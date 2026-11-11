@@ -156,7 +156,8 @@ private:
         P.Entry.Segments[2],
         {X86SegmentRegister::SS,
          Write ? X86SegmentAccessKind::Write : X86SegmentAccessKind::Read,
-         Offset, F.Bytes, O.Segments.FullLimitChoice});
+         Offset, F.Bytes, O.Segments.FullLimitChoice,
+         bool(S.EFlags & 0x20000)});
     if (!Checked) {
       Failure = Checked.takeError();
       return false;

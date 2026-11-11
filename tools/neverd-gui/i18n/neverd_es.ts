@@ -2653,6 +2653,18 @@ Con signo: %4</translation>
         <translation>Claro (Visual Studio Code Light+)</translation>
     </message>
     <message>
+        <source>Dark High Contrast (Visual Studio Code)</source>
+        <translation>Oscuro de alto contraste (Visual Studio Code)</translation>
+    </message>
+    <message>
+        <source>Light High Contrast (Visual Studio Code)</source>
+        <translation>Claro de alto contraste (Visual Studio Code)</translation>
+    </message>
+    <message>
+        <source>System (follows the desktop)</source>
+        <translation>Sistema (sigue al escritorio)</translation>
+    </message>
+    <message>
         <source>Colors</source>
         <translation>Colores</translation>
     </message>
@@ -10867,6 +10879,13 @@ Su grafo anterior sigue disponible.</translation>
     <message>
         <source>Undock window</source>
         <translation>Desacoplar ventana</translation>
+    </message>
+</context>
+<context>
+    <name>CloseButton</name>
+    <message>
+        <source>Close Tab</source>
+        <translation>Cerrar pestaña</translation>
     </message>
 </context>
 </TS>

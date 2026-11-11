@@ -64,10 +64,12 @@ constexpr bool x86DoubleFaultPair(uint8_t First, uint8_t Second) {
           (x86ContributoryException(Second) || x86PageClassException(Second)));
 }
 
-/// Protected virtual-interrupt conflict is checked before fetching an opcode.
+/// Protected/VM86 virtual-interrupt conflict is checked before fetching an
+/// opcode.
 constexpr bool x86PendingVirtualInterrupt(uint8_t CPL, uint64_t CR4,
                                           uint64_t Flags) {
-  return CPL == 3 && (CR4 & 2) && (Flags & 0x180000) == 0x180000;
+  return CPL == 3 && (CR4 & (Flags & 0x20000 ? 3 : 2)) &&
+         (Flags & 0x180000) == 0x180000;
 }
 
 } // namespace neverd

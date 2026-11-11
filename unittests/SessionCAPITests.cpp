@@ -2438,6 +2438,57 @@ TEST_F(SessionCAPITest,
   }
 }
 
+// main calls taker and keep; taker returns the address inside main's first
+// call, code no lifted function owns: main at the entry, taker at +0xb and
+// keep at +0x13.
+constexpr char MidCodeAddressBytes[] =
+    "\xe8\x06\x00\x00\x00"         // main+0x00: call taker
+    "\xe8\x09\x00\x00\x00"         // main+0x05: call keep
+    "\xc3"                         // main+0x0a: ret
+    "\x48\x8d\x05\xef\xff\xff\xff" // taker: lea rax, [main+1]
+    "\xc3"                         //        ret
+    "\xb8\x07\x00\x00\x00\xc3";    // keep: mov eax, 7; ret
+constexpr std::string_view MidCodeAddressCode(MidCodeAddressBytes,
+                                              sizeof(MidCodeAddressBytes) - 1);
+
+TEST_F(SessionCAPITest, LiftModuleNamesTheFunctionsItLeavesOut) {
+  const auto Input =
+      write("lift-left-out.elf",
+            makeNativeELF(false, 0x400000, {}, MidCodeAddressCode));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1)
+      << takeString(neverd_last_error(Session));
+  const uint64_t Main = neverd_session_entry_addr(Session);
+  const uint64_t Taker = Main + 0xb, Keep = Main + 0x13;
+  for (const uint64_t Entry : {Main, Taker, Keep})
+    if (neverd_func_find_by_addr(Session, Entry) < 0)
+      ASSERT_EQ(neverd_func_create(Session, Entry), 0)
+          << takeString(neverd_last_error(Session));
+  const auto Name = [](uint64_t Address) {
+    return "sub_" + llvm::utohexstr(Address);
+  };
+  // The module declares the body LLVM emission refuses and names it at its
+  // head, with why, and lifts the others.
+  const auto IR =
+      takeString(neverd_lift_module(Session, Input.c_str(), /*NoOpt=*/1, 0));
+  ASSERT_FALSE(IR.empty()) << takeString(neverd_last_error(Session));
+  EXPECT_EQ(IR.rfind("; neverd.not-lifted: " + Name(Taker) + " at 0x" +
+                         llvm::utohexstr(Taker) + ": llvm-emission-failed",
+                     0),
+            0u)
+      << IR;
+  EXPECT_NE(IR.find("no unique lifted code identity"), std::string::npos) << IR;
+  const auto Defines = [&](uint64_t Address) {
+    for (llvm::StringRef Line : llvm::split(IR, '\n'))
+      if (Line.starts_with("define") &&
+          Line.contains("@" + Name(Address) + "("))
+        return true;
+    return false;
+  };
+  EXPECT_TRUE(Defines(Main)) << IR;
+  EXPECT_TRUE(Defines(Keep)) << IR;
+  EXPECT_FALSE(Defines(Taker)) << IR;
+}
+
 // main calls stale and keep. stale adjusts RSP by an unconstrained input, so
 // its CALL slot may overlap the fixed read below its saved frame. main is at
 // the entry, stale at +0xb and keep at +0x20.
@@ -6630,6 +6681,26 @@ TEST_F(SessionCAPITest, DeclaredTypesJoinThePDBsAndStayWithTheProject) {
   llvm::json::Value Rows = std::move(*ParsedRows);
   ASSERT_TRUE(Rows.getAsArray());
   ASSERT_EQ(Rows.getAsArray()->size(), 4u);
+  // A span of them reads alone, as the list says it.
+  const auto declarationsOf = [&](size_t Begin, size_t End) {
+    return takeString(neverd_type_declarations_range_json(Session, Begin, End));
+  };
+  const auto rowsText = [](const llvm::json::Array &All, size_t Begin,
+                           size_t End) {
+    llvm::json::Array Part;
+    for (size_t At = Begin; At < End; ++At)
+      Part.push_back(All[At]);
+    std::string Text;
+    llvm::raw_string_ostream OS(Text);
+    OS << llvm::json::Value(std::move(Part));
+    return Text;
+  };
+  EXPECT_EQ(declarationsOf(0, 4),
+            takeString(neverd_type_declarations_json(Session)));
+  EXPECT_EQ(declarationsOf(1, 2), rowsText(*Rows.getAsArray(), 1, 2));
+  EXPECT_EQ(declarationsOf(3, 100), rowsText(*Rows.getAsArray(), 3, 4));
+  EXPECT_EQ(declarationsOf(4, 5), "[]");
+  EXPECT_EQ(declarationsOf(2, 1), "[]");
   // The list keeps one origin when asked, and counts every origin's.
   llvm::json::Object Mine =
       parse(neverd_local_types_json(Session, R"({"origin":"user"})"));
@@ -7948,6 +8019,70 @@ TEST_F(SessionCAPITest, KernelImportsPassWhatTheirPrototypesTake) {
   EXPECT_NE(Probe.find(" = IoThreadToProcess(arg0);"), std::string::npos)
       << Probe;
   EXPECT_EQ(Probe.find("unknown"), std::string::npos) << Probe;
+}
+
+TEST_F(SessionCAPITest, NewTypesKeepTheImportPrototypesTheyDoNotReach) {
+  // The kernel's prototypes the decompiler converted for the driver's calls
+  // stay through a type none of them reaches, and a type one reaches takes
+  // them again: either way the driver reads as it reads in a session that
+  // declared the same types before reading anything.
+  const auto Fixtures =
+      std::filesystem::path(__FILE__).parent_path() / "types" / "fixtures";
+  std::ifstream Input(Fixtures / "kernel_imports.sys", std::ios::binary);
+  const std::string Driver =
+      write("kernel_imports.sys",
+            std::string(std::istreambuf_iterator<char>(Input), {}));
+  const auto open = [&](neverd_session_t Each) {
+    ASSERT_EQ(neverd_session_load(Each, Driver.c_str()), 1)
+        << takeString(neverd_last_error(Each));
+    ASSERT_GE(neverd_session_discover_functions(Each), 0)
+        << takeString(neverd_last_error(Each));
+  };
+  const auto read = [](neverd_session_t Each) {
+    const int Index = neverd_func_find_by_name(Each, "Probe");
+    EXPECT_GE(Index, 0);
+    return takeString(neverd_decompile(Each, 0x180001000)) + "\n" +
+           takeString(neverd_decompile(Each, neverd_func_entry(Each, Index)));
+  };
+  const auto declare = [](neverd_session_t Each, const std::string &Source) {
+    const std::string Reply =
+        takeString(neverd_local_types_declare(Each, Source.c_str(), nullptr));
+    auto Parsed = llvm::json::parse(Reply);
+    EXPECT_TRUE(static_cast<bool>(Parsed))
+        << takeString(neverd_last_error(Each));
+    return Parsed && Parsed->getAsObject() ? *Parsed->getAsObject()
+                                           : llvm::json::Object();
+  };
+  const auto fresh = [&](const std::vector<std::string> &Sources) {
+    neverd_session_t Plain = neverd_session_create();
+    EXPECT_NE(Plain, nullptr);
+    open(Plain);
+    for (const std::string &Source : Sources)
+      (void)declare(Plain, Source);
+    const std::string Text = read(Plain);
+    neverd_session_destroy(Plain);
+    return Text;
+  };
+  open(Session);
+  const std::string Before = read(Session);
+  ASSERT_NE(Before.find("IoThreadToProcess"), std::string::npos) << Before;
+  // A type nothing names: the converted prototypes stay.
+  const std::string Unrelated = "struct ABI_UNRELATED { long long Value; };";
+  const auto First = declare(Session, Unrelated);
+  EXPECT_EQ(First.getBoolean("unread"), true);
+  EXPECT_EQ(First.getBoolean("decompilation"), false);
+  EXPECT_EQ(read(Session), fresh({Unrelated}));
+  // The process a prototype returns: they take its layout.
+  const std::string ThreadType =
+      takeString(neverd_local_type_json(Session, "PETHREAD", nullptr));
+  const std::string Process = ThreadType.find("_KTHREAD") != std::string::npos
+                                  ? "_KPROCESS"
+                                  : "_EPROCESS";
+  const std::string Reached =
+      "struct " + Process + " { long long Header; long long Count; };";
+  const auto Second = declare(Session, Reached);
+  EXPECT_EQ(Second.getBoolean("unread"), false);
+  EXPECT_EQ(read(Session), fresh({Unrelated, Reached}));
 }
 
 TEST_F(SessionCAPITest, DriverProviderImportsUseTheirDeclaredSourceABI) {
@@ -12594,6 +12729,18 @@ TEST_F(SessionCAPITest, UserFunctionEditsShapeTheListAnalysisAndSidecar) {
             "[{\"addr\":\"" + EntryHex +
                 "\",\"state\":\"created\"},{\"addr\":\"" + SecondHex +
                 "\",\"state\":\"deleted\"}]");
+  // An entry's edit, or a span's, reads alone, as the list says it.
+  const auto range = [&](neverd_va_t Begin, neverd_va_t End) {
+    return takeString(neverd_functions_range_json(Session, Begin, End));
+  };
+  EXPECT_EQ(range(Entry, Entry + 1),
+            "[{\"addr\":\"" + EntryHex + "\",\"state\":\"created\"}]");
+  EXPECT_EQ(range(Second, Second + 1),
+            "[{\"addr\":\"" + SecondHex + "\",\"state\":\"deleted\"}]");
+  EXPECT_EQ(range(Entry + 1, Second), "[]");
+  EXPECT_EQ(range(Entry, Second + 1),
+            takeString(neverd_functions_json(Session)));
+  EXPECT_EQ(range(Second, Entry), "[]");
   ASSERT_EQ(analyzeAll(), 1);
   const int Restored = neverd_func_find_by_addr(Session, Entry);
   ASSERT_GE(Restored, 0);
@@ -12689,6 +12836,12 @@ TEST_F(SessionCAPITest, UserFunctionAttributesDecideHowCallsEndAndPersist) {
       "\",\"color\":\"#20A0FF\",\"library\":true,\"noreturn\":true,"
       "\"static\":false}]";
   EXPECT_EQ(takeString(neverd_functions_json(Session)), Rows);
+  // What is stated of a function alone reads at its entry too.
+  EXPECT_EQ(
+      takeString(neverd_functions_range_json(Session, Helper, Helper + 1)),
+      Rows);
+  EXPECT_EQ(takeString(neverd_functions_range_json(Session, Entry, Helper)),
+            "[]");
   EXPECT_EQ(neverd_func_edit(Session, Helper, "{\"noreturn\":\"yes\"}"), -1);
   EXPECT_NE(lastError().find("\"noreturn\" is true, false or null"),
             std::string::npos);
@@ -13013,6 +13166,31 @@ TEST_F(SessionCAPITest, UserDataItemsDefineBytesAndPersist) {
                 WordHex + "\",\"kind\":\"undefined\",\"size\":1},{\"addr\":\"" +
                 ByteHex + "\",\"kind\":\"byte\",\"size\":1},{\"addr\":\"" +
                 RestHex + "\",\"kind\":\"undefined\",\"size\":2}]");
+  // A span lists the items that share a byte with it, those reaching into it
+  // from before included, and nothing past them.
+  const auto range = [&](neverd_va_t Begin, neverd_va_t End) {
+    return takeString(neverd_items_range_json(Session, Begin, End));
+  };
+  const std::string UndefinedRow =
+      "{\"addr\":\"" + WordHex + "\",\"kind\":\"undefined\",\"size\":1}";
+  const std::string ByteRow =
+      "{\"addr\":\"" + ByteHex + "\",\"kind\":\"byte\",\"size\":1}";
+  const std::string RestRow =
+      "{\"addr\":\"" + RestHex + "\",\"kind\":\"undefined\",\"size\":2}";
+  EXPECT_EQ(range(Word, Word + 1), "[" + UndefinedRow + "]");
+  EXPECT_EQ(range(Word + 1, Word + 2), "[" + ByteRow + "]");
+  EXPECT_EQ(range(Word, Word + 3),
+            "[" + UndefinedRow + "," + ByteRow + "," + RestRow + "]");
+  EXPECT_EQ(range(Word + 3, Word + 4), "[" + RestRow + "]");
+  // The string's terminator is the byte before the word.
+  const std::string TextRow = "{\"addr\":\"" + TextHex +
+                              "\",\"encoding\":\"utf-8\",\"kind\":"
+                              "\"string\",\"size\":6}";
+  EXPECT_EQ(range(Word - 1, Word), "[" + TextRow + "]");
+  EXPECT_EQ(range(Text + 3, Text + 4), "[" + TextRow + "]");
+  EXPECT_EQ(range(Word + 4, Word + 8), "[]");
+  EXPECT_EQ(range(Word, Word), "[]");
+  EXPECT_EQ(range(Word + 2, Word), "[]");
 
   // Saved, the items come back with the input.
   ASSERT_EQ(neverd_items_save(Session), 0)

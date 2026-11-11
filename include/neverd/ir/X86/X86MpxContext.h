@@ -40,7 +40,8 @@ enum class X86MpxResult : uint8_t {
   BoundsFault,
   PartialStateUnknown,
   MemoryFault,
-  UnknownMemory
+  UnknownMemory,
+  UndefinedOpcode
 };
 
 /// Unknown fields are not implicitly zero. A known disabled prerequisite is

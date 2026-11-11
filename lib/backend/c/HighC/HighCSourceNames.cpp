@@ -12,12 +12,14 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../LibraryPrototype.h"
 #include "HighCWriter.h"
 
 #include "neverd/backend/c/CSourceMap.h"
 #include "neverd/debug/UserPrototype.h"
 #include "neverd/libc/LibCFloatingArguments.h"
 #include "neverd/libc/LibCNames.h"
+#include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/SymbolDecoration.h"
 
 #include <map>
@@ -33,6 +35,7 @@ void HighCWriter::prepareRecordDefinitions(const std::vector<HighFunc> &Funcs) {
   std::set<const NdType *> Seen;
   std::set<std::string> Named;
   std::set<std::string> PointerRecords;
+  std::set<const libc::LibCPrototype *> HeaderPrototypes;
   std::function<void(const TypeRef &)> Visit = [&](const TypeRef &Type) {
     if (!Type || !Seen.insert(Type.get()).second)
       return;
@@ -107,6 +110,21 @@ void HighCWriter::prepareRecordDefinitions(const std::vector<HighFunc> &Funcs) {
       };
   std::function<void(const HighExpr &)> VisitExpr = [&](const HighExpr &E) {
     Visit(E.Type);
+    if (E.Kind == ExprKind::Call && E.IntrinsicId == Intrinsic::None &&
+        !E.IsIndirectCall && !E.SourceCallHint) {
+      const std::string Symbol = resolvedCallTarget(E);
+      if (const auto *Prototype = prototypeForSymbol(Symbol);
+          Prototype && !Prototype->Header.empty() &&
+          !HeaderPrototypes.count(Prototype)) {
+        const auto Callee = debugCallee(E);
+        const Import *Imported =
+            Opts.Image ? Opts.Image->findImportAt(E.CallAddr) : nullptr;
+        const bool ImportSlot = Imported && Imported->IATAddr == E.CallAddr;
+        if ((!Callee || Callee->PrototypeLibrary != UserPrototypeLibrary) &&
+            (ImportSlot || !isOwnFunctionName(Symbol, Funcs)))
+          HeaderPrototypes.insert(Prototype);
+      }
+    }
     if (E.SourceCallHint) {
       Visit(E.SourceCallHint->Signature.ReturnType);
       for (const auto &Parameter : E.SourceCallHint->Signature.Parameters)
@@ -170,6 +188,16 @@ void HighCWriter::prepareRecordDefinitions(const std::vector<HighFunc> &Funcs) {
   }
   for (const TypeRef &Record : ExtraRecords)
     Visit(Record);
+  // Runtime declarations and their headers share the same tag ownership as
+  // LLVM C. Debug parameter and local types can name those tags too.
+  std::set<std::string> HeaderTags;
+  for (const auto *Prototype : HeaderPrototypes)
+    c_library::appendHeaderTypeNames(*Prototype, HeaderTags);
+  llvm::erase_if(Records, [&](const TypeRef &Type) {
+    const TypeRef &Record =
+        Type->Kind == NdTypeKind::Ptr ? Type->Pointee : Type;
+    return Record && HeaderTags.count(Record->SourceName);
+  });
   if (Records.empty())
     return;
   // Their members as the code names them, which the definitions must agree

@@ -16,6 +16,7 @@
 #include "X86LegacySystemSelectorTestEncoding.h"
 #include "X86LegacyTaskTestState.h"
 #include "X86LegacyTestState.h"
+#include "X86LegacyVM86TestState.h"
 #include "X86PortDevice.h"
 #include "gtest/gtest.h"
 
@@ -654,6 +655,7 @@ TEST_P(X86PagingNativeTest, OriginalInstructionsMatchPagingFaultsAndCommit) {
   RecordProperty("event_cpu_comparisons", EventComparisons);
 }
 
+#include "X86CompatibilityPagingNativeTests.inc"
 #include "X86LegacyArplNativeTests.inc"
 #include "X86LegacyBMINativeTests.inc"
 #include "X86LegacyBitNativeTests.inc"
@@ -689,6 +691,7 @@ TEST_P(X86PagingNativeTest, OriginalInstructionsMatchPagingFaultsAndCommit) {
 #include "X86LegacyStringNativeTests.inc"
 #include "X86LegacySystemSelectorNativeTests.inc"
 #include "X86LegacyTaskKVMTests.inc"
+#include "X86LegacyVM86NativeTests.inc"
 #include "X86LegacyWatchpointNativeTests.inc"
 
 INSTANTIATE_TEST_SUITE_P(PagingModes, X86PagingNativeTest,

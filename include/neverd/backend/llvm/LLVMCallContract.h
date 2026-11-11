@@ -19,6 +19,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -88,18 +89,32 @@ std::optional<LLVMArgumentBinding> bindResolvedLLVMArguments(
     const llvm::Function &Target, llvm::ArrayRef<llvm::Value *> Values,
     unsigned Integers, unsigned Floating, llvm::IRBuilderBase &Builder,
     llvm::ArrayRef<int64_t> StackOffsets = {}, unsigned SlotBytes = 0);
+/// A resolved call that normalizeResolvedLLVMCalls or
+/// validateResolvedLLVMCallSignatures refuses: the function whose body makes
+/// it, and the diagnostic.
+struct ResolvedCallRefusal {
+  llvm::Function *Caller = nullptr;
+  std::string Reason;
+};
 /// Reconcile calls whose exact immutable target becomes known after emission.
 /// Drop surplus fixed arguments and adapt scalar integer/pointer carriers.
 /// Missing arguments, incompatible carriers and musttail changes fail clearly.
-bool normalizeResolvedLLVMCalls(llvm::Module &Module,
-                                LLVMSourceMap *Sources = nullptr,
-                                bool AnalystSourceProjection = false);
+/// With \p Refusals, a unit that can leave a body out learns each function a
+/// refused call is in, with why, and the calls of the other functions are
+/// still reconciled; the result is false whenever a call was refused.
+bool normalizeResolvedLLVMCalls(
+    llvm::Module &Module, LLVMSourceMap *Sources = nullptr,
+    bool AnalystSourceProjection = false,
+    std::vector<ResolvedCallRefusal> *Refusals = nullptr);
 /// Check identities after deferred import placeholders have been promoted.
 /// Opaque pointers otherwise let a mismatched direct call pass LLVM's verifier.
 /// Check both the type and calling convention after optimization and linking.
 /// An inconsistent resolved target emits a diagnostic and returns false.
-bool validateResolvedLLVMCallSignatures(llvm::Module &Module,
-                                        bool AnalystSourceProjection = false);
+/// \p Refusals, as for normalizeResolvedLLVMCalls, collects the first such
+/// call of each function and checks the others.
+bool validateResolvedLLVMCallSignatures(
+    llvm::Module &Module, bool AnalystSourceProjection = false,
+    std::vector<ResolvedCallRefusal> *Refusals = nullptr);
 } // namespace neverd
 
 #endif // NEVERD_BACKEND_LLVM_LLVMCALLCONTRACT_H

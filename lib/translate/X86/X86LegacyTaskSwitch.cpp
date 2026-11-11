@@ -92,6 +92,7 @@ struct X86LegacyTaskContinuation {
   X86LegacyTaskBinding Binding;
   X86LegacyDebugProfile DebugProfile;
   std::optional<X86FullSegmentLimitChoice> FullLimitChoice;
+  std::optional<X86AlignmentPriority> AlignmentPriority;
   std::shared_ptr<const X86LegacyTaskContinuation> PriorFault;
   bool Committed = false;
   bool Fault = false;
@@ -107,6 +108,7 @@ struct X86LegacyTaskContinuation {
         EntryDebugControl(S.Debug ? S.Debug->DebugCTL : 0),
         Binding(*Options.Tasks), DebugProfile(*Options.Debug),
         FullLimitChoice(Options.Segments.FullLimitChoice),
+        AlignmentPriority(Options.Segments.AlignmentPriority),
         PriorFault(S.PendingTask) {}
 };
 
@@ -219,13 +221,39 @@ private:
                             !Stack,
                             Stack,
                             true};
-    auto Got = Write ? M.store(A, Span) : M.load(A, Span);
-    if (!Got) {
-      Failure = Got.takeError();
+    const bool Misaligned = Stack && S.Core.CPL == 3 &&
+                            (M.controls().CR0 & 0x40000) &&
+                            (S.EFlags & 0x40000) && (Address & (Bytes - 1));
+    const auto AlignmentFault = [&] {
+      R.Status = X86PageWalkStatus::Exception;
+      R.Exception = X86MemoryException{17, 0, {}};
       return false;
+    };
+    if (Misaligned &&
+        O.Segments.AlignmentPriority == X86AlignmentPriority::BeforePaging)
+      return AlignmentFault();
+    X86MemoryAccessResult Got;
+    if (Write) {
+      auto Store = M.prepareStore(A, Bytes);
+      if (!Store) {
+        Failure = Store.takeError();
+        return false;
+      }
+      Got = static_cast<const X86MemoryAccessResult &>(*Store);
+      if (Store->Status == X86PageWalkStatus::Completed && !Misaligned)
+        M.commitStore(*Store, Span);
+    } else {
+      auto Read = M.load(A, Span);
+      if (!Read) {
+        Failure = Read.takeError();
+        return false;
+      }
+      Got = std::move(*Read);
     }
-    if (!accept(*Got))
+    if (!accept(Got))
       return false;
+    if (Misaligned)
+      return AlignmentFault();
     if (!Write) {
       V = 0;
       for (unsigned I = 0; I != Bytes; ++I)
@@ -501,10 +529,8 @@ private:
     S.EFlags = Controls.RFlags;
     S.Halted = S.STIBlocked = S.SSBlocked = false;
     x86CommitTaskDebug(*S.Debug);
-    // The protected executor cannot fetch VM86 instructions or deliver its
-    // faults. Preserve the published image at a visible mode boundary before
-    // attempting its LDT/segment loads, rather than reporting completion.
-    if (S.EFlags & 0x20000) {
+    if ((S.EFlags & 0x20000) &&
+        O.Virtual8086 != X86LegacyVM86Profile::IntelVME) {
       R.ModeUnavailable = true;
       return;
     }
@@ -512,16 +538,22 @@ private:
       return;
     if (!loadLDT(LDT))
       return;
-    for (unsigned I : {1u, 2u, 0u, 3u, 4u, 5u})
-      if (!loadSegment(I))
-        return;
+    if (S.EFlags & 0x20000) {
+      for (auto &Segment : S.Core.Segments)
+        Segment = x86VM86SegmentCache(Segment.Selector);
+    } else {
+      for (unsigned I : {1u, 2u, 0u, 3u, 4u, 5u})
+        if (!loadSegment(I))
+          return;
+    }
     if (Q.ErrorCode) {
       auto &SP = S.Core.GPR[4];
       const auto &SS = S.Core.Segments[2];
       const uint32_t Mask = SS.Attributes & 0x4000 ? UINT32_MAX : UINT16_MAX;
       auto Checked = checkX86LegacySegmentAccess(
           SS, {X86SegmentRegister::SS, X86SegmentAccessKind::Write,
-               (SP - Width) & Mask, Width, O.Segments.FullLimitChoice});
+               (SP - Width) & Mask, Width, O.Segments.FullLimitChoice,
+               bool(S.EFlags & 0x20000)});
       if (!Checked) {
         Failure = Checked.takeError();
         return;
@@ -570,6 +602,13 @@ switchLegacyTask(X86LegacyExecutionState &S, X86PagedMemory &M,
     return invalid("resume the retained task before starting another switch");
   if (auto Error = validateBinding(S, M, Options))
     return std::move(Error);
+  // Incoming CPL/AC/SP are not known before the task commits. Bind their
+  // possible error-stack priority before any busy, backlink or TSS writes.
+  if (Request.ErrorCode && (M.controls().CR0 & 0x40000) &&
+      Options.Segments.AlignmentPriority !=
+          X86AlignmentPriority::BeforePaging &&
+      Options.Segments.AlignmentPriority != X86AlignmentPriority::AfterPaging)
+    return invalid("task error stack requires a valid alignment priority");
   auto Pending = std::make_shared<X86LegacyTaskContinuation>(
       S, M, Request, Instruction, Options);
   return TaskSwitch(S, M, Options, std::move(Pending)).run();
@@ -588,7 +627,8 @@ resumeLegacyTask(X86LegacyExecutionState &S, X86PagedMemory &M,
     return std::move(Error);
   if (Options.Tasks->WordGPRHigh != S.PendingTask->Binding.WordGPRHigh ||
       Options.Debug != S.PendingTask->DebugProfile ||
-      Options.Segments.FullLimitChoice != S.PendingTask->FullLimitChoice)
+      Options.Segments.FullLimitChoice != S.PendingTask->FullLimitChoice ||
+      Options.Segments.AlignmentPriority != S.PendingTask->AlignmentPriority)
     return invalid("task resume requires the original execution bindings");
   auto Pending = std::make_shared<X86LegacyTaskContinuation>(*S.PendingTask);
   return TaskSwitch(S, M, Options, std::move(Pending)).run();

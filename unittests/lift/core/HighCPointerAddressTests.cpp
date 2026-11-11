@@ -36309,6 +36309,8 @@ TEST(LLVMCPointerAddresses, GsTebLoadPrintsReadGsQword) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
   Options.EmitIncludes = false;
   ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
   OS.flush();

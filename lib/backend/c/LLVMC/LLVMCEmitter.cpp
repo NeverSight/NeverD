@@ -55,8 +55,8 @@
 #include "neverd/backend/LLVMAnalysisDispatch.h"
 #include "neverd/backend/LLVMOriginalImageStorage.h"
 #include "neverd/backend/Limits.h"
-#include "neverd/backend/MIPS/MIPSDSPSource.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
+#include "neverd/backend/MIPS/MIPSSourceCompiler.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/FloatingPointContract.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
@@ -483,6 +483,20 @@ struct RestoreOutput {
   llvm::raw_ostream *Original;
   ~RestoreOutput() { Out.retarget(Original); }
 };
+
+/// Whether \p Text spells the `__int128` keyword, not the `__int128_t` alias.
+bool spellsInt128Keyword(llvm::StringRef Text) {
+  constexpr llvm::StringLiteral Keyword("__int128");
+  const auto Identifier = [](char C) { return llvm::isAlnum(C) || C == '_'; };
+  for (size_t At = Text.find(Keyword); At != llvm::StringRef::npos;
+       At = Text.find(Keyword, At + Keyword.size())) {
+    const size_t End = At + Keyword.size();
+    if ((At == 0 || !Identifier(Text[At - 1])) &&
+        (End == Text.size() || !Identifier(Text[End])))
+      return true;
+  }
+  return false;
+}
 } // namespace
 
 void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
@@ -497,11 +511,17 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
   DeclaredCalleeNames.clear();
   RecordPointerTags.clear();
   HeaderCallRecords.clear();
+  HeaderCallRecordTags.clear();
   DefinitionPointers.clear();
   CurMod = &Mod;
   prepareFunctionIdentifiers(Mod);
   collectImageDataUses(Mod);
   writeIncludes(Mod);
+  const auto HeaderTag = [this](llvm::StringRef Name) -> const char * {
+    const auto It = HeaderCallRecordTags.find(Name.str());
+    return It == HeaderCallRecordTags.end() ? nullptr : It->second.c_str();
+  };
+  CRecordTagSpelling Tags(HeaderTag);
   // Header conflicts can rename a local import. Key its checked declaration
   // by that final C identifier while retaining the original lookup name.
   prepareSourceImportPrototypes(Mod);
@@ -515,10 +535,24 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
     OS.retarget(&RestOS);
     writeModuleBody(Mod);
   }
-  writeRecordDefinitions(Rest);
-  OS << Rest;
-  if (isMIPS(Opts.TheArch) && mips::modulePreservesDSPControl(
-                                  Mod, Img ? Img : Opts.Image, Opts.TheArch))
+  std::string Records;
+  {
+    llvm::raw_string_ostream RecordsOS(Records);
+    RestoreOutput Restore{OS, &OS.stream()};
+    OS.retarget(&RecordsOS);
+    writeRecordDefinitions(Rest);
+  }
+  // A 16-byte integer spelled by its type, as a frame record's member is, is
+  // `__int128`, which a 32-bit target's compiler lacks: there it is the C23
+  // type of that width, as in HighC.
+  if (getTargetRegInfo(Opts.TheArch).PointerSize < 8 &&
+      (spellsInt128Keyword(Records) || spellsInt128Keyword(Rest)))
+    OS << "#define __int128 _BitInt(128)\n\n";
+  OS << Records << Rest;
+  if (isMIPS(Opts.TheArch) &&
+      (mips::modulePreservesDSPControl(Mod, Img ? Img : Opts.Image,
+                                       Opts.TheArch) ||
+       mips::moduleAvoidsMSA(Mod, Img ? Img : Opts.Image, Opts.TheArch)))
     OS << mips::DSPSourceCEnd;
 }
 
@@ -527,6 +561,9 @@ std::string LLVMCWriter::recordPointerSpelling(const NdType &Record) {
   if (Tag.empty())
     return {};
   RecordPointerTags.insert(Tag);
+  if (const auto It = HeaderCallRecordTags.find(Tag);
+      It != HeaderCallRecordTags.end())
+    return It->second + " " + Tag + "*";
   return Tag + "*";
 }
 
@@ -766,7 +803,13 @@ void LLVMCWriter::writeModuleBody(llvm::Module &Mod) {
   };
   if (OnlyFunction) {
     writeForwardDecls(Mod);
-    writeGlobals(Mod);
+    std::string Globals;
+    llvm::raw_string_ostream GlobalsOS(Globals);
+    {
+      RestoreOutput Restore{OS, &OS.stream()};
+      OS.retarget(&GlobalsOS);
+      writeGlobals(Mod);
+    }
     // The objects the function only takes the address of are declared where
     // its text names them, so that text comes first.
     std::string Tail;
@@ -777,8 +820,8 @@ void LLVMCWriter::writeModuleBody(llvm::Module &Mod) {
       writeImportCalleeDecls(Mod);
       WriteFunctions();
     }
-    writeReferencedImageObjects(SelectedFunctions.selected(), Tail);
-    OS << Tail;
+    writeReferencedImageObjects(SelectedFunctions.selected(), Tail, Globals);
+    OS << Globals << Tail;
     recordSourceNames(Mod);
     return;
   }
@@ -797,15 +840,21 @@ void LLVMCWriter::writeModuleBody(llvm::Module &Mod) {
   // A global's initializer can hold an import's address, as an import
   // table's mirror does.
   writeImportCalleeDecls(Mod);
-  writeGlobals(Mod);
+  std::string Globals;
+  llvm::raw_string_ostream GlobalsOS(Globals);
+  {
+    RestoreOutput Restore{OS, &OS.stream()};
+    OS.retarget(&GlobalsOS);
+    writeGlobals(Mod);
+  }
   // Code that reaches image data through a mirror the environment holds
   // names the data itself, as one function's output does.
   std::vector<const llvm::Function *> Defined;
   for (const auto &Fn : Mod)
     if (!Fn.isDeclaration())
       Defined.push_back(&Fn);
-  writeReferencedImageObjects(Defined, Functions);
-  OS << "\n" << Functions;
+  writeReferencedImageObjects(Defined, Functions, Globals);
+  OS << Globals << "\n" << Functions;
   recordSourceNames(Mod);
 }
 
@@ -883,8 +932,12 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
   bool HasFloatingArithmetic = false;
   bool HasWin64Call = false;
   std::set<X87CHelper> X87PrecisionHelpers;
-  const bool NeedsMIPSWideCarrier =
-      Opts.TheArch == Arch::MIPS32 || Opts.TheArch == Arch::MIPS32EL;
+  // A 32-bit target's compiler lacks the native 128-bit aliases. x86 defines
+  // them for every unit below; another such target, for a unit that needs
+  // them.
+  const bool NeedsWideCarrierAlias =
+      Opts.TheArch != Arch::X86 &&
+      getTargetRegInfo(Opts.TheArch).PointerSize == 4;
   bool HasWideInteger = false;
   const auto IsWideInteger = [](auto &&Visit, llvm::Type *Type) -> bool {
     if (const auto *Integer = llvm::dyn_cast<llvm::IntegerType>(Type))
@@ -896,14 +949,21 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     return false;
   };
   const auto NoteWideInteger = [&](llvm::Type *Type) {
-    if (NeedsMIPSWideCarrier && !HasWideInteger)
+    if (NeedsWideCarrierAlias && !HasWideInteger)
       HasWideInteger = IsWideInteger(IsWideInteger, Type);
   };
-  if (NeedsMIPSWideCarrier)
+  if (NeedsWideCarrierAlias)
     for (const auto &Global : Mod.globals())
       NoteWideInteger(Global.getValueType());
   Win64CallABI.clear();
   std::set<std::string> Headers;
+  std::set<const libc::LibCPrototype *> HeaderPrototypes;
+  const auto NotePrototype = [&](const libc::LibCPrototype *Prototype) {
+    if (Prototype && !Prototype->Header.empty()) {
+      Headers.insert(std::string(Prototype->Header));
+      HeaderPrototypes.insert(Prototype);
+    }
+  };
   // The routines the user declares that the unit calls: directly, and
   // through their imports.
   std::set<const llvm::Function *> UserFunctions;
@@ -930,11 +990,17 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     // Declarations and aggregate definitions can survive selection of only
     // one body, including a function referenced only through its address.
     NoteWideInteger(Fn.getReturnType());
-    if (NeedsMIPSWideCarrier)
+    if (NeedsWideCarrierAlias)
       for (const auto &Arg : Fn.args())
         NoteWideInteger(Arg.getType());
     if (!SelectedFunctions.contains(Fn))
       continue;
+    if (Fn.isDeclaration() && !Fn.isIntrinsic() &&
+        !Opts.PreserveLLVMFunctionTypes) {
+      const llvm::StringRef Name = cNameOfGlobal(Fn.getName(), true);
+      if (!userDeclaresRoutine(Name))
+        NotePrototype(libc::libcPrototype(Name, Opts.Format));
+    }
     // Windows exception handling prints as `__try` with the filter
     // dispositions and intrinsics <excpt.h> defines.
     if (Opts.Format == BinaryFormat::COFF && !Fn.isDeclaration() &&
@@ -946,7 +1012,7 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
       for (auto &Inst : BB) {
         NoteWideInteger(Inst.getType());
         // Opaque pointer results do not describe the declared local storage.
-        if (NeedsMIPSWideCarrier)
+        if (NeedsWideCarrierAlias)
           if (const auto *Allocation = llvm::dyn_cast<llvm::AllocaInst>(&Inst))
             NoteWideInteger(Allocation->getAllocatedType());
         for (const llvm::Use &Operand : Inst.operands()) {
@@ -988,13 +1054,12 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
         // A library routine called through its import takes the header that
         // declares it, as a direct call does, and one the runtime's tables
         // type the header its prototype's types need (`FILE`).
-        if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Inst);
-            Call && !Call->getCalledFunction()) {
+        if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Inst); Call) {
           if (const LibraryCallee Library = libraryCallee(*Call)) {
             if (!Library.Prototype)
               Headers.insert(libc::headerFor(Library.Name));
-            else if (!Library.Prototype->Header.empty())
-              Headers.insert(std::string(Library.Prototype->Header));
+            else
+              NotePrototype(Library.Prototype);
           } else if (std::string Name =
                          importCalleeCName(Call->getCalledOperand());
                      !Name.empty() && userDeclaresRoutine(Name))
@@ -1264,9 +1329,7 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     (void)Identifier;
     if (OnlyFunction && !SelectedGlobals.count(Global))
       continue;
-    if (const auto *Prototype = addressedImportPrototype(*Global);
-        Prototype && !Prototype->Header.empty())
-      Headers.insert(std::string(Prototype->Header));
+    NotePrototype(addressedImportPrototype(*Global));
   }
 
   if (HasCIntrinsics)
@@ -1283,10 +1346,16 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
       OS << "#include <" << H << ">\n";
     OS << "\n";
     IncludedHeaders.insert(Headers.begin(), Headers.end());
+    for (const auto *Prototype : HeaderPrototypes)
+      c_library::appendHeaderTypeNames(*Prototype, HeaderCallRecords,
+                                       &HeaderCallRecordTags);
   }
-  if (isMIPS(Opts.TheArch) && mips::modulePreservesDSPControl(
-                                  Mod, Img ? Img : Opts.Image, Opts.TheArch))
-    OS << mips::DSPSourceCBegin;
+  if (isMIPS(Opts.TheArch))
+    OS << mips::sourceCompilerCBegin(
+        Opts.TheArch, Img ? Img : Opts.Image,
+        mips::modulePreservesDSPControl(Mod, Img ? Img : Opts.Image,
+                                        Opts.TheArch),
+        mips::moduleAvoidsMSA(Mod, Img ? Img : Opts.Image, Opts.TheArch));
   if (NeedsX86SystemRegisterDispatch)
     OS << X86SystemRegisterCompilerDispatch;
   if (NeedsX86SegmentMoveDispatch)
@@ -1303,13 +1372,11 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     OS << X86VirtualizationCompilerDispatch;
   if (NeedsX86SystemStateDispatch)
     OS << X86SystemStateCompilerDispatch;
-  if (Opts.TheArch == Arch::X86 ||
-      (HasWideInteger &&
-       (Opts.TheArch == Arch::MIPS32 || Opts.TheArch == Arch::MIPS32EL))) {
-    // 32-bit x86/MIPS Clang supports bit-precise integers but does not define
-    // the native 128-bit aliases used by LLVM C's 65..128-bit scalar carriers.
-    // Retain the same signed/unsigned operations, including packed FP results
-    // and MXCSR.
+  if (Opts.TheArch == Arch::X86 || HasWideInteger) {
+    // A 32-bit target's Clang supports bit-precise integers but does not
+    // define the native 128-bit aliases used by LLVM C's 65..128-bit scalar
+    // carriers. Retain the same signed/unsigned operations, including x86's
+    // packed FP results and MXCSR.
     OS << "#if !defined(__SIZEOF_INT128__) && defined(__BITINT_MAXWIDTH__) && "
           "__BITINT_MAXWIDTH__ >= 128\n"
           "typedef unsigned _BitInt(128) __uint128_t;\n"
@@ -1574,17 +1641,36 @@ void LLVMCWriter::writeImageByteArray(const llvm::GlobalVariable &Global,
 }
 
 void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
+  // Forward dependencies retain the original image's storage contract and
+  // provenance, including its shape validation before declaration
+  // deduplication.
+  const auto declareOriginalImage = [&](const llvm::GlobalVariable &Global) {
+    const auto Base = parseNdDataSymbol(Global.getName());
+    const auto *Array = llvm::dyn_cast<llvm::ArrayType>(Global.getValueType());
+    if (!Base || !Array || !Array->getElementType()->isIntegerTy(8) ||
+        Global.hasInitializer())
+      throw std::invalid_argument("invalid original image storage");
+    const std::string Name = namedImageObject(*Base);
+    OS << "/* neverd.image: 0x" << llvm::utohexstr(*Base)
+       << " (original loaded image storage) */\n";
+    writeImageByteArray(Global, Name);
+    EmittedGlobalNames.insert(Name);
+  };
   // Initializers can refer forward or form cycles. The declarations use the
   // same storage shape and linkage as the definitions below.
   auto declare = [&](const llvm::GlobalVariable &Global) {
+    if (llvm_original_image::isMarked(Global)) {
+      declareOriginalImage(Global);
+      return;
+    }
     OS << llvmc::storageAlignment(Global.getValueType(), Mod.getDataLayout(),
                                   Global.getAlign().valueOrOne());
     OS << (Global.hasLocalLinkage() ? "static " : "extern ");
     if (Global.isConstant())
       OS << "const ";
     auto *Array = llvm::dyn_cast<llvm::ArrayType>(Global.getValueType());
-    const auto *Data =
-        llvm::dyn_cast<llvm::ConstantDataArray>(Global.getInitializer());
+    const auto *Data = llvm::dyn_cast_or_null<llvm::ConstantDataArray>(
+        Global.hasInitializer() ? Global.getInitializer() : nullptr);
     const bool String = Global.isConstant() && Data && Data->isString() &&
                         !parseNdDataSymbol(Global.getName());
     OS << (String ? "char"
@@ -1594,11 +1680,26 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
     if (Array)
       OS << "[" << Array->getNumElements() << "]";
     OS << ";\n";
+    if (!Global.hasInitializer())
+      EmittedGlobalNames.insert(globalNameStr(&Global));
+  };
+  // An initializer can also name storage the environment owns. Its address
+  // must be declared even when readonly loads would fold away. Imported
+  // routines and their slots retain their separate declaration owner.
+  auto externalImageStorage = [&](const llvm::GlobalVariable &Global) {
+    if (Global.hasInitializer() || ExternalDataIdentifiers.count(&Global))
+      return false;
+    auto Address = parseNdDataSymbol(Global.getName());
+    if (!Address)
+      Address = parseNdCodePtrSymbol(Global.getName());
+    return Address && (!Img || !Img->findImportAt(*Address)) &&
+           !headerDeclaresObject(globalNameStr(&Global));
   };
   if (OnlyFunction) {
     for (const auto &Global : Mod.globals())
-      if (SelectedGlobals.count(&Global) && Global.hasInitializer() &&
-          !mirrorsImageStorage(Global))
+      if (SelectedGlobals.count(&Global) &&
+          ((Global.hasInitializer() && !mirrorsImageStorage(Global)) ||
+           externalImageStorage(Global)))
         declare(Global);
   } else {
     // The whole module defines the image's storage too, in module order: a
@@ -1617,7 +1718,7 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
         if (!Seen.insert(C).second)
           continue;
         if (const auto *Var = llvm::dyn_cast<llvm::GlobalVariable>(C)) {
-          if (!Defined.count(Var))
+          if (!Defined.count(Var) || !Var->hasInitializer())
             NamedEarlier.insert(Var);
         } else if (!llvm::isa<llvm::GlobalValue>(C)) {
           for (const llvm::Use &Operand : C->operands())
@@ -1627,7 +1728,8 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
       }
     }
     for (const auto &Global : Mod.globals())
-      if (NamedEarlier.count(&Global) && Global.hasInitializer() &&
+      if (NamedEarlier.count(&Global) &&
+          (Global.hasInitializer() || externalImageStorage(Global)) &&
           !Global.getName().empty() &&
           !ExternalDataIdentifiers.count(&Global) &&
           !sourceStringOnlyCalledByValue(Global))
@@ -1658,17 +1760,10 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
 
     if (ExternalDataIdentifiers.count(&GV))
       continue;
+    if (!GV.hasInitializer() && EmittedGlobalNames.count(globalNameStr(&GV)))
+      continue;
     if (llvm_original_image::isMarked(GV)) {
-      const auto Base = parseNdDataSymbol(GV.getName());
-      const auto *Array = llvm::dyn_cast<llvm::ArrayType>(GV.getValueType());
-      if (!Base || !Array || !Array->getElementType()->isIntegerTy(8) ||
-          GV.hasInitializer())
-        throw std::invalid_argument("invalid original image storage");
-      const std::string Name = namedImageObject(*Base);
-      OS << "/* neverd.image: 0x" << llvm::utohexstr(*Base)
-         << " (original loaded image storage) */\n";
-      writeImageByteArray(GV, Name);
-      EmittedGlobalNames.insert(Name);
+      declareOriginalImage(GV);
       continue;
     }
     // IAT/import slots are callable names at call sites, not C objects.
@@ -1834,8 +1929,9 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
 }
 
 void LLVMCWriter::writeReferencedImageObjects(
-    llvm::ArrayRef<const llvm::Function *> Fns, llvm::StringRef Text) {
-  if (Fns.empty())
+    llvm::ArrayRef<const llvm::Function *> Fns, llvm::StringRef Text,
+    llvm::StringRef Globals) {
+  if (!CurMod)
     return;
   std::map<std::string, llvm::Type *> Objs;
   std::map<va_t, const llvm::GlobalVariable *> ByteArrays;
@@ -1861,7 +1957,7 @@ void LLVMCWriter::writeReferencedImageObjects(
       if (const auto Width = Widths->at(VA);
           Width && (*Width == 2 || *Width == 4 || *Width == 8))
         Bytes = *Width;
-    return llvm::Type::getIntNTy(Fns.front()->getContext(), Bytes * 8);
+    return llvm::Type::getIntNTy(CurMod->getContext(), Bytes * 8);
   };
   auto Note = [&](const llvm::Value *Ptr, llvm::Type *Ty, bool MayFold) {
     if (!Ty)
@@ -1902,15 +1998,17 @@ void LLVMCWriter::writeReferencedImageObjects(
     if (!Identifiers) {
       Identifiers.emplace();
       const auto Part = [](char C) { return llvm::isAlnum(C) || C == '_'; };
-      for (size_t At = 0; At < Text.size();) {
-        if (!Part(Text[At])) {
-          ++At;
-          continue;
+      for (const llvm::StringRef PartText : {Text, Globals}) {
+        for (size_t At = 0; At < PartText.size();) {
+          if (!Part(PartText[At])) {
+            ++At;
+            continue;
+          }
+          const size_t Begin = At;
+          while (At < PartText.size() && Part(PartText[At]))
+            ++At;
+          Identifiers->insert(PartText.slice(Begin, At));
         }
-        const size_t Begin = At;
-        while (At < Text.size() && Part(Text[At]))
-          ++At;
-        Identifiers->insert(Text.slice(Begin, At));
       }
     }
     return Identifiers->contains(Name);
@@ -1938,7 +2036,7 @@ void LLVMCWriter::writeReferencedImageObjects(
       }
     // A global's operand is its initializer, which the function does not
     // spell.
-    if (llvm::isa<llvm::ConstantExpr>(C))
+    if (!llvm::isa<llvm::GlobalValue>(C))
       for (const llvm::Use &Op : C->operands())
         Self(Self, Op.get());
   };
@@ -1947,6 +2045,14 @@ void LLVMCWriter::writeReferencedImageObjects(
       for (const auto &Inst : BB)
         for (const llvm::Use &Op : Inst.operands())
           NoteAddresses(NoteAddresses, Op.get());
+  // Initializers can name an interior image alias through a constant GEP,
+  // even when no function names that alias. Its declaration precedes the
+  // initializer as well as the function bodies, without copying their text.
+  for (const auto &Global : CurMod->globals())
+    if ((!OnlyFunction || SelectedGlobals.count(&Global)) &&
+        Global.hasInitializer() &&
+        (!OnlyFunction || !mirrorsImageStorage(Global)))
+      NoteAddresses(NoteAddresses, Global.getInitializer());
   // A pointer mirror the environment holds (runtime-filled slots) is no
   // module's to define, but code that reaches it by offset still names it.
   bool Declared = false;
@@ -2594,8 +2700,10 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
     // takes (printedCallArgLimit), which the declaration takes too.
     const std::optional<unsigned> Params = prototypedParamCount(Fn);
     if (isMIPS(Opts.TheArch)) {
-      OS << mips::dspSourceCAttribute(Opts.TheArch, Img ? Img : Opts.Image,
-                                      Fn.hasFnAttribute(mips::DSPSourceMarker));
+      OS << mips::sourceCompilerCAttribute(
+          Opts.TheArch, Img ? Img : Opts.Image,
+          Fn.hasFnAttribute(mips::DSPSourceMarker),
+          Fn.hasFnAttribute(mips::NoMSAMarker));
       OS << mips::instructionModeCAttribute(mips::instructionModeFromLLVM(Fn));
     }
     if (Fn.hasFnAttribute("neverd.x64_dispatch_frame"))

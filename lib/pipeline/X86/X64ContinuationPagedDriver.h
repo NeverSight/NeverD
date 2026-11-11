@@ -35,6 +35,9 @@ inline void emitX64PagedDriver(
  * Refused steps, changed code and scalar operand backing stops consume none.
  * An authenticated IRET that begins frame access consumes an attempt even if
  * backing fails: NMI unblocking and earlier descriptor writes are retained.
+ * IRET/RETF backing stops retain an immutable continuation in the context.
+ * Resume without refetch/replay; only an already charged attempt bypasses zero
+ * budget. A reconstructed context needs the saved instruction continuation.
  * MOV SS requires the scheduled entry, whose shadow persists across calls. */
 typedef uint64_t (*neverd_x64_paged_body_v1)(void *, void *);
 extern uint64_t neverd_x64_paged_step_v1(
@@ -45,6 +48,7 @@ extern uint64_t neverd_x64_paged_validate_v1(
 extern uint64_t neverd_x64_paged_event_v1(
     uint8_t *, uint8_t *, const uint8_t *, uint64_t);
 extern uint64_t neverd_x64_paged_progress_v1(uint8_t *);
+extern uint64_t neverd_x64_paged_pending_v1(uint8_t *);
 )C";
   if (Options.PagedDebug)
     OS << R"C(
@@ -93,9 +97,10 @@ extern uint64_t neverd_x64_paged_debug_validate_v2(
   OS << ") {\n";
   if (FunctionContext)
     emitX64FunctionContextGuard(OS, Options.PagedDebug);
-  OS << R"C(    uint64_t last = 8;
-    while (*budget) {
-        uint64_t status;
+  OS << "    uint64_t last = 8;\n"
+     << "    while (*budget || (neverd_x64_paged_pending_v1(context) & "
+     << analysis::kX64PagedAttemptConsumed << ")) {\n";
+  OS << R"C(        uint64_t status;
         switch (state->PC) {
 )C";
   for (const auto &Unit : Units) {

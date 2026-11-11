@@ -11,12 +11,53 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 
+#include <map>
 #include <set>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace neverd::c_library {
+/// Tags and known typedefs in a runtime prototype come from its named
+/// header, including tags nested inside callback parameters. Callers use this
+/// only when they include that header, so debug types must not redefine them.
+inline void
+appendHeaderTypeNames(const libc::LibCPrototype &Prototype,
+                      std::set<std::string> &Names,
+                      std::map<std::string, std::string> *Tags = nullptr) {
+  if (Prototype.Header.empty())
+    return;
+  const auto Visit = [&](std::string_view Type) {
+    std::string_view Previous;
+    for (size_t I = 0; I < Type.size();) {
+      if (!llvm::isAlpha(Type[I]) && Type[I] != '_') {
+        ++I;
+        continue;
+      }
+      size_t End = I + 1;
+      while (End < Type.size() &&
+             (llvm::isAlnum(Type[End]) || Type[End] == '_'))
+        ++End;
+      const std::string_view Word = Type.substr(I, End - I);
+      if (Previous == "struct" || Previous == "union" || Previous == "enum" ||
+          libc::isPointerType(Word) || Word == "EXCEPTION_DISPOSITION")
+        Names.emplace(Word);
+      if (Tags &&
+          (Previous == "struct" || Previous == "union" || Previous == "enum"))
+        Tags->emplace(Word, Previous);
+      // MSVC's typedef names this enum tag; MinGW spells the same public
+      // result type with a macro. Neither permits a debug redefinition.
+      if (Word == "EXCEPTION_DISPOSITION")
+        Names.emplace("_EXCEPTION_DISPOSITION");
+      Previous = Word;
+      I = End;
+    }
+  };
+  Visit(Prototype.Return);
+  for (unsigned I = 0; I < Prototype.ParamCount; ++I)
+    Visit(Prototype.Params[I]);
+}
+
 /// Whether \p Declaration, a C library's own declaration of the routine
 /// \p Name, names only what every unit that includes headers has: C's own
 /// types, <stdint.h>'s, and record and enumeration tags.  Such a unit then
@@ -205,6 +246,8 @@ inline std::string declaration(const libc::LibCPrototype &Prototype,
   std::string Text;
   if (Prototype.Winapi && TheArch == Arch::X86)
     Text += "__attribute__((stdcall)) ";
+  if (libc::isReturnsTwiceFunction(Prototype.Name))
+    Text += "__attribute__((returns_twice)) ";
   return Text +
          declarator(typeSpelling(Prototype.Return, TheArch, Format), Function);
 }

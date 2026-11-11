@@ -11,8 +11,8 @@
 #define NEVERD_LIB_BACKEND_C_RENDER_MIPS_MIPSSCALAR_H
 
 #include "neverd/backend/MIPS/MIPSBarrierSource.h"
-#include "neverd/backend/MIPS/MIPSDSPSource.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
+#include "neverd/backend/MIPS/MIPSSourceCompiler.h"
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 
@@ -52,11 +52,14 @@ inline bool mipsScalarHighShapeIsValid(const HighExpr &E, Arch Target) {
 
 template <typename Stream>
 void writeMIPSScalarHelpers(Stream &OS, Arch Target,
-                            const std::map<Intrinsic, std::string> &Helpers) {
+                            const std::map<Intrinsic, std::string> &Helpers,
+                            const BinaryImage *Image) {
   const bool Wide = isMIPS64(Target);
   const bool Little = archLittleEndian(Target);
   const char *Reg = Wide ? "uint64_t" : "uint32_t";
   for (const auto &[Id, Name] : Helpers) {
+    if (mips::isStatefulScalar(Id))
+      throw std::runtime_error(mips::kStatefulSourceUnsupported);
     if (mips::isBarrier(Id)) {
       for (unsigned Stype = 0; Stype != (Id == Intrinsic::MIPSSync ? 32u : 1u);
            ++Stype) {
@@ -72,20 +75,24 @@ void writeMIPSScalarHelpers(Stream &OS, Arch Target,
       continue;
     }
     if (Id == Intrinsic::MIPSReadDSPControl) {
-      OS << "static inline " << mips::DSPSourceCAttribute << "uint32_t " << Name
-         << "(void) {\n    uint32_t value;\n    __asm__ volatile("
+      OS << "static inline "
+         << mips::sourceCompilerCAttribute(Target, Image, true) << "uint32_t "
+         << Name << "(void) {\n    uint32_t value;\n    __asm__ volatile("
          << mips::DSPReadCAsm
          << " : \"=r\"(value) :: \"memory\");\n    return value;\n}\n\n";
       continue;
     }
     if (Id == Intrinsic::MIPSWriteDSPControl) {
-      OS << "static inline " << mips::DSPSourceCAttribute << "void " << Name
-         << "(uint32_t value) {\n    __asm__ volatile(" << mips::DSPWriteCAsm
-         << " :: \"r\"(value) : \"memory\");\n}\n\n";
+      OS << "static inline "
+         << mips::sourceCompilerCAttribute(Target, Image, true) << "void "
+         << Name << "(uint32_t value) {\n    __asm__ volatile("
+         << mips::DSPWriteCAsm << " :: \"r\"(value) : \"memory\");\n}\n\n";
       continue;
     }
     if (Id == Intrinsic::MIPSUnpredictable)
       throw std::runtime_error(mips::kUnpredictableResult);
+    if (Id == Intrinsic::MIPSAccumulatorAfterWrite)
+      throw std::runtime_error(mips::kAccumulatorHistoryUnknown);
     if (Id == Intrinsic::MIPSLwrUpper)
       throw std::runtime_error(mips::kPartialLwrRequiresWord);
     if (Id == Intrinsic::MIPSRequireWord) {
@@ -160,8 +167,12 @@ renderMIPSScalar(const HighExpr &E, Arch Target, const std::string &Name,
                  std::optional<uint64_t> GuestAddress, Render &&Expression) {
   if (!mipsScalarHighShapeIsValid(E, Target))
     throw std::runtime_error(mips::kMalformedScalar);
+  if (mips::isStatefulScalar(E.IntrinsicId))
+    throw std::runtime_error(mips::kStatefulSourceUnsupported);
   if (E.IntrinsicId == Intrinsic::MIPSUnpredictable)
     throw std::runtime_error(mips::kUnpredictableResult);
+  if (E.IntrinsicId == Intrinsic::MIPSAccumulatorAfterWrite)
+    throw std::runtime_error(mips::kAccumulatorHistoryUnknown);
   if (E.IntrinsicId == Intrinsic::MIPSLwrUpper)
     throw std::runtime_error(mips::kPartialLwrRequiresWord);
   if (E.IntrinsicId == Intrinsic::MIPSSync)

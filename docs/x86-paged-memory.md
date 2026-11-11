@@ -43,7 +43,7 @@ Faults report the vector, error code and optional new CR2. Missing physical
 backing is an embedding failure and never fabricated as a guest page fault.
 Canonicality is checked for the whole operand before the first walk: a
 noncanonical tail reports #GP/#SS even if its canonical first page is absent.
-IA-32e operands wrap modulo 2^64 across the last and first linear pages.
+Full-width IA-32e operands wrap modulo 2^64 across the last and first linear pages.
 Descriptor base/index addition, wrapped descriptor cells and interrupt frames
 use the same modular linear-address domain.
 
@@ -54,9 +54,13 @@ regions use read/write backing permissions; guest execution permission is owned
 by paging. Stores that alias their own paging structures use the translations
 established before operand publication.
 
-The explicit legacy `loadSegment`/`storeSegment` binding applies cached segment
+The explicit legacy/compatibility `loadSegment`/`storeSegment` binding applies cached segment
 permissions and bounds before any page walk, and preserves modulo-2^32 linear
-wrap after base addition. Full-limit crossings require a per-execution choice.
+wrap after base addition. Compatibility keeps EFER.LMA and the four/five-level
+page-table format. Its caller supplies low-width segment-cache views while
+preserving the complete architectural bank, including FS/GS bases. Implicit
+IA-32e system-table accesses retain full-width canonical addresses and cannot
+select `Wrap32`. Full-limit crossings require a per-execution choice.
 See [legacy segment operands](x86-legacy-segments.md) for mode, cache-loading
 and instruction-boundary responsibilities.
 
@@ -104,15 +108,27 @@ comparisons within that total), and the existing 440 continuation regressions.
 The only hardware-mode skip is LA57 on the local CPU. The same 282 generated
 C/header/manifest artifacts are byte-identical across the SDKs.
 
+The [November 10 compatibility qualification](evidence/x86-compatibility-paging-2026-11-10.json)
+records 1,764 passing executions on both SDKs, including the complete 848-case
+paging matrices and separately bound P/E-core CALL checks. Eight initial
+CALL-profile skips were subsequently requalified; eight LA57 hardware execution
+skips remain. Explicit compatibility operands use IA-32e page tables with
+32-bit segment-linear wrapping while implicit system-table operands retain
+full-width addresses. The 260 generated return C/header/manifest artifacts per
+SDK are identical to each other and to the prior return integration. This
+qualifies operand formation, not a mixed-mode instruction dispatcher.
+
 The subsequent [generated scalar executor](x86-paged-execution.md) binds both
 C routes through an explicit memory context, instruction commit boundaries and
 restart state. Partial completion for REP, gather/scatter, XSAVE and related
 instructions remains separate; the failure-atomic operand primitive alone is
 not their instruction model.
 
-Other remaining domains include legacy i386 segment/task-gate execution,
-SMI entry, SGX AEX/enclave execution, APIC/device arrival, MMIO, EPT/NPT/HLAT,
-LAM/LASS, bus-lock/split-lock fault routing and CET/FRED entry. The wrapped GDT
+Protected segment and task-gate execution use the separate
+[legacy owner](x86-legacy-segments.md). Mixed-mode instruction dispatch, SMI
+entry, SGX AEX/enclave execution, APIC/device arrival, MMIO, EPT/NPT/HLAT,
+LAM/LASS, bus-lock/split-lock fault routing and CET/FRED entry remain separate
+domains. The wrapped GDT
 CPU case binds A=1: with A=0 the host raises #AC on its split locked descriptor
 update, and KVM exits with `KVM_INTERNAL_ERROR_SIMUL_EX` during #PF entry.
 That failed oracle is retained, not counted as a passing A-bit update.

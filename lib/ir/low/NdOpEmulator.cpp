@@ -119,6 +119,8 @@ predicatedInstructionEnd(llvm::ArrayRef<LowOp> Ops,
 } // namespace
 
 void NdOpEmulator::reset() {
+  MIPSReservationKnown = false;
+  MIPSReservationAddress.reset();
   UnknownBits.clear();
   Registers.clear();
   WideRegisters.clear();
@@ -483,6 +485,19 @@ bool NdOpEmulator::storeMemoryBytes(uint64_t Addr,
   }
   uint64_t Low = 0;
   std::memcpy(&Low, Value.data(), std::min<size_t>(Value.size(), sizeof(Low)));
+  // All committed ordinary writes share this owner, including partial and
+  // vector stores. Comparing the granule rather than the old word detects ABA.
+  if (MIPSReservationAddress) {
+    const uint64_t Block = uint64_t(*MIPSReservationAddress) &
+                           ~(uint64_t(*MIPSReservationGranule) - 1);
+    for (uint16_t I = 0; I < Size; ++I) {
+      const uint64_t Byte = Wrap32 ? uint32_t(Addr + I) : Addr + I;
+      if (Byte >= Block && Byte - Block < *MIPSReservationGranule) {
+        MIPSReservationAddress.reset();
+        break;
+      }
+    }
+  }
   MemStore[Addr] = Low;
   for (uint16_t I = 0; I < Size; ++I)
     MemStoreBytes[Wrap32 ? uint32_t(Addr + I) : Addr + I] = Value[I];
@@ -507,6 +522,8 @@ void NdOpEmulator::setCallPreservedRegisters(std::vector<uint64_t> Regs) {
 }
 
 void NdOpEmulator::clobberVolatileRegisters() {
+  MIPSReservationKnown = false;
+  MIPSReservationAddress.reset();
   // An unknown callee may change MXCSR status. Do not publish the stale word
   // as an authenticated input to an explicit FP state operation.
   MXCSRKnown = false;
@@ -553,6 +570,21 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
   // Never approximate an invalid address-space tag as ordinary memory.
   if (!isKnownMemoryAddressSpace(Op.MemoryAddressSpace))
     return false;
+  if (MIPSReservationGranule) {
+    if (Op.NumInputs > std::size(Op.Inputs))
+      return false;
+    const bool Scalar =
+        Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+        Op.Inputs[0].isConst() &&
+        mips::isScalarIntrinsic(static_cast<Intrinsic>(Op.Inputs[0].Offset));
+    // Missing inputs in lenient constant recovery must not manufacture a
+    // known address/data value before LL/SC sees it. Scalar owners retain
+    // their narrower observed-byte rules, including a known-failed SC.
+    if (!Scalar)
+      for (unsigned I = 0; I < Op.NumInputs; ++I)
+        if (!knownOperandBytes(Op.Inputs[I], 0, Op.Inputs[I].Size))
+          return false;
+  }
   if (!UnknownBits.empty()) {
     if (Op.NumInputs > std::size(Op.Inputs))
       return false;
@@ -1028,6 +1060,8 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
     // base in a GP register materialised by a later `lea`) are preserved.
     if (StrictMode)
       return false;
+    MIPSReservationKnown = false;
+    MIPSReservationAddress.reset();
     ++Skips.ApproximatedOps;
     if (Op.Output.isReg() || Op.Output.isTemp()) {
       Registers.erase(Op.Output.Offset);
@@ -1206,6 +1240,10 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
     // way, so a caller can tell a folded constant from one that stepped over
     // something on its way here.
     ++Skips.UnsupportedOps;
+    if (!StrictMode) {
+      MIPSReservationKnown = false;
+      MIPSReservationAddress.reset();
+    }
     return !StrictMode;
   }
 }

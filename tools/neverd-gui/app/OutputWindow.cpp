@@ -90,7 +90,7 @@ OutputWindow::OutputWindow(Session &session, QWidget *parent)
     log_->setFont(Theme::instance().codeFont());
     command_->setFont(Theme::instance().codeFont());
     // Lines already written keep the other theme's colors until recolored.
-    if (Theme::instance().dark() != coloredDark_)
+    if (static_cast<int>(Theme::instance().mode()) != coloredMode_)
       recolor();
   };
   applyTheme();
@@ -154,7 +154,7 @@ void OutputWindow::append(const QString &text, int level) {
 }
 
 void OutputWindow::recolor() {
-  coloredDark_ = Theme::instance().dark();
+  coloredMode_ = static_cast<int>(Theme::instance().mode());
   QTextCursor cursor(log_->document());
   cursor.beginEditBlock();
   for (auto block = log_->document()->begin(); block.isValid();

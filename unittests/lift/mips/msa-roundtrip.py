@@ -31,6 +31,12 @@ VECTOR_FUNCTIONS = ("msa_add_b", "msa_add_h", "msa_add_d", "msa_sub_b", "msa_sub
     for width in ("b", "h", "w", "d"))
 VECTOR_FUNCTIONS += tuple(f"msa_{op}_same_{w}" for op in ("add_a", "adds_a") for w in ("b", "h", "w", "d"))
 VECTOR_FUNCTIONS += ('msa_andi_b', 'msa_ori_b', 'msa_nori_b', 'msa_xori_b', 'msa_bsel', 'msa_bmnz', 'msa_bmz', 'msa_pcnt_b', 'msa_pcnt_h', 'msa_pcnt_w', 'msa_pcnt_d', 'msa_nlzc_b', 'msa_nlzc_h', 'msa_nlzc_w', 'msa_nlzc_d', 'msa_nloc_b', 'msa_nloc_h', 'msa_nloc_w', 'msa_nloc_d', 'msa_slli_b', 'msa_slli_h', 'msa_slli_w', 'msa_slli_d', 'msa_srli_b', 'msa_srli_h', 'msa_srli_w', 'msa_srli_d', 'msa_srai_b', 'msa_srai_h', 'msa_srai_w', 'msa_srai_d', 'msa_bclri_b', 'msa_bclri_h', 'msa_bclri_w', 'msa_bclri_d', 'msa_bseti_b', 'msa_bseti_h', 'msa_bseti_w', 'msa_bseti_d', 'msa_bnegi_b', 'msa_bnegi_h', 'msa_bnegi_w', 'msa_bnegi_d')
+VECTOR_FUNCTIONS += tuple(f"msa_{op}_{w}" for op in ("asub_s", "asub_u") for w in ("b", "h", "w", "d"))
+VECTOR_FUNCTIONS += tuple(f"msa_{op}_{m}_{w}" for op in ("sat_s", "sat_u") for w, bits in zip(("b", "h", "w", "d"), (8, 16, 32, 64)) for m in (0, bits//2, bits-1))
+I5_OPERATIONS = ("addvi", "subvi", "ceqi", "clti_s", "clti_u", "clei_s", "clei_u", "maxi_s", "maxi_u", "mini_s", "mini_u")
+VECTOR_FUNCTIONS += tuple(f"msa_{op}_{imm}_{w}" for op in I5_OPERATIONS for imm in (0,16,31) for w in ("b","h","w","d"))
+VECTOR_FUNCTIONS += tuple(f"msa_{op}_{w}" for op in ("srar", "srlr", "binsl", "binsr") for w in ("b", "h", "w", "d"))
+VECTOR_FUNCTIONS += tuple(f"msa_{op}_{n}_{w}" for op in ("srari", "srlri", "binsli", "binsri") for w, bits in zip(("b", "h", "w", "d"), (8, 16, 32, 64)) for n in (0, bits//2, bits-1))
 FUNCTIONS = tuple(f"msa_lane{i}" for i in range(4)) + ("msa_mix", "msa_store", "msa_return_slot") + VECTOR_FUNCTIONS
 INPUTS = [(0, 0, 0, 0), (0xffffffff, 0x7fffffff, 0x80000000, 1),
           (0x11223344, 0x55667788, 0x99aabbcc, 0xddeeff00), (1, 2, 3, 4), (0, 1, 0xffffffff, 0), (0, 0x80000000, 0, 0x80000000)]
@@ -58,7 +64,42 @@ def expected(function, arguments, little):
         if "_same_" in operation:
             right = left
             operation = operation.replace("_same_", "_")
-        if operation in ("andi_b", "ori_b", "nori_b", "xori_b"):
+        if operation.split("_")[0] in ("addvi", "subvi", "ceqi", "clti", "clei", "maxi", "mini"):
+            op, imm, width = operation.rsplit("_",2)
+            bits = {"b":8,"h":16,"w":32,"d":64}[width]
+            imm=int(imm)
+            signed = op == "ceqi" or op.endswith("_s")
+            if signed and imm >= 16: imm -= 32
+            value=0
+            for shift in range(0,128,bits):
+                x=(left >> shift) & ((1 << bits)-1)
+                if signed and x & (1 << (bits-1)): x -= 1 << bits
+                if op == "addvi": y=x+imm
+                elif op == "subvi": y=x-imm
+                elif op == "ceqi": y=-int(x == imm)
+                elif op.startswith("clti"): y=-int(x < imm)
+                elif op.startswith("clei"): y=-int(x <= imm)
+                elif op.startswith("maxi"): y=max(x,imm)
+                else: y=min(x,imm)
+                value |= (y & ((1 << bits)-1)) << shift
+        elif operation.startswith(("srar", "srlr", "binsl", "binsr")):
+            parts = operation.split("_")
+            op, width = parts[0], parts[-1]
+            bits = {"b":8, "h":16, "w":32, "d":64}[width]
+            mask, value = (1 << bits)-1, 0
+            old = int.from_bytes(bytes([0x5a])*16, "little")
+            for shift in range(0,128,bits):
+                x = (left >> shift) & mask
+                count = int(parts[1]) if len(parts) == 3 else ((right >> shift) & (bits-1))
+                if op.startswith("bins"):
+                    inserted = (1 << (count+1))-1
+                    if op.startswith("binsl"): inserted <<= bits-count-1
+                    y = (x & inserted) | ((old >> shift) & (mask ^ inserted))
+                else:
+                    if op.startswith("srar") and x & (1 << (bits-1)): x -= 1 << bits
+                    y = ((x + (1 << (count-1))) >> count) if count else x
+                value |= (y & mask) << shift
+        elif operation in ("andi_b", "ori_b", "nori_b", "xori_b"):
             immediate = int.from_bytes(bytes([0xa5]) * 16, "little")
             value = left & immediate if operation == "andi_b" else left | immediate if operation == "ori_b" else ~(left | immediate) if operation == "nori_b" else left ^ immediate
             value &= (1 << 128) - 1
@@ -83,6 +124,20 @@ def expected(function, arguments, little):
                 elif op == "bseti": lane = x | (1 << count)
                 else: lane = x ^ (1 << count)
                 value |= (lane & mask) << shift
+        elif operation.startswith(("asub_", "sat_")):
+            bits = {"b": 8, "h": 16, "w": 32, "d": 64}[operation[-1]]
+            mask, value = (1 << bits) - 1, 0
+            for shift in range(0, 128, bits):
+                x, y = (left >> shift) & mask, (right >> shift) & mask
+                if "_s_" in operation:
+                    if x & (1 << (bits-1)): x -= 1 << bits
+                    if y & (1 << (bits-1)): y -= 1 << bits
+                if operation.startswith("asub_"): result = abs(x - y)
+                else:
+                    width = int(operation.split("_")[2]) + 1
+                    low, high = (-(1 << (width-1)), (1 << (width-1))-1) if "_s_" in operation else (0, (1 << width)-1)
+                    result = max(low, min(high, x))
+                value |= (result & mask) << shift
         elif operation.startswith(("add_a_", "adds_", "subs_", "ave_", "aver_")):
             bits = {"b": 8, "h": 16, "w": 32, "d": 64}[operation[-1]]
             mask, value = (1 << bits) - 1, 0

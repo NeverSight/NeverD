@@ -1106,6 +1106,19 @@ void Session::save() {
   });
 }
 
+void Session::commitComments() {
+  if (!loaded_)
+    return;
+  // Staged comments become a step of the history ahead of the edit that needs
+  // them committed, and are written behind the reply as that edit is.  Saving,
+  // closing and packing a database still wait for the files.
+  command(QStringLiteral("save"), {{"write_behind", true}},
+          [this](const QJsonObject &) {
+            dirty_ = false;
+            refreshHistory();
+          });
+}
+
 void Session::packDatabase(const QString &path) {
   if (!loaded_ || path.isEmpty())
     return;
@@ -1405,8 +1418,8 @@ void Session::editBytePatch(const QString &operation,
   if ((operation != "patch_apply" && operation != "patch_revert") ||
       !keepsBytePatches() || !acceptsEdit(epoch))
     return;
-  if (dirty_)
-    save();
+  if (commentsStaged())
+    commitComments();
   command(
       operation, request,
       [this, operation, request, done](const QJsonObject &result) {
@@ -1446,8 +1459,8 @@ void Session::editDataPresentation(const QString &operation,
   if ((operation != "item_define" && operation != "operand_format") ||
       !acceptsEdit(epoch))
     return;
-  if (dirty_)
-    save();
+  if (commentsStaged())
+    commitComments();
   command(operation, request,
           [this](const QJsonObject &) { refreshHistory(); });
 }
@@ -1457,8 +1470,8 @@ void Session::defineItem(Address address, const QString &action,
   if (!acceptsEdit(epoch))
     return;
   // Like a rename, a data item commits at once over saved comments.
-  if (dirty_)
-    save();
+  if (commentsStaged())
+    commitComments();
   command(
       QStringLiteral("item_define"),
       {{"address", hexAddress(address)}, {"action", action}},
@@ -1488,8 +1501,8 @@ void Session::formatOperand(Address address, std::optional<int> operand,
   if (!acceptsEdit(epoch))
     return;
   // Like a rename, an operand format commits at once over saved comments.
-  if (dirty_)
-    save();
+  if (commentsStaged())
+    commitComments();
   QJsonObject payload{{"address", hexAddress(address)}, {"action", action}};
   if (operand)
     payload.insert(QStringLiteral("operand"), *operand);
@@ -1503,8 +1516,8 @@ void Session::formatOperandStruct(Address address, std::optional<int> operand,
                                   std::optional<quint64> epoch) {
   if (!acceptsEdit(epoch))
     return;
-  if (dirty_)
-    save();
+  if (commentsStaged())
+    commitComments();
   // The worker takes 63 other instructions in a step; more go on in steps
   // of their own.
   constexpr int Step = 63;
@@ -1547,8 +1560,8 @@ void Session::createFunction(Address address, std::optional<quint64> epoch) {
   if (!acceptsEdit(epoch))
     return;
   // Like a rename, a function edit commits at once over saved comments.
-  if (dirty_)
-    save();
+  if (commentsStaged())
+    commitComments();
   command(QStringLiteral("function_create"), {{"address", hexAddress(address)}},
           [this, address](const QJsonObject &) {
             refreshHistory();
@@ -1560,8 +1573,8 @@ void Session::createFunction(Address address, std::optional<quint64> epoch) {
 void Session::deleteFunction(Address entry, std::optional<quint64> epoch) {
   if (!acceptsEdit(epoch))
     return;
-  if (dirty_)
-    save();
+  if (commentsStaged())
+    commitComments();
   command(QStringLiteral("function_delete"), {{"address", hexAddress(entry)}},
           [this, entry](const QJsonObject &) {
             refreshHistory();
@@ -1574,8 +1587,8 @@ void Session::editFunction(Address entry, const QJsonObject &attributes,
                            std::optional<quint64> epoch) {
   if (attributes.isEmpty() || !acceptsEdit(epoch))
     return;
-  if (dirty_)
-    save();
+  if (commentsStaged())
+    commitComments();
   command(QStringLiteral("function_edit"),
           {{"address", hexAddress(entry)}, {"attributes", attributes}},
           [this, entry](const QJsonObject &) {
@@ -1590,9 +1603,9 @@ void Session::rename(Address function, const QString &name,
   if (name.trimmed().isEmpty() || !acceptsEdit(epoch))
     return;
   // A rename commits at once, and the worker refuses it over staged comments;
-  // save them first so the rename never discards or blocks on them.
-  if (dirty_)
-    save();
+  // commit them first so the rename never discards or blocks on them.
+  if (commentsStaged())
+    commitComments();
   command(QStringLiteral("rename"),
           {{"address", hexAddress(function)}, {"name", name.trimmed()}},
           [this, function, name, then = std::move(then)](const QJsonObject &) {
@@ -1617,8 +1630,8 @@ void Session::prepareCodeName(const QJsonObject &edit, quint64 epoch) {
 void Session::editCode(const QJsonObject &edit, quint64 epoch) {
   if (!acceptsEdit(epoch))
     return;
-  if (dirty_)
-    save();
+  if (commentsStaged())
+    commitComments();
   command(QStringLiteral("code_edit"), edit,
           [this](const QJsonObject &) { refreshHistory(); });
 }
@@ -1627,35 +1640,47 @@ void Session::setComment(Address address, const QString &text,
                          std::optional<quint64> epoch) {
   if (!acceptsEdit(epoch))
     return;
-  command(QStringLiteral("annotation_set"),
-          {{"address", hexAddress(address)}, {"text", text}},
-          [this, address, text](const QJsonObject &) {
-            dirty_ = true;
-            refreshHistory();
-            emit commented(address, text);
-          });
+  // An edit sent before the reply comes commits it first all the same.
+  ++pendingComments_;
+  command(
+      QStringLiteral("annotation_set"),
+      {{"address", hexAddress(address)}, {"text", text}},
+      [this, address, text](const QJsonObject &) {
+        --pendingComments_;
+        dirty_ = true;
+        refreshHistory();
+        emit commented(address, text);
+      },
+      [this](const QString &, const QString &) { --pendingComments_; });
 }
 
 void Session::undo() {
   if (!canUndo())
     return;
-  command(QStringLiteral("undo"), {}, [this](const QJsonObject &payload) {
-    emit message(
-        tr("Undid edit at %1.").arg(payload.value("address").toString()), 0);
-    history_ = payload;
-    emit historyChanged();
-  });
+  // A step past staged comments commits them first, as an edit does.
+  command(
+      QStringLiteral("undo"), {{"commit_staged", true}, {"limit", 1}},
+      [this](const QJsonObject &payload) {
+        emit message(
+            tr("Undid edit at %1.").arg(payload.value("address").toString()),
+            0);
+        history_ = payload;
+        emit historyChanged();
+      });
 }
 
 void Session::redo() {
   if (!canRedo())
     return;
-  command(QStringLiteral("redo"), {}, [this](const QJsonObject &payload) {
-    emit message(
-        tr("Redid edit at %1.").arg(payload.value("address").toString()), 0);
-    history_ = payload;
-    emit historyChanged();
-  });
+  command(
+      QStringLiteral("redo"), {{"commit_staged", true}, {"limit", 1}},
+      [this](const QJsonObject &payload) {
+        emit message(
+            tr("Redid edit at %1.").arg(payload.value("address").toString()),
+            0);
+        history_ = payload;
+        emit historyChanged();
+      });
 }
 
 void Session::loadSignatures(const QString &path, bool tree) {
@@ -1779,8 +1804,8 @@ void Session::declareTypes(const QString &language, const QString &source,
                            Reply done, Failure failed) {
   // Like a rename, a declaration commits at once over saved comments, and
   // undo takes it away again.
-  if (dirty_)
-    save();
+  if (commentsStaged())
+    commitComments();
   command(
       QStringLiteral("local_types_declare"),
       {{"language", language}, {"source", source}},
@@ -1794,8 +1819,8 @@ void Session::declareTypes(const QString &language, const QString &source,
 
 void Session::forgetTypes(const QStringList &names, Reply done,
                           Failure failed) {
-  if (dirty_)
-    save();
+  if (commentsStaged())
+    commitComments();
   command(
       QStringLiteral("local_types_forget"),
       {{"names", QJsonArray::fromStringList(names)}},

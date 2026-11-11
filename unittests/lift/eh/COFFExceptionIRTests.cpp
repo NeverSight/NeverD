@@ -176,7 +176,18 @@ void checkStandaloneSEHSource(
   {
     llvm::raw_fd_ostream Header(HeaderPath, Error);
     ASSERT_FALSE(Error);
-    Header << "#define EXCEPTION_EXECUTE_HANDLER 1\n"
+    Header << "#pragma once\n"
+              "typedef enum _EXCEPTION_DISPOSITION {\n"
+              "  ExceptionContinueExecution, ExceptionContinueSearch,\n"
+              "  ExceptionNestedException, ExceptionCollidedUnwind\n"
+              "} EXCEPTION_DISPOSITION;\n"
+              "struct _EXCEPTION_RECORD;\n"
+              "struct _CONTEXT;\n"
+              "struct _DISPATCHER_CONTEXT;\n"
+              "EXCEPTION_DISPOSITION __C_specific_handler(\n"
+              "  struct _EXCEPTION_RECORD *, void *, struct _CONTEXT *,\n"
+              "  struct _DISPATCHER_CONTEXT *);\n"
+              "#define EXCEPTION_EXECUTE_HANDLER 1\n"
               "#define EXCEPTION_CONTINUE_SEARCH 0\n"
               "#define EXCEPTION_CONTINUE_EXECUTION (-1)\n"
               "unsigned long _exception_code(void);\n"
@@ -1771,7 +1782,8 @@ TEST(COFFExceptionIR, LLVMCAddressedImportKeepsItsRuntimeFunctionDeclaration) {
       ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
       const bool Function = Import && Format == BinaryFormat::COFF;
       const std::string Declaration =
-          Function ? "extern int32_t neverd_data___C_specific_handler("
+          Function ? "extern EXCEPTION_DISPOSITION "
+                     "neverd_data___C_specific_handler("
                    : "extern unsigned char neverd_data___C_specific_handler[]";
       EXPECT_NE(Source.find(Declaration), std::string::npos) << Source;
       EXPECT_NE(Source.find("__asm__(\"__C_specific_handler\")"),
@@ -1824,9 +1836,10 @@ TEST(COFFExceptionIR, HighCAddressedRuntimeFunctionPrecedesSEH) {
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   ASSERT_TRUE(HighCEmitter().emit({Function}, OS, Options));
-  EXPECT_NE(Source.find("extern int32_t __C_specific_handler("),
+  EXPECT_NE(Source.find("extern EXCEPTION_DISPOSITION __C_specific_handler("),
             std::string::npos)
       << Source;
+  EXPECT_NE(Source.find("#include <excpt.h>"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("extern unsigned char neverd_code_"), std::string::npos)
       << Source;
   REQUIRE_HOST_FIXTURE_COMPILER();
@@ -6667,6 +6680,92 @@ uint32_t outer_effect(void) { sequence = sequence * 10 + 1; return 0; }
         {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
 }
 
+TEST(COFFExceptionIR, LLVMCLoadsKeepFSAndGSOffsets) {
+  REQUIRE_HOST_FIXTURE_COMPILER();
+  for (Arch Target : {Arch::X86, Arch::X64}) {
+    const bool X64 = Target == Arch::X64;
+    SCOPED_TRACE(X64);
+    llvm::LLVMContext Context;
+    llvm::Module Module("segmented-loads", Context);
+    Module.setTargetTriple(
+        llvm::Triple(X64 ? "x86_64-pc-windows-msvc" : "i686-pc-windows-msvc"));
+    Module.setDataLayout(X64 ? "e-p:64:64" : "e-p:32:32");
+    llvm::IRBuilder<> B(Context);
+    auto *Word = B.getIntNTy(X64 ? 64 : 32);
+    for (unsigned AS : {kLLVMX86FSAddressSpace, kLLVMX86GSAddressSpace})
+      for (unsigned Bits : {8u, 16u, 32u, 64u}) {
+        if (!X64 && AS == kLLVMX86GSAddressSpace && Bits == 64)
+          continue;
+        for (bool Volatile : {false, true}) {
+          auto *Type = B.getIntNTy(Bits);
+          auto *Function = llvm::Function::Create(
+              llvm::FunctionType::get(Type, {Word}, false),
+              llvm::GlobalValue::ExternalLinkage, "segmented_load", Module);
+          B.SetInsertPoint(
+              llvm::BasicBlock::Create(Context, "entry", Function));
+          auto *Pointer = llvm::PointerType::get(Context, AS);
+          auto *Zero =
+              B.CreateLoad(Type, llvm::ConstantPointerNull::get(Pointer));
+          Zero->setVolatile(Volatile);
+          auto *Dynamic = B.CreateLoad(
+              Type, B.CreateIntToPtr(Function->getArg(0), Pointer));
+          Dynamic->setVolatile(Volatile);
+          B.CreateRet(B.CreateXor(Zero, Dynamic));
+        }
+      }
+    ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+    CEmitterOptions Options;
+    Options.TheArch = Target;
+    Options.Format = BinaryFormat::COFF;
+    Options.EmitIncludes = false;
+    std::string Source;
+    llvm::raw_string_ostream Stream(Source);
+    ASSERT_TRUE(LLVMCEmitter().emit(Module, Stream, Options));
+    const auto Compiled = runCCompiler(
+        "#include <stdint.h>\n#include <intrin.h>\n" + Source,
+        {X64 ? "--target=x86_64-pc-windows-msvc"
+             : "--target=i686-pc-windows-msvc",
+         "-std=c11", "-ffreestanding", "-Werror", "-S", "-o", "/dev/null"});
+    EXPECT_EQ(Compiled.ExitCode, 0) << Compiled.Error << "\n" << Source;
+  }
+}
+
+TEST(COFFExceptionIR, LLVMCRefusesUnrepresentedSegmentedLoads) {
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM})
+    for (unsigned Bits : {0u, 9u, 32u, 128u})
+      for (bool Atomic : {false, true}) {
+        if (Atomic && Bits != 32)
+          continue;
+        if (Target != Arch::ARM && Bits == 32 && !Atomic)
+          continue;
+        SCOPED_TRACE(static_cast<unsigned>(Target));
+        SCOPED_TRACE(Bits);
+        SCOPED_TRACE(Atomic);
+        llvm::LLVMContext Context;
+        llvm::Module Module("unsupported-segmented-load", Context);
+        llvm::IRBuilder<> B(Context);
+        llvm::Type *Type = Bits ? static_cast<llvm::Type *>(B.getIntNTy(Bits))
+                                : B.getFloatTy();
+        auto *Function = llvm::Function::Create(
+            llvm::FunctionType::get(Type, false),
+            llvm::GlobalValue::ExternalLinkage, "unsupported_load", Module);
+        B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Function));
+        auto *Pointer = llvm::PointerType::get(Context, kLLVMX86FSAddressSpace);
+        auto *Load =
+            B.CreateLoad(Type, llvm::ConstantPointerNull::get(Pointer));
+        if (Atomic)
+          Load->setAtomic(llvm::AtomicOrdering::Monotonic);
+        B.CreateRet(Load);
+        CEmitterOptions Options;
+        Options.TheArch = Target;
+        Options.EmitIncludes = false;
+        std::string Source;
+        llvm::raw_string_ostream Stream(Source);
+        EXPECT_THROW(LLVMCEmitter().emit(Module, Stream, Options),
+                     std::runtime_error);
+      }
+}
+
 TEST(COFFExceptionIR, LLVMCStoresKeepFSAndGSOffsets) {
   for (Arch Target : {Arch::X86, Arch::X64}) {
     SCOPED_TRACE(Target == Arch::X86 ? "x86" : "x64");
@@ -7085,11 +7184,11 @@ double widen(float value) {
       << Unsupported.Error;
 }
 
-TEST(COFFExceptionIR, LLVMCCRTIntegerArgumentsKeepTheRuntimeDeclaration) {
+TEST(COFFExceptionIR, LLVMCCRTArgumentsKeepTheRuntimeType) {
   class EnumDebug final : public NullDebugContext {
   public:
     std::optional<FunctionSym> resolveFunction(va_t Address) const override {
-      if (Address < 0x402000 || Address > 0x402020)
+      if (Address < 0x402000 || Address > 0x402030)
         return std::nullopt;
       auto Type = NdType::makeNamedRecord("_crt_app_type", 4, true);
       Type->FieldDisplayNames = {"_crt_console_app"};
@@ -7098,6 +7197,7 @@ TEST(COFFExceptionIR, LLVMCCRTIntegerArgumentsKeepTheRuntimeDeclaration) {
       Function.Addr = Address;
       Function.Name = Address == 0x402000   ? "_set_app_type"
                       : Address == 0x402010 ? "_configure_narrow_argv"
+                      : Address == 0x402020 ? "_set_fmode"
                                             : "user_enum";
       Function.ReturnType = NdType::makeVoid();
       Function.Params.emplace_back("kind", Type);
@@ -7114,8 +7214,8 @@ TEST(COFFExceptionIR, LLVMCCRTIntegerArgumentsKeepTheRuntimeDeclaration) {
   Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Caller));
   va_t Address = 0x402000;
   // i386 COFF adds one decoration underscore to each C symbol.
-  for (const char *Name :
-       {"__set_app_type", "__configure_narrow_argv", "_user_enum"}) {
+  for (const char *Name : {"__set_app_type", "__configure_narrow_argv",
+                           "__set_fmode", "_user_enum"}) {
     auto Callee = Module.getOrInsertFunction(Name, Builder.getVoidTy(),
                                              Builder.getInt32Ty());
     rewrite_source::setOriginalVA(
@@ -7132,11 +7232,30 @@ TEST(COFFExceptionIR, LLVMCCRTIntegerArgumentsKeepTheRuntimeDeclaration) {
   std::string Source;
   llvm::raw_string_ostream Output(Source);
   ASSERT_TRUE(LLVMCEmitter().emit(Module, Output, Options, &Debug));
-  EXPECT_NE(Source.find("_set_app_type(1);"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("_set_app_type(_crt_console_app);"), std::string::npos)
+      << Source;
   EXPECT_NE(Source.find("_configure_narrow_argv(1);"), std::string::npos)
       << Source;
+  EXPECT_NE(Source.find("_set_fmode(1);"), std::string::npos) << Source;
   EXPECT_NE(Source.find("user_enum(_crt_console_app);"), std::string::npos)
       << Source;
+  Options.EmitIncludes = true;
+  bool Requested = false;
+  Options.RecordDefinitions = [&](const std::vector<TypeRef> &Types) {
+    Requested = true;
+    for (const auto &Type : Types) {
+      EXPECT_NE(Type->SourceName, "_crt_app_type");
+      EXPECT_NE(Type->SourceName, "_crt_console_app");
+    }
+    return CRecordDefinitions{};
+  };
+  std::string WithHeaders;
+  llvm::raw_string_ostream HeaderOutput(WithHeaders);
+  ASSERT_TRUE(LLVMCEmitter().emit(Module, HeaderOutput, Options, &Debug));
+  EXPECT_TRUE(Requested);
+  EXPECT_NE(WithHeaders.find("_set_app_type(_crt_console_app);"),
+            std::string::npos)
+      << WithHeaders;
 }
 
 TEST(COFFExceptionIR, SourceX86FilterCapturesAnIncomingArgumentThroughStorage) {

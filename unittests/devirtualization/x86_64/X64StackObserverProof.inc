@@ -65,6 +65,10 @@ uint64_t STEP(uint8_t *context,uint8_t *raw,uint64_t address,const uint8_t *byte
     }
     return status;
 }
+uint64_t neverd_x64_paged_pending_v1(uint8_t *context) {
+  (void)context;
+  return 0;
+}
 uint64_t neverd_x64_paged_progress_v1(uint8_t *context) {
     return ((observer_memory *)context)->progress;
 }

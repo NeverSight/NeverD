@@ -30,8 +30,10 @@
 namespace neverd::translate {
 
 namespace detail {
+struct X86LegacyControlContinuation;
 struct X86LegacyTaskContinuation;
-}
+struct X86LegacyTransferContinuation;
+} // namespace detail
 
 /// Low 32-bit architectural inputs for non-IA-32e SYSENTER/SYSEXIT.
 struct X86LegacySysenterState {
@@ -48,6 +50,8 @@ struct X86LegacyEvent {
   uint32_t FaultAddress = 0;
   uint8_t Vector = 0;
   X86LegacyEventKind Kind = X86LegacyEventKind::Fault;
+  /// Only INT imm8 uses the VM86 IOPL check and VME redirection map.
+  bool SoftwareINT = false;
 };
 
 /// Pending event retained across backing or work-budget stops. Repair backing
@@ -69,6 +73,9 @@ struct X86LegacyEventContinuation {
   uint8_t DataBreakpoints = 0;
   bool SoftwareCompleted = false;
   llvm::SmallVector<Access> CompletedAccesses;
+  bool CR2Written = false;
+  bool SegmentsWritten = false;
+  std::optional<std::array<uint64_t, 4>> DebugAddresses;
 };
 
 /// PUSHA/POPA/ENTER progress across a physical-backing stop. Retain this
@@ -143,24 +150,47 @@ struct X86LegacyExecutionState {
   /// stop or a fault after loading the incoming task. Preserve this with the
   /// CPU and RAM; only that owner may resume or retire it.
   std::shared_ptr<const detail::X86LegacyTaskContinuation> PendingTask;
+  /// Return and VM86 far-transfer progress across unavailable backing. Retain
+  /// this opaque state with the CPU, bindings and original instruction bytes;
+  /// repair only backing. Completed RAM accesses are never repeated.
+  std::shared_ptr<const detail::X86LegacyTransferContinuation> PendingTransfer;
+  /// MOV-CR retains original inputs and completed physical PDPTE reads
+  /// across unavailable backing. Controls publish atomically after all four
+  /// reads. Preserve this immutable token with CPU/RAM when rebuilding a
+  /// source context; only the control owner may retire it.
+  std::shared_ptr<const detail::X86LegacyControlContinuation> PendingControl;
+  /// Resource receipt for a retained instruction, not guest CPU state. A
+  /// journal can exist after an owner Error before an attempt was reported.
+  /// Preserve this with instruction progress across context reconstruction;
+  /// only the public instruction boundary publishes or retires this receipt.
+  bool PendingInstructionAttempted = false;
 };
 
 /// One CPU, ordinary RAM, 16/32-bit gates, qword accessed writes, offset-first
 /// TSS reads and ordered frame pushes. A 16-bit target stack preserves old
 /// ESP high bits. Consecutive MOV/POP SS does not extend an incoming shadow.
-/// Target IP-limit validation follows the frame stores. Recursive #DF retains
+/// Protected target IP checks follow frame stores; VM86 exit checks first.
+/// Recursive #DF retains
 /// the failed fault's saved RF image; its saved PC/caches use the original
 /// state. These #DF choices bind otherwise architecturally undefined program
 /// state. The producer owns event selection, APIC/debug state and machine-check
-/// recovery. Task gates use the additional Tasks binding; VM86 and CET need
-/// separate execution-mode owners.
+/// recovery. Task gates use the additional Tasks binding; VM86 uses
+/// Virtual8086. CET needs its separate execution-mode owner.
 enum class X86LegacyEventProfile : uint8_t { OrderedFrame };
 
 /// IRET reads FLAGS/CS/IP, RETF reads CS/IP; descriptor accessed writes precede
 /// outer SS/SP reads and late target-limit checks. CS/SS accesses cover only
 /// their selector word, independently of the frame slot width. Ordinary RAM,
-/// one CPU.
+/// one CPU. Host backing stops retain private frame/descriptor access progress
+/// and IRET NMI unblocking; resumption does not repeat an instruction attempt.
 enum class X86LegacyReturnProfile : uint8_t { OrderedFrame };
+
+/// Intel VM86 execution with VME word IRET and low-word IRETD entry IP.
+/// Ordinary RAM; interrupt redirection reads the TSS/IVT as supervisor and
+/// pushes words on the user stack, with independent slot wrap/faults. CALL
+/// checks its target after both pushes. VIF/VIP conflicts use either VME or
+/// PVI, independently of IOPL. These CPU choices need explicit target binding.
+enum class X86LegacyVM86Profile : uint8_t { IntelVME };
 
 /// Confined ordinary RAM. POP memory uses incremented ESP, with SS.B-sized
 /// stack advancement preserving high ESP on a word wrap. PUSHA/ENTER stores
@@ -198,6 +228,17 @@ inline constexpr uint32_t kX86LegacyOtherCR4FeatureMask = 0x1a8f6fcf;
 /// refuse instead of inventing #GP. No real/IA-32e transfer is implied.
 struct X86LegacyControlRegisterBinding {
   uint32_t OtherCR4Features = 0;
+};
+
+/// Full-width system-table addresses supplied by the mixed-mode owner. Its
+/// non-64-bit view owns no persistent copy of these banks. Intel EFER.SCE is
+/// explicitly bound; LME/NXE capabilities come from X86PagingFeatures.
+struct X86Non64ModeBinding {
+  uint64_t GDTRBase = 0;
+  uint64_t LDTRBase = 0;
+  std::array<uint64_t, 4> DebugAddresses{};
+  bool EFERSystemCall = false;
+  bool operator==(const X86Non64ModeBinding &) const = default;
 };
 
 /// One ordinary-RAM element per step, with destination-first CMPS reads.
@@ -367,6 +408,10 @@ struct X86LegacyExecutionOptions {
   std::optional<X86LegacyMachineStatusProfile> MachineStatus;
   std::optional<X86LegacyControlRegisterBinding> ControlRegisters;
   std::optional<X86LegacyMpxProfile> MpxMemory;
+  std::optional<X86LegacyVM86Profile> Virtual8086;
+  /// Only executeX86Non64Instruction accepts this binding. That boundary
+  /// returns events to the full-width owner before any IDT access.
+  std::optional<X86Non64ModeBinding> Non64Mode;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {
@@ -392,6 +437,9 @@ enum class X86LegacyExecutionStatus : uint8_t {
 
 struct X86LegacyExecutionResult {
   X86LegacyExecutionStatus Status = X86LegacyExecutionStatus::Completed;
+  /// Newly reported attempt for this invocation. An already charged retained
+  /// instruction resumes without another attempt; a journal retained by an
+  /// earlier owner Error still needs its first reported attempt.
   bool InstructionAttempted = false;
   bool InstructionCompleted = false;
   bool EventAccepted = false;
@@ -403,6 +451,15 @@ struct X86LegacyExecutionResult {
   std::optional<X86MemoryException> Exception;
   std::optional<GuestMemoryFault> BackingFault;
   std::vector<SelfModificationExit> SelfModifications;
+  /// Only the mixed-mode boundary returns a request. SavedEIP is distinct
+  /// from the original instruction PC for software INT. The instruction
+  /// receipt and all effects above remain owned while delivery is pending.
+  std::optional<X86LegacyEvent> RequestedEvent;
+  /// Explicit bank-write receipts; adapters must not infer writes by comparing
+  /// low halves, which can be equal while their full-width result changes.
+  bool CR2Written = false;
+  bool CSWritten = false;
+  bool SSWritten = false;
 };
 
 /// Authenticate a complete instruction extent with the executor's own byte
@@ -420,7 +477,8 @@ validateX86LegacyInstructionEncoding(llvm::ArrayRef<uint8_t> Instruction,
 llvm::Expected<X86LegacyExecutionResult>
 deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                       const X86LegacyEvent &Event,
-                      const X86LegacyExecutionOptions &Options);
+                      const X86LegacyExecutionOptions &Options,
+                      const std::array<uint64_t, 4> *DebugAddresses = nullptr);
 
 /// Resume a previously accepted event without refetching or repeating its
 /// triggering instruction/device effects. The result counts only this call's
@@ -441,9 +499,10 @@ resumeX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// BT/BTS/BTR/BTC, BSF/BSR, XCHG/XADD/CMPXCHG/CMPXCHG8B,
 /// AAA/AAS/DAA/DAS and AAM/AAD with every immediate base,
 /// PUSH/POP, PUSHF/POPF and near CALL/JMP/Jcc/RET.
-/// Code32 MPX uses the shared bounds context; memory additionally requires
-/// MpxMemory. PendingMpx retains host backing progress. Original near branch
-/// BNDINIT commits only on success, including untaken Jcc, before debug entry.
+/// Protected code16/code32 and VM86 MPX use the shared bounds context.
+/// Enabled address16 memory forms raise #UD; legal memory requires MpxMemory.
+/// PendingMpx retains host backing progress. Original near branch BNDINIT
+/// commits only on success, including untaken Jcc, before debug entry.
 /// FarTransfers adds direct and memory far CALL/JMP and 16/32-bit call gates,
 /// including inner-ring stack switches and parameter copying. Transfers stop
 /// before fetching the destination. Tasks additionally owns protected TSS
@@ -489,12 +548,27 @@ resumeX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
 /// sampling and instruction #DB causes; data/I/O producers remain external.
 /// Returns stop at their destination, preserve RF restored by IRETD, and
 /// end SS/STI inhibition. IRET unblocks NMI after fetch, including on a later
-/// fault; RETF preserves NMI blocking.
+/// fault; RETF preserves NMI blocking. Preserve PendingInstructionAttempted
+/// with retained instruction journals across source-context reconstruction;
+/// this boundary alone publishes or retires the resource receipt.
 llvm::Expected<X86LegacyExecutionResult>
 executeX86LegacyInstruction(X86LegacyExecutionState &State,
                             X86PagedMemory &Memory,
                             llvm::ArrayRef<uint8_t> Instruction,
                             const X86LegacyExecutionOptions &Options);
+
+/// Mixed-mode instruction boundary. Shares original-byte authentication,
+/// scalar semantics and retained-attempt accounting with the legacy entry.
+/// It admits protected/compatibility scalar execution, MOV-CR, EFER MSR
+/// access and direct far JMP. Mode-specific task, selector, fast-system,
+/// call-gate and return owners remain separate. Events are returned without
+/// entering either IDT; the caller must commit its full-width view, retain the
+/// request and receipts, then select the owner from the committed LMA.
+llvm::Expected<X86LegacyExecutionResult>
+executeX86Non64Instruction(X86LegacyExecutionState &State,
+                           X86PagedMemory &Memory,
+                           llvm::ArrayRef<uint8_t> Instruction,
+                           const X86LegacyExecutionOptions &Options);
 
 } // namespace neverd::translate
 

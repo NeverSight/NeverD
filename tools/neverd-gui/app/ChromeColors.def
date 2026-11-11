@@ -5,145 +5,219 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Widget chrome colors of the Light and Dark themes, after the Visual Studio
-/// Code Light+ and Dark+ workbench colors.  Entries named after QPalette
-/// roles build the application palette; every entry is also available to the
-/// theme style sheet as ${Name}.
+/// Widget chrome colors of the Light, Dark and the two high contrast themes,
+/// after the Visual Studio Code Light+, Dark+, Light High Contrast and Dark
+/// High Contrast workbench colors.  Entries named after QPalette roles build
+/// the application palette; every entry is also available to the theme style
+/// sheet as ${Name}.  A border that only a high contrast theme draws is
+/// transparent in the others, and a fill or text color that only it changes
+/// repeats there the entry the others painted with, so they paint as before.
 ///
 //===----------------------------------------------------------------------===//
 
-// NEVERD_CHROME_COLOR(Name, Light, Dark)
+// NEVERD_CHROME_COLOR(Name, Light, Dark, LightHighContrast, DarkHighContrast)
 #ifndef NEVERD_CHROME_COLOR
 #error "Define NEVERD_CHROME_COLOR before including ChromeColors.def"
 #endif
 
 // QPalette roles.
-NEVERD_CHROME_COLOR(Window, "#F3F3F3", "#252526")
-NEVERD_CHROME_COLOR(WindowText, "#3B3B3B", "#CCCCCC")
-NEVERD_CHROME_COLOR(Base, "#FFFFFF", "#1E1E1E")
-NEVERD_CHROME_COLOR(AlternateBase, "#F7F7F7", "#232324")
-NEVERD_CHROME_COLOR(Text, "#3B3B3B", "#CCCCCC")
-NEVERD_CHROME_COLOR(Button, "#E7E7E7", "#3A3D41")
-NEVERD_CHROME_COLOR(ButtonText, "#3B3B3B", "#CCCCCC")
-NEVERD_CHROME_COLOR(Highlight, "#0060C0", "#04395E")
-NEVERD_CHROME_COLOR(HighlightedText, "#FFFFFF", "#FFFFFF")
-NEVERD_CHROME_COLOR(ToolTipBase, "#F3F3F3", "#252526")
-NEVERD_CHROME_COLOR(ToolTipText, "#3B3B3B", "#CCCCCC")
-NEVERD_CHROME_COLOR(PlaceholderText, "#8E8E8E", "#8C8C8C")
-NEVERD_CHROME_COLOR(Link, "#006AB1", "#3794FF")
-NEVERD_CHROME_COLOR(LinkVisited, "#795E9E", "#C586C0")
-NEVERD_CHROME_COLOR(BrightText, "#FFFFFF", "#FFFFFF")
-NEVERD_CHROME_COLOR(Light, "#FFFFFF", "#4A4A4A")
-NEVERD_CHROME_COLOR(Midlight, "#F0F0F0", "#3C3C3C")
-NEVERD_CHROME_COLOR(Mid, "#C8C8C8", "#2D2D2D")
-NEVERD_CHROME_COLOR(Dark, "#A0A0A0", "#1A1A1A")
-NEVERD_CHROME_COLOR(Shadow, "#808080", "#000000")
-NEVERD_CHROME_COLOR(DisabledText, "#A0A0A0", "#6E6E6E")
+NEVERD_CHROME_COLOR(Window, "#F3F3F3", "#252526", "#FFFFFF", "#000000")
+NEVERD_CHROME_COLOR(WindowText, "#3B3B3B", "#CCCCCC", "#292929", "#FFFFFF")
+NEVERD_CHROME_COLOR(Base, "#FFFFFF", "#1E1E1E", "#FFFFFF", "#000000")
+NEVERD_CHROME_COLOR(AlternateBase, "#F7F7F7", "#232324", "#FFFFFF", "#000000")
+NEVERD_CHROME_COLOR(Text, "#3B3B3B", "#CCCCCC", "#292929", "#FFFFFF")
+NEVERD_CHROME_COLOR(Button, "#E7E7E7", "#3A3D41", "#FFFFFF", "#000000")
+NEVERD_CHROME_COLOR(ButtonText, "#3B3B3B", "#CCCCCC", "#292929", "#FFFFFF")
+NEVERD_CHROME_COLOR(Highlight, "#0060C0", "#04395E", "#0F4A85", "#008000")
+NEVERD_CHROME_COLOR(HighlightedText, "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF")
+NEVERD_CHROME_COLOR(ToolTipBase, "#F3F3F3", "#252526", "#FFFFFF", "#0C141F")
+NEVERD_CHROME_COLOR(ToolTipText, "#3B3B3B", "#CCCCCC", "#292929", "#FFFFFF")
+NEVERD_CHROME_COLOR(PlaceholderText, "#8E8E8E", "#8C8C8C", "#B2292929",
+                    "#B2FFFFFF")
+NEVERD_CHROME_COLOR(Link, "#006AB1", "#3794FF", "#0F4A85", "#21A6FF")
+NEVERD_CHROME_COLOR(LinkVisited, "#795E9E", "#C586C0", "#0F4A85", "#21A6FF")
+NEVERD_CHROME_COLOR(BrightText, "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF")
+NEVERD_CHROME_COLOR(Light, "#FFFFFF", "#4A4A4A", "#FFFFFF", "#FFFFFF")
+NEVERD_CHROME_COLOR(Midlight, "#F0F0F0", "#3C3C3C", "#0F4A85", "#6FC3DF")
+NEVERD_CHROME_COLOR(Mid, "#C8C8C8", "#2D2D2D", "#0F4A85", "#6FC3DF")
+NEVERD_CHROME_COLOR(Dark, "#A0A0A0", "#1A1A1A", "#0F4A85", "#6FC3DF")
+NEVERD_CHROME_COLOR(Shadow, "#808080", "#000000", "#000000", "#000000")
+NEVERD_CHROME_COLOR(DisabledText, "#A0A0A0", "#6E6E6E", "#7F7F7F", "#A5A5A5")
 
 // Workbench surfaces.
-NEVERD_CHROME_COLOR(Accent, "#007ACC", "#007ACC")
-NEVERD_CHROME_COLOR(Focus, "#0090F1", "#007FD4")
-NEVERD_CHROME_COLOR(Border, "#E5E5E5", "#3C3C3C")
+NEVERD_CHROME_COLOR(Accent, "#007ACC", "#007ACC", "#0F4A85", "#6FC3DF")
+NEVERD_CHROME_COLOR(Focus, "#0090F1", "#007FD4", "#006BBD", "#F38518")
+NEVERD_CHROME_COLOR(Border, "#E5E5E5", "#3C3C3C", "#0F4A85", "#6FC3DF")
 // The menu bar shares the toolbar's surface, so the chrome above the windows
 // reads as one band.
-NEVERD_CHROME_COLOR(MenuBar, "#F3F3F3", "#2D2D2D")
-NEVERD_CHROME_COLOR(MenuBarText, "#333333", "#CCCCCC")
-NEVERD_CHROME_COLOR(MenuBarSelection, "#E1E1E1", "#3C3C3C")
-NEVERD_CHROME_COLOR(Menu, "#FFFFFF", "#252526")
-NEVERD_CHROME_COLOR(MenuText, "#3B3B3B", "#CCCCCC")
-NEVERD_CHROME_COLOR(MenuSelection, "#0060C0", "#04395E")
-NEVERD_CHROME_COLOR(MenuSeparator, "#D4D4D4", "#454545")
-NEVERD_CHROME_COLOR(ToolBar, "#F3F3F3", "#2D2D2D")
-NEVERD_CHROME_COLOR(ToolBarHover, "#E1E1E1", "#3C3C3C")
+NEVERD_CHROME_COLOR(MenuBar, "#F3F3F3", "#2D2D2D", "#FFFFFF", "#000000")
+NEVERD_CHROME_COLOR(MenuBarText, "#333333", "#CCCCCC", "#292929", "#FFFFFF")
+NEVERD_CHROME_COLOR(MenuBarSelection, "#E1E1E1", "#3C3C3C", "#00000000",
+                    "#00000000")
+NEVERD_CHROME_COLOR(MenuBarSelectionBorder, "#00000000", "#00000000", "#006BBD",
+                    "#F38518")
+NEVERD_CHROME_COLOR(Menu, "#FFFFFF", "#252526", "#FFFFFF", "#000000")
+NEVERD_CHROME_COLOR(MenuText, "#3B3B3B", "#CCCCCC", "#292929", "#FFFFFF")
+NEVERD_CHROME_COLOR(MenuSelection, "#0060C0", "#04395E", "#1A0F4A85",
+                    "#00000000")
+// A high contrast theme keeps a highlighted item's text in the menu's color.
+NEVERD_CHROME_COLOR(MenuSelectionText, "#FFFFFF", "#FFFFFF", "#292929",
+                    "#FFFFFF")
+NEVERD_CHROME_COLOR(MenuSelectionBorder, "#00000000", "#00000000", "#006BBD",
+                    "#F38518")
+NEVERD_CHROME_COLOR(MenuSeparator, "#D4D4D4", "#454545", "#0F4A85", "#6FC3DF")
+NEVERD_CHROME_COLOR(ToolBar, "#F3F3F3", "#2D2D2D", "#FFFFFF", "#000000")
+NEVERD_CHROME_COLOR(ToolBarHover, "#E1E1E1", "#3C3C3C", "#00000000",
+                    "#00000000")
+NEVERD_CHROME_COLOR(ToolBarHoverBorder, "#00000000", "#00000000", "#006BBD",
+                    "#F38518")
+// A pressed or checked tool button; the high contrast themes take Visual
+// Studio Code's actionBar.toggledBackground.
+NEVERD_CHROME_COLOR(ToolButtonChecked, "#0060C0", "#04395E", "#DDDDDD",
+                    "#383A49")
+NEVERD_CHROME_COLOR(ToolButtonCheckedText, "#FFFFFF", "#FFFFFF", "#292929",
+                    "#FFFFFF")
 // The status bar shares the windows' surface with a hairline above it, as in
 // Visual Studio Code's Modern themes; the accent marks states, not chrome.
-NEVERD_CHROME_COLOR(StatusBar, "#F3F3F3", "#252526")
-NEVERD_CHROME_COLOR(StatusBarText, "#3B3B3B", "#CCCCCC")
-NEVERD_CHROME_COLOR(StatusBarBorder, "#E5E5E5", "#3C3C3C")
+NEVERD_CHROME_COLOR(StatusBar, "#F3F3F3", "#252526", "#FFFFFF", "#000000")
+NEVERD_CHROME_COLOR(StatusBarText, "#3B3B3B", "#CCCCCC", "#292929", "#FFFFFF")
+NEVERD_CHROME_COLOR(StatusBarBorder, "#E5E5E5", "#3C3C3C", "#0F4A85", "#6FC3DF")
 // A window that draws its own frame, after Visual Studio Code's custom title
 // bar: the title bar carries the menus on the menu bar's surface, its text
 // dims while the window is inactive, its controls take a light wash under the
 // pointer and Close turns red, and the command center is a quiet field.
-NEVERD_CHROME_COLOR(TitleBar, "#F3F3F3", "#2D2D2D")
-NEVERD_CHROME_COLOR(TitleBarText, "#333333", "#CCCCCC")
-NEVERD_CHROME_COLOR(TitleBarInactiveText, "#808080", "#8C8C8C")
-NEVERD_CHROME_COLOR(WindowControlHover, "#DBDBDB", "#424242")
-NEVERD_CHROME_COLOR(WindowControlPressed, "#C2C2C2", "#575757")
-NEVERD_CHROME_COLOR(WindowCloseHover, "#E81123", "#E81123")
-NEVERD_CHROME_COLOR(WindowClosePressed, "#F1707A", "#F1707A")
-NEVERD_CHROME_COLOR(WindowCloseText, "#FFFFFF", "#FFFFFF")
-NEVERD_CHROME_COLOR(CommandCenter, "#E7E7E7", "#383838")
-NEVERD_CHROME_COLOR(CommandCenterBorder, "#CDCDCD", "#4D4D4D")
-NEVERD_CHROME_COLOR(CommandCenterHover, "#E0E0E0", "#3E3E3E")
-NEVERD_CHROME_COLOR(CommandCenterHoverBorder, "#B9B9B9", "#5D5D5D")
+NEVERD_CHROME_COLOR(TitleBar, "#F3F3F3", "#2D2D2D", "#FFFFFF", "#000000")
+NEVERD_CHROME_COLOR(TitleBarText, "#333333", "#CCCCCC", "#292929", "#FFFFFF")
+NEVERD_CHROME_COLOR(TitleBarInactiveText, "#808080", "#8C8C8C", "#292929",
+                    "#FFFFFF")
+NEVERD_CHROME_COLOR(WindowControlHover, "#DBDBDB", "#424242", "#1A0F4A85",
+                    "#1AFFFFFF")
+NEVERD_CHROME_COLOR(WindowControlPressed, "#C2C2C2", "#575757", "#330F4A85",
+                    "#33FFFFFF")
+NEVERD_CHROME_COLOR(WindowCloseHover, "#E81123", "#E81123", "#E81123",
+                    "#E81123")
+NEVERD_CHROME_COLOR(WindowClosePressed, "#F1707A", "#F1707A", "#F1707A",
+                    "#F1707A")
+NEVERD_CHROME_COLOR(WindowCloseText, "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF")
+NEVERD_CHROME_COLOR(CommandCenter, "#E7E7E7", "#383838", "#FFFFFF", "#000000")
+NEVERD_CHROME_COLOR(CommandCenterBorder, "#CDCDCD", "#4D4D4D", "#0F4A85",
+                    "#6FC3DF")
+NEVERD_CHROME_COLOR(CommandCenterHover, "#E0E0E0", "#3E3E3E", "#FFFFFF",
+                    "#000000")
+NEVERD_CHROME_COLOR(CommandCenterHoverBorder, "#B9B9B9", "#5D5D5D", "#006BBD",
+                    "#F38518")
 // Under Wayland GNOME draws no shadow for such a window, so it draws its own:
 // a hairline at its visible edge over a shadow that fades outward (#AARRGGBB).
-NEVERD_CHROME_COLOR(WindowEdge, "#38000000", "#B3000000")
-NEVERD_CHROME_COLOR(WindowShadow, "#30000000", "#66000000")
-NEVERD_CHROME_COLOR(TabBar, "#F3F3F3", "#252526")
-NEVERD_CHROME_COLOR(TabActive, "#FFFFFF", "#1E1E1E")
-NEVERD_CHROME_COLOR(TabInactive, "#ECECEC", "#2D2D2D")
-NEVERD_CHROME_COLOR(TabActiveText, "#333333", "#FFFFFF")
-NEVERD_CHROME_COLOR(TabInactiveText, "#7A7A7A", "#969696")
-NEVERD_CHROME_COLOR(TabActiveBorder, "#007ACC", "#007ACC")
-NEVERD_CHROME_COLOR(DockTitle, "#F3F3F3", "#252526")
-NEVERD_CHROME_COLOR(DockTitleText, "#616161", "#BBBBBB")
-NEVERD_CHROME_COLOR(DockSeparator, "#E5E5E5", "#3C3C3C")
-NEVERD_CHROME_COLOR(DockSeparatorHover, "#0090F1", "#007FD4")
-NEVERD_CHROME_COLOR(FloatingWindowBorder, "#D4D4D4", "#454545")
-NEVERD_CHROME_COLOR(Hover, "#E8E8E8", "#2A2D2E")
+NEVERD_CHROME_COLOR(WindowEdge, "#38000000", "#B3000000", "#0F4A85", "#6FC3DF")
+NEVERD_CHROME_COLOR(WindowShadow, "#30000000", "#66000000", "#00000000",
+                    "#00000000")
+NEVERD_CHROME_COLOR(TabBar, "#F3F3F3", "#252526", "#FFFFFF", "#000000")
+NEVERD_CHROME_COLOR(TabActive, "#FFFFFF", "#1E1E1E", "#FFFFFF", "#000000")
+NEVERD_CHROME_COLOR(TabInactive, "#ECECEC", "#2D2D2D", "#FFFFFF", "#000000")
+NEVERD_CHROME_COLOR(TabActiveText, "#333333", "#FFFFFF", "#292929", "#FFFFFF")
+NEVERD_CHROME_COLOR(TabInactiveText, "#7A7A7A", "#969696", "#292929", "#FFFFFF")
+NEVERD_CHROME_COLOR(TabActiveBorder, "#007ACC", "#007ACC", "#006BBD", "#F38518")
+NEVERD_CHROME_COLOR(TabSeparator, "#F3F3F3", "#252526", "#0F4A85", "#6FC3DF")
+NEVERD_CHROME_COLOR(DockTitle, "#F3F3F3", "#252526", "#FFFFFF", "#000000")
+NEVERD_CHROME_COLOR(DockTitleText, "#616161", "#BBBBBB", "#292929", "#FFFFFF")
+NEVERD_CHROME_COLOR(DockSeparator, "#E5E5E5", "#3C3C3C", "#0F4A85", "#6FC3DF")
+NEVERD_CHROME_COLOR(DockSeparatorHover, "#0090F1", "#007FD4", "#006BBD",
+                    "#F38518")
+NEVERD_CHROME_COLOR(FloatingWindowBorder, "#D4D4D4", "#454545", "#0F4A85",
+                    "#6FC3DF")
+NEVERD_CHROME_COLOR(Hover, "#E8E8E8", "#2A2D2E", "#1A0F4A85", "#1AFFFFFF")
+// A list's selected rows: filled in the accent, or in a high contrast theme
+// tinted at most and outlined (ListSelectionBorder) with the text kept.
+NEVERD_CHROME_COLOR(ListSelection, "#0060C0", "#04395E", "#1A0F4A85",
+                    "#00000000")
+NEVERD_CHROME_COLOR(ListSelectionText, "#FFFFFF", "#FFFFFF", "#292929",
+                    "#FFFFFF")
+NEVERD_CHROME_COLOR(ListSelectionBorder, "#00000000", "#00000000", "#006BBD",
+                    "#F38518")
 // Status lines and legends, which describe rather than act.
-NEVERD_CHROME_COLOR(SecondaryText, "#717171", "#9D9D9D")
-NEVERD_CHROME_COLOR(Input, "#FFFFFF", "#3C3C3C")
-NEVERD_CHROME_COLOR(InputBorder, "#CECECE", "#3C3C3C")
-NEVERD_CHROME_COLOR(CheckboxBackground, "#FFFFFF", "#3C3C3C")
-NEVERD_CHROME_COLOR(CheckboxBorder, "#919191", "#6B6B6B")
-NEVERD_CHROME_COLOR(CheckboxChecked, "#007ACC", "#0E639C")
+NEVERD_CHROME_COLOR(SecondaryText, "#717171", "#9D9D9D", "#B2292929",
+                    "#B2FFFFFF")
+NEVERD_CHROME_COLOR(Input, "#FFFFFF", "#3C3C3C", "#FFFFFF", "#000000")
+NEVERD_CHROME_COLOR(InputBorder, "#CECECE", "#3C3C3C", "#0F4A85", "#6FC3DF")
+NEVERD_CHROME_COLOR(DisabledBorder, "#E5E5E5", "#3C3C3C", "#7F7F7F", "#A5A5A5")
+NEVERD_CHROME_COLOR(CheckboxBackground, "#FFFFFF", "#3C3C3C", "#FFFFFF",
+                    "#000000")
+NEVERD_CHROME_COLOR(CheckboxBorder, "#919191", "#6B6B6B", "#0F4A85", "#6FC3DF")
+NEVERD_CHROME_COLOR(CheckboxChecked, "#007ACC", "#0E639C", "#0F4A85", "#000000")
+NEVERD_CHROME_COLOR(CheckboxCheckedBorder, "#007ACC", "#0E639C", "#0F4A85",
+                    "#6FC3DF")
 // A menu toggle that is on boxes its icon, as Visual Studio Code marks an
 // active input option: inputOption.activeBorder over activeBackground, the
 // focus color at 20% and 40% (#AARRGGBB).
-NEVERD_CHROME_COLOR(OptionActiveBorder, "#007ACC", "#007ACC")
-NEVERD_CHROME_COLOR(OptionActiveBackground, "#330090F1", "#66007FD4")
-NEVERD_CHROME_COLOR(HeaderBackground, "#F3F3F3", "#252526")
-NEVERD_CHROME_COLOR(HeaderText, "#616161", "#BBBBBB")
-NEVERD_CHROME_COLOR(ScrollbarSlider, "#C1C1C1", "#424242")
-NEVERD_CHROME_COLOR(ScrollbarSliderHover, "#9A9A9A", "#4F4F4F")
-NEVERD_CHROME_COLOR(ScrollbarSliderActive, "#787878", "#6A6A6A")
-NEVERD_CHROME_COLOR(Separator, "#E5E5E5", "#3C3C3C")
+NEVERD_CHROME_COLOR(OptionActiveBorder, "#007ACC", "#007ACC", "#0F4A85",
+                    "#6FC3DF")
+NEVERD_CHROME_COLOR(OptionActiveBackground, "#330090F1", "#66007FD4",
+                    "#00000000", "#00000000")
+NEVERD_CHROME_COLOR(HeaderBackground, "#F3F3F3", "#252526", "#FFFFFF",
+                    "#000000")
+NEVERD_CHROME_COLOR(HeaderText, "#616161", "#BBBBBB", "#292929", "#FFFFFF")
+NEVERD_CHROME_COLOR(ScrollbarSlider, "#C1C1C1", "#424242", "#660F4A85",
+                    "#996FC3DF")
+NEVERD_CHROME_COLOR(ScrollbarSliderHover, "#9A9A9A", "#4F4F4F", "#CC0F4A85",
+                    "#CC6FC3DF")
+NEVERD_CHROME_COLOR(ScrollbarSliderActive, "#787878", "#6A6A6A", "#0F4A85",
+                    "#6FC3DF")
+NEVERD_CHROME_COLOR(Separator, "#E5E5E5", "#3C3C3C", "#0F4A85", "#6FC3DF")
 // A button under the pointer, after Visual Studio Code's secondary buttons:
 // the Light Modern and Dark+ secondaryHoverBackground.
-NEVERD_CHROME_COLOR(ButtonHover, "#CCCCCC", "#45494E")
-NEVERD_CHROME_COLOR(ButtonPrimary, "#007ACC", "#0E639C")
-NEVERD_CHROME_COLOR(ButtonPrimaryHover, "#0062A3", "#1177BB")
-NEVERD_CHROME_COLOR(ButtonPrimaryText, "#FFFFFF", "#FFFFFF")
+NEVERD_CHROME_COLOR(ButtonHover, "#CCCCCC", "#45494E", "#00000000", "#00000000")
+NEVERD_CHROME_COLOR(ButtonHoverBorder, "#00000000", "#00000000", "#006BBD",
+                    "#F38518")
+NEVERD_CHROME_COLOR(ButtonPrimary, "#007ACC", "#0E639C", "#0F4A85", "#000000")
+NEVERD_CHROME_COLOR(ButtonPrimaryHover, "#0062A3", "#1177BB", "#0F4A85",
+                    "#000000")
+NEVERD_CHROME_COLOR(ButtonPrimaryText, "#FFFFFF", "#FFFFFF", "#FFFFFF",
+                    "#FFFFFF")
+NEVERD_CHROME_COLOR(ButtonPrimaryBorder, "#007ACC", "#0E639C", "#0F4A85",
+                    "#6FC3DF")
 // A primary button that cannot act keeps a faint accent behind a dimmed
 // label (#AARRGGBB).  The dark theme draws the button at 40% opacity, as
 // Visual Studio Code draws a disabled one.  In the light theme white at 40%
 // all but vanished into the pale fill (1.3:1), so there the fill is the accent
 // at 18% and the label the window text at 55%.
-NEVERD_CHROME_COLOR(ButtonPrimaryDisabled, "#2E007ACC", "#660E639C")
-NEVERD_CHROME_COLOR(ButtonPrimaryDisabledText, "#8C3B3B3B", "#66FFFFFF")
+NEVERD_CHROME_COLOR(ButtonPrimaryDisabled, "#2E007ACC", "#660E639C",
+                    "#00000000", "#00000000")
+NEVERD_CHROME_COLOR(ButtonPrimaryDisabledText, "#8C3B3B3B", "#66FFFFFF",
+                    "#7F7F7F", "#A5A5A5")
+NEVERD_CHROME_COLOR(ButtonPrimaryDisabledBorder, "#00000000", "#00000000",
+                    "#7F7F7F", "#A5A5A5")
 // Quick start: file outlines share the action glyphs' clear blue accent.
 // Labels identify the format; missing files are dimmed.  Thin strokes read
 // darker than their color, so the dark theme draws them in Visual Studio
 // Code's icon blue, lighter than its link blue.
-NEVERD_CHROME_COLOR(RecentBadgeText, "#246CC5", "#75BEFF")
-NEVERD_CHROME_COLOR(RecentBadgeSelectedText, "#185CAD", "#91CEFF")
+NEVERD_CHROME_COLOR(RecentBadgeText, "#246CC5", "#75BEFF", "#0F4A85", "#21A6FF")
+NEVERD_CHROME_COLOR(RecentBadgeSelectedText, "#185CAD", "#91CEFF", "#FFFFFF",
+                    "#FFFFFF")
 // Quick start: the side pane, action rows and line glyphs, shortcut hints,
 // and the recent file the list selected.
-NEVERD_CHROME_COLOR(QuickStartSide, "#F3F3F3", "#252526")
-NEVERD_CHROME_COLOR(QuickStartTitle, "#1F1F1F", "#E8E8E8")
-NEVERD_CHROME_COLOR(QuickStartSecondaryText, "#58636D", "#A3ABB4")
-NEVERD_CHROME_COLOR(QuickStartMetadataText, "#65727E", "#8F9BA7")
-NEVERD_CHROME_COLOR(QuickStartDefaultAction, "#EAF0F4", "#2A2F34")
-NEVERD_CHROME_COLOR(QuickStartActionHover, "#E5EBF0", "#2F3439")
-NEVERD_CHROME_COLOR(QuickStartDefaultGlyph, "#185CAD", "#91CEFF")
-NEVERD_CHROME_COLOR(QuickStartGlyph, "#246CC5", "#75BEFF")
-NEVERD_CHROME_COLOR(QuickStartFocus, "#707070", "#9AA4AE")
-NEVERD_CHROME_COLOR(QuickStartPressed, "#DAE3EB", "#343C44")
-NEVERD_CHROME_COLOR(QuickStartKeyBorder, "#CED5DB", "#424A52")
-NEVERD_CHROME_COLOR(QuickStartKeyText, "#65727E", "#A8B4C0")
-NEVERD_CHROME_COLOR(QuickStartSelection, "#E6EEF5", "#2A4461")
-NEVERD_CHROME_COLOR(QuickStartSelectionText, "#202B33", "#F0F4F8")
+NEVERD_CHROME_COLOR(QuickStartSide, "#F3F3F3", "#252526", "#FFFFFF", "#000000")
+NEVERD_CHROME_COLOR(QuickStartTitle, "#1F1F1F", "#E8E8E8", "#292929", "#FFFFFF")
+NEVERD_CHROME_COLOR(QuickStartSecondaryText, "#58636D", "#A3ABB4", "#292929",
+                    "#FFFFFF")
+NEVERD_CHROME_COLOR(QuickStartMetadataText, "#65727E", "#8F9BA7", "#B2292929",
+                    "#B2FFFFFF")
+NEVERD_CHROME_COLOR(QuickStartDefaultAction, "#EAF0F4", "#2A2F34", "#1A0F4A85",
+                    "#1AFFFFFF")
+NEVERD_CHROME_COLOR(QuickStartActionHover, "#E5EBF0", "#2F3439", "#1A0F4A85",
+                    "#1AFFFFFF")
+NEVERD_CHROME_COLOR(QuickStartDefaultGlyph, "#185CAD", "#91CEFF", "#0F4A85",
+                    "#21A6FF")
+NEVERD_CHROME_COLOR(QuickStartGlyph, "#246CC5", "#75BEFF", "#0F4A85", "#21A6FF")
+NEVERD_CHROME_COLOR(QuickStartFocus, "#707070", "#9AA4AE", "#006BBD", "#F38518")
+NEVERD_CHROME_COLOR(QuickStartPressed, "#DAE3EB", "#343C44", "#330F4A85",
+                    "#33FFFFFF")
+NEVERD_CHROME_COLOR(QuickStartKeyBorder, "#CED5DB", "#424A52", "#0F4A85",
+                    "#6FC3DF")
+NEVERD_CHROME_COLOR(QuickStartKeyText, "#65727E", "#A8B4C0", "#292929",
+                    "#FFFFFF")
+NEVERD_CHROME_COLOR(QuickStartSelection, "#E6EEF5", "#2A4461", "#0F4A85",
+                    "#008000")
+NEVERD_CHROME_COLOR(QuickStartSelectionText, "#202B33", "#F0F4F8", "#FFFFFF",
+                    "#FFFFFF")
 
 #undef NEVERD_CHROME_COLOR

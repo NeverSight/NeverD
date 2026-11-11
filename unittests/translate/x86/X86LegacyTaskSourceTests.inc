@@ -49,6 +49,9 @@ TEST_P(X86LegacySourceTest,
     EXPECT_EQ(Run(&Context, &Budget),
               uint32_t(X86LegacyExecutionStatus::BackingFault));
     EXPECT_EQ(Budget, 0u);
+    EXPECT_EQ(Run(&Context, &Budget),
+              uint32_t(X86LegacyExecutionStatus::BackingFault));
+    EXPECT_EQ(Budget, 0u);
     ASSERT_TRUE(S.PendingTask);
     EXPECT_EQ(S.EIP, 0x3000u);
   }
@@ -57,11 +60,16 @@ TEST_P(X86LegacySourceTest,
   put(0x1000, 0xcc, GuestScalarWidth::I8);
   put(0x5820, 0xdeadbeef, GuestScalarWidth::I32);
   X86LegacySourceExecution Restored(S, *M, O);
-  Budget = 1;
   EXPECT_EQ(Run(&Restored, &Budget),
             uint32_t(X86LegacySourceExit::BudgetExhausted))
       << Restored.lastError().str();
   EXPECT_EQ(Budget, 0u);
+  EXPECT_EQ(S.EIP, 0x3000u);
+  EXPECT_TRUE(Restored.lastResult().InstructionCompleted);
+  EXPECT_FALSE(Restored.lastResult().InstructionAttempted);
+  Budget = 1;
+  EXPECT_EQ(Run(&Restored, &Budget),
+            uint32_t(X86LegacySourceExit::BudgetExhausted));
   EXPECT_EQ(S.EIP, 0x3001u);
   EXPECT_EQ(get(0x5820), 0xdeadbeefu);
   EXPECT_FALSE(S.PendingTask);
@@ -90,24 +98,65 @@ TEST_P(X86LegacySourceTest, TaskIncomingFaultDispatchesHandlerWithNewFrame) {
   EXPECT_EQ(S.Core.GPR[0], 0x12345678u);
 }
 
-TEST_P(X86LegacySourceTest, TaskModeBoundaryRetainsBudgetAndStateOnRetry) {
+TEST_P(X86LegacySourceTest, TaskVM86DestinationExecutesWithParagraphBase) {
   taskState();
   put(0x8024, 0x20202, GuestScalarWidth::I32);
   const std::vector<SourceUnit> Units{{0x1000, 32, {0x9a, 0, 0, 0, 0, 0x30, 0}},
-                                      {0x3000, 16, {0x90}}};
+                                      {0x31b0, 16, {0xb8, 0x34, 0x12}}};
   Driver Run = nullptr;
   ASSERT_NO_FATAL_FAILURE(compile(Units, Run));
   install(Units);
   X86LegacySourceExecution Context(S, *M, O);
   uint64_t Budget = 2;
   EXPECT_EQ(Run(&Context, &Budget),
-            uint32_t(X86LegacyExecutionStatus::ModeUnavailable));
-  EXPECT_EQ(Budget, 1u);
+            uint32_t(X86LegacySourceExit::BudgetExhausted));
+  EXPECT_EQ(Budget, 0u);
   EXPECT_EQ(S.TR.Selector, 48);
-  EXPECT_EQ(S.EIP, 0x3000u);
+  EXPECT_EQ(S.EIP, 0x3003u);
+  EXPECT_EQ(S.Core.GPR[0], 0x1234u);
+  EXPECT_FALSE(S.PendingTask);
+}
+
+TEST_P(X86LegacySourceTest,
+       TaskEventContinuationDoesNotGrantInstructionBudget) {
+  taskState();
+  put(0x7038, taskDescriptor(0x9000, 0x3f, 0x82));
+  put(0x8060, 0x38, GuestScalarWidth::I16);
+  put(0x804c, 0x0f, GuestScalarWidth::I16);
+  put(0x11024, 0x21007, GuestScalarWidth::I32);
+  put(0x6000 + 0x30 * 8, (uint64_t(0x30) << 16) | (uint64_t(0xe5) << 40));
+  Driver Run = nullptr;
+  ASSERT_NO_FATAL_FAILURE(compile({{0x3000, 32, {0x90}}}, Run));
+  X86LegacySourceExecution Context(S, *M, O);
+  ASSERT_EQ(Context.deliver({S.EIP, 0, 0, 0x30, X86LegacyEventKind::Interrupt}),
+            uint32_t(X86LegacyExecutionStatus::BackingFault))
+      << Context.lastError().str();
+  ASSERT_TRUE(S.PendingEvent);
   ASSERT_TRUE(S.PendingTask);
+  EXPECT_FALSE(Context.lastResult().InstructionAttempted);
+  uint64_t Budget = 0;
+  const auto Before = M->physicalMemory().snapshotMemoryRegions().front().Bytes;
+  const auto PC = S.EIP;
   EXPECT_EQ(Run(&Context, &Budget),
-            uint32_t(X86LegacyExecutionStatus::ModeUnavailable));
-  EXPECT_EQ(Budget, 1u);
+            uint32_t(X86LegacySourceExit::BudgetExhausted));
+  EXPECT_EQ(Budget, 0u);
+  EXPECT_EQ(S.EIP, PC);
+  EXPECT_EQ(M->physicalMemory().snapshotMemoryRegions().front().Bytes, Before);
+  repairMpxBacking();
+  put(0x21008, 0x00cffb000000ffffULL);
+  X86LegacySourceExecution Restored(S, *M, O);
+  ASSERT_EQ(Restored.resume(),
+            uint32_t(X86LegacyExecutionStatus::EventDelivered))
+      << Restored.lastError().str();
+  EXPECT_FALSE(S.PendingEvent);
+  EXPECT_FALSE(S.PendingTask);
+  EXPECT_FALSE(Restored.lastResult().InstructionAttempted);
+  EXPECT_EQ(Run(&Restored, &Budget),
+            uint32_t(X86LegacySourceExit::BudgetExhausted));
   EXPECT_EQ(S.EIP, 0x3000u);
+  Budget = 1;
+  EXPECT_EQ(Run(&Restored, &Budget),
+            uint32_t(X86LegacySourceExit::BudgetExhausted));
+  EXPECT_EQ(Budget, 0u);
+  EXPECT_EQ(S.EIP, 0x3001u);
 }

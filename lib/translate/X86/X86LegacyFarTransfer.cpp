@@ -9,6 +9,8 @@
 
 #include "X86LegacyFarTransfer.h"
 
+#include "X86LegacyTransferJournal.h"
+
 #include "neverd/ir/X86/X86SegmentDescriptorRules.h"
 
 #include "llvm/Support/Errc.h"
@@ -54,7 +56,10 @@ public:
   run(const detail::X86LegacyFarTransfer &F, uint32_t NextIP,
       llvm::ArrayRef<uint8_t> Bytes) {
     Original = Bytes;
+    Journal.emplace(S, M, O, Bytes, detail::X86LegacyTransferKind::Far,
+                    bool(S.EFlags & 0x20000) || bool(O.Non64Mode));
     execute(F, NextIP);
+    Journal->finish(Failure ? X86PageWalkStatus::Completed : R.Status);
     if (Failure)
       return std::move(*Failure);
     return std::move(R);
@@ -67,6 +72,7 @@ private:
   detail::X86LegacyTaskResult R;
   std::optional<llvm::Error> Failure;
   llvm::ArrayRef<uint8_t> Original;
+  std::optional<detail::X86LegacyTransferJournal> Journal;
 
   bool accept(llvm::Expected<X86MemoryAccessResult> Got) {
     if (!Got) {
@@ -84,8 +90,15 @@ private:
     return false;
   }
 
-  bool access(uint32_t Address, unsigned Bytes, Value &V, bool Write = false,
+  bool access(uint64_t Address, unsigned Bytes, Value &V, bool Write = false,
               bool Implicit = true, uint8_t CPL = 0, bool Stack = false) {
+    auto Replayed = Journal->replay(Address, Bytes, Write, V);
+    if (!Replayed) {
+      Failure = Replayed.takeError();
+      return false;
+    }
+    if (*Replayed)
+      return true;
     const bool Misaligned = !Implicit && CPL == 3 &&
                             (M.controls().CR0 & 0x40000) &&
                             (S.EFlags & 0x40000) && (Address & (Bytes - 1));
@@ -97,7 +110,7 @@ private:
     const X86LinearAccess A{
         Address, Write ? MemoryAccessKind::Write : MemoryAccessKind::Read,
         CPL,     Implicit,
-        Stack,   true};
+        Stack,   !Implicit || !(M.controls().EFER & 0x400)};
     if (Write) {
       auto Store = M.prepareStore(A, Bytes);
       if (!Store) {
@@ -117,6 +130,7 @@ private:
       for (unsigned I = 0; I != Bytes; ++I)
         V |= Value(Buffer[I]) << (I * 8);
     }
+    Journal->record(Address, Bytes, Write, V);
     return true;
   }
 
@@ -125,7 +139,7 @@ private:
     auto Range = checkX86LegacySegmentAccess(
         S.Core.Segments[unsigned(Segment)],
         {Segment, X86SegmentAccessKind::Read, Offset, Bytes,
-         O.Segments.FullLimitChoice});
+         O.Segments.FullLimitChoice, bool(S.EFlags & 0x20000)});
     if (!Range) {
       Failure = Range.takeError();
       return false;
@@ -137,7 +151,7 @@ private:
   }
 
   bool descriptor(uint16_t Selector, uint8_t Fault, Value &D,
-                  uint32_t &Address) {
+                  uint64_t &Address) {
     if (faultIf(!(Selector & 0xfffc), Fault, 0))
       return false;
     const bool Local = Selector & 4;
@@ -147,11 +161,17 @@ private:
                         (Local ? C.LDTR.Limit : C.GDTRLimit),
                 Fault, Selector & 0xfffc))
       return false;
-    Address = (Local ? C.LDTR.Base : C.GDTRBase) + (Selector & 0xfff8);
+    const uint64_t Base =
+        O.Non64Mode && (M.controls().EFER & 0x400)
+            ? (Local ? O.Non64Mode->LDTRBase : O.Non64Mode->GDTRBase)
+            : (Local ? C.LDTR.Base : C.GDTRBase);
+    Address = Base + (Selector & 0xfff8);
+    if (!(M.controls().EFER & 0x400))
+      Address = uint32_t(Address);
     return access(Address, 8, D);
   }
 
-  bool accessed(uint32_t Address, Value D) {
+  bool accessed(uint64_t Address, Value D) {
     if (D & (Value{1} << 40))
       return true;
     D |= Value{1} << 40;
@@ -161,6 +181,37 @@ private:
   X86LegacySegmentCache cache(uint16_t Selector, Value D) {
     return {uint32_t(Rules::base(*this, D)), uint32_t(Rules::limit(*this, D)),
             Selector, uint16_t(Rules::attributes(*this, D)), false};
+  }
+
+  void virtualTransfer(bool Call, unsigned Width, Value IP, uint16_t Selector,
+                       uint32_t NextIP) {
+    const auto &SS = S.Core.Segments[2];
+    uint32_t SP = S.Core.GPR[4];
+    if (Call)
+      for (Value V : {Value(S.Core.Segments[1].Selector), Value(NextIP)}) {
+        SP = (SP & 0xffff0000) | uint16_t(SP - Width);
+        auto Range =
+            checkX86LegacySegmentAccess(SS, {X86SegmentRegister::SS,
+                                             X86SegmentAccessKind::Write,
+                                             uint16_t(SP),
+                                             Width,
+                                             {},
+                                             true});
+        if (!Range) {
+          Failure = Range.takeError();
+          return;
+        }
+        if (faultIf(bool(Range->FaultVector), 12, 0))
+          return;
+        if (!access(SS.Base + uint16_t(SP), Width, V, true, false, 3, true))
+          return;
+      }
+    // The Intel VM86 profile checks the target after both CALL stores.
+    if (faultIf(IP > UINT16_MAX, 13, 0))
+      return;
+    S.Core.GPR[4] = SP;
+    S.Core.Segments[1] = x86VM86SegmentCache(Selector);
+    S.EIP = IP;
   }
 
   void execute(const detail::X86LegacyFarTransfer &F, uint32_t NextIP) {
@@ -176,11 +227,34 @@ private:
                    Selector))
         return;
     }
+    if (S.EFlags & 0x20000) {
+      virtualTransfer(F.Call, F.Bytes, IP, Selector, NextIP);
+      return;
+    }
     Value Code = 0;
-    uint32_t CodeAddress = 0;
+    uint64_t CodeAddress = 0;
     if (!descriptor(Selector, 13, Code, CodeAddress))
       return;
     const unsigned Type = (Code >> 40) & 31;
+    if (O.Non64Mode && !(Type & 0x10)) {
+      if (M.controls().EFER & 0x400) {
+        // Task transfers are invalid in IA-32e; valid call gates still require
+        // their own 16-byte gate and privilege-transition owner.
+        if (Type != 12)
+          faultIf(true, 13, Selector & 0xfffc);
+        else
+          Failure = llvm::createStringError(
+              llvm::errc::not_supported,
+              "mixed-mode far gates require their own state owner");
+      } else if (Type == 1 || Type == 3 || Type == 5 || Type == 9 ||
+                 Type == 11 || Type == 4 || Type == 12)
+        Failure = llvm::createStringError(
+            llvm::errc::not_supported,
+            "mixed-mode task and gate transfers require their own state owner");
+      else
+        faultIf(true, 13, Selector & 0xfffc);
+      return;
+    }
     if (Type == 1 || Type == 3 || Type == 5 || Type == 9 || Type == 11) {
       if (Type == 5 &&
           (faultIf(((Code >> 45) & 3) < S.Core.CPL ||
@@ -235,7 +309,11 @@ private:
                 Selector & 0xfffc) ||
         faultIf(!(Attributes & 0x80), 11, Selector & 0xfffc))
       return;
-    if (Attributes & 0x2000) {
+    const bool LongTarget =
+        O.Non64Mode && (M.controls().EFER & 0x400) && (Attributes & 0x2000);
+    if (faultIf(LongTarget && (Attributes & 0x4000), 13, Selector & 0xfffc))
+      return;
+    if ((Attributes & 0x2000) && !LongTarget) {
       Failure = llvm::createStringError(
           llvm::errc::not_supported,
           "legacy far target has unsupported reserved L bit");
@@ -260,7 +338,7 @@ private:
                   10, TR.Selector & 0xfffc))
         return;
       Value NewSS = 0, NewSP = 0, Stack = 0;
-      uint32_t StackAddress = 0;
+      uint64_t StackAddress = 0;
       if (!access(TR.Base + Offset, SPBytes, NewSP) ||
           !access(TR.Base + Offset + SPBytes, 2, NewSS))
         return;
@@ -288,7 +366,7 @@ private:
       auto Range = checkX86LegacySegmentAccess(
           SS, {X86SegmentRegister::SS, X86SegmentAccessKind::Write,
                (SP - Count * Width) & Mask, Count * Width,
-               O.Segments.FullLimitChoice});
+               O.Segments.FullLimitChoice, bool(S.EFlags & 0x20000)});
       if (!Range) {
         Failure = Range.takeError();
         return;
@@ -319,7 +397,7 @@ private:
       if (!Push(S.Core.Segments[1].Selector) || !Push(NextIP))
         return;
     }
-    if (faultIf(IP > CS.Limit, 13, 0))
+    if (faultIf(!LongTarget && IP > CS.Limit, 13, 0))
       return;
     S.Core.Segments[1] = CS;
     S.Core.Segments[2] = SS;

@@ -1,0 +1,14 @@
+//===- MIPSCP0.def - Admitted MIPS32 CP0 word views ----------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Register, selector, software-visible word, writable, requires MT.
+// The stable key is (selector << 5) | register. EPC preserves the ISA-mode bit.
+NEVERD_MIPS_CP0(12, 0, Status, false, false)
+NEVERD_MIPS_CP0(14, 0, EPC, true, false)
+NEVERD_MIPS_CP0(30, 0, ErrorEPC, true, false)
+NEVERD_MIPS_CP0(0, 1, MVPControl, false, true)
+NEVERD_MIPS_CP0(1, 1, VPEControl, false, true)
+NEVERD_MIPS_CP0(1, 2, VPEConf0, false, true)
+#undef NEVERD_MIPS_CP0

@@ -131,6 +131,49 @@ A fault whose IDT entry subsequently hits a backing failure still consumes its a
 independently of the final status. Full fault and backing details
 are available through the context's `lastResult()` and `lastError()`.
 
+## Resuming a suspended return
+
+IRET/RETF backing stops retain an immutable instruction continuation in
+`X64PagedExecution`. Call the same generated driver after repairing physical
+backing. To reconstruct the runtime, keep `context.continuation()` and supply
+it as the new context constructor's third argument, alongside the same options
+and repaired `X86PagedMemory`. Preserve CPU/debug values, paging controls,
+features, profiles, exported body/validator identities, original bytes and
+STI/SS shadows. Preserve existing RAM effects when extending backing. Admission
+refusal leaves the record available for a call with the original bindings.
+The V6 state layout is unchanged; the C++ token lives outside that layout.
+
+The return evaluator reuses completed frame/descriptor reads and skips completed
+writes. This matters when a descriptor accessed-bit write aliases a previously
+read CS selector. Resume neither refetches nor reruns the generated body, and
+retains entry TF/BTF and accumulated watchpoints. `InstructionAttempted` reports
+only a newly charged attempt on that call. Only an already charged pending
+return can run with zero instruction budget. A pure-read RETF stop still needs
+budget when resumed, and completion/fault/first retained write charges it once.
+
+The distinct `neverd_x64_paged_pending_v1` import prevents older runtimes from
+silently omitting continuation support. Both drivers resume before accepting a
+new instruction boundary; scheduled resume consumes no poll budget and calls
+no producer. STI/SS inhibition remains active through backing stops and retires
+on completion or an architectural fault. Independent completed/resumed progress
+lets handler-return wrappers recognize completion without another attempt.
+
+Direct return-owner users retain `X64PagedReturnResult::Continuation` and call
+`resumeX64PagedReturn`; `validateX64PagedReturnResume` checks its CPU/control/feature
+binding without RAM access. This owner reports an exception to its caller;
+the caller owns subsequent event delivery.
+
+`X64PagedExecution` retires the instruction record on completion or a guest
+fault before starting post-return #DB or fault entry. If that entry itself
+pauses, retain `lastResult().Delivery->Continuation` and use the event resume
+API. Do not restart the return.
+
+The [2026-11-10 qualification](evidence/x86-x64-return-continuation-2026-11-10.json)
+records 876 passing executions across both SDK profiles and 1,872 byte-identical
+C/header/manifest artifacts per SDK. The initially skipped REP watchpoint
+cases passed in explicit P/E-core reruns. This qualifies retained return
+progress, not complete machine-mode or SMM/SGX execution.
+
 ## Instruction-step debug events
 
 Add `"paged_debug": true` to a paged V6 instruction-region export and bind a
@@ -656,7 +699,9 @@ handler boundary. Tests compose these calls through IRQ/NMI entry, generated
 IRET and resumed code, and execute a generated #PF handler that repairs the
 page table, removes the error code, returns to the faulting IRET and retries it.
 Returning to compatibility mode produces the correct state and explicit exit;
-it does not add a legacy-mode instruction dispatcher. Restored TF remains an
+this V6 scheduler stops at that boundary. The explicit
+[full-width mode owner](x86-mode-execution.md) can continue an admitted
+compatibility stream and later return to code64. Restored TF remains an
 explicit boundary unless the instruction-region export binds `paged_debug`.
 
 The IRET CPU matrix compares CS/SS caches, data selectors, unusable bits,

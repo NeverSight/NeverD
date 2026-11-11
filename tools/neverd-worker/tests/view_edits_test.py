@@ -188,13 +188,17 @@ def run(executable):
         assert not changed.get("unchanged") and "on the kept page" in changed["text"], changed
         assert changed["etag"] != kept_page["etag"]
         # A client that applies what changed to the page it keeps reads that:
-        # applied, it is the page a read naming none gets.
+        # applied, it is the page a read naming none gets.  The edit's views
+        # are read behind its reply as the client will ask for them, and that
+        # read takes the answer.
+        given = ok(owner, "metadata")["prepared_views_given"]
         ok(owner, "annotation_set", {"address": hex(functions[0]), "text": "on the kept page again"})
         ok(owner, "save")
         delta = ok(owner, "decompile", {"address": hex(functions[0]), "representation": "source",
                                         "offset": 0, "limit": 200, "kept_only": True,
                                         "if_none_match": changed["etag"], "page_delta": True})
         assert "delta" in delta and delta["base"] == changed["etag"], delta
+        assert ok(owner, "metadata")["prepared_views_given"] == given + 1
         assert len(json.dumps(delta)) < len(json.dumps(changed)) / 2, delta
         whole = ok(owner, "decompile", {"address": hex(functions[0]), "representation": "source",
                                         "offset": 0, "limit": 200, "kept_only": True,
@@ -344,6 +348,39 @@ def run(executable):
         ok(owner, "item_define", {"address": hex(GLOBAL + 0x14), "action": "data", "size": 2})
         assert view(owner, entry) == after[entry]
         assert store_reads(owner) == reads, (store_reads(owner), reads)
+        # Undone step by step, and redone, each reads as a new reader of the
+        # project does: a local's name, the data items and the names of data,
+        # back to the first views and forward again.
+        local = next(name for name in view(owner, entry)["code_names"] if name["kind"] == "local")
+        ok(owner, "code_edit", {"address": hex(entry), "representation": "source", "kind": "name",
+                                "original": local["original"], "identity": local["identity"],
+                                "name": "undone_local"})
+        named = compare(executable, owner, path, functions, "a local's name")
+        assert "undone_local" in named[entry]["text"], named[entry]
+        steps = len(ok(owner, "history", {"offset": 0, "limit": 64})["items"])
+        assert steps == 7, steps
+
+        def same_data(step):
+            # The data the items and names lie in reads as a new reader's too.
+            request = {"address": hex(GLOBAL + 0x10), "before": 4, "after": 12}
+            mine = ok(owner, "listing", request)["lines"]
+            with Client(executable) as fresh:
+                ok(fresh, "open", {"path": str(path), "analysis": False, "warm": False,
+                                   "read_only": True})
+                theirs = ok(fresh, "listing", request)["lines"]
+            assert mine == theirs, (step, mine, theirs)
+
+        same_data("a local's name")
+        for step in range(steps):
+            ok(owner, "undo")
+            undone = compare(executable, owner, path, functions, f"undo {step}")
+            same_data(f"undo {step}")
+        assert undone == before, (undone, before)
+        for step in range(steps):
+            ok(owner, "redo")
+            redone = compare(executable, owner, path, functions, f"redo {step}")
+            same_data(f"redo {step}")
+        assert redone == named, (redone, named)
     print("what an owner keeps of a view through an edit reads as a new reader of the project does")
 
 

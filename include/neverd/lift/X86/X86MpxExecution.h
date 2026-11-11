@@ -14,6 +14,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/ir/X86/X86MpxMemory.h"
+#include "neverd/lift/X86/X86MpxEncoding.h"
 
 #include "llvm/ADT/ArrayRef.h"
 
@@ -45,6 +46,14 @@ struct X86MpxExecutionResult {
 /// This executes a single instruction, not a function or an RTM/HLE region.
 X86MpxExecutionResult
 executeX86MpxInstruction(llvm::ArrayRef<uint8_t> Bytes, Arch Target,
+                         va_t Address, X86MpxContext &Context,
+                         const X86MpxExecutionInputs &Inputs,
+                         X86MpxMemoryProvider &Memory);
+
+/// The explicit mode also admits address16 memory encodings for their enabled
+/// #UD or disabled no-op behavior, before evaluating any operand address.
+X86MpxExecutionResult
+executeX86MpxInstruction(llvm::ArrayRef<uint8_t> Bytes, X86MpxCodeMode Mode,
                          va_t Address, X86MpxContext &Context,
                          const X86MpxExecutionInputs &Inputs,
                          X86MpxMemoryProvider &Memory);

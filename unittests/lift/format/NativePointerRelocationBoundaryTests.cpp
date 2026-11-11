@@ -2681,13 +2681,18 @@ TEST_F(NativePointerRelocationBoundary,
             Source.string(), "-o", Exe.string()});
   ASSERT_TRUE(Built.ok()) << Built.err;
 
+  // The lifted module leaves out the function that reads the table and keeps
+  // the rest.
   RunResult LLVM = liftToLLVMIRUnopt(Exe);
-  EXPECT_NE(LLVM.exitCode, 0) << LLVM.out;
-  EXPECT_NE(LLVM.err.find("among code holds a relocated pointer its code "
-                          "segment cannot mirror; refusing stale-address "
-                          "fallback"),
+  ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
+  EXPECT_NE(notLiftedNote(LLVM.out, "call_second")
+                .find("among code holds a relocated pointer its code "
+                      "segment cannot mirror; refusing stale-address "
+                      "fallback"),
             std::string::npos)
-      << LLVM.err;
+      << LLVM.out;
+  EXPECT_FALSE(definesLLVMFunction(LLVM.out, "call_second")) << LLVM.out;
+  EXPECT_TRUE(definesLLVMFunction(LLVM.out, "entry")) << LLVM.out;
 }
 
 TEST_F(NativePointerRelocationBoundary, MinGWProgramWholeModuleLLVMCCompiles) {

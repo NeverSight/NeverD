@@ -11,7 +11,7 @@
 
 #include "PipelineLLVMDetail.h"
 
-#include "neverd/Limits.h"
+#include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -37,12 +37,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
-#include <queue>
 #include <string>
 #include <utility>
 #include <vector>
@@ -121,106 +119,6 @@ bool isFatalOptimizationStop(OptimizationStopReason Stop) {
 
 } // namespace
 
-pipeline_detail::LLVMShardPlan
-pipeline_detail::planLLVMEmissionShards(const std::vector<MedFunc> &Funcs,
-                                        unsigned NumThreads) {
-  struct WorkUnit {
-    uint64_t Weight = 0;
-    size_t FirstFunction = 0;
-    std::vector<size_t> Functions;
-  };
-
-  const size_t N = Funcs.size();
-  LLVMShardPlan Plan;
-  Plan.ShardOf.assign(N, 0);
-
-  std::vector<WorkUnit> Units;
-  Units.reserve(N);
-  std::map<va_t, size_t> UnitForNativeFuncInfo;
-  uint64_t TotalWeight = 0;
-  for (size_t I = 0; I < N; ++I) {
-    uint64_t Weight = 1;
-    for (const auto &B : Funcs[I].Blocks)
-      Weight += B.Ops.size() + B.Phis.size();
-    TotalWeight += Weight;
-
-    va_t NativeFuncInfoVA = 0;
-    if (Funcs[I].ExceptionMetadata && Funcs[I].ExceptionMetadata->Cxx)
-      NativeFuncInfoVA = Funcs[I].ExceptionMetadata->Cxx->NativeFuncInfoVA;
-
-    size_t UnitIndex = Units.size();
-    if (NativeFuncInfoVA != 0) {
-      auto [It, Inserted] =
-          UnitForNativeFuncInfo.emplace(NativeFuncInfoVA, UnitIndex);
-      if (!Inserted)
-        UnitIndex = It->second;
-    }
-    if (UnitIndex == Units.size()) {
-      WorkUnit Unit;
-      Unit.FirstFunction = I;
-      Units.push_back(std::move(Unit));
-    }
-    Units[UnitIndex].Weight += Weight;
-    Units[UnitIndex].Functions.push_back(I);
-  }
-
-  const size_t NumUnits = Units.size();
-  NumThreads = std::max(
-      1u, std::min<unsigned>(NumThreads,
-                             static_cast<unsigned>(NumUnits ? NumUnits : 1)));
-
-  // Slice size, not core count, is what bounds peak memory here: a shard holds
-  // its own LLVMContext plus its slice in the emitter's pre-mem2reg form (an
-  // alloca + load/store per temp, several times the optimized IR), and every
-  // in-flight shard's module is live at once.  Pinning one shard per core --
-  // the original scheme -- therefore held the WHOLE program's unoptimized IR
-  // in memory simultaneously, which is what exhausts a 32-bit address space on
-  // a multi-megabyte input (issue #10).  Sizing shards to a work budget instead
-  // keeps every core busy while capping the concurrent set at threads x budget,
-  // and costs only a few more link steps: a shard's duplicated declarations
-  // and globals are negligible next to its function bodies.
-  const uint64_t PerShard =
-      std::max<uint64_t>(1, TotalWeight / std::max(1u, NumThreads));
-  uint64_t Budget = std::min<uint64_t>(PerShard, limits::kMaxShardOps);
-  // A 32-bit host has 2-4 GB of address space for everything, so keep the
-  // in-flight set far smaller there than on a 64-bit host.
-  if constexpr (sizeof(void *) == 4)
-    Budget = std::min<uint64_t>(Budget, limits::kMaxShardOps / 4);
-  unsigned NumShards = static_cast<unsigned>(
-      std::min<uint64_t>(NumUnits, (TotalWeight + Budget - 1) / Budget));
-  NumShards = std::max(NumShards, NumThreads);
-  NumShards = std::max(
-      1u, std::min<unsigned>(NumShards,
-                             static_cast<unsigned>(NumUnits ? NumUnits : 1)));
-  Plan.NumShards = NumShards;
-
-  // Longest-processing-time bin packing operates on indivisible work units.
-  // Ordinary functions are singleton units. Every C++ EH contribution sharing
-  // a nonzero native FuncInfo identity is accumulated before sorting, so no
-  // shard boundary can split one logical native function group.
-  std::vector<size_t> Order(NumUnits);
-  for (size_t I = 0; I < NumUnits; ++I)
-    Order[I] = I;
-  std::sort(Order.begin(), Order.end(), [&](size_t A, size_t B) {
-    return Units[A].Weight != Units[B].Weight
-               ? Units[A].Weight > Units[B].Weight
-               : Units[A].FirstFunction < Units[B].FirstFunction;
-  });
-
-  using Bin = std::pair<uint64_t, unsigned>;
-  std::priority_queue<Bin, std::vector<Bin>, std::greater<Bin>> Load;
-  for (unsigned S = 0; S < NumShards; ++S)
-    Load.emplace(0, S);
-  for (size_t UnitIndex : Order) {
-    auto [ShardWeight, Shard] = Load.top();
-    Load.pop();
-    for (size_t FunctionIndex : Units[UnitIndex].Functions)
-      Plan.ShardOf[FunctionIndex] = Shard;
-    Load.emplace(ShardWeight + Units[UnitIndex].Weight, Shard);
-  }
-  return Plan;
-}
-
 //===----------------------------------------------------------------------===//
 // Parallel LLVM emission + optimization
 //===----------------------------------------------------------------------===//
@@ -242,7 +140,7 @@ Pipeline::LLVMEmissionResult Pipeline::emitLLVMSharded(
   NumThreads = std::max(
       1u, std::min<unsigned>(NumThreads, static_cast<unsigned>(N ? N : 1)));
   const pipeline_detail::LLVMShardPlan ShardPlan =
-      pipeline_detail::planLLVMEmissionShards(Funcs, NumThreads);
+      pipeline_detail::planLLVMEmissionShards(Funcs, &Img);
   auto EmitShard = [&](unsigned S, llvm::LLVMContext &ShardCtx) {
     std::vector<char> Mask(N, 0);
     for (size_t I = 0; I < N; ++I)
@@ -281,8 +179,12 @@ Pipeline::LLVMEmissionResult Pipeline::emitLLVMSharded(
       }
       Result.UnhandledValueIntrinsics = Emitter.unhandledValueIntrinsicCount();
       if (Result.Module || !OmitRefusedBodies ||
-          Emitter.refusedBodies().empty())
+          Emitter.refusedBodies().empty()) {
+        // A unit that cannot leave a refused body out fails with why.
+        if (!Result.Module && !Emitter.refusedBodies().empty())
+          Result.Error = Emitter.refusedBodies().front().Reason;
         break;
+      }
       for (const MedLLVMEmitter::RefusedBody &Refused :
            Emitter.refusedBodies()) {
         Mask[Refused.Index] = 0;
@@ -294,14 +196,14 @@ Pipeline::LLVMEmissionResult Pipeline::emitLLVMSharded(
     return Result;
   };
   return runLLVMShardPipeline(Funcs, Ctx, ShardPlan.NumShards, NumThreads,
-                              NoOpt, EmitShard, View);
+                              NoOpt, EmitShard, View, OmitRefusedBodies);
 }
 
 Pipeline::LLVMEmissionResult Pipeline::runLLVMShardPipeline(
     const std::vector<MedFunc> &Funcs, llvm::LLVMContext &Ctx,
     unsigned NumShards, unsigned NumThreads, bool NoOpt,
     llvm::function_ref<LLVMEmissionResult(unsigned, llvm::LLVMContext &)> Emit,
-    const SourceViewOptions &View) {
+    const SourceViewOptions &View, bool OmitRefusedBodies) {
   LLVMEmissionResult Result;
   if (NumShards == 0) {
     Result.Error = "LLVM shard planning failed: no shards";
@@ -487,8 +389,53 @@ Pipeline::LLVMEmissionResult Pipeline::runLLVMShardPipeline(
       Result.Error = "LLVM shard linking failed: incomplete module";
       return Result;
     }
-    if (!normalizeResolvedLLVMCalls(*Linked, Result.Sources.get()) ||
-        !validateResolvedLLVMCallSignatures(*Linked)) {
+    // A body whose resolved call the declaration another shard linked
+    // cannot take is left out, as a shard leaves out a body it refuses, where
+    // the unit names what it leaves out: it stays declared, with its source
+    // identity, and why is noted.  The body is found by that identity, which
+    // a name a shard disambiguated (`write_str_10002F90C`) still carries.
+    std::map<va_t, size_t> IndexOf;
+    if (OmitRefusedBodies)
+      for (size_t I = 0; I < Funcs.size(); ++I)
+        IndexOf.emplace(Funcs[I].Entry, I);
+    std::vector<ResolvedCallRefusal> Refusals;
+    auto *Collect = OmitRefusedBodies ? &Refusals : nullptr;
+    bool LeftOutBodies = false;
+    const auto Reconciled = [&](bool Kept) {
+      if (Kept)
+        return true;
+      if (!Collect)
+        return false;
+      for (ResolvedCallRefusal &Refusal : Refusals) {
+        llvm::Function &Body = *Refusal.Caller;
+        auto Identity = rewrite_source::getOriginalVA(Body);
+        if (!Identity) {
+          llvm::consumeError(Identity.takeError());
+          return false;
+        }
+        const auto Index = *Identity ? IndexOf.find(**Identity) : IndexOf.end();
+        if (Index == IndexOf.end() || Body.isDeclaration())
+          return false;
+        const va_t Entry = Funcs[Index->second].Entry;
+        if (Result.Sources)
+          for (auto It = Result.Sources->Functions.begin();
+               It != Result.Sources->Functions.end();)
+            It = It->second == &Body ? Result.Sources->Functions.erase(It)
+                                     : std::next(It);
+        LinkedFunctionNames.erase(Entry);
+        Body.deleteBody();
+        rewrite_source::setOriginalVA(Body, Entry);
+        Result.LeftOut.emplace_back(Index->second, std::move(Refusal.Reason));
+      }
+      Refusals.clear();
+      LeftOutBodies = true;
+      return true;
+    };
+    if (!Reconciled(normalizeResolvedLLVMCalls(*Linked, Result.Sources.get(),
+                                               false, Collect)) ||
+        !Reconciled(
+            validateResolvedLLVMCallSignatures(*Linked, false, Collect)) ||
+        (LeftOutBodies && !validateResolvedLLVMCallSignatures(*Linked))) {
       Result.Error =
           "LLVM shard linking failed: resolved call signature mismatch";
       return Result;

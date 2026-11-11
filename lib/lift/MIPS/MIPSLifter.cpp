@@ -166,6 +166,76 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
   const uint64_t Immediate = static_cast<uint64_t>(int64_t(int16_t(Word)));
   const bool Wide = S.Width == 8;
 
+  if (Mode == InstructionMode::MIPS16 && HasMIPS16E2 && !Wide) {
+    if (Word == 0x00000140) {
+      S.emitIntrinsic(Intrinsic::MIPSPause, {});
+      return true;
+    }
+    const unsigned CP0Key = ((Word & 7) << 5) | RD;
+    if (Opcode == 16 && (RS == 0 || RS == 4) && !(Word & 0x7f8) &&
+        mips::supportedCP0Word(CP0Key, RS == 4) &&
+        (HasMT || !mips::cp0RequiresMT(CP0Key))) {
+      if (RS == 4)
+        S.emitIntrinsic(Intrinsic::MIPSWriteCP0Word, {},
+                        {NdVar::cst(CP0Key, 1), S.read(RT)});
+      else {
+        const auto Result = S.makeTemp(4);
+        S.emitIntrinsic(Intrinsic::MIPSReadCP0Word, Result,
+                        {NdVar::cst(CP0Key, 1)});
+        S.write(RT, Result);
+      }
+      return true;
+    }
+    if (Opcode == 47 || Opcode == 51) {
+      const auto Address =
+          S.binary(NdOp::INT_ADD, S.read(RS), NdVar::cst(Immediate, 4));
+      S.emitIntrinsic(Opcode == 47 ? Intrinsic::MIPSCache
+                                   : Intrinsic::MIPSPrefetch,
+                      {}, {NdVar::cst(RT, 1), Address});
+      return true;
+    }
+    if (HasMT && ((Word & 0xffe0ffdf) == 0x41600bc1 ||
+                  (Word & 0xffe0ffdf) == 0x41600001)) {
+      const bool Thread = Word & 0x800;
+      const auto Id = Thread ? (Word & 32 ? Intrinsic::MIPSEnableMT
+                                          : Intrinsic::MIPSDisableMT)
+                             : (Word & 32 ? Intrinsic::MIPSEnableVPE
+                                          : Intrinsic::MIPSDisableVPE);
+      const auto Result = S.makeTemp(4);
+      S.emitIntrinsic(Id, Result);
+      S.write(RT, Result);
+      return true;
+    }
+    if (Opcode == 48 || Opcode == 56) {
+      const auto Address =
+          S.binary(NdOp::INT_ADD, S.read(RS), NdVar::cst(Immediate, 4));
+      const auto Result = S.makeTemp(4);
+      if (Opcode == 48)
+        S.emitIntrinsic(Intrinsic::MIPSLoadLinkedWord, Result, {Address});
+      else
+        S.emitIntrinsic(Intrinsic::MIPSStoreConditionalWord, Result,
+                        {Address, S.read(RT)});
+      S.write(RT, Result);
+      return true;
+    }
+    if ((Word & 0xffe007ff) == 0x7c00003b) {
+      const auto Result = S.makeTemp(4);
+      S.emitIntrinsic(Intrinsic::MIPSReadHardwareRegister, Result,
+                      {NdVar::cst(RD, 1)});
+      S.write(RT, Result);
+      return true;
+    }
+    if ((Word & 0xffe0ffdf) == 0x41606000) {
+      const auto Result = S.makeTemp(4);
+      S.emitIntrinsic(Word & 32 ? Intrinsic::MIPSEnableInterrupts
+                                : Intrinsic::MIPSDisableInterrupts,
+                      Result);
+      S.write(RT, Result);
+      return true;
+    }
+  }
+  if (Word == 0x00000140)
+    return false;           // PAUSE requires an admitted execution profile.
   if (Word == 0x000000c0) { // EHB, before the generic SLL zero destination.
     S.emitIntrinsic(Intrinsic::MIPSExecutionHazardBarrier, {});
     return true;
@@ -240,21 +310,42 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
       S.write(RD, Result);
       return true;
     }
-    case 16: // MFHI
-    case 18: // MFLO
-      if (RS || RT || SA)
+    case 16:   // MFHI
+    case 18: { // MFLO
+      const unsigned Bank = RS & 3;
+      if ((RS & ~3u) || RT || SA ||
+          (Bank && (!HasDSP || Wide || isMIPSCompressedMode(Mode))))
         return false;
-      S.write(RD,
-              NdVar::reg(Function == 16 ? mipsreg::HI : mipsreg::LO, S.Width));
+      S.write(RD, NdVar::reg(Function == 16 ? mipsreg::accumulatorHI(Bank)
+                                            : mipsreg::accumulatorLO(Bank),
+                             S.Width));
+      // Reading to $zero still consumes the pending arithmetic result.
+      if (!Bank)
+        S.emit(NdOp::COPY, NdVar::reg(mipsreg::AC0Pending, 1),
+               {NdVar::cst(0, 1)});
       return true;
-    case 17: // MTHI
-    case 19: // MTLO
-      if (RT || RD || SA)
+    }
+    case 17:   // MTHI
+    case 19: { // MTLO
+      const unsigned Bank = RD & 3;
+      if (RT || (RD & ~3u) || SA ||
+          (Bank && (!HasDSP || Wide || isMIPSCompressedMode(Mode))))
         return false;
+      if (!Bank) {
+        const auto Other =
+            NdVar::reg(Function == 17 ? mipsreg::LO : mipsreg::HI, S.Width);
+        S.emitIntrinsic(Intrinsic::MIPSAccumulatorAfterWrite, Other,
+                        {NdVar::reg(mipsreg::AC0Pending, 1), Other});
+        S.emit(NdOp::COPY, NdVar::reg(mipsreg::AC0Pending, 1),
+               {NdVar::cst(0, 1)});
+      }
       S.emit(NdOp::COPY,
-             NdVar::reg(Function == 17 ? mipsreg::HI : mipsreg::LO, S.Width),
+             NdVar::reg(Function == 17 ? mipsreg::accumulatorHI(Bank)
+                                       : mipsreg::accumulatorLO(Bank),
+                        S.Width),
              {S.read(RS)});
       return true;
+    }
     case 24:   // MULT
     case 25:   // MULTU
     case 28:   // DMULT
@@ -277,6 +368,8 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
              {S.resize(Low, S.Width, true)});
       S.emit(NdOp::COPY, NdVar::reg(mipsreg::HI, S.Width),
              {S.resize(High, S.Width, true)});
+      S.emit(NdOp::COPY, NdVar::reg(mipsreg::AC0Pending, 1),
+             {NdVar::cst(1, 1)});
       return true;
     }
     case 26:   // DIV
@@ -296,6 +389,8 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
              {S.resize(Low, S.Width, true)});
       S.emit(NdOp::COPY, NdVar::reg(mipsreg::HI, S.Width),
              {S.resize(High, S.Width, true)});
+      S.emit(NdOp::COPY, NdVar::reg(mipsreg::AC0Pending, 1),
+             {NdVar::cst(1, 1)});
       return true;
     }
     case 33:   // ADDU
@@ -380,6 +475,8 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
                       NdVar::reg(mipsreg::HI, S.Width), {});
       S.emitIntrinsic(Intrinsic::MIPSUnpredictable,
                       NdVar::reg(mipsreg::LO, S.Width), {});
+      S.emit(NdOp::COPY, NdVar::reg(mipsreg::AC0Pending, 1),
+             {NdVar::cst(0, 1)});
       return true;
     }
     if (SA || RT != RD ||
@@ -461,6 +558,7 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
   const auto SlotCode = Slot ? encoding(*Slot) : std::nullopt;
   if (Slot &&
       (!SlotCode || (!SlotCode->Frame && (hasDelaySlot(SlotCode->Word) ||
+                                          SlotCode->Word == 0x00000140 ||
                                           SlotCode->Word >> 26 == 29))))
     throw UnliftedInstruction(
         Slot->address, Slot->mnemonic,

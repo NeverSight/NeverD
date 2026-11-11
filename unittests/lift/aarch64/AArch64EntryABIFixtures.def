@@ -1,0 +1,294 @@
+//===- AArch64EntryABIFixtures.def - Native entry ABI fixtures --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// A64_ENTRY_TEXT and A64_ENTRY_VALUE define independent caller fixtures.
+//===----------------------------------------------------------------------===//
+
+#ifndef A64_ENTRY_TEXT
+#define A64_ENTRY_TEXT(Name, Text)
+#endif
+#ifndef A64_ENTRY_VALUE
+#define A64_ENTRY_VALUE(Type, Name, Value)
+#endif
+
+A64_ENTRY_VALUE(unsigned, kByteBits, 8)
+A64_ENTRY_VALUE(unsigned, kWordBytes, 8)
+A64_ENTRY_VALUE(unsigned, kWideBytes, 16)
+A64_ENTRY_VALUE(unsigned, kHFAElements, 4)
+A64_ENTRY_VALUE(unsigned, kHVAElements, 3)
+A64_ENTRY_VALUE(unsigned, kLargeElements, 6)
+A64_ENTRY_VALUE(unsigned, kStackPrefix, 10)
+A64_ENTRY_VALUE(unsigned, kRegisterBankSize, 8)
+A64_ENTRY_VALUE(unsigned, kRefusalVariants, 6)
+A64_ENTRY_VALUE(uint64_t, kEntryVA, 0x1000)
+A64_ENTRY_VALUE(uint32_t, kClassicSubtype, 0x80000002)
+// add x0, x0, x1; ret
+A64_ENTRY_VALUE(auto, kAddReturn,
+                (std::array<uint32_t, 2>{0x8b010000, 0xd65f03c0}))
+A64_ENTRY_TEXT(kTriple, "arm64-apple-macosx15.0.0")
+A64_ENTRY_TEXT(kArm64eTriple, "arm64e-apple-macosx15.0.0")
+A64_ENTRY_TEXT(kModule, "entry_abi")
+A64_ENTRY_TEXT(kParameter, "value")
+A64_ENTRY_TEXT(kBody, "body")
+A64_ENTRY_TEXT(kScalar, "entry_scalar")
+A64_ENTRY_TEXT(kSigned, "entry_signed")
+A64_ENTRY_TEXT(kUnsigned, "entry_unsigned")
+A64_ENTRY_TEXT(kSigned16, "entry_signed16")
+A64_ENTRY_TEXT(kUnsigned16, "entry_unsigned16")
+A64_ENTRY_TEXT(kFloat, "entry_float")
+A64_ENTRY_TEXT(kDouble, "entry_double")
+A64_ENTRY_TEXT(kPointer, "entry_pointer")
+A64_ENTRY_TEXT(kVector64, "entry_vector64")
+A64_ENTRY_TEXT(kVector128, "entry_vector128")
+A64_ENTRY_TEXT(kVectorStack, "entry_vector_stack")
+A64_ENTRY_TEXT(kWide, "entry_wide")
+A64_ENTRY_TEXT(kWideStack, "entry_wide_stack")
+A64_ENTRY_TEXT(kPair, "entry_pair")
+A64_ENTRY_TEXT(kHFA, "entry_hfa")
+A64_ENTRY_TEXT(kHFAStack, "entry_hfa_stack")
+A64_ENTRY_TEXT(kHVA64, "entry_hva64")
+A64_ENTRY_TEXT(kHVA128, "entry_hva128")
+A64_ENTRY_TEXT(kEmittedHVA, "entry_emitted_hva")
+A64_ENTRY_TEXT(kLarge, "entry_large")
+A64_ENTRY_TEXT(kStack, "entry_stack")
+A64_ENTRY_TEXT(kPacked, "entry_packed")
+A64_ENTRY_TEXT(kSaved, "entry_saved")
+A64_ENTRY_TEXT(kCaller, "entry_caller")
+A64_ENTRY_TEXT(kThrow, "entry_throw")
+A64_ENTRY_TEXT(kThrowing, "entry_throwing")
+A64_ENTRY_TEXT(kWideThrowing, "entry_wide_throwing")
+A64_ENTRY_TEXT(kLargeThrowing, "entry_large_throwing")
+A64_ENTRY_TEXT(kHVAThrowing, "entry_hva_throwing")
+A64_ENTRY_TEXT(kCxxRuntime, "-lc++")
+A64_ENTRY_TEXT(kInterior, "entry_interior")
+A64_ENTRY_TEXT(kPersonality, "__gxx_personality_v0")
+A64_ENTRY_TEXT(kTemporary, "neverd-entry-abi")
+A64_ENTRY_TEXT(kArtifactProperty, "entry_abi_artifact_directory")
+A64_ENTRY_TEXT(kObject, "entry.o")
+A64_ENTRY_TEXT(kCallerFile, "caller.cpp")
+A64_ENTRY_TEXT(kExecutable, "caller")
+A64_ENTRY_TEXT(kTargetFlag, "-target")
+A64_ENTRY_TEXT(kOutputFlag, "-o")
+A64_ENTRY_TEXT(kOptimize0, "-O0")
+A64_ENTRY_TEXT(kOptimize2, "-O2")
+A64_ENTRY_TEXT(kUnavailable,
+               "native Darwin AArch64 host and Clang are required")
+A64_ENTRY_TEXT(kExportDirectory, "NEVERD_ARM64E_ENTRY_FIXTURE_DIR")
+A64_ENTRY_TEXT(kExportIR, "entry.ll")
+A64_ENTRY_TEXT(kExportDwarfIR, "entry-dwarf.ll")
+A64_ENTRY_TEXT(kDwarfCFI, ".cfi_escape 0x2e, 0")
+A64_ENTRY_TEXT(kExportCaller, "caller.cpp")
+A64_ENTRY_TEXT(kDisableTailCalls, "disable-tail-calls")
+A64_ENTRY_TEXT(kFramePointer, "frame-pointer")
+A64_ENTRY_TEXT(kAll, "all")
+A64_ENTRY_TEXT(kTrue, "true")
+A64_ENTRY_TEXT(kNativeABIVersion, "ptrauth.abi-version")
+A64_ENTRY_VALUE(unsigned, kClassicABIVersion, 0)
+A64_ENTRY_TEXT(kBackendExport, "NEVERD_ARM64E_ENTRY_BACKEND")
+A64_ENTRY_TEXT(kBackendObject, "entry-backend.o")
+A64_ENTRY_TEXT(kBackendDwarfObject, "entry-backend-dwarf.o")
+A64_ENTRY_TEXT(kOriginalIR, "entry-original.ll")
+A64_ENTRY_TEXT(kOriginalDwarfIR, "entry-original-dwarf.ll")
+A64_ENTRY_TEXT(kOriginalTrap, "brk #0; brk #0; brk #0; brk #0")
+A64_ENTRY_TEXT(kIncompatibleCFI, "classic arm64e requires the LLVM fork's "
+                                 "native B-key unwind ABI; r6 is not qualified")
+A64_ENTRY_TEXT(kPublicationInput, "NEVERD_ARM64E_ENTRY_ORIGINAL")
+A64_ENTRY_TEXT(kPublicationOutput, "NEVERD_ARM64E_ENTRY_INSTALLED")
+A64_ENTRY_TEXT(kPublicationReceipt, "NEVERD_ARM64E_ENTRY_RECEIPT")
+A64_ENTRY_TEXT(kPublicationDwarf, "NEVERD_ARM64E_ENTRY_DWARF")
+A64_ENTRY_TEXT(kPublicationUnavailable,
+               "explicit native entry publication inputs are required")
+A64_ENTRY_TEXT(kMachOPrefix, "_")
+A64_ENTRY_VALUE(unsigned, kPublicEntryCount, 26)
+A64_ENTRY_TEXT(kLayoutRefusalProperty, "entry_publication_layout_refusal")
+A64_ENTRY_TEXT(kReceiptRejected, "entry publication receipt rejected")
+A64_ENTRY_TEXT(kReceiptSymbol, "symbol")
+A64_ENTRY_TEXT(kReceiptOriginal, "original")
+A64_ENTRY_TEXT(kReceiptInstalled, "installed")
+A64_ENTRY_TEXT(kReceiptEntries, "entries")
+A64_ENTRY_TEXT(kReceiptFunctions, "functions")
+A64_ENTRY_TEXT(kReceiptText, "text")
+A64_ENTRY_TEXT(kReceiptAddress, "address")
+A64_ENTRY_TEXT(kReceiptOffset, "offset")
+A64_ENTRY_TEXT(kReceiptSize, "size")
+A64_ENTRY_TEXT(kNativeTextSection, "__text")
+A64_ENTRY_TEXT(kNativeTextSegment, "__TEXT")
+A64_ENTRY_VALUE(uint8_t, kOccupiedTailByte, 0xa5)
+A64_ENTRY_TEXT(kNativeCaller, R"cpp(
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#ifdef NEVERD_ENTRY_DWARF
+#define ENTRY_DWARF() asm volatile(".cfi_escape 0x2e, 0")
+#else
+#define ENTRY_DWARF() do {} while (false)
+#endif
+#ifdef NEVERD_ENTRY_AUTH_KEY
+#include <ptrauth.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+template<class T> __attribute__((noinline)) T *authenticated(T *Fn) {
+  using Signed = T * __ptrauth(NEVERD_ENTRY_AUTH_KEY, 1, 47);
+  Signed volatile Stored = Fn;
+  return Stored;
+}
+#define ENTRY_INVOKE(Name) authenticated(&Name)
+#else
+#define ENTRY_INVOKE(Name) Name
+#endif
+using V8 = uint8_t __attribute__((vector_size(8)));
+using V16 = uint8_t __attribute__((vector_size(16)));
+struct HFA { double v[4]; };
+struct HVA8 { V8 v[3]; };
+struct HVA16 { V16 v[3]; };
+struct Large { double v[6]; };
+struct Pair { uint64_t lo, hi; };
+extern "C" {
+uint64_t entry_scalar(uint64_t);
+int8_t entry_signed(int8_t);
+uint8_t entry_unsigned(uint8_t);
+int16_t entry_signed16(int16_t);
+uint16_t entry_unsigned16(uint16_t);
+float entry_float(float);
+double entry_double(double);
+uint64_t *entry_pointer(uint64_t *);
+V8 entry_vector64(V8);
+V16 entry_vector128(V16);
+V16 entry_vector_stack(double,double,double,double,double,double,double,double,V16);
+uint64_t entry_throwing(uint64_t);
+__uint128_t entry_wide_throwing(uint64_t, __uint128_t);
+Large entry_large_throwing(uint64_t, Large);
+HVA16 entry_hva_throwing(uint64_t, HVA16);
+__uint128_t entry_wide(uint64_t, __uint128_t);
+__uint128_t entry_wide_stack(uint64_t,uint64_t,uint64_t,uint64_t,
+                            uint64_t,uint64_t,uint64_t,uint64_t,__uint128_t);
+Pair entry_pair(Pair);
+HFA entry_hfa(HFA);
+HFA entry_hfa_stack(double,double,double,double,double,double,double,double,HFA);
+HVA8 entry_hva64(HVA8);
+HVA16 entry_hva128(HVA16);
+HVA16 entry_emitted_hva(HVA16);
+Large entry_large(Large);
+uint64_t entry_stack(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,
+                     uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
+uint64_t entry_packed(uint64_t,uint64_t,uint64_t,uint64_t,
+                      uint64_t,uint64_t,uint64_t,uint64_t,
+                      uint8_t,uint8_t,uint8_t,uint8_t,
+                      uint8_t,uint8_t,uint8_t,uint8_t);
+}
+#ifdef NEVERD_ENTRY_AUTH_KEY
+static int rejects_corrupt_entry() {
+  using Signed = uint64_t (* __ptrauth(NEVERD_ENTRY_AUTH_KEY, 1, 47))(uint64_t);
+  Signed stored = &entry_scalar;
+  asm volatile("" : "+m"(stored));
+  if (stored(23) != 23) return 1;
+  uintptr_t bits;
+  memcpy(&bits, (const void *)&stored, sizeof(bits));
+  auto raw = (uintptr_t)__builtin_ptrauth_strip((void *)bits, NEVERD_ENTRY_AUTH_KEY);
+  uintptr_t changed = bits ^ raw;
+  if (!changed) return 2;
+  pid_t child = fork();
+  if (child < 0) return 3;
+  if (!child) {
+    bits ^= changed & (~changed + 1);
+    memcpy((void *)&stored, &bits, sizeof(bits));
+    asm volatile("" : "+m"(stored));
+    (void)stored(23);
+    _exit(4);
+  }
+  int status = 0;
+  if (waitpid(child, &status, 0) != child || !WIFSIGNALED(status)) return 5;
+  int signal = WTERMSIG(status);
+  return signal != SIGSEGV && signal != SIGBUS && signal != SIGILL && signal != SIGTRAP;
+}
+#endif
+extern "C" uint64_t entry_throw(uint64_t x) {
+  ENTRY_DWARF();
+  if (x) throw int(x);
+  return 23;
+}
+template<class T> T rotated(T value) {
+  auto first = value.v[0];
+  unsigned count = sizeof(value.v) / sizeof(value.v[0]);
+  for (unsigned i = 1; i < count; ++i) value.v[i-1] = value.v[i];
+  value.v[count-1] = first;
+  return value;
+}
+int main(int, char **) {
+  ENTRY_DWARF();
+  fputs("neverd-entry-caller-entered\n", stdout);
+  fflush(stdout);
+  if (ENTRY_INVOKE(entry_scalar)(0x8123456789abcdefULL) != 0x8123456789abcdefULL) return 1;
+  __uint128_t w = (__uint128_t(0x9876543210fedcbaULL) << 64) |
+                  0x123456789abcdef0ULL;
+  if (ENTRY_INVOKE(entry_wide)(0x5555555555555555ULL, w) != w) return 2;
+  HFA a{{1.25, -2.5, 17.75, 0.125}}, b = ENTRY_INVOKE(entry_hfa)(a);
+  HFA expected_a = rotated(a);
+  if (memcmp(&expected_a, &b, sizeof(a))) return 3;
+  HVA8 c{}; HVA16 e{};
+  for (unsigned i = 0; i != 3; ++i) {
+    for (unsigned j = 0; j != 8; ++j) c.v[i][j] = 11 + 31*i + j;
+    for (unsigned j = 0; j != 16; ++j) e.v[i][j] = 17 + 47*i + j;
+  }
+  HVA8 d = ENTRY_INVOKE(entry_hva64)(c); HVA16 f = ENTRY_INVOKE(entry_hva128)(e);
+  HVA8 expected_c = rotated(c); HVA16 expected_e = rotated(e);
+  if (memcmp(&expected_c, &d, sizeof(c))) return 4;
+  if (memcmp(&expected_e, &f, sizeof(e))) return 5;
+  Large g{{3.5, -6.25, 13.75, 19.125, -21.5, 37.75}};
+  Large h = ENTRY_INVOKE(entry_large)(g);
+  if (memcmp(&g, &h, sizeof(g))) return 6;
+  if (ENTRY_INVOKE(entry_stack)(1,2,3,4,5,6,7,8,9,10,0xfedcba9876543210ULL) !=
+      0xfedcba9876543210ULL) return 7;
+  int cleaned = 0;
+  struct Guard { int *count; ~Guard() { ++*count; } };
+  try { Guard guard{&cleaned}; ENTRY_INVOKE(entry_throwing)(31); return 8; }
+  catch (int x) { if (x != 31 || cleaned != 1) return 9; }
+  if (ENTRY_INVOKE(entry_throwing)(0) != 23) return 10;
+  if (ENTRY_INVOKE(entry_signed)(-97) != -97 || ENTRY_INVOKE(entry_unsigned)(219) != 219) return 11;
+  if (ENTRY_INVOKE(entry_wide_stack)(1,2,3,4,5,6,7,8,w) != w) return 12;
+  HFA stacked = ENTRY_INVOKE(entry_hfa_stack)(1,2,3,4,5,6,7,8,a);
+  if (memcmp(&expected_a, &stacked, sizeof(a))) return 13;
+  Pair pair{0xfeed010203045678ULL, 0xdead987654321000ULL};
+  Pair returned = ENTRY_INVOKE(entry_pair)(pair);
+  if (returned.lo != pair.hi || returned.hi != pair.lo) return 14;
+  if (ENTRY_INVOKE(entry_packed)(1,2,3,4,5,6,7,8,0x11,0x93,0x25,0xa7,0x39,0xcb,0x4d,0xef)
+       != 0xef4dcb39a7259311ULL) return 15;
+  HVA16 emitted = ENTRY_INVOKE(entry_emitted_hva)(e);
+  if (memcmp(&expected_e, &emitted, sizeof(e))) return 16;
+  if (ENTRY_INVOKE(entry_signed16)(-19371) != -19371 || ENTRY_INVOKE(entry_unsigned16)(49127) != 49127)
+    return 17;
+  if (ENTRY_INVOKE(entry_float)(-7.625f) != -7.625f || ENTRY_INVOKE(entry_double)(8193.125) != 8193.125)
+    return 18;
+  if (ENTRY_INVOKE(entry_pointer)(&pair.hi) != &pair.hi) return 19;
+  V8 v8 = ENTRY_INVOKE(entry_vector64)(c.v[1]);
+  V16 v16 = ENTRY_INVOKE(entry_vector128)(e.v[1]);
+  V16 stacked_vector = ENTRY_INVOKE(entry_vector_stack)(1,2,3,4,5,6,7,8,e.v[2]);
+  if (memcmp(&v8, &c.v[1], sizeof(v8)) ||
+      memcmp(&v16, &e.v[1], sizeof(v16)) ||
+      memcmp(&stacked_vector, &e.v[2], sizeof(stacked_vector))) return 20;
+#ifdef NEVERD_ENTRY_AUTH_KEY
+  if (rejects_corrupt_entry()) return 21;
+#endif
+  try { Guard guard{&cleaned}; ENTRY_INVOKE(entry_wide_throwing)(31,w); return 22; }
+  catch (int x) { if (x != 31 || cleaned != 2) return 23; }
+  try { Guard guard{&cleaned}; ENTRY_INVOKE(entry_large_throwing)(31,g); return 24; }
+  catch (int x) { if (x != 31 || cleaned != 3) return 25; }
+  try { Guard guard{&cleaned}; ENTRY_INVOKE(entry_hva_throwing)(31,e); return 26; }
+  catch (int x) { if (x != 31 || cleaned != 4) return 27; }
+  if (ENTRY_INVOKE(entry_wide_throwing)(0,w) != w) return 28;
+  Large after_large_throw = ENTRY_INVOKE(entry_large_throwing)(0,g);
+  HVA16 after_hva_throw = ENTRY_INVOKE(entry_hva_throwing)(0,e);
+  if (memcmp(&g, &after_large_throw, sizeof(g)) ||
+      memcmp(&expected_e, &after_hva_throw, sizeof(e))) return 29;
+  fputs("neverd-entry-caller-passed\n", stdout);
+  fflush(stdout);
+  return 0;
+}
+)cpp")
+
+#undef A64_ENTRY_TEXT
+#undef A64_ENTRY_VALUE

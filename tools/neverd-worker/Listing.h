@@ -73,8 +73,10 @@ public:
   void setPdbDisplayNames(const Json &names);
   /// An imported display-only data name that the listing currently shows.
   std::optional<std::string> pdbDataName(std::uint64_t address);
-  /// `listing`: lines around an address.
-  Json page(const Json &payload);
+  /// `listing`: lines around an address.  Given \p encoded, a page the live
+  /// listing answers is written there as text, and the result is null.
+  Json page(const Json &payload,
+            std::shared_ptr<const EncodedJson> *encoded = nullptr);
   /// `overview`: address classes in equal linear buckets.
   Json overview(const Json &payload);
   /// `xrefs` from the reference index or, for "from", the instruction's lift.
@@ -118,7 +120,9 @@ public:
   /// bytes show and where the items around them stop, and the listing has read
   /// them: no string, code or function is in them.  Otherwise the caller says
   /// namesChanged.  A view of a function reads no data item (viewGeneration).
-  bool dataItemsChanged();
+  /// \p rows, where given, are the items as the engine now holds them (the
+  /// table the history committed), read in place of asking the engine.
+  bool dataItemsChanged(const Json *rows = nullptr);
   /// A declaration changed.  What the listing decoded shows what a function was
   /// declared as, and reads it again; nothing else it has read changes.  With
   /// \p viewsReadIt a kept view of a function reads it by its reads, as a name
@@ -205,7 +209,8 @@ public:
   std::uint64_t viewGeneration() const;
 
 private:
-  Json uncachedPage(const Json &payload);
+  Json uncachedPage(const Json &payload,
+                    std::shared_ptr<const EncodedJson> *encoded = nullptr);
   Json uncachedOverview(const Json &payload);
   const Json &uncachedFunctionRows();
   struct Impl;

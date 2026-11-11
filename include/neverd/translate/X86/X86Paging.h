@@ -41,6 +41,7 @@ struct X86PagingFeatures {
   bool SMAP = false;
   bool PKU = false;
   bool PKS = false;
+  bool operator==(const X86PagingFeatures &) const = default;
 };
 
 struct X86PagingState {
@@ -53,6 +54,7 @@ struct X86PagingState {
   uint32_t PKRS = 0;
   /// PAE uses the previously loaded registers, not a fresh CR3 memory read.
   std::array<uint64_t, 4> PDPTE{};
+  bool operator==(const X86PagingState &) const = default;
 };
 
 /// Segment/canonical checks precede either order. Competing #AC/#PF priority
@@ -68,9 +70,10 @@ struct X86LinearAccess {
   bool ImplicitSupervisor = false;
   /// Noncanonical stack addresses raise #SS(0), other addresses #GP(0).
   bool Stack = false;
-  /// Legacy operands after whole-segment/table checking may cross the
-  /// 32-bit linear wrap. IA-32e references cannot select
-  /// this flag. It does not waive segment-offset limit checks.
+  /// Checked legacy/compatibility segment operands, and legacy table operands,
+  /// may cross the 32-bit linear wrap. Paging mode is unchanged; IA-32e
+  /// implicit system-table references retain full-width addresses. This flag
+  /// does not waive segment-offset limits or truncate a wide starting address.
   bool Wrap32 = false;
 };
 
@@ -109,8 +112,9 @@ llvm::Error validateX86PagingState(const X86PagingFeatures &Features,
 /// Check an operand's entire linear extent before any page-table access.
 /// Controls have already passed validateX86PagingState. Noncanonical operands
 /// report #GP/#SS before any #PF, even when the first byte has no translation.
-/// IA-32e operands wrap modulo 2^64; both ends must remain canonical.
-/// Legacy linear wrap requires explicit Wrap32 after segment checks.
+/// Full-width IA-32e operands wrap modulo 2^64; both ends must remain
+/// canonical. Legacy/compatibility linear wrap requires explicit Wrap32 after
+/// segment checks, independently of the page-table format.
 llvm::Expected<std::optional<X86MemoryException>>
 checkX86LinearAccess(const X86PagingState &State, const X86LinearAccess &Access,
                      uint64_t Bytes);
@@ -123,13 +127,32 @@ walkX86PageTables(GuestMemoryRuntime &PhysicalMemory,
                   const X86PagingFeatures &Features,
                   const X86PagingState &State, const X86LinearAccess &Access);
 
+/// Host-owned progress for a physical PDPTE read. Preserve unchanged across
+/// backing repair, including the already read prefix. No guest register bank
+/// is published by this object; its instruction owner retires it on completion
+/// or a guest fault. Completed reads remain reusable until retirement.
+class X86PAEPDPTEContinuation {
+public:
+  X86PAEPDPTEContinuation() = default;
+
+private:
+  friend llvm::Expected<X86PageWalkResult>
+  loadX86PAEPDPTE(GuestMemoryRuntime &, const X86PagingFeatures &, uint64_t,
+                  std::array<uint64_t, 4> &, X86PAEPDPTEContinuation *);
+  std::optional<X86PagingFeatures> Features;
+  uint64_t CR3 = 0;
+  std::array<uint64_t, 4> Entries{};
+  unsigned Next = 0;
+};
+
 /// Load all four PAE PDPTE registers transactionally. Reserved bits in a
 /// present entry produce #GP(0); backing failures stay distinct. The previous
 /// register bank is preserved on either failure. CR3 is the requested new CR3.
 llvm::Expected<X86PageWalkResult>
 loadX86PAEPDPTE(GuestMemoryRuntime &PhysicalMemory,
                 const X86PagingFeatures &Features, uint64_t CR3,
-                std::array<uint64_t, 4> &PDPTE);
+                std::array<uint64_t, 4> &PDPTE,
+                X86PAEPDPTEContinuation *Continuation = nullptr);
 
 } // namespace neverd::translate
 

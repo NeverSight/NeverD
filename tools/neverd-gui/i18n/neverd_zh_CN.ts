@@ -2647,6 +2647,18 @@ Signed: %4</source>
         <translation>浅色（Visual Studio Code Light+）</translation>
     </message>
     <message>
+        <source>Dark High Contrast (Visual Studio Code)</source>
+        <translation>深色高对比度（Visual Studio Code）</translation>
+    </message>
+    <message>
+        <source>Light High Contrast (Visual Studio Code)</source>
+        <translation>浅色高对比度（Visual Studio Code）</translation>
+    </message>
+    <message>
+        <source>System (follows the desktop)</source>
+        <translation>系统（跟随桌面）</translation>
+    </message>
+    <message>
         <source>Colors</source>
         <translation>颜色</translation>
     </message>
@@ -10831,6 +10843,13 @@ Your previous graph is still available.</source>
     <message>
         <source>Undock window</source>
         <translation>取消停靠窗口</translation>
+    </message>
+</context>
+<context>
+    <name>CloseButton</name>
+    <message>
+        <source>Close Tab</source>
+        <translation>关闭标签页</translation>
     </message>
 </context>
 </TS>

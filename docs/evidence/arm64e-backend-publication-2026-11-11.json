@@ -1,0 +1,1285 @@
+{
+  "date": "2026-11-11",
+  "implementation_revision": "3f5513c8e936cc057326213abfe976748c98ee50",
+  "scope": "NeverD source-fork LLVM codegen and reconstructed fixed-C arm64e entry publication; synchronous signed C++ unwinding in reserved-layout fixture images",
+  "neverd_codegen_qualified": true,
+  "reconstructed_entry_publication_qualified": true,
+  "whole_image_publication_qualified": false,
+  "native_apple_cpta_qualified": false,
+  "cold_source_build_on_runner": false,
+  "local_test_host": {
+    "source_revision": "3f5513c8e936cc057326213abfe976748c98ee50",
+    "binary_sha256": "06565c60721e348b9b021dabb4f33ceb5afda50236939d317965dcc6c5fb83b3",
+    "binary_bytes": 122866440,
+    "source_sha256": {
+      "include/neverd/backend/llvm/AArch64/LLVMEntryABI.def": "926048e4cb5377490ead784eda3167581089165ce401607bcd5592bb52de972b",
+      "include/neverd/backend/llvm/AArch64/LLVMEntryABI.h": "a3cc4fa331fa1f843f1361b4ea5f871f68e392ce9cc7632fa0c80d0231f1b35e",
+      "include/neverd/backend/llvm/LLVMSourceCallValue.def": "72fb7ccb8155a79176b862f9775eb256608612801c0f3370418403dbec298335",
+      "include/neverd/backend/llvm/LLVMSourceCallValue.h": "6698219867725f32d6667ddcef89087c9193c8640de089d03ccd249f860ff748",
+      "lib/backend/codegen/CodeGen.cpp": "15cc1e48c366fd163beb50c69b5556ef9f245a9a4c09df7b7241d63349fd4919",
+      "lib/backend/codegen/MachO/MachOPatchObject.cpp": "c1332db288c81130bdd20957b83cab30701397a675dd41e0693020b0b78bfb68",
+      "lib/backend/codegen/SourcePatch.cpp": "a090f8d946a8b4b9eb4bedb982d1d6bbafa2f48ca7534d5a7f31543869502053",
+      "lib/backend/llvm/AArch64/LLVMEntryABI.cpp": "cc9e4ae4c3868e4669dc986fd0fde133ace7e0b059e7511932e270d911834431",
+      "lib/backend/llvm/emit/MedLLVMEmitter.cpp": "0360d94c6e41a294be5ddcb3946cc77281d623afa9a22fa471767585b6ea0259",
+      "lib/ir/SourceABI.cpp": "3452f57574a1134b22215fec530c8940093a6cfdad6f53219c6001318b0e5321",
+      "scripts/arm64e_artifacts.def": "c7748b446d2d7e9677d73b7dc6fb365c2521cc03eb6c06e50c75e6f8479bbd66",
+      "scripts/arm64e_artifacts.py": "ad55c17899d8a75fa12392100d782555c5f177955caaddc98c51163af659aff0",
+      "scripts/verify_arm64e_entry.def": "b4f2b89276d0d63939793d70599a74fbb237cad341987f2756a16fc88090d41f",
+      "scripts/verify_arm64e_entry.py": "5d62f066e231650205b1fb5bf2bdce30201c5c0ee529e7a8f81bc4103818e86c",
+      "scripts/verify_arm64e_native.def": "40b1edccd85fc303cc9db292c15044ba7b6dc136a2eef5515d25a008584a4c13",
+      "scripts/verify_arm64e_native.py": "240ba23bdcb63bd8a59ecb8ed14b3bdc01bd5a5b71300f8b1acf7439c6c1f8e1",
+      "unittests/lift/aarch64/AArch64EntryABIFixtures.def": "4f9f3ab2aec9db43b5fe3e083aa61f715b14785a15a37dc6e01698dc23ae0360",
+      "unittests/lift/aarch64/AArch64EntryABITests.cpp": "9671d4cf05898b1d7a02096a51ca882fe841bc6980db7b688d45a521f76f73f9",
+      "unittests/lift/format/MachOAuthenticatedNativeFixtures.def": "d1628d586e9733be6511cf100d5e2190f65931fad3ea76d590063d988d996997"
+    },
+    "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+    "llvm_prebuilt": false,
+    "configuration": "Release",
+    "cold_source_build": false,
+    "scope": "Source-bound local Release host replay; source LLVM fork; not a cold runner build",
+    "build_receipt_sha256": "e55ae04e3ff83f306386e095cd99d3cfc13cc3aa1d5631503f5e8ae8ed6d8966",
+    "cache_sha256": "f8efb3a1adaeff807f437c44978ce5c27f96b8d9fdca1219f37c7c085ca7ac5b",
+    "submodule_revisions": {
+      "third_party/llvm-project": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+      "third_party/capstone": "b8c22e0c16b1769dfa712547d4a5c5d49560ae46",
+      "third_party/unicorn": "6dbdc470767c9503841023e0e16edbe6c2af914c",
+      "signatures": "20b9036f4367e1308a3d2f0b214e06859090a7af"
+    }
+  },
+  "native_run": {
+    "conclusion": "success",
+    "createdAt": "2026-11-10T18:39:44Z",
+    "databaseId": 42877451388,
+    "headSha": "2a25f8bcd45d5c20beacf5d369a7e15e1589554d",
+    "status": "completed",
+    "updatedAt": "2026-11-10T18:41:08Z",
+    "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/42877451388"
+  },
+  "delivery_asset_sha256": "35504dced08b3d4160410e1651ef04e4961a82fe6bf39d7dd8932aa8c91fd507",
+  "native_artifacts": [
+    {
+      "name": "native-entry-xcode-27",
+      "id": 13792647286,
+      "digest": "sha256:d56b677470dd5fff8ea15c16bc41da9f2a85a9d7ce696563755ccc0d6599b1f0",
+      "size_in_bytes": 463850,
+      "expires_at": "2026-11-24T18:41:00Z"
+    },
+    {
+      "name": "native-entry-macos-26",
+      "id": 13792557429,
+      "digest": "sha256:3b00adce198978a894f157a634bc726696cdaa410bd4bd40d67c562e0cdf1264",
+      "size_in_bytes": 463928,
+      "expires_at": "2026-11-24T18:40:45Z"
+    }
+  ],
+  "coverage": [
+    "32 executed cases: two hosts x caller O0/O2 x IA/IB pointer storage x compact/indexed-DWARF x direct/publication routes",
+    "26 original trapping entries replaced per publication image; exact installed identity and final code bytes checked",
+    "16 original entry traps distinguished from startup failures by the caller entry marker",
+    "16 unreserved layouts rejected before publication, preserving the original and creating no output",
+    "Authenticated pointer corruption, integer catches, destructor cleanup and post-exception values",
+    "Source LLVM emits classic arm64e objects without repairing their subtype or return CFI"
+  ],
+  "not_qualified": [
+    "General tightly packed dylib relocation and layout growth",
+    "Arbitrary lifted analysis-module publication and complete prototype/address ownership recovery",
+    "Asynchronous interruption through prologues/epilogues and signal frames",
+    "Variadic and non-C reconstructed entries",
+    "Native Apple CPA/CPA2 CPTA-on hardware"
+  ],
+  "r6_policy": "Default neverd-llvm-v23.0.0-r6 retained; its incompatible signed-return CFI is a negative control. Only the separate qualification host uses source LLVM 5676029e378c9e37adc16c8216a8e8453ffafcae.",
+  "local_checks": {
+    "source_entry_tests": 12,
+    "source_macho_tests": 83,
+    "r6_entry_tests": 12,
+    "r6_incompatible_cfi_refusal": true,
+    "verifier_tests": 34,
+    "compiler_offline_cases": 8,
+    "backend_offline_cases": 8,
+    "publication_offline_cases": 8,
+    "unreserved_layout_refusals": 8,
+    "format_version": "22.1.2",
+    "documentation_files": 309,
+    "documentation_locales": 10
+  },
+  "local_log_sha256": {
+    "source-entry-final.xml": "3395483b5e39ff4f507ed081a8ce799f20513ba7b1832a12aaaa1fc1e0e81e64",
+    "source-macho-regression.xml": "0c28fc72e644b77835556ad758eae047c228e2147a5d9f841d9cf9525cd3d57a",
+    "python-final.log": "630bc6ca6ac2393b1d58da4f6d2c714fbad17d6056d38db32cf5c94296955ddc",
+    "compiler-final/report.json": "5166ecefbabba42699f62cc0b1260f95f06c03a08a808a8211831d5da6f8c675",
+    "backend-final/report.json": "e703170ec7ea3bfd34b2a14557c6e55e4f27da36a3328495bebd387dee4b4207",
+    "publication-final/report.json": "04a88fefbbd33358033dfa39fe20b5d7436db54943eab4f9dc8c293f1a42ce28",
+    "source-bound-build.log": "f233924d125263e21d8fc0436cacb24a47dcd18fc158797af7f5c941f9366126",
+    "style-final.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "docs-final.log": "891c1f2a9e40d3952b23e9e79b35ac05e77427ad91de98357bc3829b3ed7ab14",
+    "provenance-final.log": "4be98e9ead392a101addf501a00cba1847adc6e2f854e2989c076472d18bdd7d"
+  },
+  "native_hosts": {
+    "macos-26": {
+      "platform": "macOS-26.7.2-arm64-arm-64bit-Mach-O",
+      "environment": {
+        "kernel": {
+          "returncode": 0,
+          "stdout": "Darwin Kernel Version 25.6.0: Mon Oct 12 00:39:04 PDT 2026; root:xnu-12377.161.15.701.48~2/RELEASE_ARM64_VMAPPLE\n",
+          "stderr": ""
+        },
+        "model": {
+          "returncode": 0,
+          "stdout": "VirtualMac2,1\n",
+          "stderr": ""
+        },
+        "effective-boot-args": {
+          "returncode": 0,
+          "stdout": "\n",
+          "stderr": ""
+        },
+        "sip": {
+          "returncode": 0,
+          "stdout": "System Integrity Protection status: disabled.\n",
+          "stderr": ""
+        },
+        "compiler": {
+          "returncode": 0,
+          "stdout": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n",
+          "stderr": ""
+        },
+        "sdk": {
+          "returncode": 0,
+          "stdout": "26.5\n",
+          "stderr": ""
+        },
+        "cpu": {
+          "returncode": 0,
+          "stdout": "Apple M1 (Virtual)\n",
+          "stderr": ""
+        },
+        "feat-cpa": {
+          "returncode": 1,
+          "stdout": "",
+          "stderr": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA'\n"
+        },
+        "feat-cpa2": {
+          "returncode": 1,
+          "stdout": "",
+          "stderr": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA2'\n"
+        }
+      },
+      "probe_controls_passed": 6,
+      "probe_report_sha256": "08e4f0e15c2973fad5742f0ef8adc626c3486082e5598579c2eb4c86a98b63c5",
+      "delivery_report_sha256": "1db430df42622c7ed4584b0d565707c4f70d02476f0e65491a4289af0b0577f7",
+      "matrices": {
+        "entries": {
+          "report_sha256": "9db558854c6ada2ff967b98bb2d37c8348b0fd7df4c8da3a65c2d683dec88a88",
+          "compiler": {
+            "path": "/Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++",
+            "sha256": "d2e4bf622758eee1bf7267c060497fb2c41e098d37b0fca8be73898dc7e14eda",
+            "version": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n"
+          },
+          "sdk_path": "/Applications/Xcode_26.6.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+          "optimization_scope": "native caller; NeverD Codegen::compile uses CodeGenOptLevel::Less",
+          "publication_layout": null,
+          "export_sources_sha256": {
+            "entry.ll": "81bdba0a15bd98d7762457c7d98af597fcdeb15b083997736318a5772899cefb",
+            "entry-dwarf.ll": "f0273400ba88683082bd5d08c16c4fe6d2c694a82e13f6a9e7ec61c5c4462f1b",
+            "caller.cpp": "dd93a1cde80cc1085d7ec1223dc5ba9d00ba1be1c0e78be1fbc8d68d09a78cea"
+          },
+          "cases": [
+            {
+              "optimization": "-O0",
+              "key": 0,
+              "dwarf": false,
+              "sha256": "676f9bfe50796627faf4a645ee0f4c1ca9169a62406a3e524bc108b2088ff65e",
+              "bytes": 40144,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "5e0eb8c3be0fd9b0473a5a932185dd9c95f9e9c9d6e333aedd08c8ccbd6457d7",
+                "bytes": 6952,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": null,
+              "unreserved_original_rejected": false,
+              "installed_text_sha256": null,
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "92e3d6eed94d271af86de3250c1520dd29cd9bde1d059990952a60c12de4dd03"
+              }
+            },
+            {
+              "optimization": "-O0",
+              "key": 1,
+              "dwarf": false,
+              "sha256": "021d464794e32c59d12a68141f0613bbc32300c0639bd0e50eeb39dec3492ed0",
+              "bytes": 40144,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "5e0eb8c3be0fd9b0473a5a932185dd9c95f9e9c9d6e333aedd08c8ccbd6457d7",
+                "bytes": 6952,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": null,
+              "unreserved_original_rejected": false,
+              "installed_text_sha256": null,
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "1732ccf38eb29b5a28432eb1cc67b302c7edafeb8c7458c59d0dd0384757a9d2"
+              }
+            },
+            {
+              "optimization": "-O0",
+              "key": 0,
+              "dwarf": true,
+              "sha256": "e0fbfa176e11744ff39350b1a32f67d940e18611f00a6024a5775d5760e973b8",
+              "bytes": 56656,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "f1ec1dfb529300fb45c797a966ded344ac98056bd274168a9301fc774d7e0899",
+                "bytes": 9984,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": null,
+              "unreserved_original_rejected": false,
+              "installed_text_sha256": null,
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "6ff98f7df1ebc64e21828b40edbd26cec3aa1c3c312ece3e8940323b459fa675"
+              }
+            },
+            {
+              "optimization": "-O0",
+              "key": 1,
+              "dwarf": true,
+              "sha256": "7b37bf54565801c92506a5246ba00aa33f0d4df1b0679d1cdca92b4e94aadbc7",
+              "bytes": 56656,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "f1ec1dfb529300fb45c797a966ded344ac98056bd274168a9301fc774d7e0899",
+                "bytes": 9984,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": null,
+              "unreserved_original_rejected": false,
+              "installed_text_sha256": null,
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "ff2997e8273c66f8e9942128939aef4f983f70fa7ad99b2ccac8d9bc4d27b0cf"
+              }
+            },
+            {
+              "optimization": "-O2",
+              "key": 0,
+              "dwarf": false,
+              "sha256": "67ee1f5d16124edd1b86585eb7e7ee7ef0f55007aa1c0f5b0df073f56b88b634",
+              "bytes": 38064,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "5e0eb8c3be0fd9b0473a5a932185dd9c95f9e9c9d6e333aedd08c8ccbd6457d7",
+                "bytes": 6952,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": null,
+              "unreserved_original_rejected": false,
+              "installed_text_sha256": null,
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "b32d9eaee6fd61eccf75f95e940f7c4fa20cb8a4631bc0a1a48c3556c590062d"
+              }
+            },
+            {
+              "optimization": "-O2",
+              "key": 1,
+              "dwarf": false,
+              "sha256": "c6a887108024bdc78eebc87e38446e56d56f1d42626db88804dea7c73a92562c",
+              "bytes": 38064,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "5e0eb8c3be0fd9b0473a5a932185dd9c95f9e9c9d6e333aedd08c8ccbd6457d7",
+                "bytes": 6952,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": null,
+              "unreserved_original_rejected": false,
+              "installed_text_sha256": null,
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "6bfc7b8372966313a12aaec0c1c4db063582b0b40d9604e6a4f9ec749eca26ed"
+              }
+            },
+            {
+              "optimization": "-O2",
+              "key": 0,
+              "dwarf": true,
+              "sha256": "1eb1e427b66f9488d334ec2484bff365efcf5d0cc1959494d74cea3061de07b0",
+              "bytes": 38064,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "f1ec1dfb529300fb45c797a966ded344ac98056bd274168a9301fc774d7e0899",
+                "bytes": 9984,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": null,
+              "unreserved_original_rejected": false,
+              "installed_text_sha256": null,
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "0ef76537ea563f03b55a56732607e54d503b46b8c6bdfe7451ddfcd59465c60e"
+              }
+            },
+            {
+              "optimization": "-O2",
+              "key": 1,
+              "dwarf": true,
+              "sha256": "b92e9c4f2dd2c6d8b269bd0df44a35fc53609ecd5da1fc43558196b4fe63fb84",
+              "bytes": 38064,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "f1ec1dfb529300fb45c797a966ded344ac98056bd274168a9301fc774d7e0899",
+                "bytes": 9984,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": null,
+              "unreserved_original_rejected": false,
+              "installed_text_sha256": null,
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "e7ca88bcc8aabd04aa20085db21d762f8650daaae3530a73f9cdfde10aff9bd4"
+              }
+            }
+          ]
+        },
+        "publication": {
+          "report_sha256": "32040d6cfde0faa8f55d886c1d463c7b517e29d250cd6c756ed5e31c550486db",
+          "compiler": {
+            "path": "/Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++",
+            "sha256": "d2e4bf622758eee1bf7267c060497fb2c41e098d37b0fca8be73898dc7e14eda",
+            "version": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n"
+          },
+          "sdk_path": "/Applications/Xcode_26.6.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk",
+          "optimization_scope": "native caller; NeverD Codegen::compile uses CodeGenOptLevel::Less",
+          "publication_layout": "reserved TEXT/header capacity",
+          "export_sources_sha256": {
+            "entry.ll": "81bdba0a15bd98d7762457c7d98af597fcdeb15b083997736318a5772899cefb",
+            "entry-dwarf.ll": "f0273400ba88683082bd5d08c16c4fe6d2c694a82e13f6a9e7ec61c5c4462f1b",
+            "caller.cpp": "dd93a1cde80cc1085d7ec1223dc5ba9d00ba1be1c0e78be1fbc8d68d09a78cea"
+          },
+          "cases": [
+            {
+              "optimization": "-O0",
+              "key": 0,
+              "dwarf": false,
+              "sha256": "7e45daba7ff6a263f88e1bf820778ad7209b6f918d5403590877b9743c43001f",
+              "bytes": 109968,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "5e0eb8c3be0fd9b0473a5a932185dd9c95f9e9c9d6e333aedd08c8ccbd6457d7",
+                "bytes": 6952,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": -5,
+              "unreserved_original_rejected": true,
+              "installed_text_sha256": "b6f7ff509be102728e21619302d93310b31e55e9f2d35efdb0f93e1cb0ede88c",
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "8afe764b4c77276bc50e2317c7ba07054829bd4ef2b4d9474ad9d615bb0c7eec"
+              },
+              "installed_entry_count": 26,
+              "installed_text": {
+                "address": 65536,
+                "offset": 65536,
+                "size": 2096
+              },
+              "receipt_sha256": "309978dc7e8fdab754fcc8e1ba65d53c79d0f8ecc1f1542ccab0271f022780f6",
+              "original_execution": {
+                "returncode": -5,
+                "stdout": "neverd-entry-caller-entered\n",
+                "sha256": "84adf27038a3db1e861544f55688a618a822b9092f9ff2f72cd037fc35242632"
+              }
+            },
+            {
+              "optimization": "-O0",
+              "key": 1,
+              "dwarf": false,
+              "sha256": "cd80faed6968d151f12a601aa07749692e7534d1b9bddcc0705dca712d0e368c",
+              "bytes": 109968,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "5e0eb8c3be0fd9b0473a5a932185dd9c95f9e9c9d6e333aedd08c8ccbd6457d7",
+                "bytes": 6952,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": -5,
+              "unreserved_original_rejected": true,
+              "installed_text_sha256": "b6f7ff509be102728e21619302d93310b31e55e9f2d35efdb0f93e1cb0ede88c",
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "074c742e59bcbe48521fecaaf8ea7df6011ce3bbd2dfe3aeff467b9810f6f3dd"
+              },
+              "installed_entry_count": 26,
+              "installed_text": {
+                "address": 65536,
+                "offset": 65536,
+                "size": 2096
+              },
+              "receipt_sha256": "309978dc7e8fdab754fcc8e1ba65d53c79d0f8ecc1f1542ccab0271f022780f6",
+              "original_execution": {
+                "returncode": -5,
+                "stdout": "neverd-entry-caller-entered\n",
+                "sha256": "d985baa09d9163b561cba880b3e65a01cb0cbaa79e24788a7045f36bd6a954b9"
+              }
+            },
+            {
+              "optimization": "-O0",
+              "key": 0,
+              "dwarf": true,
+              "sha256": "22209c748eca49607c86e50c81dd7c42ae1793564e40c8beb75611ae35eba9b0",
+              "bytes": 109968,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "f1ec1dfb529300fb45c797a966ded344ac98056bd274168a9301fc774d7e0899",
+                "bytes": 9984,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": -5,
+              "unreserved_original_rejected": true,
+              "installed_text_sha256": "41e2f27ba50b4b1ec833a29f2f74abf3e37822e223f3a92a948e9df875711d7e",
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "848b8a15487ab8b8342d4dc55de9a00f9af23c9cd303a2a8ebb6736be4e4f2cb"
+              },
+              "installed_entry_count": 26,
+              "installed_text": {
+                "address": 65536,
+                "offset": 65536,
+                "size": 2096
+              },
+              "receipt_sha256": "6c18cd1b5dfe81d3b5aed05583807b8594c7592bd30517d781d6fd1451626e85",
+              "original_execution": {
+                "returncode": -5,
+                "stdout": "neverd-entry-caller-entered\n",
+                "sha256": "85138b869d0591f2e862f24aedc61e67923420d18fe2d8609f565129391ecf9e"
+              }
+            },
+            {
+              "optimization": "-O0",
+              "key": 1,
+              "dwarf": true,
+              "sha256": "a68f94b76626779f4f1153919f3c9500907bf9e866d2f7ab1c6fb34f786322c5",
+              "bytes": 109968,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "f1ec1dfb529300fb45c797a966ded344ac98056bd274168a9301fc774d7e0899",
+                "bytes": 9984,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": -5,
+              "unreserved_original_rejected": true,
+              "installed_text_sha256": "41e2f27ba50b4b1ec833a29f2f74abf3e37822e223f3a92a948e9df875711d7e",
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "e52de0f6c4248aaebf21ceaafa8d7f1ef3f851febade80f9a5fd85c32e838b12"
+              },
+              "installed_entry_count": 26,
+              "installed_text": {
+                "address": 65536,
+                "offset": 65536,
+                "size": 2096
+              },
+              "receipt_sha256": "6c18cd1b5dfe81d3b5aed05583807b8594c7592bd30517d781d6fd1451626e85",
+              "original_execution": {
+                "returncode": -5,
+                "stdout": "neverd-entry-caller-entered\n",
+                "sha256": "2a858867de4cd39d63ded6ab991444d74dd95f4399ffdd5bf182a42a86ee284c"
+              }
+            },
+            {
+              "optimization": "-O2",
+              "key": 0,
+              "dwarf": false,
+              "sha256": "93e4110340409cec8717f6637cab00c2200cf96c8f12d34d26b4ae3718a09ace",
+              "bytes": 105552,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "5e0eb8c3be0fd9b0473a5a932185dd9c95f9e9c9d6e333aedd08c8ccbd6457d7",
+                "bytes": 6952,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": -5,
+              "unreserved_original_rejected": true,
+              "installed_text_sha256": "b6f7ff509be102728e21619302d93310b31e55e9f2d35efdb0f93e1cb0ede88c",
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "c0a14c08ff45109d666412e8658328d2d18d3c8a29150b47457b5be45e75b89a"
+              },
+              "installed_entry_count": 26,
+              "installed_text": {
+                "address": 65536,
+                "offset": 65536,
+                "size": 2096
+              },
+              "receipt_sha256": "d830d02abe8900ac1795f1a4614bc7b85483789b88e26c6c23d26a41e2c10752",
+              "original_execution": {
+                "returncode": -5,
+                "stdout": "neverd-entry-caller-entered\n",
+                "sha256": "e016b4b81cdf93a0275d20c7ca17ed2324727b2292d3413823b5107c4d4d129c"
+              }
+            },
+            {
+              "optimization": "-O2",
+              "key": 1,
+              "dwarf": false,
+              "sha256": "3e70f7437834a9425293f17d9950c7e8f1f5c896f14b5e9677ec955c486e24f3",
+              "bytes": 105552,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "5e0eb8c3be0fd9b0473a5a932185dd9c95f9e9c9d6e333aedd08c8ccbd6457d7",
+                "bytes": 6952,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": -5,
+              "unreserved_original_rejected": true,
+              "installed_text_sha256": "b6f7ff509be102728e21619302d93310b31e55e9f2d35efdb0f93e1cb0ede88c",
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "13d67db30bee21ad2ad88d7ad7ef549491d91744ecbb7d1d0958499568b4af34"
+              },
+              "installed_entry_count": 26,
+              "installed_text": {
+                "address": 65536,
+                "offset": 65536,
+                "size": 2096
+              },
+              "receipt_sha256": "d830d02abe8900ac1795f1a4614bc7b85483789b88e26c6c23d26a41e2c10752",
+              "original_execution": {
+                "returncode": -5,
+                "stdout": "neverd-entry-caller-entered\n",
+                "sha256": "d5ba5b6d44a693551326612ec8978c828b34cf2db7f07953419cf1a45ca82ec2"
+              }
+            },
+            {
+              "optimization": "-O2",
+              "key": 0,
+              "dwarf": true,
+              "sha256": "f0340a31177c3d97fd9e8900254efa7de17833a408f98bb2e1138f4f465968f9",
+              "bytes": 105536,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "f1ec1dfb529300fb45c797a966ded344ac98056bd274168a9301fc774d7e0899",
+                "bytes": 9984,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": -5,
+              "unreserved_original_rejected": true,
+              "installed_text_sha256": "41e2f27ba50b4b1ec833a29f2f74abf3e37822e223f3a92a948e9df875711d7e",
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "214480aa117d7a0944b194734c9a458e9551a68bd380da3a980bb031926d8b37"
+              },
+              "installed_entry_count": 26,
+              "installed_text": {
+                "address": 65536,
+                "offset": 65536,
+                "size": 2096
+              },
+              "receipt_sha256": "3f491ec40cdd1cf35c00368d963ff0a744732854b60f2fb6155e08a3dc11d8a7",
+              "original_execution": {
+                "returncode": -5,
+                "stdout": "neverd-entry-caller-entered\n",
+                "sha256": "00c8708fddba6f3719630530854008368a8306c5963c8e707badc5a97acef3f1"
+              }
+            },
+            {
+              "optimization": "-O2",
+              "key": 1,
+              "dwarf": true,
+              "sha256": "8aa3021d2a77ae284b721103486cbda8c06c1896b2b901689c5f7be45466aab7",
+              "bytes": 105536,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "f1ec1dfb529300fb45c797a966ded344ac98056bd274168a9301fc774d7e0899",
+                "bytes": 9984,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": -5,
+              "unreserved_original_rejected": true,
+              "installed_text_sha256": "41e2f27ba50b4b1ec833a29f2f74abf3e37822e223f3a92a948e9df875711d7e",
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "5b8216cda68dd4a2b58057f3177e16da6bd8a491f7fcce9a5a275e11ec611791"
+              },
+              "installed_entry_count": 26,
+              "installed_text": {
+                "address": 65536,
+                "offset": 65536,
+                "size": 2096
+              },
+              "receipt_sha256": "3f491ec40cdd1cf35c00368d963ff0a744732854b60f2fb6155e08a3dc11d8a7",
+              "original_execution": {
+                "returncode": -5,
+                "stdout": "neverd-entry-caller-entered\n",
+                "sha256": "878ac617d50f3f5227aeb336bd73e6e136758e0d0ffef48b611942fd2b48e8ed"
+              }
+            }
+          ]
+        }
+      },
+      "owned_host_removed": true,
+      "executable_products_in_artifacts": 0,
+      "compiler_only_unwind_control": [
+        {
+          "profile": "compact.dylib",
+          "returncode": 0,
+          "stderr": "",
+          "sha256": "7ae19d23434ba54a610d8d062abf5afc067abcb05d9b785d7d3191dc432febb6",
+          "bytes": 33952,
+          "cpu_subtype": 2147483650
+        },
+        {
+          "profile": "no-index.dylib",
+          "returncode": -6,
+          "stderr": "libc++abi: terminating due to uncaught exception of type int\n",
+          "sha256": "afc41988614773c134c9855eec110a439ccca1aa991080f394e59e161f997ba1",
+          "bytes": 33952,
+          "cpu_subtype": 2147483650
+        },
+        {
+          "profile": "indexed-dwarf.dylib",
+          "returncode": 0,
+          "stderr": "",
+          "sha256": "c2706cbef9031a6dcb53c7d2b0e54b44dc74f97169c62f931bf8da7abc2dfcf1",
+          "bytes": 33952,
+          "cpu_subtype": 2147483650
+        }
+      ]
+    },
+    "xcode-27": {
+      "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+      "environment": {
+        "kernel": {
+          "returncode": 0,
+          "stdout": "Darwin Kernel Version 27.0.0: Tue Aug 11 21:00:07 PDT 2026; root:xnu-13432.1.9~1/RELEASE_ARM64_VMAPPLE\n",
+          "stderr": ""
+        },
+        "model": {
+          "returncode": 0,
+          "stdout": "VirtualMac2,1\n",
+          "stderr": ""
+        },
+        "effective-boot-args": {
+          "returncode": 0,
+          "stdout": "\n",
+          "stderr": ""
+        },
+        "sip": {
+          "returncode": 0,
+          "stdout": "System Integrity Protection status: disabled.\n",
+          "stderr": ""
+        },
+        "compiler": {
+          "returncode": 0,
+          "stdout": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode_27.1.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n",
+          "stderr": ""
+        },
+        "sdk": {
+          "returncode": 0,
+          "stdout": "27.0\n",
+          "stderr": ""
+        },
+        "cpu": {
+          "returncode": 0,
+          "stdout": "Apple M1 (Virtual)\n",
+          "stderr": ""
+        },
+        "feat-cpa": {
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": ""
+        },
+        "feat-cpa2": {
+          "returncode": 0,
+          "stdout": "0\n",
+          "stderr": ""
+        }
+      },
+      "probe_controls_passed": 6,
+      "probe_report_sha256": "8a07b3211b22f455e68fa4fb4f6a0ecc6b082ce5553849f490f3344f2c6dd9b4",
+      "delivery_report_sha256": "5efeaf6217ec22cdad3fa2fcd4825d3779920861d8ea836249a054ae89cd151e",
+      "matrices": {
+        "entries": {
+          "report_sha256": "5de30f73d06424cf1c4798a6722351b1c8cfba974e7946c5b6f08555ee4dc613",
+          "compiler": {
+            "path": "/Applications/Xcode_27.1.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++",
+            "sha256": "06e3d64f541c65a93acd176690bdaae13a3d7db092c8b98b392d4c6d0d03f176",
+            "version": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode_27.1.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n"
+          },
+          "sdk_path": "/Applications/Xcode_27.1.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk",
+          "optimization_scope": "native caller; NeverD Codegen::compile uses CodeGenOptLevel::Less",
+          "publication_layout": null,
+          "export_sources_sha256": {
+            "entry.ll": "81bdba0a15bd98d7762457c7d98af597fcdeb15b083997736318a5772899cefb",
+            "entry-dwarf.ll": "f0273400ba88683082bd5d08c16c4fe6d2c694a82e13f6a9e7ec61c5c4462f1b",
+            "caller.cpp": "dd93a1cde80cc1085d7ec1223dc5ba9d00ba1be1c0e78be1fbc8d68d09a78cea"
+          },
+          "cases": [
+            {
+              "optimization": "-O0",
+              "key": 0,
+              "dwarf": false,
+              "sha256": "354eea367050dc44a25e098858d22b6c30d24b9cf2768aa211e319380b2ac515",
+              "bytes": 40144,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "5e0eb8c3be0fd9b0473a5a932185dd9c95f9e9c9d6e333aedd08c8ccbd6457d7",
+                "bytes": 6952,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": null,
+              "unreserved_original_rejected": false,
+              "installed_text_sha256": null,
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "92e3d6eed94d271af86de3250c1520dd29cd9bde1d059990952a60c12de4dd03"
+              }
+            },
+            {
+              "optimization": "-O0",
+              "key": 1,
+              "dwarf": false,
+              "sha256": "f48ad4369a2778b09cbdf854a2461b290448d68722967952f0af74f1f743454f",
+              "bytes": 40144,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "5e0eb8c3be0fd9b0473a5a932185dd9c95f9e9c9d6e333aedd08c8ccbd6457d7",
+                "bytes": 6952,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": null,
+              "unreserved_original_rejected": false,
+              "installed_text_sha256": null,
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "1732ccf38eb29b5a28432eb1cc67b302c7edafeb8c7458c59d0dd0384757a9d2"
+              }
+            },
+            {
+              "optimization": "-O0",
+              "key": 0,
+              "dwarf": true,
+              "sha256": "936e17aff2243132a5f8a1c9a6c5ef430026e7e4fc45deccf96bae98861594e6",
+              "bytes": 56656,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "f1ec1dfb529300fb45c797a966ded344ac98056bd274168a9301fc774d7e0899",
+                "bytes": 9984,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": null,
+              "unreserved_original_rejected": false,
+              "installed_text_sha256": null,
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "6ff98f7df1ebc64e21828b40edbd26cec3aa1c3c312ece3e8940323b459fa675"
+              }
+            },
+            {
+              "optimization": "-O0",
+              "key": 1,
+              "dwarf": true,
+              "sha256": "91a74322dbd8b174e93503459bc65c3ad866ef253c323a408b23ed7dc9686970",
+              "bytes": 56656,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "f1ec1dfb529300fb45c797a966ded344ac98056bd274168a9301fc774d7e0899",
+                "bytes": 9984,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": null,
+              "unreserved_original_rejected": false,
+              "installed_text_sha256": null,
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "ff2997e8273c66f8e9942128939aef4f983f70fa7ad99b2ccac8d9bc4d27b0cf"
+              }
+            },
+            {
+              "optimization": "-O2",
+              "key": 0,
+              "dwarf": false,
+              "sha256": "c43939bd94dd1b2b568514c337bf20acf883e1925af5df8a07d711fbfc7f1ac5",
+              "bytes": 38064,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "5e0eb8c3be0fd9b0473a5a932185dd9c95f9e9c9d6e333aedd08c8ccbd6457d7",
+                "bytes": 6952,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": null,
+              "unreserved_original_rejected": false,
+              "installed_text_sha256": null,
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "b32d9eaee6fd61eccf75f95e940f7c4fa20cb8a4631bc0a1a48c3556c590062d"
+              }
+            },
+            {
+              "optimization": "-O2",
+              "key": 1,
+              "dwarf": false,
+              "sha256": "6c9f054a5c778bb19709f92328f07b8c876bd30006f5261a8c06e602de148ac8",
+              "bytes": 38064,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "5e0eb8c3be0fd9b0473a5a932185dd9c95f9e9c9d6e333aedd08c8ccbd6457d7",
+                "bytes": 6952,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": null,
+              "unreserved_original_rejected": false,
+              "installed_text_sha256": null,
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "6bfc7b8372966313a12aaec0c1c4db063582b0b40d9604e6a4f9ec749eca26ed"
+              }
+            },
+            {
+              "optimization": "-O2",
+              "key": 0,
+              "dwarf": true,
+              "sha256": "e02624cc6eb26d865210f7b1f89d272988b5de1e7cc80f2efce7a43fd7d3ef98",
+              "bytes": 38064,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "f1ec1dfb529300fb45c797a966ded344ac98056bd274168a9301fc774d7e0899",
+                "bytes": 9984,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": null,
+              "unreserved_original_rejected": false,
+              "installed_text_sha256": null,
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "0ef76537ea563f03b55a56732607e54d503b46b8c6bdfe7451ddfcd59465c60e"
+              }
+            },
+            {
+              "optimization": "-O2",
+              "key": 1,
+              "dwarf": true,
+              "sha256": "e4fda572d858713d92ec9871e2d54172a338ce698a46772f3150af73b4cfa6a1",
+              "bytes": 38064,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "f1ec1dfb529300fb45c797a966ded344ac98056bd274168a9301fc774d7e0899",
+                "bytes": 9984,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": null,
+              "unreserved_original_rejected": false,
+              "installed_text_sha256": null,
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "e7ca88bcc8aabd04aa20085db21d762f8650daaae3530a73f9cdfde10aff9bd4"
+              }
+            }
+          ]
+        },
+        "publication": {
+          "report_sha256": "34afa329480db06cb085145d14ec001801eaf05d0e574f0a38ff022b20b38908",
+          "compiler": {
+            "path": "/Applications/Xcode_27.1.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++",
+            "sha256": "06e3d64f541c65a93acd176690bdaae13a3d7db092c8b98b392d4c6d0d03f176",
+            "version": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode_27.1.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n"
+          },
+          "sdk_path": "/Applications/Xcode_27.1.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk",
+          "optimization_scope": "native caller; NeverD Codegen::compile uses CodeGenOptLevel::Less",
+          "publication_layout": "reserved TEXT/header capacity",
+          "export_sources_sha256": {
+            "entry.ll": "81bdba0a15bd98d7762457c7d98af597fcdeb15b083997736318a5772899cefb",
+            "entry-dwarf.ll": "f0273400ba88683082bd5d08c16c4fe6d2c694a82e13f6a9e7ec61c5c4462f1b",
+            "caller.cpp": "dd93a1cde80cc1085d7ec1223dc5ba9d00ba1be1c0e78be1fbc8d68d09a78cea"
+          },
+          "cases": [
+            {
+              "optimization": "-O0",
+              "key": 0,
+              "dwarf": false,
+              "sha256": "d2105e93e5aa3ab734f6faa7f198746d9ed92c19b88965b9d77393b2b76b8e69",
+              "bytes": 91968,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "5e0eb8c3be0fd9b0473a5a932185dd9c95f9e9c9d6e333aedd08c8ccbd6457d7",
+                "bytes": 6952,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": -5,
+              "unreserved_original_rejected": true,
+              "installed_text_sha256": "b6f7ff509be102728e21619302d93310b31e55e9f2d35efdb0f93e1cb0ede88c",
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "8afe764b4c77276bc50e2317c7ba07054829bd4ef2b4d9474ad9d615bb0c7eec"
+              },
+              "installed_entry_count": 26,
+              "installed_text": {
+                "address": 65536,
+                "offset": 65536,
+                "size": 2096
+              },
+              "receipt_sha256": "309978dc7e8fdab754fcc8e1ba65d53c79d0f8ecc1f1542ccab0271f022780f6",
+              "original_execution": {
+                "returncode": -5,
+                "stdout": "neverd-entry-caller-entered\n",
+                "sha256": "84adf27038a3db1e861544f55688a618a822b9092f9ff2f72cd037fc35242632"
+              }
+            },
+            {
+              "optimization": "-O0",
+              "key": 1,
+              "dwarf": false,
+              "sha256": "93e9299857e143e77ebe2b691d3d7327c2d0af64b85cfee80ba1ea44f5a59f9a",
+              "bytes": 91968,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "5e0eb8c3be0fd9b0473a5a932185dd9c95f9e9c9d6e333aedd08c8ccbd6457d7",
+                "bytes": 6952,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": -5,
+              "unreserved_original_rejected": true,
+              "installed_text_sha256": "b6f7ff509be102728e21619302d93310b31e55e9f2d35efdb0f93e1cb0ede88c",
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "074c742e59bcbe48521fecaaf8ea7df6011ce3bbd2dfe3aeff467b9810f6f3dd"
+              },
+              "installed_entry_count": 26,
+              "installed_text": {
+                "address": 65536,
+                "offset": 65536,
+                "size": 2096
+              },
+              "receipt_sha256": "309978dc7e8fdab754fcc8e1ba65d53c79d0f8ecc1f1542ccab0271f022780f6",
+              "original_execution": {
+                "returncode": -5,
+                "stdout": "neverd-entry-caller-entered\n",
+                "sha256": "d985baa09d9163b561cba880b3e65a01cb0cbaa79e24788a7045f36bd6a954b9"
+              }
+            },
+            {
+              "optimization": "-O0",
+              "key": 0,
+              "dwarf": true,
+              "sha256": "9dada3d98902736cab05ff3f5d23621da6f6e3a4c542ea72d3b4b3232a19b0ae",
+              "bytes": 91968,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "f1ec1dfb529300fb45c797a966ded344ac98056bd274168a9301fc774d7e0899",
+                "bytes": 9984,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": -5,
+              "unreserved_original_rejected": true,
+              "installed_text_sha256": "41e2f27ba50b4b1ec833a29f2f74abf3e37822e223f3a92a948e9df875711d7e",
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "848b8a15487ab8b8342d4dc55de9a00f9af23c9cd303a2a8ebb6736be4e4f2cb"
+              },
+              "installed_entry_count": 26,
+              "installed_text": {
+                "address": 65536,
+                "offset": 65536,
+                "size": 2096
+              },
+              "receipt_sha256": "6c18cd1b5dfe81d3b5aed05583807b8594c7592bd30517d781d6fd1451626e85",
+              "original_execution": {
+                "returncode": -5,
+                "stdout": "neverd-entry-caller-entered\n",
+                "sha256": "85138b869d0591f2e862f24aedc61e67923420d18fe2d8609f565129391ecf9e"
+              }
+            },
+            {
+              "optimization": "-O0",
+              "key": 1,
+              "dwarf": true,
+              "sha256": "d9f0bebefe733b9abf0c41069795ce2aaefce26ef285c5be8f93608c6cf3eb5d",
+              "bytes": 91968,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "f1ec1dfb529300fb45c797a966ded344ac98056bd274168a9301fc774d7e0899",
+                "bytes": 9984,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": -5,
+              "unreserved_original_rejected": true,
+              "installed_text_sha256": "41e2f27ba50b4b1ec833a29f2f74abf3e37822e223f3a92a948e9df875711d7e",
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "e52de0f6c4248aaebf21ceaafa8d7f1ef3f851febade80f9a5fd85c32e838b12"
+              },
+              "installed_entry_count": 26,
+              "installed_text": {
+                "address": 65536,
+                "offset": 65536,
+                "size": 2096
+              },
+              "receipt_sha256": "6c18cd1b5dfe81d3b5aed05583807b8594c7592bd30517d781d6fd1451626e85",
+              "original_execution": {
+                "returncode": -5,
+                "stdout": "neverd-entry-caller-entered\n",
+                "sha256": "2a858867de4cd39d63ded6ab991444d74dd95f4399ffdd5bf182a42a86ee284c"
+              }
+            },
+            {
+              "optimization": "-O2",
+              "key": 0,
+              "dwarf": false,
+              "sha256": "793c94007f2e5c2824ff60105b4576a8195b44108217f0c92ceb47ccc0c26d31",
+              "bytes": 87552,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "5e0eb8c3be0fd9b0473a5a932185dd9c95f9e9c9d6e333aedd08c8ccbd6457d7",
+                "bytes": 6952,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": -5,
+              "unreserved_original_rejected": true,
+              "installed_text_sha256": "b6f7ff509be102728e21619302d93310b31e55e9f2d35efdb0f93e1cb0ede88c",
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "c0a14c08ff45109d666412e8658328d2d18d3c8a29150b47457b5be45e75b89a"
+              },
+              "installed_entry_count": 26,
+              "installed_text": {
+                "address": 65536,
+                "offset": 65536,
+                "size": 2096
+              },
+              "receipt_sha256": "d830d02abe8900ac1795f1a4614bc7b85483789b88e26c6c23d26a41e2c10752",
+              "original_execution": {
+                "returncode": -5,
+                "stdout": "neverd-entry-caller-entered\n",
+                "sha256": "e016b4b81cdf93a0275d20c7ca17ed2324727b2292d3413823b5107c4d4d129c"
+              }
+            },
+            {
+              "optimization": "-O2",
+              "key": 1,
+              "dwarf": false,
+              "sha256": "5eb1d08471acee97e128a3e24e9cb59d61ebef3a057b0a03994b8902a86eae2b",
+              "bytes": 87552,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "5e0eb8c3be0fd9b0473a5a932185dd9c95f9e9c9d6e333aedd08c8ccbd6457d7",
+                "bytes": 6952,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": -5,
+              "unreserved_original_rejected": true,
+              "installed_text_sha256": "b6f7ff509be102728e21619302d93310b31e55e9f2d35efdb0f93e1cb0ede88c",
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "13d67db30bee21ad2ad88d7ad7ef549491d91744ecbb7d1d0958499568b4af34"
+              },
+              "installed_entry_count": 26,
+              "installed_text": {
+                "address": 65536,
+                "offset": 65536,
+                "size": 2096
+              },
+              "receipt_sha256": "d830d02abe8900ac1795f1a4614bc7b85483789b88e26c6c23d26a41e2c10752",
+              "original_execution": {
+                "returncode": -5,
+                "stdout": "neverd-entry-caller-entered\n",
+                "sha256": "d5ba5b6d44a693551326612ec8978c828b34cf2db7f07953419cf1a45ca82ec2"
+              }
+            },
+            {
+              "optimization": "-O2",
+              "key": 0,
+              "dwarf": true,
+              "sha256": "717b9686cd01077dbf923a033659b9a17fd1740c3c20840d96516c5d53680b6a",
+              "bytes": 87536,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "f1ec1dfb529300fb45c797a966ded344ac98056bd274168a9301fc774d7e0899",
+                "bytes": 9984,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": -5,
+              "unreserved_original_rejected": true,
+              "installed_text_sha256": "41e2f27ba50b4b1ec833a29f2f74abf3e37822e223f3a92a948e9df875711d7e",
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "214480aa117d7a0944b194734c9a458e9551a68bd380da3a980bb031926d8b37"
+              },
+              "installed_entry_count": 26,
+              "installed_text": {
+                "address": 65536,
+                "offset": 65536,
+                "size": 2096
+              },
+              "receipt_sha256": "3f491ec40cdd1cf35c00368d963ff0a744732854b60f2fb6155e08a3dc11d8a7",
+              "original_execution": {
+                "returncode": -5,
+                "stdout": "neverd-entry-caller-entered\n",
+                "sha256": "00c8708fddba6f3719630530854008368a8306c5963c8e707badc5a97acef3f1"
+              }
+            },
+            {
+              "optimization": "-O2",
+              "key": 1,
+              "dwarf": true,
+              "sha256": "f09ec4fa7052238a3d4c5b3450c935adb6e02b3df8ee72bd922356a18322da67",
+              "bytes": 87536,
+              "cpu_subtype": 2147483650,
+              "object": {
+                "sha256": "f1ec1dfb529300fb45c797a966ded344ac98056bd274168a9301fc774d7e0899",
+                "bytes": 9984,
+                "cpu_subtype": 2147483650
+              },
+              "executed": true,
+              "baseline_returncode": -5,
+              "unreserved_original_rejected": true,
+              "installed_text_sha256": "41e2f27ba50b4b1ec833a29f2f74abf3e37822e223f3a92a948e9df875711d7e",
+              "execution": {
+                "returncode": 0,
+                "stdout": "neverd-entry-caller-entered\nneverd-entry-caller-passed\n",
+                "sha256": "5b8216cda68dd4a2b58057f3177e16da6bd8a491f7fcce9a5a275e11ec611791"
+              },
+              "installed_entry_count": 26,
+              "installed_text": {
+                "address": 65536,
+                "offset": 65536,
+                "size": 2096
+              },
+              "receipt_sha256": "3f491ec40cdd1cf35c00368d963ff0a744732854b60f2fb6155e08a3dc11d8a7",
+              "original_execution": {
+                "returncode": -5,
+                "stdout": "neverd-entry-caller-entered\n",
+                "sha256": "878ac617d50f3f5227aeb336bd73e6e136758e0d0ffef48b611942fd2b48e8ed"
+              }
+            }
+          ]
+        }
+      },
+      "owned_host_removed": true,
+      "executable_products_in_artifacts": 0,
+      "compiler_only_unwind_control": [
+        {
+          "profile": "compact.dylib",
+          "returncode": 0,
+          "stderr": "",
+          "sha256": "68e7600ad0209a808ab045921cb4ef7f21ff98cce6bea36eae0f5e7b95571bc1",
+          "bytes": 33952,
+          "cpu_subtype": 2147483650
+        },
+        {
+          "profile": "no-index.dylib",
+          "returncode": -6,
+          "stderr": "libc++abi: terminating due to uncaught exception of type int\n",
+          "sha256": "1cd2f2ec26f9ec01a6b0aef486f5c3c8eeddf782aa10c1fce428de98899843a1",
+          "bytes": 33952,
+          "cpu_subtype": 2147483650
+        },
+        {
+          "profile": "indexed-dwarf.dylib",
+          "returncode": 0,
+          "stderr": "",
+          "sha256": "9ca707dee2e7f36b7d15d4357db16ac9348ebdb254bf5e6af2862be3608a2dff",
+          "bytes": 33952,
+          "cpu_subtype": 2147483650
+        }
+      ]
+    }
+  },
+  "cleanup": {
+    "runner_products_removed": true,
+    "local_products_removal_pending": false,
+    "draft_release_removal_pending": false,
+    "temporary_workflow_removal_pending": false,
+    "active_build_cache_retained": true,
+    "diagnostics_retained": true,
+    "local_products_removed": [
+      {
+        "path": "build-arm64e-source/bin/NeverDArm64eAnalysisTests",
+        "sha256": "06565c60721e348b9b021dabb4f33ceb5afda50236939d317965dcc6c5fb83b3",
+        "bytes": 122866440
+      },
+      {
+        "path": "build-arm64e/backend-publication-evidence/entry-backend-host.tar.gz",
+        "sha256": "35504dced08b3d4160410e1651ef04e4961a82fe6bf39d7dd8932aa8c91fd507",
+        "bytes": 42507586
+      }
+    ],
+    "superseded_diagnostics": {
+      "archive": "build-arm64e/backend-publication-evidence/superseded-diagnostics.tar.gz",
+      "archive_sha256": "c8b67d6f1068d44854373a7718e912d23ebfd21a7ccd34e659e7c5fb459186a3",
+      "recovery_index": "build-arm64e/backend-publication-evidence/superseded-diagnostics-index.json",
+      "recovery_index_sha256": "bf2a80b0f3d2f26f9004fb09f85ba15c1d8874742a6606730b843950de5142da",
+      "files_verified": 163,
+      "uncompressed_bytes": 2476374,
+      "archive_bytes": 377677
+    },
+    "draft_release_removed": true,
+    "temporary_workflow_removed": true,
+    "temporary_workflow_cleanup_revision": "6e77f0153461954a8aaf27bfcc2710b8d4cbcc7e"
+  }
+}

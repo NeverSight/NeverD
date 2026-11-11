@@ -197,7 +197,8 @@ writeMachOExportLayout(const MachOExportMap &Exports) {
   return fail();
 }
 llvm::Expected<std::vector<uint8_t>>
-machOExportIdentities(llvm::ArrayRef<uint8_t> B, uint64_t HeaderVA) {
+machOExportIdentities(llvm::ArrayRef<uint8_t> B, uint64_t HeaderVA,
+                      uint32_t FileType) {
   auto Exports = readMachOExportLayout(B);
   if (!Exports)
     return Exports.takeError();
@@ -209,7 +210,7 @@ machOExportIdentities(llvm::ArrayRef<uint8_t> B, uint64_t HeaderVA) {
       if (E.Address > UINT64_MAX - HeaderVA ||
           E.Resolver > UINT64_MAX - HeaderVA)
         return fail();
-      if (!(Name == "__mh_execute_header" && E.Address == 0))
+      if (!(isMachOHeaderSymbol(Name, FileType) && E.Address == 0))
         E.Address += HeaderVA;
       if (E.Flags & EXPORT_SYMBOL_FLAGS_STUB_AND_RESOLVER)
         E.Resolver += HeaderVA;

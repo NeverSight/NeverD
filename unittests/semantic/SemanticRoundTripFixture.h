@@ -133,6 +133,11 @@ struct RoundTripTC {
   /// function when RecoveredSwitch is Required.  Multi-consumer regressions
   /// use this to prevent one recovered dispatch from hiding a lost sibling.
   uint32_t MinimumRecoveredSwitchCount = 1;
+
+  /// Check the decompiled C by execution in place of the lifted object, on
+  /// this route (true: LLVM C, false: HighC), whatever NEVERD_SEMANTIC_HIGHC
+  /// and NEVERD_SEMANTIC_LLVMC select. Empty leaves the choice to them.
+  std::optional<bool> SourceRoute;
 };
 
 /// True when LLVM emission refused a guessed table/code address instead of
@@ -465,6 +470,12 @@ private:
     // ---- Step 5 (NEVERD_SEMANTIC_HIGHC / _LLVMC): decompile to C, build it
     // The same comparison then checks the decompiled C by execution: the
     // module is compiled for the original target, linked and run.
+    if (TC.SourceRoute) {
+      sourceRoundTrip(TC, ObjPath, EffTarget, ArchFlags, UcArch, UcMode, SPReg,
+                      ParamRegs, RetReg, IsARM32, OrigState.RetVal,
+                      *TC.SourceRoute);
+      return;
+    }
     for (const auto &[Variable, LlvmRoute] :
          {std::pair{"NEVERD_SEMANTIC_HIGHC", false},
           std::pair{"NEVERD_SEMANTIC_LLVMC", true}})

@@ -52,7 +52,7 @@ complete instruction support or semantic test coverage.
 | XABORT | Exact constant imm8 through validated native LLVM, HighC and LLVM-to-C. Missing or inconsistent decoded operands and nonconstant IR fail; enclosing RTM checkpoint recovery remains separate. |
 | BLCFILL, BLCI, BLCIC, BLCMSK, BLCS, BLSFILL, BLSIC, T1MSKC, TZMSK | Validated XOP forms with source-dependent CF, result-dependent ZF/SF, cleared OF and explicit undefined AF/PF. LLVM, HighC and LLVM-to-C consume the same arithmetic semantics; see the TBM qualification below. |
 | BOUND | Strict word/dword i386 source projection and native full-LLVM/Clang APIs; protected code16/code32 execution preserves conditional field access, signed comparisons, restart and MPX #BR status ownership. See [the BOUND contract](x86-legacy-segments.md#protected-bound-and-native-source-projection). |
-| BNDCL, BNDCU, BNDCN, BNDMK, BNDMOV, BNDLDX, BNDSTX | Shared bounds/enable/table semantics and native LLVM/NeverC APIs; explicit [long-mode V11 source](x86-mpx-source.md) and [protected code32 execution](x86-legacy-segments.md#protected-mpx-instructions-and-branch-effects). The protected RAM profile retains original faults, IDT delivery, backing continuation and branch bounds effects through its C dispatcher. |
+| BNDCL, BNDCU, BNDCN, BNDMK, BNDMOV, BNDLDX, BNDSTX | Shared bounds/enable/table semantics and native LLVM/NeverC APIs; explicit [long-mode V11 source](x86-mpx-source.md) and [protected code16/code32 and VM86 execution](x86-legacy-segments.md#protected-mpx-instructions-and-branch-effects). The protected RAM profile retains original faults, IDT delivery, backing continuation and branch bounds effects through its C dispatcher. |
 | BEXTR | Validated XOP immediate, VEX register-control and APX forms, including NF. Bounded shifts avoid out-of-range LLVM shifts; ordinary forms define CF/OF/ZF and record SF/AF/PF as undefined. See the BEXTR qualification below. |
 | TZCNT, LZCNT, POPCNT | Validated legacy, REX2 and APX/NF forms; aliased inputs, zero operands, destination width and defined/undefined flags retain their architectural meanings. See the count qualification below. |
 | ANDN, BLSI, BLSMSK, BLSR, BZHI | Validated VEX and APX/NF forms; independent value/flag semantics, source-before-destination carry and explicit undefined AF/PF. Shared address validators retain memory-tail ownership. |
@@ -408,9 +408,9 @@ families remain separate work.
 | ENCLU outside explicit native bindings | The [native SGX V13 profile](x86-sgx-transfer.md) imports GPR/flags/x87/SSE/AVX and transfers leaves 2/3/4 to the immutable original executable ENCLU, preserving its PC-dependent result and native enclave/AEP continuation. Actual SGX success and AEX are unqualified on the local non-SGX host; software EPC/SSA/AEX, transport faults/events and ordinary relocated ABI remain separate. Leaves 0, 1 and 5..11 use the bounded contract below when natural-width AX is proven constant. |
 | ERETS, ERETU beyond explicit V9 | Native compiler interfaces and exact object encodings are available. Decoding now owns both IDs, and the explicit V9 continuation owns successful canonical returns, including ERETU compatibility targets, descriptor/caches, GS-base exchange, stack level and event outputs through both C routes. Conditional compatibility choices are profile-owned; ordinary source, CET, fault/event delivery and physical CPU transitions remain unqualified. |
 | UIRET faulting/native execution | Decoding and the explicit V8 continuation now own the successful canonical return, UIF feature selection, monitor invalidation and complete represented state through both C routes. Ordinary source, CET, fault delivery, RTM aborts and physical UINTR execution remain unqualified. |
-| RETF/RETFQ, IRET/IRETD/IRETQ | Ordinary source still lacks complete frame, privilege, segment and flag restoration. The separate [explicit x64 continuation](x64-continuation-source.md) V6 profile owns canonical 16/32/64-bit IRET and RETF (with or without imm16) from 64-bit entry to long-mode or compatibility CPL0..3, including hidden caches, descriptor accesses and outer-return segment invalidation. Compatibility returns own eight conditional GPR high-half choices and SS.B-dependent stack restoration/cleanup. All IRET widths pop five fields; word IRET retains AC/ID/VIF/VIP and clears RF. The no-fault returns accept RF, all IOPL values and VIF/VIP on entry while excluding TF; the optional paged-debug binding separately owns entry-TF traps. Raw frame RIP must be canonical before truncation. These instructions have no unconditional empty undefined-output audit. RETFQ preserves NMI blocking; IRETQ unblocks NMIs. The [paged binding](x86-paged-execution.md#faultable-iret-iretd-and-iretq) separately owns long-mode entry faults, retained descriptor effects, handler repair/retry and event composition, with explicit local processor profiles. The separate [legacy return owner](x86-legacy-segments.md#protected-iret-and-far-returns) now executes same/outer-CPL IRET/RETF in 16/32-bit protected entry, with word-sized CS/SS reads, descriptor effects and restartable IDT faults. The explicit protected source dispatcher retains these returns and event stops. The additional [protected task binding](x86-legacy-segments.md#protected-task-transfers) owns NT IRET, TSS CALL/JMP and task gates, including incoming-task faults and retained backing progress. CET/FRED, VM86 execution, ordinary legacy function projection and compatibility source contexts remain outside these bindings. |
+| RETF/RETFQ, IRET/IRETD/IRETQ | Ordinary source still lacks complete frame, privilege, segment and flag restoration. The separate [explicit x64 continuation](x64-continuation-source.md) V6 profile owns canonical 16/32/64-bit IRET and RETF (with or without imm16) from 64-bit entry to long-mode or compatibility CPL0..3, including hidden caches, descriptor accesses and outer-return segment invalidation. Compatibility returns own eight conditional GPR high-half choices and SS.B-dependent stack restoration/cleanup. All IRET widths pop five fields; word IRET retains AC/ID/VIF/VIP and clears RF. The no-fault returns accept RF, all IOPL values and VIF/VIP on entry while excluding TF; the optional paged-debug binding separately owns entry-TF traps. Raw frame RIP must be canonical before truncation. These instructions have no unconditional empty undefined-output audit. RETFQ preserves NMI blocking; IRETQ unblocks NMIs. The [paged binding](x86-paged-execution.md#faultable-iret-iretd-and-iretq) separately owns long-mode entry faults, retained descriptor effects, handler repair/retry and event composition, with explicit local processor profiles. The separate [legacy return owner](x86-legacy-segments.md#protected-iret-and-far-returns) now executes same/outer-CPL IRET/RETF in 16/32-bit protected entry, with word-sized CS/SS reads, descriptor effects and restartable IDT faults. The explicit protected source dispatcher retains these returns and event stops. The additional [protected task binding](x86-legacy-segments.md#protected-task-transfers) owns NT IRET, TSS CALL/JMP and task gates, including incoming-task faults and retained backing progress. The additional [Intel VM86 binding](x86-legacy-segments.md#explicit-vm86-execution) connects CPL0 IRETD/task entry, word-default execution, VME redirection and protected event/task exit through the same owners and host-x64 source dispatcher. CET/FRED, real/IA-32e transitions, ordinary legacy function projection and compatibility source contexts remain outside these bindings. |
 | SYSENTER, SYSEXIT/SYSEXITQ, SYSRET/SYSRETQ, RSM | Ordinary source still lacks complete register, privilege, segment and SMM continuation state. The separate explicit x64 continuation V5/V6 profiles own canonical SYSRET/SYSRETQ with live STAR and CS/SS caches, flags and compatibility/64-bit target state. SYSRET explicitly consumes eight arbitrary values for the legacy GPR high halves; all defined bits are preserved or assigned as specified. The Intel V7 profile additionally owns canonical SYSENTER from CPL0–3 and SYSEXIT/SYSEXITQ from CPL0, with live CS/ESP/EIP MSRs, complete target caches, state and explicit stops. Unprefixed SYSENTER/SYSEXIT also accept flat compatibility entry with either CS.D and a complete in-limit instruction. RF, all IOPL values and VIF/VIP are admitted on entry; TF still requires debug-trap delivery. Nonflat compatibility entry and faulting IA-32e transfers remain unqualified; SYSRET is architecturally invalid in compatibility mode. The [protected Intel SEP executor](x86-legacy-segments.md#protected-sysenter-and-sysexit) now owns i386 SYSENTER/SYSEXIT from nonflat 16/32-bit entry, with explicit MSRs, fixed caches, ignored prefixes, LOCK #UD, privilege/null-MSR #GP and restartable original-fetch faults. The explicit protected source dispatcher now connects that owner; ordinary function projection remains separate. The separate [native SMM V12 profile](x86-smm-return.md) now owns software-state transport before hardware RSM; SMI entry, other software-managed banks and fault/event routing remain outside that profile. |
-| MPX outside explicit state profiles | The [V11 source profile](x86-mpx-source.md) owns all seven qualified long-mode families, bounds, enable state, tables, BNDSTATUS, original branch initialization and a pending-#BR stop through both C routes. The [protected code32 RAM profile](x86-legacy-segments.md#protected-mpx-instructions-and-branch-effects) adds original instructions, memory faults, IDT delivery, retained backing continuation and branch effects through the protected C dispatcher. Ordinary function ABI, compatibility source entry, code16 MPX, 16-bit addresses, non-flat-DS tables, other memory/fault profiles, transactions and physical MPX remain unqualified. |
+| MPX outside explicit state profiles | The [V11 source profile](x86-mpx-source.md) owns all seven qualified long-mode families, bounds, enable state, tables, BNDSTATUS, original branch initialization and a pending-#BR stop through both C routes. The [protected code16/code32 and VM86 RAM profile](x86-legacy-segments.md#protected-mpx-instructions-and-branch-effects) adds original instructions, memory faults, IDT delivery, retained backing continuation and branch effects through the protected C dispatcher. Enabled address16 memory forms deliver #UD after authenticated fetch and before operand access; disabled forms complete without an operand access. Ordinary function ABI, compatibility source entry, non-flat-DS tables, other memory/fault profiles, transactions and physical MPX remain unqualified. |
 | XACQUIRE/XRELEASE outside explicit native steps | The [HLE source binding](x86-hle-state.md) retains 19 memory-operation families through native LLVM/NeverC contexts and both C routes. PAUSE forces a native abort/retry before publishing state; original registers, widths, bit indexes and addr32/FS/GS addressing remain explicit. Ordinary ABI lifting, external active transactions, full RTM checkpoints, native fault continuation and physical HLE commit/rollback remain unqualified. |
 | RTM outside selected native regions | The [native RTM region provider](x86-rtm-regions.md) owns selected x64 transactions through a live outer checkpoint, including memory/state rollback, nesting, selected CALL/RET, loops and actual abort status. Standalone XABORT/XTEST are bound separately within that provider. Unsupported paths and attempt-budget exhaustion roll back and decline. The shared prefix reader now owns valid prefixed forms and rejects forbidden NP XEND/XTEST encodings. Other state effects, i386 state providers, faults/events and physical RTM qualification remain open. |
 | Remaining compact-memory descriptor/fault execution | Native LLVM and both C routes retain long-mode stack references and i386 CS/ES/SS offsets, including implicit SS for SP/BP bases, alongside DS/FS/GS. The [explicit cached-segment operand binding](x86-legacy-segments.md) now executes concrete i386 CS/ES/SS accesses with whole packed bounds; unbound accesses still refuse and zero masks suppress access. Physical AVX-512 and descriptor-fault execution remain unqualified. |
@@ -4380,8 +4380,9 @@ The final captured x86 SEH merge was rebuilt at `35d4988e8a`; both complete
 source matrices passed again with identical exported inputs and explicit shared
 library hashes. Repeated integration runs do not inflate the selected-test count.
 
-The profile does not qualify physical MPX, code16 MPX operands, 16-bit address
-forms, non-flat-DS bounds tables, transactional aborts, MMIO, shared-memory
+This November 9 qualification predates the [code16/VM86 extension](evidence/x86-vm86-returns-mpx-2026-11-10.json).
+Its original scope did not qualify physical MPX, code16 MPX operands, 16-bit
+address forms, non-flat-DS bounds tables, transactional aborts, MMIO, shared-memory
 synchronization or ordinary function-ABI bounds transport. Whole-operand
 publication and BNDMOV alignment are explicit software-profile choices. Full
 mode/task transitions, remaining original-machine banks/providers, software
@@ -4434,3 +4435,60 @@ The [Actions runner discovery](evidence/x86-sgx-runner-discovery-2026-11-09.json
 also found no usable SGX1/EPC/device on Ubuntu 24.04 or Intel macOS 15/26. It
 executed zero enclave instructions. No final LLVM release, production pin or
 LLVM gitlink update is implied by either result.
+
+## Continuous protected/compatibility/code64 execution (2026-11-11)
+
+The [full-width mode owner](x86-mode-execution.md) executes original WRMSR,
+MOV-CR, far-JMP and RETFQ instructions through protected32 → compatibility32 →
+code64 → compatibility32 → protected32 without host mode rewrites. It shares
+control-write validation, retains complete register/descriptor/debug addresses,
+uses committed LMA for event frames and authenticates suspended instruction or
+event state. Long64 bodies use paged HighC/LLVM-to-C exports compiled by Clang
+and NeverC for the x64 host; guest code16/code32 adds no NeverC source target.
+
+At integration `12a6f114ea`, each SDK passes 1,308 primary execution, paging,
+source, boundary and SDK cases, with two LA57 hardware skips. Alternate-core
+replays add 15 passes and one LA57 skip per SDK, reported separately. The mode
+source matrix covers both emitters/compilers at O0/O2; original CPU streams
+compare one complete roundtrip and four mode-dependent event frames per core.
+The [dated evidence](evidence/x86-mode-execution-2026-11-11.json) records exact
+source/binary hashes, reports, identical generated sources across SDKs, isolated
+artifact replays and recoverable cleanup of superseded fixtures.
+
+This internal C++ boundary still requires separate integration for external
+inputs and other non64 state owners, including task/system selectors, segment
+reloads, ports/strings/MPX, legacy returns and call gates. Real/unreal execution,
+software SMM/SGX and unbound event producers remain open. The production r6 pin
+and LLVM gitlink remain unchanged; no final LLVM release is declared.
+
+
+## Continuous-mode IRQ/NMI and retained acceptance (2026-11-11)
+
+The [full-width mode owner](x86-mode-execution.md#selected-external-irqnmi)
+now accepts explicitly selected IRQ/NMI inputs in protected16/32,
+compatibility16/32 and code64. Committed LMA selects the event owner; complete
+stack witnesses, NMI blocking, accepted frame effects and frozen options
+survive backing repair. Acceptance is reported once, including secondary
+faults and zero-budget resumes. Halt wake, terminal shutdown and pending-state
+authentication precede further fetch or budget checks. Inhibited or refused
+inputs publish no trial bank or paging-control changes.
+
+At integration `b9bcfd819c`, the development SDK and production r6 SDK each
+pass 476 primary paged-source, legacy-source, boundary and SDK cases. Another
+29 alternate-core replays and five regressions from the latest upstream
+runtime-varargs/frame-pointee changes pass per SDK, counted separately; there
+are no failures or skips. Original STI/HLT wake and repeated NMI/IRETQ streams
+use one initial SREGS write and no host mode or blocker rewrites. Both C
+emitters retain identical generated artifacts across SDKs. The
+[dated evidence](evidence/x86-mode-interrupts-2026-11-11.json) records exact
+source/binary/artifact hashes and the unchanged lower-owner paging baseline.
+A subsequent merge at `da61cae5e7` includes upstream type-cache, function-edit
+range and MIPS-only Capstone changes. Both SDKs rebuild and pass 154 affected
+mode, boundary, SDK, type-context and session checks each, with no failures or
+skips; these integration replays have their own exact-source records.
+
+The producer still owns arrival timing and APIC/PIC/CR8 priority arbitration.
+Other non64 state-owner integrations, real/unreal execution, software SMM/SGX
+and unbound event producers remain open. NeverC remains host x64 only. The
+production r6 pin and LLVM gitlink are unchanged; no final LLVM release is
+declared.

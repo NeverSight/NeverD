@@ -105,20 +105,38 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
     S.emit(NdOp::COPY, NdVar::reg(mipsreg::w(WD), 16), {Result});
     return true;
   }
+  // I5 shares the integer lane semantics with 3R; only its right operand
+  // differs. The descriptor has already validated the opcode/function bits.
+  const bool ImmediateInteger = (Word & 63) == 6 || (Word & 63) == 7;
+  const bool SignedImmediate = *Kind == Instruction::EqualImmediate ||
+                               *Kind == Instruction::SignedLessImmediate ||
+                               *Kind == Instruction::SignedLessEqualImmediate ||
+                               *Kind == Instruction::SignedMaximumImmediate ||
+                               *Kind == Instruction::SignedMinimumImmediate;
+  const int64_t Immediate = SignedImmediate ? int(WT ^ 16) - 16 : int(WT);
+  const auto Right = [&](unsigned I, uint16_t Bytes) {
+    return ImmediateInteger ? NdVar::cst(uint64_t(Immediate), Bytes)
+                            : Lane(WT, I, Bytes);
+  };
   std::optional<NdOp> Comparison;
   switch (*Kind) {
+  case Instruction::EqualImmediate:
   case Instruction::EqualVector:
     Comparison = NdOp::INT_EQUAL;
     break;
+  case Instruction::SignedLessImmediate:
   case Instruction::SignedLessVector:
     Comparison = NdOp::INT_SLESS;
     break;
+  case Instruction::UnsignedLessImmediate:
   case Instruction::UnsignedLessVector:
     Comparison = NdOp::INT_LESS;
     break;
+  case Instruction::SignedLessEqualImmediate:
   case Instruction::SignedLessEqualVector:
     Comparison = NdOp::INT_SLESSEQUAL;
     break;
+  case Instruction::UnsignedLessEqualImmediate:
   case Instruction::UnsignedLessEqualVector:
     Comparison = NdOp::INT_LESSEQUAL;
     break;
@@ -155,11 +173,17 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
     break;
   }
   const bool Minimum = *Kind == Instruction::SignedMinimumVector ||
-                       *Kind == Instruction::UnsignedMinimumVector;
+                       *Kind == Instruction::UnsignedMinimumVector ||
+                       *Kind == Instruction::SignedMinimumImmediate ||
+                       *Kind == Instruction::UnsignedMinimumImmediate;
   const bool Maximum = *Kind == Instruction::SignedMaximumVector ||
-                       *Kind == Instruction::UnsignedMaximumVector;
+                       *Kind == Instruction::UnsignedMaximumVector ||
+                       *Kind == Instruction::SignedMaximumImmediate ||
+                       *Kind == Instruction::UnsignedMaximumImmediate;
   const bool SignedExtremum = *Kind == Instruction::SignedMinimumVector ||
-                              *Kind == Instruction::SignedMaximumVector;
+                              *Kind == Instruction::SignedMaximumVector ||
+                              *Kind == Instruction::SignedMinimumImmediate ||
+                              *Kind == Instruction::SignedMaximumImmediate;
   const bool Absolute = *Kind == Instruction::AbsoluteMinimumVector ||
                         *Kind == Instruction::AbsoluteMaximumVector;
   const bool AddAbsolute = *Kind == Instruction::AddAbsoluteVector ||
@@ -175,7 +199,23 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
                                *Kind == Instruction::RoundAverageUnsignedVector;
   const bool RoundAverage = *Kind == Instruction::RoundAverageSignedVector ||
                             *Kind == Instruction::RoundAverageUnsignedVector;
-  const bool ImmediateBit = (Shift || Bit) && (Word & 63) == 9;
+  const bool SaturateImmediate =
+      *Kind == Instruction::SaturateSignedImmediate ||
+      *Kind == Instruction::SaturateUnsignedImmediate;
+  const bool AbsoluteDifference =
+      *Kind == Instruction::AbsoluteDifferenceSigned ||
+      *Kind == Instruction::AbsoluteDifferenceUnsigned;
+  const bool RoundShift = *Kind == Instruction::RoundShiftSignedVector ||
+                          *Kind == Instruction::RoundShiftUnsignedVector ||
+                          *Kind == Instruction::RoundShiftSignedImmediate ||
+                          *Kind == Instruction::RoundShiftUnsignedImmediate;
+  const bool InsertBits = *Kind == Instruction::InsertLeftVector ||
+                          *Kind == Instruction::InsertRightVector ||
+                          *Kind == Instruction::InsertLeftImmediate ||
+                          *Kind == Instruction::InsertRightImmediate;
+  const bool ImmediateBit =
+      ((Shift || Bit || InsertBits) && (Word & 63) == 9) ||
+      (RoundShift && (Word & 63) == 10) || SaturateImmediate;
   const bool CountBits = *Kind == Instruction::PopulationCount ||
                          *Kind == Instruction::LeadingZeroCount ||
                          *Kind == Instruction::LeadingOneCount;
@@ -208,6 +248,79 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
       S.emit(*Kind == Instruction::PopulationCount ? NdOp::POPCOUNT
                                                    : NdOp::LZCOUNT,
              Values[I], {Input});
+    } else if (SaturateImmediate) {
+      const auto A = Lane(WS, I, Bytes);
+      const unsigned Count = Field & (Bytes * 8 - 1);
+      const bool Signed = *Kind == Instruction::SaturateSignedImmediate;
+      const uint64_t Maximum =
+          Signed ? (UINT64_C(1) << Count) - 1 : UINT64_MAX >> (63 - Count);
+      const auto Upper = NdVar::cst(Maximum, Bytes);
+      auto Result = S.makeTemp(Bytes);
+      S.emit(NdOp::SELECT, Result,
+             {S.binary(Signed ? NdOp::INT_SLESS : NdOp::INT_LESS, Upper, A, 1),
+              Upper, A});
+      if (Signed) {
+        const auto Lower = NdVar::cst(~Maximum, Bytes);
+        const auto Clamped = S.makeTemp(Bytes);
+        S.emit(NdOp::SELECT, Clamped,
+               {S.binary(NdOp::INT_SLESS, A, Lower, 1), Lower, Result});
+        Result = Clamped;
+      }
+      Values[I] = Result;
+    } else if (AbsoluteDifference) {
+      const auto A = Lane(WS, I, Bytes), B = Lane(WT, I, Bytes);
+      const auto Less = S.binary(*Kind == Instruction::AbsoluteDifferenceSigned
+                                     ? NdOp::INT_SLESS
+                                     : NdOp::INT_LESS,
+                                 A, B, 1);
+      // Decide the sign before the modular subtraction; the true magnitude
+      // fits an unsigned lane even at signed min/max and in 64-bit lanes.
+      Values[I] = S.makeTemp(Bytes);
+      S.emit(
+          NdOp::SELECT, Values[I],
+          {Less, S.binary(NdOp::INT_SUB, B, A), S.binary(NdOp::INT_SUB, A, B)});
+    } else if (RoundShift || InsertBits) {
+      const auto A = Lane(WS, I, Bytes);
+      if (InsertBits && ImmediateBit &&
+          (Field & (Bytes * 8 - 1)) == Bytes * 8 - 1) {
+        // A full-lane immediate insertion does not observe the old WD.
+        Values[I] = A;
+        continue;
+      }
+      const auto Limit = NdVar::cst(Bytes * 8 - 1, Bytes);
+      const auto Count =
+          ImmediateBit ? NdVar::cst(Field & (Bytes * 8 - 1), Bytes)
+                       : S.binary(NdOp::INT_AND, Lane(WT, I, Bytes), Limit);
+      if (RoundShift) {
+        const bool Signed = *Kind == Instruction::RoundShiftSignedVector ||
+                            *Kind == Instruction::RoundShiftSignedImmediate;
+        const auto Shifted =
+            S.binary(Signed ? NdOp::INT_ASHR : NdOp::INT_RIGHT, A, Count);
+        // Mask before shifting: count zero must never evaluate a negative or
+        // full-width shift, even if a later select discards the result.
+        const auto Previous = S.binary(
+            NdOp::INT_AND, S.binary(NdOp::INT_SUB, Count, NdVar::cst(1, Bytes)),
+            Limit);
+        const auto Round =
+            S.binary(NdOp::INT_AND, S.binary(NdOp::INT_RIGHT, A, Previous),
+                     NdVar::cst(1, Bytes));
+        const auto Nonzero =
+            S.binary(NdOp::INT_NOTEQUAL, Count, NdVar::cst(0, Bytes), 1);
+        Values[I] =
+            S.binary(NdOp::INT_ADD, Shifted,
+                     S.binary(NdOp::INT_MULT, Round, S.resize(Nonzero, Bytes)));
+      } else {
+        const bool Left = *Kind == Instruction::InsertLeftVector ||
+                          *Kind == Instruction::InsertLeftImmediate;
+        const auto Complement = S.binary(NdOp::INT_SUB, Limit, Count);
+        const auto Mask = S.binary(Left ? NdOp::INT_LEFT : NdOp::INT_RIGHT,
+                                   NdVar::cst(UINT64_MAX, Bytes), Complement);
+        const auto Inverse = S.makeTemp(Bytes);
+        S.emit(NdOp::INT_NOT, Inverse, {Mask});
+        Values[I] =
+            S.binary(NdOp::INT_OR, S.binary(NdOp::INT_AND, A, Mask),
+                     S.binary(NdOp::INT_AND, Lane(WD, I, Bytes), Inverse));
+      }
     } else if (Shift || Bit) {
       const auto A = Lane(WS, I, Bytes);
       const auto Count = ImmediateBit
@@ -308,7 +421,7 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
         S.emit(NdOp::SELECT, Values[I], {Condition, A, B}); // Ties choose WT.
       }
     } else if (Minimum || Maximum) {
-      const auto A = Lane(WS, I, Bytes), B = Lane(WT, I, Bytes);
+      const auto A = Lane(WS, I, Bytes), B = Right(I, Bytes);
       const auto Condition =
           S.binary(SignedExtremum ? NdOp::INT_SLESS : NdOp::INT_LESS, A, B, 1);
       Values[I] = S.makeTemp(Bytes);
@@ -316,14 +429,16 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
              {Condition, Minimum ? A : B, Minimum ? B : A});
     } else if (Comparison) {
       const auto Condition =
-          S.binary(*Comparison, Lane(WS, I, Bytes), Lane(WT, I, Bytes), 1);
+          S.binary(*Comparison, Lane(WS, I, Bytes), Right(I, Bytes), 1);
       // Comparisons replicate their predicate across every bit of the lane.
       Values[I] = S.binary(NdOp::INT_SUB, NdVar::cst(0, Bytes),
                            S.resize(Condition, Bytes));
     } else
-      Values[I] = S.binary(*Kind == Instruction::SubVector ? NdOp::INT_SUB
-                                                           : NdOp::INT_ADD,
-                           Lane(WS, I, Bytes), Lane(WT, I, Bytes));
+      Values[I] = S.binary(*Kind == Instruction::SubVector ||
+                                   *Kind == Instruction::SubImmediate
+                               ? NdOp::INT_SUB
+                               : NdOp::INT_ADD,
+                           Lane(WS, I, Bytes), Right(I, Bytes));
   }
   for (unsigned Count = 16u / Bytes; Count > 1; Count /= 2)
     for (unsigned I = 0; I != Count / 2; ++I)

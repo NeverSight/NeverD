@@ -30,6 +30,7 @@ add_neverd_component_library(NeverDTranslate
   X86/X86LegacySegmentExecution.cpp
   X86/X86LegacyExecution.cpp
   X86/X86LegacyControlRegisters.cpp
+  X86/X86ControlRegisters.cpp
   X86/X86LegacyTaskSwitch.cpp
   X86/X86LegacyMpx.cpp
   X86/X86LegacySourceExecution.cpp
@@ -43,6 +44,7 @@ add_neverd_component_library(NeverDTranslate
   X86/X86LegacyEventDelivery.cpp
   X86/X86LegacyFrameReturn.cpp
   X86/X86LegacyFarTransfer.cpp
+  X86/X86LegacyTransferJournal.cpp
   X86/X87PortableRuntime.cpp
 
   LINK_COMPONENTS

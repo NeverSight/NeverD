@@ -17,8 +17,8 @@
 #include "neverd/backend/DataSymbolMetadata.h"
 #include "neverd/backend/LLVMOriginalImageStorage.h"
 #include "neverd/backend/Limits.h"
-#include "neverd/backend/MIPS/MIPSDSPSource.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
+#include "neverd/backend/MIPS/MIPSSourceCompiler.h"
 #include "neverd/backend/llvm/LLVMName.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/debug/DebugContext.h"
@@ -271,6 +271,8 @@ MedLLVMEmitter::materializeImageFunctionDeclaration(va_t Entry,
   Function->addFnAttr(llvm::Attribute::NullPointerIsValid);
   if (mips::imagePreservesDSPControl(Img))
     mips::applyDSPSourceAttributes(*Function);
+  if (mips::sourceAvoidsMSA(TargetArch, Img))
+    mips::applyNoMSASourceAttributes(*Function);
   if (Img)
     if (const auto Mode = Img->instructionModeAt(Entry))
       mips::applyInstructionModeLLVMAttributes(*Function, *Mode);

@@ -112,6 +112,59 @@ std::string emit(const std::vector<HighFunc> &Functions, bool Includes = true,
 
 using source_call_execution_test::compileAndRun;
 
+TEST(HighCSourceCalls, RuntimeHeaderOwnsItsEnumerationDefinitions) {
+  for (unsigned Mode = 0; Mode != 3; ++Mode) {
+    const bool OwnCallee = Mode != 0;
+    const bool ThroughImport = Mode == 2;
+    SCOPED_TRACE(OwnCallee);
+    SCOPED_TRACE(ThroughImport);
+    BinaryImage Image;
+    Image.Format = BinaryFormat::COFF;
+    Image.Arch = Arch::X64;
+    Image.Bits = Bitness::Bits64;
+    if (ThroughImport) {
+      Import Imported;
+      Imported.Name = "_configure_narrow_argv";
+      Imported.IATAddr = 0x2000;
+      Image.Imports.push_back(Imported);
+    }
+    const auto Enum = NdType::makeNamedRecord("_crt_argv_mode", 4);
+    Enum->IsEnum = true;
+    auto Call = HighExpr::makeCall("_configure_narrow_argv",
+                                   ThroughImport ? 0x2000 : 0x1000,
+                                   {parameter(0, Enum)});
+    Call->Type = NdType::makeInt(4, true);
+    std::vector<HighFunc> Functions = {returning("configure", Call, {Enum})};
+    if (OwnCallee) {
+      Functions.push_back(returning("_configure_narrow_argv",
+                                    HighExpr::makeConst(7, 4), {Enum}));
+      Functions.back().Entry = 0x1000;
+    }
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    Options.Format = BinaryFormat::COFF;
+    Options.Image = &Image;
+    bool Requested = false;
+    Options.RecordDefinitions = [&](const std::vector<TypeRef> &Types) {
+      CRecordDefinitions Definitions;
+      for (const auto &Type : Types)
+        if (Type->SourceName == "_crt_argv_mode") {
+          Requested = true;
+          Definitions.Text = "enum _crt_argv_mode { argv_none, argv_plain };\n";
+          Definitions.Enumerations = {"_crt_argv_mode"};
+        }
+      return Definitions;
+    };
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    ASSERT_TRUE(HighCEmitter().emit(Functions, Out, Options));
+    EXPECT_EQ(Requested, OwnCallee && !ThroughImport) << Source;
+    EXPECT_EQ(Source.find("#include <corecrt_startup.h>") == std::string::npos,
+              OwnCallee && !ThroughImport)
+        << Source;
+  }
+}
+
 TEST(HighCSourceCalls, OpaqueParametersCompleteOnlyForMemberAccess) {
   class RecordContext final : public NullDebugContext {
   public:

@@ -139,4 +139,13 @@ NEVERD_MIPS_MSA_VECTOR(0x7b800010, 1, RoundAverageUnsigned)
 NEVERD_MIPS_MSA_VECTOR(0x7ba00010, 2, RoundAverageUnsigned)
 NEVERD_MIPS_MSA_VECTOR(0x7bc00010, 4, RoundAverageUnsigned)
 NEVERD_MIPS_MSA_VECTOR(0x7be00010, 8, RoundAverageUnsigned)
+NEVERD_MIPS_MSA_VECTOR(0x7a000011, 1, AbsoluteDifferenceSigned)
+NEVERD_MIPS_MSA_VECTOR(0x7a200011, 2, AbsoluteDifferenceSigned)
+NEVERD_MIPS_MSA_VECTOR(0x7a400011, 4, AbsoluteDifferenceSigned)
+NEVERD_MIPS_MSA_VECTOR(0x7a600011, 8, AbsoluteDifferenceSigned)
+NEVERD_MIPS_MSA_VECTOR(0x7a800011, 1, AbsoluteDifferenceUnsigned)
+NEVERD_MIPS_MSA_VECTOR(0x7aa00011, 2, AbsoluteDifferenceUnsigned)
+NEVERD_MIPS_MSA_VECTOR(0x7ac00011, 4, AbsoluteDifferenceUnsigned)
+NEVERD_MIPS_MSA_VECTOR(0x7ae00011, 8, AbsoluteDifferenceUnsigned)
+
 #undef NEVERD_MIPS_MSA_VECTOR

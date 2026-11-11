@@ -45,6 +45,7 @@ struct alignas(16) X64ContinuationStateV1 {
   /// effects. All copies of its produced value share that value. Reusing these
   /// slots selects a subset of permitted executions, not all undefined choices.
   uint64_t Undefined[8] = {};
+  bool operator==(const X64ContinuationStateV1 &) const = default;
 };
 
 /// A separate layout; V1 callers never provide or acquire these extra banks.
@@ -55,6 +56,7 @@ struct alignas(16) X64ContinuationStateV2 {
   uint32_t MXCSR = 0;
   uint32_t Reserved = 0;
   uint64_t ReservedTail = 0;
+  bool operator==(const X64ContinuationStateV2 &) const = default;
 };
 
 /// V3 retains the V2 storage layout. Its separate profile and symbol prefix
@@ -66,6 +68,7 @@ struct alignas(16) X64ContinuationStateV4 {
   X64ContinuationStateV2 Core;
   uint64_t CR2 = 0;
   uint64_t Reserved = 0;
+  bool operator==(const X64ContinuationStateV4 &) const = default;
 };
 
 /// Visible selector and hidden descriptor cache. Limit is the effective byte
@@ -76,6 +79,7 @@ struct X64ContinuationSegment {
   uint32_t Limit = 0;
   uint16_t Selector = 0;
   uint16_t Attributes = 0;
+  bool operator==(const X64ContinuationSegment &) const = default;
 };
 
 /// V5 records the explicit result of SYSRET/SYSRETQ, including hidden CS/SS
@@ -86,6 +90,7 @@ struct alignas(16) X64ContinuationStateV5 {
   X64ContinuationSegment CS;
   X64ContinuationSegment SS;
   uint64_t Reserved = 0;
+  bool operator==(const X64ContinuationStateV5 &) const = default;
 };
 
 struct X64ContinuationDescriptorTable {
@@ -93,6 +98,7 @@ struct X64ContinuationDescriptorTable {
   uint16_t Limit = 0;
   uint16_t Reserved = 0;
   uint32_t ReservedTail = 0;
+  bool operator==(const X64ContinuationDescriptorTable &) const = default;
 };
 
 /// FS/GS bases retain their single owner in StateV1, including when a return
@@ -101,6 +107,7 @@ struct X64ContinuationSegmentMetadata {
   uint32_t Limit = 0;
   uint16_t Selector = 0;
   uint16_t Attributes = 0;
+  bool operator==(const X64ContinuationSegmentMetadata &) const = default;
 };
 
 /// V6 owns descriptor and interruptibility state for far/interrupt returns and
@@ -123,6 +130,7 @@ struct alignas(16) X64ContinuationStateV6 {
   uint8_t Unusable = 0;
   uint8_t NMIBlocked = 0;
   uint8_t Reserved[14] = {};
+  bool operator==(const X64ContinuationStateV6 &) const = default;
 };
 
 /// V7 owns the live Intel fast-system-call MSRs. CS retains all 32 readable

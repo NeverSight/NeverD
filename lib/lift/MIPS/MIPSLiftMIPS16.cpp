@@ -9,6 +9,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ArchSupport.h"
+#include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -59,6 +60,107 @@ MIPSLifter::mips16JumpEncoding(const cs_insn &Instruction) const {
 }
 
 std::optional<MIPSLifter::Encoding>
+MIPSLifter::mips16E2Encoding(uint16_t First, uint16_t Half) const {
+  const unsigned Major = Half >> 11;
+  const unsigned RX = compactRegister((Half >> 8) & 7);
+  const unsigned RY = compactRegister((Half >> 5) & 7);
+  const uint16_t Immediate =
+      ((First & 31) << 11) | (First & 0x7e0) | (Half & 31);
+  if (First == 0xf140 && Half == 0x3018)
+    return Encoding{0x00000140}; // PAUSE
+  const unsigned CP0Key = (((First >> 5) & 7) << 5) | (Half & 31);
+  if ((First & 0xff1e) == 0xf000 && (Half & 0xff00) == 0x6700 &&
+      mips::supportedCP0Word(CP0Key, First & 1) &&
+      (HasMT || !mips::cp0RequiresMT(CP0Key)))
+    return Encoding{uint32_t(0x40000000 | ((First & 1) << 23) | (RY << 16) |
+                             ((Half & 31) << 11) | ((First >> 5) & 7))};
+  if (HasMT &&
+      (First == 0xf022 || First == 0xf023 || First == 0xf026 ||
+       First == 0xf027) &&
+      (Half & 0xff1e) == 0x6700) {
+    if ((First & 4) && (Half & 0xe0))
+      return std::nullopt;
+    return Encoding{uint32_t((Half & 1 ? 0x41600bc1 : 0x41600001) |
+                             ((First & 1) << 5) |
+                             ((First & 4 ? 0 : RY) << 16))};
+  }
+  if (First == 0xf0c0 && Half == 0x3010)
+    return Encoding{0x000000c0}; // EHB
+  if (!(First & 63) && Half == 0x3014)
+    return Encoding{uint32_t(First & 0x7c0) | 15}; // SYNC stype
+  if (!(First & 0x7e0) && (Half & 0xff1f) == 0x300c &&
+      mips::supportedHardwareRegister(First & 31))
+    return Encoding{0x7c00003b | (RY << 16) | ((First & 31) << 11)};
+  if ((First == 0xf002 || First == 0xf003 || First == 0xf006 ||
+       First == 0xf007) &&
+      (Half & 0xff1f) == 0x670c) {
+    const bool Discard = First & 4;
+    if (Discard && (Half & 0xe0))
+      return std::nullopt;
+    return Encoding{
+        uint32_t(0x41606000 | ((First & 1) << 5) | ((Discard ? 0 : RY) << 16))};
+  }
+  switch ((Major << 3) | ((Half >> 5) & 7)) {
+#define NEVERD_MIPS16E2_IMMEDIATE(Major, Selector, Classic, Source)            \
+  case ((Major) << 3) | (Selector):                                            \
+    return Encoding{immediateForm(Classic, RX, Source, Immediate)};
+#include "neverd/lift/MIPS/MIPS16Integer.def"
+  case (0x1a << 3) | 4:
+  case (0x1a << 3) | 5: {
+    if (First & 0x600)
+      return std::nullopt;
+    const int Offset = int(((First & 0x1e0) | (Half & 31)) ^ 0x100) - 0x100;
+    return Encoding{
+        immediateForm(Half & 32 ? 47 : 51, First & 31, RX, uint16_t(Offset))};
+  }
+  case (0x12 << 3) | 6:
+  case (0x1a << 3) | 6: {
+    if (First & 0x618)
+      return std::nullopt;
+    const int Offset = int(((First & 0x1e0) | (Half & 31)) ^ 0x100) - 0x100;
+    return Encoding{immediateForm(Major == 0x12 ? 48 : 56, RX,
+                                  compactRegister(First & 7),
+                                  uint16_t(Offset))};
+  }
+  case (0x12 << 3) | 7:
+  case (0x1a << 3) | 7: {
+    if (First & 0x608)
+      return std::nullopt;
+    const unsigned Opcode =
+        Major == 0x12 ? (First & 16 ? 38 : 34) : (First & 16 ? 46 : 42);
+    const int Offset = int(((First & 0x1e0) | (Half & 31)) ^ 0x100) - 0x100;
+    return Encoding{immediateForm(Opcode, RX, compactRegister(First & 7),
+                                  uint16_t(Offset))};
+  }
+  }
+  if (Major == 6 && (Half & 0x1c)) {
+    const unsigned Selector = (Half >> 2) & 7;
+    if (!(Half & 3) && (Selector == 1 || Selector == 2)) {
+      const bool Insert = Selector == 1;
+      const unsigned Position = (First >> 6) & 31;
+      const unsigned Limit = First & 31;
+      const bool Source = First & 32;
+      if ((!Source && (!Insert || (Half & 0x700))) ||
+          (Insert ? Limit < Position : Limit + Position > 31))
+        return std::nullopt;
+      return Encoding{0x7c000000u | ((Source ? RX : 0) << 21) | (RY << 16) |
+                      (Limit << 11) | (Position << 6) | (Insert ? 4u : 0u)};
+    }
+    if ((Half & 3) == 2 &&
+        (Selector == 1 || Selector == 2 || Selector == 5 || Selector == 6)) {
+      if ((First & 0x7d8) || (!(First & 32) && (First & 7)) ||
+          (Selector >= 5 && (Half & 0xe0)))
+        return std::nullopt;
+      return Encoding{registerForm(Selector & 1 ? 10 : 11, RX,
+                                   First & 32 ? compactRegister(First & 7) : 0,
+                                   Selector >= 5 ? 24 : RY)};
+    }
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+std::optional<MIPSLifter::Encoding>
 MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
   if (Instruction.size != 2 && Instruction.size != 4)
     return std::nullopt;
@@ -81,53 +183,10 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
                : Half & 255;
   const uint16_t SignedImmediate =
       Extended ? Immediate : uint16_t(int16_t(int8_t(Immediate)));
-  if (Extended && HasMIPS16E2) {
-    if (First == 0xf0c0 && Half == 0x3010)
-      return Encoding{0x000000c0}; // EHB
-    if (!(First & 63) && Half == 0x3014)
-      return Encoding{uint32_t(First & 0x7c0) | 15}; // SYNC stype
-    switch ((Major << 3) | ((Half >> 5) & 7)) {
-#define NEVERD_MIPS16E2_IMMEDIATE(Major, Selector, Classic, Source)            \
-  case ((Major) << 3) | (Selector):                                            \
-    return Encoding{immediateForm(Classic, RX, Source, Immediate)};
-#include "neverd/lift/MIPS/MIPS16Integer.def"
-    case (0x12 << 3) | 7:
-    case (0x1a << 3) | 7: {
-      if (First & 0x608)
-        return std::nullopt;
-      const unsigned Opcode =
-          Major == 0x12 ? (First & 16 ? 38 : 34) : (First & 16 ? 46 : 42);
-      const int Offset = int(((First & 0x1e0) | (Half & 31)) ^ 0x100) - 0x100;
-      return Encoding{immediateForm(Opcode, RX, compactRegister(First & 7),
-                                    uint16_t(Offset))};
-    }
-    }
-    if (Major == 6 && (Half & 0x1c)) {
-      const unsigned Selector = (Half >> 2) & 7;
-      if (!(Half & 3) && (Selector == 1 || Selector == 2)) {
-        const bool Insert = Selector == 1;
-        const unsigned Position = (First >> 6) & 31;
-        const unsigned Limit = First & 31;
-        const bool Source = First & 32;
-        if ((!Source && (!Insert || (Half & 0x700))) ||
-            (Insert ? Limit < Position : Limit + Position > 31))
-          return std::nullopt;
-        return Encoding{0x7c000000u | ((Source ? RX : 0) << 21) | (RY << 16) |
-                        (Limit << 11) | (Position << 6) | (Insert ? 4u : 0u)};
-      }
-      if ((Half & 3) == 2 &&
-          (Selector == 1 || Selector == 2 || Selector == 5 || Selector == 6)) {
-        if ((First & 0x7d8) || (!(First & 32) && (First & 7)) ||
-            (Selector >= 5 && (Half & 0xe0)))
-          return std::nullopt;
-        return Encoding{
-            registerForm(Selector & 1 ? 10 : 11, RX,
-                         First & 32 ? compactRegister(First & 7) : 0,
-                         Selector >= 5 ? 24 : RY)};
-      }
-      return std::nullopt;
-    }
-  }
+  // Keep the optional e2 decoder out of the compact integer hot path.
+  if (Extended && HasMIPS16E2)
+    if (auto E2 = mips16E2Encoding(First, Half))
+      return E2;
   switch (Major) {
 #define NEVERD_MIPS16_MEMORY(Major, Classic, Scale)                            \
   case Major:                                                                  \

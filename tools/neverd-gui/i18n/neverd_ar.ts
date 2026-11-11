@@ -2677,6 +2677,18 @@ Signed: %4</source>
         <translation>فاتحة (Visual Studio Code Light+)</translation>
     </message>
     <message>
+        <source>Dark High Contrast (Visual Studio Code)</source>
+        <translation>تباين عالٍ داكن (Visual Studio Code)</translation>
+    </message>
+    <message>
+        <source>Light High Contrast (Visual Studio Code)</source>
+        <translation>تباين عالٍ فاتح (Visual Studio Code)</translation>
+    </message>
+    <message>
+        <source>System (follows the desktop)</source>
+        <translation>النظام (يتبع سطح المكتب)</translation>
+    </message>
+    <message>
         <source>Colors</source>
         <translation>الألوان</translation>
     </message>
@@ -11011,6 +11023,13 @@ Your previous graph is still available.</source>
     <message>
         <source>Undock window</source>
         <translation>فصل النافذة</translation>
+    </message>
+</context>
+<context>
+    <name>CloseButton</name>
+    <message>
+        <source>Close Tab</source>
+        <translation>إغلاق علامة التبويب</translation>
     </message>
 </context>
 </TS>

@@ -10,8 +10,10 @@
 
 #include "HighlightLocks.h"
 
+#include "DevicePixels.h"
 #include "StyledText.h"
 
+#include <QPainter>
 #include <algorithm>
 
 namespace neverd::gui {
@@ -81,6 +83,15 @@ void HighlightLocks::clear() {
   for (auto &word : words_)
     word.clear();
   emit changed();
+}
+
+void paintHighlight(QPainter &painter, const QRectF &box, ColorRole role) {
+  const Theme &theme = Theme::instance();
+  painter.fillRect(box, theme.color(role));
+  if (role == ColorRole::ListingHighlight)
+    paintDeviceBox(
+        painter, box.toAlignedRect(),
+        DeviceBox{QColor(), theme.color(ColorRole::ListingHighlightBorder)});
 }
 
 } // namespace neverd::gui

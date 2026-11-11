@@ -11491,13 +11491,20 @@ TEST_F(JTE_AArch64, WrongBasePageOffsetFailsClosedOnEscape) {
   EXPECT_EQ(Low.JumpTables.front().Targets.size(), 2u);
   EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
 
+  // The escaping stale address refuses the function, and the lifted module
+  // leaves it out with the reason at its head.
   auto LLVM = liftToLLVMIRUnopt(pageoffWrongBaseA64Obj());
-  EXPECT_NE(LLVM.exitCode, 0) << LLVM.out;
-  EXPECT_NE(LLVM.err.find("incomplete relocatable address value"),
+  ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
+  const std::string Note =
+      notLiftedNote(LLVM.out, "a64_pageoff_wrong_base_no_escape");
+  EXPECT_NE(Note.find("incomplete relocatable address value"),
             std::string::npos)
-      << LLVM.err;
-  EXPECT_NE(LLVM.err.find("escapes through a call argument"), std::string::npos)
-      << LLVM.err;
+      << LLVM.out;
+  EXPECT_NE(Note.find("escapes through a call argument"), std::string::npos)
+      << LLVM.out;
+  EXPECT_FALSE(
+      definesLLVMFunction(LLVM.out, "a64_pageoff_wrong_base_no_escape"))
+      << LLVM.out;
 }
 
 TEST_F(JTE_AArch64, ClobberedPageOffsetKeepsIndependentSwitch) {
@@ -11520,14 +11527,16 @@ TEST_F(JTE_AArch64, BypassedPageBaseMayEscapeWritableTable) {
   EXPECT_NE(LowBody.find("INDIR_BR"), std::string::npos) << LowBody;
   EXPECT_EQ(LowBody.find("INDIR_CALL"), std::string::npos) << LowBody;
 
+  // An all-path-inexact relocated address must not reach a static switch:
+  // the lifted module leaves the function out.
   auto LLVM = liftToLLVMIRUnopt(pageoffReachingA64Obj());
-  EXPECT_NE(LLVM.exitCode, 0)
-      << "an all-path-inexact relocated address must not reach a static "
-         "switch:\n"
-      << LLVM.out;
-  EXPECT_NE(LLVM.err.find("incomplete relocatable address value"),
+  ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
+  EXPECT_NE(notLiftedNote(LLVM.out, "a64_pageoff_bypass_may_escape")
+                .find("incomplete relocatable address value"),
             std::string::npos)
-      << LLVM.err;
+      << LLVM.out;
+  EXPECT_FALSE(definesLLVMFunction(LLVM.out, "a64_pageoff_bypass_may_escape"))
+      << LLVM.out;
 }
 
 TEST_F(JTE_AArch64, PageOffsetPairsAcrossOwnersOnTheSamePage) {

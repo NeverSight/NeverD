@@ -42,8 +42,10 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <vector>
 
 using namespace neverd;
@@ -1076,9 +1078,330 @@ TEST(X86RepState, ImageCopiesRetainEveryAccessedByte) {
             EXPECT_THROW(
                 HighCEmitter().emit(Result.HighFuncs, RefusedOut, COptions),
                 std::invalid_argument);
-            EXPECT_THROW(MedLLVMEmitter().emit(Result.MedFuncs, Context,
-                                               "short", Arch::X64, {}, &Image,
-                                               Format),
-                         std::invalid_argument);
+            // A HighC unit that names what it leaves out omits the function,
+            // with the reason, instead of failing.
+            std::vector<CEmitterOptions::RefusedDefinition> Definitions;
+            CEmitterOptions UnitOptions = COptions;
+            UnitOptions.RefusedDefinitions = &Definitions;
+            std::string Unit;
+            llvm::raw_string_ostream UnitOut(Unit);
+            ASSERT_NO_THROW(
+                HighCEmitter().emit(Result.HighFuncs, UnitOut, UnitOptions));
+            ASSERT_EQ(Definitions.size(), 1u);
+            EXPECT_EQ(Definitions.front().Name, "copy_image_words");
+            EXPECT_NE(
+                Definitions.front().Reason.find("crosses its mapped storage"),
+                std::string::npos)
+                << Definitions.front().Reason;
+            // LLVM refuses the body, which a unit leaves out with the reason.
+            MedLLVMEmitter ShortEmitter;
+            std::unique_ptr<llvm::Module> Short;
+            ASSERT_NO_THROW(Short = ShortEmitter.emit(Result.MedFuncs, Context,
+                                                      "short", Arch::X64, {},
+                                                      &Image, Format));
+            EXPECT_FALSE(Short);
+            ASSERT_FALSE(ShortEmitter.refusedBodies().empty());
+            EXPECT_NE(ShortEmitter.refusedBodies().front().Reason.find(
+                          "crosses its mapped storage"),
+                      std::string::npos)
+                << ShortEmitter.refusedBodies().front().Reason;
           }
+}
+
+namespace {
+
+constexpr va_t PointerCountCodeVA = 0x140001000;
+constexpr va_t PointerCountDataVA = 0x140002000;
+
+BinaryImage pointerCountImage() {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::ELF;
+  Image.Entry = Image.Base = PointerCountCodeVA;
+  Segment Data;
+  Data.VA = PointerCountDataVA;
+  Data.Size = Data.FileSz = 0x100;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.Data.resize(0x100);
+  Image.Segments.push_back(std::move(Data));
+  return Image;
+}
+
+// GCC clears an object at any alignment with one REP STOSQ over its aligned
+// middle, and computes the count from the object pointer:
+// ((p - ((p + 8) & -8)) + 0x58) >> 3. With AddressAddend, an image address
+// takes the place of 0x58.
+MedFunc pointerCountFunction(bool PointerTyped, bool AddressAddend) {
+  MedFunc Function;
+  Function.Entry = PointerCountCodeVA;
+  Function.Name = "clear_object";
+  Function.CC = CallingConv::SysV_AMD64;
+  Function.ReturnType = NdType::makeVoid();
+  MedVar Object;
+  Object.Kind = MedVar::Param;
+  Object.Id = 0;
+  Object.Size = 8;
+  Object.RegOff = x86reg::RDI;
+  Object.TheArch = Arch::X64;
+  Function.Params.push_back(Object);
+  Function.TypedParams.push_back(
+      {"object", PointerTyped ? NdType::makePtr() : NdType::makeInt(8, false)});
+  MedBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Function.Entry;
+  auto scalar = [](uint64_t Value) {
+    return MedVar::makeConst(Value, 8, ConstantAddressProvenance::Scalar);
+  };
+  auto binary = [&](NdOp Opcode, int Output, const MedVar &L, const MedVar &R) {
+    MedOp Op;
+    Op.Opcode = Opcode;
+    Op.Addr = Function.Entry + Block.Ops.size();
+    Op.Output = temporary(Output, 8);
+    Op.addInput(L);
+    Op.addInput(R);
+    Block.Ops.push_back(Op);
+    return Op.Output;
+  };
+  const MedVar Next = binary(NdOp::INT_ADD, 1, Object, scalar(8));
+  const MedVar Middle = binary(NdOp::INT_AND, 2, Next, scalar(~uint64_t(7)));
+  const MedVar Lead = binary(NdOp::INT_SUB, 3, Object, Middle);
+  const MedVar Bytes = binary(
+      NdOp::INT_ADD, 4, Lead,
+      AddressAddend ? MedVar::makeConst(PointerCountDataVA, 8,
+                                        ConstantAddressProvenance::Address)
+                    : scalar(0x58));
+  const MedVar Count = binary(NdOp::INT_RIGHT, 5, Bytes, scalar(3));
+  MedOp Rep;
+  Rep.Opcode = NdOp::INTRINSIC;
+  Rep.Addr = Function.Entry + Block.Ops.size();
+  Rep.Output = temporary(10, 8);
+  Rep.addInput(
+      MedVar::makeConst(static_cast<unsigned>(Intrinsic::X86RepStosState), 2));
+  Rep.addInput(Middle);
+  Rep.addInput(Count);
+  Rep.addInput(scalar(0));
+  Rep.addInput(MedVar::makeConst(0, 4));
+  Rep.addInput(MedVar::makeConst(
+      *x86RepDescriptor(Intrinsic::X86RepStosState, Arch::X64, 8, 8, 0, false),
+      4));
+  for (unsigned I = 0;
+       I < x86RepContract(Intrinsic::X86RepStosState)->auxiliaryOutputs(); ++I)
+    Rep.IntrinsicOutputs.push_back(temporary(11 + I, 8));
+  Block.Ops.push_back(Rep);
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = Function.Entry + Block.Ops.size();
+  Block.Ops.push_back(Return);
+  Block.EndAddr = Function.Entry + Block.Ops.size();
+  Function.Blocks.push_back(std::move(Block));
+  return Function;
+}
+
+} // namespace
+
+// The count is the register's bits whether the object parameter is typed as
+// a pointer or as an integer. A pointer-typed one used to abort the process.
+TEST(X86RepState, PointerDerivedCountTakesThePointerBits) {
+  for (bool PointerTyped : {false, true}) {
+    SCOPED_TRACE(PointerTyped);
+    const BinaryImage Image = pointerCountImage();
+    llvm::LLVMContext Context;
+    MedLLVMEmitter Emitter;
+    auto Module = Emitter.emit({pointerCountFunction(PointerTyped, false)},
+                               Context, "rep-pointer-count", Arch::X64, {},
+                               &Image, BinaryFormat::ELF);
+    ASSERT_TRUE(Module);
+    EXPECT_TRUE(Emitter.refusedBodies().empty());
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    const llvm::Function *Clear = Module->getFunction("clear_object");
+    ASSERT_TRUE(Clear && !Clear->isDeclaration());
+    ASSERT_EQ(Clear->arg_size(), 1u);
+    EXPECT_EQ(Clear->getArg(0)->getType()->isPointerTy(), PointerTyped);
+#if defined(__x86_64__) || defined(_M_X64)
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    Options.Format = BinaryFormat::ELF;
+    ASSERT_TRUE(LLVMCEmitter().emit(*Module, Out, Options));
+    Out.flush();
+    // At every start offset within a word, exactly the aligned middle that
+    // the count names is cleared.
+    Source += std::string(R"(
+int main(void) {
+  for (unsigned Skew = 0; Skew < 8; ++Skew) {
+    _Alignas(8) unsigned char Buffer[0x80];
+    for (unsigned I = 0; I < sizeof Buffer; ++I)
+      Buffer[I] = 0xA5;
+    unsigned char *Object = Buffer + 8 + Skew;
+    clear_object()") +
+              (PointerTyped ? "(void *)Object" : "(unsigned long long)Object") +
+              R"();
+    unsigned long long P = (unsigned long long)Object;
+    unsigned long long Begin = (P + 8) & ~7ULL;
+    unsigned long long End = Begin + (((P - Begin) + 0x58) >> 3) * 8;
+    for (unsigned I = 0; I < sizeof Buffer; ++I) {
+      unsigned long long At = (unsigned long long)(Buffer + I);
+      if (Buffer[I] != (At >= Begin && At < End ? 0 : 0xA5))
+        return 1;
+    }
+  }
+  return 0;
+}
+)";
+    for (const auto Level : {"-O0", "-O2"})
+      source_call_execution_test::compileAndRun(
+          Source, {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+#endif
+  }
+}
+
+// Beside a process pointer, an image address would put the original and the
+// runtime coordinates in one count. The body is refused; the process and the
+// rest of the unit go on.
+TEST(X86RepState, PointerCountBesideAnImageAddressRefusesItsBody) {
+  const BinaryImage Image = pointerCountImage();
+  llvm::LLVMContext Context;
+  MedLLVMEmitter Emitter;
+  std::unique_ptr<llvm::Module> Module;
+  ASSERT_NO_THROW(Module = Emitter.emit({pointerCountFunction(true, true)},
+                                        Context, "rep-pointer-count", Arch::X64,
+                                        {}, &Image, BinaryFormat::ELF));
+  EXPECT_FALSE(Module);
+  ASSERT_EQ(Emitter.refusedBodies().size(), 1u);
+  EXPECT_EQ(Emitter.refusedBodies().front().Index, 0u);
+  EXPECT_NE(Emitter.refusedBodies().front().Reason.find(
+                "REP count mixes a process pointer with an image address"),
+            std::string::npos)
+      << Emitter.refusedBodies().front().Reason;
+}
+
+// ELF puts .init_array first in the writable segment; that section owns only
+// its own bytes. GCC clears a .bss object behind it with one REP STOSQ at a
+// constant address, which the segment's storage holds: later loads see the
+// stored words and the bytes around them keep their values.
+TEST(X86RepState, AccessInALaterSectionUsesItsSegmentStorage) {
+  constexpr va_t CodeVA = 0x140001000, DataVA = 0x140002000;
+  constexpr uint64_t Pattern = 0x1122334455667788;
+  for (bool Backward : {false, true}) {
+    SCOPED_TRACE(Backward);
+    BinaryImage Image;
+    Image.Arch = Arch::X64;
+    Image.Bits = Bitness::Bits64;
+    Image.Format = BinaryFormat::ELF;
+    Image.Entry = Image.Base = CodeVA;
+    Segment Data;
+    Data.VA = DataVA;
+    Data.Size = 0x40;
+    Data.FileSz = 0x20;
+    Data.Data.assign(0x20, 0x5a);
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Image.Segments.push_back(std::move(Data));
+    for (const auto &[Name, Begin, Size] :
+         {std::tuple{".init_array", DataVA, 8u},
+          std::tuple{".data", DataVA + 8, 0x18u},
+          std::tuple{".bss", DataVA + 0x20, 0x20u}}) {
+      Section Sec;
+      Sec.Name = Name;
+      Sec.VA = Begin;
+      Sec.Size = Size;
+      Sec.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      // A loaded section carries its file bytes; .bss has none.
+      if (Begin < DataVA + 0x20) {
+        Sec.Data.assign(Size, 0x5a);
+        Sec.FileSz = Size;
+      }
+      Image.Sections.push_back(std::move(Sec));
+    }
+    MedFunc Function;
+    Function.Entry = CodeVA;
+    Function.Name = "clear_later_section";
+    Function.CC = CallingConv::SysV_AMD64;
+    Function.ReturnType = NdType::makeInt(8, false);
+    MedBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = CodeVA;
+    auto address = [](uint64_t Value) {
+      return MedVar::makeConst(Value, 8, ConstantAddressProvenance::Address);
+    };
+    // Three words at DataVA + 0x20..0x38; DF=1 starts at the highest one.
+    MedOp Rep;
+    Rep.Opcode = NdOp::INTRINSIC;
+    Rep.Addr = CodeVA;
+    Rep.Output = temporary(10, 8);
+    Rep.addInput(MedVar::makeConst(
+        static_cast<unsigned>(Intrinsic::X86RepStosState), 2));
+    Rep.addInput(address(DataVA + (Backward ? 0x30 : 0x20)));
+    Rep.addInput(MedVar::makeConst(3, 8, ConstantAddressProvenance::Scalar));
+    Rep.addInput(
+        MedVar::makeConst(Pattern, 8, ConstantAddressProvenance::Scalar));
+    Rep.addInput(MedVar::makeConst(
+        Backward ? uint64_t(1) << X86RepDirectionShift : 0, 4));
+    Rep.addInput(MedVar::makeConst(*x86RepDescriptor(Intrinsic::X86RepStosState,
+                                                     Arch::X64, 8, 8, 0, false),
+                                   4));
+    for (unsigned I = 0;
+         I < x86RepContract(Intrinsic::X86RepStosState)->auxiliaryOutputs();
+         ++I)
+      Rep.IntrinsicOutputs.push_back(temporary(11 + I, 8));
+    Block.Ops.push_back(Rep);
+    // The last stored word, the untouched .bss word after it and the .data
+    // word before the object.
+    MedVar Sum;
+    int Next = 20;
+    for (uint64_t Offset : {0x30u, 0x38u, 0x18u}) {
+      MedOp Load;
+      Load.Opcode = NdOp::LOAD;
+      Load.Addr = CodeVA + Block.Ops.size();
+      Load.Output = temporary(Next++, 8);
+      Load.addInput(address(DataVA + Offset));
+      Block.Ops.push_back(Load);
+      if (Offset == 0x30) {
+        Sum = Load.Output;
+        continue;
+      }
+      MedOp Xor;
+      Xor.Opcode = NdOp::INT_XOR;
+      Xor.Addr = CodeVA + Block.Ops.size();
+      Xor.Output = temporary(Next++, 8);
+      Xor.addInput(Sum);
+      Xor.addInput(Load.Output);
+      Block.Ops.push_back(Xor);
+      Sum = Xor.Output;
+    }
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.Addr = CodeVA + Block.Ops.size();
+    Return.addInput(Sum);
+    Block.Ops.push_back(Return);
+    Block.EndAddr = CodeVA + Block.Ops.size();
+    Function.Blocks.push_back(std::move(Block));
+
+    llvm::LLVMContext Context;
+    MedLLVMEmitter Emitter;
+    std::unique_ptr<llvm::Module> Module;
+    ASSERT_NO_THROW(Module =
+                        Emitter.emit({Function}, Context, "later-section",
+                                     Arch::X64, {}, &Image, BinaryFormat::ELF));
+    ASSERT_TRUE(Module) << (Emitter.refusedBodies().empty()
+                                ? std::string()
+                                : Emitter.refusedBodies().front().Reason);
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+#if defined(__x86_64__) || defined(_M_X64)
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    Options.Format = BinaryFormat::ELF;
+    Options.Image = &Image;
+    ASSERT_TRUE(LLVMCEmitter().emit(*Module, Out, Options, nullptr, &Image));
+    Out.flush();
+    Source += "\nint main(void) { return clear_later_section() != " +
+              std::to_string(Pattern ^ 0x5a5a5a5a5a5a5a5aULL) + "ULL; }\n";
+    for (const auto Level : {"-O0", "-O2"})
+      source_call_execution_test::compileAndRun(
+          Source, {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+#endif
+  }
 }

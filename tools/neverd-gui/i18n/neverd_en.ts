@@ -2653,6 +2653,18 @@ Signed: %4</translation>
         <translation>Light (Visual Studio Code Light+)</translation>
     </message>
     <message>
+        <source>Dark High Contrast (Visual Studio Code)</source>
+        <translation>Dark High Contrast (Visual Studio Code)</translation>
+    </message>
+    <message>
+        <source>Light High Contrast (Visual Studio Code)</source>
+        <translation>Light High Contrast (Visual Studio Code)</translation>
+    </message>
+    <message>
+        <source>System (follows the desktop)</source>
+        <translation>System (follows the desktop)</translation>
+    </message>
+    <message>
         <source>Colors</source>
         <translation>Colors</translation>
     </message>
@@ -10867,6 +10879,13 @@ Your previous graph is still available.</translation>
     <message>
         <source>Undock window</source>
         <translation>Undock window</translation>
+    </message>
+</context>
+<context>
+    <name>CloseButton</name>
+    <message>
+        <source>Close Tab</source>
+        <translation>Close Tab</translation>
     </message>
 </context>
 </TS>

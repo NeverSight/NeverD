@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import io
 import os
+import re
 from itertools import product
 from pathlib import Path
 import subprocess
@@ -34,6 +35,9 @@ FUNCTIONS = ("dsp_read", "dsp_write", "dsp_partial", "dsp_add",
              "dsp_shrav_r", "dsp_shra_rw", "dsp_shrav_rw", "dsp_pack_h", "dsp_pack_b",
              "dsp_bitrev", "dsp_raddu", "dsp_repl_qb", "dsp_repl_ph", "dsp_replv_qb", "dsp_replv_ph", "dsp_preceq_phl", "dsp_preceq_phr", "dsp_precequ_qbl", "dsp_precequ_qbr", "dsp_precequ_qbla", "dsp_precequ_qbra", "dsp_preceu_qbl", "dsp_preceu_qbr", "dsp_preceu_qbla", "dsp_preceu_qbra", "dsp_addq_w", "dsp_subq_w", "dsp_addsc", "dsp_addwc", "dsp_modsub", "dsp_cmpeq", "dsp_cmplt", "dsp_cmple", "dsp_pick_b", "dsp_pick_h")
 FUNCTIONS += ('dsp_abs_ph', 'dsp_abs_w', 'dsp_abs_zero', 'dsp_cmpgueq', 'dsp_cmpgult', 'dsp_cmpgule', 'dsp_shll_qb', 'dsp_shllv_qb', 'dsp_shll_ph', 'dsp_shllv_ph', 'dsp_shll_s_ph', 'dsp_shllv_s_ph', 'dsp_shll_s_w', 'dsp_shllv_s_w', 'dsp_shll_zero')
+FUNCTIONS += tuple(f"dsp_{op}{suffix}" for op in ("muleu_l", "muleu_r", "mulq_rs") for suffix in ("", "_zero"))
+FUNCTIONS += tuple(f"dsp_{op}{suffix}" for op in ("muleq_l", "muleq_r", "precrq_rs", "precrqu_s") for suffix in ("", "_zero"))
+FUNCTIONS += tuple(f"dsp_ac_{op}_{bank}_{half}" for op in ("dpau_l", "dpau_r", "dpsu_l", "dpsu_r", "dpaq", "dpsq", "mulsaq") for bank in range(4) for half in ("hi", "lo"))
 INITIAL_STATES = (0, 0x01100021, 0x0fff7fbf)
 INPUTS = ((0, 0), (0xff01807f, 0x02018081), (0x11223344, 0x55667788),
           (0xffffffff, 1), (0x80808080, 0x80808080),
@@ -41,6 +45,7 @@ INPUTS = ((0, 0), (0xff01807f, 0x02018081), (0x11223344, 0x55667788),
           (0x80008000, 0x80008000), (0x7fffffff, 1), (0xfffffffd, 1),
           (0x7fff7fff, 1), (0x80000000, 31), (0x80008000, 15))
 
+INPUTS += ((0x7fff7fff, 0xffff7fff), (0x7fff8000, 0xffff8000), (0x7f807f80, 0x7f807f80), (0x7f817f81, 0x7f817f81), (0xffff0000, 0x0080007f))
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -48,6 +53,60 @@ def digest(path):
 
 def expected(function, initial, arguments):
     a, b = arguments
+    if function.startswith("dsp_ac_"):
+        operation, bank, half = function.removeprefix("dsp_ac_").rsplit("_",2)
+        bank, state, total = int(bank), initial, 0
+        for lane in range(2):
+            if operation.startswith(("dpau", "dpsu")):
+                shift = (lane + (2 if operation.endswith("_l") else 0))*8
+                value = ((a >> shift)&255)*((b >> shift)&255)
+            else:
+                shift = (1-lane)*16
+                x,y = ((v >> shift)&65535 for v in (a,b))
+                x,y = (x-65536 if x&32768 else x),(y-65536 if y&32768 else y)
+                if x == y == -32768:
+                    value,state = 0x7fffffff,state | (1 << (16+bank))
+                else: value = 2*x*y
+            total += -value if operation == "mulsaq" and lane else value
+        accumulator = ((a << 32) | b) + (-total if operation.startswith("dps") else total)
+        return ((accumulator >> (32 if half == "hi" else 0)) & 0xffffffff),state
+    if function.startswith(("dsp_muleq_", "dsp_precrq_rs", "dsp_precrqu_s")):
+        value, state = 0, initial
+        signed = lambda v, bits: v - (1 << bits) if v & (1 << (bits-1)) else v
+        if function.startswith("dsp_muleq_"):
+            shift = 16 if "muleq_l" in function else 0
+            x, y = (signed((v >> shift) & 65535, 16) for v in (a,b))
+            if x == y == -32768: value, state = 0x7fffffff, state | (1 << 21)
+            else: value = (x*y*2) & 0xffffffff
+        elif function.startswith("dsp_precrq_rs"):
+            for v in (a,b):
+                rounded = signed(v,32) + 32768
+                if rounded > 0x7fffffff: rounded, state = 0x7fffffff, state | (1 << 22)
+                value = (value << 16) | ((rounded >> 16) & 65535)
+        else:
+            for v in (a,b):
+                for shift in (16,0):
+                    x = signed((v >> shift) & 65535,16)
+                    if x < 0 or x > 32640: state |= 1 << 22
+                    value = (value << 8) | max(0,min(255,x // 128))
+        return (7 if function.endswith("zero") else value), state
+    if function.startswith(("dsp_muleu_", "dsp_mulq_")):
+        value, state = 0, initial
+        for lane in range(2):
+            y = (b >> (16*lane)) & 65535
+            if function.startswith("dsp_mulq_"):
+                x = (a >> (16*lane)) & 65535
+                if x == y == 32768: result, state = 32767, state | (1 << 21)
+                else:
+                    x = x - 65536 if x & 32768 else x
+                    y = y - 65536 if y & 32768 else y
+                    result = (x*y + 16384) // 32768
+            else:
+                x = (a >> (8*(lane + (2 if "muleu_l" in function else 0)))) & 255
+                result = x*y
+                if result > 65535: result, state = 65535, state | (1 << 21)
+            value |= (result & 65535) << (16*lane)
+        return (7 if function.endswith("zero") else value), state
     if function.startswith("dsp_abs") or function.startswith("dsp_shll"):
         absolute = function.startswith("dsp_abs")
         bits = 32 if function.endswith("_w") else 8 if function.endswith("_qb") else 16
@@ -266,17 +325,45 @@ def run(args, artifacts):
     pipeline_tests = args.neverd.with_name("NeverDMIPSPipelineTests")
     log = artifacts.work / "standalone-export.log"
     env = dict(os.environ, NEVERD_MIPS_DSP_SOURCE_OUTPUT=str(artifacts.work.resolve()))
-    with artifacts.process([pipeline_tests, "--gtest_filter=MIPSDSPPipeline.PureStandaloneSource*:MIPSDSPPipeline.StandaloneWideHelpers*"],
+    with artifacts.process([pipeline_tests, "--gtest_filter=MIPSDSPPipeline.PureStandaloneSource*:MIPSDSPPipeline.StandaloneWideHelpers*:MIPSDSPPipeline.StandaloneStateHelpers*"],
                            log, env=env) as (process, _):
         process.wait(timeout=60)
     if process.returncode:
         raise RuntimeError(log.read_text())
     artifacts.discard(log)
     report["standalone"] = []
-    for little, backend, kind in product((False, True), ("highc", "llvmc"), ("pure", "wide")):
+    report["compiler_constraints"] = []
+    for little, backend, kind in product((False, True), ("highc", "llvmc"), ("pure", "wide", "state")):
         profile = "mipsel" if little else "mips"
         source = artifacts.work / f"{profile}-{backend}-{kind}.c"
-        function = "dsp_pure_round" if kind == "pure" else "dsp_standalone_wide"
+        function = {"pure": "dsp_pure_round", "wide": "dsp_standalone_wide", "state": "dsp_standalone_state"}[kind]
+        # External feature flags must not replace either source constraint.
+        # Inspect the actual compiler attributes on every retained definition;
+        # this is a compiler-contract probe, not a DSP+MSA guest profile claim.
+        probe, probe_log = source.with_suffix(".ll"), source.with_suffix(".log")
+        command([args.clang, f"--target={profile}-linux-gnu", "-march=mips32r5",
+                 "-mabi=32", "-mdsp", "-mmsa", "-mfp64", "-O2", "-fno-inline",
+                 "-ffreestanding", "-nostdinc", "-isystem", resource + "/include",
+                 "-I", headers, "-S", "-emit-llvm", source, "-o", probe], probe_log)
+        text = probe.read_text()
+        attributes = dict(re.findall(r'^attributes #(\d+) = \{(.*)\}$', text, re.M))
+        definitions = re.findall(r'^define .* #(\d+) \{', text, re.M)
+        if not definitions:
+            raise RuntimeError("compiler constraint probe lost its definitions")
+        required = {"-dsp", "-dspr2"} | ({"-msa"} if not little else set())
+        for identifier in definitions:
+            match = re.search(r'"target-features"="([^"]*)"', attributes[identifier])
+            features = set(match.group(1).split(",")) if match else set()
+            if not required <= features or any("+" + f[1:] in features for f in required):
+                artifacts.keep_source(source)
+                artifacts.keep_source(probe)
+                raise RuntimeError(f"compiler dropped source constraints: {profile}/{backend}/{kind}: {features}")
+        report["compiler_constraints"].append({"profile": profile, "backend": backend,
+                                               "kind": kind, "definitions": len(definitions),
+                                               "required_features": sorted(required),
+                                               "llvm_sha256": digest(probe)})
+        artifacts.write("results.json", report)
+        artifacts.discard(probe, probe_log)
         for optimization in ("-O0", "-O2"):
             obj, rebuilt, log = (source.with_suffix(ext) for ext in (".o", ".elf", ".log"))
             flags = [f"--target={profile}-linux-gnu", "-march=mips32r2", "-mabi=32", "-mdsp",
@@ -290,6 +377,7 @@ def run(args, artifacts):
                 observations = []
                 for initial, inputs in product(INITIAL_STATES, INPUTS):
                     wanted = (expected("dsp_shrav_rw", initial, inputs) if kind == "pure" else
+                              expected("dsp_zero", initial, inputs) if kind == "state" else
                               ((((inputs[0] << 32) | inputs[1]) + 0xffffffff) & ((1 << 64) - 1), initial))
                     actual = observe(rebuilt, little, function, initial, inputs)
                     if actual != wanted:

@@ -16,15 +16,22 @@
 
 namespace neverd::translate::detail {
 
+/// Retained instruction progress, including an owner Error before an attempt
+/// receipt. Pending event delivery and task fault/event owners are separate.
+bool legacyInstructionPending(const X86LegacyExecutionState &State);
+
 llvm::Error admitLegacyExecution(const X86LegacyExecutionState &State,
                                  X86PagedMemory &Memory,
-                                 const X86LegacyExecutionOptions &Options);
+                                 const X86LegacyExecutionOptions &Options,
+                                 bool Non64Mode = false);
 
 /// Authenticated return, with staged register/cache state and retained RAM
-/// effects. The caller publishes NMI unblocking even on failure.
+/// effects and a private transfer journal. The caller publishes retained
+/// progress and NMI unblocking even when the staged register image is rejected.
 llvm::Expected<X86MemoryAccessResult>
 returnLegacyFrame(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                   unsigned Bytes, uint16_t Discard, bool Interrupt,
+                  llvm::ArrayRef<uint8_t> Instruction,
                   const X86LegacyExecutionOptions &Options);
 
 } // namespace neverd::translate::detail

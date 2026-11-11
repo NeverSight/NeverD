@@ -67,9 +67,11 @@ public:
   llvm::Expected<X86MemoryAccessResult> finish(X86MpxResult Status) {
     if (Failure)
       return std::move(*Failure);
-    if (Status == X86MpxResult::BoundsFault) {
+    if (Status == X86MpxResult::BoundsFault ||
+        Status == X86MpxResult::UndefinedOpcode) {
       Result.Status = X86PageWalkStatus::Exception;
-      Result.Exception = X86MemoryException{5, 0, {}};
+      Result.Exception = X86MemoryException{
+          uint8_t(Status == X86MpxResult::BoundsFault ? 5 : 6), 0, {}};
     } else if (Status != X86MpxResult::Completed &&
                Status != X86MpxResult::Disabled &&
                !(Status == X86MpxResult::MemoryFault && Result.Exception) &&
@@ -126,7 +128,8 @@ private:
           S.Core.Segments[unsigned(Segment)],
           {Segment,
            Write ? X86SegmentAccessKind::Write : X86SegmentAccessKind::Read,
-           uint32_t(A.Address), Size, O.Segments.FullLimitChoice});
+           uint32_t(A.Address), Size, O.Segments.FullLimitChoice,
+           bool(S.EFlags & 0x20000)});
       if (!Checked) {
         Failure = Checked.takeError();
         return {};
@@ -226,7 +229,7 @@ llvm::Error admitLegacyMpxMemory(const X86MpxEncoding &E,
                                  const X86LegacyExecutionState &S,
                                  const X86PagedMemory &M,
                                  const X86LegacyExecutionOptions &O) {
-  if (Context.enabled() == false)
+  if (Context.enabled() == false || E.Detail.addr_size == 2)
     return llvm::Error::success();
   const bool Table = E.Id == X86_INS_BNDLDX || E.Id == X86_INS_BNDSTX;
   const bool Move =
@@ -249,8 +252,8 @@ llvm::Error admitLegacyMpxMemory(const X86MpxEncoding &E,
 
 llvm::Expected<X86MemoryAccessResult>
 executeLegacyMpx(X86LegacyExecutionState &S, X86PagedMemory &M,
-                 llvm::ArrayRef<uint8_t> Bytes, X86MpxContext &Context,
-                 const X86LegacyExecutionOptions &O) {
+                 llvm::ArrayRef<uint8_t> Bytes, bool Code32,
+                 X86MpxContext &Context, const X86LegacyExecutionOptions &O) {
   X86MpxExecutionInputs Inputs;
   for (unsigned I = 0; I != S.Core.GPR.size(); ++I)
     Inputs.GPR[I] = S.Core.GPR[I];
@@ -258,7 +261,9 @@ executeLegacyMpx(X86LegacyExecutionState &S, X86PagedMemory &M,
     Inputs.SegmentBases[I] = S.Core.Segments[I].Base;
   MpxMemory Memory(S, M, Bytes, O);
   return Memory.finish(
-      executeX86MpxInstruction(Bytes, Arch::X86, S.EIP, Context, Inputs, Memory)
+      executeX86MpxInstruction(
+          Bytes, Code32 ? X86MpxCodeMode::Legacy32 : X86MpxCodeMode::Legacy16,
+          S.EIP, Context, Inputs, Memory)
           .Result);
 }
 

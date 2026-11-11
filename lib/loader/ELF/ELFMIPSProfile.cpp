@@ -222,6 +222,9 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
     Profile.HasMIPS16E2 = ASE & kMIPS16E2ASE;
     if (Profile.HasMIPS16E2 && !Profile.HasMIPS16)
       return profileError("MIPS16e2 requires MIPS16 encoding capability");
+    Profile.HasMT = ASE & llvm::Mips::AFL_ASE_MT;
+    if (Profile.HasMT && (!Profile.HasMIPS16E2 || ELFT::Is64Bits))
+      return profileError("MT currently requires MIPS16e2/o32");
     Profile.HasMSA = ASE & llvm::Mips::AFL_ASE_MSA;
     if (Profile.HasMSA &&
         (ELFT::Is64Bits || Compressed || (ASE & llvm::Mips::AFL_ASE_DSP) ||
@@ -233,8 +236,8 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
       return profileError("ABI flags conflict with the admitted GPR profile");
     if (Bytes[5] > (Profile.HasMSA ? 3 : 2) || Bytes[6] != 0 || Bytes[7] > 7 ||
         Read32(8) != 0 ||
-        (ASE &
-         ~(llvm::Mips::AFL_ASE_DSP | llvm::Mips::AFL_ASE_MSA | kMIPS16E2ASE)) !=
+        (ASE & ~(llvm::Mips::AFL_ASE_DSP | llvm::Mips::AFL_ASE_MSA |
+                 llvm::Mips::AFL_ASE_MT | kMIPS16E2ASE)) !=
             (Profile.HasMicroMIPS ? llvm::Mips::AFL_ASE_MICROMIPS
              : Profile.HasMIPS16  ? llvm::Mips::AFL_ASE_MIPS16
                                   : 0u) ||

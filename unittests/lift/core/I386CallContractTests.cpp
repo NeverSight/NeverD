@@ -1752,6 +1752,198 @@ TEST(I386CallContract, APICPLTEntryJumpsByTheGOTItsCallerHolds) {
   EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
 }
 
+// _setjmp3's count describes its variadic DWORDs. Scratch ECX/EDX are not
+// extra arguments, including when a direct CALL reaches an import veneer.
+// The provider observes argument transport only, not Windows nonlocal unwind.
+TEST(I386CallContract, RuntimeVariadicImportsKeepTheirStackPrefixAndTail) {
+  for (unsigned Route : {0u, 1u, 2u})
+    for (unsigned Tail : {0u, 1u, 3u}) {
+      const bool Thunk = Route == 1;
+      std::vector<uint8_t> Code{0xb9, 99, 0, 0, 0, 0xba, 17, 0, 0, 0};
+      for (unsigned I = Tail; I > 0; --I)
+        Code.insert(Code.end(),
+                    {0x68, static_cast<uint8_t>(11 * I), 0, 0, 0x80});
+      Code.insert(Code.end(), {0x6a, static_cast<uint8_t>(Tail)});
+      Code.insert(Code.end(),
+                  {0xff, 0x74, 0x24, static_cast<uint8_t>(4 * (Tail + 2))});
+      size_t SlotOperand;
+      if (Thunk) {
+        const auto Relative = static_cast<uint8_t>(0x80 - Code.size() - 5);
+        Code.insert(Code.end(), {0xe8, Relative, 0, 0, 0});
+        SlotOperand = 0x82;
+      } else if (Route == 2) {
+        SlotOperand = Code.size() + 1;
+        const auto Call = callThroughSlot(Iat);
+        Code.push_back(0xa1); // mov eax, [Iat]; call eax
+        Code.insert(Code.end(), Call.begin() + 2, Call.end());
+        Code.insert(Code.end(), {0xff, 0xd0});
+      } else {
+        SlotOperand = Code.size() + 2;
+        const auto Call = callThroughSlot(Iat);
+        Code.insert(Code.end(), Call.begin(), Call.end());
+      }
+      Code.insert(Code.end(), {0x83, 0xc4, static_cast<uint8_t>(4 * (Tail + 2)),
+                               0x83, 0xc0, 1, 0xc3});
+      if (Thunk) {
+        Code.resize(0x80, 0xcc);
+        auto Jump = callThroughSlot(Iat);
+        Jump[1] = 0x25;
+        Code.insert(Code.end(), Jump.begin(), Jump.end());
+      }
+      auto Image = makeImage(Code, {"_setjmp3"});
+      ASSERT_TRUE(Image.recordImportStorageSlot(
+          Iat, "_setjmp3", 0, ImportStorageEvidence::ImportDirectory));
+      scanImportThunks(Image);
+      if (Thunk)
+        ASSERT_NE(Image.findImportStubAt(Text + 0x80), nullptr);
+      for (bool Whole : {false, true})
+        for (bool LLVM : {false, true})
+          for (bool NoOpt : {false, true}) {
+            SCOPED_TRACE(testing::Message()
+                         << Route << ':' << Tail << ':' << LLVM << ':' << NoOpt
+                         << ':' << Whole);
+            llvm::LLVMContext Context;
+            PipelineOptions Options;
+            Options.EmitDumpOutput = false;
+            if (!Whole)
+              Options.OnlyFunctionEntries = {Text};
+            Options.LiftMode = LLVM;
+            Options.SourceProjection = true;
+            Options.NoOpt = NoOpt;
+            const auto Result = Pipeline().run(Image, Context, Options);
+            ASSERT_TRUE(Result.Success) << Result.Error;
+            std::string Source;
+            llvm::raw_string_ostream Output(Source);
+            CEmitterOptions COptions;
+            COptions.TheArch = Image.Arch;
+            COptions.Format = Image.Format;
+            COptions.Image = &Image;
+            COptions.EmitIncludes = false;
+            if (LLVM) {
+              ASSERT_TRUE(Result.LlvmModule);
+              ASSERT_FALSE(
+                  llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+              ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Output,
+                                              COptions, nullptr, &Image));
+            } else
+              ASSERT_TRUE(
+                  HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+            EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos)
+                << Source;
+            EXPECT_NE(Source.find("__attribute__((returns_twice))"),
+                      std::string::npos)
+                << Source;
+            const std::string Standalone =
+                "#include <stdint.h>\ntypedef int jmp_buf[16];\n"
+                "int _setjmp3(jmp_buf, int, ...);\n" +
+                Source;
+            source_call_execution_test::checkSyntax(
+                Standalone,
+                {"--target=i686-pc-windows-msvc", "-ffreestanding"});
+#if defined(__linux__) && (defined(__i386__) || defined(__x86_64__))
+            std::string Oracle;
+            llvm::raw_string_ostream Native(Oracle);
+            Native << R"(
+#include <stdarg.h>
+#include <sys/mman.h>
+#include <string.h>
+static int buffer[16];
+static unsigned calls;
+int _setjmp3(int *env, int count, ...) {
+  if (env != buffer || count != )"
+                   << Tail << R"() __builtin_trap();
+  va_list args;
+  va_start(args, count);
+  uint32_t value = 7;
+  for (int i = 0; i < count; ++i) {
+    uint32_t word = va_arg(args, uint32_t);
+    if (word != (0x80000000u | (11u * (i + 1)))) __builtin_trap();
+    value = value * 31u + word;
+  }
+  va_end(args);
+  env[0] = (int)value;
+  ++calls;
+  return -19;
+}
+int main(void) {
+  static const uint8_t original[] = {)";
+            for (uint8_t Byte : Code)
+              Native << unsigned(Byte) << ',';
+            Native << "};\n  const size_t size = " << Iat - Text + 4 << ";\n"
+                   << R"(
+  uint8_t *code = mmap(0, size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (code == MAP_FAILED) return 1;
+  memcpy(code, original, sizeof(original));
+  uint32_t target = (uint32_t)(uintptr_t)_setjmp3;
+)";
+            Native << "  uint32_t slot = (uint32_t)(uintptr_t)(code + "
+                   << Iat - Text << ");\n"
+                   << "  memcpy(code + " << Iat - Text << ", &target, 4);\n"
+                   << "  memcpy(code + " << SlotOperand << ", &slot, 4);\n"
+                   << R"(
+  __builtin___clear_cache((char *)code, (char *)code + size);
+  int expected = ((int (*)(int *))code)(buffer);
+  int saved = buffer[0];
+  if (expected != -18 || calls != 1) return 1;
+  memset(buffer, 0, sizeof(buffer));
+  int actual = (int32_t)wrap((uint32_t)(uintptr_t)buffer);
+  if (munmap(code, size)) return 1;
+  return actual != expected || buffer[0] != saved || calls != 2;
+}
+)";
+            for (llvm::StringRef Level : {"-O0", "-O2"})
+              source_call_execution_test::compileAndRun(
+                  "#define _GNU_SOURCE\n" + Standalone + Oracle,
+                  {"-m32", Level, "-fsanitize=undefined",
+                   "-fsanitize-trap=all"});
+#else
+            RecordProperty("native_i386_execution", "requires Linux x86");
+#endif
+          }
+    }
+}
+
+TEST(I386CallContract, NonlocalJumpBufferAgreesWithItsRuntimeHeader) {
+  std::vector<uint8_t> Code{0xb9, 99, 0,    0,    0,    0xba, 17,   0,
+                            0,    0,  0x6a, 0xf9, 0xff, 0x74, 0x24, 8};
+  const auto Call = callThroughSlot(Iat);
+  Code.insert(Code.end(), Call.begin(), Call.end());
+  Code.push_back(0xc3);
+  auto Image = makeImage(Code, {"_longjmpex"});
+  ASSERT_TRUE(Image.recordImportStorageSlot(
+      Iat, "_longjmpex", 0, ImportStorageEvidence::ImportDirectory));
+  for (bool LLVM : {false, true}) {
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    Options.OnlyFunctionEntries = {Text};
+    Options.LiftMode = LLVM;
+    Options.SourceProjection = true;
+    const auto Result = Pipeline().run(Image, Context, Options);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    std::string Source;
+    llvm::raw_string_ostream Output(Source);
+    CEmitterOptions COptions;
+    COptions.TheArch = Image.Arch;
+    COptions.Format = Image.Format;
+    COptions.Image = &Image;
+    COptions.EmitIncludes = false;
+    if (LLVM) {
+      ASSERT_TRUE(Result.LlvmModule);
+      ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions,
+                                      nullptr, &Image));
+    } else
+      ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+    // Independent i386 CRT declarations; no runtime unwinding is executed.
+    source_call_execution_test::checkSyntax(
+        "#include <stdint.h>\ntypedef int jmp_buf[16];\n"
+        "__attribute__((noreturn)) void _longjmpex(jmp_buf, int);\n" +
+            Source,
+        {"--target=i686-pc-windows-msvc", "-ffreestanding", "-Werror"});
+  }
+}
+
 TEST(I386CallContract, HeaderVariadicStackPrefixKeepsTheOpenTail) {
   windows_variadic_test::Header Debug;
   Debug.Slot = Iat;

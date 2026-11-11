@@ -46,6 +46,7 @@
 #include "neverd/ir/low/X86/X86FourSourceShape.h"
 #include "neverd/ir/low/X86ArithmeticFlags.h"
 #include "neverd/ir/med/LowToMedError.h"
+#include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/med/MIPS/MIPSMergeValues.h"
 #include "neverd/ir/med/MIPS/MIPSReturnTargets.h"
 #include "neverd/ir/med/MIPS/MIPSSourceAccumulators.h"
@@ -818,6 +819,7 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
              }));
   bool MIPSReturnsQualified = !QualifyMIPSReturns;
   bool HasMIPSScalarValues = false;
+  bool HasMIPSAccumulatorTransport = false;
   for (const LowBlock &Block : Low.Blocks)
     for (const LowOp &Op : Block.Ops) {
       if (isLowRawEnvironmentRequirement(Op) ||
@@ -868,6 +870,8 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
             !mipsScalarLowShapeIsValid(Op, TheArch))
           throw LowToMedConversionError(mips::kMalformedScalar);
         HasMIPSScalarValues |= mips::isScalarIntrinsic(Id);
+        HasMIPSAccumulatorTransport |=
+            Id == Intrinsic::MIPSAccumulatorAfterWrite;
         if ((Id == Intrinsic::Eret && TheArch != Arch::AArch64) ||
             !aarch64ExceptionReturnShapeIsValid(Id, Op.NumInputs,
                                                 Op.Output.Size))
@@ -1948,6 +1952,15 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       runDce(Func);
       if (discardUnobservedMIPSMergeInputs(Func, Low, TheArch))
         runDce(Func);
+      if (HasMIPSAccumulatorTransport) {
+        requireMIPSSourceAccumulators(Func);
+        for (const auto &Block : Func.Blocks)
+          for (const auto &Op : Block.Ops)
+            if (!Op.Dead && mipsScalarMedShapeIsValid(Op, TheArch) &&
+                static_cast<Intrinsic>(Op.Inputs[0].ConstVal) ==
+                    Intrinsic::MIPSAccumulatorAfterWrite)
+              throw LowToMedConversionError(mips::kAccumulatorHistoryUnknown);
+      }
       debugVerifyMedFunc(Func, "MIPS scalar value projection");
     }
     detectCc(Func, TheArch, Fmt);

@@ -763,6 +763,36 @@ struct Listing::Impl {
   /// What the last full build read that names and the user's items do not
   /// change: the string scan, and the import, import slot and export rows.
   std::vector<StringItem> scannedStrings;
+  /// The scan's strings in address order, and the furthest byte after each
+  /// that it or one before it reaches: what a span shares with a string reads
+  /// in one search (scannedStringsCover).
+  std::vector<std::uint64_t> scannedStringAddresses, scannedStringReach;
+  void indexScannedStrings() {
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> spans;
+    spans.reserve(scannedStrings.size());
+    for (const auto &string : scannedStrings)
+      spans.emplace_back(string.address,
+                         string.address + string.length + string.unit);
+    std::sort(spans.begin(), spans.end());
+    scannedStringAddresses.clear();
+    scannedStringReach.clear();
+    scannedStringAddresses.reserve(spans.size());
+    scannedStringReach.reserve(spans.size());
+    std::uint64_t reach = 0;
+    for (const auto &[address, end] : spans) {
+      reach = std::max(reach, end);
+      scannedStringAddresses.push_back(address);
+      scannedStringReach.push_back(reach);
+    }
+  }
+  /// Whether a string of the scan shares a byte with [\p address, \p end).
+  bool scannedStringsCover(std::uint64_t address, std::uint64_t end) const {
+    const auto before = static_cast<std::size_t>(
+        std::lower_bound(scannedStringAddresses.begin(),
+                         scannedStringAddresses.end(), end) -
+        scannedStringAddresses.begin());
+    return before && scannedStringReach[before - 1] > address;
+  }
   Json importRows, importSlotRows, exportRows;
   std::uint64_t generation = 1;
   std::vector<Region> regions;
@@ -1904,8 +1934,10 @@ struct Listing::Impl {
       for (const auto &row : rows)
         addString(row);
     }
-    if (Rescan)
+    if (Rescan) {
       scannedStrings = strings;
+      indexScannedStrings();
+    }
     loadUserItems();
     loadNumberFormats();
     std::sort(strings.begin(), strings.end(),
@@ -2094,12 +2126,17 @@ struct Listing::Impl {
   /// Read the user's data items. Their strings join the scan's, and replace
   /// what the scan read in their bytes.
   void readUserItems() {
+    readUserItems(itemsQuery ? takeJson(itemsQuery(session)) : Json());
+  }
+  /// The user's items as \p rows hold them: the engine's, or the table a
+  /// history committed of them.
+  void readUserItems(const Json &rows) {
     userItems.clear();
     dataElementTypes.clear();
     userInstructions.clear();
     if (!itemsQuery)
       return;
-    if (const auto rows = takeJson(itemsQuery(session)); rows.is_array())
+    if (rows.is_array())
       for (const auto &row : rows) {
         const auto address = jsonAddress(row.value("addr", Json()));
         UserItem item;
@@ -4786,6 +4823,61 @@ struct Listing::Impl {
     return json;
   }
 
+  /// lineJson's document, written as text: its keys in the order the
+  /// document keeps them.
+  void lineText(JsonWriter &out, const Line &line) {
+    const int region =
+        regionIndex(line.address < regions.back().end ? line.address
+                                                      : regions.back().end - 1);
+    const int owner = region >= 0 ? region : regionIndex(line.item);
+    out.beginObject();
+    out.key("address");
+    out.address(line.address);
+    out.key("cls");
+    out.number(std::int64_t(static_cast<int>(line.cls)));
+    if (!line.flow.empty()) {
+      out.key("flow");
+      out.string(line.flow);
+    }
+    if (line.function >= 0 &&
+        static_cast<std::size_t>(line.function) < functions.size()) {
+      const auto &function = ownerOf(line.function);
+      out.key("function");
+      out.string(function.name);
+      out.key("function_address");
+      out.address(function.entry);
+    }
+    out.key("item");
+    out.address(line.item);
+    out.key("item_size");
+    out.address(line.itemSize);
+    out.key("kind");
+    out.string(line.kind);
+    out.key("prefix");
+    out.string(prefixOf(line.address, owner >= 0 ? owner : 0));
+    out.key("spans");
+    out.beginArray();
+    for (const auto &span : line.text.spans()) {
+      out.beginArray();
+      out.number(std::uint64_t(span.start));
+      out.number(std::uint64_t(span.length));
+      out.number(std::int64_t(static_cast<int>(span.role)));
+      if (span.address)
+        out.address(*span.address);
+      out.endArray();
+    }
+    out.endArray();
+    out.key("sub");
+    out.number(std::uint64_t(line.sub));
+    if (line.target) {
+      out.key("target");
+      out.address(*line.target);
+    }
+    out.key("text");
+    out.string(line.text.text());
+    out.endObject();
+  }
+
   //===--------------------------------------------------------------------===//
   // Reference index
   //===--------------------------------------------------------------------===//
@@ -5686,12 +5778,15 @@ bool Listing::dataRenamed(std::uint64_t address, const std::string &name) {
   return true;
 }
 
-bool Listing::dataItemsChanged() {
+bool Listing::dataItemsChanged(const Json *rows) {
   auto &d = *impl_;
   if (!d.built || d.namesStale)
     return false;
   const auto before = std::move(d.userItems);
-  d.readUserItems();
+  if (rows)
+    d.readUserItems(*rows);
+  else
+    d.readUserItems();
   const auto same = [](const auto &a, const auto &b) {
     return a.size == b.size && a.kind == b.kind && a.encoding == b.encoding &&
            a.type == b.type && a.elementSize == b.elementSize &&
@@ -5705,12 +5800,7 @@ bool Listing::dataItemsChanged() {
     const int region = d.regionIndex(address);
     if (region < 0 || d.regions[region].exec)
       return false;
-    return std::none_of(d.scannedStrings.begin(), d.scannedStrings.end(),
-                        [&](const auto &string) {
-                          return string.address < address + item.size &&
-                                 address < string.address + string.length +
-                                               string.unit;
-                        });
+    return !d.scannedStringsCover(address, address + item.size);
   };
   for (const auto &[address, item] : before)
     if (const auto now = d.userItems.find(address);
@@ -5969,7 +6059,8 @@ Json Listing::indexState() const {
   return state;
 }
 
-Json Listing::page(const Json &payload) {
+Json Listing::page(const Json &payload,
+                   std::shared_ptr<const EncodedJson> *encoded) {
   auto &d = *impl_;
   const bool initial = std::exchange(d.initialPage, false) && !d.discovered &&
                        d.decoded.empty() && d.recoveredReferences.empty();
@@ -5977,7 +6068,7 @@ Json Listing::page(const Json &payload) {
   // whole browsing index. Later queries use the live listing. Only a page
   // produced from the untouched loader catalog is eligible for this shortcut.
   if (!initial)
-    return uncachedPage(payload);
+    return uncachedPage(payload, encoded);
   const auto count = neverd_func_count(d.session);
   auto result = d.cache.query(
       "initial-page-" + std::to_string(count) + "-" + payload.dump(),
@@ -5995,7 +6086,8 @@ Json Listing::page(const Json &payload) {
   return result;
 }
 
-Json Listing::uncachedPage(const Json &payload) {
+Json Listing::uncachedPage(const Json &payload,
+                           std::shared_ptr<const EncodedJson> *encoded) {
   auto &d = *impl_;
   d.build();
   if (d.regions.empty())
@@ -6112,6 +6204,32 @@ Json Listing::uncachedPage(const Json &payload) {
     reversed.resize(before);
   if (forward.size() > after)
     forward.resize(after);
+  if (encoded) {
+    // Its rows cost several times more built as a document than written as
+    // the text a document prints.
+    JsonWriter out;
+    out.beginObject();
+    out.key("anchor");
+    out.number(std::uint64_t(reversed.size()));
+    out.key("at_end");
+    out.boolean(atEnd);
+    out.key("at_start");
+    out.boolean(atStart);
+    out.key("generation");
+    out.string(std::to_string(d.generation));
+    out.key("index");
+    out.value(indexState());
+    out.key("lines");
+    out.beginArray();
+    for (auto it = reversed.rbegin(); it != reversed.rend(); ++it)
+      d.lineText(out, *it);
+    for (const auto &line : forward)
+      d.lineText(out, line);
+    out.endArray();
+    out.endObject();
+    *encoded = std::make_shared<const EncodedJson>(std::move(out));
+    return Json(nullptr);
+  }
   Json lines = Json::array();
   for (auto it = reversed.rbegin(); it != reversed.rend(); ++it)
     lines.push_back(d.lineJson(*it));

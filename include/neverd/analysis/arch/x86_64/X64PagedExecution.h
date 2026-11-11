@@ -20,12 +20,21 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 
 namespace neverd::analysis {
 
 using X64PagedBody = uint64_t (*)(void *State, void *Exchange);
+
+namespace detail {
+struct X64PagedInstructionContinuation;
+}
+/// Retain across execution-context reconstruction with the same exported body,
+/// CPU/debug state and repaired RAM. This is separate from event continuation.
+using X64PagedInstructionContinuation =
+    std::shared_ptr<const detail::X64PagedInstructionContinuation>;
 
 /// Elementwise repeated memory strings with destination-first CMPS reads.
 /// Addr32 LODS entry has distinct
@@ -93,6 +102,13 @@ struct X64PagedExecutionResult {
   /// A completed instruction remains complete if its subsequent #DB entry
   /// fails. Software INT requires successful entry; intermediate REP is false.
   bool InstructionCompleted = false;
+  /// This call continued a previously fetched instruction. Attempted reports
+  /// only a new charge; completion/fault can occur without another charge.
+  bool InstructionResumed = false;
+  /// Successful instruction effects for a persistent mixed-mode scheduler.
+  /// Event acceptance supersedes these shadows before handler execution.
+  bool StartsSSShadow = false;
+  bool StartsSTIShadow = false;
   std::optional<X64PagedTransfer> Transfer;
   /// One irreversible device transfer, also retained on an INS guest fault.
   bool DeviceTransferCompleted = false;
@@ -101,6 +117,9 @@ struct X64PagedExecutionResult {
   std::optional<translate::X86MemoryException> Exception;
   std::optional<translate::GuestMemoryFault> BackingFault;
   std::optional<X64PagedEventResult> Delivery;
+  /// Retained at a post-instruction event-owner refusal, before a delivery
+  /// continuation exists. The full mode owner preserves the paid instruction.
+  std::optional<X64ContinuationEventV1> RequestedEvent;
 };
 
 /// One confined CPU and owned ordinary RAM, without external writes while a
@@ -118,8 +137,9 @@ struct X64PagedExecutionResult {
 class X64PagedExecution final {
 public:
   explicit X64PagedExecution(translate::X86PagedMemory &Memory,
-                             const X64PagedExecutionOptions &Options = {})
-      : Memory(Memory), Options(Options) {}
+                             const X64PagedExecutionOptions &Options = {},
+                             X64PagedInstructionContinuation Continuation = {})
+      : Memory(Memory), Options(Options), PendingReturn(Continuation) {}
 
   /// Shared admission before producer polling or instruction fetch. Neither
   /// the generated validator nor this check touches guest RAM.
@@ -147,6 +167,11 @@ public:
           std::optional<bool> DebugSSBlocked = std::nullopt,
           bool BranchDebug = false);
 
+  X64PagedInstructionContinuation continuation() const { return PendingReturn; }
+  /// Pending/attempt-consumed bits, independent of lastResult and admission
+  /// refusals. Only a consumed pending attempt may bypass a zero budget.
+  uint64_t pendingProgress() const;
+
   const X64PagedExecutionResult &lastResult() const { return Last; }
   const std::string &lastError() const { return Error; }
   /// C bridge retains diagnostic ownership in the supplied execution context.
@@ -156,6 +181,9 @@ public:
   void recordEntryError(llvm::Error Failure);
 
 private:
+  llvm::Expected<X64PagedExecutionResult>
+  executeReturn(X64ContinuationStateV6 &State,
+                const detail::X64PagedInstructionContinuation &Binding);
   llvm::Error
   deliverEvent(X64ContinuationStateV6 &State,
                const X64ContinuationEventV1 &Event, uint32_t MXCSRMask,
@@ -165,6 +193,7 @@ private:
                            bool InstructionFault = false, bool Icebp = false);
   translate::X86PagedMemory &Memory;
   X64PagedExecutionOptions Options;
+  X64PagedInstructionContinuation PendingReturn;
   X64PagedExecutionResult Last;
   std::string Error;
 };
@@ -208,6 +237,9 @@ extern "C" uint64_t neverd_x64_paged_event_v1(uint8_t *Context, uint8_t *State,
                                               const uint8_t *Event,
                                               uint64_t MXCSRMask);
 extern "C" uint64_t neverd_x64_paged_progress_v1(uint8_t *Context);
+/// Distinct symbol requires a runtime that retains return progress. No state
+/// or RAM is touched. Generated dispatch checks this before budget or polling.
+extern "C" uint64_t neverd_x64_paged_pending_v1(uint8_t *Context);
 /// Return the completed near transfer's original Call/Return exit, or zero
 /// without writing outputs when the last operation has no such receipt.
 /// Non-null outputs borrow disjoint caller storage. A subsequent operation,

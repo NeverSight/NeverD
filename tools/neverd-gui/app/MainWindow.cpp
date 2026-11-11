@@ -125,7 +125,9 @@
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
+#include <algorithm>
 #include <array>
+#include <iterator>
 #include <kddockwidgets/Config.h>
 #include <kddockwidgets/LayoutSaver.h>
 #include <kddockwidgets/core/DockWidget.h>
@@ -4308,16 +4310,36 @@ void MainWindow::chooseFont() {
     Theme::instance().setCodeFont(font);
 }
 
+namespace {
+/// The themes a person can choose, in the order the choosers list them.
+constexpr Theme::Choice ThemeChoices[] = {
+    Theme::Choice::Dark, Theme::Choice::Light, Theme::Choice::HighContrastDark,
+    Theme::Choice::HighContrastLight, Theme::Choice::System};
+
+QStringList themeChoiceNames() {
+  return {MainWindow::tr("Dark (Visual Studio Code Dark+)"),
+          MainWindow::tr("Light (Visual Studio Code Light+)"),
+          MainWindow::tr("Dark High Contrast (Visual Studio Code)"),
+          MainWindow::tr("Light High Contrast (Visual Studio Code)"),
+          MainWindow::tr("System (follows the desktop)")};
+}
+
+int themeChoiceIndex() {
+  const auto *chosen =
+      std::find(std::begin(ThemeChoices), std::end(ThemeChoices),
+                Theme::instance().choice());
+  return static_cast<int>(chosen - std::begin(ThemeChoices));
+}
+} // namespace
+
 void MainWindow::chooseTheme() {
-  QStringList names{tr("Dark (Visual Studio Code Dark+)"),
-                    tr("Light (Visual Studio Code Light+)")};
+  const QStringList names = themeChoiceNames();
   bool ok = false;
-  const auto choice = QInputDialog::getItem(
-      commandWindow(), tr("Colors"), tr("Theme:"), names,
-      Theme::instance().mode() == Theme::Mode::Dark ? 0 : 1, false, &ok);
-  if (ok)
-    Theme::instance().setMode(choice == names.front() ? Theme::Mode::Dark
-                                                      : Theme::Mode::Light);
+  const auto choice =
+      QInputDialog::getItem(commandWindow(), tr("Colors"), tr("Theme:"), names,
+                            themeChoiceIndex(), false, &ok);
+  if (const qsizetype index = names.indexOf(choice); ok && index >= 0)
+    Theme::instance().setChoice(ThemeChoices[index]);
 }
 
 void MainWindow::showOptions() {
@@ -4329,9 +4351,8 @@ void MainWindow::showOptions() {
   bytes->setValue(disassembly_->listing()->opcodeBytes());
   form->addRow(tr("Number of opcode bytes:"), bytes);
   auto *theme = new QComboBox(&dialog);
-  theme->addItems({tr("Dark (Visual Studio Code Dark+)"),
-                   tr("Light (Visual Studio Code Light+)")});
-  theme->setCurrentIndex(Theme::instance().mode() == Theme::Mode::Dark ? 0 : 1);
+  theme->addItems(themeChoiceNames());
+  theme->setCurrentIndex(themeChoiceIndex());
   form->addRow(tr("Theme:"), theme);
   auto *prefixes =
       new QCheckBox(tr("Show segment:address line prefixes"), &dialog);
@@ -4361,8 +4382,7 @@ void MainWindow::showOptions() {
   QSettings().setValue(OpcodeBytesKey, bytes->value());
   disassembly_->listing()->setOpcodeBytes(bytes->value());
   disassembly_->listing()->setShowPrefixes(prefixes->isChecked());
-  Theme::instance().setMode(theme->currentIndex() == 0 ? Theme::Mode::Dark
-                                                       : Theme::Mode::Light);
+  Theme::instance().setChoice(ThemeChoices[theme->currentIndex()]);
   SourceDefaults::instance().setSymbolic(symbolic->isChecked());
   QSettings().setValue(settings::OpenInNewInstance, newInstance->isChecked());
 }

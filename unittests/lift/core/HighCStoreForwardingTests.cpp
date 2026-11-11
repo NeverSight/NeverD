@@ -13,17 +13,113 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cctype>
 #include <cstddef>
+#include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace {
 
 using namespace neverd;
+
+TEST(HighCStoreForwarding, SharedVariableWalkKeepsFirstTypeAndCallBounds) {
+  const auto Local = [](int Id, uint16_t Size) {
+    MedVar Var;
+    Var.Kind = MedVar::Temp;
+    Var.Id = Id;
+    Var.Size = Size;
+    return HighExpr::makeVar(Var, NdType::makeInt(Size, false));
+  };
+  const auto Narrow = Local(1, 1);
+  const auto Wide = Local(1, 8);
+  auto Call = HighExpr::makeCall("indirect", InvalidVA,
+                                 {Narrow, Narrow, Wide, Local(3, 4)});
+  Call->IsIndirectCall = true;
+  Call->IndirectTarget = Local(2, 8);
+  Call->IntrinsicOutputs = {Local(4, 4)->Var};
+  for (int Id = 5; Id <= 40; ++Id)
+    Call->Operands.push_back(Local(Id, 4));
+  // Sharing and a back edge must not change which spelling supplies a
+  // local's type, or hide the indirect target when call arguments are cut.
+  Call->Operands.push_back(Call);
+  const auto ClearCycle =
+      llvm::make_scope_exit([&] { Call->Operands.pop_back(); });
+  for (const size_t Limit : {size_t(3), Call->Operands.size()}) {
+    SCOPED_TRACE(Limit);
+    std::vector<int> Visited;
+    std::map<std::string, TypeRef> Vars;
+    collectUsedVarsExpr(
+        *Call, Vars,
+        [&](const MedVar &Var) {
+          Visited.push_back(Var.Id);
+          return "v" + std::to_string(Var.Id);
+        },
+        [&](const HighExpr &) { return Limit; });
+    std::vector<int> Expected{4, 2, 1, 1};
+    if (Limit != 3) {
+      Expected.push_back(3);
+      for (int Id = 5; Id <= 40; ++Id)
+        Expected.push_back(Id);
+    }
+    EXPECT_EQ(Visited, Expected);
+    EXPECT_EQ(Vars.size(), Limit == 3 ? 3U : 40U);
+    EXPECT_EQ(Vars.at("v1"), Narrow->Type);
+    EXPECT_EQ(Vars.at("v2"), Call->IndirectTarget->Type);
+    EXPECT_EQ(Vars.at("v4")->Size, 4U);
+  }
+}
+
+TEST(HighCStoreForwarding, SharedMemoryWalkKeepsOrderAndRefreshesItsAddresses) {
+  const auto Integer = NdType::makeInt(8, false);
+  auto Call = HighExpr::makeCall("indirect", InvalidVA, {});
+  Call->IsIndirectCall = true;
+  std::vector<uint64_t> Expected;
+  for (uint64_t I = 0; I < 40; ++I) {
+    Expected.push_back(0x1000 + I * 8);
+    auto Read =
+        HighExpr::makeLoad(HighExpr::makeConst(Expected.back(), 8), Integer);
+    Call->Operands.push_back(Read);
+    Call->Operands.push_back(Read);
+  }
+  Call->Operands.push_back(Call);
+  const auto ClearCycle =
+      llvm::make_scope_exit([&] { Call->Operands.pop_back(); });
+  HighFunc Func;
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = Call;
+  Func.Body = {Return};
+  HighCAnalysisState State;
+  for (uint64_t Target : {0x3000U, 0x4000U}) {
+    SCOPED_TRACE(Target);
+    Call->IndirectTarget =
+        HighExpr::makeLoad(HighExpr::makeConst(Target, 8), Integer);
+    std::vector<uint64_t> Addresses;
+    analyzeDeadStores(
+        State, Func, [](const MedVar &) { return std::string("unused"); },
+        [&](const HighExpr &Address) {
+          Addresses.push_back(Address.ConstVal);
+          return std::to_string(Address.ConstVal);
+        });
+    auto PerWalk = Expected;
+    PerWalk.push_back(Target);
+    auto PerAnalysis = PerWalk;
+    PerAnalysis.insert(PerAnalysis.end(), PerWalk.begin(), PerWalk.end());
+    EXPECT_EQ(Addresses, PerAnalysis);
+    EXPECT_EQ(State.AddressKeys.size(), PerWalk.size());
+    EXPECT_TRUE(State.DeadStmts.empty());
+    EXPECT_FALSE(State.CanElideFrameStores);
+    EXPECT_EQ(State.AddressKeys.at(Call->IndirectTarget->Operands[0].get()),
+              std::to_string(Target));
+  }
+}
 
 TEST(HighCStoreForwarding, IncompleteFrameRecordsKeepTheirInteriorFields) {
   class LazyFrameTypes : public NullDebugContext {

@@ -285,7 +285,7 @@ public:
   /// (exceptionEncodingIsOutsideWindows).
   static bool hidesRegistrationMemory(const HighFunc &Func);
   /// Use the same segmented-read spelling for declarations and expressions.
-  bool useMsvcSegmentedRead() const;
+  bool useMsvcSegmentedRead(const TypeRef &Ty) const;
   bool isEmbeddedRegistrationCallback(const HighStmt &Stmt, size_t I) const;
   bool isEmbeddedWindowsCallback(const HighStmt &Stmt, size_t I) const;
   void writeEmbeddedNativeCallbacks(const HighStmt &Stmt, int Indent);
@@ -305,7 +305,8 @@ public:
       NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None,
       NdMemoryAddressSpace MemoryAddressSpace = NdMemoryAddressSpace::Default,
       bool ExactImageBytes = false,
-      MemoryLoadDestination *Destination = nullptr);
+      MemoryLoadDestination *Destination = nullptr,
+      std::optional<uint64_t> ConstantOffset = std::nullopt);
   std::string memoryStoreExpr(
       const TypeRef &Ty, llvm::StringRef Addr, llvm::StringRef Val,
       NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None,
@@ -1687,6 +1688,9 @@ public:
   /// Functions keeping an image address as a value that no storage can back,
   /// with the first such address. Each refuses when it renders.
   std::map<const HighFunc *, va_t> UnbackedEscapes;
+  /// Functions with a repeated image access past its mapped storage, with
+  /// the first such address. Each refuses when it renders.
+  std::map<const HighFunc *, va_t> UnmappedRepeatedAccesses;
   /// The access width that names the unnamed object \p Obj at \p Addr, as
   /// the listing names it: the width every access the image's code states
   /// there shares (CEmitterOptions::AccessWidths), else, without those, the

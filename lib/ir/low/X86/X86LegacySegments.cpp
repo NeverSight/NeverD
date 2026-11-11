@@ -18,10 +18,18 @@
 namespace neverd {
 
 llvm::Error validateX86LegacySegmentCache(X86SegmentRegister Segment,
-                                          const X86LegacySegmentCache &C) {
+                                          const X86LegacySegmentCache &C,
+                                          bool Virtual8086) {
   if (!x86SegmentRegisterName(unsigned(Segment)))
     return llvm::createStringError(llvm::errc::invalid_argument,
                                    "invalid legacy segment register");
+  if (Virtual8086) {
+    if (C.Unusable || C.Base != uint32_t(C.Selector) << 4 ||
+        C.Limit != UINT16_MAX || C.Attributes != 0xf3)
+      return llvm::createStringError(llvm::errc::invalid_argument,
+                                     "invalid loaded VM86 segment cache");
+    return llvm::Error::success();
+  }
   const bool CS = Segment == X86SegmentRegister::CS;
   const bool SS = Segment == X86SegmentRegister::SS;
   if (C.Unusable) {
@@ -45,7 +53,7 @@ llvm::Error validateX86LegacySegmentCache(X86SegmentRegister Segment,
 llvm::Expected<X86LegacySegmentResult>
 checkX86LegacySegmentAccess(const X86LegacySegmentCache &C,
                             const X86LegacySegmentAccess &A) {
-  if (auto Error = validateX86LegacySegmentCache(A.Segment, C))
+  if (auto Error = validateX86LegacySegmentCache(A.Segment, C, A.Virtual8086))
     return std::move(Error);
   if (!A.Bytes ||
       (A.Kind != X86SegmentAccessKind::Read &&

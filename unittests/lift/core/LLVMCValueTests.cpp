@@ -18,8 +18,10 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
+#include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
 #include "neverd/backend/llvm/X86/LLVMX86BitTest.h"
 #include "neverd/backend/llvm/X86/LLVMX86DivRem.h"
 #include "neverd/backend/llvm/X86/X86APXAtomic.h"
@@ -29,6 +31,7 @@
 #include "neverd/debug/UserPrototype.h"
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/SymbolDecoration.h"
 
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/IRBuilder.h"
@@ -49,6 +52,7 @@
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/Triple.h"
 
+#include <array>
 #include <cstdlib>
 #include <iterator>
 #include <optional>
@@ -4387,6 +4391,191 @@ int main(void) {
   compileAndRun(Source, "-O0");
 }
 
+TEST(LLVMCValues, WindowsCRTEnumsAndCallbacksAgreeWithHeaderDeclarations) {
+  for (const auto Arch : {neverd::Arch::X86, neverd::Arch::X64,
+                          neverd::Arch::ARM, neverd::Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<unsigned>(Arch));
+    for (bool Indirect : {false, true}) {
+      SCOPED_TRACE(Indirect);
+      llvm::LLVMContext Context;
+      llvm::SMDiagnostic Error;
+      const std::string Imports = Indirect ? R"ir(
+@_set_app_type = external global i8, !neverd.data-symbol !0
+@_configure_narrow_argv = external global i8, !neverd.data-symbol !0
+@_configure_wide_argv = external global i8, !neverd.data-symbol !0
+@__setusermatherr = external global i8, !neverd.data-symbol !0
+@_initialize_onexit_table = external global i8, !neverd.data-symbol !0
+@_register_onexit_function = external global i8, !neverd.data-symbol !0
+@_execute_onexit_table = external global i8, !neverd.data-symbol !0
+@_register_thread_local_exe_atexit_callback = external global i8, !neverd.data-symbol !0
+)ir"
+                                           : R"ir(
+declare void @_set_app_type(i32)
+declare i32 @_configure_narrow_argv(i32)
+declare i32 @_configure_wide_argv(i32)
+declare void @__setusermatherr(ptr)
+declare i32 @_initialize_onexit_table(ptr)
+declare i32 @_register_onexit_function(ptr, ptr)
+declare i32 @_execute_onexit_table(ptr)
+declare void @_register_thread_local_exe_atexit_callback(ptr)
+)ir";
+      auto Module = llvm::parseAssemblyString(Imports + R"ir(
+define i32 @configure_crt(i32 %mode, ptr %callback, ptr %table,
+                          ptr %onexit, ptr %tls) {
+  call void @_set_app_type(i32 %mode)
+  %narrow = call i32 @_configure_narrow_argv(i32 %mode)
+  %wide = call i32 @_configure_wide_argv(i32 %mode)
+  call void @__setusermatherr(ptr %callback)
+  %init = call i32 @_initialize_onexit_table(ptr %table)
+  %reg = call i32 @_register_onexit_function(ptr %table, ptr %onexit)
+  %exec = call i32 @_execute_onexit_table(ptr %table)
+  call void @_register_thread_local_exe_atexit_callback(ptr %tls)
+  %argv = add i32 %narrow, %wide
+  %registered = add i32 %init, %reg
+  %executed = add i32 %registered, %exec
+  %result = add i32 %argv, %executed
+  ret i32 %result
+}
+!0 = !{}
+)ir",
+                                              Error, Context);
+      ASSERT_TRUE(Module) << Error.getMessage().str();
+      for (auto &Function : *Module)
+        Function.setName(neverd::symbolOfCName(
+            Function.getName(), neverd::BinaryFormat::COFF, Arch));
+      for (auto &Global : Module->globals())
+        Global.setName(neverd::symbolOfCName(Global.getName(),
+                                             neverd::BinaryFormat::COFF, Arch));
+      Module->setDataLayout(Arch == neverd::Arch::X86 ||
+                                    Arch == neverd::Arch::ARM
+                                ? "e-p:32:32-i64:64-n8:16:32"
+                                : "e-p:64:64-i64:64-n8:16:32:64");
+      ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+      neverd::CEmitterOptions Options;
+      Options.TheArch = Arch;
+      Options.Format = neverd::BinaryFormat::COFF;
+      Options.EmitIncludes = false;
+      std::string Source;
+      llvm::raw_string_ostream OS(Source);
+      ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
+      // Independent source declarations model corecrt_startup.h, process.h
+      // and math.h. Native stubs observe enum values, table writes and calls.
+      const std::string Prelude = R"c(
+#include <stdint.h>
+enum _crt_app_type { _crt_unknown_app, _crt_console_app, _crt_gui_app };
+enum _crt_argv_mode { argv_none, argv_plain, argv_expanded };
+struct _exception { int type; };
+typedef void (*_PVFV)(void);
+typedef int (*_onexit_t)(void);
+typedef struct _onexit_table_t {
+  _PVFV *_first, *_last, *_end;
+} _onexit_table_t;
+typedef void (__attribute__((stdcall)) *_tls_callback_type)(
+    void *, unsigned long, void *);
+void _set_app_type(enum _crt_app_type);
+int _configure_narrow_argv(enum _crt_argv_mode);
+int _configure_wide_argv(enum _crt_argv_mode);
+void __setusermatherr(int (*)(struct _exception *));
+int _initialize_onexit_table(_onexit_table_t *);
+int _register_onexit_function(_onexit_table_t *, _onexit_t);
+int _execute_onexit_table(_onexit_table_t *);
+void _register_thread_local_exe_atexit_callback(_tls_callback_type);
+)c";
+      const std::string Harness = R"c(
+static int app, narrow, wide, observed, exit_observed, tls_observed;
+static _onexit_table_t *initialized;
+static _PVFV exit_slot;
+static _onexit_t exit_callback;
+void _set_app_type(enum _crt_app_type value) { app = value; }
+int _configure_narrow_argv(enum _crt_argv_mode value) {
+  narrow = value;
+  return value + 1;
+}
+int _configure_wide_argv(enum _crt_argv_mode value) {
+  wide = value;
+  return value + 2;
+}
+void __setusermatherr(int (*callback)(struct _exception *)) {
+  struct _exception error = {41};
+  observed = callback(&error);
+}
+static int handle_math_error(struct _exception *error) {
+  return error->type + 1;
+}
+int _initialize_onexit_table(_onexit_table_t *table) {
+  initialized = table;
+  table->_first = &exit_slot;
+  table->_last = table->_first;
+  table->_end = table->_first + 1;
+  return 3;
+}
+int _register_onexit_function(_onexit_table_t *table, _onexit_t callback) {
+  if (table != initialized || table->_first != &exit_slot ||
+      table->_last != table->_first || table->_end != table->_first + 1)
+    __builtin_trap();
+  exit_callback = callback;
+  return 5;
+}
+int _execute_onexit_table(_onexit_table_t *table) {
+  if (table != initialized) __builtin_trap();
+  return exit_callback();
+}
+static int handle_exit(void) {
+  ++exit_observed;
+  return 11;
+}
+void _register_thread_local_exe_atexit_callback(_tls_callback_type callback) {
+  callback(initialized, 0x12345678UL, &exit_slot);
+}
+static void __attribute__((stdcall)) handle_tls(
+    void *module, unsigned long reason, void *reserved) {
+  tls_observed = module == initialized && reason == 0x12345678UL &&
+                 reserved == &exit_slot;
+}
+int main(void) {
+  _onexit_table_t table;
+  return configure_crt(2, (void *)handle_math_error, &table,
+                       (void *)handle_exit, (void *)handle_tls) != 26 ||
+         app != 2 || narrow != 2 || wide != 2 || observed != 42 ||
+         exit_observed != 1 || tls_observed != 1;
+}
+)c";
+      for (llvm::StringRef Level : {"-O0", "-O2"}) {
+        compileAndRun(Prelude + Source + Harness, Level, {}, true);
+#if defined(__linux__) && defined(__x86_64__)
+        // Exercise stdcall's actual stack cleanup, not only its spelling in
+        // a 64-bit host projection where the compiler ignores the attribute.
+        if (Arch == neverd::Arch::X86)
+          compileAndRun(Prelude + Source + Harness, Level, {}, true, true);
+#endif
+      }
+
+      // With headers enabled, a PDB may offer the same named definitions.
+      // Asking for them would duplicate both the tags and their enumerators.
+      Options.EmitIncludes = true;
+      bool AskedForTypes = false;
+      Options.RecordDefinitions =
+          [&](const std::vector<neverd::TypeRef> &Types) {
+            AskedForTypes = true;
+            for (const auto &Type : Types)
+              for (const char *Name : {"_crt_app_type", "_crt_argv_mode",
+                                       "_exception", "_crt_console_app",
+                                       "_onexit_table_t", "_tls_callback_type"})
+                EXPECT_NE(Type->SourceName, Name);
+            return neverd::CRecordDefinitions{};
+          };
+      std::string WithHeaders;
+      llvm::raw_string_ostream HeaderOS(WithHeaders);
+      ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, HeaderOS, Options));
+      EXPECT_TRUE(AskedForTypes);
+      EXPECT_NE(WithHeaders.find("#include <corecrt_startup.h>"),
+                std::string::npos);
+      EXPECT_NE(WithHeaders.find("#include <math.h>"), std::string::npos);
+      EXPECT_NE(WithHeaders.find("#include <process.h>"), std::string::npos);
+    }
+  }
+}
+
 TEST(LLVMCValues, LocalRegisterImportPrototypesAgreeWithCalls) {
   for (const auto Arch : {neverd::Arch::X64, neverd::Arch::AArch64})
     for (const auto Format :
@@ -4744,6 +4933,78 @@ int main(void) {
 }
 )c";
   compileAndRun(Source, "-O0");
+}
+
+TEST(LLVMCValues, RuntimeVariadicFramePointersTakeTheirDeclaredPointee) {
+  using namespace neverd;
+  for (unsigned Offset : {0u, 4u}) {
+    SCOPED_TRACE(Offset);
+    llvm::LLVMContext Context;
+    llvm::Module Module("runtime_frame_pointer", Context);
+    Module.setDataLayout("e-p:32:32");
+    llvm::IRBuilder<> B(Context);
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(B.getInt32Ty(), false),
+        llvm::GlobalValue::ExternalLinkage, "observe_jump_buffer", Module);
+    B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Function));
+    auto *Frame = B.CreateAlloca(llvm::ArrayType::get(B.getInt8Ty(), 96),
+                                 nullptr, "frame");
+    auto *End = B.CreateGEP(B.getInt8Ty(), Frame, B.getInt32(80), "frame_end");
+    auto *Member = B.CreateGEP(B.getInt8Ty(), End, B.getInt32(-72));
+    B.CreateStore(B.getInt64(0), Member);
+    auto *Buffer = B.CreateGEP(B.getInt8Ty(), Member, B.getInt32(Offset));
+    auto *Last = B.CreateGEP(B.getInt8Ty(), Buffer, B.getInt32(60));
+    B.CreateStore(B.getInt32(0), Last);
+    auto Runtime = Module.getOrInsertFunction(
+        "_setjmp3", llvm::FunctionType::get(
+                        B.getInt32Ty(), {B.getPtrTy(), B.getInt32Ty()}, true));
+    auto *Result = B.CreateCall(Runtime, {Buffer, B.getInt32(0)});
+    auto *FirstValue = Offset
+                           ? B.CreateLoad(B.getInt32Ty(), Buffer)
+                           : B.CreateTrunc(B.CreateLoad(B.getInt64Ty(), Buffer),
+                                           B.getInt32Ty());
+    auto *LastValue = B.CreateLoad(B.getInt32Ty(), Last);
+    B.CreateRet(B.CreateAdd(Result, B.CreateAdd(FirstValue, LastValue)));
+    ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+    BinaryImage Image;
+    Image.Arch = Arch::X86;
+    Image.Bits = Bitness::Bits32;
+    Image.Format = BinaryFormat::COFF;
+    Import Entry;
+    Entry.Name = "_setjmp3";
+    Image.Imports.push_back(Entry);
+    CEmitterOptions Options;
+    Options.TheArch = Image.Arch;
+    Options.Format = Image.Format;
+    Options.EmitIncludes = false;
+    std::string Source;
+    llvm::raw_string_ostream Output(Source);
+    ASSERT_TRUE(LLVMCEmitter().emit(Module, Output, Options, nullptr, &Image));
+    const std::string Standalone =
+        "#include <stdint.h>\ntypedef int jmp_buf[16];\n"
+        "int _setjmp3(jmp_buf, int, ...);\n" +
+        Source;
+    source_call_execution_test::checkSyntax(
+        Standalone,
+        {"--target=i686-pc-windows-msvc", "-ffreestanding", "-Werror"});
+#if defined(__linux__) && (defined(__i386__) || defined(__x86_64__))
+    const std::string Oracle = R"(
+int _setjmp3(int *env, int count, ...) {
+  if (count != 0) __builtin_trap();
+  env[0] = 23;
+  env[15] = 31;
+  return -19;
+}
+int main(void) { return observe_jump_buffer() != 35; }
+)";
+    for (llvm::StringRef Level : {"-O0", "-O2"})
+      source_call_execution_test::compileAndRun(
+          Standalone + Oracle,
+          {"-m32", Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+#else
+    RecordProperty("native_i386_execution", "requires Linux x86");
+#endif
+  }
 }
 
 TEST(LLVMCValues, ARuntimeRoutineCalledDirectlyTakesItsPrototype) {
@@ -7914,4 +8175,638 @@ define i64 @after_exchange(i64 %x) {
   llvm::raw_string_ostream UnitOS(Unit);
   EXPECT_THROW(neverd::LLVMCEmitter().emit(*Module, UnitOS, Options),
                std::runtime_error);
+}
+
+TEST(LLVMCValues, EarlyBodyRefusalRetainsTheCalleeDeclaration) {
+  for (bool CalleeLast : {false, true}) {
+    SCOPED_TRACE(CalleeLast);
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Error;
+    auto Module = llvm::parseAssemblyString(R"ir(
+declare void @take_address(i64, ptr)
+define i64 @resume_owner() {
+entry:
+  br label %resume
+resume:
+  ret i64 17
+}
+define void @refused_callback(i1 %condition, ptr %frame) noinline optnone {
+entry:
+  br i1 %condition, label %left, label %right
+left:
+  br label %join
+right:
+  br label %join
+join:
+  call void @take_address(i64 ptrtoint (ptr blockaddress(@resume_owner, %resume) to i64), ptr %frame)
+  ret void
+}
+define i64 @retained_caller(ptr %frame) {
+  call void @refused_callback(i1 true, ptr %frame)
+  ret i64 17
+}
+)ir",
+                                            Error, Context);
+    ASSERT_TRUE(Module) << Error.getMessage().str();
+    Module->setTargetTriple(llvm::Triple("x86_64-linux-gnu"));
+    Module->setDataLayout("e-m:e-p:64:64-i64:64-n8:16:32:64-S128");
+    if (CalleeLast)
+      Module->getFunctionList().splice(
+          Module->end(), Module->getFunctionList(),
+          Module->getFunction("refused_callback")->getIterator());
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    neverd::CEmitterOptions Options;
+    Options.TheArch = neverd::Arch::X64;
+    Options.Format = neverd::BinaryFormat::ELF;
+    std::vector<neverd::CEmitterOptions::RefusedDefinition> Refused;
+    Options.RefusedDefinitions = &Refused;
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
+    ASSERT_EQ(Refused.size(), 1u) << Source;
+    EXPECT_EQ(Refused.front().Name, "refused_callback");
+    EXPECT_NE(Refused.front().Reason.find("blockaddress"), std::string::npos);
+    llvm::SmallVector<llvm::StringRef> Lines;
+    llvm::StringRef(Source).split(Lines, '\n');
+    EXPECT_TRUE(llvm::any_of(Lines, [](llvm::StringRef Line) {
+      return Line.starts_with("void refused_callback(") && Line.ends_with(");");
+    })) << Source;
+    EXPECT_FALSE(llvm::any_of(Lines, [](llvm::StringRef Line) {
+      return Line.starts_with("void refused_callback(") &&
+             Line.ends_with(") {");
+    })) << Source;
+    // The rejected body remains external. Compile and execute the retained
+    // caller against an independently supplied implementation of that ABI.
+    const std::string Harness = R"c(
+#include <stdint.h>
+static void *expected;
+static unsigned calls, errors;
+void refused_callback(uint8_t condition, void *frame) {
+  ++calls;
+  errors += condition != 1 || frame != expected;
+}
+extern uint64_t retained_caller(void *);
+int main(void) {
+  uint64_t frame = 0;
+  expected = &frame;
+  return retained_caller(&frame) != 17 || calls != 1 || errors;
+}
+)c";
+    for (llvm::StringRef Level : {"-O0", "-O2"})
+      compileAndRun(Source, Level, {}, true, false, {}, Harness);
+    Options.RefusedDefinitions = nullptr;
+    std::string Strict;
+    llvm::raw_string_ostream StrictOS(Strict);
+    EXPECT_THROW(neverd::LLVMCEmitter().emit(*Module, StrictOS, Options),
+                 std::runtime_error);
+  }
+}
+
+TEST(LLVMCValues, SavedFrameAddressKeepsItsIntegerCarrier) {
+  // A finally callback retains stack-register homes, even when its restored
+  // link and stack registers have no source-level consumer. Their surviving
+  // assignments must still obey the local declarations.
+  for (const neverd::Arch Arch : {neverd::Arch::X64, neverd::Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<unsigned>(Arch));
+    for (const neverd::BinaryFormat Format :
+         {neverd::BinaryFormat::ELF, neverd::BinaryFormat::COFF,
+          neverd::BinaryFormat::MachO}) {
+      SCOPED_TRACE(static_cast<unsigned>(Format));
+      llvm::LLVMContext Context;
+      llvm::SMDiagnostic Error;
+      auto Module = llvm::parseAssemblyString(R"ir(
+declare ptr @llvm.returnaddress.p0(i32)
+define void @saved_frame(i8 %condition, ptr %out) noinline optnone {
+frame_setup:
+  %restored_link = alloca i64, align 8
+  %stack = alloca i64, align 8
+  %restored_sp = alloca i64, align 8
+  %saved = alloca i64, align 8
+  %frame = alloca [96 x i8], align 16
+  %frame_end = getelementptr inbounds i8, ptr %frame, i64 16
+  %rsp_init = ptrtoint ptr %frame_end to i64
+  br label %bb_0
+
+bb_0:
+  store i64 %rsp_init, ptr %stack, align 8
+  %link = call ptr @llvm.returnaddress.p0(i32 0)
+  %retaddr = ptrtoint ptr %link to i64
+  %stack_value = load i64, ptr %stack, align 8
+  %address = add i64 %stack_value, -16
+  store i64 %address, ptr %saved, align 8
+  %slot_bits = add i64 %address, 8
+  %slot = inttoptr i64 %slot_bits to ptr
+  store i64 %retaddr, ptr %slot, align 1
+  %cond = icmp ne i8 %condition, 0
+  br i1 %cond, label %bb_1, label %bb_2
+
+bb_1:
+  store i64 99, ptr %out
+  br label %bb_3
+bb_2:
+  store i64 100, ptr %out
+  br label %bb_3
+
+bb_3:
+  %restore_address = load i64, ptr %saved, align 8
+  %read_bits = add i64 %restore_address, 8
+  %read_slot = inttoptr i64 %read_bits to ptr
+  %link_value = load i64, ptr %read_slot, align 1
+  store i64 %link_value, ptr %restored_link, align 8
+  %restore_stack = load i64, ptr %saved, align 8
+  %stack_end = add i64 %restore_stack, 16
+  store i64 %stack_end, ptr %restored_sp, align 8
+  ret void
+}
+)ir",
+                                              Error, Context);
+      ASSERT_TRUE(Module) << Error.getMessage().str();
+      Module->setDataLayout("e-p:64:64-i64:64-n8:16:32:64-S128");
+      ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+      neverd::CEmitterOptions Options;
+      Options.TheArch = Arch;
+      Options.Format = Format;
+      std::string Source;
+      llvm::raw_string_ostream OS(Source);
+      ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
+      Source += R"c(
+int main(void) {
+  uint64_t output = 0;
+  saved_frame(0, &output);
+  if (output != 100) return 1;
+  saved_frame(1, &output);
+  if (output != 99) return 2;
+  return 0;
+}
+)c";
+      for (llvm::StringRef Level : {"-O0", "-O2"})
+        compileAndRun(Source, Level, {}, true);
+    }
+  }
+}
+
+namespace {
+
+void checkImageByteFrameStores(bool NativeI386) {
+  const auto Architectures =
+      NativeI386 ? std::array{neverd::Arch::X86, neverd::Arch::ARM}
+                 : std::array{neverd::Arch::X64, neverd::Arch::AArch64};
+  for (const auto Arch : Architectures)
+    for (const auto Format :
+         {neverd::BinaryFormat::COFF, neverd::BinaryFormat::ELF,
+          neverd::BinaryFormat::MachO})
+      for (bool Volatile : {false, true}) {
+        SCOPED_TRACE(static_cast<unsigned>(Arch));
+        SCOPED_TRACE(static_cast<unsigned>(Format));
+        SCOPED_TRACE(Volatile);
+        llvm::LLVMContext Context;
+        llvm::SMDiagnostic Error;
+        std::string IR = R"ir(
+target datalayout = "e-p:64:64-i64:64"
+@__nd_data_2000 = internal global [24 x i8] zeroinitializer
+define i32 @store_frame_address(i32 %value) {
+entry:
+  %frame = alloca [32 x i8], align 16
+  %base = ptrtoint ptr %frame to i64
+  %address = add i64 %base, 8
+  %slot = inttoptr i64 %address to ptr
+  store i32 %value, ptr %slot, align 1
+  %image = getelementptr i8, ptr @__nd_data_2000, i64 1
+  store volatile i64 %address, ptr %image, align 1
+  %bits = load volatile i64, ptr %image, align 1
+  %restored = inttoptr i64 %bits to ptr
+  %result = load i32, ptr %restored, align 1
+  %before = load i8, ptr @__nd_data_2000, align 1
+  %end = getelementptr i8, ptr @__nd_data_2000, i64 9
+  %after = load i8, ptr %end, align 1
+  %outside = or i8 %before, %after
+  %unchanged = icmp eq i8 %outside, 0
+  %answer = select i1 %unchanged, i32 %result, i32 0
+  ret i32 %answer
+}
+)ir";
+        if (NativeI386) {
+          for (const auto &[From, To] :
+               {std::pair{"e-p:64:64-i64:64", "e-p:32:32"},
+                std::pair{"i64", "i32"}, std::pair{"i32 9", "i32 5"}})
+            for (size_t At = IR.find(From); At != std::string::npos;
+                 At = IR.find(From, At + std::char_traits<char>::length(To)))
+              IR.replace(At, std::char_traits<char>::length(From), To);
+        }
+        auto Module = llvm::parseAssemblyString(IR, Error, Context);
+        ASSERT_TRUE(Module) << Error.getMessage().str();
+        for (auto &Block : *Module->getFunction("store_frame_address"))
+          for (auto &Inst : Block) {
+            if (auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Inst))
+              if (Store->isVolatile())
+                Store->setVolatile(Volatile);
+            if (auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst))
+              if (Load->isVolatile())
+                Load->setVolatile(Volatile);
+          }
+        ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+        neverd::CEmitterOptions Options;
+        Options.TheArch = Arch;
+        Options.Format = Format;
+        std::string Source;
+        llvm::raw_string_ostream Out(Source);
+        ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Out, Options));
+        ASSERT_NE(Source.find("image_bits"), std::string::npos);
+        Source += R"c(
+int main(void) {
+  return store_frame_address(0x87654321U) != 0x87654321U ||
+         store_frame_address(0x12345678U) != 0x12345678U;
+}
+)c";
+        for (llvm::StringRef Level : {"-O0", "-O2"})
+          compileAndRun(Source, Level, {}, true, NativeI386);
+      }
+}
+
+} // namespace
+
+TEST(LLVMCValues, ImageByteStoresRetainFrameAddressBits) {
+  checkImageByteFrameStores(false);
+}
+
+TEST(LLVMCValues, ImageByteStoresRetain32BitFrameAddressBits) {
+#if defined(__linux__) && (defined(__x86_64__) || defined(__i386__))
+  checkImageByteFrameStores(true);
+#else
+  GTEST_SKIP() << "32-bit address execution requires Linux i386 support";
+#endif
+}
+
+TEST(LLVMCValues, GlobalInitializersDeclareExternalImageStorageFirst) {
+  for (bool Earlier : {false, true}) {
+    SCOPED_TRACE(Earlier);
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Error;
+    const std::string External = "@__nd_data_3000 = external global i8\n";
+    auto Module = llvm::parseAssemblyString((Earlier ? External : "") + R"ir(
+@first = internal global [1 x ptr] [ptr @__nd_data_3000]
+define ptr @get_image_address() {
+  %address = load ptr, ptr @first
+  ret ptr %address
+}
+)ir" + (Earlier ? "" : External),
+                                            Error, Context);
+    ASSERT_TRUE(Module) << Error.getMessage().str();
+    Module->setDataLayout("e-p:64:64");
+    const std::map<neverd::va_t, std::string> Names{{0x3000, "external_image"}};
+    neverd::CEmitterOptions Options;
+    Options.TheArch = neverd::Arch::X64;
+    Options.UserNames = &Names;
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Out, Options));
+    Source += R"c(
+uint8_t external_image = 71;
+int main(void) {
+  return get_image_address() != &external_image ||
+         *(uint8_t *)get_image_address() != 71;
+}
+)c";
+    for (llvm::StringRef Level : {"-O0", "-O2"})
+      compileAndRun(Source, Level, {}, true);
+  }
+}
+
+TEST(LLVMCValues, WindowsPersonalityRetainsHeaderContextTypes) {
+  for (const auto Arch :
+       {neverd::Arch::ARM, neverd::Arch::X64, neverd::Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<unsigned>(Arch));
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Error;
+    auto Module = llvm::parseAssemblyString(R"ir(
+declare i32 @__C_specific_handler(ptr, ptr, ptr, ptr)
+define i32 @dispatch_exception(ptr %exception, ptr %frame, ptr %context,
+                                ptr %dispatcher) {
+  %result = call i32 @__C_specific_handler(ptr %exception, ptr %frame,
+                                          ptr %context, ptr %dispatcher)
+  ret i32 %result
+}
+)ir",
+                                            Error, Context);
+    ASSERT_TRUE(Module) << Error.getMessage().str();
+    Module->setDataLayout(Arch == neverd::Arch::ARM ? "e-p:32:32"
+                                                    : "e-p:64:64");
+    neverd::CEmitterOptions Options;
+    Options.TheArch = Arch;
+    Options.Format = neverd::BinaryFormat::COFF;
+    Options.EmitIncludes = false;
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Out, Options));
+    const std::string Prelude = R"c(
+#include <stdint.h>
+typedef enum { disposition_continue, disposition_search, disposition_nested,
+               disposition_collided } EXCEPTION_DISPOSITION;
+struct _EXCEPTION_RECORD { int value; };
+struct _CONTEXT { int value; };
+struct _DISPATCHER_CONTEXT { int value; };
+EXCEPTION_DISPOSITION __C_specific_handler(struct _EXCEPTION_RECORD *, void *,
+                                           struct _CONTEXT *,
+                                           struct _DISPATCHER_CONTEXT *);
+)c";
+    const std::string Harness = R"c(
+EXCEPTION_DISPOSITION __C_specific_handler(struct _EXCEPTION_RECORD *exception,
+    void *frame, struct _CONTEXT *context, struct _DISPATCHER_CONTEXT *dispatcher) {
+  return exception->value == 11 && *(int *)frame == 23 && context->value == 37 &&
+         dispatcher->value == 41 ? disposition_collided : disposition_nested;
+}
+int main(void) {
+  struct _EXCEPTION_RECORD exception = {11};
+  struct _CONTEXT context = {37};
+  struct _DISPATCHER_CONTEXT dispatcher = {41};
+  int frame = 23;
+  if (dispatch_exception(&exception, &frame, &context, &dispatcher) != 3) return 1;
+  frame = 24;
+  return dispatch_exception(&exception, &frame, &context, &dispatcher) != 2;
+}
+)c";
+    for (llvm::StringRef Level : {"-O0", "-O2"})
+      compileAndRun(Prelude + Source + Harness, Level, {}, true);
+  }
+}
+
+TEST(LLVMCValues, GlobalInitializersDeclareInteriorImageAliases) {
+  for (bool Selected : {false, true})
+    for (bool HasFunction : {false, true}) {
+      SCOPED_TRACE(Selected);
+      SCOPED_TRACE(HasFunction);
+      if (Selected && !HasFunction)
+        continue;
+      llvm::LLVMContext Context;
+      llvm::SMDiagnostic Error;
+      auto Module = llvm::parseAssemblyString(R"ir(
+target datalayout = "e-p:64:64"
+@__nd_codeptr_2000 = external global [32 x i8]
+@first = internal global [1 x ptr] [ptr getelementptr (i8, ptr @__nd_codeptr_2000, i64 8)]
+define ptr @get_image_address() {
+  %address = load ptr, ptr @first
+  ret ptr %address
+}
+)ir",
+                                              Error, Context);
+      ASSERT_TRUE(Module) << Error.getMessage().str();
+      auto *Function = Module->getFunction("get_image_address");
+      if (!HasFunction) {
+        Function->eraseFromParent();
+        Function = nullptr;
+      }
+      const std::map<neverd::va_t, std::string> Names{
+          {0x2008, "external_image"}};
+      neverd::CEmitterOptions Options;
+      Options.UserNames = &Names;
+      std::string Source;
+      llvm::raw_string_ostream Out(Source);
+      ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Out, Options, nullptr,
+                                              nullptr,
+                                              Selected ? Function : nullptr));
+      ASSERT_LT(Source.find("extern uint8_t external_image;"),
+                Source.find("first[1] ="));
+      Source += R"c(
+uint8_t external_image = 71;
+int main(void) { return first[0] != &external_image; }
+)c";
+      for (llvm::StringRef Level : {"-O0", "-O2"})
+        compileAndRun(Source, Level, {}, true);
+    }
+}
+
+TEST(LLVMCValues, InitializerDeclarationsKeepOriginalImageValidation) {
+  for (llvm::StringRef Storage : {"[16 x i8]", "i32", "[8 x i16]"})
+    for (bool Selected : {false, true}) {
+      SCOPED_TRACE(Storage.str());
+      SCOPED_TRACE(Selected);
+      llvm::LLVMContext Context;
+      llvm::SMDiagnostic Error;
+      const std::string IR = "target datalayout = \"e-p:64:64\"\n"
+                             "@first = internal global ptr @__nd_data_2000\n"
+                             "@__nd_data_2000 = external global " +
+                             Storage.str() +
+                             ", !neverd.source.image-storage !0\n"
+                             "define ptr @image_address() {\n"
+                             "  %value = load ptr, ptr @first\n"
+                             "  ret ptr %value\n}\n!0 = !{}\n";
+      auto Module = llvm::parseAssemblyString(IR, Error, Context);
+      ASSERT_TRUE(Module) << Error.getMessage().str();
+      auto *Function =
+          Selected ? Module->getFunction("image_address") : nullptr;
+      neverd::CEmitterOptions Options;
+      std::string Source;
+      llvm::raw_string_ostream Out(Source);
+      if (Storage != "[16 x i8]") {
+        EXPECT_THROW(neverd::LLVMCEmitter().emit(*Module, Out, Options, nullptr,
+                                                 nullptr, Function),
+                     std::invalid_argument);
+        continue;
+      }
+      ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Out, Options, nullptr,
+                                              nullptr, Function));
+      EXPECT_NE(Source.find("(original loaded image storage)"),
+                std::string::npos)
+          << Source;
+      Source += R"c(
+uint8_t unk_2000[16] = {79};
+int main(void) {
+  return image_address() != unk_2000 || *(uint8_t *)image_address() != 79;
+}
+)c";
+      for (llvm::StringRef Level : {"-O0", "-O2"})
+        compileAndRun(Source, Level, {}, true);
+    }
+}
+
+TEST(LLVMCValues, HeaderContextTagsDoNotRequireDebugTypedefs) {
+  class ContextDebug : public neverd::NullDebugContext {
+  public:
+    std::optional<neverd::FunctionSym>
+    resolveFunction(neverd::va_t VA) const override {
+      if (VA != 0x1000)
+        return std::nullopt;
+      neverd::FunctionSym Function;
+      Function.Addr = VA;
+      Function.Name = "context_address";
+      Function.ReturnType = neverd::NdType::makePtr(neverd::NdType::makeVoid());
+      Function.Params.emplace_back(
+          "context", neverd::NdType::makePtr(
+                         neverd::NdType::makeNamedRecord("_CONTEXT", 0)));
+      return Function;
+    }
+  } Debug;
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"ir(
+target datalayout = "e-p:64:64"
+declare i32 @__C_specific_handler(ptr, ptr, ptr, ptr)
+define ptr @context_address(ptr %context) {
+  %result = call i32 @__C_specific_handler(ptr null, ptr null,
+                                          ptr %context, ptr null)
+  ret ptr %context
+}
+)ir",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  neverd::rewrite_source::setOriginalVA(*Module->getFunction("context_address"),
+                                        0x1000);
+  neverd::CEmitterOptions Options;
+  Options.Format = neverd::BinaryFormat::COFF;
+  Options.RecordDefinitions = [](const std::vector<neverd::TypeRef> &Types) {
+    for (const auto &Type : Types)
+      EXPECT_NE(Type->SourceName, "_CONTEXT");
+    return neverd::CRecordDefinitions{};
+  };
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Out, Options, &Debug));
+  EXPECT_NE(Source.find("struct _CONTEXT*"), std::string::npos) << Source;
+  const auto Include = Source.find("#include <excpt.h>");
+  ASSERT_NE(Include, std::string::npos);
+  // Independent header supplies tags but deliberately no _CONTEXT typedef.
+  Source.replace(Include, std::string("#include <excpt.h>").size(), R"c(
+#define EXCEPTION_DISPOSITION int
+struct _CONTEXT { int value; };
+struct _EXCEPTION_RECORD;
+struct _DISPATCHER_CONTEXT;
+int __C_specific_handler(struct _EXCEPTION_RECORD *, void *, struct _CONTEXT *,
+                          struct _DISPATCHER_CONTEXT *);
+)c");
+  Source += R"c(
+static struct _CONTEXT *observed;
+int __C_specific_handler(struct _EXCEPTION_RECORD *record, void *frame,
+    struct _CONTEXT *context, struct _DISPATCHER_CONTEXT *dispatcher) {
+  observed = context; return 1;
+}
+int main(void) {
+  struct _CONTEXT context = {73};
+  return context_address(&context) != &context || observed != &context;
+}
+)c";
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    compileAndRun(Source, Level, {}, true);
+}
+
+TEST(LLVMCValues, SegmentedLoadsKeepFullOffsetsAndPointerBits) {
+#if defined(__x86_64__) && defined(__linux__)
+  llvm::LLVMContext Context;
+  llvm::Module Module("segmented-offsets", Context);
+  Module.setTargetTriple(llvm::Triple("x86_64-pc-windows-msvc"));
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<> B(Context);
+  auto *Pointer =
+      llvm::PointerType::get(Context, neverd::kLLVMX86GSAddressSpace);
+  std::string Checks;
+  for (unsigned Bits : {8u, 16u, 32u, 64u, 0u})
+    for (bool Volatile : {false, true})
+      for (unsigned OffsetKind : {0u, 1u, 2u, 3u, 4u, 5u}) {
+        const std::string Name = "read_segment_" + std::to_string(Bits) + "_" +
+                                 std::to_string(Volatile) + "_" +
+                                 std::to_string(OffsetKind);
+        auto *Function = llvm::Function::Create(
+            llvm::FunctionType::get(B.getInt64Ty(), {B.getInt64Ty()}, false),
+            llvm::GlobalValue::ExternalLinkage, Name, Module);
+        B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Function));
+        llvm::Value *Offset = Function->getArg(0);
+        if (OffsetKind == 0)
+          Offset = B.getInt64(0);
+        else if (OffsetKind == 2)
+          Offset = B.getInt64(0x100000020);
+        else if (OffsetKind == 3)
+          Offset = B.CreateZExt(B.CreateTrunc(Offset, B.getInt32Ty()),
+                                B.getInt64Ty());
+        if (OffsetKind == 4)
+          Offset = B.getInt32(0xfffffff0);
+        else if (OffsetKind == 5)
+          Offset = B.getInt16(0xfff0);
+        auto *Address = B.CreateIntToPtr(Offset, Pointer);
+        llvm::Type *Type =
+            Bits ? static_cast<llvm::Type *>(B.getIntNTy(Bits)) : B.getPtrTy();
+        auto *Value = B.CreateLoad(Type, Address);
+        Value->setAlignment(llvm::Align(1));
+        Value->setVolatile(Volatile);
+        B.CreateRet(Bits ? B.CreateZExtOrTrunc(Value, B.getInt64Ty())
+                         : B.CreatePtrToInt(Value, B.getInt64Ty()));
+        const char *ExpectedOffset = OffsetKind == 4   ? "0xfffffff0"
+                                     : OffsetKind == 5 ? "0xfff0"
+                                     : OffsetKind == 0 ? "0"
+                                     : OffsetKind == 3 ? "0x20"
+                                                       : "0x100000020";
+        const char *ExpectedValue = Bits == 8    ? "0xef"
+                                    : Bits == 16 ? "0xcdef"
+                                    : Bits == 32 ? "0x89abcdef"
+                                                 : "0x1234567889abcdef";
+        Checks +=
+            "if (syscall(SYS_arch_prctl, ARCH_SET_GS, (uintptr_t)bytes + 1 - "
+            "UINT64_C(" +
+            std::string(ExpectedOffset) + "))) return 3;\n";
+        Checks += "if (" + Name + "(UINT64_C(0x100000020)) != UINT64_C(" +
+                  ExpectedValue + ")) failed = 1;\n";
+      }
+  auto *Store = llvm::Function::Create(
+      llvm::FunctionType::get(B.getVoidTy(), {B.getInt32Ty()}, false),
+      llvm::GlobalValue::ExternalLinkage, "write_segment_narrow", Module);
+  B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Store));
+  B.CreateStore(Store->getArg(0), B.CreateIntToPtr(B.getInt16(0xfff0), Pointer))
+      ->setVolatile(true);
+  B.CreateRetVoid();
+  Checks += R"(
+  if (syscall(SYS_arch_prctl, ARCH_SET_GS,
+              (uintptr_t)bytes + 1 - UINT64_C(0xfff0))) return 3;
+  write_segment_narrow(0x76543210);
+  failed |= bytes[1] != 0x10 || bytes[2] != 0x32 ||
+            bytes[3] != 0x54 || bytes[4] != 0x76;
+)";
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  // A 32-bit observer matches the Windows intrinsic's offset contract while
+  // executing real GS memory on the host. Expected bytes are independent of
+  // the emitter and include an unaligned pointer load and a zero offset.
+  const std::string Harness = R"(
+#define _GNU_SOURCE 1
+#include <stdint.h>
+#include <asm/prctl.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#define SEG_READ(name, type, opcode, constraint) \
+static type name(uint32_t offset) { \
+  type value; \
+  __asm__ volatile(opcode " %%gs:(%1), %0" : constraint(value) \
+                   : "r"((uintptr_t)offset) : "memory"); \
+  return value; \
+}
+SEG_READ(__readgsbyte, uint8_t, "movb", "=q")
+SEG_READ(__readgsword, uint16_t, "movw", "=r")
+SEG_READ(__readgsdword, uint32_t, "movl", "=r")
+SEG_READ(__readgsqword, uint64_t, "movq", "=r")
+)";
+  const std::string Main = R"(
+int main(void) {
+  uintptr_t saved_gs;
+  static unsigned char bytes[] = {0, 0xef, 0xcd, 0xab, 0x89, 0x78, 0x56, 0x34, 0x12};
+  int failed = 0;
+  if (syscall(SYS_arch_prctl, ARCH_GET_GS, &saved_gs)) return 2;
+)";
+  for (auto Format : {neverd::BinaryFormat::COFF, neverd::BinaryFormat::ELF}) {
+    SCOPED_TRACE(static_cast<unsigned>(Format));
+    neverd::CEmitterOptions Options;
+    Options.TheArch = neverd::Arch::X64;
+    Options.Format = Format;
+    Options.EmitIncludes = false;
+    std::string Source;
+    llvm::raw_string_ostream Stream(Source);
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Stream, Options));
+    for (llvm::StringRef Level : {"-O0", "-O2"})
+      source_call_execution_test::compileAndRun(
+          Harness + Source + Main + Checks +
+              "if (syscall(SYS_arch_prctl, ARCH_SET_GS, saved_gs)) return 4;\n"
+              "return failed; }\n",
+          {Level, "-fPIE", "-pie", "-Werror=int-conversion"});
+  }
+  RecordProperty("native_gs_loads", 240);
+  RecordProperty("native_gs_stores", 4);
+  RecordProperty("native_executables", 4);
+#else
+  GTEST_SKIP() << "native GS-base execution requires Linux x86-64";
+#endif
 }

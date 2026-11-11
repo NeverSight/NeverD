@@ -60,7 +60,7 @@ windowsAPIPrototype(std::string_view Name, std::string_view Return,
 /// stdio.h, vcruntime.h and the Windows SDK.
 ///
 /// A `_PVFV`, `_PIFV` or `_onexit_t` is the function pointer it is; a
-/// `_startupinfo *`, `_onexit_table_t *`, `struct _exception *`,
+/// `_startupinfo *`,
 /// `struct _EXCEPTION_POINTERS *` or a pointer to another structure the
 /// routine fills or reads (`STARTUPINFOW`, `FILETIME`, `SLIST_HEADER`,
 /// `CONTEXT`, `RUNTIME_FUNCTION`) a `void *`; a `va_list` the `char *` it is
@@ -70,6 +70,8 @@ windowsAPIPrototype(std::string_view Name, std::string_view Return,
 /// `uint16_t` it is on Windows.  They apply to a PE image alone, and no arity
 /// is derived from them: `_lock` or `terminate` is a different routine of
 /// another runtime.
+/// Header-owned records and callback typedefs retain their source types:
+/// equal integer widths alone do not make function-pointer types compatible.
 inline constexpr auto kWindowsCRTPrototypes = std::to_array<LibCPrototype>({
     // MSVC's scalar/array allocation and unsized release on 32-bit x86.
     // Exact decorated names distinguish these one-argument cdecl overloads
@@ -78,8 +80,12 @@ inline constexpr auto kWindowsCRTPrototypes = std::to_array<LibCPrototype>({
     windowsCRTPrototype("??_U@YAPAXI@Z", "void *", {"uint32_t"}),
     windowsCRTPrototype("??3@YAXPAX@Z", "void", {"void *"}),
     windowsCRTPrototype("??_V@YAXPAX@Z", "void", {"void *"}),
-    // The SEH-aware longjmp entry retains the buffer/value cdecl signature.
-    windowsCRTPrototype("_longjmpex", "void", {"void *", "int"}),
+    // i386 _setjmp3(jmp_buf, count, ...) receives count additional DWORDs.
+    // Its jmp_buf decays to int *, not a second context pointer. See
+    // https://learn.microsoft.com/en-us/cpp/c-runtime-library/setjmp3
+    windowsCRTPrototype("_setjmp3", "int", {"int *", "int", "..."}),
+    // The i386 SEH-aware longjmp entry takes the same jump buffer.
+    windowsCRTPrototype("_longjmpex", "void", {"int *", "int"}),
     // msvcrt.dll start-up and exit.
     windowsCRTPrototype("__getmainargs", "int",
                         {"int *", "char ***", "char ***", "int", "void *"}),
@@ -87,7 +93,10 @@ inline constexpr auto kWindowsCRTPrototypes = std::to_array<LibCPrototype>({
         "__wgetmainargs", "int",
         {"int *", "wchar_t ***", "wchar_t ***", "int", "void *"}, "stddef.h"),
     windowsCRTPrototype("__set_app_type", "void", {"int"}),
-    windowsCRTPrototype("__setusermatherr", "void", {"int (*)(void *)"}),
+    // A callback's record pointer must agree with math.h's declaration;
+    // replacing its pointee by void changes the C function-pointer type.
+    windowsCRTPrototype("__setusermatherr", "void",
+                        {"int (*)(struct _exception *)"}, "math.h"),
     windowsCRTPrototype("_initterm", "void",
                         {"void (**)(void)", "void (**)(void)"}),
     windowsCRTPrototype("_initterm_e", "int",
@@ -135,26 +144,37 @@ inline constexpr auto kWindowsCRTPrototypes = std::to_array<LibCPrototype>({
     windowsCRTPrototype("wcsncpy_s", "int",
                         {"wchar_t *", "size_t", "const wchar_t *", "size_t"},
                         "wchar.h"),
-    // excpt.h: EXCEPTION_DISPOSITION and four exception-context pointers.
-    windowsCRTPrototype("__C_specific_handler", "int",
-                        {"void *", "void *", "void *", "void *"}),
+    // Preserve the header's disposition type (an enum in MSVC, an int macro
+    // in MinGW) and nominal context pointers, including address-only uses.
+    windowsCRTPrototype("__C_specific_handler", "EXCEPTION_DISPOSITION",
+                        {"struct _EXCEPTION_RECORD *", "void *",
+                         "struct _CONTEXT *", "struct _DISPATCHER_CONTEXT *"},
+                        "excpt.h"),
     // Universal CRT start-up and exit.
-    windowsCRTPrototype("_set_app_type", "void", {"int"}),
-    windowsCRTPrototype("_configure_narrow_argv", "int", {"int"}),
-    windowsCRTPrototype("_configure_wide_argv", "int", {"int"}),
+    // These source enums still occupy one integer argument, but a separate
+    // signed-int prototype need not be compatible with the header's enum.
+    windowsCRTPrototype("_set_app_type", "void", {"enum _crt_app_type"},
+                        "corecrt_startup.h"),
+    windowsCRTPrototype("_configure_narrow_argv", "int",
+                        {"enum _crt_argv_mode"}, "corecrt_startup.h"),
+    windowsCRTPrototype("_configure_wide_argv", "int", {"enum _crt_argv_mode"},
+                        "corecrt_startup.h"),
     windowsCRTPrototype("_initialize_narrow_environment", "int", {}),
     windowsCRTPrototype("_initialize_wide_environment", "int", {}),
     windowsCRTPrototype("_get_initial_narrow_environment", "char **", {}),
     windowsCRTPrototype("_get_initial_wide_environment", "wchar_t **", {},
                         "stddef.h"),
-    windowsCRTPrototype("_initialize_onexit_table", "int", {"void *"}),
+    windowsCRTPrototype("_initialize_onexit_table", "int",
+                        {"struct _onexit_table_t *"}, "corecrt_startup.h"),
     windowsCRTPrototype("_register_onexit_function", "int",
-                        {"void *", "int (*)(void)"}),
-    windowsCRTPrototype("_execute_onexit_table", "int", {"void *"}),
+                        {"struct _onexit_table_t *", "int (*)(void)"},
+                        "corecrt_startup.h"),
+    windowsCRTPrototype("_execute_onexit_table", "int",
+                        {"struct _onexit_table_t *"}, "corecrt_startup.h"),
     windowsCRTPrototype("_crt_atexit", "int", {"void (*)(void)"}),
     windowsCRTPrototype("_crt_at_quick_exit", "int", {"void (*)(void)"}),
     windowsCRTPrototype("_register_thread_local_exe_atexit_callback", "void",
-                        {"void (WINAPI *)(void *, uint32_t, void *)"}),
+                        {"_tls_callback_type"}, "process.h"),
     windowsCRTPrototype("_seh_filter_exe", "int", {"uint32_t", "void *"}),
     windowsCRTPrototype("_seh_filter_dll", "int", {"uint32_t", "void *"}),
     windowsCRTPrototype("_set_fmode", "int", {"int"}),

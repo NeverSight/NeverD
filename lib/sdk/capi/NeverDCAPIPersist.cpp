@@ -723,12 +723,17 @@ static bool readFunctionAttributes(const llvm::json::Object &Row,
   return true;
 }
 
-static llvm::json::Array functionEditRows(const Session *S) {
+/// The rows of the edits at entries from \p Begin, before \p End where given.
+static llvm::json::Array functionEditRows(const Session *S, va_t Begin = 0,
+                                          std::optional<va_t> End = {}) {
   std::set<va_t> Entries;
-  for (const auto &[Entry, Created] : S->FunctionEdits)
-    Entries.insert(Entry);
-  for (const auto &[Entry, Attributes] : S->FunctionAttributeEdits)
-    Entries.insert(Entry);
+  for (auto It = S->FunctionEdits.lower_bound(Begin);
+       It != S->FunctionEdits.end() && (!End || It->first < *End); ++It)
+    Entries.insert(It->first);
+  for (auto It = S->FunctionAttributeEdits.lower_bound(Begin);
+       It != S->FunctionAttributeEdits.end() && (!End || It->first < *End);
+       ++It)
+    Entries.insert(It->first);
   llvm::json::Array Rows;
   for (const va_t Entry : Entries) {
     llvm::json::Object Row{{"addr", vaHex(Entry)}};
@@ -825,6 +830,15 @@ const char *neverd_functions_json(neverd_session_t Sess) {
   if (!S)
     return nullptr;
   return dupStr(jsonToString(llvm::json::Value(functionEditRows(S))));
+}
+
+const char *neverd_functions_range_json(neverd_session_t Sess,
+                                        neverd_va_t Begin, neverd_va_t End) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return nullptr;
+  return dupStr(jsonToString(llvm::json::Value(
+      Begin < End ? functionEditRows(S, Begin, End) : llvm::json::Array())));
 }
 
 int neverd_functions_save(neverd_session_t Sess) {
@@ -1369,24 +1383,27 @@ overlappingItem(const std::map<va_t, Session::DataItem> &Items, va_t Addr,
   return std::nullopt;
 }
 
+llvm::json::Object dataItemRow(va_t Addr, const Session::DataItem &Item) {
+  llvm::json::Object Row{{"addr", vaHex(Addr)},
+                         {"kind", Item.Kind},
+                         {"size", static_cast<int64_t>(Item.Size)}};
+  if (!Item.Encoding.empty())
+    Row["encoding"] = Item.Encoding;
+  if (Item.Kind == "array") {
+    Row["element_size"] = Item.ElementSize;
+    Row["count"] = Item.Count;
+    if (!Item.Type.empty())
+      Row["type"] = Item.Type;
+  }
+  if (Item.Kind == "alignment")
+    Row["alignment"] = Item.Alignment;
+  return Row;
+}
+
 llvm::json::Array dataItemRows(const Session *S) {
   llvm::json::Array Rows;
-  for (const auto &[Addr, Item] : S->DataItems) {
-    llvm::json::Object Row{{"addr", vaHex(Addr)},
-                           {"kind", Item.Kind},
-                           {"size", static_cast<int64_t>(Item.Size)}};
-    if (!Item.Encoding.empty())
-      Row["encoding"] = Item.Encoding;
-    if (Item.Kind == "array") {
-      Row["element_size"] = Item.ElementSize;
-      Row["count"] = Item.Count;
-      if (!Item.Type.empty())
-        Row["type"] = Item.Type;
-    }
-    if (Item.Kind == "alignment")
-      Row["alignment"] = Item.Alignment;
-    Rows.push_back(std::move(Row));
-  }
+  for (const auto &[Addr, Item] : S->DataItems)
+    Rows.push_back(dataItemRow(Addr, Item));
   return Rows;
 }
 } // namespace
@@ -1710,6 +1727,24 @@ const char *neverd_items_json(neverd_session_t Sess) {
   if (!S)
     return nullptr;
   return dupStr(jsonToString(llvm::json::Value(dataItemRows(S))));
+}
+
+const char *neverd_items_range_json(neverd_session_t Sess, neverd_va_t Begin,
+                                    neverd_va_t End) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return nullptr;
+  llvm::json::Array Rows;
+  if (Begin < End) {
+    // The item before Begin reaches into the span where it ends past Begin.
+    auto It = S->DataItems.upper_bound(Begin);
+    if (It != S->DataItems.begin() &&
+        std::prev(It)->second.Size > Begin - std::prev(It)->first)
+      --It;
+    for (; It != S->DataItems.end() && It->first < End; ++It)
+      Rows.push_back(dataItemRow(It->first, It->second));
+  }
+  return dupStr(jsonToString(llvm::json::Value(std::move(Rows))));
 }
 
 int neverd_items_save(neverd_session_t Sess) {

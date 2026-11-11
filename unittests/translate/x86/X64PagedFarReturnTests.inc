@@ -349,7 +349,7 @@ TEST_F(X64PagedExecutionTest, PagedFarReturnRetainedEffectsControlProgress) {
       EXPECT_EQ(Budget, Attempt ? 0u : 1u);
       EXPECT_EQ(State.NMIBlocked, 1);
       EXPECT_EQ(Context.lastResult().InstructionAttempted, Attempt);
-      EXPECT_EQ(Shadow.SSBlocked, Attempt ? 0 : 1);
+      EXPECT_EQ(Shadow.SSBlocked, Attempt && Case != 5 ? 0 : 1);
       EXPECT_EQ(P.Acks, 0u);
       if (Case == 0)
         EXPECT_NE(Context.lastError().find("bound frame-access order"),

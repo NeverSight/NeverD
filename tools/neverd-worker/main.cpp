@@ -596,6 +596,17 @@ void executeLoop(State &state, Transport &transport) {
       }
       if (!transport.send(std::move(result), encodedPayload.get()))
         break;
+      // While the client takes the reply in, the views an edit reached are
+      // read as it will ask for them, until a request waits.
+      if (!webRequest)
+        try {
+          engine.afterReply([&state] {
+            std::lock_guard lock(state.mutex);
+            return state.stopping || !state.queue.empty();
+          });
+        } catch (const std::exception &) {
+          // Each read asks for itself.
+        }
     }
   } catch (const std::exception &error) {
     transport.send(

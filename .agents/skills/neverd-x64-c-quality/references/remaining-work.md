@@ -1348,6 +1348,30 @@ conditional memory, invocation lifetime and both C routes remain open.
 
 ## CRT and catch-continuation repairs
 
+- The i386 `_setjmp3` runtime prototype now owns its two fixed stack words
+  and open DWORD tail before SSA. Both C routes preserve the buffer pointer,
+  count and every recovered tail argument through direct, loaded-IAT and
+  veneer calls, with the returns-twice declaration retained. `_longjmpex`
+  shares the header-compatible integer jump-buffer pointer. Original i386
+  instructions and recompiled source check argument transport at O0/O2.
+  LLVM C also converts frame-member and interior-byte addresses to the
+  runtime's declared pointee without changing the backing storage.
+  Full nonlocal unwinding and jump-buffer lifetime remain separate work.
+- LLVM C keeps recovered frame addresses in the integer carriers used by
+  image byte stores, including unaligned ordinary and volatile stores. Public
+  execution checks preserve the address and adjacent bytes on both 32-bit and
+  64-bit C targets; this does not recover unknown entry-frame state.
+- Image initializer dependencies now include external storage and interior
+  aliases reached through constant aggregates and GEPs. Their declarations
+  precede the initializers in whole, selected and data-only units. Actual C
+  execution checks address identity; header functions retain their own owner.
+- `__C_specific_handler` uses the runtime header's disposition and nominal
+  context types. LLVM C also keeps header tags distinct from same-name typedefs
+  when a debug signature forwards a context pointer. HighC includes a runtime
+  prototype's header when only the routine's address is taken. Independent
+  enum/int header providers check arguments and results, not native exception
+  dispatch.
+
 - Return contracts require the shared no-return proof before interpreting an
   absent ordinary RETURN as void. An external catch/continuation keeps the
   parent result unknown until attachment, so nested rethrows retain the
@@ -1722,6 +1746,18 @@ conditional memory, invocation lifetime and both C routes remain open.
 - Public regressions are in `HighCPointerAddresses.*`,
   `LLVMCPointerAddresses.*`, `COFFExceptionIR.*`, and the Windows EH corpus.
   Use `docs/testing.md` to select affected lift, patch, and store-forward checks.
+
+FS/GS scalar reads now share target-aware C rendering. Windows intrinsics
+are used only when their segment, target and 32-bit offset agree; other
+representable reads retain the complete address register through native
+assembly. Zero remains a segment offset, and LLVM integer-to-pointer offsets
+keep their unsigned source width in both loads and stores. Pointer results
+convert through `uintptr_t`; HighC floating loads retain typed memory helpers.
+Unsupported LLVMC segmented types, atomic reads and non-x86 targets fail
+explicitly instead of becoming ordinary memory accesses. Native Linux GS
+execution at O0/O2 and Windows x86/x64 target compilation cover this boundary;
+these checks do not qualify Windows runtime behavior or add general LLVMC
+segmented floating/aggregate or x86 assembly qword support.
 
 ## Workflow
 

@@ -408,13 +408,14 @@ TEST(MIPS16Loader, E2RequiresMatchingExplicitABIRecords) {
     F.put(36, 0x74001000, 4);
     F.put(24, 0x10101, 4);
     ELFLoader L;
-    for (uint32_t ASE : {0x400u, 0x4400u, 0x4000u, 0x4800u, 0x4401u}) {
+    for (uint32_t ASE :
+         {0x400u, 0x4400u, 0x4440u, 0x440u, 0x4000u, 0x4800u, 0x4401u}) {
       F.put(0xec, ASE, 4);
       auto I = L.loadBuffer(F.buffer());
-      const bool Valid = ASE == 0x400 || ASE == 0x4400;
+      const bool Valid = ASE == 0x400 || ASE == 0x4400 || ASE == 0x4440;
       ASSERT_EQ(bool(I), Valid);
       if (I)
-        EXPECT_EQ(I->MIPS->HasMIPS16E2, ASE == 0x4400);
+        EXPECT_EQ(I->MIPS->HasMIPS16E2, bool(ASE & 0x4000));
       else
         llvm::consumeError(I.takeError());
     }

@@ -259,16 +259,16 @@ checkX86LinearAccess(const X86PagingState &S, const X86LinearAccess &A,
     return invalid("invalid x86 paging access kind or privilege");
   if (A.Kind == MemoryAccessKind::Execute && (A.ImplicitSupervisor || A.Stack))
     return invalid("instruction fetch cannot be an implicit or stack access");
-  if (A.Wrap32 && (S.EFER & LMA))
-    return invalid("32-bit linear wrap requires a legacy operand");
+  if (A.Wrap32 && (S.EFER & LMA) && A.ImplicitSupervisor)
+    return invalid("IA-32e system-table operands require full-width addresses");
   if (!Bytes || Bytes > kMemoryFaultMaxAccessBytes)
     return invalid(
         "x86 paged operand requires a nonempty representable extent");
-  if (!(S.EFER & LMA)) {
+  if (!(S.EFER & LMA) || A.Wrap32) {
     if (A.Address > UINT32_MAX ||
         (!A.Wrap32 && Bytes - 1 > UINT32_MAX - A.Address))
       return invalid(
-          "legacy x86 wrap requires a checked segment or table operand");
+          "32-bit x86 wrap requires a checked segment or legacy table operand");
   } else {
     const unsigned Width = S.CR4 & LA57 ? 57 : 48;
     for (uint64_t Address : {A.Address, A.Address + Bytes - 1}) {
@@ -301,14 +301,21 @@ llvm::Expected<X86PageWalkResult> walkX86PageTables(GuestMemoryRuntime &Memory,
 
 llvm::Expected<X86PageWalkResult>
 loadX86PAEPDPTE(GuestMemoryRuntime &Memory, const X86PagingFeatures &F,
-                uint64_t CR3, std::array<uint64_t, 4> &PDPTE) {
+                uint64_t CR3, std::array<uint64_t, 4> &PDPTE,
+                X86PAEPDPTEContinuation *Continuation) {
   if (!validFeatures(F))
     return invalid("x86 paging requires MAXPHYADDR in 32..52");
   if (!F.PAE)
     return invalid("PDPTE reload requires a CPU with PAE");
+  X86PAEPDPTEContinuation Local;
+  auto &P = Continuation ? *Continuation : Local;
+  if (P.Features && (*P.Features != F || P.CR3 != CR3))
+    return invalid("resume the retained PDPTE read with the same CPU and CR3");
+  P.Features = F;
+  P.CR3 = CR3;
   X86PageWalkResult Result;
-  std::array<uint64_t, 4> Loaded{};
-  for (unsigned I = 0; I != Loaded.size(); ++I) {
+  for (; P.Next != P.Entries.size(); ++P.Next) {
+    const unsigned I = P.Next;
     auto Read =
         Memory.loadScalar((CR3 & 0xffffffe0) + I * 8, GuestScalarWidth::I64);
     if (Read.Status == GuestMemoryAccessStatus::Fault) {
@@ -316,14 +323,15 @@ loadX86PAEPDPTE(GuestMemoryRuntime &Memory, const X86PagingFeatures &F,
       Result.BackingFault = Read.Fault;
       return Result;
     }
-    Loaded[I] = Read.Value;
-    if ((Loaded[I] & Present) && (Loaded[I] & paeReserved(F))) {
+    P.Entries[I] = Read.Value;
+    if ((P.Entries[I] & Present) && (P.Entries[I] & paeReserved(F))) {
+      P = {};
       Result.Status = X86PageWalkStatus::Exception;
       Result.Exception = X86MemoryException{13, 0, std::nullopt};
       return Result;
     }
   }
-  PDPTE = Loaded;
+  PDPTE = P.Entries;
   return Result;
 }
 

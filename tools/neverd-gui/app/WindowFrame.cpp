@@ -10,6 +10,7 @@
 #include "WindowFrame.h"
 
 #include "../Config.h"
+#include "DevicePixels.h"
 #include "Theme.h"
 #include "TitleBar.h"
 #include "WindowFramePlatform.h"
@@ -487,17 +488,20 @@ void WindowFrame::paint() {
   painter.setCompositionMode(QPainter::CompositionMode_Source);
   painter.fillRect(window_.rect(), Qt::transparent);
   painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
-  painter.fillRect(visible, window_.palette().brush(window_.backgroundRole()));
+  // On whole device pixels, so that at a fractional scale the hairline stays
+  // one pixel and the rings one pixel apart.
+  DevicePixels device(painter);
+  const QRect face = device.rect(visible);
+  painter.fillRect(face, window_.palette().brush(window_.backgroundRole()));
   if (margins_.isNull())
     return;
   // Rings fading away from the edge, then the edge's hairline over them.
   const QColor shadow = theme.chrome(QStringLiteral("WindowShadow"));
-  const QRectF edge = QRectF(visible).adjusted(-0.5, -0.5, 0.5, 0.5);
-  for (int ring = ::neverd::limits::gui_config::kWindowFrameShadowExtent;
-       ring >= 1; --ring) {
-    const double fade =
-        1.0 - double(ring - 1) /
-                  ::neverd::limits::gui_config::kWindowFrameShadowExtent;
+  const QRectF edge = QRectF(face).adjusted(-0.5, -0.5, 0.5, 0.5);
+  const int extent =
+      device.width(::neverd::limits::gui_config::kWindowFrameShadowExtent);
+  for (int ring = extent; ring >= 1; --ring) {
+    const double fade = 1.0 - double(ring - 1) / extent;
     QColor color = shadow;
     color.setAlphaF(shadow.alphaF() * fade * fade);
     painter.setPen(QPen(color, 1));

@@ -106,14 +106,17 @@ derived listing or reference index has been rebuilt. The executor admits
 requests for up to its existing 150 ms idle grace at that transition, waking
 as soon as one arrives, before continuing derived background work.
 `open.write_behind:true` lets the reply to an edit that names data or a
-function, defines data, edits a function or declares a type go before its write:
+function, defines data, edits a function, declares a type, edits source
+(`code_edit`, a local's name among them) or formats an operand go before its write:
 the same journaled transaction runs on a thread of its own, joined with edits
 queued behind one already writing, in the few milliseconds after the reply.  A
 kill in that time leaves the project's files as they were, or a journal that
-completes them; a clean exit, `save`, `analysis_snapshot` and any operation that
-may read the project's files wait for the write first.  A write that fails stays
+completes them; a clean exit, `save` (except `save.write_behind`), `analysis_snapshot`
+and any operation that may read the project's files wait for the write first.  A write that fails stays
 queued and fails the next edit or waiting operation with its error, and goes
-through once it can.  By default the reply follows the write.
+through once it can.  An edit refused meanwhile takes back what it changed of
+the session's data items, function edits and operand formats as its history
+holds them, never as the files, which lag behind it, do.  By default the reply follows the write.
 `analysis_snapshot` with `in_memory:true` does not wait: while a write is on its
 way the snapshot says `written:false`, for a replica that takes it in place
 (`analysis_update_names`).
@@ -702,7 +705,7 @@ diagnostic; fixed-image authentication still requires its stricter evidence.
 | `segments` | Standard page by name; rows `{name,address,size,flags}`. `size` is the engine's hex string. |
 | `annotations` | Standard page by text; rows `{address,text}`. |
 | `annotation_set` | `{address,text}`; an empty string removes the comment. Stages an edit, increments revision, returns `{address,text,dirty:true,saved:false}`. Requires the writer lock. |
-| `save` | Commits staged annotations and their command-history cursor through the recovery journal; returns `{saved:true,dirty:false}` after flushing. Requires the writer lock. |
+| `save` | Commits staged annotations and their command-history cursor through the recovery journal; returns `{saved:true,dirty:false}` after flushing. With `write_behind:true` it commits them as an edit does: on a project opened with `open.write_behind` the reply goes before the write, and nothing queued is waited for first, so whatever reads the project's files afterwards (a save the user asked for, closing, packing a database) sends a plain save. Requires the writer lock. |
 | `rename` | `{address,name}`; any address: a function, data or a label. The name is not empty, has no spaces or control characters, is not an automatic form such as `sub_1234`, and is not used at another address. Requires clean annotations; never autosaves staged notes. Commits the rename plus history through the journal, reloads through the public C ABI, invalidates caches and increments revision. Returns `{address,name,saved:true}`. Requires the writer lock. |
 | `code_edit` | `{address,representation,kind}` for a function's source view (`c/llvmc/source/cpp/rust/go`). `kind:"name"` adds `{original,name,identity}` from a current local `code_names` target; an empty name or the original name clears the alias. `kind:"comment"` adds `{line,anchor,text}` from a current source row; empty text removes it. `kind:"number"` adds `{line,anchor,index,radix}`: the `index`-th integer literal of that row's line, counted outside comments and strings as `include/neverd/support/IntegerLiterals.h` counts them, reads in `radix`, a base of `include/neverd/LiteralRadixes.def` (`hex`, `decimal`, `octal`, `binary`, `char`; `number` gives the number back to the decompiler). A C literal keeps its type, taking the suffix that keeps it; a base without such a spelling is `invalid_request`. Pages show the chosen bases of a row's numbers as `code_number_radixes` `{index:radix}`. Refuses obsolete/ambiguous targets, colliding or invalid local names, dirty annotations and read-only sessions. Commits the presentation edit and history, invalidates caches and increments revision. Returns `{address,saved}`, `saved:false` on no change. Image names use `rename` and mapped instruction comments use `annotation_set`. |
 | `function_create` / `function_delete` | `{address}`. Capability present only with an engine that keeps function edits. Creates a function at the address, or deletes the one that starts there, as the engine allows (the project folder's `functions.json`). Requires clean annotations; commits the edit plus history, restarts function-level analysis and the reference index, and increments revision. Returns `{address,created,saved:true}`. Requires the writer lock. |
@@ -713,7 +716,7 @@ diagnostic; fixed-image authentication still requires its stricter evidence.
 | `operand_format` | `{address,operand?:0-7,action}`. Capability present only with an engine that keeps operand formats. The address must start an instruction whose listing shows formats (x86, ARM, Thumb, AArch64, SBF and EVM; other dialects are `unsupported`). Operands count by the commas outside brackets, braces and parentheses of the decoder's text; an ARM-family number is a `#` immediate, which keeps its `#`; an SBF number is an immediate other than a call target or a byte swap's width, counted in its operation's width; an EVM number is PUSH data, counted in the PUSH's width up to 256 bits, of which an enumerator or structure offset names at most 64. A format changes an operand that is a plain number: `operand` when it is one, otherwise (or without `operand`) the instruction's last number; an instruction without one is `invalid_request`. `action` is a base of `include/neverd/OperandFormats.def` (`number`, `hex`, `decimal`, `binary`, `char`, `offset`, `struct`; `number` also clears both flags), or `negate`/`invert` to toggle the sign change or the bitwise complement. `struct` (capability `operand_struct`) shows a structure offset, as IDA's T does, and takes `type`, a structure or union of the local types, and `delta?`, how many bytes into it the register points: it also changes a displacement from a base register, which it takes first when `operand` names none, and the listing shows `[rcx+_KTHREAD.Process]` or `[rcx+(_KAPC.Type-10h)]` (`[x0, #_KTHREAD.Process]` on ARM, `[r1 + _KTHREAD.Process]` on SBF), the number again where the type has no member; a structure offset changes neither sign nor bits. A type the program lacks is `invalid_request`. Commits the formats (the project folder's `operands.json`) plus one history command; listing lines show the change without the listing being built again. Increments revision and returns `{address,operand,format:{base,negate,invert,type?,delta?},saved}` with the operand that took the format, `saved:false` when nothing changed. Requires clean annotations and the writer lock. |
 | `reload` | Explicitly reloads the sidecars, discards staged annotations, clears dirty state, invalidates caches and increments revision. Returns metadata. |
 | `history` | Standard `offset/limit` page. Returns `{schema_version:1,items,total,cursor,offset,next_offset,complete,can_undo,can_redo,available,blocked_reason,source_sha256}`. Items contain `{kind:"annotation"|"rename"|"function"|"item"|"operand"|"code"|"types"|"patch",address,before,after,index,applied}`; a `types` item's address is the declaration's place in `types.json`. Hashing is lazy and runs on the Session execution thread; the existing dashboard API can require VM analysis. |
-| `undo` / `redo` | No payload. Annotation changes/cursor movement remain dirty until Save. Rename, function, item, operand, code, types and patch history changes require clean annotations and commit immediately. Return the history listing plus `{dirty,saved,address}`. All operations require the writer lock. |
+| `undo` / `redo` | Optional `commit_staged` boolean, and `limit` for the listing in the reply, as `history`'s (default 128). Annotation changes/cursor movement remain dirty until Save. Rename, function, item, operand, code, types and patch history changes require clean annotations, or with `commit_staged:true` commit the staged ones first as `save.write_behind` does, and commit immediately. A rename (with an engine that takes names in place), item, operand, code or function step is taken in place, as its edit was, and written as edits are (behind the reply under `open.write_behind`); a types or patch step reads every table again once its write is done. Return the history listing plus `{dirty,saved,address}`. All operations require the writer lock. |
 | `history_reset` | Explicitly starts empty history from the current sidecars, preserving comments/renames. Requires clean annotations and the writer lock, then reloads their state. It never resolves a pending recovery journal or maps comments to a changed binary. |
 | `contributions` | Available before opening a file. Returns `{schema_version:1,registry_revision:string,revision:string,items,complete:true}`. Each item has `{id,title,kind,namespace,version,query}` and optional table `columns`. The payload revision belongs to the registry, independently of the envelope's image revision. |
 | `contribution_register` | `{path}`. Validates a local manifest completely before adding or replacing its namespace; returns the new contributions listing. Registration never executes a query or loads scripts/QML. |
@@ -1071,8 +1074,16 @@ again; a function's new name usually does not.  `metadata.named_view_comment_pat
 `metadata.named_view_name_patches` and `metadata.named_view_data_name_patches` count the
 documents written from the one a view had with the image's comments, functions' new
 names, or data's new names, taken into it, where those alone reached it since it was
-decorated.  `metadata.named_view_renders` counts the documents the engine rendered a
-function for, rather than built from pages kept.  `metadata.view_store_name_reads` counts
+decorated.  After an edit views keep through, a comment or a name, the owner reads
+again right behind its reply the pages of the documents it reaches that a client read
+with `kept_only`: those read at the revision the edit left, as a view the client shows
+is read again after each change, or else the one such document it reaches alone, at
+most two, each as the client's next read of it asks (`if_none_match` naming the page
+it was given, `page_delta`), until a request waits.  A read that asks the same while
+the revision and the listing's view generation stand takes that answer, which reads
+as one made then would.  `metadata.prepared_views_made` and
+`metadata.prepared_views_given` count them.  `metadata.named_view_renders` counts the
+documents the engine rendered a function for, rather than built from pages kept.  `metadata.view_store_name_reads` counts
 the times an owner's views read which store they are kept under, which an edit that
 keeps the stores for what it changed says as it takes it.  `metadata.local_type_names_prepared`
 counts the idle steps that found read what a declaration of local types checks its

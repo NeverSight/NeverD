@@ -458,19 +458,23 @@ bool LLVMCWriter::isFrameFieldValueHome(const llvm::AllocaInst *Slot) const {
   return Peeled && Peeled->first == SyntheticFrame;
 }
 
+TypeRef
+LLVMCWriter::recordPointerAllocaType(const llvm::AllocaInst *Slot) const {
+  const auto Type = AllocaTypes.find(Slot);
+  if (Type != AllocaTypes.end() && Type->second &&
+      Type->second->Kind == NdTypeKind::Ptr && Type->second->Pointee &&
+      Type->second->Pointee->Kind == NdTypeKind::Struct &&
+      !Type->second->Pointee->SourceName.empty())
+    return Type->second;
+  return {};
+}
+
 bool LLVMCWriter::isTypedRecordCursorSlot(const llvm::AllocaInst *Slot) const {
   if (!Slot || ThisHomes.count(Slot))
     return false;
-  auto NamedCursor = [&] {
-    auto Ty = AllocaTypes.find(Slot);
-    return Ty != AllocaTypes.end() && Ty->second &&
-           Ty->second->Kind == NdTypeKind::Ptr && Ty->second->Pointee &&
-           Ty->second->Pointee->Kind == NdTypeKind::Struct &&
-           !Ty->second->Pointee->SourceName.empty();
-  };
   // The checks below only exclude named record cursors. Most homes have no
   // such type, and their field checks can recursively peel other homes.
-  if (!NamedCursor())
+  if (!recordPointerAllocaType(Slot))
     return false;
   // `isThisFieldAddress` peels. A cursor whose last home is `load(cursor+k)`
   // (`m_pNext`) would recurse peel → cursor → this-field → peel.
@@ -1758,7 +1762,8 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
         const std::string Bits = freshVar("image_bits");
         emitIndent(Indent);
         OS << "{ " << typeToCLLVM(Store->getValueOperand()->getType()) << " "
-           << Bits << " = " << valueStr(Store->getValueOperand()) << ";\n";
+           << Bits << " = "
+           << integerPointerOperandStr(Store->getValueOperand()) << ";\n";
         if (Store->isVolatile()) {
           const std::string Index = freshVar("image_byte");
           emitIndent(Indent + 1);
@@ -1936,20 +1941,16 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
     return;
   }
   if (auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst);
-      Load && !Load->isSimple() &&
-      isLLVMX86SegmentedAddressSpace(Load->getPointerAddressSpace())) {
-    if (Load->isAtomic())
-      throw std::runtime_error("unsupported atomic segmented C load");
+      Load && isLLVMX86SegmentedAddressSpace(Load->getPointerAddressSpace())) {
     auto Segment = renderX86SegmentedLoad(
-        Opts.TheArch, *Load,
-        [this](const llvm::Value *Value) { return valueStr(Value); });
-    if (Segment.empty())
-      throw std::runtime_error(
-          "unsupported segmented C load width or architecture");
+        Opts.TheArch, Opts.Format, *Load, freshVar("segment_value"),
+        [this](const llvm::Value *Value) {
+          return integerPointerOperandStr(Value);
+        });
     if (Load->getType()->isPointerTy())
       Segment =
           "(" + typeToCLLVM(Load->getType()) + ")(uintptr_t)(" + Segment + ")";
-    // Ordered loads receive a materialized ValueTexts name. That name is
+    // Segmented loads receive a materialized ValueTexts name. That name is
     // their future use, not a replacement for the effect defining it.
     emitIndent(Indent);
     OS << getName(Load) << " = " << Segment << ";\n";
@@ -2097,14 +2098,6 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
     if (writeRawMemoryCopy(Inst, Indent))
       return;
     emitIndent(Indent);
-    if (std::string Seg = renderX86SegmentedLoad(
-            Opts.TheArch, *LI,
-            [this](const llvm::Value *V) { return valueStr(V); });
-        !Seg.empty()) {
-      OS << Name << " = " << Seg << ";\n";
-      HasCIntrinsics = true;
-      return;
-    }
     if (auto VA = imageDataVA(LI->getPointerOperand())) {
       const auto *LoadTy = LI->getType();
       const uint16_t Size =
@@ -2135,9 +2128,11 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
   }
 
   if (auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst)) {
-    if (const std::string Segment = renderX86SegmentedStore(
-            Opts.TheArch, *SI,
-            [this](const llvm::Value *Value) { return valueStr(Value); });
+    if (const std::string Segment =
+            renderX86SegmentedStore(Opts.TheArch, *SI,
+                                    [this](const llvm::Value *Value) {
+                                      return integerPointerOperandStr(Value);
+                                    });
         !Segment.empty()) {
       emitIndent(Indent);
       OS << Segment << "\n";
@@ -6490,10 +6485,12 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
     // A parameter the runtime's tables type takes an integer converted to
     // its pointer, and an address converted to its integer: one the text
     // spells, or a value of pointer type (`__vfprintf_chk`'s flag, which the
-    // IR passes as the pointer its register held).
+    // IR passes as the pointer its register held). An LLVM opaque pointer
+    // also needs the declared pointee: its C text may address a frame member
+    // or interior bytes with a different type.
     else if (Prototype &&
              (libc::isPointerType(Param)
-                  ? Integer
+                  ? Integer || Operand->getType()->isPointerTy()
                   : PointerSpelling || Operand->getType()->isPointerTy()))
       Argument = Null && Integer
                      ? "0"
@@ -6771,6 +6768,8 @@ std::optional<std::string> LLVMCWriter::enumeratorDisplay(const TypeRef &Ty,
     return std::nullopt;
   if (canonicalizeCProjectionIdentifier(*Name, "") != *Name)
     return std::nullopt;
+  if (HeaderCallRecords.count(cNamedTypeSpelling(Ty->SourceName)))
+    HeaderCallRecords.insert(*Name);
   return Name;
 }
 
@@ -6914,16 +6913,15 @@ std::string LLVMCWriter::integerCallStoredText(const llvm::Value *Stored,
 
 std::string LLVMCWriter::enumStoredText(const llvm::AllocaInst *Slot,
                                         const llvm::Value *Stored) {
-  const std::string RHS = valueStr(Stored);
+  // The declaration owns the carrier even when address folding spells a
+  // frame pointer for an integer LLVM value. This also applies to saved
+  // registers whose frame reads are omitted as dead restoration work.
+  const std::string RHS = Slot && Slot->getAllocatedType()->isIntegerTy() &&
+                                  !recordPointerAllocaType(Slot)
+                              ? integerPointerOperandStr(Stored)
+                              : valueStr(Stored);
   if (!Slot)
     return RHS;
-  if (SyntheticFrame &&
-      (!Analysis.RawFrameLocations.empty() ||
-       Analysis.RawFrameAllocas.count(SyntheticFrame)) &&
-      Slot->getAllocatedType()->isIntegerTy())
-    if (auto Frame = peelPointerOffset(Stored);
-        Frame && Frame->first == SyntheticFrame)
-      return "(uintptr_t)" + RHS;
   const auto *CI =
       llvm::dyn_cast_or_null<llvm::ConstantInt>(peelIntegerView(Stored));
   if (!CI)
@@ -7003,24 +7001,35 @@ std::string LLVMCWriter::callArgStr(const llvm::Value *Arg,
   // A runtime declaration's plain int parameter is already the source
   // contract. Importing a debug enum here can define the CRT's own enum a
   // second time beside stdlib.h when optimization exposes its constant.
-  if (const LibraryCallee Runtime = libraryCallee(Call);
-      Runtime.Prototype && ArgIdx < Runtime.Prototype->ParamCount &&
+  const LibraryCallee Runtime = libraryCallee(Call);
+  if (Runtime.Prototype && ArgIdx < Runtime.Prototype->ParamCount &&
       Runtime.Prototype->Params[ArgIdx] == "int")
     return valueStr(Arg, PointerSpelling);
+  const auto DisplayEnum = [&](uint64_t Value) -> std::optional<std::string> {
+    const auto Function = debugCallee(Call);
+    if (!Function)
+      return std::nullopt;
+    const TypeRef Type = debugCallArgType(*Function, ArgIdx, Opts);
+    if (Runtime.Prototype && ArgIdx < Runtime.Prototype->ParamCount) {
+      llvm::StringRef Parameter = Runtime.Prototype->Params[ArgIdx];
+      // A debug enum cannot replace the runtime's different enum merely
+      // because both transport the same integer bits.
+      if (Parameter.consume_front("enum ") &&
+          (!Type || cNamedTypeSpelling(Type->SourceName) != Parameter))
+        return std::nullopt;
+    }
+    return enumeratorDisplay(Type, Value);
+  };
   if (const auto *CI =
           llvm::dyn_cast<llvm::ConstantInt>(peelIntegerView(Arg))) {
-    if (const auto FS = debugCallee(Call))
-      if (auto Name = enumeratorDisplay(debugCallArgType(*FS, ArgIdx, Opts),
-                                        CI->getZExtValue()))
-        return *Name;
+    if (auto Name = DisplayEnum(CI->getZExtValue()))
+      return *Name;
   }
   if (auto Imm = foldImmediate(Arg)) {
     uint64_t Val = 0;
     if (!llvm::StringRef(*Imm).getAsInteger(0, Val))
-      if (const auto FS = debugCallee(Call))
-        if (auto Name =
-                enumeratorDisplay(debugCallArgType(*FS, ArgIdx, Opts), Val))
-          return *Name;
+      if (auto Name = DisplayEnum(Val))
+        return *Name;
   }
   return valueStr(Arg, PointerSpelling);
 }

@@ -398,6 +398,8 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
                              !Result.InterpreterMachineSourceABI;
     std::vector<char> Mask;
     uint64_t UnhandledValueIntrinsics = 0;
+    // Why a refused body fails a lift that cannot leave it out.
+    std::string Refusal;
     for (;;) {
       MedLLVMEmitter MedEmitter;
       // The mask holds only bodies the unit notes left out.
@@ -438,8 +440,11 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
       }
       UnhandledValueIntrinsics = MedEmitter.unhandledValueIntrinsicCount();
       if (Result.LlvmModule || !OmitRefused ||
-          MedEmitter.refusedBodies().empty())
+          MedEmitter.refusedBodies().empty()) {
+        if (!Result.LlvmModule && !MedEmitter.refusedBodies().empty())
+          Refusal = MedEmitter.refusedBodies().front().Reason;
         break;
+      }
       if (Mask.empty())
         Mask.assign(Result.MedFuncs.size(), 1);
       for (const MedLLVMEmitter::RefusedBody &Refused :
@@ -453,7 +458,8 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
       Result.LLVMSources->preserveExpressionOrigins(Result.LibraryRecognitions);
 
     if (!Result.LlvmModule) {
-      Result.Error = "LLVM emission failed";
+      Result.Error = Refusal.empty() ? "LLVM emission failed"
+                                     : "LLVM emission failed: " + Refusal;
       return false;
     }
 

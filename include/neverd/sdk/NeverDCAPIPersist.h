@@ -202,6 +202,14 @@ NEVERD_API const char *neverd_source_type_json(neverd_session_t Sess,
 /// order, where "state" is "created" or "deleted" and the attributes are
 /// neverd_func_edit's.  Free with neverd_free_string.
 NEVERD_API const char *neverd_functions_json(neverd_session_t Sess);
+/// The user's function edits at entries in [\p Begin, \p End), as
+/// neverd_functions_json lists them: neverd_func_create, neverd_func_delete
+/// and neverd_func_edit change the row at their entry alone, read without
+/// listing every edit.  Empty where \p End is not above \p Begin.  Free
+/// with neverd_free_string.
+NEVERD_API const char *neverd_functions_range_json(neverd_session_t Sess,
+                                                   neverd_va_t Begin,
+                                                   neverd_va_t End);
 /// Write or read the edits as `<input>.neverd/functions.json`, which
 /// neverd_session_load reads too.  Return 0, or -1 with neverd_last_error.
 NEVERD_API int neverd_functions_save(neverd_session_t Sess);
@@ -228,6 +236,13 @@ NEVERD_API int neverd_item_clear(neverd_session_t Sess, neverd_va_t Addr);
 /// The user's data items, [{"addr","kind","size","encoding"?}] in address
 /// order.  Free with neverd_free_string.
 NEVERD_API const char *neverd_items_json(neverd_session_t Sess);
+/// The user's data items that share a byte with [\p Begin, \p End), as
+/// neverd_items_json lists them: what an item set over that span can change,
+/// read without listing every item.  Empty where \p End is not above
+/// \p Begin.  Free with neverd_free_string.
+NEVERD_API const char *neverd_items_range_json(neverd_session_t Sess,
+                                               neverd_va_t Begin,
+                                               neverd_va_t End);
 /// Write or read the items as `<input>.neverd/items.json`, which
 /// neverd_session_load reads too.  Return 0, or -1 with neverd_last_error.
 NEVERD_API int neverd_items_save(neverd_session_t Sess);

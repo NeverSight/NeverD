@@ -798,15 +798,28 @@ void checkNativeObjectInstallation(
     ASSERT_TRUE(bool(Compact)) << llvm::toString(Compact.takeError());
     const auto Region = findMachOEHFrameRegion(Bytes);
     ASSERT_TRUE(Region);
-    // Exceed the original gap by one pointer to require a real section move.
+    // Block in-place extension without making the request larger than
+    // every other gap in the linked image. Keep the original terminator.
+    const auto *Section = reinterpret_cast<const llvm::MachO::section_64 *>(
+        Bytes.data() + Region->SectionHeaderOff);
+    const uint64_t SectionEnd = Region->SectionFileOff + Section->size;
+    ASSERT_LE(Region->AppendFileOff, SectionEnd);
+    ASSERT_LE(SectionEnd, Region->LimitFileOff);
+    const bool BlockTail = SectionEnd < Region->LimitFileOff;
+    if (BlockTail) {
+      ASSERT_EQ(Bytes[SectionEnd], 0u);
+      Bytes[SectionEnd] = kOccupiedMetadataPadding;
+    }
     auto Moved = reserveMachOSourceUnwind(
         Bytes, Arch::AArch64,
-        Region->LimitFileOff - Region->AppendFileOff + kPointerBytes, 0);
+        SectionEnd - Region->AppendFileOff + kPointerBytes, 0);
     ASSERT_TRUE(bool(Moved)) << llvm::toString(Moved.takeError());
     ASSERT_TRUE(*Moved);
     const auto NewRegion = findMachOEHFrameRegion(Bytes);
     ASSERT_TRUE(NewRegion);
     ASSERT_NE(NewRegion->SectionVA, Region->SectionVA);
+    if (BlockTail)
+      EXPECT_EQ(Bytes[SectionEnd], kOccupiedMetadataPadding);
   }
   std::vector<SourcePatchDependency> Dependencies = {
       {kProviderLibrary, kProviderFunction,
@@ -865,6 +878,15 @@ void checkNativeObjectInstallation(
     ASSERT_TRUE(llvm::all_of(llvm::ArrayRef(Bytes).slice(Tail, TextEnd - Tail),
                              [](uint8_t Byte) { return Byte == 0; }));
     const auto RejectReservation = [&](std::vector<uint8_t> Candidate) {
+      // This linker profile reserves header padding. Occupying only the TEXT
+      // tail leaves a valid, independent location for the compact registry.
+      const auto Header = parseMachOHeader(Candidate.data(), Candidate.size());
+      const auto End = Header.HeaderSize + Header.SizeOfCmds;
+      const auto First =
+          findFirstMachODataOffset(Candidate.data(), Candidate.size());
+      ASSERT_LE(End, First);
+      std::fill(Candidate.begin() + End, Candidate.begin() + First,
+                kOccupiedMetadataPadding);
       const auto Snapshot = Candidate;
       auto Grown = reserveMachOSourceUnwind(Candidate, Arch::AArch64, 0,
                                             kObjectFunctionCount);

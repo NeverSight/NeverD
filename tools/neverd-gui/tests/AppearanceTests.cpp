@@ -9,8 +9,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "ActionRegistry.h"
+#include "DevicePixels.h"
 #include "Docking.h"
 #include "GnomeModalDialogs.h"
+#include "HighlightLocks.h"
 #include "Language.h"
 #include "OutputWindow.h"
 #include "QuickStartDialog.h"
@@ -23,6 +25,7 @@
 #include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
 #include <QColorDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -32,8 +35,11 @@
 #include <QFontDialog>
 #include <QFontInfo>
 #include <QGlyphRun>
+#include <QGroupBox>
+#include <QHeaderView>
 #include <QImage>
 #include <QInputDialog>
+#include <QItemSelectionModel>
 #include <QKeySequence>
 #include <QLineEdit>
 #include <QMenu>
@@ -42,11 +48,14 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPixmap>
+#include <QPushButton>
 #include <QScopeGuard>
 #include <QScreen>
 #include <QSettings>
 #include <QSignalSpy>
+#include <QStandardItemModel>
 #include <QStyle>
+#include <QStyleHints>
 #include <QStyleOption>
 #include <QSvgRenderer>
 #include <QTabBar>
@@ -55,9 +64,11 @@
 #include <QTextLayout>
 #include <QTimer>
 #include <QToolButton>
+#include <QTreeView>
 #include <QWheelEvent>
 #include <QWindow>
 #include <algorithm>
+#include <cmath>
 #include <kddockwidgets/qtwidgets/views/DockWidget.h>
 #include <kddockwidgets/qtwidgets/views/MainWindow.h>
 #include <memory>
@@ -70,6 +81,38 @@
 #endif
 
 using namespace neverd::gui;
+
+namespace {
+/// \p color composited over the opaque \p surface.
+QColor over(const QColor &color, const QColor &surface) {
+  const qreal a = color.alphaF();
+  return QColor::fromRgbF(color.redF() * a + surface.redF() * (1 - a),
+                          color.greenF() * a + surface.greenF() * (1 - a),
+                          color.blueF() * a + surface.blueF() * (1 - a));
+}
+
+/// WCAG's relative luminance of the opaque \p color.
+qreal luminance(const QColor &color) {
+  const auto channel = [](qreal c) {
+    return c <= 0.03928 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * channel(color.redF()) + 0.7152 * channel(color.greenF()) +
+         0.0722 * channel(color.blueF());
+}
+
+/// WCAG's contrast ratio of \p ink, composited over the opaque \p surface.
+qreal contrast(const QColor &ink, const QColor &surface) {
+  const qreal a = luminance(over(ink, surface)), b = luminance(surface);
+  return (std::max(a, b) + 0.05) / (std::min(a, b) + 0.05);
+}
+
+/// Whether \p a and \p b differ by at most \p tolerance in every channel.
+bool near(const QColor &a, const QColor &b, int tolerance) {
+  return std::abs(a.red() - b.red()) <= tolerance &&
+         std::abs(a.green() - b.green()) <= tolerance &&
+         std::abs(a.blue() - b.blue()) <= tolerance;
+}
+} // namespace
 
 class AppearanceTests final : public QObject {
   Q_OBJECT
@@ -586,6 +629,546 @@ private slots:
              qPrintable(QStringLiteral("label %1, shortcut %2")
                             .arg(activeLabel)
                             .arg(activeShortcut)));
+  }
+
+  void themeFollowsTheDesktopWhileChosen() {
+    Theme &theme = Theme::instance();
+    const auto restore = qScopeGuard([&] {
+      theme.setMode(Theme::Mode::Dark);
+      theme.apply();
+    });
+    theme.setMode(Theme::Mode::Dark);
+    QSignalSpy changed(&theme, &Theme::changed);
+    // The desktop's scheme, which the offscreen platform does not know: an
+    // unknown one keeps the theme shown.
+    const Qt::ColorScheme desktop =
+        QGuiApplication::styleHints()->colorScheme();
+    const Theme::Mode expected = desktop == Qt::ColorScheme::Light
+                                     ? Theme::Mode::Light
+                                     : Theme::Mode::Dark;
+    theme.setChoice(Theme::Choice::System);
+    QCOMPARE(theme.choice(), Theme::Choice::System);
+    QCOMPARE(QSettings().value(QStringLiteral("appearance/theme")).toString(),
+             QStringLiteral("system"));
+    QCOMPARE(theme.mode(), expected);
+    QCOMPARE(changed.count(), expected == Theme::Mode::Dark ? 0 : 1);
+    changed.clear();
+    // It takes the desktop's light or dark mode as it changes.
+    theme.followColorScheme(Qt::ColorScheme::Dark);
+    theme.followColorScheme(Qt::ColorScheme::Light);
+    QCOMPARE(theme.mode(), Theme::Mode::Light);
+    changed.clear();
+    theme.followColorScheme(Qt::ColorScheme::Dark);
+    QCOMPARE(theme.mode(), Theme::Mode::Dark);
+    QCOMPARE(changed.count(), 1);
+    theme.followColorScheme(Qt::ColorScheme::Light);
+    QCOMPARE(theme.mode(), Theme::Mode::Light);
+    QCOMPARE(changed.count(), 2);
+    QCOMPARE(qApp->palette().color(QPalette::Window),
+             theme.chrome(QStringLiteral("Window")));
+    QCOMPARE(theme.chrome(QStringLiteral("Window")), QColor(0xF3F3F3));
+    theme.followColorScheme(Qt::ColorScheme::Light);
+    QCOMPARE(changed.count(), 2);
+    theme.followColorScheme(Qt::ColorScheme::Dark);
+    QCOMPARE(theme.mode(), Theme::Mode::Dark);
+    QCOMPARE(theme.chrome(QStringLiteral("Window")), QColor(0x252526));
+    theme.followColorScheme(Qt::ColorScheme::Unknown);
+    QCOMPARE(theme.mode(), Theme::Mode::Dark);
+    // A theme chosen by name stays whatever the desktop does.
+    theme.setChoice(Theme::Choice::Light);
+    QCOMPARE(theme.mode(), Theme::Mode::Light);
+    QCOMPARE(QSettings().value(QStringLiteral("appearance/theme")).toString(),
+             QStringLiteral("light"));
+    theme.followColorScheme(Qt::ColorScheme::Dark);
+    QCOMPARE(theme.mode(), Theme::Mode::Light);
+    QCOMPARE(Theme::choiceFromName(QStringLiteral("system")),
+             Theme::Choice::System);
+    QCOMPARE(Theme::choiceFromName(QStringLiteral("bogus")),
+             Theme::Choice::Dark);
+  }
+
+  void highContrastThemesReadClearly_data() {
+    QTest::addColumn<bool>("dark");
+    QTest::newRow("dark") << true;
+    QTest::newRow("light") << false;
+  }
+
+  void highContrastThemesReadClearly() {
+    QFETCH(bool, dark);
+    Theme &theme = Theme::instance();
+    const auto restore = qScopeGuard([&] { theme.setMode(Theme::Mode::Dark); });
+    theme.setMode(dark ? Theme::Mode::HighContrastDark
+                       : Theme::Mode::HighContrastLight);
+    QVERIFY(theme.highContrast());
+    QCOMPARE(theme.dark(), dark);
+    QCOMPARE(Theme::modeName(theme.mode()),
+             dark ? QStringLiteral("dark") : QStringLiteral("light"));
+    // A translucent color is composited over its surface first; a tint
+    // \p under text, over the surface \p under itself sits on.
+    const auto check = [&](const char *ink, const char *surface, qreal least,
+                           const char *under = nullptr) {
+      QColor behind = theme.chrome(QLatin1String(surface));
+      if (under)
+        behind = over(behind, theme.chrome(QLatin1String(under)));
+      const qreal value = contrast(theme.chrome(QLatin1String(ink)), behind);
+      QVERIFY2(value >= least,
+               qPrintable(QStringLiteral("%1 on %2: %3:1, under %4:1")
+                              .arg(QLatin1String(ink), QLatin1String(surface))
+                              .arg(value, 0, 'f', 2)
+                              .arg(least)));
+    };
+    // Text, at the 7:1 of WCAG's enhanced contrast.
+    for (const auto &[ink, surface] : {std::pair{"WindowText", "Window"},
+                                       {"Text", "Base"},
+                                       {"Text", "Input"},
+                                       {"MenuText", "Menu"},
+                                       {"ButtonText", "Button"},
+                                       {"ButtonPrimaryText", "ButtonPrimary"},
+                                       {"TabActiveText", "TabActive"},
+                                       {"TabInactiveText", "TabInactive"},
+                                       {"StatusBarText", "StatusBar"},
+                                       {"TitleBarText", "TitleBar"},
+                                       {"MenuBarText", "MenuBar"},
+                                       {"HeaderText", "HeaderBackground"},
+                                       {"ToolTipText", "ToolTipBase"},
+                                       {"DockTitleText", "DockTitle"},
+                                       {"QuickStartTitle", "QuickStartSide"}})
+      check(ink, surface, 7.0);
+    // Highlighted and hovered items keep their text at 7:1 on their tint.
+    check("MenuSelectionText", "MenuSelection", 7.0, "Menu");
+    check("ListSelectionText", "ListSelection", 7.0, "Base");
+    check("Text", "Hover", 7.0, "Base");
+    check("ToolButtonCheckedText", "ToolButtonChecked", 7.0);
+    // Secondary text, links and selections, at the 4.5:1 of the minimum.
+    for (const auto &[ink, surface] :
+         {std::pair{"SecondaryText", "Window"},
+          {"PlaceholderText", "Input"},
+          {"Link", "Base"},
+          {"HighlightedText", "Highlight"},
+          {"QuickStartSelectionText", "QuickStartSelection"}})
+      check(ink, surface, 4.5);
+    // WCAG exempts what cannot be used; Visual Studio Code's disabled gray is
+    // 4:1 on the light theme's white, still legible.
+    check("DisabledText", "Window", 3.0);
+    // Every line and outline, at the 3:1 of non-text contrast.
+    for (const auto &[line, surface] :
+         {std::pair{"Border", "Window"},
+          {"InputBorder", "Input"},
+          {"Focus", "Window"},
+          {"CheckboxBorder", "CheckboxBackground"},
+          {"MenuSeparator", "Menu"},
+          {"MenuSelectionBorder", "Menu"},
+          {"OptionActiveBorder", "Menu"},
+          {"MenuBarSelectionBorder", "MenuBar"},
+          {"StatusBarBorder", "StatusBar"},
+          {"TabSeparator", "TabBar"},
+          {"TabActiveBorder", "TabActive"},
+          {"ListSelectionBorder", "Base"},
+          {"ToolBarHoverBorder", "ToolBar"},
+          {"ButtonHoverBorder", "Window"},
+          {"ButtonPrimaryBorder", "Window"},
+          {"DockSeparator", "Window"},
+          {"WindowEdge", "Window"},
+          {"Separator", "ToolBar"},
+          {"ScrollbarSliderActive", "Base"}})
+      check(line, surface, 3.0);
+    // The analysis views' text on their surfaces.
+    const auto view = [&](ColorRole ink, ColorRole surface, qreal least) {
+      const qreal value = contrast(theme.color(ink), theme.color(surface));
+      QVERIFY2(value >= least,
+               qPrintable(QStringLiteral("view role %1 on %2: %3:1")
+                              .arg(int(ink))
+                              .arg(int(surface))
+                              .arg(value, 0, 'f', 2)));
+    };
+    view(ColorRole::ListingPlain, ColorRole::ListingBackground, 7.0);
+    view(ColorRole::CodeDefault, ColorRole::CodeBackground, 7.0);
+    view(ColorRole::HexByte, ColorRole::HexBackground, 7.0);
+    view(ColorRole::ListingSelectionText, ColorRole::ListingSelection, 7.0);
+    view(ColorRole::HexCurrentText, ColorRole::HexCurrent, 7.0);
+    for (const auto role :
+         {ColorRole::ListingMnemonic, ColorRole::ListingRegister,
+          ColorRole::ListingNumber, ColorRole::ListingCodeName,
+          ColorRole::ListingDataName, ColorRole::ListingString,
+          ColorRole::ListingComment, ColorRole::ListingLibraryName,
+          ColorRole::ListingImportName, ColorRole::ListingError,
+          ColorRole::ListingAutoComment})
+      view(role, ColorRole::ListingBackground, 4.5);
+    for (const auto role :
+         {ColorRole::CodeKeyword, ColorRole::CodeControl, ColorRole::CodeType,
+          ColorRole::CodeNumber, ColorRole::CodeString, ColorRole::CodeComment,
+          ColorRole::CodeFunction, ColorRole::CodeVariable,
+          ColorRole::CodeConstant, ColorRole::CodeLineNumber})
+      view(role, ColorRole::CodeBackground, 4.5);
+    view(ColorRole::ListingCurrentLineBorder, ColorRole::ListingBackground,
+         3.0);
+    view(ColorRole::ListingHighlightBorder, ColorRole::ListingBackground, 3.0);
+    // The cursor's highlight outlines a word and leaves its syntax colors on
+    // the view's own background.
+    QCOMPARE(theme.color(ColorRole::ListingHighlight).alpha(), 0);
+  }
+
+  void highContrastFollowsTheDesktop() {
+    Theme &theme = Theme::instance();
+    const auto restore = qScopeGuard([&] { theme.setMode(Theme::Mode::Dark); });
+    theme.setMode(Theme::Mode::Dark);
+    theme.setChoice(Theme::Choice::System);
+    using platform::DesktopContrast;
+    // A desktop that asks for high contrast gets the high contrast theme of
+    // its brightness, whatever its color scheme says.
+    theme.followDesktop(Qt::ColorScheme::Light, DesktopContrast::HighDark);
+    QCOMPARE(theme.mode(), Theme::Mode::HighContrastDark);
+    QCOMPARE(theme.chrome(QStringLiteral("Window")), QColor(Qt::black));
+    theme.followDesktop(Qt::ColorScheme::Unknown, DesktopContrast::HighLight);
+    QCOMPARE(theme.mode(), Theme::Mode::HighContrastLight);
+    QCOMPARE(theme.chrome(QStringLiteral("Window")), QColor(Qt::white));
+    // Turning high contrast off returns to the scheme's theme.
+    theme.followDesktop(Qt::ColorScheme::Dark, DesktopContrast::Normal);
+    QCOMPARE(theme.mode(), Theme::Mode::Dark);
+    // A high contrast theme chosen by name stays.
+    theme.setChoice(Theme::Choice::HighContrastLight);
+    QCOMPARE(QSettings().value(QStringLiteral("appearance/theme")).toString(),
+             QStringLiteral("hc-light"));
+    theme.followDesktop(Qt::ColorScheme::Dark, DesktopContrast::HighDark);
+    QCOMPARE(theme.mode(), Theme::Mode::HighContrastLight);
+    QCOMPARE(Theme::choiceFromName(QStringLiteral("hc-dark")),
+             Theme::Choice::HighContrastDark);
+    // Only a high contrast theme adds its style sheet, which keeps an outline
+    // around every menu bar item.
+    const QString overlay =
+        QStringLiteral("QMenuBar::item { border: 1px solid transparent");
+    QVERIFY(qApp->styleSheet().contains(overlay));
+    theme.setMode(Theme::Mode::Light);
+    QVERIFY(!qApp->styleSheet().contains(overlay));
+  }
+
+  void highContrastOutlinesWhatOthersFill_data() {
+    QTest::addColumn<bool>("dark");
+    QTest::newRow("dark") << true;
+    QTest::newRow("light") << false;
+  }
+
+  void highContrastOutlinesWhatOthersFill() {
+    QFETCH(bool, dark);
+    Theme &theme = Theme::instance();
+    const auto restore = qScopeGuard([&] { theme.setMode(Theme::Mode::Dark); });
+    theme.setMode(dark ? Theme::Mode::HighContrastDark
+                       : Theme::Mode::HighContrastLight);
+    {
+      QMenu menu;
+      menu.addAction(QStringLiteral("First"));
+      auto *highlighted = menu.addAction(QStringLiteral("Second"));
+      menu.ensurePolished();
+      menu.resize(menu.sizeHint());
+      menu.setActiveAction(highlighted);
+      const QImage image = menu.grab().toImage();
+      const QRect row = menu.actionGeometry(highlighted);
+      const qreal dpr = image.devicePixelRatio();
+      const auto at = [&](int x, int y) {
+        return image.pixelColor(qRound(x * dpr), qRound(y * dpr));
+      };
+      // The highlighted item keeps the menu's color, at most tinted, and takes
+      // an outline along its middle row's ends.
+      const QColor outline =
+          theme.chrome(QStringLiteral("MenuSelectionBorder"));
+      const QColor tint = over(theme.chrome(QStringLiteral("MenuSelection")),
+                               theme.chrome(QStringLiteral("Menu")));
+      const int middle = row.top() + row.height() / 2;
+      QCOMPARE(at(row.left(), middle), outline);
+      QCOMPARE(at(row.right(), middle), outline);
+      QVERIFY(near(at(row.left() + 2, middle), tint, 1));
+      // Its text stays legible on the tint.
+      qreal best = 1;
+      for (int y = row.top() + 3; y <= row.bottom() - 3; ++y)
+        for (int x = row.left() + 3; x <= row.right() - 3; ++x)
+          best = std::max(best, contrast(at(x, y), tint));
+      QVERIFY2(best >= 7, qPrintable(QString::number(best)));
+    }
+    // The views' highlight of the word under the cursor, and of search
+    // matches, outlines the word and keeps the background.
+    {
+      QImage canvas(40, 20, QImage::Format_ARGB32);
+      const QColor background = theme.color(ColorRole::ListingBackground);
+      canvas.fill(background);
+      QPainter painter(&canvas);
+      paintHighlight(painter, QRectF(4.5, 2, 20.25, 16),
+                     ColorRole::ListingHighlight);
+      painter.end();
+      const QColor outline = theme.color(ColorRole::ListingHighlightBorder);
+      QCOMPARE(canvas.pixelColor(4, 10), outline);
+      QCOMPARE(canvas.pixelColor(12, 2), outline);
+      QCOMPARE(canvas.pixelColor(24, 10), outline);
+      QCOMPARE(canvas.pixelColor(12, 10), background);
+    }
+    // A list's selected row takes one outline around all its cells, with its
+    // text in the list's color.
+    QStandardItemModel model(3, 2);
+    for (int row = 0; row < model.rowCount(); ++row)
+      for (int column = 0; column < model.columnCount(); ++column)
+        model.setItem(row, column, new QStandardItem(QStringLiteral("Cell")));
+    QTreeView view;
+    view.setModel(&model);
+    view.setRootIsDecorated(false);
+    view.header()->hide();
+    view.resize(320, 120);
+    view.setColumnWidth(0, 160);
+    view.selectionModel()->select(model.index(1, 0),
+                                  QItemSelectionModel::Select |
+                                      QItemSelectionModel::Rows);
+    // Item delegates draw a selected row's own text in this color.
+    view.ensurePolished();
+    QCOMPARE(view.palette().color(QPalette::HighlightedText),
+             theme.chrome(QStringLiteral("ListSelectionText")));
+    const QImage image = view.grab().toImage();
+    const QPoint origin = view.viewport()->mapTo(&view, QPoint());
+    const qreal dpr = image.devicePixelRatio();
+    const auto at = [&](const QPoint &point) {
+      return image.pixelColor(qRound((point.x() + origin.x()) * dpr),
+                              qRound((point.y() + origin.y()) * dpr));
+    };
+    const QRect first = view.visualRect(model.index(1, 0));
+    const QRect second = view.visualRect(model.index(1, 1));
+    const QColor outline = theme.chrome(QStringLiteral("ListSelectionBorder"));
+    const int middle = first.center().y();
+    QCOMPARE(at(QPoint(first.center().x(), first.top())), outline);
+    QCOMPARE(at(QPoint(second.center().x(), second.bottom())), outline);
+    QCOMPARE(at(QPoint(first.left(), middle)), outline);
+    QCOMPARE(at(QPoint(second.right(), middle)), outline);
+    QVERIFY(at(QPoint(first.right(), middle)) != outline);
+    QVERIFY(at(QPoint(second.left(), middle)) != outline);
+  }
+
+  void deviceBoxesPaintAsStyleSheetsAtWholeScales_data() {
+    QTest::addColumn<QString>("rule");
+    QTest::addColumn<QSize>("size");
+    QTest::addColumn<QColor>("fill");
+    QTest::addColumn<QColor>("border");
+    QTest::addColumn<int>("edges");
+    QTest::addColumn<int>("radius");
+    QTest::addColumn<qreal>("scale");
+    const int all = Qt::TopEdge | Qt::LeftEdge | Qt::RightEdge | Qt::BottomEdge;
+    const QColor none;
+    const QColor faint = QColor::fromRgba(0x660E639Cu);
+    struct Box {
+      const char *name;
+      QSize size;
+      QColor fill, border;
+      int edges, radius;
+    };
+    const Box boxes[] = {
+        {"field", {120, 24}, QColor(0xFFFFFF), QColor(0xCECECE), all, 2},
+        {"tool-hover", {24, 24}, QColor(0xE1E1E1), none, all, 3},
+        {"editor", {120, 60}, QColor(0xFFFFFF), none, 0, 2},
+        {"tool-focus", {24, 22}, none, QColor(0x0090F1), all, 3},
+        {"check", {16, 16}, QColor(0xFFFFFF), QColor(0x919191), all, 3},
+        {"radio", {16, 16}, QColor(0x007ACC), QColor(0x007ACC), all, 8},
+        {"card", {300, 80}, QColor(0xFFFFFF), QColor(0xE5E5E5), all, 6},
+        {"faint-fill", {75, 26}, faint, none, all, 2},
+        {"faint-border", {60, 20}, QColor(0xFFFFFF), faint, all, 2},
+        {"menu", {180, 120}, QColor(0x252526), QColor(0x454545), all, 0},
+        {"heading",
+         {90, 22},
+         QColor(0xF3F3F3),
+         QColor(0xE5E5E5),
+         Qt::RightEdge | Qt::BottomEdge,
+         0},
+        {"status",
+         {300, 22},
+         QColor(0x007ACC),
+         QColor(0xE5E5E5),
+         Qt::TopEdge,
+         0}};
+    for (const Box &box : boxes)
+      for (const qreal scale : {1.0, 2.0}) {
+        QString rule =
+            QStringLiteral("QWidget { background: %1; border: none; ")
+                .arg(box.fill.isValid() ? box.fill.name(QColor::HexArgb)
+                                        : QStringLiteral("none"));
+        const std::pair<Qt::Edge, const char *> sides[] = {
+            {Qt::TopEdge, "top"},
+            {Qt::RightEdge, "right"},
+            {Qt::BottomEdge, "bottom"},
+            {Qt::LeftEdge, "left"}};
+        for (const auto &[edge, side] : sides)
+          if (box.edges & edge)
+            rule +=
+                QStringLiteral("border-%1: 1px solid %2; ")
+                    .arg(QLatin1String(side),
+                         box.border.isValid() ? box.border.name(QColor::HexArgb)
+                                              : QStringLiteral("transparent"));
+        if (box.radius)
+          rule += QStringLiteral("border-radius: %1px; ").arg(box.radius);
+        rule += QLatin1Char('}');
+        QTest::newRow(qPrintable(
+            QStringLiteral("%1-%2x").arg(QLatin1String(box.name)).arg(scale)))
+            << rule << box.size << box.fill << box.border << box.edges
+            << box.radius << scale;
+      }
+  }
+
+  void deviceBoxesPaintAsStyleSheetsAtWholeScales() {
+    QFETCH(QString, rule);
+    QFETCH(QSize, size);
+    QFETCH(QColor, fill);
+    QFETCH(QColor, border);
+    QFETCH(int, edges);
+    QFETCH(int, radius);
+    QFETCH(qreal, scale);
+    // The workbench paints its controls' boxes itself; where every logical
+    // pixel covers whole device pixels, a box is exactly the style sheet's.
+    const auto canvas = [&] {
+      QImage image((size + QSize(8, 8)) * scale,
+                   QImage::Format_ARGB32_Premultiplied);
+      image.setDevicePixelRatio(scale);
+      image.fill(QColor(0x808080));
+      return image;
+    };
+    QImage expected = canvas();
+    QWidget styled;
+    styled.setAttribute(Qt::WA_StyledBackground);
+    styled.setStyleSheet(rule);
+    styled.resize(size);
+    styled.ensurePolished();
+    styled.render(&expected, QPoint(4, 4), QRegion(), QWidget::RenderFlags());
+    QImage actual = canvas();
+    {
+      QPainter painter(&actual);
+      painter.translate(4, 4);
+      // As Qt clips a widget's painting to the widget.
+      painter.setClipRect(QRect(QPoint(), size));
+      DeviceBox box;
+      box.fill = fill;
+      box.border = border.isValid() ? border : QColor(Qt::transparent);
+      box.edges = Qt::Edges(edges);
+      box.radius = radius;
+      paintDeviceBox(painter, QRect(QPoint(), size), box);
+    }
+    QCOMPARE(actual, expected);
+  }
+
+  void controlsKeepTheirLinesOnDevicePixels_data() {
+    QTest::addColumn<QString>("kind");
+    QTest::addColumn<qreal>("scale");
+    for (const char *kind :
+         {"field", "button", "default", "check", "group", "heading", "tab"})
+      for (const qreal scale : {1.0, 1.25, 1.5, 1.75})
+        QTest::newRow(qPrintable(
+            QStringLiteral("%1-%2x").arg(QLatin1String(kind)).arg(scale)))
+            << QString::fromLatin1(kind) << scale;
+  }
+
+  void controlsKeepTheirLinesOnDevicePixels() {
+    QFETCH(QString, kind);
+    QFETCH(qreal, scale);
+    Theme::instance().setMode(Theme::Mode::Light);
+    Theme::instance().apply();
+    const Theme &theme = Theme::instance();
+    QWidget window;
+    window.setAttribute(Qt::WA_StyledBackground);
+    window.setStyleSheet(QStringLiteral("QWidget#surface { background: %1; }")
+                             .arg(theme.chrome("Window").name()));
+    window.setObjectName(QStringLiteral("surface"));
+    window.resize(220, 120);
+    // The control's box, in the window, and the colors a line across it may
+    // take: the surface, the box's border and its fill.
+    QWidget *control = nullptr;
+    QRect box;
+    QList<QColor> allowed = {theme.chrome("Window")};
+    // Headings without labels, so only the header's own lines cross them.
+    QStandardItemModel headings(0, 2);
+    headings.setHorizontalHeaderLabels(
+        {QStringLiteral(" "), QStringLiteral(" ")});
+    if (kind == QLatin1String("field")) {
+      control = new QLineEdit(&window);
+      allowed << theme.chrome("InputBorder") << theme.chrome("Input");
+    } else if (kind == QLatin1String("button") ||
+               kind == QLatin1String("default")) {
+      auto *button = new QPushButton(&window);
+      button->setDefault(kind == QLatin1String("default"));
+      control = button;
+      allowed << theme.chrome(button->isDefault() ? "ButtonPrimary" : "Border")
+              << theme.chrome(button->isDefault() ? "ButtonPrimary" : "Button");
+    } else if (kind == QLatin1String("check")) {
+      control = new QCheckBox(&window);
+      allowed << theme.chrome("CheckboxBorder")
+              << theme.chrome("CheckboxBackground");
+    } else if (kind == QLatin1String("group")) {
+      control = new QGroupBox(&window);
+      allowed << theme.chrome("Border");
+    } else if (kind == QLatin1String("tab")) {
+      // Tabs without labels, the first selected.
+      auto *tabs = new QTabBar(&window);
+      tabs->addTab(QStringLiteral(" "));
+      tabs->addTab(QStringLiteral(" "));
+      control = tabs;
+      allowed << theme.chrome("TabBar") << theme.chrome("TabActive")
+              << theme.chrome("TabInactive") << theme.chrome("TabActiveBorder");
+    } else {
+      auto *view = new QTreeView(&window);
+      view->setModel(&headings);
+      control = view;
+      allowed << theme.chrome("Border") << theme.chrome("HeaderBackground")
+              << theme.chrome("Base");
+    }
+    // At rest: a field with focus takes the focus color's outline.
+    control->setFocusPolicy(Qt::NoFocus);
+    control->setGeometry(13, 17, 150, 60);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    if (auto *check = qobject_cast<QCheckBox *>(control)) {
+      QStyleOptionButton option;
+      option.initFrom(check);
+      box = check->style()->subElementRect(QStyle::SE_CheckBoxIndicator,
+                                           &option, check);
+    } else if (auto *group = qobject_cast<QGroupBox *>(control)) {
+      QStyleOptionGroupBox option;
+      option.initFrom(group);
+      option.subControls = QStyle::SC_GroupBoxFrame;
+      box = group->style()->subControlRect(QStyle::CC_GroupBox, &option,
+                                           QStyle::SC_GroupBoxFrame, group);
+    } else if (auto *view = qobject_cast<QTreeView *>(control)) {
+      box = view->header()->geometry();
+    } else if (auto *tabs = qobject_cast<QTabBar *>(control)) {
+      box = tabs->tabRect(0);
+    } else {
+      box = control->rect();
+    }
+    box.translate(control->pos());
+    // Each logical offset puts the box at another quarter of a device pixel.
+    for (int offset = 0; offset < 4; ++offset) {
+      QImage image(QSize(240, 140) * scale,
+                   QImage::Format_ARGB32_Premultiplied);
+      image.setDevicePixelRatio(scale);
+      image.fill(theme.chrome("Window"));
+      window.render(&image, QPoint(offset, offset));
+      const QRect device(
+          QPoint(qFloor((box.left() + offset) * scale) - 2,
+                 qFloor((box.top() + offset) * scale) - 2),
+          QPoint(qCeil((box.right() + 1 + offset) * scale) + 1,
+                 qCeil((box.bottom() + 1 + offset) * scale) + 1));
+      const auto check = [&](QPoint pixel) {
+        const QColor color = image.pixelColor(pixel);
+        return std::any_of(
+            allowed.begin(), allowed.end(),
+            [&](const QColor &c) { return c.rgb() == color.rgb(); });
+      };
+      const int middleY = (device.top() + device.bottom()) / 2;
+      const int middleX = (device.left() + device.right()) / 2;
+      for (int x = device.left(); x <= device.right(); ++x)
+        QVERIFY2(check({x, middleY}),
+                 qPrintable(QStringLiteral("offset %1: %2 at (%3, %4)")
+                                .arg(offset)
+                                .arg(image.pixelColor(x, middleY).name())
+                                .arg(x)
+                                .arg(middleY)));
+      for (int y = device.top(); y <= device.bottom(); ++y)
+        QVERIFY2(check({middleX, y}),
+                 qPrintable(QStringLiteral("offset %1: %2 at (%3, %4)")
+                                .arg(offset)
+                                .arg(image.pixelColor(middleX, y).name())
+                                .arg(middleX)
+                                .arg(y)));
+    }
   }
 
   void longMenusScrollWithinOneColumn_data() {

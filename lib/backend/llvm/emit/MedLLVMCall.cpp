@@ -16,6 +16,7 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/llvm/AArch64/AArch64SourceResultCall.h"
+#include "neverd/backend/llvm/AArch64/LLVMEntryABI.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMFloatingCall.h"
 #include "neverd/backend/llvm/LLVMName.h"
@@ -50,6 +51,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/Loads.h"
 #include "llvm/IR/Constants.h"
@@ -58,6 +60,7 @@
 #include <algorithm>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -300,7 +303,8 @@ std::optional<LLVMArgumentBinding> bindResolvedLLVMArguments(
 }
 
 bool normalizeResolvedLLVMCalls(llvm::Module &Module, LLVMSourceMap *Sources,
-                                bool AnalystSourceProjection) {
+                                bool AnalystSourceProjection,
+                                std::vector<ResolvedCallRefusal> *Refusals) {
   const auto &Layout = Module.getDataLayout();
   const unsigned PointerBits = Layout.getPointerSizeInBits();
   auto Compatible = [&](llvm::Type *From, llvm::Type *To) {
@@ -329,19 +333,24 @@ bool normalizeResolvedLLVMCalls(llvm::Module &Module, LLVMSourceMap *Sources,
       for (auto &I : B)
         if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&I))
           Calls.push_back(Call);
-  for (auto *Call : Calls) {
+  // One call: true when it stands or is reconciled, else false with the
+  // diagnostic in \p Reason.
+  const auto NormalizeCall = [&](llvm::CallBase *Call,
+                                 std::string &Reason) -> bool {
     if (AnalystSourceProjection &&
         Call->getMetadata("neverd.source.analyst-call"))
-      continue;
+      return true;
     auto *Target = llvm::dyn_cast_or_null<llvm::Function>(
         constantCallIdentity(Call->getCalledOperand(), Layout, PointerBits));
     if (!Target || (Call->getFunctionType() == Target->getFunctionType() &&
                     Call->getCallingConv() == Target->getCallingConv()))
-      continue;
-    auto Refuse = [&](llvm::StringRef Reason) {
-      syncError() << "med_llvm_emitter: resolved call in "
-                  << Call->getFunction()->getName() << " to "
-                  << Target->getName() << " " << Reason << "\n";
+      return true;
+    auto Refuse = [&](llvm::StringRef Why) {
+      Reason = ("med_llvm_emitter: resolved call in " +
+                Call->getFunction()->getName() + " to " + Target->getName() +
+                " " + Why)
+                   .str();
+      syncError() << Reason << "\n";
       return false;
     };
     auto *Type = Target->getFunctionType();
@@ -441,12 +450,29 @@ bool normalizeResolvedLLVMCalls(llvm::Module &Module, LLVMSourceMap *Sources,
     if (!Call->use_empty())
       Call->replaceAllUsesWith(Convert(Builder, Replacement, Call->getType()));
     Call->eraseFromParent();
+    return true;
+  };
+  bool Normalized = true;
+  std::set<const llvm::Function *> RefusedCallers;
+  for (auto *Call : Calls) {
+    // A refused call refuses its function, whose other calls then stand.
+    if (RefusedCallers.count(Call->getFunction()))
+      continue;
+    std::string Reason;
+    if (NormalizeCall(Call, Reason))
+      continue;
+    if (!Refusals)
+      return false;
+    Normalized = false;
+    RefusedCallers.insert(Call->getFunction());
+    Refusals->push_back({Call->getFunction(), std::move(Reason)});
   }
-  return true;
+  return Normalized;
 }
 
-bool validateResolvedLLVMCallSignatures(llvm::Module &Module,
-                                        bool AnalystSourceProjection) {
+bool validateResolvedLLVMCallSignatures(
+    llvm::Module &Module, bool AnalystSourceProjection,
+    std::vector<ResolvedCallRefusal> *Refusals) {
   const auto &Layout = Module.getDataLayout();
   // Binding passed zero for integer positions the call does not set. Now that
   // the body is known, it must not read them. A callee defined in another
@@ -464,32 +490,45 @@ bool validateResolvedLLVMCallSignatures(llvm::Module &Module,
         return true;
     return false;
   };
-  for (auto &Function : Module)
+  // Why the first call of \p Function that disagrees with its target fails,
+  // or nothing.
+  const auto FirstRefusal = [&](llvm::Function &Function) -> std::string {
     for (auto &Block : Function)
       for (auto &Instruction : Block)
         if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction))
           if (auto *Target = llvm::dyn_cast_or_null<llvm::Function>(
                   constantCallIdentity(Call->getCalledOperand(), Layout,
                                        Layout.getPointerSizeInBits()))) {
-            if (ReadsUnsetInteger(*Call, *Target)) {
-              syncError() << "med_llvm_emitter: resolved call in "
-                          << Function.getName()
-                          << " does not set a register argument "
-                          << Target->getName() << " reads\n";
-              return false;
-            }
+            if (ReadsUnsetInteger(*Call, *Target))
+              return ("med_llvm_emitter: resolved call in " +
+                      Function.getName() +
+                      " does not set a register argument " + Target->getName() +
+                      " reads")
+                  .str();
             if (Call->getFunctionType() == Target->getFunctionType() &&
                 Call->getCallingConv() == Target->getCallingConv())
               continue;
             if (AnalystSourceProjection &&
                 Call->getMetadata("neverd.source.analyst-call"))
               continue;
-            syncError() << "med_llvm_emitter: resolved call in "
-                        << Function.getName() << " disagrees with the ABI of "
-                        << Target->getName() << "\n";
-            return false;
+            return ("med_llvm_emitter: resolved call in " + Function.getName() +
+                    " disagrees with the ABI of " + Target->getName())
+                .str();
           }
-  return true;
+    return {};
+  };
+  bool Valid = true;
+  for (auto &Function : Module) {
+    std::string Reason = FirstRefusal(Function);
+    if (Reason.empty())
+      continue;
+    syncError() << Reason << "\n";
+    if (!Refusals)
+      return false;
+    Valid = false;
+    Refusals->push_back({&Function, std::move(Reason)});
+  }
+  return Valid;
 }
 
 //===----------------------------------------------------------------------===//
@@ -795,11 +834,13 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   std::string IndirectImportName;
   bool PreserveHeaderTarget = Authentication != nullptr;
   std::optional<FunctionSym> VariadicHeader;
-  if (Op.CalleeVariadicFrom >= 0 && Img && CI && Dbg) {
+  if (Op.CalleeVariadicFrom >= 0 && Img && CI) {
     const std::string Name = importCalleeName(*Img, CI->TargetAddr);
-    if (!Name.empty())
-      if (auto Header = Dbg->resolvePrototype(Name);
-          Header &&
+    if (!Name.empty()) {
+      auto Header = Dbg ? Dbg->resolvePrototype(Name) : std::nullopt;
+      if (!Header)
+        Header = libc::runtimeVariadicPrototype(Name, TargetArch, TargetFormat);
+      if (Header &&
           libc::variadicCallArguments(*Header, TargetArch, TargetFormat) &&
           Header->Params.size() == static_cast<size_t>(Op.CalleeVariadicFrom) &&
           CI->VarArgFixedCount == Op.CalleeVariadicFrom &&
@@ -808,6 +849,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         IndirectImportName = Name;
         PreserveHeaderTarget = Target && !KnownTarget;
       }
+    }
     if (!VariadicHeader) {
       syncError() << "med_llvm_emitter: variadic header call lost its checked "
                      "fixed prefix\n";
@@ -1027,7 +1069,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Values.push_back(Packed);
         continue;
       }
-      const bool Floating = Members.front().Type->Kind == NdTypeKind::Float;
+      const bool Floating = Members.front().Type->Kind == NdTypeKind::Float ||
+                            isSourceAArch64VectorType(Members.front().Type);
       auto *Array = llvm::cast<llvm::ArrayType>(
           llvmSourceCallValueType(*Ctx, Parameter.Type, /*Parameter=*/true));
       const unsigned Count = Array->getNumElements();
@@ -1039,6 +1082,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                            Builder.CreateLShr(Packed, I * kSourceCallWordBytes *
                                                           kSourceCallByteBits),
                            I64Ty);
+        if (Part->getType() != Array->getElementType())
+          Part = Builder.CreateBitCast(Part, Array->getElementType());
         Value = Builder.CreateInsertValue(Value, Part, {I});
       }
       Types.push_back(Array);
@@ -1166,6 +1211,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       }
     } else {
       Call = Builder.CreateCall(FT, Callable, Values, AuthenticationBundles);
+      if (TargetArch == Arch::AArch64 && TargetFormat == BinaryFormat::MachO)
+        Call->setMetadata(kAArch64SourceEntryCall, llvm::MDNode::get(*Ctx, {}));
     }
     if (!MachineCall && Hint.Signature.ReturnType->Kind == NdTypeKind::Int &&
         Hint.Signature.ReturnType->IsSigned)

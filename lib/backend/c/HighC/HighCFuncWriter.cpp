@@ -22,8 +22,8 @@
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/backend/Limits.h"
-#include "neverd/backend/MIPS/MIPSDSPSource.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
+#include "neverd/backend/MIPS/MIPSSourceCompiler.h"
 #include "neverd/backend/c/render/AArch64/AArch64ReturnProtectionC.h"
 #include "neverd/backend/c/render/AArch64/AArch64SVEVectorState.h"
 #include "neverd/ir/SourceParameterPlacement.h"
@@ -1160,6 +1160,11 @@ void HighCWriter::writeFunction(const HighFunc &Func) {
     throw std::invalid_argument("escaped image address 0x" +
                                 llvm::utohexstr(Unbacked->second) +
                                 " has no materializable storage extent");
+  if (const auto Unmapped = UnmappedRepeatedAccesses.find(&Func);
+      Unmapped != UnmappedRepeatedAccesses.end())
+    throw std::invalid_argument("repeated image access at 0x" +
+                                llvm::utohexstr(Unmapped->second) +
+                                " crosses its mapped storage");
   const auto SourceBody = sourceBodyOrigin(Func);
   llvm::SaveAndRestore<CSourceMap *> SourceMapScope(
       Opts.SourceMap, SourceBody ? nullptr : Opts.SourceMap);
@@ -6391,7 +6396,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
 
   if (EmitFunctionWrapper) {
     if (isMIPS(Opts.TheArch))
-      OS << mips::dspSourceCAttribute(
+      OS << mips::sourceCompilerCAttribute(
           Opts.TheArch, Opts.Image,
           MIPSScalarHelpers.count(Intrinsic::MIPSReadDSPControl) ||
               MIPSScalarHelpers.count(Intrinsic::MIPSWriteDSPControl));

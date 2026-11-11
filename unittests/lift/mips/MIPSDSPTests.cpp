@@ -739,6 +739,242 @@ TEST_P(MIPSDSP, SaturatedAbsoluteAndPureGPRPredicatesHaveDistinctStateEffects) {
         }
 }
 
+TEST_P(MIPSDSP,
+       PackedMultipliesSaturateAndInvalidateAc0EvenWithZeroDestination) {
+  auto Image = dspImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  constexpr uint32_t Inputs[] = {0,          1,          0xffffffff, 0x80008000,
+                                 0x7fff7fff, 0xff00ff00, 0x00ff00ff, 0x80017fff,
+                                 0x0001ffff, 0xc0004000, 0x11223344, 0x40004000,
+                                 0x01000200, 0x80808080, 0x01010101};
+  for (uint32_t Encoding : {0x7c000190u, 0x7c0001d0u, 0x7c0007d0u})
+    for (uint32_t A : Inputs)
+      for (uint32_t B : Inputs)
+        for (unsigned Destination : {0u, 2u, 4u, 5u})
+          for (uint32_t Control : {0x050051a5u, 0x052051a5u}) {
+            SCOPED_TRACE(::testing::Message()
+                         << std::hex << Encoding << ": " << A << ", " << B);
+            uint32_t Value = 0, State = Control;
+            for (unsigned I = 0; I != 2; ++I) {
+              int64_t Product;
+              const auto Y = uint16_t(B >> (I * 16));
+              if (Encoding == 0x7c0007d0) {
+                const auto X = uint16_t(A >> (I * 16));
+                if (X == 0x8000 && Y == 0x8000) {
+                  Product = 32767;
+                  State |= 1u << 21;
+                } else {
+                  const int64_t SX = X < 32768 ? X : int(X) - 65536;
+                  const int64_t SY = Y < 32768 ? Y : int(Y) - 65536;
+                  // Floor division with a positive divisor, independent of
+                  // the lifter's arithmetic shift implementation.
+                  const int64_t Rounded = SX * SY + 16384;
+                  Product =
+                      Rounded / 32768 - (Rounded < 0 && Rounded % 32768 != 0);
+                }
+              } else {
+                const auto X =
+                    uint8_t(A >> (8 * (I + (Encoding == 0x7c000190 ? 2 : 0))));
+                Product = int64_t(X) * Y;
+                if (Product > 65535) {
+                  Product = 65535;
+                  State |= 1u << 21;
+                }
+              }
+              Value |= uint32_t(uint16_t(Product)) << (16 * I);
+            }
+            NdOpEmulator E(Image);
+            E.setStrictMode(true);
+            E.setRegister(mipsreg::A0, A);
+            E.setRegister(mipsreg::A1, B);
+            E.setRegister(mipsreg::HI, 0x12345678);
+            E.setRegister(mipsreg::LO, 0x87654321);
+            E.setRegister(mipsreg::DSPControl, Control);
+            ASSERT_TRUE(executeDSP(
+                D, GetParam(), Encoding | 0x00850000 | (Destination << 11), E));
+            if (Destination)
+              EXPECT_EQ(E.getRegister(mipsreg::r(Destination)), Value);
+            EXPECT_EQ(E.getRegister(mipsreg::DSPControl), State);
+            EXPECT_FALSE(E.getRegister(mipsreg::HI));
+            EXPECT_FALSE(E.getRegister(mipsreg::LO));
+            EXPECT_FALSE(E.skips().any());
+          }
+  for (unsigned Missing : {mipsreg::A0, mipsreg::A1, mipsreg::DSPControl}) {
+    NdOpEmulator E(Image);
+    E.setStrictMode(true);
+    for (unsigned R : {mipsreg::A0, mipsreg::A1, mipsreg::DSPControl})
+      if (R != Missing)
+        E.setRegister(R, 0);
+    E.setRegister(mipsreg::V0, 42);
+    E.setRegister(mipsreg::HI, 13);
+    E.setRegister(mipsreg::LO, 17);
+    EXPECT_FALSE(executeDSP(D, GetParam(), 0x7c8517d0, E));
+    EXPECT_EQ(E.getRegister(mipsreg::V0), 42u);
+    EXPECT_EQ(E.getRegister(mipsreg::HI), 13u);
+    EXPECT_EQ(E.getRegister(mipsreg::LO), 17u);
+  }
+}
+
+TEST_P(MIPSDSP, ExpandedMultiplyAndPrecisionReductionPreserveExactStickyState) {
+  auto Image = dspImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  const uint32_t Encodings[] = {0x7c000710, 0x7c000750, 0x7c000551, 0x7c0003d1};
+  const uint32_t Inputs[] = {0,          1,          0xffffffff, 0x80008000,
+                             0x7fff7fff, 0x7fff8000, 0xffff7fff, 0xffff8000,
+                             0x7f807f80, 0x7f817f81, 0x007f0080, 0x80000000,
+                             0x7fffffff};
+  for (unsigned Op = 0; Op != 4; ++Op)
+    for (auto A : Inputs)
+      for (auto B : Inputs)
+        for (unsigned RD : {0u, 2u, 4u, 5u}) {
+          uint32_t Value = 0;
+          bool Overflow = false;
+          const auto Signed = [](uint32_t V, unsigned Bits) -> int64_t {
+            return V & (uint32_t(1) << (Bits - 1))
+                       ? int64_t(V) - (INT64_C(1) << Bits)
+                       : int64_t(V);
+          };
+          if (Op < 2) {
+            unsigned Shift = Op ? 0 : 16;
+            int64_t X = Signed((A >> Shift) & 65535, 16),
+                    Y = Signed((B >> Shift) & 65535, 16);
+            Overflow = X == -32768 && Y == -32768;
+            Value = Overflow ? 0x7fffffff : uint32_t(X * Y * 2);
+          } else if (Op == 2) {
+            for (auto V : {A, B}) {
+              int64_t Rounded = Signed(V, 32) + 32768;
+              Overflow |= Rounded > INT32_MAX;
+              uint32_t Lane = Rounded > INT32_MAX
+                                  ? 32767
+                                  : uint32_t(uint64_t(Rounded) >> 16) & 65535;
+              Value = (Value << 16) | Lane;
+            }
+          } else {
+            for (auto V : {A, B})
+              for (unsigned Shift : {16u, 0u}) {
+                int64_t X = Signed((V >> Shift) & 65535, 16);
+                Overflow |= X < 0 || X > 32640;
+                Value = (Value << 8) | (X < 0       ? 0
+                                        : X > 32640 ? 255
+                                                    : uint32_t(X / 128));
+              }
+          }
+          NdOpEmulator E(Image);
+          E.setStrictMode(true);
+          uint32_t Control = RD & 1 ? 0x0fff7fbf : 0x01000021;
+          E.setRegister(mipsreg::DSPControl, Control);
+          E.setRegister(mipsreg::A0, A);
+          E.setRegister(mipsreg::A1, B);
+          E.setRegister(mipsreg::HI, 123);
+          E.setRegister(mipsreg::LO, 456);
+          ASSERT_TRUE(executeDSP(
+              D, GetParam(), Encodings[Op] | (4 << 21) | (5 << 16) | (RD << 11),
+              E));
+          if (RD)
+            EXPECT_EQ(E.getRegister(mipsreg::r(RD)), Value);
+          EXPECT_EQ(E.getRegister(mipsreg::DSPControl),
+                    Control | (Overflow ? 1u << (Op < 2 ? 21 : 22) : 0));
+          if (Op >= 2) {
+            EXPECT_EQ(E.getRegister(mipsreg::HI), 123u);
+            EXPECT_EQ(E.getRegister(mipsreg::LO), 456u);
+          } else {
+            LowOp Observe;
+            Observe.Opcode = NdOp::INT_ADD;
+            Observe.Output = NdVar::tmp(9000, 4);
+            Observe.addInput(NdVar::reg(mipsreg::HI, 4));
+            Observe.addInput(NdVar::cst(0, 4));
+            EXPECT_FALSE(E.step(Observe));
+            Observe.Inputs[0] = NdVar::reg(mipsreg::LO, 4);
+            EXPECT_FALSE(E.step(Observe));
+          }
+        }
+  Decoder Plain;
+  ASSERT_TRUE(Plain.init(GetParam()));
+  for (auto Word : Encodings)
+    EXPECT_THROW(
+        liftDSP(Plain, GetParam(), Word | (4 << 21) | (5 << 16) | (2 << 11)),
+        UnliftedInstruction);
+}
+
+TEST_P(MIPSDSP, AccumulatorBanksAndDotProductsPreserveFullCarryAndStickyFlags) {
+  auto I = dspImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(I));
+  const uint32_t Ops[] = {0x7c8500f0, 0x7c8501f0, 0x7c8502f0, 0x7c8503f0,
+                          0x7c850130, 0x7c850170, 0x7c8501b0};
+  for (unsigned Bank = 0; Bank != 4; ++Bank)
+    for (unsigned Kind = 0; Kind != 7; ++Kind)
+      for (auto [A, B] : {std::pair{0xffffffffu, 0xffffffffu},
+                          std::pair{0x80008000u, 0x80008000u},
+                          std::pair{0x80007fffu, 0x7fff8000u},
+                          std::pair{0x12345678u, 0x90abcdefu}})
+        for (uint64_t Initial :
+             {UINT64_C(0), UINT64_MAX, UINT64_C(0x80000000ffffffff)}) {
+          NdOpEmulator E(I);
+          E.setStrictMode(true);
+          for (unsigned N = 0; N != 4; ++N) {
+            E.setRegister(mipsreg::accumulatorHI(N),
+                          N == Bank ? Initial >> 32 : 0xabcdef01u);
+            E.setRegister(mipsreg::accumulatorLO(N),
+                          N == Bank ? uint32_t(Initial) : 0x12345678u);
+          }
+          E.setRegister(mipsreg::A0, A);
+          E.setRegister(mipsreg::A1, B);
+          E.setRegister(mipsreg::DSPControl, 0x05a17fbf);
+          uint64_t Sum = 0;
+          uint32_t Control = 0x05a17fbf;
+          for (unsigned N = 0; N != 2; ++N) {
+            int64_t Product;
+            if (Kind < 4) {
+              const unsigned Shift = 8 * (N + (!(Kind & 1) ? 2 : 0));
+              Product = ((A >> Shift) & 255) * ((B >> Shift) & 255);
+            } else {
+              const unsigned Shift = 16 * (1 - N);
+              const int64_t X = int((A >> Shift & 65535) ^ 32768) - 32768;
+              const int64_t Y = int((B >> Shift & 65535) ^ 32768) - 32768;
+              if (X == -32768 && Y == -32768) {
+                Product = 0x7fffffff;
+                Control |= 1u << (16 + Bank);
+              } else
+                Product = 2 * X * Y;
+            }
+            Sum += uint64_t(Kind == 6 && N ? -Product : Product);
+          }
+          const uint64_t Expected = Kind == 2 || Kind == 3 || Kind == 5
+                                        ? Initial - Sum
+                                        : Initial + Sum;
+          ASSERT_TRUE(executeDSP(D, GetParam(), Ops[Kind] | (Bank << 11), E));
+          EXPECT_EQ(E.getRegister(mipsreg::accumulatorHI(Bank)),
+                    Expected >> 32);
+          EXPECT_EQ(E.getRegister(mipsreg::accumulatorLO(Bank)),
+                    uint32_t(Expected));
+          EXPECT_EQ(E.getRegister(mipsreg::DSPControl), Control);
+          for (unsigned N = 0; N != 4; ++N)
+            if (N != Bank) {
+              EXPECT_EQ(E.getRegister(mipsreg::accumulatorHI(N)), 0xabcdef01u);
+              EXPECT_EQ(E.getRegister(mipsreg::accumulatorLO(N)), 0x12345678u);
+            }
+        }
+  for (unsigned Bank = 1; Bank != 4; ++Bank) {
+    NdOpEmulator E(I);
+    E.setStrictMode(true);
+    E.setRegister(mipsreg::A0, 0x87654321);
+    E.setRegister(mipsreg::HI, 19);
+    E.setRegister(mipsreg::LO, 23);
+    for (bool High : {false, true}) {
+      ASSERT_TRUE(executeDSP(D, GetParam(),
+                             0x00800011 | (Bank << 11) | (High ? 0 : 2), E));
+      ASSERT_TRUE(executeDSP(D, GetParam(),
+                             0x00001010 | (Bank << 21) | (High ? 0 : 2), E));
+      EXPECT_EQ(E.getRegister(mipsreg::V0), 0x87654321u);
+    }
+    EXPECT_EQ(E.getRegister(mipsreg::HI), 19u);
+    EXPECT_EQ(E.getRegister(mipsreg::LO), 23u);
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(ByteOrders, MIPSDSP,
                          ::testing::Values(Arch::MIPS32, Arch::MIPS32EL));
 

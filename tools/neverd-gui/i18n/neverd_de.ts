@@ -2653,6 +2653,18 @@ Mit Vorzeichen: %4</translation>
         <translation>Hell (Visual Studio Code Light+)</translation>
     </message>
     <message>
+        <source>Dark High Contrast (Visual Studio Code)</source>
+        <translation>Dunkel mit hohem Kontrast (Visual Studio Code)</translation>
+    </message>
+    <message>
+        <source>Light High Contrast (Visual Studio Code)</source>
+        <translation>Hell mit hohem Kontrast (Visual Studio Code)</translation>
+    </message>
+    <message>
+        <source>System (follows the desktop)</source>
+        <translation>System (folgt dem Desktop)</translation>
+    </message>
+    <message>
         <source>Colors</source>
         <translation>Farben</translation>
     </message>
@@ -10867,6 +10879,13 @@ Ihr vorheriger Graph ist weiterhin verfügbar.</translation>
     <message>
         <source>Undock window</source>
         <translation>Fenster abdocken</translation>
+    </message>
+</context>
+<context>
+    <name>CloseButton</name>
+    <message>
+        <source>Close Tab</source>
+        <translation>Tab schließen</translation>
     </message>
 </context>
 </TS>

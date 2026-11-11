@@ -1545,7 +1545,10 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
     llvm::function_ref<llvm::Error(const PatchResult &)> PrepareReceipt,
     const DynCodePatchEvidence *DynCode,
     const SourcePatchPreparation *Preparation,
-    llvm::ArrayRef<SourcePatchDependency> Dependencies) {
+    llvm::ArrayRef<SourcePatchDependency> Dependencies,
+    llvm::function_ref<llvm::Error(const CompiledImage &,
+                                   llvm::ArrayRef<NativeMachOCompactRange>)>
+        VerifyGenerated) {
   const BinaryImage &Original =
       Preparation ? Preparation->Image : OriginalInput;
   if (Original.MachOSharedCache)
@@ -1625,6 +1628,9 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
     if (auto E = finalizeImports(*Object, *EH))
       return E;
   }
+  if (VerifyGenerated)
+    if (auto E = VerifyGenerated(Object->Image, Object->Compact))
+      return E;
   if (DynCode)
     if (auto E =
             validateDynCodePatchImage(*DynCode, Bytes, Original, Object->Image,

@@ -438,3 +438,243 @@ keep explicit refusal paths. Native CPTA-on additionally requires actual CPA/CPA
 hardware and a controlled enabling/readback contract. The system probe records
 both feature sysctls independently of PAC execution; FVP results do not qualify
 an Apple native execution environment.
+
+## Lifted source entry reconstruction
+
+The [entry ABI validation record](evidence/arm64e-entry-abi-2026-11-10.json)
+records 886 passed and 46 skipped broader regression cases, followed by all
+11 final entry tests passing. It distinguishes the two build/test phases,
+identifies the final source and binary, and retains each unavailable check.
+
+`MedLLVMEmitter::setReconstructAArch64SourceEntries(true)` projects a complete
+fixed Darwin C declaration onto each emitted body's recovered carriers. The
+shared ABI owner must reproduce exactly the declared register and stack layout;
+an arbitrary observed-register list cannot become a native C signature. Missing
+declarations, incompatible result banks, variadic entries and uncovered input
+bytes fail before the entry is installed. Narrow register values retain their
+declared extension; unobserved upper bytes require the existing MedIR demand
+proof. Incoming stack slots require complete byte coverage.
+Unused synthetic parameters can receive zero only when they have no parameter
+attributes; a contract such as `noundef` still requires the declared carrier.
+Non-scalar physical result fields fail before any entry is changed.
+
+The public entry groups i128 values, ordinary records, HFA and HVA values and
+binds incoming stack pieces by byte offset. An indirect input retains its
+original pointer, and an indirect result uses an explicit `sret` parameter in
+x8 without inventing `noalias` or making a second result object. The private
+body keeps its physical parameter interface. Direct physical calls, recursion
+and invokes retain that body; calls marked by the canonical source-call producer
+and stored function pointers use the public entry. Interior block addresses
+remain in the body, and pointer-authentication constants retain their signing
+schema while changing the entry target. Function signing and unwind attributes
+remain with the body and its generated entry.
+
+The carrier rules follow [Apple's documented ARM64 ABI](https://developer.apple.com/documentation/xcode/writing-arm64-code-for-apple-platforms),
+including odd-register i128 pairs and packed stack arguments. The owning
+`AArch64EntryABI` tests include independent Clang O0/O2 callers and a decoded
+machine-code-to-MedIR-to-entry case. These tests distinguish ordinary native
+Darwin ABI execution from native arm64e signing and CPTA execution.
+The HVA case also executes a MedIR-emitted three-vector result. Records return
+reordered members, so an empty identity stub cannot satisfy the comparison.
+Codegen's narrow-return widening preserves an explicit `signext` contract;
+zero-extending every narrow result had changed signed byte returns.
+
+Entry reconstruction does **not** remove `neverd.arm64e-analysis`. A declaration
+does not prove the original image's prototype, physical-frame observations,
+exception coverage, address ownership or publication closure. Arbitrary lifted
+images still need those proofs, including variadic and non-C entries. The
+previous canonical-IR installation qualification and pinned r6 package remain
+unchanged; source-fork-only producer features still require the source build.
+
+## Publishing register-only lifted dylibs
+
+The ordinary segment patch pipeline can publish a classic macOS arm64e image
+whose entire instruction section consists of frameless integer leaf functions.
+It matches lifted definitions to original entries, then checks the relocated
+machine instructions and compact unwind coverage for every body. The original
+entries forward to the emitted RX addresses. The private native emission uses
+the classic ABI version. The input IR retains its analysis marker.
+
+`NeverDArm64eLiftedImageTests` compiles an unreserved Apple Clang dylib,
+lifts it through the normal patch pipeline and compares the result against
+the original image. A missing definition or a changed arithmetic result fails
+before an output file is created. Set `NEVERD_ARM64E_LIFTED_NATIVE=1` on a
+host that executes arm64e to run the independently compiled authenticated
+caller against both images. The strict instruction check currently covers
+register-only integer arithmetic, logical operations and moves ending in RET.
+Functions with calls, signed frames or stack accesses need additional proofs.
+
+The [native lifted-image run](https://github.com/gmh5225/test_mac_intel/actions/runs/42957645426)
+executed the original and installed images on both macos-26 and xcode-27.
+Each caller checked both entries for 25 ordered argument pairs. The
+[evidence record](evidence/arm64e-lifted-leaves-2026-11-11.json) identifies the
+source-bound Release host, local LLVM fork, original and published image hashes,
+and the runner artifacts.
+
+## Reconstructed entries through the native compiler
+
+`scripts/verify_arm64e_entry.py` separately validates the entry reconstruction
+IR with an explicitly selected native compiler. It uses the actual
+`AArch64EntryABI.ExportSignedNativeInputs` producer, including the MedIR HVA
+case, rather than a handwritten replacement IR fixture. A same-source system
+PAC and compiler-original unwind preflight is mandatory for execution:
+
+```sh
+python3 scripts/verify_arm64e_native.py probe --output entry-evidence/probe
+python3 scripts/verify_arm64e_entry.py \
+  --test-binary build-release/bin/NeverDArm64eAnalysisTests \
+  --compiler "$(xcrun --find clang++)" \
+  --probe-report entry-evidence/probe/report.json \
+  --output entry-evidence/native
+```
+
+The eight combinations cover O0/O2, IA/IB address-diverse pointer storage and
+compact/forced-DWARF unwind. The independent caller checks the logical values,
+C++ catch and destructor cleanup through scalar, i128, HVA128 and indirect
+aggregate/x8 entries, including their normal values after catching. Every
+generated exception entry and its private carrier body must retain signed
+return sequences and separate calls; the
+caller must contain authenticated branches. A valid signed pointer to the
+reconstructed scalar entry executes first; flipping one observed signature bit
+must then fault in a child process. Missing signing, skipped export tests,
+stale preflight identities and nonzero execution outcomes fail qualification.
+The exported fixture explicitly declares classic `ptrauth.abi-version`, as
+Apple's frontend does; without it the native IR reader produces `arm64e.old`.
+The verifier requires the exact classic object/dylib subtype and performs no
+Mach-O header conversion. Its explicit indirect-value loads/stores avoid
+version-specific `memcpy` intrinsic attributes in older native IR readers.
+The fixture sets `frame-pointer=all` and the native frontend's `uwtable(sync)`
+contract in the IR itself. Frontend flags alone do not establish the IR frame
+policy, and asynchronous epilogue CFI forced DWARF in the nominal compact
+profile. Final per-function encoding checks reject that mismatch; asynchronous
+unwinding remains outside this synchronous C++ matrix. The verifier
+also records and passes the selected macOS SDK, preserving the `clang++`
+invocation name when it is a symlink to `clang`.
+
+The DWARF profile keeps `__unwind_info` and forces per-function FDEs with
+`DW_CFA_GNU_args_size`. The verifier checks the final indexed encoding for the
+entries, carrier bodies, thrower and catching caller. Merely retaining `__eh_frame`
+does not establish a usable Darwin lookup path: the compiler-only controls in
+[run 42849216672](https://github.com/gmh5225/test_mac_intel/actions/runs/42849216672)
+passed compact and indexed DWARF on both native hosts, but removing the index
+with `-no_compact_unwind` caused an uncaught-exception abort on both. That
+unsupported link profile is retained as diagnostic evidence, not counted as a
+DWARF execution test.
+
+`--compile-only` checks objects, signatures and disassembly without claiming
+execution. Reports bind the source, exported IR, caller, selected compiler,
+test host, loader and each object/dylib. Owned executable products are removed
+on success and failure. `native_reconstructed_entry_qualified` refers only to
+the selected compiler's execution of this fixed entry matrix. It does not
+qualify NeverD's LLVM backend, original prototype recovery, arbitrary lifted
+image publication or native CPTA-on; these remain separate report fields and
+requirements. The r6 package selection does not change.
+
+[Run 42859085649](https://github.com/gmh5225/test_mac_intel/actions/runs/42859085649)
+passed all eight entry combinations and six prerequisite PAC/unwind controls
+on each of macos-26 and xcode-27. The source-bound Release/r6 test host was
+delivered to the runners; this was not a cold source build there. The local
+12-entry, 31-script and eight offline checks also passed. The
+[recorded evidence](evidence/arm64e-native-entry-2026-11-11.json) binds commit
+`2201fbe2f1291e61ebca8856b3f726d314cdda21`, compiler/SDK identities, exports and
+case hashes. Both hosts reported Apple M1 (Virtual); CPA/CPA2 remained absent
+or zero, and no self-hosted runner was registered, so native CPTA-on remains
+unqualified.
+
+## Reconstructed entries through NeverD codegen and publication
+
+Use `--producer neverd` with `scripts/verify_arm64e_entry.py` to export the
+reconstructed entry objects through `Codegen::compile`. The independent Apple
+compiler builds the caller and links the image. The exported objects must
+already have the classic arm64e subtype and compatible signed-return CFI;
+neither the verifier nor linker repairs those identities. In particular, r6
+is rejected when it emits `DW_CFA_AARCH64_negate_ra_state`. Use a separate
+source build of the pinned NeverSight LLVM fork for this qualification; the
+default r6 selection stays unchanged.
+
+Add `--publish` to exercise `bindSourcePatch` and `installSourcePatch` on the
+same reconstructed fixed-C entry matrix. Each original dylib contains 26
+public trapping entries and the independently compiled native caller/thrower.
+Native validation first requires that original image to enter its caller and
+then trap before the completion marker; a startup trap is insufficient. It
+installs all 26 reconstructed entries, preserving the original caller and its
+address-diverse signed entry pointers. The installed image must pass every
+value, catch, cleanup, post-exception and corrupted-pointer check. This is a
+complete published fixture image, not automatic admission of arbitrary lifted
+modules.
+
+The linker receives `-Wl,-headerpad,0` in all eight cases. The four compact
+and two O2 indexed-DWARF cases use the default zero preferred base and fit in
+existing TEXT storage. The two O0 DWARF cases set a nonzero preferred TEXT
+address so NeverD can extend the front of the segment while preserving code,
+data and authenticated slot VAs. The verifier reads each actual Mach header
+base and resolves the compact index's relative offsets against the installed
+base. A full zero-base O0 image still has no available prefix. Each case also
+fills the remaining TEXT tail of a zero-base input copy and requires refusal
+before producing an output. A separate contract fixture covers a zero-base
+image with exactly one free section descriptor and an aligned free range
+between occupied bytes. DWARF-only growth also exercises prefix relocation
+without a compact registry and replays the signed return-address rows.
+
+The publication test also checks rejection before the receipt commits,
+unchanged input bytes, exact installed entry receipts and refusal to overwrite
+an existing output. Analysis-marked modules remain rejected. The verifier
+uses the installed function addresses from the receipt to check both signed
+frames and final compact/DWARF lookup encodings. Installed code occupies an RX
+segment without a section descriptor, so ordinary object disassembly only
+shows the original sections. The verifier extracts the loader-validated final
+text range, hashes it, and places those exact bytes in a temporary
+inspection-only object for the independent disassembler. That object is never
+executed; the signed published image remains the runtime input. Inspecting the
+original symbol table would otherwise check the old code. All 26 public identities and
+all exceptional carrier frames must be present.
+
+The matrix remains eight combinations per route: caller O0/O2, IA/IB stored
+entry pointers and compact/indexed-DWARF frames. NeverD's current
+`Codegen::compile` uses `CodeGenOptLevel::Less`; the caller optimization axis
+must not be reported as two NeverD optimization levels. Reports record that
+scope, the producer, the original trap status, installed addresses and image
+hashes. `--compile-only` exercises emission and publication checks without
+claiming native execution. Executable products are removed on success and
+failure, including partially exported backend objects.
+
+`neverd_codegen_qualified` requires native execution with the NeverD producer.
+`reconstructed_entry_publication_qualified` additionally requires the complete
+publication matrix. These fields concern the declared fixed-C fixture. They
+do not set `whole_image_publication_qualified` or `native_apple_cpta_qualified`:
+prototype recovery, asynchronous interruption through prologues/epilogues,
+variadic/non-C entries and general lifted-image admission still require their
+own implementation and native evidence.
+
+The [native backend/publication run](https://github.com/gmh5225/test_mac_intel/actions/runs/42877451388)
+passed on both macos-26 and xcode-27. Each host executed eight direct backend
+cases and eight installed-image cases, with six independent compiler-original
+PAC/unwind controls. All eight original images per host reached the caller
+marker and trapped; all eight unreserved layouts were refused by that revision.
+The [evidence record](evidence/arm64e-backend-publication-2026-11-11.json)
+binds source `3f5513c8e936cc057326213abfe976748c98ee50`, the source LLVM fork
+`5676029e378c9e37adc16c8216a8e8453ffafcae`, the local Release host and both
+runner reports. This was source-bound replay of a locally built host, not a
+cold runner build. The fork checkout was clean and prebuilt mode was disabled
+only in that separate build. The runners still reported no CPA/CPA2 feature;
+native Apple CPTA-on remains unqualified.
+
+The [compact layout run](https://github.com/gmh5225/test_mac_intel/actions/runs/42946894626)
+executed the eight direct cases and eight installed images on both macos-26
+and xcode-27. Per host, all eight original callers reached their trap and all
+eight occupied inputs failed the TEXT capacity check. Each installed image ran
+the native caller against its 26 replaced public entries. Six images per host
+linked with zero header reservation. The
+[run record](evidence/arm64e-compact-layout-2026-11-11.json) binds the source
+revision, Release host, LLVM fork, GitHub artifacts and signed image hashes.
+Both runners reported Apple M1 (Virtual).
+
+The [header relocation run](https://github.com/gmh5225/test_mac_intel/actions/runs/42951431144)
+and the [compact storage replay](https://github.com/gmh5225/test_mac_intel/actions/runs/42954296548)
+executed all eight published images with zero linker header reservation on
+each Apple runner. In both O0 indexed-DWARF cases the preferred header moved
+from `0x100000000` to `0xffffc000`. The six default-base images retained
+their zero preferred address. Each host also passed eight original-caller
+trap controls, eight occupied-layout refusals and six compiler controls. The
+[evidence record](evidence/arm64e-header-relocation-2026-11-11.json)
+identifies the Release host, both artifacts and their measured image bases.

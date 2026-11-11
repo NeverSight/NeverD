@@ -63,6 +63,8 @@ X86MpxResult execute(const X86MpxEncoding &E, X86MpxMode Mode, va_t Address,
   const auto Ready = Context.operationStatus(Mode, Bound);
   if (Ready != X86MpxResult::Completed)
     return Ready;
+  if (X.addr_size == 2)
+    return X86MpxResult::UndefinedOpcode;
   const auto &Operand = X.operands[Store ? 0 : 1];
   if (E.Id == X86_INS_BNDMOV && Operand.type == X86_OP_REG)
     return Context.move(Mode, Bound, Operand.reg - X86_REG_BND0);
@@ -128,6 +130,21 @@ executeX86MpxInstruction(llvm::ArrayRef<uint8_t> Bytes, Arch Target,
     return {};
   return {execute(*Encoding,
                   Target == Arch::X64 ? X86MpxMode::Bits64 : X86MpxMode::Bits32,
+                  Address, Context, Inputs, Memory),
+          Encoding->Size};
+}
+
+X86MpxExecutionResult
+executeX86MpxInstruction(llvm::ArrayRef<uint8_t> Bytes, X86MpxCodeMode Mode,
+                         va_t Address, X86MpxContext &Context,
+                         const X86MpxExecutionInputs &Inputs,
+                         X86MpxMemoryProvider &Memory) {
+  const auto Encoding = decodeX86MpxEncoding(Bytes, Mode);
+  if (!Encoding)
+    return {};
+  return {execute(*Encoding,
+                  Mode == X86MpxCodeMode::Long64 ? X86MpxMode::Bits64
+                                                 : X86MpxMode::Bits32,
                   Address, Context, Inputs, Memory),
           Encoding->Size};
 }

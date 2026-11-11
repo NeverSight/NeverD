@@ -193,6 +193,7 @@ void Decoder::configureFor(const BinaryImage &Img) {
   configureX86For(Img);
   if (MIPS) {
     MIPS->setMIPS16Enabled(Img.MIPS && Img.MIPS->HasMIPS16);
+    MIPS->setMTEnabled(Img.MIPS && Img.MIPS->HasMT);
     MIPS->setMIPS16E2Enabled(Img.MIPS && Img.MIPS->HasMIPS16 &&
                              Img.MIPS->HasMIPS16E2);
     MIPS->setDSPEnabled(Img.MIPS && Img.MIPS->HasDSP);

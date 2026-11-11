@@ -680,3 +680,222 @@ dsp_shll_zero:
   nop
 .end dsp_shll_zero
 .size dsp_shll_zero, .-dsp_shll_zero
+
+.globl dsp_muleu_l
+.type dsp_muleu_l,@function
+.ent dsp_muleu_l
+dsp_muleu_l:
+  muleu_s.ph.qbl $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_muleu_l
+.size dsp_muleu_l, .-dsp_muleu_l
+
+.globl dsp_muleu_l_zero
+.type dsp_muleu_l_zero,@function
+.ent dsp_muleu_l_zero
+dsp_muleu_l_zero:
+  muleu_s.ph.qbl $zero,$a0,$a1
+  addiu $v0,$zero,7
+  jr $ra
+  nop
+.end dsp_muleu_l_zero
+.size dsp_muleu_l_zero, .-dsp_muleu_l_zero
+
+.globl dsp_muleu_r
+.type dsp_muleu_r,@function
+.ent dsp_muleu_r
+dsp_muleu_r:
+  muleu_s.ph.qbr $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_muleu_r
+.size dsp_muleu_r, .-dsp_muleu_r
+
+.globl dsp_muleu_r_zero
+.type dsp_muleu_r_zero,@function
+.ent dsp_muleu_r_zero
+dsp_muleu_r_zero:
+  muleu_s.ph.qbr $zero,$a0,$a1
+  addiu $v0,$zero,7
+  jr $ra
+  nop
+.end dsp_muleu_r_zero
+.size dsp_muleu_r_zero, .-dsp_muleu_r_zero
+
+.globl dsp_mulq_rs
+.type dsp_mulq_rs,@function
+.ent dsp_mulq_rs
+dsp_mulq_rs:
+  mulq_rs.ph $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_mulq_rs
+.size dsp_mulq_rs, .-dsp_mulq_rs
+
+.globl dsp_mulq_rs_zero
+.type dsp_mulq_rs_zero,@function
+.ent dsp_mulq_rs_zero
+dsp_mulq_rs_zero:
+  mulq_rs.ph $zero,$a0,$a1
+  addiu $v0,$zero,7
+  jr $ra
+  nop
+.end dsp_mulq_rs_zero
+.size dsp_mulq_rs_zero, .-dsp_mulq_rs_zero
+
+.globl dsp_muleq_l
+.type dsp_muleq_l,@function
+.ent dsp_muleq_l
+dsp_muleq_l:
+  muleq_s.w.phl $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_muleq_l
+.size dsp_muleq_l, .-dsp_muleq_l
+
+.globl dsp_muleq_l_zero
+.type dsp_muleq_l_zero,@function
+.ent dsp_muleq_l_zero
+dsp_muleq_l_zero:
+  muleq_s.w.phl $zero,$a0,$a1
+  addiu $v0,$zero,7
+  jr $ra
+  nop
+.end dsp_muleq_l_zero
+.size dsp_muleq_l_zero, .-dsp_muleq_l_zero
+
+.globl dsp_muleq_r
+.type dsp_muleq_r,@function
+.ent dsp_muleq_r
+dsp_muleq_r:
+  muleq_s.w.phr $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_muleq_r
+.size dsp_muleq_r, .-dsp_muleq_r
+
+.globl dsp_muleq_r_zero
+.type dsp_muleq_r_zero,@function
+.ent dsp_muleq_r_zero
+dsp_muleq_r_zero:
+  muleq_s.w.phr $zero,$a0,$a1
+  addiu $v0,$zero,7
+  jr $ra
+  nop
+.end dsp_muleq_r_zero
+.size dsp_muleq_r_zero, .-dsp_muleq_r_zero
+
+.globl dsp_precrq_rs
+.type dsp_precrq_rs,@function
+.ent dsp_precrq_rs
+dsp_precrq_rs:
+  precrq_rs.ph.w $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_precrq_rs
+.size dsp_precrq_rs, .-dsp_precrq_rs
+
+.globl dsp_precrq_rs_zero
+.type dsp_precrq_rs_zero,@function
+.ent dsp_precrq_rs_zero
+dsp_precrq_rs_zero:
+  precrq_rs.ph.w $zero,$a0,$a1
+  addiu $v0,$zero,7
+  jr $ra
+  nop
+.end dsp_precrq_rs_zero
+.size dsp_precrq_rs_zero, .-dsp_precrq_rs_zero
+
+.globl dsp_precrqu_s
+.type dsp_precrqu_s,@function
+.ent dsp_precrqu_s
+dsp_precrqu_s:
+  precrqu_s.qb.ph $v0,$a0,$a1
+  jr $ra
+  nop
+.end dsp_precrqu_s
+.size dsp_precrqu_s, .-dsp_precrqu_s
+
+.globl dsp_precrqu_s_zero
+.type dsp_precrqu_s_zero,@function
+.ent dsp_precrqu_s_zero
+dsp_precrqu_s_zero:
+  precrqu_s.qb.ph $zero,$a0,$a1
+  addiu $v0,$zero,7
+  jr $ra
+  nop
+.end dsp_precrqu_s_zero
+.size dsp_precrqu_s_zero, .-dsp_precrqu_s_zero
+
+// Each bank is initialized before accumulation; observe both result halves.
+.macro accumulator_leaf name, operation, bank, read
+.globl \name
+.type \name,@function
+.ent \name
+\name:
+  mthi $a0,\bank
+  mtlo $a1,\bank
+  \operation \bank,$a0,$a1
+  \read $v0,\bank
+  jr $ra
+  nop
+.end \name
+.size \name, .-\name
+.endm
+accumulator_leaf dsp_ac_dpau_l_0_hi,dpau.h.qbl,$ac0,mfhi
+accumulator_leaf dsp_ac_dpau_l_0_lo,dpau.h.qbl,$ac0,mflo
+accumulator_leaf dsp_ac_dpau_l_1_hi,dpau.h.qbl,$ac1,mfhi
+accumulator_leaf dsp_ac_dpau_l_1_lo,dpau.h.qbl,$ac1,mflo
+accumulator_leaf dsp_ac_dpau_l_2_hi,dpau.h.qbl,$ac2,mfhi
+accumulator_leaf dsp_ac_dpau_l_2_lo,dpau.h.qbl,$ac2,mflo
+accumulator_leaf dsp_ac_dpau_l_3_hi,dpau.h.qbl,$ac3,mfhi
+accumulator_leaf dsp_ac_dpau_l_3_lo,dpau.h.qbl,$ac3,mflo
+accumulator_leaf dsp_ac_dpau_r_0_hi,dpau.h.qbr,$ac0,mfhi
+accumulator_leaf dsp_ac_dpau_r_0_lo,dpau.h.qbr,$ac0,mflo
+accumulator_leaf dsp_ac_dpau_r_1_hi,dpau.h.qbr,$ac1,mfhi
+accumulator_leaf dsp_ac_dpau_r_1_lo,dpau.h.qbr,$ac1,mflo
+accumulator_leaf dsp_ac_dpau_r_2_hi,dpau.h.qbr,$ac2,mfhi
+accumulator_leaf dsp_ac_dpau_r_2_lo,dpau.h.qbr,$ac2,mflo
+accumulator_leaf dsp_ac_dpau_r_3_hi,dpau.h.qbr,$ac3,mfhi
+accumulator_leaf dsp_ac_dpau_r_3_lo,dpau.h.qbr,$ac3,mflo
+accumulator_leaf dsp_ac_dpsu_l_0_hi,dpsu.h.qbl,$ac0,mfhi
+accumulator_leaf dsp_ac_dpsu_l_0_lo,dpsu.h.qbl,$ac0,mflo
+accumulator_leaf dsp_ac_dpsu_l_1_hi,dpsu.h.qbl,$ac1,mfhi
+accumulator_leaf dsp_ac_dpsu_l_1_lo,dpsu.h.qbl,$ac1,mflo
+accumulator_leaf dsp_ac_dpsu_l_2_hi,dpsu.h.qbl,$ac2,mfhi
+accumulator_leaf dsp_ac_dpsu_l_2_lo,dpsu.h.qbl,$ac2,mflo
+accumulator_leaf dsp_ac_dpsu_l_3_hi,dpsu.h.qbl,$ac3,mfhi
+accumulator_leaf dsp_ac_dpsu_l_3_lo,dpsu.h.qbl,$ac3,mflo
+accumulator_leaf dsp_ac_dpsu_r_0_hi,dpsu.h.qbr,$ac0,mfhi
+accumulator_leaf dsp_ac_dpsu_r_0_lo,dpsu.h.qbr,$ac0,mflo
+accumulator_leaf dsp_ac_dpsu_r_1_hi,dpsu.h.qbr,$ac1,mfhi
+accumulator_leaf dsp_ac_dpsu_r_1_lo,dpsu.h.qbr,$ac1,mflo
+accumulator_leaf dsp_ac_dpsu_r_2_hi,dpsu.h.qbr,$ac2,mfhi
+accumulator_leaf dsp_ac_dpsu_r_2_lo,dpsu.h.qbr,$ac2,mflo
+accumulator_leaf dsp_ac_dpsu_r_3_hi,dpsu.h.qbr,$ac3,mfhi
+accumulator_leaf dsp_ac_dpsu_r_3_lo,dpsu.h.qbr,$ac3,mflo
+accumulator_leaf dsp_ac_dpaq_0_hi,dpaq_s.w.ph,$ac0,mfhi
+accumulator_leaf dsp_ac_dpaq_0_lo,dpaq_s.w.ph,$ac0,mflo
+accumulator_leaf dsp_ac_dpaq_1_hi,dpaq_s.w.ph,$ac1,mfhi
+accumulator_leaf dsp_ac_dpaq_1_lo,dpaq_s.w.ph,$ac1,mflo
+accumulator_leaf dsp_ac_dpaq_2_hi,dpaq_s.w.ph,$ac2,mfhi
+accumulator_leaf dsp_ac_dpaq_2_lo,dpaq_s.w.ph,$ac2,mflo
+accumulator_leaf dsp_ac_dpaq_3_hi,dpaq_s.w.ph,$ac3,mfhi
+accumulator_leaf dsp_ac_dpaq_3_lo,dpaq_s.w.ph,$ac3,mflo
+accumulator_leaf dsp_ac_dpsq_0_hi,dpsq_s.w.ph,$ac0,mfhi
+accumulator_leaf dsp_ac_dpsq_0_lo,dpsq_s.w.ph,$ac0,mflo
+accumulator_leaf dsp_ac_dpsq_1_hi,dpsq_s.w.ph,$ac1,mfhi
+accumulator_leaf dsp_ac_dpsq_1_lo,dpsq_s.w.ph,$ac1,mflo
+accumulator_leaf dsp_ac_dpsq_2_hi,dpsq_s.w.ph,$ac2,mfhi
+accumulator_leaf dsp_ac_dpsq_2_lo,dpsq_s.w.ph,$ac2,mflo
+accumulator_leaf dsp_ac_dpsq_3_hi,dpsq_s.w.ph,$ac3,mfhi
+accumulator_leaf dsp_ac_dpsq_3_lo,dpsq_s.w.ph,$ac3,mflo
+accumulator_leaf dsp_ac_mulsaq_0_hi,mulsaq_s.w.ph,$ac0,mfhi
+accumulator_leaf dsp_ac_mulsaq_0_lo,mulsaq_s.w.ph,$ac0,mflo
+accumulator_leaf dsp_ac_mulsaq_1_hi,mulsaq_s.w.ph,$ac1,mfhi
+accumulator_leaf dsp_ac_mulsaq_1_lo,mulsaq_s.w.ph,$ac1,mflo
+accumulator_leaf dsp_ac_mulsaq_2_hi,mulsaq_s.w.ph,$ac2,mfhi
+accumulator_leaf dsp_ac_mulsaq_2_lo,mulsaq_s.w.ph,$ac2,mflo
+accumulator_leaf dsp_ac_mulsaq_3_hi,mulsaq_s.w.ph,$ac3,mfhi
+accumulator_leaf dsp_ac_mulsaq_3_lo,mulsaq_s.w.ph,$ac3,mflo

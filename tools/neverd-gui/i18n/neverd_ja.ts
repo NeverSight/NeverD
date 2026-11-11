@@ -2647,6 +2647,18 @@ Signed: %4</source>
         <translation>ライト（Visual Studio Code Light+）</translation>
     </message>
     <message>
+        <source>Dark High Contrast (Visual Studio Code)</source>
+        <translation>ハイ コントラスト ダーク（Visual Studio Code）</translation>
+    </message>
+    <message>
+        <source>Light High Contrast (Visual Studio Code)</source>
+        <translation>ハイ コントラスト ライト（Visual Studio Code）</translation>
+    </message>
+    <message>
+        <source>System (follows the desktop)</source>
+        <translation>システム（デスクトップに従う）</translation>
+    </message>
+    <message>
         <source>Colors</source>
         <translation>配色</translation>
     </message>
@@ -10831,6 +10843,13 @@ Your previous graph is still available.</source>
     <message>
         <source>Undock window</source>
         <translation>ウィンドウを切り離す</translation>
+    </message>
+</context>
+<context>
+    <name>CloseButton</name>
+    <message>
+        <source>Close Tab</source>
+        <translation>タブを閉じる</translation>
     </message>
 </context>
 </TS>

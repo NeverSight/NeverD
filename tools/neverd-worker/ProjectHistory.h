@@ -54,6 +54,12 @@ public:
   };
   using PatchRows = std::vector<std::shared_ptr<const PatchRow>>;
   static std::shared_ptr<const PatchRow> patchRow(Json row);
+  /// A row of \p table, admitted, where the history keeps that table row by
+  /// row (keepsRows): patches and renames, each row shared by every state that
+  /// keeps it and printed once.
+  static std::shared_ptr<const PatchRow> tableRow(const std::string &table,
+                                                  Json row);
+  static bool keepsRows(std::string_view table);
 
   ProjectHistory(std::filesystem::path binary, std::string sourceHash,
                  std::string engineVersion, bool readOnly, AtomicWriter writer);
@@ -62,6 +68,8 @@ public:
   const Json &committedState() const;
   const Json &committedTable(const std::string &name) const;
   const PatchRows &committedPatches() const;
+  /// The committed rows of a table kept row by row.
+  const PatchRows &committedRows(const std::string &table) const;
   Json listing(std::size_t offset, std::size_t limit) const;
   /// Navigation/logging uses a patch row's virtual address, not its file key.
   static std::uint64_t displayAddress(const Json &command);
@@ -80,6 +88,11 @@ public:
   /// sooner leaves them as they were before it, or a journal that completes it.
   /// A write that fails stays queued and fails the next edit that finds it.
   void persistLater(Json state);
+  /// As persist and persistLater, for an edit that changes \p table alone:
+  /// \p rows are its rows after the edit, and every other table is the
+  /// committed one, neither copied nor read again.
+  void persistTable(const std::string &table, Json rows);
+  void persistTableLater(const std::string &table, Json rows);
   /// Waits for the writes persistLater queued.  Throws what fails them, and the
   /// next call tries them again.
   void finishWrites();
@@ -91,6 +104,11 @@ public:
   /// Reuse admitted rows, retaining all other tables. Sequence ordering,
   /// uniqueness, file checks and transaction budgets still apply.
   void persistPatches(PatchRows rows);
+  /// As persistTable and persistTableLater, for a table kept row by row: \p
+  /// rows are its rows after the edit, the unchanged ones shared and printed
+  /// once.
+  void persistRows(const std::string &table, PatchRows rows);
+  void persistRowsLater(const std::string &table, PatchRows rows);
   /// Called after each persist commits the project's files.
   void onCommit(std::function<void()> hook) { committed_ = std::move(hook); }
   void reset();
@@ -138,7 +156,9 @@ private:
   std::size_t commandTextSize() const;
   std::string document(std::string_view encodedState) const;
   void recover();
-  void persist(Json state, std::optional<PatchRows> patches, bool later);
+  /// \p state is the whole state, or where \p table is given that table's rows.
+  void persist(Json state, std::optional<PatchRows> patches, bool later,
+               const std::string *table = nullptr);
 };
 } // namespace neverd::worker
 

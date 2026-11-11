@@ -46,13 +46,6 @@ inline bool modulePreservesDSPControl(const llvm::Module &Module,
   return false;
 }
 
-inline const char *dspSourceCAttribute(Arch Target, const BinaryImage *Image,
-                                       bool HasStateTransfers = false) {
-  return sourcePreservesDSPControl(Target, Image) || HasStateTransfers
-             ? DSPSourceCAttribute
-             : "";
-}
-
 /// Normal wide integer/vector expressions may otherwise select ADDSC/ADDWC
 /// or packed DSP operations and change state beyond the original transfers.
 inline void applyDSPSourceAttributes(llvm::Function &Function) {

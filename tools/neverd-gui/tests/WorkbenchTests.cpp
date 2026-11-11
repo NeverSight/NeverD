@@ -643,6 +643,42 @@ private slots:
             << int(command) << open;
   }
 
+  void anEditRefreshesTheListingOnce() {
+    // An edit moves the revision and, with the same reply, the listing's
+    // generation: the rows read once for both.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loads;
+    bench.window->openFile(writeFixture(directory, "floating-code.bin"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *assembly = bench.window->disassembly();
+    assembly->navigate(Base + 0x140);
+    QTRY_COMPARE(assembly->currentFunction(),
+                 std::optional<Address>(Base + 0x140));
+    auto *listing = assembly->listing();
+    QTRY_VERIFY(ListingViewTestAccess::settled(*listing));
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    for (const auto &name :
+         {QStringLiteral("listed_once"), QStringLiteral("listed_once_again")}) {
+      const auto requests = ListingViewTestAccess::requests(*listing);
+      const auto generation = bench.session.generation();
+      const auto revision = bench.session.revision();
+      bench.session.rename(Base + 0x140, name);
+      QTRY_VERIFY_WITH_TIMEOUT(bench.session.revision() != revision &&
+                                   bench.session.generation() != generation &&
+                                   ListingViewTestAccess::settled(*listing) &&
+                                   !bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+      QCOMPARE(ListingViewTestAccess::requests(*listing), requests + 1);
+      bool shown = false;
+      for (int row = 0; row < ListingViewTestAccess::rows(*listing); ++row)
+        shown =
+            shown || ListingViewTestAccess::text(*listing, row).contains(name);
+      QVERIFY(shown);
+    }
+  }
+
   void codeOpensBesideFloatingDisassembly() {
     QFETCH(int, command);
     QFETCH(bool, alreadyOpen);
@@ -6773,6 +6809,20 @@ private slots:
     bench.session.read("decompile", payload, &reader,
                        [&](const QJsonObject &page) { first = page; });
     QTRY_VERIFY_WITH_TIMEOUT(!first.isEmpty(), OpenTimeoutMs);
+    // The owner answers first what it keeps of a view, which an edit's own
+    // view often is.  Which replica runs, and what it rendered, a read only
+    // the replica answers says: the owner keeps no C of the function.
+    const QJsonObject engineRead{{"address", hexAddress(Base)},
+                                 {"representation", "c"}};
+    const auto replicaPage = [&] {
+      QJsonObject page;
+      bench.session.read("decompile", engineRead, &reader,
+                         [&](const QJsonObject &read) { page = read; });
+      (void)QTest::qWaitFor([&] { return !page.isEmpty(); }, OpenTimeoutMs);
+      return page;
+    };
+    const auto replica = replicaPage();
+    QVERIFY(!replica.value("fixture_instance").toString().isEmpty());
     QSignalSpy listResets(&functions->model(), &QAbstractItemModel::modelReset);
     QSignalSpy listingMoves(listing, &ListingView::jumpSettled);
     QSignalSpy graphChanges(&graph, &GraphView::viewChanged);
@@ -6792,9 +6842,11 @@ private slots:
                          [&](const QJsonObject &page) { current = page; });
       QTRY_VERIFY_WITH_TIMEOUT(!current.isEmpty(), OpenTimeoutMs);
       QVERIFY(current.value("text").toString().contains(name + " = 1"));
+      // The same replica took the commit in place and rendered nothing anew.
+      const auto after = replicaPage();
       for (const auto *field :
            {"fixture_instance", "fixture_prepares", "fixture_pages"})
-        QCOMPARE(current.value(field), first.value(field));
+        QCOMPARE(after.value(field), replica.value(field));
       QCOMPARE(listResets.count(), 0);
       QCOMPARE(listingMoves.count(), 0);
       QCOMPARE(graphChanges.count(), 0);
@@ -6818,9 +6870,10 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(!changed.isEmpty(), OpenTimeoutMs);
     QVERIFY(
         changed.value("text").toString().contains("checked source comment"));
+    const auto commented = replicaPage();
     for (const auto *field :
          {"fixture_instance", "fixture_prepares", "fixture_pages"})
-      QCOMPARE(changed.value(field), first.value(field));
+      QCOMPARE(commented.value(field), replica.value(field));
     // So does a new name of another function, and a comment on the image.
     QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
                              OpenTimeoutMs);
@@ -6838,9 +6891,10 @@ private slots:
     bench.session.read("decompile", payload, &reader,
                        [&](const QJsonObject &page) { kept = page; });
     QTRY_VERIFY_WITH_TIMEOUT(!kept.isEmpty(), OpenTimeoutMs);
+    const auto renamed = replicaPage();
     for (const auto *field :
          {"fixture_instance", "fixture_prepares", "fixture_pages"})
-      QCOMPARE(kept.value(field), first.value(field));
+      QCOMPARE(renamed.value(field), replica.value(field));
     // So does a note on a function, and a declaration, whose views start anew.
     QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
                              OpenTimeoutMs);
@@ -6852,9 +6906,10 @@ private slots:
     bench.session.read("decompile", payload, &reader,
                        [&](const QJsonObject &page) { noted = page; });
     QTRY_VERIFY_WITH_TIMEOUT(!noted.isEmpty(), OpenTimeoutMs);
+    const auto colored = replicaPage();
     for (const auto *field :
          {"fixture_instance", "fixture_prepares", "fixture_pages"})
-      QCOMPARE(noted.value(field), first.value(field));
+      QCOMPARE(colored.value(field), replica.value(field));
     QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
                              OpenTimeoutMs);
     current = bench.session.revision();
@@ -6866,10 +6921,11 @@ private slots:
     bench.session.read("decompile", payload, &reader,
                        [&](const QJsonObject &page) { declared = page; });
     QTRY_VERIFY_WITH_TIMEOUT(!declared.isEmpty(), OpenTimeoutMs);
-    QCOMPARE(declared.value("fixture_instance"),
-             first.value("fixture_instance"));
-    QVERIFY(declared.value("fixture_pages").toInteger() >
-            first.value("fixture_pages").toInteger());
+    const auto redrawn = replicaPage();
+    QCOMPARE(redrawn.value("fixture_instance"),
+             replica.value("fixture_instance"));
+    QVERIFY(redrawn.value("fixture_pages").toInteger() >
+            replica.value("fixture_pages").toInteger());
     QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
                              OpenTimeoutMs);
     bool typesDeclared = false;
@@ -6883,7 +6939,8 @@ private slots:
     bench.session.read("decompile", payload, &reader,
                        [&](const QJsonObject &page) { typed = page; });
     QTRY_VERIFY_WITH_TIMEOUT(!typed.isEmpty(), OpenTimeoutMs);
-    QCOMPARE(typed.value("fixture_instance"), first.value("fixture_instance"));
+    QCOMPARE(replicaPage().value("fixture_instance"),
+             replica.value("fixture_instance"));
     // An edit to what the engine reads restores a fresh replica.
     QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
                              OpenTimeoutMs);
@@ -6895,7 +6952,8 @@ private slots:
     bench.session.read("decompile", payload, &reader,
                        [&](const QJsonObject &page) { fresh = page; });
     QTRY_VERIFY_WITH_TIMEOUT(!fresh.isEmpty(), OpenTimeoutMs);
-    QVERIFY(fresh.value("fixture_instance") != first.value("fixture_instance"));
+    QVERIFY(replicaPage().value("fixture_instance") !=
+            replica.value("fixture_instance"));
   }
 
   void functionsClicksKeepTheLoadedListAndDocument_data() {
@@ -7437,6 +7495,129 @@ private slots:
     editing.prepareFunctionRead(Base + 32);
     QVERIFY(editing.analysisReplicaStarted());
     QTRY_VERIFY_WITH_TIMEOUT(editing.analysisReplicaReady(), OpenTimeoutMs);
+  }
+
+  void ownerAnswersForItsPagesWhileAReplicaIsReady() {
+    QTemporaryDir directory;
+    const auto path = writeFixture(
+        directory,
+        QStringLiteral("summaries-ready-render-store-source-cache.bin"));
+    {
+      // An earlier session renders every function into the project's store.
+      Session session(QString::fromLocal8Bit(TEST_WORKER));
+      session.open(path);
+      QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+      session.prepareFunctionRead(Base);
+      QTRY_COMPARE_WITH_TIMEOUT(session.analysisRenderAheadState(),
+                                QStringLiteral("done"), NativeOpenTimeoutMs);
+    }
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    session.open(path);
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    QObject reader, other;
+    const auto read = [&](QObject &owner, const QJsonObject &function) {
+      QJsonObject payload;
+      session.analysisQueries(function, &owner)
+          .subscribe({"decompile", function}, &owner,
+                     [&](const QJsonObject &response) {
+                       payload = response.value("payload").toObject();
+                     });
+      (void)QTest::qWaitFor([&] { return !payload.isEmpty(); }, OpenTimeoutMs);
+      return payload;
+    };
+    const QJsonObject kept{{"address", hexAddress(Base + 32)},
+                           {"representation", "source"},
+                           {"offset", 0},
+                           {"limit", 4}};
+    // The owner answers from the store, and no replica starts.
+    const auto given = read(reader, kept);
+    QVERIFY(!given.value("etag").toString().isEmpty());
+    QTest::qWait(100);
+    QVERIFY(!session.analysisReplicaStarted());
+    // A note reads nowhere, and a graph, which the owner does not answer from
+    // the store, starts a replica that is ready from then on.  A graph solves
+    // no summaries, whose refinement would have every view read its page whole.
+    const auto revision = session.revision();
+    session.editFunction(Base + 16, {{"color", "#204060"}});
+    QTRY_VERIFY_WITH_TIMEOUT(session.revision() != revision, OpenTimeoutMs);
+    const QJsonObject graphed{{"address", hexAddress(Base + 48)}};
+    bool drawn = false;
+    session.analysisQueries(graphed, &other)
+        .subscribe({"cfg", graphed}, &other, [&](const QJsonObject &response) {
+          drawn = response.value("status") == QLatin1String("ok");
+        });
+    QTRY_VERIFY_WITH_TIMEOUT(drawn, OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(session.analysisReplicaReady(), OpenTimeoutMs);
+    // The owner still answers for the page it gave: it says the page stands,
+    // where the ready replica would send its own whole.
+    const auto again = read(reader, kept);
+    QVERIFY(!again.isEmpty());
+    QCOMPARE(again.value("etag"), given.value("etag"));
+    QCOMPARE(again.value("text"), given.value("text"));
+    QVERIFY(session.analysisReplicaReady());
+    // A graph is still the replica's to draw.
+    GraphView graph(session);
+    graph.showFunction(Base + 32);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        graph.loaded() && graph.currentAddress() == Base + 32, OpenTimeoutMs);
+  }
+
+  void ownerReadsWhatChangedOfThePageItGave() {
+    QTemporaryDir directory;
+    const auto path = writeFixture(
+        directory,
+        QStringLiteral("summaries-ready-render-store-source-cache.bin"));
+    {
+      // An earlier session renders every function into the project's store.
+      Session session(QString::fromLocal8Bit(TEST_WORKER));
+      session.open(path);
+      QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+      session.prepareFunctionRead(Base);
+      QTRY_COMPARE_WITH_TIMEOUT(session.analysisRenderAheadState(),
+                                QStringLiteral("done"), NativeOpenTimeoutMs);
+    }
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    session.open(path);
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    QObject reader;
+    const auto read = [&](const QJsonObject &function) {
+      QJsonObject payload;
+      session.analysisQueries(function, &reader)
+          .subscribe({"decompile", function}, &reader,
+                     [&](const QJsonObject &response) {
+                       payload = response.value("payload").toObject();
+                     });
+      (void)QTest::qWaitFor([&] { return !payload.isEmpty(); }, OpenTimeoutMs);
+      return payload;
+    };
+    const auto metadata = [&] {
+      QJsonObject payload;
+      session.read(QStringLiteral("metadata"), {}, &reader,
+                   [&](const QJsonObject &answer) { payload = answer; });
+      (void)QTest::qWaitFor([&] { return !payload.isEmpty(); }, OpenTimeoutMs);
+      return payload;
+    };
+    const QJsonObject kept{{"address", hexAddress(Base + 32)},
+                           {"representation", "source"},
+                           {"offset", 0},
+                           {"limit", 4}};
+    const auto given = read(kept);
+    QVERIFY(!given.value("etag").toString().isEmpty());
+    QVERIFY(!session.analysisReplicaStarted());
+    // A comment the page shows: the owner names the page it gave, so the
+    // worker reads what changed of it, and the read it made ahead of the
+    // view answers it.
+    const auto prepared = metadata().value("prepared_views_given").toInteger();
+    const auto revision = session.revision();
+    session.setComment(Base + 32, QStringLiteral("seen from the owner"));
+    QTRY_VERIFY_WITH_TIMEOUT(session.revision() != revision, OpenTimeoutMs);
+    const auto again = read(kept);
+    QVERIFY(again.value("text").toString().contains(
+        QStringLiteral("seen from the owner")));
+    QVERIFY(again.value("etag") != given.value("etag"));
+    QCOMPARE(metadata().value("prepared_views_given").toInteger(),
+             prepared + 1);
+    QVERIFY(!session.analysisReplicaStarted());
   }
 
   void analysisReplicaReadsAFunctionAnEditIsAboutToChange() {
@@ -10943,6 +11124,80 @@ private slots:
     QVERIFY(log);
     QTRY_VERIFY(
         log->toPlainText().contains(QStringLiteral("Reloaded the input file")));
+  }
+
+  void commentsCommittedAheadOfAnEditAreNotASave() {
+    // A comment stays staged until it is saved.  An edit the worker refuses
+    // over staged comments commits them first, one more step written behind
+    // the reply as the edit is, which the files then hold.  The user did not
+    // save: nothing says so, and Save still answers once the files hold it.
+    QTemporaryDir directory;
+    const auto path = writeFixture(directory, QStringLiteral("fixture.bin"));
+    Workbench bench;
+    bench.window->openFile(path);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *log = bench.window->findChild<OutputWindow *>()
+                    ->findChild<QPlainTextEdit *>();
+    QVERIFY(log);
+    const auto saved = QStringLiteral("Project changes saved");
+    bench.session.setComment(Base, QStringLiteral("committed ahead"));
+    QTRY_VERIFY(bench.session.dirty());
+    bench.session.rename(Base + 16, QStringLiteral("after_the_comment"));
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.dirty() &&
+                                 !bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(readAll(path + ".neverd/annotations.json")
+                                     .contains("committed ahead") &&
+                                 readAll(path + ".neverd/renames.json")
+                                     .contains("after_the_comment"),
+                             OpenTimeoutMs);
+    QVERIFY(!log->toPlainText().contains(saved));
+    bench.session.setComment(Base, QStringLiteral("saved by the user"));
+    QTRY_VERIFY(bench.session.dirty());
+    bench.session.save();
+    QTRY_VERIFY_WITH_TIMEOUT(log->toPlainText().contains(saved), OpenTimeoutMs);
+    QVERIFY(readAll(path + ".neverd/annotations.json")
+                .contains("saved by the user"));
+  }
+
+  void undoTakesBackANameAfterAComment() {
+    // As IDA's Undo does: a name, then a comment, then Undo twice takes back
+    // the comment and then the name, the staged comments committed on the way
+    // rather than blocking the second step.
+    QTemporaryDir directory;
+    const auto path = writeFixture(directory, QStringLiteral("fixture.bin"));
+    Workbench bench;
+    bench.window->openFile(path);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *log = bench.window->findChild<OutputWindow *>()
+                    ->findChild<QPlainTextEdit *>();
+    QVERIFY(log);
+    const auto settled = [&] {
+      return !bench.session.queries().hasPending() &&
+             bench.session.history().contains("cursor");
+    };
+    bench.session.rename(Base + 16, QStringLiteral("taken_back_name"));
+    QTRY_VERIFY_WITH_TIMEOUT(settled() && bench.session.canUndo(),
+                             OpenTimeoutMs);
+    bench.session.setComment(Base, QStringLiteral("taken back comment"));
+    QTRY_VERIFY_WITH_TIMEOUT(settled() && bench.session.dirty(), OpenTimeoutMs);
+    const auto steps = bench.session.history().value("cursor").toInt();
+    bench.session.undo();
+    QTRY_VERIFY_WITH_TIMEOUT(
+        settled() &&
+            bench.session.history().value("cursor").toInt() == steps - 1,
+        OpenTimeoutMs);
+    bench.session.undo();
+    QTRY_VERIFY_WITH_TIMEOUT(
+        settled() &&
+            bench.session.history().value("cursor").toInt() == steps - 2,
+        OpenTimeoutMs);
+    QVERIFY(!log->toPlainText().contains(QStringLiteral("staged annotations")));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        !readAll(path + ".neverd/renames.json").contains("taken_back_name"),
+        OpenTimeoutMs);
+    QVERIFY(!readAll(path + ".neverd/annotations.json")
+                 .contains("taken back comment"));
   }
 
   void fileInAReadOnlyFolderKeepsItsProjectInTheDataDirectory() {
@@ -15712,7 +15967,8 @@ private slots:
         writeFixture(directory, QStringLiteral("pseudocode-parallel.bin")));
     QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
     QObject view;
-    // Hold the project dispatcher busy so the replica's snapshot remains
+    // Hold the project dispatcher busy so what the replica's dispatcher asks
+    // the owner (its kept read, the store's state, then the snapshot) remains
     // queued when Cancel is pressed, rather than relying on a timing race.
     session.queries().subscribe(
         {"decompile",
@@ -15726,7 +15982,7 @@ private slots:
     session.externalQuery(
         "external-analysis", "decompile",
         {{"address", hexAddress(Base + 32)}, {"representation", "source"}}, {});
-    QTRY_COMPARE_WITH_TIMEOUT(session.queries().pendingReadCount(), 2, 1000);
+    QTRY_VERIFY_WITH_TIMEOUT(session.queries().pendingReadCount() >= 2, 1000);
     session.cancelReads();
     QTRY_COMPARE_WITH_TIMEOUT(replies.size(), 1, OpenTimeoutMs);
     QCOMPARE(replies.front()[0].toString(),

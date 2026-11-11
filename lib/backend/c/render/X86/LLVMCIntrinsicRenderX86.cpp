@@ -13,6 +13,7 @@
 #include "X86DescriptorState.h"
 #include "X86Flags.h"
 #include "X86ScalarSystem.h"
+#include "X86SegmentMemory.h"
 #include "X86SystemRegister.h"
 
 #include "neverd/backend/Limits.h"
@@ -840,32 +841,47 @@ const llvm::Value *segmentedMemoryOffset(const llvm::Value *Offset) {
   return Offset;
 }
 
+// inttoptr zero-extends a narrow integer before forming a target pointer.
+// Keep that source width even when C prints its value as a signed view.
+std::string segmentedMemoryOffsetText(
+    const llvm::Value *Offset,
+    const std::function<std::string(const llvm::Value *)> &ValueStr) {
+  auto Text = ValueStr(Offset);
+  if (Offset->getType()->isIntegerTy())
+    Text = "(" + typeToCLLVM(Offset->getType()) + ")(" + Text + ")";
+  return Text;
+}
+
 } // namespace
 
 std::string renderX86SegmentedLoad(
-    Arch TheArch, const llvm::LoadInst &LI,
+    Arch TheArch, BinaryFormat Format, const llvm::LoadInst &LI,
+    llvm::StringRef ResultName,
     const std::function<std::string(const llvm::Value *)> &ValueStr) {
-  if (TheArch != Arch::X86 && TheArch != Arch::X64)
-    return {};
   const unsigned AS = LI.getPointerAddressSpace();
-  const bool GS = isLLVMX86GSAddressSpace(AS);
-  if (!GS && !isLLVMX86FSAddressSpace(AS))
+  if (!isLLVMX86SegmentedAddressSpace(AS))
     return {};
-
+  if (LI.isAtomic())
+    throw std::runtime_error("unsupported atomic segmented C load");
   llvm::Type *Ty = LI.getType();
-  unsigned Size = 0;
-  if (Ty->isIntegerTy())
-    Size = Ty->getIntegerBitWidth() / 8;
-  else if (Ty->isPointerTy())
-    Size = TheArch == Arch::X86 ? 4 : 8;
-  const char *Intrinsic = x86SegmentedReadIntrinsic(GS, Size);
-  if (!Intrinsic)
-    return {};
-
+  const unsigned Bits = Ty->isIntegerTy()   ? Ty->getIntegerBitWidth()
+                        : Ty->isPointerTy() ? (TheArch == Arch::X86 ? 32 : 64)
+                                            : 0;
+  if (Bits != 8 && Bits != 16 && Bits != 32 && Bits != 64)
+    throw std::runtime_error("unsupported segmented C load width");
   const llvm::Value *Offset = segmentedMemoryOffset(LI.getPointerOperand());
-  if (!Offset)
-    return {};
-  return std::string(Intrinsic) + "(" + ValueStr(Offset) + ")";
+  std::optional<uint64_t> ConstantOffset;
+  if (llvm::isa<llvm::ConstantPointerNull>(Offset))
+    ConstantOffset = 0;
+  else if (const auto *CI = llvm::dyn_cast<llvm::ConstantInt>(Offset))
+    ConstantOffset = CI->getValue()
+                         .zextOrTrunc(TheArch == Arch::X86 ? 32 : 64)
+                         .getZExtValue();
+  return renderX86SegmentedRead(
+      TheArch, Bits / 8, segmentedMemoryOffsetText(Offset, ValueStr),
+      isLLVMX86GSAddressSpace(AS) ? NdMemoryAddressSpace::X86GS
+                                  : NdMemoryAddressSpace::X86FS,
+      Format == BinaryFormat::COFF, ConstantOffset, ResultName);
 }
 
 std::string renderX86SegmentedStore(
@@ -898,7 +914,8 @@ std::string renderX86SegmentedStore(
          (isLLVMX86GSAddressSpace(AS) ? "gs" : "fs") + ":(%1)\" : : \"" +
          (Bits == 8 ? "q" : "r") + "\"((" + Cast + ")" +
          (Type->isPointerTy() ? "(uintptr_t)" : "") + "(" + Value +
-         ")), \"r\"((uintptr_t)(" + ValueStr(Offset) + ")) : \"memory\");";
+         ")), \"r\"((uintptr_t)(" +
+         segmentedMemoryOffsetText(Offset, ValueStr) + ")) : \"memory\");";
 }
 
 } // namespace neverd

@@ -37,9 +37,11 @@ X86MemoryAccessResult backingFault(const GuestMemoryAccessResult &Access) {
 llvm::Expected<X86LegacySegmentResult>
 segmentAccess(const X86PagingState &State, const X86SegmentedAccess &A,
               uint64_t Bytes) {
-  if (!(State.CR0 & 1) || (State.EFER & 0x400) || (State.RFlags & 0x20000) ||
+  if (!(State.CR0 & 1) ||
+      ((State.RFlags & 0x20000) && ((State.EFER & 0x400) || A.CPL != 3)) ||
       A.CPL > 3 || !Bytes || Bytes > kMemoryFaultMaxAccessBytes)
-    return invalid("segmented operands require legacy protected-mode state");
+    return invalid(
+        "segmented operands require protected or compatibility state");
   X86SegmentAccessKind Kind;
   switch (A.Kind) {
   case MemoryAccessKind::Read:
@@ -55,7 +57,8 @@ segmentAccess(const X86PagingState &State, const X86SegmentedAccess &A,
     return invalid("invalid segmented access kind");
   }
   return checkX86LegacySegmentAccess(
-      A.Cache, {A.Segment, Kind, A.Offset, uint32_t(Bytes), A.FullLimitChoice});
+      A.Cache, {A.Segment, Kind, A.Offset, uint32_t(Bytes), A.FullLimitChoice,
+                bool(State.RFlags & 0x20000)});
 }
 
 } // namespace

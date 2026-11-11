@@ -778,6 +778,7 @@ Engine::Engine()
   instanceTag_ = std::to_string(entropy()) + std::to_string(entropy());
 }
 Engine::~Engine() {
+  writeStoreKeeps();
   listing_.reset();
   neverd_session_destroy(session_);
 }
@@ -990,6 +991,51 @@ Json Engine::operandFormatRows() const {
   const auto &formats = operandFormats();
   return formats ? backendJson(formats.rows(session_)) : Json::array();
 }
+bool Engine::restoreOperandFormats(const Json &committed) noexcept {
+  const auto &formats = operandFormats();
+  if (!formats || !committed.is_array())
+    return false;
+  try {
+    const auto keyed = [](const Json &rows) {
+      std::map<std::uint64_t, const Json *> byAddress;
+      for (const auto &row : rows)
+        byAddress[parseAddress(row.at("addr").get<std::string>())] = &row;
+      return byAddress;
+    };
+    const Json now = operandFormatRows();
+    const auto want = keyed(committed), have = keyed(now);
+    static const Json none = Json::object();
+    std::set<std::uint64_t> addresses;
+    for (const auto &[address, row] : want)
+      addresses.insert(address);
+    for (const auto &[address, row] : have)
+      addresses.insert(address);
+    for (const auto address : addresses) {
+      const auto &row = want.contains(address) ? *want.at(address) : none;
+      const auto &held = have.contains(address) ? *have.at(address) : none;
+      if (row == held)
+        continue;
+      // Each operand as the committed row shows it, and the listing's own
+      // number for one it does not.
+      std::map<int, Json> shown;
+      for (const auto &operand : held.value("operands", Json::array()))
+        shown[operand.at("operand").get<int>()] = nullptr;
+      for (const auto &operand : row.value("operands", Json::array())) {
+        Json format = operand;
+        format.erase("operand");
+        shown[operand.at("operand").get<int>()] = std::move(format);
+      }
+      for (const auto &[operand, format] : shown)
+        if (formats.set(session_, address, operand,
+                        format.is_null() ? nullptr : format.dump().c_str()) !=
+            0)
+          return false;
+    }
+    return operandFormatRows() == committed;
+  } catch (...) {
+    return false;
+  }
+}
 bool Engine::reloadDataItems() {
   const auto &items = dataItems();
   if (!items)
@@ -1004,6 +1050,54 @@ bool Engine::reloadDataItems() {
 Json Engine::dataItemRows() const {
   const auto &items = dataItems();
   return items ? backendJson(items.rows(session_)) : Json::array();
+}
+bool Engine::restoreDataItems(const Json &committed) noexcept {
+  using ItemClearFunction = int (*)(neverd_session_t, neverd_va_t);
+  static const auto clear =
+      engineSymbol<ItemClearFunction>("neverd_item_clear");
+  const auto &items = dataItems();
+  if (!items || !clear || !committed.is_array())
+    return false;
+  try {
+    const auto keyed = [](const Json &rows) {
+      std::map<std::uint64_t, const Json *> byAddress;
+      for (const auto &row : rows)
+        byAddress[parseAddress(row.at("addr").get<std::string>())] = &row;
+      return byAddress;
+    };
+    const Json now = dataItemRows();
+    const auto want = keyed(committed), have = keyed(now);
+    // What the edit set or changed goes first; the committed rows it took
+    // away share no byte with one another.
+    for (const auto &[address, row] : have)
+      if (const auto kept = want.find(address);
+          (kept == want.end() || *kept->second != *row) &&
+          clear(session_, address) != 0)
+        return false;
+    for (const auto &[address, row] : want)
+      if (const auto held = have.find(address);
+          (held == have.end() || *held->second != *row) &&
+          items.set(session_, address, row->dump().c_str()) != 0)
+        return false;
+    return dataItemRows() == committed;
+  } catch (...) {
+    return false;
+  }
+}
+bool Engine::restoreFunctionEdits(const Json &committed) noexcept {
+  try {
+    return takeFunctionRows(functionEditRows(), committed);
+  } catch (...) {
+    return false;
+  }
+}
+void Engine::catchUpWrites() noexcept {
+  if (history_)
+    try {
+      history_->finishWrites();
+    } catch (...) {
+      // A write that fails leaves the files behind the history.
+    }
 }
 bool Engine::reloadFunctionEdits() {
   const auto &edits = functionEdits();
@@ -1029,6 +1123,21 @@ Json Engine::typeDeclarationRows() const {
     throw Error("engine_error", "Engine returned malformed type declarations");
   for (std::size_t i = 0; i < declared.size(); ++i)
     declared[i]["addr"] = hexAddress(i);
+  return declared;
+}
+Json Engine::typeDeclarationRowsAfter(const Json &committed) const {
+  using RangeFunction = const char *(*)(neverd_session_t, size_t, size_t);
+  static const auto range =
+      engineSymbol<RangeFunction>("neverd_type_declarations_range_json");
+  if (!range || !committed.is_array())
+    return typeDeclarationRows();
+  Json added = backendJson(
+      range(session_, committed.size(), std::numeric_limits<size_t>::max()));
+  if (!added.is_array() || added.size() != 1 || !added[0].is_object())
+    return typeDeclarationRows();
+  Json declared = committed;
+  added[0]["addr"] = hexAddress(committed.size());
+  declared.push_back(std::move(added[0]));
   return declared;
 }
 bool Engine::reloadTypeDeclarations() {
@@ -2103,11 +2212,13 @@ PageSource Engine::namedViewLines(const NamedView &document, std::size_t start,
   return page;
 }
 
-std::optional<Json>
-Engine::namedViewPage(std::uint64_t address, const std::string &representation,
-                      std::size_t offset, std::size_t limit,
-                      const Json &options, EncodedPayload *encoded,
-                      const std::string *ifNoneMatch, bool pageDelta) {
+std::optional<Json> Engine::namedViewPage(std::uint64_t address,
+                                          const std::string &representation,
+                                          std::size_t offset, std::size_t limit,
+                                          const Json &options,
+                                          EncodedPayload *encoded,
+                                          const std::string *ifNoneMatch,
+                                          bool pageDelta, const Json *request) {
   const auto document = namedView(address, representation, options);
   if (!document)
     return std::nullopt;
@@ -2128,6 +2239,15 @@ Engine::namedViewPage(std::uint64_t address, const std::string &representation,
   // The same lines of the same document read the same: the client keeps them.
   const auto etag = instanceTag_ + "-" + std::to_string(document->id) + "-" +
                     std::to_string(start) + "-" + std::to_string(end);
+  // A kept-only read a client makes again names this page and asks for what
+  // changed of it.
+  served_.reset();
+  if (request && ifNoneMatch && request->value("kept_only", false)) {
+    Json next = *request;
+    next["if_none_match"] = etag;
+    next["page_delta"] = true;
+    served_ = ServedPage{document, std::move(next)};
+  }
   if (ifNoneMatch && *ifNoneMatch == etag)
     return Json{{"unchanged", true},
                 {"etag", etag},
@@ -2281,11 +2401,10 @@ Listing &Engine::newListing() {
       [this](const std::string &key, std::string bytes) {
         keepListingFact(key, std::move(bytes));
       });
-  const auto project = projectJson();
-  if (browseCacheEnabled_ && project.is_object() && project.contains("folder"))
+  if (browseCacheEnabled_ && !projectFolder().empty())
     listing_->configureCache(
-        utf8Path(project.at("folder").get<std::string>()),
-        [this] { return browseCacheIdentity(); }, !readOnly_, atomicWrite);
+        utf8Path(projectFolder()), [this] { return browseCacheIdentity(); },
+        !readOnly_, atomicWrite);
   if (analyzed_)
     listing_->loadSwitches();
   return *listing_;
@@ -2310,6 +2429,9 @@ bool Engine::hasIdleWork() const {
            warmState_ == WarmState::Running));
 }
 bool Engine::idleStep() {
+  writeStoreKeeps();
+  // What background work changes no answer read before it holds for.
+  forgetPreparedViews();
   if (!hasIdleWork())
     return false;
   if (listing_ && listing_->cachePending()) {
@@ -2700,7 +2822,12 @@ ProjectHistory &Engine::history() {
     history_ = std::make_unique<ProjectHistory>(
         utf8Path(ownedString(neverd_session_file_path(session_))), hash,
         version(), readOnly_, atomicWrite);
-    history_->onCommit([this] { recordProject(); });
+    // What the record says, the input's name, size and hash, holds while the
+    // session keeps the input: once recorded, a later commit records it again.
+    history_->onCommit([this, recorded = false]() mutable {
+      if (!recorded)
+        recorded = recordProject();
+    });
     if (history_->recovered()) {
       if (!reloadUserState())
         throw Error("recovery_required",
@@ -2787,6 +2914,8 @@ Json Engine::metadata() const {
           {"listing_facts", listingFactsJson()},
           {"listing_name_builds", listing_ ? listing_->nameBuilds() : 0},
           {"named_view_comment_patches", commentPatches_},
+          {"prepared_views_made", preparedMade_},
+          {"prepared_views_given", preparedGiven_},
           {"named_view_name_patches", namePatches_},
           {"named_view_data_name_patches", dataNamePatches_},
           {"named_view_renders", namedViewRenders_},
@@ -2824,20 +2953,33 @@ void Engine::reloadCodeEdits() {
   codeEdits_ = readCodeEdits(ownedString(neverd_session_file_path(session_)));
 }
 
-void Engine::persistEdit(ProjectHistory &store, Json state) {
+void Engine::persistTableEdit(ProjectHistory &store, const std::string &table,
+                              Json rows) {
   if (writeBehind_)
-    store.persistLater(std::move(state));
+    store.persistTableLater(table, std::move(rows));
   else
-    store.persist(std::move(state));
+    store.persistTable(table, std::move(rows));
 }
 
-void Engine::recordProject() {
+bool Engine::recordProject() {
   // The engine records which build of the input the project's files describe;
   // an older engine keeps no record, and a record that fails fails no edit.
   static const auto record =
       engineSymbol<SessionLoadFunction>("neverd_project_record");
-  if (record)
-    (void)record(session_);
+  return !record || record(session_) == 0;
+}
+
+const std::string &Engine::projectFolder() const {
+  // A session that has none yet, as before it loads, is asked again.
+  if (!projectFolder_ || projectFolder_->empty()) {
+    const auto project = projectJson();
+    const auto folder =
+        project.is_object() ? project.find("folder") : project.end();
+    projectFolder_ = folder != project.end() && folder->is_string()
+                         ? folder->get<std::string>()
+                         : std::string();
+  }
+  return *projectFolder_;
 }
 
 Json Engine::projectJson() const {
@@ -2958,7 +3100,7 @@ Json Engine::codeEditRow(std::uint64_t address) const {
 
 Json Engine::analysisSnapshot() { return analysisSnapshot(userState()); }
 
-Json Engine::analysisSnapshot(Json state) {
+Json Engine::analysisSnapshot(Json state, const Json *declared) {
   requireLoaded();
   // A declined PDB names no file to have changed.
   if (pdbInput_.contains("path") &&
@@ -3010,8 +3152,9 @@ Json Engine::analysisSnapshot(Json state) {
           {"open", options},
           {"input_sha256", inputHash()},
           {"state", std::move(state)},
-          {"declared_types",
-           declaresLocalTypes() ? typeDeclarationRows() : Json::array()},
+          {"declared_types", !declaresLocalTypes() ? Json::array()
+                             : declared            ? *declared
+                                                   : typeDeclarationRows()},
           {"analysis_sections", std::move(analysisSections)},
           {"signatures", signatureInputs_},
           {"pdb", pdbInput_},
@@ -3038,8 +3181,9 @@ Json Engine::browseCacheIdentity(
   // change of this flag invalidates the listing, which reads it again.
   identity["analyzed"] = analyzed_;
   Json shared = Json::object();
-  const auto project = projectJson();
-  const auto folder = utf8Path(project.at("folder").get<std::string>());
+  if (projectFolder().empty())
+    throw Error("cache_unavailable", "The project has no folder");
+  const auto folder = utf8Path(projectFolder());
   for (const auto &file : project_files::Files) {
     if (!file.Shared || file.Id == project_files::File::Manifest ||
         file.Id == project_files::File::Bookmarks ||
@@ -3057,8 +3201,16 @@ Json Engine::browseCacheIdentity(
   }
   identity["shared"] = std::move(shared);
   if (headersFunction()) {
-    const auto debug = backendJson(headersFunction()(session_))
-                           .value("debug_info", Json::object());
+    // What the headers say of the debug files reads the same while the
+    // session holds the debug inputs it loaded.
+    auto inputs = pdbInput_.dump() + '\n' + dwarfInput_.dump() + '\n' +
+                  mapInput_.dump() + '\n' + symbolsInput_.dump();
+    if (!debugInfo_ || debugInfoInputs_ != inputs) {
+      debugInfo_ = backendJson(headersFunction()(session_))
+                       .value("debug_info", Json::object());
+      debugInfoInputs_ = std::move(inputs);
+    }
+    const auto &debug = *debugInfo_;
     identity["debug"] = debug;
     for (const auto &file : debug.value("files", Json::array())) {
       const auto path = file.is_string() ? file.get<std::string>()
@@ -3274,6 +3426,62 @@ bool Engine::takeFunctionRows(const Json &before, const Json &after) {
   return functionEditRows() == after;
 }
 
+Engine::NameTaken Engine::takeName(std::uint64_t address, const Json &before,
+                                   const Json &after) {
+  using RenameTake = int (*)(neverd_session_t, neverd_va_t, const char *);
+  static const auto take = engineSymbol<RenameTake>("neverd_rename_take");
+  const bool named = after.is_object();
+  const std::string name =
+      named ? after.value("renamed", std::string()) : std::string();
+  const std::string original = named ? after.value("original", std::string())
+                               : before.is_object()
+                                   ? before.value("original", std::string())
+                                   : std::string();
+  const int index = neverd_func_find_by_addr(session_, address);
+  if ((take ? take(session_, address, named ? name.c_str() : nullptr)
+            : neverd_renames_load(session_)) != 0)
+    throw Error("reload_failed", "Rename was saved but could not be reloaded",
+                {{"saved", true}});
+  // What it is called now, and what a view may spell of it: that, the name
+  // the engine has for it, and the one given up.
+  const std::string &shown = named ? name : original;
+  const std::vector<std::string> spellings{
+      shown, original,
+      before.is_object() ? before.value("renamed", std::string())
+                         : std::string()};
+  // As the engine's row now reads; a name given up reads every row again.
+  using RenameOriginal = const char *(*)(neverd_session_t, neverd_va_t);
+  static const auto engineOriginal =
+      engineSymbol<RenameOriginal>("neverd_rename_original");
+  if (named && imageFactsHeld_ && engineOriginal)
+    imageFacts_.renamed(address, ownedString(engineOriginal(session_, address)),
+                        name);
+  else
+    imageFactsHeld_ = false;
+  const bool functionInPlace = listing_ && listing_->functionRenamed(address);
+  // Data that goes back to an automatic name holds no name of the listing's.
+  const bool dataInPlace = !functionInPlace && listing_ && index < 0 &&
+                           (named || !parseDummyName(original)) &&
+                           listing_->dataRenamed(address, shown);
+  if (functionInPlace) {
+    // Decoration reads a function's name.
+    functionNamesChanged(false);
+    keepNamedViewsThrough(address, spellings, false,
+                          ViewEditKind::FunctionName);
+    return NameTaken::Function;
+  }
+  if (dataInPlace) {
+    // The pages of what read it spell a name of data, which the engine text
+    // its decoration read respells.
+    imageFactsRevision_.reset();
+    forgetGraphsAndText();
+    keepNamedViewsThrough(address, spellings, false, ViewEditKind::DataName);
+    return NameTaken::Data;
+  }
+  namesChanged();
+  return NameTaken::Again;
+}
+
 bool Engine::takeNames(const std::map<std::uint64_t, std::string> &before,
                        const std::map<std::uint64_t, std::string> &after) {
   using RenameTake = int (*)(neverd_session_t, neverd_va_t, const char *);
@@ -3480,6 +3688,7 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
     renderAheadStarts_ = 0;
     // What the store keeps answers while what each render read holds; the job
     // renders again what does not.
+    writeStoreKeeps();
     const bool sameStore = !renderStoreMode_.empty() && renderStore_ &&
                            renderStore_->keeps(storeNames().renders);
     renderAheadVerifying_ = sameStore && (dataRenamed || declared);
@@ -3770,9 +3979,126 @@ Engine::Reply Engine::executeResponse(const std::string &operation,
       }
     }
   } restart{*this, before};
+  viewEditsAtRequest_ = viewEditCount_;
+  requestRevision_ = revision_;
+  served_.reset();
+  writeStoreKeeps();
+  if (!preparedViews_.empty()) {
+    // An answer made for the state the read finds, and for this read.
+    if (preparedRevision_ != revision_ || !listing_ ||
+        listing_->viewGeneration() != preparedGeneration_)
+      forgetPreparedViews();
+    else if (operation == "decompile") {
+      const auto request = p.dump();
+      const auto made = std::find_if(
+          preparedViews_.begin(), preparedViews_.end(),
+          [&](const PreparedView &view) { return view.request == request; });
+      if (made != preparedViews_.end()) {
+        Reply reply{std::move(made->reply), {}};
+        if (made->served)
+          keepServed(std::move(*made->served));
+        preparedViews_.erase(made);
+        ++preparedGiven_;
+        return reply;
+      }
+    }
+  }
   Reply reply;
   reply.value = executeImpl(operation, p, &reply.encoded);
+  if (served_)
+    keepServed(std::move(*std::exchange(served_, std::nullopt)));
   return reply;
+}
+
+void Engine::forgetPreparedViews() {
+  if (preparedViews_.empty())
+    return;
+  releases_.retire(std::make_shared<const std::vector<PreparedView>>(
+      std::exchange(preparedViews_, {})));
+}
+
+void Engine::keepServed(ServedPage served) {
+  served.document->nextRead = std::move(served.next);
+  served.document->servedAt = ++servedPages_;
+  served.document->servedRevision = revision_;
+}
+
+void Engine::afterReply(const std::function<bool()> &requestWaiting) {
+  writeStoreKeeps();
+  prepareFollowingViews(requestWaiting);
+}
+
+void Engine::prepareFollowingViews(
+    const std::function<bool()> &requestWaiting) {
+  // Only an edit views keep through reaches a view a client reads again soon:
+  // a comment or a name, whose views are written from what is kept.
+  const auto made = viewEditCount_ - viewEditsAtRequest_;
+  if (!made || !session_ || !listing_)
+    return;
+  forgetPreparedViews();
+  std::vector<std::uint64_t> addresses;
+  for (auto edit = viewEdits_.end() -
+                   static_cast<std::ptrdiff_t>(
+                       std::min<std::uint64_t>(made, viewEdits_.size()));
+       edit != viewEdits_.end(); ++edit)
+    addresses.push_back(edit->address);
+  // The documents a client was given a page of with kept_only that the edit
+  // reaches by what they read, the last given first.
+  std::vector<std::shared_ptr<const NamedView>> reached;
+  for (const auto &document : namedViews_) {
+    if (!document->servedAt || !document->nextRead.is_object())
+      continue;
+    bool reaches = !document->readsKnown;
+    for (const auto address : addresses)
+      reaches = reaches || std::binary_search(document->reads.begin(),
+                                              document->reads.end(), address);
+    if (reaches)
+      reached.push_back(document);
+  }
+  // A view the client shows it reads again after each change, so it read those
+  // at the revision this edit left; else the one document the edit reaches
+  // alone is the one it reads next.  Any other read is the client's to ask.
+  std::vector<std::shared_ptr<const NamedView>> shown;
+  for (const auto &document : reached)
+    if (document->servedRevision == requestRevision_)
+      shown.push_back(document);
+  if (!shown.empty())
+    reached = std::move(shown);
+  else if (reached.size() > 1)
+    reached.clear();
+  std::sort(reached.begin(), reached.end(), [](const auto &a, const auto &b) {
+    return a->servedAt > b->servedAt;
+  });
+  if (reached.size() > ::neverd::limits::worker::kEngineMaxPreparedViews)
+    reached.resize(::neverd::limits::worker::kEngineMaxPreparedViews);
+  const auto revision = revision_;
+  const auto generation = listing_->viewGeneration();
+  for (const auto &document : reached) {
+    if (requestWaiting && requestWaiting())
+      break;
+    const Json read = document->nextRead;
+    try {
+      served_.reset();
+      EncodedPayload encoded;
+      auto answer = executeImpl("decompile", read, &encoded);
+      // What the client keeps a page of reads as a page; the page it is given
+      // is kept on the document once it is.
+      if (!encoded && answer.is_object() && served_) {
+        preparedViews_.push_back({read.dump(), std::move(answer),
+                                  std::exchange(served_, std::nullopt)});
+        ++preparedMade_;
+      }
+    } catch (const std::exception &) {
+      // The read asks for itself.
+    }
+    served_.reset();
+  }
+  // Answers read for one state only.
+  if (revision_ != revision || !listing_ ||
+      listing_->viewGeneration() != generation)
+    forgetPreparedViews();
+  preparedRevision_ = revision_;
+  preparedGeneration_ = listing_ ? listing_->viewGeneration() : 0;
 }
 
 void Engine::analyzeBeforeFunctionQueries() {
@@ -3799,26 +4125,39 @@ namespace {
 /// and the listing alone, or queue their own.  Anything else may read the
 /// project's files, and sees them written.
 bool readsNoProjectFile(std::string_view operation) {
-  static constexpr std::string_view Operations[] = {"annotation_set",
-                                                    "cfg_summary",
-                                                    "cfg_viewport",
-                                                    "decompile",
-                                                    "function_edit",
-                                                    "function_type",
-                                                    "functions",
-                                                    "item_define",
-                                                    "kept_renders",
-                                                    "listing",
-                                                    "local_types_declare",
-                                                    "metadata",
-                                                    "prepare_function",
-                                                    "names",
-                                                    "rename",
-                                                    "resolve",
-                                                    "strings",
-                                                    "xrefs"};
+  static constexpr std::string_view Operations[] = {
+      "annotation_set", "cfg_summary",
+      "cfg_viewport",   "code_edit",
+      "decompile",      "function_edit",
+      "function_type",  "functions",
+      "item_define",    "kept_renders",
+      "listing",        "local_types_declare",
+      "metadata",       "prepare_function",
+      "names",          "operand_format",
+      "redo",           "rename",
+      "resolve",        "strings",
+      "undo",           "xrefs"};
   return std::find(std::begin(Operations), std::end(Operations), operation) !=
          std::end(Operations);
+}
+
+/// An undo or redo that commits staged comments ahead of a step they block.
+bool commitsStaged(const Json &p) {
+  if (!p.is_object() || !p.contains("commit_staged"))
+    return false;
+  if (!p.at("commit_staged").is_boolean())
+    throw Error("invalid_request", "commit_staged must be boolean");
+  return p.at("commit_staged").get<bool>();
+}
+
+/// A save that commits staged comments ahead of an edit, as that edit commits:
+/// on a project opened with write_behind, behind its reply.
+bool savesBehind(std::string_view operation, const Json &p) {
+  if (operation != "save" || !p.is_object() || !p.contains("write_behind"))
+    return false;
+  if (!p.at("write_behind").is_boolean())
+    throw Error("invalid_request", "write_behind must be boolean");
+  return p.at("write_behind").get<bool>();
 }
 } // namespace
 
@@ -3826,8 +4165,9 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                          EncodedPayload *encoded) {
   if (encoded)
     encoded->reset();
+  const bool behindSave = savesBehind(operation, p) && writeBehind_;
   if (history_ && !readsNoProjectFile(operation) && operation != "reload" &&
-      operation != "open" &&
+      operation != "open" && !behindSave &&
       !(operation == "analysis_snapshot" && p.is_object() &&
         p.value("in_memory", false)))
     history_->finishWrites();
@@ -4238,6 +4578,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
         readCodeEdits(ownedString(neverd_session_file_path(next.get())));
     neverd_session_destroy(session_);
     session_ = next.release();
+    projectFolder_.reset();
+    debugInfo_.reset();
     codeEdits_ = std::move(nextCodeEdits);
     // A file too large or unreadable is the next project_sync's to report.
     try {
@@ -4681,7 +5023,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     if (tables) {
       std::map<std::uint64_t, std::string> committed, staged;
       if (dirty_) {
-        for (const auto &row : store.committedState().at("annotations"))
+        for (const auto &row : store.committedTable("annotations"))
           committed[parseAddress(row.at("addr").get<std::string>())] =
               row.at("text").get<std::string>();
         std::set<std::uint64_t> current;
@@ -4752,19 +5094,43 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     requireWriter();
     auto &store = history();
     const bool redo = operation == "redo";
+    const bool commitStaged = commitsStaged(p);
+    // The reply's page of the history, as history pages it: the workbench
+    // reads its counts alone.
+    const auto limit = sizeField(
+        p, "limit",
+        ::neverd::limits::worker::
+            kEngineExecuteImplHistoryLimitSizeFieldDefault,
+        ::neverd::limits::worker::kEngineExecuteImplHistoryLimitSizeFieldMax);
+    if (!limit)
+      throw Error("invalid_request", "limit must be at least 1");
     const auto command = store.next(redo);
     const auto value = command.at(redo ? "after" : "before");
     const auto address = parseAddress(command.at("address").get<std::string>());
-    if (command.at("kind") == "annotation") {
+    const std::string kind = command.at("kind").get<std::string>();
+    // A step the session takes in place takes its table's rows alone, as the
+    // edit took them, and writes them as the project writes edits; any other
+    // reads every table again from the files once they are written.
+    bool inPlace = false;
+    if (kind == "annotation") {
       store.advance(redo);
       neverd_annotation_set(session_, address,
                             value.get_ref<const std::string &>().c_str());
       dirty_ = true;
     } else {
-      if (dirty_)
+      // Staged comments block any other step, unless the request commits
+      // them first, as a save written behind its reply does.
+      if (dirty_ && !commitStaged)
         throw Error("unsaved_changes",
                     "Save or reload staged annotations before undoing a "
                     "rename or a function edit");
+      if (dirty_) {
+        auto annotations = backendJson(neverd_annotations_json(session_));
+        saveAnalysisSections();
+        sectionsDirty_ = false;
+        persistTableEdit(store, "annotations", std::move(annotations));
+        dirty_ = false;
+      }
       // Replay only the changed rows. Patch handles retain immutable values
       // across checkpoints; other edits keep their existing JSON path.
       Json changes = command.value("rows", Json::array());
@@ -4787,18 +5153,20 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
             rows.insert(position, own(side));
         }
       };
-      const bool patch = command.at("kind") == "patch";
-      Json state;
+      const bool patch = kind == "patch";
+      const std::string table = ProjectHistory::tableOfKind(kind);
+      const bool byRow = ProjectHistory::keepsRows(table);
+      Json rows;
       ProjectHistory::PatchRows patches;
-      if (patch) {
-        patches = store.committedPatches();
+      if (byRow) {
+        patches = store.committedRows(table);
         replay(
             patches, [](const auto &row) { return row->address(); },
-            ProjectHistory::patchRow);
+            [&](const Json &side) {
+              return ProjectHistory::tableRow(table, side);
+            });
       } else {
-        state = store.committedState();
-        auto &rows = state[ProjectHistory::tableOfKind(
-            command.at("kind").get<std::string>())];
+        rows = store.committedTable(table);
         replay(
             rows,
             [](const Json &row) {
@@ -4807,34 +5175,139 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
             },
             [](const Json &row) { return row; });
       }
+      // The step's rows on either side.
+      const Json &before = command.at(redo ? "before" : "after");
+      const Json &after = command.at(redo ? "after" : "before");
+      using RenameTake = int (*)(neverd_session_t, neverd_va_t, const char *);
+      static const auto take = engineSymbol<RenameTake>("neverd_rename_take");
+      inPlace = (kind == "rename" && take && !command.contains("rows")) ||
+                kind == "item" || kind == "operand" || kind == "code" ||
+                kind == "function";
+      // What analysis reads of a function decides which views its step
+      // reaches, as the edit's did.
+      const auto rowRead = [&](const Json &row, bool declarations) {
+        return functionRowsRead(
+            row.is_null() ? Json::array() : Json::array({row}), declarations);
+      };
+      const auto stateOf = [](const Json &row) {
+        return row.is_object() ? row.value("state", Json()) : Json();
+      };
+      const auto analysisReads = [this]() -> std::optional<Json> {
+        try {
+          return userFactsAnalysisReads();
+        } catch (const std::exception &) {
+          // Every view reads anew.
+        }
+        return std::nullopt;
+      };
+      const bool function = kind == "function";
+      if (inPlace && (kind == "rename" || kind == "item" || function))
+        settleNamedViews();
+      const bool stated = function && stateOf(before) == stateOf(after);
+      const bool noted =
+          stated && rowRead(before, true) == rowRead(after, true);
+      const bool reaches = function && (!stated || rowRead(before, false) !=
+                                                       rowRead(after, false));
+      const auto readBefore =
+          function && !reaches && !noted && rendersSayTheirReads()
+              ? analysisReads()
+              : std::nullopt;
       const auto checkpoint = store;
       store.advance(redo);
       try {
         if (patch)
           store.persistPatches(std::move(patches));
+        else if (byRow && inPlace && writeBehind_)
+          store.persistRowsLater(table, std::move(patches));
+        else if (byRow)
+          store.persistRows(table, std::move(patches));
+        else if (inPlace)
+          persistTableEdit(store, table, std::move(rows));
         else
-          store.persist(std::move(state));
+          store.persistTable(table, std::move(rows));
       } catch (...) {
         store = checkpoint;
         throw;
       }
-      if (!reloadUserState(command.at("kind") == "patch"))
-        throw Error("reload_failed",
-                    "History operation was saved but cannot be reloaded",
-                    {{"saved", true}});
+      if (!inPlace) {
+        if (!reloadUserState(patch))
+          throw Error("reload_failed",
+                      "History operation was saved but cannot be reloaded",
+                      {{"saved", true}});
+      } else if (kind == "rename") {
+        const auto taken = takeName(address, before, after);
+        ++revision_;
+        if (taken != NameTaken::Again)
+          namedViewsTakeRevision(taken == NameTaken::Data);
+      } else {
+        // The engine takes the rows the history now holds, or where it cannot
+        // reads them from the files once those are written.
+        const Json &committed = store.committedTable(table);
+        const bool taken = kind == "item" ? restoreDataItems(committed)
+                           : kind == "operand"
+                               ? restoreOperandFormats(committed)
+                           : function ? restoreFunctionEdits(committed)
+                                      : true;
+        if (kind == "code")
+          codeEdits_ = committed;
+        if (!taken) {
+          catchUpWrites();
+          if (!(kind == "item"      ? reloadDataItems()
+                : kind == "operand" ? reloadOperandFormats()
+                                    : reloadFunctionEdits()))
+            throw Error("reload_failed",
+                        "History operation was saved but cannot be reloaded",
+                        {{"saved", true}});
+        }
+        if (kind == "item") {
+          // Items over bytes no string or code holds stay where they are.
+          const bool itemsInPlace =
+              listing_ && listing_->dataItemsChanged(&committed);
+          if (itemsInPlace)
+            dataItemsChanged();
+          else
+            namesChanged();
+          ++revision_;
+          if (itemsInPlace)
+            namedViewsTakeRevision(true);
+        } else if (kind == "operand") {
+          // Reading the formats again shows them already.
+          if (taken)
+            operandFormatsChanged();
+          ++revision_;
+        } else if (function) {
+          bool viewsReadIt = false;
+          if (reaches) {
+            functionsChanged();
+          } else if (!noted) {
+            const auto readAfter = readBefore ? analysisReads() : std::nullopt;
+            viewsReadIt = readAfter && *readAfter == *readBefore;
+            if (viewsReadIt)
+              keepNamedViewsThrough(address, {}, true);
+            declarationsChanged(viewsReadIt);
+          }
+          ++revision_;
+          if (noted || viewsReadIt)
+            namedViewsTakeRevision(true);
+        } else {
+          invalidate();
+          ++revision_;
+        }
+      }
     }
-    // Reloading operand formats shows them already, and names and data items
-    // leave the string scan as it is; a function edit changes what the
-    // listing lays out.
-    if (const auto kind = command.at("kind");
-        kind == "rename" || kind == "item")
-      namesChanged();
-    else if (kind == "annotation")
-      commentsChanged();
-    else if (kind != "operand")
-      invalidate();
-    ++revision_;
-    auto result = store.listing(0, 128);
+    if (!inPlace) {
+      // Reloading operand formats shows them already, and names and data
+      // items leave the string scan as it is; a function edit changes what
+      // the listing lays out.
+      if (kind == "rename" || kind == "item")
+        namesChanged();
+      else if (kind == "annotation")
+        commentsChanged();
+      else if (kind != "operand")
+        invalidate();
+      ++revision_;
+    }
+    auto result = store.listing(0, limit);
     result["dirty"] = dirty_;
     result["saved"] = !dirty_;
     result["address"] = hexAddress(ProjectHistory::displayAddress(command));
@@ -5023,7 +5496,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     if (operation == "local_types_declare") {
       settleNamedViews();
       try {
-        identityBefore = storeIdentity();
+        // The Session's declarations are those the history committed.
+        identityBefore = storeIdentity(&history_->committedTable("types"));
         if (identityBefore)
           storesBefore = storeNames(*identityBefore);
       } catch (const std::exception &) {
@@ -5066,8 +5540,12 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       auto &store = *history_;
       const auto checkpoint = store;
       try {
-        auto state = store.committedState();
-        Json declared = typeDeclarationRows();
+        // The history's rows, which were the Session's, and the one this
+        // declaration added; a forget lists them all again.
+        Json declared =
+            operation == "local_types_declare"
+                ? typeDeclarationRowsAfter(store.committedTable("types"))
+                : typeDeclarationRows();
         if (declared.empty())
           throw Error("engine_error", "Engine kept no declaration");
         store.stage({{"kind", "types"},
@@ -5076,10 +5554,12 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                      {"after", declared.back()}});
         if (identityBefore)
           declaredRows = declared;
-        state["types"] = std::move(declared);
-        persistEdit(store, state);
+        persistTableEdit(store, "types", std::move(declared));
       } catch (...) {
         store = checkpoint;
+        // The declarations the files hold once the writes queued before this
+        // edit are done.
+        catchUpWrites();
         (void)load(session_);
         throw;
       }
@@ -5369,7 +5849,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     return page(items, p, {"name"}, PageAddressMatch::SegmentRange);
   }
   if (operation == "listing")
-    return listing().page(p);
+    return listing().page(p, encoded);
   if (operation == "string_references")
     return listing().stringReferences(p);
   if (operation == "overview")
@@ -5848,8 +6328,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     if (before == after)
       return {{"saved", false}, {"address", hexAddress(address)}};
     const auto checkpoint = store;
-    auto state = store.committedState();
-    auto &rows = state["code_edits"];
+    Json rows = store.committedTable("code_edits");
     rows.erase(std::remove_if(rows.begin(), rows.end(),
                               [&](const Json &row) {
                                 return parseAddress(
@@ -5858,17 +6337,19 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                               }),
                rows.end());
     rows.push_back(after);
+    // The session's edits from here on, as this edit leaves them.
+    auto edits = rows;
     try {
       store.stage({{"kind", "code"},
                    {"address", hexAddress(owner)},
                    {"before", before},
                    {"after", after}});
-      store.persist(state);
+      persistTableEdit(store, "code_edits", std::move(rows));
     } catch (...) {
       store = checkpoint;
       throw;
     }
-    codeEdits_ = std::move(rows);
+    codeEdits_ = std::move(edits);
     const bool localName = p.value("kind", std::string()) == "name";
     if (localName)
       localNamesChanged();
@@ -5883,13 +6364,17 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
   if (operation == "save") {
     requireWriter();
     auto &store = history();
-    // What saves reads the project's files after this, written or not.
-    store.finishWrites();
-    auto state = store.committedState();
-    state["annotations"] = backendJson(neverd_annotations_json(session_));
+    // What saves reads the project's files after this, written or not; staged
+    // comments committed ahead of an edit go behind the reply as it will.
+    if (!behindSave)
+      store.finishWrites();
+    auto annotations = backendJson(neverd_annotations_json(session_));
     saveAnalysisSections();
     sectionsDirty_ = false;
-    store.persist(std::move(state));
+    if (behindSave)
+      store.persistTableLater("annotations", std::move(annotations));
+    else
+      store.persistTable("annotations", std::move(annotations));
     dirty_ = false;
     return {{"saved", true}, {"dirty", false}};
   }
@@ -6175,26 +6660,29 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                   "The name " + name + " is used at " + hexAddress(*other));
     const int index = neverd_func_find_by_addr(session_, address);
     auto &store = history();
-    auto state = store.committedState();
-    auto &renames = state["renames"];
-    Json before = nullptr;
-    bool found = false;
-    for (auto &item : renames)
-      if (parseAddress(item.at("addr").get<std::string>()) == address) {
-        before = item;
-        item["renamed"] = name;
-        found = true;
-      }
-    if (!found)
-      renames.push_back({{"addr", hexAddress(address)},
-                         {"original", index >= 0 ? ownedString(neverd_func_name(
-                                                       session_, index))
-                                                 : listing().nameAt(address)},
-                         {"renamed", name}});
-    Json after;
-    for (const auto &item : renames)
-      if (parseAddress(item.at("addr").get<std::string>()) == address)
-        after = item;
+    // The committed rows lie in address order: the row of this address, or
+    // the place a new one takes, each row shared with the committed state.
+    auto renames = store.committedRows("renames");
+    auto at = std::lower_bound(renames.begin(), renames.end(), address,
+                               [](const auto &row, std::uint64_t key) {
+                                 return row->address() < key;
+                               });
+    const bool found = at != renames.end() && (*at)->address() == address;
+    const Json before = found ? (*at)->value() : Json(nullptr);
+    Json row =
+        found
+            ? before
+            : Json{{"addr", hexAddress(address)},
+                   {"original",
+                    index >= 0 ? ownedString(neverd_func_name(session_, index))
+                               : listing().nameAt(address)}};
+    row["renamed"] = name;
+    auto admitted = ProjectHistory::tableRow("renames", std::move(row));
+    const Json after = admitted->value();
+    if (found)
+      *at = std::move(admitted);
+    else
+      renames.insert(at, std::move(admitted));
     settleNamedViews();
     // The session takes the name from here, so the reply need not wait for the
     // disk (ProjectHistory::persistLater).
@@ -6206,53 +6694,19 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                  {"before", before},
                  {"after", after}});
     try {
-      if (take)
-        persistEdit(store, state);
+      if (take && writeBehind_)
+        store.persistRowsLater("renames", std::move(renames));
       else
-        store.persist(state);
+        store.persistRows("renames", std::move(renames));
     } catch (...) {
       store = checkpoint;
       throw;
     }
-    if ((take ? take(session_, address, name.c_str())
-              : neverd_renames_load(session_)) != 0)
-      throw Error("reload_failed", "Rename was saved but could not be reloaded",
-                  {{"saved", true}});
-    // What a view may spell of it: the name, the one given up, and the one the
-    // engine has for it.
-    const std::vector<std::string> spellings{
-        name, after.value("original", std::string()),
-        before.is_object() ? before.value("renamed", std::string())
-                           : std::string()};
-    // As the engine's row now reads.
-    using RenameOriginal = const char *(*)(neverd_session_t, neverd_va_t);
-    static const auto engineOriginal =
-        engineSymbol<RenameOriginal>("neverd_rename_original");
-    if (imageFactsHeld_ && engineOriginal)
-      imageFacts_.renamed(address,
-                          ownedString(engineOriginal(session_, address)), name);
-    else
-      imageFactsHeld_ = false;
-    const bool functionInPlace = listing_ && listing_->functionRenamed(address);
-    const bool dataInPlace = !functionInPlace && listing_ && index < 0 &&
-                             listing_->dataRenamed(address, name);
-    if (functionInPlace) {
-      // Decoration reads a function's name.
-      functionNamesChanged(false);
-      keepNamedViewsThrough(address, spellings, false,
-                            ViewEditKind::FunctionName);
-    } else if (dataInPlace) {
-      // The pages of what read it spell a name of data, which the engine
-      // text its decoration read respells.
-      imageFactsRevision_.reset();
-      forgetGraphsAndText();
-      keepNamedViewsThrough(address, spellings, false, ViewEditKind::DataName);
-    } else
-      namesChanged();
+    const auto taken = takeName(address, before, after);
     ++revision_;
     // A function's name may bind a prototype its declaration then hides.
-    if (functionInPlace || dataInPlace)
-      namedViewsTakeRevision(dataInPlace);
+    if (taken != NameTaken::Again)
+      namedViewsTakeRevision(taken == NameTaken::Data);
     return {{"address", hexAddress(address)}, {"name", name}, {"saved", true}};
   }
   if (operation == "function_attributes") {
@@ -6342,27 +6796,63 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
          : create ? edits.create(session_, address)
                   : edits.remove(session_, address)) != 0)
       throw Error("invalid_request", error());
-    const auto rowAt = [&](const Json &rows) -> Json {
+    // The rows in address order, as the engine lists them and the history
+    // keeps them: the edit changed the engine's at its entry alone
+    // (neverd_functions_range_json), and the others are the history's.
+    using FunctionsRange =
+        const char *(*)(neverd_session_t, neverd_va_t, neverd_va_t);
+    static const auto functionsRange =
+        engineSymbol<FunctionsRange>("neverd_functions_range_json");
+    const auto &committed =
+        store.committedTable("functions").get_ref<const Json::array_t &>();
+    const auto at = std::lower_bound(
+        committed.begin(), committed.end(), address,
+        [](const Json &row, std::uint64_t value) {
+          return parseAddress(row.at("addr").get_ref<const std::string &>()) <
+                 value;
+        });
+    const bool had =
+        at != committed.end() &&
+        parseAddress(at->at("addr").get_ref<const std::string &>()) == address;
+    const Json before = had ? *at : Json(nullptr);
+    Json rows, after;
+    if (functionsRange &&
+        address != std::numeric_limits<std::uint64_t>::max()) {
+      const auto span =
+          backendJson(functionsRange(session_, address, address + 1));
+      if (!span.is_array() || span.size() > 1)
+        throw Error("engine_error", "Engine returned malformed function edits");
+      after = span.empty() ? Json(nullptr) : span.front();
+      Json::array_t next;
+      next.reserve(committed.size() + 1);
+      next.insert(next.end(), committed.begin(), at);
+      if (!after.is_null())
+        next.push_back(after);
+      next.insert(next.end(), had ? std::next(at) : at, committed.end());
+      rows = Json(std::move(next));
+    } else {
+      rows = functionEditRows();
+      after = nullptr;
       for (const auto &row : rows)
-        if (parseAddress(row.at("addr").get<std::string>()) == address)
-          return row;
-      return nullptr;
-    };
-    auto state = store.committedState();
-    const Json before = rowAt(state.at("functions"));
-    state["functions"] = functionEditRows();
-    const Json after = rowAt(state.at("functions"));
+        if (parseAddress(row.at("addr").get_ref<const std::string &>()) ==
+            address)
+          after = row;
+    }
     const auto checkpoint = store;
     store.stage({{"kind", "function"},
                  {"address", hexAddress(address)},
                  {"before", before},
                  {"after", after}});
     try {
-      persistEdit(store, state);
+      persistTableEdit(store, "functions", std::move(rows));
     } catch (...) {
       store = checkpoint;
-      // The sidecar still holds the edits before this one.
-      (void)edits.load(session_);
+      // The edits go back to the rows the history holds, as the files do once
+      // the writes queued before this edit are done.
+      if (!restoreFunctionEdits(store.committedTable("functions"))) {
+        catchUpWrites();
+        (void)edits.load(session_);
+      }
       functionsChanged();
       throw;
     }
@@ -6552,7 +7042,33 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                   "action is \"code\", \"data\", \"string\" or \"undefine\"");
     }
     auto &store = history();
-    auto state = store.committedState();
+    // The committed rows stand until this edit persists its own.
+    const Json &committedItems = store.committedTable("items");
+    // What the edit can change: the rows that share a byte with what it
+    // defines, and what is left of them around it, which lies from the first
+    // of them to the end of the last.  The engine lists that span's rows
+    // before and after the edit (neverd_items_range_json); without them the
+    // whole table is read.
+    using ItemsRange =
+        const char *(*)(neverd_session_t, neverd_va_t, neverd_va_t);
+    static const auto itemsRange =
+        engineSymbol<ItemsRange>("neverd_items_range_json");
+    const auto itemAddress = [](const Json &item) {
+      return parseAddress(item.at("addr").get_ref<const std::string &>());
+    };
+    std::optional<std::pair<std::uint64_t, std::uint64_t>> span;
+    Json spanBefore;
+    if (itemsRange && size &&
+        size <= std::numeric_limits<std::uint64_t>::max() - start) {
+      spanBefore = backendJson(itemsRange(session_, start, start + size));
+      auto low = start, high = start + size;
+      for (const auto &item : spanBefore) {
+        const auto at = itemAddress(item);
+        low = std::min(low, at);
+        high = std::max(high, at + item.at("size").get<std::uint64_t>());
+      }
+      span = {low, high};
+    }
     // The engine checks the item against the image and the other items;
     // undefined bytes it covers stay undefined around it.
     if (code.empty())
@@ -6562,17 +7078,52 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
         if (items.set(session_, entry, definition.dump().c_str()) != 0)
           throw Error("invalid_request", error());
     } catch (...) {
-      (void)items.load(session_);
+      // What it set goes back to the rows the history holds, which the files
+      // may not hold yet.
+      if (!restoreDataItems(committedItems)) {
+        catchUpWrites();
+        (void)items.load(session_);
+      }
       namesChanged();
       throw;
     }
     // One history step holds every row the edit changed, the item's first.
     std::map<std::uint64_t, std::pair<Json, Json>> changed;
-    for (const auto &item : state.at("items"))
-      changed[parseAddress(item.at("addr").get<std::string>())].first = item;
-    state["items"] = dataItemRows();
-    for (const auto &item : state.at("items"))
-      changed[parseAddress(item.at("addr").get<std::string>())].second = item;
+    Json rows;
+    if (span) {
+      // The committed rows of the span are the engine's before the edit: the
+      // table after it is theirs with the span's rows the engine now holds.
+      const Json spanAfter =
+          backendJson(itemsRange(session_, span->first, span->second));
+      const auto &committed = committedItems.get_ref<const Json::array_t &>();
+      const auto below = [&](const Json &item, std::uint64_t at) {
+        return itemAddress(item) < at;
+      };
+      const auto first = std::lower_bound(committed.begin(), committed.end(),
+                                          span->first, below);
+      const auto last =
+          std::lower_bound(first, committed.end(), span->second, below);
+      if (spanBefore.is_array() && spanAfter.is_array() &&
+          std::equal(first, last, spanBefore.begin(), spanBefore.end())) {
+        for (auto item = first; item != last; ++item)
+          changed[itemAddress(*item)].first = *item;
+        for (const auto &item : spanAfter)
+          changed[itemAddress(item)].second = item;
+        Json::array_t table;
+        table.reserve(committed.size() - (last - first) + spanAfter.size());
+        table.insert(table.end(), committed.begin(), first);
+        table.insert(table.end(), spanAfter.begin(), spanAfter.end());
+        table.insert(table.end(), last, committed.end());
+        rows = std::move(table);
+      }
+    }
+    if (rows.is_null()) {
+      for (const auto &item : committedItems)
+        changed[itemAddress(item)].first = item;
+      rows = dataItemRows();
+      for (const auto &item : rows)
+        changed[itemAddress(item)].second = item;
+    }
     const Json after = changed[start].second;
     Json command{{"kind", "item"},
                  {"address", hexAddress(start)},
@@ -6586,15 +7137,21 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     const auto checkpoint = store;
     try {
       store.stage(std::move(command));
-      persistEdit(store, state);
+      persistTableEdit(store, "items", std::move(rows));
     } catch (...) {
       store = checkpoint;
-      // The sidecar still holds the items before this one.
-      (void)items.load(session_);
+      // The items go back to the rows the history holds, as the files do once
+      // the writes queued before this edit are done.
+      if (!restoreDataItems(store.committedTable("items"))) {
+        catchUpWrites();
+        (void)items.load(session_);
+      }
       namesChanged();
       throw;
     }
-    const bool itemsInPlace = listing_ && listing_->dataItemsChanged();
+    // The listing reads the rows the history now holds, which the engine's are.
+    const bool itemsInPlace =
+        listing_ && listing_->dataItemsChanged(&store.committedTable("items"));
     if (itemsInPlace)
       dataItemsChanged();
     else
@@ -6661,14 +7218,15 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                                  : " has no number to format"));
     const auto operand = *chosen;
     auto &store = history();
-    auto state = store.committedState();
+    // The committed rows stand until this edit persists its own.
+    const Json &committedFormats = store.committedTable("operands");
     const auto rowAt = [&](const Json &rows) -> Json {
       for (const auto &row : rows)
         if (parseAddress(row.at("addr").get<std::string>()) == address)
           return row;
       return nullptr;
     };
-    const Json before = rowAt(state.at("operands"));
+    const Json before = rowAt(committedFormats);
     // The operand's format so far, then the action's change to it: a base,
     // the sign, the bits, or the listing's own number again.
     const std::string number(numberBaseName(NumberBase::Number));
@@ -6760,17 +7318,21 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                         next.dump().c_str()) != 0)
           throw Error("invalid_request", error());
     } catch (...) {
-      // The sidecar still holds the formats before these.
-      (void)formats.load(session_);
+      // What it set goes back to the rows the history holds, which the files
+      // may not hold yet.
+      if (!restoreOperandFormats(committedFormats)) {
+        catchUpWrites();
+        (void)formats.load(session_);
+      }
       throw;
     }
     // One history step holds every row the change made, the instruction's
     // first.
     std::map<std::uint64_t, std::pair<Json, Json>> changed;
-    for (const auto &row : state.at("operands"))
+    for (const auto &row : committedFormats)
       changed[parseAddress(row.at("addr").get<std::string>())].first = row;
-    state["operands"] = operandFormatRows();
-    for (const auto &row : state.at("operands"))
+    Json rows = operandFormatRows();
+    for (const auto &row : rows)
       changed[parseAddress(row.at("addr").get<std::string>())].second = row;
     const Json after = changed[address].second;
     Json command{{"kind", "operand"},
@@ -6791,11 +7353,15 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     const auto checkpoint = store;
     try {
       store.stage(std::move(command));
-      store.persist(state);
+      persistTableEdit(store, "operands", std::move(rows));
     } catch (...) {
       store = checkpoint;
-      // The sidecar still holds the formats before this one.
-      (void)formats.load(session_);
+      // The formats go back to the rows the history holds, as the files do
+      // once the writes queued before this edit are done.
+      if (!restoreOperandFormats(store.committedTable("operands"))) {
+        catchUpWrites();
+        (void)formats.load(session_);
+      }
       operandFormatsChanged();
       throw;
     }
@@ -6891,7 +7457,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       const bool deltas = etags && p.value("page_delta", false);
       if (auto named = namedViewPage(entry, representation, offset, limit,
                                      options, etags ? nullptr : encoded,
-                                     etags ? &known : nullptr, deltas))
+                                     etags ? &known : nullptr, deltas, &p))
         return std::move(*named);
       if (keptOnly_)
         throw Error("not_kept", "No session has kept this view");

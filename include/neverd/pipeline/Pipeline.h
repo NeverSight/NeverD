@@ -189,11 +189,11 @@ struct PipelineOptions {
   /// instead leaves each refused one out and names it in its audit, as a
   /// whole-image run does.
   bool OmitRefusedFunctions = false;
-  /// A unit that names each function it leaves out (a whole LLVM C unit)
-  /// declares a function only when the LLVM emitter refuses its body for a
-  /// stale code or data address, and emits the others, recording why in the
-  /// function's audit (LLVMDiagnostic). Lifting and patching, whose output
-  /// names nothing it leaves out, fail at such a body instead.
+  /// A unit that names each function it leaves out (a whole LLVM C unit,
+  /// lifted IR text) declares a function only when the LLVM emitter refuses
+  /// its body, and emits the others, recording why in the function's audit
+  /// (LLVMDiagnostic). Patching, whose output names nothing it leaves out,
+  /// fails at such a body instead.
   bool OmitRefusedLLVMBodies = false;
   /// The user's function edits: an address made the entry of a function
   /// (true) or no longer one (false).  Whole-program detection follows them;
@@ -904,9 +904,9 @@ private:
   /// shard is emitted (with link-mergeable globals), verified and optimized in
   /// its own LLVMContext on one of \p NumThreads workers, then the shard
   /// modules are serialized to bitcode and linked into one module in \p Ctx.
-  /// Because the emit and (function-local) optimization passes are the
-  /// single-threaded bottleneck of lift, this is the main end-to-end speedup.
-  /// The result is semantically identical to the serial path: every function is
+  /// Emission and optimization run concurrently on independent shards. Worker
+  /// count changes scheduling only: the fixed work-budget partition preserves
+  /// each function's module-level optimization context. Every function is
   /// defined in exactly one shard and per-address globals (crucially the
   /// writable .data/.bss segment globals) merge to one shared object at link
   /// time. A failed result owns a diagnostic and no module, so callers never
@@ -916,11 +916,10 @@ private:
   /// The shard count is derived from the total MedIR work rather than pinned to
   /// \p NumThreads: peak memory is (in-flight shards) x (slice size), so
   /// slicing finely keeps a large binary's unoptimized IR from all being
-  /// resident at once while still saturating every worker.  C++ exception
-  /// contributions carrying the same nonzero native FuncInfo identity are one
-  /// indivisible scheduling unit.  Such a group may exceed the soft slice
-  /// budget, because splitting it would make later group-level EH lowering
-  /// impossible to validate or commit atomically.
+  /// resident at once. C++ exception contributions sharing native FuncInfo,
+  /// SEH parents and callbacks, and interior-code owners and consumers form
+  /// indivisible scheduling units. A group may exceed the soft slice budget:
+  /// splitting it would lose module-local identities or the atomic EH contract.
   static LLVMEmissionResult emitLLVMSharded(
       const std::vector<MedFunc> &Funcs, llvm::LLVMContext &Ctx, Arch TheArch,
       const std::vector<std::pair<va_t, std::string>> &Imports,
@@ -936,13 +935,15 @@ private:
   /// Execute the common shard lifecycle. The emitter creates each module in
   /// its worker's context; only a complete linked module is returned in the
   /// caller's context. All workers finish before diagnostics or output are
-  /// published.
+  /// published. With \p OmitRefusedBodies, a body of \p Funcs whose resolved
+  /// call the linked module cannot reconcile is declared only and listed in
+  /// LeftOut instead of failing the unit.
   static LLVMEmissionResult runLLVMShardPipeline(
       const std::vector<MedFunc> &Funcs, llvm::LLVMContext &Ctx,
       unsigned NumShards, unsigned NumThreads, bool NoOpt,
       llvm::function_ref<LLVMEmissionResult(unsigned, llvm::LLVMContext &)>
           Emit,
-      const SourceViewOptions &View = {});
+      const SourceViewOptions &View = {}, bool OmitRefusedBodies = false);
 
   /// Shared source call/return recovery before either HighIR or LLVM emission.
   /// \p Cache keeps the image's import-address names when this run shares one.

@@ -90,7 +90,7 @@ constexpr bool isWordDivision(Intrinsic Id) {
 /// CSE-able.
 constexpr bool isPureScalarValue(Intrinsic Id) {
   return Id == Intrinsic::MIPSUnpredictable || Id == Intrinsic::MIPSLwrUpper ||
-         isWordDivision(Id);
+         isWordDivision(Id) || Id == Intrinsic::MIPSAccumulatorAfterWrite;
 }
 
 /// Ordering effects remain observable, but neither operation writes data.
@@ -100,10 +100,61 @@ constexpr bool isBarrier(Intrinsic Id) {
          Id == Intrinsic::MIPSSync;
 }
 
+constexpr bool isReservationIntrinsic(Intrinsic Id) {
+  return Id == Intrinsic::MIPSLoadLinkedWord ||
+         Id == Intrinsic::MIPSStoreConditionalWord;
+}
+constexpr bool isMTIntrinsic(Intrinsic Id) {
+  return Id == Intrinsic::MIPSDisableMT || Id == Intrinsic::MIPSEnableMT ||
+         Id == Intrinsic::MIPSDisableVPE || Id == Intrinsic::MIPSEnableVPE;
+}
+constexpr bool isCacheIntrinsic(Intrinsic Id) {
+  return Id == Intrinsic::MIPSCache || Id == Intrinsic::MIPSPrefetch;
+}
+constexpr bool isSystemIntrinsic(Intrinsic Id) {
+  return Id == Intrinsic::MIPSReadHardwareRegister ||
+         Id == Intrinsic::MIPSDisableInterrupts ||
+         Id == Intrinsic::MIPSEnableInterrupts ||
+         Id == Intrinsic::MIPSReadCP0Word ||
+         Id == Intrinsic::MIPSWriteCP0Word || isMTIntrinsic(Id);
+}
+constexpr bool scalarMayWriteMemory(Intrinsic Id) {
+  return mergeStore(Id).has_value() || isCacheIntrinsic(Id) ||
+         Id == Intrinsic::MIPSStoreConditionalWord;
+}
+constexpr bool isStatefulScalar(Intrinsic Id) {
+  return isReservationIntrinsic(Id) || isSystemIntrinsic(Id) ||
+         Id == Intrinsic::MIPSPause || isCacheIntrinsic(Id);
+}
+constexpr bool supportedCP0Word(uint64_t Index, bool Write) {
+  switch (Index) {
+#define NEVERD_MIPS_CP0(Index, Selector, Name, Writable, MT)                   \
+  case ((Selector << 5) | Index):                                              \
+    return !Write || Writable;
+#include "neverd/ir/intrinsics/MIPS/MIPSCP0.def"
+  default:
+    return false;
+  }
+}
+constexpr bool cp0RequiresMT(uint64_t Key) {
+  switch (Key) {
+#define NEVERD_MIPS_CP0(Index, Selector, Name, Writable, MT)                   \
+  case ((Selector << 5) | Index):                                              \
+    return MT;
+#include "neverd/ir/intrinsics/MIPS/MIPSCP0.def"
+  default:
+    return false;
+  }
+}
+constexpr bool supportedHardwareRegister(uint64_t Index) {
+  return Index < 4 || Index == 29;
+}
+
 constexpr bool isScalarIntrinsic(Intrinsic Id) {
   return mergeMemory(Id).has_value() || Id == Intrinsic::MIPSUnpredictable ||
          Id == Intrinsic::MIPSRequireWord || Id == Intrinsic::MIPSLwrUpper ||
-         isDSPControlIntrinsic(Id) || isWordDivision(Id) || isBarrier(Id);
+         isDSPControlIntrinsic(Id) || isWordDivision(Id) || isBarrier(Id) ||
+         isStatefulScalar(Id) || Id == Intrinsic::MIPSAccumulatorAfterWrite;
 }
 
 struct ScalarShape {
@@ -123,6 +174,32 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
   if (!S.IdIsValid || !S.Ordinary ||
       (S.Target != Arch::Unknown && !isMIPS(S.Target)))
     return false;
+  if (isStatefulScalar(Id)) {
+    if (isMIPS64(S.Target))
+      return false;
+    if (isCacheIntrinsic(Id))
+      return S.Inputs == 3 && !S.OutputBytes && S.FirstBytes == 1 &&
+             S.SecondBytes == 4 && S.FirstConstant && *S.FirstConstant < 32;
+    if (Id == Intrinsic::MIPSPause)
+      return S.Inputs == 1 && !S.OutputBytes;
+    if (Id == Intrinsic::MIPSWriteCP0Word)
+      return S.Inputs == 3 && !S.OutputBytes && S.FirstBytes == 1 &&
+             S.SecondBytes == 4 && S.FirstConstant &&
+             supportedCP0Word(*S.FirstConstant, true);
+    if (!S.OutputWritable || S.OutputBytes != 4)
+      return false;
+    if (Id == Intrinsic::MIPSLoadLinkedWord)
+      return S.Inputs == 2 && S.FirstBytes == 4;
+    if (Id == Intrinsic::MIPSStoreConditionalWord)
+      return S.Inputs == 3 && S.FirstBytes == 4 && S.SecondBytes == 4;
+    if (Id == Intrinsic::MIPSReadCP0Word)
+      return S.Inputs == 2 && S.FirstBytes == 1 && S.FirstConstant &&
+             supportedCP0Word(*S.FirstConstant, false);
+    if (Id == Intrinsic::MIPSReadHardwareRegister)
+      return S.Inputs == 2 && S.FirstBytes == 1 && S.FirstConstant &&
+             supportedHardwareRegister(*S.FirstConstant);
+    return S.Inputs == 1;
+  }
   if (Id == Intrinsic::MIPSExecutionHazardBarrier)
     return S.Inputs == 1 && !S.OutputBytes;
   if (Id == Intrinsic::MIPSSync)
@@ -144,6 +221,11 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
             S.FirstBytes == (isMIPS64(S.Target) ? 8 : 4));
   if (!S.OutputWritable || (S.OutputBytes != 4 && S.OutputBytes != 8))
     return false;
+  if (Id == Intrinsic::MIPSAccumulatorAfterWrite)
+    return S.Inputs == 3 && S.FirstBytes == 1 &&
+           S.SecondBytes == S.OutputBytes &&
+           (S.Target == Arch::Unknown ||
+            S.OutputBytes == (isMIPS64(S.Target) ? 8 : 4));
   if (Id == Intrinsic::MIPSUnpredictable)
     return S.Inputs == 1 && (S.Target == Arch::Unknown ||
                              S.OutputBytes == (isMIPS64(S.Target) ? 8 : 4));

@@ -25,9 +25,10 @@ llvm::Expected<MachOExportMap>
 readMachOExportLayout(llvm::ArrayRef<uint8_t> Bytes);
 llvm::Expected<std::vector<uint8_t>>
 writeMachOExportLayout(const MachOExportMap &Exports);
-// Canonical absolute-address identities; the distinguished executable header
+// Canonical absolute-address identities; the distinguished linker header
 // follows the real header rather than pretending to be ordinary code/data.
 llvm::Expected<std::vector<uint8_t>>
-machOExportIdentities(llvm::ArrayRef<uint8_t> Bytes, uint64_t HeaderVA);
+machOExportIdentities(llvm::ArrayRef<uint8_t> Bytes, uint64_t HeaderVA,
+                      uint32_t FileType);
 } // namespace neverd
 #endif

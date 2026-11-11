@@ -511,6 +511,12 @@ private:
   void requestTransition(const QString &action);
   void finishTransition();
   void refreshHistory();
+  /// Commit staged comments ahead of an edit the worker refuses over them,
+  /// without waiting for the files or writing a database back.
+  void commitComments();
+  /// Whether the worker holds staged comments, or will once those sent are
+  /// answered.
+  bool commentsStaged() const { return dirty_ || pendingComments_ > 0; }
   /// Watch the project's files beside the input for changes on disk.
   void watchProject();
   QFileSystemWatcher projectWatcher_;
@@ -568,6 +574,9 @@ private:
   QJsonArray contributions_;
   quint64 sessionEpoch_ = 0;
   int pendingWrites_ = 0;
+  /// Comments sent and not yet answered, which the worker stages in order
+  /// before any edit sent after them.
+  int pendingComments_ = 0;
   bool connected_ = false, loaded_ = false, opening_ = false, dirty_ = false;
   /// The project is a database the user opened, and edits since it was
   /// last written are only in its unpacked files.

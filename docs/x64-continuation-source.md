@@ -654,9 +654,10 @@ original handler instructions own register, memory and return-frame effects;
 no PC, SP, argument, padding or frame byte is synthesized. Only a successful
 privilege-return boundary (status 6) whose actual PC/SP equal the pending CALL
 coordinates permits the ordinary bridge to retry. Paged returns additionally
-require instruction-attempt progress. Merely entering the handler at matching
+require instruction-completed progress, including a resumed IRET/RETF whose
+attempt was already charged before a backing stop. Merely entering the handler at matching
 coordinates, reaching another selected CALL, a near RET, fault delivery or an
-unattempted boundary cannot start the callee. Nested returns to other
+incomplete boundary cannot start the callee. Nested returns to other
 coordinates stop with their actual status; resume continues the selected
 handler from that state. Other selected CALL pauses can be handled with their
 own bridges and then this handler resumed.
