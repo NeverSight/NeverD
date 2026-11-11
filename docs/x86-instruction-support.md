@@ -4482,6 +4482,10 @@ use one initial SREGS write and no host mode or blocker rewrites. Both C
 emitters retain identical generated artifacts across SDKs. The
 [dated evidence](evidence/x86-mode-interrupts-2026-11-11.json) records exact
 source/binary/artifact hashes and the unchanged lower-owner paging baseline.
+A subsequent merge at `da61cae5e7` includes upstream type-cache, function-edit
+range and MIPS-only Capstone changes. Both SDKs rebuild and pass 154 affected
+mode, boundary, SDK, type-context and session checks each, with no failures or
+skips; these integration replays have their own exact-source records.
 
 The producer still owns arrival timing and APIC/PIC/CR8 priority arbitration.
 Other non64 state-owner integrations, real/unreal execution, software SMM/SGX
