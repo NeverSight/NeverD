@@ -205,8 +205,13 @@ def run(executable):
         # A note on a function and a type nothing reads leave every view.
         ok(owner, "function_edit", {"address": hex(functions[2]), "attributes": {"color": "#204060"}})
         assert same_as_fresh("colour") == noted
+        # The names its declarations give the stores are read behind its reply,
+        # before the next request: the stores stand, and every view reads as it
+        # did.
+        settled = ok(owner, "metadata")["store_keeps_settled"]
         reply = ok(owner, "local_types_declare", {"language": "c", "source": "struct VIEW_NEW { unsigned value; };"})
         assert reply["unread"], reply
+        assert ok(owner, "metadata")["store_keeps_settled"] == settled + 1
         assert same_as_fresh("new type") == noted
         # A page the client keeps reads the same while its document stands, and
         # the worker says so in place of sending it again.

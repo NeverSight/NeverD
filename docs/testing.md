@@ -7239,6 +7239,8 @@ still on its way: the comment is committed first, the files hold both without th
 project being reported saved, and Save still answers once the files hold it.
 `NeverDWorkerViewEdits` also checks a prepared function, a page named as kept, and a
 replica taking a function's and data's names in one update without reading names again.
+A new type's declaration there has the stores' names read behind its reply
+(`metadata.store_keeps_settled`), every view then reading from what is kept as before.
 It reads each view as a client that keeps its pages does, whole and three lines a page,
 through comments written, changed and taken away, a function's longer and shorter name,
 a data's name and two edits with no read between: each page named for what changed of it,

@@ -1203,6 +1203,13 @@ const Json &ProjectHistory::committedState() const {
 const Json &ProjectHistory::committedTable(const std::string &name) const {
   return snapshot_->state.at(name);
 }
+std::shared_ptr<const Json>
+ProjectHistory::committedTableHeld(const std::string &name) const {
+  const auto table = snapshot_->state.Other.find(name);
+  if (table == snapshot_->state.Other.end())
+    throw Error("history_invalid", "User state table is missing");
+  return table->second;
+}
 const ProjectHistory::PatchRows &ProjectHistory::committedPatches() const {
   return snapshot_->state.Patches;
 }

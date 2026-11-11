@@ -3067,6 +3067,7 @@ Json Engine::metadata() const {
           {"named_view_data_name_patches", dataNamePatches_},
           {"named_view_changes_said", changesSaid_},
           {"named_view_documents_taken", documentsTaken_},
+          {"store_keeps_settled", storeKeepsSettled_},
           {"named_view_renders", namedViewRenders_},
           {"view_store_name_reads", viewStoreNameReads_},
           {"local_type_names_prepared", localTypeNamesPrepared_},
@@ -5843,19 +5844,15 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     static const auto load =
         engineSymbol<SessionLoadFunction>("neverd_type_declarations_load");
     std::string reply;
-    StoreNames storesBefore;
-    std::optional<Json> identityBefore;
+    // The Session's declarations before this one are those the history
+    // committed: what the stores are kept under moves by them alone, and the
+    // names it gives them are read behind the reply (settleStoreKeep).
+    std::shared_ptr<const Json> typesBefore;
+    bool typesTaken = false;
     if (operation == "local_types_declare") {
       settleNamedViews();
-      try {
-        // The Session's declarations are those the history committed.
-        identityBefore = storeIdentity(&history_->committedTable("types"));
-        if (identityBefore)
-          storesBefore = storeNames(*identityBefore);
-      } catch (const std::exception &) {
-        // Later sessions render again.
-        identityBefore.reset();
-      }
+      settleStoreKeep();
+      typesBefore = history_->committedTableHeld("types");
       const auto source =
           stringField(p, "source", {},
                       ::neverd::limits::worker::kEngineMaxDeclarationBytes);
@@ -5887,7 +5884,6 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     // The project keeps what the user declared at once, as a rename, and
     // undo takes it away again: the declaration after the last.  The
     // sidecar unchanged, so are the types.
-    Json declaredRows;
     if (result.value("problems", Json::array()).empty()) {
       auto &store = *history_;
       const auto checkpoint = store;
@@ -5904,9 +5900,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                      {"address", hexAddress(declared.size() - 1)},
                      {"before", nullptr},
                      {"after", declared.back()}});
-        if (identityBefore)
-          declaredRows = declared;
         persistTableEdit(store, "types", std::move(declared));
+        typesTaken = true;
       } catch (...) {
         store = checkpoint;
         // The declarations the files hold once the writes queued before this
@@ -5926,12 +5921,13 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
         })) {
       // Of what the stores are kept under, only the declarations moved
       // (analysisSnapshot's declared_types): the names after read the rest as
-      // the names before did.
-      if (identityBefore && declaredRows.is_array()) {
-        (*identityBefore)["declared_types"] = std::move(declaredRows);
-        keepStoresFor(storesBefore, storeNames(std::move(*identityBefore)));
-      } else
-        keepStoresFor(storesBefore);
+      // the names before did, and both are read once the reply is sent.
+      if (typesBefore)
+        storeKeepWaiting_ = StoreKeepWaiting{
+            typesBefore,
+            typesTaken ? history_->committedTableHeld("types") : nullptr};
+      else
+        keepStoresFor(StoreNames{});
       ++revision_;
       namedViewsTakeRevision(false);
       return result;

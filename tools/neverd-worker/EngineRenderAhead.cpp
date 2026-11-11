@@ -231,9 +231,42 @@ Engine::StoreNames Engine::storeNames() {
 }
 
 std::optional<Json> Engine::storeIdentity(const Json *declared) {
+  // What a declaration left to be read comes first: the names it gives the
+  // stores are those this identity is read against.
+  settleStoreKeep();
   if (!browseCacheEnabled_ || projectFolder().empty())
     return std::nullopt;
   return renderStoreIdentity(declared);
+}
+
+void Engine::settleStoreKeep() {
+  if (!storeKeepWaiting_)
+    return;
+  const auto waiting = *std::exchange(storeKeepWaiting_, std::nullopt);
+  ++storeKeepsSettled_;
+  StoreNames before, after;
+  try {
+    if (waiting.after) {
+      // Of what the stores are kept under, only the declarations moved
+      // (analysisSnapshot's declared_types): the names before read the rest
+      // as the names after do.
+      if (auto identity = storeIdentity(waiting.after.get())) {
+        after = storeNames(*identity);
+        (*identity)["declared_types"] = *waiting.before;
+        before = storeNames(std::move(*identity));
+      }
+    } else {
+      // The history took no row: its declarations are those before, and the
+      // Session says what they are now.
+      if (auto identity = storeIdentity(waiting.before.get()))
+        before = storeNames(std::move(*identity));
+      after = storeNames();
+    }
+  } catch (const std::exception &) {
+    // Later sessions render again.
+    before = after = StoreNames{};
+  }
+  keepStoresFor(before, after);
 }
 
 Engine::StoreNames Engine::storeNames(Json identity) {
@@ -285,6 +318,11 @@ void Engine::openRenderStore(const std::string &mode) {
 }
 
 void Engine::writeStoreKeeps() noexcept {
+  try {
+    settleStoreKeep();
+  } catch (const std::exception &) {
+    // Later sessions render again.
+  }
   for (const auto &keep : storeKeeps_)
     try {
       RenderStore::keepFor(keep.folder, keep.from, keep.to);

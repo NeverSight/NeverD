@@ -1107,7 +1107,10 @@ reads of the pages read at the revision it leaves, at most two, and takes the an
 as those views' next reads.  `metadata.named_view_renders` counts the
 documents the engine rendered a function for, rather than built from pages kept.  `metadata.view_store_name_reads` counts
 the times an owner's views read which store they are kept under, which an edit that
-keeps the stores for what it changed says as it takes it.  `metadata.local_type_names_prepared`
+keeps the stores for what it changed says as it takes it.  A declaration of types nothing
+has read moves what the stores are kept under by its declarations alone: the names the
+stores had and have are read once its reply is sent, before the next request or anything
+else that reads them, and `metadata.store_keeps_settled` counts those.  `metadata.local_type_names_prepared`
 counts the idle steps that found read what a declaration of local types checks its
 names against (`neverd_local_types_prepare`), which the step after each request and
 after each other idle step reads once the session has read its local types.

@@ -5261,7 +5261,11 @@ change from the account (`changedPage`), neither document being walked, and a re
 names such a page while no one else holds the document has the patch written into the
 document itself rather than into a copy (`metadata.named_view_documents_taken`). The
 account is the patch's own, so `open.check_view_changes` has a worker make each such page
-by comparing the documents as well and fail where the two differ.
+by comparing the documents as well and fail where the two differ. A declaration of types
+nothing has read leaves the stores standing under other names, which differ from the old
+by its declarations alone: the reply does not wait for them, and what the stores are kept
+under is read once, behind it, for both names (`Engine::settleStoreKeep`), before the next
+request or whatever else asks for it.
 A replica takes those edits in place (`analysis_update_names`), since no analysis
 reads them: what it keeps of a view stays the view's. The owner's snapshot for it does
 not wait for the write (`analysis_snapshot` `in_memory`): the replica takes the names

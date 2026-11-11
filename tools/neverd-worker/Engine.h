@@ -417,6 +417,19 @@ private:
   };
   std::vector<StoreKeep> storeKeeps_;
   void writeStoreKeeps() noexcept;
+  /// A declaration of types nothing had read, taken by the request being
+  /// answered: of what the stores are kept under only the declarations moved,
+  /// from \p before to \p after (none where the history took no row), and
+  /// the names the stores have before and after it are read once its reply is
+  /// sent (afterReply), or before anything else reads what they are kept
+  /// under.  Until then the stores that are open answer as they did.
+  struct StoreKeepWaiting {
+    std::shared_ptr<const Json> before, after;
+  };
+  std::optional<StoreKeepWaiting> storeKeepWaiting_;
+  void settleStoreKeep();
+  /// metadata.store_keeps_settled: how many were read so.
+  std::uint64_t storeKeepsSettled_ = 0;
   /// The debug files the session's headers say it read, for the debug inputs
   /// it loaded (pdbInput_, dwarfInput_, mapInput_, symbolsInput_).
   std::optional<Json> debugInfo_;
