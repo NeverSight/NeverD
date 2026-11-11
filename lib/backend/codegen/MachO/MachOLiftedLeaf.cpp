@@ -140,8 +140,7 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
   auto Triple = sourcePatchTargetTriple(Image);
   if (!Triple)
     return Triple.takeError();
-  if (!Module.getModuleFlag(kArm64eAnalysisModuleFlag) ||
-      !Module.getTargetTriple().isMacOSX() ||
+  if (!Module.getTargetTriple().isMacOSX() ||
       Module.getTargetTriple().getArch() != llvm::Triple::aarch64 ||
       !Module.global_empty() || !Module.alias_empty() ||
       !Module.ifunc_empty() || !Module.getModuleInlineAsm().empty() ||

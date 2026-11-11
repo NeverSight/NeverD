@@ -1759,6 +1759,7 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
   if (AuthenticatedImage.isArm64e()) {
     if (TargetArch != AuthenticatedImage.Arch ||
         InputKind != RewriteInputKind::LiftedIR ||
+        !Mod.getModuleFlag(kArm64eAnalysisModuleFlag) ||
         (CachedImage && CachedImage->MachOSharedCache) ||
         (!TextSectionOverride.empty() &&
          TextSectionOverride != section_names::macho::Text) ||
