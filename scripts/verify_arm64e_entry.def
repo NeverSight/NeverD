@@ -132,6 +132,7 @@
     "execution": "The independent caller must enter and finish the complete entry matrix",
     "inspection": "The installed text range must be completely backed by the final published image",
     "image_base": "Expected one file-backed TEXT mapping for the Mach header",
+    "zero_base": "The zero-base profile requires both input and installed Mach-O headers at zero",
     "prefix": "The requested nonzero-base image did not grow its TEXT prefix"
   },
   "dwarf_entry_source": "entry-dwarf.ll",
@@ -178,6 +179,7 @@
     "neverd"
   ],
   "backend_producer": "neverd",
+  "zero_base_argument": "--zero-base",
   "publication_argument": "--publish",
   "backend_environment": "NEVERD_ARM64E_ENTRY_BACKEND",
   "backend_object": "entry-backend.o",

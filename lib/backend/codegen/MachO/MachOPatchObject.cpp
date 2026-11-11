@@ -92,6 +92,25 @@ struct NativeMachO {
   std::map<std::pair<unsigned, bool>, GOTSlot> GOT;
 };
 
+// Count both possible sources. A frame described by both tables can reserve
+// two entries. Final installation validates the relocated encoding and LSDA.
+MachOUnwindFunctionCounts unwindFunctionCounts(const NativeMachO &Object) {
+  uint64_t LSDAs = llvm::count_if(
+      Object.OldFDEs, [](const auto &Frame) { return Frame.LSDA.has_value(); });
+  if (Object.CompactSection) {
+    const auto &Data =
+        Object.Image.Sections[*Object.CompactSection].ExternalBytes;
+    const auto Ptr = Object.Image.PointerWidth;
+    const auto Stride = Ptr * kCompactPointers + kCompactFixedBytes;
+    for (size_t Offset = 0; Offset + Stride <= Data.size(); Offset += Stride) {
+      const auto Encoding =
+          readLE<uint32_t>(Data.data() + Offset + Ptr + sizeof(uint32_t));
+      LSDAs += bool(Encoding & macho_unwind::kHasLSDA);
+    }
+  }
+  return {Object.Symbols.size(), LSDAs};
+}
+
 bool isCompactPersonality(const NativeMachO &Object, const Relocation &R) {
   const unsigned Ptr = Object.Image.PointerWidth;
   return Object.CompactSection == R.Section &&
@@ -1491,7 +1510,7 @@ appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
                                ? Object->Image.Sections[*Object->EH].Size
                                : 0;
   auto Grown = reserveMachOSourceUnwind(Candidate, Original->Arch, ExtraEH,
-                                        Object->Symbols.size());
+                                        unwindFunctionCounts(*Object));
   if (!Grown)
     return Grown.takeError();
   MachOPatcher Patcher;
@@ -1597,7 +1616,7 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
                                ? Object->Image.Sections[*Object->EH].Size
                                : 0;
   auto Grown = reserveMachOSourceUnwind(LayoutBytes, Original.Arch, ExtraEH,
-                                        Object->Symbols.size());
+                                        unwindFunctionCounts(*Object));
   if (!Grown)
     return Grown.takeError();
   const uint64_t Base =

@@ -712,7 +712,12 @@ existing TEXT storage. The two O0 DWARF cases set a nonzero preferred TEXT
 address so NeverD can extend the front of the segment while preserving code,
 data and authenticated slot VAs. The verifier reads each actual Mach header
 base and resolves the compact index's relative offsets against the installed
-base. A full zero-base O0 image still has no available prefix. Each case also
+base. With `--publish --zero-base`, the same eight IA/IB and compact/DWARF
+cases require both preferred header addresses to remain zero. On the tight
+O0 image, the installer measures LSDA index demand from the native compact
+entries and FDEs. It can retain the compact table at its original VA, move
+the adjacent DWARF records into audited free TEXT storage and reuse their
+former bytes for the enlarged compact table. Each case also
 fills the remaining TEXT tail of a zero-base input copy and requires refusal
 before producing an output. A separate contract fixture covers a zero-base
 image with exactly one free section descriptor and an aligned free range

@@ -49,6 +49,12 @@ struct MachOUnwindRelocationLimits {
   uint64_t MaxRAStateWork = limits::backend::kMachOFrameRAComparisonWork;
 };
 
+/// Upper bounds on imported compact recipes and their LSDA index entries.
+struct MachOUnwindFunctionCounts {
+  uint64_t Functions;
+  uint64_t LSDAs;
+};
+
 /// Reserve native unwind storage without moving the Mach header or original
 /// code/data. Existing metadata is copied and its encoded references rebased.
 /// Compact tables can reuse zero-filled TEXT capacity after all section and
@@ -59,6 +65,11 @@ llvm::Expected<bool>
 reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch Architecture,
                          uint64_t AdditionalEHBytes,
                          uint64_t AdditionalFunctions,
+                         const MachOUnwindRelocationLimits &Limits = {});
+llvm::Expected<bool>
+reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch Architecture,
+                         uint64_t AdditionalEHBytes,
+                         MachOUnwindFunctionCounts Additional,
                          const MachOUnwindRelocationLimits &Limits = {});
 
 /// Reserve from a real emitted object before new RX/RW segments can occupy the
