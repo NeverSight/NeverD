@@ -31,6 +31,7 @@
 #include <vector>
 
 namespace neverd::symbolic::detail {
+
 namespace {
 
 // This bounded, allocation-free hint grants no equality. Most MBA products
@@ -103,6 +104,11 @@ SymRef foldOffsetProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     return Ctx.isConst(Ctx.operand(Root, 0))
                ? foldResidualProductResidues(Ctx, Root, Budget, Storage)
                : Root;
+  if (Ctx.op(Ctx.operands(Root).back()) == SymOp::Xor) {
+    if (auto Direct = foldMixedProductProgression(Ctx, Root, Budget, Storage);
+        Direct != Root)
+      return Direct;
+  }
   const bool OffsetHint = hasOffsetFactors(Ctx, Root);
   bool CommonBase = false;
   if (OffsetHint) {

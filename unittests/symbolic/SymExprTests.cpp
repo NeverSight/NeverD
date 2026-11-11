@@ -2268,6 +2268,45 @@ TEST(SymExpr, WideScaledProductsObserveEveryDemandedPrefixAndSharedUse) {
     }
 }
 
+TEST(SymExpr, WideProductsKeepDynamicCoefficientsAndSharedFactorPrecision) {
+  std::mt19937_64 Random(0x6c6f777072656669);
+  for (unsigned W : {65u, 128u, 257u})
+    for (unsigned Bits : {7u, 64u, 65u}) {
+      SCOPED_TRACE(W);
+      SCOPED_TRACE(Bits);
+      SymContext C;
+      const auto X = C.mkVar("x", W), Y = C.mkVar("y", W);
+      const auto Z = C.mkVar("z", W);
+      const auto Scale = llvm::APInt::getOneBitSet(W, W - Bits);
+      const auto Factor = C.mkXor(Y, C.mkAdd(X, Z));
+      for (bool Perturbed : {false, true}) {
+        SCOPED_TRACE(Perturbed);
+        const auto Offset = Scale * 3 + unsigned(Perturbed);
+        const auto Coeff =
+            C.mkAdd(C.mkConst(Offset), C.mkMul(C.mkConst(Scale), Z));
+        const auto Product = C.mkMul({Factor, Y, Coeff});
+        ASSERT_NE(C.operand(Product, 0), Coeff);
+        SymEvalPlan ProductPlan(C, Product);
+        SymEvalPlan SharedPlan(C, C.mkXor(Product, Factor));
+        for (unsigned I = 0; I < 48; ++I) {
+          std::array<llvm::APInt, 3> V;
+          for (auto &Word : V) {
+            std::array<uint64_t, 5> Limbs;
+            for (auto &Limb : Limbs)
+              Limb = Random();
+            Word = llvm::APInt(W, Limbs);
+          }
+          if (!I)
+            V[0] = llvm::APInt::getSignMask(W);
+          const auto F = V[1] ^ (V[0] + V[2]);
+          const auto Expected = F * V[1] * (Offset + Scale * V[2]);
+          EXPECT_EQ(ProductPlan.eval(V), Expected);
+          EXPECT_EQ(SharedPlan.eval(V), Expected ^ F);
+        }
+      }
+    }
+}
+
 TEST(SymExpr, IncrementalProductsKeepCanonicalCoefficientsAndRepeatedFactors) {
   for (unsigned Width : {1u, 3u, 8u, 32u, 64u, 65u, 128u, 257u})
     for (uint64_t Coefficient : {0u, 1u, 6u, 37u}) {

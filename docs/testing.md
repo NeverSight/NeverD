@@ -10747,6 +10747,19 @@ truth tables at four precisions, including perturbed offsets and short budgets.
 A 64-factor machine-code fixture checks both CLI and worker source modes against
 the original product at O0 and O2. Paired expression printing must reproduce
 both individual strings for shared roots, ancestors and different widths.
+Product-progression tests exhaust every five-bit input triple and compare
+shuffled intervals, holes, parity changes and resource limits with independent
+full-width products through 257 bits. Independent Z3 checks prove shuffled
+full, half, and incomplete products for all 65-bit inputs. The wide-pair
+masked-product proof partitions the full input by the eight low-three-bit
+values of one operand, with the other operands unrestricted. The source-route
+fixtures also execute 64-factor and 126-factor windows through CLI and worker.
+Wide-product tests compare dynamic coefficients and shared consumers with full
+multiplication through 257 bits. Mixed-width verification crosses the cached
+random-word boundary in both directions. Independent word arithmetic checks
+weighted Boolean tails, overlapping inputs, and a changed high coefficient. A shuffled
+127-factor interval with an interior hole checks that rebuilding its children
+under a parent sum stays within the default work allowance.
 
 `SymMBALinearProofMemo` checks successful full-width proof reuse, alternating
 queries with the same difference, context isolation, incomplete proofs and
