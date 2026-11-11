@@ -23837,6 +23837,14 @@ and DSPControl/MSACSR where applicable. For microMIPS ASEs it feeds the
 physical micro ELF to NeverD and the same independently assembled classic
 kernel to the 74Kf or P5600 reference core.
 
+Run `micro-dsp-simulator.py` with `--assembler`, `--linker`, `--bench` and
+`--simulator` to execute the physical microMIPS DSP and DSPR2 instructions.
+Use a GNU MIPS simulator built for `mipsisa32r2-unknown-elf`. It compares two
+sets of inputs for each of the 159 forms in each byte order against the 74Kf
+classic instruction, including the two sides of BPOSGE32, indexed memory,
+DSPControl and both halves of AC2. The driver also checks each pair of classic
+and micro encodings through NeverD for matching LowIR.
+
 Ordinary pair padding, predecessor memory barriers,
 single-sided barriers at joins, depth/work exhaustion and non-entry analysis
 roots or exceptional/disconnected paths have separate call-recovery regressions.
