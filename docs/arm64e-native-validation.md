@@ -645,6 +645,7 @@ revision, Release host, LLVM fork, GitHub artifacts and signed image hashes.
 Both runners reported Apple M1 (Virtual).
 
 The [header relocation run](https://github.com/gmh5225/test_mac_intel/actions/runs/42951431144)
+and the [compact storage replay](https://github.com/gmh5225/test_mac_intel/actions/runs/42954296548)
 executed all eight published images with zero linker header reservation on
 each Apple runner. In both O0 indexed-DWARF cases the preferred header moved
 from `0x100000000` to `0xffffc000`. The six default-base images retained
