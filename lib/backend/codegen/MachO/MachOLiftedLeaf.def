@@ -1,0 +1,61 @@
+//===- MachOLiftedLeaf.def - Darwin integer leaf publication --*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef MACHO_LEAF_TEXT
+#define MACHO_LEAF_TEXT(Name, Text)
+#endif
+#ifndef MACHO_LEAF_VALUE
+#define MACHO_LEAF_VALUE(Type, Name, Value)
+#endif
+#ifndef MACHO_LEAF_INSTRUCTION
+#define MACHO_LEAF_INSTRUCTION(Name)
+#endif
+
+MACHO_LEAF_TEXT(kLeafModule,
+                "arm64e lifted image has no complete native leaf contract")
+MACHO_LEAF_TEXT(
+    kLeafCoverage,
+    "arm64e lifted entries do not cover the original instruction section")
+MACHO_LEAF_TEXT(kLeafCode, "arm64e generated instructions do not reproduce the "
+                           "original register-only leaf")
+MACHO_LEAF_TEXT(
+    kLeafFrame,
+    "arm64e lifted leaf requires matching frameless unwind coverage")
+MACHO_LEAF_TEXT(kGeneratedCoverage,
+                "arm64e object has {0} unwind ranges for {1} entries and {2} "
+                "code bytes for {3} original bytes")
+MACHO_LEAF_TEXT(kGeneratedSymbol,
+                "arm64e object has no emitted address for {0}")
+MACHO_LEAF_TEXT(
+    kGeneratedRange,
+    "arm64e object has no matching native range for {0} at [{1:x}, {2:x})")
+MACHO_LEAF_TEXT(
+    kSourceSection,
+    "arm64e lifted image has unsupported instruction section {0},{1}")
+MACHO_LEAF_TEXT(kSourceText,
+                "arm64e lifted image requires file-backed TEXT with function "
+                "starts and a single executable segment")
+MACHO_LEAF_TEXT(kSourceEntry, "arm64e lifted function {0} has no complete "
+                              "definition at an original entry")
+MACHO_LEAF_TEXT(kLeafABIFlag, "ptrauth.abi-version")
+MACHO_LEAF_VALUE(uint32_t, kClassicABIVersion, 0)
+MACHO_LEAF_VALUE(uint32_t, kReturnToLR, 0xd65f03c0)
+
+// No listed instruction takes a PC-relative operand. Operand checks also
+// exclude memory, SP, LR, frame registers and the reserved platform register.
+MACHO_LEAF_INSTRUCTION(AARCH64_INS_ADD)
+MACHO_LEAF_INSTRUCTION(AARCH64_INS_SUB)
+MACHO_LEAF_INSTRUCTION(AARCH64_INS_AND)
+MACHO_LEAF_INSTRUCTION(AARCH64_INS_ORR)
+MACHO_LEAF_INSTRUCTION(AARCH64_INS_EOR)
+MACHO_LEAF_INSTRUCTION(AARCH64_INS_MOV)
+MACHO_LEAF_INSTRUCTION(AARCH64_INS_MOVZ)
+MACHO_LEAF_INSTRUCTION(AARCH64_INS_MOVN)
+MACHO_LEAF_INSTRUCTION(AARCH64_INS_MOVK)
+
+#undef MACHO_LEAF_INSTRUCTION
+#undef MACHO_LEAF_VALUE
+#undef MACHO_LEAF_TEXT
