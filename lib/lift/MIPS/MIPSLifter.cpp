@@ -67,6 +67,8 @@ MIPSLifter::encoding(const cs_insn &Instruction) const {
 }
 
 unsigned MIPSLifter::delaySlotBytes(const cs_insn &Instruction) const {
+  if (ISARevision == 6 && Mode == InstructionMode::MicroMIPS)
+    return 0; // All microMIPS Release 6 control transfers are compact.
   if (HasMSA && Mode == InstructionMode::MicroMIPS && Instruction.size == 4 &&
       (Instruction.bytes[archLittleEndian(Target) ? 1 : 0] >> 2) == 0x16)
     return 0; // POOL32S cannot transfer control.
@@ -79,6 +81,9 @@ unsigned MIPSLifter::delaySlotBytes(const cs_insn &Instruction) const {
 LowInstructionTargetMode
 MIPSLifter::controlTargetMode(const cs_insn &Instruction) const {
   const auto Code = encoding(Instruction);
+  if (Code && Code->R6 && Mode != InstructionMode::Default &&
+      ((Code->Word >> 21) == (54u << 5) || (Code->Word >> 21) == (62u << 5)))
+    return LowInstructionTargetMode::FromTargetBit0;
   if (!Code || Code->R6 || Code->Frame || Mode == InstructionMode::Default)
     return LowInstructionTargetMode::Preserve;
   if (Code->Word >> 26 == 29)
@@ -104,7 +109,8 @@ bool MIPSLifter::isAlignmentNop(const cs_insn &Instruction) const {
   const auto Code = encoding(Instruction);
   return Code && !Code->Frame &&
          (Code->Word == 0 ||
-          (Instruction.size == 2 && Code->Word == 33)); // MOVE16 zero,zero
+          (Instruction.size == 2 &&
+           (Code->Word == 33 || Code->Word == 37))); // MOVE16 zero,zero
 }
 
 bool MIPSLifter::isFunctionTerminator(const cs_insn &Instruction) const {
@@ -124,8 +130,9 @@ va_t MIPSLifter::directCallTarget(const cs_insn &Instruction) const {
     return InvalidVA;
   const uint32_t Word = Code->Word;
   if (Code->R6)
-    return Word >> 26 == 58 ? r6BranchTarget(Word, Instruction.address)
-                            : InvalidVA;
+    return Word >> 26 == 58
+               ? r6BranchTarget(Word, Instruction.address, Instruction.size)
+               : InvalidVA;
   // Conditional link branches require their predicate when establishing a
   // no-return call. They remain discoverable from lifted control flow.
   if (Word >> 26 != 3 && Word >> 26 != 29)
@@ -524,7 +531,8 @@ void MIPSLifter::lift(const cs_insn &Instruction, std::vector<LowOp> &Ops,
   }
   State S(Instruction.address, Ops, isMIPS64(Target) ? 8 : 4, Instruction.size);
   if (Code->R6 && isR6Compact(Word)) {
-    if (!ForbiddenFollower.has_value() && isR6ConditionalCompact(Word))
+    if (Mode != InstructionMode::MicroMIPS && !ForbiddenFollower.has_value() &&
+        isR6ConditionalCompact(Word))
       throw UnliftedInstruction(Instruction.address, Instruction.mnemonic,
                                 "missing Release 6 forbidden-slot instruction");
     if (liftR6Compact(S, Word, ForbiddenFollower.value_or(false)))
@@ -582,7 +590,8 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
   if (Opcode == 0) {
     if (RT || SA || (Function == 8 && RD) ||
         (Function == 9 && RD != 0 && RD == RS &&
-         !(Mode == InstructionMode::MicroMIPS && Head.size == 2)))
+         !(Mode == InstructionMode::MicroMIPS &&
+           (Head.size == 2 || ISARevision == 6))))
       throw UnliftedInstruction(Head.address, Head.mnemonic,
                                 "unsupported MIPS register-transfer encoding");
     Link = Function == 9 ? RD : 0;

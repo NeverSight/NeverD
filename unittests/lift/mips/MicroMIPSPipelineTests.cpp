@@ -28,16 +28,24 @@ namespace {
 
 class MicroMIPSPipeline : public ::testing::TestWithParam<Arch> {};
 
-TEST_P(MicroMIPSPipeline, HalfwordAlignedALUReachesBothSourcesWithMode) {
-  mips_test::ELFBytes File(GetParam());
-  File.put(36, 0x72001000, 4);
-  File.put(24, 0x10101, 4);
-  // move v0,a0; addiu v0,v0,1; jrc ra.
-  for (auto [Offset, Half] : {std::pair{0x100, 0x0c44},
-                              {0x102, 0x3042},
-                              {0x104, 0x0001},
-                              {0x106, 0x45bf}})
-    File.put(Offset, Half, 2);
+void checkHalfwordAlignedALUSources(Arch Target, unsigned Revision) {
+  mips_test::ELFBytes File(Target);
+  const bool R6 = Revision == 6;
+  if (File.Is64) {
+    constexpr va_t Base = 0x100010000;
+    File.put(48, R6 ? 0xa2000000u : 0x82000000u, 4);
+    File.put(64 + 16, Base, 8);
+    File.put(64 + 24, Base, 8);
+    File.put(24, Base + 0x101, 8);
+  } else {
+    File.put(36, R6 ? 0x92001000u : 0x72001000u, 4);
+    File.put(24, 0x10101, 4);
+  }
+  // MOVE16 v0,a0; [D]ADDIU v0,v0,1 at a halfword boundary; JRC[16] ra.
+  File.put(0x100, 0x0c44, 2);
+  File.put(0x102, File.Is64 ? 0x5c42 : 0x3042, 2);
+  File.put(0x104, 1, 2);
+  File.put(0x106, R6 ? 0x47e3 : 0x45bf, 2);
   ELFLoader Loader;
   auto Image = Loader.loadBuffer(File.buffer());
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
@@ -64,7 +72,7 @@ TEST_P(MicroMIPSPipeline, HalfwordAlignedALUReachesBothSourcesWithMode) {
       EXPECT_TRUE(Body->hasFnAttribute("micromips"));
     } else {
       CEmitterOptions Emit;
-      Emit.TheArch = GetParam();
+      Emit.TheArch = Target;
       Emit.Format = BinaryFormat::ELF;
       Emit.Image = &*Image;
       std::string Text;
@@ -75,6 +83,20 @@ TEST_P(MicroMIPSPipeline, HalfwordAlignedALUReachesBothSourcesWithMode) {
           << Text;
     }
   }
+}
+
+TEST_P(MicroMIPSPipeline, HalfwordAlignedALUReachesBothSourcesWithMode) {
+  checkHalfwordAlignedALUSources(GetParam(), 2);
+  checkHalfwordAlignedALUSources(GetParam(), 6);
+}
+
+TEST(MicroMIPS64Pipeline, HighELFEntryReachesBothSources) {
+  for (Arch Target : {Arch::MIPS64, Arch::MIPS64EL})
+    for (unsigned Revision : {2, 6}) {
+      SCOPED_TRACE(::testing::Message()
+                   << static_cast<int>(Target) << " r" << Revision);
+      checkHalfwordAlignedALUSources(Target, Revision);
+    }
 }
 
 BinaryImage mixedImage(Arch Target) {

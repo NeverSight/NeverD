@@ -67,7 +67,7 @@ def oracle(elf, instructions, little, variant):
     return rows
 
 
-def run_micro(args, work, feature, instructions, rows, little, variant):
+def run_micro(args, work, feature, instructions, rows, little, variant, bits=32):
     source, obj, elf = (work / n for n in ("probe.s", "probe.o", "probe.elf"))
     asm = [
         ".text",
@@ -89,7 +89,11 @@ def run_micro(args, work, feature, instructions, rows, little, variant):
                 "li $6,0x80ff8000",
                 "mtlo $6,$ac2",
                 "li $2,0x89abcdef",
-                "la $4,sample" if indexed else f"li $4,{a0}",
+                (
+                    ("dla $4,sample" if bits == 64 else "la $4,sample")
+                    if indexed
+                    else f"li $4,{a0}"
+                ),
                 f"li $5,{a1}",
                 "li $14,1",
             ]
@@ -100,7 +104,13 @@ def run_micro(args, work, feature, instructions, rows, little, variant):
             asm.append(insn)
         asm.extend(["rddsp $8,63", "mfhi $9,$ac2", "mflo $10,$ac2"])
         for reg, value in zip((2, 5, 8, 9, 10, 14), expected, strict=True):
-            asm.extend([f"li $11,{value}", f"bne ${reg},$11,failed_{i}", "nop"])
+            asm.extend(
+                [
+                    f"{'dli' if bits == 64 else 'li'} $11,{value}",
+                    f"bne ${reg},$11,failed_{i}",
+                    "nop",
+                ]
+            )
     asm.extend([f"li $4,{SUCCESS}", "break 0x3ff"])
     for i in range(len(instructions)):
         asm.extend([f"failed_{i}:", f"li $4,{i + 1}", "break 0x3ff"])
@@ -117,8 +127,8 @@ def run_micro(args, work, feature, instructions, rows, little, variant):
     subprocess.run(
         [
             args.assembler,
-            "-mips32r2",
-            "-32",
+            f"-mips{bits}r2",
+            f"-{bits}",
             "-m" + feature,
             "-EL" if little else "-EB",
             "-o",
@@ -131,10 +141,10 @@ def run_micro(args, work, feature, instructions, rows, little, variant):
         [
             args.linker,
             "-m",
-            "elf32" + ("l" if little else "b") + "tsmip",
+            f"elf{bits}" + ("l" if little else "b") + "tsmip",
             "-N",
             "-Ttext",
-            "0x80010000",
+            "0xffffffff80010000" if bits == 64 else "0x80010000",
             "-e",
             "_start",
             "-o",
@@ -189,6 +199,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for option in ("assembler", "linker", "simulator", "bench"):
         parser.add_argument("--" + option, type=Path, required=True)
+    parser.add_argument("--bits", type=int, choices=(32, 64), default=32)
     args = parser.parse_args()
     results = {"lowir_form_pairs": {}, "physical_dsp_executions": {}}
     with tempfile.TemporaryDirectory(prefix="neverd-micro-dsp-") as directory:
@@ -197,7 +208,11 @@ def main():
         classic.mkdir()
         micro.mkdir()
         for profile, cpu, feature, instructions in COVERAGE["corpora"]():
-            if profile not in {"mipsdsp", "mipsdspr2", "mipsmsa"}:
+            if args.bits == 64:
+                if profile not in {"micromips64dsp", "micromips64dspr2"}:
+                    continue
+                profile = profile.removeprefix("micro")
+            elif profile not in {"mipsdsp", "mipsdspr2", "mipsmsa"}:
                 continue
             for little in (False, True):
                 raw = COVERAGE["assemble"](
@@ -213,12 +228,43 @@ def main():
                 results["lowir_form_pairs"][name] = len(instructions)
                 if feature == "msa":
                     continue
+                reference = raw.with_name("fixture.elf")
+                if args.bits == 64:
+                    # These DSP 3.02 instructions consume word views of AC halves.
+                    # The historical MIPS64DSPR2 core implements older 128-bit
+                    # accumulators and an eight-bit CCOND. Use the 74Kf for the
+                    # word results, then verify the full GPR-width sign extensions
+                    # by executing the physical microMIPS64 ELF in GNU sim.
+                    word = work / "word"
+                    word.mkdir(exist_ok=True)
+                    reference = COVERAGE["assemble"](
+                        args,
+                        word,
+                        "mips" + feature,
+                        "mips32r2",
+                        feature,
+                        instructions,
+                        little,
+                    ).with_name("fixture.elf")
                 for variant in range(2):
-                    expected = oracle(
-                        raw.with_name("fixture.elf"), instructions, little, variant
-                    )
+                    expected = oracle(reference, instructions, little, variant)
+                    if args.bits == 64:
+                        expected = [
+                            [
+                                v | 0xFFFFFFFF00000000 if v & 0x80000000 else v
+                                for v in row
+                            ]
+                            for row in expected
+                        ]
                     run_micro(
-                        args, work, feature, instructions, expected, little, variant
+                        args,
+                        work,
+                        feature,
+                        instructions,
+                        expected,
+                        little,
+                        variant,
+                        args.bits,
                     )
                 results["physical_dsp_executions"][name] = len(instructions) * 2
     print(json.dumps(results, indent=2))

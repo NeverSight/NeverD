@@ -555,8 +555,9 @@ ControlTargetResolution resolveControlTarget(
         return Result;
       }
 
-      llvm::Expected<LowControlTarget> Canonical = canonicalizeLowControlTarget(
-          Address->getZExtValue(), Boundary->Mode, TargetMode);
+      llvm::Expected<LowControlTarget> Canonical =
+          canonicalizeLowControlTarget(Address->getZExtValue(), Boundary->Mode,
+                                       TargetMode, Ctx.width(Target) / 8);
       if (!Canonical) {
         llvm::consumeError(Canonical.takeError());
         const uint64_t ModeProbeAddress =

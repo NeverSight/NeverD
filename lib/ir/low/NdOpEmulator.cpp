@@ -1354,7 +1354,7 @@ NdOpEmulator::computeTarget(const LowBlock &Block, uint64_t IndexRegOff,
   if (!RawTarget || !ReachedSourceMode || !ReachedTargetMode)
     return std::nullopt;
   llvm::Expected<LowControlTarget> Target = canonicalizeLowControlTarget(
-      *RawTarget, *ReachedSourceMode, *ReachedTargetMode);
+      *RawTarget, *ReachedSourceMode, *ReachedTargetMode, Img.getPointerSize());
   if (!Target) {
     llvm::consumeError(Target.takeError());
     return std::nullopt;

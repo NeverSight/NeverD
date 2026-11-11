@@ -141,9 +141,9 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
   case Arch::MIPS64EL:
     if ((Mode != InstructionMode::Default &&
          Mode != InstructionMode::MIPSClassic && !isMIPSCompressedMode(Mode)) ||
-        (isMIPS64(TheArch) && Mode != InstructionMode::Default) ||
+        (isMIPS64(TheArch) && Mode == InstructionMode::MIPS16) ||
         (Revision != 2 && Revision != 5 && Revision != 6) ||
-        (Revision == 6 && isMIPSCompressedMode(Mode)) ||
+        (Revision == 6 && Mode == InstructionMode::MIPS16) ||
         (Revision == 5 &&
          (isMIPS64(TheArch) || Mode == InstructionMode::MIPS16))) {
       syncError() << "unsupported MIPS instruction mode\n";
@@ -307,6 +307,8 @@ bool Decoder::decodeArchitectureFallback(const uint8_t *Bytes, size_t Len,
 LLVM_ATTRIBUTE_ALWAYS_INLINE bool
 Decoder::decodePhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
   InsnBuf->illegal = false;
+  if (MIPSISARevision == 6 && CurrentMode == InstructionMode::MicroMIPS)
+    return decodeMicroMIPSRelease6(Bytes, Len, Addr);
   if (MIPSISARevision == 6 && Len >= 4) {
     const auto Word =
         readTargetEndian<uint32_t>(Bytes, archLittleEndian(TargetArch));
@@ -345,7 +347,7 @@ int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
   Out.Size = static_cast<uint16_t>(InsnBuf->size);
   Out.Id = InsnBuf->id;
   Out.Raw = InsnBuf;
-  if (MIPSISARevision == 6)
+  if (MIPSISARevision == 6 && CurrentMode != InstructionMode::MicroMIPS)
     Out.MIPSForbiddenFollower = MIPSLifter::r6ForbiddenFollower(
         {Bytes, Len}, archLittleEndian(TargetArch));
   if (AArch64)
@@ -384,7 +386,7 @@ int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
   Out.Size = static_cast<uint16_t>(InsnBuf->size);
   Out.Id = InsnBuf->id;
   Out.Raw = InsnBuf;
-  if (MIPSISARevision == 6)
+  if (MIPSISARevision == 6 && CurrentMode != InstructionMode::MicroMIPS)
     Out.MIPSForbiddenFollower = MIPSLifter::r6ForbiddenFollower(
         {Bytes, Len}, archLittleEndian(TargetArch));
   if (AArch64)

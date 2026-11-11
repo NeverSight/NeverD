@@ -44,8 +44,6 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
   const uint32_t Flags = Header.e_flags;
   if (Flags & EF_MIPS_ABI2)
     return profileError("n32 ABI is not supported");
-  if (ELFT::Is64Bits && (Flags & EF_MIPS_MICROMIPS))
-    return profileError("microMIPS64 encoding is not supported");
   if (ELFT::Is64Bits && (Flags & EF_MIPS_ARCH_ASE_M16))
     return profileError("MIPS16 64-bit encoding is not supported");
   if ((Flags & EF_MIPS_MICROMIPS) && (Flags & EF_MIPS_ARCH_ASE_M16))
@@ -77,7 +75,7 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
   Profile.HasMicroMIPS = Flags & EF_MIPS_MICROMIPS;
   Profile.HasMIPS16 = Flags & EF_MIPS_ARCH_ASE_M16;
   const bool Compressed = Profile.HasMicroMIPS || Profile.HasMIPS16;
-  if (R6 && Compressed)
+  if (R6 && Profile.HasMIPS16)
     return profileError("Release 6 compressed profile is unsupported");
   const auto CompressedMode =
       Profile.HasMIPS16 ? InstructionMode::MIPS16 : InstructionMode::MicroMIPS;
@@ -235,7 +233,7 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
     Profile.HasDSP = Profile.HasDSPR2 || (ASE & llvm::Mips::AFL_ASE_DSP);
     Profile.HasMSA = ASE & llvm::Mips::AFL_ASE_MSA;
     const uint32_t AllowedXPA = R6 ? uint32_t(llvm::Mips::AFL_ASE_XPA) : 0u;
-    if (R6 && (ASE & ~AllowedXPA))
+    if (R6 && (ASE & ~(AllowedXPA | llvm::Mips::AFL_ASE_MICROMIPS)))
       return profileError("unsupported Release 6 extension profile");
     if (Profile.HasMSA &&
         (ELFT::Is64Bits || Profile.HasMIPS16 || Profile.HasDSP ||

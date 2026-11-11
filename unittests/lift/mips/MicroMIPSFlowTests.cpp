@@ -13,8 +13,10 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/MIPS/MIPSControlTarget.h"
+#include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/LowToMedError.h"
+#include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/MIPSCodeMode.h"
 
 #include <vector>
@@ -23,9 +25,8 @@ using namespace neverd;
 
 namespace {
 
-TEST(MicroMIPSDecode, EncodingModesRequireTheAdmittedMIPS32Target) {
-  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64,
-                      Arch::MIPS64, Arch::MIPS64EL}) {
+TEST(MicroMIPSDecode, EncodingModesRequireAMIPSTarget) {
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
     Decoder Decode;
     EXPECT_FALSE(Decode.init(Target, InstructionMode::MicroMIPS));
     EXPECT_FALSE(Decode.init(Target, InstructionMode::MIPSClassic));
@@ -60,6 +61,68 @@ LowFunc buildMicro(const BinaryImage &Image) {
   EXPECT_TRUE(Decode.init(Image));
   CFGBuilder Builder;
   return Builder.build(Image, Decode, Image.Entry, "micro_test");
+}
+
+TEST(MicroMIPS64, FullWidthTargetsRegistersAndScalarMemory) {
+  for (Arch Target : {Arch::MIPS64, Arch::MIPS64EL}) {
+    // MOVE16 v0,a0; DADDIU v0,v0,-8; SD v0,0(a1); LD v1,0(a1); JRC ra.
+    auto Image = microImage(
+        Target, {0x0c44, 0x5c42, 0xfff8, 0xd845, 0, 0xdc65, 0, 0x45bf});
+    constexpr va_t PC = 0x100001000, VA = 0x220002000;
+    Image.Bits = Bitness::Bits64;
+    Image.MIPS->ABI = MIPSABI::N64;
+    auto &Code = Image.Segments.front();
+    const auto Size = Code.Size;
+    Code.VA = Image.Entry = PC;
+    Image.MIPS->CodeModeEntries.clear();
+    Image.MIPS->CodeModeEntries.emplace(PC, InstructionMode::MicroMIPS);
+    Image.MIPS->CodeRegions = {{PC, PC + Size, InstructionMode::MicroMIPS}};
+    Image.Symbols = {Symbol::makeFunc(PC, Size)};
+    Segment Data;
+    Data.VA = VA;
+    Data.Size = Data.FileSz = 8;
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Data.Data.resize(8);
+    Image.Segments.push_back(std::move(Data));
+    EXPECT_EQ(mips::serializedCodeTarget(Image, PC | 1), PC);
+    EXPECT_FALSE(mips::serializedCodeTarget(Image, PC));
+    EXPECT_EQ(Image.instructionModeAt(PC), InstructionMode::MicroMIPS);
+    auto Canonical = canonicalizeLowControlTarget(
+        PC | 1, InstructionMode::MicroMIPS,
+        LowInstructionTargetMode::FromTargetBit0, Image.getPointerSize());
+    ASSERT_TRUE(bool(Canonical)) << llvm::toString(Canonical.takeError());
+    EXPECT_EQ(Canonical->Address, PC);
+    EXPECT_EQ(Canonical->Mode, InstructionMode::MicroMIPS);
+    EXPECT_EQ(qualifiedMIPSControlTarget(
+                  Image, InstructionMode::MicroMIPS,
+                  LowInstructionTargetMode::FromTargetBit0, PC | 1),
+              PC);
+    auto Func = buildMicro(Image);
+    ASSERT_TRUE(Func.hasCompleteLiftCoverage());
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Image));
+    NdOpEmulator E(Image);
+    E.setStrictMode(true);
+    constexpr uint64_t Value = 0xdeadbeef80010009;
+    E.setRegister(mipsreg::A0, Value);
+    E.setRegister(mipsreg::A1, VA);
+    E.setRegister(mipsreg::RA, PC | 1);
+    for (unsigned Offset = 0; Offset < Size - 2;) {
+      const auto *Bytes = Image.readVA(PC + Offset, Size - Offset);
+      ASSERT_TRUE(Bytes);
+      DecodedExecutionUnit U;
+      const auto N =
+          Decode.decodeUnitForLift(Bytes, Size - Offset, PC + Offset, U);
+      ASSERT_GT(N, 0);
+      std::vector<LowOp> Ops;
+      Decode.liftUnitToLow(U, Ops);
+      for (const auto &Op : Ops)
+        ASSERT_TRUE(E.step(Op)) << Offset;
+      Offset += N;
+    }
+    EXPECT_EQ(E.getRegister(mipsreg::V0), Value - 8);
+    EXPECT_EQ(E.getRegister(mipsreg::V1), Value - 8);
+  }
 }
 
 class MicroMIPSFlow : public ::testing::TestWithParam<Arch> {};

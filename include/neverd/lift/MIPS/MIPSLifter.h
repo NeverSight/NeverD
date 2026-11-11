@@ -43,6 +43,8 @@ public:
 #include "neverd/lift/MIPS/MIPSPhysicalForms.def"
   bool isDSPIndexedDoubleword(uint32_t Word) const;
   std::optional<uint32_t> microASEWord(uint32_t PhysicalWord) const;
+  /// Resolve a normalized compact branch using the physical occurrence length.
+  uint64_t r6BranchTarget(uint32_t Word, uint64_t PC, unsigned Size) const;
   static bool hasDelaySlot(uint32_t Word);
   /// Zero: no slot; one: either physical width; two/four: required width.
   unsigned delaySlotBytes(const cs_insn &Instruction) const;
@@ -103,7 +105,6 @@ private:
   Encoding release6Encoding(uint32_t Word) const;
   static bool isR6Compact(uint32_t Word);
   static bool isR6ConditionalCompact(uint32_t Word);
-  uint64_t r6BranchTarget(uint32_t Word, uint64_t PC) const;
   bool liftR6Compact(State &S, uint32_t Word, bool ForbiddenFollower) const;
   bool liftRelease6(State &S, uint32_t Word) const;
   bool liftNonControl(State &S, Encoding Code, va_t BasePC) const;

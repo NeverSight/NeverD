@@ -21,7 +21,8 @@ qualifiedMIPSControlTarget(const BinaryImage &Image, InstructionMode Source,
                            LowInstructionTargetMode Contract, va_t RawTarget) {
   if (!hasCompressedMIPSCode(Image.Mode))
     return RawTarget;
-  auto Target = canonicalizeLowControlTarget(RawTarget, Source, Contract);
+  auto Target = canonicalizeLowControlTarget(RawTarget, Source, Contract,
+                                             Image.getPointerSize());
   if (!Target) {
     llvm::consumeError(Target.takeError());
     return std::nullopt;

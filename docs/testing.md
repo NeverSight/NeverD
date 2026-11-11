@@ -23873,6 +23873,23 @@ DSPControl and both halves of AC2. The driver also compares NeverD LowIR for
 each classic and micro encoding of all 159 DSP/DSPR2 and 526 MSA forms in
 both byte orders.
 
+For n64, pass `--bits 64` and a GNU simulator configured for
+`mipsisa64r2-mti-elf`. The fixture executes physical microMIPS64 code in
+both byte orders and checks each full-width result against the DSP 3.02
+word result and its required sign extension. Use the pinned Unicorn build
+for the 74Kf word calculations. Its older MIPS64DSPR2 model uses different
+accumulator and condition-code widths. `MicroMIPSRelease6` executes the
+physical o32 compact arithmetic and branches on the R6 generic core,
+including taken and fallthrough paths, the returned PC and the link register.
+The two `micromips32r6` source profiles assemble the original with Clang
+and run it on the R6 generic core. They compile the emitted C unchanged
+for microMIPS32r2/o32 and compare the results under GNU sim. Clang 22's
+microR6 backend can emit legacy LUI and JRC16 in a function marked R6.
+The n64 compact R6 test compares 31 physical doubleword encodings with
+GNU-assembled classic R6 equivalents in both endiannesses. It checks
+disassembly, operand order and LowIR at a 64-bit PC. The n64 compact R6
+words have no native execution reference in the pinned emulator.
+
 Ordinary pair padding, predecessor memory barriers,
 single-sided barriers at joins, depth/work exhaustion and non-entry analysis
 roots or exceptional/disconnected paths have separate call-recovery regressions.

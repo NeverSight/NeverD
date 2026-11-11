@@ -57,12 +57,14 @@ MIPSLifter::Encoding MIPSLifter::release6Encoding(uint32_t Word) const {
   return Encoding{.Word = Word, .R6 = true};
 }
 
-uint64_t MIPSLifter::r6BranchTarget(uint32_t Word, uint64_t PC) const {
+uint64_t MIPSLifter::r6BranchTarget(uint32_t Word, uint64_t PC,
+                                    unsigned Size) const {
   const unsigned Op = Word >> 26;
   const int64_t Offset = Op == 50 || Op == 58   ? llvm::SignExtend64<26>(Word)
                          : Op == 54 || Op == 62 ? llvm::SignExtend64<21>(Word)
                                                 : int16_t(Word);
-  const uint64_t Address = PC + 4 + Offset * 4;
+  const uint64_t Address =
+      PC + Size + Offset * (Mode == InstructionMode::MicroMIPS ? 2 : 4);
   return isMIPS64(Target) ? Address : uint32_t(Address);
 }
 
@@ -101,9 +103,10 @@ bool MIPSLifter::liftR6Compact(State &S, uint32_t Word,
   NdVar TargetValue =
       Indirect ? S.binary(NdOp::INT_ADD, S.read(RT),
                           NdVar::cst(int64_t(int16_t(Word)), S.Width))
-               : NdVar::cst(r6BranchTarget(Word, S.Addr), S.Width);
-  const auto Next =
-      NdVar::cst(S.Width == 4 ? uint32_t(S.Addr + 4) : S.Addr + 4, S.Width);
+               : NdVar::cst(r6BranchTarget(Word, S.Addr, S.InsnSize), S.Width);
+  const auto Next = NdVar::cst(S.Width == 4 ? uint32_t(S.Addr + S.InsnSize)
+                                            : S.Addr + S.InsnSize,
+                               S.Width);
   std::optional<NdVar> Predicate;
   bool Link = Op == 58 || (Indirect && Op == 62);
   if (Op == 54 || Op == 62) {
@@ -155,7 +158,8 @@ bool MIPSLifter::liftR6Compact(State &S, uint32_t Word,
   if (Link && Predicate && RT == 31)
     return false; // conditional link must be restartable
   if (Link)
-    S.write(31, Next);
+    S.write(31, NdVar::cst(Next.Offset | (Mode == InstructionMode::MicroMIPS),
+                           S.Width));
   if (ForbiddenFollower)
     S.emitIntrinsic(Intrinsic::MIPSRequireTakenBranch, {}, {*Predicate});
   if (Link) {
@@ -195,6 +199,8 @@ bool MIPSLifter::liftRelease6(State &S, uint32_t Word) const {
   if (Op == 59) { // PCREL
     const unsigned Kind = (Word >> 19) & 3;
     uint64_t Address = S.Addr;
+    if (Mode == InstructionMode::MicroMIPS && Kind < 3)
+      Address &= ~uint64_t(3);
     unsigned Bytes = 0;
     if (Kind < 3) {
       if (Kind == 2 && !Wide)
