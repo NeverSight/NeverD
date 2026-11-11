@@ -9016,6 +9016,92 @@ int main(void) {
     compileAndRun(Source, Optimization);
 }
 
+TEST(LLVMCValues, ACallThroughAPointerTakesItsRegisterPairAsOneInteger) {
+  // The code may read both result registers of a callee it reaches through a
+  // pointer, EDX:EAX on i386. A C record of two words returns through a hidden
+  // pointer there, which would shift every argument: the call is typed as
+  // returning the 64-bit integer that occupies the pair, and its halves are
+  // the two results. A callee that returns one word still calls correctly.
+#if !defined(__linux__) || !defined(__x86_64__)
+  GTEST_SKIP() << "requires native Linux i386 execution";
+#else
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"ir(
+define i32 @both(ptr %callee, i32 %a, i32 %b) {
+  %pair = call { i32, i32 } %callee(i32 %a, i32 %b)
+  %low = extractvalue { i32, i32 } %pair, 0
+  %high = extractvalue { i32, i32 } %pair, 1
+  %mixed = mul i32 %high, 31
+  %sum = add i32 %low, %mixed
+  ret i32 %sum
+}
+define i32 @first(ptr %callee, i32 %a, i32 %b) {
+  %pair = call { i32, i32 } %callee(i32 %a, i32 %b)
+  %low = extractvalue { i32, i32 } %pair, 0
+  ret i32 %low
+}
+)ir",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  Module->setTargetTriple(llvm::Triple("i386-linux-gnu"));
+  Module->setDataLayout("e-m:e-p:32:32-p270:32:32-p271:32:32-p272:64:64-"
+                        "i128:128-f64:32:64-f80:32-n8:16:32-S128");
+  ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+  neverd::CEmitterOptions Options;
+  Options.TheArch = neverd::Arch::X86;
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Out, Options));
+  EXPECT_NE(Source.find("uint64_t (*)(uint32_t, uint32_t)"), std::string::npos)
+      << Source;
+  Source += R"c(
+__attribute__((noinline)) static unsigned long long wide(unsigned a,
+                                                         unsigned b) {
+  return ((unsigned long long)(a ^ b) << 32) | (a + b);
+}
+__attribute__((noinline)) static unsigned narrow(unsigned a, unsigned b) {
+  return a * 3u - b;
+}
+int main(void) {
+  void *volatile callee = (void *)wide;
+  if (both(callee, 7, 9) != 16u + (7u ^ 9u) * 31u) return 1;
+  if (first(callee, 0x80000000u, 5) != 0x80000005u) return 2;
+  callee = (void *)narrow;
+  return first(callee, 7, 9) != 12u ? 3 : 0;
+}
+)c";
+  for (const char *Opt : {"-O0", "-O2"})
+    compileAndRun(Source, Opt, {}, false, /*NativeI386=*/true);
+  // The same rule types the call on 32-bit ARM, whose pair is r0:r1; a
+  // 64-bit target returns such a record in its registers already.
+  for (const auto &[Architecture, Triple, Layout, Pair] :
+       {std::tuple{neverd::Arch::ARM, "armv7-linux-gnueabi",
+                   "e-m:e-p:32:32-Fi8-i64:64-v128:64:128-a:0:32-n32-S64", true},
+        // o32 returns the pair in v0:v1 in either byte order; the integer's
+        // bytes are the two words in memory order on both.
+        std::tuple{neverd::Arch::MIPS32, "mips-linux-gnu",
+                   "E-m:m-p:32:32-i8:8:32-i16:16:32-i64:64-n32-S64", true},
+        std::tuple{neverd::Arch::MIPS32EL, "mipsel-linux-gnu",
+                   "e-m:m-p:32:32-i8:8:32-i16:16:32-i64:64-n32-S64", true},
+        std::tuple{neverd::Arch::X64, "x86_64-linux-gnu",
+                   "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-"
+                   "f80:128-n8:16:32:64-S128",
+                   false}}) {
+    Module->setTargetTriple(llvm::Triple(Triple));
+    Module->setDataLayout(Layout);
+    Options.TheArch = Architecture;
+    std::string Text;
+    llvm::raw_string_ostream TextOut(Text);
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, TextOut, Options));
+    EXPECT_EQ(Text.find("uint64_t (*)(uint32_t, uint32_t)") !=
+                  std::string::npos,
+              Pair)
+        << Text;
+  }
+#endif
+}
+
 TEST(LLVMCValues, UnextendedNarrowArgumentsArriveAsWholeWords) {
   // The code reads only the low byte and the low half of its first two
   // arguments, as code an int was declared to take may: its callers leave the

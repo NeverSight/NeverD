@@ -6164,6 +6164,30 @@ void LLVMCWriter::writeCallLike(llvm::CallBase &Call, const std::string &Name,
   AfterCxxThrow = NoReturn;
 }
 
+bool LLVMCWriter::returnsIntegerRegisterPair(const llvm::CallBase &Call) const {
+  if (Opts.TheArch != Arch::ARM && Opts.TheArch != Arch::X86 &&
+      Opts.TheArch != Arch::MIPS32 && Opts.TheArch != Arch::MIPS32EL)
+    return false;
+  // An analyst's signature states the callee's own result type, and so
+  // does the declaration of an import the call prints by name.
+  if (!Call.isIndirectCall() || Call.isInlineAsm() ||
+      Call.getCallingConv() != llvm::CallingConv::C || analystCallHint(Call) ||
+      (!Opts.PreserveLLVMFunctionTypes &&
+       !resolveImportCalleeName(Call.getCalledOperand()).empty()))
+    return false;
+  const auto *Pair = llvm::dyn_cast<llvm::StructType>(Call.getType());
+  if (!Pair || Pair->getNumElements() != 2 ||
+      !Pair->getElementType(0)->isIntegerTy(32) ||
+      !Pair->getElementType(1)->isIntegerTy(32))
+    return false;
+  // The record the pair prints as has exactly the integer's eight bytes.
+  const auto &Layout = Call.getModule()->getDataLayout();
+  const auto *Shape =
+      Layout.getStructLayout(const_cast<llvm::StructType *>(Pair));
+  return Layout.getPointerSizeInBits() == 32 && Shape->getSizeInBytes() == 8 &&
+         Shape->getElementOffset(1) == 4;
+}
+
 std::string LLVMCWriter::indirectCalleeType(const llvm::CallBase &Call,
                                             bool Strict) {
   const auto *Type = Call.getFunctionType();
@@ -6217,8 +6241,10 @@ std::string LLVMCWriter::indirectCalleeType(const llvm::CallBase &Call,
   } else if (Parameters.empty()) {
     Parameters = "void";
   }
-  return sourceScalarType(Type->getReturnType(),
-                          Call.hasFnAttr(LLVMSourceSignedResult)) +
+  return (returnsIntegerRegisterPair(Call)
+              ? std::string("uint64_t")
+              : sourceScalarType(Type->getReturnType(),
+                                 Call.hasFnAttr(LLVMSourceSignedResult))) +
          " (" + Convention + "*)(" + Parameters + ")";
 }
 
@@ -6702,6 +6728,11 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
     return c_detail::recordCallResult(
         c_detail::recordCallType(Function->ReturnType, Opts),
         valueStr(Call.getArgOperand(*RecordCall->ResultPointer)), Expr);
+  // The integer the callee type returns holds the pair in memory order: the
+  // first register's word first, whichever half of the integer that is.
+  if (returnsIntegerRegisterPair(Call))
+    return "__builtin_bit_cast(" + typeToCLLVM(Call.getType()) + ", " + Expr +
+           ")";
   return Statement ? Expr : callResult(Call, std::move(Expr));
 }
 

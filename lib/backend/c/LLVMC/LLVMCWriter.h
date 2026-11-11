@@ -884,6 +884,13 @@ public:
   /// The C function-pointer type of \p Call's callee, from the call's own
   /// type and convention.  \p Strict refuses what shown C may approximate.
   std::string indirectCalleeType(const llvm::CallBase &Call, bool Strict);
+  /// Whether \p Call, through a pointer, takes its two pointer-sized integer
+  /// results from the register pair that a C integer of twice the width
+  /// returns in (r0:r1, EDX:EAX, v0:v1). A C record of the two returns
+  /// through memory there, so the call is typed as returning that integer,
+  /// whose bytes are the pair's in either byte order. A callee with a
+  /// declaration of its own, an import or an analyst's signature, keeps it.
+  bool returnsIntegerRegisterPair(const llvm::CallBase &Call) const;
   /// The parameters an indirect \p Call's callee takes where it loads the
   /// callee from a typed record's member that points to a function, as
   /// SystemTable->ConOut->OutputString does; none otherwise.
