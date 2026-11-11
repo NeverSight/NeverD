@@ -16127,8 +16127,9 @@ MIPS32r2/o32 and MIPS64r2/n64 have separate big- and little-endian target
 identities. Linked ELF admission is owned by `ELFMIPSProfile`; dynamic GOT and
 PLT interpretation belongs to the ELF loader. `lib/lift/MIPS` owns integer
 semantics. A `DecodedExecutionUnit` captures a delayed transfer and its slot,
-while normal disassembly still consumes four bytes. LowIR records their byte
-ownership and execution order; MedIR expands predicated effects before SSA.
+while normal disassembly consumes one physical instruction. Classic instructions
+occupy four bytes and compressed instructions occupy two or four. LowIR records
+byte ownership and execution order. MedIR expands predicated effects before SSA.
 `MIPSBitfield.def` owns the classic SPECIAL3 field/shuffle selectors and biases.
 The lifter validates encodings before emitting effects and reuses the explicit
 MIPS64 word-input contract; source backends do not reinterpret instruction bits.
@@ -16137,14 +16138,17 @@ MIPS64 word-input contract; source backends do not reinterpret instruction bits.
 classic semantic form. The physical decoder retains original bytes, mode and
 branch address, including when Capstone requires the canonical MSA encoding.
 `MIPSLiftR6` owns revision-specific integer opcodes, PC-relative addressing
-and compact transfers. The decoder records a forbidden follower independently
-of the execution unit's delay-slot ownership.
+and compact transfers. Classic R6 records the follower of a conditional compact
+branch for its forbidden-slot check. Compact microMIPS R6 transfers use their
+physical length and permit consecutive branches. Tagged n64 control targets
+preserve all 64 address bits.
 
 `MedMIPSMergeValues` owns the source-only proof for adjacent complementary
 merge loads in a single ordinary leaf block. It runs after SSA/projection/DCE
 and before ABI recovery, binds physical LowIR occurrences to MedIR, and removes
-only a first load's unobserved old-value operand. Four-byte MIPS16e2
-occurrences use the same address/use proof as classic instructions. Both reads remain ordered;
+only a first load's unobserved old-value operand. Four-byte MIPS16e2 and microMIPS
+occurrences use the same proof as classic instructions when both members
+share their mode and execute outside a delay slot. Both reads remain ordered;
 calls, PHIs, exceptional flow and unproved uses retain their original inputs.
 
 `MIPSScalar.def`/`MIPSScalar.h` own merge load/store IDs, shapes and exact byte

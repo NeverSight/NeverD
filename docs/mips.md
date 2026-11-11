@@ -47,8 +47,8 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   into a wider speculative read. Source lowering retains guest alignment bits
   when direct image data is rebound. Indexed merge reads into rebuilt image
   storage still require an explicit address contract.
-- `SWL`/`SWR` share a partial-store contract across classic and MIPS16e2
-  encodings. Only selected bytes are written; no neighboring read or whole-word
+- `SWL`/`SWR` share a partial-store contract across classic, microMIPS and
+  MIPS16e2 encodings. Only selected bytes are written; no neighboring read or whole-word
   read/modify/write is introduced. The emulator validates the full write span
   and observed source bytes before committing. Source image stores require a
   bounded writable backing and preserve guest alignment separately from its
@@ -376,8 +376,6 @@ with GNU-assembled classic encodings at a PC above 4 GiB in both byte orders.
 The diagrams for DLSA and DSRA32 disagree with the opcode map. One candidate
 for each overlaps DINSM. NeverD rejects those ambiguous words in the R6 profile.
 See the [microMIPS64 Instruction Set Reference Manual, revision 6.05](https://docs.alexrp.com/mips/micromips64_insns_v6_05.pdf).
-
-
 
 ## MIPS16e32 integer and control subset
 
