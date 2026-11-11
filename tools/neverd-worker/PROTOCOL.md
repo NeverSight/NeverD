@@ -1082,7 +1082,16 @@ most two, each as the client's next read of it asks (`if_none_match` naming the 
 it was given, `page_delta`), until a request waits.  A read that asks the same while
 the revision and the listing's view generation stand takes that answer, which reads
 as one made then would.  `metadata.prepared_views_made` and
-`metadata.prepared_views_given` count them.  `metadata.named_view_renders` counts the
+`metadata.prepared_views_given` count them.  A request's payload may carry the reads
+that follow it (`then`: at most four `{"operation":"decompile","payload":...}`, each
+naming the page its client keeps with `if_none_match`): once the request succeeds the
+reply answers each as a read made right after it would be answered, in the reply's own
+`then` list of `{status, payload}` or `{status, error}`, an answer over 1 MiB refused
+by itself; a request that fails answers none, and a read that is no page's is refused
+alone.  Such a request reads no view ahead afterwards.  `metadata.following_reads`
+counts the reads answered so.  The workbench's owner dispatcher has each edit carry the
+reads of the pages read at the revision it leaves, at most two, and takes the answers
+as those views' next reads.  `metadata.named_view_renders` counts the
 documents the engine rendered a function for, rather than built from pages kept.  `metadata.view_store_name_reads` counts
 the times an owner's views read which store they are kept under, which an edit that
 keeps the stores for what it changed says as it takes it.  `metadata.local_type_names_prepared`

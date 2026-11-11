@@ -2916,6 +2916,7 @@ Json Engine::metadata() const {
           {"named_view_comment_patches", commentPatches_},
           {"prepared_views_made", preparedMade_},
           {"prepared_views_given", preparedGiven_},
+          {"following_reads", followingReads_},
           {"named_view_name_patches", namePatches_},
           {"named_view_data_name_patches", dataNamePatches_},
           {"named_view_renders", namedViewRenders_},

@@ -134,6 +134,106 @@ private slots:
     QCOMPARE(h.sent[2].payload["if_none_match"].toString(), QString());
   }
 
+  // The reply to a command, at \p revision, with what the worker answered of
+  // the reads it carried.
+  static void replyFollowed(Harness &h, int index, const QString &revision,
+                            const QJsonArray &answers) {
+    const auto request = h.sent.at(index);
+    h.service.receive({{"protocol_major", 1},
+                       {"type", "response"},
+                       {"request_id", request.id},
+                       {"operation", request.operation},
+                       {"project_id", "project-one"},
+                       {"revision", revision},
+                       {"status", "ok"},
+                       {"payload", QJsonObject{{"saved", true}}},
+                       {"then", answers}});
+  }
+
+  void anEditCarriesTheReadsOfThePagesItsViewsShow() {
+    // An edit carries the read of a page read at the revision it leaves, as
+    // the view showing it makes it after the edit; the answer is that read's,
+    // with nothing sent, and the page it gives is the one kept.
+    Harness h;
+    establish(h);
+    h.service.setPageDeltas(true);
+    QJsonObject first;
+    h.service.subscribe(text(), &h.owner,
+                        [&](const QJsonObject &response) { first = response; });
+    QTRY_COMPARE(h.sent.size(), 1);
+    h.reply(0, {{"text", "line one\nline two"},
+                {"etag", "tag-7-0-2"},
+                {"revision", "1"}});
+    QTRY_COMPARE(first["status"].toString(), "ok");
+    bool edited = false;
+    QJsonObject edit;
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "n"}},
+                             &h.owner, [&](const QJsonObject &response) {
+                               edit = response;
+                               edited = true;
+                             });
+    QTRY_COMPARE(h.sent.size(), 2);
+    const auto carried = h.sent[1].payload["then"].toArray();
+    QCOMPARE(carried.size(), 1);
+    auto named = text().payload;
+    named["if_none_match"] = "tag-7-0-2";
+    named["page_delta"] = true;
+    QCOMPARE(carried[0].toObject()["operation"].toString(), "decompile");
+    QCOMPARE(carried[0].toObject()["payload"].toObject(), named);
+    replyFollowed(
+        h, 1, "2",
+        QJsonArray{QJsonObject{
+            {"status", "ok"},
+            {"payload",
+             QJsonObject{{"delta", QJsonArray{QJsonArray{
+                                       "lines", "text", 2,
+                                       QJsonArray{QJsonArray{1, "line 2"}}}}},
+                         {"base", "tag-7-0-2"},
+                         {"etag", "tag-8-0-2"},
+                         {"project_id", "project-one"},
+                         {"revision", "2"}}}}});
+    QTRY_VERIFY(edited);
+    QVERIFY(!edit.contains("then"));
+    QJsonObject second;
+    h.service.subscribe(text(), &h.owner, [&](const QJsonObject &response) {
+      second = response;
+    });
+    QTRY_COMPARE(second["status"].toString(), "ok");
+    QCOMPARE(h.sent.size(), 2);
+    QCOMPARE(second["payload"].toObject()["text"].toString(),
+             "line one\nline 2");
+    QCOMPARE(second["revision"].toString(), "2");
+    // A later read names the page the edit's reply gave.
+    h.service.listingChanged();
+    h.service.subscribe(text(), &h.owner, [](const QJsonObject &) {});
+    QTRY_COMPARE(h.sent.size(), 3);
+    QCOMPARE(h.sent[2].payload["if_none_match"].toString(), "tag-8-0-2");
+  }
+
+  void aCarriedReadTheWorkerRefusedIsMadeAgain() {
+    // A read the worker answered with an error is the view's to make: it names
+    // the page it kept, which no answer replaced.
+    Harness h;
+    establish(h);
+    h.service.subscribe(text(), &h.owner, [](const QJsonObject &) {});
+    QTRY_COMPARE(h.sent.size(), 1);
+    h.reply(0, {{"text", "kept"}, {"etag", "tag-7-0-1"}, {"revision", "1"}});
+    QTRY_VERIFY(!h.service.hasPending());
+    h.service.enqueueCommand("annotation_set", {{"address", "0x1"}}, &h.owner,
+                             {});
+    QTRY_COMPARE(h.sent.size(), 2);
+    QCOMPARE(h.sent[1].payload["then"].toArray().size(), 1);
+    replyFollowed(h, 1, "2",
+                  QJsonArray{QJsonObject{
+                      {"status", "error"},
+                      {"error", QJsonObject{{"code", "not_kept"},
+                                            {"message", "No session"}}}}});
+    QTRY_VERIFY(!h.service.hasPending());
+    h.service.subscribe(text(), &h.owner, [](const QJsonObject &) {});
+    QTRY_COMPARE(h.sent.size(), 3);
+    QCOMPARE(h.sent[2].payload["if_none_match"].toString(), "tag-7-0-1");
+  }
+
   void sourcePageKeptAcrossARevisionIsNamedAndTakenBack() {
     Harness h;
     establish(h);

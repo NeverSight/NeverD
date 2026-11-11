@@ -7128,8 +7128,14 @@ starts its read context anew, and names none of another project's.
 still answers for the page it gave after a note, with a replica ready, and that a
 graph is still the replica's. `WorkbenchTests::ownerReadsWhatChangedOfThePageItGave`
 comments on the function a page the owner gave shows and reads it again through the
-analysis queries: the owner's dispatcher names the page it kept, so the worker's answer
-read ahead of the view takes it (`metadata.prepared_views_given`), the comment showing.
+analysis queries: the owner's dispatcher names the page it kept, and the comment carries
+that read, whose answer the view's read takes (`metadata.following_reads`), the comment
+showing. `QueryServiceTests::anEditCarriesTheReadsOfThePagesItsViewsShow` checks that
+an edit carries the read of a page read at its revision and that the answer serves the
+view's next read with nothing sent, and `aCarriedReadTheWorkerRefusedIsMadeAgain` that a
+refused one is read again naming the page kept. `NeverDWorkerViewEdits` answers a
+comment's carried read as a whole read gets it, refuses a read that is no page's alone,
+and answers none for a refused edit or for more than four.
 `NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
 session takes up what the replica keeps of a function's first look, a later session
 lists what asking the engine lists, a new name of a function or of data keeps the
