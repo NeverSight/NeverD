@@ -305,6 +305,10 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/view_edits_test.py"
                 "$<TARGET_FILE:neverd-worker>")
       set_tests_properties(NeverDWorkerViewEdits PROPERTIES TIMEOUT 120)
+      add_test(NAME NeverDWorkerListingPages
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/listing_pages_test.py"
+                "$<TARGET_FILE:neverd-worker>")
+      set_tests_properties(NeverDWorkerListingPages PROPERTIES TIMEOUT 60)
       add_test(NAME NeverDWorkerUnreadTypes
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/unread_types_test.py"
                 "$<TARGET_FILE:neverd-worker>")

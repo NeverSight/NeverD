@@ -737,6 +737,20 @@ private:
   std::vector<std::shared_ptr<const NamedView>> viewsReadAhead() const;
   /// metadata.prepared_views: answers made and given.
   std::uint64_t preparedMade_ = 0, preparedGiven_ = 0, followingReads_ = 0;
+  /// Listing pages given to clients that keep them, newest last, each under
+  /// the name it was given by; metadata counts the reads they answered.
+  struct KeptListingPage {
+    std::string etag;
+    ListingPage page;
+  };
+  std::deque<KeptListingPage> keptListingPages_;
+  std::uint64_t listingPageIds_ = 0, listingPagesUnchanged_ = 0,
+                listingPageDeltas_ = 0;
+  /// A listing page for a client that names the one it keeps (\p known):
+  /// that it stands, what changed of it (\p deltas) or the page whole, under
+  /// a name it keeps it by.
+  Json listingReply(ListingPage page, const std::string &known, bool deltas,
+                    EncodedPayload *encoded);
   /// Documents written from another with its comments, functions' names or
   /// data's names taken (takeComments, takeFunctionNames, takeDataNames).
   std::uint64_t commentPatches_ = 0, namePatches_ = 0, dataNamePatches_ = 0;
