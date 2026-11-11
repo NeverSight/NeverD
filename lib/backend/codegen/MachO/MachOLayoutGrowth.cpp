@@ -359,17 +359,6 @@ bool isRegisterRelativeSignalLocation(llvm::ArrayRef<uint8_t> Bytes) {
   return true;
 }
 
-bool sameCFI(llvm::ArrayRef<CFIInstruction> Before,
-             llvm::ArrayRef<CFIInstruction> After) {
-  return Before.size() == After.size() &&
-         llvm::equal(Before, After, [](const auto &A, const auto &B) {
-           return std::tie(A.Kind, A.CodeOffset, A.Register, A.Register2,
-                           A.Offset, A.Expression, A.OperandBytes, A.RAState) ==
-                  std::tie(B.Kind, B.CodeOffset, B.Register, B.Register2,
-                           B.Offset, B.Expression, B.OperandBytes, B.RAState);
-         });
-}
-
 llvm::Error compareFrameStates(const dwarf_eh::ParseResult &Before,
                                const dwarf_eh::ParseResult &After,
                                Arch Architecture, uint64_t RemainingWork) {
@@ -393,7 +382,8 @@ llvm::Error compareFrameStates(const dwarf_eh::ParseResult &Before,
     const auto &Old = Before.CIEs[Index];
     const auto &New = After.CIEs[Index];
     if (CIEIdentity(Old) != CIEIdentity(New) ||
-        !sameCFI(Old.InitialInstructions, New.InitialInstructions) ||
+        !llvm::equal(Old.InitialInstructions, New.InitialInstructions,
+                     dwarf_eh::sameCFIInstruction) ||
         !CIEIndices.emplace(Old.SectionOffset, Index).second)
       return fail(kFrameIdentityChanged);
   }
@@ -407,7 +397,8 @@ llvm::Error compareFrameStates(const dwarf_eh::ParseResult &Before,
     const auto &New = After.FDEs[Index];
     const auto Found = CIEIndices.find(Old.CIESectionOffset);
     if (Found == CIEIndices.end() || FDEIdentity(Old) != FDEIdentity(New) ||
-        !sameCFI(Old.Instructions, New.Instructions))
+        !llvm::equal(Old.Instructions, New.Instructions,
+                     dwarf_eh::sameCFIInstruction))
       return fail(kFrameIdentityChanged);
     if (Architecture != Arch::AArch64)
       continue;
