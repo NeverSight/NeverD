@@ -511,6 +511,26 @@ Each caller checked both entries for 25 ordered argument pairs. The
 source-bound Release host, local LLVM fork, original and published image hashes,
 and the runner artifacts.
 
+## Interrupted return-address signing
+
+The exact-PC unwind query reports an unknown DWARF state when a classic
+arm64e frame relies on Darwin's implicit signing ABI and supplies no rule
+for the signing column. A compact prologue recipe can still be available.
+Explicit DWARF rows retain their instruction-boundary signing state.
+
+`AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions`
+compares an original indexed-DWARF function with its installed native object.
+The original carries explicit signing transitions and the replacement uses
+Darwin-compatible implicit CFI. Both functions have identical instructions.
+With `NEVERD_ARM64E_ASYNC_NATIVE=1`, a second thread interrupts the active
+function before and after PACIBSP, with LR spilled, after restoring SP, and
+after AUTIBSP. The handler reads the interrupted register state and checks
+the saved word at the spill site. It authenticates each signed return using
+the measured entry SP and compares it with the assembly caller's return site.
+The test checks each sampled PC against the original's explicit DWARF row.
+It also executes a changed companion entry to distinguish the published image
+from its input. This exercises one interrupted frame in a controlled caller.
+
 ## Reconstructed entries through the native compiler
 
 `scripts/verify_arm64e_entry.py` separately validates the entry reconstruction

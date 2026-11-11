@@ -1,0 +1,283 @@
+//===- AArch64AsyncUnwindFixtures.def - Interrupted frames ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef ASYNC_FRAME_TEXT
+#define ASYNC_FRAME_TEXT(Name, Text)
+#endif
+#ifndef ASYNC_FRAME_VALUE
+#define ASYNC_FRAME_VALUE(Type, Name, Value)
+#endif
+
+ASYNC_FRAME_TEXT(kDirectory, "neverd-arm64e-interrupted-unwind")
+ASYNC_FRAME_TEXT(kFrameSource, "stages.S")
+ASYNC_FRAME_TEXT(kWrapperSource, "caller.S")
+ASYNC_FRAME_TEXT(kDriverSource, "driver.c")
+ASYNC_FRAME_TEXT(kOldCompanion, "old.S")
+ASYNC_FRAME_TEXT(kNewCompanion, "new.S")
+ASYNC_FRAME_TEXT(kMapping, "companion")
+ASYNC_FRAME_TEXT(kStagesMapping, "stages")
+ASYNC_FRAME_TEXT(kExplicit, "-DNEVERD_TEST_EXPLICIT_RA")
+ASYNC_FRAME_TEXT(kOriginalRows, "original_signal_rows")
+ASYNC_FRAME_TEXT(kPublishedRows, "published_signal_rows")
+ASYNC_FRAME_TEXT(kCompanionName, "_companion")
+ASYNC_FRAME_VALUE(unsigned, kOldValue, 3)
+ASYNC_FRAME_VALUE(unsigned, kNewValue, 29)
+ASYNC_FRAME_TEXT(kDriver, "driver")
+ASYNC_FRAME_TEXT(kObject, "frame.o")
+ASYNC_FRAME_TEXT(kOriginal, "frame.dylib")
+ASYNC_FRAME_TEXT(kPublished, "installed.dylib")
+ASYNC_FRAME_TEXT(kOriginalSamples, "original.samples")
+ASYNC_FRAME_TEXT(kInstalledSamples, "installed.samples")
+ASYNC_FRAME_TEXT(kCompiler, "/usr/bin/clang")
+ASYNC_FRAME_TEXT(kTargetFlag, "-target")
+ASYNC_FRAME_TEXT(kTarget, "arm64e-apple-macosx15.0")
+ASYNC_FRAME_TEXT(kOptimize, "-O2")
+ASYNC_FRAME_TEXT(kDylib, "-dynamiclib")
+ASYNC_FRAME_TEXT(kHeader, "-Wl,-headerpad,0")
+ASYNC_FRAME_TEXT(kCompile, "-c")
+ASYNC_FRAME_TEXT(kOutput, "-o")
+ASYNC_FRAME_TEXT(kNativeName, "_stages")
+ASYNC_FRAME_TEXT(kExecute, "NEVERD_ARM64E_ASYNC_NATIVE")
+ASYNC_FRAME_TEXT(kSamples, "native_interrupted_frames")
+ASYNC_FRAME_TEXT(kUnavailable,
+                 "native Darwin AArch64 and Apple Clang are required")
+ASYNC_FRAME_VALUE(unsigned, kStages, 5)
+ASYNC_FRAME_VALUE(unsigned, kSpillStage, 3)
+ASYNC_FRAME_VALUE(unsigned, kFrameSize, 16)
+ASYNC_FRAME_VALUE(uint32_t, kSignLR, 0xd503237f)
+ASYNC_FRAME_VALUE(uint32_t, kAuthenticateLR, 0xd50323ff)
+ASYNC_FRAME_TEXT(kAssembly, R"asm(
+.text
+.p2align 2
+.globl _stages
+_stages:
+.cfi_startproc
+#ifdef NEVERD_TEST_EXPLICIT_RA
+.cfi_b_key_frame
+#endif
+.cfi_escape 0x2e, 0
+.macro stage n
+  mov x5, x30
+  mov w2, #\n
+  stlr w2, [x0]
+  add x3, x0, #4
+1:ldar w4, [x3]
+  cmp w4, w2
+  b.ne 1b
+.endm
+  mov x6, sp
+  stage 1
+  pacibsp
+#ifdef NEVERD_TEST_EXPLICIT_RA
+.cfi_negate_ra_state
+#endif
+  stage 2
+  sub sp, sp, #16
+.cfi_def_cfa_offset 16
+  str x30, [sp,#8]
+.cfi_offset 30, -8
+  stage 3
+  ldr x30, [sp,#8]
+.cfi_restore 30
+  add sp, sp, #16
+.cfi_def_cfa_offset 0
+  stage 4
+  autibsp
+#ifdef NEVERD_TEST_EXPLICIT_RA
+.cfi_negate_ra_state
+#endif
+  stage 5
+  ret
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+ASYNC_FRAME_TEXT(kOriginalCompanion, R"asm(
+.text
+.globl _companion
+.p2align 2
+_companion:
+.cfi_startproc
+ mov w0, #3
+ ret
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+ASYNC_FRAME_TEXT(kReplacementCompanion, R"asm(
+.text
+.globl _companion
+.p2align 2
+_companion:
+.cfi_startproc
+ .cfi_escape 0x2e, 0
+ pacibsp
+ mov w0, #29
+ retab
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+ASYNC_FRAME_TEXT(kCaller, R"asm(
+.text
+.p2align 2
+.globl _invoke_stages
+_invoke_stages:
+.cfi_startproc
+  stp x29, x30, [sp,#-16]!
+.cfi_def_cfa_offset 16
+.cfi_offset x29,-16
+.cfi_offset x30,-8
+  mov x29, sp
+.cfi_def_cfa x29, 16
+  adr x2, Lreturn_site
+  mov w5, #8
+Lselect_sp:
+  mov x3, x2
+  mov x4, sp
+  pacib x3, x4
+  cmp x2, x3
+  b.ne Lcall
+  subs w5, w5, #1
+  b.eq Lno_signature
+  sub sp, sp, #16
+  b Lselect_sp
+Lno_signature:
+  brk #0
+Lcall:
+  mov x16, x0
+  mov x0, x1
+  blraaz x16
+Lreturn_site:
+  mov sp, x29
+  ldp x29,x30,[sp],#16
+  ret
+.cfi_endproc
+
+.globl _return_address
+_return_address:
+  adr x0, Lreturn_site
+  ret
+)asm")
+ASYNC_FRAME_TEXT(kObserver, R"c(
+#include <dlfcn.h>
+#include <inttypes.h>
+#include <mach/arm/thread_status.h>
+#include <ptrauth.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdatomic.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/ucontext.h>
+#include <unistd.h>
+
+enum { stages_count = 5, spill_stage = 3, frame_bytes = 16 };
+struct handshake {
+  _Atomic int ready;
+  _Atomic int done;
+};
+struct sample {
+  uintptr_t pc;
+  uintptr_t cfa_offset;
+  int is_signed;
+  int stack_matches;
+};
+typedef void (*entry)(struct handshake *);
+extern void invoke_stages(entry, struct handshake *);
+extern uintptr_t return_address(void);
+static struct handshake state;
+static struct sample samples[stages_count];
+static pthread_t worker;
+static uintptr_t expected_return;
+
+static void observe(int signal, siginfo_t *info, void *context) {
+  const int stage = atomic_load(&state.ready);
+  if (stage < 1 || stage > stages_count || signal != SIGUSR1)
+    _exit(10);
+  const ucontext_t *uc = context;
+  const arm_thread_state64_t *regs = &uc->uc_mcontext->__ss;
+  const uintptr_t sp = arm_thread_state64_get_sp(*regs);
+  // x5 and x6 carry exact copies of the live LR and entry SP through the
+  // polling loop. Darwin's LR accessor may strip the signature.
+  const uintptr_t raw = regs->__x[5];
+  const uintptr_t entry_sp = regs->__x[6];
+  uintptr_t signed_return = expected_return;
+  __asm__ volatile("pacib %0, %1" : "+r"(signed_return) : "r"(entry_sp));
+  if (signed_return == expected_return ||
+      (raw != signed_return && raw != expected_return))
+    _exit(11);
+  struct sample *s = &samples[stage - 1];
+  s->pc = arm_thread_state64_get_pc(*regs);
+  s->is_signed = raw == signed_return;
+  s->cfa_offset = entry_sp - sp;
+  uintptr_t caller = raw;
+  if (stage == spill_stage) {
+    if (s->cfa_offset != frame_bytes)
+      _exit(12);
+    caller = *(const uintptr_t *)(entry_sp - sizeof(uintptr_t));
+    s->stack_matches = caller == raw;
+  }
+  if (s->is_signed)
+    __asm__ volatile("autib %0, %1" : "+r"(caller) : "r"(entry_sp));
+  if (caller != expected_return)
+    _exit(14);
+  atomic_store(&state.done, stage);
+}
+
+static void *interrupt_worker(void *arg) {
+  for (int stage = 1; stage <= stages_count; ++stage) {
+    while (atomic_load(&state.ready) != stage)
+      sched_yield();
+    if (pthread_kill(worker, SIGUSR1))
+      _exit(13);
+  }
+  return NULL;
+}
+
+int main(int argc, char **argv) {
+  if (argc != 5)
+    return 1;
+  alarm(20);
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  entry run = (entry)dlsym(image, "stages");
+  if (!run)
+    return 3;
+  const uintptr_t public_entry = (uintptr_t)ptrauth_strip(
+      run, ptrauth_key_function_pointer);
+  typedef unsigned (*companion_fn)(void);
+  companion_fn companion = (companion_fn)dlsym(image, "companion");
+  if (!companion || companion() != strtoul(argv[3], NULL, 10))
+    return 9;
+  const uintptr_t owner = public_entry + strtoull(argv[2], NULL, 10);
+  worker = pthread_self();
+  expected_return = return_address();
+  struct sigaction action = {.sa_sigaction = observe, .sa_flags = SA_SIGINFO};
+  sigemptyset(&action.sa_mask);
+  if (sigaction(SIGUSR1, &action, NULL))
+    return 4;
+  pthread_t monitor;
+  if (pthread_create(&monitor, NULL, interrupt_worker, NULL))
+    return 5;
+  invoke_stages(run, &state);
+  if (pthread_join(monitor, NULL))
+    return 6;
+  FILE *out = fopen(argv[4], "w");
+  if (!out)
+    return 7;
+  for (int i = 0; i < stages_count; ++i) {
+    if (samples[i].pc < owner)
+      return 8;
+    fprintf(out, "%" PRIuPTR " %d %" PRIuPTR " %d\n",
+            samples[i].pc - owner, samples[i].is_signed,
+            samples[i].cfa_offset, samples[i].stack_matches);
+  }
+  return fclose(out) || dlclose(image);
+}
+)c")
+
+#undef ASYNC_FRAME_TEXT
+#undef ASYNC_FRAME_VALUE

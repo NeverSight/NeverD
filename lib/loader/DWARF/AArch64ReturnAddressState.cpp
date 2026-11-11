@@ -75,12 +75,13 @@ evaluateAArch64ReturnAddressState(Arch Architecture, const DwarfCIE &CIE,
           Limits.MaxInstructions - CIE.InitialInstructions.size())
     return fail(Status::ResourceLimit, kBudget);
 
-  bool HasToggle = false, HasRegisterRule = false;
+  bool HasToggle = false, HasRegisterRule = false, HasSetState = false;
   for (const auto *Program : {&CIE.InitialInstructions, &FDE.Instructions})
     for (const auto &I : *Program) {
       HasToggle |= I.Kind == CFIOpKind::NegateRAState ||
                    I.Kind == CFIOpKind::NegateRAStateWithPC;
       HasRegisterRule |= isRARegisterRule(I);
+      HasSetState |= I.Kind == CFIOpKind::SetRAState;
     }
   if (HasToggle && HasRegisterRule)
     return fail(Status::Malformed, kMixedRules);
@@ -212,8 +213,10 @@ evaluateAArch64ReturnAddressState(Arch Architecture, const DwarfCIE &CIE,
   Initial = State;
   if (!run(FDE.Instructions, false))
     return Error;
-  return Answer ? AArch64RAQueryResult{Status::Known, Answer, nullptr}
-                : fail(Status::Unknown, kDynamicState);
+  if (!Answer)
+    return fail(Status::Unknown, kDynamicState);
+  return {Status::Known, Answer, nullptr,
+          HasToggle || HasRegisterRule || HasSetState};
 }
 
 } // namespace neverd::dwarf_eh

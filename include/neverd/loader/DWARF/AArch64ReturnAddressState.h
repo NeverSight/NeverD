@@ -54,6 +54,9 @@ struct AArch64RAQueryResult {
   /// Populated only for Known. Unknown never supplies an unsigned default.
   std::optional<AArch64ReturnAddressState> State;
   const char *Diagnostic = nullptr;
+  /// The CIE/FDE supplied a rule for the signing column. Classic arm64e
+  /// producers may instead rely entirely on Darwin's implicit return ABI.
+  bool HasExplicitSigningRule = false;
 };
 
 struct AArch64RAQueryLimits {
