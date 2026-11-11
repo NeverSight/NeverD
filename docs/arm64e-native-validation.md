@@ -782,8 +782,8 @@ original entries at each optimization level. The original fully O0 reproducer
 had 1,192 bytes of DWARF and 864 bytes of free TEXT with its fixed install
 name. Adding the two independently dereferenced pointer slots reduced the
 free TEXT to 440 bytes on the same compiler. The publisher can grow TEXT by
-inserting aligned pages ahead
-of the original sections in a zero-base arm64e dylib with image-relative
+inserting aligned pages ahead of the original sections in a zero-base
+arm64e dylib with image-relative
 chained fixups. The preferred header stays at zero. The output symbols, stubs
 and original data move together. The installation receipt records the slide
 and preserves each original entry VA. The verifier resolves each trampoline
@@ -811,6 +811,22 @@ Each installed caller exercised its 26 public entries and passed. The
 [validation record](evidence/arm64e-zero-base-unwind-2026-11-11.json) includes
 the source-built test host, per-image hashes, the fixed-name fully O0 refusal
 and a zero-filled range referenced by `LC_NOTE` on that earlier revision.
+
+The fully O0 IA and IB images on macos-26 and xcode-27 kept a preferred base
+of zero. Their original sections moved by `0x4000`. All 26 installed entries
+passed their independent caller checks, and `dyld_info` recovered the same 40
+authenticated binds, two ordinary binds, one authenticated rebase and one
+ordinary rebase in each image. Both runners also executed the lifted import and
+global-access fixtures, the Swift X21 tail caller and the five asynchronous
+interruption points on both original and published code. The
+[native run](https://github.com/gmh5225/test_mac_intel/actions/runs/43020688049)
+and [validation record](evidence/arm64e-dense-publication-2026-11-11.json)
+identify the source revision, compilers and per-host results.
+The default r6 CLI published the global and Swift tail cases and installed
+an independent 151-function native object into the dense image. For the
+framed `getpid` input, r6 generated indexed DWARF while the original
+registered only compact unwind. The CLI refused the image before writing
+an output. Both native runners used the pinned LLVM source fork for this call.
 
 The publication test also checks rejection before the receipt commits,
 unchanged input bytes, exact installed entry receipts and refusal to overwrite

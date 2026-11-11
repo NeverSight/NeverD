@@ -443,6 +443,17 @@ struct QueryService::State {
     return subscription;
   }
 
+  /// Whether \p job reads a page the client keeps and names to the worker: a
+  /// source page, or a listing's own page (a jump or a refresh, read as
+  /// visible), whose next read after an edit is what changed of it.  The pages
+  /// scrolling adds to a listing are not kept.
+  static bool keepsPage(const Job &job) {
+    return job.kind == Read &&
+           (job.spec.operation == QLatin1String("decompile") ||
+            (job.spec.operation == QLatin1String("listing") &&
+             job.spec.priority == Spec::Visible));
+  }
+
   void schedulePump() {
     if (pumpScheduled)
       return;
@@ -682,8 +693,7 @@ struct QueryService::State {
     // An edit carries the reads its views make after it.
     if (job->kind == Command && changesPages(job->spec.operation))
       follow(job, payload);
-    if (job->kind == Read &&
-        job->spec.operation == QLatin1String("decompile")) {
+    if (keepsPage(*job)) {
       // A page kept from an earlier revision is named; a worker that still
       // holds its document answers that it stands rather than sending it.
       const auto *kept = keptPages.object(keptPageKey(*job));
@@ -964,8 +974,7 @@ struct QueryService::State {
             QJsonObject{{"summary", job->summary}, {"viewport", payload}};
       }
     }
-    if (job->kind == Read && status == "ok" &&
-        job->spec.operation == QLatin1String("decompile")) {
+    if (keepsPage(*job) && status == "ok") {
       const auto payload = response.value("payload").toObject();
       const bool delta = payload.contains("delta");
       if (payload.value("unchanged").toBool() || delta) {

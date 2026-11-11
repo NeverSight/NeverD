@@ -510,6 +510,9 @@ inline constexpr std::size_t kEngineMaxPreviousViews = 32;
 /// Views an edit reaches that are read ahead of the client's reads after its
 /// reply (Engine::prepareFollowingViews).
 inline constexpr std::size_t kEngineMaxPreparedViews = 2;
+/// Listing pages kept for the clients that name them (if_none_match), whose
+/// next read of the same lines is answered with what changed of them.
+inline constexpr std::size_t kEngineMaxKeptListingPages = 8;
 inline constexpr std::size_t kEngineMaxPreviousViewBytes = 32 * 1024 * 1024;
 /// A delta up to this size goes without weighing it against its page; a larger
 /// one goes only where it is under half the page.
