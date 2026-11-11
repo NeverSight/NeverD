@@ -11,6 +11,7 @@
 #include "Address.h"
 #include "AddressSpace.h"
 #include "AnalysisProgress.h"
+#include "AnalysisService.h"
 #include "DeepLink.h"
 #include "DialogReturnKey.h"
 #include "Docking.h"
@@ -3000,6 +3001,117 @@ private slots:
     // Visual Studio Code Dark+ editor background.
     QCOMPARE(theme.color(ColorRole::ListingBackground),
              QColor(0x1e, 0x1e, 0x1e));
+  }
+
+  void analysisReadsGoAheadOfTheOwnersOrdinaryReads() {
+    QStringList sent, wires;
+    QueryService owner(
+        [&](const QString &operation, const QJsonObject &, const QString &) {
+          sent.append(operation);
+          wires.append(QString::number(wires.size() + 1));
+          return wires.back();
+        });
+    owner.setAvailable(true);
+    const auto reply = [&](int at, QJsonObject response = {}) {
+      response.insert("type", "response");
+      response.insert("request_id", wires.at(at));
+      response.insert("operation", sent.at(at));
+      response.insert("project_id", "project-one");
+      response.insert("revision", "1");
+      if (!response.contains("status"))
+        response.insert("status", "ok");
+      owner.receive(response);
+    };
+    QObject reader;
+    const auto ignore = [](const QJsonObject &) {};
+    owner.enqueueCommand("open", {{"path", "fixture-one"}}, &reader, {});
+    QTRY_COMPARE(sent.size(), 1);
+    reply(0);
+    QTRY_COMPARE(owner.projectId(), QStringLiteral("project-one"));
+    // The owner has its project: a lane reads beside it from here on.
+    AnalysisService analysis(owner, QStringLiteral("/nonexistent/worker"));
+    analysis.setOwnerReadsKept(true);
+    // An ordinary read runs, and two wait behind it.
+    owner.subscribe({"listing", {}}, &reader, ignore);
+    QTRY_COMPARE(sent.size(), 2);
+    owner.subscribe({"imports", {}}, &reader, ignore);
+    owner.subscribe({"exports", {}}, &reader, ignore);
+    // A view reads a function: the lane asks the owner what it keeps and what
+    // its store holds, which a view waits for.
+    analysis.queries().subscribe(
+        {"decompile", {{"address", "0x1000"}, {"representation", "source"}}},
+        &reader, ignore);
+    QTest::qWait(20);
+    QCOMPARE(sent.size(), 2);
+    reply(1);
+    QTRY_COMPARE(sent.size(), 3);
+    QCOMPARE(sent.at(2), QStringLiteral("decompile"));
+    reply(2, {{"status", "error"},
+              {"error",
+               QJsonObject{{"code", "not_kept"}, {"message", "not kept"}}}});
+    QTRY_COMPARE(sent.size(), 4);
+    QCOMPARE(sent.at(3), QStringLiteral("kept_renders"));
+  }
+
+  void aPageTheOwnerGaveStartsNoReplicaAfterAChange() {
+    QStringList sent, wires;
+    QueryService owner(
+        [&](const QString &operation, const QJsonObject &, const QString &) {
+          sent.append(operation);
+          wires.append(QString::number(wires.size() + 1));
+          return wires.back();
+        });
+    owner.setAvailable(true);
+    const auto reply = [&](int at, QJsonObject response = {},
+                           const QString &revision = QStringLiteral("1")) {
+      response.insert("type", "response");
+      response.insert("request_id", wires.at(at));
+      response.insert("operation", sent.at(at));
+      response.insert("project_id", "project-one");
+      response.insert("revision", revision);
+      if (!response.contains("status"))
+        response.insert("status", "ok");
+      owner.receive(response);
+    };
+    QObject reader;
+    owner.enqueueCommand("open", {{"path", "fixture-one"}}, &reader, {});
+    QTRY_COMPARE(sent.size(), 1);
+    reply(0);
+    QTRY_COMPARE(owner.projectId(), QStringLiteral("project-one"));
+    AnalysisService analysis(owner, QStringLiteral("/nonexistent/worker"));
+    analysis.setOwnerReadsKept(true);
+    // The owner gives the page from a store that holds part of the renders;
+    // no replica starts meanwhile.
+    analysis.setSnapshotBlocked(true);
+    const QJsonObject function{{"address", "0x1000"},
+                               {"representation", "source"}};
+    QJsonObject page;
+    const auto read = [&] {
+      page = {};
+      analysis.queries().subscribe(
+          {"decompile", function}, &reader,
+          [&](const QJsonObject &response) { page = response; });
+    };
+    read();
+    QTRY_COMPARE(sent.size(), 2);
+    QCOMPARE(sent.at(1), QStringLiteral("decompile"));
+    reply(1, {{"payload", QJsonObject{{"etag", "owner-page"}, {"text", "t"}}}});
+    QTRY_COMPARE(sent.size(), 3);
+    QCOMPARE(sent.at(2), QStringLiteral("kept_renders"));
+    reply(2, {{"payload", QJsonObject{{"kept", 1}, {"complete", false}}}});
+    QTRY_VERIFY(!page.isEmpty());
+    analysis.setSnapshotBlocked(false);
+    // A change of names: the view reads the page the owner gave again, and
+    // the owner answers for it, with no snapshot for a replica first.
+    owner.enqueueCommand("rename", {{"address", "0x10"}, {"name", "n"}},
+                         &reader, {});
+    QTRY_COMPARE(sent.size(), 4);
+    reply(3, {}, QStringLiteral("2"));
+    read();
+    QTRY_COMPARE(sent.size(), 5);
+    QCOMPARE(sent.at(4), QStringLiteral("decompile"));
+    QTest::qWait(20);
+    QVERIFY(!sent.contains(QStringLiteral("analysis_snapshot")));
   }
 };
 
