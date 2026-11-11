@@ -17,8 +17,9 @@ MACHO_LAYOUT_VALUE(uint64_t, kMetadataCommandReserve, 512)
 MACHO_LAYOUT_TEXT(kSectionOrderReferences,
                   "TEXT section ordering has unmodeled section references")
 
-MACHO_LAYOUT_TEXT(kRelroOwnership,
-                  "read-only data has unknown payload ownership")
+MACHO_LAYOUT_TEXT(
+    kMetadataOwnership,
+    "metadata placement has unknown load-command payload ownership")
 MACHO_LAYOUT_TEXT(
     kMetadataCapacity,
     "new section needs authenticated header capacity and section identities")

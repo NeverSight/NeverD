@@ -4,6 +4,14 @@
 //
 //===----------------------------------------------------------------------===//
 
+#ifndef MACHO_HEADER_SYMBOL
+#define MACHO_HEADER_SYMBOL(Type, Name)
+#endif
+
+MACHO_HEADER_SYMBOL(llvm::MachO::MH_EXECUTE, "__mh_execute_header")
+MACHO_HEADER_SYMBOL(llvm::MachO::MH_DYLIB, "__mh_dylib_header")
+MACHO_HEADER_SYMBOL(llvm::MachO::MH_BUNDLE, "__mh_bundle_header")
+
 #ifndef MACHO_TOOL_ONLY_COMMAND
 #define MACHO_TOOL_ONLY_COMMAND(Command)
 #endif
@@ -15,3 +23,5 @@ MACHO_TOOL_ONLY_COMMAND(llvm::MachO::LC_DATA_IN_CODE)
 MACHO_TOOL_ONLY_COMMAND(llvm::MachO::LC_FUNCTION_STARTS)
 
 #undef MACHO_TOOL_ONLY_COMMAND
+
+#undef MACHO_HEADER_SYMBOL

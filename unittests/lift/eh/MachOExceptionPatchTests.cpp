@@ -102,7 +102,8 @@ void setName(char (&Destination)[16], llvm::StringRef Name) {
   std::memcpy(Destination, Name.data(), Name.size());
 }
 
-std::vector<uint8_t> makeMachO64(uint32_t TextOff = kTextOff) {
+std::vector<uint8_t> makeMachO64(uint32_t TextOff = kTextOff,
+                                 uint32_t EHOff = kEHFrameOff) {
   constexpr uint32_t CommandSize =
       sizeof(segment_command_64) + 2 * sizeof(section_64);
   std::vector<uint8_t> Binary(512, 0);
@@ -130,9 +131,9 @@ std::vector<uint8_t> makeMachO64(uint32_t TextOff = kTextOff) {
   auto *EHFrame = reinterpret_cast<section_64 *>(Segment + 1);
   setName(EHFrame->sectname, "__eh_frame");
   setName(EHFrame->segname, "__TEXT");
-  EHFrame->addr = kBaseVA + kEHFrameOff;
+  EHFrame->addr = kBaseVA + EHOff;
   EHFrame->size = kEHFrameSize;
-  EHFrame->offset = kEHFrameOff;
+  EHFrame->offset = EHOff;
   EHFrame->align = 2;
   EHFrame->flags = S_REGULAR;
 
@@ -788,6 +789,26 @@ TEST(MachOExceptionPatch, RejectsNonExactSegmentCommandSize) {
   Segment->cmdsize += 8;
   reinterpret_cast<mach_header_64 *>(Binary.data())->sizeofcmds += 8;
   EXPECT_FALSE(findMachOEHFrameRegion(Binary).has_value());
+}
+
+TEST(MachOExceptionPatch, ZeroNotePayloadBoundsDWARFAppendStorage) {
+  using namespace llvm::MachO;
+  auto Binary = makeMachO64(kTextOff, kEHFrameOff + sizeof(note_command));
+  const auto Region = findMachOEHFrameRegion(Binary);
+  ASSERT_TRUE(Region);
+  auto *Header = reinterpret_cast<mach_header_64 *>(Binary.data());
+  auto *Note = reinterpret_cast<note_command *>(
+      Binary.data() + sizeof(*Header) + Header->sizeofcmds);
+  *Note = {};
+  Note->cmd = LC_NOTE;
+  Note->cmdsize = sizeof(*Note);
+  Note->offset = Region->SectionFileOff + kEHFrameSize;
+  Note->size = sizeof(uint64_t);
+  ++Header->ncmds;
+  Header->sizeofcmds += sizeof(*Note);
+  const auto Bounded = findMachOEHFrameRegion(Binary);
+  ASSERT_TRUE(Bounded);
+  EXPECT_EQ(Bounded->LimitFileOff, Note->offset);
 }
 
 TEST(MachOExceptionPatch, AcceptsARMImageWithoutUnwindAsNoOp) {

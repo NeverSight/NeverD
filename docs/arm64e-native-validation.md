@@ -578,12 +578,14 @@ value, catch, cleanup, post-exception and corrupted-pointer check. This is a
 complete published fixture image, not automatic admission of arbitrary lifted
 modules.
 
-The linker receives `-Wl,-headerpad,0` for all four compact cases and both O2
-indexed-DWARF cases. NeverD fits the regular unwind table into checked TEXT
-storage and preserves the UUID and code-signing command capacity. The two O0
-DWARF cases still need `-Wl,-headerpad,0x8000`. Their existing TEXT mapping
-ends at live DATA and cannot hold the combined unwind records. Each case also
-fills the remaining TEXT tail of a private input copy and requires refusal
+The linker receives `-Wl,-headerpad,0` in all eight cases. The four compact
+and two O2 indexed-DWARF cases use the default zero preferred base and fit in
+existing TEXT storage. The two O0 DWARF cases set a nonzero preferred TEXT
+address so NeverD can extend the front of the segment while preserving code,
+data and authenticated slot VAs. The verifier reads each actual Mach header
+base and resolves the compact index's relative offsets against the installed
+base. A full zero-base O0 image still has no available prefix. Each case also
+fills the remaining TEXT tail of a zero-base input copy and requires refusal
 before producing an output.
 
 The publication test also checks rejection before the receipt commits,

@@ -12,6 +12,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/codegen/MachO/MachOAuthenticatedFixups.h"
+#include "neverd/backend/codegen/MachO/MachOLayoutGrowth.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
 #include "neverd/backend/codegen/SourcePatchDependencies.h"
 #include "neverd/loader/Loader.h"
@@ -231,6 +232,71 @@ std::vector<uint8_t> largePageImage(const std::vector<uint8_t> &Small) {
     Starts->segment_offset = kLargePage;
   }
   return Bytes;
+}
+
+void addFunctionStarts(std::vector<uint8_t> &Image) {
+  auto *Header = reinterpret_cast<mach_header_64 *>(Image.data());
+  linkedit_data_command Starts{LC_FUNCTION_STARTS, sizeof(Starts),
+                               kFunctionStartsOffset,
+                               sizeof(kFunctionStartsData)};
+  std::memcpy(Image.data() + sizeof(*Header) + Header->sizeofcmds, &Starts,
+              sizeof(Starts));
+  std::memcpy(Image.data() + Starts.dataoff, kFunctionStartsData,
+              Starts.datasize);
+  Header->sizeofcmds += sizeof(Starts);
+  ++Header->ncmds;
+}
+
+TEST(MachOArm64eDependencies, HeaderGrowthPreservesChainedAndThreadedSlots) {
+  const auto Check = [](std::vector<uint8_t> Image,
+                        int64_t FirstDelta = kLargePage,
+                        int64_t SecondDelta = 0) {
+    addFunctionStarts(Image);
+    const auto First = readLE<uint64_t>(Image.data() + kPage);
+    const auto Second = readLE<uint64_t>(Image.data() + kSecondSlot);
+    auto Before = readMachODependencyState(Image);
+    ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
+    auto Grown = reserveMachOHeaderStorage(Image, Arch::AArch64, kPage);
+    ASSERT_TRUE(bool(Grown)) << llvm::toString(Grown.takeError());
+    ASSERT_TRUE(*Grown);
+    EXPECT_EQ(readLE<uint64_t>(Image.data() + kLargePage + kPage),
+              First + FirstDelta);
+    EXPECT_EQ(readLE<uint64_t>(Image.data() + kLargePage + kSecondSlot),
+              Second + SecondDelta);
+    MachOChainedFixups Chains;
+    auto After = readMachODependencyState(Image, &Chains);
+    ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
+    EXPECT_EQ(Chains.HeaderVA, kBase - kLargePage);
+    EXPECT_EQ(Before->Slots, After->Slots);
+    EXPECT_EQ(After->Slots.size(), 2u);
+  };
+  for (const auto &Chain : Chains) {
+    SCOPED_TRACE(Chain.Format);
+    Check(linkedImage(Chain));
+    Check(multiStartImage(Chain));
+  }
+  Check(threadedImage());
+  Check(multiStartImage({DYLD_CHAINED_PTR_ARM64E, kBase, kSignedHeaderTarget}),
+        -int64_t(kLargePage));
+  Check(multiStartImage({DYLD_CHAINED_PTR_ARM64E_USERLAND, kTaggedHeaderTarget,
+                         kSignedHeaderTarget}));
+  Check(multiStartImage({DYLD_CHAINED_PTR_64, kBase, kOrdinaryBind}),
+        -int64_t(kLargePage));
+  Check(multiStartImage(
+      {DYLD_CHAINED_PTR_64_OFFSET, kOrdinaryRebaseTarget, kOrdinaryBind}));
+}
+
+TEST(MachOArm64eDependencies,
+     HeaderGrowthRejectsUnrepresentableTargetsAtomically) {
+  for (uint64_t First : {kAuthOffsetOverflow, kAuthHeaderInterior}) {
+    auto Image = linkedImage({DYLD_CHAINED_PTR_ARM64E_USERLAND, First, 0});
+    addFunctionStarts(Image);
+    const auto Before = Image;
+    auto Grown = reserveMachOHeaderStorage(Image, Arch::AArch64, kPage);
+    ASSERT_FALSE(bool(Grown));
+    llvm::consumeError(Grown.takeError());
+    EXPECT_EQ(Image, Before);
+  }
 }
 
 TEST(MachOArm64eDependencies, PreservesMultipleAuthenticatedChainsOnOnePage) {

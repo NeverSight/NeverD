@@ -528,8 +528,7 @@ llvm::Expected<uint64_t> declareMachOMetadata(std::vector<uint8_t> &Binary,
   auto B = Binary;
   std::optional<TextMetadataStorage> Storage;
   if (!Relro) {
-    // A dylib cannot grow a PAGEZERO prefix. Reuse authenticated TEXT padding
-    // before requesting prefix growth for metadata, retaining command room.
+    // Use existing TEXT padding before requesting an available VM prefix.
     Storage = findTextMetadataStorage(B, Size);
     auto Header = reserveMachOHeaderStorage(
         B, A,
@@ -616,15 +615,15 @@ llvm::Expected<uint64_t> declareMachOMetadata(std::vector<uint8_t> &Binary,
         TextSize = F.FileSize;
         NewOrdinal = Ordinal + 1;
       });
+  std::vector<macho_patch_detail::MachOFileRange> Payloads;
+  if (!macho_patch_detail::collectMachOPayloadRanges(B, Payloads))
+    return fail(kMetadataOwnership);
+  for (const auto &Range : Payloads) {
+    First = std::min(First, Range.Begin);
+    if (Range.Begin < TextOff + TextSize && Range.End > TextOff)
+      Last = std::max(Last, Range.End);
+  }
   if (Relro) {
-    std::vector<macho_patch_detail::MachOFileRange> Payloads;
-    if (!macho_patch_detail::collectMachOPayloadRanges(B, Payloads))
-      return fail(kRelroOwnership);
-    for (const auto &Range : Payloads) {
-      First = std::min(First, Range.Begin);
-      if (Range.Begin < TextOff + TextSize && Range.End > TextOff)
-        Last = std::max(Last, Range.End);
-    }
     auto Dependencies = readMachODependencyState(B);
     if (!Dependencies)
       return Dependencies.takeError();

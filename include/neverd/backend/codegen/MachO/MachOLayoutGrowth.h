@@ -21,10 +21,10 @@ namespace neverd {
 llvm::Error completeMachOChainedSegmentTable(std::vector<uint8_t> &Binary,
                                              Arch Architecture);
 
-/// Grow command storage by extending a checked 64-bit PIE header mapping into
-/// its PAGEZERO guard. Original code/data VAs stay fixed; all admitted relative
-/// loader metadata are relocated transactionally. Explicit header-address code
-/// references are refused unless the original mapping remains unchanged.
+/// Grow the header into a PIE guard or an available prefix of a nonzero-base
+/// dylib or bundle. Original code, data and fixup slots retain their addresses.
+/// Relocate supported loader metadata transactionally and reject instruction
+/// references into the moving header.
 llvm::Expected<bool> reserveMachOHeaderStorage(std::vector<uint8_t> &Binary,
                                                Arch Architecture,
                                                uint64_t AdditionalCommandBytes);

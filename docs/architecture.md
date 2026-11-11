@@ -15056,9 +15056,17 @@ Regular compact-unwind encoding and its reservation share one checked size
 planner. Full pages contain 511 records in 4096 bytes, while the last page ends
 after its declared records. Reservations include original records, new recipe
 and gap boundaries, personality slots and LSDAs without rounding the final
-page to 4 KiB. This permits small registries in existing TEXT capacity, but
-does not create storage for a full DWARF table when a live DATA segment blocks
-TEXT growth.
+page to 4 KiB. Compact and DWARF append storage stops at the next live
+load-command payload, including zero-filled notes.
+
+A 64-bit PIE can grow the front of TEXT into its PAGEZERO guard. A dylib or
+bundle with a nonzero preferred base can use an available aligned VM range
+before TEXT. Code, data and signing slots retain their VAs. The strict dyld
+reader supplies the actual slots for every chain root, including overflow page
+starts and legacy threaded binds. Header growth changes representable rebase
+targets and starts-in-segment offsets, then rechecks dependencies, exports and
+signing schemas. A zero-base dylib with live DATA immediately after a full TEXT
+segment still needs a relocation of its original mappings.
 
 PE, ELF, and Mach-O each have format-specific exception components, but NeverD
 does not yet publish an all-formats, all-exception-types end-to-end rewrite

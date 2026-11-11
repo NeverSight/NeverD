@@ -1,0 +1,32 @@
+//===- MachOHeaderGrowth.def - Header relocation contracts -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef MACHO_HEADER_TEXT
+#define MACHO_HEADER_TEXT(Name, Text)
+#endif
+#ifndef MACHO_HEADER_VALUE
+#define MACHO_HEADER_VALUE(Type, Name, Value)
+#endif
+
+MACHO_HEADER_TEXT(kChainTargetOverflow,
+                  "relocated chained target exceeds its encoded width")
+MACHO_HEADER_TEXT(
+    kChainHeaderInterior,
+    "chained pointer addresses the interior of the relocated header")
+MACHO_HEADER_TEXT(kChainStartRange, "chain start has no stable segment address")
+MACHO_HEADER_TEXT(
+    kImageKind,
+    "header relocation requires a 64-bit PIE executable, dylib or bundle")
+MACHO_HEADER_TEXT(
+    kDyldPrefix, "dylib or bundle prefix growth requires checked dyld metadata")
+MACHO_HEADER_TEXT(kExportRange,
+                  "export offset cannot follow the relocated header")
+MACHO_HEADER_TEXT(kPrefixRange,
+                  "header mapping has no available aligned prefix")
+MACHO_HEADER_VALUE(unsigned, kOrdinaryTargetBits, 36)
+
+#undef MACHO_HEADER_VALUE
+#undef MACHO_HEADER_TEXT
