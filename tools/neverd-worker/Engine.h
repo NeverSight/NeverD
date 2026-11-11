@@ -763,6 +763,10 @@ private:
   /// The Session's type declarations as the history's rows, each at its
   /// place in the order made; none from an engine that keeps none.
   Json typeDeclarationRows() const;
+  /// The rows after a declaration added one: \p committed, which were the
+  /// Session's, and the one it added (neverd_type_declarations_range_json);
+  /// every row where the Session holds other than one more.
+  Json typeDeclarationRowsAfter(const Json &committed) const;
   /// Read the type declarations again where the history's differ from the
   /// Session's: true when they agree or loaded.  Changed declarations let
   /// the analysis go, as declaring does.

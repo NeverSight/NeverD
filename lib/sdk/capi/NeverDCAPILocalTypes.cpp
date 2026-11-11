@@ -355,9 +355,13 @@ llvm::json::Object libraryChoiceJson(const Session::LibraryChoice &Choice) {
                             {"removed", std::move(Removed)}};
 }
 
-llvm::json::Array declarationRows(const Session &S) {
+/// The rows of the declarations from \p Begin, before \p End.
+llvm::json::Array declarationRows(const Session &S, size_t Begin = 0,
+                                  size_t End = SIZE_MAX) {
   llvm::json::Array Rows;
-  for (const Session::TypeDeclaration &Declaration : S.TypeDeclarations) {
+  End = std::min(End, S.TypeDeclarations.size());
+  for (size_t At = Begin; At < End; ++At) {
+    const Session::TypeDeclaration &Declaration = S.TypeDeclarations[At];
     if (!Declaration.Forget.empty()) {
       llvm::json::Array Names;
       for (const std::string &Name : Declaration.Forget)
@@ -1467,6 +1471,16 @@ const char *neverd_type_declarations_json(neverd_session_t Sess) {
     return nullptr;
   S->clearError();
   return dupStr(jsonToString(llvm::json::Value(declarationRows(*S))));
+}
+
+const char *neverd_type_declarations_range_json(neverd_session_t Sess,
+                                                size_t Begin, size_t End) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return nullptr;
+  S->clearError();
+  return dupStr(jsonToString(llvm::json::Value(
+      Begin < End ? declarationRows(*S, Begin, End) : llvm::json::Array())));
 }
 
 const char *neverd_type_libraries_json(neverd_session_t Sess) {

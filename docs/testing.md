@@ -7138,7 +7138,9 @@ a staged comment's step is refused unless it commits the comments first
 included, none past them, and none for an empty or reversed span; and the function
 edits of an entry or a span with `neverd_functions_range_json`, created, deleted and
 stated ones as `neverd_functions_json` lists them. Its
-`NewTypesKeepTheImportPrototypesTheyDoNotReach` decompiles a driver whose calls read
+`DeclaredTypesJoinThePDBsAndStayWithTheProject` lists a span of the declarations with
+`neverd_type_declarations_range_json` as the list says it, and none for an empty or
+reversed span. `NewTypesKeepTheImportPrototypesTheyDoNotReach` decompiles a driver whose calls read
 the kernel's prototypes, declares a type none reaches and then the process one returns,
 and reads the driver as a session that declared the same types first, byte for byte.
 `LocalTypesDebugContext.NewTypesNoPrototypeReachesKeepABISignatures` keeps a converted

@@ -1124,6 +1124,21 @@ Json Engine::typeDeclarationRows() const {
     declared[i]["addr"] = hexAddress(i);
   return declared;
 }
+Json Engine::typeDeclarationRowsAfter(const Json &committed) const {
+  using RangeFunction = const char *(*)(neverd_session_t, size_t, size_t);
+  static const auto range =
+      engineSymbol<RangeFunction>("neverd_type_declarations_range_json");
+  if (!range || !committed.is_array())
+    return typeDeclarationRows();
+  Json added = backendJson(
+      range(session_, committed.size(), std::numeric_limits<size_t>::max()));
+  if (!added.is_array() || added.size() != 1 || !added[0].is_object())
+    return typeDeclarationRows();
+  Json declared = committed;
+  added[0]["addr"] = hexAddress(committed.size());
+  declared.push_back(std::move(added[0]));
+  return declared;
+}
 bool Engine::reloadTypeDeclarations() {
   if (!declaresLocalTypes() || !history_ ||
       typeDeclarationRows() == history_->committedTable("types"))
@@ -5507,7 +5522,12 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       auto &store = *history_;
       const auto checkpoint = store;
       try {
-        Json declared = typeDeclarationRows();
+        // The history's rows, which were the Session's, and the one this
+        // declaration added; a forget lists them all again.
+        Json declared =
+            operation == "local_types_declare"
+                ? typeDeclarationRowsAfter(store.committedTable("types"))
+                : typeDeclarationRows();
         if (declared.empty())
           throw Error("engine_error", "Engine kept no declaration");
         store.stage({{"kind", "types"},

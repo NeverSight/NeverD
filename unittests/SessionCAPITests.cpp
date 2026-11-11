@@ -6681,6 +6681,26 @@ TEST_F(SessionCAPITest, DeclaredTypesJoinThePDBsAndStayWithTheProject) {
   llvm::json::Value Rows = std::move(*ParsedRows);
   ASSERT_TRUE(Rows.getAsArray());
   ASSERT_EQ(Rows.getAsArray()->size(), 4u);
+  // A span of them reads alone, as the list says it.
+  const auto declarationsOf = [&](size_t Begin, size_t End) {
+    return takeString(neverd_type_declarations_range_json(Session, Begin, End));
+  };
+  const auto rowsText = [](const llvm::json::Array &All, size_t Begin,
+                           size_t End) {
+    llvm::json::Array Part;
+    for (size_t At = Begin; At < End; ++At)
+      Part.push_back(All[At]);
+    std::string Text;
+    llvm::raw_string_ostream OS(Text);
+    OS << llvm::json::Value(std::move(Part));
+    return Text;
+  };
+  EXPECT_EQ(declarationsOf(0, 4),
+            takeString(neverd_type_declarations_json(Session)));
+  EXPECT_EQ(declarationsOf(1, 2), rowsText(*Rows.getAsArray(), 1, 2));
+  EXPECT_EQ(declarationsOf(3, 100), rowsText(*Rows.getAsArray(), 3, 4));
+  EXPECT_EQ(declarationsOf(4, 5), "[]");
+  EXPECT_EQ(declarationsOf(2, 1), "[]");
   // The list keeps one origin when asked, and counts every origin's.
   llvm::json::Object Mine =
       parse(neverd_local_types_json(Session, R"({"origin":"user"})"));
