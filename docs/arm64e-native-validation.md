@@ -504,6 +504,13 @@ caller against both images. The strict instruction check currently covers
 register-only integer arithmetic, logical operations and moves ending in RET.
 Functions with calls, signed frames or stack accesses need additional proofs.
 
+The [native lifted-image run](https://github.com/gmh5225/test_mac_intel/actions/runs/42957645426)
+executed the original and installed images on both macos-26 and xcode-27.
+Each caller checked both entries for 25 ordered argument pairs. The
+[evidence record](evidence/arm64e-lifted-leaves-2026-11-11.json) identifies the
+source-bound Release host, local LLVM fork, original and published image hashes,
+and the runner artifacts.
+
 ## Reconstructed entries through the native compiler
 
 `scripts/verify_arm64e_entry.py` separately validates the entry reconstruction
