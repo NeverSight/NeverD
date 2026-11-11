@@ -7101,7 +7101,10 @@ checks that a replica's dispatcher names the page it kept after its owner's chan
 starts its read context anew, and names none of another project's.
 `WorkbenchTests::ownerAnswersForItsPagesWhileAReplicaIsReady` checks that the owner
 still answers for the page it gave after a note, with a replica ready, and that a
-graph is still the replica's.
+graph is still the replica's. `WorkbenchTests::ownerReadsWhatChangedOfThePageItGave`
+comments on the function a page the owner gave shows and reads it again through the
+analysis queries: the owner's dispatcher names the page it kept, so the worker's answer
+read ahead of the view takes it (`metadata.prepared_views_given`), the comment showing.
 `NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
 session takes up what the replica keeps of a function's first look, a later session
 lists what asking the engine lists, a new name of a function or of data keeps the

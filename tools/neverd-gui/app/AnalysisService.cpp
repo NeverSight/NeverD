@@ -195,6 +195,11 @@ void AnalysisService::readKept() {
 
 void AnalysisService::askOwner() {
   auto payload = payload_;
+  // The owner's queries name the pages they keep themselves (QueryService's
+  // pump): the page this lane names would make each read a new one there,
+  // which the owner then asks for whole.
+  payload.remove(QStringLiteral("if_none_match"));
+  payload.remove(QStringLiteral("page_delta"));
   payload["kept_only"] = true;
   const auto serial = serial_;
   if (keptRead_)
