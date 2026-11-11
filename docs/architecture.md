@@ -15967,14 +15967,18 @@ values across these memory effects.
 The qualified MIPS16e2 system/atomic slice shares scalar shape admission but
 retains separate effectful IDs. `MIPSSystemContext` authenticates a system step;
 `MIPSCP0.def` owns the admitted CP0 word selectors, context fields and write
-permissions. Status shares the DI/EI owner; EPC/ErrorEPC words preserve all bits.
+permissions and MT requirements. Selector keys are `(sel << 5) | reg`;
+Status shares the DI/EI owner, EPC/ErrorEPC words preserve all bits, and the
+three MT control views remain read-only outside typed MT operations. MT uses
+explicit ABI evidence and bound implementation/master permission. CACHE/PREF
+retain potentially writing memory effects but refuse execution and source.
 `NdOpEmulatorMIPS` owns permission/hazard consumption and the opt-in
 flat Config5.LLB=1 reservation model. `storeMemoryBytes` invalidates overlapping
 reservation granules only on committed stores. PAUSE is effectful and completes
 only with a configured, known-clear reservation; scheduling is not inferred.
 Calls/reset and lenient unknown operations discard reservation knowledge.
 `scalarMayWriteMemory` is shared with
-ABI setup recovery so SC cannot preserve a stale outgoing stack value. HighC and
+ABI setup recovery so SC/CACHE/PREF cannot preserve a stale outgoing stack value. HighC and
 LLVM reject stateful native-source lowering until an execution-region contract
 can preserve the reservation or privileged state; no helper approximates it.
 
@@ -15985,6 +15989,12 @@ DSPControl read/write intrinsics. The LowIR emulator requires supplied state;
 the source backends preserve original-machine transfers through
 `MIPSDSPSource`. These transfers remain observable independently of integer
 return values, including when packed arithmetic discards its GPR destination.
+`MIPSRegisters.def` owns AC1–AC3 storage; AC0 reuses HI/LO. The accumulator
+source proof covers all halves and ABI clobbers. AC0 unread arithmetic history
+uses one internal SSA slot and a pure unknown-value transport. Only that
+transport and SSA entry definitions bypass early observation checks; after
+propagation/DCE, the proof runs again and unresolved live transports refuse
+before ABI recovery. Native backends also reject residual transports.
 
 The MSA integer-vector slice consumes explicit r5/o32/FP64 metadata. Decoder handle
 reuse includes the ISA revision; `MIPSMSA.def` and `MIPSLiftMSA` own raw

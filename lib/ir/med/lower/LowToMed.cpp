@@ -46,6 +46,7 @@
 #include "neverd/ir/low/X86/X86FourSourceShape.h"
 #include "neverd/ir/low/X86ArithmeticFlags.h"
 #include "neverd/ir/med/LowToMedError.h"
+#include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/med/MIPS/MIPSMergeValues.h"
 #include "neverd/ir/med/MIPS/MIPSReturnTargets.h"
 #include "neverd/ir/med/MIPS/MIPSSourceAccumulators.h"
@@ -1948,6 +1949,13 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       runDce(Func);
       if (discardUnobservedMIPSMergeInputs(Func, Low, TheArch))
         runDce(Func);
+      requireMIPSSourceAccumulators(Func);
+      for (const auto &Block : Func.Blocks)
+        for (const auto &Op : Block.Ops)
+          if (!Op.Dead && mipsScalarMedShapeIsValid(Op, TheArch) &&
+              static_cast<Intrinsic>(Op.Inputs[0].ConstVal) ==
+                  Intrinsic::MIPSAccumulatorAfterWrite)
+            throw LowToMedConversionError(mips::kAccumulatorHistoryUnknown);
       debugVerifyMedFunc(Func, "MIPS scalar value projection");
     }
     detectCc(Func, TheArch, Fmt);

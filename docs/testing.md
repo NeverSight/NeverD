@@ -23708,6 +23708,17 @@ helpers, for the composed negative feature attributes. These compiler probes
 complement 24 standalone execution groups; checking the source spelling alone
 would miss Clang's declaration-versus-pragma attribute replacement.
 
+The MT/cache/accumulator follow-up tests CP0 selector keys, explicit MT ABI
+admission, master/non-master EVP updates, old control words, no-result forms,
+unknown bound state and EHB hazards. CACHE/PREF tests retain all operands and
+effects while refusing unmodeled execution/source; call setup tests invalidate
+stored fifth arguments while preserving register arguments. DSP tests cover
+all four banks, full-width dot carries and sticky OU16+AC. AC0 history cases
+cover unread producers, zero-destination consumption, consecutive half writes,
+unknown-bit transport and source joins. MSA rounded shifts/inserts exhaust every
+count at every width with APInt expectations, aliases and reserved prefixes;
+source fixtures execute zero/mid/full immediate counts on both byte orders.
+
 ### MIPS decode/lift and firmware performance
 
 `neverd-mips-bench` is an opt-in target, excluded from the default build:

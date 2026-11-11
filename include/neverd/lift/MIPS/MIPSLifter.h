@@ -44,6 +44,7 @@ public:
   void setMSAEnabled(bool Enabled) { HasMSA = Enabled; }
   void setMIPS16Enabled(bool Enabled) { HasMIPS16 = Enabled; }
   void setMIPS16E2Enabled(bool Enabled) { HasMIPS16E2 = Enabled; }
+  void setMTEnabled(bool Enabled) { HasMT = Enabled; }
 
 private:
   struct State : LiftStateBase {
@@ -78,6 +79,7 @@ private:
   std::optional<Encoding> encoding(const cs_insn &Instruction) const;
   std::optional<Encoding> microEncoding(const cs_insn &Instruction) const;
   std::optional<Encoding> mips16JumpEncoding(const cs_insn &Instruction) const;
+  std::optional<Encoding> mips16E2Encoding(uint16_t First, uint16_t Half) const;
   std::optional<Encoding> mips16Encoding(const cs_insn &Instruction) const;
   LowDelaySlot liftControl(const cs_insn &Head, const cs_insn *Slot,
                            Encoding Code, std::vector<LowOp> &Ops) const;
@@ -87,6 +89,7 @@ private:
   bool HasMSA = false;
   bool HasMIPS16 = false;
   bool HasMIPS16E2 = false;
+  bool HasMT = false;
 };
 
 } // namespace neverd

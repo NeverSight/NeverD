@@ -28,7 +28,7 @@ FUNCTIONS = ('andi', 'ori', 'xori', 'lui', 'ext', 'ins', 'ins_zero',
              'load_pair_reverse', 'store_pair', 'store_pair_reverse', 'gp_add', 'gp_lb', 'gp_lbu',
              'gp_lh', 'gp_lhu', 'gp_lw', 'gp_sb', 'gp_sh', 'gp_sw')
 FUNCTIONS += ("ehb",) + tuple(f"sync{i}" for i in range(32))
-STATEFUL = ('ll', 'sc', 'rdhwr', 'di', 'ei', 'di_discard', 'ei_discard', 'mfc0_status', 'mfc0_epc', 'mfc0_error_epc', 'mtc0_epc', 'mtc0_error_epc', 'pause')
+STATEFUL = ('ll', 'sc', 'rdhwr', 'di', 'ei', 'di_discard', 'ei_discard', 'mfc0_status', 'mfc0_epc', 'mfc0_error_epc', 'mtc0_epc', 'mtc0_error_epc', 'pause', 'dmt', 'emt', 'dvpe', 'evpe', 'dmt_discard', 'emt_discard', 'dvpe_discard', 'evpe_discard', 'mfc0_mvp', 'mfc0_vpe', 'mfc0_conf', 'cache', 'pref')
 INPUTS = [(0, 0), (1, 0xffffffff), (0xffffffff, 1), (0x80000000, 0x7fffffff),
           (0x89abcdef, 0x12345678), (0x80000000, 0), (0x7fffffff, 0x80000000)]
 rng = random.Random(0x16e2)
@@ -129,12 +129,12 @@ def run(args, artifacts):
         link = [args.ld,'-m',f"elf32{'l' if little else 'b'}tsmip",'-static']
         original = artifacts.work/(profile+'.elf')
         obj,log = original.with_suffix('.o'),original.with_suffix('.log')
-        command([*assemble,"-mmips16e2",*(['--defsym','LITTLE_ENDIAN=1'] if little else []),fixture,'-o',obj],log)
+        command([*assemble,"-mmips16e2","-mmt",*(['--defsym','LITTLE_ENDIAN=1'] if little else []),fixture,'-o',obj],log)
         command([*link,'-Ttext','0x100000','-e','m16e2_andi',obj,'-o',original],log)
         elf = ELFFile(io.BytesIO(original.read_bytes()))
         flags = elf.get_section_by_name('.MIPS.abiflags').data()
-        if int.from_bytes(flags[12:16],'little' if little else 'big') != 0x4400:
-            raise RuntimeError('GNU input lost explicit e2 ABI evidence')
+        if int.from_bytes(flags[12:16],'little' if little else 'big') != 0x4440:
+            raise RuntimeError('GNU input lost explicit e2/MT ABI evidence')
         original_hash = digest(original)
         artifacts.discard(obj,log)
         for name, backend in product(STATEFUL, ('highc', 'llvmc')):

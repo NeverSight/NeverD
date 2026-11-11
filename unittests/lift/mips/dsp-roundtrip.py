@@ -37,6 +37,7 @@ FUNCTIONS = ("dsp_read", "dsp_write", "dsp_partial", "dsp_add",
 FUNCTIONS += ('dsp_abs_ph', 'dsp_abs_w', 'dsp_abs_zero', 'dsp_cmpgueq', 'dsp_cmpgult', 'dsp_cmpgule', 'dsp_shll_qb', 'dsp_shllv_qb', 'dsp_shll_ph', 'dsp_shllv_ph', 'dsp_shll_s_ph', 'dsp_shllv_s_ph', 'dsp_shll_s_w', 'dsp_shllv_s_w', 'dsp_shll_zero')
 FUNCTIONS += tuple(f"dsp_{op}{suffix}" for op in ("muleu_l", "muleu_r", "mulq_rs") for suffix in ("", "_zero"))
 FUNCTIONS += tuple(f"dsp_{op}{suffix}" for op in ("muleq_l", "muleq_r", "precrq_rs", "precrqu_s") for suffix in ("", "_zero"))
+FUNCTIONS += tuple(f"dsp_ac_{op}_{bank}_{half}" for op in ("dpau_l", "dpau_r", "dpsu_l", "dpsu_r", "dpaq", "dpsq", "mulsaq") for bank in range(4) for half in ("hi", "lo"))
 INITIAL_STATES = (0, 0x01100021, 0x0fff7fbf)
 INPUTS = ((0, 0), (0xff01807f, 0x02018081), (0x11223344, 0x55667788),
           (0xffffffff, 1), (0x80808080, 0x80808080),
@@ -52,6 +53,23 @@ def digest(path):
 
 def expected(function, initial, arguments):
     a, b = arguments
+    if function.startswith("dsp_ac_"):
+        operation, bank, half = function.removeprefix("dsp_ac_").rsplit("_",2)
+        bank, state, total = int(bank), initial, 0
+        for lane in range(2):
+            if operation.startswith(("dpau", "dpsu")):
+                shift = (lane + (2 if operation.endswith("_l") else 0))*8
+                value = ((a >> shift)&255)*((b >> shift)&255)
+            else:
+                shift = (1-lane)*16
+                x,y = ((v >> shift)&65535 for v in (a,b))
+                x,y = (x-65536 if x&32768 else x),(y-65536 if y&32768 else y)
+                if x == y == -32768:
+                    value,state = 0x7fffffff,state | (1 << (16+bank))
+                else: value = 2*x*y
+            total += -value if operation == "mulsaq" and lane else value
+        accumulator = ((a << 32) | b) + (-total if operation.startswith("dps") else total)
+        return ((accumulator >> (32 if half == "hi" else 0)) & 0xffffffff),state
     if function.startswith(("dsp_muleq_", "dsp_precrq_rs", "dsp_precrqu_s")):
         value, state = 0, initial
         signed = lambda v, bits: v - (1 << bits) if v & (1 << (bits-1)) else v

@@ -51,6 +51,17 @@ NEVERD_MIPS_SCALAR_INTRINSIC(MIPSEnableInterrupts, 16019, "neverd_mips_ei")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSReadCP0Word, 16020, "neverd_mips_mfc0")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSWriteCP0Word, 16021, "neverd_mips_mtc0")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSPause, 16022, "neverd_mips_pause")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSDisableMT, 16023, "neverd_mips_dmt")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSEnableMT, 16024, "neverd_mips_emt")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSDisableVPE, 16025, "neverd_mips_dvpe")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSEnableVPE, 16026, "neverd_mips_evpe")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSCache, 16027, "neverd_mips_cache")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSPrefetch, 16028, "neverd_mips_pref")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSAccumulatorAfterWrite, 16029,
+                             "neverd_mips_accumulator_after_write")
+NEVERD_MIPS_SCALAR_TEXT(
+    kAccumulatorHistoryUnknown,
+    "MIPS partial accumulator write requires proven producer history")
 NEVERD_MIPS_SCALAR_TEXT(
     kStatefulSourceUnsupported,
     "MIPS system/reservation state requires an authenticated execution "

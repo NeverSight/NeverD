@@ -24,6 +24,16 @@ inline constexpr uint64_t r(unsigned Index) { return Index * SlotBytes; }
   inline constexpr uint64_t Name = r(Index);
 #include "neverd/lift/MIPS/MIPSRegisters.def"
 
+inline constexpr uint64_t accumulatorHI(unsigned Bank) {
+  return Bank ? AC1HI + (Bank - 1) * 2 * SlotBytes : HI;
+}
+inline constexpr uint64_t accumulatorLO(unsigned Bank) {
+  return Bank ? AC1LO + (Bank - 1) * 2 * SlotBytes : LO;
+}
+inline constexpr bool isAccumulator(uint64_t Offset) {
+  return Offset == HI || Offset == LO ||
+         (Offset >= AC1HI && Offset <= AC3LO && Offset % SlotBytes == 0);
+}
 inline constexpr uint64_t VectorBase = 0x200;
 inline constexpr uint16_t VectorBytes = 16;
 inline constexpr unsigned VectorCount = 32;
