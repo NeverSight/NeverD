@@ -12,6 +12,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/decode/Decoder.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExceptionInfo.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -41,6 +42,33 @@ BinaryImage makeCodeFixture(va_t Entry, std::vector<uint8_t> Bytes) {
   Seg.Data = std::move(Bytes);
   Img.Segments.push_back(std::move(Seg));
   return Img;
+}
+
+TEST(FunctionAdmission, CompactCallQueryUsesOnlyTheExactInstruction) {
+  const uint8_t Call[] = {0xe8, 0xfb, 0xff, 0xff, 0xff, 0x90};
+  const uint8_t Indirect[] = {0xff, 0xd0};
+  constexpr va_t Address = 0xfffffffd;
+  Decoder Dec;
+  for (Arch A : {Arch::X86, Arch::X64}) {
+    ASSERT_TRUE(Dec.init(A));
+    DecodedInsn Original;
+    ASSERT_EQ(Dec.decodeOneLight(Call, sizeof(Call), Address, Original), 5);
+    const va_t Target = Dec.directCallTarget(Original);
+    ASSERT_EQ(Target, Address);
+    for (bool Detail : {false, true}) {
+      Dec.setDetail(Detail);
+      for (bool Text : {false, true}) {
+        Dec.setText(Text);
+        for (size_t Size = 0; Size <= sizeof(Call); ++Size)
+          EXPECT_EQ(Dec.directX86CallTarget({Call, Size}, Address),
+                    Size == 5 ? Target : InvalidVA);
+        EXPECT_EQ(Dec.directX86CallTarget(Indirect, Address), InvalidVA);
+        EXPECT_EQ(Dec.detailEnabled(), Detail);
+        EXPECT_EQ(Dec.textEnabled(), Text);
+        EXPECT_EQ(Dec.directCallTarget(Original), Target);
+      }
+    }
+  }
 }
 
 TEST(FunctionAdmission, UnwindlessNonLeafCandidateRemainsAFunction) {

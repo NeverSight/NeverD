@@ -15948,6 +15948,11 @@ encodings fail decoding even when strict lifting is disabled. UD1 remains an
 explicit invalid-opcode intrinsic; its encoded operands do not imply an
 ordinary memory access.
 
+For an x86 function-discovery scan with operand detail disabled, the decoder
+resolves a near CALL from the exact bytes of the classified instruction. The
+Capstone query uses the same relative-target arithmetic as the operand printers.
+The scan admits the result only for an executable code owner.
+
 With text and detail disabled, Capstone's native iterator uses generated
 operand terminals that share the full decoder's bounded readers and legality
 checks. Its prefix classifier and terminal selection avoid repeated dispatch;

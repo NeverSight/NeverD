@@ -226,22 +226,12 @@ std::optional<CallScanStep> stepCallsX86(const BinaryImage &Img, Decoder &Dec,
     }
     return Step;
   }
-  // Sizes and ids do not depend on operand detail or printed text. Only
-  // calls need a detailed re-decode.
-  if (!Dec.detailEnabled()) {
-    if (DI.Id != X86_INS_CALL)
-      return Step;
-    const bool PreviousText = Dec.textEnabled();
-    Dec.setText(true);
-    Dec.setDetail(true);
-    const int Again =
-        Dec.decodeOneLight(Seg->Data.data() + Off, Remain, Cur, DI);
-    Dec.setDetail(false);
-    Dec.setText(PreviousText);
-    if (Again != Sz)
-      return Step;
-  }
-  const va_t Tgt = Dec.directCallTarget(DI);
+  if (DI.Id != X86_INS_CALL)
+    return Step;
+  const va_t Tgt = Dec.detailEnabled()
+                       ? Dec.directCallTarget(DI)
+                       : Dec.directX86CallTarget({Seg->Data.data() + Off,
+                                                  static_cast<size_t>(Sz)}, Cur);
   if (Tgt != InvalidVA && Img.hasExecutableCodeOwnerAt(Tgt))
     Step.Target = Tgt;
   return Step;

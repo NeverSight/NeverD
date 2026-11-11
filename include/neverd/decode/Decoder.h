@@ -296,6 +296,10 @@ public:
   /// not a direct call.  Dispatches to the active architecture lifter.
   va_t directCallTarget(const DecodedInsn &Insn) const;
 
+  /// Resolve one complete x86 near CALL without touching the borrowed decode.
+  /// Returns InvalidVA for indirect calls, incomplete or surplus bytes.
+  va_t directX86CallTarget(llvm::ArrayRef<uint8_t> Bytes, va_t Addr) const;
+
   /// Encoded return-pop immediate, including an explicitly encoded zero.
   /// Empty for ordinary returns and non-x86 instructions.
   std::optional<uint64_t> returnImmediate(const DecodedInsn &Insn) const;

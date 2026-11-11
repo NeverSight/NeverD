@@ -18,6 +18,7 @@
 #include "neverd/lift/X86/X86Lifter.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "X86ScanAdapter.h"
 #include "capstone/capstone.h"
 
 #include <cstddef>
@@ -105,6 +106,14 @@ bool isX86AlignmentNop(const DecodedInsn &Insn) {
 }
 
 } // namespace decoder_detail
+
+va_t Decoder::directX86CallTarget(llvm::ArrayRef<uint8_t> Bytes,
+                                 va_t Addr) const {
+  va_t Target;
+  const uint16_t Length =
+      X86_scanCallTarget(Handle, Bytes.data(), Bytes.size(), Addr, &Target);
+  return Length && Length == Bytes.size() ? Target : InvalidVA;
+}
 
 void Decoder::configureX86For(const BinaryImage &Img) {
   if (!X86)
