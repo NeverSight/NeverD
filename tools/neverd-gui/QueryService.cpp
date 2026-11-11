@@ -517,6 +517,7 @@ struct QueryService::State {
     candidate->spec = std::move(spec);
     candidate->coalescingKey = key(*candidate, false);
     JobPtr job;
+    bool created = false;
     if (kind != Command) {
       for (const auto &existing : std::as_const(jobs)) {
         if (existing->epoch == epoch && !existing->cancelRequested &&
@@ -533,6 +534,7 @@ struct QueryService::State {
         return reject(owner, std::move(complete), candidate->spec.operation,
                       "queue_full", "The query queue budget was reached.");
       job = std::move(candidate);
+      created = true;
       job->id = ++nextJob;
       job->bytes = bytes;
       if (kind == Command)
@@ -552,9 +554,33 @@ struct QueryService::State {
           owner, QObject::connect(owner, &QObject::destroyed, q, [this, owner] {
             q->unsubscribeOwner(owner);
           }));
+    // A read the cache answers takes no turn behind the reads running or
+    // queued: only an accepted command ahead of it could change its answer.
+    if (created && kind == Read && job->spec.policy == Spec::Latest &&
+        cacheable(job->spec.operation) && !commandAhead(job->id))
+      if (const auto *cached = cache.object(key(*job, true))) {
+        queue.removeAll(job->id);
+        finish(job, *cached);
+        notify();
+        return id;
+      }
     schedulePump();
     notify();
     return id;
+  }
+
+  /// Whether an accepted command runs, or waits ahead of the job \p id.
+  bool commandAhead(quint64 id) const {
+    if (active && active->kind == Command)
+      return true;
+    for (const auto queued : queue) {
+      if (queued == id)
+        return false;
+      const auto job = jobs.value(queued);
+      if (job && job->kind == Command)
+        return true;
+    }
+    return false;
   }
 
   void removeJob(const JobPtr &job) {

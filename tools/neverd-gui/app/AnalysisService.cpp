@@ -8,6 +8,18 @@
 #include <utility>
 
 namespace neverd::gui {
+namespace {
+/// What the analysis reads ask of the owner serves a view someone waits for:
+/// it goes ahead of the owner's ordinary reads, as a listing's own page does.
+QueryService::QuerySpec visible(QString operation, QJsonObject payload) {
+  return {std::move(operation),
+          std::move(payload),
+          QueryService::QuerySpec::Latest,
+          {},
+          QueryService::QuerySpec::Visible};
+}
+} // namespace
+
 AnalysisService::AnalysisService(QueryService &owner, QString workerPath,
                                  QObject *parent)
     : QObject(parent), owner_(owner),
@@ -169,19 +181,22 @@ QString AnalysisService::send(const QString &operation,
 }
 
 void AnalysisService::readKept() {
-  // Part of the renders leaves a job to go on with, whatever this read finds,
-  // as the owner said last while it is asked again.
+  // A page the owner gave is the owner's to answer for: it keeps it.
+  const auto named = payload_.value("if_none_match").toString();
+  const bool ownerPage = !named.isEmpty() && ownerPages_.contains(named);
+  // Otherwise part of the renders leaves a job to go on with, whatever this
+  // read finds, as the owner said last while it is asked again.
   const bool part =
-      keptState_ == KeptState::Part ||
-      ((keptState_ == KeptState::Unknown || keptState_ == KeptState::Asked) &&
-       keptBefore_ == KeptState::Part);
+      !ownerPage &&
+      (keptState_ == KeptState::Part ||
+       ((keptState_ == KeptState::Unknown || keptState_ == KeptState::Asked) &&
+        keptBefore_ == KeptState::Part));
   if (part)
     requestSnapshot();
   // A page a replica gave is the replica's to read again: the owner would give
   // a document of its own whole, or none.
-  const auto named = payload_.value("if_none_match").toString();
   if (!part || snapshotBlocked_ || operation_ != QLatin1String("decompile") ||
-      named.isEmpty() || ownerPages_.contains(named))
+      named.isEmpty())
     askOwner();
   // What the store holds says only whether a replica starts beside the owner's
   // answer, so the owner, which answers one request at a time, answers the read
@@ -191,7 +206,7 @@ void AnalysisService::readKept() {
   keptState_ = KeptState::Asked;
   const auto serial = serial_;
   keptStateRequest_ = owner_.subscribe(
-      {QStringLiteral("kept_renders"), {}}, this,
+      visible(QStringLiteral("kept_renders"), {}), this,
       [this, serial](const QJsonObject &response) {
         if (serial != serial_)
           return;
@@ -220,7 +235,7 @@ void AnalysisService::askOwner() {
   if (keptRead_)
     owner_.unsubscribe(std::exchange(keptRead_, 0));
   keptRead_ = owner_.subscribe(
-      {operation_, payload}, this,
+      visible(operation_, payload), this,
       [this, serial, read = active_](const QJsonObject &response) {
         if (serial != serial_)
           return;
@@ -322,8 +337,9 @@ void AnalysisService::startReplica() {
   // A replica that takes the change in place needs no write to have reached the
   // disk: the owner's state comes with the snapshot (in_memory).
   snapshotRequest_ = owner_.subscribe(
-      {QStringLiteral("analysis_snapshot"),
-       refreshingNames_ ? QJsonObject{{"in_memory", true}} : QJsonObject{}},
+      visible(QStringLiteral("analysis_snapshot"),
+              refreshingNames_ ? QJsonObject{{"in_memory", true}}
+                               : QJsonObject{}),
       this, [this, serial](const QJsonObject &response) {
         if (serial != serial_)
           return;

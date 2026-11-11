@@ -7129,7 +7129,14 @@ still answers for the page it gave after a note, with a replica ready, and that 
 graph is still the replica's. `WorkbenchTests::aPageAReplicaGaveReadsFromTheReplicaAfterANote`
 checks that, with part of the store rendered, a page a replica gave is read again from the
 replica after a note, the note showing, without asking the owner
-(`Session::analysisOwnerReads`). `WorkbenchTests::ownerReadsWhatChangedOfThePageItGave`
+(`Session::analysisOwnerReads`). `WorkbenchUnitTests::analysisReadsGoAheadOfTheOwnersOrdinaryReads`
+checks that a view's kept read and `kept_renders` go to the owner ahead of ordinary reads
+queued before them, and `aPageTheOwnerGaveStartsNoReplicaAfterAChange` that, with part of
+the store rendered, a page the owner gave is asked of the owner after a change with no
+snapshot for a replica first. `QueryServiceTests::aCachedReadTakesNoTurnBehindRunningReads`
+checks that a cached page is answered while another read runs, and that one behind an
+accepted command waits for it and reads what it left.
+`WorkbenchTests::ownerReadsWhatChangedOfThePageItGave`
 comments on the function a page the owner gave shows and reads it again through the
 analysis queries: the owner's dispatcher names the page it kept, and the comment carries
 that read, whose answer the view's read takes (`metadata.following_reads`), the comment
@@ -7209,7 +7216,8 @@ there keeps what leads to it until a type something read moves on.
 `NeverDWorkerNamesRebuild` also renames functions, exported and not, and data, and
 defines data items, without the names being read again, and each page, table and
 resolved name then reads as after a reload. A name inside an automatic item and an
-item over a string's bytes do read them again.
+item over a string's bytes do read them again. The exports list reads the image's own
+names in either order and as filtered, and the same after an exported function's rename.
 
 `NeverDMedStackDeltaTests` checks shared stack-offset queries through PHI joins,
 the original depth boundary in both query orders, definition invalidation and

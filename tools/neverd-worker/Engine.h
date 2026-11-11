@@ -420,6 +420,11 @@ private:
   /// The debug files the session's headers say it read, for the debug inputs
   /// it loaded (pdbInput_, dwarfInput_, mapInput_, symbolsInput_).
   std::optional<Json> debugInfo_;
+  /// The exports list's rows in the order the last read sorted them, under the
+  /// project and order they were read for: the image's export table and entry
+  /// points, which no edit changes, stand while its project does.
+  std::string exportOrderKey_;
+  Json exportRows_;
   std::string debugInfoInputs_;
   void openFactsStore(const std::string &name, bool writable);
   std::vector<std::string> keptListingFacts(const std::string &key);

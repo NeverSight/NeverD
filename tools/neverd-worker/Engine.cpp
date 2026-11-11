@@ -5939,19 +5939,32 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     return page(items, p, {"name"});
   }
   if (operation == "exports") {
-    Json items = Json::array();
-    for (const auto &row : backendJson(neverd_exports_json(session_)))
-      items.push_back({{"address", row.value("addr", std::string("0x0"))},
-                       {"name", row.value("name", std::string())},
-                       {"ordinal", row.value("ordinal", 0)},
-                       {"kind", "export"}});
-    for (const auto &row : backendJson(neverd_entrypoints_json(session_)))
-      items.push_back({{"address", row.value("addr", std::string("0x0"))},
-                       {"name", row.value("name", std::string())},
-                       {"ordinal", nullptr},
-                       {"kind", row.value("type", std::string("entry"))}});
-    sortItems(items, p);
-    return page(items, p, {"name"});
+    // What the image says of its exports and entry points no edit changes:
+    // they are read and sorted once per project and order, and paged from
+    // there.
+    const auto order =
+        projectId_ + '\n' +
+        stringField(
+            p, "sort", {},
+            ::neverd::limits::worker::kEngineSortItemsFieldSortStringFieldMax) +
+        (p.value("descending", false) ? "\n-" : "\n+");
+    if (projectId_.empty() || exportOrderKey_ != order) {
+      Json items = Json::array();
+      for (const auto &row : backendJson(neverd_exports_json(session_)))
+        items.push_back({{"address", row.value("addr", std::string("0x0"))},
+                         {"name", row.value("name", std::string())},
+                         {"ordinal", row.value("ordinal", 0)},
+                         {"kind", "export"}});
+      for (const auto &row : backendJson(neverd_entrypoints_json(session_)))
+        items.push_back({{"address", row.value("addr", std::string("0x0"))},
+                         {"name", row.value("name", std::string())},
+                         {"ordinal", nullptr},
+                         {"kind", row.value("type", std::string("entry"))}});
+      sortItems(items, p);
+      exportRows_ = std::move(items);
+      exportOrderKey_ = projectId_.empty() ? std::string() : order;
+    }
+    return page(exportRows_, p, {"name"});
   }
   if (operation == "search") {
     const auto kind =

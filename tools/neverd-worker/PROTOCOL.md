@@ -701,7 +701,7 @@ diagnostic; fixed-image authentication still requires its stricter evidence.
 | `names` | Standard page by name, sortable: every function (kind `function`, `library` or `thunk`), data and string label and import slot as `{name,address,kind}`. |
 | `regions` | Standard page by name, sortable: sections or segments as `{name,address,start,end,size,initialized_end,flags,alignment,class}`. |
 | `imports` | Standard page by name, sortable: `{address,name,module,ordinal}` at each import's data slot. |
-| `exports` | Standard page by name, sortable: exports `{address,name,ordinal,kind:"export"}` and entry points with their engine type. |
+| `exports` | Standard page by name, sortable: exports `{address,name,ordinal,kind:"export"}` and entry points with their engine type. The image's own names, which no edit changes: the worker sorts them once per project and order. |
 | `search` | `{kind:"text"|"bytes",pattern,case_sensitive:false,limit:256,from?:address,backward:false}`, limit 1–4096. Bytes are hexadecimal pairs with optional spaces. `from` is an exclusive image-address cursor; matches are ordered by address in the requested direction. Returns `{items:[{address,...}],complete,next_address}`. `complete:false` means another match exists; pass `next_address` as `from` to continue. Without `from`, starts at the first/last initialized image byte. Segments are searched independently, including overlapping matches within a segment. A malformed pattern or cursor is `invalid_request`. Requires the matching engine's `neverd_search_page` C API; older engines report `unsupported`. |
 | `segments` | Standard page by name; rows `{name,address,size,flags}`. `size` is the engine's hex string. |
 | `annotations` | Standard page by text; rows `{address,text}`. |
