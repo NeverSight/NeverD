@@ -185,6 +185,12 @@
     "header_args": ["-Wl,-headerpad,0", "-Wl,-install_name,@rpath/entry.dylib"]
   },
   "zero_base_argument": "--zero-base",
+  "dense_argument": "--match-original-optimization",
+  "dense_layout": "zero preferred base, caller and original entries at the same optimization, no reserved header padding",
+  "dense_optimization": "-O0",
+  "slide_field": "original_section_slide",
+  "trampoline_field": "trampoline",
+  "dense_error": "Dense O0 DWARF publication must move section entries and retain the zero preferred base",
   "publication_argument": "--publish",
   "backend_environment": "NEVERD_ARM64E_ENTRY_BACKEND",
   "backend_object": "entry-backend.o",

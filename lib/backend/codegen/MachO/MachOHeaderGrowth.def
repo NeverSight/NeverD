@@ -28,5 +28,13 @@ MACHO_HEADER_TEXT(kPrefixRange,
                   "header mapping has no available aligned prefix")
 MACHO_HEADER_VALUE(unsigned, kOrdinaryTargetBits, 36)
 
+MACHO_HEADER_TEXT(kSlideImage, "uniform slide requires a zero-base arm64e "
+                               "dylib with image-relative chained fixups")
+MACHO_HEADER_TEXT(kSlideOpaque,
+                  "unowned TEXT bytes lack a header relocation contract")
+MACHO_HEADER_TEXT(kSlideSymbol, "symbol has no section-relative slide contract")
+MACHO_HEADER_TEXT(kSlideOverflow,
+                  "preferred image address overflows during slide")
+
 #undef MACHO_HEADER_VALUE
 #undef MACHO_HEADER_TEXT

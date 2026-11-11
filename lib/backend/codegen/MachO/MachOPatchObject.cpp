@@ -1566,6 +1566,7 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
     const SourcePatchPreparation *Preparation,
     llvm::ArrayRef<SourcePatchDependency> Dependencies,
     llvm::function_ref<llvm::Error(const CompiledImage &,
+                                   va_t OriginalSectionSlide,
                                    llvm::ArrayRef<NativeMachOCompactRange>)>
         VerifyGenerated) {
   const BinaryImage &Original =
@@ -1615,10 +1616,14 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
                                           !Object->Thunks.empty())
                                ? Object->Image.Sections[*Object->EH].Size
                                : 0;
-  auto Grown = reserveMachOSourceUnwind(LayoutBytes, Original.Arch, ExtraEH,
-                                        unwindFunctionCounts(*Object));
-  if (!Grown)
-    return Grown.takeError();
+  std::optional<MachODependencyState> SlidDependencies;
+  auto Slide = reserveMachOPublishedUnwind(
+      LayoutBytes, Original.Arch, ExtraEH, unwindFunctionCounts(*Object),
+      Original.isArm64e() && !Preparation && !DynCode, SlidDependencies);
+  if (!Slide)
+    return Slide.takeError();
+  for (auto &[Name, Binding] : Bindings)
+    Binding.OriginalVA += *Slide;
   const uint64_t Base =
       Patcher.plannedExecSegmentVA(LayoutBytes, Original.Arch);
   const auto EH = findMachOEHFrameRegion(LayoutBytes);
@@ -1648,7 +1653,7 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
       return E;
   }
   if (VerifyGenerated)
-    if (auto E = VerifyGenerated(Object->Image, Object->Compact))
+    if (auto E = VerifyGenerated(Object->Image, *Slide, Object->Compact))
       return E;
   if (DynCode)
     if (auto E =
@@ -1691,6 +1696,7 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
               for (const auto &M : Mappings) {
                 const auto &S = Object->Symbols.at(Object->Names.at(M.Symbol));
                 const auto Mode = Original.instructionModeAt(M.OriginalVA);
+                const uint64_t EntryVA = M.OriginalVA + *Slide;
                 const uint64_t Owner = Object->Image.SymbolAddrs.at(M.Symbol);
                 if (!Mode ||
                     (Original.Arch == Arch::ARM &&
@@ -1698,8 +1704,8 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
                               : InstructionMode::ARM) != *Mode) ||
                     !getTargetCodegenInfo(Original.Arch, *Mode)
                          .writeSourceTrampoline(
-                             Binary, LayoutImage->vaToFileOffset(M.OriginalVA),
-                             Owner, M.OriginalVA,
+                             Binary, LayoutImage->vaToFileOffset(EntryVA),
+                             Owner, EntryVA,
                              getTargetCodegenInfo(Original.Arch, *Mode)
                                  .sourceTrampolineSize()))
                   return Reject(
@@ -1710,6 +1716,7 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
               }
               llvm::sort(Result.PatchedOriginalEntries);
               Result.CodeSize = Object->Image.Bytes.size();
+              Result.OriginalSectionSlide = *Slide;
               Result.TrampolineCount = Mappings.size();
               return true;
             });
@@ -1751,12 +1758,14 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
         if (auto E = verifyNativeObjectUnwind(Final, Object->Compact))
           return E;
         if (Original.isArm64e()) {
-          auto Before = readMachODependencyState(Original.Raw);
-          if (!Before)
-            return Before.takeError();
           auto After = readMachODependencyState(Final.Raw);
           if (!After)
             return After.takeError();
+          if (SlidDependencies)
+            return preserveMachODependencyState(*SlidDependencies, *After);
+          auto Before = readMachODependencyState(Original.Raw);
+          if (!Before)
+            return Before.takeError();
           if (auto E = preserveMachODependencyState(*Before, *After))
             return E;
         }

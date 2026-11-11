@@ -29,6 +29,12 @@ MACHO_LAYOUT_TEXT(
     "main executable needs unowned capacity in its existing read-only segment")
 
 MACHO_LAYOUT_TEXT(kLostFrameSection, "header growth lost the DWARF section")
+MACHO_LAYOUT_TEXT(
+    kInsufficientText,
+    "Mach-O layout: metadata growth requires authenticated TEXT capacity")
+MACHO_LAYOUT_TEXT(
+    kUnwindPrefix,
+    "cannot reserve a zero-base TEXT prefix for the complete unwind registry")
 
 #undef MACHO_LAYOUT_TEXT
 #undef MACHO_LAYOUT_VALUE

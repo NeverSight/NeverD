@@ -101,6 +101,25 @@ A64_LEAF_TEXT(kErrorABI, R"c(
 #define ERROR __attribute__((swift_error_result))
 )c")
 A64_LEAF_TEXT(kClearError, "#define NEVERD_TEST_CLEAR_ERROR 1\n")
+A64_LEAF_TEXT(kTailError, "#define NEVERD_TEST_TAIL_ERROR 1\n")
+A64_LEAF_TEXT(kTailErrorLeaves, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  b _leaf_difference
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  mov x8, x0
+  mov x0, x21
+  mov x21, x8
+  ret
+.cfi_endproc
+.subsections_via_symbols
+)asm")
 A64_LEAF_TEXT(kErrorLeaves, R"c(
 SWIFT void *leaf_sum(void *next, void * SELF context, void ** ERROR error) {
   return *error;
@@ -132,8 +151,14 @@ int main(int argc, char **argv) {
   for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i) {
     for (unsigned j = 0; j != sizeof(values) / sizeof(*values); ++j) {
       void *error = values[i];
+#ifdef NEVERD_TEST_TAIL_ERROR
+      if (read(values[j], storage, &error) != values[i] || error != values[j])
+        return 4;
+      error = values[i];
+#else
       if (read(values[j], storage, &error) != values[i] || error != values[i])
         return 4;
+#endif
 #ifdef NEVERD_TEST_CLEAR_ERROR
       if (replace(values[j], storage, &error) || error)
 #else
@@ -286,6 +311,34 @@ A64_LEAF_TEXT(kMemoryLeaves, R"c(
 #include <stdint.h>
 uint64_t leaf_sum(const uint64_t *p) { return p[1]; }
 void leaf_difference(uint64_t *p, uint64_t v) { p[1] = v; }
+)c")
+
+A64_LEAF_TEXT(kGlobalLeaves, R"c(
+#include <stdint.h>
+#include <unistd.h>
+uint64_t leaf_state = 42;
+uint64_t leaf_sum(void) { return leaf_state; }
+int leaf_difference(void) { return getpid(); }
+)c")
+A64_LEAF_TEXT(kGlobalCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  uint64_t (*read_state)(void) = dlsym(image, "leaf_sum");
+  int (*process)(void) = dlsym(image, "leaf_difference");
+  uint64_t *state = dlsym(image, "leaf_state");
+  if (!state || !read_state || !process || read_state() != 42) return 3;
+  const uint64_t values[] = {0, 1, UINT64_MAX, UINT64_C(1) << 63};
+  for (unsigned i = 0; i < sizeof(values) / sizeof(*values); ++i) {
+    *state = values[i];
+    if (read_state() != *state || process() != getpid()) return 4;
+  }
+  return dlclose(image) != 0;
+}
 )c")
 A64_LEAF_TEXT(kMemoryCaller, R"c(
 #include <dlfcn.h>

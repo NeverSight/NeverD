@@ -515,7 +515,13 @@ calling convention and prototype. The installer independently decodes the two
 branch destinations at their actual PCs and matches the original callee to its
 compiled owner. The regression reverses the two emitted functions and checks
 the relocated branch with Capstone. Redirecting the tail call to a different
-entry fails before publication.
+entry fails before publication. A lifted tail call may also re-enter a
+loader-identified import stub at its published address. An image-relative
+data declaration binds to the original data section. The verifier decodes
+ADRP at both PCs and checks the destination register and original data page,
+then checks the memory operation and displacement. The global/import fixture
+changes an exported 64-bit variable between calls and compares its second
+entry with the independent caller's own `getpid()`.
 
 Unassigned incoming reads of X20 and X22 use LLVM's reserved physical
 registers. These carry Swift self and the asynchronous context, respectively.
@@ -536,8 +542,10 @@ The compiler-typed tests exercise replacement and write-only clearing with
 null and four live object addresses. Removing the X21 write while preserving
 the ordinary return must prevent publication. Two adjacent clears of distinct
 admitted registers may be scheduled in either order. Both leave flags, memory,
-SP and the return address intact. Writers reached through an internal call
-still require propagation of that hidden operand across the call site.
+SP and the return address intact. Direct internal tail callers pass the same
+`swifterror` operand through to the writer. Publication checks the emitted
+branch against the relocated writer. Calls with a live continuation still
+require a frame and call-site proof.
 See the [Clang Swift error result attribute](https://clang.llvm.org/docs/AttributeReference.html#swift-error-result).
 
 On macos-26 and xcode-27, each typed caller executed all 25 input/output
@@ -593,7 +601,11 @@ hashes for each runner.
 The exact-PC unwind query reports an unknown DWARF state when a classic
 arm64e frame relies on Darwin's implicit signing ABI and supplies no rule
 for the signing column. A compact prologue recipe can still be available.
-Explicit DWARF rows retain their instruction-boundary signing state. The
+Explicit DWARF rows retain their instruction-boundary signing state.
+Mach-O metadata relocation also preserves the CIE signal-frame marker `S`
+and its exact-PC interpretation alongside the signing rows. This accepts
+register and offset rules that retain their meaning when the table moves.
+Address-dependent expressions still need explicit relocation semantics. The
 fixture decodes the original and installed CFA and LR stack rules through LLVM
 and checks both against the interrupted stack, including the saved slot.
 
@@ -742,11 +754,16 @@ base and resolves the compact index's relative offsets against the installed
 base. With `--publish --zero-base`, the same eight IA/IB and compact/DWARF
 cases require both preferred header addresses to remain zero. This profile
 uses O2 for the original trapping entries and a fixed `@rpath` install name.
-The separately compiled caller still runs at O0 and O2. When both the caller
-and the original entries use O0, the DWARF section grows to 1,192 bytes.
-The measured inputs had 752 bytes of TEXT tail with a path-based install name
-and 864 bytes with the fixed install name. In both cases the additional frame
-records exceed the available space and publication stops before the receipt.
+The separately compiled caller still runs at O0 and O2.
+Add `--match-original-optimization` to compile both the caller and the
+original entries at each optimization level. The fully O0 fixture contains
+1,192 bytes of original DWARF and only 864 bytes of free TEXT with its fixed
+install name. The publisher can grow TEXT by inserting aligned pages ahead
+of the original sections in a zero-base arm64e dylib with image-relative
+chained fixups. The preferred header stays at zero. The output symbols, stubs
+and original data move together. The installation receipt records the slide
+and preserves each original entry VA. The verifier resolves each trampoline
+from the signed output's own symbols.
 The installer measures LSDA index demand from the native compact entries
 and FDEs. It can retain the compact table at its original VA, move
 the adjacent DWARF records into audited free TEXT storage and reuse their
@@ -765,8 +782,7 @@ DWARF from `0x32d8` to `0x3678` and installed a 2,240-byte frame section.
 Each installed caller exercised its 26 public entries and passed. The
 [validation record](evidence/arm64e-zero-base-unwind-2026-11-11.json) includes
 the source-built test host, per-image hashes, the fixed-name fully O0 refusal
-and a zero-filled range referenced by `LC_NOTE`. Both inputs retained their
-bytes. Publication stopped before creating a file or a receipt.
+and a zero-filled range referenced by `LC_NOTE` on that earlier revision.
 
 The publication test also checks rejection before the receipt commits,
 unchanged input bytes, exact installed entry receipts and refusal to overwrite

@@ -19,7 +19,9 @@
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Verifier.h"
@@ -126,7 +128,8 @@ bool isPositionIndependentLeafInstruction(const DecodedInsn &I) {
 bool matchesTailTransfer(llvm::ArrayRef<uint8_t> Source, va_t OriginalPC,
                          llvm::ArrayRef<uint8_t> Installed, va_t InstalledPC,
                          llvm::ArrayRef<SourcePatchMapping> Mappings,
-                         const CompiledImage &Generated) {
+                         const CompiledImage &Generated,
+                         const BinaryImage &Image, va_t Slide) {
   const auto Target = [](llvm::ArrayRef<uint8_t> Word, va_t PC) {
     auto Jump =
         decodeDirectBranch(Arch::AArch64, InstructionMode::Default, Word.data(),
@@ -137,6 +140,8 @@ bool matchesTailTransfer(llvm::ArrayRef<uint8_t> Source, va_t OriginalPC,
   const auto After = Target(Installed, InstalledPC);
   if (!Before || !After)
     return false;
+  if (Image.findImportStubAt(*Before))
+    return *After == *Before + Slide;
   const auto Callee = llvm::lower_bound(
       Mappings, *Before,
       [](const SourcePatchMapping &M, va_t VA) { return M.OriginalVA < VA; });
@@ -153,36 +158,43 @@ llvm::Error bindLeafErrorResults(llvm::Module &Module) {
   auto *Register = llvm::MetadataAsValue::get(
       Context, llvm::MDNode::get(Context, llvm::MDString::get(
                                               Context, kDarwinErrorRegister)));
-  for (auto &F : llvm::make_early_inc_range(Module)) {
-    llvm::SmallVector<llvm::CallInst *> Accesses;
-    bool Writes = false;
-    bool HasCall = false;
+  llvm::SetVector<llvm::Function *> Writers;
+  llvm::DenseMap<llvm::Function *, llvm::SmallVector<llvm::IntrinsicInst *>>
+      Accesses;
+  for (auto &F : Module) {
     for (auto &BB : F)
       for (auto &I : BB) {
-        auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
-        if (!Call)
+        auto *Intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(&I);
+        if (!Intrinsic)
           continue;
-        auto *Intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(Call);
-        if (!Intrinsic) {
-          HasCall = true;
-          continue;
-        }
         const auto ID = Intrinsic->getIntrinsicID();
         if ((ID == llvm::Intrinsic::read_register ||
              ID == llvm::Intrinsic::write_register) &&
             Intrinsic->getArgOperand(0) == Register) {
-          Writes |= ID == llvm::Intrinsic::write_register;
-          Accesses.push_back(Intrinsic);
+          if (ID == llvm::Intrinsic::write_register)
+            Writers.insert(&F);
+          Accesses[&F].push_back(Intrinsic);
         }
       }
-    if (!Writes)
-      continue;
-    if (!F.use_empty() || F.isVarArg() || HasCall ||
-        F.getCallingConv() != llvm::CallingConv::C)
+  }
+  // A direct tail caller shares its caller's X21 with the writer. Discover
+  // the entire chain before replacing any prototypes, including recursion.
+  for (size_t I = 0; I < Writers.size(); ++I)
+    for (auto &Use : Writers[I]->uses()) {
+      auto *Call = llvm::dyn_cast<llvm::CallInst>(Use.getUser());
+      if (!Call || !Call->isCallee(&Use) || !Call->isTailCall() ||
+          Call->hasOperandBundles())
+        return refuse(kErrorResultABI);
+      Writers.insert(Call->getFunction());
+    }
+  auto *Pointer = llvm::PointerType::getUnqual(Context);
+  llvm::DenseMap<llvm::Function *, llvm::Function *> Entries;
+  for (auto *Old : Writers) {
+    auto &F = *Old;
+    if (F.isVarArg() || F.getCallingConv() != llvm::CallingConv::C)
       return refuse(kErrorResultABI);
     auto *OldType = F.getFunctionType();
     llvm::SmallVector<llvm::Type *> Params(OldType->params());
-    auto *Pointer = llvm::PointerType::getUnqual(Context);
     Params.push_back(Pointer);
     auto *Type =
         llvm::FunctionType::get(OldType->getReturnType(), Params, false);
@@ -203,9 +215,35 @@ llvm::Error bindLeafErrorResults(llvm::Module &Module) {
       Old.replaceAllUsesWith(New);
     }
     Entry->splice(Entry->begin(), &F);
-    F.replaceAllUsesWith(Entry);
-    F.eraseFromParent();
-    for (auto *Access : Accesses) {
+    Entries[Old] = Entry;
+  }
+  for (auto *Old : Writers) {
+    auto *Entry = Entries.lookup(Old);
+    auto *Error = Entry->getArg(Old->arg_size());
+    for (auto &BB : *Entry)
+      for (auto &I : llvm::make_early_inc_range(BB)) {
+        auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
+        if (!Call || llvm::isa<llvm::IntrinsicInst>(Call))
+          continue;
+        auto *Callee = Entries.lookup(Call->getCalledFunction());
+        if (!Callee)
+          return refuse(kErrorResultABI);
+        auto *Tail = llvm::cast<llvm::CallInst>(Call);
+        llvm::SmallVector<llvm::Value *> Args(Tail->args());
+        Args.push_back(Error);
+        auto *Forward = llvm::IRBuilder<>(Tail).CreateCall(Callee, Args);
+        Forward->copyMetadata(*Tail);
+        Forward->setCallingConv(llvm::CallingConv::Swift);
+        Forward->setTailCallKind(Tail->getTailCallKind());
+        Forward->setAttributes(Tail->getAttributes());
+        Forward->removeFnAttr(llvm::Attribute::Memory);
+        Forward->addParamAttr(Callee->arg_size() - 1,
+                              llvm::Attribute::SwiftError);
+        Forward->takeName(Tail);
+        Tail->replaceAllUsesWith(Forward);
+        Tail->eraseFromParent();
+      }
+    for (auto *Access : Accesses[Old]) {
       llvm::IRBuilder<> B(Access);
       if (Access->getIntrinsicID() == llvm::Intrinsic::read_register) {
         Access->replaceAllUsesWith(
@@ -217,12 +255,16 @@ llvm::Error bindLeafErrorResults(llvm::Module &Module) {
       Access->eraseFromParent();
     }
   }
+  for (auto *Old : Writers) {
+    Old->replaceAllUsesWith(Entries.lookup(Old));
+    Old->eraseFromParent();
+  }
   return llvm::Error::success();
 }
 
 llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
                          llvm::ArrayRef<SourcePatchMapping> Mappings,
-                         const CompiledImage &Generated,
+                         const CompiledImage &Generated, va_t Slide,
                          llvm::ArrayRef<NativeMachOCompactRange> Ranges) {
   using Kind = llvm::mc_rewrite::RewriteSectionKind;
   const CompiledSection *Code = nullptr;
@@ -293,10 +335,36 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
           !Insn.Raw || !Insn.Raw->detail)
         return refuse(kLeafCode);
       const bool Last = Offset + aarch64::kInsnSize == Source.size();
+      if (!Last && Insn.Id == AARCH64_INS_ADRP) {
+        // The linked instruction has a new PC. Its destination register
+        // and the original data page it materializes must stay identical.
+        const auto &SourceAdr = Insn.Raw->detail->aarch64;
+        const auto Dest = SourceAdr.operands[0].reg;
+        const va_t Page = SourceAdr.operands[1].imm;
+        const bool DataPage =
+            llvm::any_of(Original.Sections, [&](const auto &S) {
+              return S.Size && !S.isExecutable() &&
+                     (S.contains(Page) ||
+                      llvm::alignDown(S.VA, kInstructionPageBytes) == Page);
+            });
+        DecodedInsn Adr{};
+        if (!DataPage || !leafRegister(Dest, false) ||
+            Decode.decodeOne(Emitted.data() + Offset, aarch64::kInsnSize,
+                             Owner->second + Offset,
+                             Adr) != aarch64::kInsnSize ||
+            Adr.Id != AARCH64_INS_ADRP || !Adr.Raw || !Adr.Raw->detail)
+          return refuse(kDataPage);
+        const auto &Result = Adr.Raw->detail->aarch64;
+        if (Result.operands[0].reg != Dest ||
+            va_t(Result.operands[1].imm) != Page + Slide)
+          return refuse(kDataPage);
+        continue;
+      }
       if (Last && !Signed && Insn.Id == AARCH64_INS_B) {
         if (!matchesTailTransfer(Source.drop_front(Offset), Start + Offset,
                                  Emitted.drop_front(Offset),
-                                 Owner->second + Offset, Mappings, Generated))
+                                 Owner->second + Offset, Mappings, Generated,
+                                 Original, Slide))
           return refuse(kTailTarget);
         continue;
       }
@@ -334,14 +402,17 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
     return Triple.takeError();
   if (!Module.getTargetTriple().isMacOSX() ||
       Module.getTargetTriple().getArch() != llvm::Triple::aarch64 ||
-      !Module.global_empty() || !Module.alias_empty() ||
-      !Module.ifunc_empty() || !Module.getModuleInlineAsm().empty() ||
-      !Image.DataInCode.empty() || llvm::verifyModule(Module))
+      !Module.alias_empty() || !Module.ifunc_empty() ||
+      !Module.getModuleInlineAsm().empty() || !Image.DataInCode.empty() ||
+      llvm::verifyModule(Module))
     return refuse(kLeafModule);
   const Section *Text = nullptr;
   for (const auto &S : Image.Sections) {
     if (!S.Size || !(S.Type & (llvm::MachO::S_ATTR_PURE_INSTRUCTIONS |
                                llvm::MachO::S_ATTR_SOME_INSTRUCTIONS)))
+      continue;
+    if (S.SegmentName == section_names::macho::TextSeg &&
+        (S.Type & llvm::MachO::SECTION_TYPE) == llvm::MachO::S_SYMBOL_STUBS)
       continue;
     if (Text || S.Name != section_names::macho::Text ||
         S.SegmentName != section_names::macho::TextSeg ||
@@ -358,6 +429,7 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
       }))
     return refuse(kSourceText);
   std::vector<SourcePatchMapping> Mappings;
+  std::vector<SourcePatchBinding> Bindings;
   for (const auto &F : Module) {
     // Intrinsic declarations are not native entry points. Any machine code
     // their uses produce is checked with the rest of the emitted body.
@@ -366,6 +438,12 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
     auto Entry = rewrite_source::getOriginalVA(F);
     if (!Entry)
       return Entry.takeError();
+    if (F.isDeclaration() && *Entry && Image.findImportStubAt(**Entry)) {
+      if (!F.use_empty())
+        Bindings.push_back(
+            {F.getName().str(), SourcePatchBindingKind::Function, **Entry, 0});
+      continue;
+    }
     if (F.isDeclaration() || !*Entry || !Text->contains(**Entry) ||
         !Image.hasAuthenticatedFunctionEntryAt(**Entry))
       return llvm::createStringError(
@@ -409,6 +487,24 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
   // directly to the transactional installer, which rechecks each relocated
   // machine body, its original identity and its actual unwind recipe.
   auto Candidate = llvm::CloneModule(Module);
+  // Data mirrors describe original storage. Their LLVM array extent can
+  // cover the page padding beyond the symbol. Bind only the address used in
+  // relocations. Each emitted load/store and displacement is checked below.
+  for (auto &GV : llvm::make_early_inc_range(Candidate->globals())) {
+    auto Address = parseNdDataSymbol(GV.getName());
+    if (!Address || GV.isThreadLocal() || GV.getAddressSpace())
+      return refuse(kDataBinding);
+    if (GV.use_empty()) {
+      GV.eraseFromParent();
+      continue;
+    }
+    GV.setInitializer(nullptr);
+    GV.setLinkage(llvm::GlobalValue::ExternalLinkage);
+    GV.setDSOLocal(true);
+    Bindings.push_back({GV.getName().str(),
+                        SourcePatchBindingKind::ReadOnlyData, *Address,
+                        sizeof(uint8_t)});
+  }
   llvm::SmallVector<llvm::Module::ModuleFlagEntry> Flags;
   Candidate->getModuleFlagsMetadata(Flags);
   Candidate->getModuleFlagsMetadata()->clearOperands();
@@ -438,10 +534,10 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
   return installMachOObjectPatch(
       llvm::StringRef(reinterpret_cast<const char *>(Object.ObjectData.data()),
                       Object.ObjectData.size()),
-      Image, Mappings, {}, Output, {}, nullptr, nullptr, {},
-      [&](const CompiledImage &Generated,
+      Image, Mappings, Bindings, Output, {}, nullptr, nullptr, {},
+      [&](const CompiledImage &Generated, va_t Slide,
           llvm::ArrayRef<NativeMachOCompactRange> Ranges) {
-        return verifyLeaves(Image, *Text, Mappings, Generated, Ranges);
+        return verifyLeaves(Image, *Text, Mappings, Generated, Slide, Ranges);
       });
 }
 } // namespace neverd

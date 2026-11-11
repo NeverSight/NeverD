@@ -20,6 +20,7 @@
 #include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/Loader.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
+#include "neverd/loader/MachO/MachOArm64e.h"
 #include "neverd/support/DwarfEH.h"
 
 #include "llvm/ADT/APInt.h"
@@ -52,6 +53,16 @@ struct TextMetadataStorage {
   uint64_t VA;
   uint64_t FileOffset;
 };
+
+class InsufficientText : public llvm::ErrorInfo<InsufficientText> {
+public:
+  static char ID;
+  void log(llvm::raw_ostream &OS) const override { OS << kInsufficientText; }
+  std::error_code convertToErrorCode() const override {
+    return llvm::errc::not_supported;
+  }
+};
+char InsufficientText::ID;
 
 // dyld requires section descriptors in address order. Moving metadata can
 // change that order even though every byte range remains disjoint. Preserve
@@ -240,7 +251,7 @@ llvm::Expected<uint64_t> moveTextSection(std::vector<uint8_t> &Binary, Arch A,
     VA = P.appendExecSegment(Binary, Storage, kMetadataTextSegment, A);
   }
   if (!VA)
-    return fail("metadata growth requires authenticated TEXT capacity");
+    return llvm::make_error<InsufficientText>();
   unsigned Count = 0;
   forEachMachOLoadCommand(
       Binary.data(), Binary.size(),
@@ -291,7 +302,7 @@ bool hasRelocatableAugmentation(const DwarfCIE &CIE, Arch Architecture) {
   if (Augmentation.empty() || Augmentation.front() != kAugmentationLength)
     return false;
   bool Encoding = false, BKey = false, NonHint = false;
-  bool Personality = false, LSDA = false;
+  bool Personality = false, LSDA = false, Signal = false;
   for (char Character : Augmentation.drop_front()) {
     bool *Seen = nullptr;
     switch (Character) {
@@ -303,6 +314,9 @@ bool hasRelocatableAugmentation(const DwarfCIE &CIE, Arch Architecture) {
       break;
     case kAugmentationLSDA:
       Seen = &LSDA;
+      break;
+    case kAugmentationSignal:
+      Seen = &Signal;
       break;
     case dwarf_eh::aarch64::kBKeyAugmentation:
       Seen = &BKey;
@@ -318,7 +332,7 @@ bool hasRelocatableAugmentation(const DwarfCIE &CIE, Arch Architecture) {
     *Seen = true;
   }
   return Encoding && BKey == CIE.HasPointerAuth &&
-         NonHint == CIE.UsesNonHintPAuthLR;
+         NonHint == CIE.UsesNonHintPAuthLR && Signal == CIE.IsSignalFrame;
 }
 
 bool sameCFI(llvm::ArrayRef<CFIInstruction> Before,
@@ -499,8 +513,8 @@ relocatedFrames(const std::vector<uint8_t> &Binary, const MachOEHFrameRegion &R,
     if (!F || !C || F->ParseStatus != ExceptionParseStatus::Complete ||
         F->Dwarf->InitialLocation != Record.BeginVA ||
         F->Dwarf->AddressRange != Record.EndVA - Record.BeginVA ||
-        !hasRelocatableAugmentation(*C, Image->Arch) || C->IsSignalFrame ||
-        C->HasMTETaggedFrame || !StableRules(C->InitialInstructions) ||
+        !hasRelocatableAugmentation(*C, Image->Arch) || C->HasMTETaggedFrame ||
+        !StableRules(C->InitialInstructions) ||
         !StableRules(F->Dwarf->Instructions) ||
         (Record.HasLanguageAugmentation && !Image->isArm64e()) ||
         (Record.InitialLocationEncoding & dweh::Indirect))
@@ -821,6 +835,19 @@ static bool tryPackAdjacentFrames(std::vector<uint8_t> &Binary, Arch A,
   return true;
 }
 
+static llvm::Expected<uint64_t>
+compactCapacity(const macho_unwind::CompactUnwindRawSection &Raw,
+                MachOUnwindFunctionCounts Additional) {
+  uint64_t Count = 0;
+  for (const auto &Page : Raw.Pages)
+    Count += Page.EntryCount;
+  // Each new function may introduce a gap, an LSDA and a personality.
+  return measureMachOCompactUnwindRegular(
+      Count + 2 * Additional.Functions + 1,
+      macho_unwind::kPersonalityMask >> macho_unwind::kPersonalityShift,
+      Raw.LSDAEntries.size() + Additional.LSDAs);
+}
+
 llvm::Expected<bool> reserveMachOSourceUnwind(
     std::vector<uint8_t> &Binary, Arch A, uint64_t AdditionalEHBytes,
     uint64_t AdditionalFunctions, const MachOUnwindRelocationLimits &Limits) {
@@ -912,16 +939,7 @@ reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch A,
         {.TargetArch = A});
     if (!Raw)
       return Raw.takeError();
-    uint64_t Count = 0;
-    for (const auto &Page : Raw->Pages)
-      Count += Page.EntryCount;
-    // Each added function can introduce its own recipe and a gap boundary.
-    // Keep the original records and a terminal gap; every new function may
-    // also need an LSDA and any of the ABI's personality slots.
-    auto Size = measureMachOCompactUnwindRegular(
-        Count + 2 * AdditionalFunctions + 1,
-        macho_unwind::kPersonalityMask >> macho_unwind::kPersonalityShift,
-        Raw->LSDAEntries.size() + Additional.LSDAs);
+    auto Size = compactCapacity(*Raw, Additional);
     if (!Size)
       return Size.takeError();
     const uint64_t Required = *Size;
@@ -1007,6 +1025,70 @@ reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch A,
   const bool Changed = Candidate != Binary;
   Binary.swap(Candidate);
   return Changed;
+}
+
+llvm::Expected<uint64_t> reserveMachOPublishedUnwind(
+    std::vector<uint8_t> &Binary, Arch A, uint64_t ExtraFrameBytes,
+    MachOUnwindFunctionCounts Additional, bool AllowSlide,
+    std::optional<MachODependencyState> &SlidDependencies) {
+  auto Reserved =
+      reserveMachOSourceUnwind(Binary, A, ExtraFrameBytes, Additional);
+  if (Reserved)
+    return 0;
+  auto Error = Reserved.takeError();
+  if (!AllowSlide || !Error.isA<InsufficientText>())
+    return Error;
+  auto Region = findMachOCompactUnwindRegion(Binary);
+  if (!Region || !*Region || (**Region).MachHeaderVA) {
+    if (!Region)
+      llvm::consumeError(Region.takeError());
+    return Error;
+  }
+  llvm::consumeError(std::move(Error));
+  const auto &R = **Region;
+  auto Raw = macho_unwind::parseCompactUnwindRaw(
+      llvm::ArrayRef(Binary).slice(R.SectionFileOff, R.SectionSize),
+      {.TargetArch = A});
+  if (!Raw)
+    return Raw.takeError();
+  auto Compact = compactCapacity(*Raw, Additional);
+  if (!Compact)
+    return Compact.takeError();
+  const auto H = parseMachOHeader(Binary.data(), Binary.size());
+  const uint64_t HeaderEnd = uint64_t(H.HeaderSize) + H.SizeOfCmds;
+  uint64_t Bytes =
+      llvm::alignTo(HeaderEnd + kMetadataCommandReserve, alignof(uint64_t)) +
+      llvm::alignTo(*Compact, alignof(uint64_t));
+  auto EH = findMachOEHFrameRegion(Binary);
+  if (EH) {
+    // Check the original recipes before moving their code and language data.
+    // PC-relative fields retain their values under a uniform slide.
+    auto Checked = relocatedFrames(Binary, *EH, EH->SectionVA, {});
+    if (!Checked)
+      return Checked.takeError();
+    Bytes += Checked->size();
+  }
+  Bytes += ExtraFrameBytes + sizeof(uint32_t);
+  const uint64_t Slide =
+      llvm::alignTo(Bytes, macho_loader::arm64e::kLargePageBytes);
+  if (Slide > limits::backend::kMaxMachOHeaderGrowthBytes)
+    return fail(kUnwindPrefix);
+  auto Candidate = Binary;
+  auto Before = slideMachOZeroBaseDylib(Candidate, Slide);
+  if (!Before)
+    return Before.takeError();
+  auto Prefix = reserveMachOHeaderStorage(Candidate, A, Slide - HeaderEnd);
+  if (!Prefix)
+    return Prefix.takeError();
+  if (!*Prefix)
+    return fail(kUnwindPrefix);
+  Reserved =
+      reserveMachOSourceUnwind(Candidate, A, ExtraFrameBytes, Additional);
+  if (!Reserved)
+    return Reserved.takeError();
+  SlidDependencies.emplace(std::move(*Before));
+  Binary.swap(Candidate);
+  return Slide;
 }
 
 llvm::Expected<bool>

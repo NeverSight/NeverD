@@ -50,6 +50,12 @@ MACHO_LEAF_TEXT(
 MACHO_LEAF_TEXT(kErrorResultABI,
                 "arm64e writable X21 across calls requires an error-result ABI")
 MACHO_LEAF_TEXT(kLeafABIFlag, "ptrauth.abi-version")
+MACHO_LEAF_TEXT(
+    kDataPage,
+    "arm64e lifted ADRP does not reproduce the original data page and register")
+MACHO_LEAF_TEXT(kDataBinding,
+                "arm64e lifted global needs an original image data address")
+MACHO_LEAF_VALUE(va_t, kInstructionPageBytes, 4096)
 MACHO_LEAF_VALUE(uint32_t, kClassicABIVersion, 0)
 MACHO_LEAF_VALUE(unsigned, kMemoryOperandCount, 2)
 MACHO_LEAF_VALUE(uint32_t, kReturnToLR, 0xd65f03c0)

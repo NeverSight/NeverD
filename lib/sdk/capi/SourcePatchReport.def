@@ -1,0 +1,9 @@
+//===- SourcePatchReport.def - Source installation fields ------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+NEVERD_SOURCE_PATCH_FIELD(kOriginalSectionSlide, "original_section_slide")
+
+#undef NEVERD_SOURCE_PATCH_FIELD

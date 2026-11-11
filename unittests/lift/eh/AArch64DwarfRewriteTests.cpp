@@ -248,7 +248,8 @@ TEST(AArch64DwarfRewrite, MachOLayoutGrowthPreservesEverySigningRecipe) {
     std::optional<uint64_t> SigningOffset;
   };
   for (const char *Augmentation :
-       {kOrdinary, kBKey, kNonHint, kBKeyNonHint, kNonHintBeforeEncoding})
+       {kOrdinary, kBKey, kNonHint, kBKeyNonHint, kNonHintBeforeEncoding,
+        kSignalAugmentation, kBKeySignal})
     for (const auto &Case :
          {Program{{}, {}, 0, {}}, Program{kUnsignedIgnoredOffset, {}, 0, {}},
           Program{kSPIgnoredOffset, {}, 0, {}}, Program{{}, kInitialPC, 0, 0},
@@ -277,6 +278,9 @@ TEST(AArch64DwarfRewrite, MachOLayoutGrowthPreservesEverySigningRecipe) {
       ASSERT_EQ(After.FDEs.size(), 1u);
       EXPECT_EQ(After.CIEs.front().Augmentation,
                 Before.CIEs.front().Augmentation);
+      EXPECT_EQ(After.CIEs.front().IsSignalFrame,
+                Augmentation == kSignalAugmentation ||
+                    Augmentation == kBKeySignal);
       EXPECT_EQ(After.FDEs.front().InitialLocation,
                 kMachOBase + kMachOTextOffset);
       EXPECT_EQ(After.FDEs.front().AddressRange, kRange);
@@ -337,7 +341,8 @@ TEST(AArch64DwarfRewrite,
   Reject(kExpression, kOrdinary, kLayoutRefusal);
   Reject(kOpaque, kOrdinary, kLayoutRefusal);
   Reject({}, kDuplicateNonHint, kLayoutRefusal);
-  Reject({}, kSignalAugmentation, kLayoutRefusal);
+  Reject({}, kDuplicateSignal, kLayoutRefusal);
+  Reject(kExpression, kSignalAugmentation, kLayoutRefusal);
   language_eh_test::ByteBuilder Location;
   Location.u8(kSetLocation);
   Location.u64(kMachOBase + kMachOTextOffset + kCodeAlign);
