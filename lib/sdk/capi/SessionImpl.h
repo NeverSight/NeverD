@@ -217,8 +217,10 @@ struct Session {
   /// and kept through declarations that only add to them: those of a library
   /// that can hold tens of thousands.
   struct LocalTypeNameFacts {
-    const types::TypeLibrary *Library = nullptr;
-    size_t Types = 0, Declarations = 0;
+    LocalTypeNameFacts() : Library(nullptr), Types(0), Declarations(0) {}
+
+    const types::TypeLibrary *Library;
+    size_t Types, Declarations;
     types::SpelledNames Spelled;
     llvm::StringSet<> Mentioned, Prototyped;
   };
