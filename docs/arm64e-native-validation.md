@@ -578,7 +578,17 @@ CFA and register rules at their original instruction offsets. With
 `-fasynchronous-unwind-tables`, both images restore LR at offset 16, just
 before RETAB. The synchronous Clang record ends at the call-site row. The
 negative control changes the saved-LR slot in the FDE, re-signs the input,
-and requires publication to fail.
+and requires publication to fail. Both the compact and indexed signed Swift
+callers ran on macos-26 and xcode-27, including the asynchronous epilogue
+control. The [native run](https://github.com/gmh5225/test_mac_intel/actions/runs/43029704710)
+and [validation record](evidence/arm64e-swift-signed-call-2026-11-11.json)
+include both image hashes for each case, the LR boundary and compiler identities.
+The default r6 CLI refused all three signed non-tail Swift inputs. Its
+backend emitted an explicit return-address state toggle. The compact-only input
+lacked a registered DWARF section, and the indexed inputs had different CFI.
+Each refusal preserved the input and left no output. The
+[LLVM fork fix](https://github.com/NeverSight/llvm-project/commit/8b74c310a8140953b96df2464b8d091b46bd4fd8)
+is in the source build used by both runners.
 The framed import fixture calls
 `getpid`, reads an exported variable after the call and returns their sum.
 The caller changes that variable between invocations. Other stack layouts
