@@ -156,9 +156,44 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           "memory address space is attached to a non-memory operation");
   }
 
+  // A Darwin va_list can walk beyond all the named arguments. With no
+  // materialized overflow parameters, those bytes belong to the caller.
+  // Keep the lifted locals and any named stack homes in the private frame.
+  const bool NativeVariadicStack =
+      TargetArch == Arch::AArch64 && TargetFormat == BinaryFormat::MachO &&
+      FrameBaseInt && CurMedFunc->IsVariadic && !CurMedFunc->SkippedSSA &&
+      CurMedFunc->VariadicOverflowCount == 0;
+  const auto VariadicAddress = [&](const MedVar &V) -> llvm::Value * {
+    if (!NativeVariadicStack ||
+        V.Size != getTargetRegInfo(TargetArch).PointerSize)
+      return nullptr;
+    auto Slot = canonicalFrameSlotKey(V, /*RequireEntryStackPointer=*/true);
+    if (!Slot)
+      return nullptr;
+    llvm::Value *Base;
+    if (Slot->second >= CurMedFunc->VariadicOverflowBase) {
+      // Inlining into a different function would change the incoming SP.
+      CurFunc->addFnAttr(llvm::Attribute::NoInline);
+      Base = Builder.CreateIntrinsic(llvm::Intrinsic::sponentry,
+                                     {Builder.getPtrTy()}, {});
+    } else {
+      Base = Builder.CreateIntToPtr(FrameBaseInt, Builder.getPtrTy());
+    }
+    return Builder.CreateConstGEP1_64(Builder.getInt8Ty(), Base, Slot->second);
+  };
+
   // Only machine instruction outputs write the physical error result. SSA edge
   // copies and call-clobber bookkeeping update the value map independently.
   auto SetOutput = [&](const MedVar &Output, llvm::Value *Value) {
+    if (NativeVariadicStack &&
+        (Op.Opcode == NdOp::COPY || Op.Opcode == NdOp::INT_ADD ||
+         Op.Opcode == NdOp::INT_SUB) &&
+        (Output.Kind == MedVar::Temp ||
+         (Output.Kind == MedVar::Reg &&
+          !getTargetRegInfo(TargetArch).isStackPointer(Output.RegOff) &&
+          !getTargetRegInfo(TargetArch).isFramePointer(Output.RegOff))))
+      if (auto *Pointer = VariadicAddress(Output))
+        Value = Builder.CreatePtrToInt(Pointer, sizeToType(Output.Size));
     setVar(Output, Value, Builder);
     if (Op.OriginSeq >= 0 && Output.Kind == MedVar::Reg &&
         Output.RegOff == a64reg::X21 && Img && Img->isArm64e())
@@ -1001,6 +1036,8 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       if (Ptr)
         IsGlobalData = true;
     }
+    if (!Ptr && !IsSegmentRelative)
+      Ptr = VariadicAddress(AddrVar);
     if (!Ptr) {
       rejectEscapingAddressFragment(AddrVar, "an unresolved load address");
       auto *Addr = IsSegmentRelative ? getRawSegmentOffset(AddrVar, Builder)
@@ -1110,6 +1147,8 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       if (Ptr)
         IsGlobalData = true;
     }
+    if (!Ptr && !IsSegmentRelative)
+      Ptr = VariadicAddress(AddrVar);
     if (!Ptr) {
       rejectEscapingAddressFragment(AddrVar, "an unresolved store address");
       auto *Addr = IsSegmentRelative ? getRawSegmentOffset(AddrVar, Builder)

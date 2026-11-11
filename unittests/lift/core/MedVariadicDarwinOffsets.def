@@ -1,0 +1,15 @@
+//===- MedVariadicDarwinOffsets.def - OR-ed stack cursors ----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+// Entry-SP displacement, OR mask, and whether this walks incoming arguments.
+DARWIN_CURSOR(-8, 8, false)
+DARWIN_CURSOR(-16, 8, false)
+DARWIN_CURSOR(0, 8, true)
+DARWIN_CURSOR(8, 8, true)
+DARWIN_CURSOR(0, 16, false)
+DARWIN_CURSOR(0, UINT64_MAX, false)
+
+#undef DARWIN_CURSOR
