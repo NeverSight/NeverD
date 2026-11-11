@@ -141,5 +141,26 @@ int main(int argc, char **argv) {
 }
 )c")
 
+A64_LEAF_TEXT(kAssemblyName, "leaves.S")
+A64_LEAF_TEXT(kSignedLeaves, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  pacibsp
+  add x0, x1, x0
+  retab
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  pacibsp
+  sub x0, x0, x1
+  retab
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+
 #undef A64_LEAF_VALUE
 #undef A64_LEAF_TEXT

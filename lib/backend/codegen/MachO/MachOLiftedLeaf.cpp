@@ -29,6 +29,12 @@ namespace {
 #define MACHO_LEAF_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #include "MachOLiftedLeaf.def"
 
+enum class SigningHint : uint32_t {
+#define NEVERD_A64_PAUTH_HINT(Name, Word, Operation, Pointer, Modifier)        \
+  Name = Word,
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.def"
+};
+
 llvm::Error refuse(const char *Reason) {
   return llvm::createStringError(llvm::errc::not_supported, Reason);
 }
@@ -130,17 +136,28 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
     const auto Emitted =
         llvm::ArrayRef(Generated.Bytes)
             .slice(Code->Offset + Owner->second - Code->VA, End - Start);
-    if (Source != Emitted || Source.size() % aarch64::kInsnSize ||
-        readLE<uint32_t>(Source.take_back(aarch64::kInsnSize).data()) !=
-            kReturnToLR)
+    if (Source != Emitted || Source.empty() ||
+        Source.size() % aarch64::kInsnSize)
       return refuse(kLeafCode);
-    for (size_t Offset = 0; Offset < Source.size() - aarch64::kInsnSize;
+    bool Signed = false;
+    for (size_t Offset = 0; Offset < Source.size();
          Offset += aarch64::kInsnSize) {
       DecodedInsn Insn{};
       if (Decode.decodeOne(Source.data() + Offset, aarch64::kInsnSize,
                            Start + Offset, Insn) != aarch64::kInsnSize ||
-          !Insn.Raw || !Insn.Raw->detail || !registerOnly(Insn))
+          !Insn.Raw || !Insn.Raw->detail)
         return refuse(kLeafCode);
+      if (Offset + aarch64::kInsnSize == Source.size()) {
+        // Plain RET must select LR. RETAB has an implicit LR, SP and B key.
+        if (Signed ? Insn.Id != AARCH64_INS_RETAB
+                   : readLE<uint32_t>(Source.data() + Offset) != kReturnToLR)
+          return refuse(kLeafCode);
+      } else if (!Offset && readLE<uint32_t>(Source.data()) ==
+                                static_cast<uint32_t>(SigningHint::PACIBSP)) {
+        Signed = true;
+      } else if (!registerOnly(Insn)) {
+        return refuse(kLeafCode);
+      }
     }
   }
   return llvm::Error::success();

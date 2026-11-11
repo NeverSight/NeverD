@@ -7,6 +7,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
+#include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/loader/Loader.h"
@@ -34,13 +35,14 @@ using namespace neverd;
 #define A64_LEAF_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #include "AArch64LiftedLeafFixtures.def"
 
-void verifyPublishedLeaves(const char *Leaves, const char *CallerSource) {
+void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
+                           const char *SourceName = kSource) {
 #if defined(__APPLE__) && defined(__aarch64__)
   llvm::SmallString<128> Directory;
   ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kTemporary, Directory));
   const std::filesystem::path Root(Directory.str().str());
   auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
-  const auto Source = (Root / kSource).string();
+  const auto Source = (Root / SourceName).string();
   const auto Input = (Root / kOriginal).string();
   const auto Output = (Root / kOutput).string();
   const auto Rejected = (Root / kRejected).string();
@@ -84,6 +86,16 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource) {
       R->setOperand(0, Wrong);
   EXPECT_FALSE(Patcher.patch(Input, Rejected, *Changed, Image->Arch).Success);
   EXPECT_FALSE(std::filesystem::exists(Rejected));
+
+  if (Module.getFunction(kSum)->hasFnAttribute(kReturnSigningScopeAttribute)) {
+    auto Unsigned = llvm::CloneModule(Module);
+    auto *Entry = Unsigned->getFunction(kSum);
+    Entry->removeFnAttr(kReturnSigningScopeAttribute);
+    Entry->removeFnAttr(kReturnSigningKeyAttribute);
+    EXPECT_FALSE(
+        Patcher.patch(Input, Rejected, *Unsigned, Image->Arch).Success);
+    EXPECT_FALSE(std::filesystem::exists(Rejected));
+  }
 
   auto Installed = Patcher.patch(Input, Output, Module, Image->Arch);
   ASSERT_TRUE(Installed.Success);
@@ -152,5 +164,9 @@ TEST(AArch64DarwinEntry, SwiftContextSurvivesNativeLeafPublication) {
 
 TEST(AArch64DarwinEntry, ScalarFPParametersAndResultsSurvivePublication) {
   verifyPublishedLeaves(kScalarFPLeaves, kScalarFPCaller);
+}
+
+TEST(AArch64DarwinEntry, SignedLeafUsesTheIncomingSPAtItsNewAddress) {
+  verifyPublishedLeaves(kSignedLeaves, kCaller, kAssemblyName);
 }
 } // namespace

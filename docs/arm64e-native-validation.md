@@ -509,7 +509,11 @@ without requiring a stripped image to identify its source calling convention.
 Apple Clang produces both the Swift-call fixture and its independent typed
 caller. The floating-point caller checks the exact result bits, including
 signed zero.
-Functions with calls, signed frames or stack accesses need additional proofs.
+Frameless bodies may also preserve a matching entry PACIBSP and terminal
+RETAB. SP and LR remain untouched between those instructions. The relocated
+machine bytes and frameless compact unwind coverage must match, and removing
+the return-signing policy refuses publication. Functions with calls, stack
+accesses or PC-dependent signing need additional proofs.
 
 The [native lifted-image run](https://github.com/gmh5225/test_mac_intel/actions/runs/42957645426)
 executed the original and installed images on both macos-26 and xcode-27.
