@@ -11,6 +11,7 @@
 #include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
 #include "neverd/loader/Loader.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -101,6 +102,7 @@ enum class LeafCheck {
   None,
   TailTarget,
   StackArgument,
+  RestoringLoad,
   ErrorResult,
   Global,
   FramedImport,
@@ -193,22 +195,44 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
         Patcher.patch(Input, Rejected, *MissingWrite, Image->Arch).Success);
     EXPECT_FALSE(std::filesystem::exists(Rejected));
   }
-  if (Indexed) {
-    const auto *FrameSection =
-        Image->getSectionByName(section_names::macho::EhFrame);
-    ASSERT_NE(FrameSection, nullptr);
+  if (Indexed || Check == LeafCheck::RestoringLoad) {
     auto Bytes = Snapshot;
-    auto Frame = llvm::MutableArrayRef(Bytes).slice(FrameSection->FileOff,
-                                                    FrameSection->FileSz);
-    const auto Find = [&](auto Begin) {
-      return std::search(Begin, Frame.end(), kLinkSpillRule.begin(),
-                         kLinkSpillRule.end());
-    };
-    auto At = Find(Frame.begin());
-    ASSERT_NE(At, Frame.end());
-    ASSERT_EQ(Find(At + kLinkSpillRule.size()), Frame.end());
-    At[kLinkSpillRule.size() - 1] = kWrongLinkOffsetFactor;
-    auto Invalid = (Root / kWrongSpillInput).string();
+    if (Indexed) {
+      const auto *FrameSection =
+          Image->getSectionByName(section_names::macho::EhFrame);
+      ASSERT_NE(FrameSection, nullptr);
+      auto Frame = llvm::MutableArrayRef(Bytes).slice(FrameSection->FileOff,
+                                                      FrameSection->FileSz);
+      const auto Find = [&](auto Begin) {
+        return std::search(Begin, Frame.end(), kLinkSpillRule.begin(),
+                           kLinkSpillRule.end());
+      };
+      auto At = Find(Frame.begin());
+      ASSERT_NE(At, Frame.end());
+      ASSERT_EQ(Find(At + kLinkSpillRule.size()), Frame.end());
+      At[kLinkSpillRule.size() - 1] = kWrongLinkOffsetFactor;
+    } else {
+      // Changing pre-indexing to post-indexing restores the same SP but reads
+      // from the private frame. Check the published candidate against those
+      // actual input bytes as well.
+      const auto *Text = Image->findSectionByName(section_names::macho::Text);
+      ASSERT_NE(Text, nullptr);
+      unsigned Restores = 0;
+      for (size_t Off = 0; Off + aarch64::kInsnSize <= Text->FileSz;
+           Off += aarch64::kInsnSize) {
+        auto *At = Bytes.data() + Text->FileOff + Off;
+        const auto Word = readLE<uint32_t>(At);
+        const auto Update = aarch64WritebackMemoryInstruction(Word);
+        if (Update && Update->isLoad() && Update->stackBase() &&
+            Update->preIndex()) {
+          writeLE<uint32_t>(At, Word & ~kWritebackPreIndexBit);
+          ++Restores;
+        }
+      }
+      ASSERT_EQ(Restores, 1u);
+    }
+    const auto Invalid =
+        (Root / (Indexed ? kWrongSpillInput : kPostIndexedInput)).string();
     std::ofstream(Invalid, std::ios::binary)
         .write(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
     ASSERT_EQ(
@@ -217,21 +241,23 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
         0);
     auto Altered = Reader->load(Invalid);
     ASSERT_TRUE(bool(Altered)) << llvm::toString(Altered.takeError());
-    ASSERT_TRUE(
-        llvm::any_of(Altered->ExceptionMetadata.Functions, [&](const auto &F) {
-          return F.Dwarf &&
-                 llvm::any_of(F.Dwarf->Instructions, [](const auto &I) {
-                   return I.Kind == CFIOpKind::Offset &&
-                          I.Offset == -int64_t(sizeof(uint64_t));
-                 });
-        }));
+    if (Indexed) {
+      ASSERT_TRUE(llvm::any_of(
+          Altered->ExceptionMetadata.Functions, [&](const auto &F) {
+            return F.Dwarf &&
+                   llvm::any_of(F.Dwarf->Instructions, [](const auto &I) {
+                     return I.Kind == CFIOpKind::Offset &&
+                            I.Offset == -int64_t(sizeof(uint64_t));
+                   });
+          }));
+    }
     MachOPatcher AlteredPatcher;
     AlteredPatcher.setImageContext(&*Altered);
     EXPECT_FALSE(
         AlteredPatcher.patch(Invalid, Rejected, Module, Image->Arch).Success);
     EXPECT_FALSE(std::filesystem::exists(Rejected));
   }
-  if (Check == LeafCheck::StackArgument) {
+  if (Check == LeafCheck::StackArgument || Check == LeafCheck::RestoringLoad) {
     // Redirect the second incoming word to the preceding fixed carrier. The
     // native instruction still has the same load width and destination.
     auto Shifted = llvm::CloneModule(Module);
@@ -568,6 +594,11 @@ TEST(AArch64DarwinVariadic, FramelessStackLoadsSurviveImagePublication) {
 TEST(AArch64DarwinVariadic, CompactLeavesElideOnlyTheUnusedStackReservation) {
   verifyPublishedLeaves(kReservedStackLeaves, kVariadicCaller, kSource,
                         kReservedFrame, LeafCheck::StackArgument);
+}
+
+TEST(AArch64DarwinVariadic, PreIndexedArgumentLoadRestoresTheIncomingSP) {
+  verifyPublishedLeaves(kReservedStackLeaves, kVariadicCaller, kSource,
+                        kRestoreOnLoad, LeafCheck::RestoringLoad);
 }
 
 TEST(AArch64DarwinExecutable, PublishesDarwinTrue) {

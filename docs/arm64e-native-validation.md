@@ -927,7 +927,11 @@ The image publisher compares non-writeback SP accesses at their effective
 incoming byte offsets. It can remove a compact leaf's unused stack reservation
 when the exact SP adjustment and restoration agree with its unwind row, the
 surviving loads retain their widths and destinations, and every arithmetic
-instruction and the return agree. Tests redirect a load to the adjacent
-argument and require refusal. Register-walk bodies with other instruction
+instruction and the return agree. A pre-indexed SP load can restore the entire
+frame while reading the first anonymous argument. The verifier tracks the
+resulting SP for later loads and requires restoration by return. Tests change
+the incoming slot or switch the compiler's pre-indexed load to post-indexing;
+the latter restores the same SP but reads the callee's private frame. Both
+inputs must be refused. Register-walk bodies with other instruction
 changes, frame-local memory effects and additional DWARF rows need their own
 publication proof.

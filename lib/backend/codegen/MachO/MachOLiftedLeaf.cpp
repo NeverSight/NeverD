@@ -15,6 +15,7 @@
 #include "neverd/backend/llvm/AArch64/LLVMEntryABI.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/DirectBranch.h"
@@ -149,7 +150,7 @@ bool elidesUnusedStackFrame(Decoder &Decode, llvm::ArrayRef<uint8_t> Source,
       (Frame.NativeEncoding & ~macho_unwind::kARM64FramelessStackSizeMask) !=
           macho_unwind::kARM64ModeFrameless ||
       Emitted.size() < Word || Emitted.size() % Word ||
-      Source.size() <= 2 * Word || Source.size() - 2 * Word != Emitted.size() ||
+      Source.size() <= Emitted.size() ||
       readLE<uint32_t>(Source.end() - Word) != kReturnToLR ||
       readLE<uint32_t>(Emitted.end() - Word) != kReturnToLR)
     return false;
@@ -172,8 +173,12 @@ bool elidesUnusedStackFrame(Decoder &Decode, llvm::ArrayRef<uint8_t> Source,
            D.operands[2].type == AARCH64_OP_IMM && !D.operands[2].shift.value &&
            D.operands[2].imm == Frame.StackSize;
   };
-  if (!AdjustsSP(0, AARCH64_INS_SUB) ||
-      !AdjustsSP(Source.size() - 2 * Word, AARCH64_INS_ADD))
+  // Clang may restore SP with a pre-indexed load instead of a separate ADD.
+  const size_t Removed = Source.size() - Emitted.size();
+  const bool SeparateRestore = Removed == 2 * Word;
+  if ((!SeparateRestore && Removed != Word) || !AdjustsSP(0, AARCH64_INS_SUB) ||
+      (SeparateRestore &&
+       !AdjustsSP(Source.size() - 2 * Word, AARCH64_INS_ADD)))
     return false;
 
   const auto StackLoad = [](const DecodedInsn &I)
@@ -184,16 +189,29 @@ bool elidesUnusedStackFrame(Decoder &Decode, llvm::ArrayRef<uint8_t> Source,
       return std::nullopt;
     return {{D.operands[0].reg, D.operands[1].mem.disp}};
   };
+  int64_t Depth = Frame.StackSize;
   for (size_t Off = 0; Off < Emitted.size() - Word; Off += Word) {
     const size_t Old = Off + Word;
     DecodedInsn I{};
     if (!Read(Source, OldVA, Old, I))
       return false;
-    if (auto Load = StackLoad(I)) {
-      // Decode borrows its instruction until the next decode.
-      if (Load->second < Frame.StackSize || !Read(Emitted, NewVA, Off, I))
+    auto Load = StackLoad(I);
+    if (I.Id == AARCH64_INS_LDR && I.Raw->detail->writeback) {
+      const auto Update = aarch64WritebackMemoryInstruction(
+          readLE<uint32_t>(Source.data() + Old));
+      if (SeparateRestore || !Depth || !Update || !Update->stackBase() ||
+          !Update->preIndex() || Update->displacement() != uint64_t(Depth))
         return false;
-      Load->second -= Frame.StackSize;
+      // Pre-indexing accesses the updated base. Both the load and every
+      // subsequent SP-relative access now use the incoming SP.
+      Depth = 0;
+      Load = {{I.Raw->detail->aarch64.operands[0].reg, 0}};
+    }
+    if (Load) {
+      // Decode borrows its instruction until the next decode.
+      if (Load->second < Depth || !Read(Emitted, NewVA, Off, I))
+        return false;
+      Load->second -= Depth;
       if (StackLoad(I) != Load)
         return false;
       continue;
@@ -204,7 +222,7 @@ bool elidesUnusedStackFrame(Decoder &Decode, llvm::ArrayRef<uint8_t> Source,
             readLE<uint32_t>(Emitted.data() + Off))
       return false;
   }
-  return true;
+  return SeparateRestore || Depth == 0;
 }
 
 bool matchesDirectTransfer(llvm::ArrayRef<uint8_t> Source, va_t OriginalPC,

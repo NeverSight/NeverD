@@ -187,13 +187,19 @@ int main(int argc, char **argv) {
 }
 )c")
 A64_LEAF_TEXT(kReservedFrame, "#define TEST_RESERVED_STACK 1\n")
+A64_LEAF_TEXT(kRestoreOnLoad, "#define TEST_RESTORE_ON_LOAD 1\n")
+A64_LEAF_TEXT(kPostIndexedInput, "post-indexed.dylib")
 A64_LEAF_TEXT(kReservedStackLeaves, R"c(
 #include <stdarg.h>
 typedef unsigned long word;
 word leaf_sum(word seed, ...) {
   va_list args;
   va_start(args, seed);
+#ifdef TEST_RESTORE_ON_LOAD
+  word value = va_arg(args, word);
+#else
   word value = ((const word *)args)[1];
+#endif
   va_end(args);
   return seed + value;
 }
