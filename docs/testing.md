@@ -93,6 +93,14 @@ For a real save, compile projected bank initializers at O0/O2,
 inspect constant bytes, and keep hypothetical register transitions distinct
 from captured observations. No guest, handler or device callback need run.
 
+The `X86ModeExecutionTest.*` subset in `NeverDX64PagedExecutionTests` checks
+continuous original protected/compatibility/code64 streams, complete register
+banks, mode-specific fault delivery and paid continuation. Its KVM fixtures set
+SREGS once and use original instructions for every later mode change. Keep
+Clang/NeverC source compilation on the x64 host. Pair this subset with the
+paging/control/event, legacy source and existing paged source suites when
+changing the shared boundary; record P/E-core profile choices explicitly.
+
 `NeverDX64PagedExecutionTests` compiles actual paged HighC/LLVM-to-C exports
 through Clang and optional `NEVERD_TEST_NEVERC`, at O0/O2, and compares their
 scalar instruction completion and faults with independent original KVM CPU

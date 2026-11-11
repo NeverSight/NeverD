@@ -22,7 +22,8 @@ bool legacyInstructionPending(const X86LegacyExecutionState &State);
 
 llvm::Error admitLegacyExecution(const X86LegacyExecutionState &State,
                                  X86PagedMemory &Memory,
-                                 const X86LegacyExecutionOptions &Options);
+                                 const X86LegacyExecutionOptions &Options,
+                                 bool Non64Mode = false);
 
 /// Authenticated return, with staged register/cache state and retained RAM
 /// effects and a private transfer journal. The caller publishes retained

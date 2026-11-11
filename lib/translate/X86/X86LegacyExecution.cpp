@@ -52,11 +52,12 @@ struct LegacyInstruction {
   std::optional<X86MpxEncoding> Mpx;
   llvm::ArrayRef<uint8_t> Body;
   unsigned Width;
-  bool IRET, RETF, INT, UD2, HLT = false, LockedHLT = false;
+  bool IRET, RETF, INT, UD2, HLT = false, LockedHLT = false, MSR = false;
 };
 
 llvm::Expected<LegacyInstruction>
-decodeInstruction(llvm::ArrayRef<uint8_t> Instruction, bool Code32) {
+decodeInstruction(llvm::ArrayRef<uint8_t> Instruction, bool Code32,
+                  bool Non64Mode = false) {
   if (Instruction.empty() || Instruction.size() > 15)
     return invalid("invalid legacy instruction length");
   auto DebugRegister = x86DebugRegisterEncoding(Instruction, false);
@@ -85,6 +86,8 @@ decodeInstruction(llvm::ArrayRef<uint8_t> Instruction, bool Code32) {
   I.Body = Control.body();
   I.Width = Control.OperandBytes;
   const bool Unlocked = !Control.Group1Prefix;
+  I.MSR = Non64Mode && I.Body.size() == 2 && I.Body[0] == 0x0f &&
+          (I.Body[1] == 0x30 || I.Body[1] == 0x32);
   const bool Single =
       Unlocked && I.Body.size() == 1 &&
       (I.Body[0] == 0x90 || I.Body[0] == 0xfa || I.Body[0] == 0xfb ||
@@ -102,7 +105,7 @@ decodeInstruction(llvm::ArrayRef<uint8_t> Instruction, bool Code32) {
   }
   if (!I.Segment && !I.Scalar && !I.FastSystem && !I.String && !I.Port &&
       !I.Far && !Single && !I.INT && !I.UD2 && !I.IRET && !I.RETF &&
-      !I.DebugRegister && !I.ControlRegister && !I.Mpx && !I.HLT)
+      !I.DebugRegister && !I.ControlRegister && !I.Mpx && !I.HLT && !I.MSR)
     return invalid("unsupported or malformed legacy step instruction");
   return I;
 }
@@ -120,7 +123,11 @@ validateX86LegacyInstructionEncoding(llvm::ArrayRef<uint8_t> Instruction,
 
 llvm::Error detail::admitLegacyExecution(const X86LegacyExecutionState &S,
                                          X86PagedMemory &M,
-                                         const X86LegacyExecutionOptions &O) {
+                                         const X86LegacyExecutionOptions &O,
+                                         bool Non64Mode) {
+  if (!Non64Mode && O.Non64Mode)
+    return invalid(
+        "mixed-mode binding requires the deferred instruction owner");
   if (auto Error = detail::validateLegacyControlContinuation(S, M, O))
     return Error;
   if ((S.EFlags & 0x20000) && O.Virtual8086 != X86LegacyVM86Profile::IntelVME)
@@ -146,7 +153,7 @@ llvm::Error detail::admitLegacyExecution(const X86LegacyExecutionState &S,
     if (auto Error = detail::validateLegacyTaskState(S, M))
       return Error;
   } else {
-    if (auto Error = validateX86LegacySegmentState(S.Core, Controls))
+    if (auto Error = validateX86LegacySegmentState(S.Core, Controls, Non64Mode))
       return Error;
   }
   if (!(S.EFlags & 2) || (S.EFlags & ~uint32_t{0x3f7fd7}) ||
@@ -178,7 +185,10 @@ bool detail::legacyInstructionPending(const X86LegacyExecutionState &State) {
 static llvm::Expected<X86LegacyExecutionResult>
 executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                          llvm::ArrayRef<uint8_t> Instruction,
-                         const X86LegacyExecutionOptions &Options) {
+                         const X86LegacyExecutionOptions &Options,
+                         bool Non64Mode) {
+  if (Non64Mode != bool(Options.Non64Mode))
+    return invalid("non-64-bit execution requires its full-width mode binding");
   if (auto Error = detail::validateLegacyControlContinuation(
           State, Memory, Options, Instruction))
     return std::move(Error);
@@ -197,7 +207,8 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
     return invalid(
         "deliver the incoming task fault before another instruction");
   if (State.Halted) {
-    if (auto Error = detail::admitLegacyExecution(State, Memory, Options))
+    if (auto Error =
+            detail::admitLegacyExecution(State, Memory, Options, Non64Mode))
       return std::move(Error);
     X86LegacyExecutionResult R;
     R.Status = X86LegacyExecutionStatus::Halted;
@@ -218,12 +229,32 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
   const bool Code32 = ResumingTask
                           ? bool(detail::legacyTaskInstructionKey(State) >> 32)
                           : bool(State.Core.Segments[1].Attributes & 0x4000);
-  auto Decoded = decodeInstruction(Instruction, Code32);
+  auto Decoded = decodeInstruction(Instruction, Code32, Non64Mode);
   if (!Decoded)
     return Decoded.takeError();
   auto &[DebugRegister, ControlRegister, Segment, Scalar, FastSystem, String,
-         Port, Far, Mpx, Body, Width, IRET, RETF, INT, UD2, HLT, LockedHLT] =
-      *Decoded;
+         Port, Far, Mpx, Body, Width, IRET, RETF, INT, UD2, HLT, LockedHLT,
+         MSR] = *Decoded;
+  if (Non64Mode) {
+    using Op = detail::X86LegacyScalarOperation;
+    if ((State.EFlags & 0x20000) || State.PendingTask || State.PendingEvent ||
+        State.Mpx || Options.Tasks || Segment || DebugRegister || FastSystem ||
+        Port || String || Mpx || IRET || RETF ||
+        (Far && (Far->Call || Far->Memory)) ||
+        (Scalar && (Scalar->DescriptorQuery || Scalar->SystemSelector ||
+                    Scalar->Operation == Op::LoadMachineStatus ||
+                    Scalar->Operation == Op::ClearTaskSwitch ||
+                    Scalar->Operation == Op::Bound)))
+      return invalid("instruction requires a separate mixed-mode state owner");
+    const auto &F = Memory.features();
+    const uint64_t AllowedEFER = uint64_t(Options.Non64Mode->EFERSystemCall) |
+                                 (uint64_t(F.LongMode) << 8) |
+                                 (uint64_t(F.LongMode) << 10) |
+                                 (uint64_t(F.NX) << 11);
+    if (MSR && ((Memory.controls().EFER & ~AllowedEFER) ||
+                State.Core.GPR[1] != 0xc0000080))
+      return invalid("MSR access requires a bound Intel EFER bank");
+  }
   if (ControlRegister) {
     if (!Options.ControlRegisters)
       return invalid("MOV-CR requires a bound Intel control-register profile");
@@ -389,12 +420,14 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
        (State.Core.CPL == 3 && (Memory.controls().CR0 & 0x40000) &&
         (State.EFlags & 0x40000) && !Options.Segments.AlignmentPriority)))
     return invalid("legacy operand step requires a bound operand profile");
-  if (auto Error = detail::admitLegacyExecution(State, Memory, Options))
+  if (auto Error =
+          detail::admitLegacyExecution(State, Memory, Options, Non64Mode))
     return std::move(Error);
   X86LegacyExecutionResult R;
   X86WatchpointObservation Observation(
       Memory, State.Debug ? &*State.Debug : nullptr,
-      Options.Debug.value_or(X86InstructionDebugProfile::InstructionStep));
+      Options.Debug.value_or(X86InstructionDebugProfile::InstructionStep), 0,
+      Options.Non64Mode ? &Options.Non64Mode->DebugAddresses : nullptr);
   if (ResumingStack)
     Observation.Matches = State.PendingStack->DataBreakpoints;
   if (State.PendingMpx)
@@ -417,6 +450,13 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
       [&](const X86LegacyEvent &Event,
           bool Completed) -> llvm::Expected<X86LegacyExecutionResult> {
     Observation.stop();
+    if (Non64Mode) {
+      R.RequestedEvent = Event;
+      R.InstructionAttempted = Attempted;
+      R.InstructionCompleted =
+          Completed && Event.Kind == X86LegacyEventKind::Trap;
+      return R;
+    }
     auto Delivered = deliverX86LegacyEvent(State, Memory, Event, Options);
     if (!Delivered)
       return Delivered.takeError();
@@ -433,6 +473,14 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                                         R.SelfModifications.end());
     return Delivered;
   };
+  const auto ExecuteBreakpoints = [&](uint32_t PC, bool SS) {
+    return Options.Non64Mode
+               ? x86ExecutionBreakpoints(Options.Non64Mode->DebugAddresses,
+                                         State.Debug->DR7, uint64_t(PC),
+                                         State.EFlags, SS)
+               : x86ExecutionBreakpoints(State.Debug->DR, State.Debug->DR7, PC,
+                                         State.EFlags, SS);
+  };
   const auto EnterDebug =
       [&](bool FromSingleStep, bool Completed, uint8_t Data = 0,
           bool Icebp = false) -> llvm::Expected<X86LegacyExecutionResult> {
@@ -441,10 +489,12 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
     if (State.Debug) {
       const auto Matches =
           Data | ((FromSingleStep || Data) && !Icebp
-                      ? x86ExecutionBreakpoints(
-                            State.Debug->DR, State.Debug->DR7,
-                            uint32_t(State.Core.Segments[1].Base + State.EIP),
-                            State.EFlags, false)
+                      ? ExecuteBreakpoints(
+                            uint32_t((State.Core.Segments[1].Attributes & 0x2000
+                                          ? 0
+                                          : State.Core.Segments[1].Base) +
+                                     State.EIP),
+                            false)
                       : 0);
       x86PublishInstructionDebug(*State.Debug, FromSingleStep, Matches);
     }
@@ -494,10 +544,8 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                        State.Core.CPL, Memory.controls().CR4, State.EFlags))
     R.Exception = X86MemoryException{13, 0, {}};
   if (State.Debug && !R.Exception && !Resuming) {
-    const auto Matches = x86ExecutionBreakpoints(
-        State.Debug->DR, State.Debug->DR7,
-        uint32_t(State.Core.Segments[1].Base + State.EIP), State.EFlags,
-        State.SSBlocked);
+    const auto Matches = ExecuteBreakpoints(
+        uint32_t(State.Core.Segments[1].Base + State.EIP), State.SSBlocked);
     if (Matches) {
       x86PublishInstructionDebug(*State.Debug, false, Matches);
       return Enter(
@@ -586,6 +634,29 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
     if (Accept(*Got)) {
       Next = Staged.Core;
       NextCR2 = Staged.CR2;
+      R.CR2Written = ControlRegister->Write && ControlRegister->Control == 2;
+    }
+  } else if (!R.Exception && MSR) {
+    detail::X86LegacyEncoding Encoding(Instruction, Code32);
+    if (Encoding.Group1Prefix == 0xf0 || State.Core.CPL)
+      R.Exception = X86MemoryException{
+          uint8_t(Encoding.Group1Prefix == 0xf0 ? 6 : 13), 0, {}};
+    else if (Body[1] == 0x32) {
+      Next.GPR[0] = NextControls.EFER;
+      Next.GPR[2] = NextControls.EFER >> 32;
+    } else {
+      const uint64_t Value =
+          uint64_t(Next.GPR[0]) | (uint64_t(Next.GPR[2]) << 32);
+      const auto &F = Memory.features();
+      const uint64_t Allowed = uint64_t(Options.Non64Mode->EFERSystemCall) |
+                               (uint64_t(F.LongMode) << 8) | 0x400 |
+                               (uint64_t(F.NX) << 11);
+      if ((Value & ~Allowed) || ((NextControls.CR0 & 0x80000000) &&
+                                 ((Value ^ NextControls.EFER) & 0x100)))
+        R.Exception = X86MemoryException{13, 0, {}};
+      else
+        NextControls.EFER =
+            (Value & ~uint64_t(0x400)) | (NextControls.EFER & 0x400);
     }
   } else if (!R.Exception && DebugRegister) {
     auto Bank = *State.Debug;
@@ -642,6 +713,7 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
       Next = State.Core;
       NextIP = State.EIP;
       TakenBranch = true;
+      R.CSWritten = true;
     }
   } else if (!R.Exception && Segment) {
     auto Got = executeX86LegacySegmentInstruction(Next, Memory, Instruction,
@@ -810,14 +882,14 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
   return R;
 }
 
-llvm::Expected<X86LegacyExecutionResult>
-executeX86LegacyInstruction(X86LegacyExecutionState &State,
-                            X86PagedMemory &Memory,
-                            llvm::ArrayRef<uint8_t> Instruction,
-                            const X86LegacyExecutionOptions &Options) {
+static llvm::Expected<X86LegacyExecutionResult> executeInstructionBoundary(
+    X86LegacyExecutionState &State, X86PagedMemory &Memory,
+    llvm::ArrayRef<uint8_t> Instruction,
+    const X86LegacyExecutionOptions &Options, bool Non64Mode) {
   const bool Consumed =
       retainsLegacyInstruction(State) && State.PendingInstructionAttempted;
-  auto Result = executeLegacyInstruction(State, Memory, Instruction, Options);
+  auto Result =
+      executeLegacyInstruction(State, Memory, Instruction, Options, Non64Mode);
   // Owner Error may retain real progress without reporting a new attempt.
   // Entry refusal (including conflicting journals) preserves a consumed
   // receipt. Only an accepted result can transfer ownership to an event.
@@ -827,6 +899,22 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
       retainsLegacyInstruction(State) && (!Result || !State.PendingEvent) &&
       (Consumed || (Result && Result->InstructionAttempted));
   return Result;
+}
+
+llvm::Expected<X86LegacyExecutionResult>
+executeX86LegacyInstruction(X86LegacyExecutionState &State,
+                            X86PagedMemory &Memory,
+                            llvm::ArrayRef<uint8_t> Instruction,
+                            const X86LegacyExecutionOptions &Options) {
+  return executeInstructionBoundary(State, Memory, Instruction, Options, false);
+}
+
+llvm::Expected<X86LegacyExecutionResult>
+executeX86Non64Instruction(X86LegacyExecutionState &State,
+                           X86PagedMemory &Memory,
+                           llvm::ArrayRef<uint8_t> Instruction,
+                           const X86LegacyExecutionOptions &Options) {
+  return executeInstructionBoundary(State, Memory, Instruction, Options, true);
 }
 
 } // namespace neverd::translate

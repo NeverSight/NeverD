@@ -19902,6 +19902,15 @@ belongs to subsequent dataflow, with no decoder-local dividend cache. See
 [the event interface](x86-event-delivery.md); legacy non-IA-32e dispatch and
 SMM/SGX transitions do not acquire semantics from this interface.
 
+`X86ModeExecution` composes the protected/compatibility original-byte owner
+with paged code64 bodies over one complete V7 bank and retained debug/shadow
+state. The translate layer returns typed non-64-bit event requests before IDT
+access; analysis selects the event owner from committed controls and performs
+a terminal state handoff. `X86ControlRegisters` owns the pure CR0/CR3/CR4
+transition checks; its consumer retains physical PDPTE access and publication.
+Low-width views never replace persistent full-width banks. See the
+[continuous mode contract](x86-mode-execution.md) for admission and resumption.
+
 The native SMM continuation projection owns canonical RSM admission in
 `X64ContinuationSmm.h`. SVM and SMM share standard XSAVE image checks and
 SIMD import in `X64ContinuationAvxImage.h`. The LLVM terminal context intrinsic
