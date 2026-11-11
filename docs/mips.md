@@ -164,7 +164,7 @@ flags and the specified AC0 clobbers. BALIGN positions 0 and 2 produce an
 unpredictable destination. The classic DSP profile also includes indexed
 loads, INSV, accumulator shifts, banked multiply/accumulate, CMP.PH, MTHLIP
 and BPOSGE32. For CMP.PH only the two low condition bits are specified.
-For MTHLIP an incoming POS greater than 32 affects the certainty of POS alone.
+For MTHLIP an incoming POS greater than 32 makes only POS unpredictable.
 The classic MIPS32/o32 profile covers both byte orders. [MIPS DSP instruction manual](https://docs.alexrp.com/mips/mips32_dsp_v3_01.pdf)
 
 `ADDQ_S.W`/`SUBQ_S.W` saturate signed words and set sticky overflow bit 20.
@@ -186,8 +186,9 @@ its signed-saturation description. The admitted result is `0x7fff`/`0x7fffffff`,
 checked against independent original-target execution; the contradictory
 all-ones pseudocode is not used as the oracle.
 `CMPGU.EQ/LT/LE.QB` return four predicates in GPR bits 3..0 without observing
-DSPControl. `CMP.EQ/LT/LE.PH` remains unsupported: its upper condition bits become
-UNPREDICTABLE, requiring a partial-known state transport/source contract.
+DSPControl. `CMP.EQ/LT/LE.PH` replace the two low condition bits. LowIR
+tracks the two unpredictable upper condition bits separately. Native source
+observes those bits on the issuing processor when they are used.
 
 `MULEQ_S.W.PHL/PHR` expand a signed Q15 product to Q31, saturating
 negative-one times negative-one to `0x7fffffff` and setting sticky OUFLAG21.
@@ -257,7 +258,7 @@ value for OUTFLAG[23], including when the returned word is unrounded.
 EXTP[V] and EXTPDP[V] extract size + 1 bits ending at POS. Failure sets EFI,
 preserves POS and yields an unknown GPR value. A successful DP extraction
 advances POS modulo 64. Source code traps if it needs an undefined result.
-DSP revision 2, DSP64 and compressed DSP still require qualification.
+DSP64 and compressed DSP still require qualification.
 
 Classic AC0 partial writes preserve the pre-R6 unread-result restriction:
 MULT/MULTU/DIV/DIVU (and supported doubleword multiply) establish pending

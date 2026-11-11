@@ -373,6 +373,9 @@ def run(args, artifacts):
                         (0x7FFFFFFF, 0x80000000, 0x80000000),
                         (0xFF01FF01, 0x01010101, 0x807F0101),
                     )
+                    if name.startswith(("msa_int_bz_", "msa_int_bnz_")):
+                        # One completely zero vector, one nonzero in every byte.
+                        values += ((0, 0, 0), (0x01010101, 0x02020202, 0x04040404))
                 if name.endswith("_d"):
                     values += (
                         (1, 0x7FF00000, 0),

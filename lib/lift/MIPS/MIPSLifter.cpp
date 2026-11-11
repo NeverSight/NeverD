@@ -180,7 +180,6 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
     }
     const unsigned CP0Key = ((Word & 7) << 5) | RD;
     if (Opcode == 16 && (RS == 0 || RS == 4) && !(Word & 0x7f8) &&
-
         (HasMT || !mips::cp0RequiresMT(CP0Key))) {
       if (RS == 4)
         S.emitIntrinsic(Intrinsic::MIPSWriteCP0Word, {},

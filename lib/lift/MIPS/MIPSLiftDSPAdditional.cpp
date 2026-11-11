@@ -356,11 +356,9 @@ bool MIPSLifter::liftDSPAdditional(State &S, uint32_t Word) const {
         S.binary(NdOp::INT_XOR, B, S.binary(NdOp::INT_LEFT, A, Shift));
     const auto New =
         S.binary(NdOp::INT_XOR, B, S.binary(NdOp::INT_AND, Mask, Different));
-    if (RT) {
-      const auto Result = S.makeTemp(4);
-      S.emitIntrinsic(Intrinsic::MIPSExtractResult, Result, {Invalid, New});
-      S.write(RT, Result);
-    }
+    const auto Result = S.makeTemp(4);
+    S.emitIntrinsic(Intrinsic::MIPSExtractResult, Result, {Invalid, New});
+    S.write(RT, Result);
     return true;
   }
   case Form::CmpEQPH:

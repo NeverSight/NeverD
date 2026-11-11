@@ -2283,7 +2283,7 @@
       "limitations": [
         "linked classic MIPS32r2/o32 ELF with DSP ASE evidence. The qualified packed arithmetic, DSPControl and accumulator forms are listed in docs/mips.md",
         "explicit DSPControl state requires an enabled DSP execution environment; no disabled-DSP exception delivery or invented initial state",
-        "AC0 aliases HI/LO. AC1 through AC3 have independent high and low halves. Saturating fractional accumulation, EXTR and position-based extraction observe DSPControl. the 46 DSPR2 instructions require revision-two ABI evidence. DSP64 and compressed DSP require separate qualification",
+        "AC0 aliases HI/LO. AC1 through AC3 have independent high and low halves. Saturating fractional accumulation, EXTR and position-based extraction observe DSPControl. The 46 DSPR2 instructions require revision-two ABI evidence. DSP64 and compressed DSP require separate qualification",
         "original-target source preserves DSPControl after return; no portable-host execution or floating/vector ABI claim"
       ],
       "tests": [
