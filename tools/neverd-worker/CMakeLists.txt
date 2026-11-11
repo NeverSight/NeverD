@@ -305,6 +305,13 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/view_edits_test.py"
                 "$<TARGET_FILE:neverd-worker>")
       set_tests_properties(NeverDWorkerViewEdits PROPERTIES TIMEOUT 120)
+      # The same edits with every page a patch's own account answers also made
+      # by comparing the documents, which must agree (open.check_view_changes).
+      add_test(NAME NeverDWorkerViewEditsChecked
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/view_edits_test.py"
+                "$<TARGET_FILE:neverd-worker>")
+      set_tests_properties(NeverDWorkerViewEditsChecked PROPERTIES TIMEOUT 120
+        ENVIRONMENT "NEVERD_TEST_CHECK_VIEW_CHANGES=1")
       add_test(NAME NeverDWorkerListingPages
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/listing_pages_test.py"
                 "$<TARGET_FILE:neverd-worker>")

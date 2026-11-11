@@ -5245,7 +5245,16 @@ client's to read. Where an edit built the document
 again, a worker that still has the old one sends what changed of the page
 (`page_delta`: lines replaced and the offsets after them shifted, `pageDelta`), which the
 GUI applies to the page it keeps (`page_delta::apply`); a reply the kept page does not
-take forgets that page, and the GUI reads the page whole once.
+take forgets that page, and the GUI reads the page whole once. A patch that writes a
+comment, a function's name or a data's name into the document that read it says what it
+wrote (`ViewChange`: the spans of the text, the rows and names it gave other values, what
+each list's spans moved by), and the document keeps that beside the id of the one it was
+made of (`DocumentChange`, `NamedView::change`): a page of that document then reads its
+change from the account (`changedPage`), neither document being walked, and a read that
+names such a page while no one else holds the document has the patch written into the
+document itself rather than into a copy (`metadata.named_view_documents_taken`). The
+account is the patch's own, so `open.check_view_changes` has a worker make each such page
+by comparing the documents as well and fail where the two differ.
 A replica takes those edits in place (`analysis_update_names`), since no analysis
 reads them: what it keeps of a view stays the view's. The owner's snapshot for it does
 not wait for the write (`analysis_snapshot` `in_memory`): the replica takes the names

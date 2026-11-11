@@ -499,6 +499,10 @@ private:
   std::uint64_t namedViewsEpoch_ = 1;
   /// open.write_behind: an edit's reply need not wait for its write.
   bool writeBehind_ = false;
+  /// open.check_view_changes: a page a patch's own account answers is also
+  /// made by comparing the documents, which must agree, and no patch is
+  /// written into the document it is made of.
+  bool checkViewChanges_ = false;
   /// Persists an edit that changes \p table alone, whose rows after it are
   /// \p rows (ProjectHistory::persistTable), behind the reply with
   /// write_behind.
@@ -524,8 +528,9 @@ private:
   mutable std::optional<std::string> projectFolder_;
   mutable std::optional<std::uint64_t> imageFactsRevision_;
   bool imageFactsHeld_ = false;
-  /// States the names of \p view's functions as they are named now.
-  void currentNamesInView(Json &view) const;
+  /// States the names of \p view's functions as they are named now: whether
+  /// one of them read otherwise.
+  bool currentNamesInView(Json &view) const;
   /// When the last request was answered.
   std::chrono::steady_clock::time_point lastRequest_{};
   /// Whether idle time reads, for a later declaration of local types, the
@@ -622,6 +627,10 @@ private:
     /// Its engine pages spell a name of data it has taken since: it never
     /// builds again from them, but from what is kept.
     bool pagesRenamed = false;
+    /// How it reads against the document it was patched from, where one patch
+    /// made it: a page of that document, named by a client that keeps it,
+    /// reads what the patch wrote, without the two being compared.
+    std::shared_ptr<const DocumentChange> change;
     /// Of the edits views have kept through, how many it has read.
     mutable std::uint64_t viewEditsRead = 0;
     /// The read a client last made of it with kept_only, naming the page it
@@ -754,6 +763,13 @@ private:
   /// Documents written from another with its comments, functions' names or
   /// data's names taken (takeComments, takeFunctionNames, takeDataNames).
   std::uint64_t commentPatches_ = 0, namePatches_ = 0, dataNamePatches_ = 0;
+  /// metadata.named_view_changes_said: pages a patch's own account answered,
+  /// and named_view_documents_taken: patches written into the document they
+  /// were made of, no page of which another read could name.
+  std::uint64_t changesSaid_ = 0, documentsTaken_ = 0;
+  /// The document whose page the read being answered names, which a patch may
+  /// write into where no one else holds it.
+  std::optional<std::uint64_t> clientDocument_;
   /// Documents the engine rendered for, rather than built from kept pages.
   std::uint64_t namedViewRenders_ = 0;
   /// The times an owner's views read which store they are kept under
@@ -798,6 +814,10 @@ private:
     const NamedView *document;
     std::uint64_t start, end;
   };
+  /// The document's id and the lines \p etag names, as namedViewPage names a
+  /// page, whether or not this worker has the document.
+  std::optional<std::array<std::uint64_t, 3>>
+  pageName(const std::string &etag) const;
   std::optional<NamedPage> namedPage(const std::string &etag,
                                      bool previous) const;
   /// Function-list order (indices into Listing::functionRows) for the last

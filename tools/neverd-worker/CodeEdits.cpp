@@ -354,21 +354,73 @@ std::string replaced(const std::string &text,
   result.append(text, cursor, text.size() - cursor);
   return result;
 }
-/// The byte spans of a page, other than the names decorating adds.
-void remapPageSpans(Json &view, const ByteShifts &shifted) {
-  const auto remap = [&](Json &span) {
-    for (const char *field : {"begin_byte", "end_byte"})
-      if (span.contains(field))
-        span[field] = shifted(span[field].get<std::size_t>());
-  };
-  for (auto &name : view["source_names"])
-    remap(name);
-  for (auto &region : view["library_regions"])
-    for (auto &span : region["spans"])
-      remap(span);
-  if (view.contains("prelude") && view["prelude"].contains("end_byte"))
-    view["prelude"]["end_byte"] =
-        shifted(view["prelude"]["end_byte"].get<std::size_t>());
+/// One more element of a list of spans, whose begin and end moved by \p begin
+/// and \p end.
+void noteMoved(std::vector<CodeEdits::ViewChange::Moved> &runs,
+               std::ptrdiff_t begin, std::ptrdiff_t end) {
+  if (!runs.empty() && runs.back().begin == begin && runs.back().end == end)
+    ++runs.back().count;
+  else
+    runs.push_back({1, begin, end});
+}
+/// \p span's begin and end where \p shifted puts them: what was added to
+/// each, nothing to one it has not.
+std::pair<std::ptrdiff_t, std::ptrdiff_t> moveSpan(Json &span,
+                                                   const ByteShifts &shifted) {
+  std::ptrdiff_t moved[2] = {0, 0};
+  std::size_t at = 0;
+  for (const char *field : {"begin_byte", "end_byte"}) {
+    if (const auto held = span.find(field); held != span.end()) {
+      const auto was = held->get<std::size_t>();
+      const auto now = shifted(was);
+      *held = now;
+      moved[at] =
+          static_cast<std::ptrdiff_t>(now) - static_cast<std::ptrdiff_t>(was);
+    }
+    ++at;
+  }
+  return {moved[0], moved[1]};
+}
+/// The byte spans of a page, other than the names decorating adds; \p change,
+/// where given, takes what moved of them.
+void remapPageSpans(Json &view, const ByteShifts &shifted,
+                    CodeEdits::ViewChange *change = nullptr) {
+  for (auto &name : view["source_names"]) {
+    const auto [begin, end] = moveSpan(name, shifted);
+    if (change)
+      noteMoved(change->sourceNames, begin, end);
+  }
+  std::size_t place = 0;
+  for (auto &region : view["library_regions"]) {
+    // One that held no spans takes an empty list of them.
+    bool written = !region.is_object() || !region.contains("spans");
+    for (auto &span : region["spans"]) {
+      const auto [begin, end] = moveSpan(span, shifted);
+      written = written || begin || end;
+    }
+    if (change && written)
+      change->regions.push_back(place);
+    ++place;
+  }
+  if (view.contains("prelude") && view["prelude"].contains("end_byte")) {
+    const auto was = view["prelude"]["end_byte"].get<std::size_t>();
+    view["prelude"]["end_byte"] = shifted(was);
+    if (change && shifted(was) != was)
+      change->prelude = true;
+  }
+}
+/// The spans \p replacements rewrite, as a change says them.
+void noteText(CodeEdits::ViewChange &change,
+              const std::vector<Replacement> &replacements) {
+  change.text.reserve(replacements.size());
+  for (const auto &replacement : replacements)
+    change.text.push_back(
+        {replacement.begin, replacement.end, replacement.text.size()});
+}
+/// Where \p item stands in the list \p items holds.
+std::size_t indexIn(const Json &items, const Json *item) {
+  return static_cast<std::size_t>(
+      item - items.get_ref<const Json::array_t &>().data());
 }
 /// A global as a source text declares it, by a marker or an extern's trailing
 /// address.
@@ -1165,18 +1217,31 @@ respelling(const std::string &text, std::size_t bodyStart,
   return Respelling{std::move(replacements), std::move(shown),
                     std::move(movedNames)};
 }
-/// \p view's variables at an address \p shown names, called so.
-void renameVariables(
-    Json &view, const std::unordered_map<std::uint64_t, std::string> &shown) {
+/// \p view's variables at an address \p shown names, called so: those that
+/// took another name, by their place among the variables.
+std::vector<std::size_t>
+renameVariables(Json &view,
+                const std::unordered_map<std::uint64_t, std::string> &shown) {
+  std::vector<std::size_t> named;
   if (auto variables = view.find("source_variables");
-      variables != view.end() && variables->is_array())
-    for (auto &variable : *variables)
+      variables != view.end() && variables->is_array()) {
+    std::size_t place = 0;
+    for (auto &variable : *variables) {
       if (const auto address = variable.find("address");
           address != variable.end() && address->is_string())
         if (const auto name =
                 shown.find(parseAddress(address->get<std::string>()));
-            name != shown.end())
+            name != shown.end()) {
+          const auto held = variable.find("name");
+          if (held == variable.end() || !held->is_string() ||
+              held->get_ref<const std::string &>() != name->second)
+            named.push_back(place);
           variable["name"] = name->second;
+        }
+      ++place;
+    }
+  }
+  return named;
 }
 /// A list of \p view's, or none where it holds no list there.
 const Json &listed(const Json &view, const char *field) {
@@ -1753,7 +1818,7 @@ void CodeEdits::decorate(Json &view, const Json &row, std::uint64_t function,
 
 bool CodeEdits::takeFunctionNames(Json &view,
                                   const std::vector<std::uint64_t> &renamed,
-                                  const ImageFacts &image) {
+                                  const ImageFacts &image, ViewChange *change) {
   const auto text = view.find("text");
   const auto names = view.find("code_names");
   if (text == view.end() || !text->is_string() || names == view.end() ||
@@ -1794,18 +1859,21 @@ bool CodeEdits::takeFunctionNames(Json &view,
     if (replacements[i].begin < replacements[i - 1].end)
       return false;
   const ByteShifts shifted(replacements);
-  for (auto &name : *names)
-    for (const char *field : {"begin_byte", "end_byte"})
-      if (const auto at = name.find(field); at != name.end())
-        *at = shifted(at->get<std::size_t>());
-  remapPageSpans(view, shifted);
+  if (change)
+    noteText(*change, replacements);
+  for (auto &name : *names) {
+    const auto [begin, end] = moveSpan(name, shifted);
+    if (change)
+      noteMoved(change->codeNames, begin, end);
+  }
+  remapPageSpans(view, shifted, change);
   view["text"] = replaced(decorated, replacements);
   return true;
 }
 
 bool CodeEdits::takeComments(Json &view, std::uint64_t function,
                              std::optional<std::size_t> definitionLine,
-                             const ImageFacts &image) {
+                             const ImageFacts &image, ViewChange *change) {
   const auto text = view.find("text");
   const auto rows = view.find("rows");
   if (text == view.end() || !text->is_string() || rows == view.end() ||
@@ -1871,23 +1939,28 @@ bool CodeEdits::takeComments(Json &view, std::uint64_t function,
   std::sort(replacements.begin(), replacements.end(),
             [](const auto &a, const auto &b) { return a.begin < b.begin; });
   const ByteShifts shifted(replacements);
-  for (const auto &[mapping, comment] : changed)
+  if (change)
+    noteText(*change, replacements);
+  for (const auto &[mapping, comment] : changed) {
     (*mapping)["code_comment"] = comment;
+    if (change)
+      change->rows.push_back(indexIn(*rows, mapping));
+  }
   if (const auto names = view.find("code_names");
       names != view.end() && names->is_array())
-    for (auto &name : *names)
-      for (const char *field : {"begin_byte", "end_byte"})
-        if (name.contains(field))
-          name[field] = shifted(name[field].get<std::size_t>());
-  remapPageSpans(view, shifted);
+    for (auto &name : *names) {
+      const auto [begin, end] = moveSpan(name, shifted);
+      if (change)
+        noteMoved(change->codeNames, begin, end);
+    }
+  remapPageSpans(view, shifted, change);
   view["text"] = replaced(decorated, replacements);
   return true;
 }
 
-std::optional<CodeEdits::EngineText>
-CodeEdits::takeDataNames(Json &view, const EngineText &engine,
-                         const Json &renamed, const Json &row,
-                         const std::string &representation) {
+std::optional<CodeEdits::EngineText> CodeEdits::takeDataNames(
+    Json &view, const EngineText &engine, const Json &renamed, const Json &row,
+    const std::string &representation, ViewChange *change) {
   const auto text = view.find("text");
   const auto names = view.find("code_names");
   const auto rows = view.find("rows");
@@ -2020,23 +2093,36 @@ CodeEdits::takeDataNames(Json &view, const EngineText &engine,
       anchored.push_back(&mapping);
   // Nothing below refuses: the view takes it all.
   const ByteShifts shifted(replacements);
-  for (const auto &[name, to] : respelledNames)
+  if (change)
+    noteText(*change, replacements);
+  for (const auto &[name, to] : respelledNames) {
     (*name)["original"] = *to;
+    if (change)
+      change->names.push_back(indexIn(*names, name));
+  }
   for (auto &name : *names) {
-    for (const char *field : {"begin_byte", "end_byte"})
-      if (const auto at = name.find(field); at != name.end())
-        *at = shifted(at->get<std::size_t>());
+    const auto [begin, end] = moveSpan(name, shifted);
+    if (change)
+      noteMoved(change->codeNames, begin, end);
     if (const auto kind = name.find("kind");
         kind != name.end() && kind->is_string() &&
         kind->get_ref<const std::string &>() == "local" &&
-        name.contains("identity"))
+        name.contains("identity")) {
       name["identity"] = identity;
+      if (change)
+        change->identity = identity;
+    }
   }
-  for (auto *mapping : anchored)
+  for (auto *mapping : anchored) {
     (*mapping)["code_anchor"] =
         anchors.at(mapping->value("line", std::size_t{0}));
-  remapPageSpans(view, shifted);
-  renameVariables(view, respelled->shown);
+    if (change)
+      change->rows.push_back(indexIn(*rows, mapping));
+  }
+  remapPageSpans(view, shifted, change);
+  auto named = renameVariables(view, respelled->shown);
+  if (change)
+    change->variables = std::move(named);
   view["text"] = replaced(decorated, replacements);
   EngineText taken{std::move(spelled), engineShifts(engine.bodyStart), {}};
   taken.sourceNames.reserve(engine.sourceNames.size());

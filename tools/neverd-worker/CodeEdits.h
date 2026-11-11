@@ -1,4 +1,5 @@
 #pragma once
+#include "PageDelta.h"
 #include "Protocol.h"
 
 #include <functional>
@@ -71,6 +72,9 @@ public:
   };
   /// Of an engine view about to be decorated.
   static EngineText engineText(const Json &view);
+  /// What one of takeComments, takeFunctionNames and takeDataNames wrote into a
+  /// view (PageDelta.h).
+  using ViewChange = neverd::worker::ViewChange;
   /// A view decorate wrote from \p engine for \p representation, under the code
   /// edit row \p row, after the data in \p renamed, rows of what data is called
   /// now, took those names: the view as decorate writes it from the engine
@@ -83,9 +87,11 @@ public:
   /// a changed line, local names that would go stale or come back, or a
   /// variable or identifier symbol the new name may mean; the view is then read
   /// again from what is kept.
+  /// \p change, where given, takes what it wrote.
   static std::optional<EngineText>
   takeDataNames(Json &view, const EngineText &engine, const Json &renamed,
-                const Json &row, const std::string &representation);
+                const Json &row, const std::string &representation,
+                ViewChange *change = nullptr);
   /// \p definitionLine, where given, takes the line the function's definition
   /// begins on, which a function's own comment is written at.
   static void decorate(Json &view, const Json &row, std::uint64_t function,
@@ -102,18 +108,22 @@ public:
   /// move, as decorate would write them.  False, with the view as it was,
   /// where a line with a changed comment holds more than one row or does not
   /// end in the comment decorate wrote; the view is then decorated again.
+  /// \p change, where given, takes what it wrote.
   static bool takeComments(Json &view, std::uint64_t function,
                            std::optional<std::size_t> definitionLine,
-                           const ImageFacts &image);
+                           const ImageFacts &image,
+                           ViewChange *change = nullptr);
   /// A view decorate wrote, after the functions at \p renamed took the names
   /// \p image gives them: each name the view links to one of them shows its
   /// new name, and the spans after it move, as decorate would write them.
   /// False, with the view as it was, where one of them gave its name up or the
   /// view spells a new name otherwise, which may lead there now; the view is
   /// then decorated again.
+  /// \p change, where given, takes what it wrote.
   static bool takeFunctionNames(Json &view,
                                 const std::vector<std::uint64_t> &renamed,
-                                const ImageFacts &image);
+                                const ImageFacts &image,
+                                ViewChange *change = nullptr);
   /// Give a complete source view a source name wherever its code spells an
   /// identifier its identifier_symbols list (`fini`, which C calls the
   /// function `_fini`), so the identifier finds the function and reads as its

@@ -1043,7 +1043,17 @@ them with those integer fields moved by amount, `["put", [values]]` replaces the
 elements, `["skip", n]` drops n and `["new", [values]]` adds values.  An edit that moves
 the byte offsets of what follows a line, such as a comment or a name, changes a page by
 a few operations.  Where the operations would weigh more than half the page, or the
-document is gone, the page comes whole.
+document is gone, the page comes whole.  Where one patch wrote the edit into the
+document the page is of (a comment, a function's name or a data's name, taken into the
+document that read it), the operations are what the patch says it wrote, for the same
+lines of the document it was made of, without the two documents being compared; and
+where the read names a page of that document, which the worker alone holds, the patch
+is written into the document itself, whose other pages then read what the patch says
+too, while a page of a document older than that comes whole.  `metadata.
+named_view_changes_said` counts the pages answered so and `metadata.
+named_view_documents_taken` the patches written so.  `open.check_view_changes:true`,
+for tests, has each such page also made by comparing the documents, an answer that
+differs failing the read, and leaves every patch a document of its own.
 
 `prepare_function {address}` analyzes the function at `address` and emits its source as
 a visit would, keeping nothing of the text, builds the listing a view decorates with,

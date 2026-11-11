@@ -7232,6 +7232,18 @@ still on its way: the comment is committed first, the files hold both without th
 project being reported saved, and Save still answers once the files hold it.
 `NeverDWorkerViewEdits` also checks a prepared function, a page named as kept, and a
 replica taking a function's and data's names in one update without reading names again.
+It reads each view as a client that keeps its pages does, whole and three lines a page,
+through comments written, changed and taken away, a function's longer and shorter name,
+a data's name and two edits with no read between: each page named for what changed of it,
+with that applied, is the page a client that keeps none reads, the patch's own account
+answers (`metadata.named_view_changes_said`), and a read an edit carries has its patch
+written into the document (`metadata.named_view_documents_taken`), whose other pages
+read what it says. `NeverDWorkerViewEditsChecked` runs the same with
+`open.check_view_changes`, where the worker compares the documents for every such page.
+`NeverDWorkerCodeEdits` checks what each patch says it wrote (`saidChanges`): for every
+run of lines of a view, the account applied to the page before a comment, a function's
+name spelled twice on a line or a data's name gives the page after, with source names,
+library spans and a prelude it moves.
 `NeverDWorkerViewEdits` reads every view after each edit an owner takes while keeping
 documents, a function's name, a comment, a colour, a new type and undoing them, and each
 must read field for field as a session that has just opened the project's files.

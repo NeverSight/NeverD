@@ -609,4 +609,241 @@ std::optional<Json> applyPageDelta(Json page, const Json &delta) {
   return page;
 }
 
+std::optional<std::vector<std::pair<std::size_t, std::ptrdiff_t>>>
+changedLines(const ViewChange &wrote,
+             const std::vector<std::size_t> &startsBefore,
+             std::size_t bytesBefore, std::string_view textNow) {
+  std::vector<std::pair<std::size_t, std::ptrdiff_t>> lines;
+  std::ptrdiff_t moved = 0;
+  std::size_t last = 0;
+  for (const auto &span : wrote.text) {
+    // In order, each within the text it was and the one it is.
+    if (span.begin > span.end || span.end > bytesBefore || span.begin < last ||
+        startsBefore.empty() || startsBefore.front() > span.begin)
+      return std::nullopt;
+    last = span.end;
+    const auto line = static_cast<std::size_t>(
+        std::upper_bound(startsBefore.begin(), startsBefore.end(), span.begin) -
+        startsBefore.begin() - 1);
+    const auto now = static_cast<std::size_t>(
+        static_cast<std::ptrdiff_t>(span.begin) + moved);
+    // Within its line, the break that ends it not among its bytes, as what
+    // reads there now holds none.
+    if ((line + 1 < startsBefore.size() &&
+         span.end >= startsBefore[line + 1]) ||
+        now + span.size > textNow.size() ||
+        textNow.substr(now, span.size).find('\n') != std::string_view::npos)
+      return std::nullopt;
+    moved += static_cast<std::ptrdiff_t>(span.size) -
+             static_cast<std::ptrdiff_t>(span.end - span.begin);
+    if (!lines.empty() && lines.back().first == line)
+      lines.back().second = moved;
+    else
+      lines.emplace_back(line, moved);
+  }
+  return lines;
+}
+
+std::optional<Json> changedPage(const PageSource &page, const Json &document,
+                                const std::vector<std::size_t> &starts,
+                                const DocumentChange &change, std::size_t start,
+                                std::size_t end) {
+  const auto &wrote = change.wrote;
+  const auto &value = document;
+  const auto &text = value.at("text").get_ref<const std::string &>();
+  Json operations = Json::array();
+  // The runs that make a page's elements of a list from those the page had:
+  // each stays, or its span moved by what the patch added to that place of the
+  // list (\p moved, none where it moved no span), or it is sent again where
+  // the patch wrote other values of it (\p written, ascending).  With them,
+  // how many are sent again; nothing where the patch does not account for an
+  // element.
+  const auto runsOf = [&](const std::string &name, const Items &items,
+                          const std::vector<ViewChange::Moved> &moved,
+                          const std::vector<std::size_t> &written)
+      -> std::optional<std::pair<Json, std::size_t>> {
+    const Json *const first =
+        value.at(name).get_ref<const Json::array_t &>().data();
+    Json runs = Json::array();
+    enum class Run { None, Same, Shift, Put } kind = Run::None;
+    std::size_t count = 0, sent = 0, run = 0, before = 0;
+    std::ptrdiff_t byBegin = 0, byEnd = 0;
+    Json values = Json::array();
+    std::optional<std::size_t> last;
+    const auto flush = [&] {
+      if (kind == Run::Same) {
+        runs.push_back(Json::array({"same", count}));
+      } else if (kind == Run::Shift) {
+        Json by = Json::object();
+        if (byBegin)
+          by["begin_byte"] = static_cast<std::int64_t>(byBegin);
+        if (byEnd)
+          by["end_byte"] = static_cast<std::int64_t>(byEnd);
+        runs.push_back(Json::array({"shift", count, std::move(by)}));
+      } else if (kind == Run::Put) {
+        runs.push_back(Json::array({"put", std::move(values)}));
+      }
+      kind = Run::None;
+      count = 0;
+      values = Json::array();
+    };
+    for (const Json *item : items) {
+      // A page holds its elements in their list's order.
+      const auto place = static_cast<std::size_t>(item - first);
+      if (last && place <= *last)
+        return std::nullopt;
+      last = place;
+      std::ptrdiff_t begin = 0, stop = 0;
+      if (!moved.empty()) {
+        while (run < moved.size() && place >= before + moved[run].count)
+          before += moved[run++].count;
+        if (run == moved.size())
+          return std::nullopt;
+        begin = moved[run].begin;
+        stop = moved[run].end;
+      }
+      if (std::binary_search(written.begin(), written.end(), place)) {
+        if (kind != Run::Put) {
+          flush();
+          kind = Run::Put;
+        }
+        values.push_back(*item);
+        ++sent;
+      } else if (begin || stop) {
+        if (kind != Run::Shift || byBegin != begin || byEnd != stop) {
+          flush();
+          kind = Run::Shift;
+          byBegin = begin;
+          byEnd = stop;
+        }
+        ++count;
+      } else {
+        if (kind != Run::Same) {
+          flush();
+          kind = Run::Same;
+        }
+        ++count;
+      }
+    }
+    flush();
+    return std::pair{std::move(runs), sent};
+  };
+  // A list's runs as pageDelta says them: none where every element stays, the
+  // list whole where most of it is sent again.
+  const auto say = [&](const std::string &name, const Items &items,
+                       std::pair<Json, std::size_t> runs) {
+    if (runs.first.empty() ||
+        (runs.first.size() == 1 && runs.first[0][0] == "same"))
+      return;
+    if (runs.second * 2 > items.size()) {
+      Json list = Json::array();
+      for (const Json *item : items)
+        list.push_back(*item);
+      operations.push_back(Json::array({"set", name, std::move(list)}));
+    } else {
+      operations.push_back(Json::array({"items", name, std::move(runs.first)}));
+    }
+  };
+  // A list a page holds whole, as a value: its elements in place.
+  Items whole;
+  const auto wholeOf = [&](const Field &field) -> const Items & {
+    whole.clear();
+    for (const auto &item : *field.value)
+      whole.push_back(&item);
+    return whole;
+  };
+  static const std::vector<ViewChange::Moved> unmoved;
+  static const std::vector<std::size_t> unwritten;
+  for (const auto &field : page.fields()) {
+    if (field.name == "text" && field.kind == Field::Kind::Text) {
+      // The lines the patch wrote that are on the page, each whole.
+      Json changes = Json::array();
+      for (const auto &[line, moved] : change.lines) {
+        if (line < start || line >= end)
+          continue;
+        if (line >= starts.size())
+          return std::nullopt;
+        const auto begin = starts[line];
+        auto stop = text.find('\n', begin);
+        if (stop == std::string::npos)
+          stop = text.size();
+        changes.push_back(
+            Json::array({line - start, text.substr(begin, stop - begin)}));
+      }
+      if (changes.empty())
+        continue;
+      const auto total = static_cast<std::size_t>(std::count(
+                             field.text.begin(), field.text.end(), '\n')) +
+                         1;
+      if (changes.size() * 2 > total)
+        operations.push_back(
+            Json::array({"set", field.name, std::string(field.text)}));
+      else
+        operations.push_back(
+            Json::array({"lines", field.name, total, std::move(changes)}));
+    } else if (field.name == "rows" && field.kind == Field::Kind::Items) {
+      if (wrote.rows.empty())
+        continue;
+      auto runs = runsOf(field.name, field.items, unmoved, wrote.rows);
+      if (!runs)
+        return std::nullopt;
+      say(field.name, field.items, std::move(*runs));
+    } else if (field.name == "code_names" && field.kind == Field::Kind::Items) {
+      if (wrote.identity) {
+        // Every element that has an identity reads the one the patch wrote.
+        bool held = false;
+        for (const Json *item : field.items)
+          if (item->is_object())
+            if (const auto identity = item->find("identity");
+                identity != item->end()) {
+              if (*identity != *wrote.identity)
+                return std::nullopt;
+              held = true;
+            }
+        if (held)
+          operations.push_back(Json::array(
+              {"each", field.name, {{"identity", *wrote.identity}}}));
+      }
+      auto runs = runsOf(field.name, field.items, wrote.codeNames, wrote.names);
+      if (!runs)
+        return std::nullopt;
+      say(field.name, field.items, std::move(*runs));
+    } else if (field.name == "source_names" &&
+               field.kind == Field::Kind::Items) {
+      auto runs = runsOf(field.name, field.items, wrote.sourceNames, unwritten);
+      if (!runs)
+        return std::nullopt;
+      say(field.name, field.items, std::move(*runs));
+    } else if (field.name == "byte_offset" && field.kind == Field::Kind::Own) {
+      // What the bytes before the page's first line moved by.
+      std::ptrdiff_t moved = 0;
+      for (const auto &[line, by] : change.lines) {
+        if (line >= start)
+          break;
+        moved = by;
+      }
+      if (moved)
+        operations.push_back(Json::array({"set", field.name, field.own}));
+    } else if (field.kind == Field::Kind::Value &&
+               ((field.name == "prelude" && wrote.prelude) ||
+                (field.name == "function_identity" && change.stated) ||
+                (field.name == "library_regions" && change.stated))) {
+      operations.push_back(Json::array({"set", field.name, *field.value}));
+    } else if (field.kind == Field::Kind::Value && field.value->is_array() &&
+               ((field.name == "library_regions" && !wrote.regions.empty()) ||
+                (field.name == "source_variables" &&
+                 !wrote.variables.empty()))) {
+      // A list every page holds whole: the elements the patch wrote.
+      const auto &items = wholeOf(field);
+      auto runs = runsOf(field.name, items, unmoved,
+                         field.name == "library_regions" ? wrote.regions
+                                                         : wrote.variables);
+      if (!runs)
+        return std::nullopt;
+      say(field.name, items, std::move(*runs));
+    }
+  }
+  return operations;
+}
+
 } // namespace neverd::worker

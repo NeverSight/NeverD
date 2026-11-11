@@ -199,16 +199,30 @@ bool Engine::keptPageReadsCurrentNames(const Json &page) const {
   return current;
 }
 
-void Engine::currentNamesInView(Json &view) const {
+bool Engine::currentNamesInView(Json &view) const {
   const auto &names = imageFacts().names;
   if (names.empty())
-    return;
+    return false;
+  bool stated = false;
   eachStatedFunction(view, [&](std::uint64_t address, Json &identity) {
     if (const auto name = names.find(address); name != names.end()) {
+      for (const auto &[field, said] :
+           {std::pair<const char *, const std::string &>{"name", name->second},
+            {"display_name", name->second}}) {
+        const auto held = identity.find(field);
+        stated = stated || held == identity.end() || !held->is_string() ||
+                 held->get_ref<const std::string &>() != said;
+      }
+      for (const char *field : {"name_origin", "display_origin"}) {
+        const auto held = identity.find(field);
+        stated = stated || held == identity.end() || !held->is_string() ||
+                 held->get_ref<const std::string &>() != "user";
+      }
       identity["name"] = identity["display_name"] = name->second;
       identity["name_origin"] = identity["display_origin"] = "user";
     }
   });
+  return stated;
 }
 
 Engine::StoreNames Engine::storeNames() {

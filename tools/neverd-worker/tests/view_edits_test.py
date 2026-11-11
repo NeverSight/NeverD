@@ -10,6 +10,7 @@ with no view between them must each count: the first's forgetting is not lost to
 from contextlib import ExitStack
 from pathlib import Path
 import json
+import os
 import sys
 import tempfile
 
@@ -20,6 +21,11 @@ from source_variable_types_test import global_elf, ok
 from transport_test import Client
 
 GLOBAL = 0x401000
+# NEVERD_TEST_CHECK_VIEW_CHANGES=1: the owner makes every page a patch's own
+# account answers by comparing the documents too, and fails where they differ
+# (open.check_view_changes); it then writes no patch into the document it is
+# made of.
+CHECK = os.environ.get("NEVERD_TEST_CHECK_VIEW_CHANGES") == "1"
 
 
 def view(client, address):
@@ -34,7 +40,8 @@ def view(client, address):
 def filled(clients, executable, path, data, visits=()):
     path.write_bytes(data)
     owner = clients.enter_context(Client(executable))
-    ok(owner, "open", {"path": str(path), "analysis": False, "warm": False, "write_behind": True})
+    ok(owner, "open", {"path": str(path), "analysis": False, "warm": False, "write_behind": True,
+                       "check_view_changes": CHECK})
     restore = ok(owner, "analysis_snapshot")
     restore.update(call_summaries=True, render_ahead=True, render_store="write")
     with Client(executable) as replica:
@@ -91,6 +98,37 @@ def apply_delta(page, delta):
     for key in ("etag", "project_id", "revision"):
         page[key] = delta[key]
     return page
+
+
+def pages_of(client, address, limit, kept=None):
+    """Every page of a view, limit lines each, as a client reads them that keeps none, or
+    one that keeps the pages given and names each for what changed of it."""
+    pages, offset = [], 0
+    while True:
+        request = {"address": hex(address), "representation": "source", "offset": offset,
+                   "limit": limit, "kept_only": True, "if_none_match": ""}
+        if kept:
+            base = kept[len(pages)]
+            assert base["offset"] == offset, (base["offset"], offset)
+            request.update(if_none_match=base["etag"], page_delta=True)
+        page = ok(client, "decompile", request)
+        if page.get("unchanged"):
+            assert page["etag"] == base["etag"], page
+            page = dict(base, revision=page["revision"])
+        elif "delta" in page:
+            assert page["base"] == base["etag"], page
+            page = apply_delta(base, page)
+        pages.append(page)
+        if page["complete"]:
+            return pages
+        offset = page["next_offset"]
+
+
+def said(client):
+    """How many pages a patch's own account answered, and how many patches were written
+    into the document they were made of."""
+    metadata = ok(client, "metadata")
+    return metadata["named_view_changes_said"], metadata["named_view_documents_taken"]
 
 
 def replica_view(client, address):
@@ -324,8 +362,76 @@ def run(executable):
         ok(owner, "function_edit", {"address": hex(functions[2]), "attributes": {"color": "#304050"}})
         ok(owner, "function_edit", {"address": hex(functions[1]), "attributes": {"type": None}})
         ok(owner, "local_types_declare", {"language": "c", "source": "struct VIEW_NEXT { unsigned value; };"})
-        compare(executable, owner, path, functions, "declaration then type")
+        again_views = compare(executable, owner, path, functions, "declaration then type")
 
+        # A client that keeps a view's pages names each for what an edit changed
+        # of it, and the patch that wrote the edit into the view's document says
+        # that itself: a comment's line and row, a name's spelling, and the
+        # spans either moved, whole or page by page.  Applied, each page is the
+        # one a client that keeps none reads.
+        def kept_pages(limit):
+            return {address: pages_of(owner, address, limit) for address in functions}
+
+        def read_again(kept, limit, step):
+            for address in functions:
+                again = pages_of(owner, address, limit, kept[address])
+                afresh = pages_of(owner, address, limit)
+                assert again == afresh, (step, limit, hex(address), again, afresh)
+            return kept_pages(limit)
+
+        for limit in (200, 3):
+            kept = kept_pages(limit)
+            assert limit == 200 or max(len(pages) for pages in kept.values()) > 2, kept
+            before = said(owner)
+            ok(owner, "annotation_set", {"address": hex(functions[0]), "text": "said of its page"})
+            ok(owner, "save")
+            kept = read_again(kept, limit, "a comment")
+            ok(owner, "annotation_set", {"address": inner, "text": "said of a line, a longer one"})
+            ok(owner, "save")
+            kept = read_again(kept, limit, "a line's comment")
+            ok(owner, "annotation_set", {"address": inner, "text": ""})
+            ok(owner, "save")
+            kept = read_again(kept, limit, "a comment taken away")
+            ok(owner, "rename", {"address": hex(functions[1]), "name": "a_much_longer_function_name"})
+            kept = read_again(kept, limit, "a longer name")
+            ok(owner, "rename", {"address": hex(functions[1]), "name": "f"})
+            kept = read_again(kept, limit, "a shorter name")
+            assert said(owner)[0] > before[0], (said(owner), before)
+            # Two edits with no read between them: the page a client keeps is of
+            # no document a patch was made of, and is compared or read whole.
+            ok(owner, "annotation_set", {"address": hex(functions[0]), "text": "the first of two"})
+            ok(owner, "save")
+            ok(owner, "annotation_set", {"address": hex(functions[0]), "text": "the second of two"})
+            ok(owner, "save")
+            kept = read_again(kept, limit, "two edits")
+            # Carried by the edit, the read finds its document held by no one
+            # else, and the patch is written into it: the other pages of the
+            # document it was read what the patch says too.
+            before = said(owner)
+            pages = kept[functions[0]]
+            carried = owner.call("annotation_set", {
+                "address": hex(functions[0]), "text": "written into its document",
+                "then": [{"operation": "decompile",
+                          "payload": {"address": hex(functions[0]), "representation": "source",
+                                      "offset": 0, "limit": limit, "kept_only": True,
+                                      "if_none_match": pages[0]["etag"], "page_delta": True}}]})
+            assert carried["status"] == "ok" and carried["then"][0]["status"] == "ok", carried
+            assert "delta" in carried["then"][0]["payload"], carried
+            first_page = apply_delta(pages[0], carried["then"][0]["payload"])
+            ok(owner, "save")
+            after = said(owner)
+            assert after[0] > before[0], (after, before)
+            assert after[1] == before[1] + (0 if CHECK else 1), (after, before)
+            again = [first_page] + pages_of(owner, functions[0], limit, pages)[1:]
+            assert again == pages_of(owner, functions[0], limit), (limit, again)
+            # The pages after the first named the document the patch was written
+            # into, which holds them no more: they read what it said.
+            assert len(pages) == 1 or said(owner)[0] >= after[0] + len(pages) - 1, (
+                said(owner), after, len(pages))
+            for _ in range(8):
+                ok(owner, "undo")
+                ok(owner, "save")
+            assert same_as_fresh("pages said undone") == again_views
         # A replica takes a function's new name and data's in one update as the
         # owner takes them, without reading the names again, and reads as a
         # replica restored afterwards.
@@ -431,6 +537,34 @@ def run(executable):
             redone = compare(executable, owner, path, functions, f"redo {step}")
             same_data(f"redo {step}")
         assert redone == named, (redone, named)
+        # A data's new name, read by a client that keeps the pages of the view
+        # that reads it: its spellings, its rows' anchors, its variable and the
+        # identity of every local, as the patch says them; and carried by the
+        # rename, written into the document it was read from.
+        for limit in (200, 3):
+            kept = pages_of(owner, entry, limit)
+            before = said(owner)
+            ok(owner, "rename", {"address": hex(GLOBAL), "name": f"said_global_{limit}"})
+            again = pages_of(owner, entry, limit, kept)
+            assert again == pages_of(owner, entry, limit), (limit, again)
+            assert any(f"said_global_{limit}" in page["text"] for page in again), again
+            assert said(owner)[0] > before[0], (said(owner), before)
+            before = said(owner)
+            carried = owner.call("rename", {
+                "address": hex(GLOBAL), "name": f"a_longer_carried_global_{limit}",
+                "then": [{"operation": "decompile",
+                          "payload": {"address": hex(entry), "representation": "source",
+                                      "offset": 0, "limit": limit, "kept_only": True,
+                                      "if_none_match": again[0]["etag"], "page_delta": True}}]})
+            assert carried["status"] == "ok" and carried["then"][0]["status"] == "ok", carried
+            assert "delta" in carried["then"][0]["payload"], carried
+            after = said(owner)
+            assert after[0] > before[0], (after, before)
+            assert after[1] == before[1] + (0 if CHECK else 1), (after, before)
+            pages = [apply_delta(again[0], carried["then"][0]["payload"])]
+            pages += pages_of(owner, entry, limit, again)[1:]
+            assert pages == pages_of(owner, entry, limit), (limit, pages)
+            compare(executable, owner, path, functions, f"data names said, {limit} lines a page")
     print("what an owner keeps of a view through an edit reads as a new reader of the project does")
 
 
