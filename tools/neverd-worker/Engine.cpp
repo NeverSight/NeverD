@@ -1686,6 +1686,17 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
         (!reused->commentsReached ||
          CodeEdits::takeComments(full, address, reused->definitionLine,
                                  imageFacts(), wrote))) {
+      if (take) {
+        // The patch is written: the document it was holds nothing now and is
+        // no page's base, whatever becomes of the one being made.
+        restore.into = nullptr;
+        unindexNamedView(held);
+        namedViewBytes_ -= (*held)->bytes;
+        encodedPageBytes_ -= (*held)->pageBytes;
+        releases_.retire(std::move(*held));
+        namedViews_.erase(held);
+        ++documentsTaken_;
+      }
       // A page's own statement of a function's name, as a kept page's.
       if (named)
         change.stated = currentNamesInView(full);
@@ -1757,16 +1768,6 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
           document->change =
               std::make_shared<const DocumentChange>(std::move(change));
         }
-      }
-      if (take) {
-        // The document it was holds nothing now, and is no page's base.
-        restore.into = nullptr;
-        unindexNamedView(held);
-        namedViewBytes_ -= (*held)->bytes;
-        encodedPageBytes_ -= (*held)->pageBytes;
-        releases_.retire(std::move(*held));
-        namedViews_.erase(held);
-        ++documentsTaken_;
       }
       return keepNamedView(std::move(document), std::move(full), lookupKey,
                            sourceKey, cacheKey() == lookupKey);
@@ -2074,9 +2075,10 @@ Engine::keepNamedView(std::shared_ptr<NamedView> document, Json full,
   {
     const auto &text = full["text"].get_ref<const std::string &>();
     document->lines.push_back(0);
-    for (std::size_t i = 0; i < text.size(); ++i)
-      if (text[i] == '\n' && i + 1 < text.size())
-        document->lines.push_back(i + 1);
+    for (auto at = text.find('\n');
+         at != std::string::npos && at + 1 < text.size();
+         at = text.find('\n', at + 1))
+      document->lines.push_back(at + 1);
     document->orderedRows = orderedViewItems(full, "rows", "line", "line");
     document->orderedReferences =
         orderedViewItems(full, "references", "line", "line");
