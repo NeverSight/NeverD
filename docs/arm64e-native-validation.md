@@ -556,6 +556,33 @@ independent assembly return sites. The test also checks the original's
 explicit signing rows and executes a changed companion entry in the installed
 image. The two-frame hardware check covers this controlled call chain.
 
+Both the [native publication and interruption run](https://github.com/gmh5225/test_mac_intel/actions/runs/42969858410)
+and the [compiler-original frame controls](https://github.com/gmh5225/test_mac_intel/actions/runs/42967877615)
+ran on macos-26 and xcode-27. Each runner executed all six lifted original
+and installed image pairs. Five signals reached each of the original and
+installed unwind bodies. All ten samples recovered the interrupted return
+and authenticated the saved parent return. The
+[evidence record](evidence/arm64e-interrupted-frames-2026-11-11.json)
+includes the per-PC rows, caller checks, host and source revisions, and image
+hashes. The two Apple M1 virtual runners replayed a locally built Release
+host from the pinned LLVM fork.
+
+The default r6 CLI lifted six fixture images, published 5 of them, and
+verified the signed outputs and complete relocated entry bodies. For the
+compact-only signed input, r6 emitted DWARF and reported that the original
+contained no registered eh_frame section. The Release test suite also
+exercised the arm64e slice of the system dyld and decoded 138,671 real
+instruction words. The command-line symbolization regression separately
+covers unused function addresses and scalar values in a zero-based dylib.
+
+An independent [system cursor control](https://github.com/gmh5225/test_mac_intel/actions/runs/42967112065)
+starts Darwin's public `unw_init_local` in the signal handler. It reaches
+`_sigtramp` for all four compiler-original combinations of frame pointers
+and signing CFI. Before PAC or after authentication it skips the interrupted
+PC and reaches the caller. At the three signed positions it traps while
+stepping from the trampoline. A general walk from that signal handler
+remains unqualified on the two measured systems.
+
 ## Reconstructed entries through the native compiler
 
 `scripts/verify_arm64e_entry.py` separately validates the entry reconstruction
