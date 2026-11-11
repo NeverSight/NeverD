@@ -9686,6 +9686,14 @@ ctest --test-dir build-release \
   --output-on-failure
 ```
 
+`HighCStoreForwarding.SharedVariableWalkKeepsFirstTypeAndCallBounds` checks
+shared and cyclic expressions, intrinsic outputs, indirect targets, and the
+first type recorded for a name under bounded and complete call arguments.
+`SharedMemoryWalkKeepsOrderAndRefreshesItsAddresses` checks address visitation
+order and fresh results after changing the indirect target. Both exceed the
+inline traversal storage; visitation order comes from operands, never from the
+membership set.
+
 ## LLVM C object storage
 
 `NeverDCSourcePresentationTests` covers mapped array/record allocations through
