@@ -1,6 +1,6 @@
 **Idiomas**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 9a100b1a0b2a5ec44fc5623ea91ed93b02f978ecbe29cc51a156ea53dcde63ff -->
+<!-- i18n-source: edadf84089252d2d8a80ae25926c8013d54fb4a3fea7fc631f3731016652375c -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ Consulta las guías de [EVM](evm.md), [Solana SBF](sbf.md), [recuperación de c�
 
 > Todas las celdas de la matriz están implementadas, pero la profundidad de las pruebas de integración varía. Consulte la [matriz de cobertura de arquitectura](architecture.md#support-and-test-depth). Mach-O i386 usa objetos reubicables `thin` porque macOS moderno no puede enlazar ejecutables i386 históricos.
 
-**El análisis ELF de MIPS es experimental:** MIPS32r2/o32 y MIPS64r2/n64, en ambos órdenes de bytes, admiten un subconjunto estricto de instrucciones enteras para desensamblado, recuperación del CFG y salida en C y LLVM. No se admite la reescritura de código nativo. Consulta [la cobertura de MIPS y el ejemplo de firmware (inglés)](../mips.md) para conocer los subconjuntos microMIPS32, DSP y MIPS32r5 MSA validados por separado y sus restricciones de salida de código fuente.
+**El análisis ELF de MIPS es experimental:** MIPS32r2/o32 y MIPS64r2/n64, en ambos órdenes de bytes, admiten un subconjunto estricto de instrucciones enteras para desensamblado, recuperación del CFG y salida en C y LLVM. No se admite la reescritura de código nativo. Consulta [la cobertura de MIPS y el ejemplo de firmware (inglés)](../mips.md) para conocer los subconjuntos microMIPS32, MIPS16e/e2, DSP y MIPS32r5 MSA validados por separado y sus restricciones de salida de código fuente.
 
 El bytecode EVM legacy se soporta sin contenedor nativo: los 150 opcodes asignados
 de Frontier a Fusaka pasan por Low/Med/High IR, LLVM `i256` verificado, C23

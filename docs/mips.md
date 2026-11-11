@@ -516,11 +516,13 @@ MSA. Other revisions, MSA64, microMIPS/MSA and DSP/MSA combinations are refused.
 `SLLI/SRLI/SRAI`, `BCLRI/BSETI/BNEGI`, `ASUB_S/ASUB_U`, `SAT_S/SAT_U`,
 `ADDVI/SUBVI`, `CEQI`, `CLTI_S/U`, `CLEI_S/U`, `MAXI_S/U` and `MINI_S/U`.
 SRAR/SRLR/SRARI/SRLRI and BINSL/BINSR/BINSLI/BINSRI support B/H/W/D too.
-Rounded shifts add the highest discarded bit after shifting, avoiding original-
-width overflow; zero counts never evaluate invalid shifts. Insertion copies
-count+1 source bits into the old destination and permits full-width replacement.
-All aliased inputs are captured before the vector write; shifts have no old-WD
-dependency.
+Rounded shifts add the highest discarded bit after shifting. A zero count
+preserves the lane without an invalid shift. Insertion copies count+1 source
+bits into the destination. A full-width immediate insertion can initialize an
+unknown destination. Register-count insertions require the prior destination
+in strict emulation, including when every runtime count selects a full lane.
+The lifter captures aliased inputs before the vector write. Rounded shifts
+only depend on the source and count.
 The I5 arithmetic operands are unsigned; CEQI and the signed comparisons/extrema
 sign-extend the five-bit immediate. Comparison masks cover the entire element,
 including 64-bit lanes.
@@ -837,8 +839,25 @@ do not establish universal improvement or a cross-tool ranking. Raw reports,
 compiler-failure traces, recovery indexes and cleanup receipts remain in
 `build-mips/mips-cp0-immediate/`; completed raw reports are compressed and
 reproducible test/snapshot products are retired after their final readers.
-Generic CP0 writes, cache execution/MT scheduling, remaining DSP accumulator/revision coverage and MSA
-operations and original-e2 hardware execution remain outside this increment.
+The [CP0/MT, DSP accumulator and MSA qualification](evidence/mips-system-accumulators-2026-11-11.json)
+covers the selected CP0 views, the four MT controls, CACHE/PREF ordering,
+banked accumulator transfers, seven DSP dot-product families and 32 MSA rounded
+shift and bit-insertion forms. The MT tests check prior control values, master
+VPE permissions and execution hazards. The DSP and MSA tests compare the original
+instructions and the recompiled C with independent expected values in both byte
+orders. Cache execution, MT scheduling, the remaining DSP/MSA families and
+original MIPS16e2 hardware execution still require qualification.
+
+The MIPS16 comparison includes the original mixed instruction stream. One
+multiply and two HI/LO reads now emit three additional LowIR operations to
+track an unread accumulator result. A second comparison uses identical LowIR
+on both versions. The firmware workload checks the Archer C7 V5 `ubus` call
+handler at `0x4012d0` and the discovered functions through both C backends.
+The selected LLVMC handler changed block and return layout. Running the original
+handler with five modeled imports and both recompiled C views at `-O0` and
+`-O2` matched all twelve input cases. The other three firmware outputs kept
+their prior hashes. Local samples, build identities and cleanup receipts are in
+`build-mips/mips-system-accumulators/`.
 
 ## TP-Link firmware workflow
 

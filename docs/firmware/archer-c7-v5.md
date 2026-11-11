@@ -2,7 +2,7 @@
 
 This static analysis uses the US Archer C7 V5 firmware published on TP-Link's
 [official download page](https://www.tp-link.com/us/support/download/archer-c7/v5/).
-No vendor executable was run and no device was flashed.
+A separate execution check runs the selected call handler in Unicorn with controlled imports.
 
 ## Source and extraction
 
