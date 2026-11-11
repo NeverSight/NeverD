@@ -23475,6 +23475,11 @@ the completed child's one-unit reuse and the unfinished sibling's remaining work
 
 ## MIPS ELF analysis and source roundtrips
 
+The optional [Archer C7 V5 handler comparison](firmware/archer-c7-v5.md#reproduce-selected-views)
+runs the original `ubus call` at `0x4012d0` and both recompiled C views against
+five modeled PLT imports. Its input is the locally extracted, hash-checked
+firmware executable. The repository-owned source matrices run independently.
+
 The experimental [MIPS analysis](mips.md) path has focused targets
 `NeverDMIPSTests` (ELF admission, endian data, GOT/PLT and unwind records),
 `NeverDMIPSIntegerTests` (integer semantics and pinned Unicorn),

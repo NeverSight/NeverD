@@ -126,9 +126,18 @@ pipeline suite.
 
 Remaining source limitations include inferred external prototypes, raw numeric
 string/data addresses and partial type/structure recovery. LLVMC refers to
-original loaded image storage. The C files are analysis views; this receipt
-does not claim that the complete firmware can be rebuilt, linked, executed,
-modified or signed. No vendor executable was run.
+original loaded image storage.
+
+The optional `ubus-call-roundtrip.py` test executes the 68-instruction handler
+from the hashed official ELF in a MIPS32r2 big-endian emulator. It binds five
+PLT entries to controlled external functions. Twelve inputs cover argument
+counts, optional JSON parsing, quiet and diagnostic paths, lookup and invocation
+status, and wrapping timeout multiplication. The test checks the external call
+sequence, all seven invocation arguments, return value, restored stack pointer
+and callee-saved registers. It then recompiles both C views for o32 at `-O0` and
+`-O2` and checks the same observations. The modeled imports supply the lookup
+ID, blob head and statuses. A running router, ubus daemon and full process
+startup remain outside this test.
 
 ### Reproduce selected views
 
@@ -138,6 +147,16 @@ After extracting the official image to `build-mips/firmware/rootfs`:
 build-mips/bin/neverd info build-mips/firmware/rootfs/bin/ubus
 build-mips/bin/neverd decompile --func 0x400bd0 -o build-mips/firmware/ubus-main-highc.c build-mips/firmware/rootfs/bin/ubus
 build-mips/bin/neverd decompile --llvm --func 0x400bd0 -o build-mips/firmware/ubus-main-llvmc.c build-mips/firmware/rootfs/bin/ubus
+```
+
+With the MIPS roundtrip toolchain and pinned Unicorn bindings configured as
+described in the [testing guide](../testing.md#mips-elf-analysis-and-source-roundtrips),
+run the handler comparison on the extracted ELF.
+
+```sh
+python3 unittests/lift/mips/ubus-call-roundtrip.py \
+  --elf build-mips/firmware/rootfs/bin/ubus --neverd build-mips/bin/neverd \
+  --clang clang --ld ld.lld --output build-mips/ubus-call-roundtrip
 ```
 
 Select the other addresses from the table with the same commands. The C API
