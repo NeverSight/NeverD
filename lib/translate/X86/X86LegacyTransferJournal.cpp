@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Keep completed return/far accesses and target bindings across host stops.
+/// Keep completed transfer accesses and target bindings across host stops.
 //===----------------------------------------------------------------------===//
 
 #include "X86LegacyTransferJournal.h"
@@ -60,6 +60,8 @@ struct X86LegacyTransferContinuation {
   llvm::SmallVector<Access> Accesses;
   std::optional<X86AlignmentPriority> Alignment;
   std::optional<X86FullSegmentLimitChoice> FullLimit;
+  std::optional<X86NullSegmentBasePolicy> NullBase;
+  std::optional<X86DescriptorCanonicalityProfile> DescriptorCanonicality;
   std::optional<X86LegacyDebugProfile> DebugProfile;
   std::optional<X86LegacyVM86Profile> Virtual8086;
   uint8_t DataBreakpoints = 0;
@@ -76,8 +78,10 @@ struct X86LegacyTransferContinuation {
         SSBlocked(S.SSBlocked), NMIBlocked(S.NMIBlocked), Kind(K),
         Instruction(Bytes.begin(), Bytes.end()),
         Alignment(O.Segments.AlignmentPriority),
-        FullLimit(O.Segments.FullLimitChoice), DebugProfile(O.Debug),
-        Virtual8086(O.Virtual8086), Mode(O.Non64Mode) {}
+        FullLimit(O.Segments.FullLimitChoice),
+        NullBase(O.Segments.NullBasePolicy),
+        DescriptorCanonicality(O.Segments.DescriptorCanonicality),
+        DebugProfile(O.Debug), Virtual8086(O.Virtual8086), Mode(O.Non64Mode) {}
 
   bool matches(const X86LegacyExecutionState &S, const X86PagedMemory &M,
                const X86LegacyExecutionOptions &O) const {
@@ -94,8 +98,11 @@ struct X86LegacyTransferContinuation {
            controls(Controls) == controls(M.controls()) &&
            Features == M.features() && sameDebug(Debug, S.Debug) &&
            Alignment == O.Segments.AlignmentPriority &&
-           FullLimit == O.Segments.FullLimitChoice && DebugProfile == O.Debug &&
-           Virtual8086 == O.Virtual8086 && Mode == O.Non64Mode;
+           FullLimit == O.Segments.FullLimitChoice &&
+           NullBase == O.Segments.NullBasePolicy &&
+           DescriptorCanonicality == O.Segments.DescriptorCanonicality &&
+           DebugProfile == O.Debug && Virtual8086 == O.Virtual8086 &&
+           Mode == O.Non64Mode;
   }
 };
 
@@ -149,12 +156,15 @@ llvm::Error validateLegacyTransferContinuation(
   if (!S.PendingTransfer)
     return llvm::Error::success();
   const auto &P = *S.PendingTransfer;
+  const bool Bound =
+      P.Kind == X86LegacyTransferKind::Far
+          ? O.FarTransfers == X86LegacyFarTransferProfile::OrderedFrame
+      : P.Kind == X86LegacyTransferKind::Return
+          ? O.Returns == X86LegacyReturnProfile::OrderedFrame
+          : O.Segments.Profile == X86LegacySegmentProfile::WordStackOffsetFirst;
   if (S.PendingEvent || S.PendingStack || S.PendingMpx || S.PendingTask ||
       S.PendingControl || Instruction != llvm::ArrayRef(P.Instruction) ||
-      !P.matches(S, M, O) ||
-      (P.Kind == X86LegacyTransferKind::Far
-           ? O.FarTransfers != X86LegacyFarTransferProfile::OrderedFrame
-           : O.Returns != X86LegacyReturnProfile::OrderedFrame))
+      !P.matches(S, M, O) || !Bound)
     return llvm::createStringError(llvm::errc::invalid_argument,
                                    "resume the retained transfer and state");
   return llvm::Error::success();

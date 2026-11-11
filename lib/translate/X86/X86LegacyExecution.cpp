@@ -238,9 +238,8 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
   if (Non64Mode) {
     using Op = detail::X86LegacyScalarOperation;
     if ((State.EFlags & 0x20000) || State.PendingTask || State.PendingEvent ||
-        State.Mpx || Options.Tasks || Segment || DebugRegister || FastSystem ||
-        Port || String || Mpx || IRET || RETF ||
-        (Far && (Far->Call || Far->Memory)) ||
+        State.Mpx || Options.Tasks || DebugRegister || FastSystem || Port ||
+        String || Mpx || IRET || RETF || (Far && (Far->Call || Far->Memory)) ||
         (Scalar && (Scalar->DescriptorQuery || Scalar->SystemSelector ||
                     Scalar->Operation == Op::LoadMachineStatus ||
                     Scalar->Operation == Op::ClearTaskSwitch ||
@@ -255,6 +254,24 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                 State.Core.GPR[1] != 0xc0000080))
       return invalid("MSR access requires a bound Intel EFER bank");
   }
+  if ((Options.Segments.NullBasePolicy &&
+       *Options.Segments.NullBasePolicy != X86NullSegmentBasePolicy::Clear &&
+       *Options.Segments.NullBasePolicy !=
+           X86NullSegmentBasePolicy::Preserve) ||
+      (Non64Mode && Segment && !Segment->Read &&
+       (Segment->Segment == X86SegmentRegister::FS ||
+        Segment->Segment == X86SegmentRegister::GS) &&
+       !Options.Segments.NullBasePolicy))
+    return invalid("mixed-mode segment load requires a bound null-base choice");
+  if ((Options.Segments.DescriptorCanonicality &&
+       *Options.Segments.DescriptorCanonicality !=
+           X86DescriptorCanonicalityProfile::SelectorForStart &&
+       *Options.Segments.DescriptorCanonicality !=
+           X86DescriptorCanonicalityProfile::SelectorForRange) ||
+      (Non64Mode && (Memory.controls().EFER & 0x400) && Segment &&
+       !Segment->Read && !Options.Segments.DescriptorCanonicality))
+    return invalid(
+        "compatibility segment load requires a descriptor fault profile");
   if (ControlRegister) {
     if (!Options.ControlRegisters)
       return invalid("MOV-CR requires a bound Intel control-register profile");
@@ -462,6 +479,7 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
       return Delivered.takeError();
     Delivered->DeviceTransferCompleted = R.DeviceTransferCompleted;
     Delivered->PortInputBytesWritten = R.PortInputBytesWritten;
+    Delivered->SegmentWritten = R.SegmentWritten;
     Delivered->InstructionAttempted = Attempted;
     Delivered->InstructionCompleted =
         Completed && (Event.Kind == X86LegacyEventKind::Trap ||
@@ -716,12 +734,15 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
       R.CSWritten = true;
     }
   } else if (!R.Exception && Segment) {
-    auto Got = executeX86LegacySegmentInstruction(Next, Memory, Instruction,
-                                                  Options.Segments);
+    auto Got = detail::executeLegacySegmentTransfer(
+        State, Next, Memory, *Segment, Instruction, Options);
+    detail::retainLegacyTransferWatchpoints(State, Observation.Matches);
     if (!Got)
       return Got.takeError();
-    Accept(*Got);
-    SS = Got->LoadsSSWithInhibition && !State.SSBlocked;
+    if (Accept(*Got)) {
+      R.SegmentWritten = Got->SegmentWritten;
+      SS = Got->LoadsSSWithInhibition && !State.SSBlocked;
+    }
   } else if (!R.Exception && Port) {
     auto Staged = State;
     auto Got =

@@ -994,5 +994,7 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 #include "X64PagedDebugFunctionTests.inc"
 #include "X86ModeExecutionTests.inc"
 #include "X86ModeInterruptTests.inc"
+#include "X86ModeSegmentTests.inc"
+#include "X86ModeSegmentNativeTests.inc"
 
 } // namespace
