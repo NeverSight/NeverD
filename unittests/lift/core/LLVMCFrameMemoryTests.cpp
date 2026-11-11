@@ -141,12 +141,55 @@ TEST(LLVMCFrameMemory, PhiReadsKeepBothBranchStores) {
   EXPECT_EQ(State.DeadFrameStores.count(HandlerStore), 0u);
   EXPECT_EQ(State.RawFrameLocations.count({F.Frame, 48}), 1u);
   EXPECT_EQ(State.RawFrameLocations.count({F.Frame, 104}), 1u);
+  EXPECT_EQ(State.RawFrameLocationsInRecord,
+            (std::set<std::pair<const llvm::AllocaInst *, int64_t>>{
+                {F.Frame, 48}, {F.Frame, 104}}));
   EXPECT_EQ(State.FramePointerLocations.count(Load->getPointerOperand()), 0u);
   analyzeStoreForwarding(State, *F.Fn);
   EXPECT_EQ(State.DeadFrameAllocas.count(F.Frame), 0u);
   EXPECT_EQ(State.DeadFrameStores.count(NormalStore), 0u);
   EXPECT_EQ(State.DeadFrameStores.count(HandlerStore), 0u);
   EXPECT_EQ(State.ForwardedLoads.count(Load), 0u);
+}
+
+TEST(LLVMCFrameMemory, PhiStoresKeepTheirBytesAndTheJoinInTheFrame) {
+  // A store through a join of two frame addresses, made after an offset is
+  // added to the join, writes bytes a direct read may take. Each place it
+  // can write stays raw for the bytes it covers, and so does the place the
+  // join itself points at, which the C variable holds before the offset.
+  FrameFixture F;
+  auto *Normal = llvm::BasicBlock::Create(F.Context, "normal", F.Fn);
+  auto *Other = llvm::BasicBlock::Create(F.Context, "other", F.Fn);
+  auto *Join = llvm::BasicBlock::Create(F.Context, "join", F.Fn);
+  auto *Lower = F.B.CreateSub(F.Base, F.B.getInt64(56));
+  F.B.CreateCondBr(F.Fn->getArg(0), Normal, Other);
+  F.B.SetInsertPoint(Normal);
+  F.B.CreateBr(Join);
+  F.B.SetInsertPoint(Other);
+  F.B.CreateBr(Join);
+  F.B.SetInsertPoint(Join);
+  auto *Address = F.B.CreatePHI(F.B.getInt64Ty(), 2);
+  Address->addIncoming(Lower, Normal);
+  Address->addIncoming(F.Base, Other);
+  F.B.CreateStore(F.B.getInt64(7), F.address(Address, 8));
+  auto *Direct = F.B.CreateLoad(F.B.getInt32Ty(), F.address(F.Base, 12));
+  F.B.CreateRet(Direct);
+
+  LLVMCAnalysisState State;
+  analyzeDeadFrameStores(State, *F.Fn);
+  // The frame base is 72 bytes into the frame: the store reaches 24 and 80.
+  for (const int64_t Written : {24, 80}) {
+    ASSERT_EQ(State.RawFrameLocations.count({F.Frame, Written}), 1u);
+    EXPECT_EQ(State.RawFrameExtents.at({F.Frame, Written}), 8u);
+  }
+  for (const int64_t Joined : {16, 72}) {
+    ASSERT_EQ(State.RawFrameLocations.count({F.Frame, Joined}), 1u);
+    EXPECT_EQ(State.RawFrameExtents.at({F.Frame, Joined}), 1u);
+  }
+  // A frame record keeps its members where the frame's bytes are: only a
+  // read through such a pointer leaves its place unnamed there.
+  EXPECT_TRUE(State.RawFrameLocationsInRecord.empty());
+  EXPECT_TRUE(State.RawFrameAllocas.empty());
 }
 
 TEST(LLVMCFrameMemory, EqualPhiAddressesShareTheStoresFrameLocation) {

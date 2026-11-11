@@ -1812,12 +1812,23 @@ LLVMCWriter::frameSlotAccess(const llvm::Value *Ptr, uint16_t AccessSize,
   if (!Peeled || Peeled->first != SyntheticFrame)
     return std::nullopt;
   const uint64_t Off = Peeled->second;
+  // Whether [Begin, Begin + Size) shares a byte with those an ambiguous
+  // access covers from a raw location. A frame record's members lie where
+  // the frame's bytes do, so there only the place a read through the pointer
+  // starts at stays unnamed.
   auto RawTouches = [&](uint64_t Begin, uint64_t Size) {
-    for (const auto &[Frame, Offset] : Analysis.RawFrameLocations) {
-      if (Frame != SyntheticFrame || Offset < 0)
+    for (const auto &Location : Analysis.RawFrameLocations) {
+      const auto &[Frame, Offset] = Location;
+      if (Frame != SyntheticFrame || Offset < 0 ||
+          (FrameRecord && !Analysis.RawFrameLocationsInRecord.count(Location)))
         continue;
       const uint64_t Raw = static_cast<uint64_t>(Offset);
-      if (Raw >= Begin && Raw - Begin < Size)
+      const auto Covered = Analysis.RawFrameExtents.find(Location);
+      const uint64_t Extent =
+          FrameRecord || Covered == Analysis.RawFrameExtents.end()
+              ? 1
+              : Covered->second;
+      if (Raw >= Begin ? Raw - Begin < Size : Begin - Raw < Extent)
         return true;
     }
     return false;

@@ -13386,6 +13386,17 @@ these alias and storage facts even when dead-store elimination is disabled;
 compatible named slots become members of the same frame record, subject to
 the existing access-width and layout checks.
 
+A read or a write through a pointer that may name several frame places, as
+the element a sorting network picks, keeps each of them in the frame's bytes
+for as many bytes as the access covers (`RawFrameExtents`), and with them the
+place the join points at before a later offset moves it
+(`FrameAliases::JoinLocations`). A C variable holds the join, so `join + 4`
+must be the word after it; separate locals lie wherever the compiler puts them.
+No named local may hold any raw byte. A frame record lays its members out as
+the frame does, so there a write through the pointer reaches the named member
+where it is, and only the place a read through one starts at stays unnamed
+(`RawFrameLocationsInRecord`).
+
 ## Cross-architecture translation contract
 
 `include/neverd/translate` defines a contract layer, not an

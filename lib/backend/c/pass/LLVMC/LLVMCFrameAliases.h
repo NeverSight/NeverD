@@ -60,6 +60,11 @@ using StoredValues =
 
 struct FrameAliases {
   std::set<FrameLocation> Locations;
+  /// Where a PHI, a select or a scalar carrier on the way points before an
+  /// offset is added to it. The C code holds such a join in a variable and
+  /// moves it by that offset, so these bytes and the ones in Locations must
+  /// lie as far apart in C as they do in the frame.
+  std::set<FrameLocation> JoinLocations;
   bool Incomplete = false;
   bool HasNonFrameAlternative = false;
   bool UsesCarrierLoad = false;
@@ -71,6 +76,21 @@ inline FrameAliases peelSyntheticFrames(const llvm::Value *V,
                                         const llvm::DataLayout &DL) {
   FrameAliases Result;
   unsigned Visits = 0;
+  // The offsets added so far at each join the walk is below, where not zero.
+  std::vector<int64_t> JoinOffsets;
+  struct JoinScope {
+    std::vector<int64_t> &Offsets;
+    bool Entered;
+    JoinScope(std::vector<int64_t> &Offsets, int64_t Off)
+        : Offsets(Offsets), Entered(Off != 0) {
+      if (Entered)
+        Offsets.push_back(Off);
+    }
+    ~JoinScope() {
+      if (Entered)
+        Offsets.pop_back();
+    }
+  };
   std::function<void(const llvm::Value *, int64_t, bool,
                      std::set<const llvm::Value *>)>
       Walk = [&](const llvm::Value *Cur, int64_t Off, bool FromLoad,
@@ -86,6 +106,13 @@ inline FrameAliases peelSyntheticFrames(const llvm::Value *V,
           if (isSyntheticFrameAlloca(AI)) {
             Result.Frames.insert(AI);
             Result.Locations.emplace(AI, Off);
+            for (const int64_t Added : JoinOffsets) {
+              int64_t Joined;
+              if (llvm::SubOverflow(Off, Added, Joined))
+                Result.Incomplete = true;
+              else
+                Result.JoinLocations.emplace(AI, Joined);
+            }
             return;
           }
           if (!FromLoad) {
@@ -99,16 +126,19 @@ inline FrameAliases peelSyntheticFrames(const llvm::Value *V,
           }
           // A join carrier can hold different frame addresses on its normal
           // and exceptional paths. A textual last store is not its value.
+          const JoinScope Join(JoinOffsets, Off);
           for (const llvm::Value *Stored : It->second)
             Walk(Stored, Off, false, Seen);
           return;
         }
         if (const auto *Phi = llvm::dyn_cast<llvm::PHINode>(Cur)) {
+          const JoinScope Join(JoinOffsets, Off);
           for (const llvm::Value *Incoming : Phi->incoming_values())
             Walk(Incoming, Off, false, Seen);
           return;
         }
         if (const auto *Select = llvm::dyn_cast<llvm::SelectInst>(Cur)) {
+          const JoinScope Join(JoinOffsets, Off);
           Walk(Select->getTrueValue(), Off, false, Seen);
           Walk(Select->getFalseValue(), Off, false, Seen);
           return;

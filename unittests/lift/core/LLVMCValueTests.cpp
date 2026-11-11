@@ -8945,6 +8945,77 @@ int main(void) {
     compileAndRun(Source, Optimization);
 }
 
+TEST(LLVMCValues,
+     AStoreThroughAJoinedFramePointerReachesTheSlotsDirectReadsTake) {
+  // A sorting network picks one of two stack elements and writes both of its
+  // words through the pointer: the second by an offset added after the pick.
+  // The direct reads that follow take those same bytes, so the elements stay
+  // in the frame's own storage, where the word after one is the next.
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  auto Module = llvm::parseAssemblyString(R"(
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+define i64 @place(i64 %choose, i32 %low, i32 %high) {
+entry:
+  %frame = alloca [64 x i8], align 16
+  %frame_end = getelementptr inbounds i8, ptr %frame, i64 48
+  %first = getelementptr inbounds i8, ptr %frame, i64 8
+  %first_high = getelementptr inbounds i8, ptr %frame, i64 12
+  %second = getelementptr inbounds i8, ptr %frame, i64 16
+  %second_high = getelementptr inbounds i8, ptr %frame, i64 20
+  store i32 1, ptr %first, align 4
+  store i32 2, ptr %first_high, align 4
+  store i32 3, ptr %second, align 4
+  store i32 4, ptr %second_high, align 4
+  %first_address = ptrtoint ptr %first to i64
+  %second_address = ptrtoint ptr %second to i64
+  %is_first = icmp eq i64 %choose, 0
+  br i1 %is_first, label %join, label %other
+other:
+  br label %join
+join:
+  %target = phi i64 [ %first_address, %entry ], [ %second_address, %other ]
+  %target_pointer = inttoptr i64 %target to ptr
+  store i32 %low, ptr %target_pointer, align 4
+  %after = add i64 %target, 4
+  %after_pointer = inttoptr i64 %after to ptr
+  store i32 %high, ptr %after_pointer, align 4
+  %a = load i32, ptr %first, align 4
+  %b = load i32, ptr %first_high, align 4
+  %c = load i32, ptr %second, align 4
+  %d = load i32, ptr %second_high, align 4
+  %a64 = zext i32 %a to i64
+  %b64 = zext i32 %b to i64
+  %c64 = zext i32 %c to i64
+  %d64 = zext i32 %d to i64
+  %b_shifted = shl i64 %b64, 16
+  %c_shifted = shl i64 %c64, 32
+  %d_shifted = shl i64 %d64, 48
+  %ab = or i64 %a64, %b_shifted
+  %cd = or i64 %c_shifted, %d_shifted
+  %all = or i64 %ab, %cd
+  ret i64 %all
+}
+)",
+                                          Diagnostic, Context);
+  ASSERT_TRUE(Module) << Diagnostic.getMessage().str();
+  neverd::CEmitterOptions Options;
+  Options.Format = neverd::BinaryFormat::ELF;
+  Options.TheArch = neverd::Arch::X64;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
+  Source += R"c(
+int main(void) {
+  if (place(0, 7, 8) != 0x0004000300080007ull) return 1;
+  if (place(1, 7, 8) != 0x0008000700020001ull) return 2;
+  return 0;
+}
+)c";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndRun(Source, Optimization);
+}
+
 TEST(LLVMCValues, UnextendedNarrowArgumentsArriveAsWholeWords) {
   // The code reads only the low byte and the low half of its first two
   // arguments, as code an int was declared to take may: its callers leave the
