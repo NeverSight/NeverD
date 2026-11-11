@@ -469,7 +469,7 @@ issue takes an instruction hazard barrier such as JR.HB or ERET. A caller
 observing that boundary invokes `completeInstructionHazardBarrier()`.
 Until then the affected TC or VPE gate returns unknown. The two gates have
 independent scopes. Which runnable peer a scheduler selects belongs to the
-platform. The [MT manual rev1.12, p42](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00378-2B-MIPS32MT-AFP-01.12.pdf)
+platform. The [MT manual rev1.12, p42](https://docs.alexrp.com/mips/mips32_mt.pdf)
 resolves the inverted MVP condition in the older e2 pseudocode. The pinned
 Unicorn MT helpers are stubs and are not a semantic oracle for these forms.
 
@@ -900,6 +900,18 @@ handler with five modeled imports and both recompiled C views at `-O0` and
 `-O2` matched all twelve input cases. The other three firmware outputs kept
 their prior hashes. Local samples, build identities and cleanup receipts are in
 `build-mips/mips-system-accumulators/`.
+
+The [cache, MT, DSP and MSA qualification](evidence/mips-cache-mt-dsp-msa-2026-11-11.json)
+records 18 DSP forms, 51 MSA permutations, 102 MSA floating-point forms and
+both control transfers across all 32 selectors. The big- and little-endian
+74Kf/P5600 runs compared 208 assembly functions with 1,664 recompiled outputs
+from HighC and LLVMC at `-O0` and `-O2`. All 45,520 execution comparisons
+matched, including discarded results, DSPControl, MSACSR and enabled FP traps.
+MIPS16e2 cache and MT cases use the bound platform model described above.
+The receipt includes the input bytes and LowIR fingerprints for the
+decode/lift benchmarks. Local paired timings and the single-function Archer
+C7 comparison with Ghidra are in
+`build-mips/mips-cache-mt-dsp-msa/qualification.json`.
 
 ## TP-Link firmware workflow
 

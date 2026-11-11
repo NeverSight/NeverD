@@ -23849,8 +23849,8 @@ Profiles are `mips`, `mipsel`, `mips64`, `mips64el`, `micromips`,
 `micromipsel`, `mips16`, `mips16el`, `mips16e2`, `mips16e2el`, `mipsdsp`,
 `mipsdspel`, `mipsmsa` and `mipsmsael`. The e2 profiles add explicit MIPS16e2
 feature evidence to MIPS16 encoding. The DSP profiles explicitly select the admitted classic32 DSP
-capability; MSA profiles select classic32 r5/o32 FP64 with the admitted integer
-vector instructions.
+capability. MSA profiles select classic32 r5/o32 FP64 for the admitted integer,
+permutation, floating-point and control-transfer instructions.
 Stages are `capstone`
 (direct physical decoding), `decode` (NeverD physical decoding) and `lift`
 (decoding plus LowIR, including delay slots). Both decode paths request the same
