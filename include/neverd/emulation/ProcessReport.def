@@ -143,6 +143,8 @@ NEVERD_PROCESS_REPORT_FIELD(AfterSend, "after_send")
 NEVERD_PROCESS_REPORT_FIELD(ReadyAtNS, "ready_at_ns")
 NEVERD_PROCESS_REPORT_FIELD(ReceiveEOFAtNS, "receive_eof_at_ns")
 NEVERD_PROCESS_REPORT_FIELD(ReceiveQuietUntilNS, "receive_quiet_until_ns")
+NEVERD_PROCESS_REPORT_FIELD(ReceiveQuietAfterConnectNS,
+                            "receive_quiet_after_connect_ns")
 NEVERD_PROCESS_REPORT_FIELD(NetworkPeer, "peer_hex")
 NEVERD_PROCESS_REPORT_FIELD(ExpectedSend, "expected_send_hex")
 NEVERD_PROCESS_REPORT_FIELD(NetworkReceive, "receive_hex")

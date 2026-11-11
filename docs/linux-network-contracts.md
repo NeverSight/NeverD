@@ -192,6 +192,14 @@ times. All times fit signed 64-bit nanoseconds; a quiet interval must have a
 representable first unknown nanosecond. Failed connects cannot carry schedules.
 Every timed input requires `linux_time.advance_on_idle: true`.
 
+For a TCP connection established during execution, `receive_quiet_after_connect_ns`
+sets the same inclusive quiet end relative to the successful `connect`. Choose
+one of the two quiet fields. A duration of zero covers the instant of connection.
+Descriptor aliases share the deadline, and reads and polls do not extend it.
+The kernel checks the resolved end against the last timed arrival and the clock
+range before it consumes the connection attempt. Data arrival times still use
+elapsed nanoseconds from workload start.
+
 ```json
 {
   "linux_files": {"files": []},

@@ -82,6 +82,8 @@ LinuxFiles::Readiness LinuxFiles::socketReadiness(const OpenSocket &Socket,
   }
   auto Quiet = Datagram ? Socket.Datagram->ReceiveQuietUntilNS
                         : Socket.Connection->ReceiveQuietUntilNS;
+  if (Socket.ConnectQuietEnd)
+    Quiet = Socket.ConnectQuietEnd;
   if (Quiet) {
     if (!Clock || !Clock->advancesOnIdle()) {
       R.Unknown = "timed network input requires virtual idle time";

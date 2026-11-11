@@ -9,6 +9,7 @@
 #include "LinuxNetwork.h"
 
 #include "LinuxFiles.h"
+#include "LinuxTime.h"
 
 #include "neverd/emulation/Limits.h"
 
@@ -69,9 +70,11 @@ bool hasTimedReceives(const LinuxNetworkOptions &Options) {
            llvm::any_of(C.ReceiveEvents,
                         [](const auto &E) { return E.ReadyAtNS.has_value(); });
   };
-  return llvm::any_of(
-             Options.Connections,
-             [&](const auto &C) { return C.ReceiveEOFAtNS || Timed(C); }) ||
+  return llvm::any_of(Options.Connections,
+                      [&](const auto &C) {
+                        return C.ReceiveEOFAtNS ||
+                               C.ReceiveQuietAfterConnectNS || Timed(C);
+                      }) ||
          llvm::any_of(Options.DatagramConnections, Timed);
 }
 uint16_t networkAddressFamily(llvm::ArrayRef<uint8_t> Address) {
@@ -114,10 +117,15 @@ llvm::Error validateNetworkOptions(const LinuxNetworkOptions &Options) {
                             C.ReceiveEOF || !C.ReceiveEvents.empty())) ||
         (!C.Receive.empty() && !C.ReceiveEvents.empty()))
       return failure("invalid offline TCP connection contract");
+    const bool Quiet = C.ReceiveQuietUntilNS || C.ReceiveQuietAfterConnectNS;
     if ((C.ReceiveEOFAtNS && !C.ReceiveEOF) ||
-        (C.ReceiveQuietUntilNS && C.ReceiveEOF) ||
-        (C.ConnectErrno && (C.ReceiveEOFAtNS || C.ReceiveQuietUntilNS)))
+        (Quiet && (C.ReceiveEOF || C.ConnectErrno)) ||
+        (C.ConnectErrno && C.ReceiveEOFAtNS) ||
+        (C.ReceiveQuietUntilNS && C.ReceiveQuietAfterConnectNS))
       return failure("invalid offline TCP receive schedule");
+    if (C.ReceiveQuietAfterConnectNS &&
+        *C.ReceiveQuietAfterConnectNS >= uint64_t(INT64_MAX))
+      return failure("offline receive quiet interval has no finite end");
     if (auto E = receiveEnd(C.ReceiveEvents, C.ReceiveEOFAtNS,
                             C.ReceiveQuietUntilNS))
       return E;
@@ -328,13 +336,27 @@ LinuxFiles::network(ServiceKind Kind, const ProcessServiceEvent &Event,
         Network->Connections[NextConnection].Peer != Peer)
       return unsupported(Result,
                          "TCP peer has no matching offline connection attempt");
-    const auto &C = Network->Connections[NextConnection++];
+    const auto &C = Network->Connections[NextConnection];
     if (C.ConnectErrno) {
+      ++NextConnection;
       Socket->Failed = true;
       return Reply(uint64_t(0) - C.ConnectErrno);
     }
+    if (C.ReceiveQuietAfterConnectNS) {
+      if (!Clock || !Clock->advancesOnIdle())
+        return unsupported(Result,
+                           "timed network input requires virtual idle time");
+      const uint64_t Start = Clock->elapsed();
+      if (*C.ReceiveQuietAfterConnectNS >= uint64_t(INT64_MAX) - Start)
+        return unsupported(Result,
+                           "offline receive quiet interval has no finite end");
+      const uint64_t End = Start + *C.ReceiveQuietAfterConnectNS;
+      if (auto E = receiveEnd(C.ReceiveEvents, {}, End))
+        return unsupported(Result, llvm::toString(std::move(E)).c_str());
+      Socket->ConnectQuietEnd = End;
+    }
     Socket->Connection = &C;
-    Socket->ConnectionIndex = NextConnection - 1;
+    Socket->ConnectionIndex = NextConnection++;
     return Reply(0);
   }
   if (Kind == ServiceKind::ReceiveFrom)

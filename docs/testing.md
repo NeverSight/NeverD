@@ -20849,6 +20849,9 @@ ONESHOT rearming, timeout copyback, and original libc callers over all six
 O0/O2 ordinary/APS2/RELR fixtures and available checked ARM64 backends. Buffered
 cases assert partial objects, newline/read-ahead, multiple suspensions, EOF,
 per-read timeout, thread-local errno and incomplete imports at unknown input.
+TCP quiet-duration cases cover a delayed connect, duplicate and reused descriptors,
+the first unknown nanosecond, and a schedule that becomes valid on a later
+connect attempt. Android callers exercise libc `poll` and raw `ppoll`.
 Run affected Linux and Android owner suites before review; unavailable backend
 skips do not count as executed coverage. All fixtures use explicit offline data.
 

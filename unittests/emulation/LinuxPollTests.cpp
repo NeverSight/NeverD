@@ -165,6 +165,59 @@ TEST_P(LinuxPoll, ArrivalTimeoutAndRawRemainingTimespecShareVirtualClock) {
   EXPECT_EQ(Kernel->clock().elapsed(), 11u);
   EXPECT_EQ(word(Base + 104), 0u);
 }
+TEST_P(LinuxPoll, QuietDurationStartsAtConnectAndIsSharedByAliases) {
+  auto &Connections = Options.LinuxNetwork->Connections;
+  Connections[0].Receive.clear();
+  Connections[0].ReceiveEOF = false;
+  Connections[0].ReceiveQuietAfterConnectNS = 2000000;
+  Connections.resize(2, Connections.front());
+  ASSERT_TRUE(Kernel->clock().advanceTo(71, Report));
+  ASSERT_EQ(socket(), 3u);
+  ASSERT_EQ(call(ServiceKind::Dup, 3), 4u);
+  ASSERT_EQ(call(ServiceKind::Close, 3), 0u);
+  entry(0, 4, 1);
+  EXPECT_EQ(call(ServiceKind::Poll, Base + 256, 1, 1), 0u);
+  EXPECT_EQ(call(ServiceKind::ReceiveFrom, 4, Base + 128, 1, 0x40),
+            uint64_t(-11)); // MSG_DONTWAIT observes the same quiet interval.
+  EXPECT_EQ(call(ServiceKind::Poll, Base + 256, 1, 1), 0u);
+  EXPECT_EQ(Kernel->clock().elapsed(), 2000071u);
+  EXPECT_EQ(events(0), 0u);
+  entry(0, 4, 1);
+  EXPECT_FALSE(call(ServiceKind::Poll, Base + 256, 1, 1));
+  EXPECT_EQ(Kernel->clock().elapsed(), 2000072u);
+  EXPECT_EQ(events(0), 0xa5a5u);
+  EXPECT_FALSE(call(ServiceKind::ReceiveFrom, 4, Base + 128, 1, 0x40));
+  ASSERT_EQ(call(ServiceKind::Close, 4), 0u);
+  ASSERT_EQ(socket(), 3u);
+  entry(0, 3, 1);
+  EXPECT_EQ(call(ServiceKind::Poll, Base + 256, 1, 2), 0u);
+  EXPECT_EQ(Kernel->clock().elapsed(), 4000072u);
+}
+TEST_P(LinuxPoll, UnrepresentableQuietEndDoesNotConsumeTheConnection) {
+  auto &Connections = Options.LinuxNetwork->Connections;
+  Connections[0].Receive.clear();
+  Connections[0].ReceiveEOF = false;
+  Connections[0].ReceiveEvents = {{{0x5a}, 0, 0, 100}};
+  Connections[0].ReceiveQuietAfterConnectNS = 20;
+  Connections.resize(2, Connections.front());
+  Connections[1].ReceiveQuietAfterConnectNS = INT64_MAX - 1;
+  ASSERT_EQ(call(ServiceKind::Socket, 2, 1, 6), 3u);
+  EXPECT_FALSE(call(ServiceKind::Connect, 3, Base, 16));
+  EXPECT_EQ(Report.Diagnostic, "invalid offline receive end time");
+  ASSERT_TRUE(Kernel->clock().advanceTo(80, Report));
+  ASSERT_EQ(call(ServiceKind::Connect, 3, Base, 16), 0u);
+  entry(0, 3, 1);
+  EXPECT_EQ(call(ServiceKind::Poll, Base + 256, 1, 1), 1u);
+  EXPECT_EQ(Kernel->clock().elapsed(), 100u);
+  EXPECT_EQ(call(ServiceKind::Read, 3, Base + 128, 1), 1u);
+  EXPECT_EQ(call(ServiceKind::Poll, Base + 256, 1, 0), 0u);
+  ASSERT_EQ(call(ServiceKind::Socket, 2, 1, 6), 4u);
+  for (unsigned Attempt = 0; Attempt != 2; ++Attempt) {
+    EXPECT_FALSE(call(ServiceKind::Connect, 4, Base, 16));
+    EXPECT_EQ(Report.Diagnostic,
+              "offline receive quiet interval has no finite end");
+  }
+}
 TEST_P(LinuxPoll, SuspendedInputsAreCopiedButOutputPermissionsAreRechecked) {
   auto &C = Options.LinuxNetwork->Connections[0];
   C.Receive.clear();

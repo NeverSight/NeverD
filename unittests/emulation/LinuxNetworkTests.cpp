@@ -667,6 +667,18 @@ TEST(LinuxNetworkJSON, StrictWireAndSemanticAdmission) {
   Event(R"("receive_quiet_until_ns":9223372036854775807)", true, false);
   Event(R"("receive_quiet_until_ns":18446744073709551615)", false, false);
   Event(R"("connect_errno":101,"receive_quiet_until_ns":7)", true, false);
+  Event(R"("receive_quiet_after_connect_ns":0)", false, true);
+  Event(R"("receive_quiet_after_connect_ns":9223372036854775806)", false, true);
+  Event(R"("receive_quiet_after_connect_ns":9223372036854775807)", false,
+        false);
+  Event(R"("receive_quiet_after_connect_ns":-1)", false, false);
+  Event(R"("receive_quiet_until_ns":3,"receive_quiet_after_connect_ns":3)",
+        false, false);
+  Event(R"("receive_eof":true,"receive_quiet_after_connect_ns":1)", false,
+        false);
+  Event(R"("connect_errno":101,"receive_quiet_after_connect_ns":1)", false,
+        false);
+  Event(R"("receive_quiet_after_connect_ns":1)", true, false);
   // C++ admission shares byte and event limits with JSON callers.
   LinuxNetworkOptions N;
   LinuxDatagramConnection D;

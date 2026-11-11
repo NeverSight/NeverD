@@ -149,6 +149,8 @@ private:
     const LinuxDatagramConnection *Datagram = nullptr;
     uint64_t Sent = 0, Received = 0;
     size_t ReceiveEvent = 0;
+    // Absolute end of a quiet interval specified relative to TCP connect.
+    std::optional<uint64_t> ConnectQuietEnd = std::nullopt;
     bool Failed = false;
     int64_t ReceiveTimeoutSeconds = 0, SendTimeoutSeconds = 0;
   };

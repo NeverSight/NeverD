@@ -48,6 +48,8 @@ struct LinuxStreamConnection {
   /// After all receive events, asserts no read readiness through this elapsed
   /// nanosecond (inclusive). Later state stays unknown. Incompatible with EOF.
   std::optional<uint64_t> ReceiveQuietUntilNS;
+  /// Alternative terminal quiet end, in nanoseconds from successful connect.
+  std::optional<uint64_t> ReceiveQuietAfterConnectNS = std::nullopt;
 };
 /// One ordered connected UDP route observation. A successful connect selects
 /// a default peer, not a handshake or delivery confirmation. Reconnect and

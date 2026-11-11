@@ -179,6 +179,9 @@ linuxNetworkOptionsFromJSON(const llvm::json::Value &Value) {
                                    ? Connection.ReceiveEOFAtNS
                                    : Connection.ReceiveQuietUntilNS))
           return std::move(E);
+      } else if (Name == field::ReceiveQuietAfterConnectNS) {
+        if (auto E = timestamp(V, Name, Connection.ReceiveQuietAfterConnectNS))
+          return std::move(E);
       } else if (Name == field::ReceiveEOF) {
         auto B = V.getAsBoolean();
         if (!B)

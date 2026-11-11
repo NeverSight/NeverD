@@ -126,6 +126,26 @@ TEST_P(AndroidPoll, EpollFailuresConvertErrnoInTheCallingThread) {
     EXPECT_EQ(word(R, 1), 9u);
   }
 }
+TEST_P(AndroidPoll, ConnectRelativeSilenceExpiresAtTheGuestDeadline) {
+  auto &C = Options.LinuxNetwork->Connections[0];
+  C.ReceiveEvents.clear();
+  C.ReceiveQuietAfterConnectNS = 1000000;
+  for (uint64_t Route : {0u, 4u}) {
+    auto R = run(Route, 0);
+    completed(R);
+    EXPECT_EQ(word(R, 0), 0u);
+    EXPECT_EQ(word(R, 3), 1000000u);
+    EXPECT_EQ(word(R, 4), 0u);
+    EXPECT_EQ(word(R, 7), Route == 4 ? 0u : 1000000u);
+  }
+  Options.LinuxTime->AdvanceOnIdle = false;
+  auto MissingClock =
+      emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+  ASSERT_FALSE(bool(MissingClock));
+  EXPECT_NE(llvm::toString(MissingClock.takeError())
+                .find("linux_time.advance_on_idle"),
+            std::string::npos);
+}
 INSTANTIATE_TEST_SUITE_P(
     Backends, AndroidPoll,
     testing::Combine(testing::Values("poll-O0-none", "poll-O0-android",
