@@ -23814,6 +23814,43 @@ It checks distinct physical encodings and compares both byte orders. Its
 assembler objects and raw binaries are removed on exit. The execution tests
 above check register, memory and control effects for individual operations.
 
+For microMIPS32 DSP/DSPR2 and MSA, MIPS64r2 DSP/DSPR2 and classic MIPS32r6
+and MIPS64r6, use GNU binutils with all four MIPS ELF linker emulations:
+
+```bash
+python3 unittests/lift/mips/profile-encoding-coverage.py \
+  --assembler /path/to/mips-as --linker /path/to/mips-ld \
+  --bench build-mips/bin/neverd-mips-bench
+```
+
+The fixture links local branch relocations, checks physical lengths and compares
+the lifted operations across byte orders and across classic/micro ASE encodings.
+The parameterized `MIPSRelease6` and `MIPSDSPRegisterWidth` tests in
+`NeverDMIPSIntegerTests` check register values, control flow and full-width
+indexed addresses.
+
+Use `profile-roundtrip.py` in the same directory to recompile both emitted C
+views at `-O0` and `-O2`. Pass `--assembler`, `--linker`, `--neverd`,
+`--clang` and an empty `--output` directory, with the pinned Unicorn Python
+bindings and library configured as above. The fixture compares return values
+and DSPControl/MSACSR where applicable. For microMIPS ASEs it feeds the
+physical micro ELF to NeverD and the same independently assembled classic
+kernel to the 74Kf or P5600 reference core. Supply `--simulator` for these
+profiles. GNU sim executes the recompiled microMIPS functions with their
+original mode attributes. The driver checks each return value and, for DSP
+and DSPR2, the final DSPControl bits. The selected micro MSA integer kernel
+recompiles to scalar microMIPS. Its original vector instructions are checked
+against the classic encoding and the P5600.
+
+Run `micro-dsp-simulator.py` with `--assembler`, `--linker`, `--bench` and
+`--simulator` to execute the physical microMIPS DSP and DSPR2 instructions.
+Use a GNU MIPS simulator built for `mipsisa32r2-unknown-elf`. It compares two
+sets of inputs for each of the 159 forms in each byte order against the 74Kf
+classic instruction, including the two sides of BPOSGE32, indexed memory,
+DSPControl and both halves of AC2. The driver also compares NeverD LowIR for
+each classic and micro encoding of all 159 DSP/DSPR2 and 526 MSA forms in
+both byte orders.
+
 Ordinary pair padding, predecessor memory barriers,
 single-sided barriers at joins, depth/work exhaustion and non-entry analysis
 roots or exceptional/disconnected paths have separate call-recovery regressions.

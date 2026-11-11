@@ -13,7 +13,27 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
 
+#include <cstddef>
+#include <cstring>
+
 namespace neverd {
+namespace {
+
+void snapshotMIPS(DecodedInsn &Insn, cs_insn &Storage, cs_detail &Detail) {
+  Storage = *Insn.Raw;
+  if (const cs_detail *Source = Storage.detail) {
+    // Capstone publishes the common header and exactly op_count MIPS operands.
+    // Other architectures occupy the unused tail of the cs_detail union.
+    const size_t Size = offsetof(cs_detail, mips) +
+                        offsetof(cs_mips, operands) +
+                        Source->mips.op_count * sizeof(cs_mips_op);
+    std::memcpy(&Detail, Source, Size);
+    Storage.detail = &Detail;
+  }
+  Insn.Raw = &Storage;
+}
+
+} // namespace
 
 int Decoder::decodeUnitForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
                                DecodedExecutionUnit &Out) {
@@ -30,12 +50,7 @@ int Decoder::decodeUnitForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
       (!isMIPS64(TargetArch) && Addr > UINT32_MAX - Size))
     return 0;
 
-  Out.HeadStorage = *Out.Head.Raw;
-  if (Out.Head.Raw->detail) {
-    Out.HeadDetail = *Out.Head.Raw->detail;
-    Out.HeadStorage.detail = &Out.HeadDetail;
-  }
-  Out.Head.Raw = &Out.HeadStorage;
+  snapshotMIPS(Out.Head, Out.HeadStorage, Out.HeadDetail);
   const int SlotSize =
       decodeOneForLift(Bytes + Size, Len - Size, Addr + Size, Out.Slot);
   if (SlotSize <= 0 ||
@@ -43,12 +58,7 @@ int Decoder::decodeUnitForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
       Addr > InvalidVA - Size - SlotSize ||
       (!isMIPS64(TargetArch) && Addr > UINT32_MAX - Size - SlotSize + 1))
     return 0;
-  Out.SlotStorage = *Out.Slot.Raw;
-  if (Out.Slot.Raw->detail) {
-    Out.SlotDetail = *Out.Slot.Raw->detail;
-    Out.SlotStorage.detail = &Out.SlotDetail;
-  }
-  Out.Slot.Raw = &Out.SlotStorage;
+  snapshotMIPS(Out.Slot, Out.SlotStorage, Out.SlotDetail);
   Out.HasDelaySlot = true;
   return Out.spanBytes();
 }

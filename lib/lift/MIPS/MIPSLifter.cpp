@@ -53,6 +53,8 @@ MIPSLifter::encoding(const cs_insn &Instruction) const {
   if (Mode == InstructionMode::MIPS16)
     return mips16Encoding(Instruction);
   const uint32_t Word = word(Instruction);
+  if (ISARevision == 6)
+    return release6Encoding(Word);
   if (((Word >> 16) == 0x041c && !HasDSP) ||
       (Word >> 26 == 17 && hasDelaySlot(Word) && !HasMSA))
     return std::nullopt;
@@ -65,6 +67,9 @@ MIPSLifter::encoding(const cs_insn &Instruction) const {
 }
 
 unsigned MIPSLifter::delaySlotBytes(const cs_insn &Instruction) const {
+  if (HasMSA && Mode == InstructionMode::MicroMIPS && Instruction.size == 4 &&
+      (Instruction.bytes[archLittleEndian(Target) ? 1 : 0] >> 2) == 0x16)
+    return 0; // POOL32S cannot transfer control.
   const auto Code = Mode == InstructionMode::MIPS16
                         ? mips16JumpEncoding(Instruction)
                         : encoding(Instruction);
@@ -74,7 +79,7 @@ unsigned MIPSLifter::delaySlotBytes(const cs_insn &Instruction) const {
 LowInstructionTargetMode
 MIPSLifter::controlTargetMode(const cs_insn &Instruction) const {
   const auto Code = encoding(Instruction);
-  if (!Code || Code->Frame || Mode == InstructionMode::Default)
+  if (!Code || Code->R6 || Code->Frame || Mode == InstructionMode::Default)
     return LowInstructionTargetMode::Preserve;
   if (Code->Word >> 26 == 29)
     return isMIPSCompressedMode(Mode) ? LowInstructionTargetMode::MIPSClassic
@@ -90,6 +95,8 @@ MIPSLifter::controlTargetMode(const cs_insn &Instruction) const {
 
 bool MIPSLifter::isReturn(const cs_insn &Instruction) const {
   const auto Code = encoding(Instruction);
+  if (Code && Code->R6)
+    return Code->Word == 0xd81f0000;                       // JRC ra
   return Code && !Code->Frame && Code->Word == 0x03e00008; // JR/JRC ra
 }
 
@@ -105,6 +112,8 @@ bool MIPSLifter::isFunctionTerminator(const cs_insn &Instruction) const {
   if (!Code || Code->Frame)
     return false;
   const uint32_t Word = Code->Word;
+  if (Code->R6)
+    return Word >> 26 == 50 || (Word >> 21) == (54u << 5);
   return Code->Unconditional || Word >> 26 == 2 ||
          (Word & 0xfc1fffff) == 8; // B / J / JR
 }
@@ -114,6 +123,9 @@ va_t MIPSLifter::directCallTarget(const cs_insn &Instruction) const {
   if (!Code || Code->Frame)
     return InvalidVA;
   const uint32_t Word = Code->Word;
+  if (Code->R6)
+    return Word >> 26 == 58 ? r6BranchTarget(Word, Instruction.address)
+                            : InvalidVA;
   // Conditional link branches require their predicate when establishing a
   // no-return call. They remain discoverable from lifted control flow.
   if (Word >> 26 != 3 && Word >> 26 != 29)
@@ -305,7 +317,7 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
       return true;
     }
     case 5: // LSA in the MIPS32r5 MSA profile
-      if (!HasMSA || SA >= 4 || Wide || isMIPSCompressedMode(Mode))
+      if (!HasMSA || SA >= 4 || Wide || Mode == InstructionMode::MIPS16)
         return false;
       S.write(RD, S.binary(NdOp::INT_ADD,
                            S.binary(NdOp::INT_LEFT, S.read(RS),
@@ -328,7 +340,7 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
     case 18: { // MFLO
       const unsigned Bank = RS & 3;
       if ((RS & ~3u) || RT || SA ||
-          (Bank && (!HasDSP || Wide || isMIPSCompressedMode(Mode))))
+          (Bank && (!HasDSP || Mode == InstructionMode::MIPS16)))
         return false;
       S.write(RD, NdVar::reg(Function == 16 ? mipsreg::accumulatorHI(Bank)
                                             : mipsreg::accumulatorLO(Bank),
@@ -343,7 +355,7 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
     case 19: { // MTLO
       const unsigned Bank = RD & 3;
       if (RT || (RD & ~3u) || SA ||
-          (Bank && (!HasDSP || Wide || isMIPSCompressedMode(Mode))))
+          (Bank && (!HasDSP || Mode == InstructionMode::MIPS16)))
         return false;
       if (!Bank) {
         const auto Other =
@@ -364,12 +376,14 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
     case 25:   // MULTU
     case 28:   // DMULT
     case 29: { // DMULTU
-      if (RD && HasDSP && !Wide && !isMIPSCompressedMode(Mode) && RD <= 3 &&
-          !SA && Function <= 25) {
+      if (RD && HasDSP && Mode != InstructionMode::MIPS16 && RD <= 3 && !SA &&
+          Function <= 25) {
+        S.requireWord(RS);
+        S.requireWord(RT);
         const bool Signed = Function == 24;
         S.writeAccumulator(RD, S.binary(NdOp::INT_MULT,
-                                        S.resize(S.read(RS), 8, Signed),
-                                        S.resize(S.read(RT), 8, Signed)));
+                                        S.resize(S.read(RS, 4), 8, Signed),
+                                        S.resize(S.read(RT, 4), 8, Signed)));
         return true;
       }
       if (RD || SA || (Function >= 28 && !Wide))
@@ -488,12 +502,14 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
     return true;
   case 28: { // SPECIAL2: MUL, CLZ/CLO, DCLZ/DCLO
     if ((Function == 0 || Function == 1 || Function == 4 || Function == 5) &&
-        !SA && RD <= 3 && !Wide && !isMIPSCompressedMode(Mode) &&
-        (!RD || HasDSP)) {
+        !SA && RD <= 3 && (!Wide || HasDSP) &&
+        Mode != InstructionMode::MIPS16 && (!RD || HasDSP)) {
+      S.requireWord(RS);
+      S.requireWord(RT);
       const bool Signed = !(Function & 1);
       const auto Product =
-          S.binary(NdOp::INT_MULT, S.resize(S.read(RS), 8, Signed),
-                   S.resize(S.read(RT), 8, Signed));
+          S.binary(NdOp::INT_MULT, S.resize(S.read(RS, 4), 8, Signed),
+                   S.resize(S.read(RT, 4), 8, Signed));
       S.writeAccumulator(RD,
                          S.binary(Function & 4 ? NdOp::INT_SUB : NdOp::INT_ADD,
                                   S.accumulator(RD), Product));
@@ -542,6 +558,8 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
 }
 
 bool MIPSLifter::liftNonControl(State &S, Encoding Code, va_t BasePC) const {
+  if (Code.R6)
+    return liftRelease6(S, Code.Word);
   if (Code.Frame) {
     liftMIPS16Frame(S, Code.Word);
     return true;
@@ -551,8 +569,8 @@ bool MIPSLifter::liftNonControl(State &S, Encoding Code, va_t BasePC) const {
              : liftInteger(S, Code.Word) || liftMemory(S, Code.Word);
 }
 
-void MIPSLifter::lift(const cs_insn &Instruction,
-                      std::vector<LowOp> &Ops) const {
+void MIPSLifter::lift(const cs_insn &Instruction, std::vector<LowOp> &Ops,
+                      std::optional<bool> ForbiddenFollower) const {
   const auto Code = encoding(Instruction);
   if (!Code)
     throw UnliftedInstruction(Instruction.address, Instruction.mnemonic,
@@ -562,13 +580,19 @@ void MIPSLifter::lift(const cs_insn &Instruction,
     throw UnliftedInstruction(Instruction.address, Instruction.mnemonic,
                               "MIPS delayed transfer requires its slot");
   const size_t Begin = Ops.size();
-  if (!Code->Frame &&
+  if (!Code->R6 && !Code->Frame &&
       hasDelaySlot(Word)) { // A compact JRC has no physical slot.
     liftControl(Instruction, nullptr, *Code, Ops);
     return;
   }
   State S(Instruction.address, Ops, isMIPS64(Target) ? 8 : 4, Instruction.size);
-  if (liftNonControl(S, *Code, Instruction.address))
+  if (Code->R6 && isR6Compact(Word)) {
+    if (!ForbiddenFollower.has_value() && isR6ConditionalCompact(Word))
+      throw UnliftedInstruction(Instruction.address, Instruction.mnemonic,
+                                "missing Release 6 forbidden-slot instruction");
+    if (liftR6Compact(S, Word, ForbiddenFollower.value_or(false)))
+      return;
+  } else if (liftNonControl(S, *Code, Instruction.address))
     return;
   Ops.resize(Begin);
   throw UnliftedInstruction(Instruction.address, Instruction.mnemonic,
@@ -590,10 +614,11 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
                                      std::vector<LowOp> &Ops) const {
   const uint32_t Word = Code.Word;
   const auto SlotCode = Slot ? encoding(*Slot) : std::nullopt;
-  if (Slot &&
-      (!SlotCode || (!SlotCode->Frame && (hasDelaySlot(SlotCode->Word) ||
-                                          SlotCode->Word == 0x00000140 ||
-                                          SlotCode->Word >> 26 == 29))))
+  if (Slot && (!SlotCode || (SlotCode->R6 ? isR6Compact(SlotCode->Word)
+                                          : !SlotCode->Frame &&
+                                                (hasDelaySlot(SlotCode->Word) ||
+                                                 SlotCode->Word == 0x00000140 ||
+                                                 SlotCode->Word >> 26 == 29))))
     throw UnliftedInstruction(
         Slot->address, Slot->mnemonic,
         "unsupported instruction or transfer in MIPS delay slot");
@@ -611,6 +636,7 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
   const uint64_t Next = Head.address + Head.size;
   const uint64_t Resume = Address(Next + (Slot ? Slot->size : 0));
   unsigned Link = 0;
+  const bool ReadPC = (Word >> 16) == 0x0410; // NAL / BLTZAL zero
   bool Conditional = false;
   bool Likely = false;
   bool Return = false;
@@ -627,6 +653,8 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
     // Snapshot before the slot and before writing a link register.
     Destination = S.makeTemp(S.Width);
     S.emit(NdOp::COPY, Destination, {S.read(RS)});
+  } else if (ReadPC) {
+    Link = 31;
   } else if (Opcode == 2 || Opcode == 3 || Opcode == 29) {
     Link = Opcode != 2 ? 31 : 0;
     const unsigned Shift =
@@ -724,7 +752,9 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
   S.Addr = Head.address;
   S.InsnSize = Head.size;
   S.Seq = HeadSequence;
-  if (Link) {
+  if (ReadPC) {
+    S.emit(NdOp::BRANCH, {}, {NdVar::cst(Resume, S.Width)});
+  } else if (Link) {
     if (Conditional && !Likely)
       GuardFalsePath();
     S.emit(Destination.isConst() ? NdOp::CALL : NdOp::INDIR_CALL,

@@ -416,13 +416,17 @@ bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
                 Unknown);
     return true;
   }
-  if (Id == Intrinsic::MIPSExtractResult) {
+  if (Id == Intrinsic::MIPSRequireTakenBranch)
+    return knownOperandBytes(Op.Inputs[1], 0, 1) && readOperand(Op.Inputs[1]);
+  if (Id == Intrinsic::MIPSExtractResult ||
+      Id == Intrinsic::MIPSRelease6DivideResult) {
     if (!knownOperandBytes(Op.Inputs[1], 0, 1))
       return false;
     if (readOperand(Op.Inputs[1]))
-      writeOutput(Op.Output, 0, UINT32_MAX);
+      writeOutput(Op.Output, 0,
+                  llvm::maskTrailingOnes<uint64_t>(Op.Output.Size * 8));
     else {
-      if (!availableOperandBytes(Op.Inputs[2], 0, 4))
+      if (!availableOperandBytes(Op.Inputs[2], 0, Op.Output.Size))
         return false;
       writeOutput(Op.Output, readOperand(Op.Inputs[2]),
                   unknownOperandBits(Op.Inputs[2]));

@@ -43,9 +43,10 @@ std::vector<uint8_t> encodeDSP(llvm::ArrayRef<uint32_t> Words, Arch Target) {
 BinaryImage dspImage(Arch Target) {
   BinaryImage Image;
   Image.Arch = Target;
-  Image.Bits = Bitness::Bits32;
+  Image.Bits = isMIPS64(Target) ? Bitness::Bits64 : Bitness::Bits32;
   Image.Entry = 0x10000;
   Image.MIPS.emplace();
+  Image.MIPS->ABI = isMIPS64(Target) ? MIPSABI::N64 : MIPSABI::O32;
   Image.MIPS->HasDSP = true;
   return Image;
 }
@@ -91,7 +92,105 @@ constexpr PureCase PureCases[] = {
 #define MIPS_DSP_PURE(Name, Word, Result, Source) {#Name, Word, Result, Source},
 #include "MIPSDSPExpandFixtures.def"
 };
-TEST_P(MIPSDSP, RevisionTwoMatchesEveryIndependentMachineRecord) {
+class MIPSDSPRegisterWidth : public ::testing::TestWithParam<Arch> {};
+INSTANTIATE_TEST_SUITE_P(BothWidthsAndByteOrders, MIPSDSPRegisterWidth,
+                         ::testing::Values(Arch::MIPS32, Arch::MIPS32EL,
+                                           Arch::MIPS64, Arch::MIPS64EL));
+
+TEST_P(MIPSDSPRegisterWidth, IndexedDoublewordUsesTheEntireEffectiveAddress) {
+  auto Image = dspImage(GetParam());
+  const bool Wide = isMIPS64(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  const auto Bytes = encodeDSP({0x7c85120a}, GetParam()); // LDX v0,a1(a0)
+  DecodedInsn I{};
+  if (!Wide) {
+    if (D.decodeOne(Bytes.data(), 4, 0x10000, I)) {
+      std::vector<LowOp> Ops;
+      EXPECT_THROW(D.liftToLow(I, Ops), UnliftedInstruction);
+    }
+    return;
+  }
+  ASSERT_EQ(D.decodeOne(Bytes.data(), 4, 0x10000, I), 4);
+  EXPECT_STREQ(I.Raw->mnemonic, "ldx");
+  EXPECT_EQ(I.Id, MIPSLifter::IndexedLoadDoublewordID);
+  EXPECT_TRUE(std::equal(Bytes.begin(), Bytes.end(), I.Raw->bytes));
+  std::vector<LowOp> Ops;
+  D.liftToLow(I, Ops);
+  const auto Address = llvm::find_if(
+      Ops, [](const auto &O) { return O.Opcode == NdOp::INT_ADD; });
+  ASSERT_NE(Address, Ops.end());
+  EXPECT_EQ(Address->Inputs[0].Size, 8);
+  EXPECT_EQ(Address->Inputs[1].Size, 8);
+  EXPECT_EQ(Address->Output.Size, 8);
+  const auto Load =
+      llvm::find_if(Ops, [](const auto &O) { return O.Opcode == NdOp::LOAD; });
+  ASSERT_NE(Load, Ops.end());
+  EXPECT_EQ(Load->Output.Size, 8);
+  Segment Data;
+  Data.VA = 0x100002000ull;
+  Data.Data = {0x81, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef};
+  Data.Size = Data.FileSz = Data.Data.size();
+  Data.Flags = SegmentFlags::Readable;
+  Image.Segments.push_back(std::move(Data));
+  NdOpEmulator E(Image);
+  E.setStrictMode(true);
+  E.setRegister(mipsreg::A0, 0x100001ff8ull);
+  E.setRegister(mipsreg::A1, 8);
+  ASSERT_TRUE(llvm::all_of(Ops, [&](const auto &O) { return E.step(O); }));
+  const auto Expected = archLittleEndian(GetParam()) ? 0xefcdab8967452381ull
+                                                     : 0x8123456789abcdefull;
+  EXPECT_EQ(E.getRegister(mipsreg::V0), Expected);
+  E.setRegister(mipsreg::A1, 9);
+  EXPECT_FALSE(llvm::all_of(Ops, [&](const auto &O) { return E.step(O); }));
+  EXPECT_EQ(E.getRegister(mipsreg::V0), Expected);
+}
+
+TEST_P(MIPSDSPRegisterWidth, BankMovesAndWordAccumulationHaveDifferentWidths) {
+  const auto Image = dspImage(GetParam());
+  const bool Wide = isMIPS64(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  NdOpEmulator E(Image);
+  E.setStrictMode(true);
+  const uint64_t High = Wide ? 0x1234567887654321ull : 0x87654321u;
+  const uint64_t Low = Wide ? 0xfedcba9876543210ull : 0x76543210u;
+  E.setRegister(mipsreg::A0, High);
+  E.setRegister(mipsreg::A1, Low);
+  // MD00375 rev 3.02 specifies full-width bank transfers. The 64-bit
+  // Unicorn DSP model sign-extends those transfers for nonzero banks.
+  for (auto Word : {0x00801011u, 0x00a01013u, 0x00401010u, 0x00401812u})
+    ASSERT_TRUE(executeDSP(D, GetParam(), Word, E));
+  EXPECT_EQ(E.getRegister(mipsreg::V0), High);
+  EXPECT_EQ(E.getRegister(mipsreg::V1), Low);
+  ASSERT_TRUE(executeDSP(D, GetParam(), 0x70001000, E)); // MADD ac2,zero,zero
+  EXPECT_EQ(E.getRegister(mipsreg::AC2HI), Wide ? 0xffffffff87654321ull : High);
+  EXPECT_EQ(E.getRegister(mipsreg::AC2LO), 0x76543210u);
+}
+
+TEST_P(MIPSDSPRegisterWidth, InsertValidatesBothWordInputsOnN64) {
+  auto Image = dspImage(GetParam());
+  const bool Wide = isMIPS64(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  for (const auto &Bad : {mipsreg::Zero, mipsreg::A0, mipsreg::A1}) {
+    NdOpEmulator E(Image);
+    E.setStrictMode(true);
+    E.setRegister(mipsreg::A0,
+                  Wide && Bad == mipsreg::A0 ? 0x8000000000000007ull : 7);
+    E.setRegister(mipsreg::A1,
+                  Wide && Bad == mipsreg::A1 ? 0x8000000000000050ull : 0x50);
+    E.setRegister(mipsreg::DSPControl, 4u << 7);
+    ASSERT_TRUE(executeDSP(D, GetParam(), 0x7c85000c, E));
+    if (Wide && Bad != mipsreg::Zero)
+      EXPECT_FALSE(E.getRegister(mipsreg::A1));
+    else
+      EXPECT_EQ(E.getRegister(mipsreg::A1), 0x57u);
+    EXPECT_EQ(E.getRegister(mipsreg::DSPControl), 4u << 7);
+  }
+}
+
+TEST_P(MIPSDSPRegisterWidth, RevisionTwoMatchesEveryIndependentMachineRecord) {
   struct Record {
     const char *Mnemonic;
     uint32_t Word, V0, Control, HI2, LO2;
@@ -103,25 +202,82 @@ TEST_P(MIPSDSP, RevisionTwoMatchesEveryIndependentMachineRecord) {
   };
   static_assert(std::size(Cases) == 46);
   auto Image = dspImage(GetParam());
+  const bool Wide = isMIPS64(GetParam());
+  const auto WordValue = [Wide](uint32_t V) -> uint64_t {
+    return Wide ? uint64_t(int64_t(int32_t(V))) : V;
+  };
   Image.MIPS->HasDSPR2 = true;
   Decoder D;
   ASSERT_TRUE(D.init(Image));
+#ifdef NEVERD_MIPS_UNICORN_REFERENCE
+  uc_engine *Raw = nullptr;
+  const auto Mode =
+      static_cast<uc_mode>((Wide ? UC_MODE_MIPS64 : UC_MODE_MIPS32) |
+                           (archLittleEndian(GetParam()) ? UC_MODE_LITTLE_ENDIAN
+                                                         : UC_MODE_BIG_ENDIAN));
+  ASSERT_EQ(uc_open(UC_ARCH_MIPS, Mode, &Raw), UC_ERR_OK);
+  std::unique_ptr<uc_engine, decltype(&uc_close)> Reference(Raw, uc_close);
+  ASSERT_EQ(uc_ctl_set_cpu_model(Raw, Wide ? int(UC_CPU_MIPS64_MIPS64DSPR2)
+                                           : int(UC_CPU_MIPS32_74KF)),
+            UC_ERR_OK);
+  ASSERT_EQ(uc_mem_map(Raw, 0x10000, 0x2000, UC_PROT_ALL), UC_ERR_OK);
+  uint64_t PC = 0x10000;
+  const auto RunReference = [&](llvm::ArrayRef<uint32_t> Words) {
+    const auto Code = encodeDSP(Words, GetParam());
+    ASSERT_EQ(uc_mem_write(Raw, PC, Code.data(), Code.size()), UC_ERR_OK);
+    ASSERT_EQ(uc_emu_start(Raw, PC, PC + Code.size(), 0, Words.size()),
+              UC_ERR_OK);
+    PC += Code.size();
+  };
+  RunReference(
+      {0x40086000, 0x3c090100, 0x01094025, 0x40886000, 0xc0}); // Status.MX
+#endif
   for (const auto &R : Cases) {
     SCOPED_TRACE(R.Mnemonic);
     NdOpEmulator E(Image);
     E.setStrictMode(true);
-    E.setRegister(mipsreg::A1, 0x80007fff);
-    E.setRegister(mipsreg::A2, 0x80ff8000);
-    E.setRegister(mipsreg::A3, 0x8000ffff);
-    E.setRegister(mipsreg::V0, 0x80ff8000);
+    E.setRegister(mipsreg::A1, WordValue(0x80007fff));
+    E.setRegister(mipsreg::A2, WordValue(0x80ff8000));
+    E.setRegister(mipsreg::A3, WordValue(0x8000ffff));
+    E.setRegister(mipsreg::V0, WordValue(0x80ff8000));
     E.setRegister(mipsreg::DSPControl, 0x01004005);
-    E.setRegister(mipsreg::AC2HI, 0x80007fff);
-    E.setRegister(mipsreg::AC2LO, 0x80ff8000);
+    E.setRegister(mipsreg::AC2HI, WordValue(0x80007fff));
+    E.setRegister(mipsreg::AC2LO, WordValue(0x80ff8000));
     ASSERT_TRUE(executeDSP(D, GetParam(), R.Word, E));
-    EXPECT_EQ(E.getRegister(mipsreg::V0), R.V0);
+    EXPECT_EQ(E.getRegister(mipsreg::V0), WordValue(R.V0));
     EXPECT_EQ(E.getRegister(mipsreg::DSPControl), R.Control);
-    EXPECT_EQ(E.getRegister(mipsreg::AC2HI), R.HI2);
-    EXPECT_EQ(E.getRegister(mipsreg::AC2LO), R.LO2);
+    EXPECT_EQ(E.getRegister(mipsreg::AC2HI), WordValue(R.HI2));
+    EXPECT_EQ(E.getRegister(mipsreg::AC2LO), WordValue(R.LO2));
+#ifdef NEVERD_MIPS_UNICORN_REFERENCE
+    const auto Set = [&](int Reg, uint32_t Value) {
+      const auto Full = WordValue(Value);
+      ASSERT_EQ(uc_reg_write(Raw, Reg,
+                             Wide ? static_cast<const void *>(&Full)
+                                  : static_cast<const void *>(&Value)),
+                UC_ERR_OK);
+    };
+    Set(UC_MIPS_REG_4, 0x01004005);
+    Set(UC_MIPS_REG_5, 0x80007fff);
+    Set(UC_MIPS_REG_6, 0x80ff8000);
+    Set(UC_MIPS_REG_7, 0x8000ffff);
+    Set(UC_MIPS_REG_2, 0x80ff8000);
+    // WRDSP, MTHI/MTLO ac2, instruction under test, RDDSP, MFHI/MFLO ac2.
+    RunReference({0x7c81fcf8, 0x00a01011, 0x00c01013, R.Word, 0x7c3f44b8,
+                  0x00404810, 0x00405012});
+    for (const auto &[Reg, Want] :
+         std::array{std::pair{UC_MIPS_REG_2, mipsreg::V0},
+                    std::pair{UC_MIPS_REG_8, mipsreg::DSPControl},
+                    std::pair{UC_MIPS_REG_9, mipsreg::AC2HI},
+                    std::pair{UC_MIPS_REG_10, mipsreg::AC2LO}}) {
+      uint64_t Full = 0;
+      uint32_t Low = 0;
+      ASSERT_EQ(uc_reg_read(Raw, Reg,
+                            Wide ? static_cast<void *>(&Full)
+                                 : static_cast<void *>(&Low)),
+                UC_ERR_OK);
+      EXPECT_EQ(E.getRegister(Want), Wide ? Full : Low);
+    }
+#endif
   }
 }
 TEST_P(MIPSDSP, RevisionTwoRequiresEvidenceAndPreservesLaneEffects) {

@@ -91,7 +91,7 @@ TEST_P(MIPSLoader, RuntimeSymbolModesAreValidatedWithoutSectionHeaders) {
             std::string::npos);
 }
 
-TEST_P(MIPSLoader, DSPCapabilityRequiresClassic32BitProfileEvidence) {
+TEST_P(MIPSLoader, DSPCapabilityUsesWidthAndEncodingEvidence) {
   for (uint32_t ASE : {1u, 2u, 3u, 0x200u, 0x801u}) {
     ELFBytes File(GetParam());
     File.abiFlags();
@@ -101,7 +101,8 @@ TEST_P(MIPSLoader, DSPCapabilityRequiresClassic32BitProfileEvidence) {
                (File.Is64 ? 0x80000000u : 0x70001000u) | 0x02000000, 4);
     ELFLoader Loader;
     auto Image = Loader.loadBuffer(File.buffer());
-    const bool Admitted = (ASE == 1 || ASE == 2 || ASE == 3) && !File.Is64;
+    const bool Admitted =
+        ASE == 1 || ASE == 2 || ASE == 3 || (ASE == 0x801 && !File.Is64);
     ASSERT_EQ(bool(Image), Admitted);
     if (Admitted) {
       ASSERT_TRUE(Image->MIPS);
@@ -141,6 +142,26 @@ TEST_P(MIPSLoader, MSARequiresRevisionFiveAndFP64VectorEvidence) {
     ELFLoader::identify(File.buffer(), Candidates);
     ASSERT_EQ(Candidates.size(), 1u);
     EXPECT_EQ(Candidates[0].Loadable, Admitted);
+  }
+}
+
+TEST_P(MIPSLoader, Release6HeaderAndABIFlagsMustAgree) {
+  for (bool WithABI : {false, true}) {
+    ELFBytes File(GetParam());
+    File.put(File.Is64 ? 48 : 36, File.Is64 ? 0xa0000000u : 0x90001000u, 4);
+    if (WithABI) {
+      File.abiFlags();
+      File.Bytes[0xe3] = 6;
+    }
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    ASSERT_TRUE(Image->MIPS);
+    EXPECT_EQ(Image->MIPS->ISARevision, 6);
+    File.abiFlags(); // r2 payload conflicts with the r6 header.
+    auto Conflict = Loader.loadBuffer(File.buffer());
+    ASSERT_FALSE(bool(Conflict));
+    llvm::consumeError(Conflict.takeError());
   }
 }
 
@@ -298,10 +319,6 @@ TEST_P(MIPSLoader, RejectsConflictingOrUnsupportedProfilesInBothEntrypoints) {
              4);
     Reject(File, Reason);
   }
-  ELFBytes Revision(GetParam());
-  Revision.put(Revision.Is64 ? 48 : 36, Revision.Is64 ? 0xa0000000 : 0x90001000,
-               4);
-  Reject(Revision, "matching");
   ELFBytes ClassConflict(GetParam());
   ClassConflict.put(ClassConflict.Is64 ? 48 : 36,
                     ClassConflict.Is64 ? 0x70000000 : 0x80001000, 4);

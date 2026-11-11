@@ -66,6 +66,10 @@ NEVERD_MIPS_SCALAR_INTRINSIC(MIPSWriteMSAControl, 16031, "neverd_mips_ctcmsa")
 #include "neverd/ir/intrinsics/MIPS/MIPSDSPControlEffects.def"
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSMthlipPosition, 16036,
                              "neverd_mips_mthlip_pos")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSRelease6DivideResult, 16037,
+                             "neverd_mips_r6_divide_result")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSRequireTakenBranch, 16038,
+                             "neverd_mips_r6_forbidden_slot")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSExtractResult, 16032,
                              "neverd_mips_extract_result")
 #define NEVERD_MSA_FLOAT(Name, Value, Encoding, Arity, Mnemonic)               \

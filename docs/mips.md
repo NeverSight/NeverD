@@ -1,9 +1,9 @@
 # MIPS analysis
 
 The experimental MIPS analysis path targets linked ELF programs with classic
-MIPS32 Release 2/o32 or MIPS64 Release 2/n64 instructions, in either byte order,
-the bounded microMIPS32, MIPS16e32 and MIPS16e2 Release 2/o32 subsets, and the MIPS32
-Release 5/o32 MSA integer, permutation, floating-point and control forms described below.
+MIPS32/o32 and MIPS64/n64 instructions in either byte order. The profiles below
+cover classic Release 2, classic Release 6 integer instructions, microMIPS32,
+MIPS16e32 and MIPS16e2, and Release 5/o32 MSA.
 The selected ELF profile determines register width, byte order, stack layout
 and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
 
@@ -118,10 +118,10 @@ Reading only a low byte or halfword does not prove that incoming upper bits
 have the extension a narrow C parameter would require. Declared source types
 remain a separate contract.
 
-This is a strict subset. n32, historical MIPS I–V profiles, Release 6,
+The n32 ABI, historical MIPS I–V profiles,
 microMIPS64, scalar floating point, MSA/DSP forms beyond the slices below, privileged
 instructions and LL/SC reservations outside the qualified MIPS16e2 LowIR slice below,
-doubleword merge stores (`SDL`/`SDR`), doubleword division and trapping arithmetic are not admitted by
+doubleword merge stores (`SDL`/`SDR`), pre-R6 doubleword division and trapping arithmetic are not admitted by
 the current lifter. Unsupported instructions, missing slots and transfers in a
 delay slot produce errors, not replacement NOPs. Floating/aggregate source ABI
 classification, arbitrary PIC/gp recovery, raw-input target selection and
@@ -260,7 +260,21 @@ value for OUTFLAG[23], including when the returned word is unrounded.
 EXTP[V] and EXTPDP[V] extract size + 1 bits ending at POS. Failure sets EFI,
 preserves POS and yields an unknown GPR value. A successful DP extraction
 advances POS modulo 64. Source code traps if it needs an undefined result.
-DSP64 and compressed DSP still require qualification.
+MIPS64r2/n64 uses the word and packed DSP/DSPR2 operations from revision 3.02
+of the MIPS64 DSP specification. Arithmetic consumes the low word of each
+accumulator half and sign-extends each written half independently. The four
+banked register transfers copy the entire GPR-width half. The pinned Unicorn
+model truncates transfers to nonzero banks on n64, so the non-word test vectors
+for these four transfers use the specification directly. Indexed
+memory instructions use the full address registers, including the DSP-only
+doubleword load `LDX`. Both C views preserve DSPControl under the n64 ABI.
+An n64 source return requires the complete eight-byte incoming link, including
+when it is restored from a leaf stack slot. A four-byte spill suffices on o32.
+Standalone IR that writes the link and calls a direct target needs the image
+to establish the callee mode on either ABI. The older 64-bit packed formats removed in specification
+revision 2.40 (including `.OB`, `.QH` and `.PW`) are unimplemented.
+See the register model and revision history in the
+[MIPS64 DSP Module, revision 3.02](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00375-2B-MIPS64DSP-AFP-03.02.pdf).
 
 Classic AC0 partial writes preserve the pre-R6 unread-result restriction:
 MULT/MULTU/DIV/DIVU (and supported doubleword multiply) establish pending
@@ -293,8 +307,12 @@ semantic forms. The current set includes MOVE16, ADDU16/SUBU16, SLL16/SRL16,
 LI16, compact byte/halfword/word memory forms, SP/GP-relative word accesses,
 the 32-bit immediate/register forms listed in `MicroMIPSInteger.def`,
 BEQZ16/BNEZ16/B16, BEQ/BNE, J/JAL/JALS/JALX and the supported JR/JALR forms.
-Unlisted encodings are errors. This is not complete compressed-instruction
-coverage and does not admit other ISA revisions or compressed DSP/MSA encodings.
+microMIPS32r2 DSP/DSPR2 and microMIPS32r5 MSA use the same scalar/vector
+semantics as their classic encodings. The physical decoder preserves the two
+halfwords in target order, the instruction address, operand detail and size.
+The MSA branch displacement counts halfwords. Optional instructions require
+the corresponding ELF feature and local encoding evidence. Unlisted encodings
+produce a lift error.
 
 Physical instructions occupy two or four bytes, including four-byte heads at
 addresses congruent to two modulo four. The execution-unit record keeps the
@@ -544,11 +562,11 @@ moves and the immediate mask operations share the vector register bank.
 BZ/BNZ test their predicate before the delay slot. The element forms test
 for any zero or all nonzero lanes, while .V tests the whole register.
 
-The initial MSA slice requires classic MIPS32 Release 5/o32 ELF in either byte
+MSA requires classic or microMIPS32 Release 5/o32 ELF in either byte
 order, with `.MIPS.abiflags` explicitly declaring MSA, 128-bit CPR1 registers
 and FP64 ABI tag 6. A reused decoder consumes the current revision as well as
 feature evidence; architecture-only initialization remains Release 2 without
-MSA. Other revisions, MSA64, microMIPS/MSA and DSP/MSA combinations are refused.
+MSA. Other revisions, MSA64 and DSP/MSA combinations are refused.
 
 `FILL.W`, `INSERT.W`, `COPY_S.W`, all four B/H/W/D formats of `ADDV` and
 `SUBV`, `CEQ`, `CLT_S`/`CLT_U`, `CLE_S`/`CLE_U`, `MIN_S`/`MIN_U`,
@@ -951,6 +969,34 @@ baseline and Ghidra SLEIGH, with separate Capstone physical decode timings.
 The comparison uses classic MIPS32r2/o32 DSP, MIPS32r5/o32 MSA, and compressed
 MIPS16e2 r2/o32. DSP64, compressed DSP/MSA and the Release 6 DSP compact
 branch BPOSGE32C have separate ISA and ABI requirements.
+
+## Classic Release 6 integer instructions
+
+Linked MIPS32r6/o32 and MIPS64r6/n64 ELF select a revision-specific integer
+decoder. It covers three-register multiply, multiply-high, divide and modulo,
+conditional selects, count-leading operations, bit/byte alignment, scaled and
+upper-immediate arithmetic, PC-relative address generation and loads, and
+compact conditional, unconditional and indirect transfers. Word and doubleword
+results retain their specified GPR width. A zero divisor produces an explicit
+unpredictable result. Compact links save PC+4, use the physical immediate
+scale and do not consume a delay slot. A control transfer in a conditional
+compact branch's forbidden slot faults on fallthrough. Lifting a conditional compact
+branch requires the following instruction's bytes to check that constraint.
+Surviving legacy delayed transfers retain their slot. NAL writes PC+8 before
+executing its delay slot. Removed HI/LO and branch-likely encodings
+cannot use the Release 2 lifter through this profile.
+
+The current Release 6 path covers classic integer code. microMIPSr6, optional
+Release 6 ASEs, scalar floating point and general privileged/system execution
+still require separate implementation. See the linked GNU fixture in the
+[testing guide](testing.md) for the enumerated instruction forms and the
+[MIPS64 Instruction Set Reference Manual, revision 6.06](https://docs.alexrp.com/mips/mips64_insns_v6_06.pdf)
+for encodings, input restrictions and compact transfer semantics.
+
+The [MIPS64 DSP, microMIPS ASE and Release 6 qualification](evidence/mips64-micro-r6-2026-11-11.json)
+records the linked big- and little-endian corpora, per-form comparisons and
+independent execution checks. Both C views were recompiled at `-O0` and
+`-O2`, including the Archer C7 V5 `ubus call` handler.
 
 ## TP-Link firmware workflow
 

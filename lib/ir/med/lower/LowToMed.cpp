@@ -796,13 +796,13 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       isMIPS(TheArch) &&
       (Image
            ? (hasCompressedMIPSCode(Image->Mode) ||
-              (Image->MIPS && (Image->MIPS->HasDSP || Image->MIPS->HasMSA)))
-           : llvm::any_of(Low.Blocks, [TheArch](const auto &Block) {
+              (Image->MIPS && (Image->MIPS->HasDSP || Image->MIPS->HasMSA ||
+                               Image->MIPS->ISARevision == 6)))
+           : llvm::any_of(Low.Blocks, [](const auto &Block) {
                // Standalone IR cannot drop a changed return link merely
                // because the original image's ASE record is unavailable.
                // This also covers RDDSP ra,0, which is a plain zero copy.
-               if (!isMIPS64(TheArch) &&
-                   llvm::any_of(Block.Ops, [](const LowOp &Op) {
+               if (llvm::any_of(Block.Ops, [](const LowOp &Op) {
                      return (Op.Output.isReg() &&
                              Op.Output.Offset == mipsreg::RA) ||
                             (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&

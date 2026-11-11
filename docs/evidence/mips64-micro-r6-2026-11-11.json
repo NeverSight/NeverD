@@ -1,0 +1,383 @@
+{
+  "scope": "MIPS64r2/n64 DSP revision 3.02 and DSPR2, microMIPS32r2/o32 DSP and DSPR2, microMIPS32r5/o32 FP64 MSA, and classic MIPS32r6/o32 and MIPS64r6/n64 integer forms. Every catalog is independently assembled and linked for both byte orders.",
+  "tested_source_commit": "22e417b69b0ec1e0a1d035ea156e881c9ef2fa5c",
+  "baseline_commit": "ff3fa60ff9b2bfbd5f796b9b8c52cd55d155ffa9",
+  "build": {
+    "configuration": "Release",
+    "host": "macOS-15.6.1-arm64-arm-64bit-Mach-O",
+    "cpu": "Apple M4 Max",
+    "compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+    "target_compiler": "Homebrew clang version 22.1.6",
+    "assembler": "GNU assembler (GNU Binutils) 2.47.20260726",
+    "capstone_commit": "c3fd1f110810201fa4d82a2d057ed82f5b08d5b1",
+    "unicorn_commit": "dab16e86b6ac4acca71c5f3ba50721efc3891a1e",
+    "dependencies_sha256": "0a2047e110412d0ca2908fa8847878fc1e1b25d5238139c4ba78f8a6b2030dde",
+    "benchmark_sha256": "e6c30b71a9c370b7fd865cf242733b25cc7a39dafc71793cff2d47c33296482c",
+    "cli_sha256": "3e3bc130749058fb5b88b407971a02441c0c0123d5f47a3c6b5095530e18aa63",
+    "sdk_sha256": "48970ca3c05bf722391d79337834c0bfafab401776a2a9dd4abe5b74190ef7c7",
+    "unicorn_library_sha256": "831a13dafa5c04f729d64c6b1e4c8b537c9989bc3162993e27c7df47209cc4b1"
+  },
+  "ctest": {
+    "mips": {
+      "tests": 655,
+      "failure": 0,
+      "error": 0,
+      "skipped": 0
+    },
+    "shared_emulator_and_decode": {
+      "tests": 114,
+      "failure": 0,
+      "error": 0,
+      "skipped": 0
+    }
+  },
+  "gnu_linked_corpora": {
+    "mipsdsp": {
+      "forms": 113,
+      "digest": "224cb6e3ae0960d4",
+      "operations": 2280,
+      "sha256": "50ed97d564b9179744ec1557b1f3c40ec8785990cdeef68d5e428ee9695bf8ad"
+    },
+    "mipsdspel": {
+      "forms": 113,
+      "digest": "224cb6e3ae0960d4",
+      "operations": 2280,
+      "sha256": "b6431da0432c48f9c103a58852d2558b546b70062df79b81b91971def2566498"
+    },
+    "micromipsdsp": {
+      "forms": 113,
+      "digest": "224cb6e3ae0960d4",
+      "operations": 2280,
+      "sha256": "57b55ead137abcca9b0a362b07e5aca791781ce02d5ae2535982761cb650774b"
+    },
+    "micromipsdspel": {
+      "forms": 113,
+      "digest": "224cb6e3ae0960d4",
+      "operations": 2280,
+      "sha256": "3f63d2c77c808dd566554f7b08d4bd4861a34fd6ee7f2a7ac02849f1482662ac"
+    },
+    "mips64dsp": {
+      "forms": 114,
+      "digest": "014d3a49724de319",
+      "operations": 2651,
+      "sha256": "442ed41dbc19e1bb1ccf82a91725c625274f26193e7c4d22d6f3c36313d6f0d1"
+    },
+    "mips64dspel": {
+      "forms": 114,
+      "digest": "014d3a49724de319",
+      "operations": 2651,
+      "sha256": "c4f31b1e2206e5f250e1ed4c30268e753d265aeed8c5382998b31b1798654d40"
+    },
+    "mipsdspr2": {
+      "forms": 46,
+      "digest": "0bb835116d83fb8f",
+      "operations": 996,
+      "sha256": "1a28559216f71b5d47595048331d359bfecfa5b9519d6f981073c6102027e8d8"
+    },
+    "mipsdspr2el": {
+      "forms": 46,
+      "digest": "0bb835116d83fb8f",
+      "operations": 996,
+      "sha256": "5880eed5dc70f7cb66c416103b9b32ffaa8b8c8a906dde7e586f20188dc7415e"
+    },
+    "micromipsdspr2": {
+      "forms": 46,
+      "digest": "0bb835116d83fb8f",
+      "operations": 996,
+      "sha256": "ee0416b7529d944aea3d6d86f8a3d6a710082d402f79720d27f922861bbfd332"
+    },
+    "micromipsdspr2el": {
+      "forms": 46,
+      "digest": "0bb835116d83fb8f",
+      "operations": 996,
+      "sha256": "f90e9884258277fd42e55351abc7fd7e83dc30fcd8ec0798fcaaa1fc0ec028a3"
+    },
+    "mips64dspr2": {
+      "forms": 46,
+      "digest": "2c5b7ff3e3a184ce",
+      "operations": 1160,
+      "sha256": "1a28559216f71b5d47595048331d359bfecfa5b9519d6f981073c6102027e8d8"
+    },
+    "mips64dspr2el": {
+      "forms": 46,
+      "digest": "2c5b7ff3e3a184ce",
+      "operations": 1160,
+      "sha256": "5880eed5dc70f7cb66c416103b9b32ffaa8b8c8a906dde7e586f20188dc7415e"
+    },
+    "mipsmsa": {
+      "forms": 526,
+      "digest": "c064a06e1f2cd113",
+      "operations": 18140,
+      "sha256": "eb5f4295096c4386134bd97a63488edd45a1b69f8a310a946aa0218aecaadff6"
+    },
+    "mipsmsael": {
+      "forms": 526,
+      "digest": "c064a06e1f2cd113",
+      "operations": 18140,
+      "sha256": "eab6407c8da9e58fe0ff82a18244258384afcbe909cd88955640c795ce9289b3"
+    },
+    "micromipsmsa": {
+      "forms": 526,
+      "digest": "c064a06e1f2cd113",
+      "operations": 18140,
+      "sha256": "66d1288fda2e40a35e59f0ca9d4d0d31cee51feee6101852ec13922ffe84d77b"
+    },
+    "micromipsmsael": {
+      "forms": 526,
+      "digest": "c064a06e1f2cd113",
+      "operations": 18140,
+      "sha256": "a4c470ec14852215f0273e67cefe9ee70afcc6d5b8c2cb40e8c0e3742d773331"
+    },
+    "mips32r6": {
+      "forms": 45,
+      "digest": "7344f274ae6e77a5",
+      "operations": 216,
+      "sha256": "42f0c5cd187794cb72546aa521eb534bc453f02093fce5b5e8651a6cc5713d8b"
+    },
+    "mips32r6el": {
+      "forms": 45,
+      "digest": "7344f274ae6e77a5",
+      "operations": 216,
+      "sha256": "a8af1a22daf4527a0b47b12d1ec8fba06d2111fa9342c59d1a20f6e626934027"
+    },
+    "mips64r6": {
+      "forms": 63,
+      "digest": "2560cded8db0c446",
+      "operations": 418,
+      "sha256": "d8b7f555805a5865d27cf3cbba584d77aa9659df365e103b1b5beb924466bdc6"
+    },
+    "mips64r6el": {
+      "forms": 63,
+      "digest": "2560cded8db0c446",
+      "operations": 418,
+      "sha256": "7dce0499b96e210bf0238c70b30b608672a295cd0df7c66be2f20bb1426a57a4"
+    }
+  },
+  "machine_model": {
+    "dspr2": {
+      "models": [
+        "MIPS32 74Kf",
+        "MIPS64DSPR2"
+      ],
+      "mnemonics_per_profile": 46,
+      "profiles": 4,
+      "state_comparisons": 184,
+      "observation": "Destination, DSPControl and both halves of AC2."
+    },
+    "r6": {
+      "models": [
+        "MIPS32R6_GENERIC",
+        "MIPS64 I6400"
+      ],
+      "profiles": 4,
+      "integer_results": 960,
+      "compact_branch_outcomes": 1280
+    },
+    "n64_nonword_accumulator_transfers": "The four MFHI/MFLO/MTHI/MTLO transfers copy full-width halves under MIPS64 DSP specification 3.02. The pinned Unicorn core truncates nonzero-bank transfers. The full-width tests use the specification.",
+    "physical_micro_dsp": {
+      "toolchain": {
+        "package": "GNU GDB 17.1 sim/mips/run",
+        "source": "https://ftp.gnu.org/gnu/gdb/gdb-17.1.tar.xz",
+        "source_sha256": "14996f5f74c9f68f5a543fdc45bca7800207f91f92aeea6c2e791822c7c6d876",
+        "executable_sha256": "ab27ebff444cc759d81fdc2c34f88a048799b7848f3912baebc3fbd331226089",
+        "target": "mipsisa32r2-unknown-elf",
+        "build_note": "On macOS the generated module-list Makefile recipe used a BSD sed command terminator. The simulator sources are unmodified. Both classic and micro positive controls exited 211."
+      },
+      "execution_comparisons_by_profile": {
+        "micromipsdsp": 226,
+        "micromipsdspel": 226,
+        "micromipsdspr2": 92,
+        "micromipsdspr2el": 92
+      },
+      "forms_per_byte_order": 159,
+      "inputs_per_form": 2,
+      "lowir_comparisons": 318,
+      "state": "GPRs, DSPControl, AC2 HI/LO and BPOSGE32 taken/fallthrough on GNU sim compared with the classic 74Kf."
+    },
+    "individual_micro_ase_lowir_comparisons": {
+      "micromipsdsp": 113,
+      "micromipsdspel": 113,
+      "micromipsdspr2": 46,
+      "micromipsdspr2el": 46,
+      "micromipsmsa": 526,
+      "micromipsmsael": 526
+    },
+    "micro_source_reference": "Physical micro ELF kernels feed both C views. Their unchanged recompiled microMIPS functions execute on GNU sim. Return values match the separately assembled classic DSP/MSA kernels on the 74Kf/P5600. The DSP runs also compare DSPControl; the integer micro MSA kernel recompiles to scalar microMIPS. Direct original microMIPS execution is additionally qualified for DSP/DSPR2 on GNU sim. Micro MSA has no direct CPU model in this setup."
+  },
+  "recompiled_source": {
+    "views": [
+      "HighC",
+      "LLVMC"
+    ],
+    "optimization": [
+      "-O0",
+      "-O2"
+    ],
+    "binaries": 120,
+    "executions": 2336,
+    "per_elf": {
+      "mips64dsp": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "mips64dspel": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "mips64dspr2": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "mips64dspr2el": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "micromipsdsp": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "micromipsdspel": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "micromipsdspr2": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "micromipsdspr2el": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "mips64dspindex": {
+        "recompiled_binaries": 4,
+        "executions": 64
+      },
+      "mips64dspindexel": {
+        "recompiled_binaries": 4,
+        "executions": 64
+      },
+      "mips64dspcompare": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "mips64dspcompareel": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "micromipsmsa": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "micromipsmsael": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "mips32r6": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "mips32r6el": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "mips32r6div": {
+        "recompiled_binaries": 4,
+        "executions": 72
+      },
+      "mips32r6divel": {
+        "recompiled_binaries": 4,
+        "executions": 72
+      },
+      "mips32r6branch": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "mips32r6branchel": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "mips32r6nal": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "mips32r6nalel": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "mips64r6": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "mips64r6el": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "mips64r6div": {
+        "recompiled_binaries": 4,
+        "executions": 72
+      },
+      "mips64r6divel": {
+        "recompiled_binaries": 4,
+        "executions": 72
+      },
+      "mips64r6branch": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "mips64r6branchel": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "mips64r6nal": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      },
+      "mips64r6nalel": {
+        "recompiled_binaries": 4,
+        "executions": 80
+      }
+    }
+  },
+  "tplink_archer_c7_v5_ubus_call": {
+    "architecture": "MIPS32r2/o32 big endian",
+    "entry": "0x4012d0",
+    "elf_sha256": "6e1129aa58cb398a2453876ea4aa2395feecc84ecf78ed8ab43efd534b40e475",
+    "original_cases": 12,
+    "rebuilt_cases": 48,
+    "rebuilt_outputs": [
+      {
+        "backend": "highc",
+        "optimization": "-O0",
+        "source_sha256": "746482c701b92ddc0e77a202028fe20ec48232597fc05dbf175209dae56158e4",
+        "elf_sha256": "29f793d11f3a0db1c58d2fb36606a99f40b5acee4838c327ca50170dde3b2cef",
+        "cases_passed": 12
+      },
+      {
+        "backend": "highc",
+        "optimization": "-O2",
+        "source_sha256": "746482c701b92ddc0e77a202028fe20ec48232597fc05dbf175209dae56158e4",
+        "elf_sha256": "eb49482494d617cfbae03916a30fb48cac4f0a764b10dd86a9a3ef17ac6a4f93",
+        "cases_passed": 12
+      },
+      {
+        "backend": "llvmc",
+        "optimization": "-O0",
+        "source_sha256": "dcba6c7b30feaf90fa02f2229d075e0dd609de5ab218770f5bb52bb094d7d349",
+        "elf_sha256": "d226f494a4e9841c5e072c1c98247f7c4bd30db5fcb7659e2510357fad6f4565",
+        "cases_passed": 12
+      },
+      {
+        "backend": "llvmc",
+        "optimization": "-O2",
+        "source_sha256": "dcba6c7b30feaf90fa02f2229d075e0dd609de5ab218770f5bb52bb094d7d349",
+        "elf_sha256": "23ba2ffc323c3f5621f2a64a27aae6a3a9a9107f07ea70fae7c2b84d2240edc0",
+        "cases_passed": 12
+      }
+    ]
+  },
+  "performance_report": "https://github.com/NeverSight/NeverD/pull/2322",
+  "outside_qualification": [
+    "The 64-bit packed DSP formats removed before revision 3.02, including .OB/.QH/.PW.",
+    "microMIPS64, microMIPS Release 6, optional Release 6 ASEs, and complete R6 floating-point, atomics and privileged/system instruction execution."
+  ]
+}

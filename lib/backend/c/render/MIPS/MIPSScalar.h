@@ -140,9 +140,18 @@ void writeMIPSScalarHelpers(
       throw std::runtime_error(mips::kAccumulatorHistoryUnknown);
     if (Id == Intrinsic::MIPSLwrUpper)
       throw std::runtime_error(mips::kPartialLwrRequiresWord);
-    if (Id == Intrinsic::MIPSExtractResult) {
-      OS << "static inline uint32_t " << Name
-         << "(uint32_t failed, uint32_t value) {\n"
+    if (Id == Intrinsic::MIPSRequireTakenBranch) {
+      OS << "static inline void " << Name
+         << "(uint8_t taken) { if (!taken) __builtin_trap(); }\n\n";
+      continue;
+    }
+    if (Id == Intrinsic::MIPSExtractResult ||
+        Id == Intrinsic::MIPSRelease6DivideResult) {
+      const auto *Type =
+          Id == Intrinsic::MIPSExtractResult ? "uint32_t" : "uint64_t";
+      OS << "static inline " << Type << " " << Name << "(uint32_t failed, "
+         << Type
+         << " value) {\n"
             "    if (failed) __builtin_trap();\n    return value;\n}\n\n";
       continue;
     }

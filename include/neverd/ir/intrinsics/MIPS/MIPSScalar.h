@@ -129,7 +129,8 @@ constexpr bool isWordDivision(Intrinsic Id) {
 constexpr bool isPureScalarValue(Intrinsic Id) {
   return Id == Intrinsic::MIPSUnpredictable || Id == Intrinsic::MIPSLwrUpper ||
          isWordDivision(Id) || Id == Intrinsic::MIPSAccumulatorAfterWrite ||
-         Id == Intrinsic::MIPSExtractResult;
+         Id == Intrinsic::MIPSExtractResult ||
+         Id == Intrinsic::MIPSRelease6DivideResult;
 }
 
 /// Ordering effects remain observable, but neither operation writes data.
@@ -188,11 +189,14 @@ constexpr bool supportedHardwareRegister(uint64_t Index) {
 
 constexpr bool isScalarIntrinsic(Intrinsic Id) {
   return mergeMemory(Id).has_value() || Id == Intrinsic::MIPSUnpredictable ||
-         Id == Intrinsic::MIPSRequireWord || Id == Intrinsic::MIPSLwrUpper ||
-         isDSPControlIntrinsic(Id) || isMSAControl(Id) ||
-         isMSANativeVector(Id) || isWordDivision(Id) || isBarrier(Id) ||
-         isStatefulScalar(Id) || Id == Intrinsic::MIPSAccumulatorAfterWrite ||
-         Id == Intrinsic::MIPSExtractResult;
+         Id == Intrinsic::MIPSRequireWord ||
+         Id == Intrinsic::MIPSRequireTakenBranch ||
+         Id == Intrinsic::MIPSLwrUpper || isDSPControlIntrinsic(Id) ||
+         isMSAControl(Id) || isMSANativeVector(Id) || isWordDivision(Id) ||
+         isBarrier(Id) || isStatefulScalar(Id) ||
+         Id == Intrinsic::MIPSAccumulatorAfterWrite ||
+         Id == Intrinsic::MIPSExtractResult ||
+         Id == Intrinsic::MIPSRelease6DivideResult;
 }
 
 struct ScalarShape {
@@ -257,20 +261,20 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
   if (Id == Intrinsic::MIPSSync)
     return S.Inputs == 2 && !S.OutputBytes && S.FirstBytes == 1 &&
            S.FirstConstant && *S.FirstConstant < 32;
+  if (Id == Intrinsic::MIPSRequireTakenBranch)
+    return S.Inputs == 2 && !S.OutputBytes && S.FirstBytes == 1;
   if (Id == Intrinsic::MIPSRequireWord)
     return S.Inputs == 2 && !S.OutputBytes && S.FirstBytes == 8 &&
            (S.Target == Arch::Unknown || isMIPS64(S.Target));
   if (isDSPPartialControl(Id))
-    return !isMIPS64(S.Target) && !S.OutputBytes &&
+    return !S.OutputBytes &&
            (isDSPHalfCompare(Id)
                 ? S.Inputs == 3 && S.FirstBytes == 4 && S.SecondBytes == 4
                 : S.Inputs == 1);
   if (Id == Intrinsic::MIPSWriteDSPControl)
-    return S.Inputs == 2 && !S.OutputBytes && S.FirstBytes == 4 &&
-           !isMIPS64(S.Target);
+    return S.Inputs == 2 && !S.OutputBytes && S.FirstBytes == 4;
   if (Id == Intrinsic::MIPSReadDSPControl)
-    return S.Inputs == 1 && S.OutputWritable && S.OutputBytes == 4 &&
-           !isMIPS64(S.Target);
+    return S.Inputs == 1 && S.OutputWritable && S.OutputBytes == 4;
   if (const auto Store = mergeStore(Id))
     return S.Inputs == 3 && !S.OutputBytes && S.SecondBytes == Store->Bytes &&
            (S.FirstBytes == 4 || S.FirstBytes == 8) &&
@@ -278,9 +282,12 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
             S.FirstBytes == (isMIPS64(S.Target) ? 8 : 4));
   if (!S.OutputWritable || (S.OutputBytes != 4 && S.OutputBytes != 8))
     return false;
+  if (Id == Intrinsic::MIPSRelease6DivideResult)
+    return S.Inputs == 3 && S.OutputBytes == 8 && S.FirstBytes == 1 &&
+           S.SecondBytes == 8;
   if (Id == Intrinsic::MIPSExtractResult)
-    return !isMIPS64(S.Target) && S.Inputs == 3 && S.OutputBytes == 4 &&
-           S.FirstBytes == 1 && S.SecondBytes == 4;
+    return S.Inputs == 3 && S.OutputBytes == 4 && S.FirstBytes == 1 &&
+           S.SecondBytes == 4;
   if (Id == Intrinsic::MIPSAccumulatorAfterWrite)
     return S.Inputs == 3 && S.FirstBytes == 1 &&
            S.SecondBytes == S.OutputBytes &&

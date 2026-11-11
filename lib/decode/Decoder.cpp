@@ -19,9 +19,11 @@
 #include "neverd/lift/ARM/ARMLifter.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/lift/X86/X86Lifter.h"
+#include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/Diagnostic.h"
 #include "neverd/support/ProloguePatterns.h"
 
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <memory>
@@ -64,6 +66,8 @@ Decoder::~Decoder() { reset(); }
 
 void Decoder::reset() {
   advanceAArch64DecodeGeneration();
+  if (MicroASEHandle)
+    cs_close(&MicroASEHandle);
   if (InsnBuf)
     cs_free(InsnBuf, 1);
   if (Handle)
@@ -131,21 +135,26 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
     if ((Mode != InstructionMode::Default &&
          Mode != InstructionMode::MIPSClassic && !isMIPSCompressedMode(Mode)) ||
         (isMIPS64(TheArch) && Mode != InstructionMode::Default) ||
-        (Revision != 2 && Revision != 5) ||
-        (Revision == 5 && (isMIPS64(TheArch) || isMIPSCompressedMode(Mode)))) {
+        (Revision != 2 && Revision != 5 && Revision != 6) ||
+        (Revision == 6 && isMIPSCompressedMode(Mode)) ||
+        (Revision == 5 &&
+         (isMIPS64(TheArch) || Mode == InstructionMode::MIPS16))) {
       syncError() << "unsupported MIPS instruction mode\n";
       return false;
     }
     CsArch = CS_ARCH_MIPS;
     CsMode = static_cast<cs_mode>(
-        (isMIPS64(TheArch) ? CS_MODE_MIPS64R2
-         : Revision == 5   ? CS_MODE_MIPS32R5
-                           : CS_MODE_MIPS32R2) |
+        (Revision == 6
+             ? (isMIPS64(TheArch) ? CS_MODE_MIPS64R6 : CS_MODE_MIPS32R6)
+         : isMIPS64(TheArch) ? CS_MODE_MIPS64R2
+         : Revision == 5     ? CS_MODE_MIPS32R5
+                             : CS_MODE_MIPS32R2) |
+        (Revision == 6 && isMIPS64(TheArch) ? CS_MODE_MIPS_PTR64 : 0) |
         (Mode == InstructionMode::MicroMIPS ? CS_MODE_MICRO : 0) |
         (Mode == InstructionMode::MIPS16 ? CS_MODE_MIPS16 : 0) |
         (archLittleEndian(TheArch) ? CS_MODE_LITTLE_ENDIAN
                                    : CS_MODE_BIG_ENDIAN));
-    NewMIPS = std::make_unique<MIPSLifter>(TheArch, Mode);
+    NewMIPS = std::make_unique<MIPSLifter>(TheArch, Mode, Revision);
     break;
   default:
     syncError() << "unsupported arch for decoder\n";
@@ -170,6 +179,8 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
   }
 
   advanceAArch64DecodeGeneration();
+  if (MicroASEHandle)
+    cs_close(&MicroASEHandle);
   if (InsnBuf)
     cs_free(InsnBuf, 1);
   if (Handle)
@@ -270,8 +281,28 @@ void Decoder::setStrict(bool S) {
 
 bool Decoder::decodeArchitectureFallback(const uint8_t *Bytes, size_t Len,
                                          va_t Addr) {
-  return X86 && (decodePrefixedX86Fence(Bytes, Len, Addr) ||
-                 decodeX86MpxFallback(Bytes, Len, Addr));
+  if (X86)
+    return decodePrefixedX86Fence(Bytes, Len, Addr) ||
+           decodeX86MpxFallback(Bytes, Len, Addr);
+  return MIPS && decodeMIPSASE(Bytes, Len, Addr);
+}
+
+LLVM_ATTRIBUTE_ALWAYS_INLINE bool
+Decoder::decodePhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
+  InsnBuf->illegal = false;
+  // POOL32S vector forms have no microMIPS entries in Capstone. Avoid a
+  // failed physical decode for every vector arithmetic or load/store opcode.
+  const bool VectorPool =
+      MIPSISARevision == 5 && CurrentMode == InstructionMode::MicroMIPS &&
+      Len >= 4 && (Bytes[archLittleEndian(TargetArch) ? 1 : 0] >> 2) == 0x16;
+  if (VectorPool && decodeMIPSASE(Bytes, Len, Addr))
+    return true;
+  const uint8_t *Code = Bytes;
+  size_t Remaining = Len;
+  uint64_t PC = Addr;
+  if (cs_disasm_iter(Handle, &Code, &Remaining, &PC, InsnBuf))
+    return true;
+  return !VectorPool && decodeArchitectureFallback(Bytes, Len, Addr);
 }
 
 int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
@@ -281,15 +312,7 @@ int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
   if (MIPS && ((Addr % (isMIPSCompressedMode(CurrentMode) ? 2 : 4)) ||
                (!isMIPS64(TargetArch) && Addr > UINT32_MAX)))
     return 0;
-  const uint8_t *Code = Bytes;
-  size_t Sz = Len;
-  uint64_t A = Addr;
-
-  // Capstone records soft decode failures on the reused instruction object.
-  // Validity belongs to this occurrence, never the previously decoded bytes.
-  InsnBuf->illegal = false;
-  if (!cs_disasm_iter(Handle, &Code, &Sz, &A, InsnBuf) &&
-      !decodeArchitectureFallback(Bytes, Len, Addr))
+  if (!decodePhysical(Bytes, Len, Addr))
     return 0;
 
   fixupDecodedInsn(InsnBuf);
@@ -298,6 +321,10 @@ int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
   Out.Size = static_cast<uint16_t>(InsnBuf->size);
   Out.Id = InsnBuf->id;
   Out.Raw = InsnBuf;
+  Out.MIPSForbiddenFollower =
+      MIPSISARevision == 6 ? MIPSLifter::r6ForbiddenFollower(
+                                 {Bytes, Len}, archLittleEndian(TargetArch))
+                           : std::nullopt;
   if (AArch64)
     recordAArch64Decode(Bytes, Len, Out, Detail && Text);
   // The lift path and CFG classification read the mnemonic (when they need it
@@ -326,13 +353,7 @@ int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
   if (MIPS && ((Addr % (isMIPSCompressedMode(CurrentMode) ? 2 : 4)) ||
                (!isMIPS64(TargetArch) && Addr > UINT32_MAX)))
     return 0;
-  const uint8_t *Code = Bytes;
-  size_t Sz = Len;
-  uint64_t A = Addr;
-
-  InsnBuf->illegal = false;
-  if (!cs_disasm_iter(Handle, &Code, &Sz, &A, InsnBuf) &&
-      !decodeArchitectureFallback(Bytes, Len, Addr))
+  if (!decodePhysical(Bytes, Len, Addr))
     return 0;
 
   if (X86)
@@ -341,6 +362,10 @@ int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
   Out.Size = static_cast<uint16_t>(InsnBuf->size);
   Out.Id = InsnBuf->id;
   Out.Raw = InsnBuf;
+  Out.MIPSForbiddenFollower =
+      MIPSISARevision == 6 ? MIPSLifter::r6ForbiddenFollower(
+                                 {Bytes, Len}, archLittleEndian(TargetArch))
+                           : std::nullopt;
   if (AArch64)
     recordAArch64Decode(Bytes, Len, Out, Detail && Text);
   return Out.Size;
@@ -350,6 +375,8 @@ void Decoder::setDetail(bool On) {
   if (On == Detail || Handle == 0)
     return;
   cs_option(Handle, CS_OPT_DETAIL, On ? CS_OPT_ON : CS_OPT_OFF);
+  if (MicroASEHandle)
+    cs_option(MicroASEHandle, CS_OPT_DETAIL, On ? CS_OPT_ON : CS_OPT_OFF);
   Detail = On;
 }
 
@@ -357,6 +384,8 @@ void Decoder::setText(bool On) {
   if (On == Text || Handle == 0)
     return;
   cs_option(Handle, CS_OPT_TEXT, On ? CS_OPT_ON : CS_OPT_OFF);
+  if (MicroASEHandle)
+    cs_option(MicroASEHandle, CS_OPT_TEXT, On ? CS_OPT_ON : CS_OPT_OFF);
   Text = On;
 }
 
@@ -384,7 +413,7 @@ void Decoder::liftToLow(const DecodedInsn &Insn, std::vector<LowOp> &Ops,
   } else if (ARM) {
     liftARMToLow(Insn, Ops, ScalarRelocs);
   } else if (MIPS) {
-    MIPS->lift(*Insn.Raw, Ops);
+    MIPS->lift(*Insn.Raw, Ops, Insn.MIPSForbiddenFollower);
   } else {
     LowOp Nop;
     Nop.Opcode = NdOp::NOP;
