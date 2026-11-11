@@ -1049,6 +1049,18 @@ records the linked big- and little-endian corpora, per-form comparisons and
 independent execution checks. Both C views were recompiled at `-O0` and
 `-O2`, including the Archer C7 V5 `ubus call` handler.
 
+The [microMIPS64 and compact R6 measurements](evidence/mips-micro64-compact-r6-2026-11-12.json)
+record 779 passing tests and 636 executions of physical n64 DSP/DSPR2
+instructions in GNU sim. The source tests include 144 builds of the profile
+kernels and compare the Archer C7 V5 handler on 12 original and 48 rebuilt
+cases. On an Apple M4 Max, the four o32 compressed instruction corpora with
+matching instruction boundaries reached 5.15–5.42 million instructions per CPU
+second in NeverD and 1.08–1.15 million in SLEIGH. Against the previous NeverD
+build on the full microMIPS corpus, the median paired big-endian CPU time
+increased by 4.23% for decode and 2.13% for lift. Individual paired timings
+varied in both directions. The receipt includes little-endian results, input
+hashes and the excluded SLEIGH delay-slot case.
+
 ## TP-Link firmware workflow
 
 Start with the actual extracted ELF profile instead of assuming a device is
