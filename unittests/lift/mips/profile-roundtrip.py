@@ -19,6 +19,7 @@ def kernels():
         yield name + "dsp", cpu, "dsp", "subu.qb $2,$4,$5"
         yield name + "dspr2", cpu, "dspr2", "adduh_r.qb $2,$4,$5"
     yield "mips64dspindex", "mips64r2", "dsp", "ldx $2,$5($4)"
+    yield "mips64dspcompare", "mips64r2", "dsp", "cmp.lt.ph $4,$5\nrddsp $2,63"
     yield (
         "micromipsmsa",
         "mips32r5",
@@ -101,6 +102,92 @@ def observe(elf, bits, little, feature, cases):
             control = uc.reg_read(mips.UC_MIPS_REG_8) & 0xFFFFFFFF
         observations.append((value, control))
     return observations
+
+
+def verify_micro(
+    args, artifacts, obj, rebuilt, command, log, feature, little, cases, wanted
+):
+    # The ASE-capable Unicorn cores only execute classic code. The emitted C
+    # retains its microMIPS function attribute, including mixed-mode helpers.
+    directory = obj.parent
+    source, driver = directory / "driver.s", directory / "driver.o"
+    asm = [
+        ".text",
+        ".set noreorder",
+        ".set micromips",
+        ".set insn32",
+        ".globl _start",
+        ".ent _start",
+        "_start:",
+        "la $sp,stack_top",
+    ]
+    for i, ((a, b), (value, control)) in enumerate(zip(cases, wanted, strict=True)):
+        if feature != "msa":
+            asm.extend([f"li $4,{0x01004005 if i % 2 else 0}", "wrdsp $4,63"])
+        asm.extend(
+            [
+                f"li $4,{a & 0xFFFFFFFF}",
+                f"li $5,{b & 0xFFFFFFFF}",
+                "jal kernel",
+                "nop",
+                f"li $8,{value}",
+                f"bne $2,$8,failed_{i}",
+                "nop",
+            ]
+        )
+        if feature != "msa":
+            asm.extend(
+                ["rddsp $9,63", f"li $8,{control}", f"bne $9,$8,failed_{i}", "nop"]
+            )
+    success = 211
+    asm.extend([f"li $4,{success}", "break 0x3ff"])
+    for i in range(len(cases)):
+        asm.extend([f"failed_{i}:", f"li $4,{i + 1}", "break 0x3ff"])
+    asm.extend(
+        [".end _start", ".bss", ".balign 16", ".space 8192", "stack_top:", ".space 32"]
+    )
+    source.write_text("\n".join(asm) + "\n")
+    cpu = "mips32r5" if feature == "msa" else "mips32r2"
+    command(
+        [
+            args.assembler,
+            "-" + cpu,
+            "-32",
+            "-EL" if little else "-EB",
+            "-m" + feature,
+            *(["-mfp64"] if feature == "msa" else []),
+            "-o",
+            driver,
+            source,
+        ]
+    )
+    command(
+        [
+            args.linker,
+            "-m",
+            "elf32" + ("l" if little else "b") + "tsmip",
+            "-N",
+            "-Ttext",
+            "0x80010000",
+            "-e",
+            "_start",
+            "-o",
+            rebuilt,
+            driver,
+            obj,
+        ]
+    )
+    with artifacts.process(
+        [args.simulator, "--endian", "little" if little else "big", rebuilt], log
+    ) as (process, _):
+        process.wait(timeout=30)
+    if process.returncode != success:
+        index = process.returncode - 1
+        case = cases[index] if 0 <= index < len(cases) else None
+        raise ValueError(
+            f"{directory.name} simulator exit {process.returncode}, input {case}: {log.read_text()[-1024:]}"
+        )
+    artifacts.discard(source, driver)
 
 
 def run(args, artifacts):
@@ -221,28 +308,42 @@ def run(args, artifacts):
                                 obj,
                             ]
                         )
-                        command(
-                            [
-                                args.linker,
-                                "-m",
-                                emulation,
-                                "-Ttext",
-                                "0x30000",
-                                "-e",
-                                "kernel",
-                                "-o",
-                                rebuilt,
+                        if micro:
+                            verify_micro(
+                                args,
+                                artifacts,
                                 obj,
-                            ]
-                        )
-                        got = observe(rebuilt, bits, little, feature, cases)
-                        for pair, actual, expected in zip(
-                            cases, got, wanted, strict=True
-                        ):
-                            if actual != expected:
-                                raise ValueError(
-                                    f"{directory.name} {view} {opt} {pair}: {actual} != {expected}"
-                                )
+                                rebuilt,
+                                command,
+                                log,
+                                feature,
+                                little,
+                                cases,
+                                wanted,
+                            )
+                        else:
+                            command(
+                                [
+                                    args.linker,
+                                    "-m",
+                                    emulation,
+                                    "-Ttext",
+                                    "0x30000",
+                                    "-e",
+                                    "kernel",
+                                    "-o",
+                                    rebuilt,
+                                    obj,
+                                ]
+                            )
+                            got = observe(rebuilt, bits, little, feature, cases)
+                            for pair, actual, expected in zip(
+                                cases, got, wanted, strict=True
+                            ):
+                                if actual != expected:
+                                    raise ValueError(
+                                        f"{directory.name} {view} {opt} {pair}: {actual} != {expected}"
+                                    )
                         report["builds"].append(
                             {
                                 "profile": directory.name,
@@ -278,11 +379,22 @@ if __name__ == "__main__":
         parser.add_argument(
             "--" + option, type=lambda s: Path(s).absolute(), required=True
         )
+    parser.add_argument("--simulator", type=lambda s: Path(s).absolute())
     parser.add_argument("--profile", action="append", choices=[k[0] for k in kernels()])
     args = parser.parse_args()
+    if not args.simulator and (
+        not args.profile or any(p.startswith("micro") for p in args.profile)
+    ):
+        parser.error("--simulator is required to execute rebuilt microMIPS kernels")
     with MIPSValidationArtifacts(
         args.output,
         "mips-profile-roundtrip",
-        (args.assembler, args.linker, args.neverd, args.clang),
+        (
+            args.assembler,
+            args.linker,
+            args.neverd,
+            args.clang,
+            *([args.simulator] if args.simulator else []),
+        ),
     ) as artifacts:
         run(args, artifacts)

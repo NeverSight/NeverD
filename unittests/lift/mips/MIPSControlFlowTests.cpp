@@ -14,6 +14,7 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/LowToMedError.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
 #include "llvm/Support/Error.h"
@@ -111,6 +112,36 @@ TEST_P(MIPSControl, DelayedUnitOwnsBothInstructionsAndActiveOperandDetails) {
       }
     }
   }
+}
+
+TEST_P(MIPSControl, SourceReturnRequiresTheWholeIncomingLink) {
+  const bool Wide = isMIPS64(GetParam());
+  const auto Check = [&](llvm::ArrayRef<uint32_t> Words, bool Preserved) {
+    auto Image = image(Words, GetParam());
+    Image.MIPS.emplace();
+    Image.MIPS->HasDSP = true;
+    Image.MIPS->ABI = Wide ? MIPSABI::N64 : MIPSABI::O32;
+    const auto Low = build(Image);
+    ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+    for (bool WithImage : {false, true}) {
+      SCOPED_TRACE(WithImage);
+      LowToMedConverter Convert;
+      if (WithImage)
+        Convert.setBinaryImage(&Image);
+      if (Preserved)
+        EXPECT_NO_THROW(Convert.convert(Low, GetParam(), BinaryFormat::ELF));
+      else
+        EXPECT_THROW(Convert.convert(Low, GetParam(), BinaryFormat::ELF),
+                     LowToMedConversionError);
+    }
+  };
+  constexpr uint32_t ClearRA = 0x0000f825, Return = 0x03e00008;
+  Check({Return, 0}, true);
+  Check({ClearRA, Return, 0}, false);
+  // sw/lw ra,-4(sp) preserves an o32 link and truncates an n64 link.
+  Check({0xafbffffc, ClearRA, 0x8fbffffc, Return, 0}, !Wide);
+  if (Wide)
+    Check({0xffbffff8, ClearRA, 0xdfbffff8, Return, 0}, true);
 }
 
 TEST_P(MIPSControl, WideCallResultKeepsTheO32RegisterWordOrder) {

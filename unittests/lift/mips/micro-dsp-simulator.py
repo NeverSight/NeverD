@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare physical microMIPS DSP instructions on GNU sim with classic 74Kf results."""
+"""Cross-check each micro ASE lift and run the physical DSP forms on GNU sim."""
 
 import argparse
 import json
@@ -190,14 +190,14 @@ def main():
     for option in ("assembler", "linker", "simulator", "bench"):
         parser.add_argument("--" + option, type=Path, required=True)
     args = parser.parse_args()
-    results = {}
+    results = {"lowir_form_pairs": {}, "physical_dsp_executions": {}}
     with tempfile.TemporaryDirectory(prefix="neverd-micro-dsp-") as directory:
         work = Path(directory)
         classic, micro = work / "classic", work / "micro"
         classic.mkdir()
         micro.mkdir()
         for profile, cpu, feature, instructions in COVERAGE["corpora"]():
-            if profile not in {"mipsdsp", "mipsdspr2"}:
+            if profile not in {"mipsdsp", "mipsdspr2", "mipsmsa"}:
                 continue
             for little in (False, True):
                 raw = COVERAGE["assemble"](
@@ -209,6 +209,10 @@ def main():
                 compare_lifts(
                     args, work, raw, compressed, profile, little, instructions
                 )
+                name = "micro" + profile + ("el" if little else "")
+                results["lowir_form_pairs"][name] = len(instructions)
+                if feature == "msa":
+                    continue
                 for variant in range(2):
                     expected = oracle(
                         raw.with_name("fixture.elf"), instructions, little, variant
@@ -216,9 +220,7 @@ def main():
                     run_micro(
                         args, work, feature, instructions, expected, little, variant
                     )
-                results["micro" + profile + ("el" if little else "")] = (
-                    len(instructions) * 2
-                )
+                results["physical_dsp_executions"][name] = len(instructions) * 2
     print(json.dumps(results, indent=2))
 
 

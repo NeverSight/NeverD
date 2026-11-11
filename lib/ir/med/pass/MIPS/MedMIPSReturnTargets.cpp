@@ -99,8 +99,9 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   std::map<Key, bool> Results;
   std::set<Key> Active;
   size_t Remaining = limits::ir::kSourceFrameAnalysisRemaining;
+  const uint16_t LinkBytes = isMIPS64(Target) ? 8 : 4;
   std::function<bool(const MedVar &)> Prove = [&](const MedVar &Value) {
-    if (!Remaining || Value.isConst() || Value.Size != 4 ||
+    if (!Remaining || Value.isConst() || Value.Size != LinkBytes ||
         Active.size() >= limits::ir::kMIPSReturnIdentityDepth)
       return false;
     --Remaining;
@@ -134,11 +135,11 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
                 (Zero(1) && Prove(Op.Inputs[0]));
       else if (Op.Opcode == NdOp::LOAD && Op.NumInputs == 1 && LeafMemory) {
         const auto At = Offset(Op.Inputs[0]);
-        if (At && *At < 0 && *At <= -4 &&
+        if (At && *At <= -int64_t(LinkBytes) &&
             *At >= -limits::ir::kSourceFrameAnalysisMaxFrame) {
           const auto Reaching = safety::detail::reachingStackValues(
               Function, Definition.Block->Id,
-              int(&Op - Definition.Block->Ops.data()), *At, 4, Offset,
+              int(&Op - Definition.Block->Ops.data()), *At, LinkBytes, Offset,
               [](const MedVar &V) { return !V.isConst(); },
               [](const MedVar &) { return true; }, true, false);
           // LeafMemory excludes calls and hidden memory effects. Merely

@@ -23835,15 +23835,21 @@ views at `-O0` and `-O2`. Pass `--assembler`, `--linker`, `--neverd`,
 bindings and library configured as above. The fixture compares return values
 and DSPControl/MSACSR where applicable. For microMIPS ASEs it feeds the
 physical micro ELF to NeverD and the same independently assembled classic
-kernel to the 74Kf or P5600 reference core.
+kernel to the 74Kf or P5600 reference core. Supply `--simulator` for these
+profiles. GNU sim executes the recompiled microMIPS functions with their
+original mode attributes. The driver checks each return value and, for DSP
+and DSPR2, the final DSPControl bits. The selected micro MSA integer kernel
+recompiles to scalar microMIPS. Its original vector instructions are checked
+against the classic encoding and the P5600.
 
 Run `micro-dsp-simulator.py` with `--assembler`, `--linker`, `--bench` and
 `--simulator` to execute the physical microMIPS DSP and DSPR2 instructions.
 Use a GNU MIPS simulator built for `mipsisa32r2-unknown-elf`. It compares two
 sets of inputs for each of the 159 forms in each byte order against the 74Kf
 classic instruction, including the two sides of BPOSGE32, indexed memory,
-DSPControl and both halves of AC2. The driver also checks each pair of classic
-and micro encodings through NeverD for matching LowIR.
+DSPControl and both halves of AC2. The driver also compares NeverD LowIR for
+each classic and micro encoding of all 159 DSP/DSPR2 and 526 MSA forms in
+both byte orders.
 
 Ordinary pair padding, predecessor memory barriers,
 single-sided barriers at joins, depth/work exhaustion and non-entry analysis

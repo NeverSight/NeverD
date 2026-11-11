@@ -267,7 +267,11 @@ banked register transfers copy the entire GPR-width half. The pinned Unicorn
 model truncates transfers to nonzero banks on n64, so the non-word test vectors
 for these four transfers use the specification directly. Indexed
 memory instructions use the full address registers, including the DSP-only
-doubleword load `LDX`. The older 64-bit packed formats removed in specification
+doubleword load `LDX`. Both C views preserve DSPControl under the n64 ABI.
+An n64 source return requires the complete eight-byte incoming link, including
+when it is restored from a leaf stack slot. A four-byte spill suffices on o32.
+Standalone IR that writes the link and calls a direct target needs the image
+to establish the callee mode on either ABI. The older 64-bit packed formats removed in specification
 revision 2.40 (including `.OB`, `.QH` and `.PW`) are unimplemented.
 See the register model and revision history in the
 [MIPS64 DSP Module, revision 3.02](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00375-2B-MIPS64DSP-AFP-03.02.pdf).

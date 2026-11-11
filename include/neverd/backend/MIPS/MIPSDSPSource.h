@@ -57,10 +57,9 @@ inline bool imagePreservesDSPControl(const BinaryImage *Image) {
 }
 
 inline bool sourcePreservesDSPControl(Arch Target, const BinaryImage *Image) {
-  // Standalone MIPS32 source has no image profile that can rule out DSP state.
+  // Standalone MIPS source has no image profile that can rule out DSP state.
   // Even pure lifted arithmetic must not acquire compiler-generated DSP writes.
-  return imagePreservesDSPControl(Image) ||
-         (!Image && (Target == Arch::MIPS32 || Target == Arch::MIPS32EL));
+  return isMIPS(Target) && (!Image || imagePreservesDSPControl(Image));
 }
 
 inline bool modulePreservesDSPControl(const llvm::Module &Module,
