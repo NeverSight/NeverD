@@ -605,7 +605,8 @@ Explicit DWARF rows retain their instruction-boundary signing state.
 Mach-O metadata relocation also preserves the CIE signal-frame marker `S`
 and its exact-PC interpretation alongside the signing rows. This accepts
 register and offset rules that retain their meaning when the table moves.
-Address-dependent expressions still need explicit relocation semantics. The
+Register-relative signal-context expressions can dereference a saved context
+pointer and add a field offset. Absolute addresses still need relocation. The
 fixture decodes the original and installed CFA and LR stack rules through LLVM
 and checks both against the interrupted stack, including the saved slot.
 
@@ -763,7 +764,9 @@ of the original sections in a zero-base arm64e dylib with image-relative
 chained fixups. The preferred header stays at zero. The output symbols, stubs
 and original data move together. The installation receipt records the slide
 and preserves each original entry VA. The verifier resolves each trampoline
-from the signed output's own symbols.
+from the signed output's own symbols. Apple's `dyld_info` decodes the binds
+in both images so the verifier can compare each original slot's section,
+target and signing recipe at the published address.
 The installer measures LSDA index demand from the native compact entries
 and FDEs. It can retain the compact table at its original VA, move
 the adjacent DWARF records into audited free TEXT storage and reuse their

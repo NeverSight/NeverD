@@ -120,7 +120,7 @@ def check_classic(binary):
     return identity
 
 
-def check_receipt(receipt):
+def check_receipt(receipt, *, require_slide=False):
     entries = receipt.get("entries", [])
     functions = receipt.get("functions", {})
     text = receipt.get("text", {})
@@ -138,7 +138,31 @@ def check_receipt(receipt):
                 row.get("original") == row.get("installed") or
                 functions.get(row.get("symbol")) != row.get("installed") for row in entries)):
         raise ValueError(POLICY["errors"]["receipt"])
+    slide = receipt.get(POLICY["slide_field"], 0)
+    if (type(slide) is not int or slide < 0 or (require_slide and not slide) or
+            (POLICY["slide_field"] in receipt and
+             any(type(row.get(POLICY["trampoline_field"])) is not int or
+                 row[POLICY["trampoline_field"]] != row["original"] + slide or
+                 row[POLICY["trampoline_field"]] == row["installed"] for row in entries))):
+        raise ValueError(POLICY["dense_error"])
     return functions
+
+
+def check_slid_binds(original, installed, slide):
+    def slots(listing):
+        result = {}
+        for segment, section, address, kind, target in re.findall(POLICY["bind_pattern"], listing, re.MULTILINE):
+            va = int(address, POLICY["hex_radix"])
+            if va in result:
+                raise ValueError(POLICY["bind_error"])
+            result[va] = (segment, section, kind, target)
+        return result
+
+    before, after = slots(original), slots(installed)
+    if (not any(binding[2] == POLICY["auth_bind_kind"] for binding in before.values()) or
+            any(after.get(address + slide) != binding for address, binding in before.items())):
+        raise ValueError(POLICY["bind_error"])
+    return len(before)
 
 
 def check_execution(result, *, original=False):
@@ -278,6 +302,7 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                         receipt = None
                         baseline = None
                         original_base = None
+                        bind_count = None
                         if publish:
                             library = output / POLICY["installed_library_name"].format(**fields)
                             products.append(library)
@@ -321,14 +346,14 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                                     POLICY["export_timeout"], env)
                             check_export(publication_xml.read_text(), POLICY["publication_case"])
                             receipt = json.loads(receipt_path.read_text())
-                            installed = check_receipt(receipt)
+                            installed = check_receipt(
+                                receipt, require_slide=match_original_optimization and dwarf and
+                                optimization == POLICY["dense_optimization"])
                             if match_original_optimization:
-                                slide = receipt[POLICY["slide_field"]]
-                                if (type(slide) is not int or slide < 0 or
-                                        (dwarf and optimization == POLICY["dense_optimization"] and not slide) or
-                                        any(row[POLICY["trampoline_field"]] != row["original"] + slide
-                                            for row in receipt["entries"])):
-                                    raise ValueError(POLICY["dense_error"])
+                                old = command(label + POLICY["baseline_suffix"] + POLICY["bind_suffix"],
+                                              [*POLICY["bind_command"], original])
+                                new = command(label + POLICY["bind_suffix"], [*POLICY["bind_command"], library])
+                                bind_count = check_slid_binds(old.stdout, new.stdout, receipt[POLICY["slide_field"]])
                         command(label + native.POLICY["signature_suffix"],
                                 [*native.POLICY["signature_command"], library])
                         assembly = command(label + native.POLICY["disassembly_suffix"],
@@ -361,6 +386,8 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                                "image_base": base, "original_image_base": original_base,
                                "occupied_original_rejected": publish, "installed_text_sha256": text_hash}
                         report["cases"].append(row)
+                        if bind_count is not None:
+                            row[POLICY["bind_count_field"]] = bind_count
                         if not compile_only:
                             execution = command(label, [loader, library], POLICY["execute_timeout"])
                             check_execution(execution)

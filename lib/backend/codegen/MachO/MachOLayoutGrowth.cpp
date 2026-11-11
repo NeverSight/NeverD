@@ -25,6 +25,7 @@
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -335,6 +336,29 @@ bool hasRelocatableAugmentation(const DwarfCIE &CIE, Arch Architecture) {
          NonHint == CIE.UsesNonHintPAuthLR && Signal == CIE.IsSignalFrame;
 }
 
+// A signal trampoline can recover its CFA or registers from an interrupted
+// context. These operations depend only on the live register and memory.
+bool isRegisterRelativeSignalLocation(llvm::ArrayRef<uint8_t> Bytes) {
+  using namespace llvm::dwarf;
+  if (Bytes.empty() || Bytes.front() < DW_OP_breg0 ||
+      Bytes.front() > DW_OP_breg31)
+    return false;
+  size_t Offset = 1;
+  int64_t Displacement;
+  if (!dwarf_eh::readSLEB128(Bytes.data(), Bytes.size(), Offset, Displacement))
+    return false;
+  while (Offset < Bytes.size()) {
+    const auto Op = Bytes[Offset++];
+    if (Op == DW_OP_deref)
+      continue;
+    uint64_t Addend;
+    if (Op != DW_OP_plus_uconst ||
+        !dwarf_eh::readULEB128(Bytes.data(), Bytes.size(), Offset, Addend))
+      return false;
+  }
+  return true;
+}
+
 bool sameCFI(llvm::ArrayRef<CFIInstruction> Before,
              llvm::ArrayRef<CFIInstruction> After) {
   return Before.size() == After.size() &&
@@ -459,12 +483,19 @@ relocatedFrames(const std::vector<uint8_t> &Binary, const MachOEHFrameRegion &R,
     return Image.takeError();
   const auto OriginalFrames =
       dwarf_eh::parseEHFrame(*Image, {Raw.data(), Raw.size(), R.SectionVA}, {});
-  auto StableRules = [](llvm::ArrayRef<CFIInstruction> Rules) {
-    return llvm::none_of(Rules, [](const auto &I) {
-      return I.Kind == CFIOpKind::SetLoc || I.Kind == CFIOpKind::Opaque ||
-             I.Kind == CFIOpKind::Expression ||
-             I.Kind == CFIOpKind::ValExpression ||
-             I.Kind == CFIOpKind::DefCFAExpression;
+  auto StableRules = [](llvm::ArrayRef<CFIInstruction> Rules, bool Signal) {
+    return llvm::all_of(Rules, [Signal](const auto &I) {
+      switch (I.Kind) {
+      case CFIOpKind::SetLoc:
+      case CFIOpKind::Opaque:
+        return false;
+      case CFIOpKind::Expression:
+      case CFIOpKind::ValExpression:
+      case CFIOpKind::DefCFAExpression:
+        return Signal && isRegisterRelativeSignalLocation(I.Expression);
+      default:
+        return true;
+      }
     });
   };
   for (const auto &S : Image->Symbols)
@@ -514,8 +545,8 @@ relocatedFrames(const std::vector<uint8_t> &Binary, const MachOEHFrameRegion &R,
         F->Dwarf->InitialLocation != Record.BeginVA ||
         F->Dwarf->AddressRange != Record.EndVA - Record.BeginVA ||
         !hasRelocatableAugmentation(*C, Image->Arch) || C->HasMTETaggedFrame ||
-        !StableRules(C->InitialInstructions) ||
-        !StableRules(F->Dwarf->Instructions) ||
+        !StableRules(C->InitialInstructions, C->IsSignalFrame) ||
+        !StableRules(F->Dwarf->Instructions, C->IsSignalFrame) ||
         (Record.HasLanguageAugmentation && !Image->isArm64e()) ||
         (Record.InitialLocationEncoding & dweh::Indirect))
       return fail(
@@ -1010,7 +1041,7 @@ reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch A,
       const uint64_t VA =
           Storage ? Storage->VA : P.plannedExecSegmentVA(Candidate, A);
       if (!VA)
-        return fail("cannot plan relocated frame storage");
+        return llvm::make_error<InsufficientText>();
       auto Frames = relocatedFrames(Candidate, *R, VA, Limits);
       if (!Frames)
         return Frames.takeError();
@@ -1039,11 +1070,12 @@ llvm::Expected<uint64_t> reserveMachOPublishedUnwind(
   if (!AllowSlide || !Error.isA<InsufficientText>())
     return Error;
   auto Region = findMachOCompactUnwindRegion(Binary);
-  if (!Region || !*Region || (**Region).MachHeaderVA) {
-    if (!Region)
-      llvm::consumeError(Region.takeError());
-    return Error;
+  if (!Region) {
+    llvm::consumeError(std::move(Error));
+    return Region.takeError();
   }
+  if (!*Region || (**Region).MachHeaderVA)
+    return Error;
   llvm::consumeError(std::move(Error));
   const auto &R = **Region;
   auto Raw = macho_unwind::parseCompactUnwindRaw(

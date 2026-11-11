@@ -80,6 +80,12 @@ NEVERD_A64_DWARF_PROGRAM(kInitialAdvance, 0x41)
 NEVERD_A64_DWARF_PROGRAM(kInitialSP, 0x2b, 1, 0)
 NEVERD_A64_DWARF_PROGRAM(kDynamic, 0x09, 34, 5, 0x41, 0x06, 34)
 NEVERD_A64_DWARF_PROGRAM(kExpression, 0x16, 34, 1, 0x30, 0x41, 0x06, 34)
+// CFA = *(SP + 16). LR is stored at *(X19 - 8) + 24.
+NEVERD_A64_DWARF_PROGRAM(kSignalCFA, 0x0f, 3, 0x8f, 16, 0x06)
+NEVERD_A64_DWARF_PROGRAM(kSignalLR, 0x10, 30, 5, 0x83, 0x78, 0x06, 0x23, 24)
+NEVERD_A64_DWARF_PROGRAM(kTruncatedSignalLR, 0x10, 30, 2, 0x83, 0x80)
+NEVERD_A64_DWARF_PROGRAM(kAbsoluteSignalCFA, 0x0f, 9, 0x03, 16, 0, 0, 0, 0, 0,
+                         0, 0)
 NEVERD_A64_DWARF_PROGRAM(kNested, 0x0a, 0x2b, 2, 0, 0x41, 0x0a, 0x2b, 0, 0,
                          0x41, 0x0b, 0x41, 0x0b)
 NEVERD_A64_DWARF_PROGRAM(kLateUnderflow, 0x41, 0x0b)

@@ -343,10 +343,45 @@ TEST(AArch64DwarfRewrite,
   Reject({}, kDuplicateNonHint, kLayoutRefusal);
   Reject({}, kDuplicateSignal, kLayoutRefusal);
   Reject(kExpression, kSignalAugmentation, kLayoutRefusal);
+  Reject(kTruncatedSignalLR, kSignalAugmentation, kLayoutRefusal);
+  Reject({}, kSignalAugmentation, kLayoutRefusal, kAbsoluteSignalCFA);
   language_eh_test::ByteBuilder Location;
   Location.u8(kSetLocation);
   Location.u64(kMachOBase + kMachOTextOffset + kCodeAlign);
   Reject(Location.data(), kOrdinary, kLayoutRefusal);
+}
+
+TEST(AArch64DwarfRewrite, RelocatesRegisterRelativeSignalContextRules) {
+  auto Binary = machOFrame(kSignalLR, kBKeySignal, kSignalCFA);
+  const auto Before = parseMachOFrame(Binary);
+  const auto Old = findMachOEHFrameRegion(Binary);
+  ASSERT_TRUE(Old);
+  auto Grown =
+      reserveMachOSourceUnwind(Binary, Arch::AArch64, kMachOPageSize, 0);
+  ASSERT_TRUE(bool(Grown)) << llvm::toString(Grown.takeError());
+  const auto Now = findMachOEHFrameRegion(Binary);
+  ASSERT_TRUE(Now);
+  EXPECT_NE(Old->SectionVA, Now->SectionVA);
+  const auto After = parseMachOFrame(Binary);
+  ASSERT_EQ(After.ParseStatus, ExceptionParseStatus::Complete);
+  ASSERT_EQ(After.CIEs.size(), 1u);
+  ASSERT_EQ(After.FDEs.size(), 1u);
+  EXPECT_TRUE(After.CIEs.front().IsSignalFrame);
+  const auto Expression = [](const auto &Rules, CFIOpKind Kind) {
+    const auto It =
+        llvm::find_if(Rules, [&](const auto &I) { return I.Kind == Kind; });
+    return It == Rules.end() ? std::vector<uint8_t>() : It->Expression;
+  };
+  const auto CFA = Expression(After.CIEs.front().InitialInstructions,
+                              CFIOpKind::DefCFAExpression);
+  const auto LR =
+      Expression(After.FDEs.front().Instructions, CFIOpKind::Expression);
+  EXPECT_FALSE(CFA.empty());
+  EXPECT_FALSE(LR.empty());
+  EXPECT_EQ(CFA, Expression(Before.CIEs.front().InitialInstructions,
+                            CFIOpKind::DefCFAExpression));
+  EXPECT_EQ(
+      LR, Expression(Before.FDEs.front().Instructions, CFIOpKind::Expression));
 }
 
 TEST(AArch64DwarfRewrite, MetadataInsertionPreservesSymbolSectionIdentity) {
