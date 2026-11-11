@@ -89,6 +89,24 @@ namespace {
 /// Holds the frame record's place until the body has named its members.
 constexpr llvm::StringLiteral kFrameRecordMarker = "/*@neverd-frame-record@*/";
 
+/// Whether the C compiler for the original target lets a definition assume
+/// that its callers extended a char or short argument to a full int, as Clang
+/// does for AAPCS, i386, x86-64 System V, MIPS and Apple arm64 (`zeroext`).
+/// Win64 and AAPCS64 make the callee extend it.
+bool cCallersExtendNarrowArguments(Arch TheArch, BinaryFormat Format) {
+  switch (TheArch) {
+  case Arch::X86:
+  case Arch::ARM:
+    return true;
+  case Arch::X64:
+    return Format != BinaryFormat::COFF;
+  case Arch::AArch64:
+    return Format == BinaryFormat::MachO;
+  default:
+    return isMIPS(TheArch);
+  }
+}
+
 /// Whether \p Signature declares main as a hosted C program's runtime calls
 /// it: `int main(int argc, char **argv)`, and envp after argv where it
 /// passes that too (libc::kProgramMainDeclaration).
@@ -10323,6 +10341,9 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
       return {};
     return cNamedTypeSpelling(Ty->TypedefName);
   };
+  // The char and short arguments the definition takes as whole words, and the
+  // word each one arrives in.
+  std::vector<std::pair<const llvm::Argument *, std::string>> NarrowedArguments;
   auto ParamDecl = [&](llvm::Argument &Arg, unsigned ParamIdx) {
     if (ParamIdx < DefinitionTypes.Parameters.size()) {
       const auto &Pointer = DefinitionTypes.Parameters[ParamIdx];
@@ -10350,6 +10371,26 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
       if (const std::string Name = Alias(Ty, Arg.getType()); !Name.empty()) {
         return Name + " " + BindParam(Arg, ParamIdx);
       }
+    }
+    // A char or short argument with no extension attribute arrives with
+    // whatever bits its caller left above it: the code reads its low bits
+    // only, so an int argument the original declared passes it too. C would
+    // let the definition rely on an extension the original never did, so it
+    // takes the whole word and narrows it itself. A declared narrow type is
+    // one its callers extend, and keeps its spelling.
+    if (!Sret && !DebugIdx && !Opts.PreserveLLVMFunctionTypes &&
+        cCallersExtendNarrowArguments(Opts.TheArch, Opts.Format) &&
+        (Arg.getType()->isIntegerTy(8) || Arg.getType()->isIntegerTy(16)) &&
+        !Arg.hasZExtAttr() && !Arg.hasSExtAttr() &&
+        !Fn.hasFnAttribute("neverd.x64_dispatch_frame")) {
+      const std::string Name = BindParam(Arg, ParamIdx);
+      if (Arg.use_empty())
+        return "uint32_t " + Name;
+      std::string Word = Name + "_word";
+      if (!UsedNames.insert(Word).second)
+        Word = freshVar(Word);
+      NarrowedArguments.emplace_back(&Arg, Word);
+      return "uint32_t " + Word;
     }
     return ParamTypeStr(Arg, ParamIdx) + " " + BindParam(Arg, ParamIdx);
   };
@@ -10455,6 +10496,12 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
       OS.retarget(Guard.Primary);
       OS << Buffered;
       return;
+    }
+    for (const auto &[Arg, Word] : NarrowedArguments) {
+      const std::string Type = typeToCLLVM(Arg->getType());
+      emitIndent(1);
+      OS << Type << " " << getName(Arg) << " = (" << Type << ")" << Word
+         << ";\n";
     }
   } else {
     unsigned ParamIdx = 0;
