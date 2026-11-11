@@ -25,9 +25,8 @@ MACHO_LEAF_TEXT(
     "arm64e lifted entries do not cover the original instruction section")
 MACHO_LEAF_TEXT(kLeafCode, "arm64e generated instructions do not reproduce the "
                            "original position-independent leaf")
-MACHO_LEAF_TEXT(
-    kLeafFrame,
-    "arm64e lifted leaf requires a matching native frame record and unwind encoding")
+MACHO_LEAF_TEXT(kLeafFrame, "arm64e lifted leaf requires a matching native "
+                            "frame record and unwind encoding")
 MACHO_LEAF_TEXT(kGeneratedCoverage,
                 "arm64e object has {0} unwind ranges for {1} entries and {2} "
                 "code bytes for {3} original bytes")
@@ -44,9 +43,8 @@ MACHO_LEAF_TEXT(kSourceText,
                 "starts and a single executable segment")
 MACHO_LEAF_TEXT(kSourceEntry, "arm64e lifted function {0} has no complete "
                               "definition at an original entry")
-MACHO_LEAF_TEXT(
-    kDirectTarget,
-    "arm64e direct transfer does not preserve its installed target")
+MACHO_LEAF_TEXT(kDirectTarget,
+                "arm64e direct transfer does not preserve its installed target")
 MACHO_LEAF_TEXT(kErrorResultABI,
                 "arm64e writable X21 across calls requires an error-result ABI")
 MACHO_LEAF_TEXT(kLeafABIFlag, "ptrauth.abi-version")
