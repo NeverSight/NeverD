@@ -17,7 +17,7 @@
 namespace llvm {
 class Function;
 class Value;
-}
+} // namespace llvm
 
 namespace neverd {
 struct MedFunc;
