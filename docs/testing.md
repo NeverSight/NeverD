@@ -23702,6 +23702,22 @@ reference also fixes discarded packed-DSP/shift results: helpers still update
 DSPControl and enforce DSP enablement. The source runner permits no original
 zero-destination mismatch; see the [DSP reference boundary](mips.md#classic-mips32-dsp-state-and-packed-arithmetic).
 Reports identify the source revision and actual loaded native-library hash.
+
+To reproduce the DSP extraction and MSA permutation, floating-point and
+control-transfer comparisons, run the following command for each of
+`--group dsp` and `--group msa` with a separate output directory. Use a
+MIPS-enabled shared build of the pinned Unicorn fork. The runner assembles
+both byte orders, recompiles HighC and LLVMC at `-O0` and `-O2`, and compares
+registers, output bytes, control state and enabled FP traps with the original.
+
+```bash
+LIBUNICORN_PATH=/path/to/pinned-unicorn-library-directory \
+PYTHONPATH="$PWD/third_party/unicorn/bindings/python" \
+python3 unittests/lift/mips/ase-roundtrip.py --group msa \
+  --neverd build-mips/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld \
+  --output build-mips/roundtrip-msa-ase
+```
+
 Ordinary pair padding, predecessor memory barriers,
 single-sided barriers at joins, depth/work exhaustion and non-entry analysis
 roots or exceptional/disconnected paths have separate call-recovery regressions.
