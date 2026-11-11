@@ -17,6 +17,7 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Intrinsics.h"
@@ -28,6 +29,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/ModRef.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/Triple.h"
 
@@ -1372,6 +1374,622 @@ TEST(LLVMCIntrinsicSemantics,
     llvm::raw_string_ostream Output(Text);
     EXPECT_THROW(LLVMCEmitter().emit(Module, Output, {}), std::runtime_error);
   }
+}
+
+TEST(LLVMCIntrinsicSemantics, SignedSaturationClampsAtBothBounds) {
+  // A signed sum or difference outside its width's range gives the nearest
+  // bound; the helper works on the unsigned carriers the values have.
+  llvm::LLVMContext Context;
+  llvm::Module Module("signed-saturation", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<llvm::NoFolder> Builder(Context);
+  auto *Wide = Builder.getInt128Ty();
+  const llvm::Intrinsic::ID Kinds[] = {llvm::Intrinsic::sadd_sat,
+                                       llvm::Intrinsic::ssub_sat};
+  std::string Table;
+  for (unsigned Bits : {1u, 8u, 16u, 32u, 64u, 128u})
+    for (unsigned Kind = 0; Kind != 2; ++Kind) {
+      const std::string Name =
+          "signed_" + std::to_string(Bits) + "_" + std::to_string(Kind);
+      Table += Name + ",";
+      auto *Function = llvm::Function::Create(
+          llvm::FunctionType::get(Wide, {Wide, Wide}, false),
+          llvm::GlobalValue::ExternalLinkage, Name, Module);
+      Builder.SetInsertPoint(
+          llvm::BasicBlock::Create(Context, "entry", Function));
+      auto *Integer = Builder.getIntNTy(Bits);
+      auto *Intrinsic = llvm::Intrinsic::getOrInsertDeclaration(
+          &Module, Kinds[Kind], {Integer});
+      auto *Result = Builder.CreateCall(
+          Intrinsic,
+          {Builder.CreateTruncOrBitCast(Function->getArg(0), Integer),
+           Builder.CreateTruncOrBitCast(Function->getArg(1), Integer)});
+      Builder.CreateRet(Builder.CreateZExtOrBitCast(Result, Wide));
+    }
+  const std::string Text = emit(Module);
+  EXPECT_NE(Text.find("neverd_llvm_sadd_sat_i8("), std::string::npos) << Text;
+  EXPECT_NE(Text.find("neverd_llvm_ssub_sat_i128("), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("llvm_x2E_"), std::string::npos) << Text;
+  const std::string Source = "#include <stdint.h>\n#include <stdbool.h>\n" +
+                             Text + R"(
+typedef unsigned __int128 U128;
+typedef __int128 I128;
+static U128 reference(unsigned bits, int subtract, U128 left, U128 right) {
+  const U128 mask = ~(U128)0 >> (128 - bits);
+  const I128 a = (I128)(left << (128 - bits)) >> (128 - bits);
+  const I128 b = (I128)(right << (128 - bits)) >> (128 - bits);
+  const U128 sign = (U128)1 << (bits - 1);
+  I128 exact;
+  const int wrapped = subtract ? __builtin_sub_overflow(a, b, &exact)
+                               : __builtin_add_overflow(a, b, &exact);
+  U128 result = (U128)exact & mask;
+  /* The exact value is outside the width when it wrapped at 128 bits or
+     does not sign-extend from the width. */
+  if (wrapped || ((I128)(result << (128 - bits)) >> (128 - bits)) != exact)
+    result = a < 0 ? sign : sign - 1;
+  return result & mask;
+}
+int main(void) {
+  U128 (*functions[])(U128, U128) = {)" +
+                             Table + R"(};
+  const unsigned widths[] = {1, 8, 16, 32, 64, 128};
+  for (unsigned width = 0; width < 6; ++width) {
+    const unsigned bits = widths[width];
+    const U128 mask = ~(U128)0 >> (128 - bits);
+    const U128 sign = (U128)1 << (bits - 1);
+    const U128 values[] = {0, 1, 2, sign - 2, sign - 1, sign, sign + 1,
+                          mask - 1, mask, ((U128)0x5a5a << 100) | 0xabcdef};
+    for (unsigned a = 0; a < 10; ++a)
+      for (unsigned b = 0; b < 10; ++b)
+        for (unsigned kind = 0; kind < 2; ++kind)
+          if (functions[width * 2 + kind](values[a], values[b]) !=
+              reference(bits, kind, values[a] & mask, values[b] & mask))
+            return 1 + width * 2 + kind;
+  }
+  /* Every pair of bytes. */
+  for (unsigned a = 0; a < 256; ++a)
+    for (unsigned b = 0; b < 256; ++b)
+      for (unsigned kind = 0; kind < 2; ++kind)
+        if (functions[2 + kind](a, b) != reference(8, kind, a, b)) return 20;
+  return 0;
+}
+)";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndCheck(Source, false, {}, Optimization, true);
+}
+
+TEST(LLVMCIntrinsicSemantics, ThreeWayComparisonsOrderSignedAndUnsigned) {
+  // scmp and ucmp give -1, 0 or 1 in the result's width for operands of
+  // another width.
+  llvm::LLVMContext Context;
+  llvm::Module Module("three-way", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<llvm::NoFolder> Builder(Context);
+  auto *Wide = Builder.getInt128Ty();
+  const llvm::Intrinsic::ID Kinds[] = {llvm::Intrinsic::scmp,
+                                       llvm::Intrinsic::ucmp};
+  std::string Table;
+  for (unsigned Bits : {8u, 16u, 32u, 64u, 128u})
+    for (unsigned ResultBits : {8u, 32u})
+      for (unsigned Kind = 0; Kind != 2; ++Kind) {
+        const std::string Name = "order_" + std::to_string(Bits) + "_" +
+                                 std::to_string(ResultBits) + "_" +
+                                 std::to_string(Kind);
+        Table += Name + ",";
+        auto *Function = llvm::Function::Create(
+            llvm::FunctionType::get(Wide, {Wide, Wide}, false),
+            llvm::GlobalValue::ExternalLinkage, Name, Module);
+        Builder.SetInsertPoint(
+            llvm::BasicBlock::Create(Context, "entry", Function));
+        auto *Integer = Builder.getIntNTy(Bits);
+        auto *Intrinsic = llvm::Intrinsic::getOrInsertDeclaration(
+            &Module, Kinds[Kind], {Builder.getIntNTy(ResultBits), Integer});
+        auto *Result = Builder.CreateCall(
+            Intrinsic,
+            {Builder.CreateTruncOrBitCast(Function->getArg(0), Integer),
+             Builder.CreateTruncOrBitCast(Function->getArg(1), Integer)});
+        Builder.CreateRet(Builder.CreateZExt(Result, Wide));
+      }
+  const std::string Text = emit(Module);
+  EXPECT_NE(Text.find("neverd_llvm_scmp_i32_i64("), std::string::npos) << Text;
+  EXPECT_NE(Text.find("neverd_llvm_ucmp_i8_i128("), std::string::npos) << Text;
+  const std::string Source = "#include <stdint.h>\n#include <stdbool.h>\n" +
+                             Text + R"(
+typedef unsigned __int128 U128;
+typedef __int128 I128;
+int main(void) {
+  U128 (*functions[])(U128, U128) = {)" +
+                             Table + R"(};
+  const unsigned widths[] = {8, 16, 32, 64, 128};
+  const unsigned results[] = {8, 32};
+  for (unsigned width = 0; width < 5; ++width) {
+    const unsigned bits = widths[width];
+    const U128 mask = ~(U128)0 >> (128 - bits);
+    const U128 sign = (U128)1 << (bits - 1);
+    const U128 values[] = {0, 1, sign - 1, sign, sign + 1, mask,
+                          ((U128)0x5a5a << 100) | 0xabcdef};
+    for (unsigned a = 0; a < 7; ++a)
+      for (unsigned b = 0; b < 7; ++b)
+        for (unsigned result = 0; result < 2; ++result)
+          for (unsigned kind = 0; kind < 2; ++kind) {
+            const U128 left = values[a] & mask, right = values[b] & mask;
+            const I128 sl = (I128)(left << (128 - bits)) >> (128 - bits);
+            const I128 sr = (I128)(right << (128 - bits)) >> (128 - bits);
+            const int order = kind ? (left > right) - (left < right)
+                                   : (sl > sr) - (sl < sr);
+            const U128 expected =
+                (U128)(I128)order & (~(U128)0 >> (128 - results[result]));
+            if (functions[width * 4 + result * 2 + kind](
+                    values[a], values[b]) != expected)
+              return 1 + width * 4 + result * 2 + kind;
+          }
+  }
+  return 0;
+}
+)";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndCheck(Source, false, {}, Optimization, true);
+}
+
+TEST(LLVMCIntrinsicSemantics, ThreeWayComparisonRejectsUncarriedWidths) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("odd-three-way", Context);
+  llvm::IRBuilder<> Builder(Context);
+  auto *Function = llvm::Function::Create(
+      llvm::FunctionType::get(Builder.getIntNTy(2),
+                              {Builder.getInt32Ty(), Builder.getInt32Ty()},
+                              false),
+      llvm::GlobalValue::ExternalLinkage, "odd_order", Module);
+  auto *Intrinsic = llvm::Intrinsic::getOrInsertDeclaration(
+      &Module, llvm::Intrinsic::scmp,
+      {Builder.getIntNTy(2), Builder.getInt32Ty()});
+  Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Function));
+  Builder.CreateRet(Builder.CreateCall(
+      Intrinsic, {Function->getArg(0), Function->getArg(1)}));
+  std::string Text;
+  llvm::raw_string_ostream Output(Text);
+  EXPECT_THROW(LLVMCEmitter().emit(Module, Output, {}), std::runtime_error);
+}
+
+TEST(LLVMCIntrinsicSemantics, OverflowArithmeticGivesTheWrappedResultAndFlag) {
+  // Each of the six gives the result wrapped to its width and whether the
+  // exact one, signed or unsigned, was outside it.
+  llvm::LLVMContext Context;
+  llvm::Module Module("overflow-arithmetic", Context);
+  // The result pairs are laid out as the host lays out the C records.
+  Module.setDataLayout("e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-"
+                       "i128:128-f80:128-n8:16:32:64-S128");
+  llvm::IRBuilder<llvm::NoFolder> Builder(Context);
+  auto *Wide = Builder.getInt64Ty();
+  const llvm::Intrinsic::ID Kinds[] = {
+      llvm::Intrinsic::uadd_with_overflow, llvm::Intrinsic::usub_with_overflow,
+      llvm::Intrinsic::umul_with_overflow, llvm::Intrinsic::sadd_with_overflow,
+      llvm::Intrinsic::ssub_with_overflow, llvm::Intrinsic::smul_with_overflow};
+  std::string Table;
+  for (unsigned Bits : {8u, 16u, 32u, 64u})
+    for (unsigned Kind = 0; Kind != 6; ++Kind) {
+      const std::string Name =
+          "overflow_" + std::to_string(Bits) + "_" + std::to_string(Kind);
+      Table += Name + ",";
+      auto *Function = llvm::Function::Create(
+          llvm::FunctionType::get(Wide, {Wide, Wide, Builder.getPtrTy()},
+                                  false),
+          llvm::GlobalValue::ExternalLinkage, Name, Module);
+      Builder.SetInsertPoint(
+          llvm::BasicBlock::Create(Context, "entry", Function));
+      auto *Integer = Builder.getIntNTy(Bits);
+      auto *Intrinsic = llvm::Intrinsic::getOrInsertDeclaration(
+          &Module, Kinds[Kind], {Integer});
+      auto *Pair = Builder.CreateCall(
+          Intrinsic,
+          {Builder.CreateTruncOrBitCast(Function->getArg(0), Integer),
+           Builder.CreateTruncOrBitCast(Function->getArg(1), Integer)});
+      Builder.CreateStore(
+          Builder.CreateZExt(Builder.CreateExtractValue(Pair, 1),
+                             Builder.getInt8Ty()),
+          Function->getArg(2));
+      Builder.CreateRet(Builder.CreateZExtOrBitCast(
+          Builder.CreateExtractValue(Pair, 0), Wide));
+    }
+  const std::string Text = emit(Module);
+  EXPECT_NE(Text.find("__builtin_mul_overflow("), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("llvm_"), std::string::npos) << Text;
+  const std::string Source = "#include <stdint.h>\n#include <stdbool.h>\n" +
+                             Text + R"(
+typedef unsigned __int128 U128;
+typedef __int128 I128;
+int main(void) {
+  uint64_t (*functions[])(uint64_t, uint64_t, void *) = {)" +
+                             Table + R"(};
+  const unsigned widths[] = {8, 16, 32, 64};
+  for (unsigned width = 0; width < 4; ++width) {
+    const unsigned bits = widths[width];
+    const uint64_t mask = ~(uint64_t)0 >> (64 - bits);
+    const uint64_t sign = (uint64_t)1 << (bits - 1);
+    const uint64_t values[] = {0, 1, 2, 3, sign - 1, sign, sign + 1, mask - 1,
+                               mask, 0x123456789abcdef1 & mask};
+    for (unsigned a = 0; a < 10; ++a)
+      for (unsigned b = 0; b < 10; ++b)
+        for (unsigned kind = 0; kind < 6; ++kind) {
+          const int is_signed = kind >= 3;
+          const unsigned operation = kind % 3;
+          /* Exact in 128 bits: no operand is wider than 64. An unsigned
+             product may need all 128 of them. */
+          uint64_t wrapped;
+          int expected;
+          if (!is_signed && operation == 2) {
+            const U128 exact = (U128)values[a] * values[b];
+            wrapped = (uint64_t)exact & mask;
+            expected = exact > mask;
+          } else {
+            const I128 left = is_signed
+                ? (I128)((int64_t)(values[a] << (64 - bits)) >> (64 - bits))
+                : (I128)values[a];
+            const I128 right = is_signed
+                ? (I128)((int64_t)(values[b] << (64 - bits)) >> (64 - bits))
+                : (I128)values[b];
+            const I128 exact = operation == 0 ? left + right
+                               : operation == 1 ? left - right : left * right;
+            wrapped = (uint64_t)exact & mask;
+            const I128 back = is_signed
+                ? (I128)((int64_t)(wrapped << (64 - bits)) >> (64 - bits))
+                : (I128)wrapped;
+            expected = back != exact;
+          }
+          uint8_t overflow = 0xff;
+          if (functions[width * 6 + kind](values[a], values[b], &overflow) !=
+              wrapped)
+            return 1 + width * 6 + kind;
+          if (overflow != expected) return 40 + width * 6 + kind;
+        }
+  }
+  return 0;
+}
+)";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndCheck(Source, false, {}, Optimization, true);
+}
+
+TEST(LLVMCIntrinsicSemantics, FloatingPointIntrinsicsAreCompilerBuiltins) {
+  // Each floating-point intrinsic prints as the elementwise builtin that is
+  // the same intrinsic for its operands' width: no C library header, no errno
+  // from a square root, and the fused multiply-add, the four minimum and
+  // maximum rules and the rounding modes each keep their own.
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"ir(
+declare double @llvm.fma.f64(double, double, double)
+declare float @llvm.fma.f32(float, float, float)
+declare double @llvm.minimum.f64(double, double)
+declare double @llvm.maximum.f64(double, double)
+declare double @llvm.minnum.f64(double, double)
+declare double @llvm.maxnum.f64(double, double)
+declare double @llvm.copysign.f64(double, double)
+declare double @llvm.roundeven.f64(double)
+declare double @llvm.trunc.f64(double)
+declare double @llvm.fabs.f64(double)
+declare double @llvm.sqrt.f64(double)
+declare double @llvm.floor.f64(double)
+declare double @llvm.ceil.f64(double)
+declare half @llvm.fma.f16(half, half, half)
+declare half @llvm.maximum.f16(half, half)
+define half @fused_half(half %a, half %b) {
+  %r = call half @llvm.fma.f16(half %a, half %b, half 0xH3E00)
+  %m = call half @llvm.maximum.f16(half %r, half 0xH4000)
+  ret half %m
+}
+define double @fused(double %a, double %b, double %c) {
+  %r = call double @llvm.fma.f64(double %a, double %b, double %c)
+  ret double %r
+}
+define float @fused_single(float %a, float %b, float %c) {
+  %r = call float @llvm.fma.f32(float %a, float %b, float %c)
+  ret float %r
+}
+define double @least(double %a, double %b) {
+  %r = call double @llvm.minimum.f64(double %a, double %b)
+  ret double %r
+}
+define double @greatest(double %a, double %b) {
+  %r = call double @llvm.maximum.f64(double %a, double %b)
+  ret double %r
+}
+define double @least_number(double %a, double %b) {
+  %r = call double @llvm.minnum.f64(double %a, double %b)
+  ret double %r
+}
+define double @greatest_number(double %a, double %b) {
+  %r = call double @llvm.maxnum.f64(double %a, double %b)
+  ret double %r
+}
+define double @signed_as(double %a, double %b) {
+  %r = call double @llvm.copysign.f64(double %a, double %b)
+  ret double %r
+}
+define double @to_even(double %a) {
+  %r = call double @llvm.roundeven.f64(double %a)
+  ret double %r
+}
+define double @toward_zero(double %a) {
+  %r = call double @llvm.trunc.f64(double %a)
+  ret double %r
+}
+define double @magnitude_root(double %a) {
+  %m = call double @llvm.fabs.f64(double %a)
+  %r = call double @llvm.sqrt.f64(double %m)
+  ret double %r
+}
+define double @between(double %a) {
+  %f = call double @llvm.floor.f64(double %a)
+  %c = call double @llvm.ceil.f64(double %a)
+  %r = fadd double %f, %c
+  ret double %r
+}
+)ir",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  ASSERT_TRUE(LLVMCEmitter().emit(*Module, OS, Options));
+  for (llvm::StringRef Spelling :
+       {"__builtin_elementwise_fma(", "__builtin_elementwise_minimum(",
+        "__builtin_elementwise_maximum(", "__builtin_elementwise_minnum(",
+        "__builtin_elementwise_maxnum(", "__builtin_elementwise_copysign(",
+        "__builtin_elementwise_roundeven(", "__builtin_elementwise_trunc(",
+        "__builtin_elementwise_abs(", "__builtin_elementwise_sqrt(",
+        "__builtin_elementwise_floor(", "__builtin_elementwise_ceil("})
+    EXPECT_NE(Text.find(Spelling.str()), std::string::npos)
+        << Spelling.str() << "\n"
+        << Text;
+  EXPECT_EQ(Text.find("llvm_"), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("math.h"), std::string::npos) << Text;
+  const std::string Source = Text + R"(
+static uint64_t bits(double value) {
+  uint64_t out;
+  __builtin_memcpy(&out, &value, 8);
+  return out;
+}
+int main(void) {
+  /* The product 1 + 2^-26 + 2^-54 rounds to 1 + 2^-26 before the sum unless
+     the two are fused. */
+  volatile double a = 1.0 + 0x1p-27, c = -(1.0 + 0x1p-26);
+  if (fused(a, a, c) != 0x1p-54) return 1;
+  volatile float fa = 1.0f + 0x1p-12f, fc = -(1.0f + 0x1p-11f);
+  if (fused_single(fa, fa, fc) != 0x1p-24f) return 2;
+  volatile double nan = __builtin_nan(""), one = 1.0, zero = 0.0;
+  const double negative_zero = -zero;
+  /* minimum and maximum order the zeros and keep a NaN. */
+  if (bits(least(zero, negative_zero)) != bits(-0.0)) return 3;
+  if (bits(least(negative_zero, zero)) != bits(-0.0)) return 4;
+  if (bits(greatest(negative_zero, zero)) != bits(0.0)) return 5;
+  if (least(nan, one) == least(nan, one)) return 6;
+  if (greatest(one, nan) == greatest(one, nan)) return 7;
+  /* minnum and maxnum give the number. */
+  if (least_number(nan, one) != 1.0 || least_number(one, nan) != 1.0) return 8;
+  if (greatest_number(nan, one) != 1.0) return 9;
+  if (bits(signed_as(one, negative_zero)) != bits(-1.0)) return 10;
+  volatile double half = 2.5, odd = 3.5, down = -2.5;
+  if (to_even(half) != 2.0 || to_even(odd) != 4.0 || to_even(down) != -2.0)
+    return 11;
+  if (toward_zero(down) != -2.0 || toward_zero(half) != 2.0) return 12;
+  volatile double minus_nine = -9.0;
+  if (magnitude_root(minus_nine) != 3.0) return 13;
+  if (between(half) != 5.0) return 14;
+  /* A half constant is a half: 1.5 * 2 + 1.5, then the greater of it and 2. */
+  volatile _Float16 small = 1.5f16, two = 2.0f16;
+  if (fused_half(small, two) != 4.5f16) return 15;
+  return 0;
+}
+)";
+  // An older compiler lacks some of these builtins, and one without the
+  // half type cannot build the half operands.
+  const auto Compiler = llvm::sys::findProgramByName("clang");
+  if (!Compiler ||
+      !neverd::test::compilerAccepts(
+          *Compiler, "c",
+          "double f(double a, double b) {\n"
+          "  return __builtin_elementwise_minimum(\n"
+          "      __builtin_elementwise_fma(a, b, a),\n"
+          "      __builtin_elementwise_roundeven(b));\n"
+          "}\n"
+          "_Float16 h(_Float16 a) { return __builtin_elementwise_sqrt(a); }\n",
+          {}))
+    GTEST_SKIP() << "this Clang lacks the elementwise builtins the C spells";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndCheck(Source, false, {}, Optimization, false, {}, {"-lm"});
+}
+
+TEST(LLVMCIntrinsicSemantics, AnUnknownOperandOfATypeGenericBuiltinHasItsType) {
+  // An undefined value prints as the integer zero whatever its type. A
+  // type-generic builtin takes operands of one type, so each is cast to the
+  // type the intrinsic takes, as the C library routine converted it.
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"ir(
+declare double @llvm.sqrt.f64(double)
+declare double @llvm.fma.f64(double, double, double)
+declare float @llvm.minimum.f32(float, float)
+define double @root_of_nothing() {
+  %r = call double @llvm.sqrt.f64(double undef)
+  ret double %r
+}
+define double @fused_with_nothing(double %a) {
+  %r = call double @llvm.fma.f64(double %a, double undef, double 1.5)
+  ret double %r
+}
+define float @least_of_one(float %a) {
+  %r = call float @llvm.minimum.f32(float %a, float undef)
+  ret float %r
+}
+)ir",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  ASSERT_TRUE(LLVMCEmitter().emit(*Module, OS, Options));
+  EXPECT_NE(Text.find("__builtin_elementwise_sqrt((double)("),
+            std::string::npos)
+      << Text;
+  EXPECT_NE(Text.find("__builtin_elementwise_minimum((float)("),
+            std::string::npos)
+      << Text;
+  const auto Compiler = llvm::sys::findProgramByName("clang");
+  if (!Compiler ||
+      !neverd::test::compilerAccepts(
+          *Compiler, "c",
+          "float f(float a) { return __builtin_elementwise_minimum(a, a); }\n",
+          {}))
+    GTEST_SKIP() << "this Clang lacks the elementwise builtins the C spells";
+  compileAndCheck(Text + "\nint main(void) { return 0; }\n", false, {}, "-O1",
+                  false, {}, {"-lm"});
+}
+
+TEST(LLVMCIntrinsicSemantics,
+     TargetOperationsPrintAsTheirBuiltinsAndIntrinsics) {
+  // What an architecture's own intrinsic prints as: the compiler builtin
+  // that makes the instruction, or the header intrinsic that names it.
+  struct Case {
+    Arch Architecture;
+    const char *Triple;
+    const char *IR;
+    std::vector<const char *> Spellings;
+  };
+  const Case Cases[] = {
+      {Arch::AArch64,
+       "aarch64-linux-gnu",
+       R"ir(
+declare i64 @llvm.aarch64.get.fpsr()
+declare void @llvm.aarch64.set.fpsr(i64)
+declare i64 @llvm.aarch64.get.fpcr()
+declare void @llvm.aarch64.set.fpcr(i64)
+declare i32 @llvm.aarch64.fjcvtzs(double)
+declare i32 @llvm.aarch64.crc32b(i32, i32)
+declare i32 @llvm.aarch64.crc32cx(i32, i64)
+declare i32 @llvm.aarch64.crypto.sha1h(i32)
+define i64 @state(i64 %v, double %d, i32 %c) {
+  %s = call i64 @llvm.aarch64.get.fpsr()
+  call void @llvm.aarch64.set.fpsr(i64 %v)
+  %m = call i64 @llvm.aarch64.get.fpcr()
+  call void @llvm.aarch64.set.fpcr(i64 %s)
+  %j = call i32 @llvm.aarch64.fjcvtzs(double %d)
+  %b = call i32 @llvm.aarch64.crc32b(i32 %c, i32 %j)
+  %x = call i32 @llvm.aarch64.crc32cx(i32 %b, i64 %m)
+  %h = call i32 @llvm.aarch64.crypto.sha1h(i32 %x)
+  %w = zext i32 %h to i64
+  ret i64 %w
+}
+)ir",
+       {"__builtin_arm_rsr64(\"fpsr\")", "__builtin_arm_wsr64(\"fpsr\", ",
+        "__builtin_arm_rsr64(\"fpcr\")", "__builtin_arm_wsr64(\"fpcr\", ",
+        "__builtin_arm_jcvt(", "__builtin_arm_crc32b(",
+        "__builtin_arm_crc32cd(", "vsha1h_u32("}},
+      {Arch::ARM,
+       "armv7-linux-gnueabi",
+       R"ir(
+declare i32 @llvm.arm.crc32h(i32, i32)
+declare i32 @llvm.arm.crc32cw(i32, i32)
+declare i32 @llvm.arm.neon.sha1h(i32)
+define i32 @steps(i32 %c, i32 %d) {
+  call void asm sideeffect "clrex", "~{memory}"()
+  %a = call i32 @llvm.arm.crc32h(i32 %c, i32 %d)
+  %b = call i32 @llvm.arm.crc32cw(i32 %a, i32 %d)
+  %h = call i32 @llvm.arm.neon.sha1h(i32 %b)
+  ret i32 %h
+}
+)ir",
+       {"__builtin_arm_clrex()", "__builtin_arm_crc32h(",
+        "__builtin_arm_crc32cw(", "vsha1h_u32("}},
+      {Arch::X64,
+       "x86_64-linux-gnu",
+       R"ir(
+declare i32 @llvm.x86.sse42.crc32.32.8(i32, i8)
+declare i64 @llvm.x86.sse42.crc32.64.64(i64, i64)
+define i64 @steps(i32 %c, i8 %d, i64 %q) {
+  %a = call i32 @llvm.x86.sse42.crc32.32.8(i32 %c, i8 %d)
+  %w = zext i32 %a to i64
+  %b = call i64 @llvm.x86.sse42.crc32.64.64(i64 %w, i64 %q)
+  ret i64 %b
+}
+)ir",
+       {"_mm_crc32_u8(", "_mm_crc32_u64("}}};
+  for (const Case &Target : Cases) {
+    SCOPED_TRACE(Target.Triple);
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Error;
+    auto Module = llvm::parseAssemblyString(Target.IR, Error, Context);
+    ASSERT_TRUE(Module) << Error.getMessage().str();
+    Module->setTargetTriple(llvm::Triple(Target.Triple));
+    CEmitterOptions Options;
+    Options.TheArch = Target.Architecture;
+    Options.EmitIncludes = false;
+    std::vector<CEmitterOptions::RefusedDefinition> Refused;
+    Options.RefusedDefinitions = &Refused;
+    std::string Text;
+    llvm::raw_string_ostream OS(Text);
+    ASSERT_TRUE(LLVMCEmitter().emit(*Module, OS, Options));
+    EXPECT_TRUE(Refused.empty()) << Refused.front().Reason;
+    for (const char *Spelling : Target.Spellings)
+      EXPECT_NE(Text.find(Spelling), std::string::npos) << Spelling << "\n"
+                                                        << Text;
+    EXPECT_EQ(Text.find("llvm_"), std::string::npos) << Text;
+  }
+}
+
+TEST(LLVMCIntrinsicSemantics, AnIntrinsicWithNoCSpellingRefusesItsFunction) {
+  // The sanitized name of an LLVM intrinsic declares nothing, so a call to
+  // it would not compile. The function that needs it is left out by name,
+  // whether the call is a statement or part of an expression.
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"ir(
+declare double @llvm.exp.f64(double)
+declare void @llvm.pseudoprobe(i64, i64, i32, i64)
+define i64 @kept(i64 %x) {
+  %r = add i64 %x, 1
+  ret i64 %r
+}
+define double @unspelled(double %x) {
+  %r = call double @llvm.exp.f64(double %x)
+  ret double %r
+}
+define double @unspelled_twice(double %x, ptr %out) {
+  %r = call double @llvm.exp.f64(double %x)
+  store double %r, ptr %out
+  ret double %r
+}
+)ir",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.EmitIncludes = false;
+  std::vector<CEmitterOptions::RefusedDefinition> Refused;
+  Options.RefusedDefinitions = &Refused;
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  ASSERT_TRUE(LLVMCEmitter().emit(*Module, OS, Options));
+  ASSERT_EQ(Refused.size(), 2u) << Text;
+  for (const auto &Definition : Refused)
+    EXPECT_EQ(Definition.Reason,
+              "LLVM intrinsic has no C spelling: llvm.exp.f64");
+  EXPECT_EQ(Text.find("llvm_exp"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("kept("), std::string::npos) << Text;
+  // Text that cannot name what it leaves out is read, not built, and names
+  // the intrinsic instead: a unit without the list, and one function alone.
+  Options.RefusedDefinitions = nullptr;
+  std::string Unit;
+  llvm::raw_string_ostream UnitOS(Unit);
+  ASSERT_TRUE(LLVMCEmitter().emit(*Module, UnitOS, Options));
+  EXPECT_NE(Unit.find("llvm_exp_f64("), std::string::npos) << Unit;
+  std::string Shown;
+  llvm::raw_string_ostream ShownOS(Shown);
+  ASSERT_TRUE(LLVMCEmitter().emit(*Module, ShownOS, Options, nullptr, nullptr,
+                                  Module->getFunction("unspelled")));
+  EXPECT_NE(Shown.find("llvm_exp_f64("), std::string::npos) << Shown;
 }
 
 TEST(LLVMCIntrinsicSemantics, UnsignedSaturationRejectsMismatchedOperands) {

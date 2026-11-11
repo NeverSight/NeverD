@@ -1,11 +1,11 @@
-//===- LLVMCIntegerSaturation.h - Unsigned saturating arithmetic -*- C++
+//===- LLVMCIntegerSaturation.h - Saturating integer arithmetic -*- C++
 //-*-===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Shared scalar unsigned saturation admission for C emission.
+/// Shared scalar saturating addition and subtraction admission for C emission.
 
 #ifndef NEVERD_BACKEND_C_LLVM_C_INTEGERSATURATION_H
 #define NEVERD_BACKEND_C_LLVM_C_INTEGERSATURATION_H
@@ -23,6 +23,10 @@ inline const char *integerSaturationSpelling(llvm::Intrinsic::ID Kind) {
     return "uadd_sat";
   case llvm::Intrinsic::usub_sat:
     return "usub_sat";
+  case llvm::Intrinsic::sadd_sat:
+    return "sadd_sat";
+  case llvm::Intrinsic::ssub_sat:
+    return "ssub_sat";
   default:
     return nullptr;
   }
@@ -30,6 +34,7 @@ inline const char *integerSaturationSpelling(llvm::Intrinsic::ID Kind) {
 struct ScalarIntegerSaturation {
   unsigned Bits;
   bool Add;
+  bool Signed;
 };
 /// One admission rule for helper declarations and assigned/inline calls.
 inline std::optional<ScalarIntegerSaturation>
@@ -48,9 +53,12 @@ scalarIntegerSaturation(const llvm::CallBase &Call) {
       Call.getArgOperand(1)->getType() != Integer ||
       Call.getFunctionType() != Callee->getFunctionType() ||
       Call.getFunctionType()->isVarArg())
-    throw std::runtime_error("unsupported LLVM unsigned saturation shape");
-  return ScalarIntegerSaturation{Bits, Callee->getIntrinsicID() ==
-                                           llvm::Intrinsic::uadd_sat};
+    throw std::runtime_error("unsupported LLVM integer saturation shape");
+  const auto Kind = Callee->getIntrinsicID();
+  return ScalarIntegerSaturation{
+      Bits,
+      Kind == llvm::Intrinsic::uadd_sat || Kind == llvm::Intrinsic::sadd_sat,
+      Kind == llvm::Intrinsic::sadd_sat || Kind == llvm::Intrinsic::ssub_sat};
 }
 } // namespace neverd
 #endif

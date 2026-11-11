@@ -135,6 +135,12 @@ public:
   /// (CSourceMap::Names), as HighC does, from the ordinary render.
   void recordSourceNames(const llvm::Module &Mod);
   std::string functionIdentifier(const llvm::Function &Fn) const;
+  /// Throws, in a unit that leaves out and names the definitions it cannot
+  /// write, for an LLVM intrinsic that C spells neither by a name of its own
+  /// nor by a helper of the unit: its sanitized name declares nothing, and a
+  /// call to it would fail the unit's build. Any other text, as one function
+  /// shown alone, keeps that name, which says what the code does.
+  void requireCSpelling(const llvm::Function &Callee) const;
   std::string sourceScalarType(llvm::Type *Type, bool Signed) const;
   /// \p Fn's C declaration of \p Declarator; with \p Params, of its first
   /// that many parameters only.
@@ -910,6 +916,12 @@ public:
   /// The helper each modeled supervisor call in the unit prints through.
   std::map<Intrinsic, std::string> SyscallHelperNames;
   std::map<const llvm::Function *, std::string> FunctionIdentifiers;
+  /// The LLVM intrinsics a helper this unit defines stands for.
+  std::set<const llvm::Function *> HelperIntrinsics;
+  /// Whether this unit leaves out each definition whose C throws, and names
+  /// it (CEmitterOptions::RefusedDefinitions), where nothing follows one
+  /// pass's text.
+  bool LeavesOutRefusedDefinitions = false;
   /// The identifiers FunctionIdentifiers gives the module's functions.
   std::set<std::string> FunctionIdentifierNames;
   /// The identifier each routine the user declares, called through its

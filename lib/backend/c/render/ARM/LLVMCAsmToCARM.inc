@@ -25,8 +25,8 @@ M("wfi", "__wfi()")
 M("sev", "__sev()")
 M("sevl", "__sevl()")
 
-// Exclusive
-M("clrex", "__clrex()")
+// Exclusive. ACLE has no function for it: the compiler's builtin.
+M("clrex", "__builtin_arm_clrex()")
 
 // NOP (lifter usually eliminates, but catch residuals)
 M("nop", "__nop()")

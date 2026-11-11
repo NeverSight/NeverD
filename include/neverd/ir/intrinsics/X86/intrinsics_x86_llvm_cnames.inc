@@ -9,6 +9,12 @@
 //===----------------------------------------------------------------------===//
 // clang-format off
 
+// x86 SSE4.2 CRC32C steps
+{"llvm.x86.sse42.crc32.32.8",      "_mm_crc32_u8"},
+{"llvm.x86.sse42.crc32.32.16",     "_mm_crc32_u16"},
+{"llvm.x86.sse42.crc32.32.32",     "_mm_crc32_u32"},
+{"llvm.x86.sse42.crc32.64.64",     "_mm_crc32_u64"},
+
 // x86 SSE/SSSE3
 {"llvm.x86.ssse3.pshuf.b.128",     "_mm_shuffle_epi8"},
 

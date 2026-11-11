@@ -35,6 +35,7 @@
 #include "../render/X86/X86Virtualization.h"
 #include "../render/X86/X87NativeState.h"
 #include "LLVMCAtomicOrdering.h"
+#include "LLVMCIntegerCompare.h"
 #include "LLVMCIntegerMinMax.h"
 #include "LLVMCIntegerSaturation.h"
 #include "LLVMCScalarUnary.h"
@@ -235,6 +236,8 @@ bool freezeHasDefinedCProjection(const llvm::Value *Root,
         case llvm::Intrinsic::abs:
         case llvm::Intrinsic::uadd_sat:
         case llvm::Intrinsic::usub_sat:
+        case llvm::Intrinsic::sadd_sat:
+        case llvm::Intrinsic::ssub_sat:
           if (!Type || Type->getBitWidth() > 64)
             return false;
           break;
@@ -4120,6 +4123,24 @@ void LLVMCWriter::writeGEP(llvm::GetElementPtrInst &GEP,
   OS << Name << " = " << gepExpr(*llvm::cast<llvm::GEPOperator>(&GEP)) << ";\n";
 }
 
+/// The builtin that makes an LLVM overflow-reporting addition, subtraction
+/// or multiplication: the wrapped result, and whether the exact one fits.
+static const char *overflowArithmeticBuiltin(llvm::Intrinsic::ID Kind) {
+  switch (Kind) {
+  case llvm::Intrinsic::uadd_with_overflow:
+  case llvm::Intrinsic::sadd_with_overflow:
+    return "__builtin_add_overflow";
+  case llvm::Intrinsic::usub_with_overflow:
+  case llvm::Intrinsic::ssub_with_overflow:
+    return "__builtin_sub_overflow";
+  case llvm::Intrinsic::umul_with_overflow:
+  case llvm::Intrinsic::smul_with_overflow:
+    return "__builtin_mul_overflow";
+  default:
+    return nullptr;
+  }
+}
+
 bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
   if (const auto BitTest = classifyX86BitTestNative(Call, Opts.TheArch)) {
     emitIndent(Indent);
@@ -4417,6 +4438,49 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
         OS << ", \"xmm" << I << "\"";
     }
     OS << ");\n";
+    return true;
+  }
+  if (const char *Builtin = overflowArithmeticBuiltin(IID)) {
+    const auto *Result = llvm::dyn_cast<llvm::StructType>(Call.getType());
+    const auto *Integer =
+        Result && Result->getNumElements() == 2
+            ? llvm::dyn_cast<llvm::IntegerType>(Result->getElementType(0))
+            : nullptr;
+    const unsigned Bits = Integer ? Integer->getBitWidth() : 0;
+    if (!llvm::isa<llvm::CallInst>(Call) || Call.arg_size() != 2 ||
+        (Bits != 8 && Bits != 16 && Bits != 32 && Bits != 64) ||
+        !Result->getElementType(1)->isIntegerTy(1) ||
+        Call.getArgOperand(0)->getType() != Integer ||
+        Call.getArgOperand(1)->getType() != Integer)
+      throw std::runtime_error("unsupported LLVM overflow arithmetic shape");
+    if (Call.use_empty())
+      return true;
+    const bool Signed = IID == llvm::Intrinsic::sadd_with_overflow ||
+                        IID == llvm::Intrinsic::ssub_with_overflow ||
+                        IID == llvm::Intrinsic::smul_with_overflow;
+    // The builtin computes the exact result of its operands' own C values and
+    // reports whether the result's type holds it: each operand and the result
+    // have exactly the LLVM width and signedness here, whatever C's integer
+    // promotions made of the operand text.
+    const std::string Carrier = "uint" + std::to_string(Bits) + "_t";
+    const std::string Type =
+        Signed ? "int" + std::to_string(Bits) + "_t" : Carrier;
+    auto Operand = [&](unsigned Index) {
+      const std::string Text =
+          "(" + Carrier + ")(" + valueStr(Call.getArgOperand(Index)) + ")";
+      return Signed ? "(" + Type + ")" + Text : Text;
+    };
+    const std::string Exact = freshVar("overflow_result");
+    const std::string Name = getName(&Call);
+    emitIndent(Indent);
+    OS << "{ " << Type << " " << Exact << ";\n";
+    emitIndent(Indent + 1);
+    OS << Name << ".field_1 = " << Builtin << "(" << Operand(0) << ", "
+       << Operand(1) << ", &" << Exact << ");\n";
+    emitIndent(Indent + 1);
+    OS << Name << ".field_0 = (" << Carrier << ")" << Exact << ";\n";
+    emitIndent(Indent);
+    OS << "}\n";
     return true;
   }
   if (IID == llvm::Intrinsic::abs && Call.getType()->isIntegerTy() &&
@@ -6307,7 +6371,8 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
     return Expr;
   }
 
-  if (scalarIntegerMinMax(Call) || scalarIntegerSaturation(Call)) {
+  if (scalarIntegerMinMax(Call) || scalarIntegerSaturation(Call) ||
+      scalarIntegerThreeWay(Call)) {
     // An actual function captures each argument once, including when the
     // intrinsic itself is inlined into another rendered expression.
     const std::string Expr =
@@ -6330,6 +6395,30 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
       // assume can discard side effects when the predicate was inlined here.
       const std::string Expr = "(" + valueStr(Call.getArgOperand(0)) +
                                " ? (void)0 : __builtin_unreachable())";
+      RenderingCalls.pop_back();
+      return Expr;
+    }
+    // The floating-point status and control registers are read and written
+    // whole, as MRS and MSR do: the compiler's builtin names the register.
+    const bool ReadsStatus = IID == llvm::Intrinsic::aarch64_get_fpsr ||
+                             IID == llvm::Intrinsic::aarch64_get_fpcr;
+    if (ReadsStatus || IID == llvm::Intrinsic::aarch64_set_fpsr ||
+        IID == llvm::Intrinsic::aarch64_set_fpcr) {
+      const bool Status = IID == llvm::Intrinsic::aarch64_get_fpsr ||
+                          IID == llvm::Intrinsic::aarch64_set_fpsr;
+      if (Opts.TheArch != Arch::AArch64 || !llvm::isa<llvm::CallInst>(Call) ||
+          Call.getFunctionType() != Callee->getFunctionType() ||
+          (ReadsStatus
+               ? Call.arg_size() != 0 || !Call.getType()->isIntegerTy(64)
+               : Call.arg_size() != 1 || !Call.getType()->isVoidTy() ||
+                     !Call.getArgOperand(0)->getType()->isIntegerTy(64)))
+        throw std::runtime_error(
+            "unsupported AArch64 floating-point register access");
+      const std::string Register = Status ? "\"fpsr\"" : "\"fpcr\"";
+      std::string Expr =
+          ReadsStatus ? "__builtin_arm_rsr64(" + Register + ")"
+                      : "__builtin_arm_wsr64(" + Register + ", (uint64_t)(" +
+                            valueStr(Call.getArgOperand(0)) + "))";
       RenderingCalls.pop_back();
       return Expr;
     }
@@ -6366,10 +6455,12 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
   } else if (auto *Callee = Call.getCalledFunction()) {
     const std::string RawCalleeName = Callee->getName().str();
     const char *CN = llvmIntrinsicToCName(RawCalleeName.c_str());
-    if (CN)
+    if (CN) {
       CalleeName = CN;
-    else
+    } else {
+      requireCSpelling(*Callee);
       CalleeName = functionIdentifier(*Callee);
+    }
   } else if (Opts.PreserveLLVMFunctionTypes) {
     CalleeName = preservedIndirectCalleeStr(Call);
   } else {
@@ -6399,6 +6490,8 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
   }
 
   std::string Expr = CalleeName + "(";
+  const bool TypeGeneric =
+      llvm::StringRef(CalleeName).starts_with("__builtin_elementwise_");
   const unsigned Limit = printedCallArgLimit(Call, CalleeName);
   const LibraryCallee Library = libraryCallee(Call);
   const auto VaListParameter =
@@ -6586,6 +6679,11 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
         : HeaderInteger ? libc::isObjectPointerParameter(Library.Name, ArgIdx,
                                                          libcVariant())
                         : Operand->getType()->isPointerTy();
+    // A type-generic builtin takes operands of one type and no other, where
+    // the C library routine converted each: an unknown value prints as the
+    // integer zero whatever its type, and a constant as its own literal.
+    if (TypeGeneric)
+      Argument = "(" + typeToCLLVM(Operand->getType()) + ")(" + Argument + ")";
     Expr += PointerArgument ? imagePointerArgument(Operand, std::move(Argument))
                             : std::move(Argument);
   }

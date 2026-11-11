@@ -12470,6 +12470,34 @@ both C routes share the guarded conversion renderer. The cast executes only
 after range and NaN checks. Architecture-specific floating control/status
 effects remain in their existing intrinsic contracts.
 
+LLVM C spells an LLVM intrinsic one of three ways. `intrinsics_llvm_cnames.inc`
+names the compiler builtin that is the same intrinsic, which needs no C
+library header a build for another target may lack. A floating-point
+operation is its type-generic elementwise builtin at any width, half included
+(`__builtin_elementwise_sqrt`, which sets no errno as `sqrt` may;
+`__builtin_elementwise_fma`; `__builtin_elementwise_minimum`, which keeps a NaN
+and orders the zeros where `fmin` leaves the zeros open), so a floating-point
+constant carries its type's suffix and each operand is cast to the type the
+intrinsic takes, as the C library routine converted it: an unknown value
+prints as the integer zero. The ARM CRC steps, FJCVTZS and the AArch64 FPSR
+and FPCR accesses are builtins too; the x86 CRC steps and SHA1H are the
+intrinsics their headers name (`_mm_crc32_u8`, `vsha1h_u32`). A helper the
+unit defines captures each operand once and works on the
+unsigned carriers the values have: funnel shifts, integer minimum and
+maximum, saturating addition and subtraction of either signedness, and the
+three-way comparisons `scmp` and `ucmp`. An addition, subtraction or
+multiplication that reports overflow writes its pair through
+`__builtin_*_overflow` on operands cast to the exact width and signedness. Any
+other intrinsic refuses its function in a unit that leaves out and names what
+it cannot write (`LLVM intrinsic has no C spelling: llvm.exp.f64`), since its
+sanitized name declares nothing and one such call would fail the unit's
+build. Text that cannot name a refusal, as one function shown alone or a unit
+with a source map, is read, not built, and keeps that name. A value-changing
+cast whose operand reads as
+a name, a member or a typed load converts that text as the instruction does:
+`sitofp` of an unsigned carrier is `(float)(int32_t)`, never C's implicit
+unsigned conversion.
+
 `ir/X86FPMaskCompareState.h` owns legacy/VEX CMPSS/CMPSD/CMPPS/CMPPD
 completion. Scalar or packed raw mask bits precede outgoing MXCSR in one
 aggregate; they never acquire floating-point result provenance. Full imm8 is

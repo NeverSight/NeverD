@@ -39,6 +39,7 @@
 #include "../render/X86/X86SystemState.h"
 #include "../render/X86/X86Virtualization.h"
 #include "LLVMCFrameLayout.h"
+#include "LLVMCIntegerCompare.h"
 #include "LLVMCIntegerMinMax.h"
 #include "LLVMCIntegerSaturation.h"
 #include "LLVMCScalarUnary.h"
@@ -302,6 +303,7 @@ void LLVMCWriter::prepareFunctionIdentifiers(llvm::Module &Mod) {
   FunctionIdentifierNames.clear();
   FunctionSymbolNames.clear();
   FunctionSources.clear();
+  HelperIntrinsics.clear();
   ExternalDataIdentifiers.clear();
   const std::set<std::string> ImportCNames =
       Img ? peImportCNames(*Img) : std::set<std::string>{};
@@ -343,6 +345,19 @@ void LLVMCWriter::prepareFunctionIdentifiers(llvm::Module &Mod) {
             std::to_string(Fn.getArg(0)->getType()->getPrimitiveSizeInBits());
       Name = IntrinsicHelper;
     }
+    if (const char *Kind = integerThreeWaySpelling(Fn.getIntrinsicID())) {
+      // The result's width, then the operands': one LLVM name each.
+      IntrinsicHelper = std::string("neverd_llvm_") + Kind;
+      for (const llvm::Type *Type :
+           {Fn.getReturnType(),
+            Fn.arg_size() ? Fn.getArg(0)->getType() : nullptr})
+        if (const auto *Integer =
+                llvm::dyn_cast_or_null<llvm::IntegerType>(Type))
+          IntrinsicHelper += "_i" + std::to_string(Integer->getBitWidth());
+      Name = IntrinsicHelper;
+    }
+    if (!IntrinsicHelper.empty())
+      HelperIntrinsics.insert(&Fn);
     std::string DebugName;
     std::optional<va_t> ImageCalleeAddress;
     if (isSynthesizedFuncName(Name)) {
@@ -459,6 +474,17 @@ void LLVMCWriter::prepareFunctionIdentifiers(llvm::Module &Mod) {
       ExternalDataIdentifiers.emplace(
           &Global, GlobalIdentifierAllocator.allocate(
                        "neverd_data_" + Global.getName().str(), "neverd_data"));
+}
+
+void LLVMCWriter::requireCSpelling(const llvm::Function &Callee) const {
+  // Text that cannot leave the definition out and say so, as one function
+  // shown alone cannot, names the intrinsic instead: it is read, not built.
+  if (!LeavesOutRefusedDefinitions || !Callee.isIntrinsic() ||
+      HelperIntrinsics.count(&Callee) ||
+      llvmIntrinsicToCName(Callee.getName().str().c_str()))
+    return;
+  throw std::runtime_error("LLVM intrinsic has no C spelling: " +
+                           Callee.getName().str());
 }
 
 std::string LLVMCWriter::functionIdentifier(const llvm::Function &Fn) const {
@@ -763,6 +789,7 @@ void LLVMCWriter::writeModuleBody(llvm::Module &Mod) {
   // and source names follow one pass's text, so those still fail.
   const bool Refusing = Opts.RefusedDefinitions && !OnlyFunction &&
                         !SourceRecorder && !Opts.SourceMap && !Opts.SourceNames;
+  LeavesOutRefusedDefinitions = Refusing;
   if (Opts.RefusedDefinitions)
     Opts.RefusedDefinitions->clear();
   auto WriteFunctions = [&] {
@@ -974,6 +1001,7 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
   std::map<std::string, std::pair<unsigned, bool>> FunnelShifts;
   std::map<std::string, ScalarIntegerMinMax> IntegerMinMax;
   std::map<std::string, ScalarIntegerSaturation> IntegerSaturations;
+  std::map<std::string, ScalarIntegerThreeWay> IntegerThreeWays;
   std::map<std::string, ScalarUnary> ScalarUnaries;
   FPStateHelperNames.clear();
   SyscallHelperNames.clear();
@@ -1043,6 +1071,9 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
                 functionIdentifier(*Call->getCalledFunction()), *Shape);
           if (auto Shape = scalarIntegerMinMax(*Call))
             IntegerMinMax.emplace(
+                functionIdentifier(*Call->getCalledFunction()), *Shape);
+          if (auto Shape = scalarIntegerThreeWay(*Call))
+            IntegerThreeWays.emplace(
                 functionIdentifier(*Call->getCalledFunction()), *Shape);
           if (auto Shape = scalarUnary(*Call))
             ScalarUnaries.emplace(
@@ -1478,7 +1509,20 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
        << Type << " b) {\n";
     if (Shape.Bits == 1)
       OS << "    a &= 1;\n    b &= 1;\n";
-    if (Shape.Add) {
+    if (Shape.Signed) {
+      // The carrier is unsigned, so the sum wraps. It left the signed range
+      // when the operands' signs agree (differ, for a difference) and the
+      // result's sign is not the first operand's, whose sign then names the
+      // bound: the least value for a negative one, the greatest otherwise.
+      OS << "    const " << Type << " sign = (" << Type << ")1 << "
+         << Shape.Bits - 1 << ";\n"
+         << "    const " << Type << " result = (" << Type << ")(a "
+         << (Shape.Add ? '+' : '-') << " b)" << (Shape.Bits == 1 ? " & 1" : "")
+         << ";\n"
+         << "    if (((" << (Shape.Add ? "~" : "") << "(a ^ b)) & (a ^ result)"
+         << " & sign) == 0)\n        return result;\n"
+         << "    return (a & sign) ? sign : (" << Type << ")(sign - 1);\n";
+    } else if (Shape.Add) {
       OS << "    const " << Type << " maximum = (" << Type << ")"
          << (Shape.Bits == 1 ? "1" : "-1") << ";\n"
          << "    return a > maximum - b ? maximum : (" << Type << ")(a + b);\n";
@@ -1507,6 +1551,24 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
       OS << "    return a " << (Shape.Minimum ? '<' : '>') << " b ? a : b;\n";
     }
     OS << "}\n\n";
+  }
+  for (const auto &[Name, Shape] : IntegerThreeWays) {
+    auto Carrier = [](unsigned Bits) {
+      return Bits == 128 ? std::string("__uint128_t")
+                         : "uint" + std::to_string(Bits) + "_t";
+    };
+    const std::string Type = Carrier(Shape.OperandBits);
+    const std::string Result = Carrier(Shape.ResultBits);
+    OS << "static inline " << Result << " " << Name << "(" << Type << " a, "
+       << Type << " b) {\n";
+    // Flipping the sign bit maps two's-complement signed order to unsigned
+    // order, as the minimum and maximum above do.
+    if (Shape.Signed)
+      OS << "    const " << Type << " sign = (" << Type << ")1 << "
+         << Shape.OperandBits - 1 << ";\n"
+         << "    a ^= sign;\n    b ^= sign;\n";
+    // Less is every bit set: -1 in the result's width.
+    OS << "    return (" << Result << ")((a > b) - (a < b));\n}\n\n";
   }
   for (const auto &[Name, Shape] : FunnelShifts) {
     const auto [Width, Left] = Shape;
@@ -3268,6 +3330,7 @@ bool LLVMCEmitter::emit(llvm::Module &Mod, llvm::raw_ostream &Out,
                 "C source output requires a native x87 import call adapter");
           (void)scalarIntegerMinMax(*Call);
           (void)scalarIntegerSaturation(*Call);
+          (void)scalarIntegerThreeWay(*Call);
           (void)scalarUnary(*Call);
         }
         if (const auto *Allocation =

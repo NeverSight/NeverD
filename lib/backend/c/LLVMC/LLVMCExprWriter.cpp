@@ -948,7 +948,8 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C,
   }
 
   if (auto *CF = llvm::dyn_cast<llvm::ConstantFP>(C)) {
-    if ((C->getType()->isFloatTy() || C->getType()->isDoubleTy()) &&
+    if ((C->getType()->isHalfTy() || C->getType()->isFloatTy() ||
+         C->getType()->isDoubleTy()) &&
         !CF->getValueAPF().isFinite()) {
       // Decimal NaN/Inf spellings are not C literals, and a generic NAN
       // would discard payload and sign. This also covers aggregate members.
@@ -962,6 +963,10 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C,
     auto S = std::string(Buf.str());
     if (C->getType()->isFloatTy())
       S += "f";
+    else if (C->getType()->isHalfTy())
+      // The literal has its own type: a type-generic builtin takes operands
+      // of one type, and an unsuffixed literal is a double.
+      S += "f16";
     else if (C->getType()->isX86_FP80Ty())
       // An unsuffixed literal rounds as binary64 before any surrounding
       // long-double expression can use its extra precision or exponent range.
