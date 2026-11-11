@@ -46,6 +46,12 @@ if(NEVERD_ENABLE_SEMANTIC_TESTS AND NOT TARGET unicorn)
   neverd_require_unicorn()
 endif()
 if(TARGET unicorn)
+  if(TARGET NeverDEmulationUnicorn AND NEVERD_EMULATION_BACKEND_UNICORN)
+    target_link_libraries(NeverDMIPSIntegerTests PRIVATE NeverDEmulationUnicorn)
+  else()
+    target_sources(NeverDMIPSIntegerTests PRIVATE
+      ${PROJECT_SOURCE_DIR}/lib/emulation/backends/unicorn/P5600MSA.cpp)
+  endif()
   target_link_libraries(NeverDMIPSIntegerTests PRIVATE unicorn)
   target_compile_definitions(NeverDMIPSIntegerTests PRIVATE
     NEVERD_MIPS_UNICORN_REFERENCE=1)

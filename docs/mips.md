@@ -3,7 +3,7 @@
 The experimental MIPS analysis path targets linked ELF programs with classic
 MIPS32 Release 2/o32 or MIPS64 Release 2/n64 instructions, in either byte order,
 the bounded microMIPS32, MIPS16e32 and MIPS16e2 Release 2/o32 subsets, and the MIPS32
-Release 5/o32 integer MSA slice described below.
+Release 5/o32 MSA integer, permutation, floating-point and control forms described below.
 The selected ELF profile determines register width, byte order, stack layout
 and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
 
@@ -119,7 +119,7 @@ have the extension a narrow C parameter would require. Declared source types
 remain a separate contract.
 
 This is a strict subset. n32, historical MIPS I–V profiles, Release 6,
-microMIPS64, floating point, MSA/DSP forms beyond the slices below, privileged
+microMIPS64, scalar floating point, MSA/DSP forms beyond the slices below, privileged
 instructions and LL/SC reservations outside the qualified MIPS16e2 LowIR slice below,
 doubleword merge stores (`SDL`/`SDR`), doubleword division and trapping arithmetic are not admitted by
 the current lifter. Unsupported instructions, missing slots and transfers in a
@@ -237,8 +237,18 @@ DPAQ_S/DPSQ_S.W.PH and MULSAQ_S.W.PH are admitted. Byte products accumulate
 without truncating the dot product; fractional halfword products saturate only
 MIN×MIN, set sticky OU16+AC, and accumulate modulo 64 bits. Accumulator inputs
 must be defined on every source path and survive the ABI call-clobber proof.
-Uninitialized banks are not extra C parameters. Saturating-accumulator,
-extraction and remaining DSP multiply families still require implementation.
+DPAQ_SA/DPSQ_SA.L.W saturate the fractional word product and the final
+signed 64-bit sum or difference. MAQ_S/MAQ_SA.W.PHL/PHR select the high
+or low halfword of each input. The SA variant also clamps the accumulator
+to a signed word. Each saturation sets the bank's sticky OUTFLAG bit.
+
+EXTR[V].W, EXTR[V]_R.W, EXTR[V]_RS.W and EXTR[V]_S.H implement immediate
+and register counts. Word forms check the arithmetic shift and its rounded
+value for OUTFLAG[23], including when the returned word is unrounded.
+EXTP[V] and EXTPDP[V] extract size + 1 bits ending at POS. Failure sets EFI,
+preserves POS and yields an unknown GPR value. A successful DP extraction
+advances POS modulo 64. Source code traps if it needs an undefined result.
+DSP revision 2, DSP64 and compressed DSP still require qualification.
 
 Classic AC0 partial writes preserve the pre-R6 unread-result restriction:
 MULT/MULTU/DIV/DIVU (and supported doubleword multiply) establish pending
@@ -454,17 +464,27 @@ so existing selector-zero identities remain stable. DMT/EMT update only TE;
 DVPE/EVPE update only EVP when VPEConf0.MVP is set. Each returns the prior
 control word, including retained effects when the result is discarded, and
 requires CP0 usability, declared MT implementation and known bound state.
-Bound EHB discharges their execution hazard. No thread scheduler or inter-VPE
-execution is inferred. The [MT manual rev1.12, p42](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00378-2B-MIPS32MT-AFP-01.12.pdf)
+Bound EHB permits a subsequent control-register observation. Disabling peer
+issue takes an instruction hazard barrier such as JR.HB or ERET. A caller
+observing that boundary invokes `completeInstructionHazardBarrier()`.
+Until then the affected TC or VPE gate returns unknown. The two gates have
+independent scopes. Which runnable peer a scheduler selects belongs to the
+platform. The [MT manual rev1.12, p42](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00378-2B-MIPS32MT-AFP-01.12.pdf)
 resolves the inverted MVP condition in the older e2 pseudocode. The pinned
 Unicorn MT helpers are stubs and are not a semantic oracle for these forms.
 
 CACHE/PREF preserve the five-bit operation/hint, signed nine-bit offset and
 32-bit effective address as effectful LowIR intrinsics. Both may write memory
 (PREF PrepareForStore included), so they end outgoing stack-memory setup proofs.
-Dead-code elimination retains them. Execution in either emulator mode and
-native-source emission refuse until a cache/translation/exception owner exists;
-this is effect representation, not cache hardware emulation.
+Dead-code elimination retains both. A bound `MIPSCachePlatform` translates
+the virtual address as a data read and receives the selected cache, exact
+operation or hint, original instruction address and physical address. CACHE
+requires CP0 usability. PREF suppresses address exceptions and uncached
+accesses. Missing translation evidence stops the step. A synchronous board
+can use single-line maintenance for index/hit invalidation, dirty writeback,
+fill and fetch-and-lock. Eviction uses the old physical tag and line contents.
+Line geometry, tag layout, replacement policy, coherence and bus errors
+depend on the board. Native C projection of these privileged effects is unavailable.
 The EPC/ErrorEPC software word view is also described in the vendor
 [CPU reference manual, sections 50.13.25 and 50.13.55](https://ww1.microchip.com/downloads/aemDocuments/documents/WSG/ProductDocuments/ReferenceManuals/PIC32_Family_Reference_Manual_CPU.pdf).
 
@@ -498,7 +518,7 @@ survive optimization without a global `-fno-inline` option.
 Selected-function output includes its helper definitions. Input symbols with
 the same spelling cannot be reused as an internal barrier implementation.
 
-## Classic MIPS32 MSA integer vectors
+## Classic MIPS32 MSA vectors and control registers
 
 The initial MSA slice requires classic MIPS32 Release 5/o32 ELF in either byte
 order, with `.MIPS.abiflags` explicitly declaring MSA, 128-bit CPR1 registers
@@ -586,10 +606,32 @@ in Clang. LLVM functions, declarations, C source shards and helpers retain the
 same constraints. The original-versus-generated source matrix includes the
 `CLEI_U.D 31` case that exposed the compiler defect.
 
-The execution contract requires MSA enabled with CU1/FR configured. It does not
-model disabled-MSA exceptions, MSA floating point/control state or arbitrary
-MSA guest execution. The operation and alias rules follow the MIPS32 MSA manual
-(MD00866, revision 1.12), sections ADDV, SUBV, CEQ, CLT/CLE, MIN/MAX,
+Integer permutation forms cover ILVEV/ILVOD, ILVL/ILVR, PCKEV/PCKOD, VSHF,
+SLD/SLDI, SPLAT/SPLATI and INSVE in all four widths, and SHF.B/H/W. SLD
+slides byte columns within each row. VSHF uses the captured old destination
+as its selector and zeros lanes selected by either of bits 7 and 6.
+
+The MSA floating-point forms in `MIPSMSAFloat.def` include arithmetic,
+fused operations, estimates, conversions, classification and ordered or
+unordered comparisons. FCLASS.W/D expand to integer LowIR and distinguish
+all ten IEEE classes. Other forms carry their original sources, fused
+destination when needed, and an ordered MSACSR effect through LLVM and both
+C paths. Original-target native helpers execute the encoded FP instruction
+in the caller's FP environment. A P5600 executor can bind to LowIR for
+concrete evaluation. In LowIR, enabled FP exceptions commit MSACSR while preserving
+the old vector destination. Native source comparisons observe the trap,
+MSACSR and prior memory effects. Physical exception frames and handler EPCs
+belong to the compiled program. Approximation and NaN results depend on the
+target implementation.
+
+CFCMSA/CTCMSA cover all 32 selectors. The concrete context carries MSAIR,
+the writable MSACSR mask, and optional privileged partition control registers
+with the number of free physical registers. Native floating-point helpers
+require WRP clear because their scratch register numbers differ from the
+original. The vector execution profile requires MSA enabled with CU1/FR
+configured. General partitioned vector execution, disabled-unit exception
+delivery, scalar FPU, MSA64 and compressed MSA remain outside this profile. The operation and alias rules follow the
+[MIPS32 MSA manual, revision 1.12](https://docs.alexrp.com/mips/mips32_simd.pdf), sections ADDV, SUBV, CEQ, CLT/CLE, MIN/MAX,
 SLL/SRL/SRA, BCLR/BSET/BNEG, MULV/MADDV/MSUBV, MAX_A/MIN_A, ADD_A/ADDS_A, ADDS/SUBS, AVE/AVER,
 AND/OR/NOR/XOR, ADDVI/SUBVI, CEQI, CLTI/CLEI, MAXI/MINI,
 COPY_S, FILL and INSERT. Owned execution
@@ -845,8 +887,8 @@ banked accumulator transfers, seven DSP dot-product families and 32 MSA rounded
 shift and bit-insertion forms. The MT tests check prior control values, master
 VPE permissions and execution hazards. The DSP and MSA tests compare the original
 instructions and the recompiled C with independent expected values in both byte
-orders. Cache execution, MT scheduling, the remaining DSP/MSA families and
-original MIPS16e2 hardware execution still require qualification.
+orders. That qualification covered the cache instruction operands and execution
+hazards. The later cache and MT state contracts are described above.
 
 The MIPS16 comparison includes the original mixed instruction stream. One
 multiply and two HI/LO reads now emit three additional LowIR operations to

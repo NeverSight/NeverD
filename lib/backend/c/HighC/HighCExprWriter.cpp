@@ -2359,7 +2359,7 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   if (E.IntrinsicId != Intrinsic::None) {
     if (mips::isScalarIntrinsic(E.IntrinsicId))
       return renderMIPSScalar(
-          E, Opts.TheArch, MIPSScalarHelpers.at(E.IntrinsicId),
+          E, Opts.TheArch, MIPSScalarHelpers.at(mipsScalarHelperKey(E)),
           E.Operands.empty() ? std::nullopt : constAddress(*E.Operands[0]),
           [this, &E](const HighExpr &V, unsigned Index) {
             return Index == 0 && mips::mergeMemory(E.IntrinsicId)

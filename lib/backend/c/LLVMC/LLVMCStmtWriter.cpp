@@ -48,6 +48,7 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/MIPS/MIPSBarrierSource.h"
 #include "neverd/backend/MIPS/MIPSDSPSource.h"
+#include "neverd/backend/MIPS/MIPSMSASource.h"
 #include "neverd/backend/MachineInstructionText.h"
 #include "neverd/backend/c/render/AArch64/AArch64ExclusiveC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
@@ -4806,6 +4807,49 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
       throw std::invalid_argument(mips::MalformedBarrierSource);
     emitIndent(Indent);
     OS << "__asm__ volatile(\"" << *Assembly << "\" ::: \"memory\");\n";
+    return true;
+  }
+  if (auto *MD = Call.getMetadata("neverd.mips.msa")) {
+    const auto *I =
+        MD->getNumOperands() == 2
+            ? llvm::mdconst::dyn_extract<llvm::ConstantInt>(MD->getOperand(0))
+            : nullptr;
+    const auto *K =
+        MD->getNumOperands() == 2
+            ? llvm::mdconst::dyn_extract<llvm::ConstantInt>(MD->getOperand(1))
+            : nullptr;
+    if (!I || !K || I->getValue().uge(unsigned(Intrinsic::_Count)) ||
+        K->getValue().uge(32) || !isMIPS(Opts.TheArch) ||
+        isMIPS64(Opts.TheArch))
+      throw std::runtime_error("invalid native MSA assembly metadata");
+    const auto Id = static_cast<Intrinsic>(I->getZExtValue());
+    if (!mips::isMSAControl(Id) && (!mips::isMSAFloat(Id) || !K->isZero()))
+      throw std::runtime_error("invalid native MSA instruction");
+    const auto A = mips::msaAssembly(Id, K->getZExtValue(),
+                                     archLittleEndian(Opts.TheArch));
+    if (!IA->hasSideEffects() || IA->isAlignStack() || IA->canThrow() ||
+        IA->getDialect() != llvm::InlineAsm::AD_ATT ||
+        IA->getAsmString() != A.llvmText() ||
+        IA->getConstraintString() != A.Constraints ||
+        Call.arg_size() != (A.Pointers + unsigned(A.Write)) ||
+        (A.Read ? !Call.getType()->isIntegerTy(32)
+                : !Call.getType()->isVoidTy()))
+      throw std::runtime_error("invalid native MSA assembly contract");
+    std::vector<std::string> Args;
+    for (const auto &Arg : Call.args()) {
+      if (A.Write ? !Arg->getType()->isIntegerTy(32)
+                  : !Arg->getType()->isPointerTy())
+        throw std::runtime_error("invalid native MSA assembly operand");
+      Args.push_back(valueStr(Arg.get()));
+    }
+    emitIndent(Indent);
+    std::string Out = Name;
+    if (A.Read && Call.use_empty()) {
+      Out = freshVar("nd_msa_control");
+      OS << "uint32_t " << Out << ";\n";
+      emitIndent(Indent);
+    }
+    OS << A.cStatement(Args, Out) << "\n";
     return true;
   }
   if (const auto Write = mips::dspControlSourceWrite(Call)) {
