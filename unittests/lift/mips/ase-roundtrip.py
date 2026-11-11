@@ -332,11 +332,14 @@ def run(args, artifacts):
         [args.clang, "-print-resource-dir"], text=True
     ).strip()
     report = {
+        "complete": False,
         "neverd_sha256": digest(args.neverd),
         "fixture_sha256": digest(fixture),
         "unicorn_sha256": digest(Path(uclib._name)),
         "cases": [],
     }
+    artifacts.write("results.json", report)
+    artifacts.write("failures.json", [])
     for little in (False, True):
         profile = "mipsel" if little else "mips"
         msa = args.group.startswith("msa")
