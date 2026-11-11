@@ -13,6 +13,7 @@
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/med/MedCallReturnReads.h"
 #include "neverd/ir/med/MedPrologueSaves.h"
+#include "neverd/lift/ARM/ARMRegs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
@@ -193,6 +194,64 @@ TEST_P(MedPrologueSaves, OnlyUnobservedRestoredExtensionsKeepTheSave) {
       Ops.back() = op(NdOp::RETURN, none(), {Wide});
     markStackAccesses(Func, Arch::X64, BinaryFormat::ELF);
     EXPECT_EQ(save(Func).PrologueSave, !Observed);
+  }
+}
+
+/// `vpush {d8, d9}; ...; vpop {d8, d9}` in ARM32 MedIR. The restore rebuilds
+/// q4 from its d halves, a join the restore proof must follow; \p Observed
+/// returns that q4.
+MedFunc pushedD8D9(bool Observed) {
+  auto Reg = [](int Id, uint64_t Offset, uint16_t Size, int Version) {
+    MedVar V;
+    V.Kind = MedVar::Reg;
+    V.TheArch = Arch::ARM;
+    V.Id = Id;
+    V.RegOff = Offset;
+    V.Size = Size;
+    V.SSAVer = Version;
+    return V;
+  };
+  const auto SP = [&](int Version) { return Reg(1, armreg::SP, 4, Version); };
+  const auto D8 = [&](int Version) { return Reg(2, armreg::D(8), 8, Version); };
+  const auto D9 = [&](int Version) { return Reg(3, armreg::D(9), 8, Version); };
+  MedVar Q4 = Reg(4, armreg::D(8), 16, 1);
+  MedVar High = temp(40);
+  High.TheArch = Arch::ARM;
+  High.Size = 4;
+  MedFunc Func;
+  Func.Entry = 0x1000;
+  Func.CC = CallingConv::ARM_AAPCS;
+  Func.FrameSize = 16;
+  MedBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Func.Entry;
+  Block.Ops = {
+      op(NdOp::COPY, SP(0), {SP(0)}),
+      op(NdOp::COPY, D8(0), {D8(0)}),
+      op(NdOp::COPY, D9(0), {D9(0)}),
+      op(NdOp::INT_SUB, SP(1), {SP(0), MedVar::makeConst(16, 4)}),
+      op(NdOp::STORE, none(), {SP(1), D8(0)}),
+      op(NdOp::INT_ADD, High, {SP(1), MedVar::makeConst(8, 4)}),
+      op(NdOp::STORE, none(), {High, D9(0)}),
+      op(NdOp::LOAD, D8(1), {SP(1)}),
+      op(NdOp::LOAD, D9(1), {High}),
+      op(NdOp::CONCAT, Q4, {D9(1), D8(1)}),
+      op(NdOp::INT_ADD, SP(2), {SP(1), MedVar::makeConst(16, 4)}),
+      op(NdOp::RETURN, none(), {Observed ? Q4 : MedVar::makeConst(0, 4)})};
+  Func.Blocks.push_back(std::move(Block));
+  return Func;
+}
+
+TEST_P(MedPrologueSaves, AnARM32VpopRebuildsQ4FromItsRestores) {
+  for (bool Observed : {false, true}) {
+    SCOPED_TRACE(Observed);
+    MedFunc Func = pushedD8D9(Observed);
+    markStackAccesses(Func, Arch::ARM, BinaryFormat::ELF);
+    const auto &Ops = Func.Blocks[0].Ops;
+    EXPECT_EQ(Ops[4].PrologueSave, !Observed);
+    EXPECT_EQ(Ops[6].PrologueSave, !Observed);
+    EXPECT_EQ(Ops[7].Opcode, NdOp::LOAD);
+    EXPECT_EQ(Ops[8].Opcode, NdOp::LOAD);
   }
 }
 
