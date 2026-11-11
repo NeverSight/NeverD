@@ -144,6 +144,45 @@ TEST_P(MIPSControl, SourceReturnRequiresTheWholeIncomingLink) {
     Check({0xffbffff8, ClearRA, 0xdfbffff8, Return, 0}, true);
 }
 
+TEST_P(MIPSControl, ReusedExecutionUnitClearsAnOldSlotAndFailedHead) {
+  const auto Code = encode({0x0c000408, 0x8ca2fff4, 0}, GetParam());
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(GetParam()));
+  DecodedExecutionUnit Unit;
+  ASSERT_EQ(Decode.decodeUnitForLift(Code.data(), Code.size(), 0x1000, Unit),
+            8);
+  ASSERT_TRUE(Unit.HasDelaySlot);
+  ASSERT_EQ(Decode.decodeUnitForLift(Code.data() + 8, 4, 0x1008, Unit), 4);
+  EXPECT_FALSE(Unit.HasDelaySlot);
+  EXPECT_EQ(Unit.Slot.Raw, nullptr);
+  EXPECT_EQ(Unit.Slot.Size, 0);
+  ASSERT_EQ(Decode.decodeUnitForLift(Code.data(), 1, 0x1010, Unit), 0);
+  EXPECT_EQ(Unit.Head.Raw, nullptr);
+  EXPECT_EQ(Unit.Head.Size, 0);
+}
+
+TEST_P(MIPSControl,
+       AReinitializedDecoderUsesTheNewInstructionAddressWidthAndAlignment) {
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(GetParam()));
+  const auto Nop = encode({0}, GetParam());
+  DecodedInsn Insn{};
+  EXPECT_EQ(Decode.decodeOne(Nop.data(), 4, 0x1002, Insn), 0);
+  EXPECT_EQ(Decode.decodeOneLight(Nop.data(), 4, 0x100000000ull, Insn),
+            isMIPS64(GetParam()) ? 4 : 0);
+  if (!isMIPS64(GetParam())) {
+    ASSERT_TRUE(Decode.init(GetParam(), InstructionMode::MIPS16));
+    const uint8_t Compact[] = {
+        uint8_t(archLittleEndian(GetParam()) ? 0 : 0x65),
+        uint8_t(archLittleEndian(GetParam()) ? 0x65 : 0)};
+    EXPECT_EQ(Decode.decodeOne(Compact, 2, 0xfffffffe, Insn), 2);
+    EXPECT_EQ(Decode.decodeOneLight(Compact, 2, 0xffffffff, Insn), 0);
+  }
+  ASSERT_TRUE(Decode.init(Arch::X64));
+  const uint8_t X86Nop = 0x90;
+  EXPECT_EQ(Decode.decodeOne(&X86Nop, 1, 0x100000001ull, Insn), 1);
+}
+
 TEST_P(MIPSControl, WideCallResultKeepsTheO32RegisterWordOrder) {
   if (isMIPS64(GetParam()))
     return;
