@@ -420,6 +420,11 @@ private:
   /// The debug files the session's headers say it read, for the debug inputs
   /// it loaded (pdbInput_, dwarfInput_, mapInput_, symbolsInput_).
   std::optional<Json> debugInfo_;
+  /// The exports list's rows in the order the last read sorted them, under the
+  /// project and order they were read for: the image's export table and entry
+  /// points, which no edit changes, stand while its project does.
+  std::string exportOrderKey_;
+  Json exportRows_;
   std::string debugInfoInputs_;
   void openFactsStore(const std::string &name, bool writable);
   std::vector<std::string> keptListingFacts(const std::string &key);
@@ -732,6 +737,20 @@ private:
   std::vector<std::shared_ptr<const NamedView>> viewsReadAhead() const;
   /// metadata.prepared_views: answers made and given.
   std::uint64_t preparedMade_ = 0, preparedGiven_ = 0, followingReads_ = 0;
+  /// Listing pages given to clients that keep them, newest last, each under
+  /// the name it was given by; metadata counts the reads they answered.
+  struct KeptListingPage {
+    std::string etag;
+    ListingPage page;
+  };
+  std::deque<KeptListingPage> keptListingPages_;
+  std::uint64_t listingPageIds_ = 0, listingPagesUnchanged_ = 0,
+                listingPageDeltas_ = 0;
+  /// A listing page for a client that names the one it keeps (\p known):
+  /// that it stands, what changed of it (\p deltas) or the page whole, under
+  /// a name it keeps it by.
+  Json listingReply(ListingPage page, const std::string &known, bool deltas,
+                    EncodedPayload *encoded);
   /// Documents written from another with its comments, functions' names or
   /// data's names taken (takeComments, takeFunctionNames, takeDataNames).
   std::uint64_t commentPatches_ = 0, namePatches_ = 0, dataNamePatches_ = 0;

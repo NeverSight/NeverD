@@ -1600,9 +1600,7 @@ uint64_t MachOPatcher::appendExecSegmentImpl(std::vector<uint8_t> &Binary,
     }
     if (!ExtendCommand ||
         (!Is64 && Extended.VMSize + CodePadded > UINT32_MAX)) {
-      llvm::WithColor::error()
-          << "macho_patch: tight commands need an adjacent RX tail or a "
-             "complete relocation contract\n";
+      LLVM_DEBUG(llvm::dbgs() << kNoAdjacentRXTail << SegStr << '\n');
       return 0;
     }
     SegStr = readMachOName(Extended.SegName);

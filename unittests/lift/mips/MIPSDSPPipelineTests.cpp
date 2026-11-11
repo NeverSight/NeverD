@@ -470,8 +470,8 @@ TEST(MIPSDSPPipeline, StandaloneStateHelpersKeepCombinedCompilerConstraints) {
 
 TEST(MIPSDSPPipeline, StandaloneWideHelpersHaveTheSameCompilerContract) {
   EXPECT_FALSE(mips::sourcePreservesDSPControl(Arch::X64, nullptr));
-  EXPECT_FALSE(mips::sourcePreservesDSPControl(Arch::MIPS64, nullptr));
-  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL})
+  for (Arch Target :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL})
     for (bool LLVM : {false, true}) {
       CEmitterOptions Options;
       Options.TheArch = Target;
@@ -555,7 +555,9 @@ TEST(MIPSDSPPipeline, StandaloneWideHelpersHaveTheSameCompilerContract) {
               std::getenv("NEVERD_MIPS_DSP_SOURCE_OUTPUT")) {
         llvm::SmallString<256> Path(Directory);
         llvm::sys::path::append(
-            Path, std::string(archLittleEndian(Target) ? "mipsel" : "mips") +
+            Path, llvm::StringRef(getTriple(Target, BinaryFormat::ELF))
+                          .split('-')
+                          .first.str() +
                       (LLVM ? "-llvmc-wide.c" : "-highc-wide.c"));
         std::error_code Error;
         llvm::raw_fd_ostream Output(Path, Error);

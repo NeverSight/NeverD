@@ -33,6 +33,13 @@ A64_LEAF_TEXT(kSign, "--sign")
 A64_LEAF_TEXT(kAdHocIdentity, "-")
 A64_LEAF_TEXT(kVerify, "--verify")
 A64_LEAF_TEXT(kStrict, "--strict")
+A64_LEAF_TEXT(kForceSign, "--force")
+A64_LEAF_TEXT(kWrongSpillInput, "wrong-spill.dylib")
+// advance by 8, CFA = SP+16, LR = [CFA-16]. Use the same code and a
+// well-formed FDE which instead points one pointer width too high.
+A64_LEAF_VALUE(auto, kLinkSpillRule,
+               (std::array<uint8_t, 5>{0x48, 0x0e, 0x10, 0x9e, 0x02}))
+A64_LEAF_VALUE(uint8_t, kWrongLinkOffsetFactor, 1)
 A64_LEAF_TEXT(kPlatformHash, "system_slice_sha256")
 A64_LEAF_TEXT(kUnsignedHash, "unsigned_input_sha256")
 A64_LEAF_TEXT(kEntryVA, "original_entry")
@@ -49,6 +56,8 @@ A64_LEAF_TEXT(kCompiler, "/usr/bin/clang")
 A64_LEAF_TEXT(kTargetFlag, "-target")
 A64_LEAF_TEXT(kTarget, "arm64e-apple-macosx15.0")
 A64_LEAF_TEXT(kOptimize, "-O2")
+A64_LEAF_TEXT(kAsyncTables, "-fasynchronous-unwind-tables")
+A64_LEAF_TEXT(kRestoreBoundary, "restored_lr_offset")
 A64_LEAF_TEXT(kOmitFrame, "-fomit-frame-pointer")
 A64_LEAF_TEXT(kDylib, "-dynamiclib")
 A64_LEAF_TEXT(kTight, "-Wl,-headerpad,0")
@@ -101,9 +110,35 @@ A64_LEAF_TEXT(kErrorABI, R"c(
 #define ERROR __attribute__((swift_error_result))
 )c")
 A64_LEAF_TEXT(kClearError, "#define NEVERD_TEST_CLEAR_ERROR 1\n")
+A64_LEAF_TEXT(kForwardError, "#define NEVERD_TEST_FORWARD_ERROR 1\n")
+A64_LEAF_TEXT(kTailErrorLeaves, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  b _leaf_difference
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  mov x8, x0
+  mov x0, x21
+  mov x21, x8
+  ret
+.cfi_endproc
+.subsections_via_symbols
+)asm")
 A64_LEAF_TEXT(kErrorLeaves, R"c(
+#ifdef NEVERD_TEST_FORWARD_ERROR
+SWIFT __attribute__((noinline)) void *leaf_difference(void *, void * SELF, void ** ERROR);
+#endif
 SWIFT void *leaf_sum(void *next, void * SELF context, void ** ERROR error) {
+#ifdef NEVERD_TEST_FORWARD_ERROR
+  return leaf_difference(next, context, error);
+#else
   return *error;
+#endif
 }
 SWIFT void *leaf_difference(void *next, void * SELF context, void ** ERROR error) {
 #ifdef NEVERD_TEST_CLEAR_ERROR
@@ -132,8 +167,14 @@ int main(int argc, char **argv) {
   for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i) {
     for (unsigned j = 0; j != sizeof(values) / sizeof(*values); ++j) {
       void *error = values[i];
+#ifdef NEVERD_TEST_FORWARD_ERROR
+      if (read(values[j], storage, &error) != values[i] || error != values[j])
+        return 4;
+      error = values[i];
+#else
       if (read(values[j], storage, &error) != values[i] || error != values[i])
         return 4;
+#endif
 #ifdef NEVERD_TEST_CLEAR_ERROR
       if (replace(values[j], storage, &error) || error)
 #else
@@ -286,6 +327,52 @@ A64_LEAF_TEXT(kMemoryLeaves, R"c(
 #include <stdint.h>
 uint64_t leaf_sum(const uint64_t *p) { return p[1]; }
 void leaf_difference(uint64_t *p, uint64_t v) { p[1] = v; }
+)c")
+
+A64_LEAF_TEXT(kKeepFrame, "-fno-omit-frame-pointer")
+A64_LEAF_TEXT(kFramedImport, "#define NEVERD_TEST_FRAMED_IMPORT 1\n")
+A64_LEAF_TEXT(kProcessImport, "getpid")
+A64_LEAF_TEXT(kGlobalLeaves, R"c(
+#include <stdint.h>
+#include <unistd.h>
+/* The selected word is past a 4-KiB ADRP boundary and has a nonzero PAGEOFF. */
+uint64_t leaf_state[] = {[0] = UINT64_C(0x7369676e6564), [513] = 42};
+uint64_t leaf_sum(void) { return leaf_state[513]; }
+#ifdef NEVERD_TEST_FRAMED_IMPORT
+uint64_t leaf_difference(void) { return (uint32_t)getpid() + leaf_state[513]; }
+#else
+int leaf_difference(void) { return getpid(); }
+#endif
+)c")
+A64_LEAF_TEXT(kGlobalCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  uint64_t (*read_state)(void) = dlsym(image, "leaf_sum");
+#ifdef NEVERD_TEST_FRAMED_IMPORT
+  uint64_t (*process)(void) = dlsym(image, "leaf_difference");
+#else
+  int (*process)(void) = dlsym(image, "leaf_difference");
+#endif
+  uint64_t *words = dlsym(image, "leaf_state");
+  if (!words || !read_state || !process || read_state() != 42) return 3;
+  uint64_t *state = &words[513];
+  const uint64_t values[] = {0, 1, UINT64_MAX, UINT64_C(1) << 63};
+  for (unsigned i = 0; i < sizeof(values) / sizeof(*values); ++i) {
+    *state = values[i];
+    if (read_state() != *state || words[0] != UINT64_C(0x7369676e6564)) return 4;
+#ifdef NEVERD_TEST_FRAMED_IMPORT
+    if (process() != (uint32_t)getpid() + *state) return 5;
+#else
+    if (process() != getpid()) return 5;
+#endif
+  }
+  return dlclose(image) != 0;
+}
 )c")
 A64_LEAF_TEXT(kMemoryCaller, R"c(
 #include <dlfcn.h>

@@ -1,0 +1,9 @@
+//===- MIPSPhysicalForms.def - Physical forms without Capstone IDs --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Name, offset from MIPS_INS_ENDING, public disassembly spelling.
+NEVERD_MIPS_PHYSICAL_FORM(IndexedLoadDoubleword, 1, "ldx")
+NEVERD_MIPS_PHYSICAL_FORM(NoOpAndLink, 2, "nal")
+#undef NEVERD_MIPS_PHYSICAL_FORM

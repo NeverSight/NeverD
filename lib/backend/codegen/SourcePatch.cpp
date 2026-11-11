@@ -427,7 +427,8 @@ llvm::Expected<PatchResult> publishSourcePatch(
     const auto Mode = Image.instructionModeAt(Installed.OriginalVA);
     const auto Target = getTargetCodegenInfo(Image.Arch, *Mode);
     const uint64_t Size = Target.sourceTrampolineSize();
-    const uint64_t Offset = Reloaded->vaToFileOffset(Installed.OriginalVA);
+    const uint64_t EntryVA = Installed.OriginalVA + Result.OriginalSectionSlide;
+    const uint64_t Offset = Reloaded->vaToFileOffset(EntryVA);
     std::vector<uint8_t> Expected(Size);
     const auto *OwnerSegment = Reloaded->getSegmentFor(Installed.OwnerVA);
     const auto *OwnerFrame =
@@ -443,8 +444,8 @@ llvm::Expected<PatchResult> publishSourcePatch(
                         llvm::utohexstr(Installed.OwnerVA));
     if (!rangeInBounds(Offset, Size, Reloaded->Raw.size()))
       return patchError("candidate entry is outside file-backed storage");
-    if (!Target.writeSourceTrampoline(Expected, 0, Installed.OwnerVA,
-                                      Installed.OriginalVA, Size))
+    if (!Target.writeSourceTrampoline(Expected, 0, Installed.OwnerVA, EntryVA,
+                                      Size))
       return patchError("installed entry has an out-of-range destination");
     if (!std::equal(Expected.begin(), Expected.end(),
                     Reloaded->Raw.begin() + Offset))

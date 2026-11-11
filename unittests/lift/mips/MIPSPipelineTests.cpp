@@ -145,7 +145,7 @@ TEST_P(MIPSPipeline, AccumulatorSourceRequiresDefinedInputsAcrossEncodings) {
 }
 
 TEST_P(MIPSPipeline, AccumulatorJoinsAndCallsCannotInventSourceState) {
-  for (unsigned Bank = 0; Bank != (isMIPS64(GetParam()) ? 1u : 4u); ++Bank)
+  for (unsigned Bank = 0; Bank != 4; ++Bank)
     for (bool High : {false, true})
       for (bool Defined : {false, true})
         for (bool Call : {false, true}) {
@@ -173,9 +173,18 @@ TEST_P(MIPSPipeline, AccumulatorJoinsAndCallsCannotInventSourceState) {
           if (Bank && Call)
             // DSP source requires an authenticated return link. Carry RA in
             // callee-saved s0; cross-call stack-link recovery is not admitted.
-            Words = {0x27bdffe8, 0xafb00014, 0x03e08025,          Write,
-                     0x0c00404c, 0,          Defined ? Write : 0, Read,
-                     0x0200f825, 0x8fb00014, 0x03e00008,          0x27bd0018};
+            Words = {Wide ? 0x67bdfff0u : 0x27bdffe8u,
+                     Wide ? 0xffb00008u : 0xafb00014u,
+                     0x03e08025,
+                     Write,
+                     0x0c00404c,
+                     0,
+                     Defined ? Write : 0,
+                     Read,
+                     0x0200f825,
+                     Wide ? 0xdfb00008u : 0x8fb00014u,
+                     0x03e00008,
+                     Wide ? 0x67bd0010u : 0x27bd0018u};
           SCOPED_TRACE(::testing::Message()
                        << Bank << "/" << High << "/" << Defined << "/" << Call);
           mips_test::ELFBytes File(GetParam());
@@ -208,7 +217,7 @@ TEST_P(MIPSPipeline, AccumulatorJoinsAndCallsCannotInventSourceState) {
             LowToMedConverter Convert;
             if (WithImage)
               Convert.setBinaryImage(&*Image);
-            const bool MissingMode = Call && !WithImage && !Wide;
+            const bool MissingMode = Call && !WithImage;
             if (Defined && !MissingMode)
               EXPECT_NO_THROW(
                   Convert.convert(Low, GetParam(), BinaryFormat::ELF));

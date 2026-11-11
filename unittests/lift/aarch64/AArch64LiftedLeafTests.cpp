@@ -20,6 +20,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/Magic.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/FileSystem.h"
@@ -28,6 +29,8 @@
 #include "llvm/Support/SHA256.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -93,7 +96,16 @@ void verifyTailTargets(llvm::Module &Module, MachOPatcher &Patcher,
 }
 #endif
 
-enum class LeafCheck { None, TailTarget, ErrorResult };
+enum class LeafCheck {
+  None,
+  TailTarget,
+  ErrorResult,
+  Global,
+  FramedImport,
+  FramedError,
+  IndexedError,
+  AsyncIndexedError
+};
 
 void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
                            const char *SourceName = kSource,
@@ -109,10 +121,22 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   const auto Output = (Root / kOutput).string();
   const auto Rejected = (Root / kRejected).string();
   std::ofstream(Source) << Preamble << Leaves;
-  ASSERT_EQ(llvm::sys::ExecuteAndWait(
-                kCompiler, {kCompiler, kTargetFlag, kTarget, kOptimize,
-                            kOmitFrame, kDylib, kTight, Source, kOut, Input}),
-            0);
+  const bool KeepFrame =
+      Check == LeafCheck::FramedImport || Check == LeafCheck::FramedError;
+  llvm::SmallVector<llvm::StringRef> Compile{
+      kCompiler,
+      kTargetFlag,
+      kTarget,
+      kOptimize,
+      KeepFrame ? kKeepFrame : kOmitFrame,
+      kDylib,
+      kTight};
+  const bool Async = Check == LeafCheck::AsyncIndexedError;
+  const bool Indexed = Check == LeafCheck::IndexedError || Async;
+  if (Async)
+    Compile.push_back(kAsyncTables);
+  Compile.append({Source, kOut, Input});
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, Compile), 0);
   auto Reader = Loader::create(BinaryFormat::MachO);
   auto Image = Reader->load(Input);
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
@@ -150,7 +174,8 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   EXPECT_FALSE(Patcher.patch(Input, Rejected, *Changed, Image->Arch).Success);
   EXPECT_FALSE(std::filesystem::exists(Rejected));
 
-  if (Check == LeafCheck::ErrorResult) {
+  if (Check == LeafCheck::ErrorResult || Check == LeafCheck::FramedError ||
+      Indexed) {
     auto MissingWrite = llvm::CloneModule(Module);
     auto *Writer = MissingWrite->getFunction(kDifference);
     ASSERT_NE(Writer, nullptr);
@@ -164,6 +189,68 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     Writes.front()->eraseFromParent();
     EXPECT_FALSE(
         Patcher.patch(Input, Rejected, *MissingWrite, Image->Arch).Success);
+    EXPECT_FALSE(std::filesystem::exists(Rejected));
+  }
+  if (Indexed) {
+    const auto *FrameSection =
+        Image->getSectionByName(section_names::macho::EhFrame);
+    ASSERT_NE(FrameSection, nullptr);
+    auto Bytes = Snapshot;
+    auto Frame = llvm::MutableArrayRef(Bytes).slice(FrameSection->FileOff,
+                                                    FrameSection->FileSz);
+    const auto Find = [&](auto Begin) {
+      return std::search(Begin, Frame.end(), kLinkSpillRule.begin(),
+                         kLinkSpillRule.end());
+    };
+    auto At = Find(Frame.begin());
+    ASSERT_NE(At, Frame.end());
+    ASSERT_EQ(Find(At + kLinkSpillRule.size()), Frame.end());
+    At[kLinkSpillRule.size() - 1] = kWrongLinkOffsetFactor;
+    auto Invalid = (Root / kWrongSpillInput).string();
+    std::ofstream(Invalid, std::ios::binary)
+        .write(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+    ASSERT_EQ(
+        llvm::sys::ExecuteAndWait(
+            kCodesign, {kCodesign, kForceSign, kSign, kAdHocIdentity, Invalid}),
+        0);
+    auto Altered = Reader->load(Invalid);
+    ASSERT_TRUE(bool(Altered)) << llvm::toString(Altered.takeError());
+    ASSERT_TRUE(
+        llvm::any_of(Altered->ExceptionMetadata.Functions, [&](const auto &F) {
+          return F.Dwarf &&
+                 llvm::any_of(F.Dwarf->Instructions, [](const auto &I) {
+                   return I.Kind == CFIOpKind::Offset &&
+                          I.Offset == -int64_t(sizeof(uint64_t));
+                 });
+        }));
+    MachOPatcher AlteredPatcher;
+    AlteredPatcher.setImageContext(&*Altered);
+    EXPECT_FALSE(
+        AlteredPatcher.patch(Invalid, Rejected, Module, Image->Arch).Success);
+    EXPECT_FALSE(std::filesystem::exists(Rejected));
+  }
+  if (Check == LeafCheck::FramedImport) {
+    auto Retargeted = llvm::CloneModule(Module);
+    auto *Import = Retargeted->getFunction(kProcessImport);
+    auto *Read = Retargeted->getFunction(kSum);
+    ASSERT_NE(Import, nullptr);
+    ASSERT_EQ(Import->getFunctionType(), Read->getFunctionType());
+    Import->replaceAllUsesWith(Read);
+    EXPECT_FALSE(
+        Patcher.patch(Input, Rejected, *Retargeted, Image->Arch).Success);
+    EXPECT_FALSE(std::filesystem::exists(Rejected));
+  }
+  if (Check == LeafCheck::Global || Check == LeafCheck::FramedImport) {
+    auto Redirected = llvm::CloneModule(Module);
+    auto *Read = Redirected->getFunction(kSum);
+    auto *Ret = llvm::cast<llvm::ReturnInst>(Read->back().getTerminator());
+    auto *Load = llvm::dyn_cast<llvm::LoadInst>(Ret->getReturnValue());
+    ASSERT_NE(Load, nullptr);
+    llvm::IRBuilder<> Builder(Load);
+    Load->setOperand(0, Builder.CreateConstGEP1_64(
+                            Load->getType(), Load->getPointerOperand(), 1));
+    EXPECT_FALSE(
+        Patcher.patch(Input, Rejected, *Redirected, Image->Arch).Success);
     EXPECT_FALSE(std::filesystem::exists(Rejected));
   }
   const auto ReorderedPath = (Root / kReorderedOutput).string();
@@ -190,6 +277,29 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   for (const auto &Entry : Installed.PatchedFunctions) {
     EXPECT_NE(Entry.OwnerVA, Entry.OriginalVA);
     EXPECT_TRUE(Final->ExceptionMetadata.findFunction(Entry.OwnerVA));
+    if (Indexed && Entry.SourceFunction == kSum) {
+      for (const auto &[View, VA] : {std::pair{&*Image, Entry.OriginalVA},
+                                     std::pair{&*Final, Entry.OwnerVA}}) {
+        const auto *F = View->ExceptionMetadata.findFunction(VA);
+        ASSERT_NE(F, nullptr);
+        ASSERT_TRUE(F->Dwarf);
+        const auto *C =
+            View->ExceptionMetadata.findCIE(F->Dwarf->CIESectionOffset);
+        ASSERT_NE(C, nullptr);
+        const auto Restored =
+            llvm::find_if(F->Dwarf->Instructions, [&](const auto &I) {
+              return I.Kind == CFIOpKind::Restore &&
+                     I.Register == C->ReturnAddressRegister;
+            });
+        ASSERT_EQ(Restored != F->Dwarf->Instructions.end(), Async);
+        if (Async) {
+          EXPECT_EQ(Restored->CodeOffset + aarch64::kInsnSize,
+                    F->Dwarf->AddressRange);
+          testing::Test::RecordProperty(kRestoreBoundary,
+                                        std::to_string(Restored->CodeOffset));
+        }
+      }
+    }
   }
   auto Original = Reader->load(Input);
   ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
@@ -359,6 +469,30 @@ TEST(AArch64DarwinEntry, SwiftErrorCanClearTheRegisterWithoutReadingIt) {
                         LeafCheck::ErrorResult);
 }
 
+TEST(AArch64DarwinEntry, TailCallForwardsTheWritableSwiftErrorRegister) {
+  verifyPublishedLeaves(kTailErrorLeaves, kErrorCaller, kAssemblyName,
+                        std::string(kErrorABI) + kForwardError,
+                        LeafCheck::ErrorResult);
+}
+
+TEST(AArch64DarwinEntry, SignedCallReturnsTheUpdatedSwiftErrorRegister) {
+  verifyPublishedLeaves(kErrorLeaves, kErrorCaller, kSource,
+                        std::string(kErrorABI) + kForwardError,
+                        LeafCheck::FramedError);
+}
+
+TEST(AArch64DarwinEntry, IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister) {
+  verifyPublishedLeaves(kErrorLeaves, kErrorCaller, kSource,
+                        std::string(kErrorABI) + kForwardError,
+                        LeafCheck::IndexedError);
+}
+
+TEST(AArch64DarwinEntry, AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn) {
+  verifyPublishedLeaves(kErrorLeaves, kErrorCaller, kSource,
+                        std::string(kErrorABI) + kForwardError,
+                        LeafCheck::AsyncIndexedError);
+}
+
 TEST(AArch64DarwinEntry, SwiftContextSurvivesNativeLeafPublication) {
   verifyPublishedLeaves(kSwiftLeaves, kSwiftCaller, kSource, kSwiftABI);
 }
@@ -377,5 +511,15 @@ TEST(AArch64DarwinEntry, SignedLeafUsesTheIncomingSPAtItsNewAddress) {
 
 TEST(AArch64LiftedMemory, BaseAndDisplacementRetainLoadAndStoreEffects) {
   verifyPublishedLeaves(kMemoryLeaves, kMemoryCaller);
+}
+
+TEST(AArch64LiftedImage,
+     OriginalGlobalAndAuthenticatedImportSurvivePublication) {
+  verifyPublishedLeaves(kGlobalLeaves, kGlobalCaller, kSource, {},
+                        LeafCheck::Global);
+}
+TEST(AArch64LiftedImage, SignedFrameCallsImportBeforeReadingOriginalGlobal) {
+  verifyPublishedLeaves(kGlobalLeaves, kGlobalCaller, kSource, kFramedImport,
+                        LeafCheck::FramedImport);
 }
 } // namespace

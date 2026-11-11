@@ -443,6 +443,17 @@ struct QueryService::State {
     return subscription;
   }
 
+  /// Whether \p job reads a page the client keeps and names to the worker: a
+  /// source page, or a listing's own page (a jump or a refresh, read as
+  /// visible), whose next read after an edit is what changed of it.  The pages
+  /// scrolling adds to a listing are not kept.
+  static bool keepsPage(const Job &job) {
+    return job.kind == Read &&
+           (job.spec.operation == QLatin1String("decompile") ||
+            (job.spec.operation == QLatin1String("listing") &&
+             job.spec.priority == Spec::Visible));
+  }
+
   void schedulePump() {
     if (pumpScheduled)
       return;
@@ -517,6 +528,7 @@ struct QueryService::State {
     candidate->spec = std::move(spec);
     candidate->coalescingKey = key(*candidate, false);
     JobPtr job;
+    bool created = false;
     if (kind != Command) {
       for (const auto &existing : std::as_const(jobs)) {
         if (existing->epoch == epoch && !existing->cancelRequested &&
@@ -533,6 +545,7 @@ struct QueryService::State {
         return reject(owner, std::move(complete), candidate->spec.operation,
                       "queue_full", "The query queue budget was reached.");
       job = std::move(candidate);
+      created = true;
       job->id = ++nextJob;
       job->bytes = bytes;
       if (kind == Command)
@@ -552,9 +565,33 @@ struct QueryService::State {
           owner, QObject::connect(owner, &QObject::destroyed, q, [this, owner] {
             q->unsubscribeOwner(owner);
           }));
+    // A read the cache answers takes no turn behind the reads running or
+    // queued: only an accepted command ahead of it could change its answer.
+    if (created && kind == Read && job->spec.policy == Spec::Latest &&
+        cacheable(job->spec.operation) && !commandAhead(job->id))
+      if (const auto *cached = cache.object(key(*job, true))) {
+        queue.removeAll(job->id);
+        finish(job, *cached);
+        notify();
+        return id;
+      }
     schedulePump();
     notify();
     return id;
+  }
+
+  /// Whether an accepted command runs, or waits ahead of the job \p id.
+  bool commandAhead(quint64 id) const {
+    if (active && active->kind == Command)
+      return true;
+    for (const auto queued : queue) {
+      if (queued == id)
+        return false;
+      const auto job = jobs.value(queued);
+      if (job && job->kind == Command)
+        return true;
+    }
+    return false;
   }
 
   void removeJob(const JobPtr &job) {
@@ -656,8 +693,7 @@ struct QueryService::State {
     // An edit carries the reads its views make after it.
     if (job->kind == Command && changesPages(job->spec.operation))
       follow(job, payload);
-    if (job->kind == Read &&
-        job->spec.operation == QLatin1String("decompile")) {
+    if (keepsPage(*job)) {
       // A page kept from an earlier revision is named; a worker that still
       // holds its document answers that it stands rather than sending it.
       const auto *kept = keptPages.object(keptPageKey(*job));
@@ -938,8 +974,7 @@ struct QueryService::State {
             QJsonObject{{"summary", job->summary}, {"viewport", payload}};
       }
     }
-    if (job->kind == Read && status == "ok" &&
-        job->spec.operation == QLatin1String("decompile")) {
+    if (keepsPage(*job) && status == "ok") {
       const auto payload = response.value("payload").toObject();
       const bool delta = payload.contains("delta");
       if (payload.value("unchanged").toBool() || delta) {

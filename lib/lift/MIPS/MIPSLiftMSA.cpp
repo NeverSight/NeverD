@@ -35,7 +35,7 @@ void MIPSLifter::State::writeVector(unsigned Reg,
 }
 
 bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
-  if (!HasMSA || S.Width != 4 || isMIPSCompressedMode(Mode))
+  if (!HasMSA || S.Width != 4 || Mode == InstructionMode::MIPS16)
     return false;
   const unsigned WD = (Word >> 6) & 31, WS = (Word >> 11) & 31,
                  WT = (Word >> 16) & 31;

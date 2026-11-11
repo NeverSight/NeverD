@@ -6,6 +6,7 @@
 
 #include "MachOArm64eABI.h"
 #include "MachODependencyState.h"
+#include "MachOLiftedObject.h"
 
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/codegen/MachO/MachOAuthenticatedFixups.h"
@@ -20,6 +21,7 @@
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
 #include "neverd/loader/MachO/MachOPlatform.h"
+#include "neverd/loader/MachO/MachORelocations.h"
 #include "neverd/object/MachOLayout.h"
 #include "neverd/support/DwarfEH.h"
 #include "neverd/support/TargetCodegenInfo.h"
@@ -64,6 +66,7 @@ struct Relocation {
   std::optional<uint64_t> SubtractVA;
   std::optional<unsigned> SubtractSymbol;
   unsigned HalfLength = 0, OtherHalf = 0;
+  int64_t InstructionAddend = 0;
 };
 struct NativeMachO {
   CompiledImage Image;
@@ -385,6 +388,18 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
     Image.Sections.push_back(std::move(Item));
     auto Range = S.relocations();
     for (auto I = Range.begin(); I != Range.end(); ++I) {
+      int64_t Addend = 0;
+      if (Original.Arch == Arch::AArch64 &&
+          I->getType() == ARM64_RELOC_ADDEND) {
+        const auto Prefix = *I;
+        if (++I == Range.end())
+          return fail(macho_loader::detail::kMalformedARM64Addend);
+        auto Parsed =
+            macho_loader::detail::decodeARM64AddendPair(*M, Prefix, *I);
+        if (!Parsed)
+          return fail(macho_loader::detail::kMalformedARM64Addend);
+        Addend = *Parsed;
+      }
       const auto Raw = M->getRelocation(I->getRawDataRefImpl());
       Relocation R{Index,
                    I->getOffset(),
@@ -394,6 +409,7 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
                    M->getPlainRelocationExternal(Raw),
                    bool(M->getAnyRelocationPCRel(Raw)),
                    M->isRelocationScattered(Raw)};
+      R.InstructionAddend = Addend;
       const bool Half =
           Original.Arch == Arch::ARM &&
           (R.Type == ARM_RELOC_HALF || R.Type == ARM_RELOC_HALF_SECTDIFF);
@@ -1039,6 +1055,9 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
     if (!Target)
       return Target.takeError();
     llvm::APInt V(128, *Target);
+    V += llvm::APInt(V.getBitWidth(), R.InstructionAddend, true);
+    if (!V.isIntN(sizeof(va_t) * CHAR_BIT))
+      return fail(macho_loader::detail::kARM64AddendOverflow);
     const bool Vanilla =
         (A == Arch::X86 && R.Type == GENERIC_RELOC_VANILLA) ||
         (A == Arch::ARM && R.Type == ARM_RELOC_VANILLA) ||
@@ -1556,7 +1575,7 @@ appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
   return std::move(Object->Image);
 }
 
-llvm::Expected<PatchResult> installMachOObjectPatch(
+static llvm::Expected<PatchResult> installObject(
     llvm::StringRef Bytes, const BinaryImage &OriginalInput,
     llvm::ArrayRef<SourcePatchMapping> Mappings,
     llvm::ArrayRef<SourcePatchBinding> RequestedBindings,
@@ -1565,9 +1584,7 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
     const DynCodePatchEvidence *DynCode,
     const SourcePatchPreparation *Preparation,
     llvm::ArrayRef<SourcePatchDependency> Dependencies,
-    llvm::function_ref<llvm::Error(const CompiledImage &,
-                                   llvm::ArrayRef<NativeMachOCompactRange>)>
-        VerifyGenerated) {
+    MachOLiftedObjectVerifier VerifyGenerated) {
   const BinaryImage &Original =
       Preparation ? Preparation->Image : OriginalInput;
   if (Original.MachOSharedCache)
@@ -1615,10 +1632,14 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
                                           !Object->Thunks.empty())
                                ? Object->Image.Sections[*Object->EH].Size
                                : 0;
-  auto Grown = reserveMachOSourceUnwind(LayoutBytes, Original.Arch, ExtraEH,
-                                        unwindFunctionCounts(*Object));
-  if (!Grown)
-    return Grown.takeError();
+  std::optional<MachODependencyState> SlidDependencies;
+  auto Slide = reserveMachOPublishedUnwind(
+      LayoutBytes, Original.Arch, ExtraEH, unwindFunctionCounts(*Object),
+      Original.isArm64e() && !Preparation && !DynCode, SlidDependencies);
+  if (!Slide)
+    return Slide.takeError();
+  for (auto &[Name, Binding] : Bindings)
+    Binding.OriginalVA += *Slide;
   const uint64_t Base =
       Patcher.plannedExecSegmentVA(LayoutBytes, Original.Arch);
   const auto EH = findMachOEHFrameRegion(LayoutBytes);
@@ -1648,7 +1669,7 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
       return E;
   }
   if (VerifyGenerated)
-    if (auto E = VerifyGenerated(Object->Image, Object->Compact))
+    if (auto E = VerifyGenerated(Object->Image, *Slide, Object->Compact))
       return E;
   if (DynCode)
     if (auto E =
@@ -1691,6 +1712,7 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
               for (const auto &M : Mappings) {
                 const auto &S = Object->Symbols.at(Object->Names.at(M.Symbol));
                 const auto Mode = Original.instructionModeAt(M.OriginalVA);
+                const uint64_t EntryVA = M.OriginalVA + *Slide;
                 const uint64_t Owner = Object->Image.SymbolAddrs.at(M.Symbol);
                 if (!Mode ||
                     (Original.Arch == Arch::ARM &&
@@ -1698,8 +1720,8 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
                               : InstructionMode::ARM) != *Mode) ||
                     !getTargetCodegenInfo(Original.Arch, *Mode)
                          .writeSourceTrampoline(
-                             Binary, LayoutImage->vaToFileOffset(M.OriginalVA),
-                             Owner, M.OriginalVA,
+                             Binary, LayoutImage->vaToFileOffset(EntryVA),
+                             Owner, EntryVA,
                              getTargetCodegenInfo(Original.Arch, *Mode)
                                  .sourceTrampolineSize()))
                   return Reject(
@@ -1710,6 +1732,7 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
               }
               llvm::sort(Result.PatchedOriginalEntries);
               Result.CodeSize = Object->Image.Bytes.size();
+              Result.OriginalSectionSlide = *Slide;
               Result.TrampolineCount = Mappings.size();
               return true;
             });
@@ -1751,16 +1774,48 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
         if (auto E = verifyNativeObjectUnwind(Final, Object->Compact))
           return E;
         if (Original.isArm64e()) {
-          auto Before = readMachODependencyState(Original.Raw);
-          if (!Before)
-            return Before.takeError();
           auto After = readMachODependencyState(Final.Raw);
           if (!After)
             return After.takeError();
+          if (SlidDependencies)
+            return preserveMachODependencyState(*SlidDependencies, *After);
+          auto Before = readMachODependencyState(Original.Raw);
+          if (!Before)
+            return Before.takeError();
           if (auto E = preserveMachODependencyState(*Before, *After))
             return E;
         }
         return llvm::Error::success();
       });
+}
+llvm::Expected<PatchResult> installMachOObjectPatch(
+    llvm::StringRef Object, const BinaryImage &Original,
+    llvm::ArrayRef<SourcePatchMapping> Mappings,
+    llvm::ArrayRef<SourcePatchBinding> Bindings,
+    const std::filesystem::path &Output,
+    llvm::function_ref<llvm::Error(const PatchResult &)> PrepareReceipt,
+    const DynCodePatchEvidence *DynCode,
+    const SourcePatchPreparation *Preparation,
+    llvm::ArrayRef<SourcePatchDependency> Dependencies,
+    llvm::function_ref<llvm::Error(const CompiledImage &,
+                                   llvm::ArrayRef<NativeMachOCompactRange>)>
+        VerifyGenerated) {
+  return installObject(Object, Original, Mappings, Bindings, Output,
+                       PrepareReceipt, DynCode, Preparation, Dependencies,
+                       [&](const CompiledImage &Image, va_t,
+                           llvm::ArrayRef<NativeMachOCompactRange> Ranges) {
+                         return VerifyGenerated ? VerifyGenerated(Image, Ranges)
+                                                : llvm::Error::success();
+                       });
+}
+
+llvm::Expected<PatchResult>
+installMachOLiftedObject(llvm::StringRef Object, const BinaryImage &Original,
+                         llvm::ArrayRef<SourcePatchMapping> Mappings,
+                         llvm::ArrayRef<SourcePatchBinding> Bindings,
+                         const std::filesystem::path &Output,
+                         MachOLiftedObjectVerifier Verify) {
+  return installObject(Object, Original, Mappings, Bindings, Output, {},
+                       nullptr, nullptr, {}, Verify);
 }
 } // namespace neverd

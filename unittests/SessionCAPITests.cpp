@@ -5472,9 +5472,11 @@ TEST_F(SessionCAPITest, IdentifyListsWhatLoadingReads) {
   ASSERT_EQ(Rows.size(), 2u);
   EXPECT_EQ(text(Rows[0]), "ELF64 for MIPS (Executable)");
   EXPECT_FALSE(loadable(Rows[0]));
-  EXPECT_EQ(Rows[0].getString("reason").value_or(""),
-            "elf: MIPS requires matching ELF32/MIPS32r2 or ELF64/MIPS64r2");
+  const auto Reason = Rows[0].getString("reason").value_or("");
+  EXPECT_TRUE(Reason.starts_with("elf: MIPS requires matching ELF"));
   EXPECT_EQ(neverd_session_load(Session, MipsPath.c_str()), 0);
+  const std::string LoadError = takeString(neverd_last_error(Session));
+  EXPECT_EQ(llvm::StringRef(LoadError).rtrim(), Reason);
   std::string Big = Native;
   Big[llvm::ELF::EI_DATA] = llvm::ELF::ELFDATA2MSB;
   Rows = rows(write("identify-big.elf", Big));

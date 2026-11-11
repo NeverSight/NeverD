@@ -25,11 +25,20 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <tuple>
 #include <utility>
 
 #define DEBUG_TYPE "neverd-dwarf-eh"
 
 namespace neverd::dwarf_eh {
+
+bool sameCFIInstruction(const CFIInstruction &A, const CFIInstruction &B) {
+  const auto Fields = [](const CFIInstruction &I) {
+    return std::tie(I.Kind, I.CodeOffset, I.Register, I.Register2, I.Offset,
+                    I.Expression, I.OperandBytes, I.RAState);
+  };
+  return Fields(A) == Fields(B);
+}
 
 void inheritFrameSectionDecodeStatus(const ParseResult &Frames,
                                      ExceptionFunction &Function) {

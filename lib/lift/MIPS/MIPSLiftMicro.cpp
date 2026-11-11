@@ -110,6 +110,9 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
   const uint32_t Word =
       (uint32_t(First) << 16) |
       readTargetEndian<uint16_t>(Instruction.bytes + 2, Little);
+  if (HasDSP || HasMSA)
+    if (auto Classic = microASEWord(Word))
+      return Encoding{*Classic, hasDelaySlot(*Classic) ? 1u : 0u};
   const unsigned RT = (Word >> 21) & 31;
   const unsigned RS = (Word >> 16) & 31;
   const unsigned RD = (Word >> 11) & 31;

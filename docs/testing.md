@@ -4161,6 +4161,20 @@ Keep both the older corpus and `residue-power` as regression controls. The
 independent benchmark oracle evaluates a postorder expression walk so these
 deep products retain semantic checks within Python's default recursion limit.
 
+The high-word perturbation regressions cover products with even offsets, masked
+and multiplied disturbances, and pairs whose interaction survives by one bit.
+Independent full-width evaluation checks both the rewritten product and the
+original. A separate shared-use case checks that a full-width consumer prevents
+narrowing a repeated residue. A 33-factor executable exercises the CLI and
+GUI worker source paths at O0 and O2. Use `--family upper-perturbation --count 32`
+to reproduce 256 scaled products and `--family masked-perturbation --count 32`
+for 160 mixed-mask controls, including non-native widths up to 257 bits. The LLVM
+translator checks scaled offsets against exhaustive byte domains, including
+overlap and no-wrap flags that can make the input poison.
+Additional regressions combine a masked product with a compound arithmetic
+summand and recover a quadratic product beside twelve independently weighted
+inputs within a fixed work allowance.
+
 Dominant-prefix regressions add degree-511–514 products with disturbed factors
 and multiple residual multipliers. Complete-word APInt oracles cover 8–257 bits,
 both selector branches and residual zero/even values; exact and one-short work
@@ -7129,7 +7143,22 @@ still answers for the page it gave after a note, with a replica ready, and that 
 graph is still the replica's. `WorkbenchTests::aPageAReplicaGaveReadsFromTheReplicaAfterANote`
 checks that, with part of the store rendered, a page a replica gave is read again from the
 replica after a note, the note showing, without asking the owner
-(`Session::analysisOwnerReads`). `WorkbenchTests::ownerReadsWhatChangedOfThePageItGave`
+(`Session::analysisOwnerReads`). `WorkbenchUnitTests::analysisReadsGoAheadOfTheOwnersOrdinaryReads`
+checks that a view's kept read and `kept_renders` go to the owner ahead of ordinary reads
+queued before them, and `aPageTheOwnerGaveStartsNoReplicaAfterAChange` that, with part of
+the store rendered, a page the owner gave is asked of the owner after a change with no
+snapshot for a replica first. `QueryServiceTests::aCachedReadTakesNoTurnBehindRunningReads`
+checks that a cached page is answered while another read runs, and that one behind an
+accepted command waits for it and reads what it left.
+`QueryServiceTests::aListingsOwnPageReadsWhatChangedOfIt` checks that a listing's visible
+page is named when read again and that what changed of it is applied, a scrolled page
+naming none; `WorkbenchTests::anEditRefreshesTheListingOnce` that the refresh after a second
+rename reads only what changed of the page (`metadata.listing_page_deltas`), and
+`NeverDWorkerListingPages` that a listing page a client names reads `unchanged` while it
+stands, that what changed of it after a rename applies to the page a read naming none
+gets, and that a page the worker did not give, or a changed one asked for without
+`page_delta`, reads whole.
+`WorkbenchTests::ownerReadsWhatChangedOfThePageItGave`
 comments on the function a page the owner gave shows and reads it again through the
 analysis queries: the owner's dispatcher names the page it kept, and the comment carries
 that read, whose answer the view's read takes (`metadata.following_reads`), the comment
@@ -7209,7 +7238,8 @@ there keeps what leads to it until a type something read moves on.
 `NeverDWorkerNamesRebuild` also renames functions, exported and not, and data, and
 defines data items, without the names being read again, and each page, table and
 resolved name then reads as after a reload. A name inside an automatic item and an
-item over a string's bytes do read them again.
+item over a string's bytes do read them again. The exports list reads the image's own
+names in either order and as filtered, and the same after an exported function's rename.
 
 `NeverDMedStackDeltaTests` checks shared stack-offset queries through PHI joins,
 the original depth boundary in both query orders, definition invalidation and
@@ -23800,6 +23830,43 @@ DSP and 46 DSPR2 forms and 526 MIPS32 MSA mnemonic/format combinations.
 It checks distinct physical encodings and compares both byte orders. Its
 assembler objects and raw binaries are removed on exit. The execution tests
 above check register, memory and control effects for individual operations.
+
+For microMIPS32 DSP/DSPR2 and MSA, MIPS64r2 DSP/DSPR2 and classic MIPS32r6
+and MIPS64r6, use GNU binutils with all four MIPS ELF linker emulations:
+
+```bash
+python3 unittests/lift/mips/profile-encoding-coverage.py \
+  --assembler /path/to/mips-as --linker /path/to/mips-ld \
+  --bench build-mips/bin/neverd-mips-bench
+```
+
+The fixture links local branch relocations, checks physical lengths and compares
+the lifted operations across byte orders and across classic/micro ASE encodings.
+The parameterized `MIPSRelease6` and `MIPSDSPRegisterWidth` tests in
+`NeverDMIPSIntegerTests` check register values, control flow and full-width
+indexed addresses.
+
+Use `profile-roundtrip.py` in the same directory to recompile both emitted C
+views at `-O0` and `-O2`. Pass `--assembler`, `--linker`, `--neverd`,
+`--clang` and an empty `--output` directory, with the pinned Unicorn Python
+bindings and library configured as above. The fixture compares return values
+and DSPControl/MSACSR where applicable. For microMIPS ASEs it feeds the
+physical micro ELF to NeverD and the same independently assembled classic
+kernel to the 74Kf or P5600 reference core. Supply `--simulator` for these
+profiles. GNU sim executes the recompiled microMIPS functions with their
+original mode attributes. The driver checks each return value and, for DSP
+and DSPR2, the final DSPControl bits. The selected micro MSA integer kernel
+recompiles to scalar microMIPS. Its original vector instructions are checked
+against the classic encoding and the P5600.
+
+Run `micro-dsp-simulator.py` with `--assembler`, `--linker`, `--bench` and
+`--simulator` to execute the physical microMIPS DSP and DSPR2 instructions.
+Use a GNU MIPS simulator built for `mipsisa32r2-unknown-elf`. It compares two
+sets of inputs for each of the 159 forms in each byte order against the 74Kf
+classic instruction, including the two sides of BPOSGE32, indexed memory,
+DSPControl and both halves of AC2. The driver also compares NeverD LowIR for
+each classic and micro encoding of all 159 DSP/DSPR2 and 526 MSA forms in
+both byte orders.
 
 Ordinary pair padding, predecessor memory barriers,
 single-sided barriers at joins, depth/work exhaustion and non-entry analysis

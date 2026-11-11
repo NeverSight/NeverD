@@ -55,8 +55,11 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
        EF_MIPS_MACH))
     return profileError("vendor/ASE profile is not supported");
   const uint32_t ISA = Flags & EF_MIPS_ARCH;
-  if (ISA != (ELFT::Is64Bits ? EF_MIPS_ARCH_64R2 : EF_MIPS_ARCH_32R2))
-    return profileError("requires matching ELF32/MIPS32r2 or ELF64/MIPS64r2");
+  const bool R6 =
+      ISA == (ELFT::Is64Bits ? EF_MIPS_ARCH_64R6 : EF_MIPS_ARCH_32R6);
+  if (!R6 && ISA != (ELFT::Is64Bits ? EF_MIPS_ARCH_64R2 : EF_MIPS_ARCH_32R2))
+    return profileError(
+        "requires matching ELF class and MIPS32/MIPS64 r2 or r6");
   if ((Flags & EF_MIPS_ABI) != (ELFT::Is64Bits ? 0u : EF_MIPS_ABI_O32) ||
       (Flags & EF_MIPS_32BITMODE))
     return profileError("requires ELF32/o32 or ELF64/n64 ABI");
@@ -70,9 +73,12 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
   MIPSImageMetadata Profile;
   Profile.ABI = ELFT::Is64Bits ? MIPSABI::N64 : MIPSABI::O32;
   Profile.ELFFlags = Flags;
+  Profile.ISARevision = R6 ? 6 : 2;
   Profile.HasMicroMIPS = Flags & EF_MIPS_MICROMIPS;
   Profile.HasMIPS16 = Flags & EF_MIPS_ARCH_ASE_M16;
   const bool Compressed = Profile.HasMicroMIPS || Profile.HasMIPS16;
+  if (R6 && Compressed)
+    return profileError("Release 6 compressed profile is unsupported");
   const auto CompressedMode =
       Profile.HasMIPS16 ? InstructionMode::MIPS16 : InstructionMode::MicroMIPS;
   const auto AddEntry = [&](uint64_t Address,
@@ -228,11 +234,17 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
     Profile.HasDSPR2 = ASE & llvm::Mips::AFL_ASE_DSPR2;
     Profile.HasDSP = Profile.HasDSPR2 || (ASE & llvm::Mips::AFL_ASE_DSP);
     Profile.HasMSA = ASE & llvm::Mips::AFL_ASE_MSA;
-    if (Profile.HasMSA && (ELFT::Is64Bits || Compressed || Profile.HasDSP ||
-                           Bytes[3] != 5 || Bytes[5] != 3 || Bytes[7] != 6))
-      return profileError("MSA requires classic MIPS32r5/o32 FP64 profile");
+    if (R6 && ASE)
+      return profileError("unsupported Release 6 extension profile");
+    if (Profile.HasMSA &&
+        (ELFT::Is64Bits || Profile.HasMIPS16 || Profile.HasDSP ||
+         Bytes[3] != 5 || Bytes[5] != 3 || Bytes[7] != 6))
+      return profileError(
+          "MSA requires MIPS32r5/o32 FP64 in classic or microMIPS mode");
     if (Bytes[2] != (ELFT::Is64Bits ? 64 : 32) ||
-        Bytes[3] != (Profile.HasMSA ? 5 : 2) ||
+        Bytes[3] != (R6               ? 6
+                     : Profile.HasMSA ? 5
+                                      : 2) ||
         Bytes[4] != (ELFT::Is64Bits ? 2 : 1))
       return profileError("ABI flags conflict with the admitted GPR profile");
     if (Bytes[5] > (Profile.HasMSA ? 3 : 2) || Bytes[6] != 0 || Bytes[7] > 7 ||
@@ -246,8 +258,8 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
         (Read32(16) & ~1u) != 0 || Read32(20) != 0)
       return profileError("unsupported ABI flags or instruction extensions");
 
-    if (Profile.HasDSP && (ELFT::Is64Bits || Compressed))
-      return profileError("DSP currently requires classic MIPS32r2/o32");
+    if (Profile.HasDSP && Profile.HasMIPS16)
+      return profileError("DSP is unavailable in MIPS16 mode");
     Profile.ISARevision = Bytes[3];
     Profile.HasABIFlags = true;
     Profile.FPABI = Bytes[7];

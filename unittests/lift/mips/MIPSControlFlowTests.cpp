@@ -14,6 +14,7 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/LowToMedError.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
 #include "llvm/Support/Error.h"
@@ -60,6 +61,127 @@ LowFunc build(const BinaryImage &Image) {
 }
 
 class MIPSControl : public ::testing::TestWithParam<Arch> {};
+
+TEST_P(MIPSControl, DelayedUnitOwnsBothInstructionsAndActiveOperandDetails) {
+  const auto Code = encode({0x0c000408, 0x8ca2fff4, 0}, GetParam());
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(GetParam()));
+  DecodedExecutionUnit Unit;
+  ASSERT_EQ(Decode.decodeUnitForLift(Code.data(), Code.size(), 0x1000, Unit),
+            8);
+  ASSERT_TRUE(Unit.HasDelaySlot);
+  DecodedInsn Other{};
+  ASSERT_EQ(Decode.decodeOne(Code.data() + 8, 4, 0x1008, Other), 4);
+
+  for (const auto *Saved : {&Unit.Head, &Unit.Slot}) {
+    DecodedInsn Physical{};
+    ASSERT_EQ(Decode.decodeOne(Code.data() + (Saved->Addr - 0x1000), 4,
+                               Saved->Addr, Physical),
+              4);
+    EXPECT_NE(Saved->Raw, Physical.Raw);
+    EXPECT_EQ(Saved->Id, Physical.Id);
+    ASSERT_NE(Saved->Raw->detail, nullptr);
+    ASSERT_NE(Physical.Raw->detail, nullptr);
+    const auto &A = *Saved->Raw->detail, &B = *Physical.Raw->detail;
+    EXPECT_NE(&A, &B);
+    EXPECT_EQ(llvm::ArrayRef(A.regs_read, A.regs_read_count),
+              llvm::ArrayRef(B.regs_read, B.regs_read_count));
+    EXPECT_EQ(llvm::ArrayRef(A.regs_write, A.regs_write_count),
+              llvm::ArrayRef(B.regs_write, B.regs_write_count));
+    EXPECT_EQ(llvm::ArrayRef(A.groups, A.groups_count),
+              llvm::ArrayRef(B.groups, B.groups_count));
+    EXPECT_EQ(A.writeback, B.writeback);
+    ASSERT_EQ(A.mips.op_count, B.mips.op_count);
+    for (unsigned I = 0; I < B.mips.op_count; ++I) {
+      const auto &X = A.mips.operands[I], &Y = B.mips.operands[I];
+      ASSERT_EQ(X.type, Y.type);
+      EXPECT_EQ(X.access, Y.access);
+      switch (X.type) {
+      case MIPS_OP_REG:
+        EXPECT_EQ(X.reg, Y.reg);
+        break;
+      case MIPS_OP_IMM:
+        EXPECT_EQ(X.imm, Y.imm);
+        break;
+      case MIPS_OP_MEM:
+        EXPECT_EQ(X.mem.base, Y.mem.base);
+        EXPECT_EQ(X.mem.disp, Y.mem.disp);
+        break;
+      default:
+        FAIL() << "unexpected operand in JAL/LW fixture";
+      }
+    }
+  }
+}
+
+TEST_P(MIPSControl, SourceReturnRequiresTheWholeIncomingLink) {
+  const bool Wide = isMIPS64(GetParam());
+  const auto Check = [&](llvm::ArrayRef<uint32_t> Words, bool Preserved) {
+    auto Image = image(Words, GetParam());
+    Image.MIPS.emplace();
+    Image.MIPS->HasDSP = true;
+    Image.MIPS->ABI = Wide ? MIPSABI::N64 : MIPSABI::O32;
+    const auto Low = build(Image);
+    ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+    for (bool WithImage : {false, true}) {
+      SCOPED_TRACE(WithImage);
+      LowToMedConverter Convert;
+      if (WithImage)
+        Convert.setBinaryImage(&Image);
+      if (Preserved)
+        EXPECT_NO_THROW(Convert.convert(Low, GetParam(), BinaryFormat::ELF));
+      else
+        EXPECT_THROW(Convert.convert(Low, GetParam(), BinaryFormat::ELF),
+                     LowToMedConversionError);
+    }
+  };
+  constexpr uint32_t ClearRA = 0x0000f825, Return = 0x03e00008;
+  Check({Return, 0}, true);
+  Check({ClearRA, Return, 0}, false);
+  // sw/lw ra,-4(sp) preserves an o32 link and truncates an n64 link.
+  Check({0xafbffffc, ClearRA, 0x8fbffffc, Return, 0}, !Wide);
+  if (Wide)
+    Check({0xffbffff8, ClearRA, 0xdfbffff8, Return, 0}, true);
+}
+
+TEST_P(MIPSControl, ReusedExecutionUnitClearsAnOldSlotAndFailedHead) {
+  const auto Code = encode({0x0c000408, 0x8ca2fff4, 0}, GetParam());
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(GetParam()));
+  DecodedExecutionUnit Unit;
+  ASSERT_EQ(Decode.decodeUnitForLift(Code.data(), Code.size(), 0x1000, Unit),
+            8);
+  ASSERT_TRUE(Unit.HasDelaySlot);
+  ASSERT_EQ(Decode.decodeUnitForLift(Code.data() + 8, 4, 0x1008, Unit), 4);
+  EXPECT_FALSE(Unit.HasDelaySlot);
+  EXPECT_EQ(Unit.Slot.Raw, nullptr);
+  EXPECT_EQ(Unit.Slot.Size, 0);
+  ASSERT_EQ(Decode.decodeUnitForLift(Code.data(), 1, 0x1010, Unit), 0);
+  EXPECT_EQ(Unit.Head.Raw, nullptr);
+  EXPECT_EQ(Unit.Head.Size, 0);
+}
+
+TEST_P(MIPSControl,
+       AReinitializedDecoderUsesTheNewInstructionAddressWidthAndAlignment) {
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(GetParam()));
+  const auto Nop = encode({0}, GetParam());
+  DecodedInsn Insn{};
+  EXPECT_EQ(Decode.decodeOne(Nop.data(), 4, 0x1002, Insn), 0);
+  EXPECT_EQ(Decode.decodeOneLight(Nop.data(), 4, 0x100000000ull, Insn),
+            isMIPS64(GetParam()) ? 4 : 0);
+  if (!isMIPS64(GetParam())) {
+    ASSERT_TRUE(Decode.init(GetParam(), InstructionMode::MIPS16));
+    const uint8_t Compact[] = {
+        uint8_t(archLittleEndian(GetParam()) ? 0 : 0x65),
+        uint8_t(archLittleEndian(GetParam()) ? 0x65 : 0)};
+    EXPECT_EQ(Decode.decodeOne(Compact, 2, 0xfffffffe, Insn), 2);
+    EXPECT_EQ(Decode.decodeOneLight(Compact, 2, 0xffffffff, Insn), 0);
+  }
+  ASSERT_TRUE(Decode.init(Arch::X64));
+  const uint8_t X86Nop = 0x90;
+  EXPECT_EQ(Decode.decodeOne(&X86Nop, 1, 0x100000001ull, Insn), 1);
+}
 
 TEST_P(MIPSControl, WideCallResultKeepsTheO32RegisterWordOrder) {
   if (isMIPS64(GetParam()))

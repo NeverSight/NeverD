@@ -16,6 +16,7 @@
 #include <array>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 namespace neverd {
@@ -54,6 +55,21 @@ struct MachODependencyState {
   std::vector<std::vector<uint8_t>> Libraries, Symbols, Indirect;
   std::vector<uint8_t> Exports;
 };
+struct MachOUnwindFunctionCounts;
+
+/// A source image's section addresses can move together when an explicitly
+/// published zero-base dylib needs a larger TEXT mapping. The returned slide
+/// applies to source sections. The preferred Mach header stays at zero.
+llvm::Expected<uint64_t> reserveMachOPublishedUnwind(
+    std::vector<uint8_t> &Binary, Arch Architecture, uint64_t ExtraFrameBytes,
+    MachOUnwindFunctionCounts Additional, bool AllowSlide,
+    std::optional<MachODependencyState> &SlidDependencies);
+
+/// Translate the preferred section addresses of a position-independent dylib
+/// with image-relative chained fixups before growing its header downwards.
+llvm::Expected<MachODependencyState>
+slideMachOZeroBaseDylib(std::vector<uint8_t> &Binary, uint64_t Slide);
+
 // Unlike the analysis loader this decoder rejects every malformed or unmodeled
 // byte. Its result is evidence for editing loader metadata, not best effort
 // data.

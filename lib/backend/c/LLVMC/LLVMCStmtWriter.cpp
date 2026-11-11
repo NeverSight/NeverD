@@ -4858,9 +4858,8 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
       continue;
     if ((!Call.getFunction()->hasFnAttribute(mips::DSPSourceMarker) &&
          !mips::imagePreservesDSPControl(Opts.Image)) ||
-        (Opts.TheArch != Arch::MIPS32 && Opts.TheArch != Arch::MIPS32EL) ||
-        !IA->hasSideEffects() || IA->isAlignStack() || IA->canThrow() ||
-        IA->getDialect() != llvm::InlineAsm::AD_ATT ||
+        !isMIPS(Opts.TheArch) || !IA->hasSideEffects() || IA->isAlignStack() ||
+        IA->canThrow() || IA->getDialect() != llvm::InlineAsm::AD_ATT ||
         IA->getConstraintString() != A.Constraints ||
         !Call.getType()->isVoidTy() || Call.arg_size() != A.Inputs)
       throw std::invalid_argument(mips::MalformedDSPSource);
@@ -4877,7 +4876,7 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
     if (!Call.getFunction()->hasFnAttribute(mips::DSPSourceMarker) &&
         !mips::imagePreservesDSPControl(Opts.Image))
       throw std::invalid_argument(mips::MalformedDSPSource);
-    if (Opts.TheArch != Arch::MIPS32 && Opts.TheArch != Arch::MIPS32EL)
+    if (!isMIPS(Opts.TheArch))
       throw std::invalid_argument(mips::MalformedDSPSource);
     emitIndent(Indent);
     if (*Write) {

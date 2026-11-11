@@ -107,6 +107,8 @@ A64_ENTRY_TEXT(kLayoutRefusalProperty, "entry_publication_layout_refusal")
 A64_ENTRY_TEXT(kReceiptRejected, "entry publication receipt rejected")
 A64_ENTRY_TEXT(kReceiptSymbol, "symbol")
 A64_ENTRY_TEXT(kReceiptOriginal, "original")
+A64_ENTRY_TEXT(kReceiptTrampoline, "trampoline")
+A64_ENTRY_TEXT(kReceiptSlide, "original_section_slide")
 A64_ENTRY_TEXT(kReceiptInstalled, "installed")
 A64_ENTRY_TEXT(kReceiptEntries, "entries")
 A64_ENTRY_TEXT(kReceiptFunctions, "functions")
@@ -218,10 +220,26 @@ template<class T> T rotated(T value) {
   value.v[count-1] = first;
   return value;
 }
+#ifdef NEVERD_ENTRY_LOCAL_REBASE
+static uint64_t local_word = 19;
+static uint64_t *volatile ordinary_slot = &local_word;
+static uint64_t * __ptrauth(ptrauth_key_process_independent_data, 1, 0x48f)
+    volatile signed_slot = &local_word;
+static bool check_local_rebases() {
+  uint64_t *a = ordinary_slot;
+  uint64_t *b = signed_slot;
+  if (a != &local_word || b != a) return false;
+  *a = 37;
+  return *b == 37;
+}
+#endif
 int main(int, char **) {
   ENTRY_DWARF();
   fputs("neverd-entry-caller-entered\n", stdout);
   fflush(stdout);
+#ifdef NEVERD_ENTRY_LOCAL_REBASE
+  if (!check_local_rebases()) return 97;
+#endif
   if (ENTRY_INVOKE(entry_scalar)(0x8123456789abcdefULL) != 0x8123456789abcdefULL) return 1;
   __uint128_t w = (__uint128_t(0x9876543210fedcbaULL) << 64) |
                   0x123456789abcdef0ULL;

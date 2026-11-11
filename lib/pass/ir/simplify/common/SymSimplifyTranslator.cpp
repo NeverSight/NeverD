@@ -193,7 +193,7 @@ bool safeMaskedArithmetic(const llvm::Instruction &I) {
   return true;
 }
 
-// Infer only literal-mask, OR and wrapping-add facts. In particular, neither
+// Infer only bit facts that hold for the operand values themselves. Neither
 // the disjoint flag being justified nor overflow flags, metadata or assumptions
 // contribute evidence. The translator separately checks every hidden child
 // for poison. Bounded failure supplies unknown bits, never a premise.
@@ -215,6 +215,22 @@ llvm::KnownBits maskedOrBits(const llvm::Value *V, unsigned Depth,
         Unknown.Zero = ~Mask->getValue();
         return Unknown;
       }
+  }
+  // A literal scale leaves its trailing bits clear for every input word.
+  // This also admits InstCombine's disjoint OR of an offset into those bits.
+  if (I->getOpcode() == llvm::Instruction::Mul) {
+    for (const llvm::Value *Operand : I->operands())
+      if (const auto *K = llvm::dyn_cast<llvm::ConstantInt>(Operand)) {
+        Unknown.Zero.setLowBits(K->getValue().countr_zero());
+        break;
+      }
+    return Unknown;
+  }
+  if (I->getOpcode() == llvm::Instruction::Shl) {
+    const auto *K = llvm::dyn_cast<llvm::ConstantInt>(I->getOperand(1));
+    if (K && K->getValue().ult(Width))
+      Unknown.Zero.setLowBits(K->getZExtValue());
+    return Unknown;
   }
   if (I->getOpcode() != llvm::Instruction::Add &&
       I->getOpcode() != llvm::Instruction::Or)

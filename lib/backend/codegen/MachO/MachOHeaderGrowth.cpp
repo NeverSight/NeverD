@@ -218,6 +218,102 @@ llvm::Error compact(Bytes &B, Arch TargetArch, uint64_t Off, uint64_t Size,
   return llvm::Error::success();
 }
 } // namespace
+
+llvm::Expected<MachODependencyState> slideMachOZeroBaseDylib(Bytes &Binary,
+                                                             uint64_t Slide) {
+  namespace arm64e = macho_loader::arm64e;
+  MachOChainedFixups Chains;
+  auto Before = readMachODependencyState(Binary, &Chains);
+  if (!Before)
+    return Before.takeError();
+  const auto H = parseMachOHeader(Binary.data(), Binary.size());
+  if (!H.Is64 || H.FileType != MH_DYLIB || Before->CPUType != CPU_TYPE_ARM64 ||
+      !arm64e::isSubtype(Before->CPUSubtype) || Chains.HeaderVA ||
+      !Chains.CommandOffset || Chains.Threaded)
+    return fail(kSlideImage);
+  // Encoded binds are independent of the preferred base. Rebases in
+  // userland offset formats and authenticated rebases are image-relative.
+  for (const auto &Segment : Chains.Segments) {
+    for (const auto &Slot : Segment.Slots) {
+      const auto Format = arm64e::chainFormat(Segment.PointerFormat);
+      if (Format) {
+        const auto W = arm64e::decodePointerWord(Slot.Raw, *Format);
+        if (W && (W->Bind || W->Authenticated || Format->Offset ||
+                  Format->Segmented))
+          continue;
+      } else if (Segment.PointerFormat == DYLD_CHAINED_PTR_64_OFFSET) {
+        continue;
+      }
+      return fail(kSlideImage);
+    }
+  }
+  const symtab_command *Sym = nullptr;
+  const uint64_t HeaderEnd = H.HeaderSize + H.SizeOfCmds;
+  auto Candidate = Binary;
+  for (const auto &Segment : Chains.Segments) {
+    auto *Command = Candidate.data() + Segment.CommandOffset;
+    auto Fields = readMachOSegment(Command, true);
+    if (Fields.VMAddr > UINT64_MAX - Fields.VMSize ||
+        Fields.VMAddr + Fields.VMSize > UINT64_MAX - Slide)
+      return fail(kSlideOverflow);
+    const bool Text =
+        readMachOName(Fields.SegName) == section_names::macho::TextSeg;
+    auto *S =
+        reinterpret_cast<section_64 *>(Command + sizeof(segment_command_64));
+    uint64_t Cursor = HeaderEnd;
+    for (unsigned I = 0; I < Fields.NSects; ++I) {
+      if (Text && S[I].size && !isVirtualSection(S[I].flags & SECTION_TYPE)) {
+        if (S[I].offset < Cursor ||
+            !llvm::all_of(
+                llvm::ArrayRef(Candidate).slice(Cursor, S[I].offset - Cursor),
+                [](uint8_t Byte) { return Byte == 0; }))
+          return fail(kSlideOpaque);
+        Cursor = S[I].offset + S[I].size;
+      }
+      if (S[I].addr > UINT64_MAX - Slide)
+        return fail(kSlideOverflow);
+      S[I].addr += Slide;
+    }
+    const uint64_t End = Segment.FileOff + Segment.FileSize;
+    if (Text &&
+        (Cursor > End ||
+         !llvm::all_of(llvm::ArrayRef(Candidate).slice(Cursor, End - Cursor),
+                       [](uint8_t Byte) { return Byte == 0; })))
+      return fail(kSlideOpaque);
+    Fields.VMAddr += Slide;
+    writeMachOSegment(Command, true, Fields);
+  }
+  bool ClassicDyld = false;
+  forEachMachOLoadCommand(Binary.data(), Binary.size(),
+                          [&](const uint8_t *C, uint32_t Cmd, uint32_t, bool) {
+                            if (Cmd == LC_SYMTAB)
+                              Sym = reinterpret_cast<const symtab_command *>(C);
+                            ClassicDyld |=
+                                Cmd == LC_DYLD_INFO || Cmd == LC_DYLD_INFO_ONLY;
+                          });
+  if (ClassicDyld)
+    return fail(kSlideImage);
+  if (Sym) {
+    auto *Symbols =
+        reinterpret_cast<nlist_64 *>(Candidate.data() + Sym->symoff);
+    for (unsigned I = 0; I < Sym->nsyms; ++I) {
+      auto &N = Symbols[I];
+      if (N.n_type & N_STAB)
+        return fail(kSlideSymbol);
+      if ((N.n_type & N_TYPE) != N_SECT)
+        continue;
+      if (!N.n_sect || N.n_value > UINT64_MAX - Slide)
+        return fail(kSlideSymbol);
+      N.n_value += Slide;
+    }
+  }
+  auto After = readMachODependencyState(Candidate);
+  if (!After)
+    return After.takeError();
+  Binary.swap(Candidate);
+  return After;
+}
+
 llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
                                                uint64_t Extra) {
   if (Extra > ::neverd::limits::backend::kMaxMachOHeaderGrowthBytes)

@@ -5121,8 +5121,18 @@ and send it whole; a graph, and a page a replica gave, stay with the replica. Th
 owner answers the read before it says what the store holds (`kept_renders`), which
 decides only whether a replica starts beside that answer. After a change of names or
 comments the dispatcher goes on from what the owner said last while it asks again: with
-part of the store rendered, the replica starts taking the change at once, and a page a
-replica gave is read again from the replica without asking the owner first.
+part of the store rendered, the replica starts taking the change at once for a page the
+owner did not give, and a page a replica gave is read again from the replica without
+asking the owner first; a page the owner gave stays the owner's to answer for. What the
+dispatcher asks of the owner for a view (a kept page, `kept_renders`, the snapshot a
+replica takes) goes ahead of the owner's ordinary reads, as a listing's own page does,
+so a view's next page does not wait behind the lists the workbench reads again after an
+edit, and a read the owner's dispatcher can answer from its cache (a page an edit's reply
+carried among them) is answered at once rather than behind the reads running or queued,
+unless an accepted command is ahead of it. The dispatcher keeps a listing's own page (a
+jump or a refresh, read as visible) as it keeps source pages and names it to the worker,
+which answers the refresh after an edit with the lines that changed of it; the pages
+scrolling adds are not kept.
 The job also keeps what a function's first look in the listing asks the engine, its
 recovered instructions and its stack frame, in `local/listing-facts` under the same
 identity without the names of data, which those answers do not spell either. The
@@ -6117,6 +6127,23 @@ children acquire shorter equivalent spellings in the same request. New
 products formed by a caller retain their own residue search.
 The SDK renders both sides of a rewrite together when their widths agree, so
 a shared fragment is formatted once with the original precedence.
+For a product of sums of a constant and a variable term, add the two smallest
+guaranteed trailing-zero counts among the variable terms. If their sum covers
+the observed width, all mixed products vanish. Prefix and suffix products then
+give the constant and linear coefficients even for noninvertible offsets.
+Combining equal terms first can leave just one or two observed bits. The
+one-bit reading uses Boolean parity, and the two-bit reading uses the weights
+1, −1 and 2 modulo four. For independent masked disturbances, the bottom-up
+walk reuses the proved sum while continuing to simplify the original words and
+the surrounding additive terms. A sum can combine an equally sized masked
+expansion with its other terms. A standalone product must become cheaper.
+If tabulating a polynomial's linear tail would exceed the work allowance,
+the solver retains that tail and solves the nonlinear part over its own inputs.
+For LLVM source, a constant multiply or an in-range constant left shift proves
+its low zero bits directly. The translator can read an OR confined to those
+bits as an addition while preserving the poison checks on its operands.
+Repeated native evaluations can share equal low-bit operations once every
+use of their result has contributed its required width.
 Expression restoration skips nodes older than every substitution key: immutable
 children precede their parents, and simultaneous replacement bodies remain
 unchanged. Rendering appends fragments directly into their parent's text and
@@ -16085,6 +16112,13 @@ ownership and execution order; MedIR expands predicated effects before SSA.
 `MIPSBitfield.def` owns the classic SPECIAL3 field/shuffle selectors and biases.
 The lifter validates encodings before emitting effects and reuses the explicit
 MIPS64 word-input contract; source backends do not reinterpret instruction bits.
+
+`MIPSLiftMicroASE` maps qualified microMIPS DSP, DSPR2 and MSA words to their
+classic semantic form. The physical decoder retains original bytes, mode and
+branch address, including when Capstone requires the canonical MSA encoding.
+`MIPSLiftR6` owns revision-specific integer opcodes, PC-relative addressing
+and compact transfers. The decoder records a forbidden follower independently
+of the execution unit's delay-slot ownership.
 
 `MedMIPSMergeValues` owns the source-only proof for adjacent complementary
 merge loads in a single ordinary leaf block. It runs after SSA/projection/DCE

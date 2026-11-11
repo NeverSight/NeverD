@@ -1757,15 +1757,21 @@ TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
         EXPECT_TRUE(llvm::is_contained(After, Command));
     }
 
-  // Giving up all three leaves 48 bytes of commands for 72 and a signature.
-  {
+  // Releasing all three commands leaves too little room for a segment and
+  // signature. The caller can retry with another layout.
+  for (auto Kind : {RewriteInputKind::LiftedIR, RewriteInputKind::ReplacementIR,
+                    RewriteInputKind::ReplacementObject}) {
     auto Fixture = Build(39);
     const auto Before = Fixture.Binary;
     MachOPatcher Patcher;
-    EXPECT_EQ(Patcher.appendExecSegment(Fixture.Binary,
-                                        {0xd6, 0x5f, 0x03, 0xc0},
-                                        kDefaultNdTextSegment, Arch::AArch64),
-              0u);
+    Patcher.setInputKind(Kind);
+    testing::internal::CaptureStderr();
+    const uint64_t Placed =
+        Patcher.appendExecSegment(Fixture.Binary, {0xd6, 0x5f, 0x03, 0xc0},
+                                  kDefaultNdTextSegment, Arch::AArch64);
+    const std::string Diagnostics = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(Placed, 0u);
+    EXPECT_TRUE(Diagnostics.empty()) << Diagnostics;
     EXPECT_EQ(Fixture.Binary, Before);
   }
   // A nonzero byte is not unused padding: dropping one command would reach it

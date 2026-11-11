@@ -5,8 +5,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../backend/c/LLVMC/LLVMCFrameLayout.h"
-#include "../../pipeline/PipelineLLVMFrame.h"
 #include "SessionImpl.h"
+
+#include "neverd/analysis/LLVMPrivateFrameAccesses.h"
 
 using namespace neverd;
 

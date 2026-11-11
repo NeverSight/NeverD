@@ -515,7 +515,13 @@ calling convention and prototype. The installer independently decodes the two
 branch destinations at their actual PCs and matches the original callee to its
 compiled owner. The regression reverses the two emitted functions and checks
 the relocated branch with Capstone. Redirecting the tail call to a different
-entry fails before publication.
+entry fails before publication. A lifted tail call may also re-enter a
+loader-identified import stub at its published address. An image-relative
+data declaration binds to the original data section. The verifier decodes
+ADRP at both PCs and checks the destination register and original data page,
+then checks the memory operation and displacement. The global/import fixture
+changes an exported 64-bit variable between calls and compares its second
+entry with the independent caller's own `getpid()`.
 
 Unassigned incoming reads of X20 and X22 use LLVM's reserved physical
 registers. These carry Swift self and the asynchronous context, respectively.
@@ -536,8 +542,12 @@ The compiler-typed tests exercise replacement and write-only clearing with
 null and four live object addresses. Removing the X21 write while preserving
 the ordinary return must prevent publication. Two adjacent clears of distinct
 admitted registers may be scheduled in either order. Both leave flags, memory,
-SP and the return address intact. Writers reached through an internal call
-still require propagation of that hidden operand across the call site.
+SP and the return address intact. Direct internal tail callers pass the same
+`swifterror` operand through to the writer. Publication checks the emitted
+branch against the relocated writer. A direct signed call with a continuation
+uses a local Swift error-result slot. The caller copies the incoming X21 into
+the slot, calls the relocated writer, then propagates the outgoing X21 while
+returning the ordinary result in X0.
 See the [Clang Swift error result attribute](https://clang.llvm.org/docs/AttributeReference.html#swift-error-result).
 
 On macos-26 and xcode-27, each typed caller executed all 25 input/output
@@ -552,8 +562,37 @@ default r6 CLI results.
 Frameless bodies may also preserve a matching entry PACIBSP and terminal
 RETAB. SP and LR remain untouched between those instructions. The relocated
 body must pass the instruction comparison and retain its frameless compact
-unwind coverage. Removing the return-signing policy refuses publication. Functions with calls, stack
-accesses or PC-dependent signing need additional proofs.
+unwind coverage. Removing the return-signing policy refuses publication.
+For standard X29 compact frames, the publisher also checks the PACIBSP,
+saved X29/X30 pair, X29 setup, pair restore and RETAB at their final PCs.
+A direct BL in such a frame must still reach its original dyld stub or the
+installed owner of its source callee. A compact-only input retains its compact
+unwind mode. The optimizer and publisher share the same bounds check when
+they turn accesses to the lifter's private stack into LLVM frame slots. The
+backend can then remove an unobservable spill before creating its native
+frame. A separate FDE for the same frame requires its own replay.
+The Swift call fixtures use both Clang frame-pointer settings. One saves X29
+and X30 in a 32-byte frame with compact unwind. The other saves LR on the
+stack with an indexed DWARF record. Publication compares the latter's CIE,
+CFA and register rules at their original instruction offsets. With
+`-fasynchronous-unwind-tables`, both images restore LR at offset 16, just
+before RETAB. The synchronous Clang record ends at the call-site row. The
+negative control changes the saved-LR slot in the FDE, re-signs the input,
+and requires publication to fail. Both the compact and indexed signed Swift
+callers ran on macos-26 and xcode-27, including the asynchronous epilogue
+control. The [native run](https://github.com/gmh5225/test_mac_intel/actions/runs/43029704710)
+and [validation record](evidence/arm64e-swift-signed-call-2026-11-11.json)
+include both image hashes for each case, the LR boundary and compiler identities.
+The default r6 CLI refused all three signed non-tail Swift inputs. Its
+backend emitted an explicit return-address state toggle. The compact-only input
+lacked a registered DWARF section, and the indexed inputs had different CFI.
+Each refusal preserved the input and left no output. The
+[LLVM fork fix](https://github.com/NeverSight/llvm-project/commit/8b74c310a8140953b96df2464b8d091b46bd4fd8)
+is in the source build used by both runners.
+The framed import fixture calls
+`getpid`, reads an exported variable after the call and returns their sum.
+The caller changes that variable between invocations. Other stack layouts
+and PC-dependent signing need their own instruction and unwind coverage.
 
 The [native lifted-image run](https://github.com/gmh5225/test_mac_intel/actions/runs/42957645426)
 executed the original and installed images on both macos-26 and xcode-27.
@@ -593,7 +632,12 @@ hashes for each runner.
 The exact-PC unwind query reports an unknown DWARF state when a classic
 arm64e frame relies on Darwin's implicit signing ABI and supplies no rule
 for the signing column. A compact prologue recipe can still be available.
-Explicit DWARF rows retain their instruction-boundary signing state. The
+Explicit DWARF rows retain their instruction-boundary signing state.
+Mach-O metadata relocation also preserves the CIE signal-frame marker `S`
+and its exact-PC interpretation alongside the signing rows. This accepts
+register and offset rules that retain their meaning when the table moves.
+Register-relative signal-context expressions can dereference a saved context
+pointer and add a field offset. Absolute addresses still need relocation. The
 fixture decodes the original and installed CFA and LR stack rules through LLVM
 and checks both against the interrupted stack, including the saved slot.
 
@@ -742,11 +786,25 @@ base and resolves the compact index's relative offsets against the installed
 base. With `--publish --zero-base`, the same eight IA/IB and compact/DWARF
 cases require both preferred header addresses to remain zero. This profile
 uses O2 for the original trapping entries and a fixed `@rpath` install name.
-The separately compiled caller still runs at O0 and O2. When both the caller
-and the original entries use O0, the DWARF section grows to 1,192 bytes.
-The measured inputs had 752 bytes of TEXT tail with a path-based install name
-and 864 bytes with the fixed install name. In both cases the additional frame
-records exceed the available space and publication stops before the receipt.
+The separately compiled caller still runs at O0 and O2.
+Add `--match-original-optimization` to compile both the caller and the
+original entries at each optimization level. The original fully O0 reproducer
+had 1,192 bytes of DWARF and 864 bytes of free TEXT with its fixed install
+name. Adding the two independently dereferenced pointer slots reduced the
+free TEXT to 440 bytes on the same compiler. The publisher can grow TEXT by
+inserting aligned pages ahead of the original sections in a zero-base
+arm64e dylib with image-relative
+chained fixups. The preferred header stays at zero. The output symbols, stubs
+and original data move together. The installation receipt records the slide
+and preserves each original entry VA. If the existing RX segment cannot grow,
+the installer can retry with a TEXT prefix. An occupied gap that prevents the
+slide produces a relocation error before the output is written.
+The verifier resolves each trampoline
+from the signed output's own symbols. In the dense profile the caller also
+reads an ordinary pointer and an address-diversified DA-signed pointer to a
+local variable, writes through one and reads the result through the other.
+Apple's `dyld_info` decodes both images so the verifier can compare each
+original bind and rebase slot, its target and its signing recipe.
 The installer measures LSDA index demand from the native compact entries
 and FDEs. It can retain the compact table at its original VA, move
 the adjacent DWARF records into audited free TEXT storage and reuse their
@@ -765,8 +823,23 @@ DWARF from `0x32d8` to `0x3678` and installed a 2,240-byte frame section.
 Each installed caller exercised its 26 public entries and passed. The
 [validation record](evidence/arm64e-zero-base-unwind-2026-11-11.json) includes
 the source-built test host, per-image hashes, the fixed-name fully O0 refusal
-and a zero-filled range referenced by `LC_NOTE`. Both inputs retained their
-bytes. Publication stopped before creating a file or a receipt.
+and a zero-filled range referenced by `LC_NOTE` on that earlier revision.
+
+The fully O0 IA and IB images on macos-26 and xcode-27 kept a preferred base
+of zero. Their original sections moved by `0x4000`. All 26 installed entries
+passed their independent caller checks, and `dyld_info` recovered the same 40
+authenticated binds, two ordinary binds, one authenticated rebase and one
+ordinary rebase in each image. Both runners also executed the lifted import and
+global-access fixtures, the Swift X21 tail caller and the five asynchronous
+interruption points on both original and published code. The
+[native run](https://github.com/gmh5225/test_mac_intel/actions/runs/43020688049)
+and [validation record](evidence/arm64e-dense-publication-2026-11-11.json)
+identify the source revision, compilers and per-host results.
+The default r6 CLI published the global and Swift tail cases and installed
+an independent 151-function native object into the dense image. For the
+framed `getpid` input, r6 generated indexed DWARF while the original
+registered only compact unwind. The CLI refused the image before writing
+an output. Both native runners used the pinned LLVM source fork for this call.
 
 The publication test also checks rejection before the receipt commits,
 unchanged input bytes, exact installed entry receipts and refusal to overwrite

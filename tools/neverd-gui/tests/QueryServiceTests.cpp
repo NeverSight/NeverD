@@ -150,6 +150,93 @@ private slots:
                        {"then", answers}});
   }
 
+  void aListingsOwnPageReadsWhatChangedOfIt() {
+    Harness h;
+    establish(h);
+    h.service.setPageDeltas(true);
+    const Spec own{"listing",
+                   {{"address", "0x1"}, {"before", 0}, {"after", 2}},
+                   Spec::Latest,
+                   {},
+                   Spec::Visible};
+    QJsonObject first, second;
+    h.service.subscribe(own, &h.owner,
+                        [&](const QJsonObject &response) { first = response; });
+    QTRY_COMPARE(h.sent.size(), 1);
+    QCOMPARE(h.sent.at(0).payload.value("if_none_match"), QJsonValue(""));
+    h.reply(0, {{"anchor", 0},
+                {"etag", "listing-1"},
+                {"lines", QJsonArray{QJsonObject{{"text", "a"}},
+                                     QJsonObject{{"text", "b"}}}}});
+    QTRY_VERIFY(!first.isEmpty());
+    // The same lines read again: the page kept is named, and what changed of
+    // it is applied to it.
+    h.service.subscribe(
+        own, &h.owner, [&](const QJsonObject &response) { second = response; });
+    QTRY_COMPARE(h.sent.size(), 2);
+    QCOMPARE(h.sent.at(1).payload.value("if_none_match"),
+             QJsonValue("listing-1"));
+    QVERIFY(h.sent.at(1).payload.value("page_delta").toBool());
+    h.reply(1, {{"base", "listing-1"},
+                {"etag", "listing-2"},
+                {"delta",
+                 QJsonArray{QJsonArray{
+                     "items", "lines",
+                     QJsonArray{QJsonArray{"same", 1},
+                                QJsonArray{"put", QJsonArray{QJsonObject{
+                                                      {"text", "c"}}}}}}}}});
+    QTRY_VERIFY(!second.isEmpty());
+    const auto page = second.value("payload").toObject();
+    QCOMPARE(page.value("etag"), QJsonValue("listing-2"));
+    QCOMPARE(page.value("lines"),
+             QJsonValue(QJsonArray{QJsonObject{{"text", "a"}},
+                                   QJsonObject{{"text", "c"}}}));
+    // A page scrolling adds names none.
+    h.service.subscribe(
+        {"listing", {{"address", "0x9"}, {"before", 0}, {"after", 2}}},
+        &h.owner, [](const QJsonObject &) {});
+    QTRY_COMPARE(h.sent.size(), 3);
+    QVERIFY(!h.sent.at(2).payload.contains("if_none_match"));
+  }
+
+  void aCachedReadTakesNoTurnBehindRunningReads() {
+    Harness h;
+    establish(h);
+    QJsonObject first, second, third;
+    h.service.subscribe(text(), &h.owner,
+                        [&](const QJsonObject &response) { first = response; });
+    QTRY_COMPARE(h.sent.size(), 1);
+    h.reply(0, {{"text", "page"}});
+    QTRY_VERIFY(!first.isEmpty());
+    // Another read runs: the page read again answers from the cache at once.
+    h.service.subscribe({"overview", {}}, &h.owner, [](const QJsonObject &) {});
+    QTRY_COMPARE(h.sent.size(), 2);
+    h.service.subscribe(text(), &h.owner, [&](const QJsonObject &response) {
+      second = response;
+    });
+    QTRY_VERIFY(!second.isEmpty());
+    QCOMPARE(h.sent.size(), 2);
+    QCOMPARE(second.value("payload"), first.value("payload"));
+    // Behind an accepted command it waits, and reads what the command left.
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "n"}},
+                             &h.owner, {});
+    h.service.subscribe(text(), &h.owner,
+                        [&](const QJsonObject &response) { third = response; });
+    QTest::qWait(20);
+    QVERIFY(third.isEmpty());
+    h.reply(1);
+    QTRY_COMPARE(h.sent.size(), 3);
+    QCOMPARE(h.sent.at(2).operation, QStringLiteral("rename"));
+    h.reply(2, {}, "2");
+    QTRY_COMPARE(h.sent.size(), 4);
+    QCOMPARE(h.sent.at(3).operation, QStringLiteral("decompile"));
+    QVERIFY(third.isEmpty());
+    h.reply(3, {{"text", "renamed"}}, "2");
+    QTRY_VERIFY(!third.isEmpty());
+    QCOMPARE(third.value("payload").toObject().value("text"),
+             QJsonValue("renamed"));
+  }
+
   void anEditCarriesTheReadsOfThePagesItsViewsShow() {
     // An edit carries the read of a page read at the revision it leaves, as
     // the view showing it makes it after the edit; the answer is that read's,

@@ -120,7 +120,7 @@ def check_classic(binary):
     return identity
 
 
-def check_receipt(receipt):
+def check_receipt(receipt, *, require_slide=False):
     entries = receipt.get("entries", [])
     functions = receipt.get("functions", {})
     text = receipt.get("text", {})
@@ -138,7 +138,35 @@ def check_receipt(receipt):
                 row.get("original") == row.get("installed") or
                 functions.get(row.get("symbol")) != row.get("installed") for row in entries)):
         raise ValueError(POLICY["errors"]["receipt"])
+    slide = receipt.get(POLICY["slide_field"], 0)
+    if (type(slide) is not int or slide < 0 or (require_slide and not slide) or
+            (POLICY["slide_field"] in receipt and
+             any(type(row.get(POLICY["trampoline_field"])) is not int or
+                 row[POLICY["trampoline_field"]] != row["original"] + slide or
+                 row[POLICY["trampoline_field"]] == row["installed"] for row in entries))):
+        raise ValueError(POLICY["dense_error"])
     return functions
+
+
+def check_slid_fixups(original, installed, slide):
+    def slots(listing, delta):
+        result = {}
+        for segment, section, address, kind, target in re.findall(POLICY["fixup_pattern"], listing, re.MULTILINE):
+            va = int(address, POLICY["hex_radix"]) + delta
+            if va in result:
+                raise ValueError(POLICY["bind_error"])
+            if kind in POLICY["rebase_kinds"]:
+                pointer, _, signing = target.partition(" ")
+                value = int(pointer, POLICY["hex_radix"])
+                target = (value + delta if value else 0, signing)
+            result[va] = (segment, section, kind, target)
+        return result
+
+    before, after = slots(original, slide), slots(installed, 0)
+    counts = {kind: sum(binding[2] == kind for binding in before.values()) for kind in POLICY["dense_fixup_kinds"]}
+    if not all(counts.values()) or any(after.get(address) != binding for address, binding in before.items()):
+        raise ValueError(POLICY["bind_error"])
+    return counts
 
 
 def check_execution(result, *, original=False):
@@ -172,7 +200,8 @@ def inspect_installed_text(output, library, receipt, compiler, compile_args, com
     return assembly.stdout, hashlib.sha256(contents).hexdigest()
 
 
-def run(output, binary, compiler, probe_report=None, *, compile_only=False, producer=None, publish=False, zero_base=False):
+def run(output, binary, compiler, probe_report=None, *, compile_only=False, producer=None, publish=False,
+        zero_base=False, match_original_optimization=False):
     producer = producer or POLICY["producers"][0]
     backend = producer == POLICY["backend_producer"]
     provenance = native.provenance()
@@ -185,11 +214,13 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
               "whole_image_publication_qualified": False,
               "compile_only": compile_only, "producer": producer, "publish": publish,
               "optimization_scope": POLICY["optimization_scopes"].get(producer),
-              "publication_layout": POLICY["publication_layout"] if publish and not zero_base else
+              "publication_layout": POLICY["dense_layout"] if match_original_optimization else
+                  POLICY["publication_layout"] if publish and not zero_base else
                   POLICY["zero_base_publication_layout"]["name"] if publish else None,
               "reconstructed_entry_publication_qualified": False, "cases": []}
     try:
-        if producer not in POLICY["producers"] or (publish and not backend) or (zero_base and not publish):
+        if (producer not in POLICY["producers"] or (publish and not backend) or
+                (zero_base and not publish) or (match_original_optimization and not zero_base)):
             raise ValueError(POLICY["errors"]["producer"])
         if compile_only == (probe_report is not None):
             raise ValueError(POLICY["errors"]["arguments"])
@@ -245,7 +276,8 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                                            *POLICY["object_args"], output / source,
                                            POLICY["output_option"], obj])
                     original_obj = None
-                    original_optimization = POLICY["zero_base_original_optimization"] if zero_base else optimization
+                    original_optimization = (POLICY["zero_base_original_optimization"]
+                                             if zero_base and not match_original_optimization else optimization)
                     if publish:
                         original_obj = output / POLICY["original_object_name"].format(dwarf=dwarf)
                         products.append(original_obj)
@@ -257,6 +289,8 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                     for key in POLICY["keys"]:
                         fields = dict(optimization=optimization, key=key, dwarf=dwarf)
                         layout = publication_layout(optimization, dwarf, zero_base)
+                        if match_original_optimization:
+                            layout = {**layout, "name": POLICY["dense_layout"]}
                         label = POLICY["case_name"].format(**fields)
                         library = output / POLICY["library_name"].format(**fields)
                         products.append(library)
@@ -264,6 +298,8 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                                 *POLICY["library_args"], POLICY["key_option"].format(key=key)]
                         if dwarf:
                             args.append(POLICY["dwarf_option"])
+                        if match_original_optimization:
+                            args.append(POLICY["dense_rebase_option"])
                         if not publish:
                             command(label + native.POLICY["compile_suffix"],
                                     [*args, output / POLICY["caller_source"], obj,
@@ -272,6 +308,7 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                         receipt = None
                         baseline = None
                         original_base = None
+                        fixup_counts = None
                         if publish:
                             library = output / POLICY["installed_library_name"].format(**fields)
                             products.append(library)
@@ -315,7 +352,14 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                                     POLICY["export_timeout"], env)
                             check_export(publication_xml.read_text(), POLICY["publication_case"])
                             receipt = json.loads(receipt_path.read_text())
-                            installed = check_receipt(receipt)
+                            installed = check_receipt(
+                                receipt, require_slide=match_original_optimization and dwarf and
+                                optimization == POLICY["dense_optimization"])
+                            if match_original_optimization:
+                                old = command(label + POLICY["baseline_suffix"] + POLICY["bind_suffix"],
+                                              [*POLICY["bind_command"], original])
+                                new = command(label + POLICY["bind_suffix"], [*POLICY["bind_command"], library])
+                                fixup_counts = check_slid_fixups(old.stdout, new.stdout, receipt[POLICY["slide_field"]])
                         command(label + native.POLICY["signature_suffix"],
                                 [*native.POLICY["signature_command"], library])
                         assembly = command(label + native.POLICY["disassembly_suffix"],
@@ -348,6 +392,8 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                                "image_base": base, "original_image_base": original_base,
                                "occupied_original_rejected": publish, "installed_text_sha256": text_hash}
                         report["cases"].append(row)
+                        if fixup_counts is not None:
+                            row[POLICY["fixup_counts_field"]] = fixup_counts
                         if not compile_only:
                             execution = command(label, [loader, library], POLICY["execute_timeout"])
                             check_execution(execution)
@@ -374,6 +420,7 @@ def main():
                         default=POLICY["producers"][0])
     parser.add_argument(POLICY["publication_argument"], action="store_true")
     parser.add_argument(POLICY["zero_base_argument"], action="store_true")
+    parser.add_argument(POLICY["dense_argument"], action="store_true")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -382,7 +429,7 @@ def main():
         report = run(output, args.test_binary.resolve(), args.compiler.absolute(),
                      args.probe_report.resolve() if args.probe_report else None,
                      compile_only=args.compile_only, producer=args.producer, publish=args.publish,
-                     zero_base=args.zero_base)
+                     zero_base=args.zero_base, match_original_optimization=args.match_original_optimization)
         print(json.dumps({"status": report["status"], "report": str(output / POLICY["report_name"])}))
         return native.POLICY["exit_codes"][report["status"]]
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
