@@ -1,0 +1,346 @@
+{
+  "scope": "MIPS16e2 r2/o32 cache and MT transitions, classic MIPS32r2/o32 DSP saturation and extraction, and classic MIPS32r5/o32 MSA lane permutation, floating point and control transfers, both byte orders.",
+  "feature_commit": "23d8c4c3800af1a42b5ed725d1b5493f128a03cf",
+  "dependency_commits": {
+    "capstone": "3998ad42251df0547316a9d87df8b7aca5a4feac",
+    "unicorn": "7f564ddcf5e1dd38183a83b63a3e64b7096f22cd"
+  },
+  "build": {
+    "configuration": "Release; semantic tests enabled; optional CPU-emulation frontend disabled; integer tests build the production P5600 evaluator",
+    "host": "macOS-15.6.1-arm64-arm-64bit-Mach-O",
+    "cpu": "Apple M4 Max",
+    "compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+    "target_compiler": "Homebrew clang version 22.1.6",
+    "cli_sha256": "3e3bc130749058fb5b88b407971a02441c0c0123d5f47a3c6b5095530e18aa63",
+    "sdk_sha256": "84a9da5b96d55fba60b8966c0c48db5c75440e190cb6b2a92185d2bfad25fbd5",
+    "reference_library_sha256": "3f5bcf79fb6bbc6ee835e65190367e70eacd5ffc56b4afffea9675d55813d580"
+  },
+  "coverage": {
+    "dsp_encodings": 18,
+    "msa_permutation_encodings": 51,
+    "msa_fp_encodings": 102,
+    "msa_control_mnemonics": 2,
+    "control_selectors_each": 32,
+    "ctest": {
+      "core-ctest": {
+        "tests": 432,
+        "failures": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      "source-ctest": {
+        "tests": 153,
+        "failures": 0,
+        "skipped": 0,
+        "errors": 0
+      }
+    },
+    "original_vs_recompiled": {
+      "msa": {
+        "elf_leaves": 186,
+        "source_builds": 1488,
+        "matched_original_inputs": 44992
+      },
+      "dsp": {
+        "elf_leaves": 22,
+        "source_builds": 176,
+        "matched_original_inputs": 528
+      }
+    },
+    "matrix": "HighC and LLVMC at -O0 and -O2 on original-target ELF in both byte orders. Compared outputs, 16 written bytes, o32 saved registers on return, DSPControl/MSACSR and enabled MSAFP exceptions. P5600 and 74K are software references.",
+    "cache_mt": "Bound synchronous single-line cache, translation, dirty eviction, instruction fetch-and-lock and separate MT execution and instruction hazard barriers. No original MIPS16e2 hardware used."
+  },
+  "firmware": {
+    "model": "TP-Link Archer C7 V5 US",
+    "elf": "bin/ubus",
+    "sha256": "6e1129aa58cb398a2453876ea4aa2395feecc84ecf78ed8ab43efd534b40e475",
+    "function": "call",
+    "entry": "0x4012d0",
+    "original_cases": 12,
+    "outputs": [
+      {
+        "backend": "highc",
+        "optimization": "-O0",
+        "cases_passed": 12,
+        "source_sha256": "746482c701b92ddc0e77a202028fe20ec48232597fc05dbf175209dae56158e4"
+      },
+      {
+        "backend": "highc",
+        "optimization": "-O2",
+        "cases_passed": 12,
+        "source_sha256": "746482c701b92ddc0e77a202028fe20ec48232597fc05dbf175209dae56158e4"
+      },
+      {
+        "backend": "llvmc",
+        "optimization": "-O0",
+        "cases_passed": 12,
+        "source_sha256": "dcba6c7b30feaf90fa02f2229d075e0dd609de5ab218770f5bb52bb094d7d349"
+      },
+      {
+        "backend": "llvmc",
+        "optimization": "-O2",
+        "cases_passed": 12,
+        "source_sha256": "dcba6c7b30feaf90fa02f2229d075e0dd609de5ab218770f5bb52bb094d7d349"
+      }
+    ],
+    "scope": "Five modeled imports. Static recovery and original/rebuilt execution of twelve inputs."
+  },
+  "performance": {
+    "baseline_commit": "ef3b153eb51a67fddfe00413257e3b7288cdff90",
+    "candidate_commit": "fc8cda80f1cb81dbcb7fba82656a4f5b3345f088",
+    "baseline_dependency_commits": {
+      "capstone": "c8a201f9482d83b0766e09546d8d3cb5147db261",
+      "unicorn": "f00305569977bfcb30b8867824235f00ab536b40"
+    },
+    "method": "warmed, seven alternating pairs in one process at a time; per-pair median CPU delta, negative is faster",
+    "command": "neverd-mips-bench PROFILE STAGE RAW_CODE REPEATS",
+    "shared_inputs": [
+      {
+        "profile": "mips16",
+        "stage": "lift",
+        "stream": "unchanged",
+        "input_hex": "e4a9e8a0",
+        "instructions_per_iteration": 2,
+        "operations_per_iteration": 4,
+        "same_lowir_or_decode_digest": "87c2a124cb860141",
+        "iterations": 1165755
+      },
+      {
+        "profile": "mips16",
+        "stage": "lift",
+        "stream": "mixed",
+        "input_hex": "6a11f5686b074a01f45e4b08e271e477ecaced4dee6eefcf3274339ef3c034a3ea62eb83f7ff5415ea8af1007301650a67489c61dc6286a1a7c28b41ac62c341cc6102089300d301650065006500220165002b016500e8a06500650065006500",
+        "instructions_per_iteration": 43,
+        "operations_per_iteration": 107,
+        "same_lowir_or_decode_digest": "203e7ca8b10c33dd",
+        "iterations": 45333
+      },
+      {
+        "profile": "mips16el",
+        "stage": "lift",
+        "stream": "unchanged",
+        "input_hex": "a9e4a0e8",
+        "instructions_per_iteration": 2,
+        "operations_per_iteration": 4,
+        "same_lowir_or_decode_digest": "87c2a124cb860141",
+        "iterations": 1248536
+      },
+      {
+        "profile": "mips16el",
+        "stage": "lift",
+        "stream": "mixed",
+        "input_hex": "116a68f5076b014a5ef4084b71e277e4acec4ded6eeecfef74329e33c0f3a33462ea83ebfff715548aea00f101730a654867619c62dca186c2a7418b62ac41c361cc0802009301d300650065006501220065012b0065a0e80065006500650065",
+        "instructions_per_iteration": 43,
+        "operations_per_iteration": 107,
+        "same_lowir_or_decode_digest": "203e7ca8b10c33dd",
+        "iterations": 45140
+      },
+      {
+        "profile": "micromips",
+        "stage": "lift",
+        "stream": "unchanged",
+        "input_hex": "459f0558",
+        "instructions_per_iteration": 2,
+        "operations_per_iteration": 4,
+        "same_lowir_or_decode_digest": "41fe2b47a40536a7",
+        "iterations": 832249
+      },
+      {
+        "profile": "micromips",
+        "stage": "decode",
+        "stream": "unchanged",
+        "input_hex": "459f0558",
+        "instructions_per_iteration": 2,
+        "operations_per_iteration": 0,
+        "same_lowir_or_decode_digest": "24ec21d509ef6e4d",
+        "iterations": 2838557
+      },
+      {
+        "profile": "micromipsel",
+        "stage": "lift",
+        "stream": "unchanged",
+        "input_hex": "9f455805",
+        "instructions_per_iteration": 2,
+        "operations_per_iteration": 4,
+        "same_lowir_or_decode_digest": "41fe2b47a40536a7",
+        "iterations": 989792
+      },
+      {
+        "profile": "micromipsel",
+        "stage": "decode",
+        "stream": "unchanged",
+        "input_hex": "9f455805",
+        "instructions_per_iteration": 2,
+        "operations_per_iteration": 0,
+        "same_lowir_or_decode_digest": "24ec21d509ef6e4d",
+        "iterations": 2288984
+      },
+      {
+        "profile": "mips16e2",
+        "stage": "lift",
+        "stream": "unchanged",
+        "input_hex": "f0c03010f0003014f0403014f0803014f0c03014f1003014f1403014f1803014f1c03014f2003014f2403014f2803014f2c03014f3003014f3403014f3803014f3c03014f4003014f4403014f4803014f4c03014f5003014f5403014f5803014f5c03014f6003014f6403014f6803014f6c03014f7003014f7403014f7803014f7c03014",
+        "instructions_per_iteration": 33,
+        "operations_per_iteration": 33,
+        "same_lowir_or_decode_digest": "b201324d42497641",
+        "iterations": 84936
+      },
+      {
+        "profile": "mips16e2",
+        "stage": "lift",
+        "stream": "added",
+        "input_hex": "f100d2a0f0ffd1bff100d280f0fed19f",
+        "instructions_per_iteration": 4,
+        "operations_per_iteration": 8,
+        "same_lowir_or_decode_digest": "a5fa0b68bfd7afa5",
+        "iterations": 493649
+      },
+      {
+        "profile": "mips16e2el",
+        "stage": "lift",
+        "stream": "unchanged",
+        "input_hex": "c0f0103000f0143040f0143080f01430c0f0143000f1143040f1143080f11430c0f1143000f2143040f2143080f21430c0f2143000f3143040f3143080f31430c0f3143000f4143040f4143080f41430c0f4143000f5143040f5143080f51430c0f5143000f6143040f6143080f61430c0f6143000f7143040f7143080f71430c0f71430",
+        "instructions_per_iteration": 33,
+        "operations_per_iteration": 33,
+        "same_lowir_or_decode_digest": "b201324d42497641",
+        "iterations": 84254
+      },
+      {
+        "profile": "mips16e2el",
+        "stage": "lift",
+        "stream": "added",
+        "input_hex": "00f1a0d2fff0bfd100f180d2fef09fd1",
+        "instructions_per_iteration": 4,
+        "operations_per_iteration": 8,
+        "same_lowir_or_decode_digest": "a5fa0b68bfd7afa5",
+        "iterations": 548947
+      },
+      {
+        "profile": "mipsdsp",
+        "stage": "lift",
+        "stream": "unchanged",
+        "input_hex": "7c85101003e0000800000000",
+        "instructions_per_iteration": 3,
+        "operations_per_iteration": 46,
+        "same_lowir_or_decode_digest": "43f1de43913b052b",
+        "iterations": 217366
+      },
+      {
+        "profile": "mipsdspel",
+        "stage": "lift",
+        "stream": "unchanged",
+        "input_hex": "1010857c0800e00300000000",
+        "instructions_per_iteration": 3,
+        "operations_per_iteration": 46,
+        "same_lowir_or_decode_digest": "43f1de43913b052b",
+        "iterations": 218529
+      },
+      {
+        "profile": "mipsmsa",
+        "stage": "lift",
+        "stream": "unchanged",
+        "input_hex": "7b02281e793130197932381900a74026793340197b02385e793128597932305900c74826793348597801000e78b00219ac88000078b10219ac88000478b20219ac88000878b30219ac88000c03e0000824020007",
+        "instructions_per_iteration": 21,
+        "operations_per_iteration": 146,
+        "same_lowir_or_decode_digest": "b17bd07314c68fd2",
+        "iterations": 51299
+      },
+      {
+        "profile": "mipsmsael",
+        "stage": "lift",
+        "stream": "unchanged",
+        "input_hex": "1e28027b19303179193832792640a700194033795e38027b59283179593032792648c700594833790e0001781902b078000088ac1902b178040088ac1902b278080088ac1902b3780c0088ac0800e00307000224",
+        "instructions_per_iteration": 21,
+        "operations_per_iteration": 146,
+        "same_lowir_or_decode_digest": "b17bd07314c68fd2",
+        "iterations": 51851
+      }
+    ],
+    "new_inputs": [
+      {
+        "profile": "mipsdsp",
+        "words": [
+          "0x7c850330",
+          "0x7c8504b0",
+          "0x7c221038",
+          "0x7c2211f8",
+          "0x7c2212f8"
+        ],
+        "instructions": 5,
+        "ops": 123,
+        "baseline_exit": 1
+      },
+      {
+        "profile": "mipsdspel",
+        "words": [
+          "0x7c850330",
+          "0x7c8504b0",
+          "0x7c221038",
+          "0x7c2211f8",
+          "0x7c2212f8"
+        ],
+        "instructions": 5,
+        "ops": 123,
+        "baseline_exit": 1
+      },
+      {
+        "profile": "mipsmsa",
+        "words": [
+          "0x78010094",
+          "0x78010095",
+          "0x7801009b",
+          "0x7b20009e",
+          "0x787e0a19",
+          "0x783e2059"
+        ],
+        "instructions": 6,
+        "ops": 514,
+        "baseline_exit": 1
+      },
+      {
+        "profile": "mipsmsael",
+        "words": [
+          "0x78010094",
+          "0x78010095",
+          "0x7801009b",
+          "0x7b20009e",
+          "0x787e0a19",
+          "0x783e2059"
+        ],
+        "instructions": 6,
+        "ops": 514,
+        "baseline_exit": 1
+      }
+    ],
+    "firmware_request": "Fresh processes on the same ELF and function. Ghidra 12.1.3 headless imports and auto-analyzes the image before decompiling the selected address. NeverD uses the selected HighC CLI route.",
+    "host_measurements": "build-mips/mips-cache-mt-dsp-msa/qualification.json"
+  },
+  "integrated_release": {
+    "head": "fc8cda80f1cb81dbcb7fba82656a4f5b3345f088",
+    "dev": "3fc7c7518501fda67281f026b44bce1c495392fc",
+    "hashes": {
+      "cli": "3e3bc130749058fb5b88b407971a02441c0c0123d5f47a3c6b5095530e18aa63",
+      "sdk": "69995bec1771401bfff521f79e278b511caa8b13ca58595c53365136e84406a6",
+      "bench": "6fcd932c768898f94f90613ea92627341c9dac8bd5d49cc0b540f7f2f462fa3e"
+    },
+    "ctest": 585,
+    "cross_arch_decoder_tests": 84,
+    "cross_arch_tests_skipped": [
+      "X86MpxAddressFault.OriginalStackFaultClassSurvivesIgnoredSegmentPrefixes"
+    ],
+    "firmware": {
+      "original": 12,
+      "rebuilt": 48,
+      "source_hashes_unchanged": true
+    },
+    "executions": 45520,
+    "source_builds": 1664,
+    "identical_source_and_elf": 1664
+  },
+  "schema_version": 1,
+  "dependencies_and_fixes": {
+    "capstone_selector_decode": "https://github.com/NeverSight/capstone/pull/28",
+    "unicorn_q31_saturation": "https://github.com/NeverSight/unicorn/pull/20",
+    "unicorn_zero_destination_effects": "https://github.com/NeverSight/unicorn/pull/21"
+  }
+}

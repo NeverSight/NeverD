@@ -10,11 +10,16 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSDSP.h"
+#include "neverd/ir/low/MIPS/MIPSCachePlatform.h"
 #include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
+#include "neverd/ir/low/MIPS/MIPSMSAExecution.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
 #include "llvm/Support/MathExtras.h"
+
+#include <algorithm>
+#include <array>
 
 namespace neverd {
 
@@ -40,6 +45,165 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
   const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
   if (Id == Intrinsic::MIPSExecutionHazardBarrier) {
     Context.ExecutionHazardPending = false;
+    return true;
+  }
+  if (mips::isCacheIntrinsic(Id)) {
+    const bool Prefetch = Id == Intrinsic::MIPSPrefetch;
+    if (!Context.Cache || Context.ExecutionHazardPending ||
+        (!Prefetch && !Context.CP0Usable) ||
+        !knownOperandBytes(Op.Inputs[2], 0, 4))
+      return false;
+    const auto VA = uint32_t(readOperand(Op.Inputs[2]));
+    const auto T = Context.Cache->translateDataRead(VA);
+    if (!T)
+      return false;
+    if (T->Mapping == MIPSCacheMapping::AddressException)
+      return Prefetch;
+    if (Prefetch && T->Mapping == MIPSCacheMapping::Uncached)
+      return true;
+    const uint8_t Code = Op.Inputs[1].Offset;
+    const unsigned Cache = Code & 3, Function = Code >> 2;
+    auto Action = MIPSCacheAction::Prefetch;
+    if (!Prefetch) {
+      if (Function >= 4 && T->Mapping == MIPSCacheMapping::Uncached)
+        return false;
+      switch (Function) {
+      case 0:
+        Action = Cache == 0 ? MIPSCacheAction::IndexInvalidate
+                            : MIPSCacheAction::IndexWritebackInvalidate;
+        break;
+      case 1:
+        Action = MIPSCacheAction::IndexLoadTag;
+        break;
+      case 2:
+        Action = MIPSCacheAction::IndexStoreTag;
+        break;
+      case 4:
+        Action = MIPSCacheAction::HitInvalidate;
+        break;
+      case 5:
+        Action = Cache == 0 ? MIPSCacheAction::Fill
+                            : MIPSCacheAction::HitWritebackInvalidate;
+        break;
+      case 6:
+        Action = Cache == 0 ? MIPSCacheAction::ImplementationSpecific
+                            : MIPSCacheAction::HitWriteback;
+        break;
+      case 7:
+        Action = Cache <= 1 ? MIPSCacheAction::FetchAndLock
+                            : MIPSCacheAction::ImplementationSpecific;
+        break;
+      default:
+        Action = MIPSCacheAction::ImplementationSpecific;
+        break;
+      }
+    }
+    return Context.Cache->apply({Op.Addr, VA, *T, Code, Action});
+  }
+  if (mips::isMSAFloat(Id)) {
+    if (!Img.MIPS || !Img.MIPS->HasMSA || Img.MIPS->ISARevision != 5 ||
+        !Context.MSAFloat || !Context.MSAImplementation ||
+        (*Context.MSAImplementation & (1u << 16)) || !Context.MSAControl ||
+        Context.MSAFloatingPointException)
+      return false;
+    std::array<MIPSVector, 3> Inputs;
+    const unsigned N = mips::msaFloatOperation(Id).Arity;
+    for (unsigned I = 0; I < N; ++I) {
+      const auto &V = Op.Inputs[I + 1];
+      if (!knownOperandBytes(V, 0, 16))
+        return false;
+      auto Bytes = readOperandBytes(V);
+      std::copy_n(Bytes.begin(), 16, Inputs[I].begin());
+    }
+    const auto R = Context.MSAFloat->execute(
+        Id, *Context.MSAImplementation, *Context.MSAControl,
+        llvm::ArrayRef(Inputs).take_front(N));
+    if (!R)
+      return false;
+    Context.MSAControl = R->Control;
+    Context.MSAFloatingPointException = !R->Destination;
+    if (!R->Destination)
+      return false;
+    writeOutputBytes(Op.Output, *R->Destination);
+    return true;
+  }
+  if (mips::isMSAControl(Id)) {
+    if (!Img.MIPS || !Img.MIPS->HasMSA || Img.MIPS->ISARevision != 5 ||
+        Context.MSAFloatingPointException)
+      return false;
+    const unsigned Selector = Op.Inputs[1].Offset;
+    if (Selector >= 2 && Selector <= 7) {
+      const bool Read = Id == Intrinsic::MIPSReadMSAControl;
+      // MSAAccess and MSARequest ignore writes even when WRP is implemented.
+      if (!Read && (Selector == 2 || Selector == 5))
+        return true;
+      if (!Context.MSAImplementation)
+        return false;
+      if (*Context.MSAImplementation & (1u << 16)) {
+        if (!Context.CP0Usable || !Context.MSAPartition)
+          return false;
+        auto &P = *Context.MSAPartition;
+        if (Read) {
+          const uint32_t Views[] = {P.Access,  P.Save, P.Modify,
+                                    P.Request, P.Map,  P.Unmap};
+          writeOutput(Op.Output, Views[Selector - 2]);
+        } else {
+          if (!knownOperandBytes(Op.Inputs[2], 0, 4))
+            return false;
+          const uint32_t Value = readOperand(Op.Inputs[2]);
+          if (Selector == 3)
+            P.Save = Value;
+          else if (Selector == 4)
+            P.Modify = Value;
+          else {
+            // WRP map/unmap bits 31:5 are reserved and must be written zero.
+            if (Value >= 32)
+              return false;
+            const unsigned Index = Value;
+            const uint32_t Bit = uint32_t(1) << Index;
+            if (Selector == 6) {
+              P.Map = Index;
+              if ((P.Access & Bit) || !P.FreePhysical)
+                return true;
+              --P.FreePhysical;
+              P.Access |= Bit;
+            } else {
+              P.Unmap = Index;
+              if (!(P.Access & Bit))
+                return true;
+              ++P.FreePhysical;
+              P.Access &= ~Bit;
+            }
+            // A newly assigned physical WR has no proved incoming contents.
+            const auto Reg = mipsreg::w(Index);
+            Registers.erase(Reg);
+            WideRegisters.erase(Reg);
+            UnknownBits.erase(Reg);
+          }
+        }
+        return true;
+      }
+    }
+    if (Id == Intrinsic::MIPSReadMSAControl) {
+      auto Value = Selector == 0   ? Context.MSAImplementation
+                   : Selector == 1 ? Context.MSAControl
+                                   : std::optional<uint32_t>(0);
+      if (!Value)
+        return false;
+      writeOutput(Op.Output, *Value);
+    } else if (Selector == 1) {
+      if (!knownOperandBytes(Op.Inputs[2], 0, 4))
+        return false;
+      // A bound implementation supplies the writable FS/NX feature bits.
+      if (!Context.MSAControlWritableMask)
+        return false;
+      const uint32_t Value = uint32_t(readOperand(Op.Inputs[2])) &
+                             *Context.MSAControlWritableMask & 0x0167ffffu;
+      Context.MSAControl = Value;
+      Context.MSAFloatingPointException =
+          ((Value >> 12) & ((Value >> 7 & 31) | 32) & 63) != 0;
+      return !Context.MSAFloatingPointException;
+    }
     return true;
   }
   if (!mips::isSystemIntrinsic(Id) || Context.ExecutionHazardPending)
@@ -91,6 +255,9 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
       const bool Enable =
           Id == Intrinsic::MIPSEnableMT || Id == Intrinsic::MIPSEnableVPE;
       Control = Enable ? Old | Mask : Old & ~Mask;
+      if (*Control != Old)
+        (Thread ? Context.ThreadIssueHazard : Context.ProcessorIssueHazard) =
+            true;
     }
     writeOutput(Op.Output, Old);
     Context.ExecutionHazardPending = true;
@@ -110,7 +277,8 @@ bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
   if (!mipsScalarLowShapeIsValid(Op, Img.Arch))
     return false;
   const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
-  if (mips::isSystemIntrinsic(Id) || mips::isCacheIntrinsic(Id))
+  if (mips::isSystemIntrinsic(Id) || mips::isCacheIntrinsic(Id) ||
+      mips::isMSAControl(Id) || mips::isMSAFloat(Id))
     return false; // Explicit, single-step context required in either mode.
   if (Id == Intrinsic::MIPSPause)
     return MIPSReservationGranule && MIPSReservationKnown &&
@@ -163,6 +331,19 @@ bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
     if (!knownOperandBytes(State, 0, 4))
       return false;
     writeOutput(Op.Output, readOperand(State) & mips::DSPControlBits);
+    return true;
+  }
+  if (Id == Intrinsic::MIPSExtractResult) {
+    if (!knownOperandBytes(Op.Inputs[1], 0, 1))
+      return false;
+    if (readOperand(Op.Inputs[1]))
+      writeOutput(Op.Output, 0, UINT32_MAX);
+    else {
+      if (!availableOperandBytes(Op.Inputs[2], 0, 4))
+        return false;
+      writeOutput(Op.Output, readOperand(Op.Inputs[2]),
+                  unknownOperandBits(Op.Inputs[2]));
+    }
     return true;
   }
   if (Id == Intrinsic::MIPSAccumulatorAfterWrite) {

@@ -23749,6 +23749,22 @@ reference also fixes discarded packed-DSP/shift results: helpers still update
 DSPControl and enforce DSP enablement. The source runner permits no original
 zero-destination mismatch; see the [DSP reference boundary](mips.md#classic-mips32-dsp-state-and-packed-arithmetic).
 Reports identify the source revision and actual loaded native-library hash.
+
+To reproduce the DSP extraction and MSA permutation, floating-point and
+control-transfer comparisons, run the following command for each of
+`--group dsp` and `--group msa` with a separate output directory. Use a
+MIPS-enabled shared build of the pinned Unicorn fork. The runner assembles
+both byte orders, recompiles HighC and LLVMC at `-O0` and `-O2`, and compares
+registers, output bytes, control state and enabled FP traps with the original.
+
+```bash
+LIBUNICORN_PATH=/path/to/pinned-unicorn-library-directory \
+PYTHONPATH="$PWD/third_party/unicorn/bindings/python" \
+python3 unittests/lift/mips/ase-roundtrip.py --group msa \
+  --neverd build-mips/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld \
+  --output build-mips/roundtrip-msa-ase
+```
+
 Ordinary pair padding, predecessor memory barriers,
 single-sided barriers at joins, depth/work exhaustion and non-entry analysis
 roots or exceptional/disconnected paths have separate call-recovery regressions.
@@ -23839,8 +23855,8 @@ Profiles are `mips`, `mipsel`, `mips64`, `mips64el`, `micromips`,
 `micromipsel`, `mips16`, `mips16el`, `mips16e2`, `mips16e2el`, `mipsdsp`,
 `mipsdspel`, `mipsmsa` and `mipsmsael`. The e2 profiles add explicit MIPS16e2
 feature evidence to MIPS16 encoding. The DSP profiles explicitly select the admitted classic32 DSP
-capability; MSA profiles select classic32 r5/o32 FP64 with the admitted integer
-vector instructions.
+capability. MSA profiles select classic32 r5/o32 FP64 for the admitted integer,
+permutation, floating-point and control-transfer instructions.
 Stages are `capstone`
 (direct physical decoding), `decode` (NeverD physical decoding) and `lift`
 (decoding plus LowIR, including delay slots). Both decode paths request the same

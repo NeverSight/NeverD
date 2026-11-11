@@ -16,6 +16,7 @@
 #include "neverd/lift/LiftCommon.h"
 
 #include "capstone/capstone.h"
+#include "llvm/ADT/ArrayRef.h"
 
 #include <cstdint>
 #include <vector>
@@ -54,6 +55,8 @@ private:
         : LiftStateBase(Address, Size, Ops), Width(Width) {}
 
     NdVar read(unsigned Register, uint16_t Bytes = 0);
+    NdVar vectorElement(unsigned Reg, unsigned Index, uint16_t Bytes);
+    void writeVector(unsigned Reg, llvm::MutableArrayRef<NdVar> Elements);
     void requireWord(unsigned Register);
     NdVar resize(NdVar Value, uint16_t Bytes, bool SignExtend = false);
     void write(unsigned Register, NdVar Value, bool SignExtend = true);
@@ -68,6 +71,7 @@ private:
   void liftMIPS16Frame(State &S, uint32_t Word) const;
   bool liftDSP(State &S, uint32_t Word) const;
   bool liftMSA(State &S, uint32_t Word) const;
+  bool liftMSAPermutation(State &S, uint32_t Word) const;
   struct Encoding {
     uint32_t Word;
     unsigned SlotBytes = 0;

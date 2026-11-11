@@ -6398,8 +6398,8 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     if (isMIPS(Opts.TheArch))
       OS << mips::sourceCompilerCAttribute(
           Opts.TheArch, Opts.Image,
-          MIPSScalarHelpers.count(Intrinsic::MIPSReadDSPControl) ||
-              MIPSScalarHelpers.count(Intrinsic::MIPSWriteDSPControl));
+          MIPSScalarHelpers.count({Intrinsic::MIPSReadDSPControl, 0}) ||
+              MIPSScalarHelpers.count({Intrinsic::MIPSWriteDSPControl, 0}));
     if (Opts.Image && isMIPS(Opts.TheArch))
       if (const auto Mode = Opts.Image->instructionModeAt(Func.Entry))
         OS << mips::instructionModeCAttribute(*Mode);

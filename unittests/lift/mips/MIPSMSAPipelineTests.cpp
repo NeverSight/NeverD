@@ -54,18 +54,16 @@ mips_test::ELFBytes msaFile(Arch Target, llvm::ArrayRef<uint32_t> Words) {
   return File;
 }
 
-TEST(MIPSMSAPipeline, InitializedIntegerLeavesEmitBothSourceRoutes) {
+void checkMSALeafSource(llvm::ArrayRef<uint32_t> Words, bool HasDivision) {
   for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL})
     for (bool LLVM : {false, true}) {
-      const uint32_t Words[] = {0x7b02201e, 0x79312819, 0x7840004e,
-                                0x78b10899, 0x03e00008, 0};
       auto File = msaFile(Target, Words);
       ELFLoader Loader;
       auto Image = Loader.loadBuffer(File.buffer());
       ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
       ASSERT_TRUE(Image->MIPS->HasMSA);
       EXPECT_EQ(Image->MIPS->ISARevision, 5);
-      auto Symbol = Symbol::makeFunc(Image->Entry, sizeof(Words));
+      auto Symbol = Symbol::makeFunc(Image->Entry, Words.size() * 4);
       Symbol.Name = "msa_leaf";
       Image->Symbols.push_back(std::move(Symbol));
       llvm::LLVMContext Context;
@@ -98,6 +96,7 @@ TEST(MIPSMSAPipeline, InitializedIntegerLeavesEmitBothSourceRoutes) {
       } else {
         ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Stream, Emit));
       }
+      EXPECT_EQ(Text.find("fdiv.w") != std::string::npos, HasDivision) << Text;
       EXPECT_NE(Text.find("msa_leaf"), std::string::npos) << Text;
       EXPECT_EQ(Text.find(mips::NoMSACBegin) != std::string::npos,
                 Target == Arch::MIPS32)
@@ -106,6 +105,18 @@ TEST(MIPSMSAPipeline, InitializedIntegerLeavesEmitBothSourceRoutes) {
                 Target == Arch::MIPS32)
           << Text;
     }
+}
+
+TEST(MIPSMSAPipeline, InitializedIntegerLeavesEmitBothSourceRoutes) {
+  checkMSALeafSource(
+      {0x7b02201e, 0x79312819, 0x7840004e, 0x78b10899, 0x03e00008, 0}, false);
+}
+
+TEST(MIPSMSAPipeline,
+     DeadFloatingDestinationPreservesStatusAndEnabledExceptions) {
+  // FILL.W w0,a0 / FILL.W w1,a1 / FDIV.W w2,w0,w1 / v0=7 / JR ra.
+  checkMSALeafSource(
+      {0x7b02201e, 0x7b02285e, 0x78c1009b, 0x24020007, 0x03e00008, 0}, true);
 }
 
 TEST(MIPSMSAPipeline, MissingImageCannotBypassVectorAndReturnQualification) {

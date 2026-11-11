@@ -12,6 +12,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/low/MIPS/MIPSCachePlatform.h"
 #include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
@@ -999,6 +1000,146 @@ TEST_P(MIPS16E2, CacheAndPrefetchRetainExactEffectsWithoutInventingExecution) {
         }
 }
 
+TEST_P(MIPS16E2,
+       CacheUsesDataTranslationAndCommitsDirtyWritebackBeforeInvalidation) {
+  struct Board : MIPSCachePlatform {
+    std::optional<MIPSCacheTranslation> Translation;
+    MIPSCacheLine Line{0x12000, {1, 2, 3, 4}, true, true, true};
+    std::vector<uint8_t> Memory;
+    uint32_t LastVA = 0, Calls = 0;
+    bool Fail = false;
+    unsigned Fills = 0;
+    std::optional<MIPSCacheTranslation>
+    translateDataRead(uint32_t VA) override {
+      LastVA = VA;
+      return Translation;
+    }
+    bool apply(const MIPSCacheRequest &R) override {
+      ++Calls;
+      if (R.Action == MIPSCacheAction::Prefetch)
+        return true;
+      const auto Base = R.Translation.PhysicalAddress & ~UINT64_C(3);
+      MIPSCacheSelection Selected{Line, Base == Line.PhysicalBase, false};
+      const auto Write = [&](uint64_t OldBase, const auto &Bytes) {
+        EXPECT_EQ(OldBase, 0x12000u);
+        if (Fail)
+          return false;
+        Memory = Bytes;
+        return true;
+      };
+      if (R.Action == MIPSCacheAction::Fill ||
+          R.Action == MIPSCacheAction::FetchAndLock)
+        return fill(
+            R, Selected, Base,
+            [&](uint64_t Requested, auto &Bytes) {
+              ++Fills;
+              EXPECT_EQ(Requested, Base);
+              for (size_t I = 0; I < Bytes.size(); ++I)
+                Bytes[I] = uint8_t((Requested >> 12) + I);
+              return true;
+            },
+            Write);
+      return maintain(R, Selected, Write);
+    }
+  } B;
+  BinaryImage I;
+  I.Arch = GetParam();
+  NdOpEmulator E(I);
+  MIPSSystemContext C;
+  C.Cache = &B;
+  const auto Cache = [&](unsigned Code, bool Prefetch = false) {
+    auto O =
+        stateOp(Prefetch ? Intrinsic::MIPSPrefetch : Intrinsic::MIPSCache, {});
+    O.Output = {};
+    O.addInput(NdVar::cst(Code, 1));
+    O.addInput(NdVar::cst(0x80001233, 4));
+    return E.stepMIPSSystem(O, C);
+  };
+  EXPECT_FALSE(Cache(21));
+  EXPECT_EQ(B.LastVA, 0u);
+  C.CP0Usable = true;
+  EXPECT_FALSE(Cache(21));
+  B.Translation = MIPSCacheTranslation{MIPSCacheMapping::AddressException, 0};
+  EXPECT_FALSE(Cache(21));
+  C.CP0Usable = false;
+  EXPECT_TRUE(Cache(30, true));
+  B.Translation->Mapping = MIPSCacheMapping::Uncached;
+  EXPECT_TRUE(Cache(30, true));
+  EXPECT_EQ(B.Calls, 0u);
+  C.CP0Usable = true;
+  EXPECT_FALSE(Cache(21));
+  B.Translation->Mapping = MIPSCacheMapping::Cached;
+  B.Translation->PhysicalAddress = 0x23001;
+  EXPECT_TRUE(Cache(21));
+  EXPECT_TRUE(B.Line.Dirty);
+  EXPECT_TRUE(B.Line.Valid);
+  B.Translation->PhysicalAddress = 0x12001;
+  B.Fail = true;
+  EXPECT_FALSE(Cache(21));
+  EXPECT_TRUE(B.Line.Locked);
+  EXPECT_TRUE(B.Line.Dirty);
+  B.Fail = false;
+  EXPECT_TRUE(Cache(21));
+  EXPECT_FALSE(B.Line.Valid);
+  EXPECT_FALSE(B.Line.Dirty);
+  EXPECT_FALSE(B.Line.Locked);
+  EXPECT_EQ(B.Memory, B.Line.Data);
+  EXPECT_EQ(B.LastVA, 0x80001233u);
+  B.Translation->PhysicalAddress = 0x100023002;
+  ASSERT_TRUE(Cache(20)); // I-cache fill
+  EXPECT_EQ(B.Line.PhysicalBase, UINT64_C(0x100023000));
+  EXPECT_EQ(B.Line.Data, (std::vector<uint8_t>{0x23, 0x24, 0x25, 0x26}));
+  EXPECT_FALSE(B.Line.Locked);
+  ASSERT_TRUE(Cache(28)); // A fetch-and-lock hit needs no memory read.
+  EXPECT_EQ(B.Fills, 1u);
+  EXPECT_TRUE(B.Line.Locked);
+  B.Translation->PhysicalAddress = 0x12000;
+  EXPECT_FALSE(Cache(29)); // The board selected a locked victim.
+  EXPECT_EQ(B.Fills, 1u);
+  B.Line = {0x12000, {5, 6, 7, 8}, true, true, false};
+  B.Translation->PhysicalAddress = 0x100023002;
+  B.Fail = true;
+  EXPECT_FALSE(Cache(29));
+  EXPECT_EQ(B.Line.PhysicalBase, 0x12000u);
+  EXPECT_TRUE(B.Line.Dirty);
+  B.Fail = false;
+  ASSERT_TRUE(Cache(29));
+  EXPECT_EQ(B.Memory, (std::vector<uint8_t>{5, 6, 7, 8}));
+  EXPECT_TRUE(B.Line.Valid);
+  EXPECT_TRUE(B.Line.Locked);
+  EXPECT_FALSE(B.Line.Dirty);
+}
+
+TEST_P(MIPS16E2, MTExecutionBarrierDoesNotCertifyPeerInstructionSuspension) {
+  BinaryImage I;
+  I.Arch = GetParam();
+  NdOpEmulator E(I);
+  MIPSSystemContext C;
+  C.ImplementedMT = C.CP0Usable = true;
+  C.MVPControl = 1;
+  C.VPEControl = 1u << 15;
+  C.VPEConf0 = 2;
+  const auto MT = [&](Intrinsic Id) {
+    auto O = stateOp(Id, {});
+    O.Output = NdVar::tmp(9, 4);
+    return E.stepMIPSSystem(O, C);
+  };
+  EXPECT_EQ(C.peerIssueEnabled(true), true);
+  ASSERT_TRUE(MT(Intrinsic::MIPSDisableMT));
+  EXPECT_FALSE(C.peerIssueEnabled(true).has_value());
+  ASSERT_TRUE(
+      E.stepMIPSSystem(stateOp(Intrinsic::MIPSExecutionHazardBarrier, {}), C));
+  EXPECT_FALSE(C.peerIssueEnabled(true).has_value());
+  EXPECT_EQ(C.peerIssueEnabled(false), true);
+  C.completeInstructionHazardBarrier();
+  EXPECT_EQ(C.peerIssueEnabled(true), false);
+  ASSERT_TRUE(MT(Intrinsic::MIPSDisableVPE));
+  C.completeInstructionHazardBarrier();
+  EXPECT_EQ(C.peerIssueEnabled(false), false);
+  C.VPEConf0 = 0;
+  ASSERT_TRUE(MT(Intrinsic::MIPSEnableVPE));
+  EXPECT_EQ(C.peerIssueEnabled(false), false);
+}
 INSTANTIATE_TEST_SUITE_P(BothByteOrders, MIPS16E2,
                          testing::Values(Arch::MIPS32, Arch::MIPS32EL));
 } // namespace
