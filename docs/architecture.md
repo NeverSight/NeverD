@@ -5217,7 +5217,10 @@ the page again (`QueryService::State::keptPages`). A replica's dispatcher keeps 
 pages across the read context it starts at each change of its owner's, so the read
 after an edit names them too, and no dispatcher's kept page moves with the listing's
 generation, which an edit moves. A read a lane hands the owner (`AnalysisService::askOwner`)
-leaves out the page the lane names, as the owner's dispatcher names its own. Where an edit built the document
+leaves out the page the lane names, as the owner's dispatcher names its own. An edit
+the owner's dispatcher sends carries the reads of the pages read at the revision it
+leaves (the worker's `then`), and their answers are cached as the reads those views make
+after it, once the reply's background state is taken. Where an edit built the document
 again, a worker that still has the old one sends what changed of the page
 (`page_delta`: lines replaced and the offsets after them shifted, `pageDelta`), which the
 GUI applies to the page it keeps (`page_delta::apply`); a reply the kept page does not

@@ -205,6 +205,36 @@ def run(executable):
                                         "if_none_match": ""})
         assert apply_delta(changed, delta) == whole
         assert "on the kept page again" in whole["text"], whole
+        # An edit carries the read its view makes after it ("then"): the reply
+        # answers it as the read would, and a read that is no page's is refused
+        # alone, the edit standing.
+        kept_read = {"address": hex(functions[0]), "representation": "source",
+                     "offset": 0, "limit": 200, "kept_only": True,
+                     "if_none_match": whole["etag"], "page_delta": True}
+        carried = owner.call("annotation_set", {
+            "address": hex(functions[0]), "text": "carried with the edit",
+            "then": [{"operation": "decompile", "payload": kept_read},
+                     {"operation": "rename", "payload": {}},
+                     {"operation": "decompile", "payload": {"address": hex(functions[0])}}]})
+        assert carried["status"] == "ok", carried
+        answers = carried["then"]
+        assert [a["status"] for a in answers] == ["ok", "error", "error"], answers
+        assert answers[1]["error"]["code"] == "invalid_request", answers
+        followed = apply_delta(whole, answers[0]["payload"])
+        assert "carried with the edit" in followed["text"], followed
+        assert followed == ok(owner, "decompile", {"address": hex(functions[0]), "representation": "source",
+                                                   "offset": 0, "limit": 200, "kept_only": True,
+                                                   "if_none_match": ""})
+        refused = owner.call("annotation_set", {
+            "address": "no address", "text": "refused with its reads",
+            "then": [{"operation": "decompile", "payload": kept_read}]})
+        assert refused["status"] != "ok" and "then" not in refused, refused
+        too_many = owner.call("annotation_set", {
+            "address": hex(functions[0]), "text": "too many reads",
+            "then": [{"operation": "decompile", "payload": kept_read}] * 5})
+        assert too_many["error"]["code"] == "invalid_request", too_many
+        ok(owner, "undo")
+        ok(owner, "save")
         ok(owner, "undo")
         ok(owner, "save")
         ok(owner, "undo")

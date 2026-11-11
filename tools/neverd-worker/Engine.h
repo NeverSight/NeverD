@@ -69,6 +69,12 @@ public:
   /// request made are written (writeStoreKeeps), then its views read ahead
   /// (prepareFollowingViews).
   void afterReply(const std::function<bool()> &requestWaiting);
+  /// The request's own reply carried the reads that follow it ("then"):
+  /// afterReply reads no view ahead.
+  void forgoViewsAhead() { viewEditsAtRequest_ = viewEditCount_; }
+  /// A read that followed a request was answered in its reply
+  /// (metadata.following_reads).
+  void noteFollowingRead() { ++followingReads_; }
   /// Background work (the reference index) runs between requests.
   bool hasIdleWork() const;
   bool idleStep();
@@ -713,7 +719,7 @@ private:
   /// Lets answers no read took go off the request thread.
   void forgetPreparedViews();
   /// metadata.prepared_views: answers made and given.
-  std::uint64_t preparedMade_ = 0, preparedGiven_ = 0;
+  std::uint64_t preparedMade_ = 0, preparedGiven_ = 0, followingReads_ = 0;
   /// Documents written from another with its comments, functions' names or
   /// data's names taken (takeComments, takeFunctionNames, takeDataNames).
   std::uint64_t commentPatches_ = 0, namePatches_ = 0, dataNamePatches_ = 0;
