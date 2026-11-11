@@ -2225,6 +2225,37 @@
     "limitations": [
       "Worker is disabled in these two existing test profiles; upstream worker changes were inspected but are not qualified by these runs.",
       "The prior dated qualification remains attached to its exact source and binary hashes. No prior test is relabeled as having run on the merged tree."
-    ]
+    ],
+    "later_disjoint_merge": {
+      "commit": "16f86b0578756d297569c829afb88f1357e2e0bc",
+      "upstream_commit": "134e7e9db18328dcd9fa62c80a96dfe4004b60ba",
+      "changed_paths": [
+        "docs/architecture.md",
+        "docs/arm64e-native-validation.md",
+        "docs/evidence/arm64e-compact-layout-2026-11-11.json",
+        "docs/testing.md",
+        "include/neverd/backend/codegen/MachO/MachOCompactUnwindPatch.h",
+        "include/neverd/object/MachOLayout.def",
+        "include/neverd/object/MachOLayout.h",
+        "lib/backend/codegen/MachO/MachOCompactUnwindLayout.def",
+        "lib/backend/codegen/MachO/MachOCompactUnwindPatch.cpp",
+        "lib/backend/codegen/MachO/MachOLayoutGrowth.cpp",
+        "lib/backend/codegen/MachO/MachOPatch.cpp",
+        "scripts/tests/test_verify_arm64e_entry.py",
+        "scripts/verify_arm64e_entry.def",
+        "scripts/verify_arm64e_entry.py",
+        "tools/neverd-worker/Engine.cpp",
+        "tools/neverd-worker/Engine.h",
+        "tools/neverd-worker/PROTOCOL.md",
+        "tools/neverd-worker/ResourceLimits.h",
+        "tools/neverd-worker/main.cpp",
+        "tools/neverd-worker/tests/view_edits_test.py",
+        "unittests/lift/aarch64/AArch64EntryABIFixtures.def",
+        "unittests/lift/aarch64/AArch64EntryABITests.cpp",
+        "unittests/lift/eh/MachOCompactLayoutFixtures.def",
+        "unittests/lift/eh/MachOCompactUnwindPatchTests.cpp"
+      ],
+      "verification": "Inspected Mach-O compact-layout and worker-reply changes. No changed mixed-mode, x86, ELF test-loader, generated-C, paged or legacy runtime source. All qualified source hashes remain identical. Existing execution runs retain their exact earlier commits; this later disjoint merge is not relabeled as a rerun."
+    }
   }
 }
