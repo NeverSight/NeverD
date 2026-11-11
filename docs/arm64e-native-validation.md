@@ -764,9 +764,11 @@ of the original sections in a zero-base arm64e dylib with image-relative
 chained fixups. The preferred header stays at zero. The output symbols, stubs
 and original data move together. The installation receipt records the slide
 and preserves each original entry VA. The verifier resolves each trampoline
-from the signed output's own symbols. Apple's `dyld_info` decodes the binds
-in both images so the verifier can compare each original slot's section,
-target and signing recipe at the published address.
+from the signed output's own symbols. In the dense profile the caller also
+reads an ordinary pointer and an address-diversified DA-signed pointer to a
+local variable, writes through one and reads the result through the other.
+Apple's `dyld_info` decodes both images so the verifier can compare each
+original bind and rebase slot, its target and its signing recipe.
 The installer measures LSDA index demand from the native compact entries
 and FDEs. It can retain the compact table at its original VA, move
 the adjacent DWARF records into audited free TEXT storage and reuse their

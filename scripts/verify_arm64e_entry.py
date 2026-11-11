@@ -148,21 +148,25 @@ def check_receipt(receipt, *, require_slide=False):
     return functions
 
 
-def check_slid_binds(original, installed, slide):
-    def slots(listing):
+def check_slid_fixups(original, installed, slide):
+    def slots(listing, delta):
         result = {}
-        for segment, section, address, kind, target in re.findall(POLICY["bind_pattern"], listing, re.MULTILINE):
-            va = int(address, POLICY["hex_radix"])
+        for segment, section, address, kind, target in re.findall(POLICY["fixup_pattern"], listing, re.MULTILINE):
+            va = int(address, POLICY["hex_radix"]) + delta
             if va in result:
                 raise ValueError(POLICY["bind_error"])
+            if kind in POLICY["rebase_kinds"]:
+                pointer, _, signing = target.partition(" ")
+                value = int(pointer, POLICY["hex_radix"])
+                target = (value + delta if value else 0, signing)
             result[va] = (segment, section, kind, target)
         return result
 
-    before, after = slots(original), slots(installed)
-    if (not any(binding[2] == POLICY["auth_bind_kind"] for binding in before.values()) or
-            any(after.get(address + slide) != binding for address, binding in before.items())):
+    before, after = slots(original, slide), slots(installed, 0)
+    counts = {kind: sum(binding[2] == kind for binding in before.values()) for kind in POLICY["dense_fixup_kinds"]}
+    if not all(counts.values()) or any(after.get(address) != binding for address, binding in before.items()):
         raise ValueError(POLICY["bind_error"])
-    return len(before)
+    return counts
 
 
 def check_execution(result, *, original=False):
@@ -294,6 +298,8 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                                 *POLICY["library_args"], POLICY["key_option"].format(key=key)]
                         if dwarf:
                             args.append(POLICY["dwarf_option"])
+                        if match_original_optimization:
+                            args.append(POLICY["dense_rebase_option"])
                         if not publish:
                             command(label + native.POLICY["compile_suffix"],
                                     [*args, output / POLICY["caller_source"], obj,
@@ -302,7 +308,7 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                         receipt = None
                         baseline = None
                         original_base = None
-                        bind_count = None
+                        fixup_counts = None
                         if publish:
                             library = output / POLICY["installed_library_name"].format(**fields)
                             products.append(library)
@@ -353,7 +359,7 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                                 old = command(label + POLICY["baseline_suffix"] + POLICY["bind_suffix"],
                                               [*POLICY["bind_command"], original])
                                 new = command(label + POLICY["bind_suffix"], [*POLICY["bind_command"], library])
-                                bind_count = check_slid_binds(old.stdout, new.stdout, receipt[POLICY["slide_field"]])
+                                fixup_counts = check_slid_fixups(old.stdout, new.stdout, receipt[POLICY["slide_field"]])
                         command(label + native.POLICY["signature_suffix"],
                                 [*native.POLICY["signature_command"], library])
                         assembly = command(label + native.POLICY["disassembly_suffix"],
@@ -386,8 +392,8 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                                "image_base": base, "original_image_base": original_base,
                                "occupied_original_rejected": publish, "installed_text_sha256": text_hash}
                         report["cases"].append(row)
-                        if bind_count is not None:
-                            row[POLICY["bind_count_field"]] = bind_count
+                        if fixup_counts is not None:
+                            row[POLICY["fixup_counts_field"]] = fixup_counts
                         if not compile_only:
                             execution = command(label, [loader, library], POLICY["execute_timeout"])
                             check_execution(execution)
