@@ -6133,7 +6133,12 @@ the observed width, all mixed products vanish. Prefix and suffix products then
 give the constant and linear coefficients even for noninvertible offsets.
 Combining equal terms first can leave just one or two observed bits. The
 one-bit reading uses Boolean parity, and the two-bit reading uses the weights
-1, −1 and 2 modulo four.
+1, −1 and 2 modulo four. For independent masked disturbances, the bottom-up
+walk reuses the proved sum while continuing to simplify the original words and
+the surrounding additive terms. A sum can combine an equally sized masked
+expansion with its other terms. A standalone product must become cheaper.
+If tabulating a polynomial's linear tail would exceed the work allowance,
+the solver retains that tail and solves the nonlinear part over its own inputs.
 For LLVM source, a constant multiply or an in-range constant left shift proves
 its low zero bits directly. The translator can read an OR confined to those
 bits as an addition while preserving the poison checks on its operands.

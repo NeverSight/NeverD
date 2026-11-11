@@ -4171,6 +4171,9 @@ to reproduce 256 scaled products and `--family masked-perturbation --count 32`
 for 160 mixed-mask controls, including non-native widths up to 257 bits. The LLVM
 translator checks scaled offsets against exhaustive byte domains, including
 overlap and no-wrap flags that can make the input poison.
+Additional regressions combine a masked product with a compound arithmetic
+summand and recover a quadratic product beside twelve independently weighted
+inputs within a fixed work allowance.
 
 Dominant-prefix regressions add degree-511–514 products with disturbed factors
 and multiple residual multipliers. Complete-word APInt oracles cover 8–257 bits,

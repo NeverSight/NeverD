@@ -795,21 +795,43 @@ std::optional<SymRef> solvePolynomial(SymContext &Ctx, SymRef Body,
       LinearIds.push_back(AtomIds[I]);
       LinearAtoms.push_back(Atoms[I]);
     }
-  auto LinearForm =
-      expandOverMinterms(Ctx, LinearTerms, LinearIds, Width, Budget);
-  if (!LinearForm)
-    return std::nullopt;
-
   const size_t TermCeiling = termBudget(Ctx, Body, Opts);
-  llvm::SmallVector<SymRef, 4> Linear;
-  if (LinearAtoms.empty())
-    Linear.push_back(Ctx.mkConst(-LinearForm->Linear.front()));
-  else
-    linearCandidates(Ctx, std::move(LinearForm->Linear), LinearAtoms,
-                     TermCeiling, Limits, Linear);
-  SymRef Remainder = cheapestOf(Ctx, Linear);
-  if (!Remainder.isValid())
-    return std::nullopt;
+  const size_t LinearCorners = *cornerCount(LinearIds.size());
+  const size_t Words = llvm::APInt::getNumWords(Width);
+  SymRef Remainder;
+  // An independent masked word contributes an atom of its own. Retain the
+  // exact linear summands when their joint corner table cannot fit, so the
+  // nonlinear terms can still be solved over their own smaller support.
+  if (!LinearTerms.empty() &&
+      LinearCorners > Budget.available() / LinearTerms.size() / Words) {
+    const size_t TermBytes =
+        4 * sizeof(SymRef) + sizeof(llvm::APInt) + Words * sizeof(uint64_t);
+    if (LinearTerms.size() > Opts.MaxTableBytes / TermBytes ||
+        LinearTerms.size() > Budget.available() / (2 + Words))
+      return std::nullopt;
+    Budget.consume(LinearTerms.size() * (2 + Words));
+    llvm::SmallVector<SymRef, 16> Written;
+    for (const auto &Term : LinearTerms) {
+      auto C = Ctx.mkConst(Term.Coeff);
+      Written.push_back(
+          Term.Factors.empty() ? C : Ctx.mkMul(C, Term.Factors.front()));
+    }
+    Remainder = Ctx.mkAdd(Written);
+  } else {
+    auto LinearForm =
+        expandOverMinterms(Ctx, LinearTerms, LinearIds, Width, Budget);
+    if (!LinearForm)
+      return std::nullopt;
+    llvm::SmallVector<SymRef, 4> Linear;
+    if (LinearAtoms.empty())
+      Linear.push_back(Ctx.mkConst(-LinearForm->Linear.front()));
+    else
+      linearCandidates(Ctx, std::move(LinearForm->Linear), LinearAtoms,
+                       TermCeiling, Limits, Linear);
+    Remainder = cheapestOf(Ctx, Linear);
+    if (!Remainder.isValid())
+      return std::nullopt;
+  }
 
   const BitwiseSynthesisLimits Synthesis = Limits.synthesis(TermCeiling);
   llvm::SmallVector<SymRef, 4> Parts;

@@ -22,6 +22,7 @@
 #include "llvm/ADT/StringExtras.h"
 
 #include <cstdint>
+#include <string>
 
 using namespace neverd::symbolic;
 
@@ -47,6 +48,33 @@ TEST(SymMBA, KeepsWhateverLinearPartRidesAlongsideTheProduct) {
   simplifiesTo(
       "(x & y) * (x | y) + (x & ~y) * (~x & y) + (x ^ y) + 2 * (x & y)",
       "x * y + x + y");
+}
+
+TEST(SymMBA, RecoversProductWithoutEnumeratingAnIndependentAffineTail) {
+  constexpr unsigned Width = 65;
+  SymContext Ctx;
+  const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+  llvm::SmallVector<SymRef, 16> Atoms{X, Y};
+  llvm::SmallVector<SymRef, 16> Terms{Ctx.mkConst(Width, 11)};
+  for (unsigned I = 0; I < 12; ++I) {
+    const auto V = Ctx.mkVar("v" + std::to_string(I), Width);
+    Atoms.push_back(V);
+    Terms.push_back(Ctx.mkMul(Ctx.mkConst(Width, 2 * I + 1), V));
+  }
+  llvm::SmallVector<uint32_t, 16> Ids;
+  for (auto V : Atoms)
+    Ids.push_back(Ctx.varId(V));
+  const auto Tail = Ctx.mkAdd(Terms);
+  const auto Input = Ctx.mkAdd(
+      {Tail, Ctx.mkMul(Ctx.mkAnd(X, Y), Ctx.mkOr(X, Y)),
+       Ctx.mkMul(Ctx.mkAnd(X, Ctx.mkNot(Y)), Ctx.mkAnd(Ctx.mkNot(X), Y))});
+  MBAOptions Opt;
+  Opt.MaxAtoms = Opt.MaxSynthesisAtoms = Atoms.size();
+  detail::WorkBudget Budget(8192);
+  auto Reduced = detail::solvePolynomial(Ctx, Input, Ids, Atoms, Opt, Budget);
+  ASSERT_TRUE(Reduced);
+  EXPECT_EQ(*Reduced, Ctx.mkAdd(Tail, Ctx.mkMul(X, Y)));
+  EXPECT_LT(Budget.used(), 8192u);
 }
 
 TEST(SymMBA, NoticesWhenTheProductsCancelAndTheRestIsLinear) {

@@ -1589,31 +1589,41 @@ SymRef simplifyLinearTail(
     return Root;
   // Own every reference before interning the reduced tail can grow the arena.
   llvm::SmallVector<SymRef, 8> Linear, Other, Pending;
-  for (SymRef Term : Ctx.operands(Root)) {
-    SymRef Body = Unscaled(Term);
-    if (Ctx.op(Body) == SymOp::Mul)
-      Other.push_back(Term);
-    else {
-      Linear.push_back(Term);
-      Pending.push_back(Body);
-    }
-  }
   llvm::SmallVector<SymRef, 4> Inputs;
-  while (!Pending.empty()) {
-    SymRef R = Pending.pop_back_val();
-    if (Ctx.isConst(R))
-      continue;
-    if (Ctx.isVar(R)) {
-      if (!llvm::is_contained(Inputs, R))
-        Inputs.push_back(R);
-      continue;
+  auto CollectBitwise = [&](SymRef Body) {
+    Pending.clear();
+    Pending.push_back(Body);
+    while (!Pending.empty()) {
+      const SymRef R = Pending.pop_back_val();
+      if (Ctx.isConst(R))
+        continue;
+      if (Ctx.isVar(R)) {
+        if (!llvm::is_contained(Inputs, R))
+          Inputs.push_back(R);
+        continue;
+      }
+      const auto Op = Ctx.op(R);
+      if (Op != SymOp::And && Op != SymOp::Or && Op != SymOp::Xor &&
+          Op != SymOp::Not)
+        return false;
+      Pending.append(Ctx.operands(R).begin(), Ctx.operands(R).end());
     }
-    auto Op = Ctx.op(R);
-    if (Op != SymOp::And && Op != SymOp::Or && Op != SymOp::Xor &&
-        Op != SymOp::Not)
-      return Root;
-    Pending.append(Ctx.operands(R).begin(), Ctx.operands(R).end());
+    return true;
+  };
+  for (SymRef Term : Ctx.operands(Root)) {
+    const SymRef Body = Unscaled(Term);
+    const size_t Before = Inputs.size();
+    if (Ctx.op(Body) != SymOp::Mul && CollectBitwise(Body)) {
+      Linear.push_back(Term);
+    } else {
+      // A compound arithmetic word is an exact additive remainder. Its
+      // variables do not belong to the bitwise sum being simplified.
+      Inputs.resize(Before);
+      Other.push_back(Term);
+    }
   }
+  if (Linear.size() < detail::limits::kMinLinearTailSummands)
+    return Root;
   MBAOptions Inner = Opts;
   Inner.MaxTableBytes -= Storage;
   if (Ctx.width(Root) > 64 && resolveLimits(Inner).MaxAtoms >= 2) {
@@ -2047,8 +2057,10 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
                          /*SingleProductOnly=*/true);
   SymRef Prepared =
       foldProductValuations(Ctx, EarlyTail, Budget, ValuationStorage);
-  if (EarlyTail == E && Budget.MultipleResidueAttempts != ResidueAttempts &&
-      !Budget.exhausted()) {
+  if (EarlyTail == E && !Budget.exhausted() &&
+      (Budget.MultipleResidueAttempts != ResidueAttempts ||
+       (Prepared != E &&
+        hasCompletedResidueReading(Ctx, Prepared, Budget, true)))) {
     // Retain the cheap linear tail before walking a newly synthesized product
     // reading. Its generated bit selectors may no longer expose the original
     // high-degree boundary used to recognize that independent tail.

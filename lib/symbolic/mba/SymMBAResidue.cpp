@@ -138,7 +138,7 @@ SymRef factorHighSum(SymContext &Ctx, SymRef Sum, WorkBudget &Budget,
 // observed width. Prefix and suffix products supply every surviving
 // coefficient without division, including when some C_i are even.
 SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
-                            size_t &Storage) {
+                            size_t &Storage, bool *EmittedMaskedSum) {
   auto Factors = Ctx.operands(Root);
   const unsigned Width = Ctx.width(Root);
   const auto Scale = Ctx.isConst(Factors.front()) ? Factors.front() : SymRef{};
@@ -179,6 +179,7 @@ SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
       Width - (Scale ? Ctx.constValue(Scale).countr_zero() : 0);
   unsigned First = Observed, Second = Observed;
   size_t Edges = 0;
+  bool HasMaskedDisturbance = false;
   for (auto F : Factors) {
     if (!Budget.canConsume(Words + 1))
       return Root;
@@ -187,6 +188,7 @@ SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     if (!D)
       return Root;
     const auto Mask = ZeroMask(D);
+    HasMaskedDisturbance |= Mask && Ctx.op(D) == SymOp::And;
     unsigned Zeros = Mask ? Ctx.constValue(Mask).countr_zero() : 0;
     if (Zeros < First)
       std::swap(First, Zeros);
@@ -221,6 +223,7 @@ SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
 
   llvm::SmallVector<SymRef, 16> Terms;
   Terms.reserve(Factors.size() + 1);
+  const size_t FirstGenerated = Ctx.numNodes();
   llvm::APInt Suffix(Width, 1);
   for (size_t I = Factors.size(); I-- != 0;) {
     // Interning a term may grow the operand pool. Reacquire the next factor.
@@ -232,7 +235,22 @@ SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
   }
   Terms.push_back(Ctx.mkConst(Prefix.back()));
   const auto Result = factorHighSum(Ctx, Ctx.mkAdd(Terms), Budget, Storage);
-  return readingScore(Ctx, Result) < readingScore(Ctx, Root) ? Result : Root;
+  const auto CandidateCost = readingScore(Ctx, Result);
+  const auto InputCost = readingScore(Ctx, Root);
+  // Inside a sum, an equally sized linear reading can combine with its
+  // neighbours. A standalone product still requires a strict improvement.
+  if (CandidateCost > InputCost ||
+      (CandidateCost == InputCost &&
+       !(HasMaskedDisturbance && EmittedMaskedSum)))
+    return Root;
+  // Independent masks become separate atoms in a generic polynomial table.
+  // Keep the proved terms as emitted and still visit their original carriers.
+  if (HasMaskedDisturbance) {
+    recordResidueReading(Ctx, FirstGenerated, Budget, Storage);
+    if (EmittedMaskedSum)
+      *EmittedMaskedSum = true;
+  }
+  return Result;
 }
 
 // A common exact base needs only one offset vector. Avoid constructing one
@@ -282,7 +300,7 @@ SymRef foldCommonOffsetProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
 }
 
 SymRef foldOffsetProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
-                         size_t &Storage) {
+                         size_t &Storage, bool *EmittedMaskedSum = nullptr) {
   if (Budget.exhausted() || Ctx.op(Root) != SymOp::Mul ||
       Ctx.numOperands(Root) < limits::kMinResidueProductFactors)
     return Root;
@@ -298,7 +316,8 @@ SymRef foldOffsetProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
   const bool OffsetHint = hasOffsetFactors(Ctx, Root);
   bool CommonBase = false;
   if (OffsetHint) {
-    if (auto Linear = foldHighProductTerms(Ctx, Root, Budget, Storage);
+    if (auto Linear =
+            foldHighProductTerms(Ctx, Root, Budget, Storage, EmittedMaskedSum);
         Linear != Root)
       return Linear;
     auto Common =
@@ -464,12 +483,26 @@ SymRef foldProductResidues(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
   Storage -= N * 2 * sizeof(SymRef);
   llvm::SmallVector<SymRef, 16> Terms(Ctx.operands(Root));
   bool Changed = false;
+  bool OnlyMaskedChanges = true;
   for (auto &Term : Terms) {
-    auto Next = foldOffsetProduct(Ctx, Term, Budget, Storage);
-    Changed |= Next != Term;
+    bool Emitted = false;
+    auto Next = foldOffsetProduct(Ctx, Term, Budget, Storage, &Emitted);
+    if (Next != Term) {
+      Changed = true;
+      OnlyMaskedChanges &= Emitted;
+    }
     Term = Next;
   }
-  return Changed ? Ctx.mkAdd(Terms) : Root;
+  if (!Changed)
+    return Root;
+  const size_t FirstCombined = Ctx.numNodes();
+  auto Result = Ctx.mkAdd(Terms);
+  // The whole-sum mask and coefficient passes can still combine these terms.
+  // During the subsequent bottom-up walk, visit retained input words and
+  // propagate their rewrites through the canonical sum just once.
+  if (OnlyMaskedChanges)
+    recordResidueReading(Ctx, FirstCombined, Budget, Storage);
+  return Result;
 }
 
 } // namespace neverd::symbolic::detail

@@ -314,12 +314,58 @@ TEST(SymMBAResidue, KeepsObservableProductsOfTwoPerturbations) {
   }
 }
 
+TEST(SymMBAResidue, RetainsCompoundSummandsAroundAnExpandedMaskedProduct) {
+  constexpr unsigned Width = 127;
+  SymContext Ctx;
+  const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+  const auto Z = Ctx.mkVar("z", Width), W = Ctx.mkVar("w", Width);
+  const std::array Words{Ctx.mkOr(X, Y), Ctx.mkXor(Y, W),
+                         Ctx.mkAdd(Z, Ctx.mkAnd(X, W)),
+                         Ctx.mkMul(Ctx.mkXor(W, X), Ctx.mkOr(Y, Z))};
+  llvm::SmallVector<llvm::APInt, 32> Masks;
+  llvm::SmallVector<SymRef, 32> Factors{Ctx.mkConst(Width, 48)};
+  std::mt19937_64 Random(291);
+  for (unsigned I = 0; I < 21; ++I) {
+    Masks.push_back(llvm::APInt(Width, Random() | 1).shl(62 + I % 2));
+    const auto D = Ctx.mkAnd(Ctx.mkConst(Masks.back()), Words[I % 4]);
+    Factors.push_back(Ctx.mkAdd(Ctx.mkConst(Width, 2 * I + 1), D));
+  }
+  const auto Extra = Ctx.mkXor(Ctx.mkMul(X, Y), Ctx.mkMul(W, Z));
+  const auto Input = Ctx.mkAdd(
+      {Ctx.mkMul(Factors), Extra, Ctx.mkOr(X, Y), Ctx.mkAnd(X, Y),
+       Ctx.mkXor(Z, W), Ctx.mkMul(Ctx.mkConst(Width, 2), Ctx.mkAnd(Z, W))});
+  MBAOptions Opt;
+  Opt.MaxWork = 65536;
+  auto R = simplifyMBADeep(Ctx, Input, Opt);
+  ASSERT_LT(R.SizeAfter, R.SizeBefore);
+  EXPECT_LT(R.Work, Opt.MaxWork / 2);
+  SymEvalPlan Plan(Ctx, R.Expr);
+  auto RandomWord = [&]() {
+    const auto High = llvm::APInt(Width, Random()).shl(64);
+    return High | llvm::APInt(Width, Random());
+  };
+  for (unsigned I = 0; I < 32; ++I) {
+    const std::array V{RandomWord(), RandomWord(), RandomWord(), RandomWord()};
+    const std::array Word{V[0] | V[1], V[1] ^ V[3], V[2] + (V[0] & V[3]),
+                          (V[3] ^ V[0]) * (V[1] | V[2])};
+    llvm::APInt Expected(Width, 48);
+    for (unsigned J = 0; J < Masks.size(); ++J)
+      Expected *= (Word[J % 4] & Masks[J]) + (2 * J + 1);
+    Expected += (V[0] * V[1]) ^ (V[3] * V[2]);
+    EXPECT_EQ(Plan.eval(V), Expected + V[0] + V[1] + V[2] + V[3]);
+  }
+}
+
 TEST(SymMBAResidue, PreservesCompactReadingsOfTheLastTwoBits) {
   struct Example {
     unsigned Width, Cost;
     const char *Source;
   };
   const Example Cases[] = {
+      {9, 17,
+       "(48*(147+(-136*(z+(x&w))))*(173+(80*((w^x)*(y|z))))*"
+       "(159+((y^w)&144))*(96+((z+(x&w))&504))*(43+((x|y)&488))*"
+       "(71+((y^w)&112))*(53+(56*(x|y))))+(x|y)+(x&y)+(z^w)+2*(z&w)"},
       {8, 17,
        "(6*(11+(208)*(x^y))*(3+(80)*(z&w))*(7+(-112)*"
        "((x&z)*(y|w)))*(2+(272)*(z&w))*(5+(112)*(x+(w^y)))*"
