@@ -560,8 +560,14 @@ default r6 CLI results.
 Frameless bodies may also preserve a matching entry PACIBSP and terminal
 RETAB. SP and LR remain untouched between those instructions. The relocated
 body must pass the instruction comparison and retain its frameless compact
-unwind coverage. Removing the return-signing policy refuses publication. Functions with calls, stack
-accesses or PC-dependent signing need additional proofs.
+unwind coverage. Removing the return-signing policy refuses publication.
+For standard X29 compact frames, the publisher also checks the PACIBSP,
+saved X29/X30 pair, X29 setup, pair restore and RETAB at their final PCs.
+A direct BL in such a frame must still reach its original dyld stub or the
+installed owner of its source callee. The framed import fixture calls
+`getpid`, reads an exported variable after the call and returns their sum.
+The caller changes that variable between invocations. Other stack layouts
+and PC-dependent signing need their own instruction and unwind coverage.
 
 The [native lifted-image run](https://github.com/gmh5225/test_mac_intel/actions/runs/42957645426)
 executed the original and installed images on both macos-26 and xcode-27.
@@ -760,7 +766,8 @@ Add `--match-original-optimization` to compile both the caller and the
 original entries at each optimization level. The original fully O0 reproducer
 had 1,192 bytes of DWARF and 864 bytes of free TEXT with its fixed install
 name. Adding the two independently dereferenced pointer slots reduced the
-free TEXT to 440 bytes on the same compiler. The publisher can grow TEXT by inserting aligned pages ahead
+free TEXT to 440 bytes on the same compiler. The publisher can grow TEXT by
+inserting aligned pages ahead
 of the original sections in a zero-base arm64e dylib with image-relative
 chained fixups. The preferred header stays at zero. The output symbols, stubs
 and original data move together. The installation receipt records the slide

@@ -126,15 +126,15 @@ bool isPositionIndependentLeafInstruction(const DecodedInsn &I) {
   }
 }
 
-bool matchesTailTransfer(llvm::ArrayRef<uint8_t> Source, va_t OriginalPC,
-                         llvm::ArrayRef<uint8_t> Installed, va_t InstalledPC,
-                         llvm::ArrayRef<SourcePatchMapping> Mappings,
-                         const CompiledImage &Generated,
-                         const BinaryImage &Image, va_t Slide) {
-  const auto Target = [](llvm::ArrayRef<uint8_t> Word, va_t PC) {
-    auto Jump =
-        decodeDirectBranch(Arch::AArch64, InstructionMode::Default, Word.data(),
-                           Word.size(), PC, {.Jumps = true});
+bool matchesDirectTransfer(llvm::ArrayRef<uint8_t> Source, va_t OriginalPC,
+                           llvm::ArrayRef<uint8_t> Installed, va_t InstalledPC,
+                           llvm::ArrayRef<SourcePatchMapping> Mappings,
+                           const CompiledImage &Generated,
+                           const BinaryImage &Image, va_t Slide,
+                           DirectBranchForms Forms) {
+  const auto Target = [Forms](llvm::ArrayRef<uint8_t> Word, va_t PC) {
+    auto Jump = decodeDirectBranch(Arch::AArch64, InstructionMode::Default,
+                                   Word.data(), Word.size(), PC, Forms);
     return Jump ? Jump->target() : std::nullopt;
   };
   const auto Before = Target(Source, OriginalPC);
@@ -315,8 +315,7 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
           llvm::formatv(kGeneratedRange, Mapping.Symbol, Start, End).str());
     if (!Frame || !Frame->describesUnwindOnly() || !Frame->Compact ||
         Frame->CodeRange.End < End ||
-        Frame->Compact->NativeEncoding != macho_unwind::kARM64ModeFrameless ||
-        Range.mapped()->Encoding != macho_unwind::kARM64ModeFrameless)
+        Frame->Compact->NativeEncoding != Range.mapped()->Encoding)
       return refuse(kLeafFrame);
 
     const auto Source = llvm::ArrayRef(Original.Raw)
@@ -326,6 +325,24 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
             .slice(Code->Offset + Owner->second - Code->VA, End - Start);
     if (Source.empty() || Source.size() % aarch64::kInsnSize)
       return refuse(kLeafCode);
+    const bool Framed =
+        Range.mapped()->Encoding == macho_unwind::kARM64ModeFrame;
+    if (Framed) {
+      // This compact mode uses X29 as CFA. Require the actual record and
+      // its matching restore at the same PCs in both versions.
+      if (Source.size() < kFrameRecordWords * aarch64::kInsnSize ||
+          readLE<uint32_t>(Source.data()) !=
+              static_cast<uint32_t>(SigningHint::PACIBSP) ||
+          readLE<uint32_t>(Source.data() + aarch64::kInsnSize) !=
+              kPushFrameRecord ||
+          readLE<uint32_t>(Source.data() + 2 * aarch64::kInsnSize) !=
+              kSetFramePointer ||
+          readLE<uint32_t>(Source.end() - 2 * aarch64::kInsnSize) !=
+              kPopFrameRecord)
+        return refuse(kLeafFrame);
+    } else if (Range.mapped()->Encoding != macho_unwind::kARM64ModeFrameless) {
+      return refuse(kLeafFrame);
+    }
     bool Signed = false;
     size_t MatchedEnd = 0;
     for (size_t Offset = 0; Offset < Source.size();
@@ -361,12 +378,13 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
           return refuse(kDataPage);
         continue;
       }
-      if (Last && !Signed && Insn.Id == AARCH64_INS_B) {
-        if (!matchesTailTransfer(Source.drop_front(Offset), Start + Offset,
-                                 Emitted.drop_front(Offset),
-                                 Owner->second + Offset, Mappings, Generated,
-                                 Original, Slide))
-          return refuse(kTailTarget);
+      const bool Call = Framed && !Last && Insn.Id == AARCH64_INS_BL;
+      if (Call || (Last && !Signed && Insn.Id == AARCH64_INS_B)) {
+        if (!matchesDirectTransfer(
+                Source.drop_front(Offset), Start + Offset,
+                Emitted.drop_front(Offset), Owner->second + Offset, Mappings,
+                Generated, Original, Slide, {.Jumps = !Call, .Calls = Call}))
+          return refuse(kDirectTarget);
         continue;
       }
       if (Offset >= MatchedEnd &&
@@ -385,6 +403,12 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
       } else if (!Offset && readLE<uint32_t>(Source.data()) ==
                                 static_cast<uint32_t>(SigningHint::PACIBSP)) {
         Signed = true;
+      } else if (Framed && (Offset == aarch64::kInsnSize ||
+                            Offset == 2 * aarch64::kInsnSize ||
+                            Offset + 2 * aarch64::kInsnSize == Source.size())) {
+        // The three stack/frame instructions were checked above. Their
+        // emitted words also passed the equality check at this offset.
+        continue;
       } else if (!isPositionIndependentLeafInstruction(Insn)) {
         return refuse(kLeafCode);
       }
@@ -505,6 +529,14 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
     Bindings.push_back({GV.getName().str(),
                         SourcePatchBindingKind::ReadOnlyData, *Address,
                         sizeof(uint8_t)});
+  }
+  for (const auto &Mapping : Mappings) {
+    const auto *Frame =
+        Image.ExceptionMetadata.findFunction(Mapping.OriginalVA);
+    if (Frame && Frame->Compact &&
+        Frame->Compact->NativeEncoding == macho_unwind::kARM64ModeFrame)
+      Candidate->getFunction(Mapping.Symbol)
+          ->addFnAttr(kFramePointerAttribute, kNonLeafFrame);
   }
   llvm::SmallVector<llvm::Module::ModuleFlagEntry> Flags;
   Candidate->getModuleFlagsMetadata(Flags);

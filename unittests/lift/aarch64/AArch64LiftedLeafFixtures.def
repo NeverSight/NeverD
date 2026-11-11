@@ -313,12 +313,19 @@ uint64_t leaf_sum(const uint64_t *p) { return p[1]; }
 void leaf_difference(uint64_t *p, uint64_t v) { p[1] = v; }
 )c")
 
+A64_LEAF_TEXT(kKeepFrame, "-fno-omit-frame-pointer")
+A64_LEAF_TEXT(kFramedImport, "#define NEVERD_TEST_FRAMED_IMPORT 1\n")
+A64_LEAF_TEXT(kProcessImport, "getpid")
 A64_LEAF_TEXT(kGlobalLeaves, R"c(
 #include <stdint.h>
 #include <unistd.h>
 uint64_t leaf_state = 42;
 uint64_t leaf_sum(void) { return leaf_state; }
+#ifdef NEVERD_TEST_FRAMED_IMPORT
+uint64_t leaf_difference(void) { return (uint32_t)getpid() + leaf_state; }
+#else
 int leaf_difference(void) { return getpid(); }
+#endif
 )c")
 A64_LEAF_TEXT(kGlobalCaller, R"c(
 #include <dlfcn.h>
@@ -329,13 +336,22 @@ int main(int argc, char **argv) {
   void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
   if (!image) return 2;
   uint64_t (*read_state)(void) = dlsym(image, "leaf_sum");
+#ifdef NEVERD_TEST_FRAMED_IMPORT
+  uint64_t (*process)(void) = dlsym(image, "leaf_difference");
+#else
   int (*process)(void) = dlsym(image, "leaf_difference");
+#endif
   uint64_t *state = dlsym(image, "leaf_state");
   if (!state || !read_state || !process || read_state() != 42) return 3;
   const uint64_t values[] = {0, 1, UINT64_MAX, UINT64_C(1) << 63};
   for (unsigned i = 0; i < sizeof(values) / sizeof(*values); ++i) {
     *state = values[i];
-    if (read_state() != *state || process() != getpid()) return 4;
+    if (read_state() != *state) return 4;
+#ifdef NEVERD_TEST_FRAMED_IMPORT
+    if (process() != (uint32_t)getpid() + *state) return 5;
+#else
+    if (process() != getpid()) return 5;
+#endif
   }
   return dlclose(image) != 0;
 }

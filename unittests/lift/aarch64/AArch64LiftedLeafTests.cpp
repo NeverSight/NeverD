@@ -94,7 +94,7 @@ void verifyTailTargets(llvm::Module &Module, MachOPatcher &Patcher,
 }
 #endif
 
-enum class LeafCheck { None, TailTarget, ErrorResult, Global };
+enum class LeafCheck { None, TailTarget, ErrorResult, Global, FramedImport };
 
 void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
                            const char *SourceName = kSource,
@@ -111,8 +111,10 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   const auto Rejected = (Root / kRejected).string();
   std::ofstream(Source) << Preamble << Leaves;
   ASSERT_EQ(llvm::sys::ExecuteAndWait(
-                kCompiler, {kCompiler, kTargetFlag, kTarget, kOptimize,
-                            kOmitFrame, kDylib, kTight, Source, kOut, Input}),
+                kCompiler,
+                {kCompiler, kTargetFlag, kTarget, kOptimize,
+                 Check == LeafCheck::FramedImport ? kKeepFrame : kOmitFrame,
+                 kDylib, kTight, Source, kOut, Input}),
             0);
   auto Reader = Loader::create(BinaryFormat::MachO);
   auto Image = Reader->load(Input);
@@ -167,7 +169,18 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
         Patcher.patch(Input, Rejected, *MissingWrite, Image->Arch).Success);
     EXPECT_FALSE(std::filesystem::exists(Rejected));
   }
-  if (Check == LeafCheck::Global) {
+  if (Check == LeafCheck::FramedImport) {
+    auto Retargeted = llvm::CloneModule(Module);
+    auto *Import = Retargeted->getFunction(kProcessImport);
+    auto *Read = Retargeted->getFunction(kSum);
+    ASSERT_NE(Import, nullptr);
+    ASSERT_EQ(Import->getFunctionType(), Read->getFunctionType());
+    Import->replaceAllUsesWith(Read);
+    EXPECT_FALSE(
+        Patcher.patch(Input, Rejected, *Retargeted, Image->Arch).Success);
+    EXPECT_FALSE(std::filesystem::exists(Rejected));
+  }
+  if (Check == LeafCheck::Global || Check == LeafCheck::FramedImport) {
     auto Redirected = llvm::CloneModule(Module);
     auto *Read = Redirected->getFunction(kSum);
     auto *Ret = llvm::cast<llvm::ReturnInst>(Read->back().getTerminator());
@@ -403,5 +416,9 @@ TEST(AArch64LiftedImage,
      OriginalGlobalAndAuthenticatedImportSurvivePublication) {
   verifyPublishedLeaves(kGlobalLeaves, kGlobalCaller, kSource, {},
                         LeafCheck::Global);
+}
+TEST(AArch64LiftedImage, SignedFrameCallsImportBeforeReadingOriginalGlobal) {
+  verifyPublishedLeaves(kGlobalLeaves, kGlobalCaller, kSource, kFramedImport,
+                        LeafCheck::FramedImport);
 }
 } // namespace

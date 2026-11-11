@@ -27,7 +27,7 @@ MACHO_LEAF_TEXT(kLeafCode, "arm64e generated instructions do not reproduce the "
                            "original position-independent leaf")
 MACHO_LEAF_TEXT(
     kLeafFrame,
-    "arm64e lifted leaf requires matching frameless unwind coverage")
+    "arm64e lifted leaf requires a matching native frame record and unwind encoding")
 MACHO_LEAF_TEXT(kGeneratedCoverage,
                 "arm64e object has {0} unwind ranges for {1} entries and {2} "
                 "code bytes for {3} original bytes")
@@ -45,8 +45,8 @@ MACHO_LEAF_TEXT(kSourceText,
 MACHO_LEAF_TEXT(kSourceEntry, "arm64e lifted function {0} has no complete "
                               "definition at an original entry")
 MACHO_LEAF_TEXT(
-    kTailTarget,
-    "arm64e direct tail branch does not preserve its installed target")
+    kDirectTarget,
+    "arm64e direct transfer does not preserve its installed target")
 MACHO_LEAF_TEXT(kErrorResultABI,
                 "arm64e writable X21 across calls requires an error-result ABI")
 MACHO_LEAF_TEXT(kLeafABIFlag, "ptrauth.abi-version")
@@ -55,6 +55,12 @@ MACHO_LEAF_TEXT(
     "arm64e lifted ADRP does not reproduce the original data page and register")
 MACHO_LEAF_TEXT(kDataBinding,
                 "arm64e lifted global needs an original image data address")
+MACHO_LEAF_TEXT(kFramePointerAttribute, "frame-pointer")
+MACHO_LEAF_TEXT(kNonLeafFrame, "non-leaf")
+MACHO_LEAF_VALUE(unsigned, kFrameRecordWords, 5)
+MACHO_LEAF_VALUE(uint32_t, kPushFrameRecord, 0xa9bf7bfd)
+MACHO_LEAF_VALUE(uint32_t, kSetFramePointer, 0x910003fd)
+MACHO_LEAF_VALUE(uint32_t, kPopFrameRecord, 0xa8c17bfd)
 MACHO_LEAF_VALUE(va_t, kInstructionPageBytes, 4096)
 MACHO_LEAF_VALUE(uint32_t, kClassicABIVersion, 0)
 MACHO_LEAF_VALUE(unsigned, kMemoryOperandCount, 2)
