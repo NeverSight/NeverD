@@ -9931,7 +9931,18 @@ with another, keeps the save: later analyses would read the copy as the
 incoming register and take a returned save for no result. The restore proof
 also follows unobserved zero extensions, including the Q-register update from
 an AArch64 D-register restore, and the Q register an ARM32 VPOP rebuilds from
-its D halves. A read of any derived value retains the save.
+its D halves. A read of any derived value retains the save. The projection also
+leaves out a store of unknown machine state into the private frame that nothing
+observes, where either C route would fail: an ARM32 VLD1 lane load keeps the
+other half of a scratch D register, whose incoming value no caller defines, and
+the compiler spills and reloads the whole register without using that half.
+Every path from the store must overwrite the bytes or return before anything
+could read them, and every load of them must produce a value nothing observes;
+a frame address the code spilled and reloads resolves through the stores that
+reach the reload. A call, an access outside the frame other than a read of a
+complete image object or of read-only image bytes such as a literal pool, an
+operation that may fault, an escaping frame address and an exceptional edge each
+keep the store, and a store of a known value is left to the other proofs.
 HighIR removes unused restore temporaries before checking private save slots,
 while frame addresses still retain their original SSA identities. On x86 the
 projection also marks a pointer-width load of the slot at the entry stack

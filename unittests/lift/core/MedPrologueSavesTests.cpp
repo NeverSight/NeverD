@@ -340,6 +340,116 @@ TEST_P(MedPrologueSaves, AnARM32VpopRebuildsQ4FromItsRestores) {
   }
 }
 
+/// An ARM32 body that spills d17's incoming value, unknown machine state no
+/// caller defines, to its private frame and reloads it into t20: what a VLD1
+/// lane load leaves in the other half of a scratch register. A frame address
+/// spilled to the pointer slot [sp+8] is reloaded and read through: it
+/// addresses [sp+12] unless \p IntoSpill points it at the spilled bytes.
+MedFunc spillsUnknownD17(bool IntoSpill = false) {
+  auto Reg = [](int Id, uint64_t Offset, uint16_t Size, int Version) {
+    MedVar V;
+    V.Kind = MedVar::Reg;
+    V.TheArch = Arch::ARM;
+    V.Id = Id;
+    V.RegOff = Offset;
+    V.Size = Size;
+    V.SSAVer = Version;
+    return V;
+  };
+  auto Temp = [](int Id, uint16_t Size) {
+    MedVar V = temp(Id);
+    V.TheArch = Arch::ARM;
+    V.Size = Size;
+    return V;
+  };
+  const auto SP = [&](int Version) { return Reg(1, armreg::SP, 4, Version); };
+  const MedVar D17 = Reg(2, armreg::D(17), 8, 0);
+  MedFunc Func;
+  Func.Entry = 0x1000;
+  Func.CC = CallingConv::ARM_AAPCS;
+  Func.FrameSize = 16;
+  MedBlock Block;
+  Block.Id = 0;
+  Block.StartAddr = Func.Entry;
+  Block.Ops = {op(NdOp::COPY, SP(0), {SP(0)}),
+               op(NdOp::COPY, D17, {D17}),
+               op(NdOp::INT_SUB, SP(1), {SP(0), MedVar::makeConst(16, 4)}),
+               op(NdOp::STORE, none(), {SP(1), D17}),
+               op(NdOp::INT_ADD, Temp(10, 4), {SP(1), MedVar::makeConst(8, 4)}),
+               op(NdOp::INT_ADD, Temp(11, 4),
+                  {SP(1), MedVar::makeConst(IntoSpill ? 0 : 12, 4)}),
+               op(NdOp::STORE, none(), {Temp(10, 4), Temp(11, 4)}),
+               op(NdOp::LOAD, Temp(20, 8), {SP(1)}),
+               op(NdOp::LOAD, Temp(12, 4), {Temp(10, 4)}),
+               op(NdOp::LOAD, Temp(30, 4), {Temp(12, 4)}),
+               op(NdOp::INT_ADD, SP(2), {SP(1), MedVar::makeConst(16, 4)}),
+               op(NdOp::RETURN, none(), {Temp(30, 4)})};
+  Func.Blocks.push_back(std::move(Block));
+  return Func;
+}
+
+TEST(SourceUnknownSpills, AnUnobservedSpillOfUnknownStateIsLeftOut) {
+  // Both C routes would fail at the store of d17's unknown bits, which the
+  // reload's unused value never shows; the read through the reloaded frame
+  // address takes other bytes.
+  MedFunc Func = spillsUnknownD17();
+  markSourceStackAccesses(Func, Arch::ARM, BinaryFormat::ELF);
+  const auto &Ops = Func.Blocks[0].Ops;
+  EXPECT_TRUE(Ops[3].PrologueSave);
+  EXPECT_FALSE(Ops[6].PrologueSave);
+  EXPECT_EQ(Ops[7].Opcode, NdOp::LOAD);
+  EXPECT_EQ(Ops.size(), 12u);
+}
+
+TEST(SourceUnknownSpills, AnyObservationKeepsTheSpill) {
+  for (int Mode = 0; Mode < 5; ++Mode) {
+    SCOPED_TRACE(Mode);
+    MedFunc Func = spillsUnknownD17(/*IntoSpill=*/Mode == 0);
+    auto &Ops = Func.Blocks[0].Ops;
+    if (Mode == 1) {
+      // The reload's value is returned.
+      Ops.back() = op(NdOp::RETURN, none(), {Ops[7].Output});
+    } else if (Mode == 2) {
+      // It decides a branch.
+      MedBlock Exit;
+      Exit.Id = 1;
+      Exit.StartAddr = Func.Entry + 0x20;
+      Exit.Preds = {0};
+      Exit.Ops = {Ops.back()};
+      Ops.back() = op(NdOp::COND_BR, none(),
+                      {MedVar::makeConst(Exit.StartAddr, 4), Ops[7].Output});
+      Func.Blocks[0].Succs = {1};
+      Func.Blocks.push_back(std::move(Exit));
+    } else if (Mode == 3) {
+      // A store outside the frame might fault where a handler can read the
+      // frame, and it hands the frame address on; so might the read of
+      // memory no image maps.
+      Ops.insert(Ops.begin() + 4,
+                 op(NdOp::STORE, none(),
+                    {MedVar::makeConst(0x4000, 4), Ops[2].Output}));
+      MedVar Read = Ops[8].Output;
+      Read.Id = 40;
+      Ops.insert(Ops.end() - 1,
+                 op(NdOp::LOAD, Read, {MedVar::makeConst(0x4004, 4)}));
+    } else if (Mode == 4) {
+      // A call may read the frame.
+      Ops.insert(Ops.end() - 1,
+                 op(NdOp::CALL, none(), {MedVar::makeConst(0x2000, 4)}));
+    }
+    markSourceStackAccesses(Func, Arch::ARM, BinaryFormat::ELF);
+    EXPECT_FALSE(Func.Blocks[0].Ops[3].PrologueSave);
+  }
+}
+
+TEST(SourceUnknownSpills, ASpillOfAKnownValueIsUnchanged) {
+  // Only a store that C could not write is left out by this proof.
+  MedFunc Func = spillsUnknownD17();
+  auto &Store = Func.Blocks[0].Ops[3];
+  Store.Inputs[1] = MedVar::makeConst(0x1234, 8);
+  markSourceStackAccesses(Func, Arch::ARM, BinaryFormat::ELF);
+  EXPECT_FALSE(Store.PrologueSave);
+}
+
 TEST_P(MedPrologueSaves, AComputedValueIsNoSave) {
   MedFunc Func = pushedRbx();
   Func.Blocks[0].Ops[4] = op(NdOp::STORE, none(), {sp(1), rbx(1)});
