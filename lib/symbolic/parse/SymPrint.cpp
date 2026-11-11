@@ -22,7 +22,10 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 
+#include <algorithm>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -365,29 +368,41 @@ void Printer::prepare(llvm::ArrayRef<SymRef> Roots) {
   llvm::SmallVector<Frame, 64> Work;
   for (SymRef R : llvm::reverse(Roots))
     Work.push_back({R, false});
+  const size_t Span = size_t(llvm::max_element(Roots)->index()) + 1;
+  constexpr size_t SlotsPerEntry =
+      sizeof(decltype(Memo)::value_type) / sizeof(uint32_t);
+  const size_t DenseAfter =
+      std::max<size_t>(limits::symbolic::kSymExprTraversalInlineBuckets + 1,
+                       llvm::divideCeil(Span, SlotsPerEntry));
+  constexpr auto Unseen = std::numeric_limits<uint32_t>::max();
+  uint32_t Seen = 0;
   while (!Work.empty()) {
     auto [R, Expanded] = Work.pop_back_val();
     if (Expanded) {
       Order.push_back(R.index());
       continue;
     }
-    if (!Memo.try_emplace(R.index(), uint32_t(Memo.size())).second)
-      continue;
+    if (!Direct.empty()) {
+      auto &Position = Direct[R.index()];
+      if (Position != Unseen)
+        continue;
+      Position = Seen++;
+    } else {
+      if (!Memo.try_emplace(R.index(), Seen).second)
+        continue;
+      if (++Seen == DenseAfter) {
+        // Once the actually visited set pays for this index, the rest of
+        // discovery and all fragment lookups can bypass the hash table.
+        Direct.assign(Span, Unseen);
+        for (const auto &[Id, Position] : Memo)
+          Direct[Id] = Position;
+      }
+    }
     Work.push_back({R, true});
     for (SymRef C : Ctx.operands(R))
       Work.push_back({C, false});
   }
 
-  // Interned operands precede their parent. Use direct fragment indices
-  // only when their span costs no more than the reachable hash entries.
-  const size_t Span = size_t(llvm::max_element(Roots)->index()) + 1;
-  if (Order.size() > limits::symbolic::kSymExprTraversalInlineBuckets &&
-      Span <= Order.size() *
-                  (sizeof(decltype(Memo)::value_type) / sizeof(uint32_t))) {
-    Direct.resize_for_overwrite(Span);
-    for (const auto &[Id, Position] : Memo)
-      Direct[Id] = Position;
-  }
   Fragments.resize(Order.size());
   for (auto I : Order)
     Fragments[slot(SymRef(I))] = render(SymRef(I));

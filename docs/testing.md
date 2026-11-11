@@ -4168,7 +4168,13 @@ original. A separate shared-use case checks that a full-width consumer prevents
 narrowing a repeated residue. A 33-factor executable exercises the CLI and
 GUI worker source paths at O0 and O2. Use `--family upper-perturbation --count 32`
 to reproduce 256 scaled products and `--family masked-perturbation --count 32`
-for 160 mixed-mask controls, including non-native widths up to 257 bits. The LLVM
+for 160 mixed-mask controls, including non-native widths up to 257 bits.
+Use `--family mixed-perturbation --count 24` for 168 products of 9 to 65
+factors with one to four low disturbances. The native tests exhaust the
+five-bit input pair and check mixed products with independent full-width Z3
+proofs at 16, 65 and 257 bits. A 49-factor executable retains three low
+factors through the CLI and worker source routes.
+The LLVM
 translator checks scaled offsets against exhaustive byte domains, including
 overlap and no-wrap flags that can make the input poison.
 Additional regressions combine a masked product with a compound arithmetic

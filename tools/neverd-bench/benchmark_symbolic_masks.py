@@ -1152,6 +1152,41 @@ def masked_perturbation_corpus(width, count):
 
 
 
+def mixed_perturbation_corpus(width, count):
+    """High disturbances with one to four low factors whose cross terms survive."""
+    rows = []
+    sources = ("(x^y)", "(z|w)", "(x+(w^y))", "((x&z)*(y|w))", "(~(w|x))", "(z&w)")
+    for case in range(count):
+        rng = random.Random(0xB7F3461 + width * 13541 + case * 7937)
+        degree = (9, 13, 17, 33, 49, 65)[case % 6]
+        low_factors = 1 + (case // 2) % 4
+        lost = width // 5 if case % 3 else 0
+        observed = width - lost
+        scale = 3 << lost if case % 3 else 1
+        factors = []
+        for i in range(degree):
+            offset = 2 * rng.randrange(1, 16) + 1
+            if case % 7 == 2 and i % 8 == 3:
+                offset += 1
+            span = max(1, observed // 5)
+            if i < low_factors:
+                shift = (i + case) % span
+            else:
+                shift = min(observed - 1, (observed + 1) // 2 + rng.randrange(min(4, span)))
+            source = sources[(i + case) % len(sources)]
+            weight = ((rng.getrandbits(6) | 1) << shift) & ((1 << width) - 1)
+            if case % 3 == 1 and i >= low_factors and i % 2:
+                mask = (rng.getrandbits(width - shift) | 1) << shift
+                delta = f"({source}&{mask})"
+            else:
+                delta = f"({weight}*{source})"
+            factors.append(f"({offset}+{delta})")
+        rng.shuffle(factors)
+        rows.append(f"({scale}*" + "*".join(factors) + ")+(x^y)+2*(x&y)")
+    return rows
+
+
+
 def sparse_linear_mixed_degree_corpus(width, count):
     """Degree-4–18 products with disjoint constant, linear and perturbed tails.
 
@@ -1350,7 +1385,8 @@ def main():
                  "permuted-carry-product", "complemented-carry-product",
                  "narrow-product-cross-terms", "masked-product-window",
                  "residue-power", "residue-quotient", "residue-subgroup",
-                 "sparse-linear-mixed-degree", "upper-perturbation", "masked-perturbation"),
+                 "sparse-linear-mixed-degree", "upper-perturbation", "masked-perturbation",
+                 "mixed-perturbation"),
         default="complement",
     )
     args = parser.parse_args()
@@ -1368,6 +1404,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="neverd-mask-bench-") as directory:
         path = Path(directory) / "expressions.txt"
         widths = {
+            "mixed-perturbation": (8, 16, 32, 64, 65, 129, 257),
             "upper-perturbation": (8, 16, 32, 64, 65, 97, 129, 257),
             "masked-perturbation": (9, 24, 63, 127, 256),
         }.get(args.family, (8, 16, 32, 64))
@@ -1402,6 +1439,7 @@ def main():
                 "sparse-linear-mixed-degree": sparse_linear_mixed_degree_corpus,
                 "upper-perturbation": upper_perturbation_corpus,
                 "masked-perturbation": masked_perturbation_corpus,
+                "mixed-perturbation": mixed_perturbation_corpus,
             }[args.family]
             expressions = generate(width, args.count)
             path.write_text("\n".join(expressions) + "\n", encoding="utf-8")

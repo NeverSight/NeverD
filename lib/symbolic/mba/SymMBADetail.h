@@ -637,6 +637,16 @@ bool productCoefficientsFitScale(const HigherCoefficients &Higher,
 SymRef foldProductResidues(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
                            size_t &Storage);
 
+/// Linearize the factors whose pairwise disturbances vanish modulo the
+/// observed width and retain the other multiplicative factors exactly.
+SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
+                            size_t &Storage, bool *EmittedReading);
+
+/// Absorb a top-bit correction into an adjacent sum by its exact parity.
+SymRef foldResidueParitySum(SymContext &Ctx, SymRef Root,
+                            const MBAOptions &Opts, WorkBudget &Budget,
+                            size_t Storage, SolveReport &Rep);
+
 /// A complete lower bound over every low-bit residue, capped at Ceiling.
 std::optional<unsigned>
 minimumProductResidueZeros(llvm::MutableArrayRef<llvm::APInt> Offsets,
