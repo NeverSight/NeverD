@@ -163,8 +163,9 @@ private:
   /// A read-only replica is checked against the owner's loaded input and
   /// committed sidecars before any expensive operation is admitted.
   Json analysisSnapshot();
-  /// analysisSnapshot, stating \p state of the user's facts.
-  Json analysisSnapshot(Json state);
+  /// analysisSnapshot, stating \p state of the user's facts and \p declared
+  /// as the declared types where given (typeDeclarationRows otherwise).
+  Json analysisSnapshot(Json state, const Json *declared = nullptr);
   Json browseCacheIdentity();
   /// \p identity, a snapshot, with what else says what a cached page read: the
   /// project's files but for \p unread.
@@ -360,8 +361,8 @@ private:
   };
   StoreNames storeNames();
   /// What the stores are kept under (renderStoreIdentity), or none where this
-  /// session keeps no stores.
-  std::optional<Json> storeIdentity();
+  /// session keeps no stores; \p declared as renderStoreIdentity's.
+  std::optional<Json> storeIdentity(const Json *declared = nullptr);
   /// The names of the stores kept under \p identity.
   static StoreNames storeNames(Json identity);
   /// What the render just made read of what the user states, kept as the first
@@ -395,8 +396,9 @@ private:
   void keepListingFacts(std::uint64_t address);
   std::string renderStoreMode_;
   /// What renders depend on: browseCacheIdentity without what a view's
-  /// decoration reads, local and function names and comments.
-  Json renderStoreIdentity();
+  /// decoration reads, local and function names and comments.  \p declared,
+  /// where given, are the declared types it states (analysisSnapshot's).
+  Json renderStoreIdentity(const Json *declared = nullptr);
   /// A view's key in the store: its source key without the generation, which
   /// counts this session's listing builds.
   std::string renderStoreKey(std::uint64_t address,
@@ -481,6 +483,8 @@ private:
   /// take them in place (namedViewsTakeRevision).
   const CodeEdits::ImageFacts &imageFacts() const;
   mutable CodeEdits::ImageFacts imageFacts_;
+  /// projectFolder() once read; reset with the session.
+  mutable std::optional<std::string> projectFolder_;
   mutable std::optional<std::uint64_t> imageFactsRevision_;
   bool imageFactsHeld_ = false;
   /// States the names of \p view's functions as they are named now.
@@ -731,10 +735,14 @@ private:
   /// the analysis go, as declaring does.
   bool reloadTypeDeclarations();
   /// Record which build of the input the project's files describe, after
-  /// the worker wrote one of them.
-  void recordProject();
+  /// the worker wrote one of them: true once recorded, or when the engine
+  /// keeps no record.
+  bool recordProject();
   /// neverd_project_json, or null from an older engine.
   Json projectJson() const;
+  /// The project's folder, as neverd_project_json gives it: read once a
+  /// session has one, which it keeps with its input; empty without one.
+  const std::string &projectFolder() const;
   /// Read the function edits sidecar: true when it loaded or the engine keeps
   /// no function edits.  A changed function list restarts its analysis.
   bool reloadFunctionEdits();

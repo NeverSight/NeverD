@@ -2374,11 +2374,10 @@ Listing &Engine::newListing() {
       [this](const std::string &key, std::string bytes) {
         keepListingFact(key, std::move(bytes));
       });
-  const auto project = projectJson();
-  if (browseCacheEnabled_ && project.is_object() && project.contains("folder"))
+  if (browseCacheEnabled_ && !projectFolder().empty())
     listing_->configureCache(
-        utf8Path(project.at("folder").get<std::string>()),
-        [this] { return browseCacheIdentity(); }, !readOnly_, atomicWrite);
+        utf8Path(projectFolder()), [this] { return browseCacheIdentity(); },
+        !readOnly_, atomicWrite);
   if (analyzed_)
     listing_->loadSwitches();
   return *listing_;
@@ -2793,7 +2792,12 @@ ProjectHistory &Engine::history() {
     history_ = std::make_unique<ProjectHistory>(
         utf8Path(ownedString(neverd_session_file_path(session_))), hash,
         version(), readOnly_, atomicWrite);
-    history_->onCommit([this] { recordProject(); });
+    // What the record says, the input's name, size and hash, holds while the
+    // session keeps the input: once recorded, a later commit records it again.
+    history_->onCommit([this, recorded = false]() mutable {
+      if (!recorded)
+        recorded = recordProject();
+    });
     if (history_->recovered()) {
       if (!reloadUserState())
         throw Error("recovery_required",
@@ -2925,13 +2929,25 @@ void Engine::persistTableEdit(ProjectHistory &store, const std::string &table,
     store.persistTable(table, std::move(rows));
 }
 
-void Engine::recordProject() {
+bool Engine::recordProject() {
   // The engine records which build of the input the project's files describe;
   // an older engine keeps no record, and a record that fails fails no edit.
   static const auto record =
       engineSymbol<SessionLoadFunction>("neverd_project_record");
-  if (record)
-    (void)record(session_);
+  return !record || record(session_) == 0;
+}
+
+const std::string &Engine::projectFolder() const {
+  // A session that has none yet, as before it loads, is asked again.
+  if (!projectFolder_ || projectFolder_->empty()) {
+    const auto project = projectJson();
+    const auto folder =
+        project.is_object() ? project.find("folder") : project.end();
+    projectFolder_ = folder != project.end() && folder->is_string()
+                         ? folder->get<std::string>()
+                         : std::string();
+  }
+  return *projectFolder_;
 }
 
 Json Engine::projectJson() const {
@@ -3052,7 +3068,7 @@ Json Engine::codeEditRow(std::uint64_t address) const {
 
 Json Engine::analysisSnapshot() { return analysisSnapshot(userState()); }
 
-Json Engine::analysisSnapshot(Json state) {
+Json Engine::analysisSnapshot(Json state, const Json *declared) {
   requireLoaded();
   // A declined PDB names no file to have changed.
   if (pdbInput_.contains("path") &&
@@ -3104,8 +3120,9 @@ Json Engine::analysisSnapshot(Json state) {
           {"open", options},
           {"input_sha256", inputHash()},
           {"state", std::move(state)},
-          {"declared_types",
-           declaresLocalTypes() ? typeDeclarationRows() : Json::array()},
+          {"declared_types", !declaresLocalTypes() ? Json::array()
+                             : declared            ? *declared
+                                                   : typeDeclarationRows()},
           {"analysis_sections", std::move(analysisSections)},
           {"signatures", signatureInputs_},
           {"pdb", pdbInput_},
@@ -3132,8 +3149,9 @@ Json Engine::browseCacheIdentity(
   // change of this flag invalidates the listing, which reads it again.
   identity["analyzed"] = analyzed_;
   Json shared = Json::object();
-  const auto project = projectJson();
-  const auto folder = utf8Path(project.at("folder").get<std::string>());
+  if (projectFolder().empty())
+    throw Error("cache_unavailable", "The project has no folder");
+  const auto folder = utf8Path(projectFolder());
   for (const auto &file : project_files::Files) {
     if (!file.Shared || file.Id == project_files::File::Manifest ||
         file.Id == project_files::File::Bookmarks ||
@@ -4402,6 +4420,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
         readCodeEdits(ownedString(neverd_session_file_path(next.get())));
     neverd_session_destroy(session_);
     session_ = next.release();
+    projectFolder_.reset();
     codeEdits_ = std::move(nextCodeEdits);
     // A file too large or unreadable is the next project_sync's to report.
     try {
@@ -5318,7 +5337,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     if (operation == "local_types_declare") {
       settleNamedViews();
       try {
-        identityBefore = storeIdentity();
+        // The Session's declarations are those the history committed.
+        identityBefore = storeIdentity(&history_->committedTable("types"));
         if (identityBefore)
           storesBefore = storeNames(*identityBefore);
       } catch (const std::exception &) {
