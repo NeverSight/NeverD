@@ -935,6 +935,23 @@ decode/lift benchmarks. Local paired timings and the single-function Archer
 C7 comparison with Ghidra are in
 `build-mips/mips-cache-mt-dsp-msa/qualification.json`.
 
+### Classic DSPR2, MSA and compressed system validation
+
+The [DSPR2/MSA execution and performance receipt](evidence/mips-dspr2-msa-2026-11-11.json)
+records both byte orders. LLVM assembled 113 classic DSP forms, all 46 DSPR2
+forms and 526 MIPS32 MSA mnemonic/width combinations. NeverD lifted both
+copies of each stream with matching LowIR fingerprints. The 74Kf and P5600
+execution suites compared 1,552 HighC/LLVMC builds with the original ELF
+across 18,080 inputs, including unaligned vector loads/stores at odd addresses.
+The MIPS16e2 fixture independently assembled the board CP0 and RDHWR transfers.
+Its generated MIPS16 code passed 16,640 executions against the ISA expectations.
+
+The receipt includes paired CPU-time samples against the previous NeverD
+baseline and Ghidra SLEIGH, with separate Capstone physical decode timings.
+The comparison uses classic MIPS32r2/o32 DSP, MIPS32r5/o32 MSA, and compressed
+MIPS16e2 r2/o32. DSP64, compressed DSP/MSA and the Release 6 DSP compact
+branch BPOSGE32C have separate ISA and ABI requirements.
+
 ## TP-Link firmware workflow
 
 Start with the actual extracted ELF profile instead of assuming a device is
