@@ -16,6 +16,8 @@ MACHO_PATCH_TEXT(kPatchConstSegment, "__ND_CONST")
 MACHO_PATCH_TEXT(kPlacementIdentity, "native Mach-O placement identity changed")
 MACHO_PATCH_TEXT(kSegmentInstallation,
                  "native Mach-O segment installation failed")
+MACHO_PATCH_TEXT(kNoAdjacentRXTail,
+                 "macho_patch: cannot extend an adjacent RX segment for ")
 
 MACHO_PATCH_TEXT(
     kExternalRelroStorage,

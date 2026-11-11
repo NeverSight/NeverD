@@ -796,7 +796,10 @@ inserting aligned pages ahead of the original sections in a zero-base
 arm64e dylib with image-relative
 chained fixups. The preferred header stays at zero. The output symbols, stubs
 and original data move together. The installation receipt records the slide
-and preserves each original entry VA. The verifier resolves each trampoline
+and preserves each original entry VA. If the existing RX segment cannot grow,
+the installer can retry with a TEXT prefix. An occupied gap that prevents the
+slide produces a relocation error before the output is written.
+The verifier resolves each trampoline
 from the signed output's own symbols. In the dense profile the caller also
 reads an ordinary pointer and an address-diversified DA-signed pointer to a
 local variable, writes through one and reads the result through the other.
