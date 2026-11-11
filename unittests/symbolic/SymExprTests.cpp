@@ -1115,6 +1115,26 @@ TEST(SymExpr, CollectVarsReportsEveryReachableVariableOnce) {
   EXPECT_EQ(Ctx.varInfo(Vars[1]).Name, "y");
 }
 
+TEST(SymExpr, CollectVarsUnionsSharedRootsAndExistingSparseIds) {
+  SymContext C;
+  const auto X = C.mkVar("x", 32);
+  C.mkVar("unused", 257);
+  const auto Y = C.mkVar("y", 32);
+  const auto Z = C.mkVar("z", 32);
+  const auto Kept = C.mkVar("kept", 128);
+  const auto Shared = C.mkMul(C.mkXor(X, Y), C.mkConst(32, 7));
+  const llvm::SmallVector<SymRef, 4> Roots{C.mkAdd(Shared, Z),
+                                           C.mkXor(Shared, Z), Shared, X};
+  llvm::SmallVector<uint32_t, 8> Vars{C.varId(Kept), C.varId(Y), C.varId(Y)};
+  C.collectVars(Roots, Vars);
+  const llvm::SmallVector<uint32_t, 4> Expected{0, 2, 3, 4};
+  EXPECT_EQ(Vars, Expected);
+  std::reverse(Vars.begin(), Vars.end());
+  Vars.push_back(C.varId(X));
+  C.collectVars(llvm::ArrayRef<SymRef>{}, Vars);
+  EXPECT_EQ(Vars, Expected);
+}
+
 TEST(SymExpr, ReadabilityPrefixInspectionPreservesLazyAndCopiedCaches) {
   SymContext Ctx;
   const auto X = Ctx.mkVar("x", 64);

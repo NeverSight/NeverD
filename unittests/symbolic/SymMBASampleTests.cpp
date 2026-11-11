@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../lib/symbolic/mba/SampleWords.h"
 #include "../../lib/symbolic/mba/SymMBADetail.h"
 #include "gtest/gtest.h"
 
@@ -134,6 +135,50 @@ TEST(SymMBASample, MatchesAPAcrossNarrowAndWideWidths) {
       for (unsigned Samples : {0u, 1u, 2u, 3u, 4u, 7u})
         EXPECT_EQ(detail::agreeOnSamples(Ctx, E, Other, Samples),
                   referenceAgree(Ctx, E, Other, Samples));
+    }
+}
+
+TEST(SymMBASample, LongChecksRetainEveryOriginalRandomAssignment) {
+  for (unsigned Width : {8u, 64u, 65u, 257u})
+    for (bool Sparse : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Width << ':' << Sparse);
+      SymContext Ctx;
+      const auto Selector = Ctx.mkVar("selector", 64);
+      if (Sparse)
+        for (unsigned I = 0; I < 17; ++I)
+          Ctx.mkVar("unused_before_" + std::to_string(I), 257);
+      const auto X = Ctx.mkVar("x", Width);
+      if (Sparse)
+        for (unsigned I = 0; I < 17; ++I)
+          Ctx.mkVar("unused_between_" + std::to_string(I), 65);
+      const auto Y = Ctx.mkVar("y", Width);
+      const auto E = Ctx.mkXor(Ctx.mkMul(X, Y), Ctx.mkAdd(X, Y));
+      // Three native variables reach 312 random words at sample 106 and
+      // 624 at sample 210. Wide inputs consume a different number of words.
+      // A deliberately wrong value must be caught at the same exact point.
+      for (unsigned Sample : {105u, 106u, 107u, 209u, 210u, 211u})
+        expectAtSample(Ctx, E, Selector, Sample);
+    }
+}
+
+TEST(SymMBASample, LargeInputUnionsKeepEveryOriginalAssignment) {
+  for (unsigned Inputs : {14u, 18u, 20u})
+    for (bool Sparse : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Inputs << ':' << Sparse);
+      SymContext C;
+      const auto Selector = C.mkVar("selector", 64);
+      auto E = C.mkVar("v0", 64);
+      for (unsigned I = 1; I + 1 < Inputs; ++I) {
+        if (Sparse)
+          C.mkVar("unused_" + std::to_string(I), 257);
+        const auto V = C.mkVar("v" + std::to_string(I), 64);
+        E = C.mkXor(C.mkMul(E, C.mkConst(64, 2 * I + 3)), V);
+      }
+      // The first generator rollover occurs inside an assignment for these
+      // input counts. Also check the ordinary and verified request lengths.
+      const unsigned Boundary = 3 + 312 / Inputs;
+      for (unsigned Sample : {Boundary - 1, Boundary, Boundary + 1, 63u, 255u})
+        expectAtSample(C, E, Selector, Sample);
     }
 }
 
@@ -445,3 +490,27 @@ TEST(SymMBASample, MatchesAPOperatorSemanticsAtCornersAndRandomValues) {
 }
 
 } // namespace
+
+TEST(SymMBASample, CachedWordsMatchTheIndependentStandardEngine) {
+  std::mt19937_64 Reference(0x9E3779B97F4A7C15ull);
+  ASSERT_EQ(detail::kVerificationSampleWords.size(), 8192u);
+  for (size_t I = 0; I < 8192; ++I) {
+    SCOPED_TRACE(I);
+    EXPECT_EQ(detail::kVerificationSampleWords[I], Reference());
+  }
+}
+
+TEST(SymMBASample, ChecksOnBothSidesOfTheCachedPrefixKeepAllAssignments) {
+  for (bool Sparse : {false, true}) {
+    SCOPED_TRACE(Sparse);
+    SymContext Ctx;
+    SymRef Selector = Ctx.mkVar("selector", 64);
+    if (Sparse)
+      for (unsigned I = 0; I < 257; ++I)
+        Ctx.mkVar("unused_" + std::to_string(I), 257);
+    SymRef X = Ctx.mkVar("x", 8), Y = Ctx.mkVar("y", 64);
+    SymRef Sum = Ctx.mkAdd(Ctx.mkZExt(X, 64), Y);
+    for (unsigned Sample : {2732u, 2733u, 2734u})
+      expectAtSample(Ctx, Sum, Selector, Sample);
+  }
+}

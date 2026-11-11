@@ -411,6 +411,10 @@ public:
 
   /// Every variable reachable from \p R, in ascending variable-id order.
   void collectVars(SymRef R, llvm::SmallVectorImpl<uint32_t> &Out) const;
+  /// Union the variables from all roots and existing output, visiting shared
+  /// subterms once. The result is sorted and contains no duplicates.
+  void collectVars(llvm::ArrayRef<SymRef> Roots,
+                   llvm::SmallVectorImpl<uint32_t> &Out) const;
   /// Exact structural membership. Undeclared variable IDs are absent.
   bool containsVariable(SymRef R, uint32_t VarIdx) const;
 
