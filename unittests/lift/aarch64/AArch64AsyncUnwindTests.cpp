@@ -237,17 +237,32 @@ TEST(AArch64AsyncUnwind,
     EXPECT_FALSE(Implicit.DwarfStateAtPC->State);
   }
   if (std::getenv(kExecute)) {
+    const auto WriteRules = [](const std::filesystem::path &Path,
+                               llvm::ArrayRef<StackRow> Rules) {
+      std::ofstream Out(Path);
+      Out << Rules.size() << '\n';
+      for (const auto &Row : Rules)
+        Out << Row.Offset << ' ' << Row.Depth << ' ' << Row.SavedLR << '\n';
+      Out.close();
+      return bool(Out);
+    };
+    const auto OriginalRules = (Root / kOriginalRules).string();
+    const auto InstalledRules = (Root / kPublishedRules).string();
+    ASSERT_TRUE(WriteRules(OriginalRules, OriginalRows));
+    ASSERT_TRUE(WriteRules(InstalledRules, PublishedRows));
     const auto OriginalSamples = (Root / kOriginalSamples).string();
     const auto InstalledSamples = (Root / kInstalledSamples).string();
-    ASSERT_EQ(llvm::sys::ExecuteAndWait(
-                  Driver, {Driver, Input, std::to_string(0),
-                           std::to_string(kOldValue), OriginalSamples}),
-              0);
+    ASSERT_EQ(
+        llvm::sys::ExecuteAndWait(Driver, {Driver, Input, std::to_string(0),
+                                           std::to_string(kOldValue),
+                                           OriginalSamples, OriginalRules}),
+        0);
     ASSERT_NO_FATAL_FAILURE(
         checkFrame(*Original, Entry, OriginalSamples, OriginalRows));
     ASSERT_EQ(llvm::sys::ExecuteAndWait(
                   Driver, {Driver, Output, std::to_string(Owner - Entry),
-                           std::to_string(kNewValue), InstalledSamples}),
+                           std::to_string(kNewValue), InstalledSamples,
+                           InstalledRules}),
               0);
     // Both bodies have identical machine instructions at the same offsets.
     // Only the original describes the signing transitions in its DWARF rows.
@@ -261,6 +276,7 @@ TEST(AArch64AsyncUnwind,
       RecordProperty(Property, (*Rows)->getBuffer().str());
     }
     RecordProperty(kSamples, 2 * kStages);
+    RecordProperty(kParents, 2 * kStages);
   }
 #else
   GTEST_SKIP() << kUnavailable;

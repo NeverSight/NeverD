@@ -505,12 +505,14 @@ register-only integer arithmetic, logical operations, moves, and scalar
 floating-point add/subtract ending in RET. Plain LDR and STR can use a live
 base register and displacement. A typed caller compares loaded values and
 checks both neighboring slots after stores. Literal or register-indexed
-addressing, writeback and SP-based memory operands require separate proofs. Unassigned incoming reads of X20
-now use LLVM's reserved physical register. This preserves a Swift context
+addressing, writeback and SP-based memory operands require separate proofs.
+
+Unassigned incoming reads of X20 now use LLVM's reserved physical register. This preserves a Swift context
 without requiring a stripped image to identify its source calling convention.
 Apple Clang produces both the Swift-call fixture and its independent typed
 caller. The floating-point caller checks the exact result bits, including
 signed zero.
+
 Frameless bodies may also preserve a matching entry PACIBSP and terminal
 RETAB. SP and LR remain untouched between those instructions. The relocated
 machine bytes and frameless compact unwind coverage must match, and removing
@@ -539,12 +541,16 @@ The original carries explicit signing transitions and the replacement uses
 Darwin-compatible implicit CFI. Both functions have identical instructions.
 With `NEVERD_ARM64E_ASYNC_NATIVE=1`, a second thread interrupts the active
 function before and after PACIBSP, with LR spilled, after restoring SP, and
-after AUTIBSP. The handler reads the interrupted register state and checks
-the saved word at the spill site. It authenticates each signed return using
-the measured entry SP and compares it with the assembly caller's return site.
-The test checks each sampled PC against the original's explicit DWARF row.
-It also executes a changed companion entry to distinguish the published image
-from its input. This exercises one interrupted frame in a controlled caller.
+after AUTIBSP. Before execution, the test host decodes CFA and LR locations
+from that image's FDE. The handler selects the row by interrupted PC and
+recovers the return address from the Darwin thread state's LR or the saved
+stack slot. When the address carries the test's nonzero signature, the handler
+authenticates it with the derived CFA. The caller preserves a signed parent
+LR in its standard frame record. The handler uses the interrupted FP to
+recover and authenticate this second return. Both addresses must equal
+independent assembly return sites. The test also checks the original's
+explicit signing rows and executes a changed companion entry in the installed
+image. The two-frame hardware check covers this controlled call chain.
 
 ## Reconstructed entries through the native compiler
 

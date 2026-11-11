@@ -30,6 +30,9 @@ ASYNC_FRAME_TEXT(kObject, "frame.o")
 ASYNC_FRAME_TEXT(kOriginal, "frame.dylib")
 ASYNC_FRAME_TEXT(kPublished, "installed.dylib")
 ASYNC_FRAME_TEXT(kOriginalSamples, "original.samples")
+ASYNC_FRAME_TEXT(kOriginalRules, "original.rules")
+ASYNC_FRAME_TEXT(kPublishedRules, "installed.rules")
+ASYNC_FRAME_TEXT(kParents, "native_authenticated_parent_frames")
 ASYNC_FRAME_TEXT(kInstalledSamples, "installed.samples")
 ASYNC_FRAME_TEXT(kCompiler, "/usr/bin/clang")
 ASYNC_FRAME_TEXT(kTargetFlag, "-target")
@@ -62,7 +65,6 @@ _stages:
 #endif
 .cfi_escape 0x2e, 0
 .macro stage n
-  mov x5, x30
   mov w2, #\n
   stlr w2, [x0]
   add x3, x0, #4
@@ -70,7 +72,6 @@ _stages:
   cmp w4, w2
   b.ne 1b
 .endm
-  mov x6, sp
   stage 1
   pacibsp
 #ifdef NEVERD_TEST_EXPLICIT_RA
@@ -126,6 +127,7 @@ ASYNC_FRAME_TEXT(kCaller, R"asm(
 .globl _invoke_stages
 _invoke_stages:
 .cfi_startproc
+  pacibsp
   stp x29, x30, [sp,#-16]!
 .cfi_def_cfa_offset 16
 .cfi_offset x29,-16
@@ -153,12 +155,50 @@ Lcall:
 Lreturn_site:
   mov sp, x29
   ldp x29,x30,[sp],#16
-  ret
+  retab
 .cfi_endproc
 
 .globl _return_address
 _return_address:
   adr x0, Lreturn_site
+  ret
+
+.text
+.p2align 2
+.globl _call_outer
+_call_outer:
+.cfi_startproc
+  pacibsp
+  stp x29,x30,[sp,#-16]!
+.cfi_def_cfa_offset 16
+.cfi_offset x29,-16
+.cfi_offset x30,-8
+  mov x29,sp
+.cfi_def_cfa x29,16
+  adr x2,Louter_return
+  mov w5,#8
+Lchoose_outer_sp:
+  mov x3,x2
+  mov x4,sp
+  pacib x3,x4
+  cmp x2,x3
+  b.ne Lcall_inner
+  subs w5,w5,#1
+  b.eq Lno_outer_signature
+  sub sp,sp,#16
+  b Lchoose_outer_sp
+Lno_outer_signature:
+  brk #0
+Lcall_inner:
+  bl _invoke_stages
+Louter_return:
+  mov sp,x29
+  ldp x29,x30,[sp],#16
+  retab
+.cfi_endproc
+.globl _outer_return_address
+_outer_return_address:
+  adr x0,Louter_return
   ret
 )asm")
 ASYNC_FRAME_TEXT(kObserver, R"c(
@@ -175,7 +215,7 @@ ASYNC_FRAME_TEXT(kObserver, R"c(
 #include <sys/ucontext.h>
 #include <unistd.h>
 
-enum { stages_count = 5, spill_stage = 3, frame_bytes = 16 };
+enum { stages_count = 5, frame_bytes = 16 };
 struct handshake {
   _Atomic int ready;
   _Atomic int done;
@@ -187,12 +227,40 @@ struct sample {
   int stack_matches;
 };
 typedef void (*entry)(struct handshake *);
-extern void invoke_stages(entry, struct handshake *);
+extern void call_outer(entry, struct handshake *);
+extern uintptr_t outer_return_address(void);
 extern uintptr_t return_address(void);
 static struct handshake state;
 static struct sample samples[stages_count];
 static pthread_t worker;
-static uintptr_t expected_return;
+static uintptr_t expected_return, expected_outer, owner;
+struct stack_rule {
+  uintptr_t offset, depth;
+  unsigned saved_lr;
+};
+static struct stack_rule *rules;
+static size_t rule_count;
+
+// The test host writes the selected image's decoded FDE before execution.
+static int read_rules(const char *path) {
+  FILE *file = fopen(path, "r");
+  if (!file)
+    return 0;
+  if (fscanf(file, "%zu", &rule_count) != 1 || !rule_count ||
+      !(rules = calloc(rule_count, sizeof(*rules)))) {
+    fclose(file);
+    return 0;
+  }
+  for (size_t i = 0; i < rule_count; ++i) {
+    struct stack_rule *r = &rules[i];
+    if (fscanf(file, "%" SCNuPTR " %" SCNuPTR " %u", &r->offset,
+               &r->depth, &r->saved_lr) != 3) {
+      fclose(file);
+      return 0;
+    }
+  }
+  return fclose(file) == 0;
+}
 
 static void observe(int signal, siginfo_t *info, void *context) {
   const int stage = atomic_load(&state.ready);
@@ -201,30 +269,41 @@ static void observe(int signal, siginfo_t *info, void *context) {
   const ucontext_t *uc = context;
   const arm_thread_state64_t *regs = &uc->uc_mcontext->__ss;
   const uintptr_t sp = arm_thread_state64_get_sp(*regs);
-  // x5 and x6 carry exact copies of the live LR and entry SP through the
-  // polling loop. Darwin's LR accessor may strip the signature.
-  const uintptr_t raw = regs->__x[5];
-  const uintptr_t entry_sp = regs->__x[6];
-  uintptr_t signed_return = expected_return;
-  __asm__ volatile("pacib %0, %1" : "+r"(signed_return) : "r"(entry_sp));
-  if (signed_return == expected_return ||
-      (raw != signed_return && raw != expected_return))
-    _exit(11);
   struct sample *s = &samples[stage - 1];
   s->pc = arm_thread_state64_get_pc(*regs);
-  s->is_signed = raw == signed_return;
-  s->cfa_offset = entry_sp - sp;
-  uintptr_t caller = raw;
-  if (stage == spill_stage) {
-    if (s->cfa_offset != frame_bytes)
-      _exit(12);
-    caller = *(const uintptr_t *)(entry_sp - sizeof(uintptr_t));
-    s->stack_matches = caller == raw;
+  if (s->pc < owner)
+    _exit(8);
+  const uintptr_t offset = s->pc - owner;
+  const struct stack_rule *rule = rules;
+  for (size_t i = 1; i < rule_count && rules[i].offset <= offset; ++i)
+    rule = &rules[i];
+  const uintptr_t cfa = sp + rule->depth;
+  s->cfa_offset = rule->depth;
+  const uintptr_t live_lr = arm_thread_state64_get_lr(*regs);
+  uintptr_t caller = live_lr;
+  if (rule->saved_lr) {
+    caller = *(const uintptr_t *)(cfa - sizeof(uintptr_t));
+    s->stack_matches = caller == live_lr;
   }
+  // The caller selected a modifier for which the hardware signature changes
+  // the pointer bits. Authenticate the measured value before using it.
+  uintptr_t stripped = (uintptr_t)ptrauth_strip((void *)caller,
+                                                ptrauth_key_return_address);
+  s->is_signed = caller != stripped;
   if (s->is_signed)
-    __asm__ volatile("autib %0, %1" : "+r"(caller) : "r"(entry_sp));
+    __asm__ volatile("autib %0, %1" : "+r"(caller) : "r"(cfa));
   if (caller != expected_return)
     _exit(14);
+
+  // The interrupted function preserves FP. The assembly caller's frame
+  // records its own LR at CFA-8 and signs it with its entry SP.
+  const uintptr_t parent_cfa = arm_thread_state64_get_fp(*regs) + frame_bytes;
+  const uintptr_t parent_raw =
+      *(const uintptr_t *)(parent_cfa - sizeof(uintptr_t));
+  uintptr_t parent = parent_raw;
+  __asm__ volatile("autib %0, %1" : "+r"(parent) : "r"(parent_cfa));
+  if (parent_raw == parent || parent != expected_outer)
+    _exit(15);
   atomic_store(&state.done, stage);
 }
 
@@ -239,7 +318,7 @@ static void *interrupt_worker(void *arg) {
 }
 
 int main(int argc, char **argv) {
-  if (argc != 5)
+  if (argc != 6 || !read_rules(argv[5]))
     return 1;
   alarm(20);
   void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
@@ -254,9 +333,10 @@ int main(int argc, char **argv) {
   companion_fn companion = (companion_fn)dlsym(image, "companion");
   if (!companion || companion() != strtoul(argv[3], NULL, 10))
     return 9;
-  const uintptr_t owner = public_entry + strtoull(argv[2], NULL, 10);
+  owner = public_entry + strtoull(argv[2], NULL, 10);
   worker = pthread_self();
   expected_return = return_address();
+  expected_outer = outer_return_address();
   struct sigaction action = {.sa_sigaction = observe, .sa_flags = SA_SIGINFO};
   sigemptyset(&action.sa_mask);
   if (sigaction(SIGUSR1, &action, NULL))
@@ -264,7 +344,7 @@ int main(int argc, char **argv) {
   pthread_t monitor;
   if (pthread_create(&monitor, NULL, interrupt_worker, NULL))
     return 5;
-  invoke_stages(run, &state);
+  call_outer(run, &state);
   if (pthread_join(monitor, NULL))
     return 6;
   FILE *out = fopen(argv[4], "w");
@@ -277,6 +357,7 @@ int main(int argc, char **argv) {
             samples[i].pc - owner, samples[i].is_signed,
             samples[i].cfa_offset, samples[i].stack_matches);
   }
+  free(rules);
   return fclose(out) || dlclose(image);
 }
 )c")
