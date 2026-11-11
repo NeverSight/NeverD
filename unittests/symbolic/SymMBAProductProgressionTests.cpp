@@ -6,6 +6,8 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/solver/SymSynthVerifier.h"
+#include "neverd/solver/Z3Solver.h"
 #include "neverd/symbolic/SymMBA.h"
 
 #include <algorithm>
@@ -113,6 +115,29 @@ TEST(SymMBAProgressions,
           }
           ASSERT_EQ(Plan.evalU64({X, Y, Z}), Product & 255);
         }
+  }
+}
+
+TEST(SymMBAProgressions, ProvesShuffledFullHalfAndIncompleteProducts) {
+  using namespace neverd;
+  if (!solver::proofBackendAvailable(solver::ProofBackend::Z3))
+    GTEST_SKIP() << "Z3 unavailable";
+  for (Window W : {Window{5, 16, 0, 2, 2, 1, 1}, Window{5, 8, 11, 6, 3, 1, 2},
+                   Window{5, 15, 9, 2, 1, 2, 1},
+                   Window{5, 16, 7, 6, 1, 1, 0, SingleMask}}) {
+    SCOPED_TRACE(W.Size);
+    SymContext Ctx;
+    const auto Input = build(Ctx, 65, W);
+    MBAOptions Opt;
+    Opt.MaxWork = 65536;
+    auto R = simplifyMBADeep(Ctx, Input, Opt);
+    ASSERT_NE(R.Expr, Input);
+    solver::Z3SolverOptions Options;
+    Options.TimeoutMs = 30000;
+    solver::Z3Solver Verifier(Ctx, Options);
+    ASSERT_TRUE(Verifier.assertDistinct(Input, R.Expr));
+    EXPECT_EQ(Verifier.check(), solver::SatResult::Unsat)
+        << Verifier.reasonUnknown();
   }
 }
 

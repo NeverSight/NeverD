@@ -2201,6 +2201,24 @@ class LowWordDecisions {
     auto Window = chooseProductWindow(Count, Nonconstants.size(), Single);
     if (!Window)
       return false;
+    // One source handle has one offset on either axis. Extra copies at
+    // that offset must all be retained. A long repeated run therefore
+    // cannot fit the window, and its ordinary power proof gets the budget.
+    const size_t PerOffset = Window->Length == Window->Period
+                                 ? Window->Copies
+                                 : (Window->Copies + 1) / 2;
+    const size_t Limit = PerOffset + Window->MaxExceptions;
+    if (Nonconstants.size() > Limit) {
+      auto Repeated = [&](llvm::ArrayRef<SymRef> Run) {
+        if (Run.front() != Run.back())
+          return false;
+        return !charge(Run.size()) ||
+               llvm::all_of(Run, [&](SymRef F) { return F == Run.front(); });
+      };
+      if (Repeated(Nonconstants.take_front(Limit + 1)) ||
+          Repeated(Nonconstants.take_back(Limit + 1)))
+        return false;
+    }
     if (!charge(Nonconstants.size(),
                 Nonconstants.size() *
                     (sizeof(ProductFactor) + 2 * sizeof(SymRef))))
