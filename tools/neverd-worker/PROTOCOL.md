@@ -1085,11 +1085,13 @@ as one made then would.  `metadata.prepared_views_made` and
 `metadata.prepared_views_given` count them.  A request's payload may carry the reads
 that follow it (`then`: at most four `{"operation":"decompile","payload":...}`, each
 naming the page its client keeps with `if_none_match`): once the request succeeds the
-reply answers each as a read made right after it would be answered, in the reply's own
-`then` list of `{status, payload}` or `{status, error}`, an answer over 1 MiB refused
-by itself; a request that fails answers none, and a read that is no page's is refused
-alone.  Such a request reads no view ahead afterwards.  `metadata.following_reads`
-counts the reads answered so.  The workbench's owner dispatcher has each edit carry the
+reply answers each from the document that page is of, as a read made right after it
+would be answered, in the reply's own `then` list of `{status, payload}` or
+`{status, error}`, an answer over 1 MiB refused by itself.  A page of no document the
+worker holds is answered `{"status":"later"}`, for the client to read itself.  A request
+that fails answers none, and a read that is no page's is refused alone.  A page given so
+is not read ahead again once the reply is sent.  `metadata.following_reads` counts the
+reads answered so.  The workbench's owner dispatcher has each edit carry the
 reads of the pages read at the revision it leaves, at most two, and takes the answers
 as those views' next reads.  `metadata.named_view_renders` counts the
 documents the engine rendered a function for, rather than built from pages kept.  `metadata.view_store_name_reads` counts

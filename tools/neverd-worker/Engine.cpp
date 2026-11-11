@@ -2124,8 +2124,8 @@ void Engine::keepPreviousView(std::shared_ptr<const NamedView> document) {
   }
 }
 
-std::optional<PageSource>
-Engine::keptClientPage(const std::string &etag) const {
+std::optional<Engine::NamedPage> Engine::namedPage(const std::string &etag,
+                                                   bool previous) const {
   // instanceTag_-document-start-end, as namedViewPage names a page.
   if (!etag.starts_with(instanceTag_ + "-"))
     return std::nullopt;
@@ -2148,15 +2148,24 @@ Engine::keptClientPage(const std::string &etag) const {
     if (document->id == parts[0])
       found = document.get();
   for (const auto &document : previousViews_)
-    if (!found && document->id == parts[0])
+    if (previous && !found && document->id == parts[0])
       found = document.get();
-  if (!found || found->value.contains("recovery_report"))
+  if (!found)
     return std::nullopt;
-  const auto &text = found->value.at("text").get_ref<const std::string &>();
-  const std::size_t total = text.empty() ? 0 : found->lines.size();
-  if (parts[1] > parts[2] || parts[2] > total)
+  return NamedPage{found, parts[1], parts[2]};
+}
+
+std::optional<PageSource>
+Engine::keptClientPage(const std::string &etag) const {
+  const auto page = namedPage(etag, true);
+  if (!page || page->document->value.contains("recovery_report"))
     return std::nullopt;
-  return namedViewLines(*found, parts[1], parts[2], parts[1] == 0);
+  const auto &found = *page->document;
+  const auto &text = found.value.at("text").get_ref<const std::string &>();
+  const std::size_t total = text.empty() ? 0 : found.lines.size();
+  if (page->start > page->end || page->end > total)
+    return std::nullopt;
+  return namedViewLines(found, page->start, page->end, page->start == 0);
 }
 
 PageSource Engine::namedViewLines(const NamedView &document, std::size_t start,
@@ -3984,26 +3993,8 @@ Engine::Reply Engine::executeResponse(const std::string &operation,
   requestRevision_ = revision_;
   served_.reset();
   writeStoreKeeps();
-  if (!preparedViews_.empty()) {
-    // An answer made for the state the read finds, and for this read.
-    if (preparedRevision_ != revision_ || !listing_ ||
-        listing_->viewGeneration() != preparedGeneration_)
-      forgetPreparedViews();
-    else if (operation == "decompile") {
-      const auto request = p.dump();
-      const auto made = std::find_if(
-          preparedViews_.begin(), preparedViews_.end(),
-          [&](const PreparedView &view) { return view.request == request; });
-      if (made != preparedViews_.end()) {
-        Reply reply{std::move(made->reply), {}};
-        if (made->served)
-          keepServed(std::move(*made->served));
-        preparedViews_.erase(made);
-        ++preparedGiven_;
-        return reply;
-      }
-    }
-  }
+  if (auto prepared = preparedAnswer(operation, p))
+    return std::move(*prepared);
   Reply reply;
   reply.value = executeImpl(operation, p, &reply.encoded);
   if (served_)
@@ -4018,10 +4009,56 @@ void Engine::forgetPreparedViews() {
       std::exchange(preparedViews_, {})));
 }
 
+std::optional<Engine::Reply>
+Engine::preparedAnswer(const std::string &operation, const Json &p) {
+  if (preparedViews_.empty())
+    return std::nullopt;
+  // An answer made for the state the read finds, and for this read.
+  if (preparedRevision_ != revision_ || !listing_ ||
+      listing_->viewGeneration() != preparedGeneration_) {
+    forgetPreparedViews();
+    return std::nullopt;
+  }
+  if (operation != "decompile")
+    return std::nullopt;
+  const auto request = p.dump();
+  const auto made = std::find_if(
+      preparedViews_.begin(), preparedViews_.end(),
+      [&](const PreparedView &view) { return view.request == request; });
+  if (made == preparedViews_.end())
+    return std::nullopt;
+  Reply reply{std::move(made->reply), {}};
+  if (made->served)
+    keepServed(std::move(*made->served));
+  preparedViews_.erase(made);
+  ++preparedGiven_;
+  return reply;
+}
+
 void Engine::keepServed(ServedPage served) {
   served.document->nextRead = std::move(served.next);
   served.document->servedAt = ++servedPages_;
   served.document->servedRevision = revision_;
+}
+
+std::optional<Engine::Reply> Engine::followingRead(const Json &p) {
+  const auto etag = p.find("if_none_match");
+  if (etag == p.end() || !etag->is_string())
+    throw Error("invalid_request",
+                "A read that follows names its page with if_none_match");
+  // What this worker holds reads in place, a patch the request's own view
+  // edits make included: the reply saves the client the read after it.  What
+  // it does not hold, the client reads itself.
+  if (!namedPage(etag->get_ref<const std::string &>(), false))
+    return std::nullopt;
+  if (auto prepared = preparedAnswer("decompile", p))
+    return prepared;
+  served_.reset();
+  Reply reply;
+  reply.value = executeImpl("decompile", p, &reply.encoded);
+  if (served_)
+    keepServed(std::move(*std::exchange(served_, std::nullopt)));
+  return reply;
 }
 
 void Engine::afterReply(const std::function<bool()> &requestWaiting) {
@@ -4029,14 +4066,13 @@ void Engine::afterReply(const std::function<bool()> &requestWaiting) {
   prepareFollowingViews(requestWaiting);
 }
 
-void Engine::prepareFollowingViews(
-    const std::function<bool()> &requestWaiting) {
+std::vector<std::shared_ptr<const Engine::NamedView>>
+Engine::viewsReadAhead() const {
   // Only an edit views keep through reaches a view a client reads again soon:
   // a comment or a name, whose views are written from what is kept.
   const auto made = viewEditCount_ - viewEditsAtRequest_;
   if (!made || !session_ || !listing_)
-    return;
-  forgetPreparedViews();
+    return {};
   std::vector<std::uint64_t> addresses;
   for (auto edit = viewEdits_.end() -
                    static_cast<std::ptrdiff_t>(
@@ -4047,7 +4083,10 @@ void Engine::prepareFollowingViews(
   // reaches by what they read, the last given first.
   std::vector<std::shared_ptr<const NamedView>> reached;
   for (const auto &document : namedViews_) {
-    if (!document->servedAt || !document->nextRead.is_object())
+    // A page given since the request changed the project (its "then") is
+    // the client's already.
+    if (!document->servedAt || !document->nextRead.is_object() ||
+        document->servedRevision == revision_)
       continue;
     bool reaches = !document->readsKnown;
     for (const auto address : addresses)
@@ -4072,6 +4111,15 @@ void Engine::prepareFollowingViews(
   });
   if (reached.size() > ::neverd::limits::worker::kEngineMaxPreparedViews)
     reached.resize(::neverd::limits::worker::kEngineMaxPreparedViews);
+  return reached;
+}
+
+void Engine::prepareFollowingViews(
+    const std::function<bool()> &requestWaiting) {
+  if (viewEditCount_ == viewEditsAtRequest_ || !session_ || !listing_)
+    return;
+  forgetPreparedViews();
+  const auto reached = viewsReadAhead();
   const auto revision = revision_;
   const auto generation = listing_->viewGeneration();
   for (const auto &document : reached) {

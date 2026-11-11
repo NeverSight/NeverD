@@ -205,26 +205,44 @@ def run(executable):
                                         "if_none_match": ""})
         assert apply_delta(changed, delta) == whole
         assert "on the kept page again" in whole["text"], whole
-        # An edit carries the read its view makes after it ("then"): the reply
-        # answers it as the read would, and a read that is no page's is refused
-        # alone, the edit standing.
+        # An edit carries the reads its views make after it ("then"): the reply
+        # answers each from the document the page it names is of, as a read made
+        # right after it would be answered; a page of no document the worker
+        # holds is the client's to read ("later"), and a read that is no page's
+        # is refused alone, the edit standing.
         kept_read = {"address": hex(functions[0]), "representation": "source",
                      "offset": 0, "limit": 200, "kept_only": True,
                      "if_none_match": whole["etag"], "page_delta": True}
+        made = ok(owner, "metadata")["prepared_views_made"]
         carried = owner.call("annotation_set", {
             "address": hex(functions[0]), "text": "carried with the edit",
             "then": [{"operation": "decompile", "payload": kept_read},
                      {"operation": "rename", "payload": {}},
-                     {"operation": "decompile", "payload": {"address": hex(functions[0])}}]})
+                     {"operation": "decompile", "payload": {"address": hex(functions[0])}},
+                     {"operation": "decompile", "payload": dict(kept_read, if_none_match="not a page")}]})
         assert carried["status"] == "ok", carried
         answers = carried["then"]
-        assert [a["status"] for a in answers] == ["ok", "error", "error"], answers
+        assert [a["status"] for a in answers] == ["ok", "error", "error", "later"], answers
         assert answers[1]["error"]["code"] == "invalid_request", answers
+        assert answers[2]["error"]["code"] == "invalid_request", answers
+        # The page its reply gave is not read again behind it.
+        assert ok(owner, "metadata")["prepared_views_made"] == made
         followed = apply_delta(whole, answers[0]["payload"])
         assert "carried with the edit" in followed["text"], followed
         assert followed == ok(owner, "decompile", {"address": hex(functions[0]), "representation": "source",
                                                    "offset": 0, "limit": 200, "kept_only": True,
                                                    "if_none_match": ""})
+        # What an edit reaches none of, its reply answers as the page stands.
+        ok(owner, "save")
+        reads = ok(owner, "metadata")["following_reads"]
+        coloured = owner.call("function_edit", {
+            "address": hex(functions[2]), "attributes": {"color": "#405062"},
+            "then": [{"operation": "decompile", "payload": dict(kept_read, if_none_match=followed["etag"])}]})
+        assert coloured["status"] == "ok", coloured
+        assert coloured["then"][0]["status"] == "ok", coloured["then"]
+        assert coloured["then"][0]["payload"]["unchanged"], coloured["then"]
+        assert coloured["then"][0]["payload"]["etag"] == followed["etag"], coloured["then"]
+        assert ok(owner, "metadata")["following_reads"] == reads + 1
         refused = owner.call("annotation_set", {
             "address": "no address", "text": "refused with its reads",
             "then": [{"operation": "decompile", "payload": kept_read}]})
@@ -233,6 +251,8 @@ def run(executable):
             "address": hex(functions[0]), "text": "too many reads",
             "then": [{"operation": "decompile", "payload": kept_read}] * 5})
         assert too_many["error"]["code"] == "invalid_request", too_many
+        ok(owner, "undo")
+        ok(owner, "save")
         ok(owner, "undo")
         ok(owner, "save")
         ok(owner, "undo")

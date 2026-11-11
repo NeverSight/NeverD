@@ -441,22 +441,26 @@ void collectPagesAfterIdle(State &state, std::unique_lock<std::mutex> &lock) {
 
 /// The answers to \p reads, a request's "then", each as a reply's status and
 /// payload or error: a source page's read naming the page its client keeps,
-/// which a reply carries whole, or what refused it.
+/// which a reply carries whole, what refused it, or "later" where the client
+/// reads it itself (Engine::followingRead).
 Json followingReads(Engine &engine, const Json &reads) {
   Json answers = Json::array();
   for (const auto &read : reads) {
     try {
       if (!read.is_object() || read.value("operation", Json()) != "decompile" ||
-          !read.contains("payload") || !read.at("payload").is_object() ||
-          !read.at("payload").contains("if_none_match"))
+          !read.contains("payload") || !read.at("payload").is_object())
         throw Error("invalid_request",
                     "A read that follows is a decompile naming its page");
-      auto reply = engine.executeResponse("decompile", read.at("payload"));
-      if (reply.encoded || reply.value.dump().size() >
-                               ::neverd::limits::worker::kMainThenReadBytes)
+      auto reply = engine.followingRead(read.at("payload"));
+      if (!reply) {
+        answers.push_back({{"status", "later"}});
+        continue;
+      }
+      if (reply->encoded || reply->value.dump().size() >
+                                ::neverd::limits::worker::kMainThenReadBytes)
         throw Error("budget_exceeded", "The read's answer is read by itself");
       answers.push_back(
-          {{"status", "ok"}, {"payload", std::move(reply.value)}});
+          {{"status", "ok"}, {"payload", std::move(reply->value)}});
       engine.noteFollowingRead();
     } catch (const Error &error) {
       answers.push_back(
@@ -575,7 +579,11 @@ void executeLoop(State &state, Transport &transport) {
         if (const auto follow = input.find("then"); follow != input.end()) {
           if (webRequest || !follow->is_array() ||
               follow->size() > ::neverd::limits::worker::kMainThenReads)
-            throw Error("invalid_request", "then is a list of at most 4 reads");
+            throw Error(
+                "invalid_request",
+                "then is a list of at most " +
+                    std::to_string(::neverd::limits::worker::kMainThenReads) +
+                    " reads");
           then = std::move(*follow);
           input.erase("then");
         }
@@ -643,8 +651,6 @@ void executeLoop(State &state, Transport &transport) {
       // read as it will ask for them, until a request waits.
       if (!webRequest)
         try {
-          if (then.is_array() && !then.empty())
-            engine.forgoViewsAhead();
           engine.afterReply([&state] {
             std::lock_guard lock(state.mutex);
             return state.stopping || !state.queue.empty();

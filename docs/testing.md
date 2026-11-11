@@ -7134,8 +7134,10 @@ showing. `QueryServiceTests::anEditCarriesTheReadsOfThePagesItsViewsShow` checks
 an edit carries the read of a page read at its revision and that the answer serves the
 view's next read with nothing sent, and `aCarriedReadTheWorkerRefusedIsMadeAgain` that a
 refused one is read again naming the page kept. `NeverDWorkerViewEdits` answers a
-comment's carried read as a whole read gets it, refuses a read that is no page's alone,
-and answers none for a refused edit or for more than four.
+comment's carried read as a whole read gets it without reading that page again behind the
+reply, leaves a page of no document it holds to the client (`later`), answers unchanged a
+page an edit reaches none of, refuses a read that is no page's alone, and answers none for
+a refused edit or for more than four.
 `NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
 session takes up what the replica keeps of a function's first look, a later session
 lists what asking the engine lists, a new name of a function or of data keeps the

@@ -69,9 +69,13 @@ public:
   /// request made are written (writeStoreKeeps), then its views read ahead
   /// (prepareFollowingViews).
   void afterReply(const std::function<bool()> &requestWaiting);
-  /// The request's own reply carried the reads that follow it ("then"):
-  /// afterReply reads no view ahead.
-  void forgoViewsAhead() { viewEditsAtRequest_ = viewEditCount_; }
+  /// A read that follows the request just answered, in its reply ("then"):
+  /// the reply a read made right after it gets, from the document the page
+  /// \p payload names (if_none_match) while this worker holds it, or nothing
+  /// where it does not, for the client to read itself.  What the request
+  /// changed stays its own (prepareFollowingViews), and the stores' relabels
+  /// wait for the reply (afterReply).
+  std::optional<Reply> followingRead(const Json &payload);
   /// A read that followed a request was answered in its reply
   /// (metadata.following_reads).
   void noteFollowingRead() { ++followingReads_; }
@@ -718,6 +722,14 @@ private:
   std::uint64_t viewEditsAtRequest_ = 0, requestRevision_ = 0;
   /// Lets answers no read took go off the request thread.
   void forgetPreparedViews();
+  /// The answer prepareFollowingViews made for \p operation's \p payload, while
+  /// the state it read stands; answers made for another state are let go.
+  std::optional<Reply> preparedAnswer(const std::string &operation,
+                                      const Json &payload);
+  /// The documents prepareFollowingViews reads after the request's reply: those
+  /// the request's view edits reach that a client was given a page of with
+  /// kept_only before them and reads again, the last given first.
+  std::vector<std::shared_ptr<const NamedView>> viewsReadAhead() const;
   /// metadata.prepared_views: answers made and given.
   std::uint64_t preparedMade_ = 0, preparedGiven_ = 0, followingReads_ = 0;
   /// Documents written from another with its comments, functions' names or
@@ -760,6 +772,15 @@ private:
   /// The page a client names with \p etag, where this worker still has the
   /// document it came from, read in place from that document.
   std::optional<PageSource> keptClientPage(const std::string &etag) const;
+  /// The document \p etag names a page of and the page's lines [start, end),
+  /// as namedViewPage names a page, among the documents views have, or also
+  /// among those they had before (\p previous).
+  struct NamedPage {
+    const NamedView *document;
+    std::uint64_t start, end;
+  };
+  std::optional<NamedPage> namedPage(const std::string &etag,
+                                     bool previous) const;
   /// Function-list order (indices into Listing::functionRows) for the last
   /// filter, sort and listing generation.
   std::string functionOrderKey_;
