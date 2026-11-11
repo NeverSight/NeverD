@@ -176,6 +176,21 @@ void LowToMedConverter::propagate(MedFunc &Func) {
         }
         if (mipsScalarMedShapeIsValid(Op, TargetArch) &&
             static_cast<Intrinsic>(Op.Inputs[0].ConstVal) ==
+                Intrinsic::MIPSAccumulatorAfterWrite &&
+            Op.Inputs[1].isConst()) {
+          if (!Op.Inputs[1].ConstVal) {
+            Op.Opcode = NdOp::COPY;
+            Op.Inputs[0] = Op.Inputs[2];
+            Op.NumInputs = 1;
+          } else {
+            Op.Inputs[0] = MedVar::makeConst(
+                uint64_t(Intrinsic::MIPSUnpredictable), sizeof(Intrinsic));
+            Op.NumInputs = 1;
+          }
+          Changed = true;
+        }
+        if (mipsScalarMedShapeIsValid(Op, TargetArch) &&
+            static_cast<Intrinsic>(Op.Inputs[0].ConstVal) ==
                 Intrinsic::MIPSLwrUpper) {
           const auto &Address = Op.Inputs[1];
           const auto &Old = Op.Inputs[2];

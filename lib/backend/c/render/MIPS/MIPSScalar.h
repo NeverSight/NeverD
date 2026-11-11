@@ -91,6 +91,8 @@ void writeMIPSScalarHelpers(Stream &OS, Arch Target,
     }
     if (Id == Intrinsic::MIPSUnpredictable)
       throw std::runtime_error(mips::kUnpredictableResult);
+    if (Id == Intrinsic::MIPSAccumulatorAfterWrite)
+      throw std::runtime_error(mips::kAccumulatorHistoryUnknown);
     if (Id == Intrinsic::MIPSLwrUpper)
       throw std::runtime_error(mips::kPartialLwrRequiresWord);
     if (Id == Intrinsic::MIPSRequireWord) {
@@ -169,6 +171,8 @@ renderMIPSScalar(const HighExpr &E, Arch Target, const std::string &Name,
     throw std::runtime_error(mips::kStatefulSourceUnsupported);
   if (E.IntrinsicId == Intrinsic::MIPSUnpredictable)
     throw std::runtime_error(mips::kUnpredictableResult);
+  if (E.IntrinsicId == Intrinsic::MIPSAccumulatorAfterWrite)
+    throw std::runtime_error(mips::kAccumulatorHistoryUnknown);
   if (E.IntrinsicId == Intrinsic::MIPSLwrUpper)
     throw std::runtime_error(mips::kPartialLwrRequiresWord);
   if (E.IntrinsicId == Intrinsic::MIPSSync)

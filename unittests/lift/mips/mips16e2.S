@@ -641,3 +641,161 @@ li $v0,7
 jrc $ra
 .end m16e2_state_pause
 .size m16e2_state_pause, .-m16e2_state_pause
+
+.set mt
+
+.align 1
+.globl m16e2_state_dmt
+.type m16e2_state_dmt,@function
+.ent m16e2_state_dmt
+m16e2_state_dmt:
+.insn
+dmt $v0
+li $v0,7
+jrc $31
+.end m16e2_state_dmt
+.size m16e2_state_dmt, .-m16e2_state_dmt
+
+.align 1
+.globl m16e2_state_emt
+.type m16e2_state_emt,@function
+.ent m16e2_state_emt
+m16e2_state_emt:
+.insn
+emt $v0
+li $v0,7
+jrc $31
+.end m16e2_state_emt
+.size m16e2_state_emt, .-m16e2_state_emt
+
+.align 1
+.globl m16e2_state_dvpe
+.type m16e2_state_dvpe,@function
+.ent m16e2_state_dvpe
+m16e2_state_dvpe:
+.insn
+dvpe $v0
+li $v0,7
+jrc $31
+.end m16e2_state_dvpe
+.size m16e2_state_dvpe, .-m16e2_state_dvpe
+
+.align 1
+.globl m16e2_state_evpe
+.type m16e2_state_evpe,@function
+.ent m16e2_state_evpe
+m16e2_state_evpe:
+.insn
+evpe $v0
+li $v0,7
+jrc $31
+.end m16e2_state_evpe
+.size m16e2_state_evpe, .-m16e2_state_evpe
+
+.align 1
+.globl m16e2_state_dmt_discard
+.type m16e2_state_dmt_discard,@function
+.ent m16e2_state_dmt_discard
+m16e2_state_dmt_discard:
+.insn
+dmt
+li $v0,7
+jrc $31
+.end m16e2_state_dmt_discard
+.size m16e2_state_dmt_discard, .-m16e2_state_dmt_discard
+
+.align 1
+.globl m16e2_state_emt_discard
+.type m16e2_state_emt_discard,@function
+.ent m16e2_state_emt_discard
+m16e2_state_emt_discard:
+.insn
+emt
+li $v0,7
+jrc $31
+.end m16e2_state_emt_discard
+.size m16e2_state_emt_discard, .-m16e2_state_emt_discard
+
+.align 1
+.globl m16e2_state_dvpe_discard
+.type m16e2_state_dvpe_discard,@function
+.ent m16e2_state_dvpe_discard
+m16e2_state_dvpe_discard:
+.insn
+dvpe
+li $v0,7
+jrc $31
+.end m16e2_state_dvpe_discard
+.size m16e2_state_dvpe_discard, .-m16e2_state_dvpe_discard
+
+.align 1
+.globl m16e2_state_evpe_discard
+.type m16e2_state_evpe_discard,@function
+.ent m16e2_state_evpe_discard
+m16e2_state_evpe_discard:
+.insn
+evpe
+li $v0,7
+jrc $31
+.end m16e2_state_evpe_discard
+.size m16e2_state_evpe_discard, .-m16e2_state_evpe_discard
+
+.align 1
+.globl m16e2_state_mfc0_mvp
+.type m16e2_state_mfc0_mvp,@function
+.ent m16e2_state_mfc0_mvp
+m16e2_state_mfc0_mvp:
+.insn
+mfc0 $v0,$0,1
+li $v0,7
+jrc $31
+.end m16e2_state_mfc0_mvp
+.size m16e2_state_mfc0_mvp, .-m16e2_state_mfc0_mvp
+
+.align 1
+.globl m16e2_state_mfc0_vpe
+.type m16e2_state_mfc0_vpe,@function
+.ent m16e2_state_mfc0_vpe
+m16e2_state_mfc0_vpe:
+.insn
+mfc0 $v0,$1,1
+li $v0,7
+jrc $31
+.end m16e2_state_mfc0_vpe
+.size m16e2_state_mfc0_vpe, .-m16e2_state_mfc0_vpe
+
+.align 1
+.globl m16e2_state_mfc0_conf
+.type m16e2_state_mfc0_conf,@function
+.ent m16e2_state_mfc0_conf
+m16e2_state_mfc0_conf:
+.insn
+mfc0 $v0,$1,2
+li $v0,7
+jrc $31
+.end m16e2_state_mfc0_conf
+.size m16e2_state_mfc0_conf, .-m16e2_state_mfc0_conf
+
+.align 1
+.globl m16e2_state_cache
+.type m16e2_state_cache,@function
+.ent m16e2_state_cache
+m16e2_state_cache:
+.insn
+cache 0,-256($v0)
+li $v0,7
+jrc $31
+.end m16e2_state_cache
+.size m16e2_state_cache, .-m16e2_state_cache
+
+.align 1
+.globl m16e2_state_pref
+.type m16e2_state_pref,@function
+.ent m16e2_state_pref
+m16e2_state_pref:
+.insn
+pref 30,255($v0)
+li $v0,7
+jrc $31
+.end m16e2_state_pref
+.size m16e2_state_pref, .-m16e2_state_pref

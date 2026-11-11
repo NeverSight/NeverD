@@ -55,6 +55,14 @@ NEVERD_MIPS_REGISTER(LO, 33, "lo", "lo")
 NEVERD_MIPS_REGISTER(PC, 34, "pc", "pc")
 NEVERD_MIPS_REGISTER(DSPControl, 35, "dspcontrol", "dspcontrol")
 
+NEVERD_MIPS_REGISTER(AC1HI, 36, "ac1_hi", "ac1_hi")
+NEVERD_MIPS_REGISTER(AC1LO, 37, "ac1_lo", "ac1_lo")
+NEVERD_MIPS_REGISTER(AC2HI, 38, "ac2_hi", "ac2_hi")
+NEVERD_MIPS_REGISTER(AC2LO, 39, "ac2_lo", "ac2_lo")
+NEVERD_MIPS_REGISTER(AC3HI, 40, "ac3_hi", "ac3_hi")
+NEVERD_MIPS_REGISTER(AC3LO, 41, "ac3_lo", "ac3_lo")
+NEVERD_MIPS_REGISTER(AC0Pending, 42, "ac0_pending", "ac0_pending")
+
 NEVERD_MIPS_REGISTER_TEXT(UnknownRegister, "unknown_mips_register")
 
 #undef NEVERD_MIPS_REGISTER
