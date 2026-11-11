@@ -7216,7 +7216,8 @@ there keeps what leads to it until a type something read moves on.
 `NeverDWorkerNamesRebuild` also renames functions, exported and not, and data, and
 defines data items, without the names being read again, and each page, table and
 resolved name then reads as after a reload. A name inside an automatic item and an
-item over a string's bytes do read them again.
+item over a string's bytes do read them again. The exports list reads the image's own
+names in either order and as filtered, and the same after an exported function's rename.
 
 `NeverDMedStackDeltaTests` checks shared stack-offset queries through PHI joins,
 the original depth boundary in both query orders, definition invalidation and
