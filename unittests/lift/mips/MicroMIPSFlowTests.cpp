@@ -16,14 +16,70 @@
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/LowToMedError.h"
+#include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/MIPSCodeMode.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include <vector>
 
 using namespace neverd;
 
 namespace {
+
+TEST(MicroMIPSDelaySlots, AllFirstHalfwordsAndPhysicalWidths) {
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL}) {
+    const auto Order = archLittleEndian(Target) ? llvm::endianness::little
+                                                : llvm::endianness::big;
+    cs_insn Insn{};
+    MIPSLifter Base(Target, InstructionMode::MicroMIPS, 2);
+    MIPSLifter DSP(Target, InstructionMode::MicroMIPS, 2);
+    DSP.setDSPEnabled(true);
+    MIPSLifter MSA(Target, InstructionMode::MicroMIPS, 5);
+    MSA.setMSAEnabled(true);
+    MIPSLifter R6(Target, InstructionMode::MicroMIPS, 6);
+    for (unsigned First = 0; First <= 0xffff; ++First) {
+      llvm::support::endian::write16(Insn.bytes, First, Order);
+      const auto Major = First >> 10;
+      for (unsigned Second : {0u, 0x0f3cu, 0x4f3cu}) {
+        llvm::support::endian::write16(Insn.bytes + 2, Second, Order);
+        for (unsigned Size : {2u, 4u}) {
+          Insn.size = Size;
+          unsigned Expected = 0;
+          if (Size == 2) {
+            if (First >= 0x4580 && First < 0x45a0)
+              Expected = 1;
+            if (First >= 0x45c0 && First < 0x45e0)
+              Expected = 4;
+            if (First >= 0x45e0 && First < 0x4600)
+              Expected = 2;
+            if (Major == 0x23 || Major == 0x2b || Major == 0x33)
+              Expected = 1;
+          } else {
+            if (Major == 0x25 || Major == 0x2d || Major == 0x35)
+              Expected = 1;
+            if (Major == 0x1d)
+              Expected = 2;
+            if (Major == 0x3c || Major == 0x3d)
+              Expected = 4;
+            if (Major == 0 && Second != 0)
+              Expected = Second == 0x0f3c ? 4 : 2;
+          }
+          const unsigned Selector = (First >> 5) & 31;
+          const bool VBranch =
+              Size == 4 && Major == 0x20 &&
+              (Selector == 11 || Selector == 15 || Selector >= 24);
+          ASSERT_EQ(Base.delaySlotBytes(Insn), Expected)
+              << First << " " << Second;
+          ASSERT_EQ(DSP.delaySlotBytes(Insn),
+                    Size == 4 && First == 0x4360 ? 1u : Expected);
+          ASSERT_EQ(MSA.delaySlotBytes(Insn), VBranch ? 1u : Expected);
+          ASSERT_EQ(R6.delaySlotBytes(Insn), 0u);
+        }
+      }
+    }
+  }
+}
 
 TEST(MicroMIPSDecode, EncodingModesRequireAMIPSTarget) {
   for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {

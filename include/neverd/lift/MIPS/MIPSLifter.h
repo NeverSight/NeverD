@@ -48,6 +48,10 @@ public:
   static bool hasDelaySlot(uint32_t Word);
   /// Zero: no slot; one: either physical width; two/four: required width.
   unsigned delaySlotBytes(const cs_insn &Instruction) const;
+  static constexpr unsigned microInstructionBytes(uint16_t First) {
+    const unsigned LengthCode = (First >> 10) & 7;
+    return LengthCode >= 1 && LengthCode <= 3 ? 2 : 4;
+  }
   LowInstructionTargetMode controlTargetMode(const cs_insn &Instruction) const;
   bool isReturn(const cs_insn &Instruction) const;
   bool isAlignmentNop(const cs_insn &Instruction) const;
@@ -121,6 +125,9 @@ private:
   bool liftRelease6(State &S, uint32_t Word) const;
   bool liftNonControl(State &S, Encoding Code, va_t BasePC) const;
   std::optional<Encoding> encoding(const cs_insn &Instruction) const;
+  unsigned microDelaySlotBytes(const cs_insn &Instruction) const;
+  std::optional<Encoding> microLegacyJump(uint16_t First,
+                                          uint16_t Second) const;
   std::optional<Encoding> microEncoding(const cs_insn &Instruction) const;
   std::optional<Encoding> mips16JumpEncoding(const cs_insn &Instruction) const;
   std::optional<Encoding> mips16E2Encoding(uint16_t First, uint16_t Half) const;

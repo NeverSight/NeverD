@@ -110,8 +110,8 @@ bool Decoder::decodeMicroMIPSRelease6(const uint8_t *Bytes, size_t Len,
     return false;
   const bool Little = archLittleEndian(TargetArch);
   const auto First = readTargetEndian<uint16_t>(Bytes, Little);
-  const unsigned Major = First >> 10, LengthCode = Major & 7;
-  const unsigned Size = LengthCode >= 1 && LengthCode <= 3 ? 2 : 4;
+  const unsigned Major = First >> 10;
+  const unsigned Size = MIPSLifter::microInstructionBytes(First);
   if (Len < Size)
     return false;
   const uint32_t Word = Size == 2

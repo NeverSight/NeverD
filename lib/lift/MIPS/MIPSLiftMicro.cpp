@@ -35,6 +35,79 @@ uint32_t immediateForm(unsigned Opcode, unsigned RT, unsigned RS,
 
 } // namespace
 
+// The slot query shares the exact transfer encodings with the scalar lifter.
+// No register-list, memory or vector arithmetic decoding is needed here.
+LLVM_ATTRIBUTE_ALWAYS_INLINE std::optional<MIPSLifter::Encoding>
+MIPSLifter::microLegacyJump(uint16_t First, uint16_t Second) const {
+  const unsigned Major = First >> 10;
+  const uint32_t Word = (uint32_t(First) << 16) | Second;
+  const unsigned RT = (First >> 5) & 31, RS = First & 31;
+  switch (Major) {
+  case 0x11: { // JR16 / JRC / JALR16 / JALRS16
+    const unsigned Minor = (First >> 5) & 31;
+    if (Minor < 12 || Minor > 15)
+      return std::nullopt;
+    const bool Link = Minor >= 14;
+    return Encoding{registerForm(Link ? 9 : 8, Link ? 31 : 0, First & 31),
+                    Minor == 13   ? 0u
+                    : Minor == 14 ? 4u
+                    : Minor == 15 ? 2u
+                                  : 1u};
+  }
+  case 0x23: // BEQZ16
+  case 0x2b: // BNEZ16
+    return Encoding{immediateForm(Major == 0x23 ? 4 : 5, 0,
+                                  compactRegister((First >> 7) & 7),
+                                  ((First & 127) ^ 64) - 64),
+                    1};
+  case 0x33: // B16
+    return Encoding{immediateForm(4, 0, 0, ((First & 1023) ^ 512) - 512), 1};
+  case 0x25: // BEQ32
+  case 0x2d: // BNE32
+    return Encoding{
+        immediateForm(Major == 0x25 ? 4 : 5, RT, RS, uint16_t(Word)), 1};
+  case 0x35: // J
+  case 0x3d: // JAL
+  case 0x1d: // JALS
+  case 0x3c: // JALX
+    return Encoding{((Major == 0x35   ? 2u
+                      : Major == 0x3c ? 29u
+                                      : 3u)
+                     << 26) |
+                        (Word & 0x03ffffff),
+                    Major == 0x1d   ? 2u
+                    : Major == 0x35 ? 1u
+                                    : 4u};
+  case 0:
+    if (Second == 0x0f3c || Second == 0x4f3c)
+      return Encoding{registerForm(RT ? 9 : 8, RT, RS),
+                      Second == 0x4f3c ? 2u : 4u};
+    return std::nullopt;
+  case 0x10: // DSP BPOSGE32
+  case 0x20: // MSA BZ/BNZ
+    if (HasDSP || HasMSA)
+      if (const auto Classic = microASEWord(Word))
+        return Encoding{*Classic, 1};
+    return std::nullopt;
+  default:
+    return std::nullopt;
+  }
+}
+
+unsigned MIPSLifter::microDelaySlotBytes(const cs_insn &Instruction) const {
+  if (ISARevision == 6 || (Instruction.size != 2 && Instruction.size != 4))
+    return 0;
+  const bool Little = archLittleEndian(Target);
+  const auto First = readTargetEndian<uint16_t>(Instruction.bytes, Little);
+  const auto Size = microInstructionBytes(First);
+  if (Instruction.size != Size)
+    return 0;
+  const uint16_t Second =
+      Size == 2 ? 0 : readTargetEndian<uint16_t>(Instruction.bytes + 2, Little);
+  const auto Jump = microLegacyJump(First, Second);
+  return Jump ? Jump->SlotBytes : 0;
+}
+
 std::optional<MIPSLifter::Encoding>
 MIPSLifter::microEncoding(const cs_insn &Instruction) const {
   if (Instruction.size != 2 && Instruction.size != 4)
@@ -42,11 +115,10 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
   const bool Little = archLittleEndian(Target);
   const uint16_t First = readTargetEndian<uint16_t>(Instruction.bytes, Little);
   const unsigned Major = First >> 10;
-  const bool Short = (Major & 7) >= 1 && (Major & 7) <= 3;
-  if (Instruction.size != (Short ? 2 : 4))
+  if (Instruction.size != microInstructionBytes(First))
     return std::nullopt;
   const bool R6 = ISARevision == 6;
-  if (Short) {
+  if (Instruction.size == 2) {
     const unsigned RT = compactRegister((First >> 7) & 7);
     const unsigned RS = compactRegister((First >> 4) & 7);
     if (Major == 0x11) {
@@ -137,17 +209,8 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
       return Encoding{
           registerForm((First & 1) ? 2 : 0, RT, 0, RS, Shift ? Shift : 8)};
     }
-    case 0x11: { // JR16 / JRC / JALR16 / JALRS16
-      const unsigned Minor = (First >> 5) & 31;
-      if (Minor < 12 || Minor > 15)
-        return std::nullopt;
-      const bool Link = Minor >= 14;
-      return Encoding{registerForm(Link ? 9 : 8, Link ? 31 : 0, First & 31),
-                      Minor == 13   ? 0u
-                      : Minor == 14 ? 4u
-                      : Minor == 15 ? 2u
-                                    : 1u};
-    }
+    case 0x11:
+      return microLegacyJump(First, 0);
     case 0x21: // Pre-Release 6 MOVEP (POOL16F).
       if (R6 || (First & 1))
         return std::nullopt;
@@ -177,13 +240,10 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
     case 0x19: // LWGP16
       return Encoding{
           immediateForm(35, RT, 28, ((First & 127) ^ 64) * 4 - 256)};
-    case 0x23: // BEQZ16
-    case 0x2b: // BNEZ16
-      return Encoding{immediateForm(Major == 0x23 ? 4 : 5, 0, RT,
-                                    ((First & 127) ^ 64) - 64),
-                      1};
-    case 0x33: // B16
-      return Encoding{immediateForm(4, 0, 0, ((First & 1023) ^ 512) - 512), 1};
+    case 0x23:
+    case 0x2b:
+    case 0x33:
+      return microLegacyJump(First, 0);
     case 0x3b: // LI16: encoded 127 means -1; 64..126 are positive.
       return Encoding{immediateForm(
           9, RT, 0, (First & 127) == 127 ? uint16_t(-1) : First & 127)};
@@ -305,22 +365,13 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
     }
     return Encoding{immediateForm(Op, RT, RS, llvm::SignExtend64<12>(Word))};
   }
-  case 0x25: // BEQ32
-  case 0x2d: // BNE32
-    return Encoding{
-        immediateForm(Major == 0x25 ? 4 : 5, RT, RS, uint16_t(Word)), 1};
-  case 0x35: // J
-  case 0x3d: // JAL
-  case 0x1d: // JALS
-  case 0x3c: // JALX
-    return Encoding{((Major == 0x35   ? 2u
-                      : Major == 0x3c ? 29u
-                                      : 3u)
-                     << 26) |
-                        (Word & 0x03ffffff),
-                    Major == 0x1d   ? 2u
-                    : Major == 0x35 ? 1u
-                                    : 4u};
+  case 0x25:
+  case 0x2d:
+  case 0x35:
+  case 0x3d:
+  case 0x1d:
+  case 0x3c:
+    return microLegacyJump(First, uint16_t(Word));
   case 0x00: {
     const unsigned Minor = (Word >> 6) & 31;
     if ((Word & 63) == 0 && Minor <= 3) { // SLL/SRL/SRA/ROTR
@@ -339,12 +390,7 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
         break;
       }
     }
-    if (!R6 && ((Word & 0xffff) == 0x0f3c || (Word & 0xffff) == 0x4f3c)) {
-      // JR is the rt=zero alias of JALR, with the same required slot size.
-      return Encoding{registerForm(RT ? 9 : 8, RT, RS),
-                      (Word & 0x4000) ? 2u : 4u};
-    }
-    return std::nullopt;
+    return R6 ? std::nullopt : microLegacyJump(First, uint16_t(Word));
   }
   default:
     return std::nullopt;

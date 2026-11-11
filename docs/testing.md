@@ -23906,6 +23906,10 @@ Ordinary pair padding, predecessor memory barriers,
 single-sided barriers at joins, depth/work exhaustion and non-entry analysis
 roots or exceptional/disconnected paths have separate call-recovery regressions.
 
+microMIPS delay-slot tests enumerate all 65,536 first halfwords, both physical
+widths and both byte orders, including the DSP and MSA branch selectors. R6
+compact transfers always consume just the head.
+
 MIPS16 delay-slot classification exhausts all 65,536 halfwords, both byte orders
 and physical sizes. A shared jump normalizer avoids full scalar normalization
 in slot queries. EHB/SYNC tests retain every stype, reject malformed shapes and

@@ -67,11 +67,8 @@ MIPSLifter::encoding(const cs_insn &Instruction) const {
 }
 
 unsigned MIPSLifter::delaySlotBytes(const cs_insn &Instruction) const {
-  if (ISARevision == 6 && Mode == InstructionMode::MicroMIPS)
-    return 0; // All microMIPS Release 6 control transfers are compact.
-  if (HasMSA && Mode == InstructionMode::MicroMIPS && Instruction.size == 4 &&
-      (Instruction.bytes[archLittleEndian(Target) ? 1 : 0] >> 2) == 0x16)
-    return 0; // POOL32S cannot transfer control.
+  if (Mode == InstructionMode::MicroMIPS)
+    return microDelaySlotBytes(Instruction);
   const auto Code = Mode == InstructionMode::MIPS16
                         ? mips16JumpEncoding(Instruction)
                         : encoding(Instruction);
