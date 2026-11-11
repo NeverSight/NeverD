@@ -1348,6 +1348,13 @@ conditional memory, invocation lifetime and both C routes remain open.
 
 ## CRT and catch-continuation repairs
 
+- The i386 `_setjmp3` runtime prototype now owns its two fixed stack words
+  and open DWORD tail before SSA. Both C routes preserve the buffer pointer,
+  count and every recovered tail argument through direct, loaded-IAT and
+  veneer calls, with the returns-twice declaration retained. `_longjmpex`
+  shares the header-compatible integer jump-buffer pointer. Original i386
+  instructions and recompiled source check argument transport at O0/O2;
+  full nonlocal unwinding and jump-buffer lifetime remain separate work.
 - LLVM C keeps recovered frame addresses in the integer carriers used by
   image byte stores, including unaligned ordinary and volatile stores. Public
   execution checks preserve the address and adjacent bytes on both 32-bit and

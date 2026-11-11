@@ -3960,7 +3960,10 @@ ImportPrototypeArguments importPrototypeArguments(
     if (!Name.empty()) {
       // Every adapter reads this same declaration. Convert its type graph
       // once, including a missing declaration, before classifying its parts.
-      const std::optional<FunctionSym> Function = Declared(Name);
+      std::optional<FunctionSym> Function = Declared(Name);
+      if (!Function)
+        Function =
+            libc::runtimeVariadicPrototype(Name, Img.Arch, Img.abiFormat());
       // The base AAPCS returns a routine's floating value in the integer
       // registers the call already writes: the floating bank holds none of it.
       const bool ReturnsInCoreRegisters =
@@ -3989,7 +3992,8 @@ ImportPrototypeArguments importPrototypeArguments(
       Routine = UserArguments(Function);
       UserDeclared = Routine.has_value();
       PrototypeOwnsArguments = Routine.has_value();
-      // A variadic header declares a minimum prefix, never an exact arity.
+      // A variadic declaration supplies a minimum prefix, never an exact
+      // arity. A selected declaration keeps precedence over a runtime table.
       if (!Routine)
         if (Function)
           if (auto Prefix = libc::variadicCallArguments(*Function, Img.Arch,

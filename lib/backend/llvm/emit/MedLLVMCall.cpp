@@ -834,11 +834,13 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   std::string IndirectImportName;
   bool PreserveHeaderTarget = Authentication != nullptr;
   std::optional<FunctionSym> VariadicHeader;
-  if (Op.CalleeVariadicFrom >= 0 && Img && CI && Dbg) {
+  if (Op.CalleeVariadicFrom >= 0 && Img && CI) {
     const std::string Name = importCalleeName(*Img, CI->TargetAddr);
-    if (!Name.empty())
-      if (auto Header = Dbg->resolvePrototype(Name);
-          Header &&
+    if (!Name.empty()) {
+      auto Header = Dbg ? Dbg->resolvePrototype(Name) : std::nullopt;
+      if (!Header)
+        Header = libc::runtimeVariadicPrototype(Name, TargetArch, TargetFormat);
+      if (Header &&
           libc::variadicCallArguments(*Header, TargetArch, TargetFormat) &&
           Header->Params.size() == static_cast<size_t>(Op.CalleeVariadicFrom) &&
           CI->VarArgFixedCount == Op.CalleeVariadicFrom &&
@@ -847,6 +849,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         IndirectImportName = Name;
         PreserveHeaderTarget = Target && !KnownTarget;
       }
+    }
     if (!VariadicHeader) {
       syncError() << "med_llvm_emitter: variadic header call lost its checked "
                      "fixed prefix\n";
