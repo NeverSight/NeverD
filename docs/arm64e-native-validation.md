@@ -540,6 +540,15 @@ SP and the return address intact. Writers reached through an internal call
 still require propagation of that hidden operand across the call site.
 See the [Clang Swift error result attribute](https://clang.llvm.org/docs/AttributeReference.html#swift-error-result).
 
+On macos-26 and xcode-27, each typed caller executed all 25 input/output
+pairs on the compiler-original and NeverD-installed image. Both hosts also
+executed the independent compiler-only O0 and O2 controls. The default r6
+CLI published both fixture variants locally and their ad-hoc signatures
+passed strict verification. The [native run](https://github.com/gmh5225/test_mac_intel/actions/runs/42984546707)
+and [validation record](evidence/arm64e-swift-error-2026-11-11.json)
+identify the exact images, compiler, source-built NeverD test host and
+default r6 CLI results.
+
 Frameless bodies may also preserve a matching entry PACIBSP and terminal
 RETAB. SP and LR remain untouched between those instructions. The relocated
 body must pass the instruction comparison and retain its frameless compact
