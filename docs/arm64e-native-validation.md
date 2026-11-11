@@ -757,9 +757,10 @@ cases require both preferred header addresses to remain zero. This profile
 uses O2 for the original trapping entries and a fixed `@rpath` install name.
 The separately compiled caller still runs at O0 and O2.
 Add `--match-original-optimization` to compile both the caller and the
-original entries at each optimization level. The fully O0 fixture contains
-1,192 bytes of original DWARF and only 864 bytes of free TEXT with its fixed
-install name. The publisher can grow TEXT by inserting aligned pages ahead
+original entries at each optimization level. The original fully O0 reproducer
+had 1,192 bytes of DWARF and 864 bytes of free TEXT with its fixed install
+name. Adding the two independently dereferenced pointer slots reduced the
+free TEXT to 440 bytes on the same compiler. The publisher can grow TEXT by inserting aligned pages ahead
 of the original sections in a zero-base arm64e dylib with image-relative
 chained fixups. The preferred header stays at zero. The output symbols, stubs
 and original data move together. The installation receipt records the slide

@@ -6,6 +6,7 @@
 
 #include "MachOArm64eABI.h"
 #include "MachODependencyState.h"
+#include "MachOLiftedObject.h"
 
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/codegen/MachO/MachOAuthenticatedFixups.h"
@@ -1556,7 +1557,7 @@ appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
   return std::move(Object->Image);
 }
 
-llvm::Expected<PatchResult> installMachOObjectPatch(
+static llvm::Expected<PatchResult> installObject(
     llvm::StringRef Bytes, const BinaryImage &OriginalInput,
     llvm::ArrayRef<SourcePatchMapping> Mappings,
     llvm::ArrayRef<SourcePatchBinding> RequestedBindings,
@@ -1565,10 +1566,7 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
     const DynCodePatchEvidence *DynCode,
     const SourcePatchPreparation *Preparation,
     llvm::ArrayRef<SourcePatchDependency> Dependencies,
-    llvm::function_ref<llvm::Error(const CompiledImage &,
-                                   va_t OriginalSectionSlide,
-                                   llvm::ArrayRef<NativeMachOCompactRange>)>
-        VerifyGenerated) {
+    MachOLiftedObjectVerifier VerifyGenerated) {
   const BinaryImage &Original =
       Preparation ? Preparation->Image : OriginalInput;
   if (Original.MachOSharedCache)
@@ -1771,5 +1769,35 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
         }
         return llvm::Error::success();
       });
+}
+llvm::Expected<PatchResult> installMachOObjectPatch(
+    llvm::StringRef Object, const BinaryImage &Original,
+    llvm::ArrayRef<SourcePatchMapping> Mappings,
+    llvm::ArrayRef<SourcePatchBinding> Bindings,
+    const std::filesystem::path &Output,
+    llvm::function_ref<llvm::Error(const PatchResult &)> PrepareReceipt,
+    const DynCodePatchEvidence *DynCode,
+    const SourcePatchPreparation *Preparation,
+    llvm::ArrayRef<SourcePatchDependency> Dependencies,
+    llvm::function_ref<llvm::Error(const CompiledImage &,
+                                   llvm::ArrayRef<NativeMachOCompactRange>)>
+        VerifyGenerated) {
+  return installObject(Object, Original, Mappings, Bindings, Output,
+                       PrepareReceipt, DynCode, Preparation, Dependencies,
+                       [&](const CompiledImage &Image, va_t,
+                           llvm::ArrayRef<NativeMachOCompactRange> Ranges) {
+                         return VerifyGenerated ? VerifyGenerated(Image, Ranges)
+                                                : llvm::Error::success();
+                       });
+}
+
+llvm::Expected<PatchResult>
+installMachOLiftedObject(llvm::StringRef Object, const BinaryImage &Original,
+                         llvm::ArrayRef<SourcePatchMapping> Mappings,
+                         llvm::ArrayRef<SourcePatchBinding> Bindings,
+                         const std::filesystem::path &Output,
+                         MachOLiftedObjectVerifier Verify) {
+  return installObject(Object, Original, Mappings, Bindings, Output, {},
+                       nullptr, nullptr, {}, Verify);
 }
 } // namespace neverd

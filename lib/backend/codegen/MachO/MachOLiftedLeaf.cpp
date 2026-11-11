@@ -5,10 +5,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "MachOLiftedObject.h"
+
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/MachO/MachOCompactUnwindPatch.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
-#include "neverd/backend/codegen/PatchObject.h"
 #include "neverd/backend/codegen/SourcePatch.h"
 #include "neverd/backend/llvm/AArch64/LLVMEntryABI.h"
 #include "neverd/decode/Decoder.h"
@@ -531,10 +532,10 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
       Codegen().compile(*Candidate, Image.Arch, Image.Format, *Triple);
   if (!Object.Success)
     return refuse(kLeafCode);
-  return installMachOObjectPatch(
+  return installMachOLiftedObject(
       llvm::StringRef(reinterpret_cast<const char *>(Object.ObjectData.data()),
                       Object.ObjectData.size()),
-      Image, Mappings, Bindings, Output, {}, nullptr, nullptr, {},
+      Image, Mappings, Bindings, Output,
       [&](const CompiledImage &Generated, va_t Slide,
           llvm::ArrayRef<NativeMachOCompactRange> Ranges) {
         return verifyLeaves(Image, *Text, Mappings, Generated, Slide, Ranges);

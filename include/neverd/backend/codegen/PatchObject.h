@@ -80,7 +80,6 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
     const SourcePatchPreparation *Preparation = nullptr,
     llvm::ArrayRef<SourcePatchDependency> Dependencies = {},
     llvm::function_ref<llvm::Error(const CompiledImage &,
-                                   va_t OriginalSectionSlide,
                                    llvm::ArrayRef<NativeMachOCompactRange>)>
         VerifyGenerated = {});
 
