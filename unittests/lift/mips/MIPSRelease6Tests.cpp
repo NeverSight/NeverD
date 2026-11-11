@@ -121,6 +121,20 @@ TEST_P(MIPSRelease6, DoublewordOperationsAndPCRelativeBaseRetainHighBits) {
   EXPECT_EQ(E.getRegister(mipsreg::V0), 0x8000000000000000ull);
   run(0x008510de, E);
   EXPECT_EQ(E.getRegister(mipsreg::V0), 0u);
+  // The low product ignores arbitrary high bits. MUH requires sign extension;
+  // MUHU and unsigned division also accept a zero-extended word.
+  const auto ProductInput = [&](uint32_t Word, uint64_t Input) {
+    E.setRegister(mipsreg::A0, Input);
+    E.setRegister(mipsreg::A1, 3);
+    EXPECT_EQ(decode(Word), 4);
+    Ops.clear();
+    Decode.liftUnitToLow(Unit, Ops);
+    return llvm::all_of(Ops, [&](const auto &Op) { return E.step(Op); });
+  };
+  EXPECT_TRUE(ProductInput(0x00851098, 0x87654321ffffffffull));
+  EXPECT_FALSE(ProductInput(0x008510d8, 0x00000000ffffffffull));
+  EXPECT_TRUE(ProductInput(0x008510d9, 0x00000000ffffffffull));
+  EXPECT_FALSE(ProductInput(0x008510d9, 0x87654321ffffffffull));
   ASSERT_EQ(decode(0xec580001, 0x100001004ull), 4); // LDPC from (PC & ~7) + 8
   Ops.clear();
   Decode.liftUnitToLow(Unit, Ops);
@@ -152,6 +166,16 @@ TEST_P(MIPSRelease6,
   Ops.clear();
   Decode.liftUnitToLow(Unit, Ops);
   EXPECT_EQ(Ops.back().Opcode, NdOp::RETURN);
+  ASSERT_EQ(decode(0x04100000, PC), 8); // NAL, link only
+  EXPECT_TRUE(Unit.HasDelaySlot);
+  Ops.clear();
+  Decode.liftUnitToLow(Unit, Ops);
+  EXPECT_EQ(Ops.back().Opcode, NdOp::BRANCH);
+  EXPECT_EQ(Ops.back().Inputs[0].Offset, PC + 8);
+  EXPECT_TRUE(llvm::any_of(Ops, [&](const auto &O) {
+    return O.Output.isReg() && O.Output.Offset == mipsreg::RA &&
+           O.Inputs[0].isConst() && O.Inputs[0].Offset == PC + 8;
+  }));
   ASSERT_EQ(decode(0x20850002, PC),
             4); // BEQC a0,a1,PC+12 shares the old ADDI major.
   Ops.clear();

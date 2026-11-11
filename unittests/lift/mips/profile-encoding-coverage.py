@@ -13,6 +13,7 @@ from elftools.elf.elffile import ELFFile
 
 
 R6 = (
+    ("", "nal"),
     ("$2,$4,$5", "selnez seleqz mul muh mulu muhu div mod divu modu"),
     ("$2,$4", "clz clo bitswap"),
     ("$2,$4,$5,2", "lsa align"),

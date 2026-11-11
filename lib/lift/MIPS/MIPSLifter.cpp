@@ -79,7 +79,7 @@ unsigned MIPSLifter::delaySlotBytes(const cs_insn &Instruction) const {
 LowInstructionTargetMode
 MIPSLifter::controlTargetMode(const cs_insn &Instruction) const {
   const auto Code = encoding(Instruction);
-  if (!Code || Code->Frame || Mode == InstructionMode::Default)
+  if (!Code || Code->R6 || Code->Frame || Mode == InstructionMode::Default)
     return LowInstructionTargetMode::Preserve;
   if (Code->Word >> 26 == 29)
     return isMIPSCompressedMode(Mode) ? LowInstructionTargetMode::MIPSClassic
@@ -633,6 +633,7 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
   const uint64_t Next = Head.address + Head.size;
   const uint64_t Resume = Address(Next + (Slot ? Slot->size : 0));
   unsigned Link = 0;
+  const bool ReadPC = (Word >> 16) == 0x0410; // NAL / BLTZAL zero
   bool Conditional = false;
   bool Likely = false;
   bool Return = false;
@@ -649,6 +650,8 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
     // Snapshot before the slot and before writing a link register.
     Destination = S.makeTemp(S.Width);
     S.emit(NdOp::COPY, Destination, {S.read(RS)});
+  } else if (ReadPC) {
+    Link = 31;
   } else if (Opcode == 2 || Opcode == 3 || Opcode == 29) {
     Link = Opcode != 2 ? 31 : 0;
     const unsigned Shift =
@@ -746,7 +749,9 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
   S.Addr = Head.address;
   S.InsnSize = Head.size;
   S.Seq = HeadSequence;
-  if (Link) {
+  if (ReadPC) {
+    S.emit(NdOp::BRANCH, {}, {NdVar::cst(Resume, S.Width)});
+  } else if (Link) {
     if (Conditional && !Likely)
       GuardFalsePath();
     S.emit(Destination.isConst() ? NdOp::CALL : NdOp::INDIR_CALL,

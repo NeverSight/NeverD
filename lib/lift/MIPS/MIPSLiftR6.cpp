@@ -41,7 +41,8 @@ MIPSLifter::Encoding MIPSLifter::release6Encoding(uint32_t Word) const {
       Word = (Word & ~63u) | 8; // R6 JR is JALR zero,rs.
     return Encoding{Word, 4};
   }
-  if ((Op == 1 && (RT <= 1 || (RT == 17 && ((Word >> 21) & 31) == 0))) ||
+  if ((Op == 1 &&
+       (RT <= 1 || ((RT == 16 || RT == 17) && ((Word >> 21) & 31) == 0))) ||
       (Op >= 2 && Op <= 5) || ((Op == 6 || Op == 7) && !RT))
     return Encoding{Word, 4};
   if (Op == 0 && (Fn <= 4 || Fn == 6 || Fn == 7 || Fn == 15 || Fn == 20 ||
@@ -279,6 +280,18 @@ bool MIPSLifter::liftRelease6(State &S, uint32_t Word) const {
     return false;
   const bool Signed = !(Fn & 1), High = SA == 3;
   const auto A = S.read(RS, Bytes), B = S.read(RT, Bytes);
+  if (Bytes == 4 && Wide && (High || (Fn & 2))) {
+    for (unsigned R : {RS, RT}) {
+      if (Signed) {
+        S.requireWord(R);
+        continue;
+      }
+      const auto Input = S.read(R), Low = S.read(R, 4);
+      const auto ZExt = S.binary(NdOp::INT_EQUAL, Input, S.resize(Low, 8), 1);
+      S.emitIntrinsic(Intrinsic::MIPSRequireWord, {},
+                      {S.select(ZExt, S.resize(Low, 8, true), Input)});
+    }
+  }
   if (!(Fn & 2)) {
     if (!High) {
       S.write(RD, S.binary(NdOp::INT_MULT, A, B));
@@ -291,18 +304,6 @@ bool MIPSLifter::liftRelease6(State &S, uint32_t Word) const {
     S.emit(NdOp::SUBBYTES, V, {Product, NdVar::cst(Bytes, 4)});
     S.write(RD, V);
     return true;
-  }
-  if (Bytes == 4 && Wide) {
-    for (unsigned R : {RS, RT}) {
-      if (Signed) {
-        S.requireWord(R);
-        continue;
-      }
-      const auto Input = S.read(R), Low = S.read(R, 4);
-      const auto ZExt = S.binary(NdOp::INT_EQUAL, Input, S.resize(Low, 8), 1);
-      S.emitIntrinsic(Intrinsic::MIPSRequireWord, {},
-                      {S.select(ZExt, S.resize(Low, 8, true), Input)});
-    }
   }
   const auto Zero = S.binary(NdOp::INT_EQUAL, B, NdVar::cst(0, Bytes), 1);
   auto Avoid = Zero;

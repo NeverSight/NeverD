@@ -5,7 +5,7 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Strict MIPS32r2/MIPS64r2 semantics, independent of Capstone alias spelling.
+/// Profile-selected MIPS semantics, independent of Capstone alias spelling.
 ///
 //===----------------------------------------------------------------------===//
 

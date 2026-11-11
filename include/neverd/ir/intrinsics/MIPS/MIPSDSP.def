@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// MIPS32 DSP control fields and the initial classic r2 instruction subset.
+/// DSP control fields and shared word-format instruction descriptors.
 //===----------------------------------------------------------------------===//
 #ifndef NEVERD_MIPS_DSP_FIELD
 #define NEVERD_MIPS_DSP_FIELD(Name, Selector, Bits)

@@ -118,7 +118,7 @@ Reading only a low byte or halfword does not prove that incoming upper bits
 have the extension a narrow C parameter would require. Declared source types
 remain a separate contract.
 
-Outside the listed profiles are n32, historical MIPS I–V profiles,
+The n32 ABI, historical MIPS I–V profiles,
 microMIPS64, scalar floating point, MSA/DSP forms beyond the slices below, privileged
 instructions and LL/SC reservations outside the qualified MIPS16e2 LowIR slice below,
 doubleword merge stores (`SDL`/`SDR`), pre-R6 doubleword division and trapping arithmetic are not admitted by
