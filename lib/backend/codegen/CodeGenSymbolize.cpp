@@ -18,6 +18,7 @@
 #include "llvm/IR/Metadata.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <cstdint>
 #include <cstdlib>
 #include <functional>
 #include <optional>
@@ -26,6 +27,10 @@
 #include <vector>
 
 namespace neverd {
+namespace {
+#define CODEGEN_SYMBOLIZE_TEXT(Name, Value) constexpr char Name[] = Value;
+#include "CodeGenSymbolize.def"
+} // namespace
 
 void symbolizeImageAbsolutePointers(llvm::Module &Mod, const BinaryImage &Img) {
   llvm::Type *I8 = llvm::Type::getInt8Ty(Mod.getContext());
@@ -102,20 +107,22 @@ void symbolizeImageAbsolutePointers(llvm::Module &Mod, const BinaryImage &Img) {
         Sym = Img.findSymbol(("_" + F.getName()).str());
       if (!Sym || !Sym->IsFunc || !Img.containsVA(Sym->Addr))
         continue;
-      llvm::GlobalVariable *DataG = getOrCreateDataGlobal(Sym->Addr);
-      if (Img.isMachO() && Img.Arch == Arch::ARM)
-        // Darwin ARM PIC normally forces every external declaration through a
-        // non-lazy pointer. Final-image rewrite has already authenticated and
-        // numerically resolves this synthetic original-entry symbol, while a
-        // newly emitted pointer slot would have no dyld rebase record. Mark
-        // the declaration so the ARM backend keeps the direct PC-relative
-        // relation and the address continues to slide with the image.
-        DataG->setMetadata("neverd.final_image_direct_symbol",
-                           llvm::MDNode::get(Mod.getContext(), {}));
       for (llvm::User *U : F.users()) {
         auto *CE = llvm::dyn_cast<llvm::ConstantExpr>(U);
-        if (!CE || CE->getOpcode() != llvm::Instruction::PtrToInt)
+        if (!CE || CE->getOpcode() != llvm::Instruction::PtrToInt ||
+            (CE->use_empty() && !CE->isUsedByMetadata()))
           continue;
+        llvm::GlobalVariable *DataG = getOrCreateDataGlobal(Sym->Addr);
+        if (Img.isMachO() && Img.Arch == Arch::ARM) {
+          // Darwin ARM PIC normally forces every external declaration through a
+          // non-lazy pointer. Final-image rewrite has already authenticated and
+          // numerically resolves this synthetic original-entry symbol, while a
+          // newly emitted pointer slot would have no dyld rebase record. Mark
+          // the declaration so the ARM backend keeps the direct PC-relative
+          // relation and the address continues to slide with the image.
+          DataG->setMetadata(kFinalImageDirectSymbol,
+                             llvm::MDNode::get(Mod.getContext(), {}));
+        }
         Rewrites.emplace_back(
             CE, llvm::ConstantExpr::getPtrToInt(DataG, CE->getType()));
       }
@@ -139,18 +146,15 @@ void symbolizeImageAbsolutePointers(llvm::Module &Mod, const BinaryImage &Img) {
     return CI->getZExtValue();
   };
 
-  // A bare i64 ConstantInt (no inttoptr wrapper) is treated as an in-image
-  // pointer only on 64-bit Mach-O, where __PAGEZERO reserves the low 4 GiB as
-  // non-readable: every readable segment VA is therefore >= 0x1'0000'0000, so
-  // an ordinary integer literal (a count, flag, or mask) can never collide with
-  // a readable segment.  The lifter leaves a string/data address as a bare i64
-  // when it cannot type the use -- a variadic call argument (puts / printf %s),
-  // a stored pointer, or a returned pointer -- and that absolute VA does not
-  // slide under ASLR, producing a wild pointer.  ELF/COFF have no __PAGEZERO
-  // guard (low or zero base), so a VA-range guess would corrupt genuine
-  // integers there; bare-constant symbolization stays gated off until those
-  // formats grow a relocation-evidence-driven path.
-  const bool BareConstPtrSymbolizable = Img.isMachO() && Img.is64Bit();
+  // A Mach-O executable normally reserves its low 4 GiB with __PAGEZERO.
+  // A dylib can map __TEXT at zero, where small integers such as a return
+  // value or a field offset overlap readable addresses. Only infer pointers
+  // from untyped integers when the actual mappings exclude that low range.
+  const bool IsMachO64 = Img.isMachO() && Img.is64Bit();
+  const bool BareConstPtrSymbolizable =
+      IsMachO64 && llvm::none_of(Img.Segments, [](const Segment &Seg) {
+        return Seg.isReadable() && Seg.Size && Seg.VA <= UINT32_MAX;
+      });
   auto inImageBareConstPtrVA = [&](llvm::Value *V) -> std::optional<va_t> {
     if (!BareConstPtrSymbolizable)
       return std::nullopt;
@@ -332,8 +336,11 @@ void symbolizeImageAbsolutePointers(llvm::Module &Mod, const BinaryImage &Img) {
             int64_t SVal = CI->getSExtValue();
             if (SVal >= 0)
               continue;
-            uint64_t PosVA = static_cast<uint64_t>(-SVal);
-            if (!Img.containsVA(PosVA))
+            uint64_t PosVA = -static_cast<uint64_t>(SVal);
+            const bool IsImageBase =
+                IsMachO64 ? BareConstPtrSymbolizable && isReadableImageVA(PosVA)
+                          : Img.containsVA(PosVA);
+            if (!IsImageBase)
               continue;
             auto *GV = getOrCreateDataGlobal(PosVA);
             auto *PtrToInt =
@@ -398,8 +405,8 @@ void symbolizeImageAbsolutePointers(llvm::Module &Mod, const BinaryImage &Img) {
   // Debug aid (env-gated, no-op unless NEVERD_DUMP_PATCH_IR is set): emit the
   // post-symbolization module so the patch-mode IR can be inspected for
   // mixed-addressing diagnosis.  Never on a normal run.
-  if (std::getenv("NEVERD_DUMP_PATCH_IR")) {
-    llvm::errs() << "; ==== NEVERD patch-mode IR (post-symbolize) ====\n";
+  if (std::getenv(kDumpPatchIR)) {
+    llvm::errs() << kPostSymbolizationIR;
     Mod.print(llvm::errs(), nullptr);
   }
 }

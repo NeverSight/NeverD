@@ -65,6 +65,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   ASSERT_TRUE(Lifted.Success) << Lifted.Error;
   ASSERT_TRUE(Lifted.LlvmModule);
   auto &Module = *Lifted.LlvmModule;
+  symbolizeImageAbsolutePointers(Module, *Image);
   ASSERT_TRUE(Module.getModuleFlag(kArm64eAnalysisModuleFlag));
 
   MachOPatcher Patcher;
