@@ -909,19 +909,20 @@ identifies the Release host, both artifacts and their measured image bases.
 For a recovered Darwin arm64 variadic entry without materialized overflow
 parameters, the LLVM emitter takes the anonymous argument cursor from
 `llvm.sponentry`. Locals and recovered named argument homes keep their own
-storage. The LLVM and LLVM-to-C outputs retain the callee boundary when the
-cursor depends on its incoming SP. Stack-parameter recovery also uses the
+storage. LLVM IR, LLVM-to-C and structured HighC retain the callee boundary when the
+cursor depends on its incoming SP. HighC keeps all ABI positions before a
+used stack argument, including unused registers and alignment slots. Stack-parameter recovery also uses the
 target's entry alignment proof for masked pointers, including the upper word
 of a 16-byte-aligned argument after an 8-byte argument. An OR in a cursor
 walk can set only known low bits of its entry-SP displacement. In particular,
 setting an already-set bit in a negative local offset keeps the cursor local.
 
 `AArch64DarwinVariadic` compiles O0 and O2 Apple arm64e inputs and calls the
-lifted LLVM IR and the regenerated C from a separately compiled variadic
-caller. It covers a variable count, a named stack prefix, a copied cursor,
+lifted LLVM IR, LLVM-to-C and structured HighC from a separately compiled
+variadic caller. It covers a variable count, a named stack prefix, a copied cursor,
 double and a 128-bit value. The IR control enables stack protection to displace
 the private frame. Setting `NEVERD_ARM64E_LIFTED_NATIVE=1` runs the compiler
-original and both replacements as arm64e.
+original and all three replacements as arm64e.
 
 The image publisher compares non-writeback SP accesses at their effective
 incoming byte offsets. It can remove a compact leaf's unused stack reservation
