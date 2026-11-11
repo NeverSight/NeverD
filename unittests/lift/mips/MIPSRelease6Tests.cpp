@@ -29,6 +29,7 @@ protected:
     Image.Arch = GetParam();
     Image.Bits = isMIPS64(GetParam()) ? Bitness::Bits64 : Bitness::Bits32;
     Image.MIPS.emplace();
+    Image.MIPS->ABI = isMIPS64(GetParam()) ? MIPSABI::N64 : MIPSABI::O32;
     Image.MIPS->ISARevision = 6;
     ASSERT_TRUE(Decode.init(Image));
   }

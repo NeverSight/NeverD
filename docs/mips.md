@@ -262,10 +262,15 @@ preserves POS and yields an unknown GPR value. A successful DP extraction
 advances POS modulo 64. Source code traps if it needs an undefined result.
 MIPS64r2/n64 uses the word and packed DSP/DSPR2 operations from revision 3.02
 of the MIPS64 DSP specification. Arithmetic consumes the low word of each
-accumulator half and sign-extends each written half independently. Indexed
+accumulator half and sign-extends each written half independently. The four
+banked register transfers copy the entire GPR-width half. The pinned Unicorn
+model truncates transfers to nonzero banks on n64, so the non-word test vectors
+for these four transfers use the specification directly. Indexed
 memory instructions use the full address registers, including the DSP-only
 doubleword load `LDX`. The older 64-bit packed formats removed in specification
 revision 2.40 (including `.OB`, `.QH` and `.PW`) are unimplemented.
+See the register model and revision history in the
+[MIPS64 DSP Module, revision 3.02](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00375-2B-MIPS64DSP-AFP-03.02.pdf).
 
 Classic AC0 partial writes preserve the pre-R6 unread-result restriction:
 MULT/MULTU/DIV/DIVU (and supported doubleword multiply) establish pending
@@ -979,7 +984,9 @@ cannot use the Release 2 lifter through this profile.
 The current Release 6 path covers classic integer code. microMIPSr6, optional
 Release 6 ASEs, scalar floating point and general privileged/system execution
 still require separate implementation. See the linked GNU fixture in the
-[testing guide](testing.md) for the enumerated instruction forms.
+[testing guide](testing.md) for the enumerated instruction forms and the
+[MIPS64 Instruction Set Reference Manual, revision 6.06](https://docs.alexrp.com/mips/mips64_insns_v6_06.pdf)
+for encodings, input restrictions and compact transfer semantics.
 
 ## TP-Link firmware workflow
 

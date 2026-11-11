@@ -43,9 +43,10 @@ std::vector<uint8_t> encodeDSP(llvm::ArrayRef<uint32_t> Words, Arch Target) {
 BinaryImage dspImage(Arch Target) {
   BinaryImage Image;
   Image.Arch = Target;
-  Image.Bits = Bitness::Bits32;
+  Image.Bits = isMIPS64(Target) ? Bitness::Bits64 : Bitness::Bits32;
   Image.Entry = 0x10000;
   Image.MIPS.emplace();
+  Image.MIPS->ABI = isMIPS64(Target) ? MIPSABI::N64 : MIPSABI::O32;
   Image.MIPS->HasDSP = true;
   return Image;
 }
@@ -99,7 +100,6 @@ INSTANTIATE_TEST_SUITE_P(BothWidthsAndByteOrders, MIPSDSPRegisterWidth,
 TEST_P(MIPSDSPRegisterWidth, IndexedDoublewordUsesTheEntireEffectiveAddress) {
   auto Image = dspImage(GetParam());
   const bool Wide = isMIPS64(GetParam());
-  Image.Bits = Wide ? Bitness::Bits64 : Bitness::Bits32;
   Decoder D;
   ASSERT_TRUE(D.init(Image));
   const auto Bytes = encodeDSP({0x7c85120a}, GetParam()); // LDX v0,a1(a0)
@@ -146,18 +146,40 @@ TEST_P(MIPSDSPRegisterWidth, IndexedDoublewordUsesTheEntireEffectiveAddress) {
   EXPECT_EQ(E.getRegister(mipsreg::V0), Expected);
 }
 
+TEST_P(MIPSDSPRegisterWidth, BankMovesAndWordAccumulationHaveDifferentWidths) {
+  const auto Image = dspImage(GetParam());
+  const bool Wide = isMIPS64(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  NdOpEmulator E(Image);
+  E.setStrictMode(true);
+  const uint64_t High = Wide ? 0x1234567887654321ull : 0x87654321u;
+  const uint64_t Low = Wide ? 0xfedcba9876543210ull : 0x76543210u;
+  E.setRegister(mipsreg::A0, High);
+  E.setRegister(mipsreg::A1, Low);
+  // MD00375 rev 3.02 specifies full-width bank transfers. The 64-bit
+  // Unicorn DSP model sign-extends those transfers for nonzero banks.
+  for (auto Word : {0x00801011u, 0x00a01013u, 0x00401010u, 0x00401812u})
+    ASSERT_TRUE(executeDSP(D, GetParam(), Word, E));
+  EXPECT_EQ(E.getRegister(mipsreg::V0), High);
+  EXPECT_EQ(E.getRegister(mipsreg::V1), Low);
+  ASSERT_TRUE(executeDSP(D, GetParam(), 0x70001000, E)); // MADD ac2,zero,zero
+  EXPECT_EQ(E.getRegister(mipsreg::AC2HI), Wide ? 0xffffffff87654321ull : High);
+  EXPECT_EQ(E.getRegister(mipsreg::AC2LO), 0x76543210u);
+}
+
 TEST_P(MIPSDSPRegisterWidth, InsertValidatesBothWordInputsOnN64) {
   auto Image = dspImage(GetParam());
   const bool Wide = isMIPS64(GetParam());
-  Image.Bits = Wide ? Bitness::Bits64 : Bitness::Bits32;
   Decoder D;
   ASSERT_TRUE(D.init(Image));
   for (const auto &Bad : {mipsreg::Zero, mipsreg::A0, mipsreg::A1}) {
     NdOpEmulator E(Image);
     E.setStrictMode(true);
-    E.setRegister(mipsreg::A0, Bad == mipsreg::A0 ? 0x8000000000000007ull : 7);
+    E.setRegister(mipsreg::A0,
+                  Wide && Bad == mipsreg::A0 ? 0x8000000000000007ull : 7);
     E.setRegister(mipsreg::A1,
-                  Bad == mipsreg::A1 ? 0x8000000000000050ull : 0x50);
+                  Wide && Bad == mipsreg::A1 ? 0x8000000000000050ull : 0x50);
     E.setRegister(mipsreg::DSPControl, 4u << 7);
     ASSERT_TRUE(executeDSP(D, GetParam(), 0x7c85000c, E));
     if (Wide && Bad != mipsreg::Zero)
@@ -181,7 +203,6 @@ TEST_P(MIPSDSPRegisterWidth, RevisionTwoMatchesEveryIndependentMachineRecord) {
   static_assert(std::size(Cases) == 46);
   auto Image = dspImage(GetParam());
   const bool Wide = isMIPS64(GetParam());
-  Image.Bits = Wide ? Bitness::Bits64 : Bitness::Bits32;
   const auto WordValue = [Wide](uint32_t V) -> uint64_t {
     return Wide ? uint64_t(int64_t(int32_t(V))) : V;
   };

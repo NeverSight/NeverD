@@ -104,6 +104,7 @@ int main(int Argc, char **Argv) try {
   Profile.Bits = isMIPS64(Target) ? Bitness::Bits64 : Bitness::Bits32;
   Profile.Mode = Encoding;
   Profile.MIPS.emplace();
+  Profile.MIPS->ABI = isMIPS64(Target) ? MIPSABI::N64 : MIPSABI::O32;
   Profile.MIPS->HasDSP = DSP;
   Profile.MIPS->HasDSPR2 = DSPR2;
   Profile.MIPS->HasMIPS16E2 = MIPS16E2;
