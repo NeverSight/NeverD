@@ -591,6 +591,8 @@ if __name__ == "__main__":
             ("carry-product-partial-complement-neighbor-95", *carry_product_elf(95, True, 8, 5, complemented=True, neighbor=True)),
             ("carry-product-partial-projected-neighbor-256", *carry_product_elf(256, True, 7, 2, complemented=True, neighbor=True)),
             ("carry-cofactor-projected-complement-256", *carry_product_elf(256, True, 8, 2, complemented=True)),
+            ("power-group-progression-64", *carry_product_elf(64, True, 8, 2)),
+            ("power-group-inverse-126", *carry_product_elf(126, True, 8, 5)),
             ("carry-product-isolated-column-64", *carry_product_elf(64, True, 8, 2, factor_mask=0x83)),
             ("carry-cofactor-masked-window-16", *carry_product_elf(16, True, 8, 2, factor_mask=0x80000003)),
             ("carry-product-64", *carry_product_elf(64, False)),

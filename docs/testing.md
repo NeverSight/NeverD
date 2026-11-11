@@ -10736,6 +10736,10 @@ truth tables at four precisions, including perturbed offsets and short budgets.
 A 64-factor machine-code fixture checks both CLI and worker source modes against
 the original product at O0 and O2. Paired expression printing must reproduce
 both individual strings for shared roots, ancestors and different widths.
+Product-progression tests exhaust every five-bit input triple and compare
+shuffled intervals, holes, parity changes and resource limits with independent
+full-width products through 257 bits. The source-route fixtures also execute
+64-factor and 126-factor windows through both CLI and worker modes.
 
 `SymMBALinearProofMemo` checks successful full-width proof reuse, alternating
 queries with the same difference, context isolation, incomplete proofs and

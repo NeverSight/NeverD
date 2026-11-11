@@ -6093,6 +6093,11 @@ bit, the low product and the parity of the high bits can be proved separately.
 For products of two masked, offset inputs, packed truth rows check every
 assignment, including carries into the masks. An affine parity replaces the
 column only after all rows agree. Otherwise the original high column remains.
+For an interval of odd factors with regularly shifted masked operands, the
+solver verifies the offsets of each factor modulo the observed word. The full
+period reduces to a square, and the half-period includes a two-bit correction.
+An incomplete interval keeps its extra factors and compensates for each missing
+odd factor with a modular inverse. Each recurrence uses the proved parity gate.
 The SDK renders both sides of a rewrite together when their widths agree, so
 a shared fragment is formatted once with the original precedence.
 Expression restoration skips nodes older than every substitution key: immutable

@@ -15,6 +15,7 @@
 #include "Limits.h"
 #include "SymMBADetail.h"
 #include "SymMBAProductColumn.h"
+#include "SymMBAProductProgression.h"
 
 #include "neverd/symbolic/Limits.h"
 
@@ -1711,12 +1712,59 @@ class LowWordDecisions {
     return std::move(Products.front());
   }
 
-  struct MaskedOffset {
-    SymRef Base;
-    unsigned Shift, Offset;
-  };
+  // Boolean operators commute with projection to bit zero. Build a
+  // bitwise word using shifted inputs and all-ones Boolean constants, then
+  // mask once at the root instead of masking every selector separately.
+  SymRef emitDecision(uint32_t Id, unsigned Width,
+                      llvm::DenseMap<uint32_t, SymRef> &Emitted,
+                      unsigned Depth = 0) {
+    if (!charge())
+      return {};
+    if (Id <= 1)
+      return Id ? Ctx.mkConst(llvm::APInt::getAllOnes(Width))
+                : Ctx.mkZero(Width);
+    if (auto It = Emitted.find(Id); It != Emitted.end())
+      return It->second;
+    const auto D = decision(Id);
+    const auto Input = SymRef(variableInput(D.Variable));
+    const size_t Words =
+        (size_t(std::max(Width, Ctx.width(Input))) - 1) / 64 + 1;
+    if (Depth >= limits::kMaxResidueDecisionDepth ||
+        !charge(1, sizeof(SymRef) + 4 * sizeof(void *) +
+                       8 * (sizeof(SymNode) + 4 * sizeof(SymRef) +
+                            sizeof(llvm::APInt) + Words * sizeof(uint64_t)))) {
+      Failed = true;
+      return {};
+    }
+    const auto Bit = variableBit(D.Variable);
+    auto Selector = Ctx.mkZExtOrTrunc(
+        Ctx.mkLShr(Input, Ctx.mkConst(Ctx.width(Input), Bit)), Width);
+    auto Low = emitDecision(D.Low, Width, Emitted, Depth + 1);
+    auto High = emitDecision(D.High, Width, Emitted, Depth + 1);
+    if (!Low || !High || Failed)
+      return {};
+    SymRef Result;
+    const auto One = Ctx.mkConst(llvm::APInt::getAllOnes(Width));
+    if (!D.Low)
+      Result = Ctx.mkAnd(Selector, High);
+    else if (!D.High)
+      Result = Ctx.mkAnd(Ctx.mkXor(Selector, One), Low);
+    else if (D.Low == 1)
+      Result = Ctx.mkOr(Ctx.mkXor(Selector, One), High);
+    else if (D.High == 1)
+      Result = Ctx.mkOr(Selector, Low);
+    else if ((D.Low ^ D.High) == 1)
+      Result = Ctx.mkXor(Selector, Low);
+    else
+      Result = Ctx.mkXor(Low, Ctx.mkAnd(Selector, Ctx.mkXor(Low, High)));
+    if (!reserveEntry(Emitted))
+      return {};
+    Emitted.try_emplace(Id, Result);
+    return Result;
+  }
 
-  std::optional<MaskedOffset> maskedOffset(SymRef R, unsigned Count) {
+  std::optional<MaskedOffset> maskedOffset(SymRef R, unsigned Count,
+                                           unsigned Ignore = 0) {
     const unsigned All = (1u << Count) - 1;
     auto TakeOffset = [&](SymRef &Term) -> unsigned {
       if (Ctx.op(Term) != SymOp::Add || Ctx.numOperands(Term) != 2 ||
@@ -1730,18 +1778,35 @@ class LowWordDecisions {
     if (Ctx.op(R) != SymOp::And || Ctx.numOperands(R) != 2 ||
         !Ctx.isConst(Ctx.operand(R, 0)))
       return std::nullopt;
-    const unsigned Mask = unsigned(literalLowWord(Ctx.operand(R, 0))) & All;
-    if (!Mask || Mask == All)
+    const unsigned Visible = All >> Ignore;
+    const unsigned Mask = unsigned(literalLowWord(Ctx.operand(R, 0))) & Visible;
+    if (!Mask || Mask == Visible)
       return std::nullopt;
     const unsigned Shift = std::countr_zero(Mask);
     // An aligned addition commutes with clearing the low Shift bits.
-    if (Mask != (All & ~((1u << Shift) - 1)) || (Outer & ~Mask))
+    if (Mask != (Visible & ~((1u << Shift) - 1)) ||
+        (Outer & ((1u << Shift) - 1)))
       return std::nullopt;
     auto Base = Ctx.operand(R, 1);
     const auto Offset = (TakeOffset(Base) + Outer) & All;
     if (!Ctx.isVar(Base))
       return std::nullopt;
     return MaskedOffset{Base, Shift, Offset};
+  }
+
+  uint32_t affineColumnBit(const AffineProductColumn &Column, SymRef X,
+                           SymRef Y) {
+    uint32_t Result = Column.Constant;
+    auto AddBits = [&](SymRef V, unsigned Mask) {
+      while (Mask && !Failed) {
+        const unsigned I = std::countr_zero(Mask);
+        Result = apply<Xor>(Result, highestBit(V, I + 1));
+        Mask &= Mask - 1;
+      }
+    };
+    AddBits(X, Column.XBits);
+    AddBits(Y, Column.YBits);
+    return Result;
   }
 
   // XOR distributes over extraction of a single bit. Collect just the
@@ -1793,19 +1858,457 @@ class LowWordDecisions {
                                 [&](size_t Work) { return charge(Work); });
     if (!Column)
       return std::nullopt;
-    uint32_t Result = Column->Constant;
-    auto AddBits = [&](SymRef V, unsigned Mask) {
-      while (Mask && !Failed) {
-        const unsigned I = std::countr_zero(Mask);
-        Result = apply<Xor>(Result, highestBit(V, I + 1));
-        Mask &= Mask - 1;
-      }
-    };
-    AddBits(X->Base, Column->XBits);
-    AddBits(Y->Base, Column->YBits);
+    uint32_t Result = affineColumnBit(*Column, X->Base, Y->Base);
     for (auto R : Other)
       Result = apply<Xor>(Result, highestBit(R, Count));
     return Result;
+  }
+
+  std::optional<ProductFactor> productFactor(SymRef F, unsigned Count,
+                                             bool Single) {
+    if (Ctx.op(F) != SymOp::Xor)
+      return std::nullopt;
+    SymRef Nonlinear;
+    std::optional<MaskedOffset> Y, Z;
+    llvm::SmallVector<SymRef, 4> Linear;
+    auto Ops = Ctx.operands(F);
+    if (!charge(Ops.size(), Ops.size() * (sizeof(SymRef) + sizeof(SymNode))))
+      return std::nullopt;
+    for (auto Op : Ops) {
+      if (Single) {
+        auto M = maskedOffset(Op, Count);
+        if (M) {
+          if (Y)
+            return std::nullopt;
+          Y = M;
+        } else
+          Linear.push_back(Op);
+        continue;
+      }
+      if (Ctx.op(Op) != SymOp::Mul) {
+        Linear.push_back(Op);
+        continue;
+      }
+      if (Nonlinear || Ctx.numOperands(Op) != 2)
+        return std::nullopt;
+      Nonlinear = Op;
+    }
+    if (Linear.empty())
+      return std::nullopt;
+    if (!Single) {
+      if (!Nonlinear)
+        return std::nullopt;
+      auto A0 = Ctx.operand(Nonlinear, 0), A1 = Ctx.operand(Nonlinear, 1);
+      auto Zeros = [&](SymRef M) {
+        unsigned Outer = 0;
+        if (Ctx.op(M) == SymOp::Add && Ctx.numOperands(M) == 2 &&
+            Ctx.isConst(Ctx.operand(M, 0))) {
+          Outer = unsigned(literalLowWord(Ctx.operand(M, 0)));
+          M = Ctx.operand(M, 1);
+        }
+        if (Ctx.op(M) != SymOp::And || Ctx.numOperands(M) != 2 ||
+            !Ctx.isConst(Ctx.operand(M, 0)))
+          return 0u;
+        return std::min(
+            Count, unsigned(std::countr_zero(
+                       Outer | unsigned(literalLowWord(Ctx.operand(M, 0))))));
+      };
+      // The low zeros of each operand hide the same number of high bits
+      // of its partner. This admits the precise masks left by projection.
+      auto YA = Zeros(A0), ZA = Zeros(A1);
+      if (!YA || !ZA || YA + ZA >= Count)
+        return std::nullopt;
+      Y = maskedOffset(A0, Count, ZA);
+      Z = maskedOffset(A1, Count, YA);
+      if (!Y || !Z || Y->Base == Z->Base)
+        return std::nullopt;
+      if (Z->Base < Y->Base)
+        std::swap(Y, Z);
+    } else if (!Y)
+      return std::nullopt;
+    auto X = Linear.size() == 1 ? Linear.front() : Ctx.mkXor(Linear);
+    unsigned Offset = 0;
+    if (Ctx.op(X) == SymOp::Add && Ctx.numOperands(X) == 2 &&
+        Ctx.isConst(Ctx.operand(X, 0))) {
+      Offset = literalLowWord(Ctx.operand(X, 0)) & ((1u << Count) - 1);
+      X = Ctx.operand(X, 1);
+    }
+    return ProductFactor{F, X, Offset, *Y, Z.value_or(MaskedOffset{})};
+  }
+
+  SymRef progressionOffset(SymRef V, unsigned Offset, unsigned Mask) {
+    Offset &= Mask;
+    return Offset ? Ctx.mkAdd(V, Ctx.mkConst(Ctx.width(V), Offset)) : V;
+  }
+
+  SymRef progressionMultiplicand(const MaskedOffset &V, unsigned Offset,
+                                 unsigned Mask) {
+    const auto Width = Ctx.width(V.Base);
+    return Ctx.mkAnd(
+        progressionOffset(V.Base, Offset, Mask),
+        Ctx.mkConst(llvm::APInt::getHighBitsSet(Width, Width - V.Shift)));
+  }
+
+  SymRef progressionFactor(const ProductProgression &P, unsigned I) {
+    const auto Mask = (P.Basis.Z.Base ? 2 : 1) * P.Window.Period - 1;
+    auto X = progressionOffset(P.Basis.X, P.XOffset + P.XStep * I, Mask);
+    auto Y = progressionMultiplicand(P.Basis.Y, I, Mask);
+    if (!P.Basis.Z.Base)
+      return Ctx.mkXor(X, Y);
+    auto Z = progressionMultiplicand(P.Basis.Z, P.ZOffset + P.ZStep * I, Mask);
+    return Ctx.mkXor(X, Ctx.mkMul(Y, Z));
+  }
+
+  // Pair the two halves of a half-period at distance M=2^(N-3).
+  // At T=2M the linear input advances by T*a, with a=DX/2. Its product
+  // input advances by T*b, with b=(Z+DZ*Y+DZ*M)/2 for the masked Y,Z.
+  // For U=X div T and V=(Y*Z) div T, the change in their XOR, divided
+  // by T, is a+b + 2*(U*b XOR V*a XOR a*b) modulo four (low bits in
+  // the parenthesis). Only the parity of the V bits is needed across
+  // all pairs. Other odd squares are one modulo four.
+  Bits halfPeriodCorrection(const ProductProgression &P, unsigned Count,
+                            size_t NodeBytes, SymRef &Top) {
+    const unsigned Span = 1u << (Count - 3);
+    const unsigned Mask = 2 * P.Window.Period - 1;
+    if (!charge(12 * Span, Span * (8 * NodeBytes + 2 * sizeof(unsigned))))
+      return {};
+    const unsigned A = P.XStep / 2, DZ = P.ZStep;
+    auto Digits = [](unsigned Literal) -> Bits {
+      return {Literal & 1, (Literal >> 1) & 1};
+    };
+    auto Half = [&](const MaskedOffset &Input, unsigned Offset) -> Bits {
+      if (Input.Shift > 2)
+        return {0, 0};
+      const auto V = progressionOffset(Input.Base, Offset, Mask);
+      const auto &Low = word(V, 3);
+      if (Failed)
+        return {};
+      return {Input.Shift == 1 ? Low[1] : 0, Low[2]};
+    };
+    Bits Correction(2, 0);
+    llvm::SmallVector<std::pair<unsigned, unsigned>, 32> Offsets;
+    // B modulo four and X modulo four repeat every eight indices. B modulo
+    // two repeats every four. Accumulating the high bits of X in four parity
+    // groups avoids mixing the same low coefficient into each decision.
+    std::array<uint32_t, 4> LowB{}, HighX{};
+    const unsigned Cycle = std::min(Span, 8u), Copies = Span / Cycle;
+    for (unsigned J = 0; J < Span; ++J) {
+      const unsigned I = (P.Start + J) & (P.Window.Period - 1),
+                     ZO = (P.ZOffset + DZ * I) & Mask;
+      auto X = progressionOffset(P.Basis.X, P.XOffset + P.XStep * I, Mask);
+      if (J < Cycle && ((Copies & 3) || J < 4)) {
+        auto Y = Half(P.Basis.Y, I), Z = Half(P.Basis.Z, ZO);
+        if (Failed)
+          return {};
+        auto B = sumCorrection(Z, multiplyCorrection(Y, Digits(DZ)));
+        B = sumCorrection(B, Digits(DZ * (Span / 2)));
+        if (J < 4)
+          LowB[J] = B[0];
+        if (Copies & 3) {
+          auto LowX = Bits(word(X, 2));
+          if (Failed)
+            return {};
+          Correction = sumCorrection(
+              Correction,
+              multiplyCorrection(sumCorrection(B, Digits(A)), LowX));
+        }
+      }
+      if (LowB[J & 3])
+        HighX[J & 3] =
+            apply<Xor>(HighX[J & 3], highestBit(X, Count - 1) ^ (A & 1));
+      if (A & 1)
+        Offsets.emplace_back(I, ZO);
+      if (Failed)
+        return {};
+    }
+    if (Copies > 1)
+      Correction = multiplyCorrection(Correction, Digits(Copies));
+    for (unsigned J = 0; J < 4; ++J)
+      Correction[1] = apply<Xor>(Correction[1], apply<And>(HighX[J], LowB[J]));
+    if (Offsets.empty() || P.Basis.Y.Shift + P.Basis.Z.Shift >= Count - 1)
+      return Correction;
+    auto Plane = readAffineProductColumn(
+        Count - 1, P.Basis.Y.Shift, P.Basis.Z.Shift, Offsets,
+        [&](size_t Work) { return charge(Work); });
+    if (Plane) {
+      Correction[1] =
+          apply<Xor>(Correction[1],
+                     affineColumnBit(*Plane, P.Basis.Y.Base, P.Basis.Z.Base));
+    } else if ((P.ZStep & 1) && Span >= 8) {
+      if (Failed || !charge(4 * Offsets.size(), Offsets.size() * 4 * NodeBytes))
+        return {};
+      llvm::SmallVector<SymRef, 32> Parts;
+      for (auto [YO, ZO] : Offsets) {
+        auto Y = progressionMultiplicand(P.Basis.Y, YO, Mask);
+        auto Z = progressionMultiplicand(P.Basis.Z, ZO, Mask);
+        Parts.push_back(Ctx.mkMul(Y, Z));
+      }
+      if (!FirstProgressionNode)
+        FirstProgressionNode = Ctx.numNodes();
+      const auto Width = Ctx.width(P.Basis.X);
+      auto Next = Ctx.mkLShr(Ctx.mkXor(Parts), Ctx.mkConst(Width, Count - 2));
+      Top = Top ? Ctx.mkXor(Top, Next) : Next;
+    } else {
+      for (auto [YO, ZO] : Offsets) {
+        if (Failed)
+          return {};
+        auto Y = progressionMultiplicand(P.Basis.Y, YO, Mask),
+             Z = progressionMultiplicand(P.Basis.Z, ZO, Mask);
+        Correction[1] =
+            apply<Xor>(Correction[1], highestBit(Ctx.mkMul(Y, Z), Count - 1));
+      }
+    }
+    return Correction;
+  }
+
+  // An inverse or a retained high column can be emitted before the final
+  // coefficients. Publish their nodes with the completed reconstruction so
+  // the deep walk can reuse the proved structure.
+  std::optional<size_t> FirstProgressionNode;
+
+  // Reconstruct the inverse of the omitted odd factors. At h=ceil(N/2)
+  // bits equal indices modulo 2^(h-1) give equal factors. The exponent
+  // of the odd units modulo 2^h is 2^(h-2), so inverse powers can be
+  // collected before computing these few bits. If A*H=1 modulo 2^h,
+  // H*A*(2-A*H)=1-(1-A*H)^2=1 at the full observed precision.
+  SymRef inverseProgressionHoles(const ProductProgression &P, unsigned Count,
+                                 unsigned Width, size_t NodeBytes) {
+    const unsigned BitsNeeded = (Count + 1) / 2;
+    const unsigned Period = 1u << (BitsNeeded - unsigned(bool(P.Basis.Z.Base))),
+                   Order = 1u << (BitsNeeded - 2);
+    if (!charge(P.Missing.size() + 3 * Period,
+                (P.Missing.size() + 3 * Period) *
+                    (8 * NodeBytes + sizeof(SymRef))))
+      return {};
+    std::array<unsigned, 1u << (limits::kMaxAffineResidueTableBits / 2)>
+        Powers{};
+    llvm::SmallVector<SymRef, 16> Holes, LowFactors;
+    for (auto I : P.Missing) {
+      Holes.push_back(progressionFactor(P, I));
+      ++Powers[I & (Period - 1)];
+    }
+    if ((Width <= limits::kMaxAffineResidueTableBits ||
+         P.Missing.size() > P.Window.Length / 4) &&
+        P.Missing.size() > limits::kMaxDirectOddInverseFactors &&
+        !FirstProgressionNode)
+      FirstProgressionNode = Ctx.numNodes();
+    const auto H = Ctx.mkMul(Holes);
+    for (unsigned I = 0; I < Period; ++I) {
+      const unsigned Exponent = -Powers[I] & (Order - 1);
+      if (Exponent)
+        LowFactors.append(Exponent, progressionFactor(P, I));
+    }
+    const auto Low = product(LowFactors, BitsNeeded, true);
+    if (Failed || Low.empty())
+      return {};
+    // A full source word is a valid Newton seed when its observed low
+    // prefix matches. Keep cheaper seeds with a single corrected high bit.
+    SymRef Seed;
+    llvm::SmallVector<std::pair<SymRef, uint32_t>, 8> Cubic;
+    auto TrySeed = [&](SymRef F) {
+      const auto B = word(F, BitsNeeded);
+      if (Failed)
+        return;
+      unsigned Toggle = 0;
+      for (unsigned I = 0; I < BitsNeeded; ++I) {
+        uint32_t D = B[I] ^ Low[I];
+        if (D > 1) {
+          if (I != 3)
+            return;
+          auto G = Toggle ? Ctx.mkXor(Ctx.mkConst(Width, Toggle), F) : F;
+          Cubic.emplace_back(G, apply<Xor>(B[I], Low[I]));
+          return;
+        }
+        Toggle |= D << I;
+      }
+      auto A = Toggle ? Ctx.mkXor(Ctx.mkConst(Width, Toggle), F) : F;
+      if (!Seed || readingScore(Ctx, A) < readingScore(Ctx, Seed))
+        Seed = A;
+    };
+    const bool HasVariable =
+        std::any_of(Low.begin(), Low.end(), [](auto B) { return B > 1; });
+    if (P.Missing.size() > limits::kMaxDirectOddInverseFactors && HasVariable) {
+      if (!charge(6 * Period, Period * 12 * NodeBytes))
+        return {};
+      TrySeed(P.Basis.X);
+      for (unsigned I = 0; I < Period && !Failed; ++I)
+        TrySeed(progressionFactor(P, I));
+      if (Failed)
+        return {};
+    }
+    llvm::DenseMap<uint32_t, SymRef> Emitted;
+    llvm::SmallVector<SymRef, 4> Terms;
+    for (unsigned I = 0; I < BitsNeeded; ++I) {
+      if (!Low[I])
+        continue;
+      auto Term = Ctx.mkConst(Width, 1u << I);
+      if (Low[I] != 1) {
+        auto B = emitDecision(Low[I], Width, Emitted);
+        if (!B)
+          return {};
+        Term = Ctx.mkMul(Term, Ctx.mkAnd(B, Ctx.mkOne(Width)));
+      }
+      Terms.push_back(Term);
+    }
+    auto A = Ctx.mkAdd(Terms);
+    if (Seed && readingScore(Ctx, Seed) < readingScore(Ctx, A))
+      A = Seed;
+    auto Inverse = Ctx.mkSub(Ctx.mkAdd(A, A), Ctx.mkMul({A, A, H}));
+    // Let E = 1-G*H. A seed G correct through bit two has 8 | E.
+    // For up to eight observed bits, E^3 vanishes and E^2 = 64*d,
+    // where d is bit three of the difference between G and the inverse.
+    // G*(1+E+E^2) uses the original full-width H only once.
+    auto Shortest = [&](SymRef V) {
+      if (readingScore(Ctx, V) < readingScore(Ctx, Inverse))
+        Inverse = V;
+    };
+    auto Two = Ctx.mkConst(Width, 2);
+    Shortest(Ctx.mkMul(A, Ctx.mkSub(Two, Ctx.mkMul(A, H))));
+    for (auto [G, D] : Cubic) {
+      if (!charge(9, 9 * NodeBytes))
+        return {};
+      auto Delta = emitDecision(D, Width, Emitted);
+      if (!Delta)
+        return {};
+      auto Correction =
+          Ctx.mkMul(Ctx.mkConst(Width, 64), Ctx.mkAnd(Delta, Ctx.mkOne(Width)));
+      Shortest(
+          Ctx.mkMul(G, Ctx.mkSub(Ctx.mkAdd(Two, Correction), Ctx.mkMul(G, H))));
+    }
+    if (Holes.size() <= limits::kMaxDirectOddInverseFactors) {
+      // H^2 is one modulo eight. The finite geometric series in 1-H^2
+      // needs only two or three terms at the admitted precision.
+      auto D = Ctx.mkSub(Ctx.mkOne(Width), Ctx.mkMul(H, H));
+      auto Sum = Ctx.mkAdd(Ctx.mkOne(Width), D);
+      if (Count > 6)
+        Sum = Ctx.mkAdd(Sum, Ctx.mkMul(D, D));
+      const auto Direct = Ctx.mkMul(H, Sum);
+      if (readingScore(Ctx, Direct) < readingScore(Ctx, Inverse))
+        Inverse = Direct;
+    }
+    return Inverse;
+  }
+
+  bool progressionProduct(llvm::ArrayRef<SymRef> Factors, unsigned Count,
+                          unsigned Width, Bits &Product,
+                          llvm::SmallVectorImpl<SymRef> &Retained,
+                          const llvm::APInt &Scale, SymRef &UpperColumn,
+                          bool Single) {
+    const auto Nonconstants = Factors.drop_front(Ctx.isConst(Factors.front()));
+    if (Ctx.op(Nonconstants.front()) != SymOp::Xor ||
+        Count < limits::kMinProductProgressionBits)
+      return false;
+    auto Window = chooseProductWindow(Count, Nonconstants.size(), Single);
+    if (!Window)
+      return false;
+    if (!charge(Nonconstants.size(),
+                Nonconstants.size() *
+                    (sizeof(ProductFactor) + 2 * sizeof(SymRef))))
+      return false;
+    llvm::SmallVector<ProductFactor, 32> Words;
+    Words.reserve(Nonconstants.size());
+    llvm::SmallVector<SymRef, 4> OtherWords;
+    for (auto F : Nonconstants) {
+      auto Source = productFactor(F, Count, Single);
+      if (Failed)
+        return false;
+      if (!Source) {
+        if (OtherWords.size() >= Window->MaxExceptions)
+          return false;
+        OtherWords.push_back(F);
+      } else
+        Words.push_back(*Source);
+    }
+    if (Words.empty())
+      return false;
+    auto P = matchProductProgression(
+        Words, *Window, !Retained.empty(),
+        [&](size_t Work, size_t Bytes) { return charge(Work, Bytes); });
+    if (!P)
+      return false;
+    const unsigned BaseBits = P->basePrecision(Count);
+    if (BaseBits == Count)
+      return false;
+    // In the single-mask case shifting by 2^(N-2) advances the masked word
+    // by the shift and the linear side by an even multiple. Across the whole
+    // half, the low residues repeat in cycles of four and the high bit of
+    // the linear side has even parity. Its correction is therefore zero.
+    const bool Half = !Single && Window->Length < Window->Period;
+    const unsigned BaseCount = 1u << (BaseBits - (Half ? 2 : 1));
+    const size_t NodeBytes = sizeof(SymNode) + 4 * sizeof(SymRef) +
+                             sizeof(llvm::APInt) +
+                             ((size_t(Width) + 63) / 64) * 8;
+    if (!charge(8 * BaseCount + P->Retained.size(),
+                BaseCount * 12 * NodeBytes +
+                    (P->Retained.size() + 1) * sizeof(SymRef)))
+      return false;
+    llvm::SmallVector<SymRef, 16> Base;
+    for (unsigned I = 0; I < BaseCount; ++I)
+      Base.push_back(
+          progressionFactor(*P, (P->Start + I) & (Window->Period - 1)));
+    const auto &Parity = word(Base.front(), 1);
+    if (Failed || Parity.front() != 1)
+      return false;
+    SymRef Top;
+    auto Value = product(Base, BaseBits, true);
+    for (unsigned N = BaseBits + 1; N <= Count; ++N) {
+      if (Failed || Value.empty())
+        return false;
+      // In a full period the two halves differ only in the top bit.
+      // Its parity change depends on the linear step and the masked inputs'
+      // second bits, which repeat every four indices. At least two complete
+      // cycles cancel, leaving exactly the square at one less bit.
+      Value.push_back(0);
+      Value = calculate(SymOp::Mul, Value, Value);
+      if (Half && !Failed) {
+        auto Correction = halfPeriodCorrection(*P, N, NodeBytes, Top);
+        if (Failed || Correction.empty())
+          return false;
+        Bits Upper(N, 0);
+        std::copy(Correction.begin(), Correction.end(), Upper.end() - 2);
+        Value = calculate(SymOp::Add, Value, Upper);
+      }
+    }
+    auto Block = Value;
+    for (unsigned I = 1; I < Window->Copies && !Failed; ++I)
+      Value = calculate(SymOp::Mul, Value, Block);
+    if (Failed || Value.empty())
+      return false;
+    SymRef Inverse;
+    if (!P->Missing.empty()) {
+      Inverse = inverseProgressionHoles(*P, Count, Width, NodeBytes);
+      if (!Inverse || Failed)
+        return false;
+    }
+    Retained.append(OtherWords.begin(), OtherWords.end());
+    // On the unmatched tail C + ~X equals (C - 1) - X at full width.
+    // Normalize the affine operand once before walking each retained XOR.
+    for (auto F : P->Retained) {
+      if (Ctx.op(F) == SymOp::Xor && Ctx.numOperands(F) == 2) {
+        auto A = Ctx.operand(F, 0), B = Ctx.operand(F, 1);
+        if (Ctx.op(A) != SymOp::Add)
+          std::swap(A, B);
+        if (Ctx.op(A) == SymOp::Add && Ctx.numOperands(A) == 2 &&
+            Ctx.isConst(Ctx.operand(A, 0)) &&
+            Ctx.op(Ctx.operand(A, 1)) == SymOp::Not) {
+          if (!charge(4, 4 * NodeBytes))
+            return false;
+          auto X = Ctx.operand(Ctx.operand(A, 1), 0);
+          auto Offset = Ctx.mkConst(Ctx.constValue(Ctx.operand(A, 0)) - 1);
+          auto Candidate = Ctx.mkXor(Ctx.mkSub(Offset, X), B);
+          if (readingScore(Ctx, Candidate) < readingScore(Ctx, F))
+            F = Candidate;
+        }
+      }
+      Retained.push_back(F);
+    }
+    if (Inverse)
+      Retained.push_back(Inverse);
+    if (Top && (Window->Copies & 1))
+      UpperColumn = Ctx.mkMul(Ctx.mkConst(Scale.shl(Count - 1)),
+                              Ctx.mkAnd(Top, Ctx.mkOne(Width)));
+    Product = std::move(Value);
+    return true;
   }
 
   // For odd L_i and T=2^(N-1), product(L_i + T*h_i) equals
@@ -2858,7 +3361,8 @@ public:
   ~LowWordDecisions() { commitWork(); }
 
   SymRef simplify(SymRef Root, const llvm::APInt &Scale, unsigned Observed,
-                  bool OddProductOnly, bool *Complete) {
+                  bool OddProductOnly, bool *Complete,
+                  bool ProgressionOnly = false) {
     const auto Width = Ctx.width(Root);
     RootWidth = Width;
     const bool ProjectFactors =
@@ -3178,10 +3682,14 @@ public:
     const bool FullBlock =
         Nonconstant >= PairingBlock && !(Nonconstant % PairingBlock);
     SymRef UpperColumn;
-    const bool IsolatedColumn =
+    const bool ProvedGroup =
         AssumptionCoversFactors && !ProjectFactors && Nonconstant >= Observed &&
-        splitMaskedProduct(Factors, Observed, Scale, Product, UpperColumn);
-    bool AllOdd = !IsolatedColumn &&
+        (splitMaskedProduct(Factors, Observed, Scale, Product, UpperColumn) ||
+         progressionProduct(Factors, Observed, Width, Product, RetainedFactors,
+                            Scale, UpperColumn, !HasNonlinearFactor));
+    if (ProgressionOnly && !ProvedGroup)
+      return Root;
+    bool AllOdd = !ProvedGroup &&
                   (RetainedFactors.empty() || !ProjectFactors) && Assumption &&
                   Observed >= limits::kMinResidueDecisionPairingBits &&
                   (FullBlock || Nonconstant > WideProbeBlock);
@@ -3270,7 +3778,7 @@ public:
                                             NormalizeFactors)
                             : product(Factors, Observed);
       }
-    } else if (!IsolatedColumn) {
+    } else if (!ProvedGroup) {
       Product =
           product(Factors, Observed,
                   Ctx.numOperands(Root) > limits::kMaxResidueProductFactors);
@@ -3309,57 +3817,10 @@ public:
       Coefficients.try_emplace(Product[I], Width, 0).first->second +=
           Scale.shl(I);
     }
-    const size_t FirstEmitted = Ctx.numNodes();
+    const size_t FirstEmitted = ProvedGroup && FirstProgressionNode
+                                    ? *FirstProgressionNode
+                                    : Ctx.numNodes();
     llvm::DenseMap<uint32_t, SymRef> Emitted;
-    // Boolean operators commute with projection to bit zero. Build a
-    // bitwise word using shifted inputs and all-ones Boolean constants, then
-    // mask once at the root instead of masking every selector separately.
-    auto Emit = [&](auto &&Self, uint32_t Id, unsigned Depth) -> SymRef {
-      if (!charge())
-        return {};
-      if (Id <= 1)
-        return Id ? Ctx.mkConst(llvm::APInt::getAllOnes(Width))
-                  : Ctx.mkZero(Width);
-      if (auto It = Emitted.find(Id); It != Emitted.end())
-        return It->second;
-      const auto D = decision(Id);
-      const auto Input = SymRef(variableInput(D.Variable));
-      const size_t Words =
-          (size_t(std::max(Width, Ctx.width(Input))) - 1) / 64 + 1;
-      if (Depth >= limits::kMaxResidueDecisionDepth ||
-          !charge(1,
-                  sizeof(SymRef) + 4 * sizeof(void *) +
-                      8 * (sizeof(SymNode) + 4 * sizeof(SymRef) +
-                           sizeof(llvm::APInt) + Words * sizeof(uint64_t)))) {
-        Failed = true;
-        return {};
-      }
-      const auto Bit = variableBit(D.Variable);
-      auto Selector = Ctx.mkZExtOrTrunc(
-          Ctx.mkLShr(Input, Ctx.mkConst(Ctx.width(Input), Bit)), Width);
-      auto Low = Self(Self, D.Low, Depth + 1);
-      auto High = Self(Self, D.High, Depth + 1);
-      if (!Low || !High || Failed)
-        return {};
-      SymRef Result;
-      const auto One = Ctx.mkConst(llvm::APInt::getAllOnes(Width));
-      if (!D.Low)
-        Result = Ctx.mkAnd(Selector, High);
-      else if (!D.High)
-        Result = Ctx.mkAnd(Ctx.mkXor(Selector, One), Low);
-      else if (D.Low == 1)
-        Result = Ctx.mkOr(Ctx.mkXor(Selector, One), High);
-      else if (D.High == 1)
-        Result = Ctx.mkOr(Selector, Low);
-      else if ((D.Low ^ D.High) == 1)
-        Result = Ctx.mkXor(Selector, Low);
-      else
-        Result = Ctx.mkXor(Low, Ctx.mkAnd(Selector, Ctx.mkXor(Low, High)));
-      if (!reserveEntry(Emitted))
-        return {};
-      Emitted.try_emplace(Id, Result);
-      return Result;
-    };
     auto Synthesize = [&](uint32_t RootId, SymRef Fallback) -> SymRef {
       if (RootId <= 1 ||
           (decision(RootId).Low <= 1 && decision(RootId).High <= 1))
@@ -3608,6 +4069,13 @@ public:
                          Ctx.mkConst(Width, 1));
       };
       SymRef Result = LazyFlat ? SymRef{} : BuildFlat();
+      auto AndCofactors = [&](SymRef L, SymRef R) {
+        // Apply De Morgan before ranking a product of complemented cofactors.
+        // This retains one complement when the ANF reuses their disjunction.
+        if (Ctx.op(L) == SymOp::Not && Ctx.op(R) == SymOp::Not)
+          return Ctx.mkNot(Ctx.mkOr(Ctx.operand(L, 0), Ctx.operand(R, 0)));
+        return Ctx.mkAnd(L, R);
+      };
       auto Factor =
           [&](auto &&Self, const Polynomial &P, llvm::ArrayRef<SymRef> Basis,
               std::map<Polynomial, SymRef> &Cache, bool TryCoordinate,
@@ -3791,7 +4259,7 @@ public:
                 !charge(Nodes, Nodes * (sizeof(SymNode) + 4 * sizeof(SymRef))))
               return {};
             auto Value = LowConstant == HighConstant
-                             ? Ctx.mkAnd(A, Ctx.mkNot(Basis[Variable]))
+                             ? AndCofactors(A, Ctx.mkNot(Basis[Variable]))
                              : Ctx.mkOr(A, Basis[Variable]);
             Cache.emplace(P, Value);
             return Value;
@@ -3824,7 +4292,7 @@ public:
             if (!Q || !H || !R ||
                 !charge(2, 2 * (sizeof(SymNode) + 4 * sizeof(SymRef))))
               return {};
-            auto Value = Ctx.mkXor(R, Ctx.mkAnd(Q, H));
+            auto Value = Ctx.mkXor(R, AndCofactors(Q, H));
             Cache.emplace(P, Value);
             return Value;
           }
@@ -3901,7 +4369,7 @@ public:
             if (!Q || !H || !R ||
                 !charge(2, 2 * (sizeof(SymNode) + 4 * sizeof(SymRef))))
               return {};
-            auto Value = Ctx.mkXor(R, Ctx.mkAnd(Q, H));
+            auto Value = Ctx.mkXor(R, AndCofactors(Q, H));
             Cache.emplace(P, Value);
             return Value;
           }
@@ -3939,7 +4407,7 @@ public:
         }
         if (!A || !B || !charge(3, 3 * (sizeof(SymNode) + 4 * sizeof(SymRef))))
           return {};
-        auto Value = Ctx.mkXor(A, Ctx.mkAnd(Basis[Variable], B));
+        auto Value = Ctx.mkXor(A, AndCofactors(Basis[Variable], B));
         Cache.emplace(P, Value);
         return Value;
       };
@@ -4006,7 +4474,7 @@ public:
               : SymRef{};
       const bool HasPolynomial = Value.isValid();
       if (!Value && !Failed) {
-        Value = Emit(Emit, Id, 0);
+        Value = emitDecision(Id, Width, Emitted);
         if (Value)
           Value = Ctx.mkAnd(Value, Ctx.mkConst(Width, 1));
       }
@@ -4028,7 +4496,7 @@ public:
       Terms.push_back(UpperColumn);
     SymRef OutputGate;
     if (Parity != 1) {
-      OutputGate = Emit(Emit, Parity, 0);
+      OutputGate = emitDecision(Parity, Width, Emitted);
       if (!OutputGate || Failed ||
           !charge(3, 3 * (sizeof(SymNode) + 4 * sizeof(SymRef))))
         return Root;
@@ -4102,10 +4570,11 @@ public:
 
 } // namespace
 
-SymRef foldResidueDecisions(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
-                            size_t &Storage, bool OddProductOnly,
-                            size_t MaxWork, bool *StorageLimited,
-                            bool *Complete) {
+static SymRef foldDecisionProductImpl(SymContext &Ctx, SymRef Root,
+                                      WorkBudget &Budget, size_t &Storage,
+                                      bool OddProductOnly, size_t MaxWork,
+                                      bool *StorageLimited, bool *Complete,
+                                      bool ProgressionOnly) {
   if (Complete)
     *Complete = false;
   if (Ctx.op(Root) != SymOp::Mul || Ctx.numOperands(Root) < 2)
@@ -4126,7 +4595,27 @@ SymRef foldResidueDecisions(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
   if (!Observed || Observed > limits::kMaxAffineResidueTableBits)
     return Root;
   return LowWordDecisions(Ctx, Budget, Storage, MaxWork, StorageLimited)
-      .simplify(Root, Scale, Observed, OddProductOnly, Complete);
+      .simplify(Root, Scale, Observed, OddProductOnly, Complete,
+                ProgressionOnly);
+}
+
+SymRef foldResidueDecisions(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
+                            size_t &Storage, bool OddProductOnly,
+                            size_t MaxWork, bool *StorageLimited,
+                            bool *Complete) {
+  return foldDecisionProductImpl(Ctx, Root, Budget, Storage, OddProductOnly,
+                                 MaxWork, StorageLimited, Complete, false);
+}
+
+SymRef foldMixedProductProgression(SymContext &Ctx, SymRef Root,
+                                   WorkBudget &Budget, size_t &Storage) {
+  if (!hasMixedProgressionHint(Ctx, Root, [&](size_t Work) {
+        return Budget.canConsume(Work) && Budget.consume(Work);
+      }))
+    return Root;
+  return foldDecisionProductImpl(Ctx, Root, Budget, Storage, true,
+                                 limits::kMaxMultipleResidueWork, nullptr,
+                                 nullptr, true);
 }
 
 } // namespace neverd::symbolic::detail

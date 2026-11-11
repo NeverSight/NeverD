@@ -97,6 +97,15 @@ inline constexpr unsigned kResidueEqualHalfBits = 8;
 // An isolated top bit can be accumulated separately while the low product
 // uses the three-bit odd-unit reading.
 inline constexpr unsigned kMaxIsolatedProductLowBits = 3;
+// A full-period square cancels the complete parity cycle from five bits up.
+// Bound the number of missing or extra words because each inverse contributes
+// an additional full-width product to the emitted expression.
+inline constexpr unsigned kMinProductProgressionBits = 5;
+inline constexpr unsigned kMaxProductProgressionHintNodes = 24;
+inline constexpr unsigned kFullPeriodExceptionDivisor = 16;
+inline constexpr unsigned kHalfPeriodExceptionDivisor = 8;
+inline constexpr unsigned kProductWindowTailDivisor = 3;
+inline constexpr unsigned kMaxDirectOddInverseFactors = 3;
 // Squaring a recursive mixed product of six or more observed bits can grow
 // its decision graph. Preserve its complete odd factors across that square;
 // smaller recursive products keep their inexpensive complete decision words.
