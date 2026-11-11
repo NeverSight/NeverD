@@ -1981,6 +1981,13 @@ std::vector<size_t> HighCWriter::printedCallOperands(const HighExpr &E) const {
     return vaStartCallOperands(E, *Defined, *Va, /*Printed=*/false);
   // A call passes the declared parameters the definition prints after its
   // HighIR ones (unreadDeclaredParams) in the slots that follow theirs.
+  if (Defined->UsesNativeVariadicStack &&
+      E.Operands.size() >= Defined->Params.size()) {
+    auto Indices = emittedParamIndices(*Defined);
+    for (size_t I = Defined->Params.size(); I < E.Operands.size(); ++I)
+      Indices.push_back(I);
+    return Indices;
+  }
   const size_t Unread = unreadDeclaredParams(*Defined).size();
   if (Unread && E.Operands.size() == Defined->Params.size() + Unread) {
     std::vector<size_t> Indices = emittedParamIndices(*Defined);
@@ -2561,10 +2568,14 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   const std::vector<size_t> VaCallOperands =
       VaCallee ? vaStartCallOperands(E, *Defined, *VaCallee, /*Printed=*/true)
                : std::vector<size_t>();
-  const size_t ArgCount = VaCallee ? VaCallOperands.size()
-                          : Defined && !Defined->SourceTypeHint
-                              ? emittedParamCount(*Defined)
-                              : E.Operands.size();
+  const std::vector<size_t> DefinedIndices =
+      VaCallee ? VaCallOperands : printedCallOperands(E);
+  const size_t ArgCount =
+      (VaCallee ||
+       (Defined && Defined->UsesNativeVariadicStack && !DefinedIndices.empty()))
+          ? DefinedIndices.size()
+      : Defined && !Defined->SourceTypeHint ? emittedParamCount(*Defined)
+                                            : E.Operands.size();
   std::string S = Name + "(";
   const auto Callee = debugCallee(E);
   if (Callee && !Defined)
@@ -2587,8 +2598,6 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
           : std::nullopt;
   const size_t ArityIntegers = Arity ? std::max(0, Arity->IntArgs) : 0;
   const size_t ArityFloats = Arity ? std::max(0, Arity->FpArgs) : 0;
-  const std::vector<size_t> DefinedIndices =
-      VaCallee ? VaCallOperands : printedCallOperands(E);
   auto OperandIndex = [&](size_t I) {
     if (I < DefinedIndices.size())
       return DefinedIndices[I];

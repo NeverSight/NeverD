@@ -32,9 +32,10 @@ ExprPtr MedToHighConverter::medOpToExpr(const MedOp &Op) {
 }
 
 ExprPtr MedToHighConverter::medOpToExprImpl(const MedOp &Op) {
-  if (TargetArch == Arch::AArch64 &&
-      isVariadicStackAddressDefinition(Op, getTargetRegInfo(TargetArch)))
-    if (auto Address = darwinVariadicStackAddress(Op.Output))
+  if (TargetArch == Arch::AArch64 && Image && CurMed)
+    if (auto Address = darwinVariadicStackAddress(darwinVariadicStackDefinition(
+            Op, getTargetRegInfo(TargetArch), Image->abiFormat(),
+            CurMed->EntryKind)))
       return Address;
   if (ExprPtr Dynamic = dynamicStackExpr(Op))
     return Dynamic;

@@ -924,6 +924,14 @@ double and a 128-bit value. The IR control enables stack protection to displace
 the private frame. Setting `NEVERD_ARM64E_LIFTED_NATIVE=1` runs the compiler
 original and all three replacements as arm64e.
 
+An exported variadic entry can be called by another image even when its only
+local callers use direct branches. The export keeps its open ABI. An optimized
+sentinel loop can read the first stack word directly and store an advanced
+cursor made with a pointer OR. The recognizer and both projections use the
+entry alignment to prove that cursor's displacement. The caller control calls
+the same entry through dyld with different tail lengths and through a function
+inside the image.
+
 The image publisher compares non-writeback SP accesses at their effective
 incoming byte offsets. It can remove a compact leaf's unused stack reservation
 when the exact SP adjustment and restoration agree with its unwind row, the

@@ -20,6 +20,8 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/DataSymbolBinding.h"
 
+#include "llvm/ADT/ArrayRef.h"
+
 #include <map>
 #include <optional>
 #include <set>
@@ -183,9 +185,25 @@ int wholeArgRegWriteInBlock(const MedBlock &Blk, int J,
 bool usesDarwinVariadicEntryStack(const MedFunc &Func, Arch TheArch,
                                   BinaryFormat Format);
 
-/// A machine instruction that computes a stack address as an ordinary value.
-bool isVariadicStackAddressDefinition(const MedOp &Op,
-                                      const TargetRegInfo &TRI);
+/// Low bits a Darwin pointer OR may set independently of its entry address.
+std::optional<uint64_t> darwinEntryPointerOrBits(const MedOp &Op,
+                                                 const TargetRegInfo &TRI,
+                                                 BinaryFormat Format,
+                                                 StackEntryKind Entry);
+
+struct DarwinVariadicStackValue {
+  const MedVar *Base = nullptr;
+  uint64_t SetBits = 0;
+  int64_t offsetFrom(int64_t BaseOffset) const {
+    return BaseOffset | static_cast<int64_t>(SetBits);
+  }
+};
+
+/// The SSA value whose proved offset gives this instruction's stack address.
+DarwinVariadicStackValue darwinVariadicStackDefinition(const MedOp &Op,
+                                                       const TargetRegInfo &TRI,
+                                                       BinaryFormat Format,
+                                                       StackEntryKind Entry);
 
 // Finalize the overflow stack parameters of every variadic callee once all call
 // sites have been recovered.  A variadic function's va_arg overflow reads land
@@ -195,7 +213,8 @@ bool isVariadicStackAddressDefinition(const MedOp &Op,
 // that arity, and MedFunc::VariadicOverflowCount drives the emitter to spill
 // those parameters into the frame headroom where the unchanged walk reads them.
 void finalizeVariadicCallees(std::vector<MedFunc> &Funcs, Arch TheArch,
-                             BinaryFormat Fmt);
+                             BinaryFormat Fmt,
+                             llvm::ArrayRef<Export> Exports = {});
 
 } // namespace neverd
 

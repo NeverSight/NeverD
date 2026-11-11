@@ -24,8 +24,10 @@
 
 #include "MedVariadicDetail.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallConvention.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -41,20 +43,43 @@
 
 namespace neverd {
 
-bool isVariadicStackAddressDefinition(const MedOp &Op,
-                                      const TargetRegInfo &TRI) {
-  return (Op.Opcode == NdOp::COPY || Op.Opcode == NdOp::INT_ADD ||
-          Op.Opcode == NdOp::INT_SUB) &&
-         (Op.Output.Kind == MedVar::Temp ||
-          (Op.Output.Kind == MedVar::Reg &&
-           !TRI.isStackPointer(Op.Output.RegOff) &&
-           !TRI.isFramePointer(Op.Output.RegOff)));
-}
-
 bool usesDarwinVariadicEntryStack(const MedFunc &Func, Arch TheArch,
                                   BinaryFormat Format) {
   return TheArch == Arch::AArch64 && Format == BinaryFormat::MachO &&
          Func.IsVariadic && !Func.SkippedSSA && Func.VariadicOverflowCount == 0;
+}
+
+std::optional<uint64_t> darwinEntryPointerOrBits(const MedOp &Op,
+                                                 const TargetRegInfo &TRI,
+                                                 BinaryFormat Format,
+                                                 StackEntryKind Entry) {
+  if (TRI.TheArch != Arch::AArch64 || Format != BinaryFormat::MachO ||
+      Op.Opcode != NdOp::INT_OR || Op.NumInputs != 2 ||
+      Op.Output.Size != TRI.PointerSize ||
+      Op.Inputs[0].Size != TRI.PointerSize || !Op.Inputs[1].isConst() ||
+      (Op.Inputs[1].Provenance != ConstantAddressProvenance::Unknown &&
+       Op.Inputs[1].Provenance != ConstantAddressProvenance::Scalar))
+    return std::nullopt;
+  const auto Bits = Op.Inputs[1].ConstVal;
+  if (Bits >= guaranteedEntryStackAlignment(TRI.TheArch, Format, Entry))
+    return std::nullopt;
+  return Bits;
+}
+
+DarwinVariadicStackValue darwinVariadicStackDefinition(const MedOp &Op,
+                                                       const TargetRegInfo &TRI,
+                                                       BinaryFormat Format,
+                                                       StackEntryKind Entry) {
+  if (Op.Output.Kind != MedVar::Temp &&
+      (Op.Output.Kind != MedVar::Reg || TRI.isStackPointer(Op.Output.RegOff) ||
+       TRI.isFramePointer(Op.Output.RegOff)))
+    return {};
+  if (Op.Opcode == NdOp::COPY || Op.Opcode == NdOp::INT_ADD ||
+      Op.Opcode == NdOp::INT_SUB)
+    return {&Op.Output, 0};
+  if (const auto Bits = darwinEntryPointerOrBits(Op, TRI, Format, Entry))
+    return {&Op.Inputs[0], *Bits};
+  return {};
 }
 
 namespace med_variadic_detail {
@@ -137,6 +162,12 @@ std::optional<int64_t> entrySpDelta(VariadicScan &S, const MedVar &Root,
           Op.Inputs[1].ConstVal == 0)
         if (auto Base = Eval(Op.Inputs[0], Remaining - 1))
           return Proved(*Base);
+      return std::nullopt;
+    case NdOp::INT_OR:
+      if (auto Bits =
+              darwinEntryPointerOrBits(Op, S.TRI, S.Format, S.Func.EntryKind))
+        if (auto Base = Eval(Op.Inputs[0], Remaining - 1))
+          return Proved(*Base | static_cast<int64_t>(*Bits));
       return std::nullopt;
     case NdOp::INT_ADD:
     case NdOp::INT_SUB:
@@ -249,7 +280,7 @@ void detectVariadic(MedFunc &Func, const TargetRegInfo &TRI, Arch TargetArch,
                     BinaryFormat Fmt) {
   if (Func.Blocks.empty())
     return;
-  VariadicScan S(Func, TRI);
+  VariadicScan S(Func, TRI, Fmt);
   const CallArgumentConvention *Convention =
       callArgumentConvention(TargetArch, Fmt);
   bool Marked = false;

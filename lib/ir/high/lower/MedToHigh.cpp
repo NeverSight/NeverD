@@ -698,20 +698,23 @@ const PhiNode *MedToHighConverter::uniqueMedPhi(const MedVar &V) {
   return EntryStackOffsets->uniquePhi(V);
 }
 
-ExprPtr MedToHighConverter::darwinVariadicStackAddress(const MedVar &Value) {
-  if (TargetArch != Arch::AArch64 || !Image || !CurMed ||
+ExprPtr MedToHighConverter::darwinVariadicStackAddress(
+    DarwinVariadicStackValue Source) {
+  if (!Source.Base || TargetArch != Arch::AArch64 || !Image || !CurMed ||
       !usesDarwinVariadicEntryStack(*CurMed, TargetArch, Image->abiFormat()))
     return nullptr;
+  const MedVar &Value = *Source.Base;
   const auto &TRI = getTargetRegInfo(TargetArch);
   if (Value.Size != TRI.PointerSize)
     return nullptr;
   indexMedDefinitions();
-  const auto Offset = EntryStackOffsets->offset(Value);
-  if (!Offset)
+  const auto BaseOffset = EntryStackOffsets->offset(Value);
+  if (!BaseOffset)
     return nullptr;
+  const int64_t Offset = Source.offsetFrom(*BaseOffset);
 
   ExprPtr Base;
-  if (*Offset >= CurMed->VariadicOverflowBase) {
+  if (Offset >= CurMed->VariadicOverflowBase) {
     Base = std::make_shared<HighExpr>();
     Base->Kind = ExprKind::IncomingStack;
     Base->Type = NdType::makeInt(Value.Size, false);
@@ -724,15 +727,15 @@ ExprPtr MedToHighConverter::darwinVariadicStackAddress(const MedVar &Value) {
     SP.Size = Value.Size;
     Base = HighExpr::makeVar(SP);
   }
-  if (!*Offset)
+  if (!Offset)
     return Base;
   return HighExpr::makeBinop(NdOp::INT_ADD, std::move(Base),
-                             HighExpr::makeConst(*Offset, Value.Size));
+                             HighExpr::makeConst(Offset, Value.Size));
 }
 
 ExprPtr MedToHighConverter::memoryAddressExpr(const MedVar &V,
                                               bool InlineDefinition) {
-  if (auto Address = darwinVariadicStackAddress(V))
+  if (auto Address = darwinVariadicStackAddress({&V}))
     return Address;
   if (CurMed && TargetArch == Arch::X86 && Image &&
       (!Image->isELF() || !Image->IsRelocatable))
