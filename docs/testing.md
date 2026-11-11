@@ -4168,7 +4168,9 @@ original. A separate shared-use case checks that a full-width consumer prevents
 narrowing a repeated residue. A 33-factor executable exercises the CLI and
 GUI worker source paths at O0 and O2. Use `--family upper-perturbation --count 32`
 to reproduce 256 scaled products and `--family masked-perturbation --count 32`
-for 160 mixed-mask controls, including non-native widths up to 257 bits.
+for 160 mixed-mask controls, including non-native widths up to 257 bits. The LLVM
+translator checks scaled offsets against exhaustive byte domains, including
+overlap and no-wrap flags that can make the input poison.
 
 Dominant-prefix regressions add degree-511–514 products with disturbed factors
 and multiple residual multipliers. Complete-word APInt oracles cover 8–257 bits,

@@ -782,6 +782,42 @@ TEST(SymSimplifyGuard, MaskedDisjointOrMatchesExhaustiveByteDomains) {
   EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
 }
 
+TEST(SymSimplifyGuard, ScaledOffsetsKeepOverlappingBitsAndPoison) {
+  llvm::LLVMContext C;
+  llvm::Module M("scaled_offsets", C);
+  auto *Ty = llvm::Type::getInt8Ty(C);
+  for (bool Shift : {false, true}) {
+    for (bool NoWrap : {false, true}) {
+      for (unsigned Offset : {7u, 8u}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Shift << "," << NoWrap << "," << Offset);
+        auto *F =
+            llvm::Function::Create(llvm::FunctionType::get(Ty, {Ty}, false),
+                                   llvm::Function::ExternalLinkage, "f", &M);
+        llvm::IRBuilder<> B(llvm::BasicBlock::Create(C, "entry", F));
+        auto high = [&] {
+          return Shift ? B.CreateShl(F->getArg(0), B.getInt8(3), "", NoWrap)
+                       : B.CreateMul(F->getArg(0), B.getInt8(24), "", NoWrap);
+        };
+        auto *K = B.getInt8(Offset);
+        auto *Root =
+            B.CreateSub(B.CreateDisjointOr(high(), K), B.CreateAdd(high(), K));
+        B.CreateRet(Root);
+        bool Defined = true;
+        for (unsigned X = 0; X < 256; ++X) {
+          const auto Scaled = X * (Shift ? 8 : 24);
+          Defined &= !(Scaled & Offset) && (!NoWrap || Scaled <= 255);
+        }
+        const auto Result = SymSimplifyPass::constantValueOf(Root);
+        EXPECT_EQ(Result.has_value(), Defined) << printFunction(*F);
+        if (Result)
+          EXPECT_TRUE(Result->isZero());
+      }
+    }
+  }
+  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+}
+
 TEST(SymSimplifyGuard, NestedOrAdmissionPreservesPoisonAndBounds) {
   for (unsigned Width : {8u, 16u, 32u, 64u, 128u, 257u, 512u, 513u}) {
     for (unsigned Mode : {0u, 1u, 2u, 3u}) {
