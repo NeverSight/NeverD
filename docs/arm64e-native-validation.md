@@ -716,9 +716,10 @@ base. With `--publish --zero-base`, the same eight IA/IB and compact/DWARF
 cases require both preferred header addresses to remain zero. This profile
 uses O2 for the original trapping entries and a fixed `@rpath` install name.
 The separately compiled caller still runs at O0 and O2. When both the caller
-and the original entries use O0, the measured zero-base input has only 752
-bytes of TEXT tail after its 1,192-byte DWARF section. The additional frame
-records exceed that space, and installation fails before emitting a file.
+and the original entries use O0, the DWARF section grows to 1,192 bytes.
+The measured inputs had 752 bytes of TEXT tail with a path-based install name
+and 864 bytes with the fixed install name. In both cases the additional frame
+records exceed the available space and publication stops before the receipt.
 The installer measures LSDA index demand from the native compact entries
 and FDEs. It can retain the compact table at its original VA, move
 the adjacent DWARF records into audited free TEXT storage and reuse their
@@ -728,6 +729,17 @@ before producing an output. A separate contract fixture covers a zero-base
 image with exactly one free section descriptor and an aligned free range
 between occupied bytes. DWARF-only growth also exercises prefix relocation
 without a compact registry and replays the signed return-address rows.
+
+The [zero-base native run](https://github.com/gmh5225/test_mac_intel/actions/runs/42989932233)
+executed the eight zero-base images on macos-26 and xcode-27. On each host,
+both O0 caller / indexed DWARF cases kept compact unwind at `0x3230` as it
+grew from 168 to 1,096 bytes. The installer moved the 136 bytes of original
+DWARF from `0x32d8` to `0x3678` and installed a 2,240-byte frame section.
+Each installed caller exercised its 26 public entries and passed. The
+[validation record](evidence/arm64e-zero-base-unwind-2026-11-11.json) includes
+the source-built test host, per-image hashes, the fixed-name fully O0 refusal
+and a zero-filled range referenced by `LC_NOTE`. Both inputs retained their
+bytes. Publication stopped before creating a file or a receipt.
 
 The publication test also checks rejection before the receipt commits,
 unchanged input bytes, exact installed entry receipts and refusal to overwrite
