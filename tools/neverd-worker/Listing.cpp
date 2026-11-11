@@ -763,6 +763,36 @@ struct Listing::Impl {
   /// What the last full build read that names and the user's items do not
   /// change: the string scan, and the import, import slot and export rows.
   std::vector<StringItem> scannedStrings;
+  /// The scan's strings in address order, and the furthest byte after each
+  /// that it or one before it reaches: what a span shares with a string reads
+  /// in one search (scannedStringsCover).
+  std::vector<std::uint64_t> scannedStringAddresses, scannedStringReach;
+  void indexScannedStrings() {
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> spans;
+    spans.reserve(scannedStrings.size());
+    for (const auto &string : scannedStrings)
+      spans.emplace_back(string.address,
+                         string.address + string.length + string.unit);
+    std::sort(spans.begin(), spans.end());
+    scannedStringAddresses.clear();
+    scannedStringReach.clear();
+    scannedStringAddresses.reserve(spans.size());
+    scannedStringReach.reserve(spans.size());
+    std::uint64_t reach = 0;
+    for (const auto &[address, end] : spans) {
+      reach = std::max(reach, end);
+      scannedStringAddresses.push_back(address);
+      scannedStringReach.push_back(reach);
+    }
+  }
+  /// Whether a string of the scan shares a byte with [\p address, \p end).
+  bool scannedStringsCover(std::uint64_t address, std::uint64_t end) const {
+    const auto before = static_cast<std::size_t>(
+        std::lower_bound(scannedStringAddresses.begin(),
+                         scannedStringAddresses.end(), end) -
+        scannedStringAddresses.begin());
+    return before && scannedStringReach[before - 1] > address;
+  }
   Json importRows, importSlotRows, exportRows;
   std::uint64_t generation = 1;
   std::vector<Region> regions;
@@ -1904,8 +1934,10 @@ struct Listing::Impl {
       for (const auto &row : rows)
         addString(row);
     }
-    if (Rescan)
+    if (Rescan) {
       scannedStrings = strings;
+      indexScannedStrings();
+    }
     loadUserItems();
     loadNumberFormats();
     std::sort(strings.begin(), strings.end(),
@@ -5768,12 +5800,7 @@ bool Listing::dataItemsChanged(const Json *rows) {
     const int region = d.regionIndex(address);
     if (region < 0 || d.regions[region].exec)
       return false;
-    return std::none_of(d.scannedStrings.begin(), d.scannedStrings.end(),
-                        [&](const auto &string) {
-                          return string.address < address + item.size &&
-                                 address < string.address + string.length +
-                                               string.unit;
-                        });
+    return !d.scannedStringsCover(address, address + item.size);
   };
   for (const auto &[address, item] : before)
     if (const auto now = d.userItems.find(address);
