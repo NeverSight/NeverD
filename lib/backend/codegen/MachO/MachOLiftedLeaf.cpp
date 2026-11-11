@@ -16,6 +16,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/DirectBranch.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/object/SectionNames.h"
@@ -35,10 +36,14 @@
 #include "llvm/Transforms/Scalar/SROA.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
+#include <tuple>
+
 namespace neverd {
 namespace {
 #define MACHO_LEAF_TEXT(Name, Text) constexpr char Name[] = Text;
 #define MACHO_LEAF_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#define MACHO_LEAF_SEQUENCE(Name, ...)                                         \
+  constexpr uint32_t Name[] = {__VA_ARGS__};
 #include "MachOLiftedLeaf.def"
 
 enum class SigningHint : uint32_t {
@@ -213,13 +218,12 @@ llvm::Error bindLeafErrorResults(llvm::Module &Module) {
         }
       }
   }
-  // A direct tail caller shares its caller's X21 with the writer. Discover
-  // the entire chain before replacing any prototypes, including recursion.
+  // Follow direct callers before replacing any prototypes, including
+  // recursion. The native verifier checks each call and its frame.
   for (size_t I = 0; I < Writers.size(); ++I)
     for (auto &Use : Writers[I]->uses()) {
       auto *Call = llvm::dyn_cast<llvm::CallInst>(Use.getUser());
-      if (!Call || !Call->isCallee(&Use) || !Call->isTailCall() ||
-          Call->hasOperandBundles())
+      if (!Call || !Call->isCallee(&Use) || Call->hasOperandBundles())
         return refuse(kErrorResultABI);
       Writers.insert(Call->getFunction());
     }
@@ -264,20 +268,34 @@ llvm::Error bindLeafErrorResults(llvm::Module &Module) {
         auto *Callee = Entries.lookup(Call->getCalledFunction());
         if (!Callee)
           return refuse(kErrorResultABI);
-        auto *Tail = llvm::cast<llvm::CallInst>(Call);
-        llvm::SmallVector<llvm::Value *> Args(Tail->args());
-        Args.push_back(Error);
-        auto *Forward = llvm::IRBuilder<>(Tail).CreateCall(Callee, Args);
-        Forward->copyMetadata(*Tail);
+        auto *Direct = llvm::cast<llvm::CallInst>(Call);
+        llvm::IRBuilder<> B(Direct);
+        llvm::Value *CallError = Error;
+        if (!Direct->isTailCall()) {
+          // Clang gives a call with a continuation a local swifterror slot.
+          // Copy in the incoming X21 and propagate the callee's value back.
+          llvm::IRBuilder<> Prologue(
+              &*Entry->getEntryBlock().getFirstInsertionPt());
+          auto *Local = Prologue.CreateAlloca(Pointer);
+          Local->setSwiftError(true);
+          B.CreateStore(B.CreateLoad(Pointer, Error), Local);
+          CallError = Local;
+        }
+        llvm::SmallVector<llvm::Value *> Args(Direct->args());
+        Args.push_back(CallError);
+        auto *Forward = B.CreateCall(Callee, Args);
+        if (CallError != Error)
+          B.CreateStore(B.CreateLoad(Pointer, CallError), Error);
+        Forward->copyMetadata(*Direct);
         Forward->setCallingConv(llvm::CallingConv::Swift);
-        Forward->setTailCallKind(Tail->getTailCallKind());
-        Forward->setAttributes(Tail->getAttributes());
+        Forward->setTailCallKind(Direct->getTailCallKind());
+        Forward->setAttributes(Direct->getAttributes());
         Forward->removeFnAttr(llvm::Attribute::Memory);
         Forward->addParamAttr(Callee->arg_size() - 1,
                               llvm::Attribute::SwiftError);
-        Forward->takeName(Tail);
-        Tail->replaceAllUsesWith(Forward);
-        Tail->eraseFromParent();
+        Forward->takeName(Direct);
+        Direct->replaceAllUsesWith(Forward);
+        Direct->eraseFromParent();
       }
     for (auto *Access : Accesses[Old]) {
       llvm::IRBuilder<> B(Access);
@@ -299,14 +317,108 @@ llvm::Error bindLeafErrorResults(llvm::Module &Module) {
   return llvm::Error::success();
 }
 
+struct FrameBody {
+  size_t Begin;
+  size_t End;
+};
+
+std::optional<FrameBody> signedFrameBody(llvm::ArrayRef<uint8_t> Code,
+                                         llvm::ArrayRef<uint32_t> Save,
+                                         llvm::ArrayRef<uint32_t> Restore) {
+  constexpr auto Size = aarch64::kInsnSize;
+  if (Code.size() / Size < Save.size() + Restore.size() + 2 ||
+      readLE<uint32_t>(Code.data()) !=
+          static_cast<uint32_t>(SigningHint::PACIBSP))
+    return std::nullopt;
+  const size_t End = Code.size() - (Restore.size() + 1) * Size;
+  for (auto [Index, Word] : llvm::enumerate(Save))
+    if (readLE<uint32_t>(Code.data() + Size * (Index + 1)) != Word)
+      return std::nullopt;
+  for (auto [Index, Word] : llvm::enumerate(Restore))
+    if (readLE<uint32_t>(Code.data() + End + Size * Index) != Word)
+      return std::nullopt;
+  return FrameBody{(Save.size() + 1) * Size, End};
+}
+
+// Frame instructions materialize CodeOffset relative to each function.
+// Padding NOPs can change when the linker lays out the relocated records.
+bool sameSpillRules(llvm::ArrayRef<CFIInstruction> Old,
+                    llvm::ArrayRef<CFIInstruction> New) {
+  const auto Effective = [](const CFIInstruction &I) {
+    return I.Kind != CFIOpKind::Nop;
+  };
+  auto Before = llvm::make_filter_range(Old, Effective);
+  auto After = llvm::make_filter_range(New, Effective);
+  return llvm::all_of(Before,
+                      [](const auto &I) {
+                        switch (I.Kind) {
+                        case CFIOpKind::AdvanceLoc:
+                        case CFIOpKind::DefCFA:
+                        case CFIOpKind::DefCFAOffset:
+                        case CFIOpKind::Offset:
+                        case CFIOpKind::Restore:
+                          return true;
+                        default:
+                          return false;
+                        }
+                      }) &&
+         llvm::equal(Before, After, dwarf_eh::sameCFIInstruction);
+}
+
+// The compact table points to a specific FDE. Compare the compiler's LR
+// spill and its return rules at every original instruction boundary.
+bool sameIndexedLinkFrame(const BinaryImage &Original,
+                          const ExceptionFunction &Frame,
+                          const dwarf_eh::ParseResult &Generated,
+                          const DwarfFDE *NewFrame, va_t Start,
+                          const NativeMachOCompactRange &Range) {
+  if (!Frame.Dwarf || !NewFrame || Frame.Dwarf->InitialLocation != Start ||
+      Frame.Dwarf->AddressRange != Range.EndVA - Range.BeginVA ||
+      Frame.Dwarf->LSDAVA ||
+      Frame.Dwarf->ParseStatus != ExceptionParseStatus::Complete ||
+      (Frame.Compact->NativeEncoding & macho_unwind::kDwarfSectionOffsetMask) !=
+          Frame.Dwarf->SectionOffset ||
+      Generated.ParseStatus != ExceptionParseStatus::Complete)
+    return false;
+  const auto *Old =
+      Original.ExceptionMetadata.findCIE(Frame.Dwarf->CIESectionOffset);
+  if (!Old || Old->Augmentation != kCompilerFrameAugmentation ||
+      Old->ParseStatus != ExceptionParseStatus::Complete || NewFrame->LSDAVA ||
+      NewFrame->AddressRange != Frame.Dwarf->AddressRange ||
+      NewFrame->ParseStatus != ExceptionParseStatus::Complete)
+    return false;
+  const auto New = llvm::lower_bound(
+      Generated.CIEs, NewFrame->CIESectionOffset,
+      [](const DwarfCIE &C, uint64_t Off) { return C.SectionOffset < Off; });
+  const auto ABI = [](const DwarfCIE &C) {
+    return std::tie(C.Version, C.Augmentation, C.CodeAlignmentFactor,
+                    C.DataAlignmentFactor, C.ReturnAddressRegister,
+                    C.AddressSize, C.SegmentSelectorSize, C.FDEPointerEncoding,
+                    C.UsesArm64eReturnAddressABI, C.ParseStatus);
+  };
+  return New != Generated.CIEs.end() &&
+         New->SectionOffset == NewFrame->CIESectionOffset &&
+         ABI(*Old) == ABI(*New) &&
+         sameSpillRules(Old->InitialInstructions, New->InitialInstructions) &&
+         sameSpillRules(Frame.Dwarf->Instructions, NewFrame->Instructions);
+}
+
 llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
                          llvm::ArrayRef<SourcePatchMapping> Mappings,
                          const CompiledImage &Generated, va_t Slide,
                          llvm::ArrayRef<NativeMachOCompactRange> Ranges) {
   using Kind = llvm::mc_rewrite::RewriteSectionKind;
   const CompiledSection *Code = nullptr;
+  dwarf_eh::ParseResult LinkedFrames;
   for (const auto &Section : Generated.Sections) {
     if (Section.Kind != Kind::Code) {
+      if (Section.Name == section_names::macho::EhFrame &&
+          !Section.ExternalBytes.empty())
+        LinkedFrames =
+            dwarf_eh::parseEHFrame(Original,
+                                   {Section.ExternalBytes.data(),
+                                    Section.ExternalBytes.size(), Section.VA},
+                                   {});
       if (Section.Name != section_names::macho::CompactUnwind &&
           Section.Name != section_names::macho::EhFrame)
         return refuse(kLeafCode);
@@ -317,6 +429,10 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
       return refuse(kLeafCode);
     Code = &Section;
   }
+  llvm::DenseMap<va_t, const DwarfFDE *> FDEs;
+  for (const auto &F : LinkedFrames.FDEs)
+    if (!FDEs.try_emplace(F.InitialLocation, &F).second)
+      return refuse(kLeafFrame);
   if (!Code || Ranges.size() != Mappings.size() || Code->Size != Text.Size)
     return llvm::createStringError(
         llvm::errc::not_supported,
@@ -350,9 +466,22 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
           llvm::errc::not_supported,
           llvm::formatv(kGeneratedRange, Mapping.Symbol, Start, End).str());
     if (!Frame || !Frame->describesUnwindOnly() || !Frame->Compact ||
-        Frame->CodeRange.End < End ||
-        Frame->Compact->NativeEncoding != Range.mapped()->Encoding)
+        Frame->CodeRange.End < End)
       return refuse(kLeafFrame);
+    const auto Native = Range.mapped()->Encoding;
+    const bool Indexed = (Native & ~macho_unwind::kDwarfSectionOffsetMask) ==
+                         macho_unwind::kARM64ModeDwarf;
+    const auto SourceEncoding = Frame->Compact->NativeEncoding;
+    if (Indexed) {
+      if ((SourceEncoding & ~macho_unwind::kDwarfSectionOffsetMask) !=
+              macho_unwind::kARM64ModeDwarf ||
+          !sameIndexedLinkFrame(Original, *Frame, LinkedFrames,
+                                FDEs.lookup(Owner->second), Start,
+                                *Range.mapped()))
+        return refuse(kLeafFrame);
+    } else if (SourceEncoding != Native) {
+      return refuse(kLeafFrame);
+    }
 
     const auto Source = llvm::ArrayRef(Original.Raw)
                             .slice(Text.FileOff + Start - Text.VA, End - Start);
@@ -363,20 +492,18 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
       return refuse(kLeafCode);
     const bool Framed =
         Range.mapped()->Encoding == macho_unwind::kARM64ModeFrame;
+    std::optional<FrameBody> Body;
     if (Framed) {
-      // This compact mode uses X29 as CFA. Require the actual record and
-      // its matching restore at the same PCs in both versions.
-      if (Source.size() < kFrameRecordWords * aarch64::kInsnSize ||
-          readLE<uint32_t>(Source.data()) !=
-              static_cast<uint32_t>(SigningHint::PACIBSP) ||
-          readLE<uint32_t>(Source.data() + aarch64::kInsnSize) !=
-              kPushFrameRecord ||
-          readLE<uint32_t>(Source.data() + 2 * aarch64::kInsnSize) !=
-              kSetFramePointer ||
-          readLE<uint32_t>(Source.end() - 2 * aarch64::kInsnSize) !=
-              kPopFrameRecord)
+      Body = signedFrameBody(Source, kPushFrame, kPopFrame);
+      if (!Body)
+        Body = signedFrameBody(Source, kAllocateFrame, kDeallocateFrame);
+      if (!Body)
         return refuse(kLeafFrame);
-    } else if (Range.mapped()->Encoding != macho_unwind::kARM64ModeFrameless) {
+    } else if (Indexed) {
+      Body = signedFrameBody(Source, kPushLink, kPopLink);
+      if (!Body)
+        return refuse(kLeafFrame);
+    } else if (Native != macho_unwind::kARM64ModeFrameless) {
       return refuse(kLeafFrame);
     }
     bool Signed = false;
@@ -414,7 +541,8 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
           return refuse(kDataPage);
         continue;
       }
-      const bool Call = Framed && !Last && Insn.Id == AARCH64_INS_BL;
+      const bool Call = Body && Offset >= Body->Begin && Offset < Body->End &&
+                        Insn.Id == AARCH64_INS_BL;
       if (Call || (Last && !Signed && Insn.Id == AARCH64_INS_B)) {
         if (!matchesDirectTransfer(
                 Source.drop_front(Offset), Start + Offset,
@@ -439,11 +567,8 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
       } else if (!Offset && readLE<uint32_t>(Source.data()) ==
                                 static_cast<uint32_t>(SigningHint::PACIBSP)) {
         Signed = true;
-      } else if (Framed && (Offset == aarch64::kInsnSize ||
-                            Offset == 2 * aarch64::kInsnSize ||
-                            Offset + 2 * aarch64::kInsnSize == Source.size())) {
-        // The three stack/frame instructions were checked above. Their
-        // emitted words also passed the equality check at this offset.
+      } else if (Body && (Offset < Body->Begin || Offset >= Body->End)) {
+        // Both images performed the same frame operation at this offset.
         continue;
       } else if (!isPositionIndependentLeafInstruction(Insn)) {
         return refuse(kLeafCode);
@@ -569,8 +694,30 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
   for (const auto &Mapping : Mappings) {
     const auto *Frame =
         Image.ExceptionMetadata.findFunction(Mapping.OriginalVA);
-    if (!Frame || !Frame->Compact ||
-        Frame->Compact->NativeEncoding != macho_unwind::kARM64ModeFrame)
+    if (!Frame || !Frame->Compact)
+      continue;
+    auto *Entry = Candidate->getFunction(Mapping.Symbol);
+    if (Frame->Dwarf &&
+        (Frame->Compact->NativeEncoding & macho_unwind::kModeMask) ==
+            macho_unwind::kARM64ModeDwarf) {
+      const auto &FDE = *Frame->Dwarf;
+      const auto *CIE = Image.ExceptionMetadata.findCIE(FDE.CIESectionOffset);
+      if (!CIE)
+        return refuse(kLeafFrame);
+      // Synchronous Clang records can end at the call-site row. Preserve
+      // an epilogue row when the source actually describes the restored LR.
+      const bool HasEpilogue =
+          llvm::any_of(FDE.Instructions, [&](const auto &I) {
+            return I.Kind == CFIOpKind::Restore &&
+                   I.Register == CIE->ReturnAddressRegister &&
+                   FDE.AddressRange >= aarch64::kInsnSize &&
+                   I.CodeOffset == FDE.AddressRange - aarch64::kInsnSize;
+          });
+      Entry->setUWTableKind(HasEpilogue ? llvm::UWTableKind::Async
+                                        : llvm::UWTableKind::Sync);
+      continue;
+    }
+    if (Frame->Compact->NativeEncoding != macho_unwind::kARM64ModeFrame)
       continue;
     // The source supplies a compact X29 record. An additional FDE may
     // specify distinct asynchronous locations and needs its own replay.
@@ -578,7 +725,6 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
           return F.Dwarf && F.CodeRange.contains(Mapping.OriginalVA);
         }))
       return refuse(kLeafFrame);
-    auto *Entry = Candidate->getFunction(Mapping.Symbol);
     Entry->addFnAttr(kFramePointerAttribute, kNonLeafFrame);
     Entry->setUWTableKind(llvm::UWTableKind::Sync);
   }
@@ -606,7 +752,8 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
   }
   // The native prologue saves FP/LR itself. Remove only unobservable
   // accesses to the lifter's private frame before emitting that prologue.
-  if (canonicalizePrivateFrameAccesses(*Candidate)) {
+  canonicalizePrivateFrameAccesses(*Candidate);
+  {
     llvm::FunctionAnalysisManager Analyses;
     llvm::PassBuilder().registerFunctionAnalyses(Analyses);
     llvm::FunctionPassManager Cleanup;

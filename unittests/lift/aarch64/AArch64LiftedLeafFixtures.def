@@ -33,6 +33,13 @@ A64_LEAF_TEXT(kSign, "--sign")
 A64_LEAF_TEXT(kAdHocIdentity, "-")
 A64_LEAF_TEXT(kVerify, "--verify")
 A64_LEAF_TEXT(kStrict, "--strict")
+A64_LEAF_TEXT(kForceSign, "--force")
+A64_LEAF_TEXT(kWrongSpillInput, "wrong-spill.dylib")
+// advance by 8, CFA = SP+16, LR = [CFA-16]. Use the same code and a
+// well-formed FDE which instead points one pointer width too high.
+A64_LEAF_VALUE(auto, kLinkSpillRule,
+               (std::array<uint8_t, 5>{0x48, 0x0e, 0x10, 0x9e, 0x02}))
+A64_LEAF_VALUE(uint8_t, kWrongLinkOffsetFactor, 1)
 A64_LEAF_TEXT(kPlatformHash, "system_slice_sha256")
 A64_LEAF_TEXT(kUnsignedHash, "unsigned_input_sha256")
 A64_LEAF_TEXT(kEntryVA, "original_entry")
@@ -49,6 +56,8 @@ A64_LEAF_TEXT(kCompiler, "/usr/bin/clang")
 A64_LEAF_TEXT(kTargetFlag, "-target")
 A64_LEAF_TEXT(kTarget, "arm64e-apple-macosx15.0")
 A64_LEAF_TEXT(kOptimize, "-O2")
+A64_LEAF_TEXT(kAsyncTables, "-fasynchronous-unwind-tables")
+A64_LEAF_TEXT(kRestoreBoundary, "restored_lr_offset")
 A64_LEAF_TEXT(kOmitFrame, "-fomit-frame-pointer")
 A64_LEAF_TEXT(kDylib, "-dynamiclib")
 A64_LEAF_TEXT(kTight, "-Wl,-headerpad,0")
@@ -101,7 +110,7 @@ A64_LEAF_TEXT(kErrorABI, R"c(
 #define ERROR __attribute__((swift_error_result))
 )c")
 A64_LEAF_TEXT(kClearError, "#define NEVERD_TEST_CLEAR_ERROR 1\n")
-A64_LEAF_TEXT(kTailError, "#define NEVERD_TEST_TAIL_ERROR 1\n")
+A64_LEAF_TEXT(kForwardError, "#define NEVERD_TEST_FORWARD_ERROR 1\n")
 A64_LEAF_TEXT(kTailErrorLeaves, R"asm(
 .text
 .p2align 2
@@ -121,8 +130,15 @@ _leaf_difference:
 .subsections_via_symbols
 )asm")
 A64_LEAF_TEXT(kErrorLeaves, R"c(
+#ifdef NEVERD_TEST_FORWARD_ERROR
+SWIFT __attribute__((noinline)) void *leaf_difference(void *, void * SELF, void ** ERROR);
+#endif
 SWIFT void *leaf_sum(void *next, void * SELF context, void ** ERROR error) {
+#ifdef NEVERD_TEST_FORWARD_ERROR
+  return leaf_difference(next, context, error);
+#else
   return *error;
+#endif
 }
 SWIFT void *leaf_difference(void *next, void * SELF context, void ** ERROR error) {
 #ifdef NEVERD_TEST_CLEAR_ERROR
@@ -151,7 +167,7 @@ int main(int argc, char **argv) {
   for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i) {
     for (unsigned j = 0; j != sizeof(values) / sizeof(*values); ++j) {
       void *error = values[i];
-#ifdef NEVERD_TEST_TAIL_ERROR
+#ifdef NEVERD_TEST_FORWARD_ERROR
       if (read(values[j], storage, &error) != values[i] || error != values[j])
         return 4;
       error = values[i];

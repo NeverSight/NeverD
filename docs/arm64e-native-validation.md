@@ -544,8 +544,10 @@ the ordinary return must prevent publication. Two adjacent clears of distinct
 admitted registers may be scheduled in either order. Both leave flags, memory,
 SP and the return address intact. Direct internal tail callers pass the same
 `swifterror` operand through to the writer. Publication checks the emitted
-branch against the relocated writer. Calls with a live continuation still
-require a frame and call-site proof.
+branch against the relocated writer. A direct signed call with a continuation
+uses a local Swift error-result slot. The caller copies the incoming X21 into
+the slot, calls the relocated writer, then propagates the outgoing X21 while
+returning the ordinary result in X0.
 See the [Clang Swift error result attribute](https://clang.llvm.org/docs/AttributeReference.html#swift-error-result).
 
 On macos-26 and xcode-27, each typed caller executed all 25 input/output
@@ -569,6 +571,14 @@ unwind mode. The optimizer and publisher share the same bounds check when
 they turn accesses to the lifter's private stack into LLVM frame slots. The
 backend can then remove an unobservable spill before creating its native
 frame. A separate FDE for the same frame requires its own replay.
+The Swift call fixtures use both Clang frame-pointer settings. One saves X29
+and X30 in a 32-byte frame with compact unwind. The other saves LR on the
+stack with an indexed DWARF record. Publication compares the latter's CIE,
+CFA and register rules at their original instruction offsets. With
+`-fasynchronous-unwind-tables`, both images restore LR at offset 16, just
+before RETAB. The synchronous Clang record ends at the call-site row. The
+negative control changes the saved-LR slot in the FDE, re-signs the input,
+and requires publication to fail.
 The framed import fixture calls
 `getpid`, reads an exported variable after the call and returns their sum.
 The caller changes that variable between invocations. Other stack layouts

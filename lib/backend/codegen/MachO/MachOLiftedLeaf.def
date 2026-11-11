@@ -17,6 +17,9 @@
 #ifndef MACHO_LEAF_INSTRUCTION
 #define MACHO_LEAF_INSTRUCTION(Name)
 #endif
+#ifndef MACHO_LEAF_SEQUENCE
+#define MACHO_LEAF_SEQUENCE(Name, ...)
+#endif
 
 MACHO_LEAF_TEXT(kLeafModule,
                 "arm64e lifted image has no complete native leaf contract")
@@ -57,10 +60,15 @@ MACHO_LEAF_TEXT(kTailBranchAsm, "b ${0:c}")
 MACHO_LEAF_TEXT(kTailBranchSymbol, "s")
 MACHO_LEAF_TEXT(kFramePointerAttribute, "frame-pointer")
 MACHO_LEAF_TEXT(kNonLeafFrame, "non-leaf")
-MACHO_LEAF_VALUE(unsigned, kFrameRecordWords, 5)
-MACHO_LEAF_VALUE(uint32_t, kPushFrameRecord, 0xa9bf7bfd)
-MACHO_LEAF_VALUE(uint32_t, kSetFramePointer, 0x910003fd)
-MACHO_LEAF_VALUE(uint32_t, kPopFrameRecord, 0xa8c17bfd)
+// Standard FP/LR record at CFA-16. The second form also reserves a Swift
+// error-result spill below the record.
+MACHO_LEAF_SEQUENCE(kPushFrame, 0xa9bf7bfd, 0x910003fd)
+MACHO_LEAF_SEQUENCE(kPopFrame, 0xa8c17bfd)
+MACHO_LEAF_SEQUENCE(kAllocateFrame, 0xd10083ff, 0xa9017bfd, 0x910043fd)
+MACHO_LEAF_SEQUENCE(kDeallocateFrame, 0xa9417bfd, 0x910083ff)
+MACHO_LEAF_SEQUENCE(kPushLink, 0xf81f0ffe)
+MACHO_LEAF_SEQUENCE(kPopLink, 0xf84107fe)
+MACHO_LEAF_TEXT(kCompilerFrameAugmentation, "zR")
 MACHO_LEAF_VALUE(va_t, kInstructionPageBytes, 4096)
 MACHO_LEAF_VALUE(uint32_t, kClassicABIVersion, 0)
 MACHO_LEAF_VALUE(unsigned, kMemoryOperandCount, 2)
@@ -87,6 +95,7 @@ MACHO_LEAF_INSTRUCTION(AARCH64_INS_FSUB)
 MACHO_LEAF_MEMORY(AARCH64_INS_LDR)
 MACHO_LEAF_MEMORY(AARCH64_INS_STR)
 
+#undef MACHO_LEAF_SEQUENCE
 #undef MACHO_LEAF_MEMORY
 #undef MACHO_LEAF_INSTRUCTION
 #undef MACHO_LEAF_VALUE
