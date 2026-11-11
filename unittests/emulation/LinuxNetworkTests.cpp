@@ -410,6 +410,48 @@ TEST_P(LinuxNetwork, TCPConnectFailuresPreserveAdmissionAndBoundedOwnership) {
             std::string::npos);
 }
 
+TEST_P(LinuxNetwork, TCPConnectFailuresCanPrecedeTheFirstExactPeer) {
+  Options.LinuxNetwork->TCPConnectFailures = LinuxTCPConnectFailures{13, 1, 0};
+  const auto FD = open();
+  ASSERT_EQ(call(ServiceKind::Connect, FD, Base, 16), uint64_t(-13));
+  ASSERT_EQ(call(ServiceKind::Close, FD), 0u);
+  EXPECT_EQ(call(ServiceKind::Connect, open(), Base, 16), 0u);
+}
+
+TEST_P(LinuxNetwork, TCPConnectFailuresResumeAtTheNextExactPeer) {
+  auto &Network = *Options.LinuxNetwork;
+  auto &NextPeer = Network.Connections[1].Peer;
+  ++NextPeer[3];
+  llvm::cantFail(cpu().write(Base + 32, NextPeer));
+  Network.TCPConnectFailures = LinuxTCPConnectFailures{101, 2, 1};
+
+  auto FD = open();
+  EXPECT_FALSE(call(ServiceKind::Connect, FD, Base + 32, 16));
+  ASSERT_EQ(call(ServiceKind::Connect, FD, Base, 16), 0u);
+  ASSERT_EQ(call(ServiceKind::Close, FD), 0u);
+
+  for (unsigned I = 0; I != 2; ++I) {
+    FD = open();
+    EXPECT_EQ(call(ServiceKind::Connect, FD, 1, 16), uint64_t(-14));
+    // Even the next exact peer gets the supplied failure during this run.
+    ASSERT_EQ(call(ServiceKind::Connect, FD, Base + 32, 16), uint64_t(-101));
+    ASSERT_EQ(call(ServiceKind::Close, FD), 0u);
+  }
+
+  FD = open();
+  EXPECT_FALSE(call(ServiceKind::Connect, FD, Base, 16));
+  ASSERT_EQ(call(ServiceKind::Connect, FD, Base + 32, 16), 0u);
+  EXPECT_EQ(call(ServiceKind::Read, FD, Base + 64, 2), 2u);
+  uint8_t Data[2];
+  llvm::cantFail(cpu().read(Base + 64, Data));
+  EXPECT_EQ(Data[0], 7);
+  EXPECT_EQ(Data[1], 8);
+  ASSERT_EQ(call(ServiceKind::Close, FD), 0u);
+  EXPECT_FALSE(call(ServiceKind::Connect, open(), Base + 32, 16));
+  EXPECT_NE(Report.Diagnostic.find("no matching offline connection attempt"),
+            std::string::npos);
+}
+
 TEST_P(LinuxNetwork, TCPConnectFailuresReachConfiguredBoundThenStop) {
   Options.LinuxNetwork->Connections.clear();
   // A counted failure retains no connection inventory. Exercise more failures
@@ -454,6 +496,13 @@ TEST(LinuxNetworkJSON,
   Check(R"({"errno":101,"count":4097})", true);
   Check(R"({"errno":101,"count":4294967295})", true);
   Check(R"({"errno":101,"count":"4294967295"})", true);
+  Check(R"({"errno":101,"count":1,"after_connections":0})", true);
+  Check(R"({"errno":101,"count":1,"after_connections":"0"})", true);
+  for (const char *Position : {"1", "-1", "4294967296", "null", "true"})
+    Check(R"({"errno":101,"count":1,"after_connections":)" +
+              std::string(Position) + "}",
+          false);
+  Check(R"({"errno":101,"count":1,"after_connections":0,"extra":0})", false);
   // A long offline worker must be able to pass the former 256-attempt bound.
   Check(R"({"errno":101,"count":257})", true);
   for (const char *Fields : {"null",
@@ -489,6 +538,10 @@ TEST(LinuxNetworkJSON,
   LinuxDatagramConnection D;
   D.Peer = S.Peer;
   N.DatagramConnections = {D};
+  // Only exact TCP attempts count toward the insertion position.
+  N.TCPConnectFailures = LinuxTCPConnectFailures{101, 1, 4095};
+  EXPECT_EQ(llvm::toString(linux_model::validateNetworkOptions(N)),
+            "after_connections exceeds the number of TCP connections");
   for (auto F : {LinuxTCPConnectFailures{101, 1},
                  {101, 2},
                  {0, 1},
