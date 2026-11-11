@@ -981,8 +981,9 @@ results retain their specified GPR width. A zero divisor produces an explicit
 unpredictable result. Compact links save PC+4, use the physical immediate
 scale and do not consume a delay slot. A control transfer in a conditional
 compact branch's forbidden slot faults on fallthrough. Lifting a conditional compact
-branch requires the following instruction's bytes to check that constraint. Surviving legacy
-delayed transfers retain their slot. Removed HI/LO and branch-likely encodings
+branch requires the following instruction's bytes to check that constraint.
+Surviving legacy delayed transfers retain their slot. NAL writes PC+8 before
+executing its delay slot. Removed HI/LO and branch-likely encodings
 cannot use the Release 2 lifter through this profile.
 
 The current Release 6 path covers classic integer code. microMIPSr6, optional
@@ -991,6 +992,11 @@ still require separate implementation. See the linked GNU fixture in the
 [testing guide](testing.md) for the enumerated instruction forms and the
 [MIPS64 Instruction Set Reference Manual, revision 6.06](https://docs.alexrp.com/mips/mips64_insns_v6_06.pdf)
 for encodings, input restrictions and compact transfer semantics.
+
+The [MIPS64 DSP, microMIPS ASE and Release 6 qualification](evidence/mips64-micro-r6-2026-11-11.json)
+records the linked big- and little-endian corpora, per-form comparisons and
+independent execution checks. Both C views were recompiled at `-O0` and
+`-O2`, including the Archer C7 V5 `ubus call` handler.
 
 ## TP-Link firmware workflow
 
