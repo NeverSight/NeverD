@@ -81,8 +81,11 @@ public:
       : Ctx(Ctx), Ambient(Ambient) {}
 
   std::string run(SymRef Root);
+  std::pair<std::string, std::string> runPair(SymRef Before, SymRef After);
 
 private:
+  void prepare(llvm::ArrayRef<SymRef> Roots);
+
   const Fragment &frag(SymRef R) const {
     return Fragments[Memo.find(R.index())->second];
   }
@@ -345,10 +348,7 @@ Fragment Printer::render(SymRef R) const {
   llvm_unreachable("unhandled SymOp in render");
 }
 
-std::string Printer::run(SymRef Root) {
-  if (Ctx.operands(Root).empty())
-    return render(Root).Text;
-
+void Printer::prepare(llvm::ArrayRef<SymRef> Roots) {
   // Visit operands before completing their parent. Interned nodes form a DAG,
   // so an already visited operand is complete, never an active ancestor.
   // Iterative postorder avoids both recursion on deep expressions and sorting
@@ -358,7 +358,9 @@ std::string Printer::run(SymRef Root) {
     SymRef Ref;
     bool Expanded;
   };
-  llvm::SmallVector<Frame, 64> Work{{Root, false}};
+  llvm::SmallVector<Frame, 64> Work;
+  for (SymRef R : llvm::reverse(Roots))
+    Work.push_back({R, false});
   while (!Work.empty()) {
     auto [R, Expanded] = Work.pop_back_val();
     if (Expanded) {
@@ -375,11 +377,34 @@ std::string Printer::run(SymRef Root) {
   Fragments.resize(Order.size());
   for (uint32_t I : Order)
     Fragments[Memo.find(I)->second] = render(SymRef(I));
-  // The root is discovered first and completed last.
+}
+
+std::pair<std::string, std::string> Printer::runPair(SymRef Before,
+                                                     SymRef After) {
+  if (Before == After) {
+    auto Text = run(Before);
+    return {Text, std::move(Text)};
+  }
+  prepare({Before, After});
+  return {std::move(Fragments.front().Text),
+          std::move(Fragments[Memo.find(After.index())->second].Text)};
+}
+
+std::string Printer::run(SymRef Root) {
+  if (Ctx.operands(Root).empty())
+    return render(Root).Text;
+  prepare({Root});
   return std::move(Fragments.front().Text);
 }
 
 } // namespace
+
+std::pair<std::string, std::string>
+printSymExprPair(const SymContext &Ctx, SymRef Before, SymRef After) {
+  if (!Before || !After || Ctx.width(Before) != Ctx.width(After))
+    return {Ctx.toString(Before), Ctx.toString(After)};
+  return Printer(Ctx, Ctx.width(Before)).runPair(Before, After);
+}
 
 std::string SymContext::toString(SymRef R) const {
   if (!R.isValid())

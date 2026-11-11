@@ -571,6 +571,22 @@ private:
   std::mt19937_64 Rng;
 };
 
+TEST(SymParse, PairedPrintingRetainsBothRootsAndTheirAmbientWidths) {
+  SymContext Ctx;
+  const auto Shared = parseSymExpr(Ctx, "(x + y) ^ (x & y)", 32).Root;
+  ASSERT_TRUE(Shared);
+  const auto Left = Ctx.mkNot(Shared);
+  const auto Right = Ctx.mkSub(Ctx.mkConst(32, 3), Shared);
+  const auto Narrow = Ctx.mkExtract(Shared, 3, 8);
+  const SymRef Roots[] = {Shared, Left, Right, Narrow, Ctx.mkConst(32, 5), {}};
+  for (auto A : Roots)
+    for (auto B : Roots) {
+      const auto [First, Second] = printSymExprPair(Ctx, A, B);
+      EXPECT_EQ(First, Ctx.toString(A));
+      EXPECT_EQ(Second, Ctx.toString(B));
+    }
+}
+
 TEST(SymParse, RandomExpressionsSurviveTheRoundTrip) {
   for (uint32_t Width : {1u, 8u, 32u, 64u, 256u}) {
     SymContext Ctx;
