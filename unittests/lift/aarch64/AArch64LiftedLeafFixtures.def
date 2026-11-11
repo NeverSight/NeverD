@@ -95,6 +95,56 @@ int main(int argc, char **argv) {
 
 A64_LEAF_TEXT(kReorderedOutput, "reordered.dylib")
 A64_LEAF_TEXT(kReorderedTail, "native_reordered_tail")
+A64_LEAF_TEXT(kErrorABI, R"c(
+#define SWIFT __attribute__((swiftcall))
+#define SELF __attribute__((swift_context))
+#define ERROR __attribute__((swift_error_result))
+)c")
+A64_LEAF_TEXT(kClearError, "#define NEVERD_TEST_CLEAR_ERROR 1\n")
+A64_LEAF_TEXT(kErrorLeaves, R"c(
+SWIFT void *leaf_sum(void *next, void * SELF context, void ** ERROR error) {
+  return *error;
+}
+SWIFT void *leaf_difference(void *next, void * SELF context, void ** ERROR error) {
+#ifdef NEVERD_TEST_CLEAR_ERROR
+  *error = 0;
+  return 0;
+#else
+  void *old = *error;
+  *error = next;
+  return old;
+#endif
+}
+)c")
+A64_LEAF_TEXT(kErrorCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+typedef SWIFT void *operation(void *next, void * SELF context, void ** ERROR error);
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  operation *read = (operation *)dlsym(image, "leaf_sum");
+  operation *replace = (operation *)dlsym(image, "leaf_difference");
+  if (!read || !replace) return 3;
+  uintptr_t storage[4];
+  void *values[] = {0, &storage[0], &storage[1], &storage[2], &storage[3]};
+  for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i) {
+    for (unsigned j = 0; j != sizeof(values) / sizeof(*values); ++j) {
+      void *error = values[i];
+      if (read(values[j], storage, &error) != values[i] || error != values[i])
+        return 4;
+#ifdef NEVERD_TEST_CLEAR_ERROR
+      if (replace(values[j], storage, &error) || error)
+#else
+      if (replace(values[j], storage, &error) != values[i] || error != values[j])
+#endif
+        return 5;
+    }
+  }
+  return dlclose(image) != 0;
+}
+)c")
 A64_LEAF_TEXT(kTailSum, "#define NEVERD_TEST_TAIL_SUM 1\n")
 A64_LEAF_TEXT(kTailLeaves, R"asm(
 .text
