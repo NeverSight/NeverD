@@ -12709,6 +12709,18 @@ TEST_F(SessionCAPITest, UserFunctionEditsShapeTheListAnalysisAndSidecar) {
             "[{\"addr\":\"" + EntryHex +
                 "\",\"state\":\"created\"},{\"addr\":\"" + SecondHex +
                 "\",\"state\":\"deleted\"}]");
+  // An entry's edit, or a span's, reads alone, as the list says it.
+  const auto range = [&](neverd_va_t Begin, neverd_va_t End) {
+    return takeString(neverd_functions_range_json(Session, Begin, End));
+  };
+  EXPECT_EQ(range(Entry, Entry + 1),
+            "[{\"addr\":\"" + EntryHex + "\",\"state\":\"created\"}]");
+  EXPECT_EQ(range(Second, Second + 1),
+            "[{\"addr\":\"" + SecondHex + "\",\"state\":\"deleted\"}]");
+  EXPECT_EQ(range(Entry + 1, Second), "[]");
+  EXPECT_EQ(range(Entry, Second + 1),
+            takeString(neverd_functions_json(Session)));
+  EXPECT_EQ(range(Second, Entry), "[]");
   ASSERT_EQ(analyzeAll(), 1);
   const int Restored = neverd_func_find_by_addr(Session, Entry);
   ASSERT_GE(Restored, 0);
@@ -12804,6 +12816,12 @@ TEST_F(SessionCAPITest, UserFunctionAttributesDecideHowCallsEndAndPersist) {
       "\",\"color\":\"#20A0FF\",\"library\":true,\"noreturn\":true,"
       "\"static\":false}]";
   EXPECT_EQ(takeString(neverd_functions_json(Session)), Rows);
+  // What is stated of a function alone reads at its entry too.
+  EXPECT_EQ(
+      takeString(neverd_functions_range_json(Session, Helper, Helper + 1)),
+      Rows);
+  EXPECT_EQ(takeString(neverd_functions_range_json(Session, Entry, Helper)),
+            "[]");
   EXPECT_EQ(neverd_func_edit(Session, Helper, "{\"noreturn\":\"yes\"}"), -1);
   EXPECT_NE(lastError().find("\"noreturn\" is true, false or null"),
             std::string::npos);

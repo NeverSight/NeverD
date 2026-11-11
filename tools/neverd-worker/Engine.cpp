@@ -6632,15 +6632,48 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
          : create ? edits.create(session_, address)
                   : edits.remove(session_, address)) != 0)
       throw Error("invalid_request", error());
-    const auto rowAt = [&](const Json &rows) -> Json {
+    // The rows in address order, as the engine lists them and the history
+    // keeps them: the edit changed the engine's at its entry alone
+    // (neverd_functions_range_json), and the others are the history's.
+    using FunctionsRange =
+        const char *(*)(neverd_session_t, neverd_va_t, neverd_va_t);
+    static const auto functionsRange =
+        engineSymbol<FunctionsRange>("neverd_functions_range_json");
+    const auto &committed =
+        store.committedTable("functions").get_ref<const Json::array_t &>();
+    const auto at = std::lower_bound(
+        committed.begin(), committed.end(), address,
+        [](const Json &row, std::uint64_t value) {
+          return parseAddress(row.at("addr").get_ref<const std::string &>()) <
+                 value;
+        });
+    const bool had =
+        at != committed.end() &&
+        parseAddress(at->at("addr").get_ref<const std::string &>()) == address;
+    const Json before = had ? *at : Json(nullptr);
+    Json rows, after;
+    if (functionsRange &&
+        address != std::numeric_limits<std::uint64_t>::max()) {
+      const auto span =
+          backendJson(functionsRange(session_, address, address + 1));
+      if (!span.is_array() || span.size() > 1)
+        throw Error("engine_error", "Engine returned malformed function edits");
+      after = span.empty() ? Json(nullptr) : span.front();
+      Json::array_t next;
+      next.reserve(committed.size() + 1);
+      next.insert(next.end(), committed.begin(), at);
+      if (!after.is_null())
+        next.push_back(after);
+      next.insert(next.end(), had ? std::next(at) : at, committed.end());
+      rows = Json(std::move(next));
+    } else {
+      rows = functionEditRows();
+      after = nullptr;
       for (const auto &row : rows)
-        if (parseAddress(row.at("addr").get<std::string>()) == address)
-          return row;
-      return nullptr;
-    };
-    const Json before = rowAt(store.committedTable("functions"));
-    Json rows = functionEditRows();
-    const Json after = rowAt(rows);
+        if (parseAddress(row.at("addr").get_ref<const std::string &>()) ==
+            address)
+          after = row;
+    }
     const auto checkpoint = store;
     store.stage({{"kind", "function"},
                  {"address", hexAddress(address)},

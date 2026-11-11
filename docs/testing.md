@@ -7120,7 +7120,9 @@ a staged comment's step is refused unless it commits the comments first
 (`commit_staged`), its reply lists as many history entries as `limit` asks, and files changed behind the worker stop the next edit.
 `NeverDSessionCAPITests` lists the user's data items of a span with
 `neverd_items_range_json`: those sharing a byte with it, one reaching in from before
-included, none past them, and none for an empty or reversed span. Its
+included, none past them, and none for an empty or reversed span; and the function
+edits of an entry or a span with `neverd_functions_range_json`, created, deleted and
+stated ones as `neverd_functions_json` lists them. Its
 `NewTypesKeepTheImportPrototypesTheyDoNotReach` decompiles a driver whose calls read
 the kernel's prototypes, declares a type none reaches and then the process one returns,
 and reads the driver as a session that declared the same types first, byte for byte.

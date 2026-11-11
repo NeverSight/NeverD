@@ -5139,7 +5139,8 @@ item over bytes no string or code holds where they are (`Listing::dataRenamed`,
 `Listing::dataItemsChanged`, which reads the items from the table the history has just
 committed rather than asking the engine for all of them again; the edit itself reads only
 the rows of the span it can change, before and after, with
-`neverd_items_range_json`, and keeps the rest of the committed table), the session a name without reading its table
+`neverd_items_range_json`, and keeps the rest of the committed table; a function edit
+reads the row at its entry alone with `neverd_functions_range_json`), the session a name without reading its table
 (`neverd_rename_take`), and a declaration of types no other names reads them against
 what it read of the library once (`Session::LocalTypeNames`), on the library itself
 (`TypeLibrary::Trial`, which undoes a refused declaration), and the identity its stores
