@@ -4,8 +4,9 @@
 original instructions change CR0, CR3, CR4, EFER and CS. A program entry is
 identified by its full linear address and execution mode. Protected and
 compatibility code use the original-byte executor; code64 uses the authenticated
-body and validator from the same paged HighC or LLVM-to-C export. Enable `scheduled_events` for STI and
-MOV SS, whose source contract requires persistent interruptibility state.
+body and validator from the same paged HighC or LLVM-to-C export. Enable
+`scheduled_events` for STI and MOV SS, whose source contract requires persistent
+interruptibility state.
 Bind exact-type wrappers around the export's paged adapters; keep generated
 libraries and borrowed callback contexts alive through resume. Generated
 source compiles for the x64 host with Clang or NeverC. Guest code16/code32 does

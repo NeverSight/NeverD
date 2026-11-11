@@ -4435,3 +4435,28 @@ The [Actions runner discovery](evidence/x86-sgx-runner-discovery-2026-11-09.json
 also found no usable SGX1/EPC/device on Ubuntu 24.04 or Intel macOS 15/26. It
 executed zero enclave instructions. No final LLVM release, production pin or
 LLVM gitlink update is implied by either result.
+
+## Continuous protected/compatibility/code64 execution (2026-11-11)
+
+The [full-width mode owner](x86-mode-execution.md) executes original WRMSR,
+MOV-CR, far-JMP and RETFQ instructions through protected32 → compatibility32 →
+code64 → compatibility32 → protected32 without host mode rewrites. It shares
+control-write validation, retains complete register/descriptor/debug addresses,
+uses committed LMA for event frames and authenticates suspended instruction or
+event state. Long64 bodies use paged HighC/LLVM-to-C exports compiled by Clang
+and NeverC for the x64 host; guest code16/code32 adds no NeverC source target.
+
+At integration `12a6f114ea`, each SDK passes 1,308 primary execution, paging,
+source, boundary and SDK cases, with two LA57 hardware skips. Alternate-core
+replays add 15 passes and one LA57 skip per SDK, reported separately. The mode
+source matrix covers both emitters/compilers at O0/O2; original CPU streams
+compare one complete roundtrip and four mode-dependent event frames per core.
+The [dated evidence](evidence/x86-mode-execution-2026-11-11.json) records exact
+source/binary hashes, reports, identical generated sources across SDKs, isolated
+artifact replays and recoverable cleanup of superseded fixtures.
+
+This internal C++ boundary still requires separate integration for external
+inputs and other non64 state owners, including task/system selectors, segment
+reloads, ports/strings/MPX, legacy returns and call gates. Real/unreal execution,
+software SMM/SGX and unbound event producers remain open. The production r6 pin
+and LLVM gitlink remain unchanged; no final LLVM release is declared.
