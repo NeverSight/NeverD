@@ -4765,8 +4765,10 @@ graphs with the ordinary portable scalar spellings, which need no global
 name table. Rendering moves the same graph into the full-signature cache and
 adds declarations without changing previously returned types. Only valid
 prototype names in the context's library enter this intermediate cache;
-adding types clears it even when C names remain stable, so an opaque pointee
-can acquire its newly recovered layout.
+adding types a prototype reaches clears it even when C names remain stable, so
+an opaque pointee can acquire its newly recovered layout. Types no prototype
+reaches (`Session::takeUnreadTypes` checks the names prototypes reach) leave
+every converted signature as it is.
 C declaration writers build their library-wide name table only when a named
 type or enumerator needs it. Scalar and parameter spelling use the same
 identifier rules directly. The deferred table still consumes the whole
@@ -5137,10 +5139,14 @@ item over bytes no string or code holds where they are (`Listing::dataRenamed`,
 `Listing::dataItemsChanged`, which reads the items from the table the history has just
 committed rather than asking the engine for all of them again; the edit itself reads only
 the rows of the span it can change, before and after, with
-`neverd_items_range_json`, and keeps the rest of the committed table), the session a name without reading its table
+`neverd_items_range_json`, and keeps the rest of the committed table; a function edit
+reads the row at its entry alone with `neverd_functions_range_json`), the session a name without reading its table
 (`neverd_rename_take`), and a declaration of types no other names reads them against
 what it read of the library once (`Session::LocalTypeNames`), on the library itself
-(`TypeLibrary::Trial`, which undoes a refused declaration). A function's declaration
+(`TypeLibrary::Trial`, which undoes a refused declaration), and the identity its stores
+are kept under before it with the declarations the history committed. The project's
+input is recorded once a history first commits, since what the record says holds while
+the session keeps the input. A function's declaration
 reads against the library without copying it, its prototype the parse's own; one that
 would define a type reads again on a copy (`parseFunctionDeclaration`). The GUI opens with `write_behind`: the reply to such an edit, a source
 edit such as a local's name and an operand's format among them, goes before its write, which runs the same journaled transaction in order on a thread of its own

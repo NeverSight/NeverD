@@ -531,6 +531,42 @@ TEST(LocalTypesDebugContext, NewTypesInvalidateUnrenderedABISignatures) {
   }
 }
 
+TEST(LocalTypesDebugContext, NewTypesNoPrototypeReachesKeepABISignatures) {
+  using namespace neverd;
+  auto Library = std::make_shared<types::TypeLibrary>(types::DataModel::LLP64);
+  ASSERT_TRUE(types::parseCTypes(R"(
+    struct Payload { unsigned long Count; double Value; };
+    long Read(struct Payload *Input, unsigned long Count);
+  )",
+                                 *Library)
+                  .ok());
+  NamesOnlyDebugContext Names;
+  sdk::LocalTypesDebugContext Context(Names, Library);
+  const auto Before = Context.resolvePrototypeABI("Read");
+  ASSERT_TRUE(Before && Before->ReturnType);
+  auto Grown = std::make_shared<types::TypeLibrary>(*Library);
+  ASSERT_TRUE(
+      types::parseCTypes("struct Unrelated { long long First; };", *Grown)
+          .ok());
+  // No prototype reaches the new name: the converted signature stays, the
+  // very nodes it was, and reads as a fresh context's.
+  Context.takeNewTypes(*Grown, {"Unrelated"}, /*NamesHold=*/true,
+                       /*Prototyped=*/false);
+  const auto Kept = Context.resolvePrototypeABI("Read");
+  ASSERT_TRUE(Kept && Kept->ReturnType);
+  EXPECT_EQ(Kept->ReturnType, Before->ReturnType);
+  EXPECT_EQ(Kept->Params.front().second, Before->Params.front().second);
+  sdk::LocalTypesDebugContext Fresh(Names, Grown);
+  const auto Actual = Context.resolvePrototype("Read");
+  const auto Expected = Fresh.resolvePrototype("Read");
+  ASSERT_TRUE(Actual && Expected);
+  EXPECT_EQ(Actual->PrototypeDeclaration, Expected->PrototypeDeclaration);
+  EXPECT_EQ(Actual->PortablePrototypeDeclaration,
+            Expected->PortablePrototypeDeclaration);
+  EXPECT_TRUE(sdk::passesAlike(*Actual, *Expected));
+  ASSERT_TRUE(Context.library().find("Unrelated"));
+}
+
 TEST(LocalTypesDebugContext, SourceCallDeclarationsRetainCompleteValueLayouts) {
   using namespace neverd;
   types::TypeLibrary Library(types::DataModel::LP64);

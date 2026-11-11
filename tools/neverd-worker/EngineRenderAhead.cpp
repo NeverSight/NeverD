@@ -66,7 +66,7 @@ bool Engine::keptRenderHolds(RenderStore &store, const std::string &key) {
   return !first || renderReadsHold(*first);
 }
 
-Json Engine::renderStoreIdentity() {
+Json Engine::renderStoreIdentity(const Json *declared) {
   // What it reads of the user's facts alone, which may be thousands of names
   // and comments.  What the code edits, comments, operand formats and data
   // items say reaches a listing, not a render.
@@ -89,7 +89,7 @@ Json Engine::renderStoreIdentity() {
   // The state above says those that stay, whether or not their files have been
   // written yet (ProjectHistory::persistLater), as it says the declared types.
   auto identity = browseCacheIdentity(
-      analysisSnapshot(std::move(state)),
+      analysisSnapshot(std::move(state), declared),
       {project_files::File::Code, project_files::File::Annotations,
        project_files::File::Renames, project_files::File::Operands,
        project_files::File::Functions, project_files::File::Items,
@@ -216,12 +216,10 @@ Engine::StoreNames Engine::storeNames() {
   return identity ? storeNames(std::move(*identity)) : StoreNames{};
 }
 
-std::optional<Json> Engine::storeIdentity() {
-  const auto project = projectJson();
-  if (!browseCacheEnabled_ || !project.is_object() ||
-      !project.contains("folder"))
+std::optional<Json> Engine::storeIdentity(const Json *declared) {
+  if (!browseCacheEnabled_ || projectFolder().empty())
     return std::nullopt;
-  return renderStoreIdentity();
+  return renderStoreIdentity(declared);
 }
 
 Engine::StoreNames Engine::storeNames(Json identity) {
@@ -229,15 +227,17 @@ Engine::StoreNames Engine::storeNames(Json identity) {
   StoreNames names;
   names.renders = BrowseCache::digest(runtime + identity.dump());
   // What a look asks the engine spells no name of data either.
-  identity.at("state").erase("renames");
-  names.facts = BrowseCache::digest(runtime + identity.dump());
+  names.facts = identity.at("state").erase("renames")
+                    ? BrowseCache::digest(runtime + identity.dump())
+                    : names.renders;
   return names;
 }
 
 namespace {
-std::filesystem::path projectLocalFolder(const Json &project,
+std::filesystem::path projectLocalFolder(const std::string &root,
                                          const char *folder) {
-  const auto &root = project.at("folder").get_ref<const std::string &>();
+  if (root.empty())
+    throw Error("cache_unavailable", "The project has no folder");
   return std::filesystem::path(std::u8string(
              reinterpret_cast<const char8_t *>(root.data()), root.size())) /
          "local" / folder;
@@ -257,7 +257,7 @@ void Engine::openRenderStore(const std::string &mode) {
     if (names.renders.empty())
       return;
     renderStore_ = std::make_unique<RenderStore>(
-        projectLocalFolder(projectJson(), "render-ahead"), names.renders,
+        projectLocalFolder(projectFolder(), "render-ahead"), names.renders,
         mode == "write");
     if (names.facts != factsStoreName_)
       openFactsStore(names.facts, mode == "write");
@@ -283,7 +283,7 @@ void Engine::keepStoresFor(const StoreNames &before, const StoreNames &after) {
   rendersStoreRead_ = false;
   factsStoreRead_ = false;
   try {
-    const auto project = projectJson();
+    const auto &project = projectFolder();
     if (!before.renders.empty() && !after.renders.empty()) {
       RenderStore::keepFor(projectLocalFolder(project, "render-ahead"),
                            before.renders, after.renders);
@@ -331,7 +331,7 @@ RenderStore *Engine::storeOfViews() {
         rendersStoreName_.clear();
       } else if (name != rendersStoreName_) {
         renderStore_ = std::make_unique<RenderStore>(
-            projectLocalFolder(projectJson(), "render-ahead"), name, false);
+            projectLocalFolder(projectFolder(), "render-ahead"), name, false);
         rendersStoreName_ = name;
       }
     } catch (const std::exception &) {
@@ -350,7 +350,7 @@ Json Engine::keptRendersJson() {
 
 void Engine::openFactsStore(const std::string &name, bool writable) {
   factsStore_ = std::make_unique<RenderStore>(
-      projectLocalFolder(projectJson(), "listing-facts"), name, writable);
+      projectLocalFolder(projectFolder(), "listing-facts"), name, writable);
   factsStoreName_ = name;
 }
 

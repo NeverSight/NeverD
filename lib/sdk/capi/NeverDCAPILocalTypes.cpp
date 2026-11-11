@@ -812,8 +812,10 @@ bool Session::takeUnreadTypes(const types::TypeLibrary &Library,
     if (Renamed != Facts.Spelled.Renamed)
       return false;
   }
+  // No prototype reaches the new names (Facts.Prototyped, checked above).
   if (LocalTypesDbg)
-    LocalTypesDbg->takeNewTypes(Library, Names, OwnNames);
+    LocalTypesDbg->takeNewTypes(Library, Names, OwnNames,
+                                /*Prototyped=*/false);
   if (!OwnNames) {
     // Read again when next asked for.
     LocalTypeNames.reset();

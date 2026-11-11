@@ -245,8 +245,11 @@ public:
   /// \p NamesHold: they are spelled by the names they have, and no other name
   /// moves for them (Session::takeUnreadTypes' own names), so what spells the
   /// library's names spells theirs as one made of \p Library would, and stays.
+  /// \p Prototyped false says no prototype of the library reaches \p Names
+  /// (prototypeTypeNames): no signature converted from one changes.
   void takeNewTypes(const types::TypeLibrary &Library,
-                    llvm::ArrayRef<std::string> Names, bool NamesHold = false);
+                    llvm::ArrayRef<std::string> Names, bool NamesHold = false,
+                    bool Prototyped = true);
 
   /// Notes in \p Reads each function whose declaration is asked for, declared
   /// or not.  \p Reads outlives this.
