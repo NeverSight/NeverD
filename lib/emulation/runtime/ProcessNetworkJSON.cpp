@@ -127,7 +127,8 @@ linuxNetworkOptionsFromJSON(const llvm::json::Value &Value) {
   const auto *Datagrams = Object->getArray(field::DatagramConnections);
   LinuxNetworkOptions Out;
   if (const auto *F = Object->getObject(field::TCPConnectFailures)) {
-    if (F->size() != 2 || !F->get(field::NetworkErrno) ||
+    const auto *After = F->get(field::AfterConnections);
+    if (F->size() != (After ? 3u : 2u) || !F->get(field::NetworkErrno) ||
         !F->get(field::NetworkFailureCount))
       return invalid(field::TCPConnectFailures);
     auto &Failure = Out.TCPConnectFailures.emplace();
@@ -137,6 +138,10 @@ linuxNetworkOptionsFromJSON(const llvm::json::Value &Value) {
     if (auto E = number(*F->get(field::NetworkFailureCount),
                         field::NetworkFailureCount, Failure.Count))
       return std::move(E);
+    if (After)
+      if (auto E = number(*After, field::AfterConnections,
+                          Failure.AfterConnections.emplace()))
+        return std::move(E);
   }
   uint64_t Remaining = ::neverd::limits::emulation::
       kProcessNetworkJSONLinuxNetworkOptionsFromJSONRemaining;

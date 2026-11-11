@@ -21567,9 +21567,12 @@ exercise named, dynamic, variadic and raw ARM64 connect calls with independent
 errno and guarded-memory expectations. Run both Linux and Android network owners
 after changing connection admission. All transport tests are offline.
 
-`ProcessPublic.AndroidConnectionFailuresMatchSDKAndCLI` compares ten complete
-SDK/CLI reports and guarded memory across O0/O2 callers, large finite counts,
-exhausted providers and failed-description reuse.
+`LinuxNetwork.TCPConnectFailuresResumeAtTheNextExactPeer` checks both sides
+of a positioned failure run, including rejected peers and stream reads on the
+subsequent connection. `ProcessPublic.AndroidConnectionFailuresMatchSDKAndCLI`
+compares complete SDK/CLI reports and guarded memory across O0/O2 callers,
+large finite counts, recovery at an exact IPv6 peer, exhausted inputs and
+failed-description reuse.
 
 `ProcessPublic.AndroidApplicationValuesMatchSDKAndCLI` compares 84 complete
 SDK/CLI reports across O0/O2 JNI callers. Resolver identity, UTF-16 builders,

@@ -5549,20 +5549,31 @@ TEST_F(ProcessPublic, AndroidConnectionFailuresMatchSDKAndCLI) {
     Path = (std::filesystem::path(NEVERD_ANDROID_FIXTURE_DIR) /
             (std::string(Variant) + ".so"))
                .string();
-    using Case = std::pair<unsigned, uint32_t>;
-    for (const auto &[Mode, Count] :
+    struct Case {
+      unsigned Mode;
+      uint32_t Count;
+      bool Recover = false;
+    };
+    for (const auto &[Mode, Count, Recover] :
          {Case{0, 4}, Case{0, 4097}, Case{0, UINT32_MAX}, Case{1, 4},
-          Case{2, 4}}) {
+          Case{2, 4}, Case{0, 3, true}}) {
       SCOPED_TRACE(Variant);
       SCOPED_TRACE(Mode);
       SCOPED_TRACE(Count);
       auto Request = llvm::cantFail(llvm::json::parse(
           R"({"backend":"unicorn","linux_files":{"files":[]},"linux_network":{"connections":[{"peer_hex":"020023297f0000010000000000000000"}],"tcp_connect_failures":{"errno":101,"count":4}},"android":{"entry_symbol":"network_connect_failures","initialize":false,"read_memory":[{"address":"0x20000000","size":4096}],"libraries":{"libc.so":["connect"]}}})"));
       auto &Android = *Request.getAsObject()->getObject(field::Android);
-      auto &Failures = *Request.getAsObject()
-                            ->getObject(field::LinuxNetwork)
-                            ->getObject(field::TCPConnectFailures);
+      auto &Network = *Request.getAsObject()->getObject(field::LinuxNetwork);
+      auto &Failures = *Network.getObject(field::TCPConnectFailures);
       Failures[field::NetworkFailureCount] = uint64_t(Count);
+      if (Recover) {
+        Failures[field::AfterConnections] = 1;
+        // The fixture's fourth retry is a raw IPv6 connect to [::1]:9003.
+        Network.getArray(field::Connections)
+            ->push_back(llvm::json::Object{
+                {field::NetworkPeer,
+                 "0a00232b000000000000000000000000000000000000000100000000"}});
+      }
       Android[field::Arguments] = llvm::json::Array{"0x20000000", Mode};
       std::vector<uint8_t> Expected(4096, 0xa5);
       Android[field::Memory] = llvm::json::Array{
@@ -5594,8 +5605,9 @@ TEST_F(ProcessPublic, AndroidConnectionFailuresMatchSDKAndCLI) {
       }
       llvm::support::endian::write64le(Expected.data(), 0);
       for (unsigned I = 0; I != (Mode == 2 ? 1u : 4u); ++I) {
+        const auto RawResult = Recover ? 0u : uint64_t(-101);
         llvm::support::endian::write64le(Expected.data() + 8 * (1 + 2 * I),
-                                         I == 3 ? uint64_t(-101) : UINT64_MAX);
+                                         I == 3 ? RawResult : UINT64_MAX);
         llvm::support::endian::write64le(Expected.data() + 8 * (2 + 2 * I),
                                          I == 3 ? 73 : 101);
       }

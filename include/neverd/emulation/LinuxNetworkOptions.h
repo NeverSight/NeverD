@@ -61,22 +61,23 @@ struct LinuxDatagramConnection {
   std::vector<LinuxNetworkReceive> ReceiveEvents;
   std::optional<uint64_t> ReceiveQuietUntilNS;
 };
-/// Failure-only TCP attempts after the ordered exact-peer attempts are used.
+/// A finite run of failures between ordered exact-peer TCP attempts.
 /// Canonical matching-family peers are admitted without creating a route,
 /// byte stream or readiness. A failed description must be closed before reuse.
 struct LinuxTCPConnectFailures {
   uint32_t Error = 0;
   /// Finite supplied outcomes, 1..UINT32_MAX; no per-attempt storage is kept.
   uint32_t Count = 0;
+  /// Number of exact TCP attempts before this run. Absence places it last.
+  std::optional<uint32_t> AfterConnections = std::nullopt;
 };
 struct LinuxNetworkOptions {
   /// Attempts are consumed only after the exact peer and guest memory pass
   /// validation. Descriptor aliases share the selected connection and cursors.
   std::vector<LinuxStreamConnection> Connections;
   std::vector<LinuxDatagramConnection> DatagramConnections;
-  /// Absence preserves exact-peer refusal. Never bypasses an unconsumed
-  /// ordered attempt. Count is independent of the stored TCP/UDP entry bound;
-  /// ordinary execution budgets still apply to every consumed failure.
+  /// Count is independent of the stored TCP/UDP entry bound. Ordinary
+  /// execution budgets still apply to every consumed failure.
   std::optional<LinuxTCPConnectFailures> TCPConnectFailures;
 };
 } // namespace neverd::emulation
