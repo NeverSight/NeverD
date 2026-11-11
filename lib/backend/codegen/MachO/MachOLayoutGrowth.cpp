@@ -167,11 +167,18 @@ findTextMetadataStorage(llvm::ArrayRef<uint8_t> Binary, uint64_t Capacity) {
         std::max(Segment.Begin, uint64_t(H.HeaderSize) + H.SizeOfCmds +
                                     kMetadataCommandReserve);
     const auto Available = [&](uint64_t End) {
-      return macho_patch_detail::checkedAlignUp(Cursor, alignof(uint64_t),
+      while (macho_patch_detail::checkedAlignUp(Cursor, alignof(uint64_t),
                                                 Cursor) &&
-             Cursor <= End && Capacity <= End - Cursor &&
-             llvm::all_of(Binary.slice(Cursor, Capacity),
-                          [](uint8_t Byte) { return Byte == 0; });
+             Cursor <= End && Capacity <= End - Cursor) {
+        const auto Bytes = Binary.slice(Cursor, Capacity);
+        const auto Used =
+            llvm::find_if(Bytes, [](uint8_t Byte) { return Byte; });
+        if (Used == Bytes.end())
+          return true;
+        // Every start up to this byte would overlap the same live byte.
+        Cursor += std::distance(Bytes.begin(), Used) + 1;
+      }
+      return false;
     };
     for (const auto &Range : Occupied) {
       if (Range.End <= Cursor)
@@ -188,6 +195,23 @@ findTextMetadataStorage(llvm::ArrayRef<uint8_t> Binary, uint64_t Capacity) {
                                  Cursor};
   }
   return std::nullopt;
+}
+
+// Moving either kind of unwind table can require a fresh prefix even when
+// the other table already fits. Keeping the existing mapping is preferable
+// when it contains an aligned gap large enough for the complete section.
+bool growTextForMetadata(std::vector<uint8_t> &Binary, Arch A,
+                         uint64_t Capacity) {
+  if (findTextMetadataStorage(Binary, Capacity))
+    return false;
+  auto Grown =
+      reserveMachOHeaderStorage(Binary, A, kMetadataCommandReserve + Capacity);
+  if (!Grown) {
+    // A terminal TEXT segment may still extend into LINKEDIT.
+    llvm::consumeError(Grown.takeError());
+    return false;
+  }
+  return *Grown;
 }
 
 llvm::Expected<uint64_t> moveTextSection(std::vector<uint8_t> &Binary, Arch A,
@@ -528,18 +552,15 @@ llvm::Expected<uint64_t> declareMachOMetadata(std::vector<uint8_t> &Binary,
   auto B = Binary;
   std::optional<TextMetadataStorage> Storage;
   if (!Relro) {
-    // A dylib cannot grow a PAGEZERO prefix. Reuse authenticated TEXT padding
-    // before requesting prefix growth for metadata, retaining command room.
-    Storage = findTextMetadataStorage(B, Size);
-    auto Header = reserveMachOHeaderStorage(
-        B, A,
-        !Storage && (A == Arch::X64 || A == Arch::AArch64)
-            ? kMetadataCommandReserve + Size
-            : kMetadataCommandReserve);
+    // Only the section descriptor has to fit in the command table. Its
+    // contents can use another gap or extend a terminal TEXT segment.
+    const auto Original = parseMachOHeader(B.data(), B.size());
+    auto Header =
+        reserveMachOHeaderStorage(B, A, getMachOSectionSize(Original.Is64));
     if (!Header)
       return Header.takeError();
-    if (*Header)
-      Storage = findTextMetadataStorage(B, Size);
+    growTextForMetadata(B, A, Size);
+    Storage = findTextMetadataStorage(B, Size);
   }
   std::vector<macho_patch_detail::MachOFileRange> Segments, Sections;
   if (!macho_patch_detail::collectMachOFileRanges(B, Segments, Sections))
@@ -616,15 +637,15 @@ llvm::Expected<uint64_t> declareMachOMetadata(std::vector<uint8_t> &Binary,
         TextSize = F.FileSize;
         NewOrdinal = Ordinal + 1;
       });
+  std::vector<macho_patch_detail::MachOFileRange> Payloads;
+  if (!macho_patch_detail::collectMachOPayloadRanges(B, Payloads))
+    return fail(kMetadataOwnership);
+  for (const auto &Range : Payloads) {
+    First = std::min(First, Range.Begin);
+    if (Range.Begin < TextOff + TextSize && Range.End > TextOff)
+      Last = std::max(Last, Range.End);
+  }
   if (Relro) {
-    std::vector<macho_patch_detail::MachOFileRange> Payloads;
-    if (!macho_patch_detail::collectMachOPayloadRanges(B, Payloads))
-      return fail(kRelroOwnership);
-    for (const auto &Range : Payloads) {
-      First = std::min(First, Range.Begin);
-      if (Range.Begin < TextOff + TextSize && Range.End > TextOff)
-        Last = std::max(Last, Range.End);
-    }
     auto Dependencies = readMachODependencyState(B);
     if (!Dependencies)
       return Dependencies.takeError();
@@ -849,11 +870,7 @@ llvm::Expected<bool> reserveMachOSourceUnwind(
         // Adopt checked prefix growth before placing the compact registry.
         // The growth owner rebases its TEXT-relative records, so refresh the
         // payload instead of copying the pre-growth offsets into the new map.
-        auto Header = reserveMachOHeaderStorage(
-            Candidate, A, kMetadataCommandReserve + Capacity);
-        if (!Header)
-          llvm::consumeError(Header.takeError());
-        else if (*Header) {
+        if (growTextForMetadata(Candidate, A, Capacity)) {
           auto Updated = findMachOCompactUnwindRegion(Candidate);
           if (!Updated)
             return Updated.takeError();
@@ -898,6 +915,12 @@ llvm::Expected<bool> reserveMachOSourceUnwind(
           llvm::alignTo(R->AppendFileOff - R->SectionFileOff +
                             AdditionalEHBytes + sizeof(uint32_t),
                         alignof(uint64_t));
+      if (growTextForMetadata(Candidate, A, Capacity)) {
+        // The code VAs are stable but the old section moved in the file.
+        R = findMachOEHFrameRegion(Candidate);
+        if (!R)
+          return fail(kLostFrameSection);
+      }
       const auto Storage = findTextMetadataStorage(Candidate, Capacity);
       const uint64_t VA =
           Storage ? Storage->VA : P.plannedExecSegmentVA(Candidate, A);

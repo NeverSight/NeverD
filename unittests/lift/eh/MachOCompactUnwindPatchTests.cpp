@@ -4212,6 +4212,34 @@ TEST(MachOCompactUnwindStorage, ReservesMappedZeroPaddingBeforeInstallation) {
   EXPECT_EQ(Receipt->EncodedSize, Inputs.Encoded.size());
 }
 
+TEST(MachOCompactUnwindStorage, PreservesZeroFilledLoadCommandPayload) {
+  using namespace llvm::MachO;
+  const auto Inputs = makeCompactUnwindInstallInputs();
+  auto Binary =
+      makeInstallableUnwindInfoMachO(Inputs.Original, Inputs.Encoded.size(), 0);
+  auto Located = findMachOCompactUnwindRegion(Binary);
+  ASSERT_TRUE(bool(Located)) << llvm::toString(Located.takeError());
+  ASSERT_TRUE(Located->has_value());
+  auto *Section = reinterpret_cast<section_64 *>(Binary.data() +
+                                                 (**Located).SectionHeaderOff);
+  Section->size = Inputs.Original.OriginalBytes.size();
+  auto *Header = reinterpret_cast<mach_header_64 *>(Binary.data());
+  auto *Note = reinterpret_cast<note_command *>(
+      Binary.data() + sizeof(*Header) + Header->sizeofcmds);
+  *Note = {};
+  Note->cmd = LC_NOTE;
+  Note->cmdsize = sizeof(*Note);
+  Note->offset = Section->offset + Section->size;
+  Note->size = Inputs.Encoded.size() - Section->size;
+  ++Header->ncmds;
+  Header->sizeofcmds += sizeof(*Note);
+  const auto Before = Binary;
+  auto Error = reserveMachOCompactUnwindStorage(Binary, Inputs.Encoded.size());
+  ASSERT_TRUE(bool(Error));
+  llvm::consumeError(std::move(Error));
+  EXPECT_EQ(Binary, Before);
+}
+
 TEST(MachOCompactUnwindStorage, RefusesNonzeroPaddingAndMappingBoundaries) {
   const auto Inputs = makeCompactUnwindInstallInputs();
   for (bool Nonzero : {false, true}) {

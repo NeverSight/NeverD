@@ -33,6 +33,9 @@ struct MachOChainedSegment {
   uint16_t PointerFormat = 0, PageSize = 0;
   std::vector<MachOChainedSlot> Slots;
   uint32_t Flags = 0;
+  /// Original file location of the validated starts-in-segment record.
+  /// Threaded bind streams have no starts record.
+  uint64_t StartsFileOffset = 0;
 };
 /// Owned facts from the strict reader, captured only for an installing caller.
 struct MachOChainedFixups {

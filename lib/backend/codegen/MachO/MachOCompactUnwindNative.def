@@ -11,4 +11,7 @@
 MACHO_NATIVE_UNWIND_TEXT(
     kNativeLanguage, "native compact personality or LSDA cannot be represented")
 
+MACHO_NATIVE_UNWIND_TEXT(kCompactPaddingOwner,
+                         "compact-unwind growth lacks unowned adjacent storage")
+
 #undef MACHO_NATIVE_UNWIND_TEXT

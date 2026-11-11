@@ -88,12 +88,19 @@ def check_sections(text, dwarf):
         raise ValueError(POLICY["errors"]["unwind_mode"])
 
 
-def check_unwind(text, dwarf, installed=None):
+def image_base(text):
+    addresses = re.findall(POLICY["text_base_pattern"], text, re.MULTILINE)
+    if len(addresses) != 1:
+        raise ValueError(POLICY["errors"]["image_base"])
+    return int(addresses[0], POLICY["hex_radix"])
+
+
+def check_unwind(text, dwarf, installed=None, base=0):
     symbols = {name: int(address, POLICY["hex_radix"])
                for address, name in re.findall(POLICY["symbol_pattern"], text, re.MULTILINE)}
     if installed is not None:
         symbols.update(installed)
-    records = {int(address, POLICY["hex_radix"]): int(encoding, POLICY["hex_radix"])
+    records = {base + int(address, POLICY["hex_radix"]): int(encoding, POLICY["hex_radix"])
                for address, encoding in re.findall(POLICY["unwind_pattern"], text)}
     modes = (POLICY["dwarf_unwind_modes"] if dwarf else POLICY["compact_unwind_modes"])
     for name in exception_frames() + POLICY["native_exception_functions"]:
@@ -260,6 +267,7 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                         installed = None
                         receipt = None
                         baseline = None
+                        original_base = None
                         if publish:
                             library = output / POLICY["installed_library_name"].format(**fields)
                             products.append(library)
@@ -288,6 +296,9 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                                     [*args, *layout["header_args"],
                                      output / POLICY["caller_source"], original_obj,
                                      POLICY["output_option"], original])
+                            before = command(label + POLICY["baseline_suffix"] + POLICY["sections_suffix"],
+                                             [*POLICY["sections_command"], original])
+                            original_base = image_base(before.stdout)
                             if not compile_only:
                                 control = native.command(products, output, label + POLICY["baseline_suffix"],
                                                          [str(loader), str(original)], POLICY["execute_timeout"])
@@ -319,11 +330,15 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                         check_sections(sections.stdout, dwarf)
                         unwind = command(label + POLICY["unwind_suffix"],
                                          [*POLICY["unwind_command"], library])
-                        check_unwind(unwind.stdout, dwarf, installed)
+                        base = image_base(sections.stdout)
+                        if publish and layout.get("require_prefix") and base >= original_base:
+                            raise ValueError(POLICY["errors"]["prefix"])
+                        check_unwind(unwind.stdout, dwarf, installed, base)
                         row = {**fields, **check_classic(library),
                                "object": object_identity, "executed": False,
                                "publication_layout": layout if publish else None,
                                "publication": receipt, "baseline_returncode": baseline,
+                               "image_base": base, "original_image_base": original_base,
                                "occupied_original_rejected": publish, "installed_text_sha256": text_hash}
                         report["cases"].append(row)
                         if not compile_only:

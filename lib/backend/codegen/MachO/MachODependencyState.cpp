@@ -153,8 +153,7 @@ struct Reader {
     State.CPUType = readLE<uint32_t>(B.data() + offsetof(mach_header, cputype));
     State.CPUSubtype =
         readLE<uint32_t>(B.data() + offsetof(mach_header, cpusubtype));
-    const auto Flags = readLE<uint32_t>(B.data() + 24),
-               Type = readLE<uint32_t>(B.data() + 12);
+    const auto Flags = H.Flags, Type = H.FileType;
     if (!(Flags & MH_DYLDLINK) || !(Flags & MH_TWOLEVEL) ||
         (Flags & MH_FORCE_FLAT) ||
         (Type != MH_EXECUTE && Type != MH_DYLIB && Type != MH_BUNDLE))
@@ -310,8 +309,9 @@ struct Reader {
       number(Row, readLE<uint16_t>(N.data() + 6));
       const auto Value = H.Is64 ? readLE<uint64_t>(N.data() + 8)
                                 : readLE<uint32_t>(N.data() + 8);
-      number(Row,
-             Name == "__mh_execute_header" && Value == HeaderVA ? 0 : Value);
+      number(Row, isMachOHeaderSymbol(Name, H.FileType) && Value == HeaderVA
+                      ? 0
+                      : Value);
       State.Symbols.push_back(Row);
       if (I >= Dyn->iundefsym) {
         if ((N[4] & (N_STAB | N_TYPE | N_EXT)) != (N_UNDF | N_EXT))
@@ -714,6 +714,7 @@ struct Reader {
       if (Chained) {
         Chained->Segments[I].PointerFormat = Format;
         Chained->Segments[I].PageSize = Page;
+        Chained->Segments[I].StartsFileOffset = uint64_t(Chain->dataoff) + O;
       }
       number(Digest, Format);
       number(Digest, Page);
@@ -856,7 +857,7 @@ readMachODependencyState(llvm::ArrayRef<uint8_t> B,
     auto V = R.payload(D.export_off, D.export_size);
     if (!V)
       return V.takeError();
-    auto Facts = machOExportIdentities(*V, R.HeaderVA);
+    auto Facts = machOExportIdentities(*V, R.HeaderVA, R.H.FileType);
     if (!Facts)
       return Facts.takeError();
     // An empty export stream and an absent export command describe the same
@@ -869,7 +870,7 @@ readMachODependencyState(llvm::ArrayRef<uint8_t> B,
     auto V = R.payload(R.Export->dataoff, R.Export->datasize);
     if (!V)
       return V.takeError();
-    auto Facts = machOExportIdentities(*V, R.HeaderVA);
+    auto Facts = machOExportIdentities(*V, R.HeaderVA, R.H.FileType);
     if (!Facts)
       return Facts.takeError();
     if (!Facts->empty())
