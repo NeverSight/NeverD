@@ -40,6 +40,7 @@
 
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -5297,6 +5298,19 @@ HighCWriter::emittedParamIndices(const HighFunc &Func) const {
       All[I] = I;
     EmittedParamIndices[Key] = All;
     return All;
+  } else if (Opts.TheArch == Arch::AArch64 &&
+             Opts.Format == BinaryFormat::MachO) {
+    // A recovered stack parameter needs all the preceding ABI positions.
+    // Removing an unread register or stack slot changes where C reads it.
+    for (size_t I = N; I != 0; --I) {
+      const HighParam &Param = Func.Params[I - 1];
+      if (Param.RegOff != kNoParamReg || Param.MedIndex < 0 ||
+          !Used.count(static_cast<int>(I - 1)))
+        continue;
+      for (size_t J = 0; J < I; ++J)
+        Used.insert(static_cast<int>(J));
+      break;
+    }
   }
   size_t Unused = 0;
   for (size_t I = 0; I < N; ++I)
@@ -6420,6 +6434,8 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     if (!TargetFeatures.empty())
       OS << "__attribute__((target(\"" << TargetFeatures << "\")))\n";
 
+    if (Func.UsesNativeVariadicStack)
+      OS << c_stack::kRetainStackFrame;
     if (Func.DoesNotReturn)
       OS << "_Noreturn ";
     if (Func.SourceTypeHint)
@@ -6511,11 +6527,17 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
       emitParam(unreadDeclaredParamType(Func, Index),
                 Name.empty() ? "unread" + std::to_string(Index) : Name);
     }
-    if (currentVaStart() && Emitted > 0)
+    if ((currentVaStart() || Func.UsesNativeVariadicStack) && Emitted > 0)
       Declarator += ", ...";
     if (Emitted == 0)
       Declarator += "void";
     OS << declaredAs(ReturnType, Declarator + ")") << " {\n";
+    if (Func.UsesNativeVariadicStack) {
+      emitIndent(1);
+      OS << llvm::formatv(
+          c_stack::kStackIntrinsicDecl.data(), c_stack::kNativeEntrySPName,
+          llvm::Intrinsic::getBaseName(llvm::Intrinsic::sponentry));
+    }
     if (Opts.Image && !Func.SourceTypeHint)
       if (const auto &Frame = dispatchFrame(Func.Entry)) {
         c_stub::writeDispatchFrameBody(OS, x64DispatchFrameAssembly(*Frame));

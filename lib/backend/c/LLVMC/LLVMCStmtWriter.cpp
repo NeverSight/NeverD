@@ -113,8 +113,8 @@ bool LLVMCWriter::needsCallSiteCType(const llvm::CallBase &Call) {
 
 namespace {
 
-#define LLVMC_STACK_TEXT(Name, Text) constexpr llvm::StringLiteral Name = Text;
-#include "LLVMCStackIntrinsic.def"
+#define C_STACK_TEXT(Name, Text) constexpr llvm::StringLiteral Name = Text;
+#include "neverd/backend/c/render/CStackIntrinsic.def"
 std::string retainCallSiteCType(const llvm::CallBase &Call,
                                 llvm::StringRef Type, std::string Cast) {
   if (!LLVMCWriter::needsCallSiteCType(Call))

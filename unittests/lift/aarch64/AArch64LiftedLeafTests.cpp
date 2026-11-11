@@ -6,6 +6,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
 #include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
@@ -565,14 +566,24 @@ void verifyVariadicEntry(const char *Optimization) {
   COptions.TheArch = Image->Arch;
   COptions.Format = Image->Format;
   ASSERT_TRUE(LLVMCEmitter().emitToFile(Module, C, COptions, nullptr, &*Image));
+  Options.LiftMode = false;
+  auto Structured = Pipeline().run(*Image, Context, Options);
+  ASSERT_TRUE(Structured.Success) << Structured.Error;
+  ASSERT_FALSE(Structured.HighFuncs.empty());
+  const auto HighC = (Root / kStructuredC).string();
+  COptions.PreserveLLVMFunctionTypes = false;
+  COptions.Image = &*Image;
+  ASSERT_TRUE(HighCEmitter().emitToFile(Structured.HighFuncs, HighC, COptions));
   const auto Output = (Root / kOutput).string();
-  for (const auto &File : {IR, C}) {
+  const std::array Sources{IR, C, HighC};
+  for (const auto &File : Sources) {
     SCOPED_TRACE(File);
     ASSERT_EQ(Library(File, Target, Output), 0);
     ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Output}), 0);
   }
   if (Native)
-    testing::Test::RecordProperty(kNativeImages, kCount + 1);
+    testing::Test::RecordProperty(kNativeImages,
+                                  static_cast<int>(Sources.size() + 1));
 #else
   GTEST_SKIP() << kUnavailable;
 #endif

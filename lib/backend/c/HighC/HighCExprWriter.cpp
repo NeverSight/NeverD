@@ -7188,6 +7188,10 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
     return "(0 /* truncated: expr too deep */)";
 
   switch (E.Kind) {
+  case ExprKind::IncomingStack:
+    return llvm::formatv(c_stack::kNativeEntryValue.data(),
+                         c_stack::kNativeEntrySPName)
+        .str();
   case ExprKind::EntryRegister:
     return registrationEntryExpression(E);
   case ExprKind::Var:

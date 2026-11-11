@@ -179,6 +179,14 @@ int wholeArgRegWriteInBlock(const MedBlock &Blk, int J,
                             const TargetRegInfo &TRI,
                             const IntegerArgumentLayout &Layout);
 
+/// Whether the callee walks anonymous arguments in its caller's entry frame.
+bool usesDarwinVariadicEntryStack(const MedFunc &Func, Arch TheArch,
+                                  BinaryFormat Format);
+
+/// A machine instruction that computes a stack address as an ordinary value.
+bool isVariadicStackAddressDefinition(const MedOp &Op,
+                                      const TargetRegInfo &TRI);
+
 // Finalize the overflow stack parameters of every variadic callee once all call
 // sites have been recovered.  A variadic function's va_arg overflow reads land
 // above the synthetic frame, so they cannot be rewritten to ordinary parameter

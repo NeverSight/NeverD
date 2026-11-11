@@ -23,6 +23,7 @@
 #include "neverd/backend/llvm/X86/X86AtomicRmw.h"
 #include "neverd/backend/llvm/X86/X86RegistrationFrame.h"
 #include "neverd/backend/llvm/X86RegistrationSEHThread.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedIntrinsicOutputs.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/X86/I386PicAddress.h"
@@ -160,9 +161,8 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   // materialized overflow parameters, those bytes belong to the caller.
   // Keep the lifted locals and any named stack homes in the private frame.
   const bool NativeVariadicStack =
-      TargetArch == Arch::AArch64 && TargetFormat == BinaryFormat::MachO &&
-      FrameBaseInt && CurMedFunc->IsVariadic && !CurMedFunc->SkippedSSA &&
-      CurMedFunc->VariadicOverflowCount == 0;
+      FrameBaseInt &&
+      usesDarwinVariadicEntryStack(*CurMedFunc, TargetArch, TargetFormat);
   const auto VariadicAddress = [&](const MedVar &V) -> llvm::Value * {
     if (!NativeVariadicStack ||
         V.Size != getTargetRegInfo(TargetArch).PointerSize)
@@ -186,12 +186,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   // copies and call-clobber bookkeeping update the value map independently.
   auto SetOutput = [&](const MedVar &Output, llvm::Value *Value) {
     if (NativeVariadicStack &&
-        (Op.Opcode == NdOp::COPY || Op.Opcode == NdOp::INT_ADD ||
-         Op.Opcode == NdOp::INT_SUB) &&
-        (Output.Kind == MedVar::Temp ||
-         (Output.Kind == MedVar::Reg &&
-          !getTargetRegInfo(TargetArch).isStackPointer(Output.RegOff) &&
-          !getTargetRegInfo(TargetArch).isFramePointer(Output.RegOff))))
+        isVariadicStackAddressDefinition(Op, getTargetRegInfo(TargetArch)))
       if (auto *Pointer = VariadicAddress(Output))
         Value = Builder.CreatePtrToInt(Pointer, sizeToType(Output.Size));
     setVar(Output, Value, Builder);

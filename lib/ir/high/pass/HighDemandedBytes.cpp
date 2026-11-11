@@ -339,6 +339,7 @@ private:
     }
     case ExprKind::Const:
     case ExprKind::Undef:
+    case ExprKind::IncomingStack:
     case ExprKind::EntryRegister:
       return;
     case ExprKind::UnaryOp:

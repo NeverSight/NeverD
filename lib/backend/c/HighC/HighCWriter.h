@@ -53,6 +53,12 @@
 
 namespace neverd {
 
+namespace c_stack {
+#define C_STACK_TEXT(Name, Text)                                               \
+  inline constexpr llvm::StringLiteral Name = Text;
+#include "neverd/backend/c/render/CStackIntrinsic.def"
+} // namespace c_stack
+
 /// The attribute that spells \p CC on a declaration, empty for none.
 llvm::StringRef debugCallConvAttribute(DebugCallConv CC);
 

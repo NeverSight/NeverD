@@ -689,6 +689,7 @@ static bool exprMayFault(const HighExpr *E) {
   case ExprKind::Phi:
   case ExprKind::Const:
   case ExprKind::Undef:
+  case ExprKind::IncomingStack:
   case ExprKind::EntryRegister:
   case ExprKind::Addr:
     break;

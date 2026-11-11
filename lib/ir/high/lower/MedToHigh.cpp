@@ -698,8 +698,42 @@ const PhiNode *MedToHighConverter::uniqueMedPhi(const MedVar &V) {
   return EntryStackOffsets->uniquePhi(V);
 }
 
+ExprPtr MedToHighConverter::darwinVariadicStackAddress(const MedVar &Value) {
+  if (TargetArch != Arch::AArch64 || !Image || !CurMed ||
+      !usesDarwinVariadicEntryStack(*CurMed, TargetArch, Image->abiFormat()))
+    return nullptr;
+  const auto &TRI = getTargetRegInfo(TargetArch);
+  if (Value.Size != TRI.PointerSize)
+    return nullptr;
+  indexMedDefinitions();
+  const auto Offset = EntryStackOffsets->offset(Value);
+  if (!Offset)
+    return nullptr;
+
+  ExprPtr Base;
+  if (*Offset >= CurMed->VariadicOverflowBase) {
+    Base = std::make_shared<HighExpr>();
+    Base->Kind = ExprKind::IncomingStack;
+    Base->Type = NdType::makeInt(Value.Size, false);
+  } else {
+    // Locals and named homes belong to the reconstructed private frame.
+    MedVar SP;
+    SP.Kind = MedVar::Reg;
+    SP.TheArch = TargetArch;
+    SP.RegOff = TRI.StackPointer;
+    SP.Size = Value.Size;
+    Base = HighExpr::makeVar(SP);
+  }
+  if (!*Offset)
+    return Base;
+  return HighExpr::makeBinop(NdOp::INT_ADD, std::move(Base),
+                             HighExpr::makeConst(*Offset, Value.Size));
+}
+
 ExprPtr MedToHighConverter::memoryAddressExpr(const MedVar &V,
                                               bool InlineDefinition) {
+  if (auto Address = darwinVariadicStackAddress(V))
+    return Address;
   if (CurMed && TargetArch == Arch::X86 && Image &&
       (!Image->isELF() || !Image->IsRelocatable))
     if (auto Address = foldI386PicAddress(*CurMed, V, [&](const MedVar &Value) {
@@ -1775,6 +1809,8 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
   Func.DoesNotReturn = Med.DoesNotReturn;
   Func.ReturnsNoValue = Med.ReturnsNoValue;
   Func.IsVariadic = Med.IsVariadic;
+  Func.UsesNativeVariadicStack = usesDarwinVariadicEntryStack(
+      Med, TheArch, Image ? Image->abiFormat() : BinaryFormat::Unknown);
   Func.VaListDisplacement = Med.VaListDisplacement;
   Func.VaRegisterSaveArea = Med.VaRegisterSaveArea;
   Func.VaNamedIntegerRegisters = Med.VaNamedIntegerRegisters;

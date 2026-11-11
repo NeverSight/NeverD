@@ -40,6 +40,23 @@
 #include <vector>
 
 namespace neverd {
+
+bool isVariadicStackAddressDefinition(const MedOp &Op,
+                                      const TargetRegInfo &TRI) {
+  return (Op.Opcode == NdOp::COPY || Op.Opcode == NdOp::INT_ADD ||
+          Op.Opcode == NdOp::INT_SUB) &&
+         (Op.Output.Kind == MedVar::Temp ||
+          (Op.Output.Kind == MedVar::Reg &&
+           !TRI.isStackPointer(Op.Output.RegOff) &&
+           !TRI.isFramePointer(Op.Output.RegOff)));
+}
+
+bool usesDarwinVariadicEntryStack(const MedFunc &Func, Arch TheArch,
+                                  BinaryFormat Format) {
+  return TheArch == Arch::AArch64 && Format == BinaryFormat::MachO &&
+         Func.IsVariadic && !Func.SkippedSSA && Func.VariadicOverflowCount == 0;
+}
+
 namespace med_variadic_detail {
 
 std::optional<int64_t> entrySpDelta(VariadicScan &S, const MedVar &Root,
