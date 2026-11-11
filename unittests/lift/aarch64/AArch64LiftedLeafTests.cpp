@@ -198,6 +198,7 @@ void verifyPublishedDarwinExecutable(const char *SystemPath, int ExitCode) {
   auto Lifted = Pipeline().run(*Image, Context, Options);
   ASSERT_TRUE(Lifted.Success) << Lifted.Error;
   ASSERT_TRUE(Lifted.LlvmModule);
+  symbolizeImageAbsolutePointers(*Lifted.LlvmModule, *Image);
   MachOPatcher Patcher;
   Patcher.setImageContext(&*Image);
   auto Installed =
