@@ -3149,6 +3149,23 @@ record or split-width variadic tails. `check_windows_ucrt_calls.py --function
 UseCRTVarargs` separately compiles the actual `_wopen` output against the
 retained original Microsoft UCRT declarations on x86, x64 and ARM64.
 
+`I386CallContract.RuntimeVariadicImportsKeepTheirStackPrefixAndTail` checks
+the curated `_setjmp3` declaration without a supplied debug prototype. Both
+C routes, whole and selected units, and optimized/unoptimized pipelines keep
+zero, one and three additional DWORDs through direct IAT calls, loaded slots
+and import veneers. Recompiled i386 C at O0/O2 is compared with the original
+instructions using an independent provider that checks the buffer pointer,
+each high-bit argument, writes and return value. The paired
+`NonlocalJumpBufferAgreesWithItsRuntimeHeader` case checks `_longjmpex` against
+an independent i386 `jmp_buf` declaration. These are call-transport and source
+type checks, not native Windows unwind execution.
+`LLVMCValues.RuntimeVariadicFramePointersTakeTheirDeclaredPointee` additionally
+compiles frame-member and interior-byte addresses against that independent
+declaration and executes buffer writes and the return value at O0/O2.
+Older MinGW headers that
+declare `_setjmp3` with two fixed parameters do not describe the
+[documented runtime signature](https://learn.microsoft.com/en-us/cpp/c-runtime-library/setjmp3).
+
 `Win64CallContract.HeaderPointerQualifiersAgreeWithIndependentDefinitions`
 executes both C routes against independent definitions with const return and
 parameter pointers, nested pointer qualifiers, volatile output pointers and

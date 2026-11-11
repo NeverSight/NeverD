@@ -6485,10 +6485,12 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
     // A parameter the runtime's tables type takes an integer converted to
     // its pointer, and an address converted to its integer: one the text
     // spells, or a value of pointer type (`__vfprintf_chk`'s flag, which the
-    // IR passes as the pointer its register held).
+    // IR passes as the pointer its register held). An LLVM opaque pointer
+    // also needs the declared pointee: its C text may address a frame member
+    // or interior bytes with a different type.
     else if (Prototype &&
              (libc::isPointerType(Param)
-                  ? Integer
+                  ? Integer || Operand->getType()->isPointerTy()
                   : PointerSpelling || Operand->getType()->isPointerTy()))
       Argument = Null && Integer
                      ? "0"
