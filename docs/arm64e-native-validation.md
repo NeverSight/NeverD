@@ -586,7 +586,10 @@ data and authenticated slot VAs. The verifier reads each actual Mach header
 base and resolves the compact index's relative offsets against the installed
 base. A full zero-base O0 image still has no available prefix. Each case also
 fills the remaining TEXT tail of a zero-base input copy and requires refusal
-before producing an output.
+before producing an output. A separate contract fixture covers a zero-base
+image with exactly one free section descriptor and an aligned free range
+between occupied bytes. DWARF-only growth also exercises prefix relocation
+without a compact registry and replays the signed return-address rows.
 
 The publication test also checks rejection before the receipt commits,
 unchanged input bytes, exact installed entry receipts and refusal to overwrite

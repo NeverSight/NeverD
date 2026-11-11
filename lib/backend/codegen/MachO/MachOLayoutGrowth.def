@@ -27,5 +27,7 @@ MACHO_LAYOUT_TEXT(
     kRelroCapacity,
     "main executable needs unowned capacity in its existing read-only segment")
 
+MACHO_LAYOUT_TEXT(kLostFrameSection, "header growth lost the DWARF section")
+
 #undef MACHO_LAYOUT_TEXT
 #undef MACHO_LAYOUT_VALUE
