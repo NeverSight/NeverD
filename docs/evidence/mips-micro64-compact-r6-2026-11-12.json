@@ -281,6 +281,42 @@
     "micro64r6_doubleword_pairs": {
       "forms_per_byte_order": 31,
       "reference": "microMIPS64 MD00594 rev 6.05 physical words compared with GNU-assembled classic R6 forms. Original n64 microR6 execution unavailable."
+    },
+    "sleigh_n64_micro_r6": {
+      "version": "pypcode 4.1.0",
+      "context": {
+        "ISA_MODE": 1,
+        "RELP": 0
+      },
+      "results": {
+        "MIPS:BE:64:R6": {
+          "matching_mnemonics": 29,
+          "differences": {
+            "lldp": {
+              "word": "0x60445030",
+              "sleigh_mnemonic": "lldx"
+            },
+            "scdp": {
+              "word": "0x6044d030",
+              "sleigh_mnemonic": "scdx"
+            }
+          }
+        },
+        "MIPS:LE:64:R6": {
+          "matching_mnemonics": 29,
+          "differences": {
+            "lldp": {
+              "word": "0x60445030",
+              "sleigh_mnemonic": "lldx"
+            },
+            "scdp": {
+              "word": "0x6044d030",
+              "sleigh_mnemonic": "scdx"
+            }
+          }
+        }
+      },
+      "scope": "Disassembly of the 31 MicroMIPS64Release6 test words. MD00594 revision 6.05 removes LLDX/SCDX and specifies LLDP/SCDP."
     }
   },
   "source_execution": {
@@ -1422,5 +1458,25 @@
     "The o32 microR6 originals ran on the R6 generic core. The unchanged emitted C ran as microMIPS32r2/o32 in GNU sim.",
     "MSA LowIR equivalence uses classic versus physical micro encodings. The native MSA reference is the classic P5600.",
     "On the external speed check a function is excluded if SLEIGH disassembly and P-code physical spans disagree. Generated IR and state models differ across tools. Absolute profile throughput includes interleaved NOPs except for the 31-word n64 R6 corpus."
-  ]
+  ],
+  "dev_integration": {
+    "tested_commit": "8a4a4eb70fb399f9baea15bcd49a618ba603abbe",
+    "dev_parent": "18e932eb11aff5484cf44abdb2bf2a5505055a40",
+    "capstone": "34d9185433e1b0c1e038f874fc95b25edbac6795",
+    "ctest": {
+      "tests": 779,
+      "failures": 0,
+      "skipped": 0,
+      "disabled": 0
+    },
+    "neverd_sha256": "3e3bc130749058fb5b88b407971a02441c0c0123d5f47a3c6b5095530e18aa63",
+    "replayed": [
+      "32 encoding profile fingerprints",
+      "636 GNU sim n64 DSP/DSPR2 original instruction executions",
+      "144 profile builds and 2816 executions",
+      "28 microMIPS source groups and 236 executions",
+      "8 classic merge-store groups and 192 executions",
+      "12 original Archer C7 ubus cases and 48 rebuilt cases including source and ELF hashes"
+    ]
+  }
 }
