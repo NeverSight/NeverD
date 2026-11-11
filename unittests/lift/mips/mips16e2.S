@@ -799,3 +799,24 @@ li $v0,7
 jrc $31
 .end m16e2_state_pref
 .size m16e2_state_pref, .-m16e2_state_pref
+
+.macro board_leaf name, instruction:vararg
+.align 1
+.globl m16e2_state_\name
+.type m16e2_state_\name,@function
+.ent m16e2_state_\name
+m16e2_state_\name:
+.insn
+\instruction
+li $v0,7
+jrc $ra
+.end m16e2_state_\name
+.size m16e2_state_\name, .-m16e2_state_\name
+.endm
+
+board_leaf mfc0_config, mfc0 $v0,$16,0
+board_leaf mfc0_board, mfc0 $v0,$22,3
+board_leaf mtc0_count, mtc0 $v0,$9,0
+board_leaf mtc0_status, mtc0 $v0,$12,0
+board_leaf rdhwr30, rdhwr $v0,$30
+board_leaf rdhwr31, rdhwr $v0,$31
