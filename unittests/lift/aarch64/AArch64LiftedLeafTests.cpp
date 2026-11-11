@@ -20,6 +20,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/Magic.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/FileSystem.h"
@@ -93,7 +94,7 @@ void verifyTailTargets(llvm::Module &Module, MachOPatcher &Patcher,
 }
 #endif
 
-enum class LeafCheck { None, TailTarget, ErrorResult };
+enum class LeafCheck { None, TailTarget, ErrorResult, Global, FramedImport };
 
 void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
                            const char *SourceName = kSource,
@@ -110,8 +111,10 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   const auto Rejected = (Root / kRejected).string();
   std::ofstream(Source) << Preamble << Leaves;
   ASSERT_EQ(llvm::sys::ExecuteAndWait(
-                kCompiler, {kCompiler, kTargetFlag, kTarget, kOptimize,
-                            kOmitFrame, kDylib, kTight, Source, kOut, Input}),
+                kCompiler,
+                {kCompiler, kTargetFlag, kTarget, kOptimize,
+                 Check == LeafCheck::FramedImport ? kKeepFrame : kOmitFrame,
+                 kDylib, kTight, Source, kOut, Input}),
             0);
   auto Reader = Loader::create(BinaryFormat::MachO);
   auto Image = Reader->load(Input);
@@ -164,6 +167,30 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     Writes.front()->eraseFromParent();
     EXPECT_FALSE(
         Patcher.patch(Input, Rejected, *MissingWrite, Image->Arch).Success);
+    EXPECT_FALSE(std::filesystem::exists(Rejected));
+  }
+  if (Check == LeafCheck::FramedImport) {
+    auto Retargeted = llvm::CloneModule(Module);
+    auto *Import = Retargeted->getFunction(kProcessImport);
+    auto *Read = Retargeted->getFunction(kSum);
+    ASSERT_NE(Import, nullptr);
+    ASSERT_EQ(Import->getFunctionType(), Read->getFunctionType());
+    Import->replaceAllUsesWith(Read);
+    EXPECT_FALSE(
+        Patcher.patch(Input, Rejected, *Retargeted, Image->Arch).Success);
+    EXPECT_FALSE(std::filesystem::exists(Rejected));
+  }
+  if (Check == LeafCheck::Global || Check == LeafCheck::FramedImport) {
+    auto Redirected = llvm::CloneModule(Module);
+    auto *Read = Redirected->getFunction(kSum);
+    auto *Ret = llvm::cast<llvm::ReturnInst>(Read->back().getTerminator());
+    auto *Load = llvm::dyn_cast<llvm::LoadInst>(Ret->getReturnValue());
+    ASSERT_NE(Load, nullptr);
+    llvm::IRBuilder<> Builder(Load);
+    Load->setOperand(0, Builder.CreateConstGEP1_64(
+                            Load->getType(), Load->getPointerOperand(), 1));
+    EXPECT_FALSE(
+        Patcher.patch(Input, Rejected, *Redirected, Image->Arch).Success);
     EXPECT_FALSE(std::filesystem::exists(Rejected));
   }
   const auto ReorderedPath = (Root / kReorderedOutput).string();
@@ -359,6 +386,12 @@ TEST(AArch64DarwinEntry, SwiftErrorCanClearTheRegisterWithoutReadingIt) {
                         LeafCheck::ErrorResult);
 }
 
+TEST(AArch64DarwinEntry, TailCallForwardsTheWritableSwiftErrorRegister) {
+  verifyPublishedLeaves(kTailErrorLeaves, kErrorCaller, kAssemblyName,
+                        std::string(kErrorABI) + kTailError,
+                        LeafCheck::ErrorResult);
+}
+
 TEST(AArch64DarwinEntry, SwiftContextSurvivesNativeLeafPublication) {
   verifyPublishedLeaves(kSwiftLeaves, kSwiftCaller, kSource, kSwiftABI);
 }
@@ -377,5 +410,15 @@ TEST(AArch64DarwinEntry, SignedLeafUsesTheIncomingSPAtItsNewAddress) {
 
 TEST(AArch64LiftedMemory, BaseAndDisplacementRetainLoadAndStoreEffects) {
   verifyPublishedLeaves(kMemoryLeaves, kMemoryCaller);
+}
+
+TEST(AArch64LiftedImage,
+     OriginalGlobalAndAuthenticatedImportSurvivePublication) {
+  verifyPublishedLeaves(kGlobalLeaves, kGlobalCaller, kSource, {},
+                        LeafCheck::Global);
+}
+TEST(AArch64LiftedImage, SignedFrameCallsImportBeforeReadingOriginalGlobal) {
+  verifyPublishedLeaves(kGlobalLeaves, kGlobalCaller, kSource, kFramedImport,
+                        LeafCheck::FramedImport);
 }
 } // namespace

@@ -1,0 +1,12 @@
+//===- MachORelocations.def - Object relocation operand contracts --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+MACHO_RELOC_VALUE(unsigned, kARM64AddendBits, 24)
+MACHO_RELOC_TEXT(kMalformedARM64Addend, "malformed ARM64 ADDEND pair")
+MACHO_RELOC_TEXT(kARM64AddendOverflow,
+                 "ARM64 instruction relocation addend overflows its target")
+#undef MACHO_RELOC_TEXT
+#undef MACHO_RELOC_VALUE

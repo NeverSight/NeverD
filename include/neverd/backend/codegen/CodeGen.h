@@ -52,6 +52,8 @@ struct PatchResult {
   std::vector<va_t> PatchedOriginalEntries;
   std::vector<PatchedFunctionEntry> PatchedFunctions;
   std::vector<OriginalCallback> OriginalCallbacks;
+  /// Add to an input entry VA to locate its trampoline in the output image.
+  va_t OriginalSectionSlide = 0;
 };
 
 namespace patch_receipt_detail {

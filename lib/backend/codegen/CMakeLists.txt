@@ -102,6 +102,7 @@ add_neverd_component_library(NeverDCodeGen
   rewrite/InplaceRewriter.cpp
 
   LINK_COMPONENTS
+  LLVMMemoryAnalysis
   IR
   Loader
   WindowsEHMetadata

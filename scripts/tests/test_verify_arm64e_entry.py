@@ -197,6 +197,28 @@ class EntryQualificationTests(unittest.TestCase):
             with self.subTest(receipt=receipt), self.assertRaises(ValueError):
                 entry.check_receipt(receipt)
 
+    def test_dense_receipt_authenticates_original_and_output_entries(self):
+        receipt = json.loads(json.dumps(CASES["receipt"]))
+        slide = receipt["text"]["address"]
+        with self.assertRaises(ValueError):
+            entry.check_receipt(receipt, require_slide=True)
+        receipt[entry.POLICY["slide_field"]] = slide
+        for row in receipt["entries"]:
+            row[entry.POLICY["trampoline_field"]] = row["original"] + slide
+        entry.check_receipt(receipt, require_slide=True)
+        row = receipt["entries"][-1]
+        row[entry.POLICY["trampoline_field"]] = row["original"]
+        with self.assertRaises(ValueError):
+            entry.check_receipt(receipt, require_slide=True)
+
+    def test_independent_fixups_preserve_slots_targets_and_signing(self):
+        original, installed = CASES["original_fixups"], CASES["installed_fixups"]
+        counts = entry.check_slid_fixups(original, installed, CASES["fixup_slide"])
+        self.assertEqual(counts, dict.fromkeys(entry.POLICY["dense_fixup_kinds"], 1))
+        for old, new in CASES["bad_fixup_replacements"]:
+            with self.subTest(old=old), self.assertRaises(ValueError):
+                entry.check_slid_fixups(original, installed.replace(old, new), CASES["fixup_slide"])
+
     def test_installed_frames_require_the_receipt_addresses(self):
         functions = entry.check_receipt(CASES["receipt"])
         entry.check_disassembly(CASES["installed_assembly"], 0, functions)

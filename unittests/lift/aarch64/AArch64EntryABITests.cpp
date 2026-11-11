@@ -860,8 +860,15 @@ void publishNativeInputs(bool ExpectLayoutRefusal) {
   llvm::consumeError(Again.takeError());
   std::optional<uint64_t> TextBase;
   llvm::json::Array Entries;
+  auto Final = Loader::create(BinaryFormat::MachO)->load(Output);
+  ASSERT_TRUE(bool(Final)) << llvm::toString(Final.takeError());
   for (const auto &Entry : Installed->PatchedFunctions) {
     const auto Name = std::string(kMachOPrefix) + Entry.SourceFunction;
+    const auto Symbol = llvm::find_if(Final->Symbols, [&](const auto &S) {
+      return S.Name == Name && S.IsFunc;
+    });
+    ASSERT_NE(Symbol, Final->Symbols.end()) << Name;
+    ASSERT_EQ(Symbol->Addr, Entry.OriginalVA + Installed->OriginalSectionSlide);
     auto Found = llvm::find_if(Object.Functions, [&](const auto &Function) {
       return Function.Name == Name;
     });
@@ -874,6 +881,7 @@ void publishNativeInputs(bool ExpectLayoutRefusal) {
     Entries.emplace_back(
         llvm::json::Object{{kReceiptSymbol, Name},
                            {kReceiptOriginal, Entry.OriginalVA},
+                           {kReceiptTrampoline, Symbol->Addr},
                            {kReceiptInstalled, Entry.OwnerVA}});
   }
   ASSERT_TRUE(TextBase);
@@ -886,8 +894,6 @@ void publishNativeInputs(bool ExpectLayoutRefusal) {
                                             Object.ObjectData.size()),
                             kModule));
   ASSERT_TRUE(bool(Native)) << llvm::toString(Native.takeError());
-  auto Final = Loader::create(BinaryFormat::MachO)->load(Output);
-  ASSERT_TRUE(bool(Final)) << llvm::toString(Final.takeError());
   llvm::json::Object Text;
   for (const auto &Section : (*Native)->sections()) {
     auto Name = Section.getName();
@@ -912,6 +918,7 @@ void publishNativeInputs(bool ExpectLayoutRefusal) {
   ASSERT_FALSE(Error);
   Record << llvm::json::Value(
       llvm::json::Object{{kReceiptEntries, std::move(Entries)},
+                         {kReceiptSlide, Installed->OriginalSectionSlide},
                          {kReceiptFunctions, std::move(Functions)},
                          {kReceiptText, std::move(Text)}});
   Record.close();

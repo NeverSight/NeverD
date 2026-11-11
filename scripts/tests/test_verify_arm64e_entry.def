@@ -1,4 +1,8 @@
 {
+  "fixup_slide": 16384,
+  "original_fixups": "__DATA_CONST __auth_got 0x4000 auth-bind libc++/___gxx_personality_v0 (div=0x0000 ad=1 key=IA)\n__DATA_CONST __got 0x4148 bind libSystem/___stdoutp\n__DATA __data 0x8000 rebase 0x8010\n__DATA __data 0x8008 auth-rebase 0x8010 (div=0x048F ad=1 key=DA)",
+  "installed_fixups": "__DATA_CONST __auth_got 0x8000 auth-bind libc++/___gxx_personality_v0 (div=0x0000 ad=1 key=IA)\n__DATA_CONST __got 0x8148 bind libSystem/___stdoutp\n__DATA __data 0xc000 rebase 0xc010\n__DATA __data 0xc008 auth-rebase 0xc010 (div=0x048F ad=1 key=DA)",
+  "bad_fixup_replacements": [["0xc008", "0x8008"], ["0xc010", "0x8010"], ["ad=1", "ad=0"], ["libc++/", "libSystem/"]],
   "export_xml": "<testsuites><testsuite><testcase classname=\"AArch64EntryABI\" name=\"ExportSignedNativeInputs\" status=\"run\"/></testsuite></testsuites>",
   "assembly": "_entry_throwing:\n pacibsp\n bl _entry_throw\n retab\n_entry_throwing.neverd.carriers:\n pacibsp\n bl _entry_throw\n retab\n_entry_wide_throwing:\n pacibsp\n bl _entry_throw\n retab\n_entry_wide_throwing.neverd.carriers:\n pacibsp\n bl _entry_throw\n retab\n_entry_large_throwing:\n pacibsp\n bl _entry_throw\n retab\n_entry_large_throwing.neverd.carriers:\n pacibsp\n bl _entry_throw\n retab\n_entry_hva_throwing:\n pacibsp\n bl _entry_throw\n retab\n_entry_hva_throwing.neverd.carriers:\n pacibsp\n bl _entry_throw\n retab\n_entry_throw:\n pacibsp\n bl _entry_throw\n retab\n_main:\n pacibsp\n bl _entry_throw\n retab\n blraaz x16\n blraa x16, x17\n blrab x16, x17\n",
   "missing_frame_tokens": [

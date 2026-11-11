@@ -4,7 +4,8 @@ add_subdirectory(bytecode)
 add_neverd_component_library(NeverDLLVMMemoryAnalysis
   llvm/LLVMMemoryAnalysis.cpp
   llvm/LLVMPrivateFrameProjection.cpp
-  LLVM_COMPONENTS Analysis Core Support
+  llvm/LLVMPrivateFrameAccesses.cpp
+  LLVM_COMPONENTS Analysis Core Support TransformUtils
 )
 
 add_neverd_component_library(NeverDBinaryInterpreterSpecialization
