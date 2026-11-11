@@ -149,6 +149,10 @@ Lselect_sp:
 Lno_signature:
   brk #0
 Lcall:
+  adrp x7, _stage_entry_sp@PAGE
+  add x7, x7, _stage_entry_sp@PAGEOFF
+  mov x4, sp
+  stlr x4, [x7]
   mov x16, x0
   mov x0, x1
   blraaz x16
@@ -230,6 +234,7 @@ typedef void (*entry)(struct handshake *);
 extern void call_outer(entry, struct handshake *);
 extern uintptr_t outer_return_address(void);
 extern uintptr_t return_address(void);
+_Atomic uintptr_t stage_entry_sp;
 static struct handshake state;
 static struct sample samples[stages_count];
 static pthread_t worker;
@@ -278,7 +283,11 @@ static void observe(int signal, siginfo_t *info, void *context) {
   for (size_t i = 1; i < rule_count && rules[i].offset <= offset; ++i)
     rule = &rules[i];
   const uintptr_t cfa = sp + rule->depth;
-  s->cfa_offset = rule->depth;
+  const uintptr_t entry_sp = atomic_load_explicit(&stage_entry_sp,
+                                                   memory_order_acquire);
+  if (cfa != entry_sp)
+    _exit(12);
+  s->cfa_offset = entry_sp - sp;
   const uintptr_t live_lr = arm_thread_state64_get_lr(*regs);
   uintptr_t caller = live_lr;
   if (rule->saved_lr) {
