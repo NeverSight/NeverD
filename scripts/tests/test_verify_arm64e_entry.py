@@ -85,10 +85,10 @@ class EntryQualificationTests(unittest.TestCase):
                 def command(products, directory, label, argv, timeout, env=None):
                     stdout, code = CASES["compiler_version"], 0
                     if argv[0] == str(binary):
-                        if entry.POLICY["unreserved_filter"] in argv:
+                        if entry.POLICY["occupied_filter"] in argv:
                             self.assertTrue(publish)
                             self.assertTrue(Path(env[entry.POLICY["publication_input_environment"]]).exists())
-                            xml = CASES["export_xml"].replace(entry.POLICY["export_case"], entry.POLICY["unreserved_case"])
+                            xml = CASES["export_xml"].replace(entry.POLICY["export_case"], entry.POLICY["occupied_case"])
                             Path(argv[-1].removeprefix(entry.POLICY["export_xml_option"])).write_text(xml)
                         elif entry.POLICY["publication_filter"] in argv:
                             self.assertTrue(publish)
@@ -108,6 +108,12 @@ class EntryQualificationTests(unittest.TestCase):
                     elif entry.POLICY["output_option"] in argv:
                         self.assertIn(entry.POLICY["sysroot_option"], argv)
                         self.assertEqual(argv[argv.index(entry.POLICY["sysroot_option"]) + 1], CASES["sdk_path"])
+                        if label.endswith(entry.POLICY["baseline_suffix"] + entry.native.POLICY["compile_suffix"]):
+                            dwarf = CASES["dwarf_name_fragment"] in label
+                            layout = entry.publication_layout(
+                                next(opt for opt in entry.POLICY["optimizations"] if opt in argv), dwarf)
+                            for argument in layout["header_args"]:
+                                self.assertIn(argument, argv)
                         Path(argv[-1]).write_text(CASES["binary_bytes"])
                     elif label == entry.POLICY["sdk_label"]:
                         stdout = CASES["sdk_path"]
@@ -147,6 +153,9 @@ class EntryQualificationTests(unittest.TestCase):
                 self.assertEqual(report["reconstructed_entry_publication_qualified"], publish and not compile_only and not fail)
                 self.assertFalse(report["native_apple_cpta_qualified"])
                 self.assertFalse(report["whole_image_publication_qualified"])
+                for row in report["cases"]:
+                    layout = entry.publication_layout(row["optimization"], row["dwarf"])
+                    self.assertEqual(row["publication_layout"], layout if publish else None)
                 self.assertEqual(len(executed), 0 if compile_only else 1 if fail else CASES["case_count"])
                 for path in output.iterdir():
                     self.assertNotIn(path.suffix, (".out", ".o", ".dylib"))

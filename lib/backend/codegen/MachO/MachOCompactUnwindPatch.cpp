@@ -2123,14 +2123,9 @@ namespace {
 using EncodeFailure = MachOCompactUnwindEncodeFailure;
 using EncodeInputKind = MachOCompactUnwindEncodeInputKind;
 
-constexpr uint64_t kFinalHeaderSize = 28;
-constexpr uint64_t kFirstLevelIndexEntrySize = 12;
-constexpr uint64_t kLSDAIndexEntrySize = 8;
-constexpr uint64_t kRegularPageSize = 4096;
-constexpr uint64_t kRegularPageHeaderSize = 8;
-constexpr uint64_t kRegularEntrySize = 8;
-constexpr uint64_t kRegularEntriesPerPage =
-    (kRegularPageSize - kRegularPageHeaderSize) / kRegularEntrySize;
+#define MACHO_UNWIND_LAYOUT_VALUE(Type, Name, Value)                           \
+  constexpr Type Name = Value;
+#include "MachOCompactUnwindLayout.def"
 
 static_assert(kRegularEntriesPerPage == 511,
               "regular compact-unwind page capacity is fixed by its ABI");
@@ -2172,15 +2167,21 @@ struct RegularEncodeLayout {
   size_t TotalSize = 0;
 };
 
-llvm::Expected<RegularEncodeLayout>
-planRegularLayout(const MachOCompactUnwindMergeResult &Input,
-                  uint64_t LSDAEntryCount) {
+llvm::Expected<RegularEncodeLayout> planRegularLayout(uint64_t RecordCount,
+                                                      uint64_t PersonalityCount,
+                                                      uint64_t LSDAEntryCount) {
+  if (!RecordCount)
+    return encodeError(EncodeFailure::EmptyRecords);
+  if (PersonalityCount >
+      (macho_unwind::kPersonalityMask >> macho_unwind::kPersonalityShift))
+    return encodeError(EncodeFailure::TooManyPersonalities);
+  if (LSDAEntryCount > RecordCount)
+    return encodeError(EncodeFailure::LSDAEncodingMismatch);
   RegularEncodeLayout Layout;
   Layout.CommonEncodingsOffset = kFinalHeaderSize;
   Layout.PersonalityOffset = kFinalHeaderSize;
   Layout.LSDAEntryCount = LSDAEntryCount;
 
-  const uint64_t RecordCount = Input.Records.size();
   const uint64_t PageCount = 1 + (RecordCount - 1) / kRegularEntriesPerPage;
   if (PageCount >= std::numeric_limits<uint32_t>::max())
     return encodeError(EncodeFailure::SectionSizeOverflow,
@@ -2190,8 +2191,7 @@ planRegularLayout(const MachOCompactUnwindMergeResult &Input,
 
   uint64_t Cursor = kFinalHeaderSize;
   uint64_t ByteCount = 0;
-  if (!checkedMultiply(Input.PersonalitySlotRVAs.size(), sizeof(uint32_t),
-                       ByteCount) ||
+  if (!checkedMultiply(PersonalityCount, sizeof(uint32_t), ByteCount) ||
       !checkedAdd(Cursor, ByteCount, Cursor) ||
       Cursor > std::numeric_limits<uint32_t>::max())
     return encodeError(EncodeFailure::SectionSizeOverflow,
@@ -2213,7 +2213,11 @@ planRegularLayout(const MachOCompactUnwindMergeResult &Input,
                        "LSDA index end overflows");
   Layout.PagesOffset = static_cast<uint32_t>(Cursor);
 
-  if (!checkedMultiply(PageCount, kRegularPageSize, ByteCount) ||
+  // Full pages retain their ABI stride. The final page has no following
+  // page, so do not reserve bytes beyond its declared entries.
+  if (!checkedMultiply(PageCount, kRegularPageHeaderSize, ByteCount) ||
+      !checkedAdd(Cursor, ByteCount, Cursor) ||
+      !checkedMultiply(RecordCount, kRegularEntrySize, ByteCount) ||
       !checkedAdd(Cursor, ByteCount, Cursor) ||
       Cursor > std::numeric_limits<uint32_t>::max() ||
       Cursor > std::numeric_limits<size_t>::max())
@@ -2481,13 +2485,23 @@ verifyRegularRoundTrip(const MachOCompactUnwindMergeResult &Input,
 
 } // namespace
 
+llvm::Expected<uint64_t> measureMachOCompactUnwindRegular(
+    uint64_t RecordCount, uint64_t PersonalityCount, uint64_t LSDAEntryCount) {
+  auto Layout =
+      planRegularLayout(RecordCount, PersonalityCount, LSDAEntryCount);
+  if (!Layout)
+    return Layout.takeError();
+  return Layout->TotalSize;
+}
+
 llvm::Expected<std::vector<uint8_t>>
 encodeMachOCompactUnwindRegular(const MachOCompactUnwindMergeResult &Input,
                                 llvm::endianness ByteOrder) {
   auto LSDAEntryCount = validateRegularEncodeInput(Input, ByteOrder);
   if (!LSDAEntryCount)
     return LSDAEntryCount.takeError();
-  auto Layout = planRegularLayout(Input, *LSDAEntryCount);
+  auto Layout = planRegularLayout(
+      Input.Records.size(), Input.PersonalitySlotRVAs.size(), *LSDAEntryCount);
   if (!Layout)
     return Layout.takeError();
 

@@ -36,6 +36,13 @@ def check_probe(control, provenance):
         raise ValueError(POLICY["errors"]["probe"])
 
 
+def publication_layout(optimization, dwarf):
+    for rule in POLICY["publication_layout_overrides"]:
+        if rule["optimization"] == optimization and rule["dwarf"] == dwarf:
+            return rule["layout"]
+    return POLICY["tight_publication_layout"]
+
+
 def exception_frames():
     return [name for entry in POLICY["exception_entries"]
             for name in (entry, entry + POLICY["carrier_suffix"])]
@@ -238,6 +245,7 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                     object_identity = check_classic(obj)
                     for key in POLICY["keys"]:
                         fields = dict(optimization=optimization, key=key, dwarf=dwarf)
+                        layout = publication_layout(optimization, dwarf)
                         label = POLICY["case_name"].format(**fields)
                         library = output / POLICY["library_name"].format(**fields)
                         products.append(library)
@@ -262,22 +270,22 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                             env.pop(POLICY["publication_dwarf_environment"], None)
                             if dwarf:
                                 env[POLICY["publication_dwarf_environment"]] = POLICY["enabled_environment_value"]
-                            unreserved = output / POLICY["unreserved_library_name"].format(**fields)
-                            products.append(unreserved)
-                            command(label + POLICY["unreserved_suffix"] + native.POLICY["compile_suffix"],
-                                    [*args, *POLICY["unreserved_header_args"], output / POLICY["caller_source"], original_obj,
-                                     POLICY["output_option"], unreserved])
-                            refusal_xml = output / (label + POLICY["unreserved_suffix"] + POLICY["publication_xml_suffix"])
-                            env[POLICY["publication_input_environment"]] = str(unreserved)
-                            command(label + POLICY["unreserved_suffix"],
-                                    [binary, POLICY["unreserved_filter"],
+                            occupied = output / POLICY["occupied_library_name"].format(**fields)
+                            products.append(occupied)
+                            command(label + POLICY["occupied_suffix"] + native.POLICY["compile_suffix"],
+                                    [*args, *POLICY["occupied_header_args"], output / POLICY["caller_source"], original_obj,
+                                     POLICY["output_option"], occupied])
+                            refusal_xml = output / (label + POLICY["occupied_suffix"] + POLICY["publication_xml_suffix"])
+                            env[POLICY["publication_input_environment"]] = str(occupied)
+                            command(label + POLICY["occupied_suffix"],
+                                    [binary, POLICY["occupied_filter"],
                                      POLICY["export_xml_option"] + str(refusal_xml)],
                                     POLICY["export_timeout"], env)
-                            check_export(refusal_xml.read_text(), POLICY["unreserved_case"])
+                            check_export(refusal_xml.read_text(), POLICY["occupied_case"])
                             original = output / POLICY["original_library_name"].format(**fields)
                             products.append(original)
                             command(label + POLICY["baseline_suffix"] + native.POLICY["compile_suffix"],
-                                    [*args, *POLICY["publication_header_args"],
+                                    [*args, *layout["header_args"],
                                      output / POLICY["caller_source"], original_obj,
                                      POLICY["output_option"], original])
                             if not compile_only:
@@ -314,8 +322,9 @@ def run(output, binary, compiler, probe_report=None, *, compile_only=False, prod
                         check_unwind(unwind.stdout, dwarf, installed)
                         row = {**fields, **check_classic(library),
                                "object": object_identity, "executed": False,
+                               "publication_layout": layout if publish else None,
                                "publication": receipt, "baseline_returncode": baseline,
-                               "unreserved_original_rejected": publish, "installed_text_sha256": text_hash}
+                               "occupied_original_rejected": publish, "installed_text_sha256": text_hash}
                         report["cases"].append(row)
                         if not compile_only:
                             execution = command(label, [loader, library], POLICY["execute_timeout"])

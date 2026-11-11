@@ -1,0 +1,219 @@
+{
+  "date": "2026-11-11",
+  "scope": "Classic arm64e reconstructed fixed-C entry dylibs, synchronous signed C++ unwinding",
+  "implementation_revision": "b4d6124931beec8526a92f735cd976637520ceec",
+  "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+  "configuration": "Release",
+  "cold_source_build_on_runner": false,
+  "host_sha256": "7db0585e8f1dd54002d2b59c16243b1c6a7d79d267ccd2188019cba6f74733d6",
+  "host_manifest_sha256": "35523f3f124b7d18f3e13b8fcca04309cc95e3bb6d6ed791e225a7674ffcd773",
+  "host_archive_sha256": "f9d94a7e023eec07ce65a56c43caedf045dc1d8e4a40314566801d5ae80d574f",
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42946894626",
+  "workflow_revision": "5a040aaa614f6d609b6fb855d648473a97f68316",
+  "neverd_codegen_qualified": true,
+  "reconstructed_entry_publication_qualified": true,
+  "whole_image_publication_qualified": false,
+  "native_apple_cpta_qualified": false,
+  "runners": {
+    "native-entry-macos-26": {
+      "artifact_id": 13822898724,
+      "artifact_digest": "sha256:920ca2e755a84679bcb7b53c28aa37d9e8474fc51d327ee461463d6d9189afe0",
+      "cpu": "Apple M1 (Virtual)",
+      "sdk": "26.5",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "direct_executions": 8,
+      "installed_executions": 8,
+      "public_entries_per_image": 26,
+      "original_caller_traps": 8,
+      "occupied_layout_refusals": 8,
+      "compiler_controls": 6,
+      "report_sha256": {
+        "probe": "340d3828ba6d9f8894dfe630b59869b0e03a6510634175c46e39637ef82174f7",
+        "entries": "11f56d34307821a8a7f111384c04209109c5cbe2626ee1a65197983e1449f2d6",
+        "publication": "e4bcc2559ed33ca1e98092ab2984acea40b54f1b12c8f9320c5c53fc001022a3"
+      },
+      "cases": [
+        {
+          "optimization": "-O0",
+          "key": 0,
+          "dwarf": false,
+          "installed_text_sha256": "2a8265f2e6303881dfdd994f49a0b70892a20d92bb8e93a43a07d890db2f263d",
+          "sha256": "5c55f8b090bfb5750ec10469e59ae2793ba3e1774a21b3016d5b8a5bf1bc5a44",
+          "linker_layout": [
+            "-Wl,-headerpad,0"
+          ]
+        },
+        {
+          "optimization": "-O0",
+          "key": 1,
+          "dwarf": false,
+          "installed_text_sha256": "2a8265f2e6303881dfdd994f49a0b70892a20d92bb8e93a43a07d890db2f263d",
+          "sha256": "143a9c0ffd3df0128caa272f2bd26971e6e3584884655c8e455199cc45f7c88a",
+          "linker_layout": [
+            "-Wl,-headerpad,0"
+          ]
+        },
+        {
+          "optimization": "-O0",
+          "key": 0,
+          "dwarf": true,
+          "installed_text_sha256": "41e2f27ba50b4b1ec833a29f2f74abf3e37822e223f3a92a948e9df875711d7e",
+          "sha256": "17742d54d5c11a4f7412e42b9c52ae19d23201fe6ef40b0706d91c8fa03b3a6e",
+          "linker_layout": [
+            "-Wl,-headerpad,0x8000"
+          ]
+        },
+        {
+          "optimization": "-O0",
+          "key": 1,
+          "dwarf": true,
+          "installed_text_sha256": "41e2f27ba50b4b1ec833a29f2f74abf3e37822e223f3a92a948e9df875711d7e",
+          "sha256": "de3dea05f92d7ecabc28a7f99040dce7eb83ac400d2fa674e321b9d531a20416",
+          "linker_layout": [
+            "-Wl,-headerpad,0x8000"
+          ]
+        },
+        {
+          "optimization": "-O2",
+          "key": 0,
+          "dwarf": false,
+          "installed_text_sha256": "2a8265f2e6303881dfdd994f49a0b70892a20d92bb8e93a43a07d890db2f263d",
+          "sha256": "5764670f699000fd32e02cb2a8d0497395dbd50fe528571251a8f8f214f734ab",
+          "linker_layout": [
+            "-Wl,-headerpad,0"
+          ]
+        },
+        {
+          "optimization": "-O2",
+          "key": 1,
+          "dwarf": false,
+          "installed_text_sha256": "2a8265f2e6303881dfdd994f49a0b70892a20d92bb8e93a43a07d890db2f263d",
+          "sha256": "929b07e922283ef4d1478e8f1b6022bd00b2468b172e01a15d786ccf0029d444",
+          "linker_layout": [
+            "-Wl,-headerpad,0"
+          ]
+        },
+        {
+          "optimization": "-O2",
+          "key": 0,
+          "dwarf": true,
+          "installed_text_sha256": "a8036cfe7ed0da68065d813951fd3438b70b2c02650c46283fdc4d1c40555850",
+          "sha256": "1a922d51618d270f6869f418495965663a4124c70049e8bacaff394849551215",
+          "linker_layout": [
+            "-Wl,-headerpad,0"
+          ]
+        },
+        {
+          "optimization": "-O2",
+          "key": 1,
+          "dwarf": true,
+          "installed_text_sha256": "a8036cfe7ed0da68065d813951fd3438b70b2c02650c46283fdc4d1c40555850",
+          "sha256": "981cec7d9d437fe08b9f6f27e9762a60ba9d8d63be3a7eb1a9a82b06cc6d920a",
+          "linker_layout": [
+            "-Wl,-headerpad,0"
+          ]
+        }
+      ]
+    },
+    "native-entry-xcode-27": {
+      "artifact_id": 13822848709,
+      "artifact_digest": "sha256:173ed147c50bc4ba69980a2d63195d2d8259c60a996d91aaad1af45b0144d6bb",
+      "cpu": "Apple M1 (Virtual)",
+      "sdk": "27.0",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "direct_executions": 8,
+      "installed_executions": 8,
+      "public_entries_per_image": 26,
+      "original_caller_traps": 8,
+      "occupied_layout_refusals": 8,
+      "compiler_controls": 6,
+      "report_sha256": {
+        "probe": "4b42f73032eaa2bb057b3484599d6c1768e3153d3e288103babae3eef885a616",
+        "entries": "c4853223067fcda9520d2d623d9821868c0edf55fa8c80192d483cdd418dff6b",
+        "publication": "acf8a8284a793fe3c1ba97fffdf4a8ecb136e880e8f706efce358ae92de421f4"
+      },
+      "cases": [
+        {
+          "optimization": "-O0",
+          "key": 0,
+          "dwarf": false,
+          "installed_text_sha256": "2a8265f2e6303881dfdd994f49a0b70892a20d92bb8e93a43a07d890db2f263d",
+          "sha256": "a79beef2804e7910d087cde7c16b05dbec6cd974ec70142d63881ffa3b2bd34a",
+          "linker_layout": [
+            "-Wl,-headerpad,0"
+          ]
+        },
+        {
+          "optimization": "-O0",
+          "key": 1,
+          "dwarf": false,
+          "installed_text_sha256": "2a8265f2e6303881dfdd994f49a0b70892a20d92bb8e93a43a07d890db2f263d",
+          "sha256": "97f1553701e94019ae8fe8e1ae505bb351a1d7721c6989ef539818f6d3bc92ec",
+          "linker_layout": [
+            "-Wl,-headerpad,0"
+          ]
+        },
+        {
+          "optimization": "-O0",
+          "key": 0,
+          "dwarf": true,
+          "installed_text_sha256": "41e2f27ba50b4b1ec833a29f2f74abf3e37822e223f3a92a948e9df875711d7e",
+          "sha256": "3eadecedd4041193e24f06b505aea2a98449c5b95d2420763bb807d96b4a3b71",
+          "linker_layout": [
+            "-Wl,-headerpad,0x8000"
+          ]
+        },
+        {
+          "optimization": "-O0",
+          "key": 1,
+          "dwarf": true,
+          "installed_text_sha256": "41e2f27ba50b4b1ec833a29f2f74abf3e37822e223f3a92a948e9df875711d7e",
+          "sha256": "9585762a913eeaaf6b99d3480c95d7a93c660f2864cb5ffbb4313b38a8a7b030",
+          "linker_layout": [
+            "-Wl,-headerpad,0x8000"
+          ]
+        },
+        {
+          "optimization": "-O2",
+          "key": 0,
+          "dwarf": false,
+          "installed_text_sha256": "2a8265f2e6303881dfdd994f49a0b70892a20d92bb8e93a43a07d890db2f263d",
+          "sha256": "d0e20ac16f049e703d8f39bec1dfdbe8fc712c3e3612f096619cbe12879896a3",
+          "linker_layout": [
+            "-Wl,-headerpad,0"
+          ]
+        },
+        {
+          "optimization": "-O2",
+          "key": 1,
+          "dwarf": false,
+          "installed_text_sha256": "2a8265f2e6303881dfdd994f49a0b70892a20d92bb8e93a43a07d890db2f263d",
+          "sha256": "e4b017e98f057e7fedb149fc69f29de66a51e48a9a697402b4b0c54f7436d208",
+          "linker_layout": [
+            "-Wl,-headerpad,0"
+          ]
+        },
+        {
+          "optimization": "-O2",
+          "key": 0,
+          "dwarf": true,
+          "installed_text_sha256": "a8036cfe7ed0da68065d813951fd3438b70b2c02650c46283fdc4d1c40555850",
+          "sha256": "60ae75100354ea388735bad09652643d6ce29c7b87b92e5c36c3a572e6cd4e17",
+          "linker_layout": [
+            "-Wl,-headerpad,0"
+          ]
+        },
+        {
+          "optimization": "-O2",
+          "key": 1,
+          "dwarf": true,
+          "installed_text_sha256": "a8036cfe7ed0da68065d813951fd3438b70b2c02650c46283fdc4d1c40555850",
+          "sha256": "028a9c42eb6f5a0d000d36d8e72d67428f82178975dea2f3dac33c11dee1d3a4",
+          "linker_layout": [
+            "-Wl,-headerpad,0"
+          ]
+        }
+      ]
+    }
+  }
+}
