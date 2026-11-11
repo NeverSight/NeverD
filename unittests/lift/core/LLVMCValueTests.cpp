@@ -4935,6 +4935,78 @@ int main(void) {
   compileAndRun(Source, "-O0");
 }
 
+TEST(LLVMCValues, RuntimeVariadicFramePointersTakeTheirDeclaredPointee) {
+  using namespace neverd;
+  for (unsigned Offset : {0u, 4u}) {
+    SCOPED_TRACE(Offset);
+    llvm::LLVMContext Context;
+    llvm::Module Module("runtime_frame_pointer", Context);
+    Module.setDataLayout("e-p:32:32");
+    llvm::IRBuilder<> B(Context);
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(B.getInt32Ty(), false),
+        llvm::GlobalValue::ExternalLinkage, "observe_jump_buffer", Module);
+    B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Function));
+    auto *Frame = B.CreateAlloca(llvm::ArrayType::get(B.getInt8Ty(), 96),
+                                 nullptr, "frame");
+    auto *End = B.CreateGEP(B.getInt8Ty(), Frame, B.getInt32(80), "frame_end");
+    auto *Member = B.CreateGEP(B.getInt8Ty(), End, B.getInt32(-72));
+    B.CreateStore(B.getInt64(0), Member);
+    auto *Buffer = B.CreateGEP(B.getInt8Ty(), Member, B.getInt32(Offset));
+    auto *Last = B.CreateGEP(B.getInt8Ty(), Buffer, B.getInt32(60));
+    B.CreateStore(B.getInt32(0), Last);
+    auto Runtime = Module.getOrInsertFunction(
+        "_setjmp3", llvm::FunctionType::get(
+                        B.getInt32Ty(), {B.getPtrTy(), B.getInt32Ty()}, true));
+    auto *Result = B.CreateCall(Runtime, {Buffer, B.getInt32(0)});
+    auto *FirstValue = Offset
+                           ? B.CreateLoad(B.getInt32Ty(), Buffer)
+                           : B.CreateTrunc(B.CreateLoad(B.getInt64Ty(), Buffer),
+                                           B.getInt32Ty());
+    auto *LastValue = B.CreateLoad(B.getInt32Ty(), Last);
+    B.CreateRet(B.CreateAdd(Result, B.CreateAdd(FirstValue, LastValue)));
+    ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+    BinaryImage Image;
+    Image.Arch = Arch::X86;
+    Image.Bits = Bitness::Bits32;
+    Image.Format = BinaryFormat::COFF;
+    Import Entry;
+    Entry.Name = "_setjmp3";
+    Image.Imports.push_back(Entry);
+    CEmitterOptions Options;
+    Options.TheArch = Image.Arch;
+    Options.Format = Image.Format;
+    Options.EmitIncludes = false;
+    std::string Source;
+    llvm::raw_string_ostream Output(Source);
+    ASSERT_TRUE(LLVMCEmitter().emit(Module, Output, Options, nullptr, &Image));
+    const std::string Standalone =
+        "#include <stdint.h>\ntypedef int jmp_buf[16];\n"
+        "int _setjmp3(jmp_buf, int, ...);\n" +
+        Source;
+    source_call_execution_test::checkSyntax(
+        Standalone,
+        {"--target=i686-pc-windows-msvc", "-ffreestanding", "-Werror"});
+#if defined(__linux__) && (defined(__i386__) || defined(__x86_64__))
+    const std::string Oracle = R"(
+int _setjmp3(int *env, int count, ...) {
+  if (count != 0) __builtin_trap();
+  env[0] = 23;
+  env[15] = 31;
+  return -19;
+}
+int main(void) { return observe_jump_buffer() != 35; }
+)";
+    for (llvm::StringRef Level : {"-O0", "-O2"})
+      source_call_execution_test::compileAndRun(
+          Standalone + Oracle,
+          {"-m32", Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+#else
+    RecordProperty("native_i386_execution", "requires Linux x86");
+#endif
+  }
+}
+
 TEST(LLVMCValues, ARuntimeRoutineCalledDirectlyTakesItsPrototype) {
   // A routine the module declares and calls directly takes the runtime
   // tables' prototype, as one called through its import does, and the

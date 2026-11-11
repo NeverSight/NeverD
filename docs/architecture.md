@@ -4087,6 +4087,16 @@ both C routes retain every recovered tail operand. A portable rendering of
 the original header declaration preserves qualifiers where its types are
 self-contained; the original declaration and provider remain available.
 
+On i386, a curated Windows runtime prototype with an integer/pointer word
+prefix uses the same pre-SSA variadic summary. `_setjmp3` therefore takes its
+jump buffer and count from the stack, followed by the recovered tail, through
+an IAT call, a loaded slot or an import veneer. Scratch ECX/EDX values cannot
+extend that prefix. The runtime table owns the declaration and parameter
+categories; both C writers also retain its returns-twice effect. LLVM C casts
+opaque pointer operands to the runtime's declared pointee, including addresses
+of frame members and interior frame bytes. This does not
+establish jump-buffer storage or reconstruct nonlocal exception unwinding.
+
 This is a prefix contract, not an inference of arbitrary variadic tail types.
 Windows ARM64 varargs use integer registers and stack slots rather than the
 ordinary FP register bank ([Microsoft ARM64 ABI](https://learn.microsoft.com/en-us/cpp/build/arm64-windows-abi-conventions#addendum-variadic-functions)).
