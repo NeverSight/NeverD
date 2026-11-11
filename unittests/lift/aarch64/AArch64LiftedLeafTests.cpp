@@ -521,7 +521,7 @@ void verifyVariadicEntry(const char *Optimization) {
   if (Native) {
     llvm::IRBuilder<> B(Context);
     auto *ABI = llvm::MDNode::get(
-        Context, {llvm::ConstantAsMetadata::get(B.getInt32(0)),
+        Context, {llvm::ConstantAsMetadata::get(B.getInt32(kClassicABIVersion)),
                   llvm::ConstantAsMetadata::get(B.getFalse())});
     Module.addModuleFlag(llvm::Module::AppendUnique, kClassicABI,
                          llvm::MDNode::get(Context, {ABI}));

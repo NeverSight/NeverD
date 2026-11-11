@@ -72,6 +72,7 @@ A64_LEAF_TEXT(kLiftedC, "lifted.c")
 A64_LEAF_TEXT(kControl, "control.dylib")
 A64_LEAF_TEXT(kUnoptimized, "-O0")
 A64_LEAF_TEXT(kClassicABI, "ptrauth.abi-version")
+A64_LEAF_VALUE(unsigned, kClassicABIVersion, 0)
 A64_LEAF_TEXT(kExtendedVariadics, "#define TEST_VARIADIC_EXTENDED 1\n")
 A64_LEAF_TEXT(kVariadicLeaves, R"c(
 #include <stdarg.h>
