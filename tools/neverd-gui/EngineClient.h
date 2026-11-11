@@ -15,7 +15,9 @@ public slots:
   void stop();
   void shutdown();
 signals:
-  void message(const QJsonObject &message, quint64 epoch);
+  /// \p bytes is the frame's size as it came off the pipe, none for a message
+  /// made here.
+  void message(const QJsonObject &message, quint64 epoch, qint64 bytes = 0);
   void diagnostic(const QString &message, quint64 epoch);
   void failure(const QString &message, quint64 epoch);
   void stopped(quint64 epoch);
@@ -45,7 +47,9 @@ signals:
   void startRequested(const QString &program, quint64 epoch);
   void sendRequested(const QJsonObject &request);
   void stopRequested();
-  void message(const QJsonObject &message);
+  /// \p bytes is the message's size on the wire, where it came off one: what
+  /// a reply weighs without being written out again.
+  void message(const QJsonObject &message, qint64 bytes = 0);
   void diagnostic(const QString &message);
   void failure(const QString &message);
   void stopped();

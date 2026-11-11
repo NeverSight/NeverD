@@ -255,7 +255,8 @@ void AnalysisService::askOwner() {
               ownerPages_.insert(name);
             }
           }
-          finish(response);
+          // The owner's dispatcher says what the answer weighs.
+          finish(response, owner_.deliveredBytes());
           return;
         }
         // A graph the owner has let go of is the query's to ask for again.
@@ -362,7 +363,7 @@ void AnalysisService::startReplica() {
       });
 }
 
-void AnalysisService::receive(const QJsonObject &message) {
+void AnalysisService::receive(const QJsonObject &message, qint64 bytes) {
   // The replica solves the image's call summaries while no read waits.
   if (message.value("type") == QLatin1String("heartbeat")) {
     renderAheadState_ = message.value("background")
@@ -461,7 +462,7 @@ void AnalysisService::receive(const QJsonObject &message) {
     sendPreparedRead();
   } else if (!wire_.isEmpty() && id == wire_) {
     workerRevision_ = message.value("revision").toString();
-    finish(message);
+    finish(message, bytes);
   } else if (!abandoned_.isEmpty() && id == abandoned_) {
     abandoned_.clear();
     workerRevision_ = message.value("revision").toString();
@@ -480,7 +481,7 @@ void AnalysisService::dispatch() {
                           abandoned_.isEmpty() ? workerRevision_ : QString());
 }
 
-void AnalysisService::finish(QJsonObject response) {
+void AnalysisService::finish(QJsonObject response, qint64 bytes) {
   if (active_.isEmpty())
     return;
   response["type"] = "response";
@@ -498,7 +499,7 @@ void AnalysisService::finish(QJsonObject response) {
     payload["revision"] = owner_.revision();
   response["payload"] = payload;
   wire_.clear();
-  queries_.receive(response);
+  queries_.receive(response, bytes);
 }
 
 void AnalysisService::fail(const QString &code, const QString &message) {

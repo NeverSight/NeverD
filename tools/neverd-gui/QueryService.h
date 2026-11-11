@@ -105,8 +105,15 @@ public:
   /// longer answer new reads.
   void listingChanged();
 
+  /// While a subscriber is being answered, what its answer weighs: the bytes
+  /// it came in, or those of the page it was applied to with it; none where
+  /// neither is known.  A dispatcher that passes the answer on weighs it by
+  /// this (receive) in place of writing it out.
+  qint64 deliveredBytes() const;
+
 public slots:
-  void receive(const QJsonObject &response);
+  /// \p bytes, where the transport knows it, is the reply's size on the wire.
+  void receive(const QJsonObject &response, qint64 bytes = 0);
 
 signals:
   void contextChanged();

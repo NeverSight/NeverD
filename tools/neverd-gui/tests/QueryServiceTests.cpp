@@ -297,6 +297,134 @@ private slots:
     QCOMPARE(h.sent[2].payload["if_none_match"].toString(), "tag-8-0-2");
   }
 
+  void aCarriedAnswerIsGivenWhileAnotherReadIsOnItsWay() {
+    // The reads the views make after an edit wait behind it together: the one
+    // the edit's reply answered is given at once, beside the one the worker
+    // is sent, rather than after that one's answer.
+    Harness h;
+    establish(h);
+    h.service.setPageDeltas(true);
+    const Spec listing{"listing",
+                       {{"address", "0x1"}, {"before", 0}, {"after", 2}},
+                       Spec::Latest,
+                       {},
+                       Spec::Visible};
+    QJsonObject first;
+    h.service.subscribe(text(), &h.owner,
+                        [&](const QJsonObject &response) { first = response; });
+    QTRY_COMPARE(h.sent.size(), 1);
+    h.reply(0, {{"text", "line one\nline two"},
+                {"etag", "tag-7-0-2"},
+                {"revision", "1"}});
+    QTRY_COMPARE(first["status"].toString(), "ok");
+    QJsonObject listed, shown;
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "n"}},
+                             &h.owner, [](const QJsonObject &) {});
+    // As a listing and a source view do at the new revision: the listing
+    // first, both behind the edit until it is answered.
+    connect(&h.service, &QueryService::contextChanged, &h.owner, [&] {
+      h.service.subscribe(listing, &h.owner, [&](const QJsonObject &response) {
+        listed = response;
+      });
+      h.service.subscribe(text(), &h.owner, [&](const QJsonObject &response) {
+        shown = response;
+      });
+    });
+    QTRY_COMPARE(h.sent.size(), 2);
+    replyFollowed(
+        h, 1, "2",
+        QJsonArray{QJsonObject{
+            {"status", "ok"},
+            {"payload",
+             QJsonObject{{"delta", QJsonArray{QJsonArray{
+                                       "lines", "text", 2,
+                                       QJsonArray{QJsonArray{1, "line 2"}}}}},
+                         {"base", "tag-7-0-2"},
+                         {"etag", "tag-8-0-2"},
+                         {"project_id", "project-one"},
+                         {"revision", "2"}}}}});
+    // The listing is sent, and the view has its page with no answer to it.
+    QTRY_COMPARE(shown["status"].toString(), "ok");
+    QCOMPARE(h.sent.size(), 3);
+    QCOMPARE(h.sent[2].operation, QStringLiteral("listing"));
+    QVERIFY(listed.isEmpty());
+    QCOMPARE(shown["payload"].toObject()["text"].toString(),
+             "line one\nline 2");
+    h.reply(2, {{"lines", QJsonArray{}}, {"etag", "list-1"}}, "2");
+    QTRY_COMPARE(listed["status"].toString(), "ok");
+    QCOMPARE(h.sent.size(), 3);
+  }
+
+  void theNextReadIsSentBeforeAnAnswerIsTakenInAgain() {
+    // A reply's subscribers are answered and the read that waits is sent in
+    // the same turn: what they queue for the next turn finds it on its way.
+    Harness h;
+    establish(h);
+    bool sentByNextTurn = false, turned = false;
+    h.service.subscribe(text("0x1000"), &h.owner, [&](const QJsonObject &) {
+      QTimer::singleShot(0, &h.owner, [&] {
+        sentByNextTurn = h.sent.size() == 2;
+        turned = true;
+      });
+    });
+    h.service.subscribe(text("0x2000"), &h.owner, [](const QJsonObject &) {});
+    QTRY_COMPARE(h.sent.size(), 1);
+    h.reply(0, {{"text", "first"}});
+    QTRY_VERIFY(turned);
+    QVERIFY(sentByNextTurn);
+    h.reply(1, {{"text", "second"}});
+    QTRY_VERIFY(!h.service.hasPending());
+  }
+
+  void aReplyWeighsWhatItCameIn() {
+    // The transport says how many bytes a reply came in, and the cache weighs
+    // it by them in place of writing it out again; a subscriber being answered
+    // is told (deliveredBytes), for a dispatcher that passes the answer on.
+    QueryService::Limits limits;
+    limits.cacheBytes = 2400;
+    Harness h(limits);
+    establish(h);
+    qint64 told = -1;
+    const auto read = [&](const QString &address, const QString &value,
+                          qint64 bytes, bool sent) {
+      const auto before = h.sent.size();
+      int calls = 0;
+      told = -1;
+      h.service.subscribe(text(address), &h.owner, [&](const auto &) {
+        ++calls;
+        told = h.service.deliveredBytes();
+      });
+      if (sent) {
+        QTRY_COMPARE(h.sent.size(), before + 1);
+        const auto request = h.sent.at(int(before));
+        h.service.receive({{"protocol_major", 1},
+                           {"type", "response"},
+                           {"request_id", request.id},
+                           {"operation", request.operation},
+                           {"project_id", "project-one"},
+                           {"revision", "1"},
+                           {"status", "ok"},
+                           {"payload", QJsonObject{{"text", value}}}},
+                          bytes);
+      }
+      QTRY_COMPARE(calls, 1);
+      QTRY_VERIFY(!h.service.hasPending());
+      QCOMPARE(h.sent.size(), before + (sent ? 1 : 0));
+      QCOMPARE(h.service.deliveredBytes(), qint64(0));
+    };
+    // Written out, this reply is past what the cache holds; said to weigh
+    // little, it is kept, and its next read is answered by it and told so.
+    read("0x1000", QString(2048, 'a'), 300, true);
+    QCOMPARE(told, qint64(300));
+    read("0x1000", QString(2048, 'a'), 0, false);
+    QCOMPARE(told, qint64(300));
+    // And a small one said to weigh much is not kept.
+    read("0x2000", QStringLiteral("b"), 5000, true);
+    QCOMPARE(told, qint64(5000));
+    read("0x2000", QStringLiteral("b"), 5000, true);
+    QCOMPARE(told, qint64(5000));
+  }
+
   void aCarriedReadTheWorkerRefusedIsMadeAgain() {
     // A read the worker answered with an error is the view's to make: it names
     // the page it kept, which no answer replaced.

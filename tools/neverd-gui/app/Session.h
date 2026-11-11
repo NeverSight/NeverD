@@ -573,6 +573,11 @@ private:
   std::optional<quint64> BackgroundSequence;
   qint64 functionCount_ = -1;
   QJsonObject metadata_, background_, history_, selection_;
+  /// The reads of the history that are on their way, and the step asked for
+  /// while the history of the last edit was still one of them: it is taken
+  /// once that history is read, rather than refused by the one before it.
+  int historyReads_ = 0;
+  enum class Step { None, Undo, Redo } stepWanted_ = Step::None;
   QJsonArray contributions_;
   quint64 sessionEpoch_ = 0;
   int pendingWrites_ = 0;

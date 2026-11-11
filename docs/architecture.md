@@ -5238,7 +5238,14 @@ generation, which an edit moves. A read a lane hands the owner (`AnalysisService
 leaves out the page the lane names, as the owner's dispatcher names its own. An edit
 the owner's dispatcher sends carries the reads of the pages read at the revision it
 leaves (the worker's `then`), and their answers are cached as the reads those views make
-after it, once the reply's background state is taken. The worker answers them from the
+after it, once the reply's background state is taken. A read the cache answers is given
+its answer beside whatever read is on its way, up to the first command that waits
+(`QueryService::State::answerWaiting`), and the read that waits is sent in the turn a
+reply's subscribers are answered in, so the worker reads a listing while a view takes its
+page in. A reply weighs in the cache what it came in off the pipe
+(`EngineClient::message`'s bytes), a kept page what it did and what changed of it since,
+and a dispatcher that passes an answer on is told what it weighs
+(`QueryService::deliveredBytes`): none is written out again to be measured. The worker answers them from the
 documents it holds, patches the edit's own view edits make included, before the store
 relabels the edit leaves for after its reply; a page of a document it does not hold is the
 client's to read. Where an edit built the document

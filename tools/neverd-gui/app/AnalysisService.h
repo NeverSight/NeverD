@@ -67,9 +67,10 @@ private:
   void stopWorker();
   /// Leaves what the worker is answering to run to its end, unanswered.
   void abandonRunningRead();
-  void receive(const QJsonObject &message);
+  void receive(const QJsonObject &message, qint64 bytes = 0);
   void dispatch();
-  void finish(QJsonObject response);
+  /// \p bytes is what the answer weighs, where its sender said so.
+  void finish(QJsonObject response, qint64 bytes = 0);
   void fail(const QString &code, const QString &message);
 
   QueryService &owner_;

@@ -7155,7 +7155,12 @@ queued before them, and `aPageTheOwnerGaveStartsNoReplicaAfterAChange` that, wit
 the store rendered, a page the owner gave is asked of the owner after a change with no
 snapshot for a replica first. `QueryServiceTests::aCachedReadTakesNoTurnBehindRunningReads`
 checks that a cached page is answered while another read runs, and that one behind an
-accepted command waits for it and reads what it left.
+accepted command waits for it and reads what it left;
+`aCarriedAnswerIsGivenWhileAnotherReadIsOnItsWay` that, of a listing's read and a view's
+both waiting behind an edit, the view takes the answer the edit's reply carried while the
+listing's is sent, `theNextReadIsSentBeforeAnAnswerIsTakenInAgain` that the read that
+waits is sent in the turn a reply is delivered in, and `aReplyWeighsWhatItCameIn` that the
+cache weighs a reply by the bytes its transport says, a subscriber being told them.
 `QueryServiceTests::aListingsOwnPageReadsWhatChangedOfIt` checks that a listing's visible
 page is named when read again and that what changed of it is applied, a scrolled page
 naming none; `WorkbenchTests::anEditRefreshesTheListingOnce` that the refresh after a second
@@ -7226,7 +7231,9 @@ comment on a page a client keeps is read behind the edit's reply and given to th
 that asks for it (`metadata.prepared_views_given`), the page it applies to reading as a
 read naming none gets. The
 workbench's `undoTakesBackANameAfterAComment` undoes a comment and then the name before
-it, with no refusal on the way. The
+it, with no refusal on the way, and `anUndoAskedBeforeTheHistoryIsReadWaitsForIt` asks for
+Undo as a rename is taken, before the session has read the history that holds it: the
+step waits for that read and takes the name back. The
 workbench's `commentsCommittedAheadOfAnEditAreNotASave` renames while a comment is
 still on its way: the comment is committed first, the files hold both without the
 project being reported saved, and Save still answers once the files hold it.

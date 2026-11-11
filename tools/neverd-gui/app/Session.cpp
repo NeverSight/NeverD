@@ -548,6 +548,8 @@ void Session::resetState() {
   databaseIdentity_.clear();
   metadata_ = {};
   history_ = {};
+  historyReads_ = 0;
+  stepWanted_ = Step::None;
   background_ = {};
   BackgroundSequence.reset();
   generation_.clear();
@@ -1082,14 +1084,27 @@ void Session::finishTransition() {
 void Session::refreshHistory() {
   if (!loaded_)
     return;
-  read(
+  ++historyReads_;
+  // A step asked for while this read was on its way is taken now that the
+  // history says whether there is one.
+  const auto read = [this] {
+    if (historyReads_ <= 0 || --historyReads_ > 0)
+      return;
+    const auto wanted = std::exchange(stepWanted_, Step::None);
+    if (wanted == Step::Undo)
+      undo();
+    else if (wanted == Step::Redo)
+      redo();
+  };
+  this->read(
       QStringLiteral("history"), {{"limit", 1}}, &reads_,
-      [this](const QJsonObject &payload) {
+      [this, read](const QJsonObject &payload) {
         history_ = payload;
         emit historyChanged();
         emit stateChanged();
+        read();
       },
-      [](const QString &, const QString &) {});
+      [read](const QString &, const QString &) { read(); });
 }
 
 void Session::save() {
@@ -1655,8 +1670,12 @@ void Session::setComment(Address address, const QString &text,
 }
 
 void Session::undo() {
-  if (!canUndo())
+  if (!canUndo()) {
+    // The history of an edit just made is still being read.
+    stepWanted_ = historyReads_ > 0 ? Step::Undo : Step::None;
     return;
+  }
+  stepWanted_ = Step::None;
   // A step past staged comments commits them first, as an edit does.
   command(
       QStringLiteral("undo"), {{"commit_staged", true}, {"limit", 1}},
@@ -1670,8 +1689,11 @@ void Session::undo() {
 }
 
 void Session::redo() {
-  if (!canRedo())
+  if (!canRedo()) {
+    stepWanted_ = historyReads_ > 0 ? Step::Redo : Step::None;
     return;
+  }
+  stepWanted_ = Step::None;
   command(
       QStringLiteral("redo"), {{"commit_staged", true}, {"limit", 1}},
       [this](const QJsonObject &payload) {

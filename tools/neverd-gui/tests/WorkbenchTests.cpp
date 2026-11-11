@@ -11213,6 +11213,44 @@ private slots:
                 .contains("saved by the user"));
   }
 
+  void anUndoAskedBeforeTheHistoryIsReadWaitsForIt() {
+    // The session reads the history after each edit.  Undo asked before that
+    // read is back, as a script that makes an edit and takes it back at once
+    // asks, is taken once the history says there is a step, rather than
+    // refused by the history from before the edit.
+    QTemporaryDir directory;
+    const auto path = writeFixture(directory, QStringLiteral("fixture.bin"));
+    Workbench bench;
+    bench.window->openFile(path);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    QVERIFY(!bench.session.canUndo());
+    bool asked = false, known = true;
+    connect(&bench.session, &Session::renamed, &bench.session,
+            [&](Address, const QString &) {
+              if (std::exchange(asked, true))
+                return;
+              // The rename is taken, and its history is yet to be read.
+              known = bench.session.canUndo();
+              bench.session.undo();
+            });
+    bench.session.rename(Base + 16, QStringLiteral("taken_back_at_once"));
+    QTRY_VERIFY_WITH_TIMEOUT(asked, OpenTimeoutMs);
+    QVERIFY(!known);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.canRedo() &&
+                                 !bench.session.canUndo() &&
+                                 !bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        !readAll(path + ".neverd/renames.json").contains("taken_back_at_once"),
+        OpenTimeoutMs);
+    // A step no history read is on its way for is refused as before.
+    bench.session.undo();
+    QTest::qWait(50);
+    QVERIFY(bench.session.canRedo() && !bench.session.queries().hasPending());
+  }
+
   void undoTakesBackANameAfterAComment() {
     // As IDA's Undo does: a name, then a comment, then Undo twice takes back
     // the comment and then the name, the staged comments committed on the way
