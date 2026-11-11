@@ -34,6 +34,8 @@
 
 namespace neverd {
 
+struct DarwinVariadicStackValue;
+
 struct BinaryImage;
 struct CompareTreeSwitch;
 namespace detail {
@@ -473,6 +475,7 @@ private:
   std::set<std::pair<va_t, int>> I386PcRootedStores;
   /// Recover a target-width memory address from the wider LowIR VA carrier
   /// only when an explicit zero extension proves that no high bits are lost.
+  ExprPtr darwinVariadicStackAddress(DarwinVariadicStackValue Source);
   ExprPtr memoryAddressExpr(const MedVar &V, bool InlineDefinition = true);
   void indexMedDefinitions();
   const MedOp *uniqueMedDefinition(const MedVar &V);

@@ -69,6 +69,7 @@ A64_LEAF_VALUE(unsigned, kTamperedResult, 19)
 A64_LEAF_TEXT(kHostTarget, "arm64-apple-macosx15.0")
 A64_LEAF_TEXT(kLiftedIR, "lifted.ll")
 A64_LEAF_TEXT(kLiftedC, "lifted.c")
+A64_LEAF_TEXT(kStructuredC, "structured.c")
 A64_LEAF_TEXT(kControl, "control.dylib")
 A64_LEAF_TEXT(kUnoptimized, "-O0")
 A64_LEAF_TEXT(kClassicABI, "ptrauth.abi-version")
@@ -108,6 +109,18 @@ word va_named(word a, word b, word c, word d, word e, word f, word g,
   word tail = va_arg(args, word);
   va_end(args);
   return a + i - tail;
+}
+__attribute__((noinline)) word va_sentinel(word unused, ...) {
+  va_list args;
+  va_start(args, unused);
+  word total = 0;
+  for (word n; (n = va_arg(args, word));)
+    total = total * 7 + n;
+  va_end(args);
+  return total;
+}
+word va_direct(void) {
+  return va_sentinel(123, 2UL, 4UL, 0UL);
 }
 word va_copied(word seed, ...) {
   va_list args, copy;
@@ -157,6 +170,11 @@ static int check_extended(void *image) {
   if (copy(6, 3UL, 4UL) != 6) return 8;
   if (wide(10, 3UL, value) != high + 7) return 9;
   if (fp(10, 3UL, -2.5) != 10.5) return 10;
+  operation *sentinel = (operation *)dlsym(image, "va_sentinel");
+  word (*direct)(void) = dlsym(image, "va_direct");
+  if (!sentinel || !direct) return 11;
+  if (direct() != 18) return 12;
+  if (sentinel(9, 0UL) || sentinel(1, 3UL, 1UL, 2UL, 0UL) != 156) return 13;
   return 0;
 }
 #endif

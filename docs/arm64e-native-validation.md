@@ -909,19 +909,29 @@ identifies the Release host, both artifacts and their measured image bases.
 For a recovered Darwin arm64 variadic entry without materialized overflow
 parameters, the LLVM emitter takes the anonymous argument cursor from
 `llvm.sponentry`. Locals and recovered named argument homes keep their own
-storage. The LLVM and LLVM-to-C outputs retain the callee boundary when the
-cursor depends on its incoming SP. Stack-parameter recovery also uses the
-target's entry alignment proof for masked pointers, including the upper word
+storage. LLVM IR, LLVM-to-C and structured HighC retain the callee boundary
+when the cursor depends on its incoming SP. HighC keeps all ABI positions
+before a used stack argument, including unused registers and alignment slots.
+Stack-parameter recovery uses the target's entry alignment proof for masked
+pointers, including the upper word
 of a 16-byte-aligned argument after an 8-byte argument. An OR in a cursor
 walk can set only known low bits of its entry-SP displacement. In particular,
 setting an already-set bit in a negative local offset keeps the cursor local.
 
 `AArch64DarwinVariadic` compiles O0 and O2 Apple arm64e inputs and calls the
-lifted LLVM IR and the regenerated C from a separately compiled variadic
-caller. It covers a variable count, a named stack prefix, a copied cursor,
+lifted LLVM IR, LLVM-to-C and structured HighC from a separately compiled
+variadic caller. It covers a variable count, a named stack prefix, a copied cursor,
 double and a 128-bit value. The IR control enables stack protection to displace
 the private frame. Setting `NEVERD_ARM64E_LIFTED_NATIVE=1` runs the compiler
-original and both replacements as arm64e.
+original and all three replacements as arm64e.
+
+An exported variadic entry can be called by another image even when its only
+local callers use direct branches. The export keeps its open ABI. An optimized
+sentinel loop can read the first stack word directly and store an advanced
+cursor made with a pointer OR. The recognizer and both projections use the
+entry alignment to prove that cursor's displacement. The caller control calls
+the same entry through dyld with different tail lengths and through a function
+inside the image.
 
 The image publisher compares non-writeback SP accesses at their effective
 incoming byte offsets. It can remove a compact leaf's unused stack reservation
@@ -935,3 +945,21 @@ the latter restores the same SP but reads the callee's private frame. Both
 inputs must be refused. Register-walk bodies with other instruction
 changes, frame-local memory effects and additional DWARF rows need their own
 publication proof.
+
+The two Apple runners each executed 14 native images across five variadic
+tests with prebuilt r6. The signed installation and default executable checks
+also passed on each host. The pinned LLVM fork passed all 24 lifted-image
+cases on each runner, including 50 ordinary image executions, 10 interrupted
+frames and 10 authenticated parent returns. The
+[verification record](evidence/arm64e-darwin-variadic-2026-11-12.json)
+identifies the tested sources, host binaries and Actions artifacts.
+
+The nine-function variadic input still fails whole-image publication. An
+assembly caller executed the original and generated instruction bytes from
+the first rejected entry at each optimization level. At O0 both versions of
+`leaf_sum` returned 109, but X8 contained the seed 100 in the original and
+entry SP + 8 in the generated body. At O2 both versions of `leaf_difference`
+returned 77. The original left 23 in X9 and the generated body preserved its
+incoming value of 85. These registers are volatile for Darwin C callers.
+A custom caller can observe them, so accepting such substitutions requires
+evidence about the actual register contract.

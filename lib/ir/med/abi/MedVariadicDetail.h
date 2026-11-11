@@ -115,12 +115,14 @@ int firstSavedArgumentRegister(VariadicScan &S,
 /// One function's variadic prologue recognition.
 class VariadicScan {
 public:
-  VariadicScan(const MedFunc &Func, const TargetRegInfo &TRI)
-      : Func(Func), TRI(TRI), SpOff(TRI.StackPointer) {}
+  VariadicScan(const MedFunc &Func, const TargetRegInfo &TRI,
+               BinaryFormat Format)
+      : Func(Func), TRI(TRI), SpOff(TRI.StackPointer), Format(Format) {}
 
   const MedFunc &Func;
   const TargetRegInfo &TRI;
   const uint64_t SpOff;
+  const BinaryFormat Format;
 
   /// The function's definitions, indexed on first use.
   const VariadicValueIndex &values() {

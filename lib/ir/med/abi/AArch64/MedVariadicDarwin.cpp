@@ -14,9 +14,9 @@
 
 #include "../MedVariadicDetail.h"
 
-#include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/med/MedABIPass.h"
 
 #include <functional>
 
@@ -106,8 +106,6 @@ bool hasDarwinVariadicPrologue(VariadicScan &S) {
     };
     // OR can set only the bits whose values are known from the entry SP's
     // alignment. A bit already set in a negative local offset stays set.
-    const uint64_t Alignment = guaranteedEntryStackAlignment(
-        Arch::AArch64, BinaryFormat::MachO, Func.EntryKind);
     std::function<std::optional<int64_t>(const MedVar &, int)> ovfDelta =
         [&](const MedVar &V, int Depth) -> std::optional<int64_t> {
       if (Depth >
@@ -120,12 +118,12 @@ bool hasDarwinVariadicPrologue(VariadicScan &S) {
       auto It = Ors.find(VariadicValueIndex::walkKeyOf(V));
       if (It != Ors.end())
         for (const MedOp *Op : It->second) {
-          const uint64_t Bits = Op->Inputs[1].ConstVal;
-          if (V.Size != TRI.PointerSize || Op->Output.Size != V.Size ||
-              Op->Inputs[0].Size != V.Size || Bits >= Alignment)
+          const auto Bits =
+              darwinEntryPointerOrBits(*Op, TRI, S.Format, Func.EntryKind);
+          if (V.Size != TRI.PointerSize || !Bits)
             continue;
           if (auto B = ovfDelta(Op->Inputs[0], Depth + 1))
-            return *B | static_cast<int64_t>(Bits);
+            return *B | static_cast<int64_t>(*Bits);
         }
       return std::nullopt;
     };

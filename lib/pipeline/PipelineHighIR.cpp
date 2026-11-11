@@ -216,7 +216,8 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
     // A variadic callee takes its call sites' overflow arguments as trailing
     // stack parameters, which MedToHigh seeds where its va_arg walk reads
     // them, as lift mode does for the LLVM emitter.
-    finalizeVariadicCallees(Result.MedFuncs, Img.Arch, Img.abiFormat());
+    finalizeVariadicCallees(Result.MedFuncs, Img.Arch, Img.abiFormat(),
+                            Img.Exports);
   } else {
     // A convention whose calls take their arguments from callee summaries
     // recovers no call arguments here: a System V variadic callee's overflow

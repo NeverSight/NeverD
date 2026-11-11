@@ -2267,7 +2267,8 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
               ? sourceParameterType(Function.SourceTypeHint->Parameters[I])
               : declaredAs(emittedParamTypeAt(Function, I), "");
     }
-    if (vaStartForwarder(Function) && ParamCount)
+    if ((vaStartForwarder(Function) || Function.UsesNativeVariadicStack) &&
+        ParamCount)
       Declarator += ", ...";
     if (ParamCount == 0)
       Declarator += "void";
@@ -2290,7 +2291,8 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
               ? sourceParameterType(Function->SourceTypeHint->Parameters[I])
               : declaredAs(emittedParamTypeAt(*Function, I), "");
     }
-    if (vaStartForwarder(*Function) && ParamCount)
+    if ((vaStartForwarder(*Function) || Function->UsesNativeVariadicStack) &&
+        ParamCount)
       Declarator += ", ...";
     if (ParamCount == 0)
       Declarator += "void";
@@ -2329,7 +2331,8 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
               ? sourceParameterType(Function->SourceTypeHint->Parameters[I])
               : declaredAs(emittedParamTypeAt(*Function, I), "");
     }
-    if (vaStartForwarder(*Function) && ParamCount)
+    if ((vaStartForwarder(*Function) || Function->UsesNativeVariadicStack) &&
+        ParamCount)
       Declarator += ", ...";
     if (ParamCount == 0)
       Declarator += "void";

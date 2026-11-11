@@ -86,8 +86,8 @@
 namespace neverd {
 
 namespace {
-#define LLVMC_STACK_TEXT(Name, Text) constexpr llvm::StringLiteral Name = Text;
-#include "LLVMCStackIntrinsic.def"
+#define C_STACK_TEXT(Name, Text) constexpr llvm::StringLiteral Name = Text;
+#include "neverd/backend/c/render/CStackIntrinsic.def"
 
 /// Holds the frame record's place until the body has named its members.
 constexpr llvm::StringLiteral kFrameRecordMarker = "/*@neverd-frame-record@*/";

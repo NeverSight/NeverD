@@ -1,0 +1,8 @@
+//===- HighStack.def - HighIR stack expression names ------------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+HIGH_STACK_TEXT(kIncomingStack, "incoming_stack")
+#undef HIGH_STACK_TEXT

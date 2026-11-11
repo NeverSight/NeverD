@@ -23,6 +23,7 @@
 #include "neverd/backend/llvm/X86/X86AtomicRmw.h"
 #include "neverd/backend/llvm/X86/X86RegistrationFrame.h"
 #include "neverd/backend/llvm/X86RegistrationSEHThread.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedIntrinsicOutputs.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/X86/I386PicAddress.h"
@@ -160,18 +161,22 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   // materialized overflow parameters, those bytes belong to the caller.
   // Keep the lifted locals and any named stack homes in the private frame.
   const bool NativeVariadicStack =
-      TargetArch == Arch::AArch64 && TargetFormat == BinaryFormat::MachO &&
-      FrameBaseInt && CurMedFunc->IsVariadic && !CurMedFunc->SkippedSSA &&
-      CurMedFunc->VariadicOverflowCount == 0;
-  const auto VariadicAddress = [&](const MedVar &V) -> llvm::Value * {
+      FrameBaseInt &&
+      usesDarwinVariadicEntryStack(*CurMedFunc, TargetArch, TargetFormat);
+  const auto VariadicAddress =
+      [&](DarwinVariadicStackValue Source) -> llvm::Value * {
+    if (!Source.Base)
+      return nullptr;
+    const MedVar &V = *Source.Base;
     if (!NativeVariadicStack ||
         V.Size != getTargetRegInfo(TargetArch).PointerSize)
       return nullptr;
     auto Slot = canonicalFrameSlotKey(V, /*RequireEntryStackPointer=*/true);
     if (!Slot)
       return nullptr;
+    const int64_t Offset = Source.offsetFrom(Slot->second);
     llvm::Value *Base;
-    if (Slot->second >= CurMedFunc->VariadicOverflowBase) {
+    if (Offset >= CurMedFunc->VariadicOverflowBase) {
       // Inlining into a different function would change the incoming SP.
       CurFunc->addFnAttr(llvm::Attribute::NoInline);
       Base = Builder.CreateIntrinsic(llvm::Intrinsic::sponentry,
@@ -179,20 +184,16 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     } else {
       Base = Builder.CreateIntToPtr(FrameBaseInt, Builder.getPtrTy());
     }
-    return Builder.CreateConstGEP1_64(Builder.getInt8Ty(), Base, Slot->second);
+    return Builder.CreateConstGEP1_64(Builder.getInt8Ty(), Base, Offset);
   };
 
   // Only machine instruction outputs write the physical error result. SSA edge
   // copies and call-clobber bookkeeping update the value map independently.
   auto SetOutput = [&](const MedVar &Output, llvm::Value *Value) {
-    if (NativeVariadicStack &&
-        (Op.Opcode == NdOp::COPY || Op.Opcode == NdOp::INT_ADD ||
-         Op.Opcode == NdOp::INT_SUB) &&
-        (Output.Kind == MedVar::Temp ||
-         (Output.Kind == MedVar::Reg &&
-          !getTargetRegInfo(TargetArch).isStackPointer(Output.RegOff) &&
-          !getTargetRegInfo(TargetArch).isFramePointer(Output.RegOff))))
-      if (auto *Pointer = VariadicAddress(Output))
+    if (NativeVariadicStack)
+      if (auto *Pointer = VariadicAddress(darwinVariadicStackDefinition(
+              Op, getTargetRegInfo(TargetArch), TargetFormat,
+              CurMedFunc->EntryKind)))
         Value = Builder.CreatePtrToInt(Pointer, sizeToType(Output.Size));
     setVar(Output, Value, Builder);
     if (Op.OriginSeq >= 0 && Output.Kind == MedVar::Reg &&
@@ -1037,7 +1038,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         IsGlobalData = true;
     }
     if (!Ptr && !IsSegmentRelative)
-      Ptr = VariadicAddress(AddrVar);
+      Ptr = VariadicAddress({&AddrVar});
     if (!Ptr) {
       rejectEscapingAddressFragment(AddrVar, "an unresolved load address");
       auto *Addr = IsSegmentRelative ? getRawSegmentOffset(AddrVar, Builder)
@@ -1148,7 +1149,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         IsGlobalData = true;
     }
     if (!Ptr && !IsSegmentRelative)
-      Ptr = VariadicAddress(AddrVar);
+      Ptr = VariadicAddress({&AddrVar});
     if (!Ptr) {
       rejectEscapingAddressFragment(AddrVar, "an unresolved store address");
       auto *Addr = IsSegmentRelative ? getRawSegmentOffset(AddrVar, Builder)

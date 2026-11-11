@@ -16,6 +16,7 @@
 #include "neverd/ir/high/X86/X86RegistrationFrame.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/loader/BinaryImage.h"
 
@@ -31,6 +32,11 @@ ExprPtr MedToHighConverter::medOpToExpr(const MedOp &Op) {
 }
 
 ExprPtr MedToHighConverter::medOpToExprImpl(const MedOp &Op) {
+  if (TargetArch == Arch::AArch64 && Image && CurMed)
+    if (auto Address = darwinVariadicStackAddress(darwinVariadicStackDefinition(
+            Op, getTargetRegInfo(TargetArch), Image->abiFormat(),
+            CurMed->EntryKind)))
+      return Address;
   if (ExprPtr Dynamic = dynamicStackExpr(Op))
     return Dynamic;
   if (const auto Displacement = i386GotDisplacement(Op))

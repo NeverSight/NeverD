@@ -4029,7 +4029,7 @@ void recoverCallAbi(
 }
 
 void finalizeVariadicCallees(std::vector<MedFunc> &Funcs, Arch TheArch,
-                             BinaryFormat Fmt) {
+                             BinaryFormat Fmt, llvm::ArrayRef<Export> Exports) {
   const auto &TRI = getTargetRegInfo(TheArch);
   // Darwin AArch64 passes EVERY variadic argument on the stack (no register
   // save area, no register-passed overflow): the callee's va_start points its
@@ -4052,6 +4052,10 @@ void finalizeVariadicCallees(std::vector<MedFunc> &Funcs, Arch TheArch,
   const CallArgumentConvention *Convention =
       callArgumentConvention(TheArch, Fmt);
   if (Convention && Convention->VariadicArgumentsOnStack) {
+    // Clients can obtain an exported entry through dyld even when every use
+    // of its address within this image is a direct call.
+    for (const auto &Export : Exports)
+      AddressTakenVariadic.insert(Export.Addr);
     std::set<va_t> FuncEntries;
     for (const auto &MF : Funcs)
       FuncEntries.insert(MF.Entry);

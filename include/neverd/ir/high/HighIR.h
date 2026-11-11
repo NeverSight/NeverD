@@ -96,7 +96,9 @@ enum class ExprKind : uint8_t {
   Record,
   /// A register supplied by the runtime at a nonordinary entry. Capture it
   /// at EntryVA; it is not the register's value at the expression's use.
-  EntryRegister
+  EntryRegister,
+  /// The stack pointer at the public machine entry, before its prologue.
+  IncomingStack
 };
 
 struct HighExpr {
@@ -643,6 +645,8 @@ struct HighFunc {
   /// MedFunc::IsVariadic: its prologue saves its argument registers for
   /// va_arg, which reads no more of them than a caller passes.
   bool IsVariadic = false;
+  /// An open Darwin va_list reads the caller's frame at the machine entry.
+  bool UsesNativeVariadicStack = false;
   /// A System V x86-64 function whose va_start only builds a va_list it
   /// passes on (`error(fmt, ...)` calling `verror(fmt, va)`): C prints it as
   /// `T f(named, ...)` with va_start, and its calls with the arguments each
