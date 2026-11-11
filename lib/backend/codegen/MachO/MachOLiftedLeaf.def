@@ -44,10 +44,17 @@ MACHO_LEAF_TEXT(kSourceText,
                 "starts and a single executable segment")
 MACHO_LEAF_TEXT(kSourceEntry, "arm64e lifted function {0} has no complete "
                               "definition at an original entry")
+MACHO_LEAF_TEXT(
+    kTailTarget,
+    "arm64e direct tail branch does not preserve its installed target")
 MACHO_LEAF_TEXT(kLeafABIFlag, "ptrauth.abi-version")
 MACHO_LEAF_VALUE(uint32_t, kClassicABIVersion, 0)
 MACHO_LEAF_VALUE(unsigned, kMemoryOperandCount, 2)
 MACHO_LEAF_VALUE(uint32_t, kReturnToLR, 0xd65f03c0)
+MACHO_LEAF_VALUE(uint32_t, kDestinationMask, 0x1f)
+MACHO_LEAF_VALUE(uint32_t, kZeroOperationMask, 0x7fffffe0)
+MACHO_LEAF_VALUE(uint32_t, kMoveWideZero, 0x52800000)
+MACHO_LEAF_VALUE(uint32_t, kMoveFromZero, 0x2a1f03e0)
 
 // Arithmetic and moves have no PC-relative operands. Plain memory accesses
 // must pass additional base-register and addressing-mode checks.

@@ -2049,6 +2049,17 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         CalleeTy, Callable, CoercedArgs, AuthenticationBundles,
         CalleeTy->getReturnType()->isVoidTy() ? "" : "call");
     Call->setCallingConv(Callee->getCallingConv());
+    // A direct arm64e tail transfer forwards the caller's LR. Mark direct
+    // argument forwarding so instruction selection can preserve that jump.
+    // Restrict it to incoming values, which cannot refer to this frame.
+    if (Op.IsTailCall && Img && Img->isArm64e() && Callable == Callee &&
+        !CalleeTy->isVarArg() && !Call->hasOperandBundles() &&
+        CalleeTy == Call->getFunction()->getFunctionType() &&
+        Call->getCallingConv() == Call->getFunction()->getCallingConv() &&
+        llvm::all_of(Call->args(), [](const llvm::Use &Arg) {
+          return llvm::isa<llvm::Argument>(Arg.get());
+        }))
+      Call->setTailCallKind(llvm::CallInst::TCK_Tail);
     if (CookieCheck)
       Call->addParamAttr(0, llvm::Attribute::InReg);
     Result = Call;

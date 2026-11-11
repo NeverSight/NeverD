@@ -489,10 +489,12 @@ unchanged; source-fork-only producer features still require the source build.
 ## Publishing position-independent lifted dylibs
 
 The ordinary segment patch pipeline can publish a classic macOS arm64e image
-whose entire instruction section consists of verified frameless leaf functions.
+whose instruction section consists of verified frameless bodies.
 It matches lifted definitions to original entries, then checks the relocated
-machine instructions and compact unwind coverage for every body. The original
-entries forward to the emitted RX addresses. The private native emission uses
+machine instructions and compact unwind coverage for every body. An unshifted
+MOVZ with immediate zero and a move from the zero register can both clear the
+same GPR. Both W and X forms write all 64 destination bits and preserve NZCV.
+The original entries forward to the emitted RX addresses. The private native emission uses
 the classic ABI version. The input IR retains its analysis marker.
 
 `NeverDArm64eLiftedImageTests` compiles an unreserved Apple Clang dylib,
@@ -507,6 +509,14 @@ base register and displacement. A typed caller compares loaded values and
 checks both neighboring slots after stores. Literal or register-indexed
 addressing, writeback and SP-based memory operands require separate proofs.
 
+A frameless body can end with an unconditional direct tail branch to another
+installed entry. The lifter preserves simple argument forwarding with the same
+calling convention and prototype. The installer independently decodes the two
+branch destinations at their actual PCs and matches the original callee to its
+compiled owner. The regression reverses the two emitted functions and checks
+the relocated branch with Capstone. Redirecting the tail call to a different
+entry fails before publication.
+
 Unassigned incoming reads of X20 and X22 use LLVM's reserved physical
 registers. These carry Swift self and the asynchronous context, respectively.
 The lifter preserves the observed register even when the image omits its
@@ -519,8 +529,8 @@ The floating-point caller checks the exact result bits, including signed zero.
 
 Frameless bodies may also preserve a matching entry PACIBSP and terminal
 RETAB. SP and LR remain untouched between those instructions. The relocated
-machine bytes and frameless compact unwind coverage must match, and removing
-the return-signing policy refuses publication. Functions with calls, stack
+body must pass the instruction comparison and retain its frameless compact
+unwind coverage. Removing the return-signing policy refuses publication. Functions with calls, stack
 accesses or PC-dependent signing need additional proofs.
 
 The [native lifted-image run](https://github.com/gmh5225/test_mac_intel/actions/runs/42957645426)
@@ -529,6 +539,32 @@ Each caller checked both entries for 25 ordered argument pairs. The
 [evidence record](evidence/arm64e-lifted-leaves-2026-11-11.json) identifies the
 source-bound Release host, local LLVM fork, original and published image hashes,
 and the runner artifacts.
+
+The two Darwin executable tests take the host's `/usr/bin/true` and
+`/usr/bin/false` as inputs. Each test extracts its arm64e slice, removes the
+platform signature from a temporary copy, then publishes it through the
+ordinary patch pipeline. Apple codesign signs the baseline and published
+copies explicitly. The tests verify both signatures and the new owner of
+the main entry. With `NEVERD_ARM64E_LIFTED_NATIVE=1` they also require the
+two original and two published processes to return their expected exit codes.
+
+The [native executable run](https://github.com/gmh5225/test_mac_intel/actions/runs/42985655565) qualified both system-image copies on
+macos-26 and xcode-27. On each runner, both baselines and both
+installed copies returned their expected exit statuses. Each runner also
+executed eight original/installed image pairs, verified a reordered direct tail caller,
+recovered ten interrupted frames and their signed callers, and passed
+40 native object installation cases. Those cases include authenticated
+indirect calls, language exceptions, legacy threaded fixups and default
+executable startup. The unmodified compiler-original B-key startup control
+failed on both hosts before emitting a control marker. The separate diagnostic
+runs recorded SIGTRAP on both and a SIGSEGV on one Xcode 27 repeat.
+Their reports and fixup disassemblies accompany the installed-default-startup
+results. Independent HighC and LLVM C projections were also
+checked against all four pointer-signing keys and PACGA on each host. The default r6 CLI also installed both system
+copies locally and verified the relocated entries and final signatures. The
+[execution record](evidence/arm64e-darwin-executables-2026-11-11.json)
+identifies the source-built Release hosts, the IR frontend and the image
+hashes for each runner.
 
 ## Interrupted return-address signing
 
