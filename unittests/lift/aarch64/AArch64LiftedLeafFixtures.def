@@ -319,10 +319,11 @@ A64_LEAF_TEXT(kProcessImport, "getpid")
 A64_LEAF_TEXT(kGlobalLeaves, R"c(
 #include <stdint.h>
 #include <unistd.h>
-uint64_t leaf_state = 42;
-uint64_t leaf_sum(void) { return leaf_state; }
+/* The selected word is past a 4-KiB ADRP boundary and has a nonzero PAGEOFF. */
+uint64_t leaf_state[] = {[0] = UINT64_C(0x7369676e6564), [513] = 42};
+uint64_t leaf_sum(void) { return leaf_state[513]; }
 #ifdef NEVERD_TEST_FRAMED_IMPORT
-uint64_t leaf_difference(void) { return (uint32_t)getpid() + leaf_state; }
+uint64_t leaf_difference(void) { return (uint32_t)getpid() + leaf_state[513]; }
 #else
 int leaf_difference(void) { return getpid(); }
 #endif
@@ -341,12 +342,13 @@ int main(int argc, char **argv) {
 #else
   int (*process)(void) = dlsym(image, "leaf_difference");
 #endif
-  uint64_t *state = dlsym(image, "leaf_state");
-  if (!state || !read_state || !process || read_state() != 42) return 3;
+  uint64_t *words = dlsym(image, "leaf_state");
+  if (!words || !read_state || !process || read_state() != 42) return 3;
+  uint64_t *state = &words[513];
   const uint64_t values[] = {0, 1, UINT64_MAX, UINT64_C(1) << 63};
   for (unsigned i = 0; i < sizeof(values) / sizeof(*values); ++i) {
     *state = values[i];
-    if (read_state() != *state) return 4;
+    if (read_state() != *state || words[0] != UINT64_C(0x7369676e6564)) return 4;
 #ifdef NEVERD_TEST_FRAMED_IMPORT
     if (process() != (uint32_t)getpid() + *state) return 5;
 #else
