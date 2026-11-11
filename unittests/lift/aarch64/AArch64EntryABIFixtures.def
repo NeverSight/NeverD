@@ -115,6 +115,8 @@ A64_ENTRY_TEXT(kReceiptAddress, "address")
 A64_ENTRY_TEXT(kReceiptOffset, "offset")
 A64_ENTRY_TEXT(kReceiptSize, "size")
 A64_ENTRY_TEXT(kNativeTextSection, "__text")
+A64_ENTRY_TEXT(kNativeTextSegment, "__TEXT")
+A64_ENTRY_VALUE(uint8_t, kOccupiedTailByte, 0xa5)
 A64_ENTRY_TEXT(kNativeCaller, R"cpp(
 #include <stdint.h>
 #include <stdio.h>

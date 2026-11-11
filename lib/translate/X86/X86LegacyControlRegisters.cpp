@@ -9,6 +9,8 @@
 
 #include "X86LegacyControlRegisters.h"
 
+#include "neverd/translate/X86/X86ControlRegisters.h"
+
 #include "llvm/Support/Errc.h"
 
 #include <algorithm>
@@ -21,17 +23,7 @@ namespace neverd::translate::detail {
 namespace {
 
 constexpr uint32_t PE = 1, ET = 0x10, NW = 1u << 29, CD = 1u << 30,
-                   PG = 1u << 31, PAE = 1u << 5, PCIDE = 1u << 17;
-constexpr uint64_t LME = 1u << 8;
-constexpr uint32_t CR0Bits = 0xe005003f;
-
-uint32_t supportedCR4(const X86PagingFeatures &F,
-                      const X86LegacyControlRegisterBinding &B) {
-  return B.OtherCR4Features | (uint32_t(F.PSE) << 4) | (uint32_t(F.PAE) << 5) |
-         (uint32_t(F.LA57) << 12) | (uint32_t(F.SMEP) << 20) |
-         (uint32_t(F.SMAP) << 21) | (uint32_t(F.PKU) << 22) |
-         (uint32_t(F.PKS) << 24);
-}
+                   PCIDE = 1u << 17;
 
 llvm::Error invalid(const char *Message) {
   return llvm::createStringError(llvm::errc::invalid_argument, Message);
@@ -71,6 +63,7 @@ struct X86LegacyControlContinuation {
   uint32_t OtherCR4Features;
   std::optional<X86LegacyDebugProfile> DebugProfile;
   X86PAEPDPTEContinuation PDPTE;
+  std::optional<X86Non64ModeBinding> Mode;
 
   X86LegacyControlContinuation(const X86LegacyExecutionState &S,
                                const X86PagedMemory &M,
@@ -79,7 +72,7 @@ struct X86LegacyControlContinuation {
       : Entry(S), Controls(M.controls()), Features(M.features()),
         Instruction(Bytes.begin(), Bytes.end()),
         OtherCR4Features(O.ControlRegisters->OtherCR4Features),
-        DebugProfile(O.Debug) {}
+        DebugProfile(O.Debug), Mode(O.Non64Mode) {}
 
   bool matches(const X86LegacyExecutionState &S, const X86PagedMemory &M,
                const X86LegacyExecutionOptions &O) const {
@@ -100,7 +93,7 @@ struct X86LegacyControlContinuation {
            Controls == M.controls() && Features == M.features() &&
            O.ControlRegisters &&
            OtherCR4Features == O.ControlRegisters->OtherCR4Features &&
-           DebugProfile == O.Debug;
+           DebugProfile == O.Debug && Mode == O.Non64Mode;
   }
 };
 
@@ -131,8 +124,10 @@ validateLegacyControlBinding(const X86PagedMemory &Memory,
   if (Binding.OtherCR4Features & ~kX86LegacyOtherCR4FeatureMask)
     return invalid("MOV-CR requires paging features at their paging owner");
   const auto &C = Memory.controls();
-  if ((C.CR4 & ~uint64_t(supportedCR4(Memory.features(), Binding))) ||
-      (C.CR4 & PCIDE) || (C.CR0 & ~uint64_t(CR0Bits)) || !(C.CR0 & ET) ||
+  if ((C.CR4 & ~uint64_t(x86SupportedCR4(Memory.features(),
+                                         Binding.OtherCR4Features))) ||
+      ((C.CR4 & PCIDE) && !(C.EFER & 0x400)) ||
+      (C.CR0 & ~uint64_t(kX86CR0StoredMask)) || !(C.CR0 & ET) ||
       ((C.CR0 & NW) && !(C.CR0 & CD)))
     return invalid("MOV-CR requires controls valid for the bound Intel CPU");
   return llvm::Error::success();
@@ -160,38 +155,24 @@ llvm::Expected<X86MemoryAccessResult> executeLegacyControlRegister(
                              : C.CR4;
     return X86MemoryAccessResult{};
   }
-  const auto Old = C;
-  switch (I.Control) {
-  case 0:
-    C.CR0 = (Value & CR0Bits) | ET;
-    if (((C.CR0 & PG) && !(C.CR0 & PE)) || ((C.CR0 & NW) && !(C.CR0 & CD)))
-      return Fault(13);
-    if ((C.CR0 & PG) && (C.EFER & LME)) {
-      if (!(C.CR4 & PAE) || (Next.Core.Segments[1].Attributes & 0x2000) ||
-          (Next.TR.Attributes & 15) == 3)
-        return Fault(13);
+  bool Reload = false;
+  if (I.Control == 2) {
+    Next.CR2 = Value;
+  } else {
+    auto Plan = planX86PagingControlWrite(
+        C, Memory.features(), Binding.OtherCR4Features, I.Control, Value,
+        bool(Next.Core.Segments[1].Attributes & 0x2000),
+        (Next.TR.Attributes & 15) == 3);
+    if (Plan.Exception)
+      return Fault(Plan.Exception->Vector);
+    if (!(Plan.Controls.CR0 & PE))
+      return invalid("MOV-CR real-mode entry requires a mode-transfer owner");
+    if ((Plan.Controls.EFER & 0x400) && !Options.Non64Mode)
       return invalid(
           "MOV-CR activation of IA-32e requires a mode-transfer owner");
-    }
-    if (!(C.CR0 & PE))
-      return invalid("MOV-CR real-mode entry requires a mode-transfer owner");
-    break;
-  case 2:
-    Next.CR2 = Value;
-    break;
-  case 3:
-    C.CR3 = Value;
-    break;
-  case 4:
-    if ((Value & ~supportedCR4(Memory.features(), Binding)) ||
-        (Value & PCIDE) || ((Value & (1u << 23)) && !(C.CR0 & (1u << 16))))
-      return Fault(13);
-    C.CR4 = Value;
-    break;
+    C = Plan.Controls;
+    Reload = Plan.ReloadPDPTE;
   }
-  const bool Reload = (C.CR0 & PG) && (C.CR4 & PAE) &&
-                      (I.Control == 3 || ((Old.CR0 ^ C.CR0) & (CD | NW | PG)) ||
-                       ((Old.CR4 ^ C.CR4) & (PAE | 0x90 | (1u << 20))));
   // Admit the requested execution domain before physical reads. Old cached
   // PDPTE bits are irrelevant when this instruction will replace that bank.
   auto Candidate = C;

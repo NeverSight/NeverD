@@ -8001,6 +8001,70 @@ TEST_F(SessionCAPITest, KernelImportsPassWhatTheirPrototypesTake) {
   EXPECT_EQ(Probe.find("unknown"), std::string::npos) << Probe;
 }
 
+TEST_F(SessionCAPITest, NewTypesKeepTheImportPrototypesTheyDoNotReach) {
+  // The kernel's prototypes the decompiler converted for the driver's calls
+  // stay through a type none of them reaches, and a type one reaches takes
+  // them again: either way the driver reads as it reads in a session that
+  // declared the same types before reading anything.
+  const auto Fixtures =
+      std::filesystem::path(__FILE__).parent_path() / "types" / "fixtures";
+  std::ifstream Input(Fixtures / "kernel_imports.sys", std::ios::binary);
+  const std::string Driver =
+      write("kernel_imports.sys",
+            std::string(std::istreambuf_iterator<char>(Input), {}));
+  const auto open = [&](neverd_session_t Each) {
+    ASSERT_EQ(neverd_session_load(Each, Driver.c_str()), 1)
+        << takeString(neverd_last_error(Each));
+    ASSERT_GE(neverd_session_discover_functions(Each), 0)
+        << takeString(neverd_last_error(Each));
+  };
+  const auto read = [](neverd_session_t Each) {
+    const int Index = neverd_func_find_by_name(Each, "Probe");
+    EXPECT_GE(Index, 0);
+    return takeString(neverd_decompile(Each, 0x180001000)) + "\n" +
+           takeString(neverd_decompile(Each, neverd_func_entry(Each, Index)));
+  };
+  const auto declare = [](neverd_session_t Each, const std::string &Source) {
+    const std::string Reply =
+        takeString(neverd_local_types_declare(Each, Source.c_str(), nullptr));
+    auto Parsed = llvm::json::parse(Reply);
+    EXPECT_TRUE(static_cast<bool>(Parsed))
+        << takeString(neverd_last_error(Each));
+    return Parsed && Parsed->getAsObject() ? *Parsed->getAsObject()
+                                           : llvm::json::Object();
+  };
+  const auto fresh = [&](const std::vector<std::string> &Sources) {
+    neverd_session_t Plain = neverd_session_create();
+    EXPECT_NE(Plain, nullptr);
+    open(Plain);
+    for (const std::string &Source : Sources)
+      (void)declare(Plain, Source);
+    const std::string Text = read(Plain);
+    neverd_session_destroy(Plain);
+    return Text;
+  };
+  open(Session);
+  const std::string Before = read(Session);
+  ASSERT_NE(Before.find("IoThreadToProcess"), std::string::npos) << Before;
+  // A type nothing names: the converted prototypes stay.
+  const std::string Unrelated = "struct ABI_UNRELATED { long long Value; };";
+  const auto First = declare(Session, Unrelated);
+  EXPECT_EQ(First.getBoolean("unread"), true);
+  EXPECT_EQ(First.getBoolean("decompilation"), false);
+  EXPECT_EQ(read(Session), fresh({Unrelated}));
+  // The process a prototype returns: they take its layout.
+  const std::string ThreadType =
+      takeString(neverd_local_type_json(Session, "PETHREAD", nullptr));
+  const std::string Process = ThreadType.find("_KTHREAD") != std::string::npos
+                                  ? "_KPROCESS"
+                                  : "_EPROCESS";
+  const std::string Reached =
+      "struct " + Process + " { long long Header; long long Count; };";
+  const auto Second = declare(Session, Reached);
+  EXPECT_EQ(Second.getBoolean("unread"), false);
+  EXPECT_EQ(read(Session), fresh({Unrelated, Reached}));
+}
+
 TEST_F(SessionCAPITest, DriverProviderImportsUseTheirDeclaredSourceABI) {
   const auto Fixtures =
       std::filesystem::path(__FILE__).parent_path() / "types" / "fixtures";
@@ -12645,6 +12709,18 @@ TEST_F(SessionCAPITest, UserFunctionEditsShapeTheListAnalysisAndSidecar) {
             "[{\"addr\":\"" + EntryHex +
                 "\",\"state\":\"created\"},{\"addr\":\"" + SecondHex +
                 "\",\"state\":\"deleted\"}]");
+  // An entry's edit, or a span's, reads alone, as the list says it.
+  const auto range = [&](neverd_va_t Begin, neverd_va_t End) {
+    return takeString(neverd_functions_range_json(Session, Begin, End));
+  };
+  EXPECT_EQ(range(Entry, Entry + 1),
+            "[{\"addr\":\"" + EntryHex + "\",\"state\":\"created\"}]");
+  EXPECT_EQ(range(Second, Second + 1),
+            "[{\"addr\":\"" + SecondHex + "\",\"state\":\"deleted\"}]");
+  EXPECT_EQ(range(Entry + 1, Second), "[]");
+  EXPECT_EQ(range(Entry, Second + 1),
+            takeString(neverd_functions_json(Session)));
+  EXPECT_EQ(range(Second, Entry), "[]");
   ASSERT_EQ(analyzeAll(), 1);
   const int Restored = neverd_func_find_by_addr(Session, Entry);
   ASSERT_GE(Restored, 0);
@@ -12740,6 +12816,12 @@ TEST_F(SessionCAPITest, UserFunctionAttributesDecideHowCallsEndAndPersist) {
       "\",\"color\":\"#20A0FF\",\"library\":true,\"noreturn\":true,"
       "\"static\":false}]";
   EXPECT_EQ(takeString(neverd_functions_json(Session)), Rows);
+  // What is stated of a function alone reads at its entry too.
+  EXPECT_EQ(
+      takeString(neverd_functions_range_json(Session, Helper, Helper + 1)),
+      Rows);
+  EXPECT_EQ(takeString(neverd_functions_range_json(Session, Entry, Helper)),
+            "[]");
   EXPECT_EQ(neverd_func_edit(Session, Helper, "{\"noreturn\":\"yes\"}"), -1);
   EXPECT_NE(lastError().find("\"noreturn\" is true, false or null"),
             std::string::npos);

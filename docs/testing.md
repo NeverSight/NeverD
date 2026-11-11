@@ -93,6 +93,21 @@ For a real save, compile projected bank initializers at O0/O2,
 inspect constant bytes, and keep hypothetical register transitions distinct
 from captured observations. No guest, handler or device callback need run.
 
+The `X86ModeInterruptTest.*` subset checks selected IRQ/NMI input in all five
+protected/compatibility/64-bit modes, deferred/refused inputs without effects,
+NMI-under-STI choices, high-half stack witnesses, suspended frame/event-budget
+work, zero-budget authentication, task refusal and terminal shutdown. KVM
+streams use one initial SREGS write, original mode transitions and STI/HLT wake;
+HighC/LLVM-to-C IRETQ handlers accept a second NMI without host state rewrites.
+
+The `X86ModeExecutionTest.*` subset in `NeverDX64PagedExecutionTests` checks
+continuous original protected/compatibility/code64 streams, complete register
+banks, mode-specific fault delivery and paid continuation. Its KVM fixtures set
+SREGS once and use original instructions for every later mode change. Keep
+Clang/NeverC source compilation on the x64 host. Pair this subset with the
+paging/control/event, legacy source and existing paged source suites when
+changing the shared boundary; record P/E-core profile choices explicitly.
+
 `NeverDX64PagedExecutionTests` compiles actual paged HighC/LLVM-to-C exports
 through Clang and optional `NEVERD_TEST_NEVERC`, at O0/O2, and compares their
 scalar instruction completion and faults with independent original KVM CPU
@@ -3133,6 +3148,23 @@ These host C tests do not qualify native Windows execution or arbitrary FP,
 record or split-width variadic tails. `check_windows_ucrt_calls.py --function
 UseCRTVarargs` separately compiles the actual `_wopen` output against the
 retained original Microsoft UCRT declarations on x86, x64 and ARM64.
+
+`I386CallContract.RuntimeVariadicImportsKeepTheirStackPrefixAndTail` checks
+the curated `_setjmp3` declaration without a supplied debug prototype. Both
+C routes, whole and selected units, and optimized/unoptimized pipelines keep
+zero, one and three additional DWORDs through direct IAT calls, loaded slots
+and import veneers. Recompiled i386 C at O0/O2 is compared with the original
+instructions using an independent provider that checks the buffer pointer,
+each high-bit argument, writes and return value. The paired
+`NonlocalJumpBufferAgreesWithItsRuntimeHeader` case checks `_longjmpex` against
+an independent i386 `jmp_buf` declaration. These are call-transport and source
+type checks, not native Windows unwind execution.
+`LLVMCValues.RuntimeVariadicFramePointersTakeTheirDeclaredPointee` additionally
+compiles frame-member and interior-byte addresses against that independent
+declaration and executes buffer writes and the return value at O0/O2.
+Older MinGW headers that
+declare `_setjmp3` with two fixed parameters do not describe the
+[documented runtime signature](https://learn.microsoft.com/en-us/cpp/c-runtime-library/setjmp3).
 
 `Win64CallContract.HeaderPointerQualifiersAgreeWithIndependentDefinitions`
 executes both C routes against independent definitions with const return and
@@ -7103,9 +7135,19 @@ a staged comment's step is refused unless it commits the comments first
 (`commit_staged`), its reply lists as many history entries as `limit` asks, and files changed behind the worker stop the next edit.
 `NeverDSessionCAPITests` lists the user's data items of a span with
 `neverd_items_range_json`: those sharing a byte with it, one reaching in from before
-included, none past them, and none for an empty or reversed span.
+included, none past them, and none for an empty or reversed span; and the function
+edits of an entry or a span with `neverd_functions_range_json`, created, deleted and
+stated ones as `neverd_functions_json` lists them. Its
+`NewTypesKeepTheImportPrototypesTheyDoNotReach` decompiles a driver whose calls read
+the kernel's prototypes, declares a type none reaches and then the process one returns,
+and reads the driver as a session that declared the same types first, byte for byte.
+`LocalTypesDebugContext.NewTypesNoPrototypeReachesKeepABISignatures` keeps a converted
+signature, the same nodes, through a type no prototype reaches.
 `NeverDWorkerViewEdits` also undoes a local's name, data items and names of data step by
-step and redoes them, each step reading as a new reader of the project does. The
+step and redoes them, each step reading as a new reader of the project does, and a
+comment on a page a client keeps is read behind the edit's reply and given to the read
+that asks for it (`metadata.prepared_views_given`), the page it applies to reading as a
+read naming none gets. The
 workbench's `undoTakesBackANameAfterAComment` undoes a comment and then the name before
 it, with no refusal on the way. The
 workbench's `commentsCommittedAheadOfAnEditAreNotASave` renames while a comment is
@@ -9685,6 +9727,14 @@ ctest --test-dir build-release \
   -L '^NeverD(CMemoryCopy|LLVMCValue|LLVMCFrameMemory|HighCStoreForwarding)Tests$' \
   --output-on-failure
 ```
+
+`HighCStoreForwarding.SharedVariableWalkKeepsFirstTypeAndCallBounds` checks
+shared and cyclic expressions, intrinsic outputs, indirect targets, and the
+first type recorded for a name under bounded and complete call arguments.
+`SharedMemoryWalkKeepsOrderAndRefreshesItsAddresses` checks address visitation
+order and fresh results after changing the indirect target. Both exceed the
+inline traversal storage; visitation order comes from operands, never from the
+membership set.
 
 ## LLVM C object storage
 

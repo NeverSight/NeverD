@@ -36,9 +36,9 @@ public:
                            const X86LegacyExecutionOptions &Options,
                            llvm::ArrayRef<uint8_t> Instruction,
                            X86LegacyTransferKind Kind, bool Active = true);
-  llvm::Expected<bool> replay(uint32_t Address, unsigned Bytes, bool Write,
+  llvm::Expected<bool> replay(uint64_t Address, unsigned Bytes, bool Write,
                               uint64_t &Value);
-  void record(uint32_t Address, unsigned Bytes, bool Write, uint64_t Value);
+  void record(uint64_t Address, unsigned Bytes, bool Write, uint64_t Value);
   void finish(X86PageWalkStatus Status);
 };
 

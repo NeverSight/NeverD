@@ -4435,3 +4435,60 @@ The [Actions runner discovery](evidence/x86-sgx-runner-discovery-2026-11-09.json
 also found no usable SGX1/EPC/device on Ubuntu 24.04 or Intel macOS 15/26. It
 executed zero enclave instructions. No final LLVM release, production pin or
 LLVM gitlink update is implied by either result.
+
+## Continuous protected/compatibility/code64 execution (2026-11-11)
+
+The [full-width mode owner](x86-mode-execution.md) executes original WRMSR,
+MOV-CR, far-JMP and RETFQ instructions through protected32 → compatibility32 →
+code64 → compatibility32 → protected32 without host mode rewrites. It shares
+control-write validation, retains complete register/descriptor/debug addresses,
+uses committed LMA for event frames and authenticates suspended instruction or
+event state. Long64 bodies use paged HighC/LLVM-to-C exports compiled by Clang
+and NeverC for the x64 host; guest code16/code32 adds no NeverC source target.
+
+At integration `12a6f114ea`, each SDK passes 1,308 primary execution, paging,
+source, boundary and SDK cases, with two LA57 hardware skips. Alternate-core
+replays add 15 passes and one LA57 skip per SDK, reported separately. The mode
+source matrix covers both emitters/compilers at O0/O2; original CPU streams
+compare one complete roundtrip and four mode-dependent event frames per core.
+The [dated evidence](evidence/x86-mode-execution-2026-11-11.json) records exact
+source/binary hashes, reports, identical generated sources across SDKs, isolated
+artifact replays and recoverable cleanup of superseded fixtures.
+
+This internal C++ boundary still requires separate integration for external
+inputs and other non64 state owners, including task/system selectors, segment
+reloads, ports/strings/MPX, legacy returns and call gates. Real/unreal execution,
+software SMM/SGX and unbound event producers remain open. The production r6 pin
+and LLVM gitlink remain unchanged; no final LLVM release is declared.
+
+
+## Continuous-mode IRQ/NMI and retained acceptance (2026-11-11)
+
+The [full-width mode owner](x86-mode-execution.md#selected-external-irqnmi)
+now accepts explicitly selected IRQ/NMI inputs in protected16/32,
+compatibility16/32 and code64. Committed LMA selects the event owner; complete
+stack witnesses, NMI blocking, accepted frame effects and frozen options
+survive backing repair. Acceptance is reported once, including secondary
+faults and zero-budget resumes. Halt wake, terminal shutdown and pending-state
+authentication precede further fetch or budget checks. Inhibited or refused
+inputs publish no trial bank or paging-control changes.
+
+At integration `b9bcfd819c`, the development SDK and production r6 SDK each
+pass 476 primary paged-source, legacy-source, boundary and SDK cases. Another
+29 alternate-core replays and five regressions from the latest upstream
+runtime-varargs/frame-pointee changes pass per SDK, counted separately; there
+are no failures or skips. Original STI/HLT wake and repeated NMI/IRETQ streams
+use one initial SREGS write and no host mode or blocker rewrites. Both C
+emitters retain identical generated artifacts across SDKs. The
+[dated evidence](evidence/x86-mode-interrupts-2026-11-11.json) records exact
+source/binary/artifact hashes and the unchanged lower-owner paging baseline.
+A subsequent merge at `da61cae5e7` includes upstream type-cache, function-edit
+range and MIPS-only Capstone changes. Both SDKs rebuild and pass 154 affected
+mode, boundary, SDK, type-context and session checks each, with no failures or
+skips; these integration replays have their own exact-source records.
+
+The producer still owns arrival timing and APIC/PIC/CR8 priority arbitration.
+Other non64 state-owner integrations, real/unreal execution, software SMM/SGX
+and unbound event producers remain open. NeverC remains host x64 only. The
+production r6 pin and LLVM gitlink are unchanged; no final LLVM release is
+declared.

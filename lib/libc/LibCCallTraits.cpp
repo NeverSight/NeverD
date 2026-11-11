@@ -98,6 +98,9 @@ bool wideFormatNeedsDeclaration(std::string_view Name, LibCVariant Variant) {
 
 unsigned varArgFixedCount(std::string_view Name, LibCVariant Variant) {
   Name = routineOfSymbol(Name, Variant);
+  if (Variant == LibCVariant::Windows)
+    if (const auto *Prototype = libcPrototype(Name, BinaryFormat::COFF))
+      return Prototype->Variadic ? Prototype->ParamCount : 0;
   if (const std::string_view Routine = largeFileRoutine(Name); !Routine.empty())
     Name = Routine;
   if (const std::string_view Standard = isoAliasTarget(Name); Standard != Name)
@@ -179,8 +182,17 @@ unsigned varArgFixedCount(std::string_view Name, LibCVariant Variant) {
 
 VarArgFixedParamKind varArgFixedParamKind(std::string_view Name, unsigned Index,
                                           LibCVariant Variant) {
-  Name =
-      isoAliasTarget(stripLeadingUnderscores(routineOfSymbol(Name, Variant)));
+  Name = routineOfSymbol(Name, Variant);
+  if (Variant == LibCVariant::Windows)
+    if (const auto *Prototype = libcPrototype(Name, BinaryFormat::COFF)) {
+      if (!Prototype->Variadic || Index >= Prototype->ParamCount)
+        return VarArgFixedParamKind::Unknown;
+      const auto Type = Prototype->Params[Index];
+      return isPointerType(Type)    ? VarArgFixedParamKind::Pointer
+             : isFloatingType(Type) ? VarArgFixedParamKind::Unknown
+                                    : VarArgFixedParamKind::Integer;
+    }
+  Name = isoAliasTarget(stripLeadingUnderscores(Name));
   if (Variant != LibCVariant::GNU)
     if (const auto Kinds = variant_rows::variadic(Name, Variant))
       return Index < Kinds->size() ? (*Kinds)[Index]

@@ -832,15 +832,20 @@ llvm::Expected<bool> reserveMachOSourceUnwind(
     uint64_t Count = 0;
     for (const auto &Page : Raw->Pages)
       Count += Page.EntryCount;
-    // Bound regular encoding, including gap records and page indexes.
-    // Regular pages occupy 4096 bytes even when only partially filled.
-    const uint64_t Required =
-        4096 + 256 + (Count + 3 * AdditionalFunctions + 1) * 32 +
-        Raw->LSDAEntries.size() * 8 + Raw->PersonalitySlotOffsets.size() * 4;
+    // Each added function can introduce its own recipe and a gap boundary.
+    // Keep the original records and a terminal gap; every new function may
+    // also need an LSDA and any of the ABI's personality slots.
+    auto Size = measureMachOCompactUnwindRegular(
+        Count + 2 * AdditionalFunctions + 1,
+        macho_unwind::kPersonalityMask >> macho_unwind::kPersonalityShift,
+        Raw->LSDAEntries.size() + AdditionalFunctions);
+    if (!Size)
+      return Size.takeError();
+    const uint64_t Required = *Size;
     if (Required > R.SectionSize) {
       if (auto E = reserveMachOCompactUnwindStorage(Candidate, Required)) {
         llvm::consumeError(std::move(E));
-        const uint64_t Capacity = llvm::alignTo(Required, 4096);
+        const uint64_t Capacity = llvm::alignTo(Required, alignof(uint64_t));
         // Adopt checked prefix growth before placing the compact registry.
         // The growth owner rebases its TEXT-relative records, so refresh the
         // payload instead of copying the pre-growth offsets into the new map.

@@ -4087,6 +4087,16 @@ both C routes retain every recovered tail operand. A portable rendering of
 the original header declaration preserves qualifiers where its types are
 self-contained; the original declaration and provider remain available.
 
+On i386, a curated Windows runtime prototype with an integer/pointer word
+prefix uses the same pre-SSA variadic summary. `_setjmp3` therefore takes its
+jump buffer and count from the stack, followed by the recovered tail, through
+an IAT call, a loaded slot or an import veneer. Scratch ECX/EDX values cannot
+extend that prefix. The runtime table owns the declaration and parameter
+categories; both C writers also retain its returns-twice effect. LLVM C casts
+opaque pointer operands to the runtime's declared pointee, including addresses
+of frame members and interior frame bytes. This does not
+establish jump-buffer storage or reconstruct nonlocal exception unwinding.
+
 This is a prefix contract, not an inference of arbitrary variadic tail types.
 Windows ARM64 varargs use integer registers and stack slots rather than the
 ordinary FP register bank ([Microsoft ARM64 ABI](https://learn.microsoft.com/en-us/cpp/build/arm64-windows-abi-conventions#addendum-variadic-functions)).
@@ -4755,8 +4765,10 @@ graphs with the ordinary portable scalar spellings, which need no global
 name table. Rendering moves the same graph into the full-signature cache and
 adds declarations without changing previously returned types. Only valid
 prototype names in the context's library enter this intermediate cache;
-adding types clears it even when C names remain stable, so an opaque pointee
-can acquire its newly recovered layout.
+adding types a prototype reaches clears it even when C names remain stable, so
+an opaque pointee can acquire its newly recovered layout. Types no prototype
+reaches (`Session::takeUnreadTypes` checks the names prototypes reach) leave
+every converted signature as it is.
 C declaration writers build their library-wide name table only when a named
 type or enumerator needs it. Scalar and parameter spelling use the same
 identifier rules directly. The deferred table still consumes the whole
@@ -5127,15 +5139,23 @@ item over bytes no string or code holds where they are (`Listing::dataRenamed`,
 `Listing::dataItemsChanged`, which reads the items from the table the history has just
 committed rather than asking the engine for all of them again; the edit itself reads only
 the rows of the span it can change, before and after, with
-`neverd_items_range_json`, and keeps the rest of the committed table), the session a name without reading its table
+`neverd_items_range_json`, and keeps the rest of the committed table; a function edit
+reads the row at its entry alone with `neverd_functions_range_json`), the session a name without reading its table
 (`neverd_rename_take`), and a declaration of types no other names reads them against
 what it read of the library once (`Session::LocalTypeNames`), on the library itself
-(`TypeLibrary::Trial`, which undoes a refused declaration). A function's declaration
+(`TypeLibrary::Trial`, which undoes a refused declaration), and the identity its stores
+are kept under before it with the declarations the history committed. The project's
+input is recorded once a history first commits, since what the record says holds while
+the session keeps the input. A function's declaration
 reads against the library without copying it, its prototype the parse's own; one that
 would define a type reads again on a copy (`parseFunctionDeclaration`). The GUI opens with `write_behind`: the reply to such an edit, a source
 edit such as a local's name and an operand's format among them, goes before its write, which runs the same journaled transaction in order on a thread of its own
 (`ProjectHistory::persistLater`), joined with what is queued behind one already
-writing. What may read the project's files waits for it first. Staged comments an edit
+writing. What may read the project's files waits for it first. While the client takes
+in the reply to a comment or a name, the owner reads the views it reaches that the client
+shows (or the one it reaches alone) as the client will ask for them
+(`Engine::prepareFollowingViews`), and the read that asks the same takes that answer while
+nothing has changed. Staged comments an edit
 must not pass are committed ahead of it the same way (`save.write_behind`,
 `Session::commitComments`, counting comments still on their way to the worker), while
 the user's Save, closing and packing a database send a plain save that waits. Undo and redo take a step as its edit took it, in place
@@ -15041,13 +15061,24 @@ entry point, and C-source ARM Mach-O patching all fail closed before output
 mutation. Stripped inputs whose only function discovery source is
 `LC_FUNCTION_STARTS` are not yet supported.
 
-A whole-image Mach-O rewrite adds one segment command. Apple's linker can leave
-less room than that after the load commands, so the rewrite gives up
-`LC_SOURCE_VERSION`, `LC_DATA_IN_CODE` and `LC_FUNCTION_STARTS`, in that order and
-only as far as it must. dyld reads none of them. The signature command that
-`codesign` writes back after the table counts as part of what must fit, since
-`codesign` overwrites whatever follows the table. A source patch keeps them and
-grows the header instead.
+Mach-O code installation can need additional segment commands. Apple's linker
+can leave less room than that after the load commands, so both lifted rewrites
+and native source/object replacements give up `LC_SOURCE_VERSION`,
+`LC_DATA_IN_CODE` and `LC_FUNCTION_STARTS`, in that order and only as needed.
+The UUID and the symbol, dependency and unwind tables stay live.
+The signature command that `codesign` writes back after the table counts as
+part of what must fit, since `codesign` overwrites whatever follows the table.
+Every reached padding byte must be unowned and zero. Original code and data
+addresses remain fixed; occupied space still requires a complete relocation
+contract.
+
+Regular compact-unwind encoding and its reservation share one checked size
+planner. Full pages contain 511 records in 4096 bytes, while the last page ends
+after its declared records. Reservations include original records, new recipe
+and gap boundaries, personality slots and LSDAs without rounding the final
+page to 4 KiB. This permits small registries in existing TEXT capacity, but
+does not create storage for a full DWARF table when a live DATA segment blocks
+TEXT growth.
 
 PE, ELF, and Mach-O each have format-specific exception components, but NeverD
 does not yet publish an all-formats, all-exception-types end-to-end rewrite
@@ -19911,6 +19942,19 @@ previous lift calls. The signed/unsigned operations share one lifter; narrowing
 belongs to subsequent dataflow, with no decoder-local dividend cache. See
 [the event interface](x86-event-delivery.md); legacy non-IA-32e dispatch and
 SMM/SGX transitions do not acquire semantics from this interface.
+
+`X86ModeExecution` composes the protected/compatibility original-byte owner
+with paged code64 bodies over one complete V7 bank and retained debug/shadow
+state. The translate layer returns typed non-64-bit event requests before IDT
+access; analysis selects the event owner from committed controls and performs
+a terminal state handoff. `X86ControlRegisters` owns the pure CR0/CR3/CR4
+transition checks; its consumer retains physical PDPTE access and publication.
+Low-width views never replace persistent full-width banks. See the
+[continuous mode contract](x86-mode-execution.md) for admission and resumption. Its selected
+IRQ/NMI entry uses the same committed-mode event owner, reports original input
+acceptance once and retains full-bank progress across frame suspension. The
+mode owner authenticates pending state before stop/budget exits and keeps
+shutdown terminal; the event producer owns arrival and interrupt arbitration.
 
 The native SMM continuation projection owns canonical RSM admission in
 `X64ContinuationSmm.h`. SVM and SMM share standard XSAVE image checks and

@@ -1,0 +1,23 @@
+//===- MachOCompactUnwindLayout.def - Regular unwind layout ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef MACHO_UNWIND_LAYOUT_VALUE
+#define MACHO_UNWIND_LAYOUT_VALUE(Type, Name, Value)
+#endif
+
+MACHO_UNWIND_LAYOUT_VALUE(uint64_t, kFinalHeaderSize, 28)
+MACHO_UNWIND_LAYOUT_VALUE(uint64_t, kFirstLevelIndexEntrySize, 12)
+MACHO_UNWIND_LAYOUT_VALUE(uint64_t, kLSDAIndexEntrySize, 8)
+// A second-level page holds at most 4096 bytes; its last page needs only
+// the header and entries named by entryCount.
+MACHO_UNWIND_LAYOUT_VALUE(uint64_t, kRegularPageSize, 4096)
+MACHO_UNWIND_LAYOUT_VALUE(uint64_t, kRegularPageHeaderSize, 8)
+MACHO_UNWIND_LAYOUT_VALUE(uint64_t, kRegularEntrySize, 8)
+MACHO_UNWIND_LAYOUT_VALUE(uint64_t, kRegularEntriesPerPage,
+                          (kRegularPageSize - kRegularPageHeaderSize) /
+                              kRegularEntrySize)
+
+#undef MACHO_UNWIND_LAYOUT_VALUE

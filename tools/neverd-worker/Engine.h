@@ -60,6 +60,11 @@ public:
   std::string revision() const { return std::to_string(revision_); }
   std::string projectId() const { return projectId_; }
   bool analyzed() const { return analyzed_; }
+  /// After an edit's reply: the views it reaches that a client was last given
+  /// a page of are read again, as that client will ask for them, until
+  /// \p requestWaiting says a request waits.  The read that asks the same
+  /// takes the answer while nothing has changed since.
+  void prepareFollowingViews(const std::function<bool()> &requestWaiting);
   /// Background work (the reference index) runs between requests.
   bool hasIdleWork() const;
   bool idleStep();
@@ -163,8 +168,9 @@ private:
   /// A read-only replica is checked against the owner's loaded input and
   /// committed sidecars before any expensive operation is admitted.
   Json analysisSnapshot();
-  /// analysisSnapshot, stating \p state of the user's facts.
-  Json analysisSnapshot(Json state);
+  /// analysisSnapshot, stating \p state of the user's facts and \p declared
+  /// as the declared types where given (typeDeclarationRows otherwise).
+  Json analysisSnapshot(Json state, const Json *declared = nullptr);
   Json browseCacheIdentity();
   /// \p identity, a snapshot, with what else says what a cached page read: the
   /// project's files but for \p unread.
@@ -360,8 +366,8 @@ private:
   };
   StoreNames storeNames();
   /// What the stores are kept under (renderStoreIdentity), or none where this
-  /// session keeps no stores.
-  std::optional<Json> storeIdentity();
+  /// session keeps no stores; \p declared as renderStoreIdentity's.
+  std::optional<Json> storeIdentity(const Json *declared = nullptr);
   /// The names of the stores kept under \p identity.
   static StoreNames storeNames(Json identity);
   /// What the render just made read of what the user states, kept as the first
@@ -395,8 +401,9 @@ private:
   void keepListingFacts(std::uint64_t address);
   std::string renderStoreMode_;
   /// What renders depend on: browseCacheIdentity without what a view's
-  /// decoration reads, local and function names and comments.
-  Json renderStoreIdentity();
+  /// decoration reads, local and function names and comments.  \p declared,
+  /// where given, are the declared types it states (analysisSnapshot's).
+  Json renderStoreIdentity(const Json *declared = nullptr);
   /// A view's key in the store: its source key without the generation, which
   /// counts this session's listing builds.
   std::string renderStoreKey(std::uint64_t address,
@@ -481,6 +488,8 @@ private:
   /// take them in place (namedViewsTakeRevision).
   const CodeEdits::ImageFacts &imageFacts() const;
   mutable CodeEdits::ImageFacts imageFacts_;
+  /// projectFolder() once read; reset with the session.
+  mutable std::optional<std::string> projectFolder_;
   mutable std::optional<std::uint64_t> imageFactsRevision_;
   bool imageFactsHeld_ = false;
   /// States the names of \p view's functions as they are named now.
@@ -583,6 +592,10 @@ private:
     bool pagesRenamed = false;
     /// Of the edits views have kept through, how many it has read.
     mutable std::uint64_t viewEditsRead = 0;
+    /// The read a client last made of it with kept_only, naming the page it
+    /// was given (if_none_match) as its next read will, and when.
+    mutable Json nextRead;
+    mutable std::uint64_t servedAt = 0, servedRevision = 0;
     /// Hashes of the identifiers its text spells, sorted, once an edit's names
     /// are first looked for in it.
     mutable std::vector<std::uint64_t> spelled;
@@ -658,8 +671,32 @@ private:
                                     const Json &options = Json::object(),
                                     EncodedPayload *encoded = nullptr,
                                     const std::string *ifNoneMatch = nullptr,
-                                    bool pageDelta = false);
+                                    bool pageDelta = false,
+                                    const Json *request = nullptr);
   std::uint64_t namedViewIds_ = 0;
+  /// The page the last view read gave, of which document, and the read that
+  /// follows it: kept on the document once the page reaches the client.
+  struct ServedPage {
+    std::shared_ptr<const NamedView> document;
+    Json next;
+  };
+  std::optional<ServedPage> served_;
+  std::uint64_t servedPages_ = 0;
+  void keepServed(ServedPage served);
+  /// Answers prepareFollowingViews made, for the request each answers, while
+  /// the revision and the listing's view generation are those they read.
+  struct PreparedView {
+    std::string request;
+    Json reply;
+    std::optional<ServedPage> served;
+  };
+  std::vector<PreparedView> preparedViews_;
+  std::uint64_t preparedRevision_ = 0, preparedGeneration_ = 0;
+  std::uint64_t viewEditsAtRequest_ = 0, requestRevision_ = 0;
+  /// Lets answers no read took go off the request thread.
+  void forgetPreparedViews();
+  /// metadata.prepared_views: answers made and given.
+  std::uint64_t preparedMade_ = 0, preparedGiven_ = 0;
   /// Documents written from another with its comments, functions' names or
   /// data's names taken (takeComments, takeFunctionNames, takeDataNames).
   std::uint64_t commentPatches_ = 0, namePatches_ = 0, dataNamePatches_ = 0;
@@ -731,10 +768,14 @@ private:
   /// the analysis go, as declaring does.
   bool reloadTypeDeclarations();
   /// Record which build of the input the project's files describe, after
-  /// the worker wrote one of them.
-  void recordProject();
+  /// the worker wrote one of them: true once recorded, or when the engine
+  /// keeps no record.
+  bool recordProject();
   /// neverd_project_json, or null from an older engine.
   Json projectJson() const;
+  /// The project's folder, as neverd_project_json gives it: read once a
+  /// session has one, which it keeps with its input; empty without one.
+  const std::string &projectFolder() const;
   /// Read the function edits sidecar: true when it loaded or the engine keeps
   /// no function edits.  A changed function list restarts its analysis.
   bool reloadFunctionEdits();
