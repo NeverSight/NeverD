@@ -1092,6 +1092,66 @@ def residue_subgroup_corpus(width, count):
     return rows
 
 
+def upper_perturbation_corpus(width, count):
+    """Products whose independent high-word disturbances can overlap."""
+    rows = []
+    sources = ("(x^y)", "(y|z)", "(z&w)", "(x+(w^y))", "((x&z)*(y|w))", "(~(w|x))")
+    for case in range(count):
+        rng = random.Random(0x4AF9288 + 1009 * width + case)
+        degree = (4, 9, 17, 33, 49, 65)[case % 6]
+        observed = max(7, width - width // 4) if case % 3 else width
+        scale = 3 << (width - observed) if case % 3 else 1
+        shifts = [(observed + 1) // 2 + rng.randrange(max(1, min(4, observed // 4)))
+                  for _ in range(degree)]
+        if case % 4 == 1:
+            shifts[0] = (observed - 1) // 2
+            shifts[1:] = [max(s, observed - shifts[0]) for s in shifts[1:]]
+        elif case % 4 == 2:
+            shifts = [0] + [observed] * (degree - 1)
+        factors = []
+        for i, shift in enumerate(shifts):
+            offset = ((2 * i + 1) % 15 or 1) if case % 3 else 1
+            if case % 5 == 4 and i % 7 == 0:
+                offset += 1
+            weight = (2 * i + 3 if i % 3 else -(2 * i + 1)) << shift
+            source = sources[(i + case) % len(sources)]
+            factors.append(f"({offset}+({weight})*{source})")
+        rng.shuffle(factors)
+        rows.append(f"({scale}*" + "*".join(factors) + ")+(x^y)+2*(x&y)")
+    return rows
+
+
+def masked_perturbation_corpus(width, count):
+    """Unequal masks on shared arithmetic words with noninvertible offsets."""
+    rows = []
+    sources = ("(x|y)", "(y^w)", "(z+(x&w))", "((w^x)*(y|z))")
+    for case in range(count):
+        rng = random.Random(0xA084959 + 73 * width + case)
+        degree = (7, 12, 21, 37)[case % 4]
+        observed = width - 2 - case % 3
+        scale = (3 if case % 2 == 0 else 5) << (width - observed)
+        factors = []
+        for i in range(degree):
+            zeros = (observed + 1) // 2 + i % 2
+            if case % 4 == 3:
+                low = observed // 2 - 1
+                zeros = low if i == 0 else max(zeros, observed - low)
+            mask = (rng.getrandbits(width) & -(1 << zeros)) | (1 << zeros)
+            source = sources[i % len(sources)]
+            weight = (rng.randrange(-17, 18) | 1) << zeros
+            delta = f"({source}&{mask})" if i % 3 else f"({weight}*{source})"
+            offset = rng.randrange(1, 256) | 1
+            if case % 5 == 0 and i == 2:
+                offset += 1
+            if case % 2 and i % 3 == 1:
+                offset = -offset
+            factors.append(f"({offset}+{delta})")
+        rng.shuffle(factors)
+        rows.append(f"({scale}*" + "*".join(factors) + ")+(x|y)+(x&y)+(z^w)+2*(z&w)")
+    return rows
+
+
+
 def sparse_linear_mixed_degree_corpus(width, count):
     """Degree-4–18 products with disjoint constant, linear and perturbed tails.
 
@@ -1290,7 +1350,7 @@ def main():
                  "permuted-carry-product", "complemented-carry-product",
                  "narrow-product-cross-terms", "masked-product-window",
                  "residue-power", "residue-quotient", "residue-subgroup",
-                 "sparse-linear-mixed-degree"),
+                 "sparse-linear-mixed-degree", "upper-perturbation", "masked-perturbation"),
         default="complement",
     )
     args = parser.parse_args()
@@ -1307,7 +1367,11 @@ def main():
     }
     with tempfile.TemporaryDirectory(prefix="neverd-mask-bench-") as directory:
         path = Path(directory) / "expressions.txt"
-        for width in (8, 16, 32, 64):
+        widths = {
+            "upper-perturbation": (8, 16, 32, 64, 65, 97, 129, 257),
+            "masked-perturbation": (9, 24, 63, 127, 256),
+        }.get(args.family, (8, 16, 32, 64))
+        for width in widths:
             generate = {
                 "complement": corpus, "weighted": weighted_corpus,
                 "bitwise": bitwise_corpus, "interleaved": interleaved_corpus,
@@ -1336,6 +1400,8 @@ def main():
                 "residue-quotient": residue_quotient_corpus,
                 "residue-subgroup": residue_subgroup_corpus,
                 "sparse-linear-mixed-degree": sparse_linear_mixed_degree_corpus,
+                "upper-perturbation": upper_perturbation_corpus,
+                "masked-perturbation": masked_perturbation_corpus,
             }[args.family]
             expressions = generate(width, args.count)
             path.write_text("\n".join(expressions) + "\n", encoding="utf-8")

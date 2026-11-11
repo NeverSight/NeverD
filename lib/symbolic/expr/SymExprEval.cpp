@@ -24,6 +24,7 @@
 #include <cassert>
 #include <cstddef>
 #include <limits>
+#include <tuple>
 #include <utility>
 
 namespace neverd::symbolic {
@@ -102,9 +103,20 @@ template <typename Step>
 LLVM_ATTRIBUTE_NOINLINE size_t prepareNativeResidues(
     const SymContext &Ctx, SymRef Root, uint32_t &RootSlot, size_t NumSlots,
     llvm::MutableArrayRef<Step> Steps, llvm::MutableArrayRef<uint32_t> Args) {
-  const auto Needed =
-      visitRequiredPrefixes(Ctx, Root, RootSlot, NumSlots, Steps, Args,
-                            [](const Step &, unsigned, unsigned, unsigned) {});
+  unsigned ProductBits = 0;
+  const auto Needed = visitRequiredPrefixes(
+      Ctx, Root, RootSlot, NumSlots, Steps, Args,
+      [&](const Step &St, unsigned Demand, unsigned Zeros, unsigned) {
+        if (!Zeros || Zeros >= Demand)
+          return;
+        const unsigned Bits = Demand - Zeros;
+        // More factors than distinct residues makes repeated prefixes likely.
+        // NumArgs is 32 bits, so no modulus of 2^32 or larger can qualify.
+        if (Bits < 32 && St.NumArgs - 1 > (uint32_t(1) << Bits))
+          ProductBits = std::max(ProductBits, Bits);
+      });
+  using ResidueKey = std::tuple<unsigned, unsigned, uint32_t, uint32_t>;
+  llvm::DenseMap<ResidueKey, uint32_t> Residues;
   llvm::SmallVector<uint32_t, 64> Aliases;
   Aliases.reserve(NumSlots);
   for (size_t I = 0; I < NumSlots; ++I)
@@ -124,6 +136,26 @@ LLVM_ATTRIBUTE_NOINLINE size_t prepareNativeResidues(
                                                  : Low == 0;
       if (Neutral) {
         Aliases[St.OutputSlot] = Args[St.FirstArg + 1];
+        continue;
+      }
+    }
+    // Each consumer observes at most Needed[slot] bits. Two binary words
+    // with identical projected inputs and operation can share that slot,
+    // even when different constants made them distinct full-width nodes.
+    unsigned Bits = Needed[St.OutputSlot];
+    if (Bits <= ProductBits && St.NumArgs == 2 && preservesLowBits(St.Op)) {
+      const auto First = Ctx.operand(St.Node, 0);
+      const bool Constant = Ctx.isConst(First);
+      uint32_t L = Args[St.FirstArg], R = Args[St.FirstArg + 1];
+      if (Constant)
+        L = Ctx.node(First).Aux & ((uint32_t(1) << Bits) - 1);
+      else if (L > R)
+        std::swap(L, R);
+      auto [It, Inserted] = Residues.try_emplace(
+          ResidueKey{2 * unsigned(St.Op) + Constant, Bits, L, R},
+          St.OutputSlot);
+      if (!Inserted) {
+        Aliases[St.OutputSlot] = It->second;
         continue;
       }
     }

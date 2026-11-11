@@ -4161,6 +4161,15 @@ Keep both the older corpus and `residue-power` as regression controls. The
 independent benchmark oracle evaluates a postorder expression walk so these
 deep products retain semantic checks within Python's default recursion limit.
 
+The high-word perturbation regressions cover products with even offsets, masked
+and multiplied disturbances, and pairs whose interaction survives by one bit.
+Independent full-width evaluation checks both the rewritten product and the
+original. A separate shared-use case checks that a full-width consumer prevents
+narrowing a repeated residue. A 33-factor executable exercises the CLI and
+GUI worker source paths at O0 and O2. Use `--family upper-perturbation --count 32`
+to reproduce 256 scaled products and `--family masked-perturbation --count 32`
+for 160 mixed-mask controls, including non-native widths up to 257 bits.
+
 Dominant-prefix regressions add degree-511–514 products with disturbed factors
 and multiple residual multipliers. Complete-word APInt oracles cover 8–257 bits,
 both selector branches and residual zero/even values; exact and one-short work
