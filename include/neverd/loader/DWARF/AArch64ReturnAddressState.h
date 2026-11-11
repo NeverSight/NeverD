@@ -54,9 +54,6 @@ struct AArch64RAQueryResult {
   /// Populated only for Known. Unknown never supplies an unsigned default.
   std::optional<AArch64ReturnAddressState> State;
   const char *Diagnostic = nullptr;
-  /// The CIE/FDE supplied a rule for the signing column. Classic arm64e
-  /// producers may instead rely entirely on Darwin's implicit return ABI.
-  bool HasExplicitSigningRule = false;
 };
 
 struct AArch64RAQueryLimits {
@@ -74,6 +71,13 @@ AArch64RAQueryResult
 evaluateAArch64ReturnAddressState(Arch Architecture, const DwarfCIE &CIE,
                                   const DwarfFDE &FDE, va_t PC,
                                   const AArch64RAQueryLimits &Limits = {});
+
+/// Also report whether the CIE or FDE supplied a signing-column rule. An
+/// absent rule has a DWARF default, but cannot establish the live state of
+/// an interrupted frame using Darwin's implicit return ABI.
+AArch64RAQueryResult evaluateAArch64ReturnAddressState(
+    Arch Architecture, const DwarfCIE &CIE, const DwarfFDE &FDE, va_t PC,
+    const AArch64RAQueryLimits &Limits, bool &HasExplicitRule);
 
 } // namespace neverd::dwarf_eh
 

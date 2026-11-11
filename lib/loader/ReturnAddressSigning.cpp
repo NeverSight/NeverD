@@ -79,10 +79,11 @@ AArch64RAQueryResult dwarfState(const BinaryImage &Image,
   }
   if (!CIE)
     return fail(Status::Malformed, kInvalidCIE);
+  bool HasExplicitRule;
   auto State = dwarf_eh::evaluateAArch64ReturnAddressState(
-      Image.Arch, *CIE, FDE, PC, Limits.Dwarf);
+      Image.Arch, *CIE, FDE, PC, Limits.Dwarf, HasExplicitRule);
   if (State.Status == Status::Known && CIE->UsesArm64eReturnAddressABI &&
-      !State.HasExplicitSigningRule)
+      !HasExplicitRule)
     return fail(Status::Unknown, kImplicitDarwinState);
   return State;
 }

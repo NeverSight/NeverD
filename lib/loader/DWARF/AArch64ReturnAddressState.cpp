@@ -51,6 +51,15 @@ AArch64RAQueryResult
 evaluateAArch64ReturnAddressState(Arch Architecture, const DwarfCIE &CIE,
                                   const DwarfFDE &FDE, va_t PC,
                                   const AArch64RAQueryLimits &Limits) {
+  bool HasExplicitRule;
+  return evaluateAArch64ReturnAddressState(Architecture, CIE, FDE, PC, Limits,
+                                           HasExplicitRule);
+}
+
+AArch64RAQueryResult evaluateAArch64ReturnAddressState(
+    Arch Architecture, const DwarfCIE &CIE, const DwarfFDE &FDE, va_t PC,
+    const AArch64RAQueryLimits &Limits, bool &HasExplicitRule) {
+  HasExplicitRule = false;
   using namespace aarch64;
   using Status = AArch64RAQueryStatus;
   const auto fail = [](Status S, const char *Message) {
@@ -83,6 +92,7 @@ evaluateAArch64ReturnAddressState(Arch Architecture, const DwarfCIE &CIE,
       HasRegisterRule |= isRARegisterRule(I);
       HasSetState |= I.Kind == CFIOpKind::SetRAState;
     }
+  HasExplicitRule = HasToggle || HasRegisterRule || HasSetState;
   if (HasToggle && HasRegisterRule)
     return fail(Status::Malformed, kMixedRules);
 
@@ -215,8 +225,7 @@ evaluateAArch64ReturnAddressState(Arch Architecture, const DwarfCIE &CIE,
     return Error;
   if (!Answer)
     return fail(Status::Unknown, kDynamicState);
-  return {Status::Known, Answer, nullptr,
-          HasToggle || HasRegisterRule || HasSetState};
+  return {Status::Known, Answer, nullptr};
 }
 
 } // namespace neverd::dwarf_eh
