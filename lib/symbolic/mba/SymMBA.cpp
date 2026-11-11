@@ -2292,6 +2292,13 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
         Rebuilt = Ctx.rebuild(R, NewOps);
     }
 
+    // Rebuilding a proved product after shortening its children preserves
+    // its full value. Keep its residue proof available to the parent sum.
+    if (Rebuilt != R && Ctx.op(R) == SymOp::Mul &&
+        Ctx.op(Rebuilt) == SymOp::Mul &&
+        isReconstructedProgression(Ctx, R, Budget))
+      recordReconstructedProgression(Ctx, Rebuilt, Budget, RefinementStorage);
+
     RebuiltInput = Rebuilt;
     if (hasCompletedResidueReading(Ctx, R, Budget, true)) {
       // These nodes were just emitted from an exact observed-word proof.

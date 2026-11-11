@@ -10746,7 +10746,9 @@ fixtures also execute 64-factor and 126-factor windows through CLI and worker.
 Wide-product tests compare dynamic coefficients and shared consumers with full
 multiplication through 257 bits. Mixed-width verification crosses the cached
 random-word boundary in both directions. Independent word arithmetic checks
-weighted Boolean tails, overlapping inputs, and a changed high coefficient.
+weighted Boolean tails, overlapping inputs, and a changed high coefficient. A shuffled
+127-factor interval with an interior hole checks that rebuilding its children
+under a parent sum stays within the default work allowance.
 
 `SymMBALinearProofMemo` checks successful full-width proof reuse, alternating
 queries with the same difference, context isolation, incomplete proofs and

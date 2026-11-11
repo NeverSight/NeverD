@@ -686,6 +686,12 @@ SymRef foldResidueDecisions(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
                             bool *StorageLimited = nullptr,
                             bool *Complete = nullptr);
 
+/// Reuse an accepted modular product reconstruction within this deep request.
+bool isReconstructedProgression(const SymContext &Ctx, SymRef Root,
+                                WorkBudget &Budget);
+void recordReconstructedProgression(const SymContext &Ctx, SymRef Root,
+                                    WorkBudget &Budget, size_t &Storage);
+
 /// Avoid rediscovering an emitted exact low-word reading. Original opaque
 /// inputs still participate in the deep walk. The canonical builder propagates
 /// their rewrites; changed original products remain eligible for analysis.

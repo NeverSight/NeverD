@@ -6103,6 +6103,9 @@ have guaranteed trailing zeros. Evaluation retains the full coefficient and
 computes each other factor to the highest bit observed by any consumer.
 For disjoint pairs in an additive tail, the solver checks the weights of the
 one-set and both-set bit rows at full width before replacing them with a sum.
+A parent can reuse the modular reading of a reconstructed product after its
+children acquire shorter equivalent spellings in the same request. New
+products formed by a caller retain their own residue search.
 The SDK renders both sides of a rewrite together when their widths agree, so
 a shared fragment is formatted once with the original precedence.
 Expression restoration skips nodes older than every substitution key: immutable

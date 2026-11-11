@@ -4582,6 +4582,8 @@ public:
       return Root;
     commitWork();
     recordResidueReading(Ctx, FirstEmitted, Budget, Storage);
+    if (ProvedGroup && Ctx.op(Result) == SymOp::Mul)
+      recordReconstructedProgression(Ctx, Result, Budget, Storage);
     return Result;
   }
 };

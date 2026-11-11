@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <numeric>
+#include <optional>
 #include <random>
 #include <vector>
 
@@ -31,7 +32,14 @@ struct Window {
   unsigned Bits, Size, Start, XStep, ZStep, YShift, ZShift;
   unsigned Variations = 0, ClearYBit = 0;
 
+  std::optional<unsigned> Hole = std::nullopt;
+
   bool has(WindowVariation V) const { return Variations & V; }
+
+  unsigned indexAt(unsigned J) const {
+    return Start + J + unsigned(has(RepeatedIndex) && J == Size / 3) +
+           unsigned(Hole && J >= *Hole);
+  }
 };
 
 SymRef build(SymContext &Ctx, unsigned Width, const Window &W) {
@@ -47,7 +55,7 @@ SymRef build(SymContext &Ctx, unsigned Width, const Window &W) {
   std::shuffle(Order.begin(), Order.end(), std::mt19937(399));
   llvm::SmallVector<SymRef, 64> Factors;
   for (unsigned J : Order) {
-    unsigned I = W.Start + J + (W.has(RepeatedIndex) && J == W.Size / 3);
+    unsigned I = W.indexAt(J);
     auto A = Ctx.mkAdd(
         XBase, Ctx.mkConst(Width, W.XStep * I + (W.has(Perturbed) && !J)));
     auto B = Ctx.mkAnd(Ctx.mkAdd(Y, Ctx.mkConst(Width, I)), Ctx.mkConst(YMask));
@@ -66,7 +74,7 @@ llvm::APInt evaluate(const Window &W, llvm::ArrayRef<llvm::APInt> Inputs) {
   const auto Width = Inputs.front().getBitWidth();
   auto Product = llvm::APInt(Width, 3).shl(Width - W.Bits);
   for (unsigned J = 0; J < W.Size; ++J) {
-    const unsigned I = J + W.Start + (W.has(RepeatedIndex) && J == W.Size / 3);
+    const unsigned I = W.indexAt(J);
     auto X = (W.has(ComplementX) ? ~Inputs[0] : Inputs[0]) + W.XStep * I +
              (W.has(Perturbed) && !J);
     auto Y =
@@ -103,8 +111,7 @@ TEST(SymMBAProgressions,
         for (unsigned Z = 0; Z < 32; ++Z) {
           unsigned Product = 3u << 3;
           for (unsigned J = 0; J < W.Size; ++J) {
-            const unsigned I =
-                W.Start + J + (W.has(RepeatedIndex) && J == W.Size / 3);
+            const unsigned I = W.indexAt(J);
             const unsigned A = (W.has(ComplementX) ? ~X : X) + W.XStep * I +
                                (W.has(Perturbed) && !J);
             unsigned B = (Y + I) & -(1u << W.YShift);
@@ -152,6 +159,7 @@ TEST(SymMBAProgressions,
           Window{8, 128, 7, 6, 1, 1, 0, SingleMask},
           Window{8, 126, 0, 2, 2, 1, 4, 0, 7},
           Window{8, 95, 0, 2, 2, 1, 4, ComplementX | LinearTail},
+          Window{8, 127, 38, 2, 2, 1, 3, LinearTail, 0, 88},
           Window{8, 192, 13, 6, 3, 1, 2, RepeatedIndex}}) {
       SCOPED_TRACE(::testing::Message() << Width << "/" << W.Size);
       SymContext Ctx;
