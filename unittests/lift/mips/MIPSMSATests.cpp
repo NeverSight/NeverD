@@ -971,6 +971,91 @@ TEST_P(MIPSMSA, IntegerImmediatesCoverEveryValueAndFullLanePredicates) {
         }
 }
 
+TEST_P(MIPSMSA, RoundedShiftsAndBitInsertionCoverAllCountsWidthsAndAliases) {
+  auto Image = msaImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  // Independently assembled base encodings; do not use the lifter descriptor.
+  const uint32_t Opcodes[] = {0x78800015, 0x79000015, 0x7900000a, 0x7980000a,
+                              0x7b00000d, 0x7b80000d, 0x7b000009, 0x7b800009};
+  for (unsigned Kind = 0; Kind != 8; ++Kind)
+    for (unsigned Format = 0; Format != 4; ++Format)
+      for (unsigned Count = 0; Count != (8u << Format); ++Count)
+        for (unsigned Destination : {1u, 2u, 4u})
+          for (unsigned Pattern = 0; Pattern != 5; ++Pattern) {
+            const unsigned Bytes = 1u << Format, Bits = 8 * Bytes;
+            const bool Immediate = Kind % 4 >= 2, Insert = Kind >= 4;
+            const unsigned Field = (Bits == 64   ? 0
+                                    : Bits == 32 ? 64
+                                    : Bits == 16 ? 96
+                                                 : 112) |
+                                   Count;
+            const uint32_t Word =
+                Opcodes[Kind] | (1 << 11) | (Destination << 6) |
+                (Immediate ? Field << 16 : (Format << 21) | (2 << 16));
+            std::vector<uint8_t> Source(16), Counts(16), Old(16, 0x5a),
+                Expected(16);
+            const auto X =
+                Pattern == 0   ? llvm::APInt(Bits, 0)
+                : Pattern == 1 ? llvm::APInt::getAllOnes(Bits)
+                : Pattern == 2 ? llvm::APInt::getSignedMinValue(Bits)
+                : Pattern == 3
+                    ? llvm::APInt::getSignedMaxValue(Bits)
+                    : llvm::APInt(Bits, UINT64_C(0x123456789abcdef0));
+            for (unsigned At = 0; At != 16; At += Bytes)
+              for (unsigned Byte = 0; Byte != Bytes; ++Byte) {
+                Source[At + Byte] = X.extractBitsAsZExtValue(8, Byte * 8);
+                Counts[At + Byte] = uint64_t(Count + Bits) >> (Byte * 8);
+              }
+            if (Destination == 1)
+              Old = Source;
+            if (Destination == 2)
+              Old = Counts;
+            for (unsigned At = 0; At != 16; At += Bytes) {
+              uint64_t Previous = 0;
+              for (unsigned Byte = 0; Byte != Bytes; ++Byte)
+                Previous |= uint64_t(Old[At + Byte]) << (Byte * 8);
+              llvm::APInt Result(Bits, 0);
+              if (Insert) {
+                const auto Mask =
+                    Kind & 1 ? llvm::APInt::getLowBitsSet(Bits, Count + 1)
+                             : llvm::APInt::getHighBitsSet(Bits, Count + 1);
+                Result = (X & Mask) | (llvm::APInt(Bits, Previous) & ~Mask);
+              } else {
+                auto Wide = Kind & 1 ? X.zext(128) : X.sext(128);
+                if (Count)
+                  Wide += llvm::APInt(128, 1).shl(Count - 1);
+                Result = Wide.ashr(Count).trunc(Bits);
+              }
+              for (unsigned Byte = 0; Byte != Bytes; ++Byte)
+                Expected[At + Byte] =
+                    Result.extractBitsAsZExtValue(8, Byte * 8);
+            }
+            NdOpEmulator E(Image);
+            E.setStrictMode(true);
+            E.setRegisterBytes(mipsreg::w(1), Source);
+            E.setRegisterBytes(mipsreg::w(2), Counts);
+            if (Insert && Destination == 4 && !(Immediate && Count == Bits - 1))
+              E.setRegisterBytes(mipsreg::w(4), Old);
+            ASSERT_TRUE(msaExecute(D, GetParam(), Word, E))
+                << Kind << '/' << Bits << '/' << Count;
+            EXPECT_EQ(E.getRegisterBytes(mipsreg::w(Destination)), Expected);
+          }
+  for (uint32_t Opcode : {0x7900000au, 0x7980000au, 0x7b000009u, 0x7b800009u})
+    for (unsigned Reserved = 120; Reserved != 128; ++Reserved) {
+      MIPSLifter L(GetParam());
+      L.setMSAEnabled(true);
+      cs_insn Raw{};
+      Raw.size = 4;
+      auto B =
+          msaBytes({Opcode | (Reserved << 16)}, archLittleEndian(GetParam()));
+      std::copy(B.begin(), B.end(), Raw.bytes);
+      std::vector<LowOp> Ops;
+      EXPECT_THROW(L.lift(Raw, Ops), UnliftedInstruction);
+      EXPECT_TRUE(Ops.empty());
+    }
+}
+
 INSTANTIATE_TEST_SUITE_P(Endian, MIPSMSA,
                          ::testing::Values(Arch::MIPS32, Arch::MIPS32EL));
 } // namespace

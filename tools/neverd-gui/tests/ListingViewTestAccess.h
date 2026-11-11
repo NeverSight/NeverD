@@ -28,6 +28,11 @@ struct ListingViewTestAccess {
     return view.rowsCurrent() && !view.fetchingBefore_ && !view.fetchingAfter_;
   }
   static int rows(const ListingView &view) { return int(view.lines_.size()); }
+  /// How many jumps and refreshes the view has asked for.
+  static quint64 requests(const ListingView &view) { return view.serial_; }
+  static QString text(const ListingView &view, int row) {
+    return view.lines_[std::size_t(row)].styled.text;
+  }
   static std::pair<Address, int> first(const ListingView &view) {
     const auto &line = view.lines_.front();
     return {line.item, line.sub};

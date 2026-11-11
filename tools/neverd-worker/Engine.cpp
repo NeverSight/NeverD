@@ -778,6 +778,7 @@ Engine::Engine()
   instanceTag_ = std::to_string(entropy()) + std::to_string(entropy());
 }
 Engine::~Engine() {
+  writeStoreKeeps();
   listing_.reset();
   neverd_session_destroy(session_);
 }
@@ -1122,6 +1123,21 @@ Json Engine::typeDeclarationRows() const {
     throw Error("engine_error", "Engine returned malformed type declarations");
   for (std::size_t i = 0; i < declared.size(); ++i)
     declared[i]["addr"] = hexAddress(i);
+  return declared;
+}
+Json Engine::typeDeclarationRowsAfter(const Json &committed) const {
+  using RangeFunction = const char *(*)(neverd_session_t, size_t, size_t);
+  static const auto range =
+      engineSymbol<RangeFunction>("neverd_type_declarations_range_json");
+  if (!range || !committed.is_array())
+    return typeDeclarationRows();
+  Json added = backendJson(
+      range(session_, committed.size(), std::numeric_limits<size_t>::max()));
+  if (!added.is_array() || added.size() != 1 || !added[0].is_object())
+    return typeDeclarationRows();
+  Json declared = committed;
+  added[0]["addr"] = hexAddress(committed.size());
+  declared.push_back(std::move(added[0]));
   return declared;
 }
 bool Engine::reloadTypeDeclarations() {
@@ -2413,6 +2429,7 @@ bool Engine::hasIdleWork() const {
            warmState_ == WarmState::Running));
 }
 bool Engine::idleStep() {
+  writeStoreKeeps();
   // What background work changes no answer read before it holds for.
   forgetPreparedViews();
   if (!hasIdleWork())
@@ -3184,8 +3201,16 @@ Json Engine::browseCacheIdentity(
   }
   identity["shared"] = std::move(shared);
   if (headersFunction()) {
-    const auto debug = backendJson(headersFunction()(session_))
-                           .value("debug_info", Json::object());
+    // What the headers say of the debug files reads the same while the
+    // session holds the debug inputs it loaded.
+    auto inputs = pdbInput_.dump() + '\n' + dwarfInput_.dump() + '\n' +
+                  mapInput_.dump() + '\n' + symbolsInput_.dump();
+    if (!debugInfo_ || debugInfoInputs_ != inputs) {
+      debugInfo_ = backendJson(headersFunction()(session_))
+                       .value("debug_info", Json::object());
+      debugInfoInputs_ = std::move(inputs);
+    }
+    const auto &debug = *debugInfo_;
     identity["debug"] = debug;
     for (const auto &file : debug.value("files", Json::array())) {
       const auto path = file.is_string() ? file.get<std::string>()
@@ -3663,6 +3688,7 @@ Json Engine::updateAnalysisNames(const Json &snapshot) {
     renderAheadStarts_ = 0;
     // What the store keeps answers while what each render read holds; the job
     // renders again what does not.
+    writeStoreKeeps();
     const bool sameStore = !renderStoreMode_.empty() && renderStore_ &&
                            renderStore_->keeps(storeNames().renders);
     renderAheadVerifying_ = sameStore && (dataRenamed || declared);
@@ -3956,6 +3982,7 @@ Engine::Reply Engine::executeResponse(const std::string &operation,
   viewEditsAtRequest_ = viewEditCount_;
   requestRevision_ = revision_;
   served_.reset();
+  writeStoreKeeps();
   if (!preparedViews_.empty()) {
     // An answer made for the state the read finds, and for this read.
     if (preparedRevision_ != revision_ || !listing_ ||
@@ -3994,6 +4021,11 @@ void Engine::keepServed(ServedPage served) {
   served.document->nextRead = std::move(served.next);
   served.document->servedAt = ++servedPages_;
   served.document->servedRevision = revision_;
+}
+
+void Engine::afterReply(const std::function<bool()> &requestWaiting) {
+  writeStoreKeeps();
+  prepareFollowingViews(requestWaiting);
 }
 
 void Engine::prepareFollowingViews(
@@ -4547,6 +4579,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     neverd_session_destroy(session_);
     session_ = next.release();
     projectFolder_.reset();
+    debugInfo_.reset();
     codeEdits_ = std::move(nextCodeEdits);
     // A file too large or unreadable is the next project_sync's to report.
     try {
@@ -5507,7 +5540,12 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       auto &store = *history_;
       const auto checkpoint = store;
       try {
-        Json declared = typeDeclarationRows();
+        // The history's rows, which were the Session's, and the one this
+        // declaration added; a forget lists them all again.
+        Json declared =
+            operation == "local_types_declare"
+                ? typeDeclarationRowsAfter(store.committedTable("types"))
+                : typeDeclarationRows();
         if (declared.empty())
           throw Error("engine_error", "Engine kept no declaration");
         store.stage({{"kind", "types"},

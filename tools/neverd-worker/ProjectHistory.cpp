@@ -35,6 +35,12 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#ifndef _WIN32
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace neverd::worker {
 namespace fs = std::filesystem;
@@ -259,6 +265,44 @@ SidecarWrites prepareSidecars(const fs::path &binary, const State &state,
   return writes;
 }
 std::optional<std::string> readText(const fs::path &path, std::size_t limit) {
+#ifndef _WIN32
+  // One open answers whether it is there, its size and its bytes: an edit
+  // reads every table's file whenever the writer is idle.
+  const int descriptor = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+  if (descriptor < 0) {
+    if (errno == ENOENT || errno == ENOTDIR)
+      return std::nullopt;
+    throw Error("history_read_failed", "Cannot open user state file");
+  }
+  struct Closer {
+    int descriptor;
+    ~Closer() { ::close(descriptor); }
+  } closer{descriptor};
+  struct stat status{};
+  if (::fstat(descriptor, &status) != 0 || !S_ISREG(status.st_mode) ||
+      static_cast<std::uintmax_t>(status.st_size) > limit)
+    throw Error("history_budget_exceeded",
+                "User state file exceeds its read budget");
+  const auto size = static_cast<std::size_t>(status.st_size);
+  // A byte past the size it had says the file grew while it was read.
+  std::string text(size + 1, '\0');
+  std::size_t read = 0;
+  while (read < text.size()) {
+    const auto count =
+        ::read(descriptor, text.data() + read, text.size() - read);
+    if (count < 0 && errno == EINTR)
+      continue;
+    if (count < 0)
+      throw Error("history_read_failed", "Cannot read user state file");
+    if (count == 0)
+      break;
+    read += static_cast<std::size_t>(count);
+  }
+  text.resize(read);
+  if (text.size() > size)
+    throw Error("foreign_edits", "User state changed while it was being read");
+  return text;
+#else
   std::error_code ec;
   if (!fs::exists(path, ec))
     return std::nullopt;
@@ -275,6 +319,7 @@ std::optional<std::string> readText(const fs::path &path, std::size_t limit) {
   if (text.size() > size)
     throw Error("foreign_edits", "User state changed while it was being read");
   return text;
+#endif
 }
 Json parseFile(const fs::path &path, const std::optional<std::string> &text,
                std::size_t limit) {

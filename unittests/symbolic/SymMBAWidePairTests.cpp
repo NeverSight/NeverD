@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../lib/symbolic/mba/SymMBADetail.h"
+#include "../../lib/symbolic/mba/SymMBAProductColumn.h"
 #include "gtest/gtest.h"
 
 #include "neverd/solver/SymSynthVerifier.h"
@@ -20,6 +21,7 @@
 #include "llvm/ADT/SmallString.h"
 
 #include <array>
+#include <bit>
 #include <limits>
 #include <random>
 #include <string>
@@ -564,12 +566,22 @@ TEST(SymMBAWidePairs, FiveAndSixBitUnitsKeepWideInputsAndRefusals) {
             }
             EXPECT_EQ(Reduced.eval(Values), F.oracle(Values));
           }
-          if (Width == 8 && Allowance == 65536 &&
-              solver::proofBackendAvailable(solver::ProofBackend::Z3)) {
-            solver::SymSynthVerifier Verifier({}, solver::ProofBackend::Z3,
-                                              10000);
-            EXPECT_EQ(Verifier(Ctx, F.Input, Result),
-                      SynthVerification::Equivalent);
+          if (Width == 8 && Allowance == 65536) {
+            // This byte-sized domain is small enough for an independent
+            // complete proof, including all high bits above Observed.
+            // Enumerate every input rather than making this regression
+            // depend on a high-degree SAT search finishing before a timer.
+            for (uint64_t X = 0; X < 256; ++X)
+              for (uint64_t Y = 0; Y < 256; ++Y)
+                for (uint64_t Z = 0; Z < 256; ++Z) {
+                  uint64_t Expected = uint64_t(3) << (8 - Observed);
+                  for (unsigned I = 0; I < 31; ++I)
+                    Expected *= ((~X) + 2 * I + unsigned(Neighbor && I == 0)) ^
+                                (((Y + I) & ~uint64_t(1)) *
+                                 ((Z + 2 * I) & ~uint64_t(1)));
+                  ASSERT_EQ(Reduced.evalU64({X, Y, Z}), Expected & 255)
+                      << X << ':' << Y << ':' << Z;
+                }
           }
         }
       }
@@ -834,6 +846,108 @@ TEST(SymMBAWidePairs, MaskedProductsObserveOnlyTheRequestedLiteralWindow) {
   }
 }
 
+TEST(SymMBAWidePairs, PackedColumnsAgreeWithIndependentScalarTruthTables) {
+  using Offset = std::pair<unsigned, unsigned>;
+  for (unsigned N : {4u, 6u, 7u, 8u}) {
+    for (auto [A, B] : {Offset{1, 1}, Offset{1, 2}, Offset{2, 1}}) {
+      const unsigned Domain = 1u << N;
+      for (unsigned Mode = 0; Mode < 4; ++Mode) {
+        SCOPED_TRACE(::testing::Message()
+                     << N << "/" << A << "/" << B << "/" << Mode);
+        llvm::SmallVector<Offset, 64> Offsets;
+        for (unsigned I = 0; I < (Domain >> 2); ++I) {
+          const Offset Pair{I + (Mode == 2 && I == 3),
+                            2 * I + unsigned(Mode == 1)};
+          Offsets.push_back(Pair);
+          if (Mode == 3)
+            Offsets.push_back(Pair);
+        }
+        auto Truth = [&](unsigned X, unsigned Y) {
+          unsigned P = 0;
+          for (auto [XO, YO] : Offsets)
+            P ^= ((X + XO) & -(1u << A)) * ((Y + YO) & -(1u << B));
+          return (P >> (N - 1)) & 1;
+        };
+        const auto Constant = Truth(0, 0);
+        unsigned XM = 0, YM = 0;
+        for (unsigned I = 0; I < N; ++I) {
+          XM |= (Truth(1u << I, 0) ^ Constant) << I;
+          YM |= (Truth(0, 1u << I) ^ Constant) << I;
+        }
+        bool Affine = true;
+        for (unsigned X = 0; Affine && X < Domain; ++X)
+          for (unsigned Y = 0; Y < Domain; ++Y) {
+            const unsigned Expected = Constant ^ (std::popcount(X & XM) & 1) ^
+                                      (std::popcount(Y & YM) & 1);
+            if (Truth(X, Y) != Expected) {
+              Affine = false;
+              break;
+            }
+          }
+        const auto Column = detail::readAffineProductColumn(
+            N, A, B, Offsets, [](size_t) { return true; });
+        ASSERT_EQ(bool(Column), Affine);
+        if (Column) {
+          EXPECT_EQ(Column->XBits, XM);
+          EXPECT_EQ(Column->YBits, YM);
+          EXPECT_EQ(Column->Constant, Constant != 0);
+          size_t Work = 0;
+          ASSERT_TRUE(detail::readAffineProductColumn(N, A, B, Offsets,
+                                                      [&](size_t Units) {
+                                                        Work += Units;
+                                                        return true;
+                                                      }));
+          ASSERT_GT(Work, 0u);
+          --Work;
+          EXPECT_FALSE(detail::readAffineProductColumn(N, A, B, Offsets,
+                                                       [&](size_t Units) {
+                                                         if (Units > Work)
+                                                           return false;
+                                                         Work -= Units;
+                                                         return true;
+                                                       }));
+        }
+      }
+    }
+  }
+}
+
+TEST(SymMBAWidePairs, MovingAMaskAcrossAnOffsetRequiresAlignment) {
+  for (bool Misaligned : {false, true}) {
+    SymContext Ctx;
+    auto X = Ctx.mkVar("x", 8), Y = Ctx.mkVar("y", 8), Z = Ctx.mkVar("z", 8);
+    auto Even = Ctx.mkConst(8, 254);
+    llvm::SmallVector<SymRef, 64> Factors;
+    for (unsigned I = 0; I < 64; ++I) {
+      auto A = Ctx.mkAdd(X, Ctx.mkConst(8, 2 * I));
+      auto B = (I & 1) ? Ctx.mkAnd(Ctx.mkAdd(Y, Ctx.mkConst(8, I)), Even)
+                       : Ctx.mkAdd(Ctx.mkAnd(Y, Even),
+                                   Ctx.mkConst(8, I + (Misaligned && !I)));
+      auto C = Ctx.mkAdd(Ctx.mkAnd(Z, Even), Ctx.mkConst(8, 2 * I));
+      Factors.push_back(
+          Ctx.mkAnd(Ctx.mkXor(A, Ctx.mkMul(B, C)), Ctx.mkConst(8, 0x83)));
+    }
+    MBAOptions Opt;
+    Opt.MaxWork = 65536;
+    auto Result = simplifyMBADeep(Ctx, Ctx.mkMul(Factors), Opt);
+    if (!Misaligned) {
+      EXPECT_LT(Result.Work, Opt.MaxWork);
+      EXPECT_LE(Result.SizeAfter, 40u);
+    }
+    SymEvalPlan Plan(Ctx, Result.Expr);
+    for (uint64_t XVal : {0u, 1u, 7u, 254u, 255u})
+      for (uint64_t YVal : {0u, 1u, 127u, 129u, 255u})
+        for (uint64_t ZVal : {0u, 2u, 127u, 128u, 255u}) {
+          uint64_t Expected = 1;
+          for (unsigned I = 0; I < 64; ++I) {
+            const auto B = ((YVal + I) & 254) + (Misaligned && !I);
+            Expected *= ((XVal + 2 * I) ^ (B * ((ZVal + 2 * I) & 254))) & 0x83;
+          }
+          EXPECT_EQ(Plan.evalU64({XVal, YVal, ZVal}), Expected & 255);
+        }
+  }
+}
+
 TEST(SymMBAWidePairs, MaskedHighDegreeSignaturesKeepOnlyTheirVisibleBits) {
   for (unsigned Width : {8u, 16u, 65u, 257u}) {
     for (unsigned Degree : {32u, 64u}) {
@@ -863,6 +977,11 @@ TEST(SymMBAWidePairs, MaskedHighDegreeSignaturesKeepOnlyTheirVisibleBits) {
         MBAOptions Options;
         Options.MaxWork = 65536;
         const auto Result = simplifyMBADeep(Ctx, Root, Options);
+        if (Width == 8 && Degree == 64 && Mode != 2) {
+          EXPECT_LT(Result.Work, Options.MaxWork);
+          EXPECT_LE(Result.SizeAfter, 40u);
+          EXPECT_EQ(Result.Evidence, MBAEvidence::Derivation);
+        }
         if (Width > 8) {
           EXPECT_LT(Result.Work, Options.MaxWork);
           EXPECT_LT(Result.SizeAfter, Result.SizeBefore);

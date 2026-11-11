@@ -29,6 +29,8 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
     throw std::runtime_error(mips::kMalformedScalar);
   if (Id == Intrinsic::MIPSUnpredictable)
     throw std::runtime_error(mips::kUnpredictableResult);
+  if (Id == Intrinsic::MIPSAccumulatorAfterWrite)
+    throw std::runtime_error(mips::kAccumulatorHistoryUnknown);
   if (Id == Intrinsic::MIPSLwrUpper)
     throw std::runtime_error(mips::kPartialLwrRequiresWord);
   if (mips::isStatefulScalar(Id))

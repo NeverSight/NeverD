@@ -1,0 +1,70 @@
+//===- AArch64LiftedLeafFixtures.def - Leaf fixtures ---------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef A64_LEAF_TEXT
+#define A64_LEAF_TEXT(Name, Text)
+#endif
+#ifndef A64_LEAF_VALUE
+#define A64_LEAF_VALUE(Type, Name, Value)
+#endif
+
+A64_LEAF_TEXT(kTemporary, "neverd-arm64e-lifted-leaves")
+A64_LEAF_TEXT(kSource, "leaves.c")
+A64_LEAF_TEXT(kOriginal, "leaves.dylib")
+A64_LEAF_TEXT(kOutput, "published.dylib")
+A64_LEAF_TEXT(kRejected, "refused.dylib")
+A64_LEAF_TEXT(kDriverSource, "driver.c")
+A64_LEAF_TEXT(kDriver, "driver")
+A64_LEAF_TEXT(kOriginalHash, "original_sha256")
+A64_LEAF_TEXT(kPublishedHash, "published_sha256")
+A64_LEAF_TEXT(kAuthenticatedSites, "caller_authenticated_call_sites")
+A64_LEAF_TEXT(kNativeImages, "executed_native_images")
+A64_LEAF_TEXT(kExecute, "NEVERD_ARM64E_LIFTED_NATIVE")
+A64_LEAF_TEXT(kUnavailable,
+              "native Darwin AArch64 and Apple Clang are required")
+A64_LEAF_TEXT(kCompiler, "/usr/bin/clang")
+A64_LEAF_TEXT(kTargetFlag, "-target")
+A64_LEAF_TEXT(kTarget, "arm64e-apple-macosx15.0")
+A64_LEAF_TEXT(kOptimize, "-O2")
+A64_LEAF_TEXT(kOmitFrame, "-fomit-frame-pointer")
+A64_LEAF_TEXT(kDylib, "-dynamiclib")
+A64_LEAF_TEXT(kTight, "-Wl,-headerpad,0")
+A64_LEAF_TEXT(kOut, "-o")
+A64_LEAF_TEXT(kSum, "leaf_sum")
+A64_LEAF_TEXT(kDifference, "leaf_difference")
+A64_LEAF_VALUE(unsigned, kCount, 2)
+A64_LEAF_VALUE(unsigned, kTamperedResult, 19)
+A64_LEAF_TEXT(kLeaves, R"c(
+unsigned long leaf_sum(unsigned long a, unsigned long b) { return a + b; }
+unsigned long leaf_difference(unsigned long a, unsigned long b) { return a - b; }
+)c")
+A64_LEAF_TEXT(kCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+typedef unsigned long (*operation)(unsigned long, unsigned long);
+
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  operation sum = (operation)dlsym(image, "leaf_sum");
+  operation difference = (operation)dlsym(image, "leaf_difference");
+  if (!sum || !difference)
+    return 3;
+  const unsigned long values[] = {0, 1, 17, UINT64_MAX, UINT64_C(1) << 63};
+  for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i)
+    for (unsigned j = 0; j != sizeof(values) / sizeof(*values); ++j)
+      if (sum(values[i], values[j]) != values[i] + values[j] ||
+          difference(values[i], values[j]) != values[i] - values[j])
+        return 4;
+  return dlclose(image) != 0;
+}
+)c")
+
+#undef A64_LEAF_VALUE
+#undef A64_LEAF_TEXT

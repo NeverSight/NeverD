@@ -20,8 +20,10 @@ struct MIPSHardwareObservation {
 };
 struct MIPSSystemContext {
   bool CP0Usable = false;
+  bool ImplementedMT = false;
   uint32_t HWREna = 0;
-#define NEVERD_MIPS_CP0(Index, Name, Writable) std::optional<uint32_t> Name;
+#define NEVERD_MIPS_CP0(Index, Selector, Name, Writable, MT)                   \
+  std::optional<uint32_t> Name;
 #include "neverd/ir/intrinsics/MIPS/MIPSCP0.def"
   std::optional<MIPSHardwareObservation> Hardware;
   bool ExecutionHazardPending = false;

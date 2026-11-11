@@ -155,7 +155,7 @@ Pack operations select the upper half of each source lane. These forms leave
 DSPControl untouched and need no incoming DSPControl value, including when
 their destination is `$zero`. Decoder reuse consumes the current
 image's feature evidence; Capstone recognizing an encoding without that
-evidence does not authorize its lift. DSPR2, DSP64, microMIPS DSP, accumulators and other DSP instructions remain
+evidence does not authorize its lift. DSPR2, DSP64, microMIPS DSP and DSP instructions beyond the families below remain
 unsupported.
 
 `ADDQ_S.W`/`SUBQ_S.W` saturate signed words and set sticky overflow bit 20.
@@ -194,7 +194,7 @@ different flag updates. HI/LO are preserved by these pack operations.
 `MULQ_RS.PH` rounds signed Q15 products toward positive infinity at halfway
 values and saturates the pair of -1 operands to 32767. Both families set sticky
 DSPControl bit 21 and leave HI/LO unpredictable, including with a `$zero`
-destination. Explicit accumulator writes can redefine either value independently;
+destination. Explicit accumulator writes can redefine either value;
 source refuses a retained observation of an unpredictable result.
 
 The ten-bit control selector selects six field groups; its upper four bits are
@@ -230,6 +230,24 @@ incoming link; a DSP result written to `$ra` cannot become an ordinary C return.
 Standalone MIPS32 LowIR with an explicit link write also requires this proof,
 including a zero-selector `RDDSP ra,0` reduced to a constant copy. Cross-call
 link spills remain outside the current source proof.
+
+AC0 aliases classic HI/LO; AC1–AC3 have separate named high/low slots owned by
+`MIPSRegisters.def`. Banked MFHI/MFLO/MTHI/MTLO and DPAU/DPSU.H.QBL/QBR,
+DPAQ_S/DPSQ_S.W.PH and MULSAQ_S.W.PH are admitted. Byte products accumulate
+without truncating the dot product; fractional halfword products saturate only
+MIN×MIN, set sticky OU16+AC, and accumulate modulo 64 bits. Accumulator inputs
+must be defined on every source path and survive the ABI call-clobber proof.
+Uninitialized banks are not extra C parameters. Saturating-accumulator,
+extraction and remaining DSP multiply families still require implementation.
+
+Classic AC0 partial writes preserve the pre-R6 unread-result restriction:
+MULT/MULTU/DIV/DIVU (and supported doubleword multiply) establish pending
+history; MFHI/MFLO consume it even when their destination is `$zero`. A partial
+write before consumption makes the other half unpredictable. A pure transport
+intrinsic carries unknown bits in LowIR; source propagation must discharge it
+or discard its dead output before ABI recovery. Unknown live history refuses.
+This differs from the removed MIPS I–III two-instruction read-to-write hazard.
+The rule does not couple AC1–AC3 halves.
 
 The operation rules follow the
 [MIPS32 DSP ASE manual, revision 1.00](https://0x04.net/~mwk/doc/mips/MD00374-2B-MIPS32DSP-AFP-01.00.pdf).
@@ -372,12 +390,12 @@ invalid.
 
 The encoding/operation authority is
 [MIPS16e2 Volume IV-a, MD01172 revision 1.00](https://jnastarot.io/arch_index/pdf/MD01172-2B-MIPS16e2-AFP-01.00.pdf).
-GNU `-mmips16e2` supplies explicit ELF evidence for the owned fixtures; a local
-`.set mips16e2` alone need not retain that evidence in the whole object.
+The GNU fixture uses `-mmips16e2 -mmt` to publish both features in ELF
+`.MIPS.abiflags`. Local `.set` directives only enable the instructions for assembly.
 The pinned Unicorn predates e2, so it is **not** an original-e2 oracle. Literal
 GNU bytes, independent LowIR expectations and execution of generated old-MIPS16
 source are separate checks. Hardware or independent original-e2 execution
-remains unavailable. General CP0 transfers beyond the word views below, MT, cache/hint forms and
+remains unavailable. General CP0 transfers beyond the word views below and
 MIPS16 on MIPS64 remain unsupported. The following system/atomic slice is
 qualified at LowIR, not as native source or original-e2 hardware execution. No path treats a misdecoded operand or unknown instruction as
 valid semantics. The immediate, memory, call and slot rules follow
@@ -430,6 +448,23 @@ Status reads share the DI/EI state owner. CP0 usability is required independentl
 of HWREna; an unknown read or write operand refuses. A successful write establishes
 that view and an execution-hazard obligation, discharged by bound EHB. General
 Status writes, Count, Config/TLB and other CP0 selectors remain unsupported.
+The explicit MT ABI feature (0x40) additionally admits read-only MVPControl
+(0,1), VPEControl (1,1) and VPEConf0 (1,2). The intrinsic key is `(sel << 5) | reg`,
+so existing selector-zero identities remain stable. DMT/EMT update only TE;
+DVPE/EVPE update only EVP when VPEConf0.MVP is set. Each returns the prior
+control word, including retained effects when the result is discarded, and
+requires CP0 usability, declared MT implementation and known bound state.
+Bound EHB discharges their execution hazard. No thread scheduler or inter-VPE
+execution is inferred. The [MT manual rev1.12, p42](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00378-2B-MIPS32MT-AFP-01.12.pdf)
+resolves the inverted MVP condition in the older e2 pseudocode. The pinned
+Unicorn MT helpers are stubs and are not a semantic oracle for these forms.
+
+CACHE/PREF preserve the five-bit operation/hint, signed nine-bit offset and
+32-bit effective address as effectful LowIR intrinsics. Both may write memory
+(PREF PrepareForStore included), so they end outgoing stack-memory setup proofs.
+Dead-code elimination retains them. Execution in either emulator mode and
+native-source emission refuse until a cache/translation/exception owner exists;
+this is effect representation, not cache hardware emulation.
 The EPC/ErrorEPC software word view is also described in the vendor
 [CPU reference manual, sections 50.13.25 and 50.13.55](https://ww1.microchip.com/downloads/aemDocuments/documents/WSG/ProductDocuments/ReferenceManuals/PIC32_Family_Reference_Manual_CPU.pdf).
 
@@ -480,6 +515,14 @@ MSA. Other revisions, MSA64, microMIPS/MSA and DSP/MSA combinations are refused.
 `BSEL/BMNZ/BMZ.V`, and B/H/W/D formats of `PCNT`, `NLZC`, `NLOC`,
 `SLLI/SRLI/SRAI`, `BCLRI/BSETI/BNEGI`, `ASUB_S/ASUB_U`, `SAT_S/SAT_U`,
 `ADDVI/SUBVI`, `CEQI`, `CLTI_S/U`, `CLEI_S/U`, `MAXI_S/U` and `MINI_S/U`.
+SRAR/SRLR/SRARI/SRLRI and BINSL/BINSR/BINSLI/BINSRI support B/H/W/D too.
+Rounded shifts add the highest discarded bit after shifting. A zero count
+preserves the lane without an invalid shift. Insertion copies count+1 source
+bits into the destination. A full-width immediate insertion can initialize an
+unknown destination. Register-count insertions require the prior destination
+in strict emulation, including when every runtime count selects a full lane.
+The lifter captures aliased inputs before the vector write. Rounded shifts
+only depend on the source and count.
 The I5 arithmetic operands are unsigned; CEQI and the signed comparisons/extrema
 sign-extend the five-bit immediate. Comparison masks cover the entire element,
 including 64-bit lanes.
@@ -796,8 +839,25 @@ do not establish universal improvement or a cross-tool ranking. Raw reports,
 compiler-failure traces, recovery indexes and cleanup receipts remain in
 `build-mips/mips-cp0-immediate/`; completed raw reports are compressed and
 reproducible test/snapshot products are retired after their final readers.
-Generic CP0/cache/MT behavior, DSP accumulator/revision coverage, remaining MSA
-operations and original-e2 hardware execution remain outside this increment.
+The [CP0/MT, DSP accumulator and MSA qualification](evidence/mips-system-accumulators-2026-11-11.json)
+covers the selected CP0 views, the four MT controls, CACHE/PREF ordering,
+banked accumulator transfers, seven DSP dot-product families and 32 MSA rounded
+shift and bit-insertion forms. The MT tests check prior control values, master
+VPE permissions and execution hazards. The DSP and MSA tests compare the original
+instructions and the recompiled C with independent expected values in both byte
+orders. Cache execution, MT scheduling, the remaining DSP/MSA families and
+original MIPS16e2 hardware execution still require qualification.
+
+The MIPS16 comparison includes the original mixed instruction stream. One
+multiply and two HI/LO reads now emit three additional LowIR operations to
+track an unread accumulator result. A second comparison uses identical LowIR
+on both versions. The firmware workload checks the Archer C7 V5 `ubus` call
+handler at `0x4012d0` and the discovered functions through both C backends.
+The selected LLVMC handler changed block and return layout. Running the original
+handler with five modeled imports and both recompiled C views at `-O0` and
+`-O2` matched all twelve input cases. The other three firmware outputs kept
+their prior hashes. Local samples, build identities and cleanup receipts are in
+`build-mips/mips-system-accumulators/`.
 
 ## TP-Link firmware workflow
 

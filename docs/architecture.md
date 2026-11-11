@@ -5137,14 +5137,19 @@ recovers every complete record.
 An edit costs what it changes. The owner's listing takes a name of data and a data
 item over bytes no string or code holds where they are (`Listing::dataRenamed`,
 `Listing::dataItemsChanged`, which reads the items from the table the history has just
-committed rather than asking the engine for all of them again; the edit itself reads only
+committed rather than asking the engine for all of them again, and whether the scan's
+strings cover an item's bytes in one search; the edit itself reads only
 the rows of the span it can change, before and after, with
 `neverd_items_range_json`, and keeps the rest of the committed table; a function edit
 reads the row at its entry alone with `neverd_functions_range_json`), the session a name without reading its table
 (`neverd_rename_take`), and a declaration of types no other names reads them against
 what it read of the library once (`Session::LocalTypeNames`), on the library itself
 (`TypeLibrary::Trial`, which undoes a refused declaration), and the identity its stores
-are kept under before it with the declarations the history committed. The project's
+are kept under before it with the declarations the history committed; the rows after it
+are those and the one it added (`neverd_type_declarations_range_json`). The stores'
+relabel for such a type is written once the reply is sent, before the next request or
+idle step reads their folders (`Engine::writeStoreKeeps`), and what the session's headers
+say of its debug files is read once for the debug inputs it loaded. The project's
 input is recorded once a history first commits, since what the record says holds while
 the session keeps the input. A function's declaration
 reads against the library without copying it, its prototype the parse's own; one that
@@ -5210,7 +5215,9 @@ GUI keeps is named by the document and lines it came from; a later read names it
 (`if_none_match`), and while the document stands the worker says so instead of sending
 the page again (`QueryService::State::keptPages`). A replica's dispatcher keeps its
 pages across the read context it starts at each change of its owner's, so the read
-after an edit names them too. Where an edit built the document
+after an edit names them too, and no dispatcher's kept page moves with the listing's
+generation, which an edit moves. A read a lane hands the owner (`AnalysisService::askOwner`)
+leaves out the page the lane names, as the owner's dispatcher names its own. Where an edit built the document
 again, a worker that still has the old one sends what changed of the page
 (`page_delta`: lines replaced and the offsets after them shifted, `pageDelta`), which the
 GUI applies to the page it keeps (`page_delta::apply`); a reply the kept page does not
@@ -5693,6 +5700,13 @@ Support discovery consumes the shared work allowance, and constants keep a
 single coefficient with the minterm basis's negative sign. Projection does
 not authorize a replacement: the complete polynomial difference must still
 be proved before CLI or GUI source output uses the result.
+Within one admitted polynomial expansion, factor slots reuse their minterm
+selections while the factor identity is unchanged. The context and atom order
+are fixed for that call; changing or removing a factor invalidates its slot.
+Selection storage is reserved from the exact table population. Tables fitting
+one machine word enumerate set bits in ascending order; larger tables retain
+the complete entry scan. This preserves term order, coefficients and work
+accounting, with no state retained between calls.
 Cubic recovery uses a minterm shared by all three factors as an anchor. Its
 diagonal coefficient fixes the scale; coefficients with two copies of the
 anchor identify how many factors select each other minterm. Coefficients with
@@ -6050,6 +6064,37 @@ each finished column before reduction. Final columns balance their parity
 without constructing an unobservable carry. Signature keys occupy stable pages
 whose storage is charged before allocation. These operations retain the full
 identity checks, cumulative allowances and decision-node ceiling.
+Products observed at eight bits use equal-width low and high halves, eliminating
+quadratic high terms exactly. For proved odd three- or four-bit prefixes with
+zero upper bits, powers evaluate all four or eight possible values and
+substitute their exact Boolean coefficients into the decision graph. Input
+bits may be correlated; this is a complete identity, not sampling. Work, node
+and storage ceilings stay unchanged. Pairing tables prepay one dense bucket
+allocation from the factor count; erased matches cannot trigger rehashing.
+Packed Boolean tables skip one rehash generation while charging the full new
+allocation to the existing storage budget. Six-bit products keep two-bit
+prefix groups to avoid doubling their number. CLI and GUI share these core
+paths.
+The fixed power coefficients are generated at compile time. The optional
+deterministic cross-check reuses a compile-time prefix of 8192 generator words
+when all native input assignments fit; longer and arbitrary-width checks retain
+the original generator. Shared subexpressions collect their variables together, preserving
+the sorted, unique input union and original assignments. Equivalence continues
+to require the existing exact proofs.
+Recursive paired products can retain unmatched odd factors as complete words.
+Their square equals one modulo eight, so it can be factored out of the two-bit
+high correction without expanding the complete mixed product. The original
+full-width factors and parity selector remain in the result. This reading is
+reserved for mixed three-bit prefixes whose recursive precision is at least
+six bits. Fewer than three representatives cannot leave both a pair and an
+unmatched word, so they do not start this additional prefix reading.
+When each odd factor exposes only a short low mask and its highest observed
+bit, the low product and the parity of the high bits can be proved separately.
+For products of two masked, offset inputs, packed truth rows check every
+assignment, including carries into the masks. An affine parity replaces the
+column only after all rows agree. Otherwise the original high column remains.
+The SDK renders both sides of a rewrite together when their widths agree, so
+a shared fragment is formatted once with the original precedence.
 Expression restoration skips nodes older than every substitution key: immutable
 children precede their parents, and simultaneous replacement bodies remain
 unchanged. Rendering appends fragments directly into their parent's text and
@@ -15076,9 +15121,17 @@ Regular compact-unwind encoding and its reservation share one checked size
 planner. Full pages contain 511 records in 4096 bytes, while the last page ends
 after its declared records. Reservations include original records, new recipe
 and gap boundaries, personality slots and LSDAs without rounding the final
-page to 4 KiB. This permits small registries in existing TEXT capacity, but
-does not create storage for a full DWARF table when a live DATA segment blocks
-TEXT growth.
+page to 4 KiB. Compact and DWARF append storage stops at the next live
+load-command payload, including zero-filled notes.
+
+A 64-bit PIE can grow the front of TEXT into its PAGEZERO guard. A dylib or
+bundle with a nonzero preferred base can use an available aligned VM range
+before TEXT. Code, data and signing slots retain their VAs. The strict dyld
+reader supplies the actual slots for every chain root, including overflow page
+starts and legacy threaded binds. Header growth changes representable rebase
+targets and starts-in-segment offsets, then rechecks dependencies, exports and
+signing schemas. A zero-base dylib with live DATA immediately after a full TEXT
+segment still needs a relocation of its original mappings.
 
 PE, ELF, and Mach-O each have format-specific exception components, but NeverD
 does not yet publish an all-formats, all-exception-types end-to-end rewrite
@@ -15998,14 +16051,18 @@ values across these memory effects.
 The qualified MIPS16e2 system/atomic slice shares scalar shape admission but
 retains separate effectful IDs. `MIPSSystemContext` authenticates a system step;
 `MIPSCP0.def` owns the admitted CP0 word selectors, context fields and write
-permissions. Status shares the DI/EI owner; EPC/ErrorEPC words preserve all bits.
+permissions and MT requirements. Selector keys are `(sel << 5) | reg`;
+Status shares the DI/EI owner, EPC/ErrorEPC words preserve all bits, and the
+three MT control views remain read-only outside typed MT operations. MT uses
+explicit ABI evidence and bound implementation/master permission. CACHE/PREF
+retain potentially writing memory effects but refuse execution and source.
 `NdOpEmulatorMIPS` owns permission/hazard consumption and the opt-in
 flat Config5.LLB=1 reservation model. `storeMemoryBytes` invalidates overlapping
 reservation granules only on committed stores. PAUSE is effectful and completes
 only with a configured, known-clear reservation; scheduling is not inferred.
 Calls/reset and lenient unknown operations discard reservation knowledge.
 `scalarMayWriteMemory` is shared with
-ABI setup recovery so SC cannot preserve a stale outgoing stack value. HighC and
+ABI setup recovery so SC/CACHE/PREF cannot preserve a stale outgoing stack value. HighC and
 LLVM reject stateful native-source lowering until an execution-region contract
 can preserve the reservation or privileged state; no helper approximates it.
 
@@ -16016,6 +16073,12 @@ DSPControl read/write intrinsics. The LowIR emulator requires supplied state;
 the source backends preserve original-machine transfers through
 `MIPSDSPSource`. These transfers remain observable independently of integer
 return values, including when packed arithmetic discards its GPR destination.
+`MIPSRegisters.def` owns AC1–AC3 storage; AC0 reuses HI/LO. The accumulator
+source proof covers all halves and ABI clobbers. AC0 unread arithmetic history
+uses one internal SSA slot and a pure unknown-value transport. Only that
+transport and SSA entry definitions bypass early observation checks; after
+propagation/DCE, the proof runs again and unresolved live transports refuse
+before ABI recovery. Native backends also reject residual transports.
 
 The MSA integer-vector slice consumes explicit r5/o32/FP64 metadata. Decoder handle
 reuse includes the ISA revision; `MIPSMSA.def` and `MIPSLiftMSA` own raw

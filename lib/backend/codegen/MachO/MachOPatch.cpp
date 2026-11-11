@@ -1757,8 +1757,32 @@ PatchResult MachOPatcher::patch(const std::filesystem::path &InputPath,
   }
   BinaryImage AuthenticatedImage = std::move(*LoadedImage);
   if (AuthenticatedImage.isArm64e()) {
-    llvm::WithColor::error() << kArm64eRebuildUnsupported;
-    return PatchResult{};
+    if (TargetArch != AuthenticatedImage.Arch ||
+        InputKind != RewriteInputKind::LiftedIR ||
+        !Mod.getModuleFlag(kArm64eAnalysisModuleFlag) ||
+        (CachedImage && CachedImage->MachOSharedCache) ||
+        (!TextSectionOverride.empty() &&
+         TextSectionOverride != section_names::macho::Text) ||
+        Opts.SegmentName != kDefaultNdTextSegment ||
+        Opts.SectionName != kNdTextSectionMachO) {
+      llvm::WithColor::error() << kArm64eRebuildUnsupported;
+      return {};
+    }
+    std::string Detail;
+    if (CachedImage &&
+        (!cachedImageBytesMatchInput(AuthenticatedImage.Raw, *CachedImage,
+                                     TargetArch, true, Detail) ||
+         !cachedAddressModelMatchesInput(AuthenticatedImage.Raw, *CachedImage,
+                                         Detail))) {
+      llvm::WithColor::error() << Detail << '\n';
+      return {};
+    }
+    auto Installed = installLiftedLeaves(Mod, AuthenticatedImage, OutputPath);
+    if (!Installed) {
+      llvm::WithColor::error() << llvm::toString(Installed.takeError()) << '\n';
+      return {};
+    }
+    return std::move(*Installed);
   }
 
   std::vector<PatchedFunctionEntry> InstalledFunctions;

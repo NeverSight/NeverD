@@ -486,6 +486,31 @@ images still need those proofs, including variadic and non-C entries. The
 previous canonical-IR installation qualification and pinned r6 package remain
 unchanged; source-fork-only producer features still require the source build.
 
+## Publishing register-only lifted dylibs
+
+The ordinary segment patch pipeline can publish a classic macOS arm64e image
+whose entire instruction section consists of frameless integer leaf functions.
+It matches lifted definitions to original entries, then checks the relocated
+machine instructions and compact unwind coverage for every body. The original
+entries forward to the emitted RX addresses. The private native emission uses
+the classic ABI version. The input IR retains its analysis marker.
+
+`NeverDArm64eLiftedImageTests` compiles an unreserved Apple Clang dylib,
+lifts it through the normal patch pipeline and compares the result against
+the original image. A missing definition or a changed arithmetic result fails
+before an output file is created. Set `NEVERD_ARM64E_LIFTED_NATIVE=1` on a
+host that executes arm64e to run the independently compiled authenticated
+caller against both images. The strict instruction check currently covers
+register-only integer arithmetic, logical operations and moves ending in RET.
+Functions with calls, signed frames or stack accesses need additional proofs.
+
+The [native lifted-image run](https://github.com/gmh5225/test_mac_intel/actions/runs/42957645426)
+executed the original and installed images on both macos-26 and xcode-27.
+Each caller checked both entries for 25 ordered argument pairs. The
+[evidence record](evidence/arm64e-lifted-leaves-2026-11-11.json) identifies the
+source-bound Release host, local LLVM fork, original and published image hashes,
+and the runner artifacts.
+
 ## Reconstructed entries through the native compiler
 
 `scripts/verify_arm64e_entry.py` separately validates the entry reconstruction
@@ -578,13 +603,18 @@ value, catch, cleanup, post-exception and corrupted-pointer check. This is a
 complete published fixture image, not automatic admission of arbitrary lifted
 modules.
 
-The linker receives `-Wl,-headerpad,0` for all four compact cases and both O2
-indexed-DWARF cases. NeverD fits the regular unwind table into checked TEXT
-storage and preserves the UUID and code-signing command capacity. The two O0
-DWARF cases still need `-Wl,-headerpad,0x8000`. Their existing TEXT mapping
-ends at live DATA and cannot hold the combined unwind records. Each case also
-fills the remaining TEXT tail of a private input copy and requires refusal
-before producing an output.
+The linker receives `-Wl,-headerpad,0` in all eight cases. The four compact
+and two O2 indexed-DWARF cases use the default zero preferred base and fit in
+existing TEXT storage. The two O0 DWARF cases set a nonzero preferred TEXT
+address so NeverD can extend the front of the segment while preserving code,
+data and authenticated slot VAs. The verifier reads each actual Mach header
+base and resolves the compact index's relative offsets against the installed
+base. A full zero-base O0 image still has no available prefix. Each case also
+fills the remaining TEXT tail of a zero-base input copy and requires refusal
+before producing an output. A separate contract fixture covers a zero-base
+image with exactly one free section descriptor and an aligned free range
+between occupied bytes. DWARF-only growth also exercises prefix relocation
+without a compact registry and replays the signed return-address rows.
 
 The publication test also checks rejection before the receipt commits,
 unchanged input bytes, exact installed entry receipts and refusal to overwrite
@@ -638,3 +668,13 @@ linked with zero header reservation. The
 [run record](evidence/arm64e-compact-layout-2026-11-11.json) binds the source
 revision, Release host, LLVM fork, GitHub artifacts and signed image hashes.
 Both runners reported Apple M1 (Virtual).
+
+The [header relocation run](https://github.com/gmh5225/test_mac_intel/actions/runs/42951431144)
+and the [compact storage replay](https://github.com/gmh5225/test_mac_intel/actions/runs/42954296548)
+executed all eight published images with zero linker header reservation on
+each Apple runner. In both O0 indexed-DWARF cases the preferred header moved
+from `0x100000000` to `0xffffc000`. The six default-base images retained
+their zero preferred address. Each host also passed eight original-caller
+trap controls, eight occupied-layout refusals and six compiler controls. The
+[evidence record](evidence/arm64e-header-relocation-2026-11-11.json)
+identifies the Release host, both artifacts and their measured image bases.

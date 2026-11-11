@@ -129,6 +129,15 @@ NEVERD_MIPS_DSP_INSTRUCTION(PackRoundedSaturatedHalfwords, 0xfc0007ff,
                             0x7c000551)
 NEVERD_MIPS_DSP_INSTRUCTION(PackSaturatedUnsignedBytes, 0xfc0007ff, 0x7c0003d1)
 
+NEVERD_MIPS_DSP_INSTRUCTION(DotAddLeftBytes, 0xfc00e7ff, 0x7c0000f0)
+NEVERD_MIPS_DSP_INSTRUCTION(DotAddRightBytes, 0xfc00e7ff, 0x7c0001f0)
+NEVERD_MIPS_DSP_INSTRUCTION(DotSubLeftBytes, 0xfc00e7ff, 0x7c0002f0)
+NEVERD_MIPS_DSP_INSTRUCTION(DotSubRightBytes, 0xfc00e7ff, 0x7c0003f0)
+NEVERD_MIPS_DSP_INSTRUCTION(DotAddFractionalHalfwords, 0xfc00e7ff, 0x7c000130)
+NEVERD_MIPS_DSP_INSTRUCTION(DotSubFractionalHalfwords, 0xfc00e7ff, 0x7c000170)
+NEVERD_MIPS_DSP_INSTRUCTION(MultiplySubtractFractionalHalfwords, 0xfc00e7ff,
+                            0x7c0001b0)
+
 #undef NEVERD_MIPS_DSP_LEFT
 #undef NEVERD_MIPS_DSP_EXPAND
 #undef NEVERD_MIPS_DSP_SHIFT

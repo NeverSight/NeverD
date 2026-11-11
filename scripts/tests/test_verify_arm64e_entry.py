@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -120,7 +121,9 @@ class EntryQualificationTests(unittest.TestCase):
                     elif label.endswith(entry.native.POLICY["disassembly_suffix"]):
                         stdout = (CASES["inspection_assembly"] if entry.POLICY["inspection_suffix"] in label else CASES["assembly"])
                     elif label.endswith(entry.POLICY["sections_suffix"]):
-                        stdout = CASES["sections_dwarf"] if CASES["dwarf_name_fragment"] in label else CASES["sections_compact"]
+                        original = label.endswith(entry.POLICY["baseline_suffix"] + entry.POLICY["sections_suffix"])
+                        stdout = CASES["nonzero_text_base"] if original else CASES["text_base"]
+                        stdout += CASES["sections_dwarf"] if CASES["dwarf_name_fragment"] in label else CASES["sections_compact"]
                     elif label.endswith(entry.POLICY["unwind_suffix"]):
                         stdout = CASES["unwind_dwarf"] if CASES["dwarf_name_fragment"] in label else CASES["unwind_compact"]
                     elif argv[0] == str(output / entry.POLICY["loader_binary"]):
@@ -159,6 +162,18 @@ class EntryQualificationTests(unittest.TestCase):
                 self.assertEqual(len(executed), 0 if compile_only else 1 if fail else CASES["case_count"])
                 for path in output.iterdir():
                     self.assertNotIn(path.suffix, (".out", ".o", ".dylib"))
+
+    def test_unwind_index_uses_the_mach_header_address(self):
+        base = entry.image_base(CASES["nonzero_text_base"])
+        text = CASES["unwind_regular_dwarf"]
+        shifted = {name: base + int(address, entry.POLICY["hex_radix"])
+                   for address, name in re.findall(entry.POLICY["symbol_pattern"], text, re.MULTILINE)}
+        entry.check_unwind(text, True, shifted, base)
+        with self.assertRaises(ValueError):
+            entry.check_unwind(text, True, shifted)
+        for invalid in ("", CASES["text_base"] + CASES["nonzero_text_base"]):
+            with self.assertRaises(ValueError):
+                entry.image_base(invalid)
 
     def test_receipt_cannot_omit_duplicate_or_alias_entries(self):
         entry.check_receipt(CASES["receipt"])

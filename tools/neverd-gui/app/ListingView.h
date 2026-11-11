@@ -184,6 +184,10 @@ private:
   bool fetchingBefore_ = false, fetchingAfter_ = false;
   quint64 serial_ = 0;
   quint64 contentSerial_ = 0;
+  /// The revision the last jump or refresh was asked at, and whether a
+  /// generation moved while it was on its way (generationChanged).
+  QString requestedRevision_;
+  bool generationBehind_ = false;
   int top_ = 0;
   // Body-relative columns; negative positions select the address prefix.
   int cursorLine_ = 0, cursorColumn_ = 0;

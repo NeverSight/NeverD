@@ -849,6 +849,50 @@ TEST_P(MIPSScalar, MalformedScalarContractsFailBeforeReadingOrWriting) {
   }
 }
 
+TEST_P(MIPSScalar,
+       PartialAccumulatorWritesTransportUnconsumedProducerUnknowns) {
+  auto Image = image(0x2000, {});
+  for (bool Strict : {false, true})
+    for (bool High : {false, true})
+      for (uint32_t Producer :
+           {0x00850018u, 0x00850019u, 0x0085001au, 0x0085001bu})
+        for (bool Consume : {false, true}) {
+          NdOpEmulator E(Image);
+          E.setStrictMode(Strict);
+          E.setRegister(mipsreg::A0, 10);
+          E.setRegister(mipsreg::A1, 3);
+          E.setRegister(mipsreg::A2, 99);
+          ASSERT_TRUE(execute(E, Producer));
+          const auto Other = High ? mipsreg::LO : mipsreg::HI;
+          const auto Expected = E.getRegister(Other);
+          if (Consume)
+            ASSERT_TRUE(execute(E, 0x00000010)); // MFHI $zero consumes too.
+          ASSERT_TRUE(execute(E, High ? 0x00c00011 : 0x00c00013));
+          EXPECT_EQ(E.getRegister(High ? mipsreg::HI : mipsreg::LO), 99u);
+          if (Consume)
+            EXPECT_EQ(E.getRegister(Other), Expected);
+          else
+            EXPECT_FALSE(E.getRegister(Other));
+          ASSERT_TRUE(execute(E, High ? 0x00001012 : 0x00001010));
+          if (!Consume)
+            EXPECT_FALSE(E.getRegister(mipsreg::V0));
+          // A fresh pair is well-defined even after the unknown transport.
+          ASSERT_TRUE(execute(E, 0x00800011));
+          ASSERT_TRUE(execute(E, 0x00a00013));
+          EXPECT_EQ(E.getRegister(mipsreg::HI), 10u);
+          EXPECT_EQ(E.getRegister(mipsreg::LO), 3u);
+        }
+  NdOpEmulator E(Image);
+  E.setStrictMode(true);
+  E.setRegister(mipsreg::A0, 7);
+  E.setRegister(mipsreg::A1, 9);
+  ASSERT_TRUE(execute(E, 0x00800011)); // Entry producer history is unknown.
+  EXPECT_FALSE(E.getRegister(mipsreg::LO));
+  ASSERT_TRUE(execute(E, 0x00a00013));
+  EXPECT_EQ(E.getRegister(mipsreg::HI), 7u);
+  EXPECT_EQ(E.getRegister(mipsreg::LO), 9u);
+}
+
 INSTANTIATE_TEST_SUITE_P(EndianAndWidth, MIPSScalar,
                          testing::Values(Arch::MIPS32, Arch::MIPS32EL,
                                          Arch::MIPS64, Arch::MIPS64EL));

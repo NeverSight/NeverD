@@ -1,0 +1,87 @@
+{
+  "date": "2026-11-11",
+  "scope": "Classic arm64e fixed-C entry dylibs, zero linker header reservation and synchronous signed C++ unwinding",
+  "implementation_revision": "50a88d3dfe908c687977a5ac4148be397e5f7f2a",
+  "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+  "configuration": "Release",
+  "cold_source_build_on_runner": false,
+  "host_sha256": "2cff94b3d63deb870725aa13f42bf3af6e6756977c6611a2ce6809fe687e9a84",
+  "host_manifest_sha256": "2fdc30e1a384cddda03fb0d605679549928adc7e1a8e928ffbc4d22eb099f2ac",
+  "host_archive_sha256": "3b2bfefcc6dedd5c1ddc4e5bde796822ac6b509fdac526dbac0420c87e8c7492",
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42954296548",
+  "workflow_revision": "2000ace35244ebcaec3f987241f4c0c83a1bf653",
+  "neverd_codegen_qualified": true,
+  "reconstructed_entry_publication_qualified": true,
+  "whole_image_publication_qualified": false,
+  "native_apple_cpta_qualified": false,
+  "runners": {
+    "native-entry-macos-26": {
+      "artifact_id": 13826780504,
+      "artifact_digest": "sha256:4b78fa5ab4e87f1d9dd77b53d318b44dc240e9775513ae7b5425d19a020a2b6f",
+      "cpu": "Apple M1 (Virtual)",
+      "sdk": "26.5",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "direct_executions": 8,
+      "installed_executions": 8,
+      "public_entries_per_image": 26,
+      "zero_headerpad_images": 8,
+      "zero_preferred_base_images": 6,
+      "original_caller_traps": 8,
+      "occupied_layout_refusals": 8,
+      "compiler_controls": 6,
+      "prefix_relocations": [
+        {
+          "key": 0,
+          "original_image_base": "0x100000000",
+          "installed_image_base": "0xffffc000",
+          "signed_image_sha256": "899604c149102425e2792a93c3d265cd9889cbd3b576ca43ed9679b7b4a49f24"
+        },
+        {
+          "key": 1,
+          "original_image_base": "0x100000000",
+          "installed_image_base": "0xffffc000",
+          "signed_image_sha256": "71ad781e91f1829494098bcf8967b5c8b96f5cf16a5826def11fa1472e1949ef"
+        }
+      ],
+      "report_sha256": {
+        "probe": "30dcef71bbdcf9d7274097c90ef94296d82e412e480fd78c26feb3c054394410",
+        "entries": "a7b8060bf5634307e05f38edfb35c9c35cbc5acb40041186281f69badfb81dfc",
+        "publication": "67949bb8907d7c8cf245c125602c645b4f28afca312dc6b3a54f30cd78bd7d5f"
+      }
+    },
+    "native-entry-xcode-27": {
+      "artifact_id": 13825704553,
+      "artifact_digest": "sha256:c929c13904de5060d7c64d9d3d61ae6319bbddef9ce256592ec61386c6cf8453",
+      "cpu": "Apple M1 (Virtual)",
+      "sdk": "27.0",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "direct_executions": 8,
+      "installed_executions": 8,
+      "public_entries_per_image": 26,
+      "zero_headerpad_images": 8,
+      "zero_preferred_base_images": 6,
+      "original_caller_traps": 8,
+      "occupied_layout_refusals": 8,
+      "compiler_controls": 6,
+      "prefix_relocations": [
+        {
+          "key": 0,
+          "original_image_base": "0x100000000",
+          "installed_image_base": "0xffffc000",
+          "signed_image_sha256": "9f3bef9eafd533c5822f1a93ebafab47eeb3495d9d84c08b935551438cd11e65"
+        },
+        {
+          "key": 1,
+          "original_image_base": "0x100000000",
+          "installed_image_base": "0xffffc000",
+          "signed_image_sha256": "590e6e55e0d3fa274251bf5ee15dcd8a9323ffe8c832ab151fe871655fe6ee23"
+        }
+      ],
+      "report_sha256": {
+        "probe": "7d303e92e07b24adce704e5748f578bc57520b2979266c582493e35fc2e420b8",
+        "entries": "ae04178a521cb5b081271480cf52ccd1cd90df227ff8ddcc6f2c1caada6e2aee",
+        "publication": "4b70bf9e3c72ac3f257668af242cc7010c368a0a81dc24691317d7e8aa745b33"
+      }
+    }
+  }
+}

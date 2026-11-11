@@ -245,6 +245,7 @@ std::filesystem::path projectLocalFolder(const std::string &root,
 } // namespace
 
 void Engine::openRenderStore(const std::string &mode) {
+  writeStoreKeeps();
   renderStore_.reset();
   renderStoreStale_ = false;
   summariesDeferred_ = false;
@@ -269,6 +270,16 @@ void Engine::openRenderStore(const std::string &mode) {
   summariesDeferred_ = summaryJob_ && renderStore_->contains(CompleteKey);
 }
 
+void Engine::writeStoreKeeps() noexcept {
+  for (const auto &keep : storeKeeps_)
+    try {
+      RenderStore::keepFor(keep.folder, keep.from, keep.to);
+    } catch (const std::exception &) {
+      // Later sessions render again.
+    }
+  storeKeeps_.clear();
+}
+
 void Engine::keepStoresFor(const StoreNames &before) {
   StoreNames names;
   try {
@@ -284,16 +295,19 @@ void Engine::keepStoresFor(const StoreNames &before, const StoreNames &after) {
   factsStoreRead_ = false;
   try {
     const auto &project = projectFolder();
+    // What an earlier relabel says reads first; this one is written once the
+    // reply is sent.
+    writeStoreKeeps();
     if (!before.renders.empty() && !after.renders.empty()) {
-      RenderStore::keepFor(projectLocalFolder(project, "render-ahead"),
-                           before.renders, after.renders);
+      storeKeeps_.push_back({projectLocalFolder(project, "render-ahead"),
+                             before.renders, after.renders});
       // What is open holds for them too.
       if (rendersStoreName_ == before.renders)
         rendersStoreName_ = after.renders;
     }
     if (!before.facts.empty() && !after.facts.empty()) {
-      RenderStore::keepFor(projectLocalFolder(project, "listing-facts"),
-                           before.facts, after.facts);
+      storeKeeps_.push_back({projectLocalFolder(project, "listing-facts"),
+                             before.facts, after.facts});
       if (factsStoreName_ == before.facts)
         factsStoreName_ = after.facts;
     }
@@ -349,6 +363,7 @@ Json Engine::keptRendersJson() {
 }
 
 void Engine::openFactsStore(const std::string &name, bool writable) {
+  writeStoreKeeps();
   factsStore_ = std::make_unique<RenderStore>(
       projectLocalFolder(projectFolder(), "listing-facts"), name, writable);
   factsStoreName_ = name;

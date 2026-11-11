@@ -102,7 +102,19 @@
     "lib/backend/codegen/MachO/MachOCompactUnwindLayout.def",
     "lib/backend/codegen/MachO/MachOPatch.cpp",
     "include/neverd/object/MachOLayout.h",
-    "include/neverd/object/MachOLayout.def"
+    "include/neverd/object/MachOLayout.def",
+    "lib/backend/codegen/MachO/MachOHeaderGrowth.cpp",
+    "lib/backend/codegen/MachO/MachOHeaderGrowth.def",
+    "lib/backend/codegen/MachO/MachODependencyState.cpp",
+    "lib/backend/codegen/MachO/MachODependencyState.h",
+    "lib/backend/codegen/MachO/MachOExportLayout.cpp",
+    "lib/backend/codegen/MachO/MachOCompactUnwindNative.def",
+    "include/neverd/loader/MachO/MachOArm64e.h",
+    "include/neverd/loader/MachO/MachOArm64e.def",
+    "lib/loader/MachO/MachOArm64eFixups.cpp",
+    "lib/backend/codegen/MachO/MachOExceptionPatch.cpp",
+    "lib/backend/codegen/MachO/MachOLayoutGrowth.def",
+    "lib/backend/codegen/MachO/MachOStrictLayout.h"
   ],
   "errors": {
     "arguments": "Native entry validation requires --probe-report; --compile-only does not accept one",
@@ -118,7 +130,9 @@
     "baseline": "The original entry must trap after entering the independent caller and before completing it",
     "receipt": "Publication must replace every declared public entry with a unique generated address and retain every exception frame",
     "execution": "The independent caller must enter and finish the complete entry matrix",
-    "inspection": "The installed text range must be completely backed by the final published image"
+    "inspection": "The installed text range must be completely backed by the final published image",
+    "image_base": "Expected one file-backed TEXT mapping for the Mach header",
+    "prefix": "The requested nonzero-base image did not grow its TEXT prefix"
   },
   "dwarf_entry_source": "entry-dwarf.ll",
   "unwind_command": [
@@ -229,7 +243,7 @@
   },
   "caller_entry_marker": "neverd-entry-caller-entered\n",
   "caller_pass_marker": "neverd-entry-caller-passed\n",
-  "publication_layout": "zero header reservation for compact and optimized DWARF, reserved capacity for unoptimized DWARF",
+  "publication_layout": "zero requested header padding, with a nonzero preferred base for unoptimized DWARF",
   "inspection_source_suffix": "-installed-text.s",
   "inspection_object_suffix": "-installed-text.o",
   "inspection_suffix": "-installed-text",
@@ -255,11 +269,14 @@
       "dwarf": true,
       "optimization": "-O0",
       "layout": {
-        "name": "reserved TEXT/header capacity",
+        "name": "zero header reservation with checked VM prefix",
         "header_args": [
-          "-Wl,-headerpad,0x8000"
-        ]
+          "-Wl,-headerpad,0",
+          "-Wl,-segaddr,__TEXT,0x100000000"
+        ],
+        "require_prefix": true
       }
     }
-  ]
+  ],
+  "text_base_pattern": "^\\s*cmd LC_SEGMENT_64\\s+cmdsize \\d+\\s+segname __TEXT\\s+vmaddr (0x[0-9a-fA-F]+)\\s+vmsize \\S+\\s+fileoff 0\\s*$"
 }

@@ -222,6 +222,10 @@ std::optional<Json> itemRuns(const Items &before, const Items &after,
       }
       ++count;
     } else {
+      // Past half of the list sent again, no runs answer: what is left
+      // cannot bring the count back.
+      if ((sent + 1) * 2 > after.size())
+        return std::nullopt;
       if (kind != Run::Put) {
         flush();
         kind = Run::Put;

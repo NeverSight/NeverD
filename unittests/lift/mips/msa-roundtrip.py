@@ -35,6 +35,8 @@ VECTOR_FUNCTIONS += tuple(f"msa_{op}_{w}" for op in ("asub_s", "asub_u") for w i
 VECTOR_FUNCTIONS += tuple(f"msa_{op}_{m}_{w}" for op in ("sat_s", "sat_u") for w, bits in zip(("b", "h", "w", "d"), (8, 16, 32, 64)) for m in (0, bits//2, bits-1))
 I5_OPERATIONS = ("addvi", "subvi", "ceqi", "clti_s", "clti_u", "clei_s", "clei_u", "maxi_s", "maxi_u", "mini_s", "mini_u")
 VECTOR_FUNCTIONS += tuple(f"msa_{op}_{imm}_{w}" for op in I5_OPERATIONS for imm in (0,16,31) for w in ("b","h","w","d"))
+VECTOR_FUNCTIONS += tuple(f"msa_{op}_{w}" for op in ("srar", "srlr", "binsl", "binsr") for w in ("b", "h", "w", "d"))
+VECTOR_FUNCTIONS += tuple(f"msa_{op}_{n}_{w}" for op in ("srari", "srlri", "binsli", "binsri") for w, bits in zip(("b", "h", "w", "d"), (8, 16, 32, 64)) for n in (0, bits//2, bits-1))
 FUNCTIONS = tuple(f"msa_lane{i}" for i in range(4)) + ("msa_mix", "msa_store", "msa_return_slot") + VECTOR_FUNCTIONS
 INPUTS = [(0, 0, 0, 0), (0xffffffff, 0x7fffffff, 0x80000000, 1),
           (0x11223344, 0x55667788, 0x99aabbcc, 0xddeeff00), (1, 2, 3, 4), (0, 1, 0xffffffff, 0), (0, 0x80000000, 0, 0x80000000)]
@@ -80,6 +82,23 @@ def expected(function, arguments, little):
                 elif op.startswith("maxi"): y=max(x,imm)
                 else: y=min(x,imm)
                 value |= (y & ((1 << bits)-1)) << shift
+        elif operation.startswith(("srar", "srlr", "binsl", "binsr")):
+            parts = operation.split("_")
+            op, width = parts[0], parts[-1]
+            bits = {"b":8, "h":16, "w":32, "d":64}[width]
+            mask, value = (1 << bits)-1, 0
+            old = int.from_bytes(bytes([0x5a])*16, "little")
+            for shift in range(0,128,bits):
+                x = (left >> shift) & mask
+                count = int(parts[1]) if len(parts) == 3 else ((right >> shift) & (bits-1))
+                if op.startswith("bins"):
+                    inserted = (1 << (count+1))-1
+                    if op.startswith("binsl"): inserted <<= bits-count-1
+                    y = (x & inserted) | ((old >> shift) & (mask ^ inserted))
+                else:
+                    if op.startswith("srar") and x & (1 << (bits-1)): x -= 1 << bits
+                    y = ((x + (1 << (count-1))) >> count) if count else x
+                value |= (y & mask) << shift
         elif operation in ("andi_b", "ori_b", "nori_b", "xori_b"):
             immediate = int.from_bytes(bytes([0xa5]) * 16, "little")
             value = left & immediate if operation == "andi_b" else left | immediate if operation == "ori_b" else ~(left | immediate) if operation == "nori_b" else left ^ immediate

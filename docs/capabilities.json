@@ -265,6 +265,7 @@
           "neverd_translate_object_result_dispose",
           "neverd_type_declarations_json",
           "neverd_type_declarations_load",
+          "neverd_type_declarations_range_json",
           "neverd_type_declarations_save",
           "neverd_type_libraries_json",
           "neverd_type_libraries_load",
@@ -1792,6 +1793,7 @@
           "neverd_symbol_table_reference_json",
           "neverd_symbols_json",
           "neverd_type_declarations_json",
+          "neverd_type_declarations_range_json",
           "neverd_type_libraries_json",
           "neverd_types_languages_json",
           "neverd_unwind_frame_json",
@@ -2109,8 +2111,8 @@
         "docs/firmware/archer-c7-v5.md"
       ],
       "limitations": [
-        "linked MIPS32r2/o32 and MIPS64r2/n64 ELF only; n32, Release 6, compressed encodings and relocatable objects are rejected",
-        "strict integer subset; floating point, DSP/MSA, privileged operations, LL/SC, unaligned merge stores and trapping arithmetic/division are unsupported",
+        "linked classic MIPS32r2/o32 and MIPS64r2/n64 ELF in either byte order",
+        "bounded integer, HI/LO and unaligned word-merge forms described in docs/mips.md. n32, Release 6, floating point and relocatable objects remain outside this profile",
         "integer carrier recovery does not establish complete typed o32 wide/narrow or aggregate/floating ABI classification, arbitrary PIC/gp recovery, native rewriting or guest execution",
         "firmware qualification covers selected Archer C7 V5 functions; independent owned fixtures qualify MIPS64"
       ],
@@ -2154,7 +2156,7 @@
         "docs/mips.md"
       ],
       "limitations": [
-        "linked microMIPS32r2/o32 scalar subset in either byte order; other revisions, MIPS16, microMIPS64 and DSP/MSA remain unsupported",
+        "linked microMIPS32r2/o32 scalar subset in either byte order with local ISA-mode evidence. microMIPS64 and compressed ASE forms remain unqualified",
         "local mode evidence and physical two/four-byte instruction and slot ownership are required; unknown or conflicting targets fail explicitly",
         "source qualification covers bounded leaves with proven incoming RA; numeric microMIPS callable reconstruction, unknown-mode import values, tail calls and unproved restores across calls are rejected",
         "no complete compressed ISA, typed floating/vector ABI, native rewrite or guest-process execution claim"
@@ -2187,6 +2189,59 @@
       }
     },
     {
+      "id": "analysis.mips.mips16-r2",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "lift",
+      "targets": [
+        "mips",
+        "mipsel"
+      ],
+      "docs": [
+        "docs/mips.md"
+      ],
+      "limitations": [
+        "linked MIPS16e32 and MIPS16e2 Release 2/o32 ELF with local mode evidence in either byte order",
+        "MIPS16e2 MT controls require the MT ASE flag and a bound execution context. CP0 word views and execution hazards have explicit state contracts",
+        "CACHE and PREF retain the operation and effective address in LowIR. Cache execution, MT scheduling, privileged native-source projection and original MIPS16e2 hardware execution remain unqualified"
+      ],
+      "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPS16E2Tests.cpp",
+          "filter": "*/MIPS16E2.MTControlUsesBoundViewsMasterPermissionAndHazards/*",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPS16E2Tests.cpp",
+          "filter": "*/MIPS16E2.CacheAndPrefetchRetainExactEffectsWithoutInventingExecution/*",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSPipelineTests",
+          "source": "unittests/lift/mips/MIPS16E2PipelineTests.cpp",
+          "filter": "MIPS16E2Pipeline.StatefulInstructionsSurviveDeadResultsAndRefuseNativeSource",
+          "platforms": [
+            "darwin"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [],
+        "python": [],
+        "cli": [],
+        "json": []
+      }
+    },
+    {
       "id": "analysis.mips.dsp32-r2",
       "kind": "analysis",
       "status": "experimental",
@@ -2199,9 +2254,9 @@
         "docs/mips.md"
       ],
       "limitations": [
-        "classic MIPS32r2/o32 linked ELF with DSP ASE evidence; initial RDDSP, WRDSP, ADDU.QB and ADDU_S.QB slice only",
+        "linked classic MIPS32r2/o32 ELF with DSP ASE evidence. The qualified packed arithmetic, DSPControl and accumulator forms are listed in docs/mips.md",
         "explicit DSPControl state requires an enabled DSP execution environment; no disabled-DSP exception delivery or invented initial state",
-        "DSPR2, DSP64, compressed DSP, accumulators, other DSP forms and MSA remain unsupported",
+        "AC0 aliases HI/LO. AC1 through AC3 have independent high and low halves. Saturating accumulator, extraction, DSPR2, DSP64 and compressed DSP families require separate qualification",
         "original-target source preserves DSPControl after return; no portable-host execution or floating/vector ABI claim"
       ],
       "tests": [
@@ -2219,6 +2274,59 @@
           "target": "NeverDMIPSIntegerTests",
           "source": "unittests/lift/mips/MIPSDSPTests.cpp",
           "filter": "*/MIPSDSP.SelectorsPreserveUnselectedFieldsAndIgnoreHighBits/*",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPSDSPTests.cpp",
+          "filter": "*/MIPSDSP.AccumulatorBanksAndDotProductsPreserveFullCarryAndStickyFlags/*",
+          "platforms": [
+            "darwin"
+          ]
+        }
+      ],
+      "public_surfaces": {
+        "c": [],
+        "python": [],
+        "cli": [],
+        "json": []
+      }
+    },
+    {
+      "id": "analysis.mips.msa32-r5",
+      "kind": "analysis",
+      "status": "experimental",
+      "owner": "lift",
+      "targets": [
+        "mips",
+        "mipsel"
+      ],
+      "docs": [
+        "docs/mips.md"
+      ],
+      "limitations": [
+        "linked classic MIPS32r5/o32 ELF with MSA, FP64 ABI and 128-bit CPR1 evidence in either byte order",
+        "qualified integer B/H/W/D operations include rounded shifts and bit insertion. Source recovery requires defined vector inputs and the original-target compiler contract",
+        "floating-point and control state, disabled-MSA exception delivery, MSA64 and compressed MSA remain outside this profile"
+      ],
+      "tests": [
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPSMSATests.cpp",
+          "filter": "*/MIPSMSA.RoundedShiftsAndBitInsertionCoverAllCountsWidthsAndAliases/*",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSPipelineTests",
+          "source": "unittests/lift/mips/MIPSMSAPipelineTests.cpp",
+          "filter": "MIPSMSAPipeline.InitializedIntegerLeavesEmitBothSourceRoutes",
           "platforms": [
             "darwin"
           ]

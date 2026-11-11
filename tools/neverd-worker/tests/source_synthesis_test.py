@@ -274,14 +274,14 @@ def multiple_residual_elf(degree, neighbor=False):
 
 def carry_product_elf(degree, product=True, needed=7, high_bits=None, additive=False,
                       *, interleaved=False, complemented=False, neighbor=False,
-                      factor_mask=None):
+                      factor_mask=None, factor_order=None):
     # Retain the requested low bits, including observable residual cross terms.
     high_bits = high_bits or (3 if product else 2)
     mask = (0xffffffff << (high_bits - int(product))) & 0xffffffff
     scale = 3 << (32 - needed)
     code = bytearray.fromhex("b8") + struct.pack("<I", scale)
     factors = [None] * degree
-    order = list(range(degree))
+    order = list(range(degree)) if factor_order is None else factor_order
     if interleaved:
         order = order[::2] + order[1::2]
     for i in order:
@@ -420,6 +420,9 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
             if not kind.endswith("neighbor"):
                 assert code.count("*") <= 3, text
+        elif kind == "carry-product-isolated-column-64":
+            code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
+            assert code.count("*") <= 3 and code.count("^") <= 1, text
         elif kind.startswith("carry-product-partial-"):
             # Partial blocks keep complete unpaired words. Their original
             # degree-N product has two multiplications per factor; require
@@ -574,11 +577,21 @@ if __name__ == "__main__":
             ("multiple-residual-neighbor", *multiple_residual_elf(4, True)),
             ("carry-product-32", *carry_product_elf(32)),
             ("carry-product-partial-23", *carry_product_elf(23, True, 6, 2)),
+            # Completed recursive and reordered reductions; the degree-25
+            # preservation boundary remains in SymMBASparseUnits.
+            ("carry-product-partial-recursive-49", *carry_product_elf(49, True, 7, 2)),
+            ("power-group-permuted-64", *carry_product_elf(
+                64, False, 8, 3, factor_order=(
+                    18, 61, 44, 34, 0, 36, 19, 11, 15, 21, 40, 55, 35, 42, 5, 52,
+                    31, 10, 63, 17, 50, 47, 22, 60, 20, 14, 49, 53, 43, 28, 23, 39,
+                    1, 57, 9, 37, 16, 26, 45, 4, 29, 8, 41, 46, 54, 59, 51, 32,
+                    13, 62, 3, 2, 38, 7, 33, 56, 24, 58, 48, 25, 6, 27, 12, 30))),
             ("carry-product-partial-narrow-23", *carry_product_elf(23, True, 6, 3)),
             ("carry-product-partial-neighbor-47", *carry_product_elf(47, True, 7, 4, neighbor=True)),
             ("carry-product-partial-complement-neighbor-95", *carry_product_elf(95, True, 8, 5, complemented=True, neighbor=True)),
             ("carry-product-partial-projected-neighbor-256", *carry_product_elf(256, True, 7, 2, complemented=True, neighbor=True)),
             ("carry-cofactor-projected-complement-256", *carry_product_elf(256, True, 8, 2, complemented=True)),
+            ("carry-product-isolated-column-64", *carry_product_elf(64, True, 8, 2, factor_mask=0x83)),
             ("carry-cofactor-masked-window-16", *carry_product_elf(16, True, 8, 2, factor_mask=0x80000003)),
             ("carry-product-64", *carry_product_elf(64, False)),
             ("carry-cofactor-8", *carry_product_elf(8, True, 5, 2)),

@@ -4366,6 +4366,31 @@ blocks of degree 15/23/31 retain unpaired source words and low-bit disturbances.
 Tests exhaust all three six-bit inputs for a degree-15 block, check complete
 8–257-bit words and retain every factor under short work/storage allowances.
 A degree-23 machine-code fixture executes all six source routes at O0/O2.
+`SymMBASparseUnits` requires a reordered 64-factor product to complete its
+residue proof and reduce cofactor cost by more than half at 8/16/32/64 bits.
+Its independent oracle enumerates every observed byte pair, including populated
+high bits. Short-prefix powers check correlated bits through an entire unit
+period, including its neighboring exponents.
+`SymMBASample.LongChecksRetainEveryOriginalRandomAssignment` pins the original
+counterexample points around 312 and 624 generator words with dense/sparse IDs
+and 8/64/65/257-bit inputs. Independent standard-engine comparisons cover all
+8192 cached words, the cache boundary and large dense/sparse input unions.
+`SymExpr.CollectVarsUnionsSharedRootsAndExistingSparseIds` checks overlapping
+roots, unused wide inputs and the union with previously collected variables.
+Degree-23 fixtures cover disturbed neighbors, 8–257-bit inputs, cumulative
+work/storage refusals and independent full-width Z3 proofs at 8 and 64 bits.
+The existing 31-factor byte cases check all 16,777,216 input triples for each
+observation-width and parity-neighbor configuration. This complete finite-domain
+proof avoids relying on the runtime of a high-degree SMT query.
+Degree-49 and permuted degree-64 machine-code fixtures execute all six
+HighC/LLVMC CLI and worker source routes at O0/O2.
+Recursive square retention checks degrees 25/31/49/63 with full 8–257-bit
+arithmetic and parity neighbors. Native-width degree-49/63 cases must reduce
+cost within the default allowance; wider cases may decline while preserving
+every original bit. Degree 49 enumerates all seven-bit input
+triples, with populated high bits; degree 25 remains a preservation case without
+claiming a completed reduction. A degree-33 single-pair boundary must keep the
+original global work allowance below exhaustion.
 Reassociated complemented blocks check XOR identity reuse with independent
 8–257-bit arithmetic and an exhaustive three-input six-bit oracle. Degree-192
 mixed products at both mask precisions must preserve their independent linear
@@ -7101,7 +7126,10 @@ checks that a replica's dispatcher names the page it kept after its owner's chan
 starts its read context anew, and names none of another project's.
 `WorkbenchTests::ownerAnswersForItsPagesWhileAReplicaIsReady` checks that the owner
 still answers for the page it gave after a note, with a replica ready, and that a
-graph is still the replica's.
+graph is still the replica's. `WorkbenchTests::ownerReadsWhatChangedOfThePageItGave`
+comments on the function a page the owner gave shows and reads it again through the
+analysis queries: the owner's dispatcher names the page it kept, so the worker's answer
+read ahead of the view takes it (`metadata.prepared_views_given`), the comment showing.
 `NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
 session takes up what the replica keeps of a function's first look, a later session
 lists what asking the engine lists, a new name of a function or of data keeps the
@@ -7138,7 +7166,9 @@ a staged comment's step is refused unless it commits the comments first
 included, none past them, and none for an empty or reversed span; and the function
 edits of an entry or a span with `neverd_functions_range_json`, created, deleted and
 stated ones as `neverd_functions_json` lists them. Its
-`NewTypesKeepTheImportPrototypesTheyDoNotReach` decompiles a driver whose calls read
+`DeclaredTypesJoinThePDBsAndStayWithTheProject` lists a span of the declarations with
+`neverd_type_declarations_range_json` as the list says it, and none for an empty or
+reversed span. `NewTypesKeepTheImportPrototypesTheyDoNotReach` decompiles a driver whose calls read
 the kernel's prototypes, declares a type none reaches and then the process one returns,
 and reads the driver as a session that declared the same types first, byte for byte.
 `LocalTypesDebugContext.NewTypesNoPrototypeReachesKeepABISignatures` keeps a converted
@@ -10693,6 +10723,19 @@ formula at `-O0` and `-O2`, preserving the high-bit remainder and toggle/cache
 isolation.
 
 ## Modular MBA simplification
+
+`SymMBAHigherProduct.MintermSelectionsKeepEveryBoundaryCorner` checks empty,
+singleton and complete tables across the 64-entry storage boundary.
+`MixedDegreeExpansionPreservesIndependentWordValues` checks changing factor
+counts, repeated and replaced factors, constants, cancellation and zero products
+against an independent word oracle. It exhausts two-bit triples and populates
+all limbs through 257 bits, including single-term expansion and budget refusal.
+
+The isolated-column tests compare the packed proof with exhaustive scalar
+truth tables at four precisions, including perturbed offsets and short budgets.
+A 64-factor machine-code fixture checks both CLI and worker source modes against
+the original product at O0 and O2. Paired expression printing must reproduce
+both individual strings for shared roots, ancestors and different widths.
 
 `SymMBALinearProofMemo` checks successful full-width proof reuse, alternating
 queries with the same difference, context isolation, incomplete proofs and
@@ -23478,6 +23521,11 @@ the completed child's one-unit reuse and the unfinished sibling's remaining work
 
 ## MIPS ELF analysis and source roundtrips
 
+The optional [Archer C7 V5 handler comparison](firmware/archer-c7-v5.md#reproduce-selected-views)
+runs the original `ubus call` at `0x4012d0` and both recompiled C views against
+five modeled PLT imports. Its input is the locally extracted, hash-checked
+firmware executable. The repository-owned source matrices run independently.
+
 The experimental [MIPS analysis](mips.md) path has focused targets
 `NeverDMIPSTests` (ELF admission, endian data, GOT/PLT and unwind records),
 `NeverDMIPSIntegerTests` (integer semantics and pinned Unicorn),
@@ -23760,6 +23808,17 @@ functions. Twelve external Clang probes compile their HighC/LLVMC output with
 helpers, for the composed negative feature attributes. These compiler probes
 complement 24 standalone execution groups; checking the source spelling alone
 would miss Clang's declaration-versus-pragma attribute replacement.
+
+The MT/cache/accumulator follow-up tests CP0 selector keys, explicit MT ABI
+admission, master/non-master EVP updates, old control words, no-result forms,
+unknown bound state and EHB hazards. CACHE/PREF tests retain all operands and
+effects while refusing unmodeled execution/source; call setup tests invalidate
+stored fifth arguments while preserving register arguments. DSP tests cover
+all four banks, full-width dot carries and sticky OU16+AC. AC0 history cases
+cover unread producers, zero-destination consumption, consecutive half writes,
+unknown-bit transport and source joins. MSA rounded shifts/inserts exhaust every
+count at every width with APInt expectations, aliases and reserved prefixes;
+source fixtures execute zero/mid/full immediate counts on both byte orders.
 
 ### MIPS decode/lift and firmware performance
 
