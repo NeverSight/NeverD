@@ -188,13 +188,17 @@ def run(executable):
         assert not changed.get("unchanged") and "on the kept page" in changed["text"], changed
         assert changed["etag"] != kept_page["etag"]
         # A client that applies what changed to the page it keeps reads that:
-        # applied, it is the page a read naming none gets.
+        # applied, it is the page a read naming none gets.  The edit's views
+        # are read behind its reply as the client will ask for them, and that
+        # read takes the answer.
+        given = ok(owner, "metadata")["prepared_views_given"]
         ok(owner, "annotation_set", {"address": hex(functions[0]), "text": "on the kept page again"})
         ok(owner, "save")
         delta = ok(owner, "decompile", {"address": hex(functions[0]), "representation": "source",
                                         "offset": 0, "limit": 200, "kept_only": True,
                                         "if_none_match": changed["etag"], "page_delta": True})
         assert "delta" in delta and delta["base"] == changed["etag"], delta
+        assert ok(owner, "metadata")["prepared_views_given"] == given + 1
         assert len(json.dumps(delta)) < len(json.dumps(changed)) / 2, delta
         whole = ok(owner, "decompile", {"address": hex(functions[0]), "representation": "source",
                                         "offset": 0, "limit": 200, "kept_only": True,

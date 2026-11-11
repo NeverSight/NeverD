@@ -7129,7 +7129,10 @@ and reads the driver as a session that declared the same types first, byte for b
 `LocalTypesDebugContext.NewTypesNoPrototypeReachesKeepABISignatures` keeps a converted
 signature, the same nodes, through a type no prototype reaches.
 `NeverDWorkerViewEdits` also undoes a local's name, data items and names of data step by
-step and redoes them, each step reading as a new reader of the project does. The
+step and redoes them, each step reading as a new reader of the project does, and a
+comment on a page a client keeps is read behind the edit's reply and given to the read
+that asks for it (`metadata.prepared_views_given`), the page it applies to reading as a
+read naming none gets. The
 workbench's `undoTakesBackANameAfterAComment` undoes a comment and then the name before
 it, with no refusal on the way. The
 workbench's `commentsCommittedAheadOfAnEditAreNotASave` renames while a comment is

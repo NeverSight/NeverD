@@ -60,6 +60,11 @@ public:
   std::string revision() const { return std::to_string(revision_); }
   std::string projectId() const { return projectId_; }
   bool analyzed() const { return analyzed_; }
+  /// After an edit's reply: the views it reaches that a client was last given
+  /// a page of are read again, as that client will ask for them, until
+  /// \p requestWaiting says a request waits.  The read that asks the same
+  /// takes the answer while nothing has changed since.
+  void prepareFollowingViews(const std::function<bool()> &requestWaiting);
   /// Background work (the reference index) runs between requests.
   bool hasIdleWork() const;
   bool idleStep();
@@ -587,6 +592,10 @@ private:
     bool pagesRenamed = false;
     /// Of the edits views have kept through, how many it has read.
     mutable std::uint64_t viewEditsRead = 0;
+    /// The read a client last made of it with kept_only, naming the page it
+    /// was given (if_none_match) as its next read will, and when.
+    mutable Json nextRead;
+    mutable std::uint64_t servedAt = 0, servedRevision = 0;
     /// Hashes of the identifiers its text spells, sorted, once an edit's names
     /// are first looked for in it.
     mutable std::vector<std::uint64_t> spelled;
@@ -662,8 +671,32 @@ private:
                                     const Json &options = Json::object(),
                                     EncodedPayload *encoded = nullptr,
                                     const std::string *ifNoneMatch = nullptr,
-                                    bool pageDelta = false);
+                                    bool pageDelta = false,
+                                    const Json *request = nullptr);
   std::uint64_t namedViewIds_ = 0;
+  /// The page the last view read gave, of which document, and the read that
+  /// follows it: kept on the document once the page reaches the client.
+  struct ServedPage {
+    std::shared_ptr<const NamedView> document;
+    Json next;
+  };
+  std::optional<ServedPage> served_;
+  std::uint64_t servedPages_ = 0;
+  void keepServed(ServedPage served);
+  /// Answers prepareFollowingViews made, for the request each answers, while
+  /// the revision and the listing's view generation are those they read.
+  struct PreparedView {
+    std::string request;
+    Json reply;
+    std::optional<ServedPage> served;
+  };
+  std::vector<PreparedView> preparedViews_;
+  std::uint64_t preparedRevision_ = 0, preparedGeneration_ = 0;
+  std::uint64_t viewEditsAtRequest_ = 0, requestRevision_ = 0;
+  /// Lets answers no read took go off the request thread.
+  void forgetPreparedViews();
+  /// metadata.prepared_views: answers made and given.
+  std::uint64_t preparedMade_ = 0, preparedGiven_ = 0;
   /// Documents written from another with its comments, functions' names or
   /// data's names taken (takeComments, takeFunctionNames, takeDataNames).
   std::uint64_t commentPatches_ = 0, namePatches_ = 0, dataNamePatches_ = 0;
