@@ -213,6 +213,35 @@ protected:
 };
 
 /// Browse references while keeping the originating analysis pane usable.
+/// The buttons of a dialog that states one correction: Reset, then Cancel and
+/// Apply.
+struct CorrectionButtons {
+  QDialogButtonBox *box;
+  QPushButton *apply;
+  QPushButton *reset;
+};
+
+/// Apply is the step that comes next: it follows Cancel, as every dialog's
+/// primary action does, and takes Return while it can act.  Reset discards
+/// what the user stated, so it stands apart and never takes the key.  Left
+/// to Qt, Reset was the default as the first push button, and Apply, with a
+/// role of its own, stood before Cancel.
+CorrectionButtons correctionButtons(QDialog &dialog) {
+  auto *box =
+      new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel |
+                               QDialogButtonBox::Reset,
+                           &dialog);
+  auto *apply = box->button(QDialogButtonBox::Apply);
+  auto *reset = box->button(QDialogButtonBox::Reset);
+  box->removeButton(apply);
+  box->addButton(apply, QDialogButtonBox::AcceptRole);
+  apply->setDefault(true);
+  reset->setAutoDefault(false);
+  QObject::connect(apply, &QPushButton::clicked, &dialog, &QDialog::accept);
+  QObject::connect(box, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  return {box, apply, reset};
+}
+
 class ReferencesDialog final : public QDialog {
 public:
   ReferencesDialog(Session &session, const AddressSpace &space,
@@ -5518,22 +5547,33 @@ void MainWindow::editStackFrame(int mode) {
           }
           layout->addWidget(table);
         }
-        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Apply |
-                                                 QDialogButtonBox::Cancel |
-                                                 QDialogButtonBox::Reset,
-                                             &dialog);
+        const auto buttons = correctionButtons(dialog);
+        buttons.apply->setObjectName("stackFrameApply");
+        buttons.reset->setObjectName("stackFrameReset");
         bool reset = false;
-        buttons->button(QDialogButtonBox::Apply)->setEnabled(stale.isEmpty());
-        connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
-                &dialog, &QDialog::accept);
-        connect(buttons, &QDialogButtonBox::rejected, &dialog,
-                &QDialog::reject);
-        connect(buttons->button(QDialogButtonBox::Reset), &QPushButton::clicked,
-                &dialog, [&] {
-                  reset = true;
-                  dialog.accept();
-                });
-        layout->addWidget(buttons);
+        buttons.apply->setEnabled(stale.isEmpty());
+        connect(buttons.reset, &QPushButton::clicked, &dialog, [&] {
+          reset = true;
+          dialog.accept();
+        });
+        if (!table) {
+          // A few lines stand as tall as they need and stay at the top; in
+          // the height the table takes they drifted apart.
+          layout->addStretch(1);
+          layout->addWidget(buttons.box);
+          const auto fit = [&dialog, layout] {
+            const int needed = layout->totalHeightForWidth(dialog.width());
+            if (dialog.height() < needed)
+              dialog.resize(dialog.width(), needed);
+          };
+          dialog.resize(dialog.width(),
+                        layout->totalHeightForWidth(dialog.width()));
+          // Again once it shows: a platform's frame or font may give the
+          // wrapped text less room than was measured before.
+          QTimer::singleShot(0, &dialog, fit);
+        } else {
+          layout->addWidget(buttons.box);
+        }
         if (dialog.exec() != QDialog::Accepted || session_.epoch() != epoch ||
             session_.revision() != revision || currentFunction() != function)
           return;
@@ -5679,25 +5719,15 @@ void MainWindow::editCallType(bool resetAll) {
           types.append(type.toString());
         actuals->setPlainText(types.join('\n'));
         layout->addWidget(actuals);
-        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Apply |
-                                                 QDialogButtonBox::Cancel |
-                                                 QDialogButtonBox::Reset,
-                                             &dialog);
-        buttons->button(QDialogButtonBox::Apply)
-            ->setObjectName("callTypeApply");
-        buttons->button(QDialogButtonBox::Reset)
-            ->setObjectName("callTypeReset");
+        const auto buttons = correctionButtons(dialog);
+        buttons.apply->setObjectName("callTypeApply");
+        buttons.reset->setObjectName("callTypeReset");
         bool reset = false;
-        connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
-                &dialog, &QDialog::accept);
-        connect(buttons, &QDialogButtonBox::rejected, &dialog,
-                &QDialog::reject);
-        connect(buttons->button(QDialogButtonBox::Reset), &QPushButton::clicked,
-                &dialog, [&] {
-                  reset = true;
-                  dialog.accept();
-                });
-        layout->addWidget(buttons);
+        connect(buttons.reset, &QPushButton::clicked, &dialog, [&] {
+          reset = true;
+          dialog.accept();
+        });
+        layout->addWidget(buttons.box);
         if (dialog.exec() != QDialog::Accepted || !view ||
             session_.epoch() != epoch || session_.revision() != revision ||
             view->text()->function() != function ||

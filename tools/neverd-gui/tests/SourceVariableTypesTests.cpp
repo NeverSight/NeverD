@@ -20,6 +20,7 @@
 #include <QInputDialog>
 #include <QJsonDocument>
 #include <QLabel>
+#include <QLayout>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPlainTextEdit>
@@ -296,6 +297,92 @@ private slots:
     Session.closeFile();
     Window.close();
   }
+  void returnAppliesAStackCorrectionAndNeverResets() {
+    // Reset was the stack dialogs' default by Qt's choice of their first push
+    // button, so Return in the offset field discarded the corrections it was
+    // meant to state, and Apply stood before Cancel where every other
+    // dialog's primary action follows it.
+    QTemporaryDir Directory;
+    const auto Path = fixture(
+        Directory, QByteArray::fromHex(
+                       "4883ec2848897c2418e8c3ff0f00488b4424184883c428c3"));
+    QVERIFY(!Path.isEmpty());
+    Session Session(QString::fromLocal8Bit(TEST_REAL_WORKER));
+    McpConnectionManager Mcp;
+    GuiSessionBroker Broker;
+    MainWindow Window(Session, Mcp, Broker);
+    Window.setAsksForDebugInfo(false);
+    Window.setLayoutPath(Directory.filePath("layout.json"));
+    Window.resize(1400, 900);
+    Window.initializeLayout();
+    Window.show();
+    Session.open(Path);
+    QTRY_VERIFY_WITH_TIMEOUT(Session.loaded(), 30000);
+    Window.disassembly()->navigate(0x400078);
+    QTRY_COMPARE_WITH_TIMEOUT(Window.disassembly()->currentItem(),
+                              std::optional<Address>(0x400078), 30000);
+    Window.disassembly()->listing()->setFocus();
+    auto *Action = Window.actions().action(ActionId::EditStackPointer);
+    QTRY_VERIFY(Action->isEnabled());
+    int Resets = 0, Applies = 0;
+    bool Seen = false, Accepts = false, ResetTakesFocusDefault = true;
+    int Height = 0, Needed = 0;
+    QTimer Editor;
+    connect(&Editor, &QTimer::timeout, this, [&] {
+      auto *Dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+      // A dialog is the active modal widget before it is the active window,
+      // and until then a key belongs to the window behind it: Return there
+      // is the listing's "Jump to operand".
+      if (!Dialog || Dialog->objectName() != "stackFrameDialog" ||
+          !Dialog->isActiveWindow())
+        return;
+      Editor.stop();
+      auto *Box = Dialog->findChild<QDialogButtonBox *>();
+      auto *After = Dialog->findChild<QLineEdit *>("stackPointerAfter");
+      QPushButton *Apply = nullptr, *Reset = nullptr, *Cancel = nullptr;
+      for (auto *Button : Box->buttons()) {
+        auto *Push = qobject_cast<QPushButton *>(Button);
+        switch (Box->buttonRole(Button)) {
+        case QDialogButtonBox::ResetRole:
+          Reset = Push;
+          break;
+        case QDialogButtonBox::RejectRole:
+          Cancel = Push;
+          break;
+        default:
+          Apply = Push;
+        }
+      }
+      if (!After || !Apply || !Reset || !Cancel) {
+        Dialog->reject();
+        return;
+      }
+      connect(Reset, &QPushButton::clicked, this, [&Resets] { ++Resets; });
+      connect(Apply, &QPushButton::clicked, this, [&Applies] { ++Applies; });
+      // The accept role stands after Cancel in the workbench's layout; the
+      // standard Apply's own role stands before it.
+      Accepts = Box->buttonRole(Apply) == QDialogButtonBox::AcceptRole;
+      ResetTakesFocusDefault = Reset->autoDefault() || Reset->isDefault();
+      Height = Dialog->height();
+      Needed = Dialog->layout()->totalHeightForWidth(Dialog->width());
+      Seen = true;
+      After->setFocus();
+      QTest::keyClick(After, Qt::Key_Return);
+      if (Dialog->isVisible())
+        Dialog->reject();
+    });
+    Editor.start(20);
+    Action->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(Seen, 30000);
+    QCOMPARE(Resets, 0);
+    QCOMPARE(Applies, 1);
+    QVERIFY(Accepts);
+    QVERIFY(!ResetTakesFocusDefault);
+    // Four lines stand as tall as they need, not adrift in the height the
+    // table of stack variables takes.
+    QCOMPARE(Height, Needed);
+  }
+
   void stackFrameDialogs_data() {
     QTest::addColumn<QString>("Offset");
     QTest::addColumn<QString>("Width");
@@ -349,9 +436,7 @@ private slots:
           Table->item(Row, 3)->setText("uint64_t");
           Opened = true;
         }
-      Dialog->findChild<QDialogButtonBox *>()
-          ->button(QDialogButtonBox::Apply)
-          ->click();
+      Dialog->findChild<QPushButton *>("stackFrameApply")->click();
     });
     Editor.start(20);
     Action->trigger();
@@ -397,9 +482,7 @@ private slots:
       Input->setText(After);
       PointerOpened = true;
       PointerEditor.stop();
-      Dialog->findChild<QDialogButtonBox *>()
-          ->button(QDialogButtonBox::Apply)
-          ->click();
+      Dialog->findChild<QPushButton *>("stackFrameApply")->click();
     });
     PointerEditor.start(20);
     Action->trigger();
@@ -616,7 +699,7 @@ private slots:
     QVERIFY(View->text()->findText("sub_4000B8(7", true));
     View->text()->setFocus();
     QTRY_VERIFY(Window.actions().action(ActionId::EditCallType)->isEnabled());
-    bool Edited = false;
+    bool Edited = false, Primary = false;
     QTimer Editor;
     connect(&Editor, &QTimer::timeout, this, [&] {
       auto *Dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
@@ -633,6 +716,11 @@ private slots:
           ->setPlainText("unsigned int\nunsigned int");
       Edited = true;
       Editor.stop();
+      // Apply is the step that comes next and Reset never takes Return.
+      const auto *Apply = Dialog->findChild<QPushButton *>("callTypeApply");
+      const auto *Reset = Dialog->findChild<QPushButton *>("callTypeReset");
+      Primary =
+          Apply->isDefault() && !Reset->isDefault() && !Reset->autoDefault();
       Dialog->findChild<QPushButton *>("callTypeApply")->click();
     });
     Editor.start(10);
@@ -643,6 +731,7 @@ private slots:
     });
     Window.actions().action(ActionId::EditCallType)->trigger();
     QTRY_VERIFY_WITH_TIMEOUT(Edited, 30000);
+    QVERIFY(Primary);
     QTRY_VERIFY_WITH_TIMEOUT(
         View->text()->allText().contains("(*)(uint32_t, ...)"), 30000);
     QVERIFY2(Session.lastError().isEmpty(), qPrintable(Session.lastError()));
