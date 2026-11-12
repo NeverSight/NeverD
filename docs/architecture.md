@@ -3603,6 +3603,34 @@ conversion from memory bytes to numeric SUBBYTES offsets. A predecessor wide
 store without published lane evidence makes the proof incomplete, so required
 unknown arguments cannot become alignment padding.
 
+That rule stands at the call. The position a pair-aligned wide argument
+leaves before it, a register or a stack lane no caller sets, is counted by
+the callee's summary all the same, so recovery passes what the caller has
+there: an unknown value where the register was never written or an earlier
+call left it. Source preparation (`prepareRecoveredSourceStackAccesses`)
+passes zero for a direct call's argument only when the caller does not
+determine it, an argument it determines follows (the undetermined values
+that end a list are dropped as before), and the callee's body provably never
+reads the position (`unreadArgumentPositions`): no operation, join or call argument names a
+register position, every call of the body lists its arguments, and the
+register carries no result the function could return unwritten; for a stack
+position every address derived from the entry stack pointer keeps a known
+offset and only addresses loads and stores, none overlapping the slot, with
+no tail call. A caller that reads more result bytes than the callee returns
+keeps its unknown value, as do variadic, source-bound and incompletely
+lifted callees, indirect calls and escaped addresses. All proofs are made
+before any argument changes, so the order of the functions changes nothing.
+
+A predicated run can test its own earlier result (`lsreq r9, r1, r10; tsteq
+r9, #1`): both become selections on one condition, and the second names the
+first's result, whose other arm is what the register held before. After flag
+elimination (`readSelectedArms`) an arm of a selection on a condition that is
+itself a selection on that condition reads its same arm, and a temporary
+whose operand is such a selection reads the arm too when every use of the
+temporary reaches only that arm of selections on the condition, through
+integer operations that cannot fault. A join, store, call, branch or division
+keeps the selection, so a value read on every path stays what it was.
+
 ## Manual PDB presentation boundary
 
 `lib/debug/PDBIdentity.h` owns RSDS build identity for full loading, symbol-store
@@ -6618,7 +6646,15 @@ XMM0 the routine never set): the bytes above the lane are no part of the
 return, so source output reads no unknown machine state for them and they
 pass zero, as an unset register reads on the native route. A temporary no statement assigns,
 the bytes a partial write keeps of a register nothing set, is an unknown leaf
-as such a register is. An AArch32 `$d` interval among code is data, bounded
+as such a register is. Demand reaches an unknown leaf only through bits a
+reader takes: a comparison whose lowest bit is not demanded demands nothing
+of its operands, and a compare REP's status operand, which carries the
+incoming flags a zero count returns, is demanded at its direction bit and at
+the flag bits demanded of the REP's flags result. A call operand known on
+some paths only passes zero on the others where the callee is defined in the
+unit, converted, and its body neither names that parameter nor calls through
+a pointer, which passes on whatever the argument registers hold; a callee
+that reads it keeps the failing form. An AArch32 `$d` interval among code is data, bounded
 by the interval, so a literal pool's address prints as an object. An integer
 comparison, division or remainder of a floating value's bits casts the bit
 cast, never the floating text, and a guarded x87 value samples its status
@@ -10795,7 +10831,18 @@ address reaching a call is no such read: the function may overwrite the slot
 first (`double v = a * 0.75; return pf(a, &v);`, whose push reserves `v`), or
 the routine may write it, where the LLVM route's C stored the unknown value
 and trapped. HighIR drops such a store too once its own
-forwarding has removed the reads (`elimUndefinedEntryScratchStores`). A store
+forwarding has removed the reads (`elimUndefinedEntryScratchStores`). Its
+read-back test is per byte and follows the flow graph from the store
+(`FrameStoreObservers`): a plain store at a resolved frame offset ends a
+byte, a load of it observes it, and so does a load through a frame address
+the proof cannot place or a call, intrinsic or atomic operation that
+receives a frame address, so a slot the function reuses before it reads it
+(`push rax; movsd [rsp], xmm1`) holds no read of the push. A frame address
+stored to memory, an unresolved goto and any try statement or handler
+continuation decline the proof. A scratch register the convention gives a
+value in some functions (i386 EAX under regparm) is dropped the same way
+only when no call runs before the store or before the overwrite, which is a
+dead-store proof for any value. A store
 of the variadic count register (System V's RAX), which carries nothing into a
 function that is not variadic, goes even where the bytes are read back, if on
 every path a call receives an address in the slot before anything may read
@@ -10887,7 +10934,20 @@ and a copied or passed-on va_list read; and a frame address may reach memory
 only as the pointer va_start stores in each of those three fields, and no call
 or return in an argument register. Loads through the pointers va_arg reads from
 `__stack` and `__gr_top` are taken to stay in their areas, as the va_list
-convention keeps them. A function whose va_arg reads a double keeps the spills,
+convention keeps them. A walk Clang unrolls for a count it knows keeps
+`__gr_top` and `__stack` in registers instead of reloading them, so its loads
+are at frame
+addresses, and each must be at offsets the frame fixes. A register-offset
+load keeps its instruction (`AArch64AddressMemory.h`): it is such a load
+where its base is a frame address and its index a scalar constant, which
+`constantValues` folds through the copies, sums and extensions that carry
+it. A load through a join of frame addresses reads at each offset an arm
+brings (`FrameOffsets`): the address of the next argument in the integer
+half or in the incoming arguments. None of those offsets may read the area,
+`__vr_top` or `__vr_offs`, and a joined address stored as a pointer must be
+one of va_start's at every offset. A join in a loop, more offsets than
+`kMedVariadicAArch64FrameOffsetsMaxChoices`, an index that is no constant,
+or a register-offset store of a frame address keeps the spills. A function whose va_arg reads a double keeps the spills,
 whose unknown values still fail where it stores them. Windows ARM64 passes
 floating varargs in integer registers and Apple's arm64 every vararg on the
 stack; neither saves a vector register for va_arg.
@@ -19807,6 +19867,9 @@ redundant writebacks and complete-overwrite proofs within independent regions
 and bounded acyclic branches. Calls, uncertain aliases, partial writes, cycles
 and exceptional/ordered observations retain their memory effects. Forwarding
 retains an unchanged call expression's instruction-navigation identity.
+The integer comparisons with equally wide operands are among the operations
+it replays, so a comparison spilled inside its register's stale bytes
+(`seta al; mov [rbp-0x40], rax`) reaches the mask that reads it.
 Changed call inputs rebuild the shared expression without rebinding
 old observations by address. Prologue
 cleanup preserves saved register values still observed as data. Word zero-test
