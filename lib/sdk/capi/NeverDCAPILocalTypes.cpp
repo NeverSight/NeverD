@@ -746,15 +746,16 @@ void Session::readLocalTypeNames(const types::TypeLibrary &Library) {
       LocalTypeNames->Types == Library.size() &&
       LocalTypeNames->Declarations == TypeDeclarations.size())
     return;
-  LocalTypeNames.emplace();
-  LocalTypeNames->Library = &Library;
-  LocalTypeNames->Types = Library.size();
-  LocalTypeNames->Declarations = TypeDeclarations.size();
-  LocalTypeNames->Spelled = types::spelledNames(Library, types::Language::C);
+  LocalTypeNameFacts Facts;
+  Facts.Library = &Library;
+  Facts.Types = Library.size();
+  Facts.Declarations = TypeDeclarations.size();
+  Facts.Spelled = types::spelledNames(Library, types::Language::C);
   for (const types::LocalType *Type : Library.types())
     for (const std::string &Named : types::mentionedTypeNames(*Type))
-      LocalTypeNames->Mentioned.insert(Named);
-  LocalTypeNames->Prototyped = prototypeTypeNames(Library);
+      Facts.Mentioned.insert(Named);
+  Facts.Prototyped = prototypeTypeNames(Library);
+  LocalTypeNames = std::move(Facts);
 }
 
 bool Session::takeUnreadTypes(const types::TypeLibrary &Library,
