@@ -199,6 +199,8 @@ Descriptor aliases share the deadline, and reads and polls do not extend it.
 The kernel checks the resolved end against the last timed arrival and the clock
 range before it consumes the connection attempt. Data arrival times still use
 elapsed nanoseconds from workload start.
+JSON durations above `9007199254740991` use decimal strings under the shared
+lossless integer encoding.
 
 ```json
 {
@@ -334,9 +336,13 @@ share the failed description.
 The failure count accepts 1 through `UINT32_MAX`, independently of the 4,096
 stored TCP/UDP entries. It retains one counter and creates no per-attempt
 inventory. The exhausted count is checked before incrementing, including at
-`UINT32_MAX`. If the failures end the sequence, the exhaustion diagnostic
-reports the number consumed. A pending `connect` retains no result until a
-matching outcome is supplied in the input.
+`UINT32_MAX`. When an exact connection entry is missing or its peer differs,
+the diagnostic identifies the one-based attempt and the zero-based index in
+`connections` to append or correct. Each consumed exact result or counted
+failure advances the attempt number. Only exact results advance the index.
+When counted failures end the sequence, the diagnostic gives the number of
+failures consumed and the pending attempt number. A pending `connect` retains
+no result until a matching outcome is supplied in the input.
 Execution instruction, event and time budgets still bound each
 run. JSON and typed input use the shared validator; decimal strings follow the
 existing integer wire contract. Allowed errors match explicit TCP attempts:

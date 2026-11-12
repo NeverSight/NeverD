@@ -5598,7 +5598,8 @@ TEST_F(ProcessPublic, AndroidConnectionFailuresMatchSDKAndCLI) {
                   llvm::StringRef::npos);
         if (Mode == 1)
           EXPECT_NE(Report->getString(field::Diagnostic)
-                        ->find("after 4 supplied failures"),
+                        ->find("after 4 supplied failures "
+                               "(attempt 6 has no supplied result)"),
                     llvm::StringRef::npos);
       } else {
         EXPECT_EQ(Report->getString(field::ReturnValue), "0");
