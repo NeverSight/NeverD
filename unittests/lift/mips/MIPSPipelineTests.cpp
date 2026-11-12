@@ -216,6 +216,21 @@ TEST_P(MIPSPipeline, FloatingCallPreservesOnlyPrivateLinkSlots) {
     const std::map<va_t, FloatingCallArguments> Calls{{0x20000, *Signature}};
     LowToMedConverter Convert;
     Convert.setBinaryImage(&*Image);
+    if (Variant == 0) {
+      // This caller reads f0 immediately after the call. A floating argument
+      // does not define f0 when the declared result is in v0 or is void.
+      for (const auto &Result :
+           {NdType::makeVoid(), NdType::makeInt(Pointer->Size), Pointer}) {
+        const auto OtherSignature = floatingCallArguments(
+            GetParam(), BinaryFormat::ELF, Result, Parameters);
+        ASSERT_TRUE(OtherSignature);
+        const std::map<va_t, FloatingCallArguments> Other{
+            {0x20000, *OtherSignature}};
+        Convert.setCallEntryFloatingArguments(&Other);
+        EXPECT_THROW(Convert.convert(Low, GetParam(), BinaryFormat::ELF),
+                     LowToMedConversionError);
+      }
+    }
     Convert.setCallEntryFloatingArguments(&Calls);
     if (Variant > 0 && Variant < 4)
       EXPECT_THROW(Convert.convert(Low, GetParam(), BinaryFormat::ELF),

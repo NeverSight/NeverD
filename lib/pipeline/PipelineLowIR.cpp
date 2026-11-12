@@ -4057,7 +4057,8 @@ ImportPrototypeArguments importPrototypeArguments(
         if (const auto Function = Dbg->resolveFunction(Addr))
           if (auto Floating = libc::floatingCallArguments(*Function, Img.Arch,
                                                           Img.abiFormat())) {
-            Result.FloatReturns[Addr] = Floating->ReturnBytes;
+            if (Floating->ReturnKind == NdTypeKind::Float)
+              Result.FloatReturns[Addr] = Floating->ReturnBytes;
             Result.FloatingArguments.emplace(Addr, std::move(*Floating));
             Result.PrototypeDeclared.insert(Addr);
             if (Function->PrototypeLibrary == UserPrototypeLibrary)

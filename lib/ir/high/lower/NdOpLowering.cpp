@@ -197,9 +197,7 @@ void MedToHighConverter::lowerCall(HighFunc &Func, const MedBlock &CurBlock,
       CurOp.Output.Kind == MedVar::Reg && CurOp.Output.Size == 10 &&
       getTargetRegInfo(TargetArch).isX87StackReg(CurOp.Output.RegOff);
   if (CurOp.Output.Size || CurOp.SourceCallHint || X87Result ||
-      CurOp.CalleeFloatReturnBytes ||
-      (CallExpr->FloatingCallSignature &&
-       CallExpr->FloatingCallSignature->ReturnElements))
+      CurOp.CalleeFloatReturnBytes || CallExpr->FloatingCallSignature)
     CallExpr->Type = sourceCallResultType(CurOp);
   if (ExpressionObserver && CurOp.Addr != InvalidVA && CurOp.OriginSeq >= 0)
     ExpressionObserver(CurOp, CallExpr);

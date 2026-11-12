@@ -91,7 +91,14 @@ def run(args, artifacts):
             cpu = f"mips{bits}r6"
             emulation = f"elf{bits}{'l' if little else 'b'}tsmip"
             for scalar_bytes in (4, 8):
-                for layout in ("prefix", "overflow", "after-integer"):
+                for layout in (
+                    "prefix",
+                    "overflow",
+                    "after-integer",
+                    "word-result",
+                    "pointer-result",
+                    "void-result",
+                ):
                     overflow = layout == "overflow"
                     after_integer = layout == "after-integer"
                     directory = root / (target + f"-f{scalar_bytes * 8}" + "-" + layout)
@@ -109,13 +116,19 @@ def run(args, artifacts):
                         ("ldc1", "sdc1") if scalar_bytes == 8 else ("lwc1", "swc1")
                     )
                     declarations = directory / "declarations.h"
+                    result_type = {
+                        "word-result": "long",
+                        "pointer-result": "void *",
+                        "void-result": "void",
+                    }.get(layout, c_type)
                     declarations.write_text(
-                        f"{c_type} kernel({c_type} value, int bias);\n{c_type} fp_callee("
+                        f"{c_type} kernel({c_type} value, int bias);\n{result_type} fp_callee("
                         + (
                             f"int tag, {c_type} value"
                             if after_integer
                             else ", ".join(f"{c_type} a{i}" for i in range(count))
                         )
+                        + (", void *base" if layout == "pointer-result" else "")
                         + ");\n"
                     )
                     d = "d" if bits == 64 else ""
@@ -160,6 +173,34 @@ def run(args, artifacts):
                             + f"\nmtc1 $4,$f2\ncvt.{fmt}.w $f2,$f2"
                             + f"\nadd.{fmt} $f0,$f12,$f2"
                         )
+                    after_call = f"add.{fmt} $f0,$f0,$f0"
+                    if layout in ("word-result", "pointer-result", "void-result"):
+                        # A volatile f0 marker must never supply a GPR/void result.
+                        callee = f"trunc.w.{fmt} $f2,$f12\nmfc1 $2,$f2\nmtc1 $zero,$f0"
+                        after_call = f"mtc1 $2,$f0\ncvt.{fmt}.w $f0,$f0"
+                        if layout == "word-result" and bits == 64:
+                            callee += (
+                                "\ndaddiu $8,$zero,3\ndsll32 $8,$8,0\ndaddu $2,$2,$8"
+                            )
+                            after_call = "dsrl32 $8,$2,0\naddu $2,$2,$8\n" + after_call
+                        if layout == "pointer-result":
+                            arg = 5 if bits == 64 or scalar_bytes == 4 else 6
+                            setup = [
+                                (
+                                    f"dli ${arg},0x100600000"
+                                    if bits == 64
+                                    else f"lui ${arg},0x60"
+                                )
+                            ]
+                            callee += f"\nandi $2,$2,255\n{d}addu $2,$2,${arg}"
+                            after_call = (
+                                "dsrl32 $8,$2,0\nandi $2,$2,255\naddu $2,$2,$8\n"
+                                if bits == 64
+                                else "andi $2,$2,255\n"
+                            ) + after_call
+                        elif layout == "void-result":
+                            # Observe the conversion's inexact sticky flag across the call.
+                            after_call = "cfc1 $2,$31\nandi $2,$2,4\n" + after_call
                     callee_text = (
                         prefix
                         + ".globl fp_callee\n.ent fp_callee\nfp_callee:\n"
@@ -172,7 +213,7 @@ def run(args, artifacts):
                         + f"{d}addiu $sp,$sp,-96\n{'sd' if bits == 64 else 'sw'} $ra,{slot}($sp)\n"
                         + f"mtc1 ${5 if bits == 64 or scalar_bytes == 4 else 6},$f2\ncvt.{fmt}.w $f2,$f2\nadd.{fmt} $f12,$f12,$f2\n"
                         + "\n".join(setup)
-                        + f"\nbalc fp_callee\nadd.{fmt} $f0,$f0,$f0\n"
+                        + f"\nbalc fp_callee\n{after_call}\n"
                         + f"{'ld' if bits == 64 else 'lw'} $ra,{slot}($sp)\n{d}addiu $sp,$sp,96\njr $ra\nnop\n.end kernel\n"
                     )
                     assembly = directory / "original.s"
@@ -207,9 +248,26 @@ def run(args, artifacts):
                             struct.pack(
                                 "<d" if scalar_bytes == 8 else "<f",
                                 (
-                                    2 * (value + bias + 7)
-                                    if after_integer
-                                    else 4 * (value + bias)
+                                    int(value + bias)
+                                    + (
+                                        (2 if int(value + bias) < 0 else 3)
+                                        if bits == 64
+                                        else 0
+                                    )
+                                    if layout == "word-result"
+                                    else (
+                                        (int(value + bias) & 255) + (bits == 64)
+                                        if layout == "pointer-result"
+                                        else (
+                                            4 * (value + bias != int(value + bias))
+                                            if layout == "void-result"
+                                            else (
+                                                2 * (value + bias + 7)
+                                                if after_integer
+                                                else 4 * (value + bias)
+                                            )
+                                        )
+                                    )
                                 ),
                             ),
                         )[0]

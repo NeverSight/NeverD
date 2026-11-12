@@ -111,10 +111,12 @@ void requireMIPSSourceVectors(
             Clobbered &= ~Bytes(NdVar::reg(mipsreg::w(R), 8));
         T.Defines &= ~Clobbered;
         T.Kills |= Clobbered;
-        const auto Result =
-            Bytes(NdVar::reg(TRI.FPReturnReg, Signature->ReturnBytes));
-        T.Defines |= Result;
-        T.Kills &= ~Result;
+        if (Signature->ReturnKind == NdTypeKind::Float) {
+          const auto Result =
+              Bytes(NdVar::reg(TRI.FPReturnReg, Signature->ReturnBytes));
+          T.Defines |= Result;
+          T.Kills &= ~Result;
+        }
       }
       for (unsigned J = 0; J != Op.NumInputs; ++J) {
         if (!IsVector(Op.Inputs[J]))

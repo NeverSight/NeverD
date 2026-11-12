@@ -303,7 +303,8 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
       auto &Op = Blk.Ops[OI];
       if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
         continue;
-      if (Op.PreservesCallerSaved || Op.SourceCallHint)
+      if (Op.PreservesCallerSaved || Op.SourceCallHint ||
+          Op.ScalarCallSignature)
         continue;
       if (Op.Output.Kind == MedVar::Reg && TRI.isX87StackReg(Op.Output.RegOff))
         continue; // LowIR already bound the proven x87 result.

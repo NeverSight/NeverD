@@ -630,6 +630,14 @@ boundFloatingCallArguments(const MedOp &Op, Arch A, BinaryFormat F) {
         Op.Output.Size != Signature.ReturnBytes ||
         Signature.ReturnElements > Registers.FPReturnRegs.size())
       return std::nullopt;
+  } else if (Signature.ReturnKind != NdTypeKind::Float) {
+    if (!isMIPS(A) || Op.CalleeFloatReturnBytes ||
+        (Signature.ReturnKind == NdTypeKind::Void
+             ? Op.Output.Size != 0
+             : Op.Output.Kind != MedVar::Reg ||
+                   Op.Output.RegOff != Registers.IntReturnReg ||
+                   Op.Output.Size != Signature.ReturnBytes))
+      return std::nullopt;
   } else if ((A != Arch::X86 && !isMIPS(A) && Signature.Scalars.empty()) ||
              Op.CalleeFloatReturnBytes != Signature.ReturnBytes ||
              Op.Output.Kind != MedVar::Reg ||

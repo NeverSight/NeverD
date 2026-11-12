@@ -15,6 +15,8 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 
+#include "llvm/ADT/STLExtras.h"
+
 #include <algorithm>
 #include <utility>
 
@@ -130,8 +132,16 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
     }
     return Result;
   }
-  if (!Scalar(ReturnType))
-    return std::nullopt;
+  if (!Scalar(ReturnType)) {
+    // A word result needs no extension or register pair. Keep narrower and
+    // paired integer results out until their complete return carriers are
+    // bound.
+    if (!isMIPS(A) || !ReturnType || !llvm::any_of(Parameters, Scalar) ||
+        (ReturnType->Kind != NdTypeKind::Void &&
+         (!ScalarParameter(ReturnType) ||
+          ReturnType->Size != getTargetRegInfo(A).PointerSize)))
+      return std::nullopt;
+  }
   const auto Registers = getTargetRegInfo(A).floatingParamRegs(F);
   bool AllFloating = true;
   for (const auto &Type : Parameters)
@@ -149,6 +159,7 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
     return std::nullopt;
   FloatingCallArguments Result;
   Result.ReturnBytes = ReturnType->Size;
+  Result.ReturnKind = ReturnType->IsEnum ? NdTypeKind::Int : ReturnType->Kind;
   if (A == Arch::X86 || !AllFloating || isMIPS(A)) {
     for (size_t I = 0; I < Parameters.size(); ++I) {
       const auto &Pieces = Placement->Parameters[I];
@@ -257,7 +268,23 @@ floatingCallTypes(Arch A, BinaryFormat F,
       return std::nullopt;
     Types.Parameters = std::move(Grouped);
   }
-  Types.Result = NdType::makeFloat(Signature.ReturnBytes);
+  switch (Signature.ReturnKind) {
+  case NdTypeKind::Void:
+    Types.Result = NdType::makeVoid();
+    break;
+  case NdTypeKind::Int:
+    Types.Result = NdType::makeInt(Signature.ReturnBytes, false);
+    break;
+  case NdTypeKind::Ptr:
+    Types.Result = NdType::makePtr();
+    Types.Result->Size = Signature.ReturnBytes;
+    break;
+  case NdTypeKind::Float:
+    Types.Result = NdType::makeFloat(Signature.ReturnBytes);
+    break;
+  default:
+    return std::nullopt;
+  }
   if (Signature.ReturnElements) {
     if (Signature.ReturnBytes % Signature.ReturnElements)
       return std::nullopt;

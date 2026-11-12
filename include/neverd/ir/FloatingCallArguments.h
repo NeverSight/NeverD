@@ -48,6 +48,10 @@ struct FloatingCallArguments {
   /// SourceParameterPlacement, including the entry-SP bias of stack values.
   /// An o32 double in a GPR pair occupies one logical entry at its first word.
   std::vector<ScalarParameter> Scalars;
+  /// Fixed MIPS calls may read FP parameters without returning in f0. Integer
+  /// and pointer results occupy v0; void has no result. HFA descriptors keep
+  /// their existing ReturnElements and floating element convention.
+  NdTypeKind ReturnKind = NdTypeKind::Float;
   bool operator==(const FloatingCallArguments &) const = default;
 };
 

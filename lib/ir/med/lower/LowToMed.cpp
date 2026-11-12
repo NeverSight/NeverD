@@ -591,13 +591,22 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
           MOp.addInput(loadCallStackArgument(Block, LOp, Parameter.StackOffset,
                                              Parameter.Bytes, TailCall));
         }
-        MOp.CalleeFloatReturnBytes =
-            Signature.ReturnElements ? 0 : Signature.ReturnBytes;
-        MOp.Output =
-            Signature.ReturnElements ? Temporary(Signature.ReturnBytes)
-            : TargetArch == Arch::X86
-                ? ndVarToMedVar(LOp.Output)
-                : ndVarToMedVar(NdVar::reg(TRI.FPReturnReg, TRI.FPABIRegWidth));
+        MOp.CalleeFloatReturnBytes = 0;
+        if (Signature.ReturnElements) {
+          MOp.Output = Temporary(Signature.ReturnBytes);
+        } else if (Signature.ReturnKind == NdTypeKind::Float) {
+          MOp.CalleeFloatReturnBytes = Signature.ReturnBytes;
+          MOp.Output = TargetArch == Arch::X86
+                           ? ndVarToMedVar(LOp.Output)
+                           : ndVarToMedVar(NdVar::reg(TRI.FPReturnReg,
+                                                      TRI.FPABIRegWidth));
+        } else if (Signature.ReturnKind == NdTypeKind::Void) {
+          MOp.Output = {};
+          MOp.Output.Id = -1;
+        } else {
+          MOp.Output = ndVarToMedVar(
+              NdVar::reg(TRI.IntReturnReg, Signature.ReturnBytes));
+        }
       } else if (Signature.ParameterBytes.size() <= FPParamRegs.size() &&
                  Signature.ParameterBytes.size() <=
                      sizeof(MOp.CalleeVectorArgWidths) * 2 &&
