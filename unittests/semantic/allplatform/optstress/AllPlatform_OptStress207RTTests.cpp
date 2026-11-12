@@ -8,8 +8,8 @@
 // loops over writable globals -- x86 `lock xadd`/`lock cmpxchg`/`xchg`, AArch64
 // LSE or ldxr/stxr, ARM32 ldrex/strex.  Single-threaded in Unicorn the atomics
 // are ordinary RMW, but the lift must model the locked operation and its
-// returned old value correctly across the loop-carried dependence.  32-bit (int)
-// atomics keep every target inline -- no 64-bit atomic libcall.
+// returned old value correctly across the loop-carried dependence.  32-bit
+// (int) atomics keep every target inline -- no 64-bit atomic libcall.
 //
 //   * aadd   - atomic fetch-and-add accumulating a value-driven sequence.
 //   * acas   - compare-and-swap accumulation (val_compare_and_swap old value).
@@ -18,12 +18,13 @@
 //   * acasr  - a compare-and-swap retry loop (the lock-free RMW idiom).
 //   * amix   - several atomics over two globals interleaved.
 //
-// Integer add/xor/and/or only, value-driven (LCG), folded to one integer return,
-// -O2, all four targets.
+// Integer add/xor/and/or only, value-driven (LCG), folded to one integer
+// return, -O2, all four targets.
 //
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64OptStress207RT : public SemanticRoundTripFixture,
                           public ::testing::WithParamInterface<RoundTripTC> {};
@@ -37,10 +38,12 @@ TEST_P(A64OptStress207RT, Verify) { roundTripAArch64(GetParam()); }
 // ARM32 lowers a __sync RMW to a `dmb; ldrex/strex` retry loop.  The barrier
 // must be a side-effect-only intrinsic: it earlier carried a default R0 output
 // that shadowed the just-computed RMW operand (`lsr r4,r0,#20`) with a zero, so
-// the atomic added/xored 0.  Fixed by emitting `dmb`/`dsb`/`isb`/`clrex` with no
-// output (emitVoidIntrinsic), so ARM32 is now covered like the other targets.
+// the atomic added/xored 0.  Fixed by emitting `dmb`/`dsb`/`isb`/`clrex` with
+// no output (emitVoidIntrinsic), so ARM32 is now covered like the other
+// targets.
 class ARM32OptStress207RT : public SemanticRoundTripFixture,
-                            public ::testing::WithParamInterface<RoundTripTC> {};
+                            public ::testing::WithParamInterface<RoundTripTC> {
+};
 TEST_P(ARM32OptStress207RT, Verify) { roundTripARM32(GetParam()); }
 
 // clang-format off
@@ -117,12 +120,26 @@ static std::vector<RoundTripTC> makeOptStress207TC(const char *prefix, const cha
 }
 // clang-format on
 
-static const std::vector<RoundTripTC> kX64 = makeOptStress207TC("x64o207", "long");
-static const std::vector<RoundTripTC> kX86 = makeOptStress207TC("x86o207", "int");
-static const std::vector<RoundTripTC> kA64 = makeOptStress207TC("a64o207", "long");
-static const std::vector<RoundTripTC> kARM = makeOptStress207TC("armo207", "int");
+static const std::vector<RoundTripTC> kX64 =
+    makeOptStress207TC("x64o207", "long");
+static const std::vector<RoundTripTC> kX86 =
+    makeOptStress207TC("x86o207", "int");
+static const std::vector<RoundTripTC> kA64 =
+    makeOptStress207TC("a64o207", "long");
+static const std::vector<RoundTripTC> kARM =
+    makeOptStress207TC("armo207", "int");
 
-INSTANTIATE_TEST_SUITE_P(OptStress207, X64OptStress207RT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress207, X86OptStress207RT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress207, A64OptStress207RT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress207, ARM32OptStress207RT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress207, X64OptStress207RT,
+                         ::testing::ValuesIn(kX64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress207, X86OptStress207RT,
+                         ::testing::ValuesIn(kX86), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress207, A64OptStress207RT,
+                         ::testing::ValuesIn(kA64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress207, ARM32OptStress207RT,
+                         ::testing::ValuesIn(kARM), rtTCName);
+
+// The i386 form of the reused entry push, `pushl %eax` overwritten before
+// any call: the C is checked by execution.
+INSTANTIATE_TEST_SUITE_P(OptStress207HighC, X86OptStress207RT,
+                         ::testing::ValuesIn(onHighC(kX86, {"_amix"})),
+                         rtTCName);

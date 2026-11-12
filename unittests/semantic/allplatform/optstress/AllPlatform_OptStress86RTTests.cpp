@@ -12,22 +12,25 @@
 // dereferences.  The fix symbolizes a pointer-width integer call arg resolving
 // to a global address even when the callee param is an integer.
 //
-//   * vargp   - three global element addresses as varargs, callee sums *p, p[1].
+//   * vargp   - three global element addresses as varargs, callee sums *p,
+//   p[1].
 //   * vargpm  - varargs mix an int count and global pointers.
 //   * vargp2  - two distinct globals reached through varargs in one call.
 //
-// SysV/AAPCS64 pass these varargs in registers (RSI/RDX/RCX, X1..X7); i386 cdecl
-// passes them on the stack and ARM32 AAPCS in r1..r3 + stack.  All four targets
-// now recover and symbolize them: the i386 leading-gap (clang drops the constant
-// count arg, leaving slot 0 empty) is filled instead of truncating the arg list
-// (#484), and the call-arg symbolization fires for any pointer-width integer arg
-// reaching a recovered integer param.
+// SysV/AAPCS64 pass these varargs in registers (RSI/RDX/RCX, X1..X7); i386
+// cdecl passes them on the stack and ARM32 AAPCS in r1..r3 + stack.  All four
+// targets now recover and symbolize them: the i386 leading-gap (clang drops the
+// constant count arg, leaving slot 0 empty) is filled instead of truncating the
+// arg list
+// (#484), and the call-arg symbolization fires for any pointer-width integer
+// arg reaching a recovered integer param.
 //
 // All integer, arrays seeded from the LCG, fold to one integer return.  -O2.
 //
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64OptStress86RT : public SemanticRoundTripFixture,
                          public ::testing::WithParamInterface<RoundTripTC> {};
@@ -101,12 +104,25 @@ static std::vector<RoundTripTC> makeOptStress86TC(const char *prefix, const char
 }
 // clang-format on
 
-static const std::vector<RoundTripTC> kX64 = makeOptStress86TC("x64o86", "long");
+static const std::vector<RoundTripTC> kX64 =
+    makeOptStress86TC("x64o86", "long");
 static const std::vector<RoundTripTC> kX86 = makeOptStress86TC("x86o86", "int");
-static const std::vector<RoundTripTC> kA64 = makeOptStress86TC("a64o86", "long");
+static const std::vector<RoundTripTC> kA64 =
+    makeOptStress86TC("a64o86", "long");
 static const std::vector<RoundTripTC> kARM = makeOptStress86TC("armo86", "int");
 
-INSTANTIATE_TEST_SUITE_P(OptStress86, X64OptStress86RT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress86, X86OptStress86RT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress86, A64OptStress86RT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress86, ARM32OptStress86RT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress86, X64OptStress86RT,
+                         ::testing::ValuesIn(kX64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress86, X86OptStress86RT,
+                         ::testing::ValuesIn(kX86), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress86, A64OptStress86RT,
+                         ::testing::ValuesIn(kA64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress86, ARM32OptStress86RT,
+                         ::testing::ValuesIn(kARM), rtTCName);
+
+// A register the callee's body never reads, known on the first iteration
+// only, was passed as an unknown value: the C is checked by execution.
+INSTANTIATE_TEST_SUITE_P(OptStress86HighC, X64OptStress86RT,
+                         ::testing::ValuesIn(onHighC(kX64, {"_vargp", "_vargp2",
+                                                            "_vargpm"})),
+                         rtTCName);

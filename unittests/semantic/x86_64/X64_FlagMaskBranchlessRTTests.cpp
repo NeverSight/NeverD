@@ -20,6 +20,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64FlagMaskRT : public SemanticRoundTripFixture,
                       public ::testing::WithParamInterface<RoundTripTC> {};
@@ -129,3 +130,11 @@ static const std::vector<RoundTripTC> kX64 = {
 
 INSTANTIATE_TEST_SUITE_P(FlagMask, X64FlagMaskRT, ::testing::ValuesIn(kX64),
                          rtTCName);
+
+// A comparison spilled with its register's stale upper bytes and read back
+// through a mask evaluated those bytes: the C is checked by execution.
+INSTANTIATE_TEST_SUITE_P(
+    FlagMaskHighC, X64FlagMaskRT,
+    ::testing::ValuesIn(onHighC(kX64, {"multi_setcc_eq", "multi_setcc_lt",
+                                       "multi_setcc_signov"})),
+    rtTCName);
