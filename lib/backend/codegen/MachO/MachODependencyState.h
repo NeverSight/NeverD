@@ -48,6 +48,9 @@ struct MachOChainedFixups {
   std::vector<MachOChainedSegment> Segments;
   std::vector<MachOChainedImport> Imports;
   std::vector<std::string> Libraries;
+  /// Regular weak definitions exported by the original image, keyed by the
+  /// exact dyld spelling and carrying the linked address of the fallback.
+  std::map<std::string, uint64_t> WeakDefinitions;
 
   using Provider = std::pair<int64_t, bool>; // Library ordinal and weak import.
   /// A disengaged value records conflicting dyld lookup scopes for a name.

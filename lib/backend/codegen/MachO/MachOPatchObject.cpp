@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <climits>
+#include <cstring>
 #include <map>
 #include <set>
 
@@ -55,7 +56,7 @@ struct Symbol {
   std::string Name;
   uint32_t Section = 0;
   uint64_t Offset = 0, Size = 0;
-  bool Function = false, Thumb = false;
+  bool Function = false, Thumb = false, External = false;
 };
 struct Relocation {
   size_t Section;
@@ -93,6 +94,8 @@ struct NativeMachO {
     uint64_t Address = 0;
   };
   std::map<std::pair<unsigned, bool>, GOTSlot> GOT;
+  // Section index to the sole public weak definition that owns its storage.
+  std::map<size_t, unsigned> WeakData;
 };
 
 // Count both possible sources. A frame described by both tables can reserve
@@ -136,7 +139,7 @@ prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
            R.Type == ARM64_RELOC_GOT_LOAD_PAGE21 ||
            R.Type == ARM64_RELOC_GOT_LOAD_PAGEOFF12;
   };
-  if (llvm::none_of(Object.Relocations, UsesGOT))
+  if (Object.WeakData.empty() && llvm::none_of(Object.Relocations, UsesGOT))
     return llvm::Error::success();
   MachOChainedFixups Chains;
   auto State = readMachODependencyState(Original.Raw, &Chains);
@@ -173,15 +176,58 @@ prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
         }))
       Ordinary.try_emplace(canonical(B.Name), Address);
   }
+  // A public weak fallback can be discarded only when all its users go
+  // through the original coalescing GOT. The original definition and dyld
+  // lookup scope then continue to choose the runtime address together.
+  for (const auto &[Section, Index] : Object.WeakData) {
+    const auto &Symbol = Object.Symbols.at(Index);
+    const auto Slot = Ordinary.find(Symbol.Name);
+    if (Slot == Ordinary.end() || Declared.contains(Symbol.Name))
+      return fail(kWeakDataFallback);
+    const auto &Bind = Original.DyldBindSlots.at(Slot->second);
+    const auto Export = Chains.WeakDefinitions.find(Bind.Name);
+    if (Bind.LibraryOrdinal != BIND_SPECIAL_DYLIB_WEAK_LOOKUP ||
+        Bind.WeakImport || Export == Chains.WeakDefinitions.end() ||
+        !Original.getSectionFor(Export->second) ||
+        Original.isCodeAddress(Export->second))
+      return fail(kWeakDataFallback);
+    Object.GOT.emplace(std::pair{Index, false},
+                       NativeMachO::GOTSlot{std::nullopt, Slot->second});
+    auto &Discarded = Object.Image.Sections[Section];
+    Discarded.IsAllocated = Discarded.IsInImage = false;
+  }
+  const auto WeakTarget = [&](unsigned Ref,
+                              bool External) -> std::optional<unsigned> {
+    if (External) {
+      const auto Symbol = Object.Symbols.find(Ref);
+      if (Symbol == Object.Symbols.end())
+        return std::nullopt;
+      Ref = Symbol->second.Section;
+    }
+    const auto Section = Object.Sections.find(Ref);
+    if (Section == Object.Sections.end())
+      return std::nullopt;
+    const auto I = Object.WeakData.find(Section->second);
+    return I == Object.WeakData.end() ? std::nullopt : std::optional(I->second);
+  };
   llvm::DenseMap<uint64_t, uint8_t> PersonalityFields;
   for (const auto &F : Object.OldFDEs)
     if (F.Personality)
       PersonalityFields.try_emplace(F.Personality->Offset,
                                     F.Personality->Width);
   for (const auto &R : Object.Relocations) {
+    if (Object.WeakData.contains(R.Section))
+      continue;
     const bool Personality =
         isCompactPersonality(Object, R) ||
         (Object.EH == R.Section && R.Type == ARM64_RELOC_POINTER_TO_GOT);
+    if (!Object.WeakData.empty()) {
+      const auto Target = WeakTarget(R.SymbolIndex, R.External);
+      if ((R.SubtractSymbol && WeakTarget(*R.SubtractSymbol, true)) ||
+          (Target && (!UsesGOT(R) || !R.External || R.SymbolIndex != *Target ||
+                      R.SubtractSymbol || R.Scattered || Personality)))
+        return fail(kWeakDataReference);
+    }
     if (Personality && Object.EH == R.Section &&
         PersonalityFields.lookup(R.Offset) != R.Width)
       return fail(kLanguagePointer);
@@ -317,6 +363,34 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
         *Name == "__mod_term_func" || *Name == "__LLVM" ||
         M->getSectionFinalSegmentName(S.getRawDataRefImpl()) == "__LLVM")
       return fail("unsupported runtime initialization, TLS or bitcode section");
+    if (Original.isArm64e() && *Name == kObjCImageInfo) {
+      // The runtime reads one image-wide version/flags pair. A matching
+      // object declaration is already installed in the original image.
+      auto Contents = S.getContents();
+      if (!Contents)
+        return Contents.takeError();
+      const auto InData = [](llvm::StringRef Segment) {
+        return Segment == kDataSegment || Segment == kDataConstSegment ||
+               Segment == kAuthConstSegment;
+      };
+      const Section *Info = nullptr;
+      for (const auto &Candidate : Original.Sections)
+        if (Candidate.Name == kObjCImageInfo && InData(Candidate.SegmentName)) {
+          if (Info)
+            return fail(kObjCFlags);
+          Info = &Candidate;
+        }
+      if (!Info || Type != S_REGULAR ||
+          !InData(M->getSectionFinalSegmentName(S.getRawDataRefImpl())) ||
+          Contents->size() != kObjCImageInfoBytes || !S.relocations().empty() ||
+          readLE<uint32_t>(Contents->bytes_begin()) != kObjCImageInfoVersion ||
+          Info->Size != Contents->size() || Info->FileSz < Info->Size)
+        return fail(kObjCFlags);
+      const auto *Installed = Original.readVA(Info->VA, Info->Size);
+      if (!Installed || std::memcmp(Installed, Contents->data(), Info->Size))
+        return fail(kObjCFlags);
+      continue;
+    }
     const bool Code =
         Flags & (S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS);
     const bool Zero = Type == S_ZEROFILL;
@@ -503,11 +577,15 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
       continue;
     const bool PrivateWeak = Original.isArm64e() && (Type & N_TYPE) == N_SECT &&
                              (Type & N_PEXT) && (Desc & N_WEAK_DEF);
-    if (((Desc & (N_WEAK_REF | N_WEAK_DEF)) && !PrivateWeak) ||
+    const bool PublicWeak = Original.isArm64e() && (Type & N_TYPE) == N_SECT &&
+                            (Type & N_EXT) && !(Type & N_PEXT) &&
+                            (Desc & (N_WEAK_DEF | N_WEAK_REF)) == N_WEAK_DEF;
+    if (((Desc & (N_WEAK_REF | N_WEAK_DEF)) && !PrivateWeak && !PublicWeak) ||
         ((Type & N_TYPE) == N_UNDF && Value))
       return fail("weak/common native definitions are unsupported");
     Symbol Item{
-        canonical(*Name), Number, 0, 0, false, bool(Desc & N_ARM_THUMB_DEF)};
+        canonical(*Name),  Number, 0, 0, false, bool(Desc & N_ARM_THUMB_DEF),
+        bool(Type & N_EXT)};
     if ((Type & N_TYPE) == N_SECT) {
       if (!Result.Sections.contains(Number))
         continue;
@@ -519,13 +597,28 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
       Item.Function = Section.Kind == Kind::Code && Name->starts_with("_");
       // Hidden compiler helpers (e.g. terminate landing pads) bind within this
       // object. Staging adds no exported weak definition or coalescing promise.
-      if ((Desc & N_WEAK_DEF) && !Item.Function)
+      if (PublicWeak) {
+        if (Item.Function || Item.Offset ||
+            Section.Name != kMutableDataSection ||
+            Section.Kind != Kind::WritableData ||
+            !Result.WeakData.emplace(Result.Sections.at(Number), Index).second)
+          return fail(kWeakDataAtom);
+      }
+      if (PrivateWeak && !Item.Function)
         return fail(kPrivateWeak);
     } else
       Item.Section = 0;
     if (!Name->empty() && !Result.Names.emplace(Item.Name, Index).second)
       return fail("duplicate native symbol");
     Result.Symbols.emplace(Index, Item);
+  }
+  for (const auto &[Index, S] : Result.Symbols) {
+    if (!S.Section)
+      continue;
+    auto It = Result.WeakData.find(Result.Sections.at(S.Section));
+    if (It != Result.WeakData.end() &&
+        (S.Offset || (S.External && Index != It->second)))
+      return fail(kWeakDataAtom);
   }
   if (Result.EH) {
     const auto &EH = Image.Sections[*Result.EH];
@@ -817,7 +910,8 @@ llvm::Error place(NativeMachO &Object, uint64_t Base,
       Image.Sections[*Object.EH].VA = EH->AppendVA;
   }
   for (const auto &[Index, S] : Object.Symbols)
-    if (S.Section && Object.Sections.contains(S.Section))
+    if (S.Section && Object.Sections.contains(S.Section) &&
+        !Object.WeakData.contains(Object.Sections.at(S.Section)))
       Image.SymbolAddrs[S.Name] =
           Image.Sections[Object.Sections.at(S.Section)].VA + S.Offset;
   for (auto &[Key, Slot] : Object.GOT) {
@@ -912,6 +1006,8 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
          R.Offset - std::prev(Next)->first.second < std::prev(Next)->second))
       return fail("overlapping native relocation writers");
     Written.emplace(Key, R.Width);
+    if (Object.WeakData.contains(R.Section))
+      continue;
     if (Object.CompactOnly && Object.EH && R.Section == *Object.EH) {
       if ((R.External && !Object.Symbols.contains(R.SymbolIndex)) ||
           (R.SubtractSymbol && !Object.Symbols.contains(*R.SubtractSymbol)))

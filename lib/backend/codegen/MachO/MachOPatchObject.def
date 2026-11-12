@@ -62,6 +62,20 @@ MACHO_OBJECT_TEXT(kLanguagePointer,
 MACHO_OBJECT_TEXT(kLanguageReplay,
                   "installed native language metadata failed semantic replay")
 
+MACHO_OBJECT_TEXT(kMutableDataSection, "__data")
+MACHO_OBJECT_TEXT(kObjCImageInfo, "__objc_imageinfo")
+MACHO_OBJECT_VALUE(size_t, kObjCImageInfoBytes, 2 * sizeof(uint32_t))
+MACHO_OBJECT_VALUE(uint32_t, kObjCImageInfoVersion, 0)
+MACHO_OBJECT_TEXT(
+    kObjCFlags,
+    "native Objective-C image flags differ or lack an installed declaration")
+MACHO_OBJECT_TEXT(kWeakDataAtom,
+                  "weak data requires an independently owned regular data atom")
+MACHO_OBJECT_TEXT(
+    kWeakDataFallback,
+    "weak data lacks an exported fallback and sealed coalescing GOT slot")
+MACHO_OBJECT_TEXT(kWeakDataReference,
+                  "weak data reference bypasses its coalescing GOT")
 MACHO_OBJECT_TEXT(kPrivateWeak,
                   "native private weak data requires a coalescing contract")
 MACHO_OBJECT_TEXT(kSharedCache,

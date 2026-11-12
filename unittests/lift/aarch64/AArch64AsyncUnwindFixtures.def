@@ -122,8 +122,87 @@ ASYNC_FRAME_TEXT(kCatchDriverFile, "catch-driver.cpp")
 ASYNC_FRAME_TEXT(kCxxPaths, "native_cxx_exception_paths")
 ASYNC_FRAME_TEXT(kCxxTraps, "native_cxx_unwinder_pac_traps")
 ASYNC_FRAME_VALUE(int, kUnwinderPACTrapExit, 85)
-ASYNC_FRAME_VALUE(unsigned, kCxxInputs, 4)
+ASYNC_FRAME_VALUE(unsigned, kExceptionInputs, 4)
 ASYNC_FRAME_VALUE(unsigned, kCxxCallArgumentBytes, 16)
+ASYNC_FRAME_TEXT(kObjCFile, "catcher.m")
+ASYNC_FRAME_TEXT(kObjCProviderFile, "provider.m")
+ASYNC_FRAME_TEXT(kObjCDriverFile, "driver.m")
+ASYNC_FRAME_TEXT(kObjCStrongImage, "framework-type.dylib")
+ASYNC_FRAME_TEXT(kObjCWeakImage, "coalesced-type.dylib")
+ASYNC_FRAME_TEXT(kObjCFlagsSection, "__objc_imageinfo")
+ASYNC_FRAME_TEXT(kObjCFramework, "-framework")
+ASYNC_FRAME_TEXT(kFoundation, "Foundation")
+ASYNC_FRAME_TEXT(kObjCExceptions, "-fobjc-exceptions")
+ASYNC_FRAME_TEXT(kObjCWeakClass, "-DNEVERD_WEAK_TYPE")
+ASYNC_FRAME_TEXT(kObjCDirectRef, "-DNEVERD_DIRECT_WEAK_REFERENCE")
+ASYNC_FRAME_TEXT(kObjCPaths, "native_objc_exception_paths")
+ASYNC_FRAME_TEXT(kObjCBody, R"objc(
+#import <Foundation/Foundation.h>
+#ifndef RETURN_ADJUSTMENT
+#define RETURN_ADJUSTMENT 0
+#endif
+#ifdef NEVERD_WEAK_TYPE
+#define CatchType NSString
+#else
+#define CatchType NSException
+#endif
+#ifdef NEVERD_DIRECT_WEAK_REFERENCE
+__asm__(".section __DATA_CONST,__const\n"
+        ".quad _OBJC_EHTYPE_$_NSString\n.text");
+#endif
+extern int source_value(int);
+extern int observe_value(int);
+extern void cleanup_value(void);
+int catcher(int x) {
+  @try { return source_value(x) + RETURN_ADJUSTMENT; }
+  @catch (CatchType *caught) { return observe_value(x) + RETURN_ADJUSTMENT; }
+  @finally { cleanup_value(); }
+}
+)objc")
+ASYNC_FRAME_TEXT(kObjCProvider, R"objc(
+#import <Foundation/Foundation.h>
+static int Cleanups;
+int source_value(int x) {
+  if (!x) return 6;
+  if (x == 2) @throw @42;
+#ifdef NEVERD_WEAK_TYPE
+  @throw @"matched";
+#else
+  @throw [NSException exceptionWithName:@"matched" reason:nil userInfo:nil];
+#endif
+}
+int observe_value(int x) {
+  if (x == 3) @throw @43;
+  return 7;
+}
+void cleanup_value(void) { ++Cleanups; }
+int cleanup_count(void) { return Cleanups; }
+)objc")
+ASYNC_FRAME_TEXT(kObjCDriver, R"objc(
+#import <Foundation/Foundation.h>
+#include <dlfcn.h>
+extern int cleanup_count(void);
+int main(int argc, char **argv) {
+  if (argc != 2 && argc != 3) return 1;
+  @autoreleasepool {
+    void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+    if (!image) return 2;
+    int (*call)(int) = (int (*)(int))dlsym(image, "catcher");
+    if (!call) return 3;
+    int adjustment = argc == 3;
+    for (int x = 0; x != 4; ++x) {
+      @try {
+        int value = call(x);
+        if (x >= 2 || value != 6 + x + adjustment) return 4;
+      } @catch (NSNumber *value) {
+        if (x < 2 || value.intValue != 40 + x) return 5;
+      }
+      if (cleanup_count() != x + 1) return 6;
+    }
+    return dlclose(image);
+  }
+}
+)objc")
 ASYNC_FRAME_TEXT(kCatchBody, R"cpp(
 #include <cstdint>
 #ifndef RETURN_ADJUSTMENT
