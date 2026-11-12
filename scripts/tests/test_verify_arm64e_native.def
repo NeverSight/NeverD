@@ -278,5 +278,157 @@
     1,
     -4,
     -5
+  ],
+  "cursor_invalid_observations": [
+    [],
+    {},
+    {
+      "checks": 0,
+      "signed": [
+        64,
+        64
+      ],
+      "pc_rejected": [
+        0,
+        0
+      ],
+      "key_rejected": [
+        64,
+        63
+      ],
+      "recipe_rejected": [
+        0,
+        0
+      ]
+    },
+    {
+      "checks": true,
+      "signed": [
+        64,
+        64
+      ],
+      "pc_rejected": [
+        0,
+        0
+      ],
+      "key_rejected": [
+        64,
+        63
+      ],
+      "recipe_rejected": [
+        0,
+        0
+      ]
+    },
+    {
+      "checks": 1024,
+      "signed": [
+        0,
+        0
+      ],
+      "pc_rejected": [
+        0,
+        0
+      ],
+      "key_rejected": [
+        64,
+        63
+      ],
+      "recipe_rejected": [
+        0,
+        0
+      ]
+    },
+    {
+      "checks": 1024,
+      "signed": [
+        64,
+        64
+      ],
+      "pc_rejected": [
+        0,
+        0
+      ],
+      "key_rejected": [
+        64,
+        0
+      ],
+      "recipe_rejected": [
+        0,
+        0
+      ]
+    },
+    {
+      "checks": 1024,
+      "signed": [
+        64,
+        64
+      ],
+      "pc_rejected": [
+        65,
+        0
+      ],
+      "key_rejected": [
+        64,
+        63
+      ],
+      "recipe_rejected": [
+        0,
+        0
+      ]
+    },
+    {
+      "checks": 1024,
+      "signed": [
+        64,
+        64
+      ],
+      "pc_rejected": [
+        false,
+        false
+      ],
+      "key_rejected": [
+        64,
+        63
+      ],
+      "recipe_rejected": [
+        0,
+        0
+      ]
+    },
+    {
+      "checks": 1024,
+      "signed": [
+        64,
+        64
+      ],
+      "pc_rejected": [
+        0
+      ],
+      "key_rejected": [
+        64,
+        63
+      ],
+      "recipe_rejected": [
+        0,
+        0
+      ]
+    },
+    {
+      "checks": 1024,
+      "signed": [
+        64,
+        64
+      ],
+      "pc_rejected": "no",
+      "key_rejected": [
+        64,
+        63
+      ],
+      "recipe_rejected": [
+        0,
+        0
+      ]
+    }
   ]
 }

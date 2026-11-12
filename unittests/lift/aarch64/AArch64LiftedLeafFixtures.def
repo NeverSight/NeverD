@@ -40,6 +40,8 @@ A64_LEAF_TEXT(kWrongSpillInput, "wrong-spill.dylib")
 A64_LEAF_VALUE(auto, kLinkSpillRule,
                (std::array<uint8_t, 5>{0x48, 0x0e, 0x10, 0x9e, 0x02}))
 A64_LEAF_VALUE(uint8_t, kWrongLinkOffsetFactor, 1)
+A64_LEAF_VALUE(auto, kFrameLinkSpillRule, (std::array<uint8_t, 2>{0x9e, 0x01}))
+A64_LEAF_VALUE(uint8_t, kWrongFrameLinkOffsetFactor, 2)
 A64_LEAF_TEXT(kPlatformHash, "system_slice_sha256")
 A64_LEAF_TEXT(kUnsignedHash, "unsigned_input_sha256")
 A64_LEAF_TEXT(kEntryVA, "original_entry")
@@ -87,6 +89,7 @@ A64_LEAF_TEXT(kReturnMnemonic, "ret")
 A64_LEAF_TEXT(kChangeScratch, "mov x9, xzr\n")
 A64_LEAF_TEXT(kVariadicDirect, "va_direct")
 A64_LEAF_TEXT(kScratchTail, "#define NEVERD_TEST_SCRATCH_FORWARD 1\n")
+A64_LEAF_TEXT(kScratchFrame, "#define NEVERD_TEST_SCRATCH_FRAME 1\n")
 A64_LEAF_VALUE(unsigned, kScratchTailEntries, 3)
 A64_LEAF_TEXT(kScratchResultSource, R"asm(
 .text
@@ -110,16 +113,46 @@ _scratch_results:
 .globl _leaf_difference
 _leaf_difference:
 .cfi_startproc
+#ifdef NEVERD_TEST_SCRATCH_FRAME
+.cfi_b_key_frame
+.cfi_escape 0x2e,0
+#endif
   pacibsp
   sub sp, sp, #32
   stp x29, x30, [sp, #16]
 .cfi_def_cfa_offset 32
 .cfi_offset x30, -8
 .cfi_offset x29, -16
+#ifdef NEVERD_TEST_SCRATCH_FRAME
+  mov x29, sp
+.cfi_def_cfa_register x29
+#endif
   bl _leaf_sum
   sub x0, x8, x9
+#ifdef NEVERD_TEST_SCRATCH_FRAME
+.cfi_remember_state
+  cbz x0, Lzero
+#endif
   ldp x29, x30, [sp, #16]
+#ifdef NEVERD_TEST_SCRATCH_FRAME
+.cfi_def_cfa sp,32
+.cfi_restore x29
+.cfi_restore x30
+#endif
   add sp, sp, #32
+#ifdef NEVERD_TEST_SCRATCH_FRAME
+.cfi_def_cfa_offset 0
+  autibsp
+  ret
+.cfi_restore_state
+Lzero:
+  ldp x29,x30,[sp,#16]
+.cfi_def_cfa sp,32
+.cfi_same_value x29
+.cfi_same_value x30
+  add sp,sp,#32
+.cfi_def_cfa_offset 0
+#endif
   retab
 .cfi_endproc
 .subsections_via_symbols

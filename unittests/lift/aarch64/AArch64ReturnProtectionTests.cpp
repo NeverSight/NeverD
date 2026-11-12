@@ -474,15 +474,24 @@ TEST(AArch64ReturnProtection, CompiledFramesDescribeTheirActualSigningPC) {
         EXPECT_EQ(CIE.HasPointerAuth, BKey && Format == BinaryFormat::ELF);
         EXPECT_EQ(CIE.UsesArm64eReturnAddressABI,
                   Format == BinaryFormat::MachO);
+        bool HasExplicitSigning = false;
         const auto Query = [&](size_t Offset) {
           return dwarf_eh::evaluateAArch64ReturnAddressState(
-              Arch::AArch64, CIE, FDE, FDE.InitialLocation + Offset);
+              Arch::AArch64, CIE, FDE, FDE.InitialLocation + Offset, {},
+              HasExplicitSigning);
         };
         const auto Entry = Query(*SigningOffset);
         ASSERT_TRUE(Entry.State);
         EXPECT_EQ(Entry.State->Kind, dwarf_eh::AArch64RASigningKind::Unsigned);
         const auto Signed = Query(*SigningOffset + kNativeWordBytes);
         ASSERT_TRUE(Signed.State);
+        if (Format == BinaryFormat::MachO) {
+          // Darwin's implicit IB ABI deliberately omits generic RA toggles.
+          // The raw DWARF default cannot prove that the native LR is unsigned.
+          EXPECT_FALSE(HasExplicitSigning);
+          continue;
+        }
+        EXPECT_TRUE(HasExplicitSigning);
         EXPECT_EQ(Signed.State->Kind, dwarf_eh::AArch64RASigningKind::SP);
         EXPECT_EQ(Signed.State->Key,
                   BKey ? dwarf_eh::AArch64RAKey::B : dwarf_eh::AArch64RAKey::A);

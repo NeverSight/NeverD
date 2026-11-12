@@ -31,6 +31,10 @@ extern void signPACMIA(uintptr_t, Signature *);
 extern void signPACMIB(uintptr_t, Signature *);
 extern void signExplicitIA(uintptr_t, Signature *);
 extern void signExplicitIB(uintptr_t, Signature *);
+extern void signZeroPACMIA(uintptr_t, Signature *);
+extern void signZeroPACMIB(uintptr_t, Signature *);
+extern void signZeroExplicitIA(uintptr_t, Signature *);
+extern void signZeroExplicitIB(uintptr_t, Signature *);
 #ifdef __cplusplus
 }
 #endif
@@ -58,7 +62,25 @@ __asm__(".text\n"
         "signer signPACMIA,0xd503233f,1\n"
         "signer signPACMIB,0xd503237f,1\n"
         "signer signExplicitIA,0xdac1a3fe\n"
-        "signer signExplicitIB,0xdac1a7fe\n");
+        "signer signExplicitIB,0xdac1a7fe\n"
+        ".macro zero_signer name, word, prefix=0\n"
+        ".globl _\\name\n"
+        "_\\name:\n"
+        "mov x17,x0\n"
+        "mov x16,sp\n"
+        "mov x15,xzr\n"
+        ".if \\prefix\n"
+        ".inst 0xd50324ff\n"
+        ".endif\n"
+        ".inst \\word\n"
+        "str x17,[x1]\n"
+        "stp x16,x15,[x1,#8]\n"
+        "ret\n"
+        ".endm\n"
+        "zero_signer signZeroPACMIA,0xd503211f,1\n"
+        "zero_signer signZeroPACMIB,0xd503215f,1\n"
+        "zero_signer signZeroExplicitIA,0xdac18bfe\n"
+        "zero_signer signZeroExplicitIB,0xdac18ffe\n");
 
 static void unavailable(int Signal) {
   (void)Signal;
@@ -205,6 +227,23 @@ static void checkRecipes(bool Explicit) {
       Cursor = Input;
       Row.Signing = Key ? NDArm64eSignedIBWithCFA : NDArm64eSignedIAWithCFA;
       RecipeRejected[Key] += !step(&Cursor, Row, Low, High, Explicit);
+      // A zero signing address must also succeed when it really signed LR.
+      if (Explicit) {
+        if (Key)
+          signZeroExplicitIB(PC, &Value);
+        else
+          signZeroExplicitIA(PC, &Value);
+      } else if (Key) {
+        signZeroPACMIB(PC, &Value);
+      } else {
+        signZeroPACMIA(PC, &Value);
+      }
+      check(Value.PC == 0);
+      Row.Signing = Kind;
+      Row.SigningPC = Value.PC;
+      Cursor = (NDDarwinArm64eCursor){Value.PC, Value.CFA, Low, Value.LR};
+      check(step(&Cursor, Row, Low, High, Explicit));
+      check(Cursor.PC == PC && Cursor.SP == Value.CFA && !Cursor.LR);
     }
     check(Signed[Key] && KeyRejected[Key]);
     if (Explicit)

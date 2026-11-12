@@ -1018,7 +1018,47 @@ The native ADDPT controls report an undefined instruction in both arm64 and
 arm64e processes on both M1 runners. Xcode 27 emits an arm64e.x1 slice whose
 launch fails with `EBADARCH`. The local M4 control also reports an undefined
 ADDPT instruction. Native CPTA-on remains unavailable on these environments.
-The explicit signal-context cursor covers unsigned and IA/IB-with-CFA rows.
-Instruction-address-diversified returns, the direct system `_sigtramp` walk
-and additional arbitrary image instruction and unwind profiles still require
-qualification.
+That qualification covers unsigned and IA/IB-with-CFA signal rows. The
+instruction-address recipes added below have separate hardware qualification.
+The direct system `_sigtramp` walk and additional arbitrary image instruction
+and unwind profiles still require qualification.
+
+## Instruction-address signal recipes and remembered frames
+
+`DarwinArm64eSignalCursor.h` now accepts IA/IB signatures diversified by CFA
+and the resolved signing instruction address. Explicit PAuth_LR and PACM
+remain distinct recipes. `SigningPC = 0` is a valid modifier, not an unknown
+state. The caller resolves the row before entering a signal handler and
+supplies the interrupted thread's keys and enable controls. The existing
+`ndDarwinArm64eStepFrame` entry point refuses explicit PAuth_LR;
+`ndDarwinArm64eStepFrameWithPAuthLR` accepts it only when the caller has
+established instruction availability. Both compare a fresh hardware signature,
+so malformed PACs do not execute a potentially trapping authentication.
+Every refusal leaves the cursor unchanged.
+
+The runtime signers reuse the instruction contracts in
+`AArch64PAuthLR.def` and `AArch64PAuthM.def`. The independent native oracle
+uses SP/PC signing instructions, including the actual address of the signing
+instruction; the cursor instead materializes the two modifiers in registers.
+It exercises both keys, saved and live returns, SP/FP CFA bases, bounds and
+overflow, wrong PACs, wrong signing recipes and unavailable explicit
+instructions. C11 and C++20 compile at O0/O2 in the lifted-image test suite.
+Run the standalone C11 qualification with:
+
+```bash
+python3 scripts/verify_arm64e_native.py probe-cursor --output cursor-evidence
+```
+
+The report separates `native_cursor_qualified`, `pacm_pc_qualified` and
+`explicit_pauth_lr_qualified`. PACM hints can execute on old CPUs while
+ignoring the PC modifier, which cannot qualify PC-sensitive recovery.
+Both hosted Apple profiles pass 674 baseline checks at each optimization
+level; both report no PC sensitivity and unavailable explicit PAuth_LR.
+[Native cursor run](https://github.com/gmh5225/test_mac_intel/actions/runs/43171582476)
+
+Native register-result image publication also retains FP/SP CFA changes,
+remembered states across multiple epilogues, saved/same-value register rules,
+GNU argument-size rows and the explicit B-key CIE augmentation. Final linked
+CFI is compared against the original at every instruction boundary. Generic
+RA toggles remain rejected by the existing classic-Darwin compatibility
+boundary; this extension does not authorize them.

@@ -444,9 +444,14 @@ bool sameSpillRules(llvm::ArrayRef<CFIInstruction> Old,
                         switch (I.Kind) {
                         case CFIOpKind::AdvanceLoc:
                         case CFIOpKind::DefCFA:
+                        case CFIOpKind::DefCFARegister:
                         case CFIOpKind::DefCFAOffset:
                         case CFIOpKind::Offset:
                         case CFIOpKind::Restore:
+                        case CFIOpKind::SameValue:
+                        case CFIOpKind::RememberState:
+                        case CFIOpKind::RestoreState:
+                        case CFIOpKind::GnuArgsSize:
                           return true;
                         default:
                           return false;
@@ -472,7 +477,9 @@ bool sameIndexedLinkFrame(const BinaryImage &Original,
     return false;
   const auto *Old =
       Original.ExceptionMetadata.findCIE(Frame.Dwarf->CIESectionOffset);
-  if (!Old || Old->Augmentation != kCompilerFrameAugmentation ||
+  if (!Old ||
+      (Old->Augmentation != kCompilerFrameAugmentation &&
+       Old->Augmentation != kBKeyFrameAugmentation) ||
       Old->ParseStatus != ExceptionParseStatus::Complete || NewFrame->LSDAVA ||
       NewFrame->AddressRange != Frame.Dwarf->AddressRange ||
       NewFrame->ParseStatus != ExceptionParseStatus::Complete)

@@ -43,14 +43,7 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                          native.POLICY["passed"])
 
     def test_cursor_does_not_accept_a_partial_or_unsigned_observation(self):
-        baseline = CASES["cursor_observation"]
-        invalid = [[], {}, {**baseline, "checks": 0}, {**baseline, "checks": True},
-                   {**baseline, "signed": [0, 0]}, {**baseline, "key_rejected": [64, 0]},
-                   {**baseline, "pc_rejected": [65, 0]},
-                   {**baseline, "pc_rejected": [False, False]},
-                   {**baseline, "pc_rejected": [0]},
-                   {**baseline, "pc_rejected": "no"}]
-        for observation in invalid:
+        for observation in CASES["cursor_invalid_observations"]:
             result = subprocess.CompletedProcess([], 0, CASES["cursor_started"] +
                                                  "\n" + json.dumps(observation) + "\n", "")
             with self.subTest(observation=observation), self.assertRaises(ValueError):
