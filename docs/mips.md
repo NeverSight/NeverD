@@ -1112,9 +1112,17 @@ profile and volatile registers. General incoming FP call ABI and saved-FPR
 restoration require additional proofs. Function-scoped instruction mode is
 preserved, including physical microMIPS FP assembly.
 
-The independent GNU/LLVM encoding fixtures and original-machine execution
-checks cover both byte orders. The baseline for decoder measurements is
+The independent GNU/LLVM encoding fixtures cover both byte orders. Original
+execution covers classic MIPS32/64 and physical microMIPS32. I6400 supplies the
+classic 64-bit reference. Physical microMIPS64 is checked against fixed encodings
+and the corresponding classic LowIR for every catalog entry. The 112 FP forms
+are exercised with finite values, NaNs and rounding changes. Source round trips
+cover explicit classic o32 and n64 FR=1 leaves in HighC and LLVMC at O0 and O2.
+
+The baseline for decoder measurements is
 bcef8d07e1, with matched Release compiler and dependency inputs except for
-the intentional Capstone revision change. Initial merged validation and
-nine-pair compressed decode/lift results are recorded in
+the intentional Capstone revision change. The paired driver defaults to the four
+classic Release 2 profiles from its `.def` catalog. Optional profiles are selected
+explicitly. MSA64, legacy DSP64, scalar FPU validation and nine-pair compressed
+decode/lift results are recorded in
 [the MSA64 and scalar FP qualification receipt](evidence/mips-wide-fp-2026-11-12.json).

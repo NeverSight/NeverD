@@ -307,13 +307,19 @@ TEST_P(MIPSRelease6,
   struct Row {
     uint32_t Micro, Classic;
   };
-  const Row Pairs[] = {{0x5444203b, 0x44022000}, {0x5444283b, 0x44822000},
-                       {0x5444303b, 0x44622000}, {0x5444383b, 0x44e22000},
-                       {0x545f103b, 0x4442f800}, {0x549f183b, 0x44c4f800},
-                       {0x9c440004, 0xc4820004}, {0xbc440008, 0xd4820008},
-                       {0x98440004, 0xe4820004}, {0xb8440008, 0xf4820008},
+  const Row Pairs[] = {{0x5444203b, 0x44022000},
+                       {0x5444283b, 0x44822000},
+                       {0x5444303b, 0x44622000},
+                       {0x5444383b, 0x44e22000},
+                       {0x545f103b, 0x4442f800},
+                       {0x549f183b, 0x44c4f800},
+                       {0x9c440004, 0xc4820004},
+                       {0xbc440008, 0xd4820008},
+                       {0x98440004, 0xe4820004},
+                       {0xb8440008, 0xf4820008},
                        // CEIL.W.D and FLOOR.W.D retain all five FS bits.
-                       {0x54455b3b, 0x4620288e}, {0x54454b3b, 0x4620288f}};
+                       {0x54455b3b, 0x4620288e},
+                       {0x54454b3b, 0x4620288f}};
   for (const auto &P : Pairs) {
     SCOPED_TRACE(::testing::Message() << std::hex << P.Micro);
     DecodedExecutionUnit U;
