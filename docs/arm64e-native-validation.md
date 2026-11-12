@@ -975,3 +975,24 @@ the results of ADDPT on a non-overflowing pointer, a top-byte carry, a borrow
 and an existing poison bit. The report identifies the exact executed slice,
 an unavailable instruction or slice, and effective checked EL0 arithmetic.
 The privileged EL1 controls have a separate verification record.
+
+A local direct caller can also establish a non-variadic X8/X9 result contract.
+The register reader checks physical reads and writes after the call, including
+W-register definitions. The callee and its supported callers use the same
+native lowering. The custom-caller test consumes both results and checks a
+matrix of ordinary, wrapping and high-bit scalar values.
+
+`DarwinArm64eSignalCursor.h` provides a signal-context cursor for classic
+arm64e frames. A caller supplies the exact-PC CFA and saved-register row and
+the interrupted thread's mapped stack bounds. The cursor verifies an IA- or
+IB-key signature against the recovered CFA before returning the canonical PC.
+Unknown signing state, a mismatched signature and an out-of-range saved slot
+leave the cursor unchanged. The native interruption test reaches the system
+`_sigtramp`, recovers the interrupted return and its signed parent, and
+cross-checks the parent through Darwin's frame-pointer backtrace.
+
+For the installed implicit-signing fixture, the test transfers signing rows
+from its explicitly described original after checking that the complete
+instruction ranges are identical. Each image supplies its own CFA and LR
+location rows. The unmodified system `unw_step` path across `_sigtramp` retains
+the earlier failure record.

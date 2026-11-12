@@ -11,7 +11,7 @@
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/MachO/MachOCompactUnwindPatch.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
-#include "neverd/backend/codegen/MachO/MachOVariadicRegisters.h"
+#include "neverd/backend/codegen/MachO/MachORegisterResults.h"
 #include "neverd/backend/codegen/SourcePatch.h"
 #include "neverd/backend/llvm/AArch64/LLVMEntryABI.h"
 #include "neverd/decode/Decoder.h"
@@ -755,7 +755,7 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
         return S.isExecutable() && S.Name != section_names::macho::TextSeg;
       }))
     return refuse(kSourceText);
-  auto RegisterEntries = validateMachOVariadicRegisters(Module, Image);
+  auto RegisterEntries = validateMachORegisterResults(Module, Image);
   if (!RegisterEntries)
     return RegisterEntries.takeError();
   std::vector<SourcePatchMapping> Mappings;

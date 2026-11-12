@@ -17,7 +17,7 @@
 #include "PipelineSourceStackAccesses.h"
 
 #include "neverd/backend/RewriteSourceIdentity.h"
-#include "neverd/backend/codegen/MachO/MachOVariadicRegisters.h"
+#include "neverd/backend/codegen/MachO/MachORegisterResults.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -559,7 +559,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
           Audit.DecodeFailures.empty() && Audit.TruncatedPaths.empty() &&
           Audit.UnprovenReturns.empty())
         Admitted.push_back(Audit.Entry);
-    lowerMachOVariadicRegisters(*Result.LlvmModule, Img, Admitted);
+    lowerMachORegisterResults(*Result.LlvmModule, Img, Admitted);
   }
   Result.LLVMVerifierFailed =
       llvm::verifyModule(*Result.LlvmModule, &FinalVerifyStream);

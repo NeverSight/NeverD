@@ -1,4 +1,4 @@
-//===- MachOVariadicRegisters.def - Darwin native register lowering ------===//
+//===- MachORegisterResults.def - Darwin native register lowering ------===//
 //
 // NeverD Decompiler
 //
@@ -17,9 +17,9 @@
 #define MACHO_REGISTER_MEMORY(Name)
 #endif
 
-MACHO_REGISTER_TEXT(kRegisterBody, "neverd.arm64e.variadic-registers")
+MACHO_REGISTER_TEXT(kRegisterBody, "neverd.arm64e.register-results")
 MACHO_REGISTER_TEXT(kInvalidBody, "arm64e native register body disagrees with its source registers, branches or unwind rows")
-MACHO_REGISTER_TEXT(kLocal, "Lneverd_va_${:uid}_")
+MACHO_REGISTER_TEXT(kLocal, "Lneverd_reg_${:uid}_")
 MACHO_REGISTER_TEXT(kCall, "bl ")
 MACHO_REGISTER_TEXT(kOperandStart, "${")
 MACHO_REGISTER_TEXT(kOperandEnd, ":c}")
@@ -36,6 +36,8 @@ MACHO_REGISTER_TEXT(kWZero, ", wzr, wzr")
 MACHO_REGISTER_TEXT(kEntryBlock, "entry")
 MACHO_REGISTER_TEXT(kSeparator, ", ")
 MACHO_REGISTER_TEXT(kEndLabel, ":\n")
+MACHO_REGISTER_VALUE(unsigned, kScratchX8, 1)
+MACHO_REGISTER_VALUE(unsigned, kScratchX9, 2)
 MACHO_REGISTER_VALUE(unsigned, kDwarfFP, 29)
 MACHO_REGISTER_VALUE(unsigned, kDwarfLR, 30)
 

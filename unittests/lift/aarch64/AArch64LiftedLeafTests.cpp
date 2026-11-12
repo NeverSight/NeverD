@@ -105,6 +105,7 @@ enum class LeafCheck {
   TailTarget,
   StackArgument,
   RestoringLoad,
+  ScratchResult,
   ErrorResult,
   Global,
   FramedImport,
@@ -174,9 +175,17 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   auto *Wrong = Result->isIntegerTy()
                     ? llvm::ConstantInt::get(Result, kTamperedResult)
                     : llvm::ConstantFP::get(Result, kTamperedResult);
-  for (auto &Block : *Sum)
-    if (auto *R = llvm::dyn_cast<llvm::ReturnInst>(Block.getTerminator()))
-      R->setOperand(0, Wrong);
+  if (Check == LeafCheck::ScratchResult) {
+    ASSERT_FALSE(Sum->isVarArg());
+    ASSERT_TRUE(Sum->hasFnAttribute(llvm::Attribute::Naked));
+    auto *End = Sum->getEntryBlock().getTerminator();
+    llvm::ReturnInst::Create(Context, Wrong, End->getIterator());
+    End->eraseFromParent();
+  } else {
+    for (auto &Block : *Sum)
+      if (auto *R = llvm::dyn_cast<llvm::ReturnInst>(Block.getTerminator()))
+        R->setOperand(0, Wrong);
+  }
   EXPECT_FALSE(Patcher.patch(Input, Rejected, *Changed, Image->Arch).Success);
   EXPECT_FALSE(std::filesystem::exists(Rejected));
 
@@ -710,6 +719,11 @@ void verifyVariadicRegisterImage(const char *Optimization) {
 #else
   GTEST_SKIP() << kUnavailable;
 #endif
+}
+
+TEST(AArch64DarwinEntry, DirectCallerConsumesNonVariadicX8AndX9Results) {
+  verifyPublishedLeaves(kScratchResultSource, kCaller, kAssemblyName, {},
+                        LeafCheck::ScratchResult);
 }
 
 TEST(AArch64DarwinVariadic, OptimizedImagePreservesReturnedRegisters) {

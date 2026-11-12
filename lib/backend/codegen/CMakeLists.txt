@@ -83,7 +83,7 @@ add_neverd_component_library(NeverDCodeGen
   MachO/MachOPatch.cpp
   MachO/MachOPatchObject.cpp
   MachO/MachOLiftedLeaf.cpp
-  MachO/MachOVariadicRegisters.cpp
+  MachO/MachORegisterResults.cpp
   MachO/MachOReloc.cpp
   MachO/MachOSigner.cpp
   MachO/MachOSignaturePolicy.cpp

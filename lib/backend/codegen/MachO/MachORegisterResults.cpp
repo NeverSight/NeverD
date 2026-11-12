@@ -1,10 +1,10 @@
-//===- MachOVariadicRegisters.cpp - Darwin register-preserving entries ----===//
+//===- MachORegisterResults.cpp - Darwin register-preserving entries ----===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 
-#include "neverd/backend/codegen/MachO/MachOVariadicRegisters.h"
+#include "neverd/backend/codegen/MachO/MachORegisterResults.h"
 
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/decode/Decoder.h"
@@ -14,7 +14,9 @@
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/ISAEncoding.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Module.h"
@@ -30,13 +32,14 @@ namespace neverd {
 namespace {
 #define MACHO_REGISTER_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #define MACHO_REGISTER_TEXT(Name, Value) constexpr char Name[] = Value;
-#include "MachOVariadicRegisters.def"
+#include "MachORegisterResults.def"
 
 using Entries = std::map<va_t, llvm::Function *>;
 struct RegisterBody {
   std::string Assembly;
   std::string Constraints;
   llvm::SmallVector<llvm::Value *> Operands;
+  llvm::SmallVector<llvm::Function *> ObservedCallees;
   bool LoadsStackArgument = false;
   bool MaterializesCursor = false;
 };
@@ -66,13 +69,13 @@ bool independent(const DecodedInsn &I) {
   const auto &D = I.Raw->detail->aarch64;
   switch (I.Id) {
 #define MACHO_REGISTER_ALU(Name) case AARCH64_INS_##Name:
-#include "MachOVariadicRegisters.def"
+#include "MachORegisterResults.def"
     return llvm::all_of(
         llvm::ArrayRef(D.operands, D.op_count), [](const cs_aarch64_op &Op) {
           return Op.type == AARCH64_OP_IMM || Op.type == AARCH64_OP_REG;
         });
 #define MACHO_REGISTER_MEMORY(Name) case AARCH64_INS_##Name:
-#include "MachOVariadicRegisters.def"
+#include "MachORegisterResults.def"
     return llvm::any_of(
         llvm::ArrayRef(D.operands, D.op_count),
         [](const cs_aarch64_op &Op) { return Op.type == AARCH64_OP_MEM; });
@@ -170,6 +173,19 @@ bool emitOperands(RegisterBody &Body, llvm::raw_ostream &OS, Decoder &Decode,
   return true;
 }
 
+// A W write defines the entire corresponding X register. Reads precede
+// writes within an instruction, including read-modify-write operands.
+unsigned scratchMask(llvm::ArrayRef<uint16_t> Registers) {
+  unsigned Mask = 0;
+  for (const auto R : Registers) {
+    if (R == AARCH64_REG_X8 || R == AARCH64_REG_W8)
+      Mask |= kScratchX8;
+    if (R == AARCH64_REG_X9 || R == AARCH64_REG_W9)
+      Mask |= kScratchX9;
+  }
+  return Mask;
+}
+
 bool emitFrameRow(const CFIInstruction &Row, llvm::raw_ostream &OS) {
   switch (Row.Kind) {
   case CFIOpKind::Nop:
@@ -237,6 +253,8 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
 
   RegisterBody Body;
   llvm::raw_string_ostream OS(Body.Assembly);
+  llvm::Function *LastCallee = nullptr;
+  unsigned LiveScratch = 0;
   for (va_t PC = Start; PC < End; PC += Word) {
     while (!Rows.empty() && Rows.front().CodeOffset == PC - Start) {
       if (!emitFrameRow(Rows.front(), OS))
@@ -252,12 +270,27 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
     const auto Ops = llvm::ArrayRef(D.operands, D.op_count);
     OS << kLocal << (PC - Start) / Word << kEndLabel;
 
+    if (LiveScratch && I.Id != AARCH64_INS_BL) {
+      cs_regs Reads, Writes;
+      uint8_t NumReads = 0, NumWrites = 0;
+      if (cs_regs_access(Decode.getHandle(), I.Raw, Reads, &NumReads, Writes,
+                         &NumWrites) != CS_ERR_OK)
+        return std::nullopt;
+      if (LiveScratch & scratchMask(llvm::ArrayRef(Reads, NumReads))) {
+        Body.ObservedCallees.push_back(LastCallee);
+        LiveScratch = 0;
+      } else {
+        LiveScratch &= ~scratchMask(llvm::ArrayRef(Writes, NumWrites));
+      }
+    }
     if (I.Id == AARCH64_INS_BL) {
       if (Ops.size() != 1 || Ops[0].type != AARCH64_OP_IMM)
         return std::nullopt;
       const auto Target = Functions.find(Ops[0].imm);
       if (Target == Functions.end())
         return std::nullopt;
+      LastCallee = Target->second;
+      LiveScratch = kScratchX8 | kScratchX9;
       OS << kCall;
       emitOperand(Body, OS, Target->second, kSymbolConstraint);
       OS << '\n';
@@ -265,6 +298,7 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
     }
     if (I.Id == AARCH64_INS_B || I.Id == AARCH64_INS_CBZ ||
         I.Id == AARCH64_INS_CBNZ) {
+      LiveScratch = 0;
       const bool TestReg = I.Id != AARCH64_INS_B;
       if (Ops.size() != (TestReg ? 2u : 1u) ||
           Ops.back().type != AARCH64_OP_IMM ||
@@ -279,6 +313,8 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
       OS << kLocal << (Target - Start) / Word << '\n';
       continue;
     }
+    if (I.Id == AARCH64_INS_RET || I.Id == AARCH64_INS_RETAB)
+      LiveScratch = 0;
     if (!independent(I))
       return std::nullopt;
     // Frameless variadic entries can load directly at or above incoming SP
@@ -346,11 +382,8 @@ llvm::InlineAsm *assembly(llvm::Function &F, const RegisterBody &Body) {
 }
 } // namespace
 
-void lowerMachOVariadicRegisters(llvm::Module &M, const BinaryImage &Image,
-                                 llvm::ArrayRef<va_t> AdmittedEntries) {
-  if (!llvm::any_of(
-          M, [](const auto &F) { return !F.isDeclaration() && F.isVarArg(); }))
-    return;
+void lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
+                               llvm::ArrayRef<va_t> AdmittedEntries) {
   auto Functions = definedEntries(M);
   if (!Functions) {
     llvm::consumeError(Functions.takeError());
@@ -372,15 +405,22 @@ void lowerMachOVariadicRegisters(llvm::Module &M, const BinaryImage &Image,
       Bodies.try_emplace(&F, std::move(*Body));
     }
   }
-  if (!HasVariadicCursor)
-    return;
   llvm::DenseSet<llvm::Function *> Selected;
   llvm::SmallVector<llvm::Function *> Worklist;
-  for (const auto &[F, Body] : Bodies)
-    if (F->isVarArg() || Body.MaterializesCursor || Body.LoadsStackArgument) {
-      Selected.insert(F);
+  const auto Select = [&](llvm::Function *F) {
+    if (Selected.insert(F).second)
       Worklist.push_back(F);
-    }
+  };
+  for (const auto &[F, Body] : Bodies) {
+    if (HasVariadicCursor &&
+        (F->isVarArg() || Body.MaterializesCursor || Body.LoadsStackArgument))
+      Select(F);
+    for (auto *Callee : Body.ObservedCallees)
+      if (Bodies.contains(Callee))
+        Select(Callee);
+  }
+  if (Selected.empty())
+    return;
   // Direct callers can pass the complete register result on to their own
   // callers, including through a chain of non-variadic functions.
   llvm::DenseMap<llvm::Function *, llvm::SmallVector<llvm::Function *>> Callers;
@@ -390,8 +430,7 @@ void lowerMachOVariadicRegisters(llvm::Module &M, const BinaryImage &Image,
         Callers[Callee].push_back(F);
   while (!Worklist.empty())
     for (auto *Caller : Callers.lookup(Worklist.pop_back_val()))
-      if (Selected.insert(Caller).second)
-        Worklist.push_back(Caller);
+      Select(Caller);
   for (auto &[F, Body] : Bodies) {
     if (!Selected.contains(F))
       continue;
@@ -413,7 +452,7 @@ void lowerMachOVariadicRegisters(llvm::Module &M, const BinaryImage &Image,
 }
 
 llvm::Expected<llvm::DenseSet<va_t>>
-validateMachOVariadicRegisters(llvm::Module &M, const BinaryImage &Image) {
+validateMachORegisterResults(llvm::Module &M, const BinaryImage &Image) {
   llvm::DenseSet<va_t> Result;
   if (!llvm::any_of(
           M, [](const auto &F) { return F.hasFnAttribute(kRegisterBody); }))

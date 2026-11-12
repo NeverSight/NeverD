@@ -86,6 +86,35 @@ A64_LEAF_VALUE(unsigned, kRegisterInputs, 3)
 A64_LEAF_TEXT(kReturnMnemonic, "ret")
 A64_LEAF_TEXT(kChangeScratch, "mov x9, xzr\n")
 A64_LEAF_TEXT(kVariadicDirect, "va_direct")
+A64_LEAF_TEXT(kScratchResultSource, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  mov x8, x0
+  mov x9, x1
+  add x0, x8, x9
+  ret
+.cfi_endproc
+
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  pacibsp
+  sub sp, sp, #32
+  stp x29, x30, [sp, #16]
+.cfi_def_cfa_offset 32
+.cfi_offset x30, -8
+.cfi_offset x29, -16
+  bl _leaf_sum
+  sub x0, x8, x9
+  ldp x29, x30, [sp, #16]
+  add sp, sp, #32
+  retab
+.cfi_endproc
+.subsections_via_symbols
+)asm")
 A64_LEAF_TEXT(kRegisterCallerAssembly, R"asm(
 .text
 .p2align 2
