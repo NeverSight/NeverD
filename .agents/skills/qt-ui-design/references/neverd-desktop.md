@@ -347,6 +347,70 @@ rules below do, not from taste.
   pixels in and a 10 pixel chevron. Right to left, the chevron points left;
   the style sheet had fallen back to Fusion's triangle there.
 
+## Judging a look
+
+The user judges NeverD's windows by comfort ("按照最舒服的来") and names a
+defect by how it feels, not by its cause. Each verdict below was traced to a
+number or a count; start from these before reaching for taste.
+
+| Verdict | What the window showed | Cause, measured | What settled it |
+| --- | --- | --- | --- |
+| "lifeless" (2026-11-09) | Disabled buttons as full gray blocks | The enabled fill (1.40:1 on the dark window) kept behind a gray label | The fill must fade with the label |
+| "有点难看" (2026-11-12) | Disabled buttons as hollow outlines | An outline of 1.39:1 around nothing, as loud as an enabled fill; seventeen at once | A faint plate (1.14:1), and commands that cannot apply yet stay away |
+| "太左了" (2026-11-12) | A pane flush against the combo box beside it | A 6-pixel splitter handle painted whole in the fields' gray | A hairline in a 13-pixel gutter, first rows on one line |
+
+How loud a button that cannot act is, as the contrast of each part against
+what lies behind it, composited over each system's own surface (fetched
+2026-11-12; `-` is not drawn):
+
+| Dark theme | Plate | Edge | Label |
+| --- | --- | --- | --- |
+| Windows 11 (WinUI 3) | 1.14 | 1.23 | 3.25 |
+| Visual Studio Code, default secondary at 40% | 1.04 | 1.19 | 2.65 |
+| Visual Studio Code Dark Modern, secondary at 40% | - | 1.13 | 2.82 |
+| Fluent 2 web (a plate darker than the surface) | 1.27 | 1.45 | 2.76 |
+| NeverD until 2026-11-12 | - | 1.39 | 3.00 |
+| NeverD now | 1.14 | - | 2.64 |
+| NeverD's enabled button, for scale | 1.40 | 1.39 | 6.80 |
+
+| Light theme | Plate | Edge | Label |
+| --- | --- | --- | --- |
+| Windows 11 (WinUI 3) | 1.02 | 1.11 | 2.49 |
+| Visual Studio Code Light Modern, secondary at 40% | 1.07 | 1.19 | 1.99 |
+| Fluent 2 web | 1.14 | 1.32 | 1.65 |
+| NeverD until 2026-11-12 | - | 1.14 | 2.36 |
+| NeverD now | 1.05 | 1.11 | 2.25 |
+| NeverD's enabled button, for scale | 1.11 | 1.14 | 9.06 |
+
+- Trace a verdict to its cause before changing a color. Measure the parts of
+  what the user points at, and count how many of it the window shows. The
+  hollow buttons were a token defect (the outline's strength) and a
+  structure defect (seventeen commands waiting) at once, and the earlier
+  token-only fix had only traded one verdict for the next.
+- Offer the choice as renders of the real window, switched in place: the
+  window as it is, the token change alone, and the token change with the
+  structure change. The user left the choice to comfort; the regrouped
+  window was taken because it opened quietest while its buttons still looked
+  like buttons.
+- Keep faces on text commands. A row of flat text commands, as Visual Studio
+  Code and Windows command bars draw them, was rendered and set aside: without
+  icons the commands read as labels. Revisit it once the commands have icons;
+  the icon set has `check`, `link`, `refresh` and `pathfinder`, and none for
+  unmatching a pair.
+- Let the accent say what comes next. In Binary comparison it sits on Compare
+  until a comparison exists, faintly while Compare cannot act yet, and on
+  nothing afterwards.
+- Look along every seam. Two shapes of one gray that meet read as one shape:
+  the splitter's band and the combo box beside it were both `#3C3C3C`. Leave
+  a layout's spacing between a control and any dividing line, and put the
+  first rows of two panes on one line so the rows below start level.
+- Render at the desktop's own font size. The user's GNOME desktop gives the
+  interface about 11 points where Qt's offscreen platform gives 9: the same
+  Cancel button is 77 by 31 pixels on their screen and 68 by 27 offscreen,
+  and a row that fits offscreen wraps for them. Set the application font's
+  point size in the throwaway driver; `QT_FONT_DPI` scales everything, not
+  the font.
+
 ## Hierarchy and proportion
 
 Start by identifying the user's task and the order in which information should
@@ -621,6 +685,18 @@ diff does not establish the appearance of a Qt widget.
    window's hidden panes and menus included: a text equal to English in every
    other language is either missing from the catalogs or written once and
    never set again, and the catalogs tell which.
+
+10. Render a dialog in the states that matter with a throwaway driver linked
+    against the build's `libneverd_gui_app.a`: construct the real dialog,
+    drive it through its states (as it opens, with its inputs chosen, with
+    its results and a selection), and grab each in both themes. Give it the
+    worker of a qualified bundle and private `XDG_*` directories, and private
+    copies of its input files, since comparing writes sidecars beside them.
+    Set the application font to the desktop's size first (see "Judging a
+    look"). A dialog that sets `Qt::WA_DeleteOnClose` must not be closed
+    from a stack-allocated object. To show the build before a change from
+    the same build directory, link the driver with objects compiled from the
+    old sources ahead of the archive.
 
 When reporting an audit, connect each finding to its consequence and proposed
 change: for example, a timestamp beside the filename hides a build suffix, so

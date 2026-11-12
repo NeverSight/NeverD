@@ -5,10 +5,10 @@ description: >-
 license: LicenseRef-Qt-Commercial OR BSD-3-Clause
 metadata:
   author: qt-ai-skills
-  version: "1.3"
+  version: "1.4"
   qt-version: "6.x"
   category: conceptual
-  changelog: "Added Windows native-handle transparency ordering and desktop shadow verification"
+  changelog: "Added quiet states, command rows, gutters and judging a look on the user's screen"
 ---
 # Qt UI Design
 
@@ -221,6 +221,51 @@ Thin lines show their full colour only where they cover whole pixels. A 1 px lin
 - **In paint code**, fill hairlines as integer rectangles or offset 1 px pens by 0.5. Round a computed position before drawing a thin line with antialiasing on. In QML, place thin items and icons at whole-pixel positions (for example with `Math.round`), and draw icons at their native size or a whole multiple of it.
 - **Choose thin-stroke colours by how they render.** On dark surfaces, a thin icon needs a lighter tone than text of the same hue. Visual Studio Code, for example, uses `#75BEFF` for coloured icons and `#4DAAFC` for links.
 - **Verify at 100% scale** in a capture of the real UI, because 100% is common on desktop monitors. Then check 125%, 150% and 200%. At a fractional scale a toolkit can place a widget at a fraction of a device pixel, so a 1 px border drawn at that position spreads over two pixels. Paint chrome borders and hairlines in device pixels instead: round each side to the nearest device pixel and give a 1 px line one device pixel, as browsers snap border widths. Icons and text cannot be snapped everywhere; keep them no worse.
+### 1.7 Quiet states, command rows and gutters (desktop/web)
+
+A screen looks calm when each part is only as loud as its job. It looks wrong, and users say "ugly" without naming a cause, when parts that cannot act or that only divide are as loud as the parts that matter. Measure loudness instead of judging it by eye: take the WCAG contrast ratio of each part (fill, edge, label) against what lies directly behind it, after compositing any transparency. 1.00:1 is invisible; an enabled button's face usually stands at 1.1–1.4:1 on its surface.
+
+**A state is the same control turned up or down, never another drawing.**
+- A control that cannot act keeps the shape of the enabled one and recedes. Its fill fades and its label dims to about 2–3:1. Visual Studio Code fades the whole button to 40%; Windows 11 keeps a fill of about 4% white (30% of the fill in its light theme) inside an edge of 6–7%.
+- Nothing about a disabled control should stand out from the surface by more than about 1.25:1, and all of it must stay quieter than the enabled control beside it.
+- Two failures bracket the target. A full-strength fill behind a gray label reads as a dead block. An outline alone at the enabled border's strength reads as an empty frame, and a row of them as wire: the outline is as loud as the fill it replaced, around nothing.
+- Keep the fill where the enabled control has one. A transparent box with an outline is what several systems draw for an *enabled* secondary button, so it cannot also mean "cannot act".
+- Add an edge to a receded fill only where the fill alone would be lost, which is usually the light theme (a 40% fill can sit within 1.05:1 of a light surface). On a dark surface an edge that faint glows more than it helps.
+- A primary (accent) control that cannot act keeps a faint accent, so the screen's next step stays recognizable.
+
+**Measure a design system; do not quote it.**
+- Before writing "as Windows 11 draws it" or "as Visual Studio Code does", read the source of the values (theme resource files, CSS, token files), composite them over that system's own surface, and compare the numbers with yours, per theme. A claim can hold in the light theme and fail in the dark one.
+- Note what each system composites an edge over: the surface, the fill, or half of each. The same alpha gives a different edge.
+- Record the numbers beside the rule, so the next change is checked against them and not against memory.
+
+**Count before restyling.**
+- When a window shows many controls that cannot act at once, no disabled style makes it look right; the count is the problem. Hide by mode, disable by selection: commands that cannot apply in the window's current mode (nothing loaded, nothing compared yet) stay away as a group and appear with the content they act on. From then on single commands disable in place, so positions stay stable.
+- A reveal that coincides with the content arriving does not read as a jumping layout.
+
+**One accent, on the next step.**
+- Give a window at most one filled accent button, and only while it is the step the user is expected to take next. When that step is done, the accent goes away or moves. Running the same step again is not the next step.
+- Set the default button yourself. Toolkits assign one on their own: Qt makes a dialog's first push button its default and then each button that takes focus, which puts the accent on an arbitrary button and binds Return to it.
+- Decide what Return does in each kind of place, and test each. On a focused button it presses that button. In an input that feeds the main action it runs that action, but only where the input changed what would run, so the key cannot throw finished work away, and again after a run that failed. In a filter, a table or a toggle it starts nothing.
+- A window that owns child windows needs its own Return handling once it has no default: Qt's dialog looks for a default button among all its descendants and presses one in a child window.
+
+**Command rows.**
+- Group commands by what they act on, in the order of use. Keep a group close and leave a wider gap between groups. Prefer the gap to a separator line.
+- Let each command take its natural width and let the row wrap, a group whole. A grid that stretches commands to its columns scatters them and hides the grouping; a row that cannot wrap is clipped by a long translation or a narrow window.
+- Keyboard order follows the visual order.
+- Flat (borderless) commands suit a row that has icons or stands on a band of its own. Text-only flat commands read as labels; keep their faces until they have icons.
+
+**Gutters, dividers and alignment.**
+- No control touches a divider or the next pane. Leave at least the layout's spacing on either side of a dividing line.
+- A divider is a hairline in the middle of its room. Its grab area may be wider than the line, but is never painted whole: a band beside a field, in the field's own gray, merges with the field.
+- Neighbors of one color merge. Check every seam for two shapes of the same color meeting.
+- Line up what adjacent panes show first: their first rows share a text line, and the rows below start level. Rows that miss each other by a few pixels read as clutter even when every control is drawn well.
+
+**Judge on the user's screen.**
+- Render the real UI with the user's font size, scale and window size before judging spacing or wrapping. A headless platform's default font can be two points smaller than the desktop's, and everything then looks roomier than it is.
+- Compare variants in place: same size, same position, switched back and forth. Side by side, the eye compares two layouts; switched in place, it sees the one thing that changed.
+- Check both themes, 125%, the minimum window size, the longest bundled language and a right-to-left one before settling a layout.
+- Turn each rule into a test with a number in it (a contrast bound, a count of pixels across a seam, two tops that must be equal), and plant the old behavior once to see the test fail.
+- Find out which build a screenshot came from before reasoning from its details. A window left open for days shows an older binary.
 ---
 
 ## 2. Accessibility (WCAG 2.2)
@@ -344,6 +389,10 @@ Apply section 4 constraints first if the target is embedded.
 - [ ] Colour: are all colours token-based or semantically named? Is colour paired with a second cue for all state changes?
 - [ ] Crispness: at 100% scale, do straight icon strokes and 1 px lines cover whole pixels, so thin elements show their real colour? At 125%, does each border and hairline still take one whole device pixel?
 - [ ] States: does every control read differently at rest, under the pointer, pressed, with keyboard focus, checked and disabled, in every theme, and does a disabled control stay legible rather than vanish or look enabled?
+- [ ] Disabled look: is a control that cannot act its enabled self turned down (same shape, its fill kept and faded, nothing louder than about 1.25:1 on the surface), not a dead block and not an empty outline?
+- [ ] Command load: does the window show only the commands that can apply in its current mode, one accent on the next step, and its commands in groups by what they act on, a group wrapping whole?
+- [ ] Return key: does Return press the focused button, run the main action only from that action's own inputs, and start nothing from a filter, a table or a child window's default?
+- [ ] Seams: does any control touch a divider or the next pane, is any divider wider than a hairline painted whole, and do adjacent panes' first rows share a line?
 - [ ] High contrast: in the high contrast themes, does each state still read by its outline, is text at least 7:1 and every line at least 3:1, and does selected or highlighted text keep a colour of its own?
 - [ ] Localisation: do all user-visible strings use locale-aware formatting? Are containers able to expand 30–40% for translated text?
 - [ ] Languages: does every window fit its texts in every bundled language, does a live language switch reword every pane, and do layouts placed by hand mirror right to left?
@@ -359,5 +408,9 @@ Apply section 4 constraints first if the target is embedded.
 - Apple Human Interface Guidelines: https://developer.apple.com/design/human-interface-guidelines
 - Microsoft Fluent 2 Design Principles: https://fluent2.microsoft.design/design-principles
 - Google Material Design 3 Foundations: https://m3.material.io/foundations
+- Windows UX Guide — disabling or removing controls: https://learn.microsoft.com/en-us/windows/win32/uxguide/win-dialog-box#disabling-or-removing-controls-vs-giving-error-messages
+- WinUI theme resources (the values behind each control state): https://github.com/microsoft/microsoft-ui-xaml/tree/main/controls/dev/CommonStyles
+- Visual Studio Code button states: https://github.com/microsoft/vscode/blob/main/src/vs/base/browser/ui/button/button.css
+- Visual Studio Code UX Guidelines: https://code.visualstudio.com/api/ux-guidelines/overview
 - Qt QLocale (localisation API): https://doc.qt.io/qt-6/qlocale.html
 - Qt LayoutMirroring (RTL): https://doc.qt.io/qt-6/qml-qtquick-layoutmirroring.html

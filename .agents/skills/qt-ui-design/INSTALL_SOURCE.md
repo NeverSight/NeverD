@@ -16,8 +16,13 @@ icons. The states item in the same checklist is a NeverD addition drawn from a
 review of NeverD's control states on 2026-11-09; the profile's "Control
 states" section holds its rules. The languages item beside it comes from the
 same day's survey of every dialog in every bundled language, and the
-profile's "Languages and direction" section holds its rules. The upstream
-copyright, license, and general guidance are retained. This
+profile's "Languages and direction" section holds its rules. Section 1.7 of
+`SKILL.md` and the disabled-look, command-load, Return-key and seams items in
+that checklist are NeverD additions from the review of Binary comparison on
+2026-11-12, measured against the sources of Windows 11's, Fluent 2's and
+Visual Studio Code's control states; the profile's "Control states" and
+"Judging a look" sections hold NeverD's values and the user's verdicts. The
+upstream copyright, license, and general guidance are retained. This
 file records installation provenance and those local additions. The local
 `references/macos-qt.md` guide records Cocoa menu defaults, precision input,
 platform font sizes, docking style inheritance, Retina capture sampling and
