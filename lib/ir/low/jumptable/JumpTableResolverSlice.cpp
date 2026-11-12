@@ -12460,18 +12460,38 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
                      {},
                      {}});
     if (originalAArch64TableLoad(*Load)) {
-      if (Role.IsLiteralCoordinate || Role.AllowedBases.size() != 1 ||
-          Role.HasBaseSelect || Role.HasBaseMaskBlend || HasFrameStorage ||
-          HasDisplacedAddress || Role.AddressIndex.Value.Size ||
+      if (Role.IsLiteralCoordinate || Role.HasBaseMaskBlend ||
+          HasFrameStorage || HasDisplacedAddress ||
           Role.AddressScale != originalAArch64TableLoad(*Load)->accessBytes())
         return false;
+      uint32_t Capacity = Info.PhysicalCapacity ? Info.PhysicalCapacity
+                                                : limits::kMaxJumpTableEntries;
+      if (Role.HasBaseSelect) {
+        // The load selects between two tables and has no address ADD: its own
+        // index operand is the composite selector's dynamic coordinate.  Each
+        // table owns its own run; the merged capacity is not one table's.
+        const auto &Ranges = Info.StorageRanges;
+        if (!Info.TwoTableSelect || Role.AllowedBases.size() != 2 ||
+            Ranges.size() != 2 || Ranges[0].PhysicalSlotCount == 0 ||
+            Ranges[0].PhysicalSlotCount != Ranges[1].PhysicalSlotCount ||
+            Ranges[0].PhysicalSlotCount > limits::kMaxJumpTableEntries ||
+            std::min(Role.TrueBase, Role.FalseBase) != Ranges[0].BaseAddr ||
+            std::max(Role.TrueBase, Role.FalseBase) != Ranges[1].BaseAddr ||
+            Role.AddressIndex.DefinedAtPoint ||
+            Role.AddressIndex.Addr != Load->Addr ||
+            Role.AddressIndex.Seq != Load->Seq ||
+            !sameVar(Role.AddressIndex.Value,
+                     Load->Inputs[kAddressMemoryIndexOperand + 1]))
+          return false;
+        Capacity = static_cast<uint32_t>(Ranges[0].PhysicalSlotCount);
+      } else if (Role.AllowedBases.size() != 1 ||
+                 Role.AddressIndex.Value.Size) {
+        return false;
+      }
       bool AddressComplete = false;
       if (!aarch64OriginalTableLoadMatches(
-              *Load, Role,
-              Info.PhysicalCapacity ? Info.PhysicalCapacity
-                                    : limits::kMaxJumpTableEntries,
-              AggregateEvidenceBudget, AddressComplete, &QueryScope,
-              CertifiedEdgeOverrides, UseGroupContext)) {
+              *Load, Role, Capacity, AggregateEvidenceBudget, AddressComplete,
+              &QueryScope, CertifiedEdgeOverrides, UseGroupContext)) {
         Complete &= AddressComplete;
         return false;
       }
@@ -14133,6 +14153,10 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
       return false;
     JumpTableLoadRole &Role = *Roles[RoleIndex].Role;
     if (Role.AddressIndex.Value.Size == 0)
+      continue;
+    // An original load has no address ADD to choose among: its certificate
+    // above bound this coordinate to the load's own index operand.
+    if (Roles[RoleIndex].OriginalCheckedAddress)
       continue;
     const auto &Addresses = AddressAlternatives[RoleIndex];
     const auto &Indices = AddressIndexAlternatives[RoleIndex];

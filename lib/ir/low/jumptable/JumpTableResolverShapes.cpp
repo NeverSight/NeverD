@@ -617,51 +617,72 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
     if (!consumeWork())
       return false;
     const LowOp &L = Ops[I];
-    if (L.Opcode != NdOp::LOAD || L.NumInputs < 1)
+    // An AArch64 register-offset load stays one original instruction: it has
+    // no address ADD, and names its base and its raw index as operands.
+    const auto OriginalLoad = originalAArch64TableLoad(L);
+    if ((L.Opcode != NdOp::LOAD && !OriginalLoad) || L.NumInputs < 1)
       continue;
     uint16_t W = L.Output.Size;
     if (W != 4 && W != 8)
       continue;
     TableEntW = W;
-    const NdVar &AddrV = (L.NumInputs >= 2) ? L.Inputs[1] : L.Inputs[0];
-    if (!AddrV.isReg() && !AddrV.isTemp())
-      continue;
-    int AddIdx = budgetedReachingDefIdx(I - 1, AddrV);
-    if (!Complete)
-      return false;
-    // Each lookup starts before the previous definition. This is a linear
-    // walk through a finite prefix, not recursive expression expansion; its
-    // existing work charges bound even a long chain of address copies.
-    while (AddIdx >= 0) {
-      if (!consumeWork())
-        return false;
-      const LowOp &Forwarder = Ops[AddIdx];
-      if (Forwarder.NumInputs < 1 ||
-          (!Forwarder.Inputs[0].isReg() && !Forwarder.Inputs[0].isTemp()))
-        break;
-      const bool IsCopy = Forwarder.Opcode == NdOp::COPY;
-      const bool IsCanonicalGuestAddressWiden =
-          Forwarder.Opcode == NdOp::INT_ZEXT &&
-          Forwarder.Inputs[0].Size == Img.getPointerSize() &&
-          Forwarder.Output.Size >= Forwarder.Inputs[0].Size;
-      if (!IsCopy && !IsCanonicalGuestAddressWiden)
-        break;
-      AddIdx = budgetedReachingDefIdx(AddIdx - 1, Forwarder.Inputs[0]);
+    int AddIdx = -1;
+    if (OriginalLoad) {
+      // Only the form that scales a register index by the entry width reads
+      // `base[index]`.  An unscaled, immediate or vector form is another read.
+      if (Img.Arch != Arch::AArch64 || OriginalLoad->isVector() ||
+          !OriginalLoad->hasRegisterIndex() ||
+          OriginalLoad->accessBytes() != W ||
+          (uint64_t{1} << OriginalLoad->indexShift()) != W)
+        continue;
+    } else {
+      const NdVar &AddrV = (L.NumInputs >= 2) ? L.Inputs[1] : L.Inputs[0];
+      if (!AddrV.isReg() && !AddrV.isTemp())
+        continue;
+      AddIdx = budgetedReachingDefIdx(I - 1, AddrV);
       if (!Complete)
         return false;
+      // Each lookup starts before the previous definition. This is a linear
+      // walk through a finite prefix, not recursive expression expansion; its
+      // existing work charges bound even a long chain of address copies.
+      while (AddIdx >= 0) {
+        if (!consumeWork())
+          return false;
+        const LowOp &Forwarder = Ops[AddIdx];
+        if (Forwarder.NumInputs < 1 ||
+            (!Forwarder.Inputs[0].isReg() && !Forwarder.Inputs[0].isTemp()))
+          break;
+        const bool IsCopy = Forwarder.Opcode == NdOp::COPY;
+        const bool IsCanonicalGuestAddressWiden =
+            Forwarder.Opcode == NdOp::INT_ZEXT &&
+            Forwarder.Inputs[0].Size == Img.getPointerSize() &&
+            Forwarder.Output.Size >= Forwarder.Inputs[0].Size;
+        if (!IsCopy && !IsCanonicalGuestAddressWiden)
+          break;
+        AddIdx = budgetedReachingDefIdx(AddIdx - 1, Forwarder.Inputs[0]);
+        if (!Complete)
+          return false;
+      }
+      if (AddIdx < 0 || Ops[AddIdx].Opcode != NdOp::INT_ADD ||
+          Ops[AddIdx].NumInputs < 2)
+        continue;
     }
-    if (AddIdx < 0 || Ops[AddIdx].Opcode != NdOp::INT_ADD ||
-        Ops[AddIdx].NumInputs < 2)
-      continue;
+    // The operation that consumes the selected base and the index: the
+    // address ADD of a LOAD, or the original load itself.
+    const int UseIdx = OriginalLoad ? I : AddIdx;
+    const LowOp &AddressUse = Ops[UseIdx];
 
     // The load address is `base + index`; the base is the runtime-selected
-    // table pointer.  Try each operand as the base.
-    for (int BaseW = 0; BaseW < 2; ++BaseW) {
+    // table pointer.  Try each ADD operand as the base; an original load
+    // names its base.
+    for (int BaseW = 0; BaseW < (OriginalLoad ? 1 : 2); ++BaseW) {
       if (!consumeWork())
         return false;
-      NdVar BaseV = Ops[AddIdx].Inputs[BaseW];
-      NdVar IdxV = Ops[AddIdx].Inputs[1 - BaseW];
-      int BDef = budgetedReachingDefIdx(AddIdx - 1, BaseV);
+      NdVar BaseV = OriginalLoad ? L.Inputs[kAddressMemoryBaseOperand + 1]
+                                 : AddressUse.Inputs[BaseW];
+      NdVar IdxV = OriginalLoad ? L.Inputs[kAddressMemoryIndexOperand + 1]
+                                : AddressUse.Inputs[1 - BaseW];
+      int BDef = budgetedReachingDefIdx(UseIdx - 1, BaseV);
       if (!Complete)
         return false;
       while (BDef >= 0 && Ops[BDef].Opcode == NdOp::COPY &&
@@ -689,12 +710,17 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
       int BlendArmSide[2] = {-1, -1};
       MaskDefinition BlendMaskDef[2];
       int PositiveBlendSide = -1;
+      // The address role of an original load certifies only a SELECT base, so
+      // a mask blend feeding one is not claimed and its branch stays
+      // unresolved.
+      const bool MayBlendBases = !OriginalLoad;
       if (BD.Opcode == NdOp::SELECT && BD.NumInputs >= 3) {
         ArmPos = BD.Inputs[1];
         ArmNeg = BD.Inputs[2];
         Matched = true;
         MatchedSelect = true;
-      } else if (BD.Opcode == NdOp::INT_OR && BD.NumInputs >= 2) {
+      } else if (MayBlendBases && BD.Opcode == NdOp::INT_OR &&
+                 BD.NumInputs >= 2) {
         // Each OR input is INT_AND(table_arm, mask).  Split arm vs mask, then
         // classify by whether the mask is the negated one (~M).
         NdVar Arms[2], Masks[2];
@@ -811,29 +837,43 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
       va_t IndexUseAddr = InvalidVA;
       int IndexUseSeq = -1;
       bool IndexIsPreScaled = false;
-      uint64_t IdxReg = budgetedScaledIndexReg(AddIdx - 1, IdxV, &ExactIndex,
-                                               &IndexUseAddr, &IndexUseSeq);
-      if (!Complete)
-        return false;
-      if (IdxReg == InvalidVA) {
-        // Size optimizers commonly fold `slot * W` into one bit mask, e.g.
-        // `(x >> 5) & 0x38` for an eight-entry pointer table.  There is then no
-        // MULT/LEFT for scaledIndexReg to find: the exact value consumed by the
-        // address ADD is already the byte offset.  Keep that coordinate
-        // explicit instead of pretending it is a logical slot index and
-        // multiplying by W a second time in the address certificate.
+      uint64_t IdxReg = InvalidVA;
+      if (OriginalLoad) {
+        // The instruction extends and scales its raw index operand itself, so
+        // that operand at the load is the logical slot index.  The load may
+        // overwrite its own index register: no register names this value.
         if ((!IdxV.isReg() && !IdxV.isTemp()) || IdxV.Size == 0)
           return false;
         ExactIndex = IdxV;
-        IndexUseAddr = Ops[AddIdx].Addr;
-        IndexUseSeq = Ops[AddIdx].Seq;
-        IdxReg = budgetedTraceToRegister(AddIdx - 1, IdxV);
+        IndexUseAddr = L.Addr;
+        IndexUseSeq = L.Seq;
+      } else {
+        IdxReg = budgetedScaledIndexReg(AddIdx - 1, IdxV, &ExactIndex,
+                                        &IndexUseAddr, &IndexUseSeq);
         if (!Complete)
           return false;
-        IndexIsPreScaled = true;
+        if (IdxReg == InvalidVA) {
+          // Size optimizers commonly fold `slot * W` into one bit mask, e.g.
+          // `(x >> 5) & 0x38` for an eight-entry pointer table.  There is then
+          // no MULT/LEFT for scaledIndexReg to find: the exact value consumed
+          // by the address ADD is already the byte offset.  Keep that
+          // coordinate explicit instead of pretending it is a logical slot
+          // index and multiplying by W a second time in the address
+          // certificate.
+          if ((!IdxV.isReg() && !IdxV.isTemp()) || IdxV.Size == 0)
+            return false;
+          ExactIndex = IdxV;
+          IndexUseAddr = Ops[AddIdx].Addr;
+          IndexUseSeq = Ops[AddIdx].Seq;
+          IdxReg = budgetedTraceToRegister(AddIdx - 1, IdxV);
+          if (!Complete)
+            return false;
+          IndexIsPreScaled = true;
+        }
+        if (IdxReg == InvalidVA)
+          return false;
       }
-      if (IdxReg == InvalidVA || ExactIndex.Size == 0 ||
-          IndexUseAddr == InvalidVA || IndexUseSeq < 0)
+      if (ExactIndex.Size == 0 || IndexUseAddr == InvalidVA || IndexUseSeq < 0)
         return false;
       // The x86 LowIR address container is eight bytes even for an i386
       // guest.  The effective-address coordinate is nevertheless the low
@@ -1123,7 +1163,7 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
       Role.AllowedBases.push_back(Hi);
       Role.Indices.reserve(1);
       Role.Indices.push_back(IndexOccurrence);
-      Role.AddressIndex = {IdxV, Ops[AddIdx].Addr, Ops[AddIdx].Seq,
+      Role.AddressIndex = {IdxV, AddressUse.Addr, AddressUse.Seq,
                            /*DefinedAtPoint=*/false};
       Role.AddressScale = IndexIsPreScaled ? 1 : W;
       // scaledIndexReg deliberately records the logical selector at the input
@@ -1193,10 +1233,16 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
       Result.IndexUseSeq = IndexUseSeq;
       Result.IndexValueAlternatives.reserve(1);
       Result.IndexValueAlternatives.push_back(IndexOccurrence);
-      Result.PreScaledIndex = true;
-      Result.Stride = W;
+      // The selector is the dynamic operand of the address: a byte offset for
+      // an address ADD, the slot index for an original load, whose scaled
+      // offset no operation holds.  Labels and the distance between the two
+      // runs are in that same coordinate.
+      const uint32_t SelectorStride = OriginalLoad ? 1 : W;
+      Result.PreScaledIndex = !OriginalLoad;
+      Result.Stride = SelectorStride;
       Result.TwoTableSelect = true;
-      Result.TwoTableOffset = N * W; // concatenated (lo-first) coordinate
+      // Concatenated (lo-first) coordinate.
+      Result.TwoTableOffset = N * SelectorStride;
       Result.TwoTableHiPositive = (Cpos > Cneg);
       Result.ExplicitTargets = std::move(Union);
       Result.TargetLoads.reserve(1);
@@ -1231,38 +1277,106 @@ bool CFGBuilder::aarch64OriginalTableLoadMatches(
     bool UseGroupContext) const {
   AnalysisComplete = true;
   const auto Instruction = originalAArch64TableLoad(Load);
+  // The base is one table, or a SELECT of two tables of Capacity slots each.
+  // A mask blend has no certificate here.
   if (!CurrentImg || CurrentImg->Arch != Arch::AArch64 || !Instruction ||
-      Role.AllowedBases.size() != 1 || Role.Indices.empty() ||
+      Role.HasBaseMaskBlend ||
+      Role.AllowedBases.size() != (Role.HasBaseSelect ? 2u : 1u) ||
+      Role.Indices.empty() ||
       (uint64_t(1) << Instruction->indexShift()) !=
           Instruction->accessBytes() ||
       !Capacity || Capacity > limits::kMaxJumpTableEntries)
     return false;
-  const va_t Base = Role.AllowedBases.front();
+  const auto Charge = [&](size_t Amount) {
+    if (!AggregateEvidenceBudget)
+      return true;
+    if (Amount > *AggregateEvidenceBudget) {
+      *AggregateEvidenceBudget = 0;
+      AnalysisComplete = false;
+      return false;
+    }
+    *AggregateEvidenceBudget -= Amount;
+    return true;
+  };
+  const LowOp *Select = nullptr;
+  if (Role.HasBaseSelect) {
+    if (Role.TrueBase == Role.FalseBase || !Role.SelectedBase.DefinedAtPoint ||
+        std::find(Role.AllowedBases.begin(), Role.AllowedBases.end(),
+                  Role.TrueBase) == Role.AllowedBases.end() ||
+        std::find(Role.AllowedBases.begin(), Role.AllowedBases.end(),
+                  Role.FalseBase) == Role.AllowedBases.end())
+      return false;
+    const auto SelectInsn = Insns.find(Role.SelectedBase.Addr);
+    if (SelectInsn == Insns.end() || SelectInsn->second.IsInstructionGuard)
+      return false;
+    if (!Charge(SelectInsn->second.Ops.size() + 1))
+      return false;
+    for (const LowOp &Op : SelectInsn->second.Ops) {
+      if (Op.Addr != Role.SelectedBase.Addr || Op.Seq != Role.SelectedBase.Seq)
+        continue;
+      if (Select)
+        return false;
+      Select = &Op;
+    }
+    if (!Select || Select->Opcode != NdOp::SELECT || Select->NumInputs < 3 ||
+        Select->Output != Role.SelectedBase.Value)
+      return false;
+  }
   // A storage ceiling alone grants no selector domain. Inline tables have no
   // independent storage owner: the resolver limit is only an address-equality
   // envelope, and the separate native-width query must prove the raw index
   // lies inside it. Target and runtime-domain certification remain mandatory.
   const uint64_t LastIndex =
       Instruction->index() == kAddressMemoryRegisterMask ? 0 : Capacity - 1;
-  for (uint64_t Index = 0; Index <= LastIndex; ++Index) {
-    if (AggregateEvidenceBudget) {
-      if (!*AggregateEvidenceBudget) {
-        AnalysisComplete = false;
+  for (const va_t Base : Role.AllowedBases)
+    for (uint64_t Index = 0; Index <= LastIndex; ++Index) {
+      if (!Charge(1))
         return false;
-      }
-      --*AggregateEvidenceBudget;
+      const auto Address = Instruction->controlIndependentAddress(Base, Index);
+      if (!Address || *Address != Base + Index * Instruction->accessBytes())
+        return false;
     }
-    const auto Address = Instruction->controlIndependentAddress(Base, Index);
-    if (!Address || *Address != Base + Index * Instruction->accessBytes())
-      return false;
-  }
+  const auto EveryBaseCoversIndices = [&](uint64_t MaximumIndex) {
+    return std::all_of(Role.AllowedBases.begin(), Role.AllowedBases.end(),
+                       [&](va_t Base) {
+                         return Instruction->controlIndependentAddressRange(
+                             Base, MaximumIndex);
+                       });
+  };
+  // The load's base is its one table, or exactly the SELECT's result, whose
+  // true and false inputs are then each proved to be their own table. Only an
+  // address names a table there: the candidate fold that proposed an arm also
+  // accepts a number that happens to equal a table's address.
+  std::vector<JumpTableValueQuery> IdentityQueries;
   JumpTableValueQuery BaseQuery;
   BaseQuery.Candidate = Load.Inputs[kAddressMemoryBaseOperand + 1];
   BaseQuery.UseAddr = Load.Addr;
   BaseQuery.UseSeq = Load.Seq;
-  BaseQuery.Alternatives = {
-      {NdVar::address(Base, kAddressMemoryPointerBytes), InvalidVA, -1, false},
-      {NdVar::scalar(Base, kAddressMemoryPointerBytes), InvalidVA, -1, false}};
+  if (Select) {
+    // Prepay the two arm queries and their retained occurrences.
+    if (!Charge(16))
+      return false;
+    BaseQuery.Alternatives = {Role.SelectedBase};
+    const auto PushArm = [&](const NdVar &Input, va_t Base) {
+      JumpTableValueQuery ArmQuery;
+      ArmQuery.Candidate = Input;
+      ArmQuery.UseAddr = Select->Addr;
+      ArmQuery.UseSeq = Select->Seq;
+      ArmQuery.Alternatives = {
+          {NdVar::address(Base, kAddressMemoryPointerBytes), InvalidVA, -1,
+           false}};
+      IdentityQueries.push_back(std::move(ArmQuery));
+    };
+    PushArm(Select->Inputs[1], Role.TrueBase);
+    PushArm(Select->Inputs[2], Role.FalseBase);
+  } else {
+    const va_t Base = Role.AllowedBases.front();
+    BaseQuery.Alternatives = {{NdVar::address(Base, kAddressMemoryPointerBytes),
+                               InvalidVA, -1, false},
+                              {NdVar::scalar(Base, kAddressMemoryPointerBytes),
+                               InvalidVA, -1, false}};
+  }
+  IdentityQueries.push_back(std::move(BaseQuery));
   JumpTableValueQuery IndexQuery;
   IndexQuery.Candidate = Load.Inputs[kAddressMemoryIndexOperand + 1];
   IndexQuery.UseAddr = Load.Addr;
@@ -1270,10 +1384,10 @@ bool CFGBuilder::aarch64OriginalTableLoadMatches(
   IndexQuery.Relation = JumpTableValueRelation::UnsignedLessThan;
   // The address-equality envelope may exceed the storage owner. Do not turn
   // that owner's size into a selector bound before the common domain proof.
-  IndexQuery.UnsignedUpperBound = Instruction->controlIndependentAddressRange(
-                                      Base, limits::kMaxJumpTableEntries - 1)
-                                      ? limits::kMaxJumpTableEntries
-                                      : Capacity;
+  IndexQuery.UnsignedUpperBound =
+      EveryBaseCoversIndices(limits::kMaxJumpTableEntries - 1)
+          ? limits::kMaxJumpTableEntries
+          : Capacity;
   const auto Match = [&](llvm::ArrayRef<JumpTableValueQuery> Queries) {
     return tableValuesMatchAtUses(
         Queries, &AnalysisComplete, nullptr, InvalidVA, nullptr,
@@ -1296,15 +1410,16 @@ bool CFGBuilder::aarch64OriginalTableLoadMatches(
     *AggregateEvidenceBudget -= Role.Indices.size() * 3;
   }
   IdentityQuery.Alternatives = Role.Indices;
-  const auto Identities = Match({BaseQuery, IdentityQuery});
-  if (!AnalysisComplete || Identities.size() != 2 || !Identities[0] ||
-      !Identities[1])
+  IdentityQueries.push_back(std::move(IdentityQuery));
+  const auto Identities = Match(IdentityQueries);
+  if (!AnalysisComplete || Identities.size() != IdentityQueries.size() ||
+      std::find(Identities.begin(), Identities.end(), false) !=
+          Identities.end())
     return false;
   // A zero-extended W index has a complete, branch-independent input domain.
   // Proving AddressAdd agrees throughout it breaks no runtime-domain tie:
   // the common selector/storage fixed point still owns every table slot.
-  if (Instruction->controlIndependentAddressRange(Base,
-                                                  kAddressMemoryNarrowMask)) {
+  if (EveryBaseCoversIndices(kAddressMemoryNarrowMask)) {
     if (!Instruction->usesFullWidthIndex())
       return true;
     JumpTableValueQuery NarrowIdentity;

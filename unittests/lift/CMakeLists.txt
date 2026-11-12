@@ -3536,6 +3536,8 @@ set(AARCH64_TEST_SOURCES
   aarch64/test_jumptable_inflate_gcc_a64.s
   aarch64/test_jumptable_byte_loop_a64.s
   aarch64/test_jumptable_masked_lane_a64.s
+  aarch64/test_jumptable_twotable_select_a64.s
+  aarch64/test_jumptable_twotable_select_open_a64.s
   aarch64/test_pageoff_wrong_base_a64.s
   aarch64/test_pageoff_reaching_a64.s
   aarch64/test_pageoff_alternatives_a64.s

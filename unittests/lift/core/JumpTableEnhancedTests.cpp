@@ -11238,6 +11238,132 @@ TEST_F(JTE_AArch64, MaskedLaneGuardBoundsAWideMaskIndex) {
   EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
 }
 
+static fs::path twoTableSelectA64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_twotable_select_a64.o";
+}
+
+static fs::path twoTableSelectOpenA64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_twotable_select_open_a64.o";
+}
+
+// `tb = (w1 & 1) ? A : B; goto *tb[idx]` reads its table with one original
+// register-offset load, which scales the raw index itself.  The merged switch
+// dispatches on that slot index: positions 0..3 are the lower table, 4..7 the
+// higher one, and the higher table adds its distance in slots, not bytes.
+TEST_F(JTE_AArch64, TwoTableSelectThroughAnOriginalLoadMergesBothTables) {
+  auto ImageOrErr = neverd::loadBinary(twoTableSelectA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  struct Form {
+    const char *Name;
+    // The SELECT's true input is the higher table.
+    bool HigherIsTrue;
+    uint16_t IndexBytes;
+  };
+  for (const Form &F : {Form{"twotable_select_uxtw", false, 4},
+                        Form{"twotable_select_sxtw", false, 4},
+                        Form{"twotable_select_xlsl", false, 8},
+                        Form{"twotable_select_swapped", true, 4}}) {
+    SCOPED_TRACE(F.Name);
+    const neverd::Symbol *Function = Image.findSymbol(F.Name);
+    ASSERT_NE(Function, nullptr);
+    neverd::CFGBuilder Builder;
+    const neverd::LowFunc Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    ASSERT_EQ(Low.JumpTables.size(), 1u);
+    const neverd::JumpTable &Table = Low.JumpTables.front();
+    EXPECT_TRUE(Table.TwoTableSelect);
+    EXPECT_FALSE(Table.PreScaledIndex);
+    EXPECT_EQ(Table.EntrySize, 8u);
+    EXPECT_EQ(Table.TwoTableOffset, 4u);
+    EXPECT_EQ(Table.TwoTableHiPositive, F.HigherIsTrue);
+    ASSERT_EQ(Table.StorageRanges.size(), 2u);
+    EXPECT_EQ(Table.StorageRanges[0].PhysicalSlotCount, 4u);
+    EXPECT_EQ(Table.StorageRanges[1].PhysicalSlotCount, 4u);
+    EXPECT_EQ(Table.StorageRanges[1].BaseAddr,
+              Table.StorageRanges[0].BaseAddr + 4 * 8);
+    // The dispatch is nine instructions; the eight two-instruction case
+    // bodies follow it in table order, the lower table's four first.
+    ASSERT_EQ(Table.Targets.size(), 8u);
+    EXPECT_EQ(Table.Targets.front(), Function->Addr + 9 * 4);
+    for (size_t K = 1; K < Table.Targets.size(); ++K)
+      EXPECT_EQ(Table.Targets[K], Table.Targets[K - 1] + 8);
+    // Positional labels: the selector is a slot index.
+    EXPECT_TRUE(Table.CaseLabels.empty());
+    ASSERT_TRUE(Table.CompositeSelectorUseRef.has_value());
+    const neverd::JumpTableCompositeSelectorUseRef &Recipe =
+        *Table.CompositeSelectorUseRef;
+    EXPECT_EQ(Recipe.ByteIndex.ExpectedOpcode, neverd::NdOp::INTRINSIC);
+    EXPECT_EQ(Recipe.ByteIndex.Role,
+              neverd::JumpTableSelectorUseRef::ValueRole::Input);
+    EXPECT_EQ(Recipe.ByteIndex.ExpectedSize, F.IndexBytes);
+    EXPECT_EQ(Recipe.ResultSize, F.IndexBytes);
+    EXPECT_EQ(Recipe.Condition.ExpectedOpcode, neverd::NdOp::SELECT);
+    EXPECT_EQ(Recipe.TrueOffset, F.HigherIsTrue ? 4u : 0u);
+    EXPECT_EQ(Recipe.FalseOffset, F.HigherIsTrue ? 0u : 4u);
+    EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+    EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  }
+}
+
+// Each of these forms misses one proof the merged switch needs: a selector
+// domain no mask proves, a mask wider than either table, a SELECT input that
+// is no table, a base that is not the SELECT's result, and a load that does
+// not scale its index by the entry width.  The indirect branch stays
+// unresolved; no half of the dispatch is published as a single table.
+TEST_F(JTE_AArch64, TwoTableSelectThroughAnOriginalLoadKeepsUnprovedFormsOpen) {
+  auto ImageOrErr = neverd::loadBinary(twoTableSelectOpenA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  for (const char *Name :
+       {"twotable_select_shift_bound", "twotable_select_wide_mask",
+        "twotable_select_runtime_arm", "twotable_select_moved_base",
+        "twotable_select_unscaled"}) {
+    SCOPED_TRACE(Name);
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    ASSERT_NE(Function, nullptr);
+    neverd::CFGBuilder Builder;
+    const neverd::LowFunc Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    EXPECT_TRUE(Low.JumpTables.empty());
+    EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+    EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  }
+}
+
+// The lifted switch has one case per slot of the merged run and adds the
+// higher table's four slots through the SELECT's own condition.
+TEST_F(JTE_AArch64, TwoTableSelectThroughAnOriginalLoadLiftsToOneSwitch) {
+  auto LLVM = liftToLLVMIRUnopt(twoTableSelectA64Obj());
+  ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
+  for (const char *Name : {"twotable_select_uxtw", "twotable_select_sxtw",
+                           "twotable_select_xlsl", "twotable_select_swapped"}) {
+    SCOPED_TRACE(Name);
+    const std::string Body = llvmFunctionBody(LLVM.out, Name);
+    ASSERT_FALSE(Body.empty()) << LLVM.out;
+    const auto Condition = llvmSwitchConditionToken(Body);
+    ASSERT_TRUE(Condition) << Body;
+    EXPECT_TRUE(llvmSSAValueDependsOn(Body, *Condition, "%arg0"))
+        << "the merged selector keeps the load's raw index\n"
+        << Body;
+    EXPECT_TRUE(llvmSSAValueDependsOn(Body, *Condition, "%arg1"))
+        << "the merged selector keeps the table-select condition\n"
+        << Body;
+    for (unsigned Case = 0; Case < 8; ++Case)
+      EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+    EXPECT_FALSE(llvmHasSwitchCase(Body, 8)) << Body;
+    EXPECT_FALSE(llvmHasSwitchCase(Body, 32))
+        << "a byte offset is not this selector's coordinate\n"
+        << Body;
+  }
+}
+
 TEST_F(JTE_AArch64, CompactModuloDropsOlderReusedZeroExtension) {
   auto ImageOrErr = neverd::loadBinary(indexIdentityA64Obj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
