@@ -12576,6 +12576,18 @@ inside an arm of a switch as well. Nothing jumps through the table, so the
 address the compiler gives a label is its own choice, as on the lift route,
 where a block the optimizer removes leaves no address at all.
 
+`freeze` prints as its operand when the operand has one bit pattern in C
+whatever LLVM says of it (`freezeHasDefinedCProjection`): the wrapping integer
+operations, bounded shifts, funnel shifts and byte or bit reversals, loads, a
+call's result or one member of it, the result of assembly, and an address
+constant. A division or remainder asks nothing of its divisor, which LLVM
+makes immediate undefined behavior when poison or zero, as C does: only the
+dividend can be the poison a freeze defines. A signed one also needs the
+dividend to be LLVM's own value or the divisor known not to be -1, since the
+overflow is undefined in LLVM only then. A floating-point conversion, whose
+out-of-range result is poison in LLVM and undefined in C, keeps its function
+refused.
+
 `ir/X86FPMaskCompareState.h` owns legacy/VEX CMPSS/CMPSD/CMPPS/CMPPD
 completion. Scalar or packed raw mask bits precede outgoing MXCSR in one
 aggregate; they never acquire floating-point result provenance. Full imm8 is

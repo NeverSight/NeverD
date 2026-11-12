@@ -241,6 +241,11 @@ bool freezeHasDefinedCProjection(const llvm::Value *Root,
         case llvm::Intrinsic::usub_sat:
         case llvm::Intrinsic::sadd_sat:
         case llvm::Intrinsic::ssub_sat:
+        // A funnel shift's helper reduces the count modulo the width.
+        case llvm::Intrinsic::fshl:
+        case llvm::Intrinsic::fshr:
+        case llvm::Intrinsic::bswap:
+        case llvm::Intrinsic::bitreverse:
           if (!Type || Type->getBitWidth() > 64)
             return false;
           break;
@@ -258,15 +263,71 @@ bool freezeHasDefinedCProjection(const llvm::Value *Root,
         Users[Argument].push_back(Value);
         Work.push_back(Argument);
       }
-      if (!Callee) {
+      // A called pointer is an operand like any other; assembly text is not
+      // a value.
+      if (!Callee && !Call->isInlineAsm()) {
         Users[Call->getCalledOperand()].push_back(Value);
         Work.push_back(Call->getCalledOperand());
+      }
+      continue;
+    }
+    // An address the linker computes, as an integer: the casts and sums of a
+    // constant expression are those of the instructions below.
+    if (const auto *Expression = llvm::dyn_cast<llvm::ConstantExpr>(Value)) {
+      switch (Expression->getOpcode()) {
+      case llvm::Instruction::PtrToInt:
+      case llvm::Instruction::IntToPtr:
+      case llvm::Instruction::Trunc:
+      case llvm::Instruction::Add:
+      case llvm::Instruction::Sub:
+      case llvm::Instruction::Xor:
+        break;
+      default:
+        return false;
+      }
+      for (const auto &Operand : Expression->operands()) {
+        Users[Operand].push_back(Value);
+        Work.push_back(Operand);
       }
       continue;
     }
     const auto *Inst = llvm::dyn_cast<llvm::Instruction>(Value);
     if (!Inst)
       return false;
+    // One member of a call's result is part of the bit pattern the call
+    // returned. As for a scalar result, the arguments need their own proof.
+    if (llvm::isa<llvm::ExtractValueInst, llvm::ExtractElementInst>(Inst)) {
+      const auto *Call = llvm::dyn_cast<llvm::CallInst>(Inst->getOperand(0));
+      if (!Call || Call->hasOperandBundles() ||
+          Call->getCallingConv() != llvm::CallingConv::C)
+        return false;
+      if (const auto *Index = llvm::dyn_cast<llvm::ExtractElementInst>(Inst);
+          Index && !llvm::isa<llvm::ConstantInt>(Index->getIndexOperand()))
+        return false;
+      if (const auto *Callee = Call->getCalledFunction();
+          Callee && Callee->isIntrinsic())
+        switch (Callee->getIntrinsicID()) {
+        case llvm::Intrinsic::sadd_with_overflow:
+        case llvm::Intrinsic::uadd_with_overflow:
+        case llvm::Intrinsic::ssub_with_overflow:
+        case llvm::Intrinsic::usub_with_overflow:
+        case llvm::Intrinsic::smul_with_overflow:
+        case llvm::Intrinsic::umul_with_overflow:
+          break;
+        default:
+          return false;
+        }
+      Anchors.push_back(Value);
+      for (const auto &Argument : Call->args()) {
+        Users[Argument].push_back(Value);
+        Work.push_back(Argument);
+      }
+      if (!Call->getCalledFunction() && !Call->isInlineAsm()) {
+        Users[Call->getCalledOperand()].push_back(Value);
+        Work.push_back(Call->getCalledOperand());
+      }
+      continue;
+    }
     if (Inst->getOpcode() == llvm::Instruction::SDiv ||
         Inst->getOpcode() == llvm::Instruction::UDiv ||
         Inst->getOpcode() == llvm::Instruction::SRem ||
@@ -286,25 +347,27 @@ bool freezeHasDefinedCProjection(const llvm::Value *Root,
         Anchors.push_back(Value);
         continue;
       }
-      // A C-defined denominator makes a wrapping numerator safe as well.
-      // Ignore poison-generating flags when proving its nonzero value: an
-      // overflowing flagged multiply must not conceal a zero C denominator.
+      // A poison or zero divisor is immediate LLVM UB as well, so on every
+      // defined execution the divisor is a value, C's is that value, and it
+      // is not zero: only the dividend can be the poison freeze defines. It
+      // needs a total projection of its own. A signed division overflows in
+      // C for the least dividend and -1, which is LLVM UB only when that
+      // dividend is LLVM's own value rather than C's choice for a poison one.
       const llvm::SimplifyQuery Query(Layout, &Dominators, nullptr, Inst,
                                       /*UseInstrInfo=*/false,
                                       /*CanUseUndef=*/false);
+      auto *Dividend = Inst->getOperand(0);
       auto *Denominator = Inst->getOperand(1);
-      if (!llvm::isKnownNonZero(Denominator, Query))
-        return false;
       const bool Signed = Inst->getOpcode() == llvm::Instruction::SDiv ||
                           Inst->getOpcode() == llvm::Instruction::SRem;
       if (Signed &&
+          !llvm::isGuaranteedNotToBeUndefOrPoison(Dividend, nullptr, Inst,
+                                                  &Dominators) &&
           !llvm::isKnownNonEqual(Denominator,
                                  llvm::ConstantInt::getSigned(Type, -1), Query))
         return false;
-      for (const auto &Operand : Inst->operands()) {
-        Users[Operand].push_back(Value);
-        Work.push_back(Operand);
-      }
+      Users[Dividend].push_back(Value);
+      Work.push_back(Dividend);
       continue;
     }
     switch (Inst->getOpcode()) {
