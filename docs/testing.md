@@ -4194,6 +4194,17 @@ for 84 cases on both sides of a falling-factorial precision boundary. A
 63-factor x64 fixture exercises the CLI and worker source routes. The native
 tests also exhaust the six-bit input pair and prove overlapping products
 equivalent at 16, 65 and 257 bits with Z3.
+Use `--family affine-product --count 12` for 96 products of 23 to 137
+factors with nested affine coordinates, scaled XOR tails and widths through
+513 bits. The native regressions preserve even weights, zero content and
+limited work/storage, exhaust a six-bit input pair, and prove nested
+coordinates at full width with Z3. An additional 63-factor x64 fixture
+exercises two affine layers through both CLI and GUI worker source paths.
+For latency comparisons, retain per-run and pooled per-input P95, separate
+thread CPU from wall time, and include same-binary A/A controls. Pooling input
+medians can change the sample at the 95th percentile and reverse the apparent
+direction of individual runs. Keep raw timings and paired intervals when
+interpreting small changes.
 The LLVM
 translator checks scaled offsets against exhaustive byte domains, including
 overlap and no-wrap flags that can make the input poison.

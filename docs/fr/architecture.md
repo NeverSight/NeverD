@@ -1282,6 +1282,8 @@ Lorsque certains produits croisés subsistent, seuls les facteurs dont la pertur
 
 Pour les facteurs qui partagent une expression `u`, les zéros de poids faible des coefficients déterminent les puissances observables. Le schéma de Horner évalue le polynôme. Les autres facteurs peuvent encore réduire la précision nécessaire. Le produit de `j` entiers consécutifs est divisible par `j!`, ce qui peut éliminer des termes de degré supérieur. Les entrées des groupes peuvent être interdépendantes.
 
+Avant le regroupement des facteurs, les formes affines imbriquées sont composées à la précision observable. Le budget du calcul polynomial suit la précision réelle des coefficients. Les groupes déjà reconstruits restent factorisés à côté de variables pondérées ou de termes XOR indépendants ; un facteur direct commun ou une partition AND autorise encore la reconstruction imbriquée.
+
 Le rendu suit un parcours postfixe itératif, sans tri des nœuds, et traite directement les feuilles. Lorsque la classification existante ne demande ni entrée cachée, ni entrée représentant un masque littéral, ni réécriture d’un complément arithmétique, l’abstraction MBA réutilise le DAG original. La vérification indépendante des identités et la comptabilisation du travail restent inchangées.
 
 Les décalages et facteurs littéraux d’une base affine déjà opaque construisent directement le résultat des coefficients, sans arbre temporaire. Les enfants linéaires conservent le parcours général ; le stockage du résultat et les opérations sur mots sont comptabilisés avant la publication d’une relation complète.

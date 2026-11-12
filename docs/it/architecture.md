@@ -1272,6 +1272,8 @@ Se rimangono termini incrociati, si raggruppano solo i fattori la cui perturbazi
 
 Per i fattori con la stessa espressione `u`, gli zeri finali dei coefficienti determinano quali potenze restano osservabili. Il polinomio viene valutato con il metodo di Horner. Gli altri fattori possono ridurre ulteriormente la precisione necessaria. Il prodotto di `j` interi consecutivi è divisibile per `j!` e può quindi annullare altri termini di grado elevato. Gli ingressi dei gruppi possono dipendere gli uni dagli altri.
 
+Prima di raggruppare i fattori, le espressioni affini annidate vengono composte alla precisione osservabile. Il budget del calcolo polinomiale segue la precisione effettiva dei coefficienti. I gruppi già ricostruiti restano fattorizzati accanto a variabili scalate o termini XOR indipendenti; un fattore diretto condiviso o una partizione AND consente ancora la ricostruzione annidata.
+
 Il rendering usa una visita iterativa in postordine, senza ordinare i nodi, e stampa direttamente le foglie. Se la classificazione esistente non richiede ingressi nascosti, ingressi per maschere letterali o riscritture di complementi aritmetici, l’astrazione MBA riutilizza il DAG originale. La verifica indipendente delle identità e il conteggio del lavoro restano invariati.
 
 Gli offset e i fattori letterali di una base affine già opaca costruiscono direttamente i coefficienti, evitando un albero temporaneo. I figli lineari mantengono la visita generale; memoria del risultato e operazioni sulle parole sono conteggiate prima di pubblicare una relazione completa.

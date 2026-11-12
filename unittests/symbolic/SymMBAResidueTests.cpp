@@ -783,4 +783,149 @@ TEST(SymMBAResidue, HasIndependentFullWidthSMTProofs) {
   }
 }
 
+TEST(SymMBAResidue, NestedAffineProductsKeepCompleteValuesWithinBudget) {
+  std::mt19937_64 Random(0x63a971);
+  for (unsigned Width : {6u, 9u, 32u, 65u, 257u, 513u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const std::array Words{Ctx.mkXor(X, Y),
+                           Ctx.mkXor(Ctx.mkAdd(X, Y), Ctx.mkAnd(X, Y))};
+    const unsigned Observed = Width <= 97 ? Width : Width / 3;
+    const auto Scale = llvm::APInt(Width, 3).shl(Width - Observed);
+    llvm::SmallVector<SymRef, 64> Factors{Ctx.mkConst(Scale)};
+    for (unsigned I = 0; I < 47; ++I) {
+      auto Word = Words[I % 2];
+      for (unsigned J = 0; J < 3; ++J)
+        Word = Ctx.mkAdd(
+            Ctx.mkConst(Width, 3 + 2 * I + J),
+            Ctx.mkMul(Ctx.mkConst(llvm::APInt(Width, J % 2 ? -3 : 5, true)),
+                      Word));
+      const auto Weight =
+          llvm::APInt(Width, 2 * I + 1, false, true).shl((Observed + 5) / 6);
+      Factors.push_back(Ctx.mkAdd(Ctx.mkConst(Width, 2 * I + 1),
+                                  Ctx.mkMul(Ctx.mkConst(Weight), Word)));
+    }
+    const auto Input =
+        Ctx.mkAdd({Ctx.mkMul(Factors), Ctx.mkMul(Ctx.mkConst(Width, 3), X),
+                   Ctx.mkMul(Ctx.mkConst(Width, 5), Y),
+                   Ctx.mkMul(Ctx.mkConst(Width, 7), Ctx.mkXor(X, Y))});
+    MBAOptions Opts;
+    Opts.MaxWork = 65536;
+    const auto Result = simplifyMBADeep(Ctx, Input, Opts);
+    EXPECT_LT(Result.Work, Opts.MaxWork);
+    EXPECT_LT(Result.SizeAfter, 150u);
+    SymEvalPlan Plan(Ctx, Result.Expr);
+    auto Check = [&](const llvm::APInt &A, const llvm::APInt &B) {
+      auto Expected = Scale;
+      for (unsigned I = 0; I < 47; ++I) {
+        auto V = I % 2 ? (A + B) ^ (A & B) : A ^ B;
+        for (unsigned J = 0; J < 3; ++J)
+          V = 3 + 2 * I + J + V * llvm::APInt(Width, J % 2 ? -3 : 5, true);
+        Expected *= 2 * I + 1 +
+                    V * llvm::APInt(Width, 2 * I + 1, false, true)
+                            .shl((Observed + 5) / 6);
+      }
+      EXPECT_EQ(Plan.eval({A, B}), Expected + A * 3 + B * 5 + (A ^ B) * 7);
+    };
+    if (Width == 6) {
+      for (unsigned A = 0; A < 64; ++A)
+        for (unsigned B = 0; B < 64; ++B)
+          Check(llvm::APInt(Width, A), llvm::APInt(Width, B));
+    } else {
+      auto Word = [&] {
+        auto V = llvm::APInt(Width, 0);
+        for (unsigned Bit = 0; Bit < Width; Bit += 64)
+          V |= llvm::APInt(Width, Random(), false, true).shl(Bit);
+        return V;
+      };
+      for (unsigned I = 0; I < 48; ++I)
+        Check(Word(), Word());
+    }
+    for (size_t Bytes : {1u, 128u, 1024u, 8192u}) {
+      detail::WorkBudget Short(128);
+      size_t Remaining = Bytes;
+      const auto Part = detail::foldProductResidues(Ctx, Ctx.mkMul(Factors),
+                                                    Short, Remaining);
+      EXPECT_LE(Short.used(), 128u);
+      EXPECT_LE(Remaining, Bytes);
+      SymEvalPlan Original(Ctx, Ctx.mkMul(Factors)), Limited(Ctx, Part);
+      for (unsigned I : {0u, 1u, 7u, 63u}) {
+        const std::array Inputs{llvm::APInt(Width, I),
+                                llvm::APInt::getAllOnes(Width)};
+        EXPECT_EQ(Limited.eval(Inputs), Original.eval(Inputs));
+      }
+    }
+  }
+}
+
+TEST(SymMBAResidue, AffineCoordinatesPreserveEvenWeightsAndZeroContent) {
+  for (unsigned Width : {5u, 65u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto U = Ctx.mkXor(X, Y);
+    for (unsigned Cancel : {0u, 1u}) {
+      llvm::SmallVector<SymRef, 16> Factors{
+          Ctx.mkConst(llvm::APInt(Width, 3).shl(Width - 5))};
+      for (unsigned I = 0; I < 7; ++I) {
+        const auto Word = Ctx.mkAdd(
+            Ctx.mkConst(Width, 3),
+            Ctx.mkMul(Ctx.mkConst(Width, 2), I % 2 ? Ctx.mkNot(U) : U));
+        const int Offset = Cancel && I == 0 ? -12 : 1 + 2 * I;
+        Factors.push_back(
+            Ctx.mkAdd(Ctx.mkConst(llvm::APInt(Width, Offset, true)),
+                      Ctx.mkMul(Ctx.mkConst(Width, 4), Word)));
+      }
+      const auto Input = Ctx.mkMul(Factors);
+      detail::WorkBudget Budget(65536);
+      size_t Storage = 1 << 20;
+      const auto Output =
+          detail::foldProductResidues(Ctx, Input, Budget, Storage);
+      SymEvalPlan Plan(Ctx, Output);
+      for (unsigned A = 0; A < 32; ++A)
+        for (unsigned B = 0; B < 32; ++B) {
+          auto Expected = llvm::APInt(Width, 3).shl(Width - 5);
+          for (unsigned I = 0; I < 7; ++I) {
+            auto V = llvm::APInt(Width, A ^ B);
+            if (I % 2)
+              V.flipAllBits();
+            const int Offset = Cancel && I == 0 ? -12 : int(1 + 2 * I);
+            Expected *= llvm::APInt(Width, Offset, true) + (3 + V * 2) * 4;
+          }
+          EXPECT_EQ(Plan.eval({llvm::APInt(Width, A), llvm::APInt(Width, B)}),
+                    Expected);
+        }
+    }
+  }
+}
+
+TEST(SymMBAResidue, ProvesNestedAffineCoordinatesAtFullWidth) {
+  if (!solver::proofBackendAvailable(solver::ProofBackend::Z3))
+    GTEST_SKIP() << "Z3 unavailable";
+  for (unsigned Width : {16u, 65u, 257u}) {
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto U = Ctx.mkXor(X, Y);
+    llvm::SmallVector<SymRef, 16> Factors{
+        Ctx.mkConst(llvm::APInt(Width, 3).shl(Width - 7))};
+    for (unsigned I = 0; I < 11; ++I) {
+      const auto Nested =
+          Ctx.mkAdd(Ctx.mkConst(Width, I + 3),
+                    Ctx.mkMul(Ctx.mkConst(llvm::APInt(Width, -5, true)), U));
+      Factors.push_back(
+          Ctx.mkAdd(Ctx.mkConst(Width, 2 * I + 1),
+                    Ctx.mkMul(Ctx.mkConst(Width, (2 * I + 1) * 4), Nested)));
+    }
+    const auto Input = Ctx.mkMul(Factors);
+    detail::WorkBudget Budget(65536);
+    size_t Storage = 1 << 20;
+    const auto Output =
+        detail::foldProductResidues(Ctx, Input, Budget, Storage);
+    ASSERT_LT(Ctx.readabilityCost(Output), Ctx.readabilityCost(Input));
+    solver::SymSynthVerifier Verify({}, solver::ProofBackend::Z3, 5000);
+    EXPECT_EQ(Verify(Ctx, Input, Output), SynthVerification::Equivalent);
+  }
+}
+
 } // namespace

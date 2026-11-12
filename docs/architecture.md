@@ -6175,6 +6175,11 @@ multiplied together, including when their input words overlap. A degree
 can drop again when its falling factorial vanishes because the product of `j`
 consecutive integers is always divisible by `j!`. The solver compares the
 two exact polynomial readings at the observed width.
+Nested affine spellings of a word are composed at the observed precision
+before grouping its factors. Polynomial arithmetic is charged at its actual
+coefficient precision. Completed polynomial groups remain factored beside
+independent scaled variables or XOR words; a shared direct factor or an AND
+partition still admits the nested reconstruction search.
 Equal or opposite weights can share a factor. After removing a common power
 of two, an odd weight is invertible at the remaining width, which lets long
 literal coefficients share one scale. The simplifier compares expression
