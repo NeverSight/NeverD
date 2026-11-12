@@ -248,5 +248,187 @@
   ],
   "ir_compiler_file": "clang++",
   "ir_compiler_bytes": "independent-test-frontend",
-  "ir_compiler_version": "test canonical IR frontend"
+  "ir_compiler_version": "test canonical IR frontend",
+  "cursor_observation": {
+    "checks": 1024,
+    "signed": [
+      64,
+      64
+    ],
+    "pc_rejected": [
+      0,
+      0
+    ],
+    "key_rejected": [
+      64,
+      63
+    ],
+    "recipe_rejected": [
+      0,
+      0
+    ]
+  },
+  "cursor_unavailable_code": 2,
+  "cursor_started": "cursor-started",
+  "cursor_recipes": [
+    "pacm",
+    "explicit"
+  ],
+  "cursor_invalid_return_codes": [
+    1,
+    -4,
+    -5
+  ],
+  "cursor_invalid_observations": [
+    [],
+    {},
+    {
+      "checks": 0,
+      "signed": [
+        64,
+        64
+      ],
+      "pc_rejected": [
+        0,
+        0
+      ],
+      "key_rejected": [
+        64,
+        63
+      ],
+      "recipe_rejected": [
+        0,
+        0
+      ]
+    },
+    {
+      "checks": true,
+      "signed": [
+        64,
+        64
+      ],
+      "pc_rejected": [
+        0,
+        0
+      ],
+      "key_rejected": [
+        64,
+        63
+      ],
+      "recipe_rejected": [
+        0,
+        0
+      ]
+    },
+    {
+      "checks": 1024,
+      "signed": [
+        0,
+        0
+      ],
+      "pc_rejected": [
+        0,
+        0
+      ],
+      "key_rejected": [
+        64,
+        63
+      ],
+      "recipe_rejected": [
+        0,
+        0
+      ]
+    },
+    {
+      "checks": 1024,
+      "signed": [
+        64,
+        64
+      ],
+      "pc_rejected": [
+        0,
+        0
+      ],
+      "key_rejected": [
+        64,
+        0
+      ],
+      "recipe_rejected": [
+        0,
+        0
+      ]
+    },
+    {
+      "checks": 1024,
+      "signed": [
+        64,
+        64
+      ],
+      "pc_rejected": [
+        65,
+        0
+      ],
+      "key_rejected": [
+        64,
+        63
+      ],
+      "recipe_rejected": [
+        0,
+        0
+      ]
+    },
+    {
+      "checks": 1024,
+      "signed": [
+        64,
+        64
+      ],
+      "pc_rejected": [
+        false,
+        false
+      ],
+      "key_rejected": [
+        64,
+        63
+      ],
+      "recipe_rejected": [
+        0,
+        0
+      ]
+    },
+    {
+      "checks": 1024,
+      "signed": [
+        64,
+        64
+      ],
+      "pc_rejected": [
+        0
+      ],
+      "key_rejected": [
+        64,
+        63
+      ],
+      "recipe_rejected": [
+        0,
+        0
+      ]
+    },
+    {
+      "checks": 1024,
+      "signed": [
+        64,
+        64
+      ],
+      "pc_rejected": "no",
+      "key_rejected": [
+        64,
+        63
+      ],
+      "recipe_rejected": [
+        0,
+        0
+      ]
+    }
+  ]
 }

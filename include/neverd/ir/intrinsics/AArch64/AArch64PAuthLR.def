@@ -25,13 +25,19 @@
 #ifndef NEVERD_A64_PAUTH_LR_TEXT
 #define NEVERD_A64_PAUTH_LR_TEXT(Name, Text)
 #endif
+#ifndef NEVERD_A64_PAUTH_LR_SIGN
+#define NEVERD_A64_PAUTH_LR_SIGN(Key, Asm)
+#endif
+
+#define NEVERD_A64_PACIA171615_ASM ".inst 0xdac18bfe"
+#define NEVERD_A64_PACIB171615_ASM ".inst 0xdac18ffe"
 
 // The implicit-register instructions accept arbitrary materialized modifiers,
 // including the original PC after the instruction has been relocated.
 NEVERD_A64_PAUTH_LR_OPERATION(A64_Pacia2, "pacia171615", IA, false, false,
-                              ".inst 0xdac18bfe")
+                              NEVERD_A64_PACIA171615_ASM)
 NEVERD_A64_PAUTH_LR_OPERATION(A64_Pacib2, "pacib171615", IB, false, false,
-                              ".inst 0xdac18ffe")
+                              NEVERD_A64_PACIB171615_ASM)
 NEVERD_A64_PAUTH_LR_OPERATION(A64_Autia2, "autia171615", IA, true, false,
                               ".inst 0xdac1bbfe")
 NEVERD_A64_PAUTH_LR_OPERATION(A64_Autib2, "autib171615", IB, true, false,
@@ -40,6 +46,10 @@ NEVERD_A64_PAUTH_LR_OPERATION(A64_AuthReturnIA2, "retaasppc", IA, true, true,
                               ".inst 0xdac1bbfe")
 NEVERD_A64_PAUTH_LR_OPERATION(A64_AuthReturnIB2, "retabsppc", IB, true, true,
                               ".inst 0xdac1bffe")
+
+// The signal cursor compares a fresh signature without risking a trapping AUT.
+NEVERD_A64_PAUTH_LR_SIGN(IA, NEVERD_A64_PACIA171615_ASM)
+NEVERD_A64_PAUTH_LR_SIGN(IB, NEVERD_A64_PACIB171615_ASM)
 
 NEVERD_A64_PAUTH_LR_INSTRUCTION(0xffffffff, 0xdac18bfe, A64_Pacia2, X17, X16,
                                 X15)
@@ -85,3 +95,6 @@ NEVERD_A64_PAUTH_LR_TEXT(kAArch64PAuthLRReturnCheck,
 #undef NEVERD_A64_PAUTH_LR_RETURN
 #undef NEVERD_A64_PAUTH_LR_VALUE
 #undef NEVERD_A64_PAUTH_LR_TEXT
+#undef NEVERD_A64_PAUTH_LR_SIGN
+#undef NEVERD_A64_PACIA171615_ASM
+#undef NEVERD_A64_PACIB171615_ASM

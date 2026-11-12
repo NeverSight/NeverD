@@ -87,6 +87,76 @@ def check_binary(binary):
             "cpu_subtype": fields[2]}
 
 
+def cursor_observation(result, recipe):
+    policy = POLICY["cursor_probe"]
+    lines = result.stdout.splitlines()
+    if not lines and result.returncode < 0:
+        return {"status": POLICY["unavailable"]}
+    if (lines == [policy["started"]] and
+            result.returncode == policy["unavailable_code"] and
+            recipe == policy["recipe_explicit"]):
+        return {"status": POLICY["unavailable"]}
+    if result.returncode or len(lines) != 2 or lines[0] != policy["started"]:
+        raise ValueError(policy["invalid_report"])
+    data = json.loads(lines[1])
+    if (not isinstance(data, dict) or set(data) != {"checks", *policy["counts"]} or
+            type(data["checks"]) is not int or data["checks"] <= 0):
+        raise ValueError(policy["invalid_report"])
+    for name in policy["counts"]:
+        values = data[name]
+        if (not isinstance(values, list) or len(values) != 2 or
+                any(type(v) is not int or v < 0 or v > policy["samples"] for v in values)):
+            raise ValueError(policy["invalid_report"])
+    required = policy["required"] + (
+        policy["explicit_required"] if recipe == policy["recipe_explicit"] else [])
+    if any(not all(data[name]) for name in required):
+        raise ValueError(policy["invalid_report"])
+    return {"status": POLICY["passed"], **data}
+
+
+def probe_signal_cursor(output):
+    policy = POLICY["cursor_probe"]
+    source = ROOT / policy["source"]
+    report = {**provenance(), "platform": platform.platform(), "profiles": {},
+              "status": POLICY["failed"], policy["baseline_key"]: False,
+              policy["explicit_key"]: False, policy["pacm_pc_key"]: False}
+    report["source_sha256"].update(
+        {name: digest(ROOT / name) for name in [policy["source"], *policy["source_files"]]})
+    try:
+        if platform.system() != POLICY["host_os"] or platform.machine() not in POLICY["host_arches"]:
+            report["status"] = POLICY["unavailable"]
+            return report
+        with OwnedProducts(output, False) as products:
+            for optimization in policy["optimizations"]:
+                label = policy["binary_label"].format(optimization=optimization)
+                binary = output / label
+                products.append(binary)
+                argv = [arg.format(optimization=optimization, include=ROOT / policy["include"],
+                                   source=source, binary=binary) for arg in policy["compile"]]
+                built = command(products, output, label + POLICY["compile_suffix"],
+                                argv, POLICY["tool_timeout"])
+                if built.returncode:
+                    return report
+                identity = check_binary(binary)
+                for recipe in policy["recipes"]:
+                    label = policy["profile_label"].format(optimization=optimization, recipe=recipe)
+                    result = command(products, output, label, [binary, recipe], POLICY["tool_timeout"])
+                    report["profiles"][label] = {**identity, **cursor_observation(result, recipe)}
+            def observations(recipe):
+                return [report["profiles"][policy["profile_label"].format(
+                    optimization=optimization, recipe=recipe)] for optimization in policy["optimizations"]]
+            pacm = observations(policy["recipe_pacm"])
+            report[policy["baseline_key"]] = all(p["status"] == POLICY["passed"] for p in pacm)
+            report[policy["pacm_pc_key"]] = all(p["status"] == POLICY["passed"] and
+                                               all(p["pc_rejected"]) for p in pacm)
+            report[policy["explicit_key"]] = all(
+                p["status"] == POLICY["passed"] for p in observations(policy["recipe_explicit"]))
+            report["status"] = POLICY["passed"] if report[policy["baseline_key"]] else POLICY["unavailable"]
+        return report
+    finally:
+        save(output / POLICY["report_name"], report)
+
+
 def probe_cpta(output):
     policy = POLICY["cpta_probe"]
     source = ROOT / policy["source"]
@@ -492,6 +562,8 @@ def main():
             report = probe(output)
         elif args.mode == POLICY["cpta_probe"]["mode"]:
             report = probe_cpta(output)
+        elif args.mode == POLICY["cursor_probe"]["mode"]:
+            report = probe_signal_cursor(output)
         elif args.mode == POLICY["startup_mode"]:
             report = probe(output, startup=True, userspace_fixups=userspace)
         elif args.mode == POLICY["legacy_mode"]:

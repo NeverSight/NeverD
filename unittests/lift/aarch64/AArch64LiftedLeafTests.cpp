@@ -13,6 +13,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
+#include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/Loader.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -106,6 +107,7 @@ enum class LeafCheck {
   StackArgument,
   RestoringLoad,
   ScratchResult,
+  FrameScratchResult,
   ErrorResult,
   Global,
   FramedImport,
@@ -141,6 +143,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
       kTight};
   const bool Async = Check == LeafCheck::AsyncIndexedError;
   const bool Indexed = Check == LeafCheck::IndexedError || Async;
+  const bool ScratchFrame = Check == LeafCheck::FrameScratchResult;
   if (Async)
     Compile.push_back(kAsyncTables);
   Compile.append({Source, kOut, Input});
@@ -176,7 +179,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   auto *Wrong = Result->isIntegerTy()
                     ? llvm::ConstantInt::get(Result, kTamperedResult)
                     : llvm::ConstantFP::get(Result, kTamperedResult);
-  if (Check == LeafCheck::ScratchResult) {
+  if (Check == LeafCheck::ScratchResult || ScratchFrame) {
     ASSERT_FALSE(Sum->isVarArg());
     ASSERT_TRUE(Sum->hasFnAttribute(llvm::Attribute::Naked));
     auto *End = Sum->getEntryBlock().getTerminator();
@@ -207,22 +210,25 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
         Patcher.patch(Input, Rejected, *MissingWrite, Image->Arch).Success);
     EXPECT_FALSE(std::filesystem::exists(Rejected));
   }
-  if (Indexed || Check == LeafCheck::RestoringLoad) {
+  if (Indexed || ScratchFrame || Check == LeafCheck::RestoringLoad) {
     auto Bytes = Snapshot;
-    if (Indexed) {
+    if (Indexed || ScratchFrame) {
       const auto *FrameSection =
           Image->getSectionByName(section_names::macho::EhFrame);
       ASSERT_NE(FrameSection, nullptr);
       auto Frame = llvm::MutableArrayRef(Bytes).slice(FrameSection->FileOff,
                                                       FrameSection->FileSz);
+      llvm::ArrayRef<uint8_t> Rule = kLinkSpillRule;
+      if (ScratchFrame)
+        Rule = kFrameLinkSpillRule;
       const auto Find = [&](auto Begin) {
-        return std::search(Begin, Frame.end(), kLinkSpillRule.begin(),
-                           kLinkSpillRule.end());
+        return std::search(Begin, Frame.end(), Rule.begin(), Rule.end());
       };
       auto At = Find(Frame.begin());
       ASSERT_NE(At, Frame.end());
-      ASSERT_EQ(Find(At + kLinkSpillRule.size()), Frame.end());
-      At[kLinkSpillRule.size() - 1] = kWrongLinkOffsetFactor;
+      ASSERT_EQ(Find(At + Rule.size()), Frame.end());
+      At[Rule.size() - 1] =
+          ScratchFrame ? kWrongFrameLinkOffsetFactor : kWrongLinkOffsetFactor;
     } else {
       // Changing pre-indexing to post-indexing restores the same SP but reads
       // from the private frame. Check the published candidate against those
@@ -243,8 +249,9 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
       }
       ASSERT_EQ(Restores, 1u);
     }
-    const auto Invalid =
-        (Root / (Indexed ? kWrongSpillInput : kPostIndexedInput)).string();
+    const auto Invalid = (Root / (Indexed || ScratchFrame ? kWrongSpillInput
+                                                          : kPostIndexedInput))
+                             .string();
     std::ofstream(Invalid, std::ios::binary)
         .write(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
     ASSERT_EQ(
@@ -330,6 +337,33 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   for (const auto &Entry : Installed.PatchedFunctions) {
     EXPECT_NE(Entry.OwnerVA, Entry.OriginalVA);
     EXPECT_TRUE(Final->ExceptionMetadata.findFunction(Entry.OwnerVA));
+    if (ScratchFrame && Entry.SourceFunction == kDifference) {
+      const auto *Before =
+          Image->ExceptionMetadata.findFunction(Entry.OriginalVA);
+      const auto *After = Final->ExceptionMetadata.findFunction(Entry.OwnerVA);
+      ASSERT_TRUE(Before && Before->Dwarf && After && After->Dwarf);
+      const auto *BeforeCIE =
+          Image->ExceptionMetadata.findCIE(Before->Dwarf->CIESectionOffset);
+      const auto *AfterCIE =
+          Final->ExceptionMetadata.findCIE(After->Dwarf->CIESectionOffset);
+      ASSERT_TRUE(BeforeCIE && AfterCIE);
+      EXPECT_TRUE(BeforeCIE->HasPointerAuth);
+      EXPECT_TRUE(AfterCIE->HasPointerAuth);
+      EXPECT_EQ(BeforeCIE->Augmentation, AfterCIE->Augmentation);
+      const auto Effective = [](const auto &I) {
+        return I.Kind != CFIOpKind::Nop;
+      };
+      EXPECT_TRUE(llvm::equal(
+          llvm::make_filter_range(Before->Dwarf->Instructions, Effective),
+          llvm::make_filter_range(After->Dwarf->Instructions, Effective),
+          dwarf_eh::sameCFIInstruction));
+      for (auto Kind : {CFIOpKind::DefCFA, CFIOpKind::DefCFARegister,
+                        CFIOpKind::RememberState, CFIOpKind::RestoreState,
+                        CFIOpKind::SameValue, CFIOpKind::GnuArgsSize})
+        EXPECT_TRUE(
+            llvm::any_of(After->Dwarf->Instructions,
+                         [&](const auto &I) { return I.Kind == Kind; }));
+    }
     if (Indexed && Entry.SourceFunction == kSum) {
       for (const auto &[View, VA] : {std::pair{&*Image, Entry.OriginalVA},
                                      std::pair{&*Final, Entry.OwnerVA}}) {
@@ -731,6 +765,11 @@ TEST(AArch64DarwinEntry, DirectCallerConsumesTailForwardedX8AndX9Results) {
   verifyPublishedLeaves(kScratchResultSource, kCaller, kAssemblyName,
                         kScratchTail, LeafCheck::ScratchResult,
                         kScratchTailEntries);
+}
+
+TEST(AArch64DarwinEntry, MultipleEpiloguesKeepFramePointerAndRememberedRows) {
+  verifyPublishedLeaves(kScratchResultSource, kCaller, kAssemblyName,
+                        kScratchFrame, LeafCheck::FrameScratchResult);
 }
 
 TEST(AArch64DarwinVariadic, OptimizedImagePreservesReturnedRegisters) {
