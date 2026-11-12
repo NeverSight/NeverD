@@ -825,6 +825,13 @@ letter work either way. In a dialog, Return presses the default button, usually
 **OK**, from a check box or radio button too, as in IDA and on Windows, where
 GNOME would toggle the box; Space toggles it. Alt+P, Alt+O, Return thus states
 that a function does not return.
+A window of tools has no default button, because no one step comes next
+in it: MCP connections, the plugin manager, the shortcut list, x87 support,
+Unwind information, Offline package review, the version comparison graph and
+Binary comparison's review windows. There Return acts in the field or list that
+holds the focus and presses a button only while that button holds it. A dialog
+that states a correction (Change stack pointer, Stack variables, Set call type)
+applies it on Return; **Reset** always takes a click.
 
 A command IDA also has takes IDA's default key: the legacy scheme of IDA's
 `cfg/idagui.cfg`, and the decompiler's F5, Tab and Ctrl+F5.
