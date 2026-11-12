@@ -55,6 +55,10 @@ MIPSLifter::encoding(const cs_insn &Instruction) const {
   const uint32_t Word = word(Instruction);
   if (ISARevision == 6)
     return release6Encoding(Word);
+  // A JALR with a hardwired zero link register has JR semantics on r2/r5.
+  if ((Word & 0xfc1fffffu) == 9)
+    return Encoding{(Word & ~63u) | 8u, 4};
+
   if (((Word >> 16) == 0x041c && !HasDSP) ||
       (Word >> 26 == 17 && hasDelaySlot(Word) && !HasMSA))
     return std::nullopt;
@@ -258,14 +262,19 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
       S.write(RD, Result);
       return true;
     }
-    case 5: // LSA in the MIPS32r5 MSA profile
-      if (!HasMSA || SA >= 4 || Wide || Mode == InstructionMode::MIPS16)
+    case 5:    // LSA
+    case 21: { // DLSA
+      if (!HasMSA || SA >= 4 || (Function == 21 && !Wide))
         return false;
+      const uint16_t Bytes = Function == 21 ? 8 : 4;
+      if (Bytes == 4)
+        S.requireWord(RT); // RS is truncated before the shift.
       S.write(RD, S.binary(NdOp::INT_ADD,
-                           S.binary(NdOp::INT_LEFT, S.read(RS),
-                                    NdVar::cst(SA + 1, 4)),
-                           S.read(RT)));
+                           S.binary(NdOp::INT_LEFT, S.read(RS, Bytes),
+                                    NdVar::cst(SA + 1, Bytes)),
+                           S.read(RT, Bytes)));
       return true;
+    }
     case 10:   // MOVZ
     case 11: { // MOVN
       if (SA)
@@ -561,7 +570,7 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
   const uint32_t Word = Code.Word;
   const auto SlotCode = Slot ? encoding(*Slot) : std::nullopt;
   if (Slot &&
-      (!SlotCode ||
+      (!SlotCode || SlotCode->SlotBytes ||
        (Mode == InstructionMode::MicroMIPS && SlotCode->hasSequence()) ||
        (SlotCode->R6
             ? isR6Compact(SlotCode->Word)
@@ -633,6 +642,11 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
       S.emitIntrinsic(Intrinsic::MIPSReadDSPControl, Control);
       Condition = S.binary(NdOp::INT_NOTEQUAL,
                            S.binary(NdOp::INT_AND, Control, NdVar::cst(32, 4)),
+                           NdVar::cst(0, 4), 1);
+    } else if (Opcode == 17 && ISARevision == 6) {
+      const auto Bit = S.binary(NdOp::INT_AND, NdVar::reg(mipsreg::w(RT), 4),
+                                NdVar::cst(1, 4));
+      Condition = S.binary(RS == 9 ? NdOp::INT_EQUAL : NdOp::INT_NOTEQUAL, Bit,
                            NdVar::cst(0, 4), 1);
     } else if (Opcode == 17) {
       const bool Whole = RS == 11 || RS == 15;

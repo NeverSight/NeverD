@@ -38,10 +38,12 @@ void requireMIPSSourceVectors(const LowFunc &Function, Arch Target,
     }
   if (!HasVectors)
     return;
-  if (Target != Arch::MIPS32 && Target != Arch::MIPS32EL)
-    throw LowToMedConversionError("MSA source requires MIPS32");
+  if (!isMIPS(Target))
+    throw LowToMedConversionError("MSA source requires a MIPS target");
+  const bool Wide = isMIPS64(Target);
   const bool FP64 = Image && Image->MIPS && Image->MIPS->HasMSA &&
-                    Image->MIPS->ISARevision == 5 && Image->MIPS->FPABI == 6;
+                    Image->MIPS->ISARevision == 5 &&
+                    Image->MIPS->FPABI == (Wide ? 1 : 6);
   if (Image && !FP64)
     throw LowToMedConversionError("MSA source requires explicit FP64 profile");
   using Mask = std::bitset<mipsreg::VectorCount>;
@@ -77,8 +79,8 @@ void requireMIPSSourceVectors(const LowFunc &Function, Arch Target,
       if (!IsVector(Op.Output))
         continue;
       const auto R = Index(Op.Output);
-      // The low F20,F22,... views are callee-saved under o32 FP64.
-      if (R >= 20 && (!FP64 || R % 2 == 0))
+      // n64 preserves F24–F31. o32 FP64 preserves F20,F22,...,F30.
+      if (Wide ? R >= 24 : (R >= 20 && (!FP64 || R % 2 == 0)))
         throw LowToMedConversionError(
             "MSA source saved FPR restoration is not qualified");
       T.Defines[R] = Op.Output.Size == mipsreg::VectorBytes;

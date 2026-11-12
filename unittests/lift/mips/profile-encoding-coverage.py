@@ -77,7 +77,14 @@ def corpora():
                 feature,
                 insns,
             )
-        if feature != "msa":
+        if feature == "msa":
+            wide = insns + [
+                "copy_u.w $2,$w0[1]", "copy_s.d $2,$w0[1]",
+                "fill.d $w2,$5", "insert.d $w2[1],$5", "dlsa $2,$4,$5,3",
+            ]
+            for prefix in ("mips64", "micromips64"):
+                yield prefix + feature, "mips64r5", feature, wide
+        else:
             yield (
                 "mips64" + feature,
                 "mips64r2",

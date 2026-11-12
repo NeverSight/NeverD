@@ -26,6 +26,15 @@ def kernels():
         "msa",
         "fill.w $w0,$4\nfill.w $w1,$5\naddv.w $w2,$w0,$w1\ncopy_s.w $2,$w2[0]",
     )
+    yield (
+        "mips64msa", "mips64r5", "msa",
+        "fill.d $w0,$4\ninsert.d $w0[1],$5\nsplati.d $w1,$w0[1]\n"
+        "addv.d $w2,$w0,$w1\ncopy_s.d $2,$w2[0]",
+    )
+    yield (
+        "mips64msafloat", "mips64r5", "msa",
+        "fill.d $w0,$4\nfill.d $w1,$5\nfadd.d $w2,$w0,$w1\ncopy_s.d $2,$w2[0]",
+    )
     # The R6 generic core executes the original microMIPS ELF directly.
     yield "micromips32r6", "mips32r6", "", "mul $2,$4,$5\nbitswap $2,$2\njrc16 $ra"
     yield (
@@ -80,7 +89,7 @@ def reference_model(bits, feature):
             else mips.UC_CPU_MIPS32_MIPS32R6_GENERIC
         )
     if bits == 64:
-        return mips.UC_CPU_MIPS64_MIPS64DSPR2
+        return mips.UC_CPU_MIPS64_I6400 if feature == "msa" else mips.UC_CPU_MIPS64_MIPS64DSPR2
     return mips.UC_CPU_MIPS32_P5600 if feature == "msa" else mips.UC_CPU_MIPS32_74KF
 
 
@@ -227,6 +236,10 @@ def run(args, artifacts):
         # prologue/epilogue. Keep the original R6 ISA and tagged entry, then
         # execute the unedited C on the GNU sim microMIPS32r2/o32 target.
         rebuild_cpu = "mips32r2" if micro_r6 else cpu
+        # The pinned I6400 implements MSA and n64, with the Release 6
+        # return encoding. The original uses JALR zero,ra, valid in r5 and r6.
+        if bits == 64 and feature == "msa":
+            rebuild_cpu = "mips64r6"
         cases = inputs(name, bits)
         extra = (["-m" + feature] if feature else []) + (
             ["-mfp64"] if feature == "msa" else []
@@ -253,7 +266,7 @@ def run(args, artifacts):
                     )
                     + ".globl kernel\n.type kernel,@function\n.ent kernel\nkernel:\n"
                     + body
-                    + ("" if micro_r6 else "\njr $ra\nnop" if feature else "\njrc $ra")
+                    + ("" if micro_r6 else "\njalr $0,$31\nnop" if bits == 64 and feature == "msa" else "\njr $ra\nnop" if feature else "\njrc $ra")
                     + "\n.end kernel\n.size kernel,.-kernel\n"
                 )
                 if micro_r6:

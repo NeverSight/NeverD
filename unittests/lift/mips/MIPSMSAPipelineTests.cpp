@@ -42,16 +42,35 @@ namespace {
 mips_test::ELFBytes msaFile(Arch Target, llvm::ArrayRef<uint32_t> Words) {
   mips_test::ELFBytes File(Target);
   File.Bytes.resize(0x200);
-  File.put(52 + 16, File.Bytes.size(), 4);
-  File.put(52 + 20, File.Bytes.size(), 4);
+  File.put(File.Is64 ? 64 + 32 : 52 + 16, File.Bytes.size(), File.Is64 ? 8 : 4);
+  File.put(File.Is64 ? 64 + 40 : 52 + 20, File.Bytes.size(), File.Is64 ? 8 : 4);
   File.abiFlags();
   File.Bytes[0xe3] = 5;
   File.Bytes[0xe5] = 3;
-  File.Bytes[0xe7] = 6;
+  File.Bytes[0xe7] = File.Is64 ? 1 : 6;
   File.put(0xec, 0x200, 4);
   for (unsigned I = 0; I < Words.size(); ++I)
     File.put(0x100 + I * 4, Words[I], 4);
   return File;
+}
+
+TEST(MIPSMSAPipeline, N64Requires128BitCPR1WithHardDoubleABI) {
+  for (const auto Target : {Arch::MIPS64, Arch::MIPS64EL}) {
+    auto File = msaFile(Target, {0x7b03205e, 0x78b90899, 0x03e00008, 0});
+    ELFLoader L;
+    auto Image = L.loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    EXPECT_TRUE(Image->MIPS->HasMSA);
+    EXPECT_EQ(Image->MIPS->ABI, MIPSABI::N64);
+    EXPECT_EQ(Image->MIPS->FPABI, 1u);
+    for (auto Profile : {std::pair{3, 6}, std::pair{2, 1}}) {
+      File.Bytes[0xe5] = Profile.first;
+      File.Bytes[0xe7] = Profile.second;
+      auto Bad = L.loadBuffer(File.buffer());
+      ASSERT_FALSE(bool(Bad));
+      llvm::consumeError(Bad.takeError());
+    }
+  }
 }
 
 void checkMSALeafSource(llvm::ArrayRef<uint32_t> Words, bool HasDivision,
@@ -191,7 +210,7 @@ TEST(MIPSMSAPipeline, BranchJoinRequiresEveryReachingVectorDefinition) {
 TEST(MIPSMSAPipeline, StandaloneArchitectureAndFPABIHaveDistinctSaveViews) {
   for (Arch Target :
        {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL})
-    for (unsigned Reg : {19u, 20u, 21u, 31u}) {
+    for (unsigned Reg : {19u, 20u, 21u, 23u, 24u, 31u}) {
       LowFunc Function;
       Function.Blocks.emplace_back();
       LowOp Write;
@@ -200,7 +219,7 @@ TEST(MIPSMSAPipeline, StandaloneArchitectureAndFPABIHaveDistinctSaveViews) {
       Write.Inputs[0] = NdVar::cst(0, 16);
       Write.NumInputs = 1;
       Function.Blocks[0].Ops.push_back(Write);
-      if (!isMIPS64(Target) && Reg < 20)
+      if (Reg < (isMIPS64(Target) ? 24u : 20u))
         EXPECT_NO_THROW(requireMIPSSourceVectors(Function, Target, nullptr));
       else
         EXPECT_THROW(requireMIPSSourceVectors(Function, Target, nullptr),
@@ -212,8 +231,8 @@ TEST(MIPSMSAPipeline, StandaloneArchitectureAndFPABIHaveDistinctSaveViews) {
       Image.MIPS.emplace();
       Image.MIPS->ISARevision = 5;
       Image.MIPS->HasMSA = true;
-      Image.MIPS->FPABI = 6;
-      if (!isMIPS64(Target) && Reg != 20)
+      Image.MIPS->FPABI = isMIPS64(Target) ? 1 : 6;
+      if (isMIPS64(Target) ? Reg < 24 : (Reg < 20 || Reg % 2))
         EXPECT_NO_THROW(requireMIPSSourceVectors(Function, Target, &Image));
       else
         EXPECT_THROW(requireMIPSSourceVectors(Function, Target, &Image),

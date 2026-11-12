@@ -28,10 +28,11 @@ bool MIPSLifter::liftMSAAdditional(State &S, uint32_t Word) const {
   if (Fn >= 32 && Fn <= 39) {
     Bytes = 1u << (Fn & 3);
     const int Offset = int((Word >> 16 & 1023) ^ 512) - 512;
-    const auto Base =
-        S.binary(NdOp::INT_ADD, S.read(WS), NdVar::cst(Offset * Bytes, 4));
+    const auto Base = S.binary(NdOp::INT_ADD, S.read(WS),
+                               NdVar::cst(int64_t(Offset) * Bytes, S.Width));
     const auto Address = [&](unsigned I) {
-      return I ? S.binary(NdOp::INT_ADD, Base, NdVar::cst(I * Bytes, 4)) : Base;
+      return I ? S.binary(NdOp::INT_ADD, Base, NdVar::cst(I * Bytes, S.Width))
+               : Base;
     };
     // LD/ST have no alignment requirement. Address order is element order on
     // both byte orders. LOAD/STORE supply the byte order within each element.
@@ -55,22 +56,29 @@ bool MIPSLifter::liftMSAAdditional(State &S, uint32_t Word) const {
            {NdVar::reg(mipsreg::w(WS), 16)});
     return true;
   }
-  if ((Word & 0xfffe003f) == 0x7b00001e) {
-    Bytes = 1u << (WT & 1);
+  if ((Word & 0xfffc003f) == 0x7b00001e) {
+    Bytes = 1u << (WT & 3);
+    if (Bytes > S.Width)
+      return false;
     return Write([&](unsigned) { return S.read(WS, Bytes); });
   }
   if (Fn == 25) {
     const unsigned Major = Word >> 22 & 15, Tag = Word >> 16 & 63;
-    if ((Major != 2 && Major != 3 && Major != 4) ||
-        (Tag >= 16 && (Tag & 56) != 32))
+    if (Major != 2 && Major != 3 && Major != 4)
       return false;
-    Bytes = Tag < 16 ? 1 : 2;
+    Bytes = msaElementBytes(Tag);
+    // COPY_U has no encoding for an element as wide as its GPR.
+    if (!Bytes || Bytes > S.Width || (Major == 3 && Bytes == S.Width))
+      return false;
     const unsigned Index = Tag & (16 / Bytes - 1);
     if (Major == 4)
       return Write([&](unsigned I) {
         return I == Index ? S.read(WS, Bytes) : Lane(WD, I);
       });
-    S.write(WD, Lane(WS, Index), Major == 2);
+    if (WD)
+      S.write(WD, Lane(WS, Index), Major == 2);
+    else
+      S.emit(NdOp::NOP, {}, {});
     return true;
   }
   if (Fn == 1 && (Word >> 24 & 3) < 3) {

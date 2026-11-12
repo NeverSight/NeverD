@@ -143,9 +143,7 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
          Mode != InstructionMode::MIPSClassic && !isMIPSCompressedMode(Mode)) ||
         (isMIPS64(TheArch) && Mode == InstructionMode::MIPS16) ||
         (Revision != 2 && Revision != 5 && Revision != 6) ||
-        (Revision == 6 && Mode == InstructionMode::MIPS16) ||
-        (Revision == 5 &&
-         (isMIPS64(TheArch) || Mode == InstructionMode::MIPS16))) {
+        (Revision != 2 && Mode == InstructionMode::MIPS16)) {
       syncError() << "unsupported MIPS instruction mode\n";
       return false;
     }
@@ -153,8 +151,9 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
     CsMode = static_cast<cs_mode>(
         (Revision == 6
              ? (isMIPS64(TheArch) ? CS_MODE_MIPS64R6 : CS_MODE_MIPS32R6)
+         : Revision == 5
+             ? (isMIPS64(TheArch) ? CS_MODE_MIPS64R5 : CS_MODE_MIPS32R5)
          : isMIPS64(TheArch) ? CS_MODE_MIPS64R2
-         : Revision == 5     ? CS_MODE_MIPS32R5
                              : CS_MODE_MIPS32R2) |
         (Revision == 6 && isMIPS64(TheArch) ? CS_MODE_MIPS_PTR64 : 0) |
         (Mode == InstructionMode::MicroMIPS ? CS_MODE_MICRO : 0) |
