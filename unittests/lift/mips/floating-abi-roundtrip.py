@@ -8,6 +8,7 @@ link spills are checked. All disposable binaries belong to the artifact owner.
 
 import argparse
 from pathlib import Path
+import re
 import struct
 import subprocess
 
@@ -68,6 +69,92 @@ def observe(path, bits, little, scalar_bytes, cases):
     return result
 
 
+def narrow_arguments(bits, scalar_bytes, fmt, load, store):
+    # Compare the whole machine word the caller provided for each C integer.
+    # A single wrong sign or zero extension sets its own bit in the FP result.
+    def constants(regs):
+        a, b, c, d, e = regs
+        return [
+            f"addiu ${a},$zero,-7",
+            f"ori ${b},$zero,249",
+            f"addiu ${c},$zero,-257",
+            f"ori ${d},$zero,65279",
+            f"lui ${e},0x8000",
+            f"ori ${e},${e},1",
+        ]
+
+    setup = constants(range(4, 9))
+    check = []
+    if bits == 64:
+        setup.append(f"mov.{fmt} $f17,$f12")
+        check.append(f"mov.{fmt} $f12,$f17")
+    else:
+        fp_offset = 24 if scalar_bytes == 8 else 20
+        setup.extend(["sw $8,16($sp)", f"{store} $f12,{fp_offset}($sp)"])
+        check.extend(["lw $8,16($sp)", f"{load} $f12,{fp_offset}($sp)"])
+    check.extend(constants(range(10, 15)))
+    check.append("or $9,$zero,$zero")
+    for i in range(5):
+        check.extend(
+            [
+                f"xor $15,${4 + i},${10 + i}",
+                "sltu $15,$zero,$15",
+                f"sll $15,$15,{i}",
+                "or $9,$9,$15",
+            ]
+        )
+    check.extend(["mtc1 $9,$f2", f"cvt.{fmt}.w $f2,$f2", f"add.{fmt} $f0,$f12,$f2"])
+    return setup, "\n".join(check)
+
+
+def validate_narrow_llvm(ir):
+    expected = (
+        ("i8", "signext"),
+        ("i8", "zeroext"),
+        ("i16", "signext"),
+        ("i16", "zeroext"),
+        ("i32", "signext"),
+    )
+    declarations, calls = set(), set()
+    for line in ir.splitlines():
+        if line.startswith("declare "):
+            names = declarations
+        elif " call " in line:
+            names = calls
+        else:
+            continue
+        match = re.search(r"@([\w.$-]+)\(([^()]*)\)", line)
+        if match:
+            params = [param.split() for param in match[2].split(",")]
+            if len(params) == 6 and all(
+                param and param[0] == kind and extension in param
+                for param, (kind, extension) in zip(params[:5], expected, strict=True)
+            ):
+                names.add(match[1])
+    if len(declarations & calls) != 1:
+        raise ValueError(
+            "the LLVM declaration and call must carry all five integer extensions"
+        )
+
+
+def expected_result(layout, bits, value, bias):
+    total = value + bias
+    if layout == "word-result":
+        word = int(total)
+        # The n64 caller adds the upper half of the returned machine word.
+        return word + ((2 if word < 0 else 3) if bits == 64 else 0)
+    if layout == "pointer-result":
+        return (int(total) & 255) + (bits == 64)
+    if layout == "void-result":
+        # The caller reads the inexact flag set by the callee's conversion.
+        return 4 if total != int(total) else 0
+    if layout == "narrow-arguments":
+        return 2 * total
+    if layout == "after-integer":
+        return 2 * (total + 7)
+    return 4 * total
+
+
 def run(args, artifacts):
     root = artifacts.work
     headers = root / "headers"
@@ -95,6 +182,7 @@ def run(args, artifacts):
                     "prefix",
                     "overflow",
                     "after-integer",
+                    "narrow-arguments",
                     "word-result",
                     "pointer-result",
                     "void-result",
@@ -121,15 +209,20 @@ def run(args, artifacts):
                         "pointer-result": "void *",
                         "void-result": "void",
                     }.get(layout, c_type)
-                    declarations.write_text(
-                        f"{c_type} kernel({c_type} value, int bias);\n{result_type} fp_callee("
-                        + (
-                            f"int tag, {c_type} value"
-                            if after_integer
-                            else ", ".join(f"{c_type} a{i}" for i in range(count))
+                    if layout == "narrow-arguments":
+                        params = (
+                            "signed char s8, unsigned char u8, short s16, "
+                            f"unsigned short u16, unsigned int u32, {c_type} value"
                         )
-                        + (", void *base" if layout == "pointer-result" else "")
-                        + ");\n"
+                    elif after_integer:
+                        params = f"int tag, {c_type} value"
+                    else:
+                        params = ", ".join(f"{c_type} a{i}" for i in range(count))
+                        if layout == "pointer-result":
+                            params += ", void *base"
+                    declarations.write_text(
+                        f"{c_type} kernel({c_type} value, int bias);\n"
+                        f"{result_type} fp_callee({params});\n"
                     )
                     d = "d" if bits == 64 else ""
                     slot = 88 if bits == 64 else 92
@@ -173,6 +266,10 @@ def run(args, artifacts):
                             + f"\nmtc1 $4,$f2\ncvt.{fmt}.w $f2,$f2"
                             + f"\nadd.{fmt} $f0,$f12,$f2"
                         )
+                    if layout == "narrow-arguments":
+                        setup, callee = narrow_arguments(
+                            bits, scalar_bytes, fmt, load, store
+                        )
                     after_call = f"add.{fmt} $f0,$f0,$f0"
                     if layout in ("word-result", "pointer-result", "void-result"):
                         # A volatile f0 marker must never supply a GPR/void result.
@@ -182,7 +279,9 @@ def run(args, artifacts):
                             callee += (
                                 "\ndaddiu $8,$zero,3\ndsll32 $8,$8,0\ndaddu $2,$2,$8"
                             )
-                            after_call = "dsrl32 $8,$2,0\naddu $2,$2,$8\n" + after_call
+                            # A word ADDU requires sign-extended word inputs on n64.
+                            # Keep the full return in a doubleword op; MTC1 reads its low word.
+                            after_call = "dsrl32 $8,$2,0\ndaddu $2,$2,$8\n" + after_call
                         if layout == "pointer-result":
                             arg = 5 if bits == 64 or scalar_bytes == 4 else 6
                             setup = [
@@ -247,28 +346,7 @@ def run(args, artifacts):
                             "<Q" if scalar_bytes == 8 else "<I",
                             struct.pack(
                                 "<d" if scalar_bytes == 8 else "<f",
-                                (
-                                    int(value + bias)
-                                    + (
-                                        (2 if int(value + bias) < 0 else 3)
-                                        if bits == 64
-                                        else 0
-                                    )
-                                    if layout == "word-result"
-                                    else (
-                                        (int(value + bias) & 255) + (bits == 64)
-                                        if layout == "pointer-result"
-                                        else (
-                                            4 * (value + bias != int(value + bias))
-                                            if layout == "void-result"
-                                            else (
-                                                2 * (value + bias + 7)
-                                                if after_integer
-                                                else 4 * (value + bias)
-                                            )
-                                        )
-                                    )
-                                ),
+                                expected_result(layout, bits, value, bias),
                             ),
                         )[0]
                         if actual != expected:
@@ -285,6 +363,23 @@ def run(args, artifacts):
                             "--save",
                         ]
                     )
+                    if layout == "narrow-arguments":
+                        ir = directory / "kernel.ll"
+                        command(
+                            [
+                                args.neverd,
+                                "export",
+                                original,
+                                "--format",
+                                "ir",
+                                "--func",
+                                "kernel",
+                                "-o",
+                                ir,
+                            ]
+                        )
+                        validate_narrow_llvm(ir.read_text())
+                        artifacts.discard(ir)
                     callee_source, callee_obj = (
                         directory / "callee.s",
                         directory / "callee.o",

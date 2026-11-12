@@ -1116,8 +1116,12 @@ stack slots in either byte order. Integer right justification is unchanged.
 
 Complete fixed declarations bind mixed integer, pointer and floating operands
 before SSA, including o32 register pairs and stack overflow. Direct imported
-and explicitly declared exported calls returning float/double retain these
-carriers. Unknown calls, indirect target recovery, variadic floating calls,
+and explicitly declared exported calls can return a float or double in f0, a
+machine-word integer or pointer in v0, or no value. Only a floating result
+defines f0 after the call. LLVM declarations and call sites retain the signed
+or unsigned extension of 8- and 16-bit parameters. Both signed and unsigned
+32-bit parameters use sign extension in n64 argument registers. Narrow and paired integer results for a floating
+call, unknown prototypes, indirect target recovery, variadic floating calls,
 aggregate results and general saved-FPR restoration still need additional
 proofs. The register model preserves only the low eight bytes of o32's even
 F20–F30 or n64's F24–F31, not the overlaid 128-bit MSA register.
@@ -1140,12 +1144,19 @@ The 112 FP forms execute their original micro bytes in both GPR widths and byte
 orders, with finite values, NaNs and rounding changes. Reference tests also
 cover double transfers and compact FP branches. Its [native doubleword decoder](https://github.com/NeverSight/unicorn/pull/24) also executes physical integer
 encodings directly: 21 forms, 18 wide/signed operand pairs and both byte orders
-are compared against NeverD, including every GPR and next PC.
+are compared against NeverD, including every GPR and next PC. The test
+executes above 4 GiB with Status.KX and an identity-mapped virtual address
+space. A doubleword load/store at 0x100040000 must copy eight bytes while
+leaving the page with the same low address bits at 0x40000 unchanged.
 Fixed call round trips use explicit classic o32 and n64 FR=1 profiles in HighC
 and LLVMC at O0 and O2: single/double precision, an integer parameter after an
 FP entry parameter, nine-argument overflow, and a floating call argument after
-an integer (including o32 register pairs). The 96 compiled outputs match 1,920
-original executions in return bits, FCSR, SP, RA and preserved FPRs.
+an integer (including o32 register pairs). Word, pointer and void callees
+make the upper bits of n64 results and FCSR side effects observable. Each
+rebuilt caller is compared with the original for result bits, FCSR, SP, RA
+and ABI-preserved FPRs. The [execution receipt](evidence/mips-micro64-fp-calls-2026-11-13.json)
+records 224 rebuilt callers and 4,480 comparisons, including signed and
+unsigned narrow arguments observed at the full width of the register.
 Single-precision result inference follows the arithmetic operation rather than
 the FPR container. A final source byte-use proof may canonicalize unread upper
 bits; stores, calls, preserved registers and observed return bytes block that

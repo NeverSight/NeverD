@@ -41,6 +41,8 @@ struct FloatingCallArguments {
     uint16_t Bytes = 0;
     bool Floating = false;
     bool Pointer = false;
+    /// MIPS narrow integer arguments are extended by the caller.
+    bool Signed = false;
     bool operator==(const ScalarParameter &) const = default;
   };
   /// A mixed scalar signature, in source order. Empty retains the consecutive
@@ -52,6 +54,7 @@ struct FloatingCallArguments {
   /// and pointer results occupy v0; void has no result. HFA descriptors keep
   /// their existing ReturnElements and floating element convention.
   NdTypeKind ReturnKind = NdTypeKind::Float;
+  bool SignedResult = false;
   bool operator==(const FloatingCallArguments &) const = default;
 };
 

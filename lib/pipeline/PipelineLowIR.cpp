@@ -3809,20 +3809,6 @@ ImportPrototypeArguments importPrototypeArguments(
                                              ExportStarts->end(), Addr)
                         : Img.findExportAt(Addr) != nullptr;
   };
-  // A routine the image exports, whose name binds a prototype
-  // (LocalTypesDebugContext), takes what that prototype declares from every
-  // caller: its export binds the convention, which a compiler keeps for the
-  // callers within the image too, as a Windows system call stub's callers
-  // pass the parameters its dispatcher reads from the stack.  A body that
-  // reads more keeps it.  Only a convention of register summaries reads it.
-  auto ExportedArguments = [&](va_t Addr) -> std::optional<Arguments> {
-    if (!Dbg || !RegisterArguments || !Exported(Addr))
-      return std::nullopt;
-    const std::optional<FunctionSym> Function = Dbg->resolveFunction(Addr);
-    if (!Function || Function->PrototypeLibrary.empty())
-      return std::nullopt;
-    return SignatureArguments(*Function);
-  };
   // A runtime's own prototype names its routine exactly, where stripping
   // leading underscores for the arity tables could reach another runtime's.
   auto RoutineArguments = [&](const std::string &Name,
@@ -4047,25 +4033,29 @@ ImportPrototypeArguments importPrototypeArguments(
       if (!Routine)
         Routine = DecoratedArguments(Addr);
     } else {
-      // An exported body follows its explicitly declared platform prototype
-      // for internal callers too. Preserve the complete FP carriers before
-      // SSA, just as for an imported declaration; a source-parameter count
-      // cannot represent mixed registers, aligned pairs or stack values.
-      if (Dbg && RegisterArguments && Exported(Addr) && Convention &&
+      // Both scalar and floating calls use the same exported declaration.
+      // Look it up once; a stripped internal target has neither contract.
+      if (!Dbg || !RegisterArguments || !Exported(Addr))
+        return;
+      const auto Function = Dbg->resolveFunction(Addr);
+      if (!Function)
+        return;
+      if (isMIPS(Img.Arch) && Convention &&
           (Convention->ArgumentsFromCallSetup ||
            Convention->RegisterArgumentsFromCalleeSummary))
-        if (const auto Function = Dbg->resolveFunction(Addr))
-          if (auto Floating = libc::floatingCallArguments(*Function, Img.Arch,
-                                                          Img.abiFormat())) {
-            if (Floating->ReturnKind == NdTypeKind::Float)
-              Result.FloatReturns[Addr] = Floating->ReturnBytes;
-            Result.FloatingArguments.emplace(Addr, std::move(*Floating));
-            Result.PrototypeDeclared.insert(Addr);
-            if (Function->PrototypeLibrary == UserPrototypeLibrary)
-              Result.UserDeclared.insert(Addr);
-            return;
-          }
-      Routine = ExportedArguments(Addr);
+        if (auto Floating = libc::floatingCallArguments(*Function, Img.Arch,
+                                                        Img.abiFormat())) {
+          if (Floating->ReturnKind == NdTypeKind::Float)
+            Result.FloatReturns[Addr] = Floating->ReturnBytes;
+          Result.FloatingArguments.emplace(Addr, std::move(*Floating));
+          Result.PrototypeDeclared.insert(Addr);
+          if (Function->PrototypeLibrary == UserPrototypeLibrary)
+            Result.UserDeclared.insert(Addr);
+          return;
+        }
+      if (Function->PrototypeLibrary.empty())
+        return;
+      Routine = SignatureArguments(*Function);
       if (!Routine)
         return;
       Joins = Effects.count(Addr) != 0;

@@ -430,6 +430,8 @@ TEST(MicroMIPS64Release6, NativeDoublewordResultsMatchIndependentExecution) {
           SCOPED_TRACE(Y);
           NdOpEmulator E(Image);
           E.setStrictMode(true);
+          // LowIR represents architectural reads of zero as constants.
+          E.setRegister(mipsreg::r(0), 0);
           for (unsigned R = 1; R < 32; ++R) {
             const uint64_t Value = R == 4   ? X
                                    : R == 5 ? Y
@@ -441,7 +443,7 @@ TEST(MicroMIPS64Release6, NativeDoublewordResultsMatchIndependentExecution) {
                     UC_ERR_OK);
           for (const auto &Op : Ops)
             ASSERT_TRUE(E.step(Op));
-          for (unsigned R = 1; R < 32; ++R) {
+          for (unsigned R = 0; R < 32; ++R) {
             uint64_t Actual = 0;
             ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_0 + R, &Actual), UC_ERR_OK);
             EXPECT_EQ(E.getRegister(mipsreg::r(R)), Actual) << "register " << R;

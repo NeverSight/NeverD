@@ -33,6 +33,10 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
   };
   if (Parameters.size() > static_cast<size_t>(limits::kMaxBoundSourceCallArgs))
     return std::nullopt;
+  const auto MIPSSignedInteger = [&](const TypeRef &Type) {
+    return isMIPS(A) && (Type->Kind == NdTypeKind::Int || Type->IsEnum) &&
+           Type->IsSigned;
+  };
   const auto ScalarParameter = [&](const TypeRef &Type) {
     return Scalar(Type) ||
            (Type &&
@@ -160,6 +164,7 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
   FloatingCallArguments Result;
   Result.ReturnBytes = ReturnType->Size;
   Result.ReturnKind = ReturnType->IsEnum ? NdTypeKind::Int : ReturnType->Kind;
+  Result.SignedResult = MIPSSignedInteger(ReturnType);
   if (A == Arch::X86 || !AllFloating || isMIPS(A)) {
     for (size_t I = 0; I < Parameters.size(); ++I) {
       const auto &Pieces = Placement->Parameters[I];
@@ -172,11 +177,13 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
         const auto &Second = Pieces[1].Location;
         if (First.Kind == SourceABICarrierKind::IntegerRegister) {
           Result.Scalars.push_back({First.Kind, First.RegisterOffset, 0, 8,
-                                    Scalar(Parameters[I]), false});
+                                    Scalar(Parameters[I]), false,
+                                    MIPSSignedInteger(Parameters[I])});
         } else if (First.Kind == SourceABICarrierKind::Stack &&
                    Second.Kind == First.Kind) {
           Result.Scalars.push_back({First.Kind, 0, First.EntryStackOffset, 8,
-                                    Scalar(Parameters[I]), false});
+                                    Scalar(Parameters[I]), false,
+                                    MIPSSignedInteger(Parameters[I])});
         } else {
           return std::nullopt;
         }
@@ -193,7 +200,8 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
       Result.Scalars.push_back({Location.Kind, Location.RegisterOffset,
                                 Location.EntryStackOffset, Location.ValueBytes,
                                 Scalar(Parameters[I]),
-                                Parameters[I]->Kind == NdTypeKind::Ptr});
+                                Parameters[I]->Kind == NdTypeKind::Ptr,
+                                MIPSSignedInteger(Parameters[I])});
     }
     return Result;
   }
@@ -240,9 +248,11 @@ floatingCallTypes(Arch A, BinaryFormat F,
         (Parameter.Floating ||
          Parameter.Bytes != getTargetRegInfo(A).PointerSize))
       return std::nullopt;
-    auto Type = Parameter.Floating  ? NdType::makeFloat(Parameter.Bytes)
-                : Parameter.Pointer ? NdType::makePtr()
-                                    : NdType::makeInt(Parameter.Bytes);
+    auto Type =
+        Parameter.Floating ? NdType::makeFloat(Parameter.Bytes)
+        : Parameter.Pointer
+            ? NdType::makePtr()
+            : NdType::makeInt(Parameter.Bytes, !isMIPS(A) || Parameter.Signed);
     Type->Size = Parameter.Bytes;
     Types.Parameters.push_back(std::move(Type));
   }
@@ -273,7 +283,8 @@ floatingCallTypes(Arch A, BinaryFormat F,
     Types.Result = NdType::makeVoid();
     break;
   case NdTypeKind::Int:
-    Types.Result = NdType::makeInt(Signature.ReturnBytes, false);
+    Types.Result =
+        NdType::makeInt(Signature.ReturnBytes, Signature.SignedResult);
     break;
   case NdTypeKind::Ptr:
     Types.Result = NdType::makePtr();

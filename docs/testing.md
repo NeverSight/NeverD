@@ -24055,9 +24055,13 @@ PYTHONPATH=third_party/unicorn/bindings/python LIBUNICORN_PATH=/path/to/unicorn-
 
 The runner compares original machine code with recompiled HighC and LLVMC at
 O0/O2 for o32/n64, both byte orders, float/double mixed entry arguments and
-nine-argument FP overflow. It checks result bits, FCSR, SP, return target and
-preserved FPRs. `NeverDMIPSPipelineTests` additionally rejects escaped frame
-pointers, callee-owned link spills and reads of volatile FP state after a call.
+nine-argument FP overflow. Callee results include float, double, a machine
+word, a pointer and void. Negative and wide inputs, the high half of an n64
+result, and the FCSR inexact flag distinguish the return carriers. A mixed
+call checks each narrow integer at the full width supplied to the callee. The runner
+also checks SP, return target and ABI-preserved FPRs. `NeverDMIPSPipelineTests`
+rejects escaped frame pointers, callee-owned link spills and reads of volatile
+FP state (including f0 after a declared non-floating call).
 `NeverDMIPSFlowTests` covers delayed snapshots with detail disabled and poisoned
 operand counts. `NeverDLLVMCAllocaTests` executes floating/integer storage views
 against original LLVM, including negative zero and NaN payloads.

@@ -70,7 +70,8 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
       const bool NoDataWrite =
           Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
           Op.Inputs[0].isConst() &&
-          (mips::isBarrier(static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) ||
+          (Op.Inputs[0].ConstVal == uint64_t(Intrinsic::MIPSRequireWord) ||
+           mips::isBarrier(static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) ||
            mips::isDSPControlIntrinsic(
                static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) ||
            mips::isPureScalarValue(
@@ -205,6 +206,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
       case NdOp::INT_OR:
       case NdOp::INT_XOR:
       case NdOp::INT_MULT:
+      case NdOp::INT_LEFT:
       case NdOp::SELECT:
         Safe = Op.NumInputs &&
                llvm::all_of(llvm::ArrayRef(Op.Inputs.data(), Op.NumInputs),
