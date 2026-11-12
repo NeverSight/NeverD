@@ -12588,6 +12588,13 @@ overflow is undefined in LLVM only then. A floating-point conversion, whose
 out-of-range result is poison in LLVM and undefined in C, keeps its function
 refused.
 
+A saturating conversion of a half is the float's, to which a half converts
+exactly. AArch64's half-precision conversions to and from fixed point take 1
+to 32 or 64 fraction bits, more than arm_fp16.h's intrinsics admit, and print
+as the instruction itself in an assembly statement expression; the scalar
+extended multiply, reciprocal exponent and round-to-odd narrowing are the
+header's `vmulxh_f16`, `vrecpxs_f32` and `vcvtxd_f32_f64` forms.
+
 `ir/X86FPMaskCompareState.h` owns legacy/VEX CMPSS/CMPSD/CMPPS/CMPPD
 completion. Scalar or packed raw mask bits precede outgoing MXCSR in one
 aggregate; they never acquire floating-point result provenance. Full imm8 is

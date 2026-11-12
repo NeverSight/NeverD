@@ -6521,6 +6521,50 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
       RenderingCalls.pop_back();
       return Expr;
     }
+    // A half-precision conversion to or from a fixed-point integer. The
+    // instruction takes 1 to 32 or 64 fraction bits and arm_fp16.h's
+    // intrinsics 1 to 16, so the instruction itself is written.
+    const bool ToFixed = IID == llvm::Intrinsic::aarch64_fcvtzs_fixed ||
+                         IID == llvm::Intrinsic::aarch64_fcvtzu_fixed;
+    if (ToFixed || IID == llvm::Intrinsic::aarch64_scvtf_fixed ||
+        IID == llvm::Intrinsic::aarch64_ucvtf_fixed) {
+      auto *Integer = ToFixed                ? Call.getType()
+                      : Call.arg_size() == 2 ? Call.getArgOperand(0)->getType()
+                                             : nullptr;
+      auto *Half = ToFixed ? Call.arg_size() == 2
+                                 ? Call.getArgOperand(0)->getType()
+                                 : nullptr
+                           : Call.getType();
+      const auto *Fraction = llvm::dyn_cast_or_null<llvm::ConstantInt>(
+          Call.arg_size() == 2 ? Call.getArgOperand(1) : nullptr);
+      const unsigned Bits =
+          Integer && Integer->isIntegerTy() ? Integer->getIntegerBitWidth() : 0;
+      if (Opts.TheArch != Arch::AArch64 || !llvm::isa<llvm::CallInst>(Call) ||
+          Call.getFunctionType() != Callee->getFunctionType() ||
+          (Bits != 32 && Bits != 64) || !Half || !Half->isHalfTy() ||
+          !Fraction || Fraction->isZero() || Fraction->getValue().ugt(Bits))
+        throw std::runtime_error(
+            "unsupported AArch64 half-precision fixed-point conversion");
+      const bool Unsigned = IID == llvm::Intrinsic::aarch64_fcvtzu_fixed ||
+                            IID == llvm::Intrinsic::aarch64_ucvtf_fixed;
+      const std::string Word = Bits == 64 ? "x" : "w";
+      const std::string IntegerType = typeToCLLVM(Integer);
+      const std::string Operand = valueStr(Call.getArgOperand(0));
+      const std::string Count = std::to_string(Fraction->getZExtValue());
+      std::string Expr;
+      if (ToFixed)
+        Expr = "({ " + IntegerType + " neverd_fixed; __asm__(\"" +
+               (Unsigned ? "fcvtzu" : "fcvtzs") + " %" + Word + "0, %h1, #" +
+               Count + "\" : \"=r\"(neverd_fixed) : \"w\"((_Float16)(" +
+               Operand + "))); neverd_fixed; })";
+      else
+        Expr = std::string("({ _Float16 neverd_half; __asm__(\"") +
+               (Unsigned ? "ucvtf" : "scvtf") + " %h0, %" + Word + "1, #" +
+               Count + "\" : \"=w\"(neverd_half) : \"r\"((" + IntegerType +
+               ")(" + Operand + "))); neverd_half; })";
+      RenderingCalls.pop_back();
+      return Expr;
+    }
     // The floating-point status and control registers are read and written
     // whole, as MRS and MSR do: the compiler's builtin names the register.
     const bool ReadsStatus = IID == llvm::Intrinsic::aarch64_get_fpsr ||

@@ -96,6 +96,15 @@
 // SHA-1's fixed rotation of one word, as arm_neon.h names it.
 {"llvm.arm.neon.sha1h",            "vsha1h_u32"},
 {"llvm.aarch64.crypto.sha1h",      "vsha1h_u32"},
+// Scalar forms of AArch64's extended multiply, reciprocal exponent and
+// round-to-odd narrowing, as arm_neon.h and arm_fp16.h name them.
+{"llvm.aarch64.neon.fmulx.f16",    "vmulxh_f16"},
+{"llvm.aarch64.neon.fmulx.f32",    "vmulxs_f32"},
+{"llvm.aarch64.neon.fmulx.f64",    "vmulxd_f64"},
+{"llvm.aarch64.neon.frecpx.f16",   "vrecpxh_f16"},
+{"llvm.aarch64.neon.frecpx.f32",   "vrecpxs_f32"},
+{"llvm.aarch64.neon.frecpx.f64",   "vrecpxd_f64"},
+{"llvm.aarch64.sisd.fcvtxn",       "vcvtxd_f32_f64"},
 {"llvm.bitreverse.i8",             "__rbit"},
 {"llvm.bitreverse.i16",            "__rbit"},
 {"llvm.bitreverse.i32",            "__rbit"},

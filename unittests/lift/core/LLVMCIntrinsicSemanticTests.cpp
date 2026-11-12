@@ -4869,4 +4869,85 @@ define <16 x i8> @foreign(<16 x i8> %data, <16 x i8> %key) {
   }
 }
 
+TEST(LLVMCIntrinsicSemantics, HalfPrecisionConversionsKeepEveryFractionBit) {
+  // A half converts to float exactly, so a saturating conversion of one is
+  // the float's. The fixed-point conversions take up to 64 fraction bits,
+  // more than arm_fp16.h's intrinsics do, and print as the instruction.
+  std::vector<CEmitterOptions::RefusedDefinition> Refused;
+  const std::string Text =
+      emitUnit(R"ir(
+declare i32 @llvm.fptosi.sat.i32.f16(half)
+declare i64 @llvm.fptoui.sat.i64.f16(half)
+declare half @llvm.aarch64.scvtf.fixed.i64(i64, i32)
+declare half @llvm.aarch64.ucvtf.fixed.i32(i32, i32)
+declare i32 @llvm.aarch64.fcvtzs.fixed.i32(half, i32)
+declare i64 @llvm.aarch64.fcvtzu.fixed.i64(half, i32)
+declare half @llvm.aarch64.neon.fmulx.f16(half, half)
+declare float @llvm.aarch64.neon.frecpx.f32(float)
+declare float @llvm.aarch64.sisd.fcvtxn(double)
+define i32 @saturated(half %h) {
+  %r = call i32 @llvm.fptosi.sat.i32.f16(half %h)
+  ret i32 %r
+}
+define i64 @saturated_unsigned(half %h) {
+  %r = call i64 @llvm.fptoui.sat.i64.f16(half %h)
+  ret i64 %r
+}
+define half @from_fixed(i64 %x, i32 %y) {
+  %a = call half @llvm.aarch64.scvtf.fixed.i64(i64 %x, i32 64)
+  %b = call half @llvm.aarch64.ucvtf.fixed.i32(i32 %y, i32 16)
+  %m = call half @llvm.aarch64.neon.fmulx.f16(half %a, half %b)
+  ret half %m
+}
+define i64 @to_fixed(half %h) {
+  %a = call i32 @llvm.aarch64.fcvtzs.fixed.i32(half %h, i32 16)
+  %b = call i64 @llvm.aarch64.fcvtzu.fixed.i64(half %h, i32 40)
+  %w = zext i32 %a to i64
+  %r = add i64 %w, %b
+  ret i64 %r
+}
+define float @scalar_forms(float %f, double %d) {
+  %x = call float @llvm.aarch64.neon.frecpx.f32(float %f)
+  %n = call float @llvm.aarch64.sisd.fcvtxn(double %d)
+  %r = fadd float %x, %n
+  ret float %r
+}
+)ir",
+               Arch::AArch64, "aarch64-linux-gnu", Refused, true);
+  EXPECT_TRUE(Refused.empty()) << Refused.front().Reason;
+  for (const char *Spelling :
+       {"neverd_llvm_fptosi_sat_i32_f16(", "neverd_llvm_fptoui_sat_i64_f16(",
+        "scvtf %h0, %x1, #64", "ucvtf %h0, %w1, #16", "fcvtzs %w0, %h1, #16",
+        "fcvtzu %x0, %h1, #40", "vmulxh_f16(", "vrecpxs_f32(",
+        "vcvtxd_f32_f64("})
+    EXPECT_NE(Text.find(Spelling), std::string::npos) << Spelling << "\n"
+                                                      << Text;
+  const auto Compiler = llvm::sys::findProgramByName("clang");
+  const std::vector<llvm::StringRef> Build = {"-target", "aarch64-linux-gnu",
+                                              "-march=armv8.2-a+fp16"};
+  std::string Diagnostics;
+  if (Compiler &&
+      buildsObject(*Compiler, Build, "#include <arm_fp16.h>\n", Diagnostics))
+    EXPECT_TRUE(buildsObject(*Compiler, Build, Text, Diagnostics))
+        << Diagnostics << "\n"
+        << Text;
+  // The instruction takes 1 to the integer's width of fraction bits.
+  for (const char *Count : {"0", "33"}) {
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Error;
+    const std::string IR =
+        std::string("declare i32 @llvm.aarch64.fcvtzs.fixed.i32(half, i32)\n"
+                    "define i32 @out_of_range(half %h) {\n"
+                    "  %r = call i32 @llvm.aarch64.fcvtzs.fixed.i32(half %h, "
+                    "i32 ") +
+        Count + ")\n  ret i32 %r\n}\n";
+    std::vector<CEmitterOptions::RefusedDefinition> Left;
+    const std::string Out =
+        emitUnit(IR.c_str(), Arch::AArch64, "aarch64-linux-gnu", Left);
+    ASSERT_EQ(Left.size(), 1u) << Out;
+    EXPECT_EQ(Left.front().Reason,
+              "unsupported AArch64 half-precision fixed-point conversion");
+  }
+}
+
 } // namespace
