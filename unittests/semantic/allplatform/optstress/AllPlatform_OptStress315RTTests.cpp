@@ -15,16 +15,17 @@
 // 64-bit parameter recovery survive the roundtrip?
 //
 // On i386 a `long long` argument occupies two consecutive cdecl stack slots; on
-// arm32 (AAPCS) it occupies an even/odd register pair (r0:r1 or r2:r3) and, when
-// it cannot fit, spills as an 8-byte aligned pair to the outgoing-argument area.
-// A lift that recovers only the low word of an indirect-call argument — or whose
-// indirect-only callee reads a 64-bit parameter as i32 — yields a wrong high
-// half on i386/arm32 while x86-64/aarch64 (which carry the i64 in one register)
-// stay correct.
+// arm32 (AAPCS) it occupies an even/odd register pair (r0:r1 or r2:r3) and,
+// when it cannot fit, spills as an 8-byte aligned pair to the outgoing-argument
+// area. A lift that recovers only the low word of an indirect-call argument —
+// or whose indirect-only callee reads a 64-bit parameter as i32 — yields a
+// wrong high half on i386/arm32 while x86-64/aarch64 (which carry the i64 in
+// one register) stay correct.
 //
 //   * argll  - one i64 arg + int, both halves consumed by the callee.
 //   * arg2ll - two i64 args (four 32-bit halves) through the pointer.
-//   * argmix - int, i64, int: arm32's even-pair alignment hole (r0, r2:r3, stk).
+//   * argmix - int, i64, int: arm32's even-pair alignment hole (r0, r2:r3,
+//   stk).
 //   * retll  - i64 arg AND i64 return through the SAME indirect call (stresses
 //              the #311 return path and the argument path together).
 //   * argstk - int,int,int,i64: the i64 spills to the arm32 outgoing-arg area.
@@ -38,12 +39,13 @@
 // #518/#520 constant-symbolization family, and uses only multiply/shift/xor/add
 // i64 math (no 64-bit division) so i386/arm32 stay libcall-free.  Every callee
 // genuinely consumes every half of every wide argument, so a dropped high word
-// changes the result.  x86-64/aarch64 are controls.  Deterministic (LCG-seeded),
-// -O0, all four targets.
+// changes the result.  x86-64/aarch64 are controls.  Deterministic
+// (LCG-seeded), -O0, all four targets.
 //
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64OptStress315RT : public SemanticRoundTripFixture,
                           public ::testing::WithParamInterface<RoundTripTC> {};
@@ -55,7 +57,8 @@ class A64OptStress315RT : public SemanticRoundTripFixture,
                           public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(A64OptStress315RT, Verify) { roundTripAArch64(GetParam()); }
 class ARM32OptStress315RT : public SemanticRoundTripFixture,
-                            public ::testing::WithParamInterface<RoundTripTC> {};
+                            public ::testing::WithParamInterface<RoundTripTC> {
+};
 TEST_P(ARM32OptStress315RT, Verify) { roundTripARM32(GetParam()); }
 
 // clang-format off
@@ -160,12 +163,26 @@ static std::vector<RoundTripTC> makeOptStress315TC(const char *prefix,
 }
 // clang-format on
 
-static const std::vector<RoundTripTC> kX64 = makeOptStress315TC("x64o315", "long", 0);
-static const std::vector<RoundTripTC> kX86 = makeOptStress315TC("x86o315", "int", 0);
-static const std::vector<RoundTripTC> kA64 = makeOptStress315TC("a64o315", "long", 0);
-static const std::vector<RoundTripTC> kARM = makeOptStress315TC("armo315", "int", 0);
+static const std::vector<RoundTripTC> kX64 =
+    makeOptStress315TC("x64o315", "long", 0);
+static const std::vector<RoundTripTC> kX86 =
+    makeOptStress315TC("x86o315", "int", 0);
+static const std::vector<RoundTripTC> kA64 =
+    makeOptStress315TC("a64o315", "long", 0);
+static const std::vector<RoundTripTC> kARM =
+    makeOptStress315TC("armo315", "int", 0);
 
-INSTANTIATE_TEST_SUITE_P(OptStress315, X64OptStress315RT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress315, X86OptStress315RT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress315, A64OptStress315RT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress315, ARM32OptStress315RT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress315, X64OptStress315RT,
+                         ::testing::ValuesIn(kX64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress315, X86OptStress315RT,
+                         ::testing::ValuesIn(kX86), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress315, A64OptStress315RT,
+                         ::testing::ValuesIn(kA64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress315, ARM32OptStress315RT,
+                         ::testing::ValuesIn(kARM), rtTCName);
+
+// An indirect call whose stack arguments follow a skipped register printed
+// them in register positions: the C is checked by execution.
+INSTANTIATE_TEST_SUITE_P(OptStress315HighC, ARM32OptStress315RT,
+                         ::testing::ValuesIn(onHighC(kARM, {"_argstk"})),
+                         rtTCName);

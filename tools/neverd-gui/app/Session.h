@@ -92,6 +92,13 @@ public:
   bool analysisReplicaReady() const { return analysis_.replicaReady(); }
   /// The analysis reads asked of the owner from what it keeps.
   quint64 analysisOwnerReads() const { return analysis_.ownerReads(); }
+  /// The pages its views took as the owner read them with an edit.
+  quint64 analysisPagesTaken() const { return analysis_.pagesTaken(); }
+  /// Gives \p owner the answers its reads have already, now, in place of the
+  /// turn each would take (QueryService::deliverNow).
+  qsizetype deliverNow(QObject *owner) {
+    return queries_.deliverNow(owner) + analysis_.deliverNow(owner);
+  }
   /// An edit the user is making will have a replica render \p address, under
   /// the \p declaration the user would state where given
   /// (AnalysisService::prepareRead).
@@ -448,6 +455,13 @@ signals:
   /// A file did not open, and no other waits to.
   void openFailed();
   void unloaded();
+  /// Said just ahead of revisionChanged, to the views that show a reader the
+  /// content the change is about: they ask for it again before every other
+  /// listener does its own work.  What they asked of the worker is sent, and
+  /// shownRevisionAsked follows: they take what is there already (deliverNow)
+  /// while the worker reads the rest.
+  void shownRevisionChanged();
+  void shownRevisionAsked();
   void revisionChanged();
   void generationChanged();
   /// An analysis replica's decompiles changed once, after it solved the

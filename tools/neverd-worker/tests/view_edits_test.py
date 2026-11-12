@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 
 from listing_facts_test import ADDRESSES, DATA
 from pe_listing_facts_test import fixture as functions_fixture
@@ -234,14 +235,29 @@ def run(executable):
         # applied, it is the page a read naming none gets.  The edit's views
         # are read behind its reply as the client will ask for them, and that
         # read takes the answer.
-        given = ok(owner, "metadata")["prepared_views_given"]
-        ok(owner, "annotation_set", {"address": hex(functions[0]), "text": "on the kept page again"})
-        ok(owner, "save")
-        delta = ok(owner, "decompile", {"address": hex(functions[0]), "representation": "source",
-                                        "offset": 0, "limit": 200, "kept_only": True,
-                                        "if_none_match": changed["etag"], "page_delta": True})
-        assert "delta" in delta and delta["base"] == changed["etag"], delta
-        assert ok(owner, "metadata")["prepared_views_given"] == given + 1
+        # The worker reads them only while no request waits, so one sent as the
+        # edit's reply arrives can find it has read none: the client rests a
+        # moment first, as one that shows a reply does, and where the worker
+        # still read none it takes the page as it is and edits again.
+        for attempt in range(40):
+            before = ok(owner, "metadata")
+            ok(owner, "annotation_set", {"address": hex(functions[0]),
+                                         "text": f"on the kept page again {attempt}"})
+            time.sleep(0.05)
+            made = ok(owner, "metadata")["prepared_views_made"] - before["prepared_views_made"]
+            ok(owner, "save")
+            delta = ok(owner, "decompile", {"address": hex(functions[0]), "representation": "source",
+                                            "offset": 0, "limit": 200, "kept_only": True,
+                                            "if_none_match": changed["etag"], "page_delta": True})
+            assert "delta" in delta and delta["base"] == changed["etag"], delta
+            given = ok(owner, "metadata")["prepared_views_given"] - before["prepared_views_given"]
+            # A view it read is the answer; one it did not read is read now.
+            assert given == made and made in (0, 1), (made, given)
+            if made:
+                break
+            changed = apply_delta(changed, delta)
+        else:
+            raise AssertionError("the worker read no view behind any of forty edits")
         assert len(json.dumps(delta)) < len(json.dumps(changed)) / 2, delta
         whole = ok(owner, "decompile", {"address": hex(functions[0]), "representation": "source",
                                         "offset": 0, "limit": 200, "kept_only": True,
@@ -275,6 +291,60 @@ def run(executable):
         assert followed == ok(owner, "decompile", {"address": hex(functions[0]), "representation": "source",
                                                    "offset": 0, "limit": 200, "kept_only": True,
                                                    "if_none_match": ""})
+        # A view of more pages than one carries the read of each.  The first
+        # answered has the patch written into the document both name; the next
+        # is answered from what that patch says it wrote, as a read made after
+        # the edit is, rather than left to the client.
+        def part(offset, tag):
+            return {"address": hex(functions[0]), "representation": "source", "offset": offset,
+                    "limit": 3, "kept_only": True, "if_none_match": tag, "page_delta": bool(tag)}
+        def taken(page, answer):
+            assert answer["status"] == "ok", answer
+            payload = answer["payload"]
+            if payload.get("unchanged"):
+                assert payload["etag"] == page["etag"], (payload, page["etag"])
+                return page["text"]
+            return (apply_delta(page, payload) if "delta" in payload else payload)["text"]
+        note = "carried with the edit"
+        for turn, order in enumerate(((1, 0), (0, 1))):
+            ok(owner, "save")
+            document = ok(owner, "decompile", {"address": hex(functions[0]), "representation": "source",
+                                               "offset": 0, "limit": 200, "kept_only": True,
+                                               "if_none_match": ""})["text"].split("\n")
+            noted_at = next(at for at, line in enumerate(document) if note in line)
+            # The note's line in the first of two pages of three lines.
+            starts = (max(0, noted_at - 1), max(0, noted_at - 1) + 3)
+            assert starts[1] < len(document) - 1, (starts, len(document))
+            pages = [ok(owner, "decompile", part(start, "")) for start in starts]
+            assert note in pages[0]["text"] and pages[1]["text"], pages
+            reads = ok(owner, "metadata")["following_reads"]
+            note = f"on a view of two pages {turn}"
+            both = owner.call("annotation_set", {
+                "address": hex(functions[0]), "text": note,
+                "then": [{"operation": "decompile", "payload": part(starts[at], pages[at]["etag"])}
+                         for at in order]})
+            assert both["status"] == "ok", both
+            assert [a["status"] for a in both["then"]] == ["ok", "ok"], both["then"]
+            assert ok(owner, "metadata")["following_reads"] == reads + 2
+            answers = dict(zip(order, both["then"]))
+            fresh = [ok(owner, "decompile", part(start, "")) for start in starts]
+            for at in (0, 1):
+                assert taken(pages[at], answers[at]) == fresh[at]["text"], (turn, at, answers[at])
+            # What changed of each is sent, not the page: the note's line of
+            # the first, and of the second no line, only where its text begins.
+            assert "delta" in answers[0]["payload"] and note in fresh[0]["text"], answers[0]
+            assert any(change[1] == "text" for change in answers[0]["payload"]["delta"]), answers[0]
+            assert answers[1]["payload"].get("unchanged") or all(
+                change[1] != "text" for change in answers[1]["payload"]["delta"]), answers[1]
+        ok(owner, "undo")
+        ok(owner, "save")
+        ok(owner, "undo")
+        ok(owner, "save")
+        # The page as it stands once those are taken back.
+        followed = ok(owner, "decompile", {"address": hex(functions[0]), "representation": "source",
+                                           "offset": 0, "limit": 200, "kept_only": True,
+                                           "if_none_match": ""})
+        assert "carried with the edit" in followed["text"], followed
         # What an edit reaches none of, its reply answers as the page stands.
         ok(owner, "save")
         reads = ok(owner, "metadata")["following_reads"]

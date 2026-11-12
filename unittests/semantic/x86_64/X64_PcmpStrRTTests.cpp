@@ -32,6 +32,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64PcmpStrRT : public SemanticRoundTripFixture,
                      public ::testing::WithParamInterface<RoundTripTC> {};
@@ -39,7 +40,7 @@ TEST_P(X64PcmpStrRT, Verify) { roundTripX64(GetParam()); }
 
 // Common prologue: vector typedefs + two operands built from the args.
 //   v16 = 16 packed bytes, v2 = 2 packed i64; `(v16)(v2){a,0}` is a movq.
-#define PCMP_PRO                                                                \
+#define PCMP_PRO                                                               \
   "typedef char v16 __attribute__((vector_size(16)));"                         \
   "typedef long long v2 __attribute__((vector_size(16)));"
 
@@ -187,3 +188,8 @@ static const std::vector<RoundTripTC> kX64 = {
 
 INSTANTIATE_TEST_SUITE_P(PcmpStr, X64PcmpStrRT, ::testing::ValuesIn(kX64),
                          rtTCName);
+
+// The string comparisons stay whole when vectors are scalarized and print
+// as their header intrinsics on the LLVM C route: checked by execution.
+INSTANTIATE_TEST_SUITE_P(PcmpStrLLVMC, X64PcmpStrRT,
+                         ::testing::ValuesIn(onLLVMC(kX64)), rtTCName);

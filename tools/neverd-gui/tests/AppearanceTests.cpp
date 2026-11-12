@@ -107,7 +107,7 @@ qreal contrast(const QColor &ink, const QColor &surface) {
 }
 
 /// Whether \p a and \p b differ by at most \p tolerance in every channel.
-bool near(const QColor &a, const QColor &b, int tolerance) {
+bool withinTolerance(const QColor &a, const QColor &b, int tolerance) {
   return std::abs(a.red() - b.red()) <= tolerance &&
          std::abs(a.green() - b.green()) <= tolerance &&
          std::abs(a.blue() - b.blue()) <= tolerance;
@@ -876,7 +876,7 @@ private slots:
       const int middle = row.top() + row.height() / 2;
       QCOMPARE(at(row.left(), middle), outline);
       QCOMPARE(at(row.right(), middle), outline);
-      QVERIFY(near(at(row.left() + 2, middle), tint, 1));
+      QVERIFY(withinTolerance(at(row.left() + 2, middle), tint, 1));
       // Its text stays legible on the tint.
       qreal best = 1;
       for (int y = row.top() + 3; y <= row.bottom() - 3; ++y)
@@ -1169,6 +1169,109 @@ private slots:
                                 .arg(middleX)
                                 .arg(y)));
     }
+  }
+
+  void controlsThatCannotActRecede_data() {
+    QTest::addColumn<int>("mode");
+    QTest::addColumn<QString>("kind");
+    QTest::addColumn<qreal>("scale");
+    for (const auto mode :
+         {Theme::Mode::Dark, Theme::Mode::Light, Theme::Mode::HighContrastDark,
+          Theme::Mode::HighContrastLight})
+      for (const char *kind : {"button", "field"})
+        for (const qreal scale : {1.0, 1.25})
+          QTest::newRow(qPrintable(QStringLiteral("%1-%2-%3x")
+                                       .arg(int(mode))
+                                       .arg(QLatin1String(kind))
+                                       .arg(scale)))
+              << int(mode) << QString::fromLatin1(kind) << scale;
+  }
+
+  void controlsThatCannotActRecede() {
+    QFETCH(int, mode);
+    QFETCH(QString, kind);
+    QFETCH(qreal, scale);
+    Theme &theme = Theme::instance();
+    const auto restore = qScopeGuard([&] { theme.setMode(Theme::Mode::Dark); });
+    theme.setMode(Theme::Mode(mode));
+    theme.apply();
+    const QColor surface = theme.chrome("Window");
+    QWidget window;
+    window.setAttribute(Qt::WA_StyledBackground);
+    window.setStyleSheet(QStringLiteral("QWidget#surface { background: %1; }")
+                             .arg(surface.name()));
+    window.setObjectName(QStringLiteral("surface"));
+    window.resize(220, 120);
+    QWidget *control = kind == QLatin1String("field")
+                           ? static_cast<QWidget *>(new QLineEdit(&window))
+                           : new QPushButton(&window);
+    control->setEnabled(false);
+    control->setGeometry(13, 17, 150, 60);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QImage image(QSize(240, 140) * scale, QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(scale);
+    image.fill(surface);
+    window.render(&image);
+    // What the box may show: the surface, its plate, and its edge, which lies
+    // on half the plate since a box fills to the middle of its border.
+    const QColor fill = theme.chrome("ControlDisabled");
+    const QColor line = theme.chrome("ControlDisabledBorder");
+    const QColor plate = over(fill, surface);
+    QColor half = fill;
+    half.setAlphaF(fill.alphaF() / 2);
+    const QColor edge = line.alpha() ? over(line, over(half, surface)) : plate;
+    const QRect box = control->geometry();
+    const QRect device(
+        QPoint(qFloor(box.left() * scale) - 2, qFloor(box.top() * scale) - 2),
+        QPoint(qCeil((box.right() + 1) * scale) + 1,
+               qCeil((box.bottom() + 1) * scale) + 1));
+    const QPoint middle = device.center();
+    // Its lines lie on whole device pixels: no pixel across it is a blend.
+    const auto known = [&](QPoint pixel) {
+      const QColor color = image.pixelColor(pixel);
+      return withinTolerance(color, surface, 1) ||
+             withinTolerance(color, plate, 1) ||
+             withinTolerance(color, edge, 1);
+    };
+    for (int x = device.left(); x <= device.right(); ++x)
+      QVERIFY2(known({x, middle.y()}),
+               qPrintable(QStringLiteral("%1 at (%2, %3)")
+                              .arg(image.pixelColor(x, middle.y()).name())
+                              .arg(x)
+                              .arg(middle.y())));
+    for (int y = device.top(); y <= device.bottom(); ++y)
+      QVERIFY2(known({middle.x(), y}),
+               qPrintable(QStringLiteral("%1 at (%2, %3)")
+                              .arg(image.pixelColor(middle.x(), y).name())
+                              .arg(middle.x())
+                              .arg(y)));
+    QVERIFY2(withinTolerance(image.pixelColor(middle), plate, 1),
+             qPrintable(image.pixelColor(middle).name()));
+    // The edge, where the theme draws one, is the first pixel of the box.
+    int first = device.left();
+    while (first < middle.x() &&
+           withinTolerance(image.pixelColor(first, middle.y()), surface, 0))
+      ++first;
+    QVERIFY(first < middle.x());
+    QVERIFY2(withinTolerance(image.pixelColor(first, middle.y()), edge, 1),
+             qPrintable(image.pixelColor(first, middle.y()).name()));
+    if (theme.highContrast()) {
+      // An outline alone, at the 3:1 of non-text contrast.
+      QCOMPARE(plate, surface);
+      QVERIFY(contrast(edge, surface) >= 3.0);
+      return;
+    }
+    // A plate that is there, with nothing about the box a quarter louder than
+    // the surface, and quieter than the face of a button that can act.  An
+    // outline alone, as loud as that face, read as an empty frame.
+    QVERIFY2(contrast(plate, surface) >= 1.04,
+             qPrintable(QString::number(contrast(plate, surface))));
+    for (const QColor &part : {plate, edge})
+      QVERIFY2(contrast(part, surface) <= 1.25,
+               qPrintable(QString::number(contrast(part, surface))));
+    QVERIFY(contrast(plate, surface) <
+            contrast(theme.chrome("Button"), surface));
   }
 
   void longMenusScrollWithinOneColumn_data() {

@@ -204,6 +204,8 @@ TEST_P(LinuxSelect, MissingAndGatedReceiveInputsDoNotInventReadiness) {
   EXPECT_EQ(word(Base + 128) & 0xff, 9u);
   EXPECT_FALSE(select(4, Base + 64));
   EXPECT_FALSE(select(4, 0, Base + 64)); // Acceptance budget is not readiness.
+  EXPECT_EQ(Report.Diagnostic, "socket readiness has no offline observation "
+                               "(TCP connection index 0, write readiness)");
 }
 
 TEST_P(LinuxSelect, CompletionErrorsAndExceptionalDataRemainUnknown) {
@@ -215,6 +217,9 @@ TEST_P(LinuxSelect, CompletionErrorsAndExceptionalDataRemainUnknown) {
   EXPECT_FALSE(select(4, Base + 64));
   EXPECT_EQ(call(ServiceKind::Read, 3, Base + 128, 1), uint64_t(-4));
   EXPECT_FALSE(select(4, 0, 0, Base + 64));
+  EXPECT_EQ(Report.Diagnostic,
+            "socket readiness has no offline observation "
+            "(TCP connection index 0, exceptional readiness)");
 }
 
 TEST_P(LinuxSelect, ZeroLengthDatagramsAreReadableWithoutConsumption) {

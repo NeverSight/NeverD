@@ -84,7 +84,7 @@ std::optional<unsigned> encoding(const cs_insn *Insn, Arch Target) {
   const unsigned RegExtension = P.Rex & 4 ? 8 : 0;
   const unsigned BaseExtension = P.Rex & 1 ? 8 : 0;
   const unsigned IndexExtension = P.Rex & 2 ? 8 : 0;
-  constexpr std::array<uint8_t, 4> OpcodeDetail = {0x0f, 0xf6, 0, 0};
+  constexpr std::array<uint8_t, 4> OpcodeDetail = {0x0f, 0x38, 0xf6, 0};
   // ADX is legacy map 2. REX2 can encode only maps 0/1, never 0F 38.
   if (Insn->size - Offset < 4 || Insn->bytes[Offset] != 0x0f ||
       Insn->bytes[Offset + 1] != 0x38 || Insn->bytes[Offset + 2] != 0xf6 ||

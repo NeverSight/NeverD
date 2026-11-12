@@ -488,6 +488,219 @@ void recoverVectorReturnFromCallers(const BinaryImage &Img,
     }
 }
 
+// The type pass types a `{float, float}` packed in xmm0 as the scalar its
+// first lane is, which the recovery above then leaves alone.  A C function
+// of that type returns the scalar's bytes only, so a direct caller that
+// reads the register's other bytes after the call would read nothing of
+// what the callee left there.  Such a callee returns the whole register.
+//
+// A caller reads those bytes when one of them reaches an operation that is
+// no transport of bytes (a copy, a slice, a concatenation, a join): a
+// scalar operation that keeps its register's upper lanes only carries them
+// along.  A function that returns its whole register reads every byte it
+// leaves there, so the proof repeats until no callee changes.
+void recoverPackedScalarReturnFromCallers(const BinaryImage &Img,
+                                          PipelineResult &Result) {
+  const auto &TRI = getTargetRegInfo(Img.Arch);
+  if (!TRI.hasFPReturnReg() || !TRI.isVectorReg(TRI.FPReturnReg) ||
+      TRI.ReturnsFPInX87)
+    return;
+  // The scalar bytes of each callee the type pass typed so.
+  std::map<va_t, uint16_t> Scalars;
+  for (const auto &MF : Result.MedFuncs)
+    if (!MF.SourceTypeHint && !MF.SourceParametersBound &&
+        MF.MultiReturn.empty() && !MF.FPReturnViaX87 &&
+        !MF.ReturnsVectorRegister && MF.ReturnType &&
+        MF.ReturnType->Kind == NdTypeKind::Float &&
+        MF.ReturnType->Size <= sizeof(double) &&
+        returnsWholeVector(MF, TRI, /*NoIntegerResult=*/false))
+      Scalars.emplace(MF.Entry, MF.ReturnType->Size);
+  if (Scalars.empty())
+    return;
+  using Key = std::pair<int, int>;
+  const auto Bytes = [](uint16_t Size) {
+    return Size >= 64 ? ~uint64_t{0} : (uint64_t{1} << Size) - 1;
+  };
+  struct Use {
+    const MedOp *Op = nullptr;
+    const PhiNode *Phi = nullptr;
+  };
+  struct CallerFacts {
+    const MedFunc *Function = nullptr;
+    std::map<Key, std::vector<Use>> Uses;
+    /// The direct calls whose result the scalar-typed callee leaves in the
+    /// FP return register.
+    std::vector<const MedOp *> Calls;
+    /// The values the FP return register holds at a RETURN, or every value
+    /// of it where a RETURN's own block does not say (ReturnsAny).
+    std::set<Key> Returned;
+    bool ReturnsAny = false;
+  };
+  std::vector<CallerFacts> Callers;
+  std::set<va_t> ReadAsInteger;
+  for (const auto &Caller : Result.MedFuncs) {
+    CallerFacts Facts;
+    Facts.Function = &Caller;
+    for (const auto &Blk : Caller.Blocks)
+      for (const auto &Op : Blk.Ops) {
+        if (Op.SourceCallHint || Op.Opcode != NdOp::CALL || Op.NumInputs < 1 ||
+            !Op.Inputs[0].isConst() || Op.Output.Kind != MedVar::Reg)
+          continue;
+        const auto Callee = Scalars.find(Op.Inputs[0].ConstVal);
+        if (Callee == Scalars.end())
+          continue;
+        if (Op.Output.RegOff == TRI.FPReturnReg &&
+            Op.Output.Size > Callee->second)
+          Facts.Calls.push_back(&Op);
+        else if (llvm::is_contained(TRI.IntReturnRegs, Op.Output.RegOff))
+          ReadAsInteger.insert(Callee->first);
+      }
+    if (Facts.Calls.empty())
+      continue;
+    for (const auto &Blk : Caller.Blocks) {
+      const auto Return = llvm::find_if(
+          Blk.Ops, [](const MedOp &Op) { return Op.Opcode == NdOp::RETURN; });
+      if (Return != Blk.Ops.end()) {
+        const auto IsResult = [&](const MedVar &Value) {
+          return Value.Kind == MedVar::Reg && Value.Size != 0 &&
+                 Value.RegOff == TRI.FPReturnReg;
+        };
+        const MedVar *Last = nullptr;
+        for (auto Op = Blk.Ops.begin(); Op != Return; ++Op)
+          if (IsResult(Op->Output))
+            Last = &Op->Output;
+        for (const auto &Phi : Blk.Phis)
+          if (!Last && IsResult(Phi.Output))
+            Last = &Phi.Output;
+        if (Last)
+          Facts.Returned.insert({Last->Id, Last->SSAVer});
+        else
+          Facts.ReturnsAny = true;
+      }
+      for (const auto &Phi : Blk.Phis)
+        for (const auto &Arg : Phi.Args)
+          if (!Arg.second.isConst())
+            Facts.Uses[{Arg.second.Id, Arg.second.SSAVer}].push_back(
+                {nullptr, &Phi});
+      for (const auto &Op : Blk.Ops)
+        for (uint8_t I = 0; I < Op.NumInputs; ++I)
+          if (!Op.Inputs[I].isConst())
+            Facts.Uses[{Op.Inputs[I].Id, Op.Inputs[I].SSAVer}].push_back(
+                {&Op, nullptr});
+    }
+    Callers.push_back(std::move(Facts));
+  }
+  if (Callers.empty())
+    return;
+  std::map<va_t, MedFunc *> ByEntry;
+  for (auto &MF : Result.MedFuncs)
+    ByEntry.emplace(MF.Entry, &MF);
+  // Whether a byte of \p Result beyond \p Scalar reaches a read in
+  // \p Caller.
+  size_t Budget = ::neverd::limits::pipeline::kPipelineHighIRSourceWorkBudget;
+  const auto ReadsBeyond = [&](const CallerFacts &Caller, const MedVar &Result,
+                               uint16_t Scalar) {
+    std::map<Key, uint64_t> Carried;
+    std::vector<MedVar> Pending;
+    const auto Carry = [&](const MedVar &Value, uint64_t Mask) {
+      Mask &= Bytes(Value.Size);
+      uint64_t &Known = Carried[{Value.Id, Value.SSAVer}];
+      if ((Known | Mask) == Known)
+        return;
+      Known |= Mask;
+      Pending.push_back(Value);
+    };
+    Carry(Result, ~Bytes(Scalar));
+    while (!Pending.empty()) {
+      // An exhausted proof reads them: the callee then returns them all.
+      if (!Budget)
+        return true;
+      --Budget;
+      const MedVar Value = Pending.back();
+      Pending.pop_back();
+      const uint64_t Mask = Carried[{Value.Id, Value.SSAVer}];
+      // A function that returns its whole FP register reads what it leaves
+      // in it.
+      if (Caller.Function->ReturnsVectorRegister && Value.Kind == MedVar::Reg &&
+          Value.RegOff == TRI.FPReturnReg &&
+          (Caller.ReturnsAny ||
+           Caller.Returned.count({Value.Id, Value.SSAVer})))
+        return true;
+      const auto Users = Caller.Uses.find({Value.Id, Value.SSAVer});
+      if (Users == Caller.Uses.end())
+        continue;
+      for (const Use &User : Users->second) {
+        if (User.Phi) {
+          Carry(User.Phi->Output, Mask);
+          continue;
+        }
+        const MedOp &Op = *User.Op;
+        const auto Is = [&](unsigned Input) {
+          return Input < Op.NumInputs && !Op.Inputs[Input].isConst() &&
+                 Op.Inputs[Input].Id == Value.Id &&
+                 Op.Inputs[Input].SSAVer == Value.SSAVer;
+        };
+        switch (Op.Opcode) {
+        case NdOp::COPY:
+        case NdOp::INT_ZEXT:
+          if (Op.NumInputs != 1)
+            return true;
+          Carry(Op.Output, Mask);
+          continue;
+        case NdOp::SUBBYTES:
+          if (Op.NumInputs != 2 || !Is(0) || !Op.Inputs[1].isConst())
+            return true;
+          Carry(Op.Output, Op.Inputs[1].ConstVal >= 64
+                               ? 0
+                               : Mask >> Op.Inputs[1].ConstVal);
+          continue;
+        case NdOp::CONCAT:
+          // The high part above the low part.
+          if (Op.NumInputs != 2 || Op.Inputs[1].Size >= 64)
+            return true;
+          if (Is(1))
+            Carry(Op.Output, Mask & Bytes(Op.Inputs[1].Size));
+          if (Is(0))
+            Carry(Op.Output, Mask << Op.Inputs[1].Size);
+          continue;
+        case NdOp::CALL:
+        case NdOp::INDIR_CALL: {
+          // A callee reads the bytes of a vector argument its summary says.
+          bool Read = false;
+          for (unsigned I = 0; I < Op.NumInputs && !Read; ++I)
+            if (Is(I)) {
+              const uint16_t Width = Op.vectorArgumentWidth(I);
+              Read = !Width || (Mask & Bytes(Width)) != 0;
+            }
+          if (Read)
+            return true;
+          continue;
+        }
+        default:
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+  for (bool Changed = true; Changed;) {
+    Changed = false;
+    for (const CallerFacts &Caller : Callers)
+      for (const MedOp *Call : Caller.Calls) {
+        const va_t Entry = Call->Inputs[0].ConstVal;
+        const auto Callee = Scalars.find(Entry);
+        if (Callee == Scalars.end() || ReadAsInteger.count(Entry) ||
+            !ReadsBeyond(Caller, Call->Output, Callee->second))
+          continue;
+        MedFunc &MF = *ByEntry.at(Entry);
+        MF.ReturnType = NdType::makeFloat(16);
+        MF.ReturnsVectorRegister = true;
+        Scalars.erase(Callee);
+        Changed = true;
+      }
+  }
+}
+
 // A function reached ONLY through a function pointer is never the target of a
 // direct CALL, so the caller-side struct-return remodel above never learns
 // its multi-register return shape (an indirect call site cannot name its

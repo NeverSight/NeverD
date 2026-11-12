@@ -68,9 +68,11 @@ static const std::vector<RoundTripTC> kAutoX64RoundTrip = {
    "",
    {1084227584, 1077936128}, "AutoRT", 0, "-msse"},
 
+  // ADOX carries in from OF, which CLC leaves as the caller had it: TEST
+  // clears it.
   {"adox",
    "long rt_adox(long a, long b) {\n"
-   "  __asm__ volatile (\"clc\\n\\tadox %1, %0\" : \"+r\"(a) : \"r\"(b));\n"
+   "  __asm__ volatile (\"testq %0, %0\\n\\tadox %1, %0\" : \"+r\"(a) : \"r\"(b));\n"
    "  return a;\n"
    "}\n"
    "",

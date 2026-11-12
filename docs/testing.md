@@ -21448,6 +21448,10 @@ adapters: stock Clang does not register the fork's native state APIs. The
 original module remains unchanged, and native-intrinsic qualification uses
 the fork directly. `HostFixtureKeepsStateInAnIndependentClone` checks that
 separation and compiles all 15 state interfaces for i386/x64 at O0/O2.
+The cloned fixture also uses the emitter's DIV/IDIV assembly contract for
+32-bit and 64-bit quotient/remainder pairs. The x87 call-loop replay links
+that IR with a stock Clang and checks the result against original machine code
+at O0 and O2.
 
 ### Bounded ENCLU/GETSEC state
 

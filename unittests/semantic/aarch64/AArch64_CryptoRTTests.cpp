@@ -1,4 +1,5 @@
-//===- AArch64_CryptoRTTests.cpp - AES/SHA1/SHA256 roundtrip ---------------===//
+//===- AArch64_CryptoRTTests.cpp - AES/SHA1/SHA256 roundtrip
+//---------------===//
 //
 // NeverD Decompiler
 //
@@ -17,6 +18,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class AArch64CryptoRT : public SemanticRoundTripFixture,
                         public ::testing::WithParamInterface<RoundTripTC> {};
@@ -234,4 +236,10 @@ static const std::vector<RoundTripTC> kA64Crypto = {
 
 INSTANTIATE_TEST_SUITE_P(Crypto, AArch64CryptoRT,
                          ::testing::ValuesIn(kA64Crypto),
+                         [](const auto &P) { return P.param.Name; });
+
+// The AES and SHA operations print as their header intrinsics on the LLVM C
+// route: checked by execution.
+INSTANTIATE_TEST_SUITE_P(CryptoLLVMC, AArch64CryptoRT,
+                         ::testing::ValuesIn(onLLVMC(kA64Crypto)),
                          [](const auto &P) { return P.param.Name; });

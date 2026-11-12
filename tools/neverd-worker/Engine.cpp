@@ -2252,6 +2252,21 @@ std::optional<Engine::NamedPage> Engine::namedPage(const std::string &etag,
   return NamedPage{found, (*parts)[1], (*parts)[2]};
 }
 
+bool Engine::holdsPageOf(const std::string &etag) const {
+  if (namedPage(etag, false))
+    return true;
+  // A patch written into the document a page names leaves that document
+  // behind, and says what it wrote of it (DocumentChange): a view of more
+  // pages than one reads its second through that, as its first was read.
+  const auto parts = pageName(etag);
+  if (!parts)
+    return false;
+  return std::any_of(
+      namedViews_.begin(), namedViews_.end(), [&](const auto &document) {
+        return document->change && document->change->from == (*parts)[0];
+      });
+}
+
 std::optional<PageSource>
 Engine::keptClientPage(const std::string &etag) const {
   const auto page = namedPage(etag, true);
@@ -4191,7 +4206,7 @@ std::optional<Engine::Reply> Engine::followingRead(const Json &p) {
   // What this worker holds reads in place, a patch the request's own view
   // edits make included: the reply saves the client the read after it.  What
   // it does not hold, the client reads itself.
-  if (!namedPage(etag->get_ref<const std::string &>(), false))
+  if (!holdsPageOf(etag->get_ref<const std::string &>()))
     return std::nullopt;
   if (auto prepared = preparedAnswer("decompile", p))
     return prepared;

@@ -25,6 +25,10 @@
 //               target is known only once the call is emitted. The call
 //               recovers no integer register, while the callee declares every
 //               integer position below its stack parameters.
+//   * fwd     - wrappers that pass their own register arguments on through a
+//               pointer and add stack arguments. The call's block sets at most
+//               one of the registers the callee reads; the others reach the
+//               call as the wrapper received them.
 //
 // Every callee has external linkage + noinline so clang keeps a standard-ABI
 // call (no IPA arg elision).  Each kernel folds the FP result to an integer
@@ -41,6 +45,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64ManyArgAbiRT : public SemanticRoundTripFixture,
                         public ::testing::WithParamInterface<RoundTripTC> {};
@@ -167,6 +172,34 @@ static std::vector<RoundTripTC> makeManyArgAbiTC(const char *prefix, const char 
      {0x6dULL}, "ManyArgAbi", 0},
   };
 }
+
+// Ten integers through a pointer from wrappers that take eight of them: the
+// registers of the convention pass through untouched, the rest are stored.
+static std::vector<RoundTripTC> makeForwardedArgTC(const char *prefix, const char *T) {
+  std::string p = prefix, t = T;
+  const std::string Eight = t+","+t+","+t+","+t+","+t+","+t+","+t+","+t;
+  return {
+    {p+"_fwd",
+     "typedef "+t+" (*"+p+"_fn10)("+Eight+","+t+","+t+");\n"
+     "static "+t+" "+p+"_fwd_t("+Eight+","+t+","+t+") __attribute__((noinline));\n"
+     "static "+t+" "+p+"_fwd_some("+Eight+","+p+"_fn10) __attribute__((noinline));\n"
+     "static "+t+" "+p+"_fwd_all("+Eight+","+p+"_fn10) __attribute__((noinline));\n"
+     "static "+t+" "+p+"_fwd_t("+t+" a,"+t+" b,"+t+" c,"+t+" d,"+t+" e,"+t+" f,"
+     +t+" g,"+t+" h,"+t+" i,"+t+" j){\n"
+     "  return a+2*b+3*c+4*d+5*e+6*f+7*g+8*h+9*i+10*j; }\n"
+     "static "+t+" "+p+"_fwd_some("+t+" a0,"+t+" a1,"+t+" a2,"+t+" a3,"+t+" a4,"
+     +t+" a5,"+t+" a6,"+t+" a7,"+p+"_fn10 fp){\n"
+     "  return fp(a0+1,a1,a2,a3,a4,a5,a6,a7,9,10); }\n"
+     "static "+t+" "+p+"_fwd_all("+t+" a0,"+t+" a1,"+t+" a2,"+t+" a3,"+t+" a4,"
+     +t+" a5,"+t+" a6,"+t+" a7,"+p+"_fn10 fp){\n"
+     "  return fp(a0,a1,a2,a3,a4,a5,a6,a7,9,10)+1; }\n"
+     +t+" "+p+"_fwd("+t+" a){\n"
+     "  volatile "+p+"_fn10 keep="+p+"_fwd_t; "+p+"_fn10 fp=keep;\n"
+     "  return "+p+"_fwd_some(a,a+1,a+2,a+3,a+4,a+5,a+6,a+7,fp)^\n"
+     "         "+p+"_fwd_all(a+8,a+9,a+10,a+11,a+12,a+13,a+14,a+15,fp); }\n",
+     {0x41ULL}, "ManyArgAbi", 2},
+  };
+}
 // clang-format on
 
 static const std::vector<RoundTripTC> kX64 = makeManyArgAbiTC("x64ma", "long");
@@ -182,3 +215,37 @@ INSTANTIATE_TEST_SUITE_P(ManyArgAbi, ARM32ManyArgAbiRT,
                          ::testing::ValuesIn(kARM), rtTCName);
 INSTANTIATE_TEST_SUITE_P(ManyArgAbi, X86ManyArgAbiRT, ::testing::ValuesIn(kX86),
                          rtTCName);
+
+static const std::vector<RoundTripTC> kA64Fwd =
+    makeForwardedArgTC("a64ma", "long");
+static const std::vector<RoundTripTC> kARMFwd =
+    makeForwardedArgTC("armma", "int");
+static const std::vector<RoundTripTC> kX86Fwd =
+    makeForwardedArgTC("x86ma", "int");
+
+// A call through a pointer to a routine of the object passed its stack
+// arguments in another order, or none: the C is checked by execution.
+INSTANTIATE_TEST_SUITE_P(
+    ManyArgAbiHighC, X64ManyArgAbiRT,
+    ::testing::ValuesIn(onHighC(kX64, {"_ind_d10", "_ind_f12", "_ind_mix"})),
+    rtTCName);
+INSTANTIATE_TEST_SUITE_P(
+    ManyArgAbiHighC, A64ManyArgAbiRT,
+    ::testing::ValuesIn(onHighC(kA64, {"_ind_d10", "_ind_f12", "_ind_mix"})),
+    rtTCName);
+INSTANTIATE_TEST_SUITE_P(
+    ManyArgAbiHighC, ARM32ManyArgAbiRT,
+    ::testing::ValuesIn(onHighC(kARM, {"_ind_d10", "_ind_f12", "_ind_mix"})),
+    rtTCName);
+
+// A wrapper that passes its own register arguments on through a pointer and
+// adds stack arguments printed the stored values in the registers' places:
+// the C is checked by execution where the convention passes integers in
+// registers and declares them below a stack parameter, and on i386, where
+// every argument is stored.
+INSTANTIATE_TEST_SUITE_P(ForwardedArgsHighC, A64ManyArgAbiRT,
+                         ::testing::ValuesIn(onHighC(kA64Fwd)), rtTCName);
+INSTANTIATE_TEST_SUITE_P(ForwardedArgsHighC, ARM32ManyArgAbiRT,
+                         ::testing::ValuesIn(onHighC(kARMFwd)), rtTCName);
+INSTANTIATE_TEST_SUITE_P(ForwardedArgsHighC, X86ManyArgAbiRT,
+                         ::testing::ValuesIn(onHighC(kX86Fwd)), rtTCName);

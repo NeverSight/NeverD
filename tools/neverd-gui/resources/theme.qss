@@ -79,9 +79,9 @@ QHeaderView::section { background: ${HeaderBackground}; color: ${HeaderText}; bo
 QHeaderView::up-arrow { image: url(:/neverd/icons/chevron_up-${Mode}.svg); width: 10px; height: 10px; }
 QHeaderView::down-arrow { image: url(:/neverd/icons/chevron_down-${Mode}.svg); width: 10px; height: 10px; }
 /* The style paints a field's box: the input fill and outline, the focus
-   color's outline while it has focus, and only a quieter outline while it
-   cannot take input, as Windows 11 draws a disabled text box or combo box.
-   A text edit that only shows text keeps the rule's fill and its corners. */
+   color's outline while it has focus, and a faint plate while it cannot take
+   input, as Windows 11 keeps one under a disabled text box or combo box.  A
+   text edit that only shows text keeps the rule's fill and its corners. */
 QLineEdit, QComboBox, QAbstractSpinBox, QPlainTextEdit, QTextEdit { background: transparent; color: ${Text}; border: 1px solid transparent; border-radius: 2px; padding: 3px 4px; selection-background-color: ${Highlight}; selection-color: ${HighlightedText}; }
 QPlainTextEdit[readOnly="true"], QTextEdit[readOnly="true"] { background: ${Base}; border: none; }
 QLineEdit, QAbstractSpinBox, QPlainTextEdit[readOnly="false"], QTextEdit[readOnly="false"] { font: ${CodeFont}; }
@@ -109,10 +109,9 @@ QComboBox QAbstractItemView::item { min-height: 22px; padding: 0 12px 0 8px; bor
 QComboBox QAbstractItemView::item:hover, QComboBox QAbstractItemView::item:selected { background: ${MenuSelection}; color: ${MenuSelectionText}; }
 QComboBox QAbstractItemView::item:disabled { color: ${DisabledText}; }
 /* The style paints a push button's face: a dialog's default in the accent,
-   any other in the button gray.  One that cannot act gives up its fill and
-   keeps its outline and a dimmed label, as Windows 11 draws a disabled
-   button; a default one keeps a faint accent, on which its label stays
-   legible. */
+   any other in the button gray.  One that cannot act recedes to a faint
+   plate under a dimmed label, as Visual Studio Code fades a disabled button;
+   a default one keeps a faint accent, on which its label stays legible. */
 QPushButton { background: transparent; color: ${ButtonText}; border: 1px solid transparent; padding: 4px 14px; }
 QPushButton:default { color: ${ButtonPrimaryText}; }
 QPushButton:disabled { color: ${DisabledText}; }

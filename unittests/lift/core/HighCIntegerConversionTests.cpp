@@ -741,4 +741,127 @@ int main(void) {
 )");
 }
 
+TEST(HighCIntegerConversion, AnIntegerOperatorReadsAFloatingValuesBits) {
+  // AArch64 `fmov x8, d0; cmp x8, x0; cset w0, lt` compares a double's bits
+  // as a signed integer, and `udiv` divides them: HighIR holds each as an
+  // integer operator over a BitCast of the floating value.  The C cast such
+  // an operator puts on its operand converts a value, so it goes on the bit
+  // cast: `(int64_t)d < k` would compare the truncated value instead, and
+  // of a NaN is undefined.
+  for (uint16_t Bytes : {4, 8}) {
+    SCOPED_TRACE(Bytes);
+    const TypeRef Float = NdType::makeFloat(Bytes);
+    const TypeRef Unsigned = integer(Bytes, false);
+    const TypeRef Signed = integer(Bytes, true);
+    const TypeRef Flag = integer(1, false);
+    const std::string Suffix = std::to_string(Bytes * 8);
+    auto Bits = [&] {
+      auto Parameter = typed(input(), Float);
+      Parameter->Var.Size = Bytes;
+      Parameter->Var.TheArch = Arch::AArch64;
+      auto View = cast(std::move(Parameter), Unsigned);
+      View->Kind = ExprKind::BitCast;
+      return View;
+    };
+    // The constants have the sign bit of the width clear and set.
+    const uint64_t Low = 5;
+    const uint64_t High = Bytes == 4 ? 0xC0000000ull : 0xC000000000000000ull;
+    struct Case {
+      const char *Name;
+      NdOp Op;
+      uint64_t Right;
+      bool Truth;
+    };
+    const Case Cases[] = {
+        {"signed_less_low", NdOp::INT_SLESS, Low, true},
+        {"signed_less_high", NdOp::INT_SLESS, High, true},
+        {"signed_less_equal", NdOp::INT_SLESSEQUAL, High, true},
+        {"unsigned_less_low", NdOp::INT_LESS, Low, true},
+        {"unsigned_less_high", NdOp::INT_LESS, High, true},
+        {"unsigned_less_equal", NdOp::INT_LESSEQUAL, High, true},
+        {"unsigned_quotient", NdOp::INT_DIV, 10, false},
+        {"signed_quotient", NdOp::INT_SDIV, 10, false},
+        {"unsigned_remainder", NdOp::INT_REM, 10, false},
+        {"signed_remainder", NdOp::INT_SREM, 10, false},
+        {"logical_shift", NdOp::INT_RIGHT, 3, false},
+    };
+    std::vector<HighFunc> Functions;
+    for (const Case &C : Cases) {
+      const bool SignedOp = C.Op == NdOp::INT_SLESS ||
+                            C.Op == NdOp::INT_SLESSEQUAL ||
+                            C.Op == NdOp::INT_SDIV || C.Op == NdOp::INT_SREM;
+      auto Value = op(C.Op, Bits(), constant(C.Right, Bytes),
+                      C.Truth    ? Flag
+                      : SignedOp ? Signed
+                                 : Unsigned);
+      HighFunc F =
+          function(std::string(C.Name) + "_" + Suffix, integer(8, false),
+                   {result(extend(NdOp::INT_ZEXT, std::move(Value),
+                                  integer(8, false)))});
+      F.Entry = 0x1000 + 0x100 * Functions.size();
+      F.Params = {{"arg0", Float}};
+      Functions.push_back(std::move(F));
+    }
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::AArch64;
+    ASSERT_TRUE(HighCEmitter().emit(Functions, Out, Options));
+    Out.flush();
+    // No C conversion of the floating parameter itself reaches an operator.
+    EXPECT_EQ(Source.find("_t)arg0"), std::string::npos) << Source;
+    const std::string F = Bytes == 4 ? "float" : "double";
+    const std::string U = "uint" + Suffix + "_t", S = "int" + Suffix + "_t";
+    const std::string H =
+        Bytes == 4 ? "UINT32_C(0xC0000000)" : "UINT64_C(0xC000000000000000)";
+    compileAndRun(
+        Source + "\n#include <string.h>\nstatic " + U + " bits(" + F +
+        " v) { " + U +
+        " b; memcpy(&b, &v, sizeof b); return b; }\n"
+        "int main(void) {\n"
+        "  static const " +
+        F +
+        " vs[] = {0.0, -0.0, 1.5, -2.25, 3.0, 1e30, -1e-30,\n"
+        "                      123456789.0, -7e18, __builtin_nan(\"\")};\n"
+        "  for (unsigned i = 0; i < sizeof vs / sizeof vs[0]; ++i) {\n"
+        "    const " +
+        U + " u = bits(vs[i]); const " + S + " s = (" + S +
+        ")u;\n"
+        "    if (signed_less_low_" +
+        Suffix +
+        "(vs[i]) != (uint64_t)(s < 5)) return 1;\n"
+        "    if (signed_less_high_" +
+        Suffix + "(vs[i]) != (uint64_t)(s < (" + S + ")" + H +
+        ")) return 2;\n"
+        "    if (signed_less_equal_" +
+        Suffix + "(vs[i]) != (uint64_t)(s <= (" + S + ")" + H +
+        ")) return 3;\n"
+        "    if (unsigned_less_low_" +
+        Suffix +
+        "(vs[i]) != (uint64_t)(u < 5)) return 4;\n"
+        "    if (unsigned_less_high_" +
+        Suffix + "(vs[i]) != (uint64_t)(u < " + H +
+        ")) return 5;\n"
+        "    if (unsigned_less_equal_" +
+        Suffix + "(vs[i]) != (uint64_t)(u <= " + H +
+        ")) return 6;\n"
+        "    if (unsigned_quotient_" +
+        Suffix +
+        "(vs[i]) != (uint64_t)(u / 10)) return 7;\n"
+        "    if (signed_quotient_" +
+        Suffix + "(vs[i]) != (uint64_t)(" + U +
+        ")(s / 10)) return 8;\n"
+        "    if (unsigned_remainder_" +
+        Suffix +
+        "(vs[i]) != (uint64_t)(u % 10)) return 9;\n"
+        "    if (signed_remainder_" +
+        Suffix + "(vs[i]) != (uint64_t)(" + U +
+        ")(s % 10)) return 10;\n"
+        "    if (logical_shift_" +
+        Suffix +
+        "(vs[i]) != (uint64_t)(u >> 3)) return 11;\n"
+        "  }\n  return 0;\n}\n");
+  }
+}
+
 } // namespace

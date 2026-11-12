@@ -30,6 +30,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64OptStress91RT : public SemanticRoundTripFixture,
                          public ::testing::WithParamInterface<RoundTripTC> {};
@@ -113,12 +114,24 @@ static std::vector<RoundTripTC> makeOptStress91TC(const char *prefix, const char
 }
 // clang-format on
 
-static const std::vector<RoundTripTC> kX64 = makeOptStress91TC("x64o91", "long");
+static const std::vector<RoundTripTC> kX64 =
+    makeOptStress91TC("x64o91", "long");
 static const std::vector<RoundTripTC> kX86 = makeOptStress91TC("x86o91", "int");
-static const std::vector<RoundTripTC> kA64 = makeOptStress91TC("a64o91", "long");
+static const std::vector<RoundTripTC> kA64 =
+    makeOptStress91TC("a64o91", "long");
 static const std::vector<RoundTripTC> kARM = makeOptStress91TC("armo91", "int");
 
-INSTANTIATE_TEST_SUITE_P(OptStress91, X64OptStress91RT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress91, X86OptStress91RT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress91, A64OptStress91RT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress91, ARM32OptStress91RT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress91, X64OptStress91RT,
+                         ::testing::ValuesIn(kX64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress91, X86OptStress91RT,
+                         ::testing::ValuesIn(kX86), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress91, A64OptStress91RT,
+                         ::testing::ValuesIn(kA64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress91, ARM32OptStress91RT,
+                         ::testing::ValuesIn(kARM), rtTCName);
+
+// Addresses in a literal pool printed as numbers: the C is checked by
+// execution.
+INSTANTIATE_TEST_SUITE_P(OptStress91HighC, ARM32OptStress91RT,
+                         ::testing::ValuesIn(onHighC(kARM, {"_pdstore"})),
+                         rtTCName);

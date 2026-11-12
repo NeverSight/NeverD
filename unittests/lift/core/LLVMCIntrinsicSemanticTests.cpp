@@ -4515,4 +4515,439 @@ TEST(LLVMCIntrinsicSemantics, NativeAdditionRejectsChangedContracts) {
   checkNativeRmwContract(NdOp::ATOMIC_ADD);
 }
 
+/// The C of \p IR for \p Architecture as one unit that names what it leaves
+/// out, with \p Refused taking those names.
+std::string emitUnit(const char *IR, Arch Architecture, const char *Triple,
+                     std::vector<CEmitterOptions::RefusedDefinition> &Refused,
+                     bool Includes = false) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(IR, Error, Context);
+  EXPECT_TRUE(Module) << Error.getMessage().str();
+  if (!Module)
+    return {};
+  Module->setTargetTriple(llvm::Triple(Triple));
+  CEmitterOptions Options;
+  Options.TheArch = Architecture;
+  Options.EmitIncludes = Includes;
+  Options.RefusedDefinitions = &Refused;
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  EXPECT_TRUE(LLVMCEmitter().emit(*Module, OS, Options));
+  return Text;
+}
+
+/// Whether \p Compiler builds the C \p Source to an object with
+/// \p Arguments, its diagnostics in \p Diagnostics when it does not.
+bool buildsObject(llvm::StringRef Compiler,
+                  llvm::ArrayRef<llvm::StringRef> Arguments,
+                  llvm::StringRef Source, std::string &Diagnostics) {
+  llvm::SmallString<128> Input, Output, Errors;
+  if (llvm::sys::fs::createTemporaryFile("neverd-unit", "c", Input) ||
+      llvm::sys::fs::createTemporaryFile("neverd-unit", "o", Output) ||
+      llvm::sys::fs::createTemporaryFile("neverd-unit", "err", Errors))
+    return false;
+  llvm::FileRemover RemoveInput(Input), RemoveOutput(Output),
+      RemoveErrors(Errors);
+  {
+    std::error_code EC;
+    llvm::raw_fd_ostream OS(Input, EC);
+    if (EC)
+      return false;
+    OS << Source;
+  }
+  std::vector<llvm::StringRef> Command = {Compiler};
+  Command.insert(Command.end(), Arguments.begin(), Arguments.end());
+  Command.insert(Command.end(), {"-w", "-c", Input, "-o", Output});
+  const std::optional<llvm::StringRef> Redirects[] = {
+      llvm::StringRef(), llvm::StringRef(), Errors.str()};
+  const int Status =
+      llvm::sys::ExecuteAndWait(Compiler, Command, std::nullopt, Redirects, 60);
+  if (auto Log = llvm::MemoryBuffer::getFile(Errors))
+    Diagnostics = (*Log)->getBuffer().str();
+  return Status == 0;
+}
+
+TEST(LLVMCIntrinsicSemantics, HeaderScalarIntrinsicsNameTheirTargetFeature) {
+  // The header defines PDEP, PEXT and the CRC32 steps inline, for a caller
+  // that has the feature. The function that calls one names it, so the unit
+  // builds with no option.
+  std::vector<CEmitterOptions::RefusedDefinition> Refused;
+  const std::string Text =
+      emitUnit(R"ir(
+declare i64 @llvm.x86.bmi.pdep.64(i64, i64)
+declare i32 @llvm.x86.bmi.pext.32(i32, i32)
+declare i32 @llvm.x86.sse42.crc32.32.8(i32, i8)
+define i64 @deposit(i64 %value, i64 %mask) {
+  %r = call i64 @llvm.x86.bmi.pdep.64(i64 %value, i64 %mask)
+  ret i64 %r
+}
+define i32 @extract(i32 %value, i32 %mask) {
+  %r = call i32 @llvm.x86.bmi.pext.32(i32 %value, i32 %mask)
+  ret i32 %r
+}
+define i32 @checksum(i32 %sum, i8 %byte) {
+  %r = call i32 @llvm.x86.sse42.crc32.32.8(i32 %sum, i8 %byte)
+  ret i32 %r
+}
+define i32 @plain(i32 %a) {
+  %r = add i32 %a, 1
+  ret i32 %r
+}
+)ir",
+               Arch::X64, "x86_64-linux-gnu", Refused, true);
+  EXPECT_TRUE(Refused.empty()) << Refused.front().Reason;
+  EXPECT_NE(Text.find("target(\"bmi2\")"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("target(\"crc32\")"), std::string::npos) << Text;
+  const size_t Plain = Text.rfind("plain(");
+  ASSERT_NE(Plain, std::string::npos) << Text;
+  const size_t Line = Text.rfind('\n', Text.rfind('\n', Plain) - 1);
+  EXPECT_EQ(Text.substr(Line, Plain - Line).find("target("), std::string::npos)
+      << Text;
+  const auto Compiler = llvm::sys::findProgramByName("clang");
+  std::string Diagnostics;
+  if (Compiler && neverd::test::hostRunsX86())
+    EXPECT_TRUE(buildsObject(*Compiler, {}, Text, Diagnostics))
+        << Diagnostics << "\n"
+        << Text;
+}
+
+TEST(LLVMCIntrinsicSemantics, VectorOperationsPrintAsTheirHeaderIntrinsics) {
+  // Scalarizing leaves a target vector intrinsic whole. It prints as the
+  // header's intrinsic of its lane type, each vector operand converted to
+  // the header's type and an immediate as the constant the header takes.
+  struct Case {
+    Arch Architecture;
+    const char *Triple;
+    std::vector<llvm::StringRef> Build;
+    const char *IR;
+    std::vector<const char *> Spellings;
+  };
+  const Case Cases[] = {
+      {Arch::AArch64,
+       "aarch64-linux-gnu",
+       {"-target", "aarch64-linux-gnu",
+        "-march=armv8.4-a+aes+sha2+sha3+sm4+fp16"},
+       R"ir(
+declare <4 x i32> @llvm.aarch64.neon.sqshl.v4i32(<4 x i32>, <4 x i32>)
+declare <4 x i32> @llvm.aarch64.neon.uqrshl.v4i32(<4 x i32>, <4 x i32>)
+declare <4 x i32> @llvm.aarch64.neon.sqshlu.v4i32(<4 x i32>, <4 x i32>)
+declare <4 x i16> @llvm.aarch64.neon.sqrshrn.v4i16(<4 x i32>, i32)
+declare <8 x i8> @llvm.aarch64.neon.sqshrun.v8i8(<8 x i16>, i32)
+declare <16 x i8> @llvm.aarch64.crypto.aese(<16 x i8>, <16 x i8>)
+declare <4 x i32> @llvm.aarch64.crypto.sha1c(<4 x i32>, i32, <4 x i32>)
+declare <4 x i32> @llvm.aarch64.crypto.sm3tt2a(<4 x i32>, <4 x i32>, <4 x i32>, i64)
+declare <16 x i8> @llvm.aarch64.neon.pmull64(i64, i64)
+declare <8 x i16> @llvm.aarch64.neon.pmull.v8i16(<8 x i8>, <8 x i8>)
+declare <4 x float> @llvm.aarch64.neon.fmulx.v4f32(<4 x float>, <4 x float>)
+declare <2 x float> @llvm.aarch64.neon.fcvtxn.v2f32.v2f64(<2 x double>)
+declare <2 x i32> @llvm.aarch64.neon.urecpe.v2i32(<2 x i32>)
+define <4 x i32> @shifts(<4 x i32> %a, <4 x i32> %b) {
+  %s = call <4 x i32> @llvm.aarch64.neon.sqshl.v4i32(<4 x i32> %a, <4 x i32> %b)
+  %u = call <4 x i32> @llvm.aarch64.neon.uqrshl.v4i32(<4 x i32> %s, <4 x i32> %b)
+  %l = call <4 x i32> @llvm.aarch64.neon.sqshlu.v4i32(<4 x i32> %u, <4 x i32> splat (i32 3))
+  ret <4 x i32> %l
+}
+define <4 x i16> @narrow(<4 x i32> %a) {
+  %n = call <4 x i16> @llvm.aarch64.neon.sqrshrn.v4i16(<4 x i32> %a, i32 10)
+  ret <4 x i16> %n
+}
+define <8 x i8> @narrow_unsigned(<8 x i16> %a) {
+  %n = call <8 x i8> @llvm.aarch64.neon.sqshrun.v8i8(<8 x i16> %a, i32 3)
+  ret <8 x i8> %n
+}
+define <16 x i8> @cipher(<16 x i8> %data, <16 x i8> %key) {
+  %r = call <16 x i8> @llvm.aarch64.crypto.aese(<16 x i8> %data, <16 x i8> %key)
+  ret <16 x i8> %r
+}
+define <4 x i32> @hash(<4 x i32> %a, i32 %e, <4 x i32> %w) {
+  %c = call <4 x i32> @llvm.aarch64.crypto.sha1c(<4 x i32> %a, i32 %e, <4 x i32> %w)
+  %t = call <4 x i32> @llvm.aarch64.crypto.sm3tt2a(<4 x i32> %c, <4 x i32> %a, <4 x i32> %w, i64 2)
+  ret <4 x i32> %t
+}
+define <16 x i8> @carryless(i64 %a, i64 %b) {
+  %p = call <16 x i8> @llvm.aarch64.neon.pmull64(i64 %a, i64 %b)
+  ret <16 x i8> %p
+}
+define <8 x i16> @carryless_bytes(<8 x i8> %a, <8 x i8> %b) {
+  %p = call <8 x i16> @llvm.aarch64.neon.pmull.v8i16(<8 x i8> %a, <8 x i8> %b)
+  ret <8 x i16> %p
+}
+define <4 x i32> @extended(<4 x i32> %a, <4 x i32> %b) {
+  %x = bitcast <4 x i32> %a to <4 x float>
+  %y = bitcast <4 x i32> %b to <4 x float>
+  %m = call <4 x float> @llvm.aarch64.neon.fmulx.v4f32(<4 x float> %x, <4 x float> %y)
+  %r = bitcast <4 x float> %m to <4 x i32>
+  ret <4 x i32> %r
+}
+define <2 x i32> @narrow_odd(<2 x i64> %a) {
+  %d = bitcast <2 x i64> %a to <2 x double>
+  %f = call <2 x float> @llvm.aarch64.neon.fcvtxn.v2f32.v2f64(<2 x double> %d)
+  %r = bitcast <2 x float> %f to <2 x i32>
+  %e = call <2 x i32> @llvm.aarch64.neon.urecpe.v2i32(<2 x i32> %r)
+  ret <2 x i32> %e
+}
+)ir",
+       {"vqshlq_s32((int32x4_t)(", "vqrshlq_u32((uint32x4_t)(",
+        "vqshluq_n_s32((int32x4_t)(", ", 3)", "vqrshrn_n_s32((int32x4_t)(",
+        ", 10)", "vqshrun_n_s16((int16x8_t)(", "vaeseq_u8((uint8x16_t)(",
+        "vsha1cq_u32((uint32x4_t)(", "(uint32_t)(",
+        "vsm3tt2aq_u32((uint32x4_t)(", ", 2)",
+        "vreinterpretq_u8_p128(vmull_p64((poly64_t)(", "vmull_p8((poly8x8_t)(",
+        "vmulxq_f32((float32x4_t)(", "vcvtx_f32_f64((float64x2_t)(",
+        "vrecpe_u32((uint32x2_t)("}},
+      {Arch::ARM,
+       "armv8-linux-gnueabihf",
+       {"-target", "armv8-linux-gnueabihf", "-mfpu=crypto-neon-fp-armv8"},
+       R"ir(
+declare <4 x i16> @llvm.arm.neon.vqshiftns.v4i16(<4 x i32>, <4 x i32>)
+declare <4 x i32> @llvm.arm.neon.vqshiftu.v4i32(<4 x i32>, <4 x i32>)
+declare <4 x i32> @llvm.arm.neon.vqdmull.v4i32(<4 x i16>, <4 x i16>)
+declare <8 x i16> @llvm.arm.neon.vqrdmulh.v8i16(<8 x i16>, <8 x i16>)
+declare <8 x i16> @llvm.arm.neon.vmullp.v8i16(<8 x i8>, <8 x i8>)
+declare <16 x i8> @llvm.arm.neon.aesmc(<16 x i8>)
+define <4 x i16> @narrow(<4 x i32> %a) {
+  %n = call <4 x i16> @llvm.arm.neon.vqshiftns.v4i16(<4 x i32> %a, <4 x i32> splat (i32 -5))
+  ret <4 x i16> %n
+}
+define <4 x i32> @shift(<4 x i32> %a, <4 x i32> %b) {
+  %s = call <4 x i32> @llvm.arm.neon.vqshiftu.v4i32(<4 x i32> %a, <4 x i32> %b)
+  ret <4 x i32> %s
+}
+define <4 x i32> @doubling(<4 x i16> %a, <4 x i16> %b) {
+  %d = call <4 x i32> @llvm.arm.neon.vqdmull.v4i32(<4 x i16> %a, <4 x i16> %b)
+  ret <4 x i32> %d
+}
+define <8 x i16> @rounding(<8 x i16> %a, <8 x i16> %b) {
+  %d = call <8 x i16> @llvm.arm.neon.vqrdmulh.v8i16(<8 x i16> %a, <8 x i16> %b)
+  ret <8 x i16> %d
+}
+define <8 x i16> @carryless(<8 x i8> %a, <8 x i8> %b) {
+  %p = call <8 x i16> @llvm.arm.neon.vmullp.v8i16(<8 x i8> %a, <8 x i8> %b)
+  ret <8 x i16> %p
+}
+define <16 x i8> @mix(<16 x i8> %a) {
+  %m = call <16 x i8> @llvm.arm.neon.aesmc(<16 x i8> %a)
+  ret <16 x i8> %m
+}
+)ir",
+       {"vqshrn_n_s32((int32x4_t)(", ", 5)", "vqshlq_u32((uint32x4_t)(",
+        "(int32x4_t)(", "vqdmull_s16((int16x4_t)(",
+        "vqrdmulhq_s16((int16x8_t)(", "vmull_p8((poly8x8_t)(",
+        "vaesmcq_u8((uint8x16_t)("}},
+      {Arch::X64,
+       "x86_64-linux-gnu",
+       {},
+       R"ir(
+declare i32 @llvm.x86.sse42.pcmpistri128(<16 x i8>, <16 x i8>, i8)
+declare i32 @llvm.x86.sse42.pcmpestric128(<16 x i8>, i32, <16 x i8>, i32, i8)
+declare <16 x i8> @llvm.x86.sse42.pcmpistrm128(<16 x i8>, <16 x i8>, i8)
+declare <8 x i16> @llvm.x86.sse41.mpsadbw(<16 x i8>, <16 x i8>, i8)
+declare <2 x i64> @llvm.x86.pclmulqdq(<2 x i64>, <2 x i64>, i8)
+declare <8 x i32> @llvm.x86.avx2.permd(<8 x i32>, <8 x i32>)
+declare <4 x i32> @llvm.x86.sha1rnds4(<4 x i32>, <4 x i32>, i8)
+define i32 @strings(<16 x i8> %a, <16 x i8> %b, i32 %la, i32 %lb) {
+  %i = call i32 @llvm.x86.sse42.pcmpistri128(<16 x i8> %a, <16 x i8> %b, i8 12)
+  %c = call i32 @llvm.x86.sse42.pcmpestric128(<16 x i8> %a, i32 %la, <16 x i8> %b, i32 %lb, i8 8)
+  %r = add i32 %i, %c
+  ret i32 %r
+}
+define <16 x i8> @mask(<16 x i8> %a, <16 x i8> %b) {
+  %m = call <16 x i8> @llvm.x86.sse42.pcmpistrm128(<16 x i8> %a, <16 x i8> %b, i8 72)
+  ret <16 x i8> %m
+}
+define <8 x i16> @sad(<16 x i8> %a, <16 x i8> %b) {
+  %s = call <8 x i16> @llvm.x86.sse41.mpsadbw(<16 x i8> %a, <16 x i8> %b, i8 5)
+  ret <8 x i16> %s
+}
+define <2 x i64> @carryless(<2 x i64> %a, <2 x i64> %b) {
+  %p = call <2 x i64> @llvm.x86.pclmulqdq(<2 x i64> %a, <2 x i64> %b, i8 17)
+  ret <2 x i64> %p
+}
+define <8 x i32> @permute(<8 x i32> %a, <8 x i32> %index) {
+  %p = call <8 x i32> @llvm.x86.avx2.permd(<8 x i32> %a, <8 x i32> %index)
+  ret <8 x i32> %p
+}
+define <4 x i32> @rounds(<4 x i32> %a, <4 x i32> %b) {
+  %r = call <4 x i32> @llvm.x86.sha1rnds4(<4 x i32> %a, <4 x i32> %b, i8 6)
+  ret <4 x i32> %r
+}
+)ir",
+       // The instruction reads two bits of SHA1RNDS4's immediate, and the
+       // header takes no more.
+       {"_mm_cmpistri((__m128i)(", ", 12)", "_mm_cmpestrc((__m128i)(", "(int)(",
+        "_mm_cmpistrm((__m128i)(", ", 72)", "_mm_mpsadbw_epu8((__m128i)(",
+        "_mm_clmulepi64_si128((__m128i)(", ", 17)",
+        "_mm256_permutevar8x32_epi32((__m256i)(",
+        "_mm_sha1rnds4_epu32((__m128i)(", ", 2)", "sse4.2", "sse4.1", "pclmul",
+        "avx2", "sha"}}};
+  const auto Compiler = llvm::sys::findProgramByName("clang");
+  for (const Case &Target : Cases) {
+    SCOPED_TRACE(Target.Triple);
+    std::vector<CEmitterOptions::RefusedDefinition> Refused;
+    const std::string Text =
+        emitUnit(Target.IR, Target.Architecture, Target.Triple, Refused, true);
+    EXPECT_TRUE(Refused.empty()) << Refused.front().Reason;
+    for (const char *Spelling : Target.Spellings)
+      EXPECT_NE(Text.find(Spelling), std::string::npos) << Spelling << "\n"
+                                                        << Text;
+    EXPECT_EQ(Text.find("llvm_"), std::string::npos) << Text;
+    // The x86 unit builds with no option: each function names the features
+    // its header intrinsics need. The ARM units build for a processor that
+    // has the instructions. A host without the target's headers, or of
+    // another architecture for the x86 unit, cannot say whether the C builds.
+    std::string Diagnostics;
+    if (!Compiler || !buildsObject(*Compiler, Target.Build,
+                                   Target.Architecture == Arch::X64
+                                       ? "#include <immintrin.h>\n"
+                                       : "#include <arm_neon.h>\n",
+                                   Diagnostics))
+      continue;
+    EXPECT_TRUE(buildsObject(*Compiler, Target.Build, Text, Diagnostics))
+        << Diagnostics << "\n"
+        << Text;
+  }
+}
+
+TEST(LLVMCIntrinsicSemantics, AVectorOperationTheHeaderCannotTakeIsRefused) {
+  // The header takes these counts as constants in a range. A count that is
+  // not one, or lies outside it, has no header spelling, and neither has an
+  // intrinsic of another architecture: the unit is refused, not guessed.
+  struct Case {
+    Arch Architecture;
+    const char *Triple;
+    const char *IR;
+  };
+  const Case Cases[] = {{Arch::AArch64, "aarch64-linux-gnu", R"ir(
+declare <4 x i32> @llvm.aarch64.neon.sqshlu.v4i32(<4 x i32>, <4 x i32>)
+define <4 x i32> @variable(<4 x i32> %a, <4 x i32> %count) {
+  %l = call <4 x i32> @llvm.aarch64.neon.sqshlu.v4i32(<4 x i32> %a, <4 x i32> %count)
+  ret <4 x i32> %l
+}
+)ir"},
+                        {Arch::AArch64, "aarch64-linux-gnu", R"ir(
+declare <4 x i32> @llvm.aarch64.neon.sqshlu.v4i32(<4 x i32>, <4 x i32>)
+define <4 x i32> @too_far(<4 x i32> %a) {
+  %l = call <4 x i32> @llvm.aarch64.neon.sqshlu.v4i32(<4 x i32> %a, <4 x i32> splat (i32 32))
+  ret <4 x i32> %l
+}
+)ir"},
+                        {Arch::ARM, "armv8-linux-gnueabihf", R"ir(
+declare <4 x i16> @llvm.arm.neon.vqshiftns.v4i16(<4 x i32>, <4 x i32>)
+define <4 x i16> @left(<4 x i32> %a) {
+  %n = call <4 x i16> @llvm.arm.neon.vqshiftns.v4i16(<4 x i32> %a, <4 x i32> splat (i32 3))
+  ret <4 x i16> %n
+}
+)ir"},
+                        {Arch::X64, "x86_64-linux-gnu", R"ir(
+declare <16 x i8> @llvm.aarch64.crypto.aese(<16 x i8>, <16 x i8>)
+define <16 x i8> @foreign(<16 x i8> %data, <16 x i8> %key) {
+  %r = call <16 x i8> @llvm.aarch64.crypto.aese(<16 x i8> %data, <16 x i8> %key)
+  ret <16 x i8> %r
+}
+)ir"}};
+  for (const Case &Target : Cases) {
+    SCOPED_TRACE(Target.IR);
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Error;
+    auto Module = llvm::parseAssemblyString(Target.IR, Error, Context);
+    ASSERT_TRUE(Module) << Error.getMessage().str();
+    Module->setTargetTriple(llvm::Triple(Target.Triple));
+    CEmitterOptions Options;
+    Options.TheArch = Target.Architecture;
+    std::string Text;
+    llvm::raw_string_ostream OS(Text);
+    try {
+      (void)LLVMCEmitter().emit(*Module, OS, Options);
+      FAIL() << "a vector operation with no header spelling printed: " << Text;
+    } catch (const std::runtime_error &Refusal) {
+      EXPECT_NE(std::string(Refusal.what())
+                    .find("retains an unsupported vector instruction"),
+                std::string::npos)
+          << Refusal.what();
+    }
+  }
+}
+
+TEST(LLVMCIntrinsicSemantics, HalfPrecisionConversionsKeepEveryFractionBit) {
+  // A half converts to float exactly, so a saturating conversion of one is
+  // the float's. The fixed-point conversions take up to 64 fraction bits,
+  // more than arm_fp16.h's intrinsics do, and print as the instruction.
+  std::vector<CEmitterOptions::RefusedDefinition> Refused;
+  const std::string Text =
+      emitUnit(R"ir(
+declare i32 @llvm.fptosi.sat.i32.f16(half)
+declare i64 @llvm.fptoui.sat.i64.f16(half)
+declare half @llvm.aarch64.scvtf.fixed.i64(i64, i32)
+declare half @llvm.aarch64.ucvtf.fixed.i32(i32, i32)
+declare i32 @llvm.aarch64.fcvtzs.fixed.i32(half, i32)
+declare i64 @llvm.aarch64.fcvtzu.fixed.i64(half, i32)
+declare half @llvm.aarch64.neon.fmulx.f16(half, half)
+declare float @llvm.aarch64.neon.frecpx.f32(float)
+declare float @llvm.aarch64.sisd.fcvtxn(double)
+define i32 @saturated(half %h) {
+  %r = call i32 @llvm.fptosi.sat.i32.f16(half %h)
+  ret i32 %r
+}
+define i64 @saturated_unsigned(half %h) {
+  %r = call i64 @llvm.fptoui.sat.i64.f16(half %h)
+  ret i64 %r
+}
+define half @from_fixed(i64 %x, i32 %y) {
+  %a = call half @llvm.aarch64.scvtf.fixed.i64(i64 %x, i32 64)
+  %b = call half @llvm.aarch64.ucvtf.fixed.i32(i32 %y, i32 16)
+  %m = call half @llvm.aarch64.neon.fmulx.f16(half %a, half %b)
+  ret half %m
+}
+define i64 @to_fixed(half %h) {
+  %a = call i32 @llvm.aarch64.fcvtzs.fixed.i32(half %h, i32 16)
+  %b = call i64 @llvm.aarch64.fcvtzu.fixed.i64(half %h, i32 40)
+  %w = zext i32 %a to i64
+  %r = add i64 %w, %b
+  ret i64 %r
+}
+define float @scalar_forms(float %f, double %d) {
+  %x = call float @llvm.aarch64.neon.frecpx.f32(float %f)
+  %n = call float @llvm.aarch64.sisd.fcvtxn(double %d)
+  %r = fadd float %x, %n
+  ret float %r
+}
+)ir",
+               Arch::AArch64, "aarch64-linux-gnu", Refused, true);
+  EXPECT_TRUE(Refused.empty()) << Refused.front().Reason;
+  for (const char *Spelling :
+       {"neverd_llvm_fptosi_sat_i32_f16(", "neverd_llvm_fptoui_sat_i64_f16(",
+        "scvtf %h0, %x1, #64", "ucvtf %h0, %w1, #16", "fcvtzs %w0, %h1, #16",
+        "fcvtzu %x0, %h1, #40", "vmulxh_f16(", "vrecpxs_f32(",
+        "vcvtxd_f32_f64("})
+    EXPECT_NE(Text.find(Spelling), std::string::npos) << Spelling << "\n"
+                                                      << Text;
+  const auto Compiler = llvm::sys::findProgramByName("clang");
+  const std::vector<llvm::StringRef> Build = {"-target", "aarch64-linux-gnu",
+                                              "-march=armv8.2-a+fp16"};
+  std::string Diagnostics;
+  if (Compiler &&
+      buildsObject(*Compiler, Build, "#include <arm_fp16.h>\n", Diagnostics))
+    EXPECT_TRUE(buildsObject(*Compiler, Build, Text, Diagnostics))
+        << Diagnostics << "\n"
+        << Text;
+  // The instruction takes 1 to the integer's width of fraction bits.
+  for (const char *Count : {"0", "33"}) {
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Error;
+    const std::string IR =
+        std::string("declare i32 @llvm.aarch64.fcvtzs.fixed.i32(half, i32)\n"
+                    "define i32 @out_of_range(half %h) {\n"
+                    "  %r = call i32 @llvm.aarch64.fcvtzs.fixed.i32(half %h, "
+                    "i32 ") +
+        Count + ")\n  ret i32 %r\n}\n";
+    std::vector<CEmitterOptions::RefusedDefinition> Left;
+    const std::string Out =
+        emitUnit(IR.c_str(), Arch::AArch64, "aarch64-linux-gnu", Left);
+    ASSERT_EQ(Left.size(), 1u) << Out;
+    EXPECT_EQ(Left.front().Reason,
+              "unsupported AArch64 half-precision fixed-point conversion");
+  }
+}
+
 } // namespace

@@ -88,14 +88,9 @@ std::optional<Encoding> encoding(const cs_insn *Insn, Arch Target) {
            ? !matchesFPGPROperand(X.operands[1], E.rmIndex(), Width)
            : X.operands[1].type != X86_OP_MEM))
     return std::nullopt;
-  // The pinned decoder over-reports these resets for legacy BEXTR. Authenticate
-  // its detail, but derive architectural effects here: DF and control flags
-  // are preserved, and SF/AF/PF are undefined in both AMD and Intel manuals.
-  constexpr uint64_t DecoderFlags = Flags | X86_EFLAGS_RESET_TF |
-                                    X86_EFLAGS_RESET_IF | X86_EFLAGS_RESET_DF |
-                                    X86_EFLAGS_RESET_NT | X86_EFLAGS_RESET_RF;
-  if (!apxvalidation::implicitDetail(Insn, X, DecoderFlags, {},
-                                     {X86_REG_EFLAGS}))
+  // DF and the control flags are preserved, and SF/AF/PF are undefined in
+  // both AMD and Intel manuals; the decoder's detail says exactly that.
+  if (!apxvalidation::implicitDetail(Insn, X, Flags, {}, {X86_REG_EFLAGS}))
     return std::nullopt;
   if (Immediate) {
     if (Insn->size < E.Offset + 9 || X.encoding.imm_size != 4 ||

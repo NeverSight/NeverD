@@ -26,6 +26,9 @@ public:
   bool replicaStarted() const { return ready_ || startingReplica_; }
   /// The reads asked of the owner from what it keeps (askOwner).
   quint64 ownerReads() const { return ownerReads_; }
+  /// The reads answered with a page the owner read with an edit (take), for
+  /// which it was asked nothing.
+  quint64 pagesTaken() const { return pagesTaken_; }
   void setSnapshotBlocked(bool blocked);
   /// The user is making an edit a replica will render: it starts now, if it has
   /// not, and reads \p address, so that the read after the edit finds what this
@@ -63,6 +66,31 @@ private:
   /// The owner's answer to the running read from what it keeps; what it does
   /// not keep goes to the replica, or starts it.
   void askOwner();
+  /// A page the owner read with an edit (QueryService::followed), which a view
+  /// of this dispatcher's showed as the owner gave it: the read that view
+  /// makes at the change is answered with it, the owner asked nothing.
+  void take(const QString &operation, const QJsonObject &payload,
+            const QString &was, const QJsonObject &response, qint64 bytes);
+  /// Such a page: the read it answers, the answer as this dispatcher's reads
+  /// have it, and the owner's own.
+  struct Carried {
+    QString operation;
+    QJsonObject read, answer, response;
+    qint64 bytes = 0;
+  };
+  /// Hands \p page to this dispatcher's reads; false where they are not yet
+  /// those of the state it was read at.
+  bool give(const Carried &page);
+  /// A read took a page so given.
+  void tookGiven();
+  /// The owner gave the page \p response holds: it answers for it from here.
+  void ownerGave(const QJsonObject &response);
+  /// Asks the owner what the store holds, once for a project state; a replica
+  /// starts beside the owner where that is part of the renders.
+  void askKeptState();
+  /// \p response as this dispatcher's reads have it: the owner's project and
+  /// revision, and no analysis state, which a replica's never is the owner's.
+  QJsonObject ofTheOwner(QJsonObject response) const;
   void forgetKeptRequests();
   void stopWorker();
   /// Leaves what the worker is answering to run to its end, unanswered.
@@ -99,7 +127,12 @@ private:
   /// names a document the owner kept, which a ready replica would read whole,
   /// so the owner answers for it while it keeps it.
   QSet<QString> ownerPages_;
-  quint64 serial_ = 0, next_ = 0, ownerReads_ = 0;
+  /// The pages the owner said ahead of the change they came with.
+  QList<Carried> carried_;
+  /// A read took such a page while its edit was still to be given its own
+  /// answer, and no replica was started for it yet (setSnapshotBlocked).
+  bool tookSince_ = false;
+  quint64 serial_ = 0, next_ = 0, ownerReads_ = 0, pagesTaken_ = 0;
   bool ready_ = false;
   bool snapshotBlocked_ = false, startingReplica_ = false;
   bool updatesNames_ = false, refreshingNames_ = false;
@@ -127,6 +160,20 @@ public:
   void setOwnerReadsKept(bool reads) {
     for (auto &lane : lanes_)
       lane.service->setOwnerReadsKept(reads);
+  }
+  /// Gives \p owner the answers its reads have already (QueryService).
+  qsizetype deliverNow(QObject *owner) {
+    qsizetype given = 0;
+    for (auto &lane : lanes_)
+      given += lane.service->queries().deliverNow(owner);
+    return given;
+  }
+  /// The pages the lanes took as the owner read them with an edit.
+  quint64 pagesTaken() const {
+    quint64 taken = 0;
+    for (const auto &lane : lanes_)
+      taken += lane.service->pagesTaken();
+    return taken;
   }
   bool replicaStarted() const {
     for (const auto &lane : lanes_)

@@ -2774,6 +2774,7 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
   BlockLabels.clear();
   DeferredBlockLabels.clear();
   ReferencedBlocks.clear();
+  AddressLabelBlocks.clear();
   KnownImmediates.clear();
   AllocaImmediates.clear();
   UnknownPlaceholderCache.clear();
@@ -9075,6 +9076,7 @@ void LLVMCWriter::writeGoto(const llvm::BasicBlock *From,
                             bool EmitGoto) {
   if (!From || !To)
     return;
+  noteLabelPlace(From);
   std::set<const llvm::BasicBlock *> Seen;
   const llvm::BasicBlock *CurFrom = From;
   const llvm::BasicBlock *CurTo = To;
@@ -10553,6 +10555,7 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
   BufOS.flush();
   const size_t DeclInsertPos = Buffered.size();
   emitFunctionDecls(Fn);
+  writeLabelTables(Fn);
   {
     llvm::SmallPtrSet<const llvm::AllocaInst *, 8> Seen;
     for (const llvm::BasicBlock &BB : Fn) {
@@ -11536,7 +11539,7 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
   // a later region will actually inline. Retain the destination's rendered
   // position and reconcile late references before publishing the function.
   llvm::StringSet<> PrintedGotos, PrintedLabels;
-  if (!DeferredBlockLabels.empty()) {
+  if (!DeferredBlockLabels.empty() || !AddressLabelBlocks.empty()) {
     const llvm::StringRef Text(Buffered);
     for (size_t Pos = 0; (Pos = Text.find("goto ", Pos)) != Text.npos;) {
       const size_t Start = Pos + 5;
@@ -11556,6 +11559,9 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
       Start = End + 1;
     }
   }
+  // A label table names its blocks as a goto does.
+  for (const llvm::BasicBlock *Block : AddressLabelBlocks)
+    PrintedGotos.insert(blockLabel(Block));
   std::vector<std::pair<size_t, std::string>> MissingLabels;
   for (const auto &[Block, Position] : DeferredBlockLabels) {
     const std::string Name = blockLabel(Block);
@@ -11567,6 +11573,11 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
     if (!PrintedLabels.contains(Name))
       MissingLabels.emplace_back(Position, Label);
   }
+  for (const llvm::BasicBlock *Block : AddressLabelBlocks)
+    if (!PrintedLabels.contains(blockLabel(Block)) &&
+        !DeferredBlockLabels.count(Block))
+      throw std::runtime_error(
+          "a label table names a block that prints no statement");
   if (!MissingLabels.empty()) {
     std::sort(MissingLabels.begin(), MissingLabels.end());
     std::string WithLabels;

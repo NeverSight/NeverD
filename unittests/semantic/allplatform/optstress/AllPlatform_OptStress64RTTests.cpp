@@ -26,6 +26,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64OptStress64RT : public SemanticRoundTripFixture,
                          public ::testing::WithParamInterface<RoundTripTC> {};
@@ -147,12 +148,25 @@ static std::vector<RoundTripTC> makeOptStress64TC(const char *prefix, const char
 }
 // clang-format on
 
-static const std::vector<RoundTripTC> kX64 = makeOptStress64TC("x64o64", "long");
+static const std::vector<RoundTripTC> kX64 =
+    makeOptStress64TC("x64o64", "long");
 static const std::vector<RoundTripTC> kX86 = makeOptStress64TC("x86o64", "int");
-static const std::vector<RoundTripTC> kA64 = makeOptStress64TC("a64o64", "long");
+static const std::vector<RoundTripTC> kA64 =
+    makeOptStress64TC("a64o64", "long");
 static const std::vector<RoundTripTC> kARM = makeOptStress64TC("armo64", "int");
 
-INSTANTIATE_TEST_SUITE_P(OptStress64, X64OptStress64RT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress64, X86OptStress64RT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress64, A64OptStress64RT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress64, ARM32OptStress64RT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress64, X64OptStress64RT,
+                         ::testing::ValuesIn(kX64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress64, X86OptStress64RT,
+                         ::testing::ValuesIn(kX86), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress64, A64OptStress64RT,
+                         ::testing::ValuesIn(kA64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress64, ARM32OptStress64RT,
+                         ::testing::ValuesIn(kARM), rtTCName);
+
+// A switch behind an aligned vector store to the frame, whose unrecovered
+// dispatch HighC called through the image's numbers: the C is checked by
+// execution.
+INSTANTIATE_TEST_SUITE_P(OptStress64HighC, X86OptStress64RT,
+                         ::testing::ValuesIn(onHighC(kX86, {"_megamix"})),
+                         rtTCName);

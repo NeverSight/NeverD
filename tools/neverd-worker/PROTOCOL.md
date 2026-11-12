@@ -1098,8 +1098,11 @@ that follow it (`then`: at most four `{"operation":"decompile","payload":...}`, 
 naming the page its client keeps with `if_none_match`): once the request succeeds the
 reply answers each from the document that page is of, as a read made right after it
 would be answered, in the reply's own `then` list of `{status, payload}` or
-`{status, error}`, an answer over 1 MiB refused by itself.  A page of no document the
-worker holds is answered `{"status":"later"}`, for the client to read itself.  A request
+`{status, error}`, an answer over 1 MiB refused by itself.  A view of more pages than
+one carries each: where an earlier answer had a patch written into the document they
+name, a later one is answered from what that patch says it wrote of it.  A page of no
+document the worker holds, nor of one a patch it holds was so written into, is answered
+`{"status":"later"}`, for the client to read itself.  A request
 that fails answers none, and a read that is no page's is refused alone.  A page given so
 is not read ahead again once the reply is sent.  `metadata.following_reads` counts the
 reads answered so.  The workbench's owner dispatcher has each edit carry the

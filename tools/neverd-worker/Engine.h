@@ -833,6 +833,9 @@ private:
   pageName(const std::string &etag) const;
   std::optional<NamedPage> namedPage(const std::string &etag,
                                      bool previous) const;
+  /// Whether a read naming \p etag is one of a document held: the document
+  /// the page is of, or one a patch made of it that says what it wrote.
+  bool holdsPageOf(const std::string &etag) const;
   /// Function-list order (indices into Listing::functionRows) for the last
   /// filter, sort and listing generation.
   std::string functionOrderKey_;
