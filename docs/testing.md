@@ -1908,6 +1908,20 @@ work across multiple FDEs. Callback code relocation still rejects these new
 recipes. `AppleSignedCallbacks/SourcePatchPAuthLRCallbackMatrix`
 in `NeverDSourcePatchMatrixTests` rejects exact and interior original callbacks
 whose compact recipe requires PAuth_LR, leaving image and output unchanged.
+
+`NeverDArm64eLiftedImageTests` checks register-result publication with FP/SP
+CFA changes, explicit B-key augmentation, remembered states and two epilogues.
+It compares the final linked CFI with the original and rejects altered source
+spill rules. Native replay exercises both exits over an integer input matrix.
+`InstructionAddressRecipesUseTheActualSigningPC` compiles the public Darwin
+signal cursor and an independent SP/PC signing oracle as C11 and C++20 at
+O0/O2. Set `NEVERD_ARM64E_ASYNC_NATIVE=1` only in a qualified arm64e process
+environment to execute it. Separate properties count PACM and explicit
+PAuth_LR profiles; an unavailable explicit instruction is not counted.
+`verify_arm64e_native.py probe-cursor` additionally records whether the PC
+modifier changes signatures, rather than treating old-CPU PACM hint fallback
+as full PC-signing qualification. See the
+[native qualification record](arm64e-native-validation.md#instruction-address-signal-recipes-and-remembered-frames).
 These tests do not execute native signed exception unwinding.
 
 `AArch64LinkedUnwind` assembles and links real arm64e dylibs with the host

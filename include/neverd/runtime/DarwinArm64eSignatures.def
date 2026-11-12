@@ -1,0 +1,26 @@
+//===- DarwinArm64eSignatures.def - Native return recipes -------*- C -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Fixed-register signers shared with the AArch64 instruction contracts.
+///
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_ARM64E_SIGNER
+#define NEVERD_ARM64E_SIGNER(Name, Asm, Pointer, Modifier, PC, Output, Input)
+#endif
+
+#define NEVERD_A64_PAUTH_LR_SIGN(Key, Asm)                                     \
+  NEVERD_ARM64E_SIGNER(ndDarwinArm64eSignExplicit##Key, Asm, "x17", "x16",     \
+                       "x15", "+r", "r")
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuthLR.def"
+
+#define NEVERD_A64_PAUTH_M_SIGN(Key, Asm)                                      \
+  NEVERD_ARM64E_SIGNER(ndDarwinArm64eSignPACM##Key, Asm, "x17", "x16", "x15",  \
+                       "+r", "r")
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuthM.def"
+
+#undef NEVERD_ARM64E_SIGNER

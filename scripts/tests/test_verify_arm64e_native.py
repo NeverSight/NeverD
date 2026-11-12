@@ -26,6 +26,41 @@ def runtime_xml(executable=False, generated=False):
 
 
 class Arm64eNativeQualificationTests(unittest.TestCase):
+    def test_cursor_requires_pc_sensitivity_for_explicit_instructions(self):
+        observation = dict(CASES["cursor_observation"])
+        def result():
+            return subprocess.CompletedProcess([], 0, CASES["cursor_started"] +
+                                               "\n" + json.dumps(observation) + "\n", "")
+        self.assertEqual(native.cursor_observation(result(), CASES["cursor_recipes"][0])["status"],
+                         native.POLICY["passed"])
+        with self.assertRaises(ValueError):
+            native.cursor_observation(result(), CASES["cursor_recipes"][1])
+        observation["pc_rejected"] = observation["signed"]
+        with self.assertRaises(ValueError):
+            native.cursor_observation(result(), CASES["cursor_recipes"][1])
+        observation["recipe_rejected"] = observation["signed"]
+        self.assertEqual(native.cursor_observation(result(), CASES["cursor_recipes"][1])["status"],
+                         native.POLICY["passed"])
+
+    def test_cursor_does_not_accept_a_partial_or_unsigned_observation(self):
+        for observation in CASES["cursor_invalid_observations"]:
+            result = subprocess.CompletedProcess([], 0, CASES["cursor_started"] +
+                                                 "\n" + json.dumps(observation) + "\n", "")
+            with self.subTest(observation=observation), self.assertRaises(ValueError):
+                native.cursor_observation(result, CASES["cursor_recipes"][0])
+
+    def test_cursor_distinguishes_unavailable_isa_from_failed_checks(self):
+        result = subprocess.CompletedProcess([], CASES["cursor_unavailable_code"],
+                                             CASES["cursor_started"] + "\n", "")
+        self.assertEqual(native.cursor_observation(result, CASES["cursor_recipes"][1])["status"],
+                         native.POLICY["unavailable"])
+        with self.assertRaises(ValueError):
+            native.cursor_observation(result, CASES["cursor_recipes"][0])
+        for code in CASES["cursor_invalid_return_codes"]:
+            result.returncode = code
+            with self.subTest(code=code), self.assertRaises(ValueError):
+                native.cursor_observation(result, CASES["cursor_recipes"][1])
+
     def test_cpta_requires_checked_results_from_the_actual_x1_slice(self):
         policy = native.POLICY["cpta_probe"]
         checked = [row[3] for row in policy["vectors"]]
