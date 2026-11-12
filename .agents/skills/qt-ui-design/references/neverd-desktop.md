@@ -236,16 +236,27 @@ once: the user called the disabled buttons "lifeless", and found a disabled
 combo box that looked enabled. Take each value from a primary source, as the
 rules below do, not from taste.
 
-- Disabled controls give up their fill, keep their outline and dim their
-  label, as Windows 11 draws a disabled button, text box and combo box (WinUI
-  `ControlFillColorDisabled`, `ControlStrokeColorDefault`,
-  `TextFillColorDisabled`): `background: transparent` over the `Border`
-  hairline and `DisabledText`, which composite to almost exactly WinUI's
-  values in both themes. A full `Button` fill behind gray text turned
-  Binary comparison, whose actions wait for input, into a wall of dead gray
-  blocks. Combo box and spin box chevrons dim with the field
-  (`chevron_*_disabled-<mode>.svg`), and a disabled partly checked box
-  matches a disabled checked one.
+- A button or field that cannot act recedes to a faint plate under a dimmed
+  label (`ControlDisabled`, `ControlDisabledBorder`, `DisabledText`): the
+  button gray at 40%, as Visual Studio Code's `.monaco-button.disabled` fades
+  the whole button, with no edge in the dark theme and a 4% edge in the light
+  one, whose plate alone lies within a twentieth of the window. The plate
+  must be there, and nothing of the control may stand out from its surface by
+  more than a quarter: Windows 11 composites to 1.14:1 for the plate and
+  1.23:1 for the edge (`ControlFillColorDisabled` inside
+  `ControlStrokeColorDefault`, over `#202020`), and Visual Studio Code's
+  secondary button at 40% to 1.04:1 and 1.19:1 in Dark+, or to an edge of
+  1.13:1 alone in Dark Modern, whose enabled button is an outline too. Two
+  earlier looks failed with the user. A full
+  `Button` fill behind gray text turned Binary comparison, whose actions wait
+  for input, into a wall of dead gray blocks ("lifeless"). An outline alone
+  in the full `Border` color was as loud as an enabled button's fill (1.39:1
+  beside 1.40:1) around nothing, and the same dialog became a wall of empty
+  frames ("a bit ugly"); the note here that it matched Windows 11 was wrong
+  for the dark theme, where WinUI keeps its plate. Check boxes and radio
+  buttons keep `DisabledBorder`: a small box needs its outline. Combo box and
+  spin box chevrons dim with the field (`chevron_*_disabled-<mode>.svg`), and
+  a disabled partly checked box matches a disabled checked one.
 - Give every control the style sheet colors a `:disabled` rule. An explicit
   `color` or `background` hides the palette's disabled colors, so a disabled
   combo box, such as Binary comparison's SSA representation, looked exactly
@@ -258,7 +269,7 @@ rules below do, not from taste.
   white at 40% vanished into the pale fill (1.3:1), so there the fill is the
   accent at 18% and the label the window text at 55% (2.7:1). The full accent
   behind gray text read as an enabled button that had broken.
-- A checked tool button that cannot act keeps an outline in place of its
+- A checked tool button that cannot act keeps that plate in place of its
   fill; a toggle whose glyph shows its state keeps neither.
 - A spin box's arrow dims where its range ends. Qt marks that arrow `:off`,
   from `stepEnabled`, not `:disabled`.
