@@ -615,13 +615,15 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
            Offset += aarch64::kInsnSize) {
         auto Before = Source.drop_front(Offset);
         auto After = Emitted.drop_front(Offset);
-        if (decodeDirectBranch(Original.Arch, InstructionMode::Default,
-                               Before.data(), Before.size(), Start + Offset,
-                               {.Jumps = false, .Calls = true})) {
+        const auto Transfer = decodeDirectBranch(
+            Original.Arch, InstructionMode::Default, Before.data(),
+            Before.size(), Start + Offset, {.Jumps = true, .Calls = true});
+        const auto Target = Transfer ? Transfer->target() : std::nullopt;
+        if (Target && (*Target < Start || *Target >= End)) {
           if (!matchesDirectTransfer(Before, Start + Offset, After,
                                      Owner->second + Offset, Mappings,
                                      Generated, Original, Slide,
-                                     {.Jumps = false, .Calls = true}))
+                                     {.Jumps = true, .Calls = true}))
             return refuse(kDirectTarget);
         } else if (!equivalentLeafWord(readLE<uint32_t>(Before.data()),
                                        readLE<uint32_t>(After.data()))) {

@@ -979,7 +979,8 @@ The privileged EL1 controls have a separate verification record.
 A local direct caller can also establish a non-variadic X8/X9 result contract.
 The register reader checks physical reads and writes after the call, including
 W-register definitions. The callee and its supported callers use the same
-native lowering. The custom-caller test consumes both results and checks a
+native lowering. Local tail forwarders retain the complete register result,
+and the installer resolves their B targets against the published entry map. The custom-caller test consumes both results and checks a
 matrix of ordinary, wrapping and high-bit scalar values.
 
 `DarwinArm64eSignalCursor.h` provides a signal-context cursor for classic

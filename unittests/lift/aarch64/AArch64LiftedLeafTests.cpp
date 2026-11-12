@@ -117,7 +117,8 @@ enum class LeafCheck {
 void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
                            const char *SourceName = kSource,
                            std::string_view Preamble = {},
-                           LeafCheck Check = LeafCheck::None) {
+                           LeafCheck Check = LeafCheck::None,
+                           unsigned ExpectedEntries = kCount) {
 #if defined(__APPLE__) && defined(__aarch64__)
   llvm::SmallString<128> Directory;
   ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kTemporary, Directory));
@@ -321,7 +322,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
 
   auto Installed = Patcher.patch(Input, Output, Module, Image->Arch);
   ASSERT_TRUE(Installed.Success);
-  ASSERT_EQ(Installed.PatchedFunctions.size(), kCount);
+  ASSERT_EQ(Installed.PatchedFunctions.size(), ExpectedEntries);
   auto Final = Reader->load(Output);
   ASSERT_TRUE(bool(Final)) << llvm::toString(Final.takeError());
   EXPECT_TRUE(Final->isArm64e());
@@ -724,6 +725,12 @@ void verifyVariadicRegisterImage(const char *Optimization) {
 TEST(AArch64DarwinEntry, DirectCallerConsumesNonVariadicX8AndX9Results) {
   verifyPublishedLeaves(kScratchResultSource, kCaller, kAssemblyName, {},
                         LeafCheck::ScratchResult);
+}
+
+TEST(AArch64DarwinEntry, DirectCallerConsumesTailForwardedX8AndX9Results) {
+  verifyPublishedLeaves(kScratchResultSource, kCaller, kAssemblyName,
+                        kScratchTail, LeafCheck::ScratchResult,
+                        kScratchTailEntries);
 }
 
 TEST(AArch64DarwinVariadic, OptimizedImagePreservesReturnedRegisters) {

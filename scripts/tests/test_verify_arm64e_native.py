@@ -54,6 +54,33 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                 self.assertEqual(report[policy["qualified_key"]], status == native.POLICY["passed"])
                 self.assertFalse(list(Path(temporary).glob("*" + native.POLICY["binary_suffix"])))
 
+    def test_cpta_records_unsupported_isa_and_loader_without_qualification(self):
+        policy = native.POLICY["cpta_probe"]
+
+        def run(products, output, label, argv, timeout, env=None):
+            if label.endswith(native.POLICY["compile_suffix"]):
+                arch = label.removesuffix(native.POLICY["compile_suffix"])
+                Path(argv[-1]).write_bytes(struct.pack(
+                    native.POLICY["header_format"], native.POLICY["macho_magic"],
+                    native.POLICY["cpu_type"], policy["profiles"][arch]))
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            if label == policy["x1"]:
+                raise OSError(policy["bad_cpu_type_errno"], "")
+            return subprocess.CompletedProcess(argv, policy["undefined_instruction"],
+                                               policy["started"], "")
+
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(native.platform, "system", return_value=CASES["probe_host"]["system"]), \
+                mock.patch.object(native.platform, "machine", return_value=CASES["probe_host"]["machine"]), \
+                mock.patch.object(native, "command", side_effect=run):
+            report = native.probe_cpta(Path(temporary))
+            self.assertEqual(report["status"], native.POLICY["unavailable"])
+            self.assertFalse(report[policy["observed_key"]])
+            self.assertFalse(report[policy["qualified_key"]])
+            for arch, profile in report["profiles"].items():
+                self.assertEqual(profile["outcome"],
+                                 policy["loader_unavailable" if arch == policy["x1"] else "isa_unavailable"])
+
     def test_probe_keeps_startup_and_dlopen_contracts_distinct(self):
         contract = native.fixture_contract()
         markers = "\n".join(contract[name] for name in

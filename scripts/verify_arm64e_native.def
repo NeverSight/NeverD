@@ -345,6 +345,7 @@
     ],
     "started": "running-addpt",
     "undefined_instruction": 132,
+    "bad_cpu_type_errno": 86,
     "vectors": [
       [
         "1200000000000100",

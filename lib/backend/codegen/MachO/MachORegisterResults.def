@@ -23,6 +23,7 @@ MACHO_REGISTER_TEXT(kInvalidBody,
                     "registers, branches or unwind rows")
 MACHO_REGISTER_TEXT(kLocal, "Lneverd_reg_${:uid}_")
 MACHO_REGISTER_TEXT(kCall, "bl ")
+MACHO_REGISTER_TEXT(kTail, "b ")
 MACHO_REGISTER_TEXT(kOperandStart, "${")
 MACHO_REGISTER_TEXT(kOperandEnd, ":c}")
 MACHO_REGISTER_TEXT(kSymbolConstraint, "s,")

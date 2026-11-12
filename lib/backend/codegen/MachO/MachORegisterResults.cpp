@@ -9,6 +9,7 @@
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/DirectBranch.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -40,6 +41,7 @@ struct RegisterBody {
   std::string Constraints;
   llvm::SmallVector<llvm::Value *> Operands;
   llvm::SmallVector<llvm::Function *> ObservedCallees;
+  llvm::SmallVector<llvm::Function *> TailCallees;
   bool LoadsStackArgument = false;
   bool MaterializesCursor = false;
 };
@@ -305,7 +307,19 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
           (TestReg && Ops.front().type != AARCH64_OP_REG))
         return std::nullopt;
       const auto Target = va_t(Ops.back().imm);
-      if (Target < Start || Target >= End || (Target - Start) % Word)
+      if (Target < Start || Target >= End) {
+        const auto Tail = Functions.find(Target);
+        if (Tail == Functions.end() ||
+            !decodeDirectBranch(Image.Arch, InstructionMode::Default,
+                                I.Raw->bytes, Word, PC, {.Jumps = true}))
+          return std::nullopt;
+        Body.TailCallees.push_back(Tail->second);
+        OS << kTail;
+        emitOperand(Body, OS, Tail->second, kSymbolConstraint);
+        OS << '\n';
+        continue;
+      }
+      if ((Target - Start) % Word)
         return std::nullopt;
       OS << I.Raw->mnemonic << ' ';
       if (TestReg)
@@ -428,9 +442,14 @@ void lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
     for (auto *Operand : Body.Operands)
       if (auto *Callee = llvm::dyn_cast<llvm::Function>(Operand))
         Callers[Callee].push_back(F);
-  while (!Worklist.empty())
-    for (auto *Caller : Callers.lookup(Worklist.pop_back_val()))
+  while (!Worklist.empty()) {
+    auto *F = Worklist.pop_back_val();
+    for (auto *Target : Bodies.at(F).TailCallees)
+      if (Bodies.contains(Target))
+        Select(Target);
+    for (auto *Caller : Callers.lookup(F))
       Select(Caller);
+  }
   for (auto &[F, Body] : Bodies) {
     if (!Selected.contains(F))
       continue;

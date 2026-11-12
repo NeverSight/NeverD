@@ -86,12 +86,21 @@ A64_LEAF_VALUE(unsigned, kRegisterInputs, 3)
 A64_LEAF_TEXT(kReturnMnemonic, "ret")
 A64_LEAF_TEXT(kChangeScratch, "mov x9, xzr\n")
 A64_LEAF_TEXT(kVariadicDirect, "va_direct")
+A64_LEAF_TEXT(kScratchTail, "#define NEVERD_TEST_SCRATCH_FORWARD 1\n")
+A64_LEAF_VALUE(unsigned, kScratchTailEntries, 3)
 A64_LEAF_TEXT(kScratchResultSource, R"asm(
 .text
 .p2align 2
 .globl _leaf_sum
 _leaf_sum:
 .cfi_startproc
+#ifdef NEVERD_TEST_SCRATCH_FORWARD
+  b _scratch_results
+.cfi_endproc
+.globl _scratch_results
+_scratch_results:
+.cfi_startproc
+#endif
   mov x8, x0
   mov x9, x1
   add x0, x8, x9

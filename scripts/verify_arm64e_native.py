@@ -2,7 +2,6 @@
 """Qualify native Apple PAC before running the signed language install matrix."""
 
 import argparse
-import errno
 import hashlib
 import json
 import os
@@ -109,7 +108,8 @@ def probe_cpta(output):
                 built = command(products, output, arch + POLICY["compile_suffix"], argv, POLICY["tool_timeout"])
                 profile = report["profiles"][arch] = {"outcome": policy["unexpected"]}
                 if built.returncode:
-                    if arch == policy["x1"] and any(t in built.stderr.lower() for t in policy["unsupported_compiler"]):
+                    if (arch == policy["x1"] and arch in built.stderr and
+                            any(t in built.stderr.lower() for t in policy["unsupported_compiler"])):
                         profile["outcome"] = policy["slice_unavailable"]
                     continue
                 raw = binary.read_bytes()
@@ -122,7 +122,7 @@ def probe_cpta(output):
                 try:
                     result = command(products, output, arch, arguments, POLICY["tool_timeout"])
                 except OSError as error:
-                    if error.errno != errno.EBADARCH:
+                    if error.errno != policy["bad_cpu_type_errno"]:
                         raise
                     profile.update(outcome=policy["loader_unavailable"], errno=error.errno)
                     continue
