@@ -315,6 +315,8 @@ LinuxFiles::network(ServiceKind Kind, const ProcessServiceEvent &Event,
       Socket->Datagram = &C;
       return Reply(0);
     }
+    const uint64_t AttemptNumber =
+        uint64_t(TCPConnectFailuresConsumed) + NextConnection + 1;
     if (const auto &F = Network->TCPConnectFailures;
         F && NextConnection ==
                  F->AfterConnections.value_or(Network->Connections.size())) {
@@ -325,17 +327,25 @@ LinuxFiles::network(ServiceKind Kind, const ProcessServiceEvent &Event,
       }
       if (NextConnection == Network->Connections.size()) {
         const auto Reason =
-            llvm::formatv("TCP connection failure contract exhausted after {0} "
-                          "supplied failures; next result is not supplied",
-                          TCPConnectFailuresConsumed)
+            llvm::formatv(
+                "TCP connection failure contract exhausted after {0} "
+                "supplied failures (attempt {1} has no supplied result)",
+                TCPConnectFailuresConsumed, AttemptNumber)
                 .str();
         return unsupported(Result, Reason.c_str());
       }
     }
-    if (NextConnection == Network->Connections.size() ||
-        Network->Connections[NextConnection].Peer != Peer)
-      return unsupported(Result,
-                         "TCP peer has no matching offline connection attempt");
+    const bool MissingResult = NextConnection == Network->Connections.size();
+    if (MissingResult || Network->Connections[NextConnection].Peer != Peer) {
+      const auto Reason =
+          llvm::formatv("TCP peer has no matching offline connection attempt "
+                        "(attempt {0}, connection index {1} {2})",
+                        AttemptNumber, NextConnection,
+                        MissingResult ? "has no supplied result"
+                                      : "has a different peer")
+              .str();
+      return unsupported(Result, Reason.c_str());
+    }
     const auto &C = Network->Connections[NextConnection];
     if (C.ConnectErrno) {
       ++NextConnection;

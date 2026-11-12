@@ -1,0 +1,38 @@
+//===- arm64e_native_cpta.def - Native EL0 checked arithmetic control -----===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#include <inttypes.h>
+#include <signal.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+static void unsupported(int Signal) { _exit(128 + Signal); }
+
+static uint64_t addChecked(uint64_t Base, uint64_t Offset) {
+  register uint64_t Left __asm__("x1") = Base;
+  register uint64_t Right __asm__("x2") = Offset;
+  register uint64_t Result __asm__("x0");
+  // ADDPT X0, X1, X2. Its encoding also builds with pre-CPA Apple assemblers.
+  __asm__ volatile(".long 0x9a022020" : "=r"(Result) : "r"(Left), "r"(Right));
+  return Result;
+}
+
+int main(int Argc, char **Argv) {
+  if (Argc < 3 || (Argc - 1) % 2)
+    return 1;
+  if (signal(SIGILL, unsupported) == SIG_ERR)
+    return 1;
+  puts("running-addpt");
+  fflush(stdout);
+  for (int I = 1; I < Argc; I += 2) {
+    const uint64_t Base = strtoull(Argv[I], NULL, 16);
+    const uint64_t Offset = strtoull(Argv[I + 1], NULL, 16);
+    printf("%016" PRIx64 "\n", addChecked(Base, Offset));
+  }
+  return 0;
+}

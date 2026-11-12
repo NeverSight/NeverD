@@ -437,6 +437,9 @@ TEST_P(LinuxNetwork, TCPConnectFailuresResumeAtTheNextExactPeer) {
 
   auto FD = open();
   EXPECT_FALSE(call(ServiceKind::Connect, FD, Base + 32, 16));
+  EXPECT_NE(Report.Diagnostic.find(
+                "attempt 1, connection index 0 has a different peer"),
+            std::string::npos);
   ASSERT_EQ(call(ServiceKind::Connect, FD, Base, 16), 0u);
   ASSERT_EQ(call(ServiceKind::Close, FD), 0u);
 
@@ -450,6 +453,9 @@ TEST_P(LinuxNetwork, TCPConnectFailuresResumeAtTheNextExactPeer) {
 
   FD = open();
   EXPECT_FALSE(call(ServiceKind::Connect, FD, Base, 16));
+  EXPECT_NE(Report.Diagnostic.find(
+                "attempt 4, connection index 1 has a different peer"),
+            std::string::npos);
   ASSERT_EQ(call(ServiceKind::Connect, FD, Base + 32, 16), 0u);
   EXPECT_EQ(call(ServiceKind::Read, FD, Base + 64, 2), 2u);
   uint8_t Data[2];
@@ -458,7 +464,8 @@ TEST_P(LinuxNetwork, TCPConnectFailuresResumeAtTheNextExactPeer) {
   EXPECT_EQ(Data[1], 8);
   ASSERT_EQ(call(ServiceKind::Close, FD), 0u);
   EXPECT_FALSE(call(ServiceKind::Connect, open(), Base + 32, 16));
-  EXPECT_NE(Report.Diagnostic.find("no matching offline connection attempt"),
+  EXPECT_NE(Report.Diagnostic.find(
+                "attempt 5, connection index 2 has no supplied result"),
             std::string::npos);
 }
 
@@ -483,6 +490,8 @@ TEST_P(LinuxNetwork, TCPConnectFailuresReachConfiguredBoundThenStop) {
   EXPECT_NE(Report.Diagnostic.find("failure contract exhausted"),
             std::string::npos);
   EXPECT_NE(Report.Diagnostic.find("after 4097 supplied failures"),
+            std::string::npos);
+  EXPECT_NE(Report.Diagnostic.find("attempt 4098 has no supplied result"),
             std::string::npos);
 }
 
@@ -594,6 +603,7 @@ INSTANTIATE_TEST_SUITE_P(Raw, LinuxNetwork,
 
 TEST(LinuxNetworkJSON, StrictWireAndSemanticAdmission) {
   auto Check = [](llvm::StringRef Text, bool Valid) {
+    SCOPED_TRACE(Text.str());
     auto P = processOptionsFromJSON(Text);
     EXPECT_EQ(bool(P), Valid);
     if (!P)
@@ -668,7 +678,12 @@ TEST(LinuxNetworkJSON, StrictWireAndSemanticAdmission) {
   Event(R"("receive_quiet_until_ns":18446744073709551615)", false, false);
   Event(R"("connect_errno":101,"receive_quiet_until_ns":7)", true, false);
   Event(R"("receive_quiet_after_connect_ns":0)", false, true);
-  Event(R"("receive_quiet_after_connect_ns":9223372036854775806)", false, true);
+  Event(R"("receive_quiet_after_connect_ns":9223372036854775806)", false,
+        false);
+  Event(R"("receive_quiet_after_connect_ns":"9223372036854775806")", false,
+        true);
+  Event(R"("receive_quiet_after_connect_ns":"9223372036854775807")", false,
+        false);
   Event(R"("receive_quiet_after_connect_ns":9223372036854775807)", false,
         false);
   Event(R"("receive_quiet_after_connect_ns":-1)", false, false);
