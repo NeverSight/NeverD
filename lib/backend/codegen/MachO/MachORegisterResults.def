@@ -18,7 +18,9 @@
 #endif
 
 MACHO_REGISTER_TEXT(kRegisterBody, "neverd.arm64e.register-results")
-MACHO_REGISTER_TEXT(kInvalidBody, "arm64e native register body disagrees with its source registers, branches or unwind rows")
+MACHO_REGISTER_TEXT(kInvalidBody,
+                    "arm64e native register body disagrees with its source "
+                    "registers, branches or unwind rows")
 MACHO_REGISTER_TEXT(kLocal, "Lneverd_reg_${:uid}_")
 MACHO_REGISTER_TEXT(kCall, "bl ")
 MACHO_REGISTER_TEXT(kOperandStart, "${")
