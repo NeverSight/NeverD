@@ -606,11 +606,18 @@ void WorkbenchStyle::drawPrimitive(PrimitiveElement element,
     case PE_IndicatorItemViewItemCheck:
       paintIndicator(element, *option, *painter);
       return;
-    case PE_FrameGroupBox:
-      paintDeviceBox(*painter, option->rect,
-                     DeviceBox{QColor(), chrome("Border"), 1, DeviceBox().edges,
-                               config::kWorkbenchStyleGroupBoxRadius});
+    case PE_FrameGroupBox: {
+      // A flat box is a rule beside its title: it frames nothing, as a box
+      // that shows its fields only while checked would around none of them.
+      const auto *frame = qstyleoption_cast<const QStyleOptionFrame *>(option);
+      const bool flat = frame && (frame->features & QStyleOptionFrame::Flat);
+      paintDeviceBox(
+          *painter, option->rect,
+          DeviceBox{QColor(), chrome("Border"), 1,
+                    flat ? Qt::Edges(Qt::TopEdge) : DeviceBox().edges,
+                    flat ? 0.0 : config::kWorkbenchStyleGroupBoxRadius});
       return;
+    }
     case PE_PanelMenu:
     case PE_FrameMenu:
       // A menu fills first and frames last, over its items.

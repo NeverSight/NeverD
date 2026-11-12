@@ -23,11 +23,15 @@
 #include "web/ReviewJournal.h"
 
 #include <QAction>
+#include <QApplication>
 #include <QComboBox>
 #include <QCryptographicHash>
 #include <QFile>
+#include <QFileDialog>
+#include <QFontInfo>
 #include <QGroupBox>
 #include <QJsonDocument>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPointer>
@@ -36,6 +40,7 @@
 #include <QTableView>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTimer>
 
 using namespace neverd::gui::web;
 
@@ -358,6 +363,57 @@ private slots:
       QVERIFY(Button->focusPolicy() != Qt::NoFocus);
     Dialog->findChild<PackageSession *>()->cancel();
     QVERIFY(!Dialog->findChild<PackageSession *>()->ready());
+    QVERIFY(Dialog->close());
+  }
+
+  void theWindowKeepsTheWorkbenchsManners() {
+    // "Preview file…" was the window's default by Qt's choice of its first
+    // push button, so Return in the finding filter opened a file chooser.
+    // The window also set a font of at least 12 points where every other
+    // takes the desktop's size, stretched two commands across their rows and
+    // framed registry fields it did not show.
+    auto *Dialog =
+        new PackageReviewDialog(QString::fromLocal8Bit(TEST_WEB_WORKER));
+    Dialog->show();
+    QVERIFY(QTest::qWaitForWindowExposed(Dialog));
+    QTRY_VERIFY_WITH_TIMEOUT(!Dialog->findChild<PackageSession *>()->busy(),
+                             TimeoutMs);
+    bool Opened = false;
+    QTimer Watch;
+    connect(&Watch, &QTimer::timeout, Dialog, [&Opened] {
+      if (auto *Chooser =
+              qobject_cast<QFileDialog *>(QApplication::activeModalWidget())) {
+        Opened = true;
+        Chooser->reject();
+      }
+    });
+    Watch.start(10);
+    auto *Filter =
+        Dialog->findChild<QLineEdit *>(QStringLiteral("packageFindingFilter"));
+    QVERIFY(Filter);
+    Filter->setFocus();
+    QTest::keyClick(Filter, Qt::Key_Return);
+    QTest::qWait(100);
+    QVERIFY(!Opened);
+    QVERIFY(Dialog->isVisible());
+    for (const auto *Button : Dialog->findChildren<QPushButton *>())
+      QVERIFY2(!Button->isDefault() && !Button->autoDefault(),
+               qPrintable(Button->text()));
+    QCOMPARE(QFontInfo(Dialog->font()).pointSizeF(),
+             QFontInfo(QApplication::font()).pointSizeF());
+    for (const auto *Name : {"packageExtract", "packageAssess"}) {
+      const auto *Button =
+          Dialog->findChild<QPushButton *>(QString::fromLatin1(Name));
+      QVERIFY(Button);
+      QVERIFY2(Button->width() <= Button->sizeHint().width(),
+               qPrintable(QStringLiteral("%1: %2 > %3")
+                              .arg(Button->text())
+                              .arg(Button->width())
+                              .arg(Button->sizeHint().width())));
+    }
+    QVERIFY(Dialog->findChild<QGroupBox *>(QStringLiteral("packageRegistry"))
+                ->isFlat());
+    Dialog->findChild<PackageSession *>()->cancel();
     QVERIFY(Dialog->close());
   }
 

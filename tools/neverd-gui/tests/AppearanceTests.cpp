@@ -1276,6 +1276,52 @@ private slots:
             contrast(theme.chrome("Button"), surface));
   }
 
+  void aFlatGroupBoxFramesNothing() {
+    // Offline package review shows its registry fields only while their
+    // group is checked; unchecked, the group drew a frame around nothing.  A
+    // flat group keeps the rule beside its title and no sides.
+    Theme::instance().setMode(Theme::Mode::Dark);
+    Theme::instance().apply();
+    const QColor line = Theme::instance().chrome("Border");
+    struct Sides {
+      int down = 0, across = 0;
+      QSize size;
+    };
+    const auto sides = [&line](bool flat) {
+      QGroupBox box(QStringLiteral("Include declarations"));
+      box.setCheckable(true);
+      box.setChecked(false);
+      box.setFlat(flat);
+      box.setAutoFillBackground(true);
+      box.resize(240, 64);
+      box.show();
+      QCoreApplication::processEvents();
+      const QImage image = box.grab().toImage();
+      // Device pixels of the frame's color down the left edge, and along
+      // the row that holds most of them.
+      Sides found;
+      found.size = image.size();
+      for (int y = 0; y < image.height(); ++y) {
+        found.down += image.pixelColor(0, y).rgb() == line.rgb();
+        int row = 0;
+        for (int x = 0; x < image.width(); ++x)
+          row += image.pixelColor(x, y).rgb() == line.rgb();
+        found.across = qMax(found.across, row);
+      }
+      return found;
+    };
+    const Sides framed = sides(false), flat = sides(true);
+    // A frame's side runs down more than half the box; a rule ends where it
+    // began, as thick as one pixel of the layout at the screen's scale.
+    QVERIFY2(framed.down > framed.size.height() / 2,
+             qPrintable(QString::number(framed.down)));
+    QVERIFY2(flat.down <= qCeil(qApp->devicePixelRatio()),
+             qPrintable(QString::number(flat.down)));
+    // The rule still runs across, broken only by the title.
+    QVERIFY2(flat.across > flat.size.width() / 4,
+             qPrintable(QString::number(flat.across)));
+  }
+
   void columnHeadingsStartWithTheirColumnsAndKeepTheirWeight() {
     // Qt centers a table's headings over cells that start at the left and
     // draws them bold while a cell of their column is selected, where a
