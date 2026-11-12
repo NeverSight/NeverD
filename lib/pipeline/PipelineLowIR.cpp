@@ -4280,48 +4280,53 @@ static LocalRegisterEffect summarizeRecoveredCallRegisters(
   std::optional<CallRegisterBody> Projection;
   size_t Work = limits::ir::kSourceFrameAnalysisRemaining;
   std::optional<std::map<SourceCallOccurrenceKey, va_t>> ScalarTargets;
-  if (!Img.IsRelocatable)
-    for (size_t B = 0; B < Body.Blocks.size(); ++B) {
-      auto Targets =
-          resolveLowBlockCallTargets(Body.Blocks[B], Img.Arch, &Work);
-      for (size_t I = 0; I < Body.Blocks[B].Ops.size(); ++I)
-        if (const auto &Call = Body.Blocks[B].Ops[I];
-            !Targets.count(I) && Call.Opcode == NdOp::INDIR_CALL &&
-            Call.NumInputs == 1 && !Call.Inputs[0].isConst()) {
-          const auto Site = sourceCallOccurrenceKey(Call);
-          if (!Site)
-            continue;
-          if (!ScalarTargets)
-            ScalarTargets = constantRegisterCallTargets(Body);
-          if (const auto Found = ScalarTargets->find(*Site);
-              Found != ScalarTargets->end())
-            Targets.try_emplace(I, MedCallTarget{Found->second, false});
-        }
-      for (const auto &[Index, Target] : Targets) {
-        const auto CodeTarget =
-            Target.ThroughSlot ? std::optional<va_t>(Target.Address)
-                               : qualifiedMIPSCallTarget(Img, Body.Blocks[B],
-                                                         Index, Target.Address);
-        if (!CodeTarget)
+  // A relocatable object's call becomes a call to its own routine only
+  // where lifting makes it one (LowToMedConverter::convert): through a
+  // pointer that is an address of the object's own, never a scalar that
+  // equals one, a slot, or a register constant.
+  for (size_t B = 0; B < Body.Blocks.size(); ++B) {
+    auto Targets = resolveLowBlockCallTargets(Body.Blocks[B], Img.Arch, &Work);
+    for (size_t I = 0; !Img.IsRelocatable && I < Body.Blocks[B].Ops.size(); ++I)
+      if (const auto &Call = Body.Blocks[B].Ops[I];
+          !Targets.count(I) && Call.Opcode == NdOp::INDIR_CALL &&
+          Call.NumInputs == 1 && !Call.Inputs[0].isConst()) {
+        const auto Site = sourceCallOccurrenceKey(Call);
+        if (!Site)
           continue;
-        if (Target.ThroughSlot ? importCalleeName(Img, Target.Address).empty()
-                               : !Img.hasExecutableCodeOwnerAt(*CodeTarget))
-          continue;
-        if (!Projection) {
-          Projection.emplace();
-          Projection->Blocks.assign(Body.Blocks.begin(), Body.Blocks.end());
-          Projection->Complete = Body.Complete;
-          Projection->UnsafeIndirectBranches = Body.UnsafeIndirectBranches;
-          Projection->HasIndependentRoots = Body.HasIndependentRoots;
-        }
-        auto &Call = Projection->Blocks[B].Ops[Index];
-        // This private view must also expose an import's register reads.
-        // A caller forwarding RCX still owns that incoming parameter even
-        // when the callable was transported through a frame slot.
-        Call.Opcode = Target.ThroughSlot ? NdOp::INDIR_CALL : NdOp::CALL;
-        Call.Inputs[0] = NdVar::cst(*CodeTarget, Call.Inputs[0].Size);
+        if (!ScalarTargets)
+          ScalarTargets = constantRegisterCallTargets(Body);
+        if (const auto Found = ScalarTargets->find(*Site);
+            Found != ScalarTargets->end())
+          Targets.try_emplace(I, MedCallTarget{Found->second, false});
       }
+    for (const auto &[Index, Target] : Targets) {
+      if (Img.IsRelocatable &&
+          (Target.ThroughSlot || !Target.addressesImage(true)))
+        continue;
+      const auto CodeTarget =
+          Target.ThroughSlot ? std::optional<va_t>(Target.Address)
+                             : qualifiedMIPSCallTarget(Img, Body.Blocks[B],
+                                                       Index, Target.Address);
+      if (!CodeTarget)
+        continue;
+      if (Target.ThroughSlot ? importCalleeName(Img, Target.Address).empty()
+                             : !Img.hasExecutableCodeOwnerAt(*CodeTarget))
+        continue;
+      if (!Projection) {
+        Projection.emplace();
+        Projection->Blocks.assign(Body.Blocks.begin(), Body.Blocks.end());
+        Projection->Complete = Body.Complete;
+        Projection->UnsafeIndirectBranches = Body.UnsafeIndirectBranches;
+        Projection->HasIndependentRoots = Body.HasIndependentRoots;
+      }
+      auto &Call = Projection->Blocks[B].Ops[Index];
+      // This private view must also expose an import's register reads.
+      // A caller forwarding RCX still owns that incoming parameter even
+      // when the callable was transported through a frame slot.
+      Call.Opcode = Target.ThroughSlot ? NdOp::INDIR_CALL : NdOp::CALL;
+      Call.Inputs[0] = NdVar::cst(*CodeTarget, Call.Inputs[0].Size);
     }
+  }
   return localRegisterEffect(
       Img, Projection ? CallRegisterBodyView(*Projection) : Body,
       &NoReturnTargets, &FixedCallReads, &ArgumentSources, &StackProbes);

@@ -619,6 +619,18 @@ va_t resolveIndirectTargetAddr(const MedBlock &Blk, int FromIdx,
   }
 }
 
+/// What the sum of an address computation is, from the constant \p Base it
+/// adds its displacements to: `adrp; add` completes a page fragment into an
+/// address, as MedIR's own fold of the pair has it
+/// (LowToMedConverter::propagate), and a displacement leaves an address one.
+/// Any other base, a scalar included, stays what it was.
+static ConstantAddressProvenance
+completedAddressProvenance(const MedVar &Base) {
+  return Base.Provenance == ConstantAddressProvenance::AddressFragment
+             ? ConstantAddressProvenance::Address
+             : Base.Provenance;
+}
+
 std::optional<MedCallTarget> resolveMedCallTarget(const MedBlock &Block,
                                                   size_t Before,
                                                   const MedVar &Value,
@@ -633,7 +645,7 @@ std::optional<MedCallTarget> resolveMedCallTarget(const MedBlock &Block,
     if (!consumeCallTargetWork(WorkRemaining))
       return std::nullopt;
     if (Current.isConst())
-      return MedCallTarget{Current.ConstVal, false};
+      return MedCallTarget{Current.ConstVal, false, 0, Current.Provenance};
     const MedOp *Definition = nullptr;
     for (size_t I = Before; I-- > 0;) {
       if (!consumeCallTargetWork(WorkRemaining))
@@ -668,7 +680,8 @@ std::optional<MedCallTarget> resolveMedCallTarget(const MedBlock &Block,
         llvm::APInt Bits(Address->Offset.getBitWidth(), Address->Base.ConstVal,
                          false, true);
         Bits += Address->Offset;
-        return MedCallTarget{Bits.getZExtValue(), false};
+        return MedCallTarget{Bits.getZExtValue(), false, 0,
+                             completedAddressProvenance(Address->Base)};
       }
       return std::nullopt;
     }
@@ -688,7 +701,8 @@ std::optional<MedCallTarget> resolveMedCallTarget(const MedBlock &Block,
       llvm::APInt Slot(Address->Offset.getBitWidth(), Address->Base.ConstVal,
                        false, true);
       Slot += Address->Offset;
-      return MedCallTarget{Slot.getZExtValue(), true, Before};
+      return MedCallTarget{Slot.getZExtValue(), true, Before,
+                           completedAddressProvenance(Address->Base)};
     }
     return std::nullopt;
   }

@@ -27,6 +27,19 @@ struct MedCallTarget {
   bool ThroughSlot;
   /// Original input-block LOAD index, meaningful when ThroughSlot is true.
   std::size_t LoadIndex = 0;
+  /// What the constant Address was read from is: the constant itself, or a
+  /// complete address where an address computation (`lea`, `adrp; add`)
+  /// formed it from an address or one's fragment.
+  ConstantAddressProvenance Provenance = ConstantAddressProvenance::Unknown;
+
+  /// Whether Address is one of the image's own. A linked image's constants
+  /// are. A relocatable object numbers its sections from zero, so a scalar
+  /// there can equal a routine's address without naming it (a null function
+  /// pointer where a routine starts the first section): only a constant the
+  /// loader or the decoder formed as a complete address is.
+  bool addressesImage(bool Relocatable) const {
+    return !Relocatable || isExactAddressProvenance(Provenance);
+  }
 };
 
 /// Query SSA values before \p Before. Calls, uncertain aliases, partial writes

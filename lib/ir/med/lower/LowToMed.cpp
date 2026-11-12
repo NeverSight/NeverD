@@ -1252,8 +1252,12 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
                 "instruction mode");
           CachedTarget->Address = *Target;
         }
+        // A relocatable object's call takes the routine's contract too,
+        // where the pointer is an address of the object's own
+        // (MedCallTarget::addressesImage): left indirect, each backend would
+        // have to bind an unknown callee's arguments to that routine late.
         if (CachedTarget && !CachedTarget->ThroughSlot && !AnalystSite &&
-            !Image->IsRelocatable &&
+            CachedTarget->addressesImage(Image->IsRelocatable) &&
             Image->hasExecutableCodeOwnerAt(CachedTarget->Address)) {
           DirectCall = Call;
           DirectCall->Opcode = NdOp::CALL;
