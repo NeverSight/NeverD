@@ -28,6 +28,8 @@ NEVERD_UNWIND_TEXT(
     kCFI, "implicit unwind recovery cannot resolve this CFA or register rule")
 NEVERD_UNWIND_TEXT(
     kCode, "implicit unwind recovery cannot decode the complete control flow")
+NEVERD_UNWIND_TEXT(kLandingPad, "implicit unwind recovery cannot resolve this "
+                                "personality or landing-pad table")
 NEVERD_UNWIND_TEXT(
     kBudget, "implicit unwind recovery exceeded its work or stack-state budget")
 NEVERD_UNWIND_TEXT(kUnaligned,

@@ -130,39 +130,49 @@ prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
   std::set<std::string> Declared;
   for (const auto &D : Dependencies)
     Declared.insert(D.Symbol);
-  std::map<std::string, uint64_t> Personalities;
-  std::set<std::string> Conflicts;
-  for (const auto &[Address, P] : Original.MachOAuthenticatedPointers) {
-    if (P.Symbol.empty() || P.Addend || P.Key != kPersonalityKey ||
-        P.Diversity != kPersonalityDiversity ||
-        P.AddressDiversity != kPersonalityAddressDiversity)
-      continue;
-    const auto Name = canonical(P.Symbol);
-    auto [It, Added] = Personalities.emplace(Name, Address);
-    if (!Added) {
-      const auto &Previous = Original.MachOAuthenticatedPointers.at(It->second);
-      if (Previous.Module != P.Module ||
-          Previous.LibraryOrdinal != P.LibraryOrdinal ||
-          Previous.WeakImport != P.WeakImport)
-        Conflicts.insert(Name);
-    }
-  }
-  // A second slot with a different provider makes an undeclared symbol
-  // ambiguous even if only one slot has the unwind signing schema.
-  const auto CheckProvider = [&](const auto &Binding, llvm::StringRef Name) {
-    const auto Canonical = canonical(Name);
-    if (auto It = Personalities.find(Canonical); It != Personalities.end()) {
-      const auto &Selected = Original.MachOAuthenticatedPointers.at(It->second);
-      if (Selected.Module != Binding.Module ||
-          Selected.LibraryOrdinal != Binding.LibraryOrdinal ||
-          Selected.WeakImport != Binding.WeakImport)
-        Conflicts.insert(Canonical);
-    }
+  const auto UsesGOT = [&](const Relocation &R) {
+    return isCompactPersonality(Object, R) ||
+           R.Type == ARM64_RELOC_POINTER_TO_GOT ||
+           R.Type == ARM64_RELOC_GOT_LOAD_PAGE21 ||
+           R.Type == ARM64_RELOC_GOT_LOAD_PAGEOFF12;
   };
-  for (const auto &[Address, Binding] : Original.MachOAuthenticatedPointers)
-    CheckProvider(Binding, Binding.Symbol);
-  for (const auto &[Address, Binding] : Original.DyldBindSlots)
-    CheckProvider(Binding, Binding.Name);
+  if (llvm::none_of(Object.Relocations, UsesGOT))
+    return llvm::Error::success();
+  MachOChainedFixups Chains;
+  auto State = readMachODependencyState(Original.Raw, &Chains);
+  if (!State)
+    return State.takeError();
+  const auto Providers = Chains.uniqueImportProviders();
+  const auto MatchesProvider = [&](const std::string &Name, const auto &B) {
+    auto It = Providers.find(Name);
+    return It != Providers.end() && It->second && B.LibraryOrdinal &&
+           *It->second ==
+               MachOChainedFixups::Provider{*B.LibraryOrdinal, B.WeakImport};
+  };
+  std::map<std::string, va_t> Personalities, Ordinary;
+  for (const auto &[Address, P] : Original.MachOAuthenticatedPointers)
+    if (!P.Symbol.empty() && !P.Addend && P.Key == kPersonalityKey &&
+        P.Diversity == kPersonalityDiversity &&
+        P.AddressDiversity == kPersonalityAddressDiversity &&
+        MatchesProvider(P.Symbol, P))
+      Personalities.try_emplace(canonical(P.Symbol), Address);
+  // A mutable data variable can have the same bind. Only reuse non-lazy
+  // pointer storage that dyld seals after applying the ordinary binding.
+  for (const auto &[Address, B] : Original.DyldBindSlots) {
+    if (B.Addend || !MatchesProvider(B.Name, B))
+      continue;
+    const auto *Sec = Original.getSectionFor(Address);
+    if (!Sec || (Sec->Type & SECTION_TYPE) != S_NON_LAZY_SYMBOL_POINTERS ||
+        (Address - Sec->VA) % arm64e::kPointerBytes ||
+        !rangeInBounds(Address - Sec->VA, arm64e::kPointerBytes, Sec->FileSz))
+      continue;
+    if (llvm::any_of(Chains.Segments, [&](const auto &S) {
+          return (S.Flags & SG_READ_ONLY) && Address >= S.VMAddr &&
+                 rangeInBounds(Address - S.VMAddr, arm64e::kPointerBytes,
+                               S.FileSize);
+        }))
+      Ordinary.try_emplace(canonical(B.Name), Address);
+  }
   llvm::DenseMap<uint64_t, uint8_t> PersonalityFields;
   for (const auto &F : Object.OldFDEs)
     if (F.Personality)
@@ -175,9 +185,7 @@ prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
     if (Personality && Object.EH == R.Section &&
         PersonalityFields.lookup(R.Offset) != R.Width)
       return fail(kLanguagePointer);
-    if (!Personality && R.Type != ARM64_RELOC_POINTER_TO_GOT &&
-        R.Type != ARM64_RELOC_GOT_LOAD_PAGE21 &&
-        R.Type != ARM64_RELOC_GOT_LOAD_PAGEOFF12)
+    if (!UsesGOT(R))
       continue;
     if (!R.External || R.Scattered || R.SubtractVA || R.SubtractSymbol ||
         !Object.Symbols.contains(R.SymbolIndex))
@@ -188,10 +196,9 @@ prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
     const auto &Symbol = Object.Symbols.at(R.SymbolIndex);
     if (Symbol.Name.empty())
       return fail(kGOTRelocation);
-    if (Personality && !Symbol.Section && !Declared.contains(Symbol.Name) &&
-        !Conflicts.contains(Symbol.Name)) {
-      if (auto It = Personalities.find(Symbol.Name);
-          It != Personalities.end()) {
+    if (!Symbol.Section && !Declared.contains(Symbol.Name)) {
+      const auto &Candidates = Personality ? Personalities : Ordinary;
+      if (auto It = Candidates.find(Symbol.Name); It != Candidates.end()) {
         Object.GOT.emplace(Key, NativeMachO::GOTSlot{std::nullopt, It->second});
         continue;
       }

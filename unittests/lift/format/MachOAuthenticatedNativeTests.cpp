@@ -1208,8 +1208,12 @@ void checkNativeObjectInstallation(
   EXPECT_EQ(
       llvm::count_if(*Recipes, [](const auto &R) { return R.Authenticated; }),
       kKeyCount + unsigned(FreshPersonality));
-  EXPECT_EQ(Recipes->size(),
-            kKeyCount + kOrdinaryPointerCount + unsigned(FreshPersonality));
+  const auto TypeBinds = llvm::count_if(*Recipes, [](const auto &R) {
+    return !R.Authenticated && R.Recipe.Symbol == kTypeInfo;
+  });
+  EXPECT_LE(TypeBinds, 1);
+  EXPECT_EQ(Recipes->size(), kKeyCount + kOrdinaryObjectPointers + TypeBinds +
+                                 unsigned(FreshPersonality));
   const char *Slots[] = {kObjectLocalCode, kObjectExternalCode,
                          kObjectLocalData, kObjectExternalData};
   for (unsigned Key = 0; Key != kKeyCount; ++Key) {
@@ -1521,10 +1525,23 @@ void checkNativeObjectInstallation(
           kDwarfLSDAPrefix +
           Address(Function->HandlerDataVA, kDwarfAddressDigits)));
     }
-    if (llvm::StringRef(Name) == kObjectCatch)
-      EXPECT_TRUE(llvm::any_of(Function->Itanium->TypeTable, [](const auto &T) {
-        return T.TypeName == kTypeInfo;
-      }));
+    if (llvm::StringRef(Name) == kObjectCatch) {
+      const auto &Types = Function->Itanium->TypeTable;
+      const auto Type = llvm::find_if(
+          Types, [](const auto &T) { return T.TypeName == kTypeInfo; });
+      ASSERT_NE(Type, Types.end());
+      if (TypeBinds) {
+        EXPECT_TRUE(llvm::any_of(*Recipes, [&](const auto &R) {
+          return R.Address == Type->TypeInfoSlotVA && !R.Authenticated &&
+                 R.Recipe.Symbol == kTypeInfo;
+        }));
+      } else {
+        const auto Existing = Before->DyldBindSlots.find(Type->TypeInfoSlotVA);
+        ASSERT_NE(Existing, Before->DyldBindSlots.end());
+        EXPECT_EQ(Existing->second.Name, kTypeInfo);
+        EXPECT_EQ(Existing->second.Addend, 0);
+      }
+    }
   }
   if (ExecuteNative) {
     auto Anchor = llvm::find_if(Parsed->Symbols, [&](const auto &Symbol) {

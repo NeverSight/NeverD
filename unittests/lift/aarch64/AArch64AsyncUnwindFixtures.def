@@ -108,6 +108,78 @@ int main(int argc, char **argv) {
 }
 )c")
 ASYNC_FRAME_VALUE(unsigned, kCompactInputs, 3)
+ASYNC_FRAME_TEXT(kCxxCompiler, "/usr/bin/clang++")
+ASYNC_FRAME_TEXT(kCatchFile, "catcher.cpp")
+ASYNC_FRAME_TEXT(kCatchSymbol, "_catcher")
+ASYNC_FRAME_TEXT(kCatchMapping, "catcher")
+ASYNC_FRAME_TEXT(kCatchReplacement, "-DRETURN_ADJUSTMENT=1")
+ASYNC_FRAME_TEXT(kCatchDwarf, "-DNEVERD_TEST_DWARF_CATCH")
+ASYNC_FRAME_TEXT(kWritableGOT, "-Wl,-no_data_const,-headerpad,0x1000")
+ASYNC_FRAME_TEXT(kCatchImportsFile, "provider.cpp")
+ASYNC_FRAME_TEXT(kCatchImports, "provider.dylib")
+ASYNC_FRAME_TEXT(kCatchDriverFile, "catch-driver.cpp")
+ASYNC_FRAME_TEXT(kCxxPaths, "native_cxx_exception_paths")
+ASYNC_FRAME_VALUE(unsigned, kCxxInputs, 4)
+ASYNC_FRAME_TEXT(kCatchBody, R"cpp(
+#ifndef RETURN_ADJUSTMENT
+#define RETURN_ADJUSTMENT 0
+#endif
+extern "C" void source_throw(int);
+extern "C" int observe_catch(int);
+extern "C" __attribute__((noinline)) int catcher(int x) {
+#ifdef NEVERD_TEST_DWARF_CATCH
+  asm volatile(".cfi_escape 0x2e, 0");
+#endif
+  try {
+    source_throw(x);
+    return x + RETURN_ADJUSTMENT;
+  } catch (int v) {
+    return observe_catch(v) + RETURN_ADJUSTMENT;
+  }
+}
+)cpp")
+ASYNC_FRAME_TEXT(kCatchProvider, R"cpp(
+extern "C" void source_throw(int x) {
+  switch (x) {
+  case 1: throw 7;
+  case 2: throw 13L;
+  case 3: throw 11;
+  }
+}
+extern "C" int observe_catch(int v) {
+  if (v == 11)
+    throw 17L;
+  return v + 1;
+}
+)cpp")
+ASYNC_FRAME_TEXT(kCatchDriver, R"cpp(
+#include <dlfcn.h>
+#include <exception>
+#include <initializer_list>
+int main(int argc, char **argv) {
+  if (argc != 2 && argc != 3)
+    return 1;
+  auto *Image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!Image)
+    return 1;
+  auto catcher = reinterpret_cast<int (*)(int)>(dlsym(Image, "catcher"));
+  const int Adjustment = argc == 3;
+  if (!catcher || catcher(0) != Adjustment || catcher(1) != 8 + Adjustment)
+    return 1;
+  for (int x : {2, 3}) {
+    try {
+      catcher(x);
+      return 2;
+    } catch (long v) {
+      if (v != (x == 2 ? 13L : 17L))
+        return 3;
+    }
+    if (std::current_exception())
+      return 4;
+  }
+  return dlclose(Image);
+}
+)cpp")
 ASYNC_FRAME_TEXT(kAssembly, R"asm(
 .text
 .p2align 2

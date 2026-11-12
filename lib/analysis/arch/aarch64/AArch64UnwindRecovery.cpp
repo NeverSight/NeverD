@@ -8,6 +8,7 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
+#include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExceptionFunction.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
@@ -17,6 +18,7 @@
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/MathExtras.h"
 
+#include <algorithm>
 #include <deque>
 #include <map>
 #include <utility>
@@ -130,8 +132,10 @@ struct FrameRow {
   std::array<AArch64UnwindRegister, kRegisters> Registers;
 };
 
-llvm::Expected<std::map<uint64_t, FrameRow>>
-frameRows(const DwarfCIE &CIE, const DwarfFDE &FDE, size_t Limit) {
+llvm::Expected<std::map<uint64_t, FrameRow>> frameRows(const DwarfCIE &CIE,
+                                                       const DwarfFDE &FDE,
+                                                       size_t Limit,
+                                                       bool HasLandingPads) {
   FrameRow Row, Initial;
   std::vector<FrameRow> Remembered;
   std::map<uint64_t, FrameRow> Rows;
@@ -183,7 +187,10 @@ frameRows(const DwarfCIE &CIE, const DwarfFDE &FDE, size_t Limit) {
       case CFIOpKind::Nop:
       case CFIOpKind::AdvanceLoc:
       case CFIOpKind::SetLoc:
+        break;
       case CFIOpKind::GnuArgsSize:
+        if (HasLandingPads && I.Offset)
+          return fail(kCFI);
         break;
       default:
         return fail(kCFI);
@@ -373,6 +380,18 @@ void memory(State &S, const State &Before, const DecodedInsn &I) {
   }
 }
 
+void clobberCallState(State &S) {
+  for (unsigned R = 0; R < kVolatileEnd; ++R)
+    S.Registers[R] = {};
+  S.Registers[kLR] = {};
+  S.PACM = false;
+  // A callee owns the stack below its incoming SP, including its red zone.
+  if (const auto SP = S.Registers[kSP].StackOffset)
+    S.Stack.erase(S.Stack.begin(), S.Stack.lower_bound(*SP));
+  else
+    S.Stack.clear();
+}
+
 bool transfer(State &S, const State &Before, Decoder &Decode,
               const DecodedInsn &I) {
   const auto &D = I.Raw->detail->aarch64;
@@ -429,16 +448,8 @@ bool transfer(State &S, const State &Before, Decoder &Decode,
     }
   }
   memory(S, Before, I);
-  if (cs_insn_group(Decode.getHandle(), I.Raw, CS_GRP_CALL)) {
-    for (unsigned R = 0; R < kVolatileEnd; ++R)
-      S.Registers[R] = {};
-    S.Registers[kLR] = {};
-    // A callee owns the stack below its incoming SP, including its red zone.
-    if (const auto SP = Before.Registers[kSP].StackOffset)
-      S.Stack.erase(S.Stack.begin(), S.Stack.lower_bound(*SP));
-    else
-      S.Stack.clear();
-  }
+  if (cs_insn_group(Decode.getHandle(), I.Raw, CS_GRP_CALL))
+    clobberCallState(S);
   return true;
 }
 
@@ -500,18 +511,62 @@ bool implicitProfile(const BinaryImage &Image,
           Query.CompactRecipe->Status == AArch64RAQueryStatus::Known) &&
          (Entry.Kind == CompactUnwindKind::FramePointer ||
           Entry.Kind == CompactUnwindKind::FramelessImmediate) &&
-         !Entry.HasLSDA && !Entry.LSDAVA &&
-         !(Entry.NativeEncoding &
-           (macho_unwind::kIsNotFunctionStart | macho_unwind::kHasLSDA));
+         !(Entry.NativeEncoding & macho_unwind::kIsNotFunctionStart);
+}
+
+// The C++ personality selects a landing pad by the protected instruction
+// range. Index only the owning frame's aligned, disjoint ranges. In
+// particular, the entry order of an SJLJ table does not describe PC ranges.
+llvm::Expected<std::vector<size_t>>
+landingPads(const ExceptionFunction &Function, ExceptionAddressRange Range,
+            size_t Count, size_t Limit) {
+  const va_t DwarfLSDA = Function.Dwarf ? Function.Dwarf->LSDAVA : 0;
+  const auto *Compact = Function.Compact ? &*Function.Compact : nullptr;
+  const va_t CompactLSDA = Compact ? Compact->LSDAVA : 0;
+  const bool HasCompactLSDA =
+      Compact &&
+      (Compact->HasLSDA || (Compact->NativeEncoding & macho_unwind::kHasLSDA));
+  if (!Function.Itanium && !DwarfLSDA && !CompactLSDA && !HasCompactLSDA)
+    return std::vector<size_t>{};
+  const auto &Info = Function.Itanium;
+  if (!Info || Function.Personality != ExceptionPersonality::GxxPersonalityV0 ||
+      !Info->IsCallSiteAddressForm || !Info->LSDAVA ||
+      (!DwarfLSDA && !CompactLSDA) ||
+      (DwarfLSDA && DwarfLSDA != Info->LSDAVA) ||
+      ((HasCompactLSDA || CompactLSDA) && CompactLSDA != Info->LSDAVA))
+    return fail(kLandingPad);
+  if (Info->CallSites.size() > Limit)
+    return fail(kBudget, AArch64RAQueryStatus::ResourceLimit);
+
+  std::vector<size_t> Pads(Count, Count);
+  va_t PreviousEnd = Range.Begin;
+  for (const auto &Site : Info->CallSites) {
+    const auto Guard = Site.GuardedRange;
+    if (Guard.Begin == Guard.End)
+      continue; // An empty encoded range protects no instructions.
+    if (!Range.contains(Guard) || Guard.Begin < PreviousEnd ||
+        Guard.Begin % neverd::aarch64::kInsnSize ||
+        Guard.End % neverd::aarch64::kInsnSize)
+      return fail(kLandingPad);
+    PreviousEnd = Guard.End;
+    if (!Site.LandingPadVA)
+      continue;
+    if (!Range.contains(Site.LandingPadVA) ||
+        Site.LandingPadVA % neverd::aarch64::kInsnSize)
+      return fail(kLandingPad);
+    const auto Index = [&](va_t PC) {
+      return (PC - Range.Begin) / neverd::aarch64::kInsnSize;
+    };
+    std::fill(Pads.begin() + Index(Guard.Begin),
+              Pads.begin() + Index(Guard.End), Index(Site.LandingPadVA));
+  }
+  return Pads;
 }
 
 llvm::Expected<std::vector<AArch64RecoveredUnwindRow>>
 recoverImplicitFrame(const BinaryImage &Image,
                      const ExceptionFunction &Function,
                      const AArch64UnwindRecoveryLimits &Limits) {
-  if (Function.Itanium || (Function.Compact && (Function.Compact->HasLSDA ||
-                                                Function.Compact->LSDAVA)))
-    return fail(kProfile);
   const auto Start = Function.CodeRange.Begin;
   const uint64_t Size = Function.Dwarf ? Function.Dwarf->AddressRange
                                        : Function.Compact->CodeRange.size();
@@ -520,14 +575,18 @@ recoverImplicitFrame(const BinaryImage &Image,
   const auto Count = Size / neverd::aarch64::kInsnSize;
   if (Count > Limits.MaxInstructions)
     return fail(kBudget, AArch64RAQueryStatus::ResourceLimit);
+  auto Pads = landingPads(Function, {Start, Start + Size}, Count,
+                          Limits.MaxInstructions);
+  if (!Pads)
+    return Pads.takeError();
   std::map<uint64_t, FrameRow> Rules;
   if (Function.Dwarf) {
     const auto &FDE = *Function.Dwarf;
     const auto *CIE = Image.ExceptionMetadata.findCIE(FDE.CIESectionOffset);
-    if (FDE.InitialLocation != Start || FDE.LSDAVA || CIE->IsSignalFrame ||
+    if (FDE.InitialLocation != Start || CIE->IsSignalFrame ||
         CIE->ReturnAddressRegister != kLR)
       return fail(kProfile);
-    auto Parsed = frameRows(*CIE, FDE, Limits.MaxInstructions);
+    auto Parsed = frameRows(*CIE, FDE, Limits.MaxInstructions, !Pads->empty());
     if (!Parsed)
       return Parsed.takeError();
     Rules = std::move(*Parsed);
@@ -574,16 +633,32 @@ recoverImplicitFrame(const BinaryImage &Image,
       return fail(kBudget, AArch64RAQueryStatus::ResourceLimit);
     const auto &D = I.Raw->detail->aarch64;
     const auto Ops = llvm::ArrayRef(D.operands, D.op_count);
-    const auto Queue = [&](size_t Next) {
+    const auto Queue = [&](size_t Next, const State &Incoming) {
       if (Next >= Count)
         return;
       if (!States[Next]) {
-        States[Next] = After;
+        States[Next] = Incoming;
         Work.push_back(Next);
-      } else if (merge(*States[Next], After)) {
+      } else if (merge(*States[Next], Incoming)) {
         Work.push_back(Next);
       }
     };
+    const bool IsCall = cs_insn_group(Decode.getHandle(), I.Raw, CS_GRP_CALL);
+    if (!Pads->empty() && (*Pads)[Index] != Count) {
+      // The unwinder preserves the callee-saved registers and frame slots.
+      // The personality supplies its exception arguments. No incoming LR or
+      // volatile value can be inferred from them. A protected range can also
+      // include non-call instructions. Retain only facts common to either
+      // side of such an instruction when admitting that exceptional edge.
+      if (IsCall) {
+        Queue((*Pads)[Index], After);
+      } else {
+        State Handler = *States[Index];
+        merge(Handler, After);
+        clobberCallState(Handler);
+        Queue((*Pads)[Index], Handler);
+      }
+    }
     if (I.Id == AARCH64_INS_B || I.Id == AARCH64_INS_CBZ ||
         I.Id == AARCH64_INS_CBNZ || I.Id == AARCH64_INS_TBZ ||
         I.Id == AARCH64_INS_TBNZ) {
@@ -593,23 +668,30 @@ recoverImplicitFrame(const BinaryImage &Image,
       if (Target >= Start && Target - Start < Size) {
         if ((Target - Start) % neverd::aarch64::kInsnSize)
           return fail(kCode);
-        Queue((Target - Start) / neverd::aarch64::kInsnSize);
+        Queue((Target - Start) / neverd::aarch64::kInsnSize, After);
       }
       if (I.Id != AARCH64_INS_B ||
           (D.cc != AArch64CC_Invalid && D.cc != AArch64CC_AL &&
            D.cc != AArch64CC_NV)) {
         if (Index + 1 == Count)
           return fail(kCode);
-        Queue(Index + 1);
+        Queue(Index + 1, After);
       }
     } else if (cs_insn_group(Decode.getHandle(), I.Raw, CS_GRP_RET) ||
                isAArch64PAuthLRReturnWord(readLE<uint32_t>(I.Raw->bytes))) {
       continue;
-    } else if (cs_insn_group(Decode.getHandle(), I.Raw, CS_GRP_CALL)) {
-      if (Index + 1 == Count || (I.Id == AARCH64_INS_BL && Ops.size() == 1 &&
-                                 va_t(Ops[0].imm) - Start < Size))
+    } else if (IsCall) {
+      if (I.Id == AARCH64_INS_BL && Ops.size() == 1 &&
+          Ops.front().type == AARCH64_OP_IMM) {
+        const va_t Target = Ops.front().imm;
+        if (Target - Start < Size)
+          return fail(kCode);
+        if (libc::isNoReturnTarget(Image, Target))
+          continue;
+      }
+      if (Index + 1 == Count)
         return fail(kCode);
-      Queue(Index + 1);
+      Queue(Index + 1, After);
     } else if (I.Id == AARCH64_INS_BRK || I.Id == AARCH64_INS_HLT ||
                I.Id == AARCH64_INS_UDF ||
                cs_insn_group(Decode.getHandle(), I.Raw, CS_GRP_INT) ||
@@ -619,7 +701,7 @@ recoverImplicitFrame(const BinaryImage &Image,
     } else {
       if (Index + 1 == Count)
         return fail(kCode);
-      Queue(Index + 1);
+      Queue(Index + 1, After);
     }
   }
   std::vector<AArch64RecoveredUnwindRow> Result;

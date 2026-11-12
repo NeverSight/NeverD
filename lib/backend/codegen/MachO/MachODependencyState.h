@@ -18,6 +18,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 namespace neverd {
 struct MachOChainedImport {
@@ -47,6 +48,10 @@ struct MachOChainedFixups {
   std::vector<MachOChainedSegment> Segments;
   std::vector<MachOChainedImport> Imports;
   std::vector<std::string> Libraries;
+
+  using Provider = std::pair<int64_t, bool>; // Library ordinal and weak import.
+  /// A disengaged value records conflicting dyld lookup scopes for a name.
+  std::map<std::string, std::optional<Provider>> uniqueImportProviders() const;
 };
 struct MachODependencyState {
   uint32_t CPUType = 0, CPUSubtype = 0;

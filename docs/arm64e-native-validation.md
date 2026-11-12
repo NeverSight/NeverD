@@ -1093,8 +1093,9 @@ live LR or saved stack slot. For a compact-only frame the analysis instead
 tracks the incoming SP, register values and active frame saves. It follows
 reachable direct branches, joins agreeing facts, and accounts for call
 clobbers, stack writeback, classic IA/IB, PACM and explicit PAuth_LR. A failed
-proof has no unsigned default. Opaque control flow, alternate entries, LSDA
-edges and exceeded budgets cannot authorize a native handoff.
+proof has no unsigned default. Opaque control flow, alternate entries,
+unrecognized personalities and exceeded budgets cannot authorize a native
+handoff.
 
 Select the row at the interrupted instruction. `prepareDarwinArm64eSystemCaller`
 binds its signing PC to the loaded address and checks that the caller's integer
@@ -1172,7 +1173,23 @@ The [integrated source replay](https://github.com/gmh5225/test_mac_intel/actions
 Clang fixture with a typed C++ catch has a compact frame and LSDA. Its
 implicit signing rule was unavailable at entry and at the next two
 instructions. The verification record includes the source and all three
-query results.
+query results for that revision.
+
+For Darwin C++ frames using `__gxx_personality_v0`, instruction recovery
+follows the decoded LSDA call-site ranges to their catch and cleanup landing
+pads. The handler receives only surviving callee-saved registers and stack
+slots. For a protected non-call instruction the analysis intersects the
+states on both sides. A call to a known non-returning function can still
+reach its handler. An unaligned, overlapping or out-of-frame range, a missing
+LSDA, a different personality or an unmodeled stack adjustment prevents this
+proof. The register handoff follows the [Itanium exception ABI](https://itanium-cxx-abi.github.io/cxx-abi/abi-eh.html#base-personality).
+
+Native Mach-O object publication can reuse a dyld-bound RTTI slot in a
+non-lazy pointer section sealed after fixups. The import table must select
+one provider and weak-import policy, and the binding must have zero addend.
+An ordinary RTTI reference and an authenticated personality reference keep
+their respective pointer encodings. A writable source slot requires separate
+GOT storage for the published reference.
 
 To repeat the interrupted-frame test on a Mac that can launch arm64e
 executables, build the test host against the tracked LLVM fork and require

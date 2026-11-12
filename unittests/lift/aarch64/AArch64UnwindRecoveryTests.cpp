@@ -71,6 +71,17 @@ struct Frame {
                    .Register = kLR,
                    .Offset = -int(kRegisterBytes)});
   }
+
+  void addHandler(size_t Begin, size_t End, size_t Handler) {
+    const auto LSDAVA = Function.CodeRange.End;
+    Function.Personality = ExceptionPersonality::GxxPersonalityV0;
+    Function.Dwarf->LSDAVA = LSDAVA;
+    if (!Function.Itanium)
+      Function.Itanium.emplace().LSDAVA = LSDAVA;
+    Function.Itanium->CallSites.push_back(
+        {.GuardedRange = {Begin * sizeof(uint32_t), End * sizeof(uint32_t)},
+         .LandingPadVA = Handler * sizeof(uint32_t)});
+  }
 };
 
 TEST(AArch64ImplicitUnwind,
@@ -216,5 +227,69 @@ TEST(AArch64ImplicitUnwind, IncompleteFramesAndUnknownEdgesFailClosed) {
   ASSERT_TRUE(Incomplete.Metadata.DwarfStateAtPC);
   EXPECT_EQ(Incomplete.Metadata.DwarfStateAtPC->Status, Status::Malformed);
   EXPECT_FALSE(Incomplete.InstructionStateAtPC);
+}
+
+TEST(AArch64ImplicitUnwind, LandingPadsJoinOnlySurvivingFrameSaves) {
+  Frame F{SignB, PushFP, Call, PartialStore, Call, Ret, Ret};
+  F.saveRow(2);
+  F.addHandler(2, 3, 6);
+  const auto Single = F.at(6);
+  ASSERT_TRUE(Single.State);
+  EXPECT_EQ(Single.State->Kind, Kind::SP);
+  EXPECT_EQ(Single.State->Key, AArch64RAKey::B);
+  F.addHandler(4, 5, 6);
+  EXPECT_EQ(F.at(6).Status, Status::Unknown);
+  // A protected non-call write cannot vouch for the earlier stack contents.
+  F.Function.Itanium->CallSites.pop_back();
+  F.Function.Itanium->CallSites.front().GuardedRange.End = 4 * sizeof(uint32_t);
+  EXPECT_EQ(F.at(6).Status, Status::Unknown);
+
+  Frame Live{SignA, Call, Ret, Ret};
+  Live.addHandler(1, 2, 3);
+  EXPECT_EQ(Live.at(3).Status, Status::Unknown);
+}
+
+TEST(AArch64ImplicitUnwind, NonReturningCallsStillReachTheirLandingPads) {
+  Frame F{SignB, PushFP, Skip, Ret, Call};
+  F.saveRow(2);
+  F.addHandler(4, 5, 3);
+  const auto Target = 4 * sizeof(uint32_t) + CallDisplacement;
+  F.Image.UserNoReturn[Target] = true;
+  const auto FromThrow = F.at(3);
+  ASSERT_TRUE(FromThrow.State);
+  EXPECT_EQ(FromThrow.State->Key, AArch64RAKey::B);
+  EXPECT_EQ(FromThrow.State->Kind, Kind::SP);
+  F.Image.UserNoReturn[Target] = false;
+  EXPECT_EQ(F.at(3).Status, Status::Unsupported);
+}
+
+TEST(AArch64ImplicitUnwind, RequiresAnOwnedAddressBasedCxxLandingPadTable) {
+  Frame F{SignB, PushFP, Call, Ret, Ret};
+  F.saveRow(2);
+  F.addHandler(2, 3, 4);
+  F.Function.Itanium->IsCallSiteAddressForm = false;
+  EXPECT_EQ(F.at(0).Status, Status::Unsupported);
+  F.Function.Itanium->IsCallSiteAddressForm = true;
+  F.Function.Personality = ExceptionPersonality::Unknown;
+  EXPECT_EQ(F.at(0).Status, Status::Unsupported);
+  F.Function.Personality = ExceptionPersonality::GxxPersonalityV0;
+  F.addHandler(2, 3, 4);
+  EXPECT_EQ(F.at(0).Status, Status::Unsupported);
+  F.Function.Itanium->CallSites.pop_back();
+  auto &Site = F.Function.Itanium->CallSites.front();
+  ++Site.LandingPadVA;
+  EXPECT_EQ(F.at(0).Status, Status::Unsupported);
+  Site.LandingPadVA = F.Function.CodeRange.End;
+  EXPECT_EQ(F.at(0).Status, Status::Unsupported);
+  Site.LandingPadVA -= sizeof(uint32_t);
+  F.Function.Dwarf->Instructions.push_back({.Kind = CFIOpKind::GnuArgsSize,
+                                            .CodeOffset = 2 * sizeof(uint32_t),
+                                            .Offset = kRegisterBytes});
+  EXPECT_EQ(F.at(0).Status, Status::Unsupported);
+  F.Function.Dwarf->Instructions.pop_back();
+  ++F.Function.Itanium->LSDAVA;
+  EXPECT_EQ(F.at(0).Status, Status::Unsupported);
+  F.Function.Itanium.reset();
+  EXPECT_EQ(F.at(0).Status, Status::Unsupported);
 }
 } // namespace
