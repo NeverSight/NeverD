@@ -127,6 +127,7 @@ std::optional<int64_t> add(std::optional<int64_t> Base, int64_t Delta) {
 }
 
 struct FrameRow {
+  uint32_t OutgoingArgsSize = 0;
   std::optional<unsigned> CFARegister;
   int64_t CFAOffset = 0;
   std::array<AArch64UnwindRegister, kRegisters> Registers;
@@ -189,8 +190,11 @@ llvm::Expected<std::map<uint64_t, FrameRow>> frameRows(const DwarfCIE &CIE,
       case CFIOpKind::SetLoc:
         break;
       case CFIOpKind::GnuArgsSize:
-        if (HasLandingPads && I.Offset)
-          return fail(kCFI);
+        if (HasLandingPads) {
+          if (!std::in_range<uint32_t>(I.Offset))
+            return fail(kCFI);
+          Row.OutgoingArgsSize = uint32_t(I.Offset);
+        }
         break;
       default:
         return fail(kCFI);
@@ -380,16 +384,20 @@ void memory(State &S, const State &Before, const DecodedInsn &I) {
   }
 }
 
+void discardInactiveStack(State &S) {
+  if (const auto SP = S.Registers[kSP].StackOffset)
+    S.Stack.erase(S.Stack.begin(), S.Stack.lower_bound(*SP));
+  else
+    S.Stack.clear();
+}
+
 void clobberCallState(State &S) {
   for (unsigned R = 0; R < kVolatileEnd; ++R)
     S.Registers[R] = {};
   S.Registers[kLR] = {};
   S.PACM = false;
   // A callee owns the stack below its incoming SP, including its red zone.
-  if (const auto SP = S.Registers[kSP].StackOffset)
-    S.Stack.erase(S.Stack.begin(), S.Stack.lower_bound(*SP));
-  else
-    S.Stack.clear();
+  discardInactiveStack(S);
 }
 
 bool transfer(State &S, const State &Before, Decoder &Decode,
@@ -659,14 +667,24 @@ recoverImplicitFrame(const BinaryImage &Image,
       // volatile value can be inferred from them. A protected range can also
       // include non-call instructions. Retain only facts common to either
       // side of such an instruction when admitting that exceptional edge.
-      if (IsCall) {
-        Queue((*Pads)[Index], After);
-      } else {
-        State Handler = *States[Index];
-        merge(Handler, After);
+      State Handler = After;
+      if (!IsCall) {
+        merge(Handler, *States[Index]);
         clobberCallState(Handler);
-        Queue((*Pads)[Index], Handler);
       }
+      if (!Rules.empty()) {
+        const auto PCOffset = Index * neverd::aarch64::kInsnSize;
+        const auto Size =
+            std::prev(Rules.upper_bound(PCOffset))->second.OutgoingArgsSize;
+        if (Size) {
+          // Darwin libunwind pops these outgoing arguments when resuming the
+          // handler. Ordinary call fallthrough still owns the argument area.
+          auto &SP = Handler.Registers[kSP].StackOffset;
+          SP = add(SP, Size);
+          discardInactiveStack(Handler);
+        }
+      }
+      Queue((*Pads)[Index], Handler);
     }
     if (I.Id == AARCH64_INS_B || I.Id == AARCH64_INS_CBZ ||
         I.Id == AARCH64_INS_CBNZ || I.Id == AARCH64_INS_TBZ ||

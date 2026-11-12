@@ -294,6 +294,29 @@ TEST(AArch64ImplicitUnwind, NonReturningCallsStillReachTheirLandingPads) {
   EXPECT_EQ(F.at(3).Status, Status::Unsupported);
 }
 
+TEST(AArch64ImplicitUnwind, LandingPadsPopOnlyTheirOutgoingArgumentArea) {
+  Frame F{SignB, PushFP, Allocate, Call, Ret, Ret};
+  F.addHandler(3, 4, 5);
+  const auto CallOffset = 3 * sizeof(uint32_t);
+  F.Function.Dwarf->Instructions = {
+      {.Kind = CFIOpKind::AdvanceLoc, .Offset = int64_t(CallOffset)},
+      {.Kind = CFIOpKind::GnuArgsSize,
+       .CodeOffset = CallOffset,
+       .Offset = 2 * kRegisterBytes}};
+  auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+  ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+  for (unsigned Index : {4u, 5u}) {
+    const auto &Row = aarch64UnwindRowAt(*Rows, Index * sizeof(uint32_t));
+    EXPECT_EQ(Row.CFARegister, kSP);
+    EXPECT_EQ(Row.CFAOffset, (Index == 4 ? 4 : 2) * kRegisterBytes);
+    ASSERT_TRUE(Row.Signing.State);
+    EXPECT_EQ(Row.Signing.State->Kind, Kind::SP);
+  }
+  // A return saved in the released area cannot authorize the handler.
+  F.Function.Dwarf->Instructions.back().Offset = 4 * kRegisterBytes;
+  EXPECT_EQ(F.at(5).Status, Status::Unknown);
+}
+
 TEST(AArch64ImplicitUnwind, RequiresAnOwnedAddressBasedCxxLandingPadTable) {
   Frame F{SignB, PushFP, Call, Ret, Ret};
   F.saveRow(2);
@@ -315,7 +338,7 @@ TEST(AArch64ImplicitUnwind, RequiresAnOwnedAddressBasedCxxLandingPadTable) {
   Site.LandingPadVA -= sizeof(uint32_t);
   F.Function.Dwarf->Instructions.push_back({.Kind = CFIOpKind::GnuArgsSize,
                                             .CodeOffset = 2 * sizeof(uint32_t),
-                                            .Offset = kRegisterBytes});
+                                            .Offset = -1});
   EXPECT_EQ(F.at(0).Status, Status::Unsupported);
   F.Function.Dwarf->Instructions.pop_back();
   ++F.Function.Itanium->LSDAVA;

@@ -1181,8 +1181,11 @@ pads. The handler receives only surviving callee-saved registers and stack
 slots. For a protected non-call instruction the analysis intersects the
 states on both sides. A call to a known non-returning function can still
 reach its handler. An unaligned, overlapping or out-of-frame range, a missing
-LSDA, a different personality or an unmodeled stack adjustment prevents this
-proof. The register handoff follows the [Itanium exception ABI](https://itanium-cxx-abi.github.io/cxx-abi/abi-eh.html#base-personality).
+LSDA or a different personality prevents this proof. At a protected PC with
+a DWARF outgoing-argument size, the exceptional edge advances SP and drops
+the released stack slots. Ordinary return retains the argument area. See the
+[Itanium exception ABI](https://itanium-cxx-abi.github.io/cxx-abi/abi-eh.html#base-personality)
+and [libunwind context installation](https://github.com/llvm/llvm-project/blob/main/libunwind/src/libunwind.cpp#L205-L212).
 
 Native Mach-O object publication can reuse a dyld-bound RTTI slot in a
 non-lazy pointer section sealed after fixups. The import table must select

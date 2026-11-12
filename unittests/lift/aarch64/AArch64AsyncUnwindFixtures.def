@@ -113,6 +113,7 @@ ASYNC_FRAME_TEXT(kCatchFile, "catcher.cpp")
 ASYNC_FRAME_TEXT(kCatchSymbol, "_catcher")
 ASYNC_FRAME_TEXT(kCatchMapping, "catcher")
 ASYNC_FRAME_TEXT(kCatchReplacement, "-DRETURN_ADJUSTMENT=1")
+ASYNC_FRAME_TEXT(kCatchStackArgs, "-DNEVERD_TEST_STACK_ARGS")
 ASYNC_FRAME_TEXT(kCatchDwarf, "-DNEVERD_TEST_DWARF_CATCH")
 ASYNC_FRAME_TEXT(kWritableGOT, "-Wl,-no_data_const,-headerpad,0x1000")
 ASYNC_FRAME_TEXT(kCatchImportsFile, "provider.cpp")
@@ -120,20 +121,37 @@ ASYNC_FRAME_TEXT(kCatchImports, "provider.dylib")
 ASYNC_FRAME_TEXT(kCatchDriverFile, "catch-driver.cpp")
 ASYNC_FRAME_TEXT(kCxxPaths, "native_cxx_exception_paths")
 ASYNC_FRAME_VALUE(unsigned, kCxxInputs, 4)
+ASYNC_FRAME_VALUE(unsigned, kCxxCallArgumentBytes, 16)
 ASYNC_FRAME_TEXT(kCatchBody, R"cpp(
+#include <cstdint>
 #ifndef RETURN_ADJUSTMENT
 #define RETURN_ADJUSTMENT 0
 #endif
 extern "C" void source_throw(int);
 extern "C" int observe_catch(int);
 extern "C" __attribute__((noinline)) int catcher(int x) {
-#ifdef NEVERD_TEST_DWARF_CATCH
+#ifdef NEVERD_TEST_STACK_ARGS
+  uintptr_t Base;
+  asm volatile("mov %0, sp" : "=r"(Base));
+#elif defined(NEVERD_TEST_DWARF_CATCH)
   asm volatile(".cfi_escape 0x2e, 0");
 #endif
   try {
+#ifdef NEVERD_TEST_STACK_ARGS
+    asm volatile("sub sp, sp, #16\n.cfi_escape 0x2e, 16" ::: "memory");
+#endif
     source_throw(x);
+#ifdef NEVERD_TEST_STACK_ARGS
+    asm volatile("add sp, sp, #16\n.cfi_escape 0x2e, 0" ::: "memory");
+#endif
     return x + RETURN_ADJUSTMENT;
   } catch (int v) {
+#ifdef NEVERD_TEST_STACK_ARGS
+    uintptr_t Seen;
+    asm volatile("mov %0, sp" : "=r"(Seen));
+    if (Seen != Base)
+      return -1;
+#endif
     return observe_catch(v) + RETURN_ADJUSTMENT;
   }
 }

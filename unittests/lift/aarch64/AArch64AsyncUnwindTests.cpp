@@ -166,10 +166,17 @@ void checkFrame(const BinaryImage &Image, va_t Entry,
 }
 
 void checkCxxLandingPads(const BinaryImage &Image, va_t Entry, bool Dwarf,
-                         va_t &TypeSlot) {
+                         bool StackArgs, va_t &TypeSlot) {
   const auto *Frame = Image.ExceptionMetadata.findFunction(Entry);
   ASSERT_NE(Frame, nullptr);
   ASSERT_EQ(bool(Frame->Dwarf), Dwarf);
+  if (Dwarf)
+    EXPECT_EQ(llvm::any_of(Frame->Dwarf->Instructions,
+                           [](const CFIInstruction &I) {
+                             return I.Kind == CFIOpKind::GnuArgsSize &&
+                                    I.Offset == kCxxCallArgumentBytes;
+                           }),
+              StackArgs);
   ASSERT_EQ(Frame->Personality, ExceptionPersonality::GxxPersonalityV0);
   ASSERT_TRUE(Frame->Itanium);
   ASSERT_EQ(Frame->Itanium->TypeTable.size(), 1u);
@@ -494,18 +501,23 @@ TEST(AArch64AsyncUnwind, CompilerCatchAndCleanupRecoverTheSavedSignedLR) {
     const char *Opt;
     bool Writable;
     bool Dwarf;
+    bool StackArgs = false;
   };
   const Profile Profiles[] = {{kNoOptimize, false, false},
                               {kOptimize, false, false},
                               {kOptimize, true, false},
-                              {kOptimize, false, true}};
-  for (const auto &[Opt, Writable, Dwarf] : Profiles) {
+                              {kOptimize, false, true},
+                              {kOptimize, false, true, true}};
+  for (const auto &[Opt, Writable, Dwarf, StackArgs] : Profiles) {
     SCOPED_TRACE(Opt);
     SCOPED_TRACE(Writable);
     SCOPED_TRACE(Dwarf);
+    SCOPED_TRACE(StackArgs);
     llvm::SmallVector<llvm::StringRef> Compile{
         kCxxCompiler, kTargetFlag, kTarget, kCXXStandard, Opt, kFramePointer};
-    if (Dwarf)
+    if (StackArgs)
+      Compile.push_back(kCatchStackArgs);
+    else if (Dwarf)
       Compile.push_back(kCatchDwarf);
     auto Link = Compile;
     Link.push_back(kDylib);
@@ -518,8 +530,8 @@ TEST(AArch64AsyncUnwind, CompilerCatchAndCleanupRecoverTheSavedSignedLR) {
     const auto *Sym = Image->findSymbol(kCatchSymbol);
     ASSERT_NE(Sym, nullptr);
     va_t OriginalTypeSlot = 0;
-    ASSERT_NO_FATAL_FAILURE(
-        checkCxxLandingPads(*Image, Sym->Addr, Dwarf, OriginalTypeSlot));
+    ASSERT_NO_FATAL_FAILURE(checkCxxLandingPads(*Image, Sym->Addr, Dwarf,
+                                                StackArgs, OriginalTypeSlot));
     Compile.append({kCatchReplacement, kCompile, Source, kOutput, Object});
     ASSERT_EQ(llvm::sys::ExecuteAndWait(kCxxCompiler, Compile), 0);
     auto Bytes = llvm::MemoryBuffer::getFile(Object);
@@ -534,8 +546,8 @@ TEST(AArch64AsyncUnwind, CompilerCatchAndCleanupRecoverTheSavedSignedLR) {
     auto Published = Loader::create(BinaryFormat::MachO)->load(Output);
     ASSERT_TRUE(bool(Published)) << llvm::toString(Published.takeError());
     va_t PublishedTypeSlot = 0;
-    ASSERT_NO_FATAL_FAILURE(
-        checkCxxLandingPads(*Published, Owner, Dwarf, PublishedTypeSlot));
+    ASSERT_NO_FATAL_FAILURE(checkCxxLandingPads(*Published, Owner, Dwarf,
+                                                StackArgs, PublishedTypeSlot));
     const auto SlidTypeSlot = OriginalTypeSlot + Patch->OriginalSectionSlide;
     if (Writable)
       EXPECT_NE(PublishedTypeSlot, SlidTypeSlot);
