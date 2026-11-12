@@ -297,6 +297,447 @@ private slots:
     QCOMPARE(h.sent[2].payload["if_none_match"].toString(), "tag-8-0-2");
   }
 
+  void aCarriedPageIsSaidAsItsEditsReplyIsTakenIn() {
+    // The page an edit's reply carries is taken, and said, as the reply is:
+    // ahead of the change the reply makes and of the turn that gives the edit
+    // its own answer, so that a dispatcher reading through this one has it for
+    // the read its view makes at the change.
+    Harness h;
+    establish(h);
+    h.service.setPageDeltas(true);
+    QJsonObject first;
+    h.service.subscribe(text(), &h.owner,
+                        [&](const QJsonObject &response) { first = response; });
+    QTRY_COMPARE(h.sent.size(), 1);
+    h.reply(0, {{"text", "line one\nline two"},
+                {"etag", "tag-7-0-2"},
+                {"revision", "1"}});
+    QTRY_COMPARE(first["status"].toString(), "ok");
+    bool edited = false;
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "n"}},
+                             &h.owner,
+                             [&](const QJsonObject &) { edited = true; });
+    QTRY_COMPARE(h.sent.size(), 2);
+    struct Said {
+      QString operation, was, revisionThen;
+      QJsonObject payload, response;
+      qint64 bytes;
+      bool edited;
+    };
+    QList<Said> said;
+    QStringList order;
+    connect(&h.service, &QueryService::contextChanged, &h.owner,
+            [&] { order.append("changed"); });
+    connect(&h.service, &QueryService::followed, &h.owner,
+            [&](const QString &operation, const QJsonObject &payload,
+                const QString &was, const QJsonObject &response, qint64 bytes) {
+              order.append("followed");
+              said.append({operation, was, h.service.revision(), payload,
+                           response, bytes, edited});
+            });
+    const QJsonObject delta{
+        {"status", "ok"},
+        {"payload",
+         QJsonObject{{"delta", QJsonArray{QJsonArray{
+                                   "lines", "text", 2,
+                                   QJsonArray{QJsonArray{1, "line 2"}}}}},
+                     {"base", "tag-7-0-2"},
+                     {"etag", "tag-8-0-2"},
+                     {"project_id", "project-one"},
+                     {"revision", "2"}}}};
+    replyFollowed(h, 1, "2", QJsonArray{delta});
+    // No turn of the event loop has passed.
+    QCOMPARE(said.size(), 1);
+    // The page ahead of the change: who hears of the change has it.
+    QCOMPARE(order, QStringList({"followed", "changed"}));
+    QVERIFY(!said[0].edited);
+    QVERIFY(!edited);
+    QCOMPARE(said[0].operation, "decompile");
+    QCOMPARE(said[0].payload, text().payload);
+    QCOMPARE(said[0].was, "tag-7-0-2");
+    QCOMPARE(said[0].revisionThen, "2");
+    QCOMPARE(said[0].response["status"].toString(), "ok");
+    QCOMPARE(said[0].response["revision"].toString(), "2");
+    QCOMPARE(said[0].response["project_id"].toString(), "project-one");
+    QCOMPARE(said[0].response["payload"].toObject()["text"].toString(),
+             "line one\nline 2");
+    QCOMPARE(said[0].response["payload"].toObject()["etag"].toString(),
+             "tag-8-0-2");
+    QVERIFY(said[0].bytes > 0);
+    QTRY_VERIFY(edited);
+    // Said once: the answer the edit is given later says it no more.
+    QTest::qWait(20);
+    QCOMPARE(said.size(), 1);
+    // A carried read the worker refused, or one whose page this one does not
+    // keep, is not said.
+    h.service.subscribe(text(), &h.owner, [](const QJsonObject &) {});
+    QTest::qWait(5);
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "m"}},
+                             &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 3);
+    replyFollowed(
+        h, 2, "3",
+        QJsonArray{QJsonObject{
+            {"status", "error"},
+            {"error", QJsonObject{{"code", "not_kept"}, {"message", "x"}}}}});
+    QCOMPARE(said.size(), 1);
+    QTRY_VERIFY(!h.service.hasPending());
+    QCOMPARE(said.size(), 1);
+  }
+
+  void anAnswerGivenIsKeptAndAnswersTheReadsThatWait() {
+    // A dispatcher that reads through another (a replica's, through its
+    // owner's) is given a page that one read for it: the read of it that
+    // waits is answered with nothing sent, later reads find it cached, and it
+    // is the page a read at a later state names.
+    Harness h;
+    h.service.resetReadContext("project-one", "2");
+    h.service.setPageDeltas(true);
+    QJsonObject waiting;
+    h.service.subscribe(text(), &h.owner, [&](const QJsonObject &response) {
+      waiting = response;
+    });
+    const QJsonObject page{{"protocol_major", 1},
+                           {"type", "response"},
+                           {"status", "ok"},
+                           {"operation", "decompile"},
+                           {"project_id", "project-one"},
+                           {"revision", "2"},
+                           {"payload", QJsonObject{{"text", "given text"},
+                                                   {"etag", "tag-9-0-1"},
+                                                   {"revision", "2"}}}};
+    // Not this state's, not an answer, or of a read whose answers are not
+    // kept: refused, and nothing changes.
+    auto other = page;
+    other["revision"] = "3";
+    QVERIFY(!h.service.give(text(), other));
+    other = page;
+    other["project_id"] = "project-two";
+    QVERIFY(!h.service.give(text(), other));
+    other = page;
+    other["status"] = "error";
+    QVERIFY(!h.service.give(text(), other));
+    QVERIFY(!h.service.give({"history", {}}, page));
+    QVERIFY(waiting.isEmpty());
+    // Given before the read is sent: it answers that read, in a later turn.
+    const auto answered = h.service.give(text(), page, 321);
+    QVERIFY(answered.has_value());
+    QCOMPARE(*answered, 1);
+    QVERIFY(waiting.isEmpty());
+    QTRY_COMPARE(waiting["status"].toString(), "ok");
+    QCOMPARE(waiting["payload"].toObject()["text"].toString(), "given text");
+    QCOMPARE(waiting["revision"].toString(), "2");
+    QCOMPARE(waiting["operation"].toString(), "decompile");
+    QTRY_VERIFY(!h.service.hasPending());
+    QCOMPARE(h.sent.size(), 0);
+    // A read made after it is answered from it.
+    QJsonObject later;
+    h.service.subscribe(text(), &h.owner,
+                        [&](const QJsonObject &response) { later = response; });
+    QTRY_COMPARE(later["status"].toString(), "ok");
+    QCOMPARE(later["payload"].toObject()["text"].toString(), "given text");
+    QCOMPARE(h.sent.size(), 0);
+    // Another read is not answered by it, and none waits for it now.
+    const auto none = h.service.give(text("0xffff000000000002"), page, 321);
+    QVERIFY(none.has_value());
+    QCOMPARE(*none, 0);
+    // At a later state the page given is the one named.
+    h.service.resetReadContext("project-one", "3");
+    h.service.subscribe(text(), &h.owner, [](const QJsonObject &) {});
+    QTRY_COMPARE(h.sent.size(), 1);
+    QCOMPARE(h.sent[0].payload["if_none_match"].toString(), "tag-9-0-1");
+    QCOMPARE(h.sent[0].payload["page_delta"].toBool(), true);
+    // A read on its way when its answer is given runs to its end, and takes
+    // the worker's own answer: what is given answers none that waits.
+    const QJsonObject newer{{"protocol_major", 1},
+                            {"type", "response"},
+                            {"status", "ok"},
+                            {"operation", "decompile"},
+                            {"project_id", "project-one"},
+                            {"revision", "3"},
+                            {"payload", QJsonObject{{"text", "newer text"},
+                                                    {"etag", "tag-9-1-1"},
+                                                    {"revision", "3"}}}};
+    QJsonObject running;
+    h.service.subscribe(text(), &h.owner, [&](const QJsonObject &response) {
+      running = response;
+    });
+    const auto beside = h.service.give(text(), newer, 400);
+    QVERIFY(beside.has_value());
+    QCOMPARE(*beside, 0);
+    QTest::qWait(5);
+    QVERIFY(running.isEmpty());
+    h.reply(0,
+            {{"text", "newer text"}, {"etag", "tag-9-1-1"}, {"revision", "3"}},
+            "3");
+    QTRY_COMPARE(running["payload"].toObject()["text"].toString(),
+                 "newer text");
+    QTRY_VERIFY(!h.service.hasPending());
+    QCOMPARE(h.sent.size(), 1);
+  }
+
+  void aReadThatTakesAGivenAnswerIsSaidOnce() {
+    // The dispatcher that was given an answer hears of the first read that
+    // takes it, whether that read waited for it or came after it.
+    const QJsonObject page{{"protocol_major", 1},
+                           {"type", "response"},
+                           {"status", "ok"},
+                           {"operation", "decompile"},
+                           {"project_id", "project-one"},
+                           {"revision", "2"},
+                           {"payload", QJsonObject{{"text", "given text"},
+                                                   {"etag", "tag-9-0-1"},
+                                                   {"revision", "2"}}}};
+    for (const bool waits : {true, false}) {
+      Harness h;
+      h.service.resetReadContext("project-one", "2");
+      int said = 0;
+      connect(&h.service, &QueryService::givenRead, &h.owner, [&] { ++said; });
+      QJsonObject first;
+      const auto read = [&](QJsonObject &into) {
+        h.service.subscribe(
+            text(), &h.owner,
+            [&into](const QJsonObject &response) { into = response; });
+      };
+      if (waits)
+        read(first);
+      QVERIFY(h.service.give(text(), page, 300).has_value());
+      QCOMPARE(said, waits ? 1 : 0);
+      if (!waits)
+        read(first);
+      QCOMPARE(said, 1);
+      QTRY_COMPARE(first["status"].toString(), "ok");
+      // A second read of it is one more read of a cached answer.
+      QJsonObject second;
+      read(second);
+      QTRY_COMPARE(second["status"].toString(), "ok");
+      QCOMPARE(said, 1);
+      QCOMPARE(h.sent.size(), 0);
+      // An answer the sender gave is no given one.
+      QJsonObject other;
+      h.service.subscribe(
+          text("0xffff000000000002"), &h.owner,
+          [&](const QJsonObject &response) { other = response; });
+      QTRY_COMPARE(h.sent.size(), 1);
+      h.reply(0,
+              {{"text", "sent text"}, {"etag", "tag-5-0-1"}, {"revision", "2"}},
+              "2");
+      QTRY_COMPARE(other["status"].toString(), "ok");
+      QJsonObject again;
+      h.service.subscribe(
+          text("0xffff000000000002"), &h.owner,
+          [&](const QJsonObject &response) { again = response; });
+      QTRY_COMPARE(again["status"].toString(), "ok");
+      QCOMPARE(said, 1);
+    }
+  }
+
+  void anAnswerThereAlreadyIsGivenAtOnceToTheOneThatAsksForIt() {
+    // A reader that has just asked and is ready takes the answers its reads
+    // have already without the turn each would take; a read another owner
+    // waits for too keeps its turn, and one still on its way is not waited
+    // for.
+    Harness h;
+    h.service.resetReadContext("project-one", "2");
+    const QJsonObject page{{"protocol_major", 1},
+                           {"type", "response"},
+                           {"status", "ok"},
+                           {"operation", "decompile"},
+                           {"project_id", "project-one"},
+                           {"revision", "2"},
+                           {"payload", QJsonObject{{"text", "there already"},
+                                                   {"etag", "tag-9-0-1"},
+                                                   {"revision", "2"}}}};
+    QVERIFY(h.service.give(text(), page, 300).has_value());
+    QObject reader, other;
+    QStringList got;
+    h.service.subscribe(text(), &reader, [&](const QJsonObject &response) {
+      got.append(response["payload"].toObject()["text"].toString());
+    });
+    QVERIFY(got.isEmpty());
+    // Nothing of another owner's.
+    QCOMPARE(h.service.deliverNow(&other), 0);
+    QVERIFY(got.isEmpty());
+    QCOMPARE(h.service.deliverNow(&reader), 1);
+    QCOMPARE(got, QStringList({"there already"}));
+    // Its turn, when it comes, gives it no second time.
+    QTest::qWait(10);
+    QCOMPARE(got.size(), 1);
+    QCOMPARE(h.service.deliverNow(&reader), 0);
+    // One on its way is not there yet.
+    QString sent;
+    h.service.subscribe(
+        text("0xffff000000000002"), &reader, [&](const QJsonObject &response) {
+          sent = response["payload"].toObject()["text"].toString();
+        });
+    QCOMPARE(h.service.deliverNow(&reader), 0);
+    QTRY_COMPARE(h.sent.size(), 1);
+    QCOMPARE(h.service.deliverNow(&reader), 0);
+    h.reply(0,
+            {{"text", "sent text"}, {"etag", "tag-5-0-1"}, {"revision", "2"}},
+            "2");
+    // The reply is in: its answer is there, and taken at once.
+    QVERIFY(sent.isEmpty());
+    QCOMPARE(h.service.deliverNow(&reader), 1);
+    QCOMPARE(sent, "sent text");
+    // A read two owners wait for is given to both in its turn.
+    int mine = 0, theirs = 0;
+    const auto shared = text("0xffff000000000004");
+    h.service.subscribe(shared, &reader, [&](const QJsonObject &) { ++mine; });
+    h.service.subscribe(shared, &other, [&](const QJsonObject &) { ++theirs; });
+    QTRY_COMPARE(h.sent.size(), 2);
+    h.reply(1, {{"text", "for both"}, {"etag", "tag-6-0-1"}, {"revision", "2"}},
+            "2");
+    QCOMPARE(h.service.deliverNow(&reader), 0);
+    QCOMPARE(h.service.deliverNow(&other), 0);
+    QCOMPARE(mine + theirs, 0);
+    QTRY_COMPARE(mine, 1);
+    QCOMPARE(theirs, 1);
+  }
+
+  void aReadAskedAtAnEditsChangeIsSentBehindItsReply() {
+    // The worker is free once an edit's reply is in: a read of visible
+    // content asked for while the change is said goes to it then, though the
+    // edit is given its own answer a turn later, and still before that read's.
+    const auto shown = [](const QString &address) {
+      auto spec = text(address);
+      spec.priority = Spec::Visible;
+      return spec;
+    };
+    Harness h;
+    establish(h);
+    QStringList order;
+    bool edited = false;
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "n"}},
+                             &h.owner, [&](const QJsonObject &) {
+                               edited = true;
+                               order.append("edit");
+                             });
+    QTRY_COMPARE(h.sent.size(), 1);
+    QJsonObject read;
+    qsizetype sentAtChange = -1;
+    bool ask = true, answeringAtChange = false;
+    const auto changed =
+        connect(&h.service, &QueryService::contextChanged, &h.owner, [&] {
+          if (!std::exchange(ask, false))
+            return;
+          // An ordinary read asked first keeps its turn; the visible one
+          // behind it goes.
+          h.service.subscribe(text("0xffff000000000009"), &h.owner,
+                              [](const QJsonObject &) {});
+          h.service.subscribe(shown("0xffff000000000001"), &h.owner,
+                              [&](const QJsonObject &response) {
+                                read = response;
+                                order.append("read");
+                              });
+          const auto before = h.sent.size();
+          h.service.sendAhead();
+          sentAtChange = h.sent.size() - before;
+          // Once: the read on its way is the one the worker has.
+          h.service.sendAhead();
+          QCOMPARE(h.sent.size() - before, sentAtChange);
+          answeringAtChange = h.service.answeringCommand();
+        });
+    QVERIFY(!h.service.answeringCommand());
+    h.reply(0, {{"saved", true}}, "2");
+    // No turn of the event loop has passed: the edit's reply is in, its
+    // change said, and its own answer still to be given.
+    QVERIFY(answeringAtChange);
+    QVERIFY(h.service.answeringCommand());
+    QCOMPARE(sentAtChange, 1);
+    QCOMPARE(h.sent.size(), 2);
+    QCOMPARE(h.sent[1].operation, "decompile");
+    QCOMPARE(h.sent[1].payload["address"].toString(), "0xffff000000000001");
+    QCOMPARE(h.sent[1].expectedRevision, "2");
+    QVERIFY(!edited);
+    QTRY_VERIFY(edited);
+    // Given: a read on its way is no edit being answered.
+    QVERIFY(!h.service.answeringCommand());
+    QVERIFY(read.isEmpty());
+    h.reply(1, {{"text", "after"}, {"etag", "tag-1-0-1"}, {"revision", "2"}},
+            "2");
+    QTRY_COMPARE(read["payload"].toObject()["text"].toString(), "after");
+    QCOMPARE(order, QStringList({"edit", "read"}));
+    // The ordinary read goes in its turn.
+    QTRY_COMPARE(h.sent.size(), 3);
+    QCOMPARE(h.sent[2].payload["address"].toString(), "0xffff000000000009");
+    h.reply(2, {{"text", "plain"}, {"etag", "tag-2-0-1"}, {"revision", "2"}},
+            "2");
+    QTRY_VERIFY(!h.service.hasPending());
+    disconnect(changed);
+    // Where only ordinary reads wait at a change, none is sent ahead: what
+    // the command's answer has its owner ask for a reader goes before them.
+    h.sent.clear();
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "o"}},
+                             &h.owner, [&](const QJsonObject &) {
+                               h.service.subscribe(shown("0xffff000000000007"),
+                                                   &h.owner,
+                                                   [](const QJsonObject &) {});
+                             });
+    QTRY_COMPARE(h.sent.size(), 1);
+    ask = true;
+    qsizetype plainAhead = -1;
+    const auto plain =
+        connect(&h.service, &QueryService::contextChanged, &h.owner, [&] {
+          if (!std::exchange(ask, false))
+            return;
+          h.service.subscribe(text("0xffff000000000008"), &h.owner,
+                              [](const QJsonObject &) {});
+          const auto before = h.sent.size();
+          h.service.sendAhead();
+          plainAhead = h.sent.size() - before;
+        });
+    h.reply(0, {{"saved", true}}, "3");
+    QCOMPARE(plainAhead, 0);
+    QTRY_COMPARE(h.sent.size(), 2);
+    QCOMPARE(h.sent[1].payload["address"].toString(), "0xffff000000000007");
+    h.reply(1, {{"text", "first"}, {"etag", "tag-3-0-1"}, {"revision", "3"}},
+            "3");
+    QTRY_COMPARE(h.sent.size(), 3);
+    QCOMPARE(h.sent[2].payload["address"].toString(), "0xffff000000000008");
+    h.reply(2, {{"text", "plain"}, {"etag", "tag-4-0-1"}, {"revision", "3"}},
+            "3");
+    QTRY_VERIFY(!h.service.hasPending());
+    disconnect(plain);
+    // At no other time: a read asked for outside a change takes its turn.
+    h.sent.clear();
+    h.service.subscribe(shown("0xffff00000000000a"), &h.owner,
+                        [](const QJsonObject &) {});
+    h.service.sendAhead();
+    QCOMPARE(h.sent.size(), 0);
+    QTRY_COMPARE(h.sent.size(), 1);
+    h.reply(0, {{"text", "later"}, {"etag", "tag-5-0-1"}, {"revision", "3"}},
+            "3");
+    QTRY_VERIFY(!h.service.hasPending());
+    // A command that waits is not passed: the read asked for at the first
+    // one's change goes after it.
+    h.sent.clear();
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "a"}},
+                             &h.owner, {});
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "b"}},
+                             &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 1);
+    ask = true;
+    qsizetype passed = -1;
+    connect(&h.service, &QueryService::contextChanged, &h.owner, [&] {
+      if (!std::exchange(ask, false))
+        return;
+      h.service.subscribe(shown("0xffff000000000003"), &h.owner,
+                          [](const QJsonObject &) {});
+      const auto before = h.sent.size();
+      h.service.sendAhead();
+      passed = h.sent.size() - before;
+    });
+    h.reply(0, {{"saved", true}}, "4");
+    QCOMPARE(passed, 0);
+    QTRY_COMPARE(h.sent.size(), 2);
+    QCOMPARE(h.sent[1].operation, "rename");
+    QCOMPARE(h.sent[1].payload["name"].toString(), "b");
+    h.reply(1, {{"saved", true}}, "5");
+    QTRY_COMPARE(h.sent.size(), 3);
+    QCOMPARE(h.sent[2].operation, "decompile");
+  }
+
   void aCarriedAnswerIsGivenWhileAnotherReadIsOnItsWay() {
     // The reads the views make after an edit wait behind it together: the one
     // the edit's reply answered is given at once, beside the one the worker

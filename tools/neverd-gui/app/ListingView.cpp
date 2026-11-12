@@ -131,7 +131,10 @@ ListingView::ListingView(Session &session, const AddressSpace &space,
   });
   connect(&session_, &Session::opened, this, &ListingView::clear);
   connect(&session_, &Session::unloaded, this, &ListingView::clear);
-  connect(&session_, &Session::revisionChanged, this, [this] {
+  // The rows are asked for ahead of the others that hear of a new revision
+  // (Session::shownRevisionChanged): the worker reads them while the views
+  // take what is there already.  The word that follows asks no second time.
+  const auto revised = [this] {
     // Local pseudocode names do not change assembly. Adopt the new revision
     // only for settled rows; a pending semantic refresh must still complete.
     if (session_.queries().localNamesOnly() && !pendingJump_ &&
@@ -139,6 +142,14 @@ ListingView::ListingView(Session &session, const AddressSpace &space,
       revision_ = session_.revision();
     else
       refresh();
+  };
+  connect(&session_, &Session::shownRevisionChanged, this, [this, revised] {
+    askedAhead_ = true;
+    revised();
+  });
+  connect(&session_, &Session::revisionChanged, this, [this, revised] {
+    if (!std::exchange(askedAhead_, false))
+      revised();
   });
   updateMetrics();
 }

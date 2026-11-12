@@ -370,6 +370,9 @@ private:
   /// replacement page arrives. Cancellation discards these pages together.
   std::optional<QVector<QJsonObject>> refreshPages_;
   bool interrupted_ = false;
+  /// The page was read again ahead of the others that hear of a new revision
+  /// (Session::shownRevisionChanged): the word that follows reads it no more.
+  bool readAhead_ = false;
   bool foldPreludeAfterLoad_ = true;
   bool foldDetailsAfterLoad_ = true;
   QSet<QString> blocksAfterLoad_;

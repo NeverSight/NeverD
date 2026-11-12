@@ -513,6 +513,9 @@ CodeText::CodeText(Session &session, QWidget *parent)
   for (const auto changed :
        {&Session::revisionChanged, &Session::sourceRefined})
     connect(&session_, changed, this, [this] {
+      // Read already, ahead of the others that hear of the revision.
+      if (std::exchange(readAhead_, false))
+        return;
       if (!function_)
         return;
       if (isVisible())
@@ -520,6 +523,28 @@ CodeText::CodeText(Session &session, QWidget *parent)
       else
         interrupted_ = true;
     });
+  // A view someone looks at reads its page ahead of what else a new revision
+  // sets off, and takes the one an edit's reply carried at once: it is there
+  // already, and shown before the rest of the workbench does its own work.
+  connect(&session_, &Session::shownRevisionChanged, this, [this] {
+    if (!function_ || !isVisible())
+      return;
+    readAhead_ = true;
+    load(*function_, representation_);
+  });
+  connect(&session_, &Session::shownRevisionAsked, this, [this] {
+    if (!readAhead_ || !loading_)
+      return;
+    // A page gives the next one's place: each is asked for as the one before
+    // it is taken.
+    for (int pages = 0;
+         pages < ::neverd::limits::gui::kCodeViewPagesTakenAtOnce && loading_ &&
+         session_.deliverNow(this) > 0;
+         ++pages) {
+    }
+    if (!loading_)
+      viewport()->repaint();
+  });
   // A new default reaches the shown function too, whatever this window
   // chose for it; a hidden window takes it when it shows again.
   connect(&SourceDefaults::instance(), &SourceDefaults::changed, this, [this] {
