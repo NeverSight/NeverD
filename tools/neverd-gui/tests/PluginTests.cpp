@@ -35,6 +35,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFile>
+#include <QFileDialog>
 #include <QGraphicsView>
 #include <QImage>
 #include <QJsonDocument>
@@ -43,6 +44,7 @@
 #include <QMenu>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QSpinBox>
@@ -50,6 +52,7 @@
 #include <QTableWidget>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTimer>
 #include <QTreeView>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -354,6 +357,43 @@ raise SystemExit(run(handler))
              qPrintable(error));
     QCOMPARE(pane.jobs().plugins().size(), 1);
     QVERIFY(!pane.contextActions().isEmpty());
+  }
+
+  void returnInTheManagersFilterOpensNoChooser() {
+    // "Import plugin…" was the manager's default by Qt's choice of its first
+    // push button, so Return in the filter opened the file chooser.
+    // Were the chooser to open, it is Qt's own, which this test can see and
+    // dismiss; a native one would hold the test until it timed out.
+    const bool native =
+        QCoreApplication::testAttribute(Qt::AA_DontUseNativeDialogs);
+    QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
+    const auto restore = qScopeGuard([native] {
+      QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs, native);
+    });
+    Session session(QStringLiteral(TEST_WORKER));
+    PluginManagerDialog manager(session.pluginServices());
+    manager.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&manager));
+    bool opened = false;
+    QTimer watch;
+    connect(&watch, &QTimer::timeout, &manager, [&opened] {
+      if (auto *chooser =
+              qobject_cast<QFileDialog *>(QApplication::activeModalWidget())) {
+        opened = true;
+        chooser->reject();
+      }
+    });
+    watch.start(10);
+    auto *filter = manager.findChild<QLineEdit *>("pluginManagerFilter");
+    QVERIFY(filter);
+    filter->setFocus();
+    QTest::keyClick(filter, Qt::Key_Return);
+    QTest::qWait(100);
+    QVERIFY(!opened);
+    QVERIFY(manager.isVisible());
+    for (const auto *button : manager.findChildren<QPushButton *>())
+      QVERIFY2(!button->isDefault() && !button->autoDefault(),
+               qPrintable(button->text()));
   }
 
   void managerProjectsTheSharedCatalog() {

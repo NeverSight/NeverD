@@ -9,6 +9,7 @@
 #include "CodeView.h"
 #include "ComparisonDialog.h"
 #include "ConnectionsDialog.h"
+#include "DialogReturnKey.h"
 #include "DisassemblyView.h"
 #include "Docking.h"
 #include "DwarfPromptDialog.h"
@@ -4727,6 +4728,8 @@ void MainWindow::showShortcuts() {
   auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
   connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
   layout->addWidget(buttons);
+  // Close would otherwise be the default, and Return in the filter press it.
+  leaveWithoutDefaultButton(*dialog);
   filter->setFocus();
   showModelessDialog(dialog, dialog->parentWidget());
 }

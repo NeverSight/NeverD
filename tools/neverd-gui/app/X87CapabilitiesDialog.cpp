@@ -11,6 +11,7 @@
 
 #include "X87CapabilitiesDialog.h"
 
+#include "DialogReturnKey.h"
 #include "Icons.h"
 #include "QueryService.h"
 #include "Theme.h"
@@ -134,6 +135,8 @@ X87CapabilitiesDialog::X87CapabilitiesDialog(QueryService &Service,
   Reload->setEnabled(false);
   connect(Reload, &QPushButton::clicked, this, &X87CapabilitiesDialog::refresh);
   connect(Buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+  // An inventory to read: Return in its filter is no reason to fetch it again.
+  leaveWithoutDefaultButton(*this);
   Layout->addWidget(Buttons);
   Status->setText(tr("Waiting for the analysis worker."));
 }

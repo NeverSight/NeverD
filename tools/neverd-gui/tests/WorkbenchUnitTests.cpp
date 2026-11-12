@@ -2927,6 +2927,101 @@ private slots:
     QVERIFY(alone.isChecked());
   }
 
+  void toolWindowsKeepReturnInTheirFields() {
+    // Qt makes the first push button of a dialog its default as the dialog
+    // shows, so Return in any field presses it: "Enable sharing" from the
+    // server path of MCP connections, the import chooser from the plugin
+    // filter, Close from the shortcut filter.
+    QDialog plain;
+    auto *plainLayout = new QVBoxLayout(&plain);
+    auto *plainField = new QLineEdit(&plain);
+    auto *plainFirst = new QPushButton(QStringLiteral("First"), &plain);
+    plainLayout->addWidget(plainField);
+    plainLayout->addWidget(plainFirst);
+    int plainClicks = 0;
+    connect(plainFirst, &QPushButton::clicked, &plain,
+            [&plainClicks] { ++plainClicks; });
+    plain.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&plain));
+    // Where Qt appointed it, and it does under the workbench's style on
+    // every desktop, the key presses it.  What follows holds either way.
+    if (plainFirst->isDefault()) {
+      plainField->setFocus();
+      QTest::keyClick(plainField, Qt::Key_Return);
+      QCOMPARE(plainClicks, 1);
+    }
+    plain.hide();
+
+    QDialog tools;
+    auto *layout = new QVBoxLayout(&tools);
+    auto *field = new QLineEdit(&tools);
+    auto *first = new QPushButton(QStringLiteral("First"), &tools);
+    auto *second = new QPushButton(QStringLiteral("Second"), &tools);
+    auto *box = new QCheckBox(QStringLiteral("Choice"), &tools);
+    for (QWidget *widget :
+         {static_cast<QWidget *>(field), static_cast<QWidget *>(first),
+          static_cast<QWidget *>(second), static_cast<QWidget *>(box)})
+      layout->addWidget(widget);
+    int firstClicks = 0, secondClicks = 0, childClicks = 0;
+    connect(first, &QPushButton::clicked, &tools,
+            [&firstClicks] { ++firstClicks; });
+    connect(second, &QPushButton::clicked, &tools,
+            [&secondClicks] { ++secondClicks; });
+    QSignalSpy returns(field, &QLineEdit::returnPressed);
+    leaveWithoutDefaultButton(tools);
+    // A window it opened keeps a default of its own, which QDialog would
+    // press for a key its parent did not use.
+    QDialog child(&tools);
+    auto *childLayout = new QVBoxLayout(&child);
+    auto *refresh = new QPushButton(QStringLiteral("Refresh"), &child);
+    childLayout->addWidget(refresh);
+    refresh->setDefault(true);
+    connect(refresh, &QPushButton::clicked, &child,
+            [&childClicks] { ++childClicks; });
+    const std::unique_ptr<QObject> filter(acceptDialogsOnReturn(*qApp));
+    tools.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&tools));
+    child.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&child));
+    for (const QPushButton *button : {first, second}) {
+      QVERIFY(!button->isDefault());
+      QVERIFY(!button->autoDefault());
+    }
+    QVERIFY(refresh->isDefault());
+    for (const auto key : {Qt::Key_Return, Qt::Key_Enter}) {
+      field->setFocus();
+      QTest::keyClick(field, key,
+                      key == Qt::Key_Enter ? Qt::KeypadModifier
+                                           : Qt::NoModifier);
+      // A check box sends Return to its dialog, which has no use for it.
+      box->setFocus();
+      QTest::keyClick(box, key);
+    }
+    QCOMPARE(returns.size(), 2);
+    QCOMPARE(firstClicks, 0);
+    QCOMPARE(secondClicks, 0);
+    QCOMPARE(childClicks, 0);
+    QVERIFY(!box->isChecked());
+    QVERIFY(tools.isVisible());
+    // The button that holds the focus is the one the key presses, and the
+    // focus alone makes none the default.
+    second->setFocus();
+    QVERIFY(!second->isDefault());
+    QTest::keyClick(second, Qt::Key_Return);
+    QCOMPARE(secondClicks, 1);
+    QCOMPARE(firstClicks, 0);
+    // Shown again, the dialog has none either.
+    tools.hide();
+    first->setAutoDefault(true);
+    tools.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&tools));
+    QVERIFY(!first->isDefault());
+    QVERIFY(!second->isDefault());
+    field->setFocus();
+    QTest::keyClick(field, Qt::Key_Escape);
+    QVERIFY(!tools.isVisible());
+  }
+
   void returnOnAListOfChoicesPressesTheDefaultButton() {
     // The GNOME theme makes Return open a combo box's list as well, so
     // Return after choosing a theme opened the list again.

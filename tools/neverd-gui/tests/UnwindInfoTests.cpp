@@ -153,6 +153,26 @@ private slots:
     QTRY_VERIFY(!Dialog.isVisible());
   }
 
+  void returnDoesNotRefresh() {
+    // Refresh was the dialog's default by Qt's choice of its first push
+    // button and drew the accent in a window that only reports.
+    Harness H;
+    UnwindInfoDialog Dialog(H.Queries, fixture::kHighPC);
+    Dialog.setProviderAvailable(true, true);
+    QTRY_COMPARE(H.requests().size(), 1);
+    H.reply(0, report(fixture::kStates));
+    Dialog.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&Dialog));
+    dwarf(Dialog)->setFocus();
+    QTest::keyClick(dwarf(Dialog), Qt::Key_Return);
+    QTest::qWait(50);
+    QCOMPARE(H.requests().size(), 1);
+    QVERIFY(Dialog.isVisible());
+    for (const auto *Button : Dialog.findChildren<QPushButton *>())
+      QVERIFY2(!Button->isDefault() && !Button->autoDefault(),
+               qPrintable(Button->text()));
+  }
+
   void zeroQueryPCAndAbsentSourceRemainDistinct() {
     Harness H;
     UnwindInfoDialog Dialog(H.Queries, fixture::kZeroPC);

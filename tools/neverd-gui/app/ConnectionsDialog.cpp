@@ -1,5 +1,6 @@
 #include "ConnectionsDialog.h"
 
+#include "DialogReturnKey.h"
 #include "Icons.h"
 #include "KeepTranslated.h"
 #include "ModelessDialog.h"
@@ -106,6 +107,10 @@ ConnectionsDialog::ConnectionsDialog(Session &session,
           &ConnectionsDialog::refresh);
   connect(connect_, &QPushButton::clicked, this,
           &ConnectionsDialog::connectOrDisconnect);
+  // Return in a field of the server row connects; the fields take no typing
+  // once a server is connected.
+  for (QLineEdit *field : {endpoint_, arguments_, token_, caFile_})
+    connect(field, &QLineEdit::returnPressed, connect_, &QPushButton::click);
 
   // Catalog and result.
   auto *splitter = new QSplitter(this);
@@ -176,6 +181,9 @@ ConnectionsDialog::ConnectionsDialog(Session &session,
           &ConnectionsDialog::refresh);
   connect(&session_, &Session::stateChanged, this, &ConnectionsDialog::refresh);
   connect(this, &QDialog::finished, token_, &QLineEdit::clear);
+  // No step here comes next, least of all sharing the session: as the first
+  // push button it was the default, and Return in the server path pressed it.
+  leaveWithoutDefaultButton(*this);
   keepTranslated(*this, [this, sessionLabel] {
     setWindowTitle(tr("MCP connections"));
     sessionLabel->setText(tr("This NeverD session"));

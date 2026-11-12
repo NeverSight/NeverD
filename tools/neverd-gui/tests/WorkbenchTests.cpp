@@ -2780,6 +2780,84 @@ private slots:
     QTRY_VERIFY(inspected);
   }
 
+  void toolWindowsLeaveReturnToTheirFields_data() {
+    QTest::addColumn<int>("command");
+    QTest::addColumn<QString>("name");
+    QTest::newRow("shortcuts")
+        << int(ActionId::OptionsShortcuts) << "shortcutsDialog";
+    QTest::newRow("connections")
+        << int(ActionId::ViewConnections) << "connectionsDialog";
+  }
+
+  void toolWindowsLeaveReturnToTheirFields() {
+    // Each took its first push button for a default by Qt's choice: Return
+    // in the shortcut filter closed the list, and Return in the server path
+    // of MCP connections pressed "Enable sharing".
+    QFETCH(int, command);
+    QFETCH(QString, name);
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loads;
+    bench.window->openFile(writeFixture(directory, "byte-export.bin"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    bool inspected = false;
+    QTimer answer;
+    connect(&answer, &QTimer::timeout, this, [&] {
+      QPointer<QDialog> dialog = visibleDialog();
+      // Until the window is the active one a key belongs to the workbench
+      // behind it, where Return is a code view's "Jump to operand".
+      if (!dialog || dialog->objectName() != name || !dialog->isActiveWindow())
+        return;
+      answer.stop();
+      const auto close = qScopeGuard([dialog] {
+        if (dialog)
+          dialog->reject();
+      });
+      inspected = true;
+      const auto texts = [dialog] {
+        QStringList all;
+        for (const auto *button : dialog->findChildren<QPushButton *>())
+          all.append(button->text());
+        return all;
+      };
+      const QStringList before = texts();
+      const auto fields = dialog->findChildren<QLineEdit *>();
+      QVERIFY(!fields.isEmpty());
+      for (QLineEdit *field : fields) {
+        if (!field->isVisible() || !field->isEnabled())
+          continue;
+        field->setFocus();
+        QTest::keyClick(field, Qt::Key_Return);
+        QVERIFY(dialog && dialog->isVisible());
+        // "Enable sharing" would read "Disable sharing" once pressed.
+        QCOMPARE(texts(), before);
+      }
+      if (name == QLatin1String("connectionsDialog")) {
+        // Return in a field of the server row connects, as its button does:
+        // arguments that are no list are refused where both can be seen.
+        QLineEdit *arguments = nullptr;
+        for (QLineEdit *field : fields)
+          if (field->text() == QLatin1String("[]"))
+            arguments = field;
+        QVERIFY(arguments);
+        arguments->setText(QStringLiteral("{"));
+        arguments->setFocus();
+        QTest::keyClick(arguments, Qt::Key_Return);
+        bool refused = false;
+        for (const auto *label : dialog->findChildren<QLabel *>())
+          refused = refused || label->text().contains("JSON array");
+        QVERIFY(refused);
+        QCOMPARE(texts(), before);
+      }
+      for (const auto *button : dialog->findChildren<QPushButton *>())
+        QVERIFY2(!button->isDefault() && !button->autoDefault(),
+                 qPrintable(button->text()));
+    });
+    answer.start(10);
+    bench.action(ActionId(command))->trigger();
+    QTRY_VERIFY(inspected);
+  }
+
   void commandButtonsExposeTheirKeys_data() {
     QTest::addColumn<bool>("dark");
     QTest::newRow("dark") << true;
