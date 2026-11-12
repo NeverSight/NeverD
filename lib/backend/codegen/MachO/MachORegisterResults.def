@@ -1,0 +1,71 @@
+//===- MachORegisterResults.def - Darwin native register lowering ------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef MACHO_REGISTER_TEXT
+#define MACHO_REGISTER_TEXT(Name, Text)
+#endif
+#ifndef MACHO_REGISTER_VALUE
+#define MACHO_REGISTER_VALUE(Type, Name, Value)
+#endif
+#ifndef MACHO_REGISTER_ALU
+#define MACHO_REGISTER_ALU(Name)
+#endif
+#ifndef MACHO_REGISTER_MEMORY
+#define MACHO_REGISTER_MEMORY(Name)
+#endif
+
+MACHO_REGISTER_TEXT(kRegisterBody, "neverd.arm64e.register-results")
+MACHO_REGISTER_TEXT(kInvalidBody,
+                    "arm64e native register body disagrees with its source "
+                    "registers, branches or unwind rows")
+MACHO_REGISTER_TEXT(kLocal, "Lneverd_reg_${:uid}_")
+MACHO_REGISTER_TEXT(kCall, "bl ")
+MACHO_REGISTER_TEXT(kTail, "b ")
+MACHO_REGISTER_TEXT(kOperandStart, "${")
+MACHO_REGISTER_TEXT(kOperandEnd, ":c}")
+MACHO_REGISTER_TEXT(kSymbolConstraint, "s,")
+MACHO_REGISTER_TEXT(kImmediateConstraint, "i,")
+MACHO_REGISTER_TEXT(kShiftLeft, ", lsl #")
+MACHO_REGISTER_TEXT(kEffects, "~{memory},~{cc}")
+MACHO_REGISTER_TEXT(kCFAOffset, ".cfi_def_cfa_offset ")
+MACHO_REGISTER_TEXT(kSpill, ".cfi_offset ")
+MACHO_REGISTER_TEXT(kRestore, ".cfi_restore ")
+MACHO_REGISTER_TEXT(kClear, "orr ")
+MACHO_REGISTER_TEXT(kXZero, ", xzr, xzr")
+MACHO_REGISTER_TEXT(kWZero, ", wzr, wzr")
+MACHO_REGISTER_TEXT(kEntryBlock, "entry")
+MACHO_REGISTER_TEXT(kSeparator, ", ")
+MACHO_REGISTER_TEXT(kEndLabel, ":\n")
+MACHO_REGISTER_VALUE(unsigned, kScratchX8, 1)
+MACHO_REGISTER_VALUE(unsigned, kScratchX9, 2)
+MACHO_REGISTER_VALUE(unsigned, kDwarfFP, 29)
+MACHO_REGISTER_VALUE(unsigned, kDwarfLR, 30)
+
+// These register/immediate operations have no PC-relative operand.
+MACHO_REGISTER_ALU(ADD)
+MACHO_REGISTER_ALU(SUB)
+MACHO_REGISTER_ALU(SUBS)
+MACHO_REGISTER_ALU(AND)
+MACHO_REGISTER_ALU(ORR)
+MACHO_REGISTER_ALU(EOR)
+MACHO_REGISTER_ALU(MOV)
+MACHO_REGISTER_ALU(MOVZ)
+MACHO_REGISTER_ALU(MOVN)
+MACHO_REGISTER_ALU(MOVK)
+MACHO_REGISTER_ALU(MUL)
+MACHO_REGISTER_ALU(MADD)
+MACHO_REGISTER_ALU(UCVTF)
+MACHO_REGISTER_ALU(FADD)
+MACHO_REGISTER_ALU(FSUB)
+MACHO_REGISTER_MEMORY(LDR)
+MACHO_REGISTER_MEMORY(STR)
+MACHO_REGISTER_MEMORY(LDP)
+MACHO_REGISTER_MEMORY(STP)
+
+#undef MACHO_REGISTER_VALUE
+#undef MACHO_REGISTER_TEXT
+#undef MACHO_REGISTER_ALU
+#undef MACHO_REGISTER_MEMORY

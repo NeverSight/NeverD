@@ -26,6 +26,61 @@ def runtime_xml(executable=False, generated=False):
 
 
 class Arm64eNativeQualificationTests(unittest.TestCase):
+    def test_cpta_requires_checked_results_from_the_actual_x1_slice(self):
+        policy = native.POLICY["cpta_probe"]
+        checked = [row[3] for row in policy["vectors"]]
+        unchecked = [row[2] for row in policy["vectors"]]
+        for results, status in ((checked, native.POLICY["passed"]),
+                                (unchecked, native.POLICY["unavailable"]),
+                                (checked[:-1], native.POLICY["failed"]),
+                                (unchecked[:-1] + checked[-1:], native.POLICY["failed"])):
+            def run(products, output, label, argv, timeout, env=None):
+                if label.endswith(native.POLICY["compile_suffix"]):
+                    arch = label.removesuffix(native.POLICY["compile_suffix"])
+                    Path(argv[-1]).write_bytes(struct.pack(
+                        native.POLICY["header_format"], native.POLICY["macho_magic"],
+                        native.POLICY["cpu_type"], policy["profiles"][arch]))
+                values = results if label == policy["x1"] else checked
+                lines = [policy["started"], *values]
+                return subprocess.CompletedProcess(argv, 0, "\n".join(lines), "")
+
+            with self.subTest(results=results), tempfile.TemporaryDirectory() as temporary, \
+                    mock.patch.object(native.platform, "system", return_value=CASES["probe_host"]["system"]), \
+                    mock.patch.object(native.platform, "machine", return_value=CASES["probe_host"]["machine"]), \
+                    mock.patch.object(native, "command", side_effect=run):
+                report = native.probe_cpta(Path(temporary))
+                self.assertEqual(report["status"], status)
+                self.assertTrue(report[policy["observed_key"]])
+                self.assertEqual(report[policy["qualified_key"]], status == native.POLICY["passed"])
+                self.assertFalse(list(Path(temporary).glob("*" + native.POLICY["binary_suffix"])))
+
+    def test_cpta_records_unsupported_isa_and_loader_without_qualification(self):
+        policy = native.POLICY["cpta_probe"]
+
+        def run(products, output, label, argv, timeout, env=None):
+            if label.endswith(native.POLICY["compile_suffix"]):
+                arch = label.removesuffix(native.POLICY["compile_suffix"])
+                Path(argv[-1]).write_bytes(struct.pack(
+                    native.POLICY["header_format"], native.POLICY["macho_magic"],
+                    native.POLICY["cpu_type"], policy["profiles"][arch]))
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            if label == policy["x1"]:
+                raise OSError(policy["bad_cpu_type_errno"], "")
+            return subprocess.CompletedProcess(argv, policy["undefined_instruction"],
+                                               policy["started"], "")
+
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(native.platform, "system", return_value=CASES["probe_host"]["system"]), \
+                mock.patch.object(native.platform, "machine", return_value=CASES["probe_host"]["machine"]), \
+                mock.patch.object(native, "command", side_effect=run):
+            report = native.probe_cpta(Path(temporary))
+            self.assertEqual(report["status"], native.POLICY["unavailable"])
+            self.assertFalse(report[policy["observed_key"]])
+            self.assertFalse(report[policy["qualified_key"]])
+            for arch, profile in report["profiles"].items():
+                self.assertEqual(profile["outcome"],
+                                 policy["loader_unavailable" if arch == policy["x1"] else "isa_unavailable"])
+
     def test_probe_keeps_startup_and_dlopen_contracts_distinct(self):
         contract = native.fixture_contract()
         markers = "\n".join(contract[name] for name in

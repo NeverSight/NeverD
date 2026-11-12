@@ -954,12 +954,71 @@ frames and 10 authenticated parent returns. The
 [verification record](evidence/arm64e-darwin-variadic-2026-11-12.json)
 identifies the tested sources, host binaries and Actions artifacts.
 
-The nine-function variadic input still fails whole-image publication. An
-assembly caller executed the original and generated instruction bytes from
-the first rejected entry at each optimization level. At O0 both versions of
-`leaf_sum` returned 109, but X8 contained the seed 100 in the original and
-entry SP + 8 in the generated body. At O2 both versions of `leaf_difference`
-returned 77. The original left 23 in X9 and the generated body preserved its
-incoming value of 85. These registers are volatile for Darwin C callers.
-A custom caller can observe them, so accepting such substitutions requires
-evidence about the actual register contract.
+The nine-function mixed variadic fixture exercises a custom caller that reads
+X8 and X9 after return. The earlier O0 `leaf_sum` preserved the C result
+109 while changing X8 from 100 to entry SP + 8. The earlier O2
+`leaf_difference` returned 77 while changing X9 from 23 to 85.
+
+For these stack argument entries and their local callers, patch-mode lifting
+retains the source register operands in an LLVM native body. Immediates and
+local function targets are explicit LLVM operands. MC assembles each body
+at its new address, including local branches and unwind directives. Before
+writing the output, the installer checks the final machine instructions, call
+destinations and compact or indexed DWARF frame rows. The O0 and O2 tests
+require all nine relocated owners and reject changes to X9, a stack
+displacement or the called function. The native observer compares X0, X8,
+X9, D0 and SP immediately after each call across three input vectors.
+
+`python3 scripts/verify_arm64e_native.py probe-cpta --output <directory>`
+builds thin arm64, arm64e and arm64e.x1 controls. Each executable records
+the results of ADDPT on a non-overflowing pointer, a top-byte carry, a borrow
+and an existing poison bit. The report identifies the exact executed slice,
+an unavailable instruction or slice, and effective checked EL0 arithmetic.
+The privileged EL1 controls have a separate verification record.
+
+A local direct caller can also establish a non-variadic X8/X9 result contract.
+The register reader checks physical reads and writes after the call, including
+W-register definitions. The callee and its supported callers use the same
+native lowering. Local tail forwarders retain the complete register result,
+and the installer resolves their B targets against the published entry map.
+The custom-caller test consumes both results and checks a
+matrix of ordinary, wrapping and high-bit scalar values.
+
+`DarwinArm64eSignalCursor.h` provides a signal-context cursor for classic
+arm64e frames. A caller supplies the exact-PC CFA and saved-register row and
+the interrupted thread's mapped stack bounds. The cursor verifies an IA- or
+IB-key signature against the recovered CFA before returning the canonical PC.
+Unknown signing state, a mismatched signature and an out-of-range saved slot
+leave the cursor unchanged. The native interruption test reaches the system
+`_sigtramp`, recovers the interrupted return and its signed parent, and
+cross-checks the parent through Darwin's frame-pointer backtrace.
+
+For the installed implicit-signing fixture, the test transfers signing rows
+from its explicitly described original after checking that the complete
+instruction ranges are identical. Each image supplies its own CFA and LR
+location rows. The unmodified system `unw_step` path across `_sigtramp` retains
+the earlier failure record.
+
+Release verification at `7bf3d8571ab87cb8de5f20145e786621d3dc4659` uses the
+tracked Capstone and Unicorn revisions and LLVM fork
+`5676029e378c9e37adc16c8216a8e8453ffafcae`. The fork passes all 28 lifted-image
+cases locally and on both Apple runners. Each runner executes 58 ordinary
+images, compares 54 register input cases across the O0/O2 nine-function
+fixtures, and completes 10 interrupted-frame returns, 10 authenticated parent
+returns and 10 signal-context handoffs. Prebuilt r6 passes its 23 locally
+supported cases on both runners, with 48 ordinary image executions per host.
+The five r6 failures match the recorded baseline. Both local configurations
+pass all 87 shared Pipeline and variadic regressions. The public `neverd patch`
+entry point publishes both nine-function images and their signatures verify.
+The verification record contains source and host hashes, dependency revisions,
+native image properties and runner artifacts.
+[Verification record](evidence/arm64e-register-results-and-signal-2026-11-12.json)
+
+The native ADDPT controls report an undefined instruction in both arm64 and
+arm64e processes on both M1 runners. Xcode 27 emits an arm64e.x1 slice whose
+launch fails with `EBADARCH`. The local M4 control also reports an undefined
+ADDPT instruction. Native CPTA-on remains unavailable on these environments.
+The explicit signal-context cursor covers unsigned and IA/IB-with-CFA rows.
+Instruction-address-diversified returns, the direct system `_sigtramp` walk
+and additional arbitrary image instruction and unwind profiles still require
+qualification.
