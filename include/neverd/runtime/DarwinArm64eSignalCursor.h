@@ -1,7 +1,13 @@
-//===- DarwinArm64eSignalCursor.h - Darwin signal frame returns -*- C -*-===//
+//===- DarwinArm64eSignalCursor.h - Signal frame returns -*- C -*-===//
 //
 // NeverD Decompiler
 //
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Authenticate Darwin signal-context returns using resolved rows and stack
+/// bounds.
+///
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_RUNTIME_DARWINARM64ESIGNALCURSOR_H

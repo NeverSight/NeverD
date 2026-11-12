@@ -1,8 +1,13 @@
-//===- MachORegisterResults.h - Darwin native register entries -*- C++
-//-*-===//
+//===- MachORegisterResults.h - Native register entries -*- C++ -*-===//
 //
 // NeverD Decompiler
 //
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Bind decoded physical register operands and unwind rows to patch-mode LLVM
+/// bodies.
+///
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_BACKEND_CODEGEN_MACHO_MACHOREGISTERRESULTS_H

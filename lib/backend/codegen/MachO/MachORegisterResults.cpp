@@ -1,7 +1,12 @@
-//===- MachORegisterResults.cpp - Darwin register-preserving entries ----===//
+//===- MachORegisterResults.cpp - Native register entries -*- C++ -*-===//
 //
 // NeverD Decompiler
 //
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Lower and validate register-preserving Mach-O entries at the patch boundary.
+///
 //===----------------------------------------------------------------------===//
 
 #include "neverd/backend/codegen/MachO/MachORegisterResults.h"
