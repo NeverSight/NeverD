@@ -10109,8 +10109,10 @@ value that leaves the function as it is, returned, passed to a call or joined
 with another, keeps the save: later analyses would read the copy as the
 incoming register and take a returned save for no result. The restore proof
 also follows unobserved zero extensions, including the Q-register update from
-an AArch64 D-register restore, and the Q register an ARM32 VPOP rebuilds from
-its D halves. A read of any derived value retains the save. The projection also
+an AArch64 D-register restore, a piece taken back out of such a value (the D
+view of a Q register the body wrote whole, which the lifter reads out of the
+restored Q again), and the Q register an ARM32 VPOP rebuilds from its D
+halves. A read of any derived value retains the save. The projection also
 leaves out a store of unknown machine state into the private frame that nothing
 observes, where either C route would fail: an ARM32 VLD1 lane load keeps the
 other half of a scratch D register, whose incoming value no caller defines, and
