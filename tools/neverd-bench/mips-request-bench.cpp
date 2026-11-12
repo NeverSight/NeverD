@@ -17,8 +17,9 @@
 #include <string_view>
 
 int main(int Argc, char **Argv) {
-  if (Argc != 4) {
-    std::fprintf(stderr, "usage: %s IMAGE REPEATS OUTPUT\n", Argv[0]);
+  if (Argc != 4 && Argc != 5) {
+    std::fprintf(stderr, "usage: %s IMAGE REPEATS OUTPUT [HEX_ENTRY]\n",
+                 Argv[0]);
     return 2;
   }
   unsigned Repeats = 0;
@@ -28,6 +29,16 @@ int main(int Argc, char **Argv) {
   if (Parsed.ec != std::errc() || Parsed.ptr != Count.data() + Count.size() ||
       !Repeats)
     return 2;
+  neverd_va_t Entry = 0;
+  if (Argc == 5) {
+    std::string_view Address(Argv[4]);
+    if (Address.starts_with("0x") || Address.starts_with("0X"))
+      Address.remove_prefix(2);
+    const auto End = Address.data() + Address.size();
+    const auto VA = std::from_chars(Address.data(), End, Entry, 16);
+    if (VA.ec != std::errc() || VA.ptr != End)
+      return 2;
+  }
   std::unique_ptr<void, decltype(&neverd_session_destroy)> Session(
       neverd_session_create(), neverd_session_destroy);
   if (!Session || !neverd_session_load(Session.get(), Argv[1]))
@@ -37,7 +48,9 @@ int main(int Argc, char **Argv) {
   const auto Start = std::chrono::steady_clock::now();
   for (unsigned I = 0; I < Repeats; ++I) {
     std::unique_ptr<const char, decltype(&neverd_free_string)> Source(
-        neverd_decompile_all(Session.get(), Argv[1], 0, 0, 250),
+        Argc == 5 ? neverd_decompile_functions(Session.get(), Argv[1],
+                                               NEVERD_OUTPUT_C, &Entry, 1)
+                  : neverd_decompile_all(Session.get(), Argv[1], 0, 0, 250),
         neverd_free_string);
     if (!Source) {
       std::unique_ptr<const char, decltype(&neverd_free_string)> Error(

@@ -24063,7 +24063,7 @@ operand counts. `NeverDLLVMCAllocaTests` executes floating/integer storage views
 against original LLVM, including negative zero and NaN payloads.
 
 The opt-in `neverd-mips-request-bench` target repeatedly decompiles one loaded
-SDK session and refuses changing source output. Supply `IMAGE REPEATS OUTPUT`;
+SDK session and refuses changing source output. Supply `IMAGE REPEATS OUTPUT [HEX_ENTRY]` for the program or one function;
 its JSON reports wall/CPU time and output size. It exercises request reuse in
 addition to the fresh CLI requests measured by the paired runner below.
 

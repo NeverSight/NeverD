@@ -1139,7 +1139,7 @@ using its existing QEMU micro decoder; it is not a claim about I6400 hardware.
 The 112 FP forms execute their original micro bytes in both GPR widths and byte
 orders, with finite values, NaNs and rounding changes. Reference tests also
 cover double transfers and compact FP branches. Its [native doubleword decoder](https://github.com/NeverSight/unicorn/pull/24) also executes physical integer
-encodings directly: 21 forms, five wide/sign-edge inputs and both byte orders
+encodings directly: 21 forms, 18 wide/signed operand pairs and both byte orders
 are compared against NeverD, including every GPR and next PC.
 Fixed call round trips use explicit classic o32 and n64 FR=1 profiles in HighC
 and LLVMC at O0 and O2: single/double precision, an integer parameter after an

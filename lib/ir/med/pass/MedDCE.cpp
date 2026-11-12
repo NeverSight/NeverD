@@ -190,7 +190,8 @@ void LowToMedConverter::runDce(MedFunc &Func) {
           MarkLive(*Widest);
       };
       for (uint64_t R : TRI.FPReturnRegs)
-        seedReg(R);
+        if (RegOffVars.contains(R))
+          seedReg(R);
       for (uint64_t R : TRI.IntReturnRegs)
         seedReg(R);
     }

@@ -20,6 +20,7 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
 #include <map>
@@ -448,12 +449,6 @@ bool isStraightLinePrivateFrameFunction(llvm::ArrayRef<HighStmt> Body,
   return true;
 }
 
-bool isStraightLinePrivateFrameFunction(const HighFunc &Func, Arch Architecture,
-                                        size_t &Budget) {
-  return isStraightLinePrivateFrameFunction(Func.Body, Func, Architecture,
-                                            Budget);
-}
-
 std::optional<int64_t> privateFrameOffset(const ExprPtr &Address,
                                           uint16_t Bytes, const HighFunc &Func,
                                           Arch Architecture, size_t &Budget,
@@ -641,20 +636,21 @@ void invalidateWrittenVariable(std::map<int64_t, StoredFrameValue> &Stores,
 }
 } // namespace
 
-// \p Validated says the caller has just proven \p Func straight-line.
-static void forwardLinearPrivateFrameLoads(HighFunc &Func, Arch Architecture,
-                                           size_t &Budget,
-                                           const FrameAliases &KnownAliases,
-                                           bool Validated = false) {
+// The region stays in its owning statement vector. Synthetic trailing reads
+// expose the following call's inputs without copying the region or the call.
+static void forwardLinearPrivateFrameLoads(
+    llvm::MutableArrayRef<HighStmt> Body, llvm::MutableArrayRef<HighStmt> Reads,
+    const HighFunc &Func, Arch Architecture, size_t &Budget,
+    const FrameAliases &KnownAliases, bool Validated) {
   if (Architecture == Arch::Unknown)
     return;
   const uint16_t PointerBytes = getTargetRegInfo(Architecture).PointerSize;
   if ((PointerBytes != 4 && PointerBytes != 8) ||
       (!Validated &&
-       !isStraightLinePrivateFrameFunction(Func, Architecture, Budget)))
+       !isStraightLinePrivateFrameFunction(Body, Func, Architecture, Budget)))
     return;
   std::map<LocalIdentity, unsigned> DefinitionCounts;
-  for (const HighStmt &Stmt : Func.Body)
+  for (const HighStmt &Stmt : Body)
     if (Stmt.Kind == StmtKind::Assign && Stmt.Dst->Kind == ExprKind::Var)
       ++DefinitionCounts[highSourceLocalIdentity(Stmt.Dst->Var)];
 
@@ -682,7 +678,7 @@ static void forwardLinearPrivateFrameLoads(HighFunc &Func, Arch Architecture,
     Statement.Kind = StmtKind::Block;
     Statement.Addr = Address;
   };
-  for (HighStmt &Stmt : Func.Body) {
+  for (HighStmt &Stmt : llvm::concat<HighStmt>(Body, Reads)) {
     if (!Budget)
       break;
     const bool Calls = statementCall(Stmt) != nullptr;
@@ -895,8 +891,17 @@ class FrameWritebacks {
     if (T) {
       if (!spend(1 + S.size()))
         return;
-      auto [It, Fresh] = Before.try_emplace(T, S);
-      if (!Fresh) {
+      auto [It, Fresh] = Before.try_emplace(T);
+      if (Fresh) {
+        // Killing an overwritten store needs the incoming addresses. Captured
+        // reads also need a memory value with a corresponding local; a join
+        // can only remove facts from this snapshot.
+        It->second.Addresses = S.Addresses;
+        if (!S.Memory.empty() && !S.Locals.empty()) {
+          It->second.Memory = S.Memory;
+          It->second.Locals = S.Locals;
+        }
+      } else {
         intersect(It->second.Locals, S.Locals);
         intersect(It->second.Addresses, S.Addresses);
         intersect(It->second.Memory, S.Memory);
@@ -1054,19 +1059,23 @@ class FrameWritebacks {
               return Result;
             }
         }
-      auto Copy = std::make_shared<HighExpr>(*E);
-      bool Changed = false;
-      for (auto &Child : Copy->Operands) {
+      ExprPtr Copy;
+      const auto Mutable = [&]() -> HighExpr & {
+        if (!Copy)
+          Copy = std::make_shared<HighExpr>(*E);
+        return *Copy;
+      };
+      for (auto [I, Child] : llvm::enumerate(E->Operands)) {
         auto Value = Self(Self, Child, Depth + 1);
-        Changed |= Value != Child;
-        Child = std::move(Value);
+        if (Value != Child)
+          Mutable().Operands[I] = std::move(Value);
       }
-      if (Copy->IndirectTarget) {
-        auto Value = Self(Self, Copy->IndirectTarget, Depth + 1);
-        Changed |= Value != Copy->IndirectTarget;
-        Copy->IndirectTarget = std::move(Value);
+      if (E->IndirectTarget) {
+        auto Value = Self(Self, E->IndirectTarget, Depth + 1);
+        if (Value != E->IndirectTarget)
+          Mutable().IndirectTarget = std::move(Value);
       }
-      auto Result = Changed ? Copy : E;
+      auto Result = Copy ? std::move(Copy) : E;
       Rebuilt[E.get()] = Result;
       return Result;
     };
@@ -1102,16 +1111,16 @@ class FrameWritebacks {
       }
       const auto StateIt = Before.find(Node.Statement);
       const auto Rewrite = Rewritten.find(Node.Statement);
-      if (Node.Statement &&
-          (StateIt == Before.end() || Rewrite == Rewritten.end())) {
+      if (Node.Statement && StateIt == Before.end()) {
         Bytes.clear();
         continue;
       }
       const State EmptyState;
       const HighStmt EmptyStatement;
       const auto &S = StateIt == Before.end() ? EmptyState : StateIt->second;
-      const auto &T =
-          Rewrite == Rewritten.end() ? EmptyStatement : Rewrite->second;
+      const auto &T = Rewrite != Rewritten.end() ? Rewrite->second
+                      : Node.Statement           ? *Node.Statement
+                                                 : EmptyStatement;
       if (T.MemoryOrdering != NdMemoryOrdering::None ||
           T.MemoryAddressSpace != NdMemoryAddressSpace::Default) {
         Bytes.clear();
@@ -1290,13 +1299,16 @@ public:
       ++Visited;
       Order.push_back(I);
       transfer(Graph.Nodes[I], S);
-      for (size_t Next : Graph.Nodes[I].Successors) {
+      const auto &Successors = Graph.Nodes[I].Successors;
+      for (auto [Index, Next] : llvm::enumerate(Successors)) {
         if (!spend(1 + S.size()))
           return false;
         if (Incoming[Next]) {
           intersect(Incoming[Next]->Locals, S.Locals);
           intersect(Incoming[Next]->Addresses, S.Addresses);
           intersect(Incoming[Next]->Memory, S.Memory);
+        } else if (Index + 1 == Successors.size()) {
+          Incoming[Next] = std::move(S);
         } else {
           Incoming[Next] = S;
         }
@@ -1309,15 +1321,26 @@ public:
       return false;
     std::map<const HighStmt *, HighStmt> Rewritten;
     for (const auto &[Statement, S] : Before) {
-      HighStmt Copy = *Statement;
-      forEachRhsExpr(Copy, [&](ExprPtr &E) {
+      if (S.Memory.empty() || S.Locals.empty())
+        continue;
+      llvm::SmallVector<ExprPtr, 4> Values;
+      bool Changed = false;
+      forEachRhsExpr(*Statement, [&](const ExprPtr &E) {
         // A do-while test runs after the body, not in the state at its entry.
-        if (Copy.Kind != StmtKind::DoWhile || &E != &Copy.Cond)
-          E = replaceCapturedReads(E, S);
+        auto V = Statement->Kind == StmtKind::DoWhile && &E == &Statement->Cond
+                     ? E
+                     : replaceCapturedReads(E, S);
+        Changed |= V != E;
+        Values.push_back(std::move(V));
       });
-      Rewritten.emplace(Statement, std::move(Copy));
       if (!Complete)
         return false;
+      if (Changed) {
+        // Keep the original graph intact until the backward proof completes.
+        auto &Copy = Rewritten.try_emplace(Statement, *Statement).first->second;
+        auto Value = Values.begin();
+        forEachRhsExpr(Copy, [&](ExprPtr &E) { E = std::move(*Value++); });
+      }
     }
     std::map<const HighStmt *, bool> Overwritten;
     findOverwrittenStores(Graph, Order, Rewritten, Overwritten);
@@ -1372,14 +1395,14 @@ bool forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture,
   HighFunc Context;
   Context.FrameSize = Func.FrameSize;
   Context.FrameHeadroom = Func.FrameHeadroom;
-  const auto Entries = gotoTargets(Func.Body);
   // Immutable frame addresses survive calls. Stored bytes do not. Learn each
   // address only after its assignment, and keep branch/loop-local definitions
   // inside the scope they dominate.
   std::map<LocalIdentity, unsigned> Definitions;
-  bool UnsupportedFrame = false;
+  bool UnsupportedFrame = false, HasEntryStack = false;
   std::set<LocalIdentity> AddressTaken;
   HighExprSet Observed;
+  llvm::SmallVector<const HighExpr *, 16> Pending;
   walkStmts(Func.Body, [&](const HighStmt &S) {
     if (!Remaining)
       return;
@@ -1391,13 +1414,15 @@ bool forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture,
         isSyntheticEntryStackPointer(S.Dst->Var, Func, Architecture))
       UnsupportedFrame = true;
     forEachExpr(S, [&](const ExprPtr &Root) {
-      std::vector<ExprPtr> Pending{Root};
+      Pending.push_back(Root.get());
       while (!Pending.empty() && Remaining) {
-        auto E = Pending.back();
-        Pending.pop_back();
+        const auto *E = Pending.pop_back_val();
         --Remaining;
-        if (!E || !Observed.insert(E.get()).second)
+        if (!E || !Observed.insert(E).second)
           continue;
+        if (!HasEntryStack && E->Kind == ExprKind::Var)
+          HasEntryStack =
+              isSyntheticEntryStackPointer(E->Var, Func, Architecture);
         for (const MedVar &Output : E->IntrinsicOutputs) {
           ++Definitions[highSourceLocalIdentity(Output)];
           UnsupportedFrame |=
@@ -1407,12 +1432,15 @@ bool forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture,
             E->Operands[0] && E->Operands[0]->Kind == ExprKind::Var)
           AddressTaken.insert(highSourceLocalIdentity(E->Operands[0]->Var));
         E->forEachChildExpr(
-            [&](const ExprPtr &Child) { Pending.push_back(Child); });
+            [&](const ExprPtr &Child) { Pending.push_back(Child.get()); });
       }
     });
   });
-  if (UnsupportedFrame || !Remaining)
+  // Every recognized cell (including a captured load) is relative to the
+  // synthetic entry SP, either directly or through an alias learned here.
+  if (UnsupportedFrame || !Remaining || !HasEntryStack)
     return false;
+  const auto Entries = gotoTargets(Func.Body);
   const auto LearnAlias = [&](const HighStmt &S, FrameAliases &Aliases) {
     if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val ||
         S.Dst->Kind != ExprKind::Var || !replayableIntegerNode(*S.Dst) ||
@@ -1445,20 +1473,21 @@ bool forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture,
   // Returns whether control can enter \p Body other than at its start: a goto
   // target anywhere in it, or a subtree too deep to walk.
   const auto Forward = [&](auto &&Self, std::vector<HighStmt> &Body,
-                           FrameAliases VisibleAliases,
+                           const FrameAliases &InheritedAliases,
                            unsigned Depth) -> bool {
     if (Depth > ::neverd::limits::ir::kMaxPrivateFrameLeafDepth)
       return true;
+    if (Body.empty())
+      return false;
+    FrameAliases VisibleAliases = InheritedAliases;
     bool Entered = false;
     size_t First = 0;
     FrameAliases RegionAliases = VisibleAliases;
     const auto Flush = [&](size_t End, HighStmt *Call = nullptr) {
       if (End <= First || !Remaining)
         return;
-      HighFunc Region = Context;
-      Region.Body.insert(Region.Body.end(), Body.begin() + First,
-                         Body.begin() + End);
-      const size_t Count = Region.Body.size();
+      const auto Region = llvm::MutableArrayRef(Body).slice(First, End - First);
+      const size_t Count = Region.size();
       if (Count > Remaining) {
         Remaining = 0;
         return;
@@ -1480,7 +1509,7 @@ bool forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture,
         else if (Call->Kind == StmtKind::Switch)
           Root = &Call->SwitchExpr;
       }
-      std::vector<ExprPtr *> Inputs;
+      llvm::SmallVector<ExprPtr *, 4> Inputs;
       if (Root && *Root && (*Root)->Kind == ExprKind::Call) {
         for (auto &Operand : (*Root)->Operands)
           Inputs.push_back(&Operand);
@@ -1489,11 +1518,12 @@ bool forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture,
       } else if (Root && *Root) {
         Inputs.push_back(Root);
       }
+      std::vector<HighStmt> Reads;
+      Reads.reserve(Inputs.size());
       for (auto *Input : Inputs) {
-        HighStmt Read;
+        auto &Read = Reads.emplace_back();
         Read.Kind = StmtKind::ExprStmt;
         Read.Val = *Input;
-        Region.Body.push_back(std::move(Read));
       }
       // If a call input contains an effect, still optimize the preceding
       // region, but never speculate about argument evaluation order.
@@ -1501,26 +1531,22 @@ bool forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture,
       // only the exposed call inputs remain.
       size_t Budget = Remaining;
       const bool Valid = isStraightLinePrivateFrameFunction(
-          llvm::ArrayRef<HighStmt>(Region.Body).drop_front(Count), Region,
-          Architecture, Budget);
+          Reads, Context, Architecture, Budget);
       if (!Valid) {
-        Region.Body.resize(Count);
+        Reads.clear();
         Inputs.clear();
       }
       Remaining = Budget;
       // A region the proof above accepted is not proven again.
-      forwardLinearPrivateFrameLoads(Region, Architecture, Remaining,
-                                     RegionAliases, Valid);
-      for (size_t I = 0; I < Count; ++I)
-        Body[First + I] = std::move(Region.Body[I]);
+      forwardLinearPrivateFrameLoads(Region, Reads, Context, Architecture,
+                                     Remaining, RegionAliases, Valid);
       if (Root && !Inputs.empty()) {
         if ((*Root)->Kind != ExprKind::Call) {
-          *Root = Region.Body[Count].Val;
+          *Root = Reads.front().Val;
           return;
         }
         // A no-op must retain the call's instruction navigation identity.
-        if (std::equal(Inputs.begin(), Inputs.end(),
-                       Region.Body.begin() + Count,
+        if (std::equal(Inputs.begin(), Inputs.end(), Reads.begin(),
                        [](const ExprPtr *Input, const HighStmt &Read) {
                          return *Input == Read.Val;
                        }))
@@ -1529,11 +1555,11 @@ bool forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture,
         // statements. Rebuild only changed calls instead of mutating their
         // shared node; unchanged calls retain their observed identity.
         auto Rebuilt = std::make_shared<HighExpr>(**Root);
-        size_t I = Count;
+        size_t I = 0;
         for (auto &Operand : Rebuilt->Operands)
-          Operand = Region.Body[I++].Val;
+          Operand = Reads[I++].Val;
         if (Rebuilt->IndirectTarget)
-          Rebuilt->IndirectTarget = Region.Body[I].Val;
+          Rebuilt->IndirectTarget = Reads[I].Val;
         *Root = std::move(Rebuilt);
       }
     };
