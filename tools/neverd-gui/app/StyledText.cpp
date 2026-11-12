@@ -101,6 +101,14 @@ QString StyledLine::tokenAt(int position, TokenDots dots) const {
   return text.mid(begin, end - begin);
 }
 
+bool StyledLine::adoptLayout(StyledLine &other) {
+  if (!other.layout_ || text != other.text || spans != other.spans)
+    return false;
+  layout_ = std::move(other.layout_);
+  stamp_ = other.stamp_;
+  return true;
+}
+
 QTextLayout &StyledLine::layout(const QFont &font, quint64 stamp,
                                 const ColorOf &colorOf) const {
   if (layout_ && stamp_ == stamp)

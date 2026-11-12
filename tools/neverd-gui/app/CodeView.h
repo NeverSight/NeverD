@@ -373,6 +373,9 @@ private:
   /// The page was read again ahead of the others that hear of a new revision
   /// (Session::shownRevisionChanged): the word that follows reads it no more.
   bool readAhead_ = false;
+  /// The lines shown before the page was read again, whose layouts the lines
+  /// that read the same take (rebuildLines); let go of when it is whole.
+  QList<Line> linesBefore_;
   bool foldPreludeAfterLoad_ = true;
   bool foldDetailsAfterLoad_ = true;
   QSet<QString> blocksAfterLoad_;

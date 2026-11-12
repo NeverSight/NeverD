@@ -29,6 +29,7 @@ struct StyledSpan {
   int length = 0;
   int role = 0;
   std::optional<Address> address;
+  bool operator==(const StyledSpan &) const = default;
 };
 
 /// One line of styled text with a lazily built, cached text layout.  Layouts
@@ -61,6 +62,11 @@ struct StyledLine {
   using ColorOf = std::function<QColor(int role)>;
   QTextLayout &layout(const QFont &font, quint64 stamp,
                       const ColorOf &colorOf) const;
+  /// Takes the layout \p other has built, where this line reads as that one
+  /// does: the same text under the same spans lays out the same for one view,
+  /// which draws both with one font, one stamp and one set of colors.  Whether
+  /// it took one.
+  bool adoptLayout(StyledLine &other);
 
 private:
   mutable std::unique_ptr<QTextLayout> layout_;

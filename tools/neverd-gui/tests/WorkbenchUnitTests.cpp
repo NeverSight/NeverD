@@ -41,9 +41,11 @@
 #include <QDialogButtonBox>
 #include <QDirIterator>
 #include <QFile>
+#include <QFontDatabase>
 #include <QFontInfo>
 #include <QHash>
 #include <QHoverEvent>
+#include <QImage>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QKeyEvent>
@@ -534,6 +536,62 @@ private slots:
     StyledLine copy = line;
     QCOMPARE(copy.text, line.text);
     QCOMPARE(copy.spans.size(), line.spans.size());
+  }
+
+  void aLineThatReadsTheSameTakesTheLayoutBuiltForIt() {
+    // A view that reads its page again builds its lines again; one that reads
+    // as the line before it did takes that line's layout, and no other.
+    const QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    const auto color = [](int role) {
+      return role ? QColor(Qt::red) : QColor(Qt::black);
+    };
+    const auto line = [](const QString &text, QVector<StyledSpan> spans) {
+      StyledLine made;
+      made.text = text;
+      made.spans = std::move(spans);
+      return made;
+    };
+    const QString text = QString::fromUtf8("call 中文_😀(x); // n");
+    const QVector<StyledSpan> spans{{5, 5, 3, Address(0x401000)}, {14, 4, 4}};
+    StyledLine before = line(text, spans);
+    QTextLayout *built = &before.layout(font, 7, color);
+    // Another text, other spans, a span's other place or address: not taken.
+    for (auto other :
+         {line(text + QLatin1Char(' '), spans), line(text, {}),
+          line(text, {{5, 5, 3, Address(0x401000)}}),
+          line(text, {{5, 5, 3, Address(0x401000)}, {14, 4, 5}}),
+          line(text, {{5, 5, 3, Address(0x401008)}, {14, 4, 4}}),
+          line(text, {{5, 4, 3, Address(0x401000)}, {14, 4, 4}})}) {
+      QVERIFY(!other.adoptLayout(before));
+      QCOMPARE(&before.layout(font, 7, color), built);
+    }
+    StyledLine after = line(text, spans);
+    QVERIFY(after.adoptLayout(before));
+    // The very layout, under the stamp it was built at.
+    QCOMPARE(&after.layout(font, 7, color), built);
+    // It was lent once: the line it came from builds its own again, and has
+    // none to lend meanwhile.
+    StyledLine third = line(text, spans);
+    QVERIFY(!third.adoptLayout(before));
+    QVERIFY(&before.layout(font, 7, color) != built);
+    // A line with none built has none to give.
+    StyledLine fresh = line(text, spans);
+    QVERIFY(!third.adoptLayout(fresh));
+    // Another stamp builds it anew, as for any line.
+    QVERIFY(&after.layout(font, 8, color) != built);
+    // What it draws is what a line built by itself draws.
+    const auto render = [&](StyledLine &styled) {
+      QImage image(600, 40, QImage::Format_ARGB32_Premultiplied);
+      image.fill(Qt::white);
+      QPainter painter(&image);
+      styled.layout(font, 9, color).draw(&painter, QPointF(4, 4));
+      return image;
+    };
+    StyledLine lender = line(text, spans), taker = line(text, spans),
+               alone = line(text, spans);
+    lender.layout(font, 9, color);
+    QVERIFY(taker.adoptLayout(lender));
+    QCOMPARE(render(taker), render(alone));
   }
 
   void registerFamiliesShareTheirParts() {

@@ -655,6 +655,7 @@ void CodeText::clear() {
   interrupted_ = false;
   sourceRows_.clear();
   lineStarts_.clear();
+  linesBefore_.clear();
   regions_ = {};
   regionsValid_ = false;
   prelude_ = {};
@@ -1117,6 +1118,10 @@ void CodeText::appendPage(const QJsonObject &payload, int offset) {
   }
   if (offset == 0) {
     sourceBytes_ = renderedChars_ = renderedRows_ = widestLine_ = 0;
+    // The lines it showed lend the ones that read the same their layouts
+    // (rebuildLines): a page read again after an edit changes few.
+    if (!lines_.isEmpty())
+      linesBefore_ = std::move(lines_);
     lines_.clear();
     lineStarts_.clear();
   }
@@ -1275,6 +1280,10 @@ void CodeText::rebuildLines(bool append) {
   const QVariantList &rows = folding ? library_.mappings() : sourceRows_;
   const int previousLine = cursorLine_;
   if (!append) {
+    // The lines it showed lend the ones that read the same their layouts,
+    // below: a fold, or a page read again, changes few.
+    if (linesBefore_.isEmpty())
+      linesBefore_ = std::move(lines_);
     lines_.clear();
     lineStarts_.clear();
     inComment_ = false;
@@ -1348,6 +1357,20 @@ void CodeText::rebuildLines(bool append) {
                 });
       line.styled.spans = spans;
     }
+  // A line that reads as the one in its place did keeps the layout built for
+  // that one; where lines came or went, as the one as far from the end.
+  if (!linesBefore_.isEmpty()) {
+    const auto count = std::min(linesBefore_.size(), lines_.size());
+    for (qsizetype i = 0; i < count; ++i)
+      lines_[i].styled.adoptLayout(linesBefore_[i].styled);
+    // Whole: the rest of what it showed is let go of.
+    if (!loading_ || refreshPages_) {
+      for (qsizetype i = 1; i <= count; ++i)
+        lines_[lines_.size() - i].styled.adoptLayout(
+            linesBefore_[linesBefore_.size() - i].styled);
+      linesBefore_.clear();
+    }
+  }
   const int lastSourceLine =
       lines_.isEmpty() ? 1 : lines_.back().sourceLine + 1;
   gutterChars_ = std::max(3, int(QString::number(lastSourceLine).size()));

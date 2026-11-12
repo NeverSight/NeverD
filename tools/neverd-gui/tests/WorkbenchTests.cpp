@@ -7765,6 +7765,16 @@ private slots:
                              OpenTimeoutMs);
     QCOMPARE(ListingViewTestAccess::requests(*listing), requests + 1);
     QVERIFY(code->allText().contains(QStringLiteral("shown at once")));
+    // The lines that read as they did kept their layouts through the page
+    // read again: what they draw is what layouts built afresh draw, which a
+    // change of style has every line build.
+    QTRY_VERIFY(QTest::qWaitForWindowExposed(bench.window.get()));
+    const QImage kept = code->viewport()->grab().toImage();
+    emit Theme::instance().changed();
+    QCoreApplication::processEvents();
+    const QImage afresh = code->viewport()->grab().toImage();
+    QVERIFY(!kept.isNull());
+    QCOMPARE(kept, afresh);
     // A revision said by itself is read as before.
     const auto version = code->documentVersion();
     emit bench.session.revisionChanged();
