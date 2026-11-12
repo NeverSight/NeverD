@@ -53,6 +53,7 @@
 #include <QScreen>
 #include <QSettings>
 #include <QSignalSpy>
+#include <QSplitter>
 #include <QStandardItemModel>
 #include <QStyle>
 #include <QStyleHints>
@@ -1272,6 +1273,77 @@ private slots:
                qPrintable(QString::number(contrast(part, surface))));
     QVERIFY(contrast(plate, surface) <
             contrast(theme.chrome("Button"), surface));
+  }
+
+  void splitterHandlesKeepAHairlineInTheirRoom_data() {
+    QTest::addColumn<int>("orientation");
+    QTest::addColumn<int>("room");
+    QTest::addColumn<qreal>("scale");
+    // The theme's own handle is the hairline; a wider one is a gutter
+    // between panes whose controls would otherwise touch the line.
+    for (const auto orientation : {Qt::Horizontal, Qt::Vertical})
+      for (const int room : {1, 13})
+        for (const qreal scale : {1.0, 1.25})
+          QTest::newRow(qPrintable(
+              QStringLiteral("%1-%2-%3x")
+                  .arg(orientation == Qt::Horizontal ? "beside" : "above")
+                  .arg(room)
+                  .arg(scale)))
+              << int(orientation) << room << scale;
+  }
+
+  void splitterHandlesKeepAHairlineInTheirRoom() {
+    QFETCH(int, orientation);
+    QFETCH(int, room);
+    QFETCH(qreal, scale);
+    Theme::instance().setMode(Theme::Mode::Dark);
+    Theme::instance().apply();
+    const Theme &theme = Theme::instance();
+    const QColor surface = theme.chrome("Window");
+    const QColor line = theme.chrome("DockSeparator");
+    QSplitter splitter{Qt::Orientation(orientation)};
+    splitter.setAutoFillBackground(true);
+    auto *first = new QWidget;
+    auto *second = new QWidget;
+    splitter.addWidget(first);
+    splitter.addWidget(second);
+    splitter.setChildrenCollapsible(false);
+    splitter.setHandleWidth(room);
+    splitter.resize(240, 140);
+    splitter.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&splitter));
+    QImage image(QSize(240, 140) * scale, QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(scale);
+    image.fill(surface);
+    splitter.render(&image);
+    // Across the handle, from one pane to the other: the surface, and one
+    // device pixel of the hairline in the middle.  A handle filled whole was
+    // a band as wide as its room.
+    const bool beside = orientation == Qt::Horizontal;
+    const int from =
+        beside ? first->geometry().right() + 1 : first->geometry().bottom() + 1;
+    const int to =
+        beside ? second->geometry().left() : second->geometry().top();
+    QCOMPARE(to - from, room);
+    const int begin = qFloor(from * scale), end = qCeil(to * scale);
+    const int along = qRound((beside ? 70 : 120) * scale);
+    int lines = 0, before = 0, after = 0;
+    for (int at = begin; at < end; ++at) {
+      const QColor color =
+          image.pixelColor(beside ? QPoint(at, along) : QPoint(along, at));
+      if (color.rgb() == line.rgb()) {
+        ++lines;
+        continue;
+      }
+      QVERIFY2(
+          color.rgb() == surface.rgb(),
+          qPrintable(QStringLiteral("%1 at %2").arg(color.name()).arg(at)));
+      ++(lines ? after : before);
+    }
+    QCOMPARE(lines, 1);
+    QVERIFY2(std::abs(before - after) <= 2,
+             qPrintable(
+                 QStringLiteral("%1 before, %2 after").arg(before).arg(after)));
   }
 
   void longMenusScrollWithinOneColumn_data() {

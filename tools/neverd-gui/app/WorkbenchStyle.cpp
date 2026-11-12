@@ -735,17 +735,30 @@ void WorkbenchStyle::drawControl(ControlElement element,
                              Qt::RightEdge | Qt::BottomEdge});
     return;
   }
-  // A splitter's handle is a hairline, the focus color under the pointer.  A
+  // A splitter's handle is a hairline along the middle of its room, under
+  // the bar a dock's separator shows while the pointer is over it or drags
+  // it.  A handle wider than the hairline is a gutter between two panes whose
+  // controls would otherwise touch the line.  Filled whole, such a handle was
+  // a band of the fields' own gray that the fields beside it ran into.  A
   // handle paints itself on behalf of its splitter.
   if (element == CE_Splitter && option &&
       (qobject_cast<const QSplitter *>(widget) ||
        qobject_cast<const QSplitterHandle *>(widget))) {
-    fillDeviceLine(*painter, option->rect,
-                   option->state & State_Horizontal ? Qt::Vertical
-                                                    : Qt::Horizontal,
-                   chrome(option->state & (State_MouseOver | State_Sunken)
-                              ? "DockSeparatorHover"
-                              : "DockSeparator"));
+    const QRect &room = option->rect;
+    const int line = config::kDockingSeparatorLineWidth;
+    // Panes side by side have an upright handle between them.
+    const bool upright = option->state & State_Horizontal;
+    paintDeviceSeparator(
+        *painter,
+        upright ? QRect(room.left() + (room.width() - line) / 2, room.top(),
+                        line, room.height())
+                : QRect(room.left(), room.top() + (room.height() - line) / 2,
+                        room.width(), line),
+        upright ? Qt::Vertical : Qt::Horizontal, chrome("DockSeparator"),
+        config::kDockingSeparatorHighlightWidth,
+        option->state & (State_MouseOver | State_Sunken)
+            ? chrome("DockSeparatorHover")
+            : QColor());
     return;
   }
   // The style paints a menu's items, so a shortcut can read quieter than its
