@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 
 from listing_facts_test import ADDRESSES, DATA
 from pe_listing_facts_test import fixture as functions_fixture
@@ -234,14 +235,29 @@ def run(executable):
         # applied, it is the page a read naming none gets.  The edit's views
         # are read behind its reply as the client will ask for them, and that
         # read takes the answer.
-        given = ok(owner, "metadata")["prepared_views_given"]
-        ok(owner, "annotation_set", {"address": hex(functions[0]), "text": "on the kept page again"})
-        ok(owner, "save")
-        delta = ok(owner, "decompile", {"address": hex(functions[0]), "representation": "source",
-                                        "offset": 0, "limit": 200, "kept_only": True,
-                                        "if_none_match": changed["etag"], "page_delta": True})
-        assert "delta" in delta and delta["base"] == changed["etag"], delta
-        assert ok(owner, "metadata")["prepared_views_given"] == given + 1
+        # The worker reads them only while no request waits, so one sent as the
+        # edit's reply arrives can find it has read none: the client rests a
+        # moment first, as one that shows a reply does, and where the worker
+        # still read none it takes the page as it is and edits again.
+        for attempt in range(40):
+            before = ok(owner, "metadata")
+            ok(owner, "annotation_set", {"address": hex(functions[0]),
+                                         "text": f"on the kept page again {attempt}"})
+            time.sleep(0.05)
+            made = ok(owner, "metadata")["prepared_views_made"] - before["prepared_views_made"]
+            ok(owner, "save")
+            delta = ok(owner, "decompile", {"address": hex(functions[0]), "representation": "source",
+                                            "offset": 0, "limit": 200, "kept_only": True,
+                                            "if_none_match": changed["etag"], "page_delta": True})
+            assert "delta" in delta and delta["base"] == changed["etag"], delta
+            given = ok(owner, "metadata")["prepared_views_given"] - before["prepared_views_given"]
+            # A view it read is the answer; one it did not read is read now.
+            assert given == made and made in (0, 1), (made, given)
+            if made:
+                break
+            changed = apply_delta(changed, delta)
+        else:
+            raise AssertionError("the worker read no view behind any of forty edits")
         assert len(json.dumps(delta)) < len(json.dumps(changed)) / 2, delta
         whole = ok(owner, "decompile", {"address": hex(functions[0]), "representation": "source",
                                         "offset": 0, "limit": 200, "kept_only": True,
