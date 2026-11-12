@@ -3936,17 +3936,20 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
 
   if (auto *Sel = llvm::dyn_cast<llvm::SelectInst>(&Inst)) {
     emitIndent(Indent);
+    // An arm C spells as a pointer, such as a frame address, converts to the
+    // integer the select yields: C's conditional takes no pointer beside an
+    // integer.
     if (auto Condition = foldImmediate(Sel->getCondition());
         Condition && (*Condition == "0" || *Condition == "1")) {
       OS << Name << " = "
-         << valueStr(*Condition == "1" ? Sel->getTrueValue()
-                                       : Sel->getFalseValue())
+         << integerPointerOperandStr(*Condition == "1" ? Sel->getTrueValue()
+                                                       : Sel->getFalseValue())
          << ";\n";
       return;
     }
     OS << Name << " = " << valueStr(Sel->getCondition()) << " ? "
-       << valueStr(Sel->getTrueValue()) << " : "
-       << valueStr(Sel->getFalseValue()) << ";\n";
+       << integerPointerOperandStr(Sel->getTrueValue()) << " : "
+       << integerPointerOperandStr(Sel->getFalseValue()) << ";\n";
     return;
   }
 

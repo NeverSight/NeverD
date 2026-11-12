@@ -1043,4 +1043,37 @@ int main(void) {
                   {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
 }
 
+TEST(LLVMCVoidAnalysis, ASelectStatementConvertsAPointerSpelledArm) {
+  // A select of integers whose arm is a frame address: the address prints
+  // as a pointer, and C's conditional takes no pointer beside an integer.
+  // The select has two readers, so it is a statement of its own.
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"ir(
+target datalayout = "e-p:64:64"
+define i64 @pick(i1 %take, i64 %value) {
+entry:
+  %frame = alloca [16 x i8], align 8
+  %slot = getelementptr inbounds i8, ptr %frame, i64 8
+  %address = ptrtoint ptr %slot to i64
+  %base = ptrtoint ptr %frame to i64
+  %chosen = select i1 %take, i64 %value, i64 %address
+  store volatile i64 %chosen, ptr %frame, align 8
+  %distance = sub i64 %chosen, %base
+  ret i64 %distance
+}
+)ir",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Out, {}));
+  compileAndRun(Source + R"(
+int main(void) {
+  /* The frame's own slot is eight bytes above its base. */
+  return pick(0, 5) == 8 ? 0 : 1;
+}
+)");
+}
+
 } // namespace
