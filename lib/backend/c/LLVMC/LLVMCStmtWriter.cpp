@@ -1622,6 +1622,9 @@ bool LLVMCWriter::deadNullAssignBlocks(
 }
 
 void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
+  // A block laid out inside another's region prints no label of its own; one
+  // whose address is taken keeps the place its code starts at.
+  noteLabelPlace(Inst.getParent());
   auto Event =
       SourceRecorder ? SourceRecorder->instruction(Inst) : std::nullopt;
   if (Event)
@@ -8286,6 +8289,7 @@ void LLVMCWriter::writePhiCopies(const llvm::BasicBlock *From,
                                  const llvm::PHINode *Declare) {
   if (!From || !To)
     return;
+  noteLabelPlace(From);
   struct PhiCopy {
     const llvm::PHINode *Phi;
     const llvm::Value *Incoming;

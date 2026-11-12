@@ -12562,6 +12562,20 @@ refused as an unsupported vector instruction. An x86 function names the target
 feature the header declares each of these with too; an ARM unit builds for a
 processor that has the instruction, as its HighC does.
 
+C names a label inside its function alone, so a constant table of block
+addresses is defined in the function that owns the blocks, as a static object
+whose initializer spells each address `&&label` (`collectLabelTables`,
+`writeLabelTables`). The lifter leaves such a table when a computed goto's
+label array is still read as data after its dispatch was recovered as a
+switch. It is admitted only when every address in it is one function's block
+and every use is an instruction of that function; a table another function or
+another object names, and a block address anywhere else, are refused as
+before. An address-taken block keeps a label wherever its code is laid out: at
+its first statement, or at the copies and jump of its edge when it has none,
+inside an arm of a switch as well. Nothing jumps through the table, so the
+address the compiler gives a label is its own choice, as on the lift route,
+where a block the optimizer removes leaves no address at all.
+
 `ir/X86FPMaskCompareState.h` owns legacy/VEX CMPSS/CMPSD/CMPPS/CMPPD
 completion. Scalar or packed raw mask bits precede outgoing MXCSR in one
 aggregate; they never acquire floating-point result provenance. Full imm8 is
