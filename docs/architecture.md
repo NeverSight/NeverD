@@ -12548,6 +12548,20 @@ inline, for a caller that has the feature. The function that calls one names
 the feature in its target attribute (`headerIntrinsicFeature`), beside those
 of its system instructions, so the unit builds with no option.
 
+A target vector intrinsic stays whole when the unit's vectors are scalarized,
+since its lanes are not independent, and prints as the header intrinsic that is
+the same operation (`NativeVectorCall.h`): arm_neon.h's by lane type and width
+(`vqshlq_s32`, `vqshrn_n_u16`, `vmull_p8`, `vmulxq_f32`, and the AES, SHA and
+SM3/SM4 forms), and the x86 headers' string comparisons, MPSADBW, PCLMULQDQ,
+VPERMD and SHA-1 steps. Each vector operand is cast to the header's type and
+the result back to the C vector the value has. A count or lane selector the
+header takes as a constant has to be one, in the header's range, the AArch32
+forms' vector of negated counts included; the carry-less product of two 64-bit
+polynomials goes through `vreinterpretq_u8_p128`. A call with no entry is
+refused as an unsupported vector instruction. An x86 function names the target
+feature the header declares each of these with too; an ARM unit builds for a
+processor that has the instruction, as its HighC does.
+
 `ir/X86FPMaskCompareState.h` owns legacy/VEX CMPSS/CMPSD/CMPPS/CMPPD
 completion. Scalar or packed raw mask bits precede outgoing MXCSR in one
 aggregate; they never acquire floating-point result provenance. Full imm8 is

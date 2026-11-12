@@ -55,6 +55,7 @@
 #include "neverd/backend/MachineInstructionText.h"
 #include "neverd/backend/c/render/AArch64/AArch64ExclusiveC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
+#include "neverd/backend/c/render/NativeVectorCall.h"
 #include "neverd/backend/c/render/X86/X86SegmentAsm.h"
 #include "neverd/backend/c/render/X86/X87ContextRender.h"
 #include "neverd/backend/c/render/X86/X87GuardedValueRender.h"
@@ -4597,6 +4598,27 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
       OS << "(__m128i)(" << valueStr(Call.getArgOperand(I)) << ")";
     }
     OS << ");\n";
+    return true;
+  }
+  if (const auto Native = nativeVectorCall(Call, Opts.TheArch)) {
+    emitIndent(Indent);
+    if (!Call.use_empty())
+      OS << getName(&Call) << " = (" << typeToCLLVM(Call.getType()) << ")";
+    if (Native->ResultThrough)
+      OS << Native->ResultThrough << "(";
+    OS << Native->Name << "(";
+    bool First = true;
+    for (const auto &Operand : Native->Operands) {
+      if (!First)
+        OS << ", ";
+      First = false;
+      if (Operand.Type.empty())
+        OS << Operand.Immediate;
+      else
+        OS << "(" << Operand.Type << ")("
+           << valueStr(Call.getArgOperand(Operand.Argument)) << ")";
+    }
+    OS << (Native->ResultThrough ? "));\n" : ");\n");
     return true;
   }
   if (IID == llvm::Intrinsic::aarch64_neon_bfmmla) {

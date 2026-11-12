@@ -64,6 +64,7 @@
 #include "neverd/backend/c/render/AArch64/AArch64ReturnProtectionC.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/backend/c/render/LLVMC/LLVMCIntrinsicRender.h"
+#include "neverd/backend/c/render/NativeVectorCall.h"
 #include "neverd/backend/c/render/SyscallHelpers.h"
 #include "neverd/backend/c/render/X86/X86SegmentAsm.h"
 #include "neverd/backend/llvm/AArch64/AArch64SourceResultCall.h"
@@ -280,6 +281,8 @@ bool LLVMCWriter::isNativeVectorIntrinsic(const llvm::CallBase &Call,
                                           Arch TheArch) {
   if ((TheArch == Arch::X86 || TheArch == Arch::X64) &&
       llvmX86SHA256CName(Call))
+    return true;
+  if (nativeVectorCall(Call, TheArch))
     return true;
   const auto *Callee = Call.getCalledFunction();
   if (TheArch != Arch::AArch64 || !Callee ||

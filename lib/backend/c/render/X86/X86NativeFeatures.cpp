@@ -20,6 +20,7 @@
 #include "X86FourSource.h"
 #include "X86RepState.h"
 
+#include "neverd/backend/c/render/NativeVectorCall.h"
 #include "neverd/backend/llvm/X86/LLVMX86SHA.h"
 #include "neverd/backend/llvm/X86/X86SgxNative.h"
 #include "neverd/backend/llvm/X86/X86SystemStateNative.h"
@@ -236,6 +237,9 @@ std::string x86NativeFunctionPreamble(const llvm::Function &Function,
       }
       if (llvmX86SHA256CName(*Call))
         Required.insert("sha");
+      if (const auto Native = nativeVectorCall(*Call, TargetArch);
+          Native && Native->Feature)
+        Required.insert(Native->Feature);
       const auto *Result = llvm::dyn_cast<llvm::StructType>(Call->getType());
       const Arch RepArch = Result && Result->getNumElements() &&
                                    Result->getElementType(0)->isIntegerTy(64)
