@@ -56,6 +56,13 @@ void recoverStructReturnFromCallers(const BinaryImage &Img,
 void recoverVectorReturnFromCallers(const BinaryImage &Img,
                                     PipelineResult &Result);
 
+/// A callee the type pass typed a scalar float returns its whole vector
+/// register where a direct caller reads the register's other bytes. Only the
+/// source routes declare a scalar return narrower than the register; the
+/// lift route carries the register whole.
+void recoverPackedScalarReturnFromCallers(const BinaryImage &Img,
+                                          PipelineResult &Result);
+
 /// Propagate a proven multi-register return shape forward through tail-call
 /// forwarders (`struct S f(a){return g(a);}`) to callees reached only that way.
 void propagateStructReturnForwarderShapes(const BinaryImage &Img,

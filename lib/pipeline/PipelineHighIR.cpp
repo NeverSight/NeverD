@@ -186,6 +186,7 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
   propagateStructReturnForwarderShapes(Img, Result);
   recoverStructReturnFromBody(Img, Result, StructReturnEvidence::Callers);
   recoverVectorReturnFromCallers(Img, Result);
+  recoverPackedScalarReturnFromCallers(Img, Result);
   materializeKnownStructReturnCallSites(Img, Result);
   bindFloatCallResults(Img, Result);
   settleReturnContracts(Img, Result, Dbg);
