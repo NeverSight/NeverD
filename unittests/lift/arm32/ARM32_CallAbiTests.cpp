@@ -169,3 +169,95 @@ int vmany(int n, ...) {
                             "vmany_e", {"vmany_e", "vmany"},
                             {0, 1, -1, 0x23456, 77});
 }
+
+namespace {
+const std::vector<std::string> SoftFp = {
+    "-target", "arm-linux-gnueabi", "-mcpu=cortex-a15", "-mfloat-abi=softfp"};
+
+/// The text of \p Name's definition in \p C, or empty.
+std::string definitionOf(const std::string &C, const std::string &Name) {
+  const size_t Begin = C.find(" " + Name + "(");
+  for (size_t At = Begin; At != std::string::npos;
+       At = C.find(" " + Name + "(", At + 1)) {
+    const size_t Open = C.find_first_of(";{", At);
+    if (Open == std::string::npos || C[Open] != '{')
+      continue;
+    const size_t End = C.find("\n}\n", Open);
+    return C.substr(At, End == std::string::npos ? End : End - At);
+  }
+  return {};
+}
+} // namespace
+
+// `lsreq r9, r1, r10; tsteq r9, #1` tests the value the first instruction
+// computed: both select on one condition, so the test never reads what r9
+// held before, which is the caller's on the first iteration.
+TEST_F(ARM32_CallAbi, APredicatedTestReadsThePredicatedResultItFollows) {
+  HostFlags = {"-m32"};
+  expectHighCRunsLikeSource(SoftFp, R"C(
+static const unsigned char br[32] = {1, 3, 5, 6, 4, 2, 1, 1, 2, 2, 3, 5, 6, 4, 5, 6,
+                                     1, 3, 3, 4, 4, 2, 5, 1, 6, 2, 3, 5, 6, 4, 1, 2};
+int paren(int a) {
+  unsigned s = (unsigned)a, out = 0;
+  for (int it = 0; it < 96; it++) {
+    s = s * 1103515245u + 12345u;
+    unsigned acc = s;
+    unsigned st[32];
+    int sp = 0;
+    unsigned ok = 1u, maxd = 0u;
+    for (int i = 0; i < 32; i++) {
+      unsigned c = br[i];
+      if (c == 1u || c == 3u || c == 5u) {
+        if (sp < 32) { st[sp++] = c; if ((unsigned)sp > maxd) maxd = (unsigned)sp; }
+      } else {
+        if (sp > 0) { unsigned op = st[--sp]; if (op + 1u != c) ok = 0u; }
+        else ok = 0u;
+      }
+      acc = acc * 131u + (unsigned)sp;
+    }
+    acc = acc * 131u + ok + maxd + (sp == 0 ? 1u : 0u);
+    out = out * 1311u + acc;
+  }
+  return (int)out;
+}
+)C",
+                            "paren", {"paren", "br"}, {0, 1, -1, 0x55AA, 77});
+}
+
+// The rewrite needs every reader to sit under the same condition.  r9's
+// incoming value stays unknown where an unconditional instruction reads the
+// predicated result (an add, a store); the predicated compare beside it
+// reads the chosen arm.
+TEST_F(ARM32_CallAbi, APredicatedResultReadOnEveryPathKeepsItsUnknownValue) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target compilation requires Clang";
+  const std::string Kernel = R"C(
+#define NK __attribute__((naked, noinline))
+NK int later_read(int a, int b) { __asm__("push {r4, r9, lr}\n\ttst r0, #1\n\tlsreq r9, r1, #2\n\ttsteq r9, #1\n\tmoveq r0, #5\n\tadd r0, r0, r9\n\tpop {r4, r9, pc}"); }
+NK int stored(int a, int *p) { __asm__("push {r4, r9, lr}\n\ttst r0, #1\n\tlsreq r9, r0, #2\n\tstr r9, [r1]\n\tmov r0, #0\n\tpop {r4, r9, pc}"); }
+NK int only_tested(int a, int b) { __asm__("push {r4, r9, lr}\n\ttst r0, #1\n\tlsreq r9, r1, #2\n\ttsteq r9, #1\n\tmovne r0, #3\n\tmoveq r0, #4\n\tpop {r4, r9, pc}"); }
+)C";
+  const auto Source = tmpFile("predicated-readers.c");
+  const auto Object = tmpFile("predicated-readers.o");
+  std::ofstream(Source) << Kernel;
+  const auto Compiled =
+      exec(NEVERD_TEST_CLANG, {"-target", "arm-linux-gnueabi",
+                               "-mcpu=cortex-a15", "-mfloat-abi=softfp", "-O2",
+                               "-c", Source.string(), "-o", Object.string()});
+  ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
+  const auto Decompiled = decompileToHighC(Object);
+  ASSERT_EQ(Decompiled.exitCode, 0) << Decompiled.err;
+  std::ifstream Input(tmpFile("decompiled_high.c"));
+  ASSERT_TRUE(Input.good());
+  const std::string C((std::istreambuf_iterator<char>(Input)),
+                      std::istreambuf_iterator<char>());
+  for (const char *Observer : {"later_read", "stored"}) {
+    const std::string Body = definitionOf(C, Observer);
+    ASSERT_FALSE(Body.empty()) << Observer << C;
+    EXPECT_NE(Body.find("unknown register"), std::string::npos)
+        << Observer << Body;
+  }
+  const std::string Tested = definitionOf(C, "only_tested");
+  ASSERT_FALSE(Tested.empty()) << C;
+  EXPECT_EQ(Tested.find("__builtin_trap"), std::string::npos) << Tested;
+}

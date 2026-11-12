@@ -368,6 +368,12 @@ inline constexpr size_t kMedCallingConvFPReadWork = 65536;
 
 // lib/ir/med/flags/MedFlags.cpp
 inline constexpr int kMedFlagsFlagDefTracesToFPBudget = 256;
+// How many value operations a predicated result is followed through to the
+// selections that read it, how many uses one function's rewrite examines, and
+// how often it repeats while operands still change.
+inline constexpr unsigned kMedFlagsSelectedArmUseDepth = 8;
+inline constexpr size_t kMedFlagsSelectedArmWork = 262144;
+inline constexpr unsigned kMedFlagsSelectedArmRounds = 4;
 
 // lib/ir/med/lower/LowToMedCallReturnStruct.cpp
 inline constexpr size_t kLowToMedCallReturnStructWindow = 4;
