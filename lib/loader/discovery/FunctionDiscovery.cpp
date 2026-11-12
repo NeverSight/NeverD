@@ -8,6 +8,7 @@
 
 #include "FunctionDiscoveryDetail.h"
 
+#include "neverd/loader/ExecutableCodeOwnerIndex.h"
 #include "neverd/loader/LinkerThunk.h"
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -600,6 +601,10 @@ void scanDataFuncPointers(BinaryImage &Img, const LoadProgress &Progress) {
   const auto Known = collectClaimedCodeRanges(Img);
   auto Existing = Img.getSymbolAddresses();
 
+  // This scan only appends zero-sized symbols at already-owned addresses
+  // and confirms boundary guesses. Neither changes the ownership predicate,
+  // so its metadata index remains valid while Symbols grows.
+  const ExecutableCodeOwnerIndex CodeOwners(Img);
   auto InExecSeg = [&](va_t Addr) -> const Segment * {
     const auto *S = Img.getSegmentFor(Addr);
     // Most read-only data values are not prologue addresses. Reject their
@@ -607,7 +612,7 @@ void scanDataFuncPointers(BinaryImage &Img, const LoadProgress &Progress) {
     if (!S || !S->isExecutable() ||
         !checkPrologueAtOffset(*S, static_cast<size_t>(Addr - S->VA), Img.Arch))
       return nullptr;
-    return Img.hasExecutableCodeOwnerAt(Addr) ? S : nullptr;
+    return Img.hasExecutableCodeOwnerAt(Addr, &CodeOwners) ? S : nullptr;
   };
 
   // A value is a code pointer only if it lies in an executable segment; most
