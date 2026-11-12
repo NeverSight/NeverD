@@ -56,8 +56,23 @@ TEST_P(X86LegacyDebugNativeTest, OriginalDataWatchpointRangesAndShadows) {
 TEST_P(X86LegacyDebugNativeTest, OriginalIntegerExtensionReadWatchpoints) {
   if (!neverd::test::supportsX86KVMPrefault(KVM))
     GTEST_SKIP() << "Data-watchpoint oracle requires KVM pre-fault memory";
-  if (!__builtin_cpu_supports("popcnt") || !__builtin_cpu_supports("lzcnt") ||
-      !__builtin_cpu_supports("bmi") || !__builtin_cpu_supports("adx"))
+  // Query the same feature bank installed on the KVM CPU. Clang 18 does not
+  // accept every required extension name in __builtin_cpu_supports.
+  X86LegacyIntegerExtensions Features;
+  const auto *CPUID =
+      reinterpret_cast<const kvm_cpuid2 *>(CPUIDStorage.data());
+  for (unsigned I = 0; I != CPUID->nent; ++I) {
+    const auto &E = CPUID->entries[I];
+    if (E.function == 1)
+      Features.POPCNT = E.ecx & (1u << 23);
+    if (E.function == 7 && E.index == 0) {
+      Features.BMI1 = E.ebx & (1u << 3);
+      Features.ADX = E.ebx & (1u << 19);
+    }
+    if (E.function == 0x80000001)
+      Features.LZCNT = E.ecx & (1u << 5);
+  }
+  if (!Features.POPCNT || !Features.LZCNT || !Features.BMI1 || !Features.ADX)
     GTEST_SKIP() << "Original integer oracle requires POPCNT/LZCNT/BMI1/ADX";
   for (bool Code32 : {false, true})
     for (bool Stack32 : {false, true})
