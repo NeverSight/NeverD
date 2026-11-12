@@ -54,6 +54,12 @@ def kernels():
     for bits, multiply in ((32, "mul"), (64, "dmulu")):
         cpu = f"mips{bits}r6"
         d = "d" if bits == 64 else ""
+        transfer = "dmtc1" if bits == 64 else "mtc1"
+        move = "dmfc1" if bits == 64 else "mfc1"
+        fmt = "d" if bits == 64 else "s"
+        yield cpu+"fp",cpu,"",f"{transfer} $4,$f0\n{transfer} $5,$f2\nadd.{fmt} $f4,$f0,$f2\n{move} $2,$f4"
+        yield cpu+"fpcompare",cpu,"",f"{transfer} $4,$f0\n{transfer} $5,$f2\ncmp.une.{fmt} $f4,$f0,$f2\n{move} $2,$f4"
+        yield cpu+"fpround",cpu,"",f"{transfer} $4,$f0\nrint.{fmt} $f4,$f0\n{move} $2,$f4"
         yield cpu, cpu, "", f"{multiply} $2,$4,$5\n{d}bitswap $2,$2"
         yield cpu + "div", cpu, "", f"{d}div $2,$4,$5"
         yield cpu + "branch", cpu, "", "or $2,$4,$0\nbgec $4,$5,1f\nori $2,$0,7\n1:"
@@ -66,6 +72,10 @@ def inputs(name, bits):
         for a in (0, 1, -1, 0x11223344, 0x8000000000000001)
         for b in (0, 7, -1, 0xA5A533FF)
     ]
+    if "fp" in name:
+        values=(0,0x80000000,0x3fc00000,0xbf800000,0x7fc00000,0x7f800001,1) if bits==32 else (
+            0,0x8000000000000000,0x3ff8000000000000,0xbff0000000000000,0x7ff8000000000000,0x7ff0000000000001,1)
+        return [(a,b) for a in values for b in values]
     if name.endswith("div"):
         return [(a, b) for a, b in pairs if b] + [
             (-(1 << (bits - 1)), -1),
@@ -108,9 +118,14 @@ def observe(elf, bits, little, feature, cases):
             roundtrip.STOP + 0x200,
             ASE["ENABLE_MSA" if feature == "msa" else "ENABLE_DSP"],
         )
+    if not feature:
+        status=uc.reg_read(mips.UC_MIPS_REG_CP0_STATUS) | 0x24000000
+        uc.reg_write(mips.UC_MIPS_REG_CP0_STATUS,status)
     uc.mem_write(roundtrip.DATA, bytes((0x87 + 29 * i) & 255 for i in range(64)))
     observations = []
     for i, pair in enumerate(cases):
+        if not feature:
+            uc.reg_write(mips.UC_MIPS_REG_FCSR,0xc0000|(i&3))
         if feature:
             uc.reg_write(
                 mips.UC_MIPS_REG_A0, 0x01004005 if feature != "msa" and i % 2 else 0
@@ -119,7 +134,7 @@ def observe(elf, bits, little, feature, cases):
                 roundtrip.STOP + 0x300, [0x783E2059 if feature == "msa" else 0x7C81FCF8]
             )
         value = roundtrip.invoke(uc, entry, bits, little, pair)[0]
-        control = None
+        control = uc.reg_read(mips.UC_MIPS_REG_FCSR) if not feature else None
         if feature:
             execute(
                 roundtrip.STOP + 0x400, [0x787E0A19 if feature == "msa" else 0x7C3F44B8]

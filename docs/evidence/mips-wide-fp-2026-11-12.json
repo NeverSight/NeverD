@@ -1,0 +1,238 @@
+{
+  "first_merge": "d751f46fcd9654004f65aa497bee9a34d403aa38",
+  "ctest_passed": 791,
+  "encoding_profiles": 36,
+  "msa64_forms_per_profile": 531,
+  "msa64_source_builds": 16,
+  "msa64_source_executions": 320,
+  "capstone_observable_comparisons": 7077888,
+  "baseline_commit": "bcef8d07e1429f6b62746aedf868bf5c915c15dc",
+  "toolchain": {
+    "compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+    "llvm": "NeverD LLVM 23.0.0git, neverd-llvm-v23.0.0-r6, macOS arm64",
+    "capstone": "ebf11952991d43f44314d261707eddbd1b41141b",
+    "build": [
+      "CMAKE_BUILD_TYPE:STRING=Release",
+      "CMAKE_CXX_FLAGS_RELEASE:STRING=-O3 -DNDEBUG",
+      "CMAKE_C_FLAGS_RELEASE:STRING=-O3 -DNDEBUG"
+    ]
+  },
+  "candidate_toolchain": {
+    "compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+    "llvm": "NeverD LLVM 23.0.0git, neverd-llvm-v23.0.0-r6, macOS arm64",
+    "capstone": "edbee4479eb3fff649756c4856e4a96f89ad9f8b",
+    "build": [
+      "CMAKE_BUILD_TYPE:STRING=Release",
+      "CMAKE_CXX_FLAGS_RELEASE:STRING=-O3 -DNDEBUG",
+      "CMAKE_C_FLAGS_RELEASE:STRING=-O3 -DNDEBUG"
+    ]
+  },
+  "code_sha256": {
+    "mips16-unchanged.bin": "c4ec3219f426053e44892132602906a005b6d3c75028332bbee806378d4f0651",
+    "micromipsel-unchanged.bin": "9289479df5882dab701d4f69714e9c403f5131c0cd3527c8b5a7e5893fe4ca38",
+    "micromips-unchanged.bin": "d3f77f4f8d0f1c28c1eece2dceb554c34d26cadc0bf83e403f04a05ba35967f6",
+    "mips16el-unchanged.bin": "6bf26403c9b29524ad2175b5bc9b22667103bf69f456af6e244eabcfb19362fa"
+  },
+  "firmware_sha256": "6e1129aa58cb398a2453876ea4aa2395feecc84ecf78ed8ab43efd534b40e475",
+  "samples_per_variant": 9,
+  "repeats": 100000,
+  "paired_cpu": [
+    {
+      "job": "micromips-capstone",
+      "cpu_A_median": 0.183724,
+      "cpu_B_median": 0.149869,
+      "paired_cpu_delta_percent_median": -19.34967093869068,
+      "paired_cpu_delta_percent_range": [
+        -21.782435836056703,
+        -11.718120659249742
+      ],
+      "wall_A_median": 1.2807015830185264,
+      "wall_B_median": 0.919084458029829,
+      "rss_A_median": 2097152,
+      "rss_B_median": 2080768
+    },
+    {
+      "job": "micromips-decode",
+      "cpu_A_median": 0.194806,
+      "cpu_B_median": 0.165905,
+      "paired_cpu_delta_percent_median": -15.182098070135918,
+      "paired_cpu_delta_percent_range": [
+        -20.22667742288884,
+        -13.101864167468136
+      ],
+      "wall_A_median": 1.4452753749210387,
+      "wall_B_median": 1.2147351669846103,
+      "rss_A_median": 2097152,
+      "rss_B_median": 2080768
+    },
+    {
+      "job": "micromips-lift",
+      "cpu_A_median": 0.458733,
+      "cpu_B_median": 0.416558,
+      "paired_cpu_delta_percent_median": -9.590551181102358,
+      "paired_cpu_delta_percent_range": [
+        -11.045633479921824,
+        -7.860558822026809
+      ],
+      "wall_A_median": 3.6961397079285234,
+      "wall_B_median": 3.284261916996911,
+      "rss_A_median": 2129920,
+      "rss_B_median": 2146304
+    },
+    {
+      "job": "micromipsel-capstone",
+      "cpu_A_median": 0.183298,
+      "cpu_B_median": 0.145699,
+      "paired_cpu_delta_percent_median": -20.72690373053716,
+      "paired_cpu_delta_percent_range": [
+        -24.74966897277866,
+        -14.340222754194908
+      ],
+      "wall_A_median": 1.4865675419569016,
+      "wall_B_median": 1.2234740830026567,
+      "rss_A_median": 2097152,
+      "rss_B_median": 2080768
+    },
+    {
+      "job": "micromipsel-decode",
+      "cpu_A_median": 0.190676,
+      "cpu_B_median": 0.161678,
+      "paired_cpu_delta_percent_median": -15.447214191645998,
+      "paired_cpu_delta_percent_range": [
+        -19.270075229442142,
+        -12.031216242563481
+      ],
+      "wall_A_median": 1.55823354201857,
+      "wall_B_median": 1.3117242089938372,
+      "rss_A_median": 2097152,
+      "rss_B_median": 2080768
+    },
+    {
+      "job": "micromipsel-lift",
+      "cpu_A_median": 0.450832,
+      "cpu_B_median": 0.411142,
+      "paired_cpu_delta_percent_median": -8.722331993872523,
+      "paired_cpu_delta_percent_range": [
+        -10.521231320876234,
+        -7.01792589433039
+      ],
+      "wall_A_median": 4.47730629099533,
+      "wall_B_median": 3.954274542047642,
+      "rss_A_median": 2195456,
+      "rss_B_median": 2211840
+    },
+    {
+      "job": "ubus-call-highc-1",
+      "cpu_A_median": 0.044143,
+      "cpu_B_median": 0.044905,
+      "paired_cpu_delta_percent_median": -1.0432093387925945,
+      "paired_cpu_delta_percent_range": [
+        -6.706295112739946,
+        13.67800256205738
+      ],
+      "wall_A_median": 0.08391933399252594,
+      "wall_B_median": 0.072114875074476,
+      "rss_A_median": 33079296,
+      "rss_B_median": 32964608
+    },
+    {
+      "job": "ubus-discovered-highc-1",
+      "cpu_A_median": 0.05072599999999999,
+      "cpu_B_median": 0.052530999999999994,
+      "paired_cpu_delta_percent_median": 6.367177988799622,
+      "paired_cpu_delta_percent_range": [
+        -13.406249999999986,
+        11.378747705486436
+      ],
+      "wall_A_median": 0.08257700002286583,
+      "wall_B_median": 0.07462995802052319,
+      "rss_A_median": 33898496,
+      "rss_B_median": 33685504
+    },
+    {
+      "job": "ubus-call-llvmc-1",
+      "cpu_A_median": 0.044197,
+      "cpu_B_median": 0.047587000000000004,
+      "paired_cpu_delta_percent_median": 4.7204226054021525,
+      "paired_cpu_delta_percent_range": [
+        -7.785065309080097,
+        11.14063215758132
+      ],
+      "wall_A_median": 0.08846620901022106,
+      "wall_B_median": 0.09025812498293817,
+      "rss_A_median": 37814272,
+      "rss_B_median": 37535744
+    },
+    {
+      "job": "ubus-discovered-llvmc-1",
+      "cpu_A_median": 0.046092999999999995,
+      "cpu_B_median": 0.047131,
+      "paired_cpu_delta_percent_median": 2.7638640429338057,
+      "paired_cpu_delta_percent_range": [
+        -7.686244317348578,
+        14.020410844903864
+      ],
+      "wall_A_median": 0.104604916065,
+      "wall_B_median": 0.0954346660291776,
+      "rss_A_median": 37863424,
+      "rss_B_median": 37847040
+    },
+    {
+      "job": "ubus-call-highc-default",
+      "cpu_A_median": 0.043365,
+      "cpu_B_median": 0.045334,
+      "paired_cpu_delta_percent_median": 4.387803393955791,
+      "paired_cpu_delta_percent_range": [
+        -1.2951616771689656,
+        15.349674994126406
+      ],
+      "wall_A_median": 0.07360283297020942,
+      "wall_B_median": 0.10131495899986476,
+      "rss_A_median": 33210368,
+      "rss_B_median": 32964608
+    },
+    {
+      "job": "ubus-discovered-highc-default",
+      "cpu_A_median": 0.052002,
+      "cpu_B_median": 0.054355999999999995,
+      "paired_cpu_delta_percent_median": 3.4408959244294435,
+      "paired_cpu_delta_percent_range": [
+        -5.001922471949383,
+        14.909041959924618
+      ],
+      "wall_A_median": 0.09660670801531523,
+      "wall_B_median": 0.09046629199292511,
+      "rss_A_median": 33931264,
+      "rss_B_median": 33882112
+    },
+    {
+      "job": "ubus-call-llvmc-default",
+      "cpu_A_median": 0.04475699999999999,
+      "cpu_B_median": 0.048084999999999996,
+      "paired_cpu_delta_percent_median": 4.963598669302338,
+      "paired_cpu_delta_percent_range": [
+        -1.686886967401724,
+        14.66903015880725
+      ],
+      "wall_A_median": 0.08106295811012387,
+      "wall_B_median": 0.0780568749178201,
+      "rss_A_median": 37732352,
+      "rss_B_median": 37535744
+    },
+    {
+      "job": "ubus-discovered-llvmc-default",
+      "cpu_A_median": 0.046286999999999995,
+      "cpu_B_median": 0.047905,
+      "paired_cpu_delta_percent_median": 0.9916391211355347,
+      "paired_cpu_delta_percent_range": [
+        -9.574427626074389,
+        16.136850936888216
+      ],
+      "wall_A_median": 0.071149209048599,
+      "wall_B_median": 0.07261620799545199,
+      "rss_A_median": 38027264,
+      "rss_B_median": 37797888
+    }
+  ],
+  "limits": "Shared host, no CPU affinity pinning. Direct Capstone is a decode-only comparator; added word guards/new instruction forms are excluded from same-output speedup claims. No world-leading claim."
+}

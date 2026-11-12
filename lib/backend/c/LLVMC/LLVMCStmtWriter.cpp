@@ -49,7 +49,9 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/MIPS/MIPSBarrierSource.h"
 #include "neverd/backend/MIPS/MIPSDSPSource.h"
+#include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/MIPS/MIPSMSASource.h"
+#include "neverd/backend/MIPS/MIPSR6FPSource.h"
 #include "neverd/backend/MachineInstructionText.h"
 #include "neverd/backend/c/render/AArch64/AArch64ExclusiveC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
@@ -4880,7 +4882,9 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
     OS << "__asm__ volatile(\"" << *Assembly << "\" ::: \"memory\");\n";
     return true;
   }
-  if (auto *MD = Call.getMetadata("neverd.mips.msa")) {
+  const bool ScalarFP = Call.getMetadata("neverd.mips.scalar.fp");
+  if (auto *MD = Call.getMetadata(ScalarFP ? "neverd.mips.scalar.fp"
+                                           : "neverd.mips.msa")) {
     const auto *I =
         MD->getNumOperands() == 2
             ? llvm::mdconst::dyn_extract<llvm::ConstantInt>(MD->getOperand(0))
@@ -4893,11 +4897,17 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
         K->getValue().uge(32) || !isMIPS(Opts.TheArch))
       throw std::runtime_error("invalid native MSA assembly metadata");
     const auto Id = static_cast<Intrinsic>(I->getZExtValue());
-    if (!mips::isMSAControl(Id) &&
-        (!mips::isMSANativeVector(Id) || !K->isZero()))
+    if (ScalarFP ? (!mips::isR6FPControl(Id) &&
+                    (!mips::isR6FPArithmetic(Id) || !K->isZero()))
+                 : (!mips::isMSAControl(Id) &&
+                    (!mips::isMSANativeVector(Id) || !K->isZero())))
       throw std::runtime_error("invalid native MSA instruction");
-    const auto A = mips::msaAssembly(Id, K->getZExtValue(),
-                                     archLittleEndian(Opts.TheArch));
+    const auto A = ScalarFP ? mips::r6FPAssembly(Id, K->getZExtValue(),
+                                                 mips::instructionModeFromLLVM(
+                                                     *Call.getFunction()) ==
+                                                     InstructionMode::MicroMIPS)
+                            : mips::msaAssembly(Id, K->getZExtValue(),
+                                                archLittleEndian(Opts.TheArch));
     if (!IA->hasSideEffects() || IA->isAlignStack() || IA->canThrow() ||
         IA->getDialect() != llvm::InlineAsm::AD_ATT ||
         IA->getAsmString() != A.llvmText() ||

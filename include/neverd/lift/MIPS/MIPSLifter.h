@@ -97,6 +97,7 @@ private:
   void liftMIPS16Frame(State &S, uint32_t Word) const;
   bool liftDSP(State &S, uint32_t Word) const;
   bool liftDSP64Packed(State &S, uint32_t Word) const;
+  bool liftDSP64Accumulator(State &S, uint32_t Word) const;
   bool liftDSPAdditional(State &S, uint32_t Word) const;
   bool liftMSA(State &S, uint32_t Word) const;
   bool liftMSAAdditional(State &S, uint32_t Word) const;

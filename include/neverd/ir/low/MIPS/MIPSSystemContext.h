@@ -50,6 +50,7 @@ struct MIPSMSAPartition {
   uint8_t Map, Unmap;
   unsigned FreePhysical;
 };
+class MIPSR6FPExecutor;
 struct MIPSSystemContext {
   bool CP0Usable = false;
   bool ImplementedMT = false;
@@ -91,6 +92,11 @@ struct MIPSSystemContext {
     return std::nullopt;
   }
 
+  // Caller-bound FR=1 scalar FPU. Enabled exceptions update the control
+  // register before suppressing the FPR write.
+  MIPSR6FPExecutor *ScalarFPU = nullptr;
+  std::optional<uint32_t> FCSR;
+  bool FloatingPointException = false;
   // Explicit MSA implementation and per-TC control state. WRP platforms
   // require separate register partition state for selectors 2 through 7.
   std::optional<uint32_t> MSAImplementation, MSAControl, MSAControlWritableMask;

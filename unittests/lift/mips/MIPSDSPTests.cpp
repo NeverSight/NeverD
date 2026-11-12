@@ -188,6 +188,95 @@ TEST(MIPSDSP64, PackedGPRsMatchOriginalInstructionsAndFullControl) {
   }
 }
 
+TEST(MIPSDSP64, PackedDotsAndSingleLanesUpdateTheSelected128BitAccumulator) {
+  // Distinct positive halfwords make left/right selections and alternating
+  // subtraction observable. Fixed instruction words use GNU as $ac0,$4,$5.
+  constexpr int64_t Left = 2ll * 0x00010002 * 0x00050006;
+  constexpr int64_t Right = 2ll * 0x00030004 * 0x00070008;
+  struct Row {
+    uint32_t Word;
+    const char *Name;
+    int64_t Delta;
+  };
+  const Row Rows[] = {{0x7c8500f4, "dpau.h.obl", 17},
+                      {0x7c8501f4, "dpau.h.obr", 53},
+                      {0x7c8502f4, "dpsu.h.obl", -17},
+                      {0x7c8503f4, "dpsu.h.obr", -53},
+                      {0x7c850134, "dpaq_s.w.qh", 140},
+                      {0x7c850174, "dpsq_s.w.qh", -140},
+                      {0x7c8501b4, "mulsaq_s.w.qh", -36},
+                      {0x7c850334, "dpaq_sa.l.pw", Left + Right},
+                      {0x7c850374, "dpsq_sa.l.pw", -Left - Right},
+                      {0x7c8503b4, "mulsaq_s.l.pw", Left - Right},
+                      {0x7c850434, "maq_sa.w.qhll", 10},
+                      {0x7c850474, "maq_sa.w.qhlr", 24},
+                      {0x7c8504b4, "maq_sa.w.qhrl", 42},
+                      {0x7c8504f4, "maq_sa.w.qhrr", 64},
+                      {0x7c850534, "maq_s.w.qhll", 10},
+                      {0x7c850574, "maq_s.w.qhlr", 24},
+                      {0x7c8505b4, "maq_s.w.qhrl", 42},
+                      {0x7c8505f4, "maq_s.w.qhrr", 64},
+                      {0x7c850734, "maq_s.l.pwl", Left},
+                      {0x7c8507b4, "maq_s.l.pwr", Right}};
+  for (Arch Target : {Arch::MIPS64, Arch::MIPS64EL}) {
+    auto Image = dspImage(Target);
+    Decoder D;
+    ASSERT_TRUE(D.init(Image));
+    D.setText(true);
+    for (const Row &R : Rows)
+      for (unsigned Bank = 0; Bank < 4; ++Bank) {
+        SCOPED_TRACE(::testing::Message() << R.Name << " bank " << Bank);
+        const auto Word = R.Word | Bank << 11;
+        const auto B = encodeDSP({Word}, Target);
+        DecodedInsn I;
+        ASSERT_EQ(D.decodeOne(B.data(), B.size(), 0x10000, I), 4);
+        EXPECT_STREQ(I.Raw->mnemonic, R.Name);
+        NdOpEmulator E(Image);
+        E.setStrictMode(true);
+        E.setRegister(mipsreg::A0, 0x0001000200030004);
+        E.setRegister(mipsreg::A1, 0x0005000600070008);
+        E.setRegister(mipsreg::DSPControl, 0xa5010003);
+        for (unsigned N = 0; N < 4; ++N) {
+          E.setRegister(mipsreg::accumulatorHI(N), N == Bank ? 0 : 0x1234);
+          E.setRegister(mipsreg::accumulatorLO(N), N == Bank ? 5 : 0x5678);
+        }
+        ASSERT_TRUE(executeDSP(D, Target, Word, E));
+        EXPECT_EQ(E.getRegister(mipsreg::accumulatorLO(Bank)),
+                  uint64_t(5 + R.Delta));
+        EXPECT_EQ(E.getRegister(mipsreg::accumulatorHI(Bank)),
+                  5 + R.Delta < 0 ? UINT64_MAX : 0);
+        EXPECT_EQ(E.getRegister(mipsreg::accumulatorHI(Bank ^ 1)), 0x1234u);
+        EXPECT_EQ(E.getRegister(mipsreg::accumulatorLO(Bank ^ 1)), 0x5678u);
+        EXPECT_EQ(E.getRegister(mipsreg::DSPControl), 0xa5010003u);
+      }
+    NdOpEmulator E(Image);
+    E.setStrictMode(true);
+    auto HI = mipsreg::accumulatorHI(2), LO = mipsreg::accumulatorLO(2);
+    E.setRegister(mipsreg::DSPControl, 0x23);
+    E.setRegister(mipsreg::A0, 1);
+    E.setRegister(mipsreg::A1, 2);
+    E.setRegister(HI, 0x123456789abcdef0ull);
+    E.setRegister(LO, UINT64_MAX);
+    ASSERT_TRUE(executeDSP(D, Target, 0x7c8511f4, E)); // dpau.h.obr ac2
+    EXPECT_EQ(E.getRegister(HI), 0x123456789abcdef1ull);
+    EXPECT_EQ(E.getRegister(LO), 1u);
+    E.setRegister(HI, 0);
+    E.setRegister(LO, INT64_MAX);
+    ASSERT_TRUE(executeDSP(D, Target, 0x7c851334, E)); // dpaq_sa.l.pw ac2
+    EXPECT_EQ(E.getRegister(HI), 0u);
+    EXPECT_EQ(E.getRegister(LO), uint64_t(INT64_MAX));
+    EXPECT_EQ(E.getRegister(mipsreg::DSPControl), 0x40023u);
+    E.setRegister(mipsreg::A0, 0x8000);
+    E.setRegister(mipsreg::A1, 0x8000);
+    E.setRegister(mipsreg::DSPControl, 0);
+    E.setRegister(HI, 0);
+    E.setRegister(LO, 0);
+    ASSERT_TRUE(executeDSP(D, Target, 0x7c8515f4, E)); // maq_s.w.qhrr ac2
+    EXPECT_EQ(E.getRegister(LO), uint64_t(INT32_MAX));
+    EXPECT_EQ(E.getRegister(mipsreg::DSPControl), 0x40000u);
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(BothWidthsAndByteOrders, MIPSDSPRegisterWidth,
                          ::testing::Values(Arch::MIPS32, Arch::MIPS32EL,
                                            Arch::MIPS64, Arch::MIPS64EL));

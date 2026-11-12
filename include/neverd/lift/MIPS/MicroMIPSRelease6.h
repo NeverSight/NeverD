@@ -60,6 +60,81 @@ inline std::optional<uint32_t> microR6Compact(uint32_t Word, unsigned Size) {
   }
 }
 
+/// Canonical COP1 for microMIPS64 Volume II-B. Numeric FPR operands and
+/// the physical halfword displacement are preserved in either byte order.
+inline std::optional<uint32_t> microR6Float(uint32_t Word) {
+  const unsigned Major = Word >> 26, T = Word >> 21 & 31, S = Word >> 16 & 31,
+                 D = Word >> 11 & 31;
+  switch (Major) {
+  case 0x26:
+  case 0x27:
+  case 0x2e:
+  case 0x2f: {
+    const unsigned Op = Major == 0x26   ? 57
+                        : Major == 0x27 ? 49
+                        : Major == 0x2e ? 61
+                                        : 53;
+    return Op << 26 | S << 21 | T << 16 | uint16_t(Word);
+  }
+  case 0x11:
+    if (T == 8 || T == 9)
+      return (T == 8 ? 0x45200000u : 0x45a00000u) | S << 16 | uint16_t(Word);
+    return std::nullopt;
+  case 0x15:
+    break;
+  default:
+    return std::nullopt;
+  }
+  switch (Word & 0xffff) {
+#define NEVERD_MICRO_FP_UNARY(Minor, Classic)                                  \
+  case Minor:                                                                  \
+    return Classic | (S << 11) | (T << 6);
+#define NEVERD_MICRO_FP_REVERSED(Minor, Classic)                               \
+  case Minor:                                                                  \
+    return Classic | (T << 11) | (S << 6);
+#include "neverd/lift/MIPS/MicroMIPSFloat.def"
+  }
+  if ((Word & 0xc03f) == 0x3b) {
+    const unsigned Minor = Word >> 6 & 255;
+    switch (Minor) {
+    case 0x80:
+    case 0x90:
+    case 0x40:
+    case 0xc0:
+    case 0xa0:
+    case 0xb0:
+    case 0x60:
+    case 0xe0: {
+      const unsigned Fmt = Minor == 0x80   ? 0
+                           : Minor == 0x90 ? 1
+                           : Minor == 0x40 ? 2
+                           : Minor == 0xc0 ? 3
+                           : Minor == 0xa0 ? 4
+                           : Minor == 0xb0 ? 5
+                           : Minor == 0x60 ? 6
+                                           : 7;
+      return 0x44000000u | Fmt << 21 | T << 16 | S << 11;
+    }
+    }
+  }
+  const unsigned F = Word & 63;
+  if (F == 5 || F == 21) {
+    const unsigned Cond = Word >> 6 & 31;
+    if (Cond < 16 || (Cond >= 17 && Cond <= 19) || (Cond >= 25 && Cond <= 27))
+      return (F == 5 ? 0x46800000u : 0x46a00000u) | T << 16 | S << 11 | D << 6 |
+             Cond;
+    return std::nullopt;
+  }
+  switch (Word & 0x7ff) {
+#define NEVERD_MICRO_FP_BINARY(Minor, Classic)                                 \
+  case Minor:                                                                  \
+    return Classic | (T << 16) | (S << 11) | (D << 6);
+#include "neverd/lift/MIPS/MicroMIPSFloat.def"
+  default:
+    return std::nullopt;
+  }
+}
+
 /// Canonical register roles for LSA and ALIGN; some physical decoders
 /// exchange the source and destination fields in their operand detail.
 inline std::optional<uint32_t> microR6ScaledALU(uint32_t Word) {

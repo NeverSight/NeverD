@@ -11,7 +11,9 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/backend/MIPS/MIPSBarrierSource.h"
 #include "neverd/backend/MIPS/MIPSDSPSource.h"
+#include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/MIPS/MIPSMSASource.h"
+#include "neverd/backend/MIPS/MIPSR6FPSource.h"
 #include "neverd/backend/llvm/LLVMSourceBody.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
@@ -34,14 +36,24 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
     throw std::runtime_error(mips::kAccumulatorHistoryUnknown);
   if (Id == Intrinsic::MIPSLwrUpper)
     throw std::runtime_error(mips::kPartialLwrRequiresWord);
-  if (mips::isMSANativeVector(Id) || mips::isMSAControl(Id)) {
-    if (!Img || !Img->MIPS || !Img->MIPS->HasMSA || Img->MIPS->ISARevision != 5)
+  const bool ScalarFP = mips::isR6FPArithmetic(Id) || mips::isR6FPControl(Id);
+  if (ScalarFP || mips::isMSANativeVector(Id) || mips::isMSAControl(Id)) {
+    if (!Img || !Img->MIPS ||
+        (ScalarFP ? Img->MIPS->ISARevision != 6
+                  : (!Img->MIPS->HasMSA || Img->MIPS->ISARevision != 5)))
       throw std::runtime_error(
           "MSA native source requires an enabled r5 MSA image");
     const unsigned Selector =
-        mips::isMSAControl(Id) ? Op.Inputs[1].ConstVal : 0;
+        (mips::isMSAControl(Id) || mips::isR6FPControl(Id))
+            ? Op.Inputs[1].ConstVal
+            : 0;
     const auto Asm =
-        mips::msaAssembly(Id, Selector, archLittleEndian(TargetArch));
+        ScalarFP
+            ? mips::r6FPAssembly(Id, Selector,
+                                 mips::instructionModeFromLLVM(
+                                     *B.GetInsertBlock()->getParent()) ==
+                                     InstructionMode::MicroMIPS)
+            : mips::msaAssembly(Id, Selector, archLittleEndian(TargetArch));
     llvm::SmallVector<llvm::Value *, 4> Args;
     llvm::SmallVector<llvm::Type *, 4> Types;
     llvm::Value *Result = nullptr;
@@ -54,7 +66,12 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
       auto &Entry = B.GetInsertBlock()->getParent()->getEntryBlock();
       llvm::IRBuilder<> Frame(&Entry, Entry.getFirstInsertionPt());
       for (unsigned I = 0; I < Asm.Pointers; ++I) {
-        auto *Slot = Frame.CreateAlloca(B.getInt128Ty(), nullptr, "msa.vec");
+        const unsigned Bytes = ScalarFP
+                                   ? (I ? mips::r6FPOperation(Id).InputBytes
+                                        : mips::r6FPOperation(Id).OutputBytes)
+                                   : 16;
+        auto *Slot = Frame.CreateAlloca(B.getIntNTy(8 * Bytes), nullptr,
+                                        ScalarFP ? "mips.fp" : "msa.vec");
         Slot->setAlignment(llvm::Align(16));
         Args.push_back(Slot);
         if (I)
@@ -71,12 +88,14 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
     auto *Call = B.CreateCall(
         llvm::InlineAsm::get(Ty, Asm.llvmText(), Asm.Constraints, true), Args);
     Call->setMetadata(
-        "neverd.mips.msa",
+        ScalarFP ? "neverd.mips.scalar.fp" : "neverd.mips.msa",
         llvm::MDNode::get(
             *Ctx, {llvm::ConstantAsMetadata::get(B.getInt32(unsigned(Id))),
                    llvm::ConstantAsMetadata::get(B.getInt32(Selector))}));
     if (Result)
-      return B.CreateLoad(B.getInt128Ty(), Result);
+      return B.CreateLoad(
+          B.getIntNTy(ScalarFP ? mips::r6FPOperation(Id).OutputBytes * 8 : 128),
+          Result);
     return Call;
   }
   if (mips::isStatefulScalar(Id))

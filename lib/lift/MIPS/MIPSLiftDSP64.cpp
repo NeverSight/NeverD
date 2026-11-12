@@ -17,6 +17,8 @@ namespace neverd {
 bool MIPSLifter::liftDSP64Packed(State &S, uint32_t Word) const {
   if (!mips::dsp64PackedForm(Word))
     return false;
+  if ((Word & 63) == 0x34)
+    return liftDSP64Accumulator(S, Word);
   const unsigned Fn = Word & 63, Sel = (Word >> 6) & 31;
   const unsigned RS = Word >> 21 & 31, RT = Word >> 16 & 31,
                  RD = Word >> 11 & 31;
@@ -237,4 +239,88 @@ bool MIPSLifter::liftDSP64Packed(State &S, uint32_t Word) const {
     Sticky(22);
   return true;
 }
+// Packed DSP64 accumulates into a complete HI:LO pair at GPR width.
+bool MIPSLifter::liftDSP64Accumulator(State &S, uint32_t Word) const {
+  const unsigned Sel = (Word >> 6) & 31, Bank = (Word >> 11) & 3,
+                 RS = Word >> 21 & 31, RT = Word >> 16 & 31;
+  const auto A = S.read(RS), B = S.read(RT);
+  const auto Hi = NdVar::reg(mipsreg::accumulatorHI(Bank), 8),
+             Lo = NdVar::reg(mipsreg::accumulatorLO(Bank), 8);
+  auto Upper = Hi, Lower = Lo;
+  const bool DotByte = Sel == 3 || Sel == 7 || Sel == 11 || Sel == 15;
+  const bool Pair =
+      Sel == 12 || Sel == 13 || Sel == 14 || Sel == 28 || Sel == 30;
+  const bool Single = Sel >= 16;
+  const bool Subtract = Sel == 5 || Sel == 11 || Sel == 13 || Sel == 15;
+  const bool Difference = Sel == 6 || Sel == 14;
+  const uint16_t Bytes = DotByte ? 1 : Pair ? 4 : 2;
+  const auto Lane = [&](NdVar V, unsigned I) {
+    const auto L = S.makeTemp(Bytes);
+    S.emit(NdOp::SUBBYTES, L, {V, NdVar::cst(I * Bytes, 4)});
+    return L;
+  };
+  const unsigned First = DotByte  ? ((Sel == 3 || Sel == 11) ? 4 : 0)
+                         : Single ? (Pair ? (Sel == 28 ? 1 : 0) : 3 - (Sel & 3))
+                                  : 0;
+  const unsigned Count = Single ? 1 : DotByte ? 4 : 8 / Bytes;
+  auto Overflow = NdVar::cst(0, 1);
+  for (unsigned I = 0; I < Count; ++I) {
+    auto X = Lane(A, First + I), Y = Lane(B, First + I);
+    auto Product = S.binary(NdOp::INT_MULT, S.resize(X, 8, !DotByte),
+                            S.resize(Y, 8, !DotByte));
+    if (!DotByte) {
+      const auto Min = NdVar::cst(uint64_t(1) << (Bytes * 8 - 1), Bytes);
+      const auto Sat =
+          S.binary(NdOp::BOOL_AND, S.binary(NdOp::INT_EQUAL, X, Min, 1),
+                   S.binary(NdOp::INT_EQUAL, Y, Min, 1), 1);
+      Product = S.select(Sat, NdVar::cst(Bytes == 4 ? INT64_MAX : INT32_MAX, 8),
+                         S.binary(NdOp::INT_LEFT, Product, NdVar::cst(1, 8)));
+      Overflow = S.binary(NdOp::BOOL_OR, Overflow, Sat, 1);
+    }
+    const bool Sub = Subtract || (Difference && !(I & 1));
+    const auto HighProduct =
+        DotByte ? NdVar::cst(0, 8)
+                : S.binary(NdOp::INT_ASHR, Product, NdVar::cst(63, 8));
+    const auto NewLow =
+        S.binary(Sub ? NdOp::INT_SUB : NdOp::INT_ADD, Lower, Product);
+    const auto Carry = Sub ? S.binary(NdOp::INT_LESS, Lower, Product, 1)
+                           : S.binary(NdOp::INT_LESS, NewLow, Lower, 1);
+    Upper = S.binary(Sub ? NdOp::INT_SUB : NdOp::INT_ADD, Upper,
+                     S.binary(NdOp::INT_ADD, HighProduct, S.resize(Carry, 8)));
+    Lower = NewLow;
+  }
+  if (Sel == 12 || Sel == 13 || (Sel >= 16 && Sel <= 19)) {
+    const uint16_t Out = Pair ? 8 : 4;
+    const uint64_t Sign = uint64_t(1) << (8 * Out - 1);
+    const auto Narrow = S.resize(S.resize(Lower, Out), 8, true);
+    auto Fits =
+        S.binary(NdOp::INT_EQUAL, Upper,
+                 S.binary(NdOp::INT_ASHR, Narrow, NdVar::cst(63, 8)), 1);
+    if (Out < 8)
+      Fits = S.binary(NdOp::BOOL_AND, Fits,
+                      S.binary(NdOp::INT_EQUAL, Lower, Narrow, 1), 1);
+    const auto Negative = S.binary(NdOp::INT_SLESS, Upper, NdVar::cst(0, 8), 1);
+    const auto Min = S.resize(NdVar::cst(Sign, Out), 8, true),
+               Max = NdVar::cst(Sign - 1, 8);
+    Lower = S.select(Fits, Lower, S.select(Negative, Min, Max));
+    Upper = S.binary(NdOp::INT_ASHR, Lower, NdVar::cst(63, 8));
+    Overflow =
+        S.binary(NdOp::BOOL_OR, Overflow,
+                 S.binary(NdOp::INT_EQUAL, Fits, NdVar::cst(0, 1), 1), 1);
+  }
+  if (!DotByte) {
+    const auto C = S.makeTemp(4);
+    S.emitIntrinsic(Intrinsic::MIPSReadDSPControl, C);
+    S.emitIntrinsic(Intrinsic::MIPSWriteDSPControl, {},
+                    {S.binary(NdOp::INT_OR, C,
+                              S.binary(NdOp::INT_LEFT, S.resize(Overflow, 4),
+                                       NdVar::cst(16 + Bank, 4)))});
+  }
+  S.emit(NdOp::COPY, Hi, {Upper});
+  S.emit(NdOp::COPY, Lo, {Lower});
+  if (!Bank)
+    S.emit(NdOp::COPY, NdVar::reg(mipsreg::AC0Pending, 1), {NdVar::cst(0, 1)});
+  return true;
+}
+
 } // namespace neverd

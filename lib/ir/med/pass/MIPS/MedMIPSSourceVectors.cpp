@@ -41,18 +41,26 @@ void requireMIPSSourceVectors(const LowFunc &Function, Arch Target,
   if (!isMIPS(Target))
     throw LowToMedConversionError("MSA source requires a MIPS target");
   const bool Wide = isMIPS64(Target);
-  const bool FP64 = Image && Image->MIPS && Image->MIPS->HasMSA &&
-                    Image->MIPS->ISARevision == 5 &&
+  const bool FP64 = Image && Image->MIPS &&
+                    ((Image->MIPS->HasMSA && Image->MIPS->ISARevision == 5) ||
+                     Image->MIPS->ISARevision == 6) &&
                     Image->MIPS->FPABI == (Wide ? 1 : 6);
   if (Image && !FP64)
     throw LowToMedConversionError("MSA source requires explicit FP64 profile");
-  using Mask = std::bitset<mipsreg::VectorCount>;
+  using Mask = std::bitset<mipsreg::VectorCount * mipsreg::VectorBytes>;
   struct Transfer {
     Mask Needs, Defines, Kills;
     std::optional<Mask> Incoming;
   };
   const auto Index = [](const NdVar &V) {
     return (V.Offset - mipsreg::VectorBase) / mipsreg::VectorBytes;
+  };
+  const auto Bytes = [&](const NdVar &V) {
+    Mask M;
+    const auto First = Index(V) * mipsreg::VectorBytes;
+    for (unsigned I = 0; I < V.Size; ++I)
+      M.set(First + I);
+    return M;
   };
   std::vector<Transfer> Effects(Function.Blocks.size());
   llvm::DenseMap<int, size_t> Indices;
@@ -69,12 +77,11 @@ void requireMIPSSourceVectors(const LowFunc &Function, Arch Target,
       for (unsigned J = 0; J != Op.NumInputs; ++J) {
         if (!IsVector(Op.Inputs[J]))
           continue;
-        const auto R = Index(Op.Inputs[J]);
-        if (T.Kills[R])
+        const auto Read = Bytes(Op.Inputs[J]);
+        if ((T.Kills & Read).any())
           throw LowToMedConversionError(
               "MSA source observes a partial vector definition");
-        if (!T.Defines[R])
-          T.Needs.set(R);
+        T.Needs |= Read & ~T.Defines;
       }
       if (!IsVector(Op.Output))
         continue;
@@ -83,8 +90,11 @@ void requireMIPSSourceVectors(const LowFunc &Function, Arch Target,
       if (Wide ? R >= 24 : (R >= 20 && (!FP64 || R % 2 == 0)))
         throw LowToMedConversionError(
             "MSA source saved FPR restoration is not qualified");
-      T.Defines[R] = Op.Output.Size == mipsreg::VectorBytes;
-      T.Kills[R] = !T.Defines[R];
+      const auto Whole =
+          Bytes(NdVar::reg(Op.Output.Offset, mipsreg::VectorBytes));
+      const auto Written = Bytes(Op.Output);
+      T.Defines = (T.Defines & ~Whole) | Written;
+      T.Kills = (T.Kills & ~Whole) | (Whole & ~Written);
     }
   }
 

@@ -264,6 +264,8 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
         return release6Encoding(*Wide);
     if (const auto Branch = mips::microR6Compact(Word, 4))
       return Encoding{.Word = *Branch, .R6 = true};
+    if (const auto FP = mips::microR6Float(Word))
+      return Encoding{.Word = *FP, .R6 = true};
     if (const auto Atomic = mips::microR6Reservation(Word))
       return Encoding{.Word = *Atomic, .R6 = true};
     const auto Native = [](uint32_t W) {

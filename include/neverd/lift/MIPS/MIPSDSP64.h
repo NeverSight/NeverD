@@ -20,7 +20,8 @@ enum class DSP64Operands {
   Shift4,
   Shift5,
   Imm8,
-  Imm10
+  Imm10,
+  Accumulator
 };
 struct DSP64Form {
   const char *Mnemonic;
@@ -43,6 +44,9 @@ constexpr std::optional<DSP64Form> dsp64PackedForm(uint32_t Word) {
   }
   uint32_t Reserved = 0;
   switch (Layout) {
+  case DSP64Operands::Accumulator:
+    Reserved = 28u << 11;
+    break;
   case DSP64Operands::Compare:
     Reserved = 31u << 11;
     break;

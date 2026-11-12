@@ -53,7 +53,8 @@ if(TARGET unicorn)
     target_link_libraries(NeverDMIPSIntegerTests PRIVATE NeverDEmulationUnicorn)
   else()
     target_sources(NeverDMIPSIntegerTests PRIVATE
-      ${PROJECT_SOURCE_DIR}/lib/emulation/backends/unicorn/P5600MSA.cpp)
+      ${PROJECT_SOURCE_DIR}/lib/emulation/backends/unicorn/P5600MSA.cpp
+      ${PROJECT_SOURCE_DIR}/lib/emulation/backends/unicorn/R6ScalarFP.cpp)
   endif()
   target_link_libraries(NeverDMIPSIntegerTests PRIVATE unicorn)
   target_compile_definitions(NeverDMIPSIntegerTests PRIVATE
