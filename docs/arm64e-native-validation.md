@@ -1231,6 +1231,15 @@ separate weak atom and indirect references through that slot. Conflicting
 image flags, additional live atoms in the same storage and direct references
 to a discarded fallback cause publication to fail.
 
+Each Apple M1 runner passed all 33 publication tests in the
+[Objective-C execution run](https://github.com/gmh5225/test_mac_intel/actions/runs/43294345635). On each runner, the original and redirected
+entries produced 32 expected results across both catch types at O0 and O2.
+The driver checked return values and the type and value of each propagated
+exception. It also verified one cleanup on every path. Both runners repeated
+ten system signal-frame crossings. The
+[verification record](evidence/arm64e-system-signal-and-implicit-unwind-2026-11-12.json)
+includes the compiler versions, test-host digest and hardware probe results.
+
 To repeat the interrupted-frame test on a Mac that can launch arm64e
 executables, build the test host against the tracked LLVM fork and require
 native execution:
