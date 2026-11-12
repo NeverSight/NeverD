@@ -1020,8 +1020,10 @@ launch fails with `EBADARCH`. The local M4 control also reports an undefined
 ADDPT instruction. Native CPTA-on remains unavailable on these environments.
 That qualification covers unsigned and IA/IB-with-CFA signal rows. The
 instruction-address recipes added below have separate hardware qualification.
-The direct system `_sigtramp` walk and additional arbitrary image instruction
-and unwind profiles still require qualification.
+At that revision, continuing the system cursor beyond `_sigtramp` had not
+been demonstrated. The [later bridge qualification](#system-signal-trampoline-and-implicit-signing-rows)
+covers the caller handoff. Additional image instruction and unwind profiles
+still require qualification.
 
 ## Instruction-address signal recipes and remembered frames
 
@@ -1138,3 +1140,37 @@ machine instructions use the physical SP. A partial body, an unsupported
 operation or a changed tested bit prevents publication. This does not qualify
 an ordinary LLVM function using a synthetic stack. No LLVM overlay or new
 prebuilt package is needed.
+
+At `a6ffeb9bd9e3a9799c56d60418ed05abf8b01a1b`, the
+[source LLVM replay](https://github.com/gmh5225/test_mac_intel/actions/runs/43210663619)
+passed all 31 tests on each runner. Each executed 60 original or published
+images, continued the system cursor at all 10 interruptions across the two
+images, and made three native calls through the compiler-generated compact
+fixture. The nine-function variadic images each compared 27 register inputs
+at O0 and again at O2. Neither runner qualified explicit PAuth_LR,
+PC-sensitive PACM or native CPTA-on.
+
+The unchanged [r6 replay](https://github.com/gmh5225/test_mac_intel/actions/runs/43215695747)
+passed its 26 supported tests on each runner, with 50 image executions, the
+same 10 system-caller continuations and three compact-fixture calls. The
+local unfiltered run executed all 31 tests and reproduced exactly the five
+previous r6 failures; the compatibility replay explicitly excludes those
+five. No LLVM patch, fork revision change or replacement prebuilt is used.
+The [verification record](evidence/arm64e-system-signal-and-implicit-unwind-2026-11-12.json)
+includes the per-runner signal samples, test-host hashes, local suite results
+and hardware capabilities.
+
+To repeat the interrupted-frame test on a Mac that can launch arm64e
+executables, build the test host against the tracked LLVM fork and require
+native execution:
+
+```bash
+python3 scripts/build.py build-release --target NeverDArm64eLiftedImageTests
+NEVERD_ARM64E_ASYNC_NATIVE=1 build-release/bin/NeverDArm64eLiftedImageTests \
+  --gtest_filter=AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions \
+  --gtest_output=xml:signal-results.xml
+```
+
+The XML property `native_system_caller_steps` must be 10. Without the
+environment variable the test can check publication and the recovered rows
+without performing those native steps.

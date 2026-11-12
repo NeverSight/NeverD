@@ -1,0 +1,624 @@
+{
+  "source_revision": "a6ffeb9bd9e3a9799c56d60418ed05abf8b01a1b",
+  "base_revision": "067b02210b595afe09a119ad45cc0db8b670cdf5",
+  "dependencies": {
+    "llvm-project": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+    "capstone": "f52e6e73c419bb58129e19495204bae1ab9d42b2",
+    "unicorn": "dab16e86b6ac4acca71c5f3ba50721efc3891a1e"
+  },
+  "prebuilt": "neverd-llvm-v23.0.0-r6",
+  "build": "Release via scripts/build.py",
+  "local": {
+    "source_publication": {
+      "discovered": 31,
+      "passed": 31,
+      "failed": [],
+      "skipped": []
+    },
+    "source_implicit_recovery": {
+      "discovered": 6,
+      "passed": 6,
+      "failed": [],
+      "skipped": []
+    },
+    "r6_publication": {
+      "discovered": 31,
+      "passed": 26,
+      "failed": [
+        "AArch64DarwinEntry.SignedCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+        "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+      ],
+      "skipped": []
+    },
+    "r6_implicit_recovery": {
+      "discovered": 6,
+      "passed": 6,
+      "failed": [],
+      "skipped": []
+    },
+    "loader_compact_unwind": {
+      "discovered": 57,
+      "passed": 57,
+      "failed": [],
+      "skipped": []
+    },
+    "compact_and_dwarf_rewriting": {
+      "discovered": 106,
+      "passed": 106,
+      "failed": [],
+      "skipped": []
+    },
+    "return_protection": {
+      "discovered": 19,
+      "passed": 19,
+      "failed": [],
+      "skipped": []
+    },
+    "pointer_authentication": {
+      "discovered": 34,
+      "passed": 32,
+      "failed": [],
+      "skipped": [
+        "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+        "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections"
+      ]
+    },
+    "c_api": {
+      "discovered": 6,
+      "passed": 6,
+      "failed": [],
+      "skipped": []
+    },
+    "cli": {
+      "discovered": 3,
+      "passed": 3,
+      "failed": [],
+      "skipped": []
+    },
+    "desktop_consumers": [
+      "NeverDWorkerUnwindQuery",
+      "NeverDGuiUnwindInfo"
+    ],
+    "python_query_tests": 4,
+    "qualification_driver_regressions": 42,
+    "native_checked_arithmetic": {
+      "hardware": "Apple M4 Max",
+      "status": "unavailable",
+      "native_el0_cpta_observed": false,
+      "x1_el0_cpta_qualified": false,
+      "profiles": {
+        "arm64": "undefined-instruction",
+        "arm64e": "did-not-start",
+        "arm64e.x1": "slice-unavailable"
+      }
+    },
+    "public_query_build": {
+      "configuration": "Release",
+      "prebuilt": "neverd-llvm-v23.0.0-r6",
+      "tested_options": {
+        "NEVERD_ENABLE_CPU_EMULATION": "OFF",
+        "NEVERD_ENABLE_WEB_ANALYSIS": "OFF"
+      },
+      "restored_options": {
+        "NEVERD_ENABLE_CPU_EMULATION": "ON",
+        "NEVERD_ENABLE_WEB_ANALYSIS": "ON"
+      },
+      "scope": "Static unwind queries through C API, CLI, GUI and worker; native execution qualified separately."
+    }
+  },
+  "ubuntu_qt_comparison": {
+    "pr_job": "https://github.com/NeverSight/NeverD/actions/runs/43210580887/job/131157050075",
+    "baseline_job": "https://github.com/NeverSight/NeverD/actions/runs/43185966064/job/131073070707",
+    "baseline_commit": "42e241cee0d12771d6accf198f0ca23f9b6799bc",
+    "baseline_conclusion": "failure",
+    "matching_assertions": [
+      "DockingTests::framedWindowEdgesResize(workbench-right)",
+      "DockingTests::framedWindowEdgesResize(workbench-right-restored)"
+    ],
+    "passing_unwind_tests": [
+      "NeverDGuiUnwindInfo",
+      "NeverDWorkerUnwindQuery"
+    ]
+  },
+  "native": {
+    "source": {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43210663619",
+      "test_host_sha256": "776068d32269329c833a6827ea6205e68558b0b402900447f979d4dea3d56b64",
+      "archive_sha256": "f0a34e4f4560208e941d81ad71baa5a81cd0cbbe8531bc37b5e17ce656edf152",
+      "runners": {
+        "macos-26": {
+          "hardware": "Apple M1 (Virtual)",
+          "os": [
+            "ProductName:\t\tmacOS",
+            "ProductVersion:\t\t26.7.2",
+            "BuildVersion:\t\t25G332"
+          ],
+          "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+          "passed": 31,
+          "native_image_executions": 60,
+          "native_interrupted_frames": 10,
+          "native_system_caller_steps": 10,
+          "native_compact_calls": 3,
+          "mixed_variadic_O0_O2": [
+            {
+              "native_register_entries_compared": 9,
+              "native_register_input_comparisons": 27,
+              "installed_register_entries": 9
+            },
+            {
+              "native_register_entries_compared": 9,
+              "native_register_input_comparisons": 27,
+              "installed_register_entries": 9
+            }
+          ],
+          "original_native_pac": true,
+          "original_signed_call_and_exception": true,
+          "native_signal_cursor": true,
+          "explicit_pauth_lr": false,
+          "pc_sensitive_pacm": false,
+          "cpta": {
+            "status": "unavailable",
+            "observed_el0": false,
+            "x1_qualified": false,
+            "profiles": {
+              "arm64": "undefined-instruction",
+              "arm64e": "undefined-instruction",
+              "arm64e.x1": "slice-unavailable"
+            }
+          },
+          "qualification_sha256": "7f3d49b1e35c8556e29a8f507b5add6812ff201e5448a6bce88ee1e0f7ebe49e",
+          "original_controls_sha256": "c731d25a84dd7b2c0e9bf34bcf6382392e7f56506bedd6343fc23a859b05d2f4",
+          "cpta_report_sha256": "5f6034b3a58a70e11558f1d2437a8fb6b509c1412355c4c34b8a67f0b430cb9b",
+          "cursor_report_sha256": "3962b39e7cd71c0b8c7a018d7a33f8043fc4ec9d9d70e6692657b6d42609fcf4",
+          "signal_sample_columns": [
+            "frame_relative_pc",
+            "signed",
+            "cfa_minus_sp",
+            "saved_lr_observed"
+          ],
+          "original_signal_samples": [
+            [
+              16,
+              0,
+              0,
+              0
+            ],
+            [
+              40,
+              1,
+              0,
+              0
+            ],
+            [
+              76,
+              1,
+              16,
+              1
+            ],
+            [
+              112,
+              1,
+              0,
+              0
+            ],
+            [
+              144,
+              0,
+              0,
+              0
+            ]
+          ],
+          "published_signal_samples": [
+            [
+              16,
+              0,
+              0,
+              0
+            ],
+            [
+              48,
+              1,
+              0,
+              0
+            ],
+            [
+              80,
+              1,
+              16,
+              1
+            ],
+            [
+              112,
+              1,
+              0,
+              0
+            ],
+            [
+              140,
+              0,
+              0,
+              0
+            ]
+          ]
+        },
+        "xcode-27": {
+          "hardware": "Apple M1 (Virtual)",
+          "os": [
+            "ProductName:\t\tmacOS",
+            "ProductVersion:\t\t27.0.1",
+            "BuildVersion:\t\t26A434"
+          ],
+          "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+          "passed": 31,
+          "native_image_executions": 60,
+          "native_interrupted_frames": 10,
+          "native_system_caller_steps": 10,
+          "native_compact_calls": 3,
+          "mixed_variadic_O0_O2": [
+            {
+              "native_register_entries_compared": 9,
+              "native_register_input_comparisons": 27,
+              "installed_register_entries": 9
+            },
+            {
+              "native_register_entries_compared": 9,
+              "native_register_input_comparisons": 27,
+              "installed_register_entries": 9
+            }
+          ],
+          "original_native_pac": true,
+          "original_signed_call_and_exception": true,
+          "native_signal_cursor": true,
+          "explicit_pauth_lr": false,
+          "pc_sensitive_pacm": false,
+          "cpta": {
+            "status": "unavailable",
+            "observed_el0": false,
+            "x1_qualified": false,
+            "profiles": {
+              "arm64": "undefined-instruction",
+              "arm64e": "undefined-instruction",
+              "arm64e.x1": "did-not-start"
+            }
+          },
+          "qualification_sha256": "e4d20c373b25561407173d3706308af9b134ba77de15561301ab73ad328d3448",
+          "original_controls_sha256": "3629322ac3245d13607e130452fa09e45b7742525f3cf1827e882c1e3d833610",
+          "cpta_report_sha256": "5b502a28775dfdc619a4444ca9a2a6f974ac281386f5c0b83f8f1e130eb6aabb",
+          "cursor_report_sha256": "0f901573df15e21cb1cfff79219c957086cdf622db577133b82481a178b1a90b",
+          "signal_sample_columns": [
+            "frame_relative_pc",
+            "signed",
+            "cfa_minus_sp",
+            "saved_lr_observed"
+          ],
+          "original_signal_samples": [
+            [
+              16,
+              0,
+              0,
+              0
+            ],
+            [
+              44,
+              1,
+              0,
+              0
+            ],
+            [
+              80,
+              1,
+              16,
+              1
+            ],
+            [
+              112,
+              1,
+              0,
+              0
+            ],
+            [
+              136,
+              0,
+              0,
+              0
+            ]
+          ],
+          "published_signal_samples": [
+            [
+              16,
+              0,
+              0,
+              0
+            ],
+            [
+              44,
+              1,
+              0,
+              0
+            ],
+            [
+              80,
+              1,
+              16,
+              1
+            ],
+            [
+              116,
+              1,
+              0,
+              0
+            ],
+            [
+              140,
+              0,
+              0,
+              0
+            ]
+          ]
+        }
+      }
+    },
+    "r6": {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43215695747",
+      "test_host_sha256": "e10f18c44908838193d77d967f7d2eb8d891a85ccb4f76eaf39e2d9776112d82",
+      "archive_sha256": "4f749a2b889f1d259459cee7eb11de833e8b5eb4073ed70b406e2b7662fe6adf",
+      "runners": {
+        "macos-26": {
+          "hardware": "Apple M1 (Virtual)",
+          "os": [
+            "ProductName:\t\tmacOS",
+            "ProductVersion:\t\t26.7.2",
+            "BuildVersion:\t\t25G332"
+          ],
+          "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+          "passed": 26,
+          "native_image_executions": 50,
+          "native_interrupted_frames": 10,
+          "native_system_caller_steps": 10,
+          "signal_sample_columns": [
+            "frame_relative_pc",
+            "signed",
+            "cfa_minus_sp",
+            "saved_lr_observed"
+          ],
+          "original_signal_samples": [
+            [
+              12,
+              0,
+              0,
+              0
+            ],
+            [
+              40,
+              1,
+              0,
+              0
+            ],
+            [
+              76,
+              1,
+              16,
+              1
+            ],
+            [
+              108,
+              1,
+              0,
+              0
+            ],
+            [
+              136,
+              0,
+              0,
+              0
+            ]
+          ],
+          "published_signal_samples": [
+            [
+              16,
+              0,
+              0,
+              0
+            ],
+            [
+              44,
+              1,
+              0,
+              0
+            ],
+            [
+              80,
+              1,
+              16,
+              1
+            ],
+            [
+              112,
+              1,
+              0,
+              0
+            ],
+            [
+              140,
+              0,
+              0,
+              0
+            ]
+          ],
+          "native_compact_calls": 3,
+          "mixed_variadic_O0_O2": [
+            {
+              "native_register_entries_compared": 9,
+              "native_register_input_comparisons": 27,
+              "installed_register_entries": 9
+            },
+            {
+              "native_register_entries_compared": 9,
+              "native_register_input_comparisons": 27,
+              "installed_register_entries": 9
+            }
+          ],
+          "original_native_pac": true,
+          "original_signed_call_and_exception": true,
+          "native_signal_cursor": true,
+          "explicit_pauth_lr": false,
+          "pc_sensitive_pacm": false,
+          "cpta": {
+            "status": "unavailable",
+            "observed_el0": false,
+            "x1_qualified": false,
+            "profiles": {
+              "arm64": "undefined-instruction",
+              "arm64e": "undefined-instruction",
+              "arm64e.x1": "slice-unavailable"
+            }
+          },
+          "qualification_sha256": "cfee220060c321ad24c38a07f199cd0826cb743d8b5f585ce025ce7d5e72286b",
+          "original_controls_sha256": "6882e87aefc54a01cf43365968f56661696269ab1a7fcc21543ae064230e782f",
+          "cpta_report_sha256": "5f6034b3a58a70e11558f1d2437a8fb6b509c1412355c4c34b8a67f0b430cb9b",
+          "cursor_report_sha256": "06a20ecad2ba86e79cfcc960bd9a0409fac1f197b2b4d36ad83d99c995b60fc3"
+        },
+        "xcode-27": {
+          "hardware": "Apple M1 (Virtual)",
+          "os": [
+            "ProductName:\t\tmacOS",
+            "ProductVersion:\t\t27.0.1",
+            "BuildVersion:\t\t26A434"
+          ],
+          "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+          "passed": 26,
+          "native_image_executions": 50,
+          "native_interrupted_frames": 10,
+          "native_system_caller_steps": 10,
+          "signal_sample_columns": [
+            "frame_relative_pc",
+            "signed",
+            "cfa_minus_sp",
+            "saved_lr_observed"
+          ],
+          "original_signal_samples": [
+            [
+              16,
+              0,
+              0,
+              0
+            ],
+            [
+              48,
+              1,
+              0,
+              0
+            ],
+            [
+              80,
+              1,
+              16,
+              1
+            ],
+            [
+              112,
+              1,
+              0,
+              0
+            ],
+            [
+              140,
+              0,
+              0,
+              0
+            ]
+          ],
+          "published_signal_samples": [
+            [
+              16,
+              0,
+              0,
+              0
+            ],
+            [
+              40,
+              1,
+              0,
+              0
+            ],
+            [
+              76,
+              1,
+              16,
+              1
+            ],
+            [
+              112,
+              1,
+              0,
+              0
+            ],
+            [
+              140,
+              0,
+              0,
+              0
+            ]
+          ],
+          "native_compact_calls": 3,
+          "mixed_variadic_O0_O2": [
+            {
+              "native_register_entries_compared": 9,
+              "native_register_input_comparisons": 27,
+              "installed_register_entries": 9
+            },
+            {
+              "native_register_entries_compared": 9,
+              "native_register_input_comparisons": 27,
+              "installed_register_entries": 9
+            }
+          ],
+          "original_native_pac": true,
+          "original_signed_call_and_exception": true,
+          "native_signal_cursor": true,
+          "explicit_pauth_lr": false,
+          "pc_sensitive_pacm": false,
+          "cpta": {
+            "status": "unavailable",
+            "observed_el0": false,
+            "x1_qualified": false,
+            "profiles": {
+              "arm64": "undefined-instruction",
+              "arm64e": "undefined-instruction",
+              "arm64e.x1": "did-not-start"
+            }
+          },
+          "qualification_sha256": "2f23b8a6305698aed2fe8235c570def4ec9f1834f92208e384eac297b2a9fe49",
+          "original_controls_sha256": "a5b620a57516d5efbff36ca6f6edb8161d479e0180ef6afd6fe51c7e38d930a9",
+          "cpta_report_sha256": "5b502a28775dfdc619a4444ca9a2a6f974ac281386f5c0b83f8f1e130eb6aabb",
+          "cursor_report_sha256": "ebb49c7f8acd2a11b6aadff80254cab43e8418945d57930a96f26efad00507b8"
+        }
+      }
+    }
+  },
+  "controls": {
+    "unmodified_system_walk": "https://github.com/gmh5225/test_mac_intel/actions/runs/43196724884",
+    "guarded_system_bridge": "https://github.com/gmh5225/test_mac_intel/actions/runs/43204290639",
+    "before_terminal_sentinel_fix": "https://github.com/gmh5225/test_mac_intel/actions/runs/43208989717",
+    "original_linker_outputs": "https://github.com/gmh5225/test_mac_intel/actions/runs/43209395729",
+    "compact_fixture_sha256": {
+      "macos-26": "7d0915073c3f2d13982a9b01f756e21f92e9d3c74682a8944c726c11989b3f81",
+      "xcode-27": "bb106788d475de6f43cfb2fcf830d640d5e77a6201eb1787aeb4229f843e5e60"
+    },
+    "last_compact_lookup_end": {
+      "macos-26": "0x304",
+      "xcode-27": "0x305"
+    },
+    "text_end": "0x304"
+  },
+  "limits": [
+    "The system bridge walks an authenticated caller with known integer register locations. It does not resume exceptions or restore vector state.",
+    "Unmodified Darwin stepping from the trampoline still traps on the signed control; the successful walk uses the NeverD handoff.",
+    "Opaque control flow, unmodelled register locations or landing-pad edges cannot authorize an implicit row.",
+    "Publication is qualified for the tested inputs, including the nine-function mixed variadic images at O0 and O2; arbitrary image publication is not established.",
+    "The observed hosts do not qualify explicit PAuth_LR, PC-sensitive PACM or native CPTA-on."
+  ]
+}

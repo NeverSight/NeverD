@@ -2308,8 +2308,10 @@ provenance, exact PCs, source scopes and bounded CIE lookup.
 `NeverDUnwindFrameCAPITests` loads independent Mach-O fixtures through the
 public session API and covers all six query statuses, unsigned and absent
 sources, a shorter FDE than compact range, half-open boundaries and signing
-address zero. `NeverDUnwindFrameCLITests` compares complete CLI JSON against
-that same public API without adding dependencies to the C API suite.
+address zero. For an implicit arm64e frame the C API tests check that an
+unknown DWARF result coexists with a known instruction result at the queried
+PC. `NeverDUnwindFrameCLITests` compares complete CLI JSON against that same
+public API without adding dependencies to the C API suite.
 `pluginsdk/python/tests/test_unwind_query.py` checks the Python adapter's
 ownership, integer validation and complete JSON retention.
 `NeverDLinkedUnwindQuery` rebuilds the three Apple-linked fixtures and compares
