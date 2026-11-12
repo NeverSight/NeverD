@@ -19,6 +19,8 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/X86/X86FPState.h"
+#include "neverd/ir/intrinsics/IntrinsicValueEffects.h"
+#include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/MedScalarSelection.h"
 #include "neverd/ir/med/X86/I386PicAddress.h"
 #include "neverd/ir/med/X86/X86RepAddresses.h"
@@ -3954,6 +3956,16 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
                 continue;
               return stableOffsetFailure("incomplete-frame-reload", Start,
                                          Depth);
+            }
+            // A check that only faults writes no register and no memory: the
+            // alignment precondition of `movaps %xmm0, -0x18(%rsp)` tests the
+            // frame address, and neither writes through it nor passes it on.
+            if (hasValidMedIntrinsicId(Write) && Write.Output.Size == 0 &&
+                Write.IntrinsicOutputs.empty()) {
+              const auto Id = static_cast<Intrinsic>(Write.Inputs[0].ConstVal);
+              if (Write.Inputs[0].ConstVal == static_cast<uint64_t>(Id) &&
+                  onlyChecksForAFault(Id))
+                continue;
             }
             // An x86 floating-state memory operand is a source the operation
             // reads as a LOAD would (`addss -0x54(%ebp), %xmm0`); only the
