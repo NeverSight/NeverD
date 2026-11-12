@@ -1589,6 +1589,80 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
             FromABI[I] = Found[I];
         if (CI->ArgumentsFromPrototype)
           return FromABI;
+        // Recovery lists an indirect call's register runs and then the values
+        // it stores for the stack, where a C call gives its leading integer
+        // arguments to every argument register before the stack.  A stored
+        // value keeps its place only after all of them, so each register
+        // recovery left out passes what the machine has in it at the call.
+        // The one recovery stopped at because it holds the call's target
+        // passes that target (AAPCS skips r3 before a 64-bit stack argument,
+        // which frees it for `blx r3`).  Any other passes the value reaching
+        // the call in it, a parameter the body only passes on included, or
+        // zero where the function has none to name: one it never set and
+        // does not take, or one an earlier call left.
+        //
+        // The stored values are recovery's upper bound, a local at the stack
+        // pointer among them, and a conforming call stores an integer for
+        // the stack only once the registers are used up.  One register may
+        // go unused before it, the bank's last, which an alignment or a
+        // composite that does not fit skips; a floating overflow leaves the
+        // integer registers alone.  So the stored values are arguments, and
+        // take their places, only where every register left out before the
+        // last carries a value, or every floating register is taken.  A call
+        // that leaves more of them without one keeps its list: its stored
+        // values are locals no callee of that convention reads.
+        if (CI->IsIndirect && !CI->ArgumentsInCalleeRegisterOrder &&
+            CI->IntegerRegisterArgCount >= 0 && CI->VarArgFixedCount < 0 &&
+            !(Convention && Convention->StackArgumentsFollowUsedRegisters)) {
+          const size_t Integers =
+              static_cast<size_t>(CI->IntegerRegisterArgCount);
+          const size_t Floating =
+              static_cast<size_t>(std::max(0, CI->FloatingRegisterArgCount));
+          auto ReachingValue = [&](size_t K) -> ExprPtr {
+            MedVar LiveIn;
+            JoinsSeen.clear();
+            if (ReachingAtCall(ParamRegs[K], LiveIn,
+                               /*ParameterAtEntry=*/true) &&
+                SetInFunction(LiveIn) && !LeftByCall(LiveIn, ParamRegs[K]))
+              if (ExprPtr Value = medvarToExpr(LiveIn);
+                  Value && Value->Kind != ExprKind::Undef)
+                return Value;
+            return nullptr;
+          };
+          if (Integers < ParamRegs.size() && Integers + Floating < Recovered &&
+              Integers <= FromABI.size()) {
+            std::vector<ExprPtr> Unset;
+            bool OnlyTheLastIsUnused = true;
+            for (size_t K = Integers; K < ParamRegs.size(); ++K) {
+              ExprPtr Value;
+              bool Unused = false;
+              if (CI->TargetRegisterArgIdx >= 0 &&
+                  K == static_cast<size_t>(CI->TargetRegisterArgIdx) &&
+                  !Target.isConst()) {
+                Value = medvarToExpr(Target);
+                Unused = true;
+              } else if (FoundSource[K] && Found[K] &&
+                         Found[K]->Kind != ExprKind::Undef) {
+                Value = Found[K];
+              } else if (!(Value = ReachingValue(K))) {
+                Value = HighExpr::makeConst(0, TRI.PointerSize);
+                Unused = true;
+              }
+              if (Unused && K + 1 != ParamRegs.size())
+                OnlyTheLastIsUnused = false;
+              Unset.push_back(std::move(Value));
+            }
+            const size_t FloatingBank =
+                TRI.floatingParamRegs(Image ? Image->abiFormat()
+                                            : BinaryFormat::Unknown)
+                    .size();
+            if (OnlyTheLastIsUnused ||
+                (FloatingBank && Floating >= FloatingBank))
+              FromABI.insert(FromABI.begin() +
+                                 static_cast<std::ptrdiff_t>(Integers),
+                             Unset.begin(), Unset.end());
+          }
+        }
         return BoundKnownCalleeArity(std::move(FromABI));
       }
     }
