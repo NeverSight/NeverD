@@ -3680,6 +3680,11 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   // guard comes before the access that declares the object, so the
   // alignment applies once the walk is done.
   std::map<va_t, uint16_t> GuardedAlignments;
+  // The same for an address the code adds a base to (i386 PIC code keeps
+  // the GOT register in its frame and adds the object's offset): the guard
+  // tests that sum, which is as aligned in C as in the image when the
+  // object keeps its address's residue.
+  std::map<va_t, uint16_t> GuardedBaseAlignments;
   auto NoteAlignmentGuard = [&](const HighExpr &Call) {
     if (Call.Kind != ExprKind::Call ||
         Call.IntrinsicId != Intrinsic::RequireAligned ||
@@ -3689,10 +3694,14 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
       return;
     NoteAccessAddress(Call.Operands[0]);
     const uint64_t Bytes = Call.Operands[1]->ConstVal;
-    if (auto VA = constAddress(*Call.Operands[0]);
-        VA && Bytes > 1 && Bytes <= UINT16_MAX)
+    if (Bytes <= 1 || Bytes > UINT16_MAX)
+      return;
+    if (auto VA = constAddress(*Call.Operands[0]))
       GuardedAlignments[*VA] = std::max<uint16_t>(GuardedAlignments[*VA],
                                                   static_cast<uint16_t>(Bytes));
+    else if (const HighExpr *Base = indexedImageBase(*Call.Operands[0]))
+      GuardedBaseAlignments[Base->ConstVal] = std::max<uint16_t>(
+          GuardedBaseAlignments[Base->ConstVal], static_cast<uint16_t>(Bytes));
   };
   std::optional<AArch64ImmediateHighBases> ImageMemoryBases;
   std::function<void(const HighExpr &)> Visit = [&](const HighExpr &E) {
@@ -4194,6 +4203,19 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
       noteImageAddress(VA);
     if (auto It = ImageObjects.find(VA); It != ImageObjects.end())
       It->second.AlignedBytes = std::max(It->second.AlignedBytes, Bytes);
+  }
+  // The access the guard precedes declared the object that holds the base,
+  // whole: that object carries the alignment, wherever in it the base lies.
+  for (const auto &[VA, Bytes] : GuardedBaseAlignments) {
+    auto It = ImageObjects.upper_bound(VA);
+    if (It == ImageObjects.begin())
+      continue;
+    ImageObject &Obj = std::prev(It)->second;
+    const uint64_t Extent = std::max<uint64_t>(
+        Obj.IndexedBytes,
+        Obj.String ? Obj.ArrayBytes : (Obj.Type ? Obj.Type->Size : 0));
+    if (VA - std::prev(It)->first < Extent)
+      Obj.AlignedBytes = std::max(Obj.AlignedBytes, Bytes);
   }
 
   // A table the code keeps only the address of, through a variable it
