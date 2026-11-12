@@ -299,6 +299,11 @@ private:
   /// original and recompiled images (see compileMemHelper / linkAndExtract).
   std::string MemHelperObj;
 
+  /// Path to the ARM EABI floating-to-64-bit conversion routines compiled for
+  /// this test's target (compileConversionHelper), or "" when no image calls
+  /// one.  Linked into both images as the mem* helper is.
+  std::string ConversionHelperObj;
+
   /// The function the link places first in the text, or "" for the inputs'
   /// own order.
   std::string LinkFirst;
@@ -421,6 +426,12 @@ private:
     if (TC.LinkMemBuiltins && objReferencesMemBuiltins(ObjPath))
       MemHelperObj =
           compileMemHelper(EffTarget, IsARM32, TC.ClangTargetOverride);
+    // A conversion of a floating value to a 64-bit integer is a call to the
+    // compiler's run-time routine on AArch32.  Unlinked, the call does
+    // nothing and each image returns what its registers happened to hold.
+    if (objReferences(ObjPath, isLinkedConversionName))
+      ConversionHelperObj =
+          compileConversionHelper(EffTarget, IsARM32, TC.ClangTargetOverride);
 
     // ---- Step 3: Extract original .text (+ link if relocations / rodata) ----
     SectionData OrigSections;
@@ -631,6 +642,10 @@ private:
     if (MemHelperObj.empty() && objReferencesMemBuiltins(SourceObj))
       MemHelperObj =
           compileMemHelper(EffTarget, IsARM32, TC.ClangTargetOverride);
+    if (ConversionHelperObj.empty() &&
+        objReferences(SourceObj, isLinkedConversionName))
+      ConversionHelperObj =
+          compileConversionHelper(EffTarget, IsARM32, TC.ClangTargetOverride);
     auto Buffer = llvm::MemoryBuffer::getFile(SourceObj);
     ASSERT_TRUE(static_cast<bool>(Buffer)) << "could not read " << SourceObj;
     auto Recompiled = extractSectionsWithLink(
@@ -955,6 +970,15 @@ private:
   // linked in (compileMemHelper).  Tests with no such reference never trigger
   // this, so their link is byte-for-byte unchanged.
   static bool objReferencesMemBuiltins(const std::string &Path) {
+    return objReferences(Path, [](llvm::StringRef N) {
+      return neverd::libc::isMemCopyName(N) || neverd::libc::isMemSetName(N);
+    });
+  }
+
+  /// Whether the object at \p Path leaves a symbol \p Wanted accepts
+  /// undefined.
+  static bool objReferences(const std::string &Path,
+                            bool (*Wanted)(llvm::StringRef)) {
     auto BufOrErr = llvm::MemoryBuffer::getFile(Path);
     if (!BufOrErr)
       return false;
@@ -971,16 +995,22 @@ private:
       auto NameOrErr = Sym.getName();
       if (!NameOrErr)
         continue;
-      llvm::StringRef N = *NameOrErr;
-      if (neverd::libc::isMemCopyName(N) || neverd::libc::isMemSetName(N))
+      if (Wanted(*NameOrErr))
         return true;
     }
     return false;
   }
 
-  /// The functions \p Path calls without defining them, besides the mem*
-  /// routines the test can link, and the function at the start of its first
-  /// executable section, where emulation starts.
+  /// The ARM EABI routines that convert a float or a double to a 64-bit
+  /// integer, which the test can link (compileConversionHelper).
+  static bool isLinkedConversionName(llvm::StringRef N) {
+    return N == "__aeabi_d2lz" || N == "__aeabi_d2ulz" || N == "__aeabi_f2lz" ||
+           N == "__aeabi_f2ulz";
+  }
+
+  /// The functions \p Path calls without defining them, besides the mem* and
+  /// conversion routines the test can link, and the function at the start of
+  /// its first executable section, where emulation starts.
   struct ObjectLinkage {
     std::vector<std::string> Externals;
     std::string Entry;
@@ -1010,7 +1040,7 @@ private:
       if (*FlagsOrErr & llvm::object::SymbolRef::SF_Undefined) {
         // The linker defines the GOT position-independent i386 code names.
         if (!neverd::libc::isMemCopyName(N) && !neverd::libc::isMemSetName(N) &&
-            N != "_GLOBAL_OFFSET_TABLE_")
+            !isLinkedConversionName(N) && N != "_GLOBAL_OFFSET_TABLE_")
           Result.Externals.push_back(N.str());
         continue;
       }
@@ -1033,22 +1063,80 @@ private:
   // links without it).
   std::string compileMemHelper(const std::string &EffTarget, bool IsARM32,
                                const std::string &ClangTargetOverride) {
-    auto SrcPath = (Work / "_memhelper.c").string();
-    auto ObjPath = (Work / "_memhelper.o").string();
+    return compileFreestandingHelper(
+        "_memhelper",
+        "void *memcpy(void *d,const void *s,unsigned long n){\n"
+        "  unsigned char *a=(unsigned char*)d;\n"
+        "  const unsigned char *b=(const unsigned char*)s;\n"
+        "  for(unsigned long i=0;i<n;i++)a[i]=b[i];return d;}\n"
+        "void *memmove(void *d,const void *s,unsigned long n){\n"
+        "  unsigned char *a=(unsigned char*)d;\n"
+        "  const unsigned char *b=(const unsigned char*)s;\n"
+        "  if(a<b){for(unsigned long i=0;i<n;i++)a[i]=b[i];}\n"
+        "  else{for(unsigned long i=n;i>0;i--)a[i-1]=b[i-1];}return d;}\n"
+        "void *memset(void *d,int c,unsigned long n){\n"
+        "  unsigned char *a=(unsigned char*)d;\n"
+        "  for(unsigned long i=0;i<n;i++)a[i]=(unsigned char)c;return d;}\n",
+        EffTarget, IsARM32, ClangTargetOverride);
+  }
+
+  // Compile the ARM EABI conversions of a float or a double to a signed or
+  // unsigned 64-bit integer, as compiler-rt defines them: truncation toward
+  // zero, the nearest bound for a value out of range.  Integer operations
+  // with constant shifts only, so the routines call no other run-time
+  // routine and convert nothing themselves.
+  std::string compileConversionHelper(const std::string &EffTarget,
+                                      bool IsARM32,
+                                      const std::string &ClangTargetOverride) {
+    return compileFreestandingHelper(
+        "_conversionhelper",
+        "typedef unsigned long long u64;\n"
+        "static u64 nd_fix(u64 m,int shift){\n"
+        "  while(shift>0){m<<=1;--shift;}\n"
+        "  while(shift<0){m>>=1;++shift;}\n"
+        "  return m;}\n"
+        "static u64 nd_double(double x){union{double d;u64 u;}v;v.d=x;"
+        "return v.u;}\n"
+        "static unsigned nd_float(float x){union{float f;unsigned u;}v;v.f=x;"
+        "return v.u;}\n"
+        "long long __aeabi_d2lz(double x){\n"
+        "  u64 b=nd_double(x);int e=(int)((b>>52)&0x7ff)-1023;\n"
+        "  int neg=(int)(b>>63);\n"
+        "  if(e<0)return 0;\n"
+        "  if(e>=63)return neg?(long long)(1ULL<<63):(long long)~(1ULL<<63);\n"
+        "  u64 r=nd_fix((b&0xfffffffffffffULL)|0x10000000000000ULL,e-52);\n"
+        "  return neg?(long long)(0-r):(long long)r;}\n"
+        "u64 __aeabi_d2ulz(double x){\n"
+        "  u64 b=nd_double(x);int e=(int)((b>>52)&0x7ff)-1023;\n"
+        "  if(e<0||(b>>63))return 0;\n"
+        "  if(e>=64)return ~0ULL;\n"
+        "  return nd_fix((b&0xfffffffffffffULL)|0x10000000000000ULL,e-52);}\n"
+        "long long __aeabi_f2lz(float x){\n"
+        "  unsigned b=nd_float(x);int e=(int)((b>>23)&0xff)-127;\n"
+        "  int neg=(int)(b>>31);\n"
+        "  if(e<0)return 0;\n"
+        "  if(e>=63)return neg?(long long)(1ULL<<63):(long long)~(1ULL<<63);\n"
+        "  u64 r=nd_fix((u64)((b&0x7fffff)|0x800000),e-23);\n"
+        "  return neg?(long long)(0-r):(long long)r;}\n"
+        "u64 __aeabi_f2ulz(float x){\n"
+        "  unsigned b=nd_float(x);int e=(int)((b>>23)&0xff)-127;\n"
+        "  if(e<0||(b>>31))return 0;\n"
+        "  if(e>=64)return ~0ULL;\n"
+        "  return nd_fix((u64)((b&0x7fffff)|0x800000),e-23);}\n",
+        EffTarget, IsARM32, ClangTargetOverride);
+  }
+
+  // Compile \p Source for the test target as a freestanding object named
+  // \p Stem. Returns the object path, or "" on failure.
+  std::string
+  compileFreestandingHelper(const char *Stem, const std::string &Source,
+                            const std::string &EffTarget, bool IsARM32,
+                            const std::string &ClangTargetOverride) {
+    auto SrcPath = (Work / (std::string(Stem) + ".c")).string();
+    auto ObjPath = (Work / (std::string(Stem) + ".o")).string();
     {
       std::ofstream F(SrcPath);
-      F << "void *memcpy(void *d,const void *s,unsigned long n){\n"
-           "  unsigned char *a=(unsigned char*)d;\n"
-           "  const unsigned char *b=(const unsigned char*)s;\n"
-           "  for(unsigned long i=0;i<n;i++)a[i]=b[i];return d;}\n"
-           "void *memmove(void *d,const void *s,unsigned long n){\n"
-           "  unsigned char *a=(unsigned char*)d;\n"
-           "  const unsigned char *b=(const unsigned char*)s;\n"
-           "  if(a<b){for(unsigned long i=0;i<n;i++)a[i]=b[i];}\n"
-           "  else{for(unsigned long i=n;i>0;i--)a[i-1]=b[i-1];}return d;}\n"
-           "void *memset(void *d,int c,unsigned long n){\n"
-           "  unsigned char *a=(unsigned char*)d;\n"
-           "  for(unsigned long i=0;i<n;i++)a[i]=(unsigned char)c;return d;}\n";
+      F << Source;
     }
     std::string Cmd =
         "clang -target " + EffTarget +
@@ -1132,6 +1220,8 @@ private:
                           neverd::test::shellQuote(ObjPath);
     if (!MemHelperObj.empty())
       LinkCmd += " " + neverd::test::shellQuote(MemHelperObj);
+    if (!ConversionHelperObj.empty())
+      LinkCmd += " " + neverd::test::shellQuote(ConversionHelperObj);
     if (!LinkFirst.empty()) {
       const auto Order = (Work / (Tag + "_order.txt")).string();
       std::ofstream(Order) << LinkFirst << "\n";
