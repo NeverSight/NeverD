@@ -9,6 +9,7 @@
 /// ISA.
 //===----------------------------------------------------------------------===//
 
+#include "neverd/ArchSupport.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
 
 #include <array>
@@ -99,6 +100,8 @@ uint32_t dspOperands(uint32_t Word, Layout Fields) {
 std::optional<uint32_t> MIPSLifter::microASEWord(uint32_t Word) const {
   const unsigned Major = Word >> 26;
   if (HasMSA) {
+    if (isMIPS64(Target) && (Word & 0xfc00073f) == 0x58000020) // R5 DLSA
+      return dspOperands(Word, Layout::Registers) | (Word & 0xc0) | 21;
     if (Major ==
         0x16) { // POOL32S: vector register / immediate fields are shared.
       unsigned Group;

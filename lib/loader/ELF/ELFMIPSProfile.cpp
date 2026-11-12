@@ -236,10 +236,10 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
     if (R6 && (ASE & ~(AllowedXPA | llvm::Mips::AFL_ASE_MICROMIPS)))
       return profileError("unsupported Release 6 extension profile");
     if (Profile.HasMSA &&
-        (ELFT::Is64Bits || Profile.HasMIPS16 || Profile.HasDSP ||
-         Bytes[3] != 5 || Bytes[5] != 3 || Bytes[7] != 6))
+        (Profile.HasMIPS16 || Profile.HasDSP || Bytes[3] != 5 ||
+         Bytes[5] != 3 || Bytes[7] != (ELFT::Is64Bits ? 1 : 6)))
       return profileError(
-          "MSA requires MIPS32r5/o32 FP64 in classic or microMIPS mode");
+          "MSA requires r5 with 128-bit CPR1 and o32 FP64 or n64 hard double");
     if (Bytes[2] != (ELFT::Is64Bits ? 64 : 32) ||
         Bytes[3] != (R6               ? 6
                      : Profile.HasMSA ? 5

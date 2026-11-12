@@ -71,7 +71,7 @@ void writeMIPSScalarHelpers(
       if (!Image || !Image->MIPS || !Image->MIPS->HasMSA ||
           Image->MIPS->ISARevision != 5)
         throw std::runtime_error(
-            "MSA native source requires an enabled MIPS32r5 MSA image");
+            "MSA native source requires an enabled r5 MSA image");
       const auto Asm = mips::msaAssembly(Id, Selector, Little);
       OS << "static __attribute__((noinline)) ";
       if (Asm.Read || Asm.Write) {

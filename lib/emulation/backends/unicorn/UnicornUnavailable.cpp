@@ -14,6 +14,10 @@ llvm::Expected<std::unique_ptr<MIPSMSAExecutor>> createP5600MSAExecutor(Arch) {
   return diagnostic::unavailable(diagnostic::UnicornDisabled,
                                  BackendAvailability::BuildDisabled);
 }
+llvm::Expected<std::unique_ptr<MIPSMSAExecutor>> createI6400MSAExecutor(Arch) {
+  return diagnostic::unavailable(diagnostic::UnicornDisabled,
+                                 BackendAvailability::BuildDisabled);
+}
 llvm::Expected<std::unique_ptr<X64Machine>>
 createUnicornX64Machine(MemoryProjection &, bool) {
   return diagnostic::unavailable(diagnostic::UnicornDisabled,

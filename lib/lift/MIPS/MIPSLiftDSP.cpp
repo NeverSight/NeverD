@@ -46,6 +46,10 @@ void MIPSLifter::State::discardHILO() {
   emit(NdOp::COPY, NdVar::reg(mipsreg::AC0Pending, 1), {NdVar::cst(0, 1)});
 }
 
+bool MIPSLifter::hasClassicDSP64() const {
+  return HasDSP && isMIPS64(Target) && Mode != InstructionMode::MicroMIPS &&
+         Mode != InstructionMode::MIPS16 && ISARevision == 2;
+}
 bool MIPSLifter::isDSPIndexedDoubleword(uint32_t Word) const {
   return HasDSP && isMIPS64(Target) && (Word & 0xfc0007ffu) == 0x7c00020au;
 }
@@ -59,6 +63,8 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
     return liftMemory(S, (55u << 26) | (Destination << 16),
                       S.binary(NdOp::INT_ADD, S.read(Base), S.read(Index)));
   }
+  if (hasClassicDSP64() && liftDSP64Packed(S, Word))
+    return true;
   const auto Kind = mips::dspInstruction(Word);
   if (!Kind)
     return liftDSPAdditional(S, Word);
@@ -284,17 +290,18 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
     return true;
   }
   if (*Kind == mips::DSPInstruction::ReadControl) {
-    const uint32_t Bits = mips::dspControlMask(Word >> 16);
+    const uint32_t Bits = mips::dspControlMask(Word >> 16, S.Width == 8);
     if (!RD)
       S.emit(NdOp::NOP, {}, {});
     else
       S.write(RD,
               Bits ? S.binary(NdOp::INT_AND, ReadControl(), NdVar::cst(Bits, 4))
-                   : NdVar::cst(0, 4));
+                   : NdVar::cst(0, 4),
+              false);
     return true;
   }
   if (*Kind == mips::DSPInstruction::WriteControl) {
-    const uint32_t Bits = mips::dspControlMask(Word >> 11);
+    const uint32_t Bits = mips::dspControlMask(Word >> 11, S.Width == 8);
     if (!Bits) {
       // WRDSP with no selected fields has no architectural effect in the
       // admitted DSP-enabled profile. This is a defined encoding, not a
@@ -303,10 +310,11 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
       return true;
     }
     auto Value = S.binary(NdOp::INT_AND, S.read(RS, 4), NdVar::cst(Bits, 4));
-    if (Bits != mips::DSPControlBits)
+    const auto ControlBits = mips::dspControlMask(63, S.Width == 8);
+    if (Bits != ControlBits)
       Value = S.binary(NdOp::INT_OR, Value,
                        S.binary(NdOp::INT_AND, ReadControl(),
-                                NdVar::cst(mips::DSPControlBits & ~Bits, 4)));
+                                NdVar::cst(ControlBits & ~Bits, 4)));
     WriteControl(Value);
     return true;
   }

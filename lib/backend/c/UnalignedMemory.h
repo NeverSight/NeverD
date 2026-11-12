@@ -7,6 +7,7 @@
 #ifndef NEVERD_BACKEND_C_UNALIGNEDMEMORY_H
 #define NEVERD_BACKEND_C_UNALIGNEDMEMORY_H
 
+#include "neverd/ArchSupport.h"
 #include "neverd/backend/c/CEmitterOptions.h"
 #include "neverd/loader/BinaryImage.h"
 
@@ -26,10 +27,9 @@ using ScalarPointerSpelling = CEmitterOptions::ScalarPointerSpelling;
 inline void applyMIPSVectorAlignment(CEmitterOptions &Opts,
                                      const BinaryImage *Image) {
   // MSA LD/ST allow any byte address even when scalar LH/LW/LD would fault.
-  // A standalone MIPS32 unit has no image profile ruling those accesses out.
+  // A standalone MIPS unit has no image profile ruling those accesses out.
   const auto Target = Image ? Image->Arch : Opts.TheArch;
-  if ((Target == Arch::MIPS32 || Target == Arch::MIPS32EL) &&
-      (!Image || (Image->MIPS && Image->MIPS->HasMSA)))
+  if (isMIPS(Target) && (!Image || (Image->MIPS && Image->MIPS->HasMSA)))
     Opts.ScalarPointers = ScalarPointerSpelling::AliasTypes;
 }
 

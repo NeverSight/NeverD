@@ -119,8 +119,8 @@ int main(int Argc, char **Argv) try {
   Capstone Reference;
   const auto Mode = static_cast<cs_mode>(
       (Revision == 6 ? (isMIPS64(Target) ? CS_MODE_MIPS64R6 : CS_MODE_MIPS32R6)
+       : MSA         ? (isMIPS64(Target) ? CS_MODE_MIPS64R5 : CS_MODE_MIPS32R5)
        : isMIPS64(Target) ? CS_MODE_MIPS64R2
-       : MSA              ? CS_MODE_MIPS32R5
                           : CS_MODE_MIPS32R2) |
       (Revision == 6 && isMIPS64(Target) ? CS_MODE_MIPS_PTR64 : 0) |
       (Encoding == InstructionMode::MicroMIPS ? CS_MODE_MICRO

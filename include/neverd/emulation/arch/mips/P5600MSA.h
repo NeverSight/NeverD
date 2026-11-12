@@ -4,7 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Optional Unicorn-backed execution of the unpartitioned P5600 FP profile.
+/// Optional Unicorn-backed execution of the unpartitioned P5600 and I6400 FP
+/// profiles.
 //===----------------------------------------------------------------------===//
 #ifndef NEVERD_EMULATION_ARCH_MIPS_P5600MSA_H
 #define NEVERD_EMULATION_ARCH_MIPS_P5600MSA_H
@@ -19,5 +20,7 @@
 namespace neverd::emulation {
 llvm::Expected<std::unique_ptr<MIPSMSAExecutor>>
 createP5600MSAExecutor(Arch Target);
+llvm::Expected<std::unique_ptr<MIPSMSAExecutor>>
+createI6400MSAExecutor(Arch Target);
 } // namespace neverd::emulation
 #endif // NEVERD_EMULATION_ARCH_MIPS_P5600MSA_H

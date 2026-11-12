@@ -38,6 +38,8 @@ MIPSLifter::Encoding MIPSLifter::release6Encoding(uint32_t Word) const {
   const unsigned Op = Word >> 26, Fn = Word & 63, RT = (Word >> 16) & 31;
   // Reused majors must never enter the pre-r6 HI/LO, merge-load, COP1 or
   // branch-likely handlers. Only shared encodings are dispatched to that ISA.
+  if (Op == 17 && (((Word >> 21) & 31) == 9 || ((Word >> 21) & 31) == 13))
+    return Encoding{Word, 4}; // BC1EQZ/BC1NEZ have a physical delay slot.
   if (Op == 0 && Fn == 9) {
     if (((Word >> 11) & 31) == 0)
       Word = (Word & ~63u) | 8; // R6 JR is JALR zero,rs.
@@ -180,12 +182,103 @@ bool MIPSLifter::liftR6Compact(State &S, uint32_t Word,
   return true;
 }
 
+bool MIPSLifter::liftR6Float(State &S, uint32_t Word) const {
+  const unsigned Op = Word >> 26, Fmt = Word >> 21 & 31, FT = Word >> 16 & 31,
+                 FS = Word >> 11 & 31, FD = Word >> 6 & 31, Fn = Word & 63;
+  const auto FPR = [](unsigned R, uint16_t Bytes) {
+    return NdVar::reg(mipsreg::w(R), Bytes);
+  };
+  const auto StoreFPR = [&](unsigned R, NdVar Value) {
+    // StoreFPR(S/W) leaves the high 32 bits unpredictable even when a
+    // previous DMTC1 defined them. MTHC1 can define them subsequently.
+    if (Value.Size == 4) {
+      auto Unknown = S.makeTemp(S.Width);
+      S.emitIntrinsic(Intrinsic::MIPSUnpredictable, Unknown);
+      Value = S.binary(NdOp::CONCAT, S.resize(Unknown, 4), Value, 8);
+    }
+    S.emit(NdOp::COPY, FPR(R, 8), {Value});
+  };
+  if (Op == 49 || Op == 53 || Op == 57 || Op == 61) {
+    const unsigned Bytes = Op & 4 ? 8 : 4;
+    const auto Address = S.binary(NdOp::INT_ADD, S.read(Fmt),
+                                  NdVar::cst(int64_t(int16_t(Word)), S.Width));
+    if (Op & 8)
+      S.emit(NdOp::STORE, {}, {Address, FPR(FT, Bytes)});
+    else {
+      auto Value = S.makeTemp(Bytes);
+      S.emit(NdOp::LOAD, Value, {Address});
+      StoreFPR(FT, Value);
+    }
+    return true;
+  }
+  if (Op != 17)
+    return false;
+  if (Fmt < 8) {
+    if ((Word & 0x7ff) || ((Fmt == 1 || Fmt == 5) && S.Width != 8))
+      return false;
+    switch (Fmt) {
+    case 0:
+    case 1:
+    case 3: { // MFC1, DMFC1, MFHC1
+      auto Value = FPR(FS, Fmt == 0 ? 4 : 8);
+      if (Fmt == 3) {
+        Value = S.makeTemp(4);
+        S.emit(NdOp::SUBBYTES, Value, {FPR(FS, 8), NdVar::cst(4, 4)});
+      }
+      if (FT)
+        S.write(FT, Value);
+      else
+        S.emit(NdOp::NOP, {}, {}); // Move into the hardwired zero register.
+      return true;
+    }
+    case 4:
+    case 5: // MTC1, DMTC1
+      StoreFPR(FS, S.read(FT, Fmt == 4 ? 4 : 8));
+      return true;
+    case 7: // MTHC1 preserves the low word.
+      StoreFPR(FS, S.binary(NdOp::CONCAT, S.read(FT, 4), FPR(FS, 4), 8));
+      return true;
+    default:
+      return false;
+    }
+  }
+  if (Fmt != 16 && Fmt != 17)
+    return false;
+  const uint16_t Bytes = Fmt == 16 ? 4 : 8;
+  const auto X = FPR(FS, Bytes), Y = FPR(FT, Bytes), Z = NdVar::cst(0, Bytes);
+  const auto Sign = uint64_t{1} << (8 * Bytes - 1);
+  if (Fn == 16 || Fn == 20 || Fn == 23) {
+    const auto Predicate = Fn == 16 ? FPR(FD, Bytes) : Y;
+    const auto Bit = S.binary(NdOp::INT_AND, Predicate, NdVar::cst(1, Bytes));
+    const auto Set = S.binary(NdOp::INT_NOTEQUAL, Bit, Z, 1);
+    StoreFPR(FD, Fn == 16   ? S.select(Set, Y, X)
+                 : Fn == 20 ? S.select(Set, Z, X)
+                            : S.select(Set, X, Z));
+    return true;
+  }
+  if (FT)
+    return false;
+  if (Fn == 5 || Fn == 6 || Fn == 7) {
+    // Release 6 mandates ABS2008: ABS and NEG are non-arithmetic bit moves.
+    StoreFPR(FD, Fn == 6 ? X
+                         : S.binary(Fn == 5 ? NdOp::INT_AND : NdOp::INT_XOR, X,
+                                    NdVar::cst(Fn == 5 ? ~Sign : Sign, Bytes)));
+    return true;
+  }
+  if (Fn != 27)
+    return false;
+  StoreFPR(FD, S.floatClass(X));
+  return true;
+}
+
 bool MIPSLifter::liftRelease6(State &S, uint32_t Word) const {
   const unsigned Op = Word >> 26, RS = (Word >> 21) & 31,
                  RT = (Word >> 16) & 31;
   const unsigned RD = (Word >> 11) & 31, SA = (Word >> 6) & 31, Fn = Word & 63;
   const bool Wide = S.Width == 8;
 
+  if (Op == 17 || Op == 49 || Op == 53 || Op == 57 || Op == 61)
+    return liftR6Float(S, Word);
   if (Op == 15 || (Op == 29 && Wide && RS) ||
       (Op == 1 && Wide && (RT == 6 || RT == 30))) {
     const unsigned Shift = Op != 1 ? 16 : RT == 6 ? 32 : 48;

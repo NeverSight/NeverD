@@ -17,6 +17,17 @@
 
 namespace neverd {
 
+unsigned MIPSLifter::msaElementBytes(unsigned Tag) {
+  // ELM reserves all tags outside 00nnnn, 100nnn, 1100nn and 11100n.
+  if (Tag < 16)
+    return 1;
+  if ((Tag & 56) == 32)
+    return 2;
+  if ((Tag & 60) == 48)
+    return 4;
+  return (Tag & 62) == 56 ? 8 : 0;
+}
+
 NdVar MIPSLifter::State::vectorElement(unsigned Reg, unsigned Index,
                                        uint16_t Bytes) {
   auto Value = makeTemp(Bytes);
@@ -34,8 +45,36 @@ void MIPSLifter::State::writeVector(unsigned Reg,
   emit(NdOp::COPY, NdVar::reg(mipsreg::w(Reg), 16), {Elements[0]});
 }
 
+NdVar MIPSLifter::State::floatClass(NdVar X) {
+  const auto Bytes = X.Size;
+  const uint64_t ExpMask =
+      Bytes == 4 ? UINT32_C(0x7f800000) : UINT64_C(0x7ff0000000000000);
+  const uint64_t Fraction =
+      Bytes == 4 ? UINT32_C(0x7fffff) : UINT64_C(0x000fffffffffffff);
+  const auto Exp = binary(NdOp::INT_AND, X, NdVar::cst(ExpMask, Bytes));
+  const auto Frac = binary(NdOp::INT_AND, X, NdVar::cst(Fraction, Bytes));
+  const auto Z = NdVar::cst(0, Bytes);
+  const auto HasFrac = binary(NdOp::INT_NOTEQUAL, Frac, Z, 1);
+  const auto Special =
+      binary(NdOp::INT_EQUAL, Exp, NdVar::cst(ExpMask, Bytes), 1);
+  const auto SubOrZero =
+      select(HasFrac, NdVar::cst(16, Bytes), NdVar::cst(32, Bytes));
+  const auto Finite = select(binary(NdOp::INT_EQUAL, Exp, Z, 1), SubOrZero,
+                             NdVar::cst(8, Bytes));
+  const auto Class = select(Special, NdVar::cst(4, Bytes), Finite);
+  const auto Signed =
+      select(binary(NdOp::INT_SLESS, X, Z, 1), Class,
+             binary(NdOp::INT_LEFT, Class, NdVar::cst(4, Bytes)));
+  const auto Quiet =
+      binary(NdOp::INT_AND, Frac, NdVar::cst((Fraction + 1) / 2, Bytes));
+  return select(binary(NdOp::BOOL_AND, Special, HasFrac, 1),
+                select(binary(NdOp::INT_NOTEQUAL, Quiet, Z, 1),
+                       NdVar::cst(2, Bytes), NdVar::cst(1, Bytes)),
+                Signed);
+}
+
 bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
-  if (!HasMSA || S.Width != 4 || Mode == InstructionMode::MIPS16)
+  if (!HasMSA || Mode == InstructionMode::MIPS16)
     return false;
   const unsigned WD = (Word >> 6) & 31, WS = (Word >> 11) & 31,
                  WT = (Word >> 16) & 31;
@@ -55,40 +94,9 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
     }
     if (Id == Intrinsic::MIPSMSAFCLASS_W || Id == Intrinsic::MIPSMSAFCLASS_D) {
       const uint16_t Bytes = Id == Intrinsic::MIPSMSAFCLASS_W ? 4 : 8;
-      const uint64_t ExpMask =
-          Bytes == 4 ? UINT32_C(0x7f800000) : UINT64_C(0x7ff0000000000000);
-      const uint64_t Fraction =
-          Bytes == 4 ? UINT32_C(0x7fffff) : UINT64_C(0x000fffffffffffff);
-      const auto Select = [&](NdVar C, NdVar Yes, NdVar No) {
-        const auto V = S.makeTemp(Bytes);
-        S.emit(NdOp::SELECT, V, {C, Yes, No});
-        return V;
-      };
       std::array<NdVar, 4> Lanes;
-      for (unsigned I = 0; I < 16u / Bytes; ++I) {
-        const auto X = S.vectorElement(WS, I, Bytes);
-        const auto Exp = S.binary(NdOp::INT_AND, X, NdVar::cst(ExpMask, Bytes));
-        const auto Frac =
-            S.binary(NdOp::INT_AND, X, NdVar::cst(Fraction, Bytes));
-        const auto Z = NdVar::cst(0, Bytes);
-        const auto HasFrac = S.binary(NdOp::INT_NOTEQUAL, Frac, Z, 1);
-        const auto Special =
-            S.binary(NdOp::INT_EQUAL, Exp, NdVar::cst(ExpMask, Bytes), 1);
-        const auto SubOrZero =
-            Select(HasFrac, NdVar::cst(16, Bytes), NdVar::cst(32, Bytes));
-        const auto Finite = Select(S.binary(NdOp::INT_EQUAL, Exp, Z, 1),
-                                   SubOrZero, NdVar::cst(8, Bytes));
-        const auto Class = Select(Special, NdVar::cst(4, Bytes), Finite);
-        const auto Signed =
-            Select(S.binary(NdOp::INT_SLESS, X, Z, 1), Class,
-                   S.binary(NdOp::INT_LEFT, Class, NdVar::cst(4, Bytes)));
-        const auto Quiet = S.binary(NdOp::INT_AND, Frac,
-                                    NdVar::cst((Fraction + 1) / 2, Bytes));
-        Lanes[I] = Select(S.binary(NdOp::BOOL_AND, Special, HasFrac, 1),
-                          Select(S.binary(NdOp::INT_NOTEQUAL, Quiet, Z, 1),
-                                 NdVar::cst(2, Bytes), NdVar::cst(1, Bytes)),
-                          Signed);
-      }
+      for (unsigned I = 0; I < 16u / Bytes; ++I)
+        Lanes[I] = S.floatClass(S.vectorElement(WS, I, Bytes));
       S.writeVector(WD, llvm::MutableArrayRef(Lanes).take_front(16u / Bytes));
       return true;
     }
@@ -116,7 +124,7 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
   }
   if ((Word & 0xffff003f) == 0x783e0019) {
     S.emitIntrinsic(Intrinsic::MIPSWriteMSAControl, {},
-                    {NdVar::cst(WD, 1), S.read(WS)});
+                    {NdVar::cst(WD, 1), S.read(WS, 4)});
     return true;
   }
   switch (Word & 63) {
@@ -343,9 +351,9 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
   std::array<NdVar, 16> Values;
   for (unsigned I = 0; I != 16u / Bytes; ++I) {
     if (*Kind == Instruction::FillWord)
-      Values[I] = S.read(WS);
+      Values[I] = S.read(WS, 4);
     else if (*Kind == Instruction::InsertWord)
-      Values[I] = I == Index ? S.read(WS) : Lane(WD, I);
+      Values[I] = I == Index ? S.read(WS, 4) : Lane(WD, I);
     else if (CountBits) {
       auto Input = Lane(WS, I, Bytes);
       if (*Kind == Instruction::LeadingOneCount) {

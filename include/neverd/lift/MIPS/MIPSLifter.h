@@ -41,6 +41,7 @@ public:
 #define NEVERD_MIPS_PHYSICAL_FORM(Name, Offset, Text)                          \
   static constexpr unsigned Name##ID = MIPS_INS_ENDING + Offset;
 #include "neverd/lift/MIPS/MIPSPhysicalForms.def"
+  bool hasClassicDSP64() const;
   bool isDSPIndexedDoubleword(uint32_t Word) const;
   std::optional<uint32_t> microASEWord(uint32_t PhysicalWord) const;
   /// Resolve a normalized compact branch using the physical occurrence length.
@@ -78,6 +79,7 @@ private:
     NdVar accumulator(unsigned Bank);
     void writeAccumulator(unsigned Bank, NdVar Value);
     void discardHILO();
+    NdVar floatClass(NdVar X);
     NdVar vectorElement(unsigned Reg, unsigned Index, uint16_t Bytes);
     void writeVector(unsigned Reg, llvm::MutableArrayRef<NdVar> Elements);
     void requireWord(unsigned Register);
@@ -94,9 +96,11 @@ private:
   bool liftPCRelative(State &S, uint32_t Word, va_t BasePC) const;
   void liftMIPS16Frame(State &S, uint32_t Word) const;
   bool liftDSP(State &S, uint32_t Word) const;
+  bool liftDSP64Packed(State &S, uint32_t Word) const;
   bool liftDSPAdditional(State &S, uint32_t Word) const;
   bool liftMSA(State &S, uint32_t Word) const;
   bool liftMSAAdditional(State &S, uint32_t Word) const;
+  static unsigned msaElementBytes(unsigned Tag);
   bool liftMSAPermutation(State &S, uint32_t Word) const;
   enum class SequenceKind : uint8_t {
     None,
@@ -122,6 +126,7 @@ private:
   static bool isR6Compact(uint32_t Word);
   static bool isR6ConditionalCompact(uint32_t Word);
   bool liftR6Compact(State &S, uint32_t Word, bool ForbiddenFollower) const;
+  bool liftR6Float(State &S, uint32_t Word) const;
   bool liftRelease6(State &S, uint32_t Word) const;
   bool liftNonControl(State &S, Encoding Code, va_t BasePC) const;
   std::optional<Encoding> encoding(const cs_insn &Instruction) const;

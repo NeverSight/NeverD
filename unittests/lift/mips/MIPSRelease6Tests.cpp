@@ -797,6 +797,64 @@ TEST_P(MIPSRelease6, IntegerKernelsMatchRelease6HardwareModel) {
 }
 #endif
 
+TEST_P(MIPSRelease6, FR1TransfersPreserveOnlyArchitecturallyDefinedBits) {
+  NdOpEmulator E(Image);
+  E.setStrictMode(true);
+  E.setRegister(mipsreg::A0, 0x80000001);
+  E.setRegister(mipsreg::A1, 0xfff12345);
+  run(0x44841000, E); // mtc1 a0,f2
+  EXPECT_FALSE(E.getRegister(mipsreg::w(2)));
+  run(0x44021000, E); // mfc1 v0,f2
+  EXPECT_EQ(E.getRegister(mipsreg::V0),
+            isMIPS64(GetParam()) ? 0xffffffff80000001ull : 0x80000001ull);
+  run(0x44e51000, E); // mthc1 a1,f2
+  EXPECT_EQ(E.getRegister(mipsreg::w(2)), 0xfff1234580000001ull);
+  run(0x44621000, E); // mfhc1 v0,f2
+  EXPECT_EQ(E.getRegister(mipsreg::V0),
+            isMIPS64(GetParam()) ? 0xfffffffffff12345ull : 0xfff12345ull);
+  if (isMIPS64(GetParam())) {
+    run(0x44221000, E); // dmfc1 v0,f2
+    EXPECT_EQ(E.getRegister(mipsreg::V0), 0xfff1234580000001ull);
+  }
+}
+TEST_P(MIPSRelease6, ScalarClassAndSelectorsUseRawNaNsAndPredicateBitZero) {
+  NdOpEmulator E(Image);
+  E.setStrictMode(true);
+  for (unsigned Size : {4u, 8u}) {
+    const uint64_t Sign = uint64_t(1) << (Size * 8 - 1),
+                   Inf = Size == 4 ? 0x7f800000ull : 0x7ff0000000000000ull;
+    const uint64_t Quiet = (Sign - Inf) / 2;
+    const uint64_t Cases[] = {Inf | 1,    Inf | Quiet,
+                              Sign | Inf, Sign | (Inf >> 1),
+                              Sign | 1,   Sign,
+                              Inf,        Inf >> 1,
+                              1,          0};
+    for (unsigned I = 0; I < std::size(Cases); ++I) {
+      E.setRegister(mipsreg::w(2), Cases[I]);
+      run((Size == 4 ? 0x4600111bu : 0x4620111bu), E); // class.fmt f4,f2
+      run(0x44022000, E);
+      EXPECT_EQ(E.getRegister(mipsreg::V0), uint64_t(1) << I);
+    }
+  }
+  E.setRegister(mipsreg::w(2), 0x7ff0123456789abc);
+  E.setRegister(mipsreg::w(3), 0x8000000000000000);
+  E.setRegister(mipsreg::w(4), 2);
+  run(0x46231110, E); // sel.d f4,f2,f3
+  EXPECT_EQ(E.getRegister(mipsreg::w(4)), 0x7ff0123456789abcull);
+  E.setRegister(mipsreg::w(4), 3);
+  run(0x46231110, E);
+  EXPECT_EQ(E.getRegister(mipsreg::w(4)), 0x8000000000000000ull);
+  run(0x46201107, E); // neg.d preserves the NaN payload
+  EXPECT_EQ(E.getRegister(mipsreg::w(4)), 0xfff0123456789abcull);
+  EXPECT_EQ(decode(0x45220003), 8); // bc1eqz f2,PC+16
+  ASSERT_TRUE(Unit.HasDelaySlot);
+  Ops.clear();
+  Decode.liftUnitToLow(Unit, Ops);
+  EXPECT_TRUE(std::any_of(Ops.begin(), Ops.end(), [](const LowOp &O) {
+    return O.Opcode == NdOp::COND_BR && O.Inputs[0].Offset == 0x10010;
+  }));
+}
+
 INSTANTIATE_TEST_SUITE_P(BothWidthsAndByteOrders, MIPSRelease6,
                          ::testing::Values(Arch::MIPS32, Arch::MIPS32EL,
                                            Arch::MIPS64, Arch::MIPS64EL));
