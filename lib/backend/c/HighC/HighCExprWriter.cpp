@@ -80,6 +80,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/SaveAndRestore.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -2683,9 +2684,49 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     throw std::runtime_error("The header's record call ABI is unsupported");
   if (RecordCall)
     PrintedArgs = RecordCall->Parameters.size();
+  // Whether the code of \p Callee, a definition this unit prints, reads its
+  // parameter \p Index anywhere, or may hand it to a callee no operation
+  // names.
+  const auto ReadsParameter = [](const HighFunc &Callee, size_t Index) {
+    bool Reads = false;
+    HighExprSet Seen;
+    walkStmts(Callee.Body, [&](const HighStmt &Stmt) {
+      forEachExpr(Stmt, [&](const ExprPtr &Root) {
+        std::vector<const HighExpr *> Pending{Root.get()};
+        while (!Reads && !Pending.empty()) {
+          const HighExpr *Value = Pending.back();
+          Pending.pop_back();
+          if (!Value || !Seen.insert(Value).second)
+            continue;
+          // A call through a pointer passes on whatever the argument
+          // registers hold, the ones its recovered list leaves out too.
+          Reads =
+              (Value->Kind == ExprKind::Call && Value->IsIndirectCall) ||
+              ((Value->Kind == ExprKind::Var || Value->Kind == ExprKind::Phi) &&
+               Value->Var.Kind == MedVar::Param &&
+               Value->Var.Id == static_cast<int>(Index));
+          Value->forEachChildExpr(
+              [&](const ExprPtr &Child) { Pending.push_back(Child.get()); });
+        }
+      });
+    });
+    return Reads;
+  };
+  // An argument that is only available on some paths: where its text starts
+  // and the flag that says so.
+  size_t DeferredBegin = 0;
+  std::string DeferredFlag;
+  const auto CloseDeferred = [&] {
+    if (DeferredFlag.empty())
+      return;
+    S = S.substr(0, DeferredBegin) + "(" + DeferredFlag + " ? (" +
+        S.substr(DeferredBegin) + ") : 0)";
+    DeferredFlag.clear();
+  };
   // The string an argument points to reads beside it, before the comma.
   std::string Note;
   for (size_t I = 0; I < PrintedArgs; ++I) {
+    CloseDeferred();
     S += Note;
     if (I > 0)
       S += ", ";
@@ -2727,6 +2768,24 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
           0, Op->Type && Op->Type->Size ? Op->Type->Size : 8);
       Op = Missing.get();
     }
+    // A register only some paths to the call set is known on those alone
+    // (`v_known ? v : unknown`).  Where the callee's code never reads the
+    // parameter, nothing observes the others: it passes the value where it
+    // has one, and zero as an unread parameter does where it has none.
+    llvm::SaveAndRestore<bool> Unobserved(ReadingDeferredPayload,
+                                          ReadingDeferredPayload);
+    if (const HighExpr *Value = peelIntegerViewOps(Op);
+        Defined && !RecordCall && Defined->ConversionFailure.empty() &&
+        !Defined->AnalysisOnly && Source < Defined->Params.size() && Value &&
+        (Value->Kind == ExprKind::Var || Value->Kind == ExprKind::Phi))
+      if (const auto Flag =
+              DeferredUnknownFlags.find(copyForwardName(varName(Value->Var)));
+          Flag != DeferredUnknownFlags.end() && !ReadingDeferredPayload &&
+          !ReadsParameter(*Defined, Source)) {
+        DeferredBegin = S.size();
+        DeferredFlag = Flag->second;
+        ReadingDeferredPayload = true;
+      }
     // <excpt.h>'s GetExceptionInformation() points to its own
     // EXCEPTION_POINTERS, which the callee may take as a record of the unit's
     // own: the pointer converts through void *.
@@ -3146,6 +3205,7 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     }
     S += Arg;
   }
+  CloseDeferred();
   S += Note;
   S += ")";
   if (RecordCall && RecordCall->FloatingResult) {
