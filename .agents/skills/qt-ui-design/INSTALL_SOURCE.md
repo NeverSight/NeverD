@@ -21,7 +21,10 @@ profile's "Languages and direction" section holds its rules. Section 1.7 of
 that checklist are NeverD additions from the review of Binary comparison on
 2026-11-12, measured against the sources of Windows 11's, Fluent 2's and
 Visual Studio Code's control states; the profile's "Control states" and
-"Judging a look" sections hold NeverD's values and the user's verdicts. The
+"Judging a look" sections hold NeverD's values and the user's verdicts.
+Section 1.8 and the every-window, default-at-open and one-drawing items come
+from the audit of every NeverD window on the same day; the profile's
+"Auditing every window" section holds what it found and what it left. The
 upstream copyright, license, and general guidance are retained. This
 file records installation provenance and those local additions. The local
 `references/macos-qt.md` guide records Cocoa menu defaults, precision input,
