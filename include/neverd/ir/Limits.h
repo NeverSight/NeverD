@@ -877,6 +877,12 @@ inline constexpr int
 // lib/ir/med/abi/MedVariadic.cpp
 inline constexpr int kMedVariadicEntrySpDeltaDepth0Default = 64;
 
+// lib/ir/med/abi/AArch64/MedVariadicAArch64.cpp
+/// Definitions followed from a frame address to the entry stack pointer.
+inline constexpr int kMedVariadicAArch64FrameOffsetsDepthLimit = 128;
+/// Offsets a joined frame address may have before it counts as unknown.
+inline constexpr size_t kMedVariadicAArch64FrameOffsetsMaxChoices = 32;
+
 // lib/ir/med/abi/AArch64/MedVariadicDarwin.cpp
 inline constexpr int
     kMedVariadicDarwinHasDarwinVariadicPrologueThruCopyDepthLimit = 32;
