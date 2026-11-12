@@ -1214,6 +1214,35 @@ def truncated_product_corpus(width, count):
 
 
 
+def residue_view_corpus(width, count):
+    """High-bit changes disguise repeated coordinates in modular products."""
+    axes = ("(x^y)", "((x&z)^(y|w))", "((x+y)^(z&w))")
+    mask = (1 << width) - 1
+    observed = min(width, max(4, width * 2 // 3))
+    rows = []
+    for case in range(count):
+        rng = random.Random(0x49280 + width * 773 + case * 1069)
+        degree = (23, 47, 89, 137)[case % 4]
+        shift = max(1, observed // (3 + case % 4))
+        factors = []
+        for i in range(degree):
+            word = axes[(i + case) % (1 + case % 3)]
+            zeros = shift + i % 2
+            bits = max(1, observed - zeros)
+            high = ((rng.getrandbits(width - bits) | 1) << bits) & mask
+            low = (1 << bits) - 1
+            view = (f"({word}&{low | high})", f"({word}|{high})",
+                    f"({word}^{high})", f"(({word}&{low})|{high})",
+                    f"(({word}+({1 << bits})*(z^w)))")[(i + case) % 5]
+            offset = rng.randrange(-31, 32) | 1
+            weight = (rng.randrange(-31, 32) | 1) << zeros
+            factors.append(f"({offset}+({weight})*{view})")
+        tail = ("(x|y)+(x&y)+(z^w)", "3*x+5*y+7*(z^w)",
+                "(z^w)*(x|y)")[case % 3]
+        rows.append(f"({3 << (width - observed)}*" + "*".join(factors) + f")+({tail})")
+    return rows
+
+
 def affine_product_corpus(width, count):
     """Repeated words hidden under up to three affine coordinate changes."""
     axes = ("(x^y)", "((x&z)^(y|w))", "((x+y)^(z&w))")
@@ -1463,7 +1492,8 @@ def main():
                  "narrow-product-cross-terms", "masked-product-window",
                  "residue-power", "residue-quotient", "residue-subgroup",
                  "sparse-linear-mixed-degree", "upper-perturbation", "masked-perturbation",
-                 "mixed-perturbation", "truncated-product", "integer-product", "affine-product"),
+                 "mixed-perturbation", "truncated-product", "integer-product", "affine-product",
+                 "residue-view"),
         default="complement",
     )
     args = parser.parse_args()
@@ -1484,6 +1514,7 @@ def main():
             "truncated-product": (8, 16, 32, 63, 65, 129, 257),
             "integer-product": (8, 16, 31, 64, 97, 193, 257),
             "mixed-perturbation": (8, 16, 32, 64, 65, 129, 257),
+            "residue-view": (9, 16, 32, 65, 97, 257, 513),
             "affine-product": (8, 9, 16, 32, 65, 97, 257, 513),
             "upper-perturbation": (8, 16, 32, 64, 65, 97, 129, 257),
             "masked-perturbation": (9, 24, 63, 127, 256),
@@ -1521,6 +1552,7 @@ def main():
                 "masked-perturbation": masked_perturbation_corpus,
                 "mixed-perturbation": mixed_perturbation_corpus,
                 "affine-product": affine_product_corpus,
+                "residue-view": residue_view_corpus,
                 "truncated-product": truncated_product_corpus,
                 "integer-product": integer_product_corpus,
             }[args.family]

@@ -15,6 +15,7 @@
 #include "neverd/solver/SymSynthVerifier.h"
 #include "neverd/symbolic/SymParse.h"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <random>
@@ -362,6 +363,13 @@ TEST(SymMBAResidue, PreservesCompactReadingsOfTheLastTwoBits) {
     const char *Source;
   };
   const Example Cases[] = {
+      {32, 16,
+       "(768*(8+(819200)*(y|z))*(14+(507904)*((x&z)*(y|w)))*(6+(188416)*(x^y))"
+       "*(12+(950272)*(x+(w^y)))*(1+(278528)*(x+(w^y)))*(5+(57344)*((x&z)*(y|w"
+       ")))*(9+(90112)*(x^y))*(1+(-16384)*(z&w))*(3+(81920)*(x+(w^y)))*(1+(-50"
+       "7904)*(~(w|x)))*(4+(-622592)*(~(w|x)))*(2+(311296)*((x&z)*(y|w)))*(3+("
+       "1146880)*(x^y))*(10+(-409600)*(z&w))*(11+(106496)*(y|z))*(13+(-53248)*"
+       "(z&w))*(7+(-114688)*(~(w|x))))+(x^y)+2*(x&y)"},
       {9, 17,
        "(48*(147+(-136*(z+(x&w))))*(173+(80*((w^x)*(y|z))))*"
        "(159+((y^w)&144))*(96+((z+(x&w))&504))*(43+((x|y)&488))*"
@@ -382,6 +390,20 @@ TEST(SymMBAResidue, PreservesCompactReadingsOfTheLastTwoBits) {
     const auto Input = parseSymExpr(Ctx, Example.Source, Example.Width);
     ASSERT_TRUE(Input);
     MBAOptions Opt;
+    if (Example.Width == 32) {
+      // The full top-column reading also fits a short interactive budget.
+      SymContext Limited;
+      const auto Parsed = parseSymExpr(Limited, Example.Source, Example.Width);
+      ASSERT_TRUE(Parsed);
+      Opt.MaxWork = 256;
+      const auto Compact = simplifyMBADeep(Limited, Parsed.Root, Opt);
+      EXPECT_LE(Compact.SizeAfter, Example.Cost);
+      if (solver::proofBackendAvailable(solver::ProofBackend::Z3)) {
+        solver::SymSynthVerifier Verify({}, solver::ProofBackend::Z3, 5000);
+        EXPECT_EQ(Verify(Limited, Parsed.Root, Compact.Expr),
+                  SynthVerification::Equivalent);
+      }
+    }
     Opt.MaxWork = 65536;
     const auto R = simplifyMBADeep(Ctx, Input.Root, Opt);
     EXPECT_LE(R.SizeAfter, Example.Cost);
@@ -923,6 +945,201 @@ TEST(SymMBAResidue, ProvesNestedAffineCoordinatesAtFullWidth) {
     const auto Output =
         detail::foldProductResidues(Ctx, Input, Budget, Storage);
     ASSERT_LT(Ctx.readabilityCost(Output), Ctx.readabilityCost(Input));
+    solver::SymSynthVerifier Verify({}, solver::ProofBackend::Z3, 5000);
+    EXPECT_EQ(Verify(Ctx, Input, Output), SynthVerification::Equivalent);
+  }
+}
+
+TEST(SymMBAResidue, GroupsCoordinatesOnlyThroughTheirLiveLowBits) {
+  std::mt19937_64 Random(0xa1685);
+  for (unsigned Width : {6u, 9u, 32u, 65u, 257u, 513u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto U = Ctx.mkXor(X, Y);
+    const unsigned Observed = Width == 6 ? 6 : Width * 2 / 3;
+    const auto Scale = llvm::APInt(Width, 3).shl(Width - Observed);
+    for (unsigned Variant = 0; Variant < 4; ++Variant) {
+      SCOPED_TRACE(Variant);
+      const bool Neighbor = Variant & 1, AbsorbedScale = Variant & 2;
+      llvm::SmallVector<SymRef, 64> Factors;
+      if (!AbsorbedScale)
+        Factors.push_back(Ctx.mkConst(Scale));
+      for (unsigned I = 0; I < 47; ++I) {
+        const unsigned Shift = std::max(1u, Observed / 5) + I % 2;
+        const unsigned Bits = Observed - Shift;
+        const auto Low = llvm::APInt::getLowBitsSet(Width, Bits);
+        const auto K = Ctx.mkConst(Neighbor && I == 0 ? Low.lshr(1) : Low);
+        const auto High = Ctx.mkConst(~Low);
+        SymRef View;
+        switch (I % 5) {
+        case 0:
+          View = Ctx.mkAnd(U, K);
+          break;
+        case 1:
+          View = Ctx.mkOr(U, High);
+          break;
+        case 2:
+          View = Ctx.mkXor({X, Y, K});
+          break;
+        case 3:
+          View = Ctx.mkXor({X, Y, High});
+          break;
+        default:
+          View = Ctx.mkAdd(
+              {X, Ctx.mkConst(Width, 3),
+               Ctx.mkMul(Ctx.mkConst(llvm::APInt::getOneBitSet(Width, Bits)),
+                         Y)});
+        }
+        auto Offset = llvm::APInt(Width, 2 * I + 1, false, true);
+        auto Weight = Offset.shl(Shift);
+        if (AbsorbedScale && I == 0) {
+          Offset *= Scale;
+          Weight *= Scale;
+        }
+        Factors.push_back(Ctx.mkAdd(Ctx.mkConst(Offset),
+                                    Ctx.mkMul(Ctx.mkConst(Weight), View)));
+      }
+      const auto Input = Ctx.mkMul(Factors);
+      MBAOptions Opts;
+      Opts.MaxWork = 65536;
+      const auto R = simplifyMBADeep(Ctx, Input, Opts);
+      ASSERT_LT(R.Work, Opts.MaxWork);
+      ASSERT_LT(R.SizeAfter, 100u);
+      SymEvalPlan Result(Ctx, R.Expr);
+      auto Check = [&](llvm::APInt A, llvm::APInt B) {
+        auto Expected = Scale;
+        for (unsigned I = 0; I < 47; ++I) {
+          const unsigned Shift = std::max(1u, Observed / 5) + I % 2;
+          const unsigned Bits = Observed - Shift;
+          const auto Low = llvm::APInt::getLowBitsSet(Width, Bits);
+          auto V = A ^ B;
+          switch (I % 5) {
+          case 0:
+            V &= Neighbor && I == 0 ? Low.lshr(1) : Low;
+            break;
+          case 1:
+            V |= ~Low;
+            break;
+          case 2:
+            V ^= Low;
+            break;
+          case 3:
+            V ^= ~Low;
+            break;
+          default:
+            V = A + 3 + B.shl(Bits);
+          }
+          Expected *= 2 * I + 1 +
+                      V * llvm::APInt(Width, 2 * I + 1, false, true).shl(Shift);
+        }
+        EXPECT_EQ(Result.eval({A, B}), Expected);
+      };
+      if (Width == 6) {
+        for (unsigned A = 0; A < 64; ++A)
+          for (unsigned B = 0; B < 64; ++B)
+            Check(llvm::APInt(Width, A), llvm::APInt(Width, B));
+      } else {
+        auto Word = [&] {
+          llvm::APInt V(Width, 0);
+          for (unsigned Bit = 0; Bit < Width; Bit += 64)
+            V |= llvm::APInt(Width, Random(), false, true).shl(Bit);
+          return V;
+        };
+        for (unsigned I = 0; I < 48; ++I)
+          Check(Word(), Word());
+      }
+      detail::WorkBudget Short(128);
+      size_t Storage = 256;
+      const auto Part = detail::foldProductResidues(Ctx, Input, Short, Storage);
+      EXPECT_EQ(Part, Input);
+      EXPECT_LE(Short.used(), 128u);
+    }
+  }
+}
+
+TEST(SymMBAResidue, ProvesLivePrefixAndNeighborAtFullWidth) {
+  if (!solver::proofBackendAvailable(solver::ProofBackend::Z3))
+    GTEST_SKIP() << "Z3 unavailable";
+  for (unsigned Width : {16u, 65u, 257u}) {
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto U = Ctx.mkXor(X, Y);
+    for (bool Neighbor : {false, true}) {
+      llvm::SmallVector<SymRef, 16> Factors{
+          Ctx.mkConst(llvm::APInt(Width, 3).shl(Width - 7))};
+      for (unsigned I = 0; I < 13; ++I) {
+        const auto Mask =
+            llvm::APInt::getLowBitsSet(Width, Neighbor && I == 0 ? 4 : 5);
+        auto V = I % 2 ? Ctx.mkXor(U, Ctx.mkConst(~Mask))
+                       : Ctx.mkAnd(U, Ctx.mkConst(Mask));
+        Factors.push_back(
+            Ctx.mkAdd(Ctx.mkConst(Width, 2 * I + 1),
+                      Ctx.mkMul(Ctx.mkConst(Width, (2 * I + 1) * 4), V)));
+      }
+      const auto Input = Ctx.mkMul(Factors);
+      detail::WorkBudget Budget(65536);
+      size_t Storage = 1 << 20;
+      const auto Output =
+          detail::foldProductResidues(Ctx, Input, Budget, Storage);
+      ASSERT_LT(Ctx.readabilityCost(Output), Ctx.readabilityCost(Input));
+      solver::SymSynthVerifier Verify({}, solver::ProofBackend::Z3, 5000);
+      EXPECT_EQ(Verify(Ctx, Input, Output), SynthVerification::Equivalent);
+    }
+  }
+}
+
+TEST(SymMBAResidue, StreamsTopColumnAndRetainsLowerCofactors) {
+  if (!solver::proofBackendAvailable(solver::ProofBackend::Z3))
+    GTEST_SKIP() << "Z3 unavailable";
+  constexpr unsigned Width = 32;
+  SymContext Ctx;
+  const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+  for (unsigned Delta : {0u, 1u}) {
+    // The literal product has ten low zeros. The second factor removes two
+    // of those zeros from its cofactor; lowering its shift by one makes bit
+    // 30 live even though every pair of disturbances still vanishes.
+    const auto A =
+        Ctx.mkAdd(Ctx.mkConst(Width, 2),
+                  Ctx.mkMul(Ctx.mkConst(Width, 1u << 22), Ctx.mkNot(X)));
+    const auto B =
+        Ctx.mkAdd(Ctx.mkConst(Width, 12),
+                  Ctx.mkMul({Ctx.mkConst(Width, 1u << (23 - Delta)), X, Y}));
+    const auto C =
+        Ctx.mkAdd(Ctx.mkConst(Width, 13),
+                  Ctx.mkMul(Ctx.mkConst(Width, 1u << 21), Ctx.mkXor(X, Y)));
+    const auto Input = Ctx.mkMul({Ctx.mkConst(Width, 128), A, B, C});
+    detail::WorkBudget Budget(65536);
+    size_t Storage = 1 << 20;
+    const auto Output =
+        detail::foldHighProductTerms(Ctx, Input, Budget, Storage, nullptr);
+    ASSERT_LT(Ctx.readabilityCost(Output), Ctx.readabilityCost(Input));
+    solver::SymSynthVerifier Verify({}, solver::ProofBackend::Z3, 5000);
+    EXPECT_EQ(Verify(Ctx, Input, Output), SynthVerification::Equivalent);
+  }
+}
+
+TEST(SymMBAResidue, ProvesColumnCofactorsWithMultipleOrMissingPartners) {
+  if (!solver::proofBackendAvailable(solver::ProofBackend::Z3))
+    GTEST_SKIP() << "Z3 unavailable";
+  SymContext Ctx;
+  constexpr unsigned Width = 32;
+  const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+  const auto Z = Ctx.mkVar("z", Width), W = Ctx.mkVar("w", Width);
+  const auto Sign = Ctx.mkConst(llvm::APInt::getSignMask(Width));
+  for (unsigned Shape : {0u, 1u, 2u}) {
+    const std::array Words{Shape == 1 ? Z : X, Ctx.mkOr(X, Y),
+                           Ctx.mkAnd(Shape == 2 ? X : Y, Z),
+                           Ctx.mkAnd(Shape == 2 ? X : Y, W)};
+    llvm::SmallVector<SymRef, 4> Factors;
+    for (auto V : Words)
+      Factors.push_back(Ctx.mkAdd(Ctx.mkConst(Width, 1), Ctx.mkMul(Sign, V)));
+    const auto Input = Ctx.mkMul(Factors);
+    detail::WorkBudget Budget(4096);
+    size_t Storage = 8192;
+    const auto Output =
+        detail::foldHighProductTerms(Ctx, Input, Budget, Storage, nullptr);
+    EXPECT_LT(Ctx.readabilityCost(Output), Ctx.readabilityCost(Input));
     solver::SymSynthVerifier Verify({}, solver::ProofBackend::Z3, 5000);
     EXPECT_EQ(Verify(Ctx, Input, Output), SynthVerification::Equivalent);
   }

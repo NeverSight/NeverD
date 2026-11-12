@@ -1274,6 +1274,8 @@ Per i fattori con la stessa espressione `u`, gli zeri finali dei coefficienti de
 
 Prima di raggruppare i fattori, le espressioni affini annidate vengono composte alla precisione osservabile. Il budget del calcolo polinomiale segue la precisione effettiva dei coefficienti. I gruppi già ricostruiti restano fattorizzati accanto a variabili scalate o termini XOR indipendenti; un fattore diretto condiviso o una partizione AND consente ancora la ricostruzione annidata.
 
+Un prodotto può raggruppare forme diverse di una parola se coincidono i bit bassi osservati. Una maschera o un addendo si elimina solo se non cambia alcun bit osservato. Se tutti i pesi hanno almeno `s` zeri finali, il coefficiente di grado `k` è divisibile per `2^(k*s)`: alla precisione `P`, il quoziente richiede solo `P-k*s` bit. Se tutti i termini non costanti del prodotto linearizzato incidono solo sul bit di segno, le loro parole si combinano con XOR. Un prodotto già fattorizzato conserva i fattori che cambiano bit osservati; la ricerca di fattori comuni può riprendere in presenza di altri addendi.
+
 Il rendering usa una visita iterativa in postordine, senza ordinare i nodi, e stampa direttamente le foglie. Se la classificazione esistente non richiede ingressi nascosti, ingressi per maschere letterali o riscritture di complementi aritmetici, l’astrazione MBA riutilizza il DAG originale. La verifica indipendente delle identità e il conteggio del lavoro restano invariati.
 
 Gli offset e i fattori letterali di una base affine già opaca costruiscono direttamente i coefficienti, evitando un albero temporaneo. I figli lineari mantengono la visita generale; memoria del risultato e operazioni sulle parole sono conteggiate prima di pubblicare una relazione completa.

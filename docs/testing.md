@@ -4200,6 +4200,14 @@ factors with nested affine coordinates, scaled XOR tails and widths through
 limited work/storage, exhaust a six-bit input pair, and prove nested
 coordinates at full width with Z3. An additional 63-factor x64 fixture
 exercises two affine layers through both CLI and GUI worker source paths.
+Use `--family residue-view --count 12` for 84 products with 23 to 137 factors
+at widths from 9 to 513 bits. Masks and high addends disguise the coordinates.
+Native tests change a single observed bit, exhaust a six-bit input pair and
+check full-width equivalence with Z3. Both an outer scale and a scale already
+multiplied into one factor must preserve the same observations. A 63-factor executable uses these masks
+through CLI and GUI worker source paths. The 32-bit top-column regression
+requires the same 16-node reading at a 256-unit work limit and at the usual
+limit; Z3 verifies the short-budget result.
 For latency comparisons, retain per-run and pooled per-input P95, separate
 thread CPU from wall time, and include same-binary A/A controls. Pooling input
 medians can change the sample at the 95th percentile and reverse the apparent
