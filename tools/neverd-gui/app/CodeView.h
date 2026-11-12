@@ -122,6 +122,9 @@ public:
   /// Changes when a load or clear replaces this source document. Hiding a
   /// complete document cancels requests without replacing its contents.
   quint64 documentVersion() const { return DocumentVersion; }
+  /// The layouts its lines took from the lines they replaced, which read the
+  /// same (rebuildLines).
+  quint64 layoutsKept() const { return layoutsKept_; }
   /// All pages of this document arrived successfully. Error text and a
   /// cancelled or partially loaded document are not exportable source.
   bool complete() const { return complete_ && !loading_ && !interrupted_; }
@@ -376,6 +379,7 @@ private:
   /// The lines shown before the page was read again, whose layouts the lines
   /// that read the same take (rebuildLines); let go of when it is whole.
   QList<Line> linesBefore_;
+  quint64 layoutsKept_ = 0;
   bool foldPreludeAfterLoad_ = true;
   bool foldDetailsAfterLoad_ = true;
   QSet<QString> blocksAfterLoad_;

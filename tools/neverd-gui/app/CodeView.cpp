@@ -1362,11 +1362,11 @@ void CodeText::rebuildLines(bool append) {
   if (!linesBefore_.isEmpty()) {
     const auto count = std::min(linesBefore_.size(), lines_.size());
     for (qsizetype i = 0; i < count; ++i)
-      lines_[i].styled.adoptLayout(linesBefore_[i].styled);
+      layoutsKept_ += lines_[i].styled.adoptLayout(linesBefore_[i].styled);
     // Whole: the rest of what it showed is let go of.
     if (!loading_ || refreshPages_) {
       for (qsizetype i = 1; i <= count; ++i)
-        lines_[lines_.size() - i].styled.adoptLayout(
+        layoutsKept_ += lines_[lines_.size() - i].styled.adoptLayout(
             linesBefore_[linesBefore_.size() - i].styled);
       linesBefore_.clear();
     }

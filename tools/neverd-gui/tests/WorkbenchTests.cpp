@@ -7720,8 +7720,10 @@ private slots:
     QTRY_COMPARE(assembly->currentFunction(),
                  std::optional<Address>(Base + 32));
     bench.action(ActionId::ViewPseudocode)->trigger();
+    // The window opens once the listing's jump has landed.
+    QTRY_VERIFY_WITH_TIMEOUT(bench.codeView(QStringLiteral("source")),
+                             OpenTimeoutMs);
     auto *view = bench.codeView(QStringLiteral("source"));
-    QVERIFY(view);
     auto *code = view->text();
     QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 2,
                              OpenTimeoutMs);
@@ -7751,6 +7753,10 @@ private slots:
     });
     const auto taken = bench.session.analysisPagesTaken();
     const auto requests = ListingViewTestAccess::requests(*listing);
+    // Painted, so that its lines have layouts to lend.
+    QVERIFY(QTest::qWaitForWindowExposed(bench.window.get()));
+    QVERIFY(!code->viewport()->grab().isNull());
+    const auto layouts = code->layoutsKept();
     bench.session.setComment(Base + 32, QStringLiteral("shown at once"));
     QTRY_VERIFY_WITH_TIMEOUT(heard == 1, OpenTimeoutMs);
     QVERIFY2(shown.contains(QStringLiteral("shown at once")),
@@ -7759,6 +7765,8 @@ private slots:
     QCOMPARE(asked, requests + 1);
     QCOMPARE(askedBeforeTaking, requests + 1);
     QCOMPARE(bench.session.analysisPagesTaken(), taken + 1);
+    // The lines the edit left as they read took the layouts built for them.
+    QVERIFY(code->layoutsKept() > layouts);
     // Each asks once: the word that follows, to everyone, reads nothing again.
     QTRY_VERIFY_WITH_TIMEOUT(ListingViewTestAccess::settled(*listing) &&
                                  !bench.session.queries().hasPending(),
@@ -9895,8 +9903,11 @@ private slots:
           bench.window->disassembly()->currentFunction().has_value(),
           OpenTimeoutMs);
       bench.action(ActionId::ViewPseudocode)->trigger();
+      // Where the listing's jump is still on its way, the window opens once
+      // it lands (MainWindow::showPseudocode).
+      QTRY_VERIFY_WITH_TIMEOUT(bench.codeView(QStringLiteral("source")),
+                               OpenTimeoutMs);
       auto *view = bench.codeView(QStringLiteral("source"));
-      QVERIFY(view);
       target = view->text()->viewport();
     } else if (targetName == QLatin1String("output"))
       target = bench.window->findChild<OutputWindow *>()
@@ -11399,10 +11410,15 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(
         !readAll(path + ".neverd/renames.json").contains("taken_back_at_once"),
         OpenTimeoutMs);
-    // A step no history read is on its way for is refused as before.
+    // A step no history read is on its way for is refused as before: once
+    // what the session reads behind the edits is in, nothing has changed.
     bench.session.undo();
     QTest::qWait(50);
-    QVERIFY(bench.session.canRedo() && !bench.session.queries().hasPending());
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    QVERIFY(bench.session.canRedo() && !bench.session.canUndo());
+    QVERIFY(
+        !readAll(path + ".neverd/renames.json").contains("taken_back_at_once"));
   }
 
   void undoTakesBackANameAfterAComment() {
