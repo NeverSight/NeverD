@@ -165,6 +165,14 @@ private:
             });
           }
         });
+      // A call assigns its intrinsic's further outputs as well.
+      const HighExpr *Call =
+          S.Kind == StmtKind::Call ? S.CallExpr.get() : S.Val.get();
+      if (Call && Call->Kind == ExprKind::Call)
+        for (const MedVar &Output : Call->IntrinsicOutputs)
+          Assigned.insert(highSourceLocalIdentity(Output));
+      if (S.Kind == StmtKind::Assign && S.Dst && S.Dst->Kind == ExprKind::Phi)
+        Assigned.insert(highSourceLocalIdentity(S.Dst->Var));
       if (S.Kind != StmtKind::Assign || !S.Dst || S.Dst->Kind != ExprKind::Var)
         return;
       Assigned.insert(highSourceLocalIdentity(S.Dst->Var));
@@ -596,12 +604,16 @@ private:
   }
 
   /// An entry value of a register or flag the function neither receives as
-  /// a parameter nor ever assigns, which the C prints as unknown.
+  /// a parameter nor ever assigns, which the C prints as unknown.  So is a
+  /// temporary nothing assigns: the bytes of an incoming register a partial
+  /// write keeps where the register is no parameter (i386 `mov cx, imm`
+  /// before any write of ECX), whose entry marker lowering drops.
   bool unknownLeaf(const HighExpr &E) const {
     if (E.Kind == ExprKind::Undef)
       return true;
     if (E.Kind != ExprKind::Var ||
-        (E.Var.Kind != MedVar::Reg && E.Var.Kind != MedVar::Flag) ||
+        (E.Var.Kind != MedVar::Reg && E.Var.Kind != MedVar::Flag &&
+         E.Var.Kind != MedVar::Temp) ||
         E.Var.SSAVer != 0 || E.Var.Id < 0 ||
         Assigned.count(highSourceLocalIdentity(E.Var)) ||
         isSyntheticEntryStackPointer(E.Var, Func, Architecture))

@@ -28,14 +28,14 @@ public:
     std::array<uint64_t, 3> Output{};
     uint64_t Count = 0;
     std::optional<uint64_t> Wake;
-    const char *Unknown = nullptr;
+    ReadinessFailure Unknown;
   };
   Observation observe() const {
     Observation O;
     for (const auto &[FD, Owner] : Owners) {
       const auto I = Files.Descriptors.find(FD);
       if (I == Files.Descriptors.end() || I->second != Owner) {
-        O.Unknown = "select descriptor changed while waiting";
+        O.Unknown = {"select descriptor changed while waiting"};
         return O;
       }
       const uint64_t Bit = uint64_t(1) << FD;
@@ -49,7 +49,7 @@ public:
       else if (std::holds_alternative<OpenFile>(*Owner))
         R.Available = Wanted & 3;
       else if (!std::holds_alternative<ProcessDescriptor>(*Owner))
-        R.Unknown = "select readiness for this descriptor is unmodeled";
+        R.Unknown = {"select readiness for this descriptor is unmodeled"};
       if (R.Unknown) {
         O.Unknown = R.Unknown;
         return O;
@@ -105,7 +105,7 @@ public:
   resume(ProcessResult &Result) override {
     const auto O = observe();
     if (O.Unknown)
-      return unsupported(Result, O.Unknown);
+      return O.Unknown.stop(Result);
     if (!O.Count && !Immediate &&
         (!Deadline || Files.Clock->elapsed() < *Deadline))
       return unsupported(Result, "select resumed before a readiness event");

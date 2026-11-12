@@ -64,6 +64,7 @@
 #include "neverd/backend/c/render/AArch64/AArch64ReturnProtectionC.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/backend/c/render/LLVMC/LLVMCIntrinsicRender.h"
+#include "neverd/backend/c/render/NativeVectorCall.h"
 #include "neverd/backend/c/render/SyscallHelpers.h"
 #include "neverd/backend/c/render/X86/X86SegmentAsm.h"
 #include "neverd/backend/llvm/AArch64/AArch64SourceResultCall.h"
@@ -280,6 +281,8 @@ bool LLVMCWriter::isNativeVectorIntrinsic(const llvm::CallBase &Call,
                                           Arch TheArch) {
   if ((TheArch == Arch::X86 || TheArch == Arch::X64) &&
       llvmX86SHA256CName(Call))
+    return true;
+  if (nativeVectorCall(Call, TheArch))
     return true;
   const auto *Callee = Call.getCalledFunction();
   if (TheArch != Arch::AArch64 || !Callee ||
@@ -542,6 +545,8 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
   DefinitionPointers.clear();
   CurMod = &Mod;
   prepareFunctionIdentifiers(Mod);
+  // Function bodies are written before the globals they name.
+  collectLabelTables(Mod);
   collectImageDataUses(Mod);
   writeIncludes(Mod);
   const auto HeaderTag = [this](llvm::StringRef Name) -> const char * {
@@ -1703,6 +1708,86 @@ void LLVMCWriter::writeImageByteArray(const llvm::GlobalVariable &Global,
      << "};\n";
 }
 
+void LLVMCWriter::collectLabelTables(const llvm::Module &Mod) {
+  LabelTables.clear();
+  // One function's output names the image's storage and defines none of it.
+  if (OnlyFunction)
+    return;
+  for (const auto &Global : Mod.globals()) {
+    if (!Global.hasInitializer() || !Global.hasLocalLinkage())
+      continue;
+    // The blocks the initializer names, which have to be one function's.
+    const llvm::Function *Owner = nullptr;
+    bool Local = true;
+    llvm::SmallVector<const llvm::Constant *, 16> Work{Global.getInitializer()};
+    llvm::SmallPtrSet<const llvm::Constant *, 16> Seen;
+    while (Local && !Work.empty()) {
+      const llvm::Constant *C = Work.pop_back_val();
+      if (!Seen.insert(C).second)
+        continue;
+      if (const auto *Address = llvm::dyn_cast<llvm::BlockAddress>(C)) {
+        Local = !Owner || Owner == Address->getFunction();
+        Owner = Address->getFunction();
+      } else if (!llvm::isa<llvm::GlobalValue>(C)) {
+        for (const llvm::Use &Operand : C->operands())
+          if (const auto *Next = llvm::dyn_cast<llvm::Constant>(Operand))
+            Work.push_back(Next);
+      }
+    }
+    if (!Owner || !Local || Owner->isDeclaration())
+      continue;
+    // Every use has to be an instruction of that function: another
+    // function, or another object's initializer, could not name the table.
+    llvm::SmallVector<const llvm::User *, 16> Users(Global.user_begin(),
+                                                    Global.user_end());
+    llvm::SmallPtrSet<const llvm::User *, 16> Visited;
+    while (Local && !Users.empty()) {
+      const llvm::User *User = Users.pop_back_val();
+      if (!Visited.insert(User).second)
+        continue;
+      if (const auto *Inst = llvm::dyn_cast<llvm::Instruction>(User))
+        Local = Inst->getFunction() == Owner;
+      else if (llvm::isa<llvm::GlobalValue>(User))
+        Local = false;
+      else
+        Users.append(User->user_begin(), User->user_end());
+    }
+    if (Local)
+      LabelTables[&Global] = Owner;
+  }
+}
+
+void LLVMCWriter::writeLabelTables(const llvm::Function &Fn) {
+  const llvm::Module &Mod = *Fn.getParent();
+  for (const auto &Global : Mod.globals()) {
+    const auto Table = LabelTables.find(&Global);
+    if (Table == LabelTables.end() || Table->second != &Fn)
+      continue;
+    const std::string Name = globalNameStr(&Global);
+    UsedNames.insert(Name);
+    const llvm::Constant *Init = Global.getInitializer();
+    LabelTableOwner = &Fn;
+    emitIndent(1);
+    OS << llvmc::storageAlignment(Global.getValueType(), Mod.getDataLayout(),
+                                  Global.getAlign().valueOrOne())
+       << "static " << (Global.isConstant() ? "const " : "");
+    if (const auto *Array =
+            llvm::dyn_cast<llvm::ArrayType>(Global.getValueType())) {
+      OS << typeToCLLVM(Array->getElementType()) << " " << Name << "["
+         << Array->getNumElements() << "] = {";
+      for (uint64_t I = 0; I < Array->getNumElements(); ++I)
+        OS << (I ? ", " : "")
+           << constStr(Init->getAggregateElement(unsigned(I)),
+                       /*AllowImageAddress=*/false);
+      OS << "};\n";
+    } else {
+      OS << typeToCLLVM(Global.getValueType()) << " " << Name << " = "
+         << constStr(Init, /*AllowImageAddress=*/false) << ";\n";
+    }
+    LabelTableOwner = nullptr;
+  }
+}
+
 void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
   // Forward dependencies retain the original image's storage contract and
   // provenance, including its shape validation before declaration
@@ -1722,6 +1807,8 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
   // Initializers can refer forward or form cycles. The declarations use the
   // same storage shape and linkage as the definitions below.
   auto declare = [&](const llvm::GlobalVariable &Global) {
+    if (LabelTables.count(&Global))
+      return;
     if (llvm_original_image::isMarked(Global)) {
       declareOriginalImage(Global);
       return;
@@ -1821,7 +1908,7 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
     if (RawName.empty())
       continue;
 
-    if (ExternalDataIdentifiers.count(&GV))
+    if (ExternalDataIdentifiers.count(&GV) || LabelTables.count(&GV))
       continue;
     if (!GV.hasInitializer() && EmittedGlobalNames.count(globalNameStr(&GV)))
       continue;

@@ -6,38 +6,44 @@
 //
 // AArch64 NEON saturating doubling multiply-accumulate LONG, per widened lane:
 //
-//   SQDMLAL Vd, Vn, Vm:  Vd[i] = SignedSat( Vd[i] + SignedSat(2 * Vn[i]*Vm[i]) )
-//   SQDMLSL Vd, Vn, Vm:  Vd[i] = SignedSat( Vd[i] - SignedSat(2 * Vn[i]*Vm[i]) )
+//   SQDMLAL Vd, Vn, Vm:  Vd[i] = SignedSat( Vd[i] + SignedSat(2 * Vn[i]*Vm[i])
+//   ) SQDMLSL Vd, Vn, Vm:  Vd[i] = SignedSat( Vd[i] - SignedSat(2 *
+//   Vn[i]*Vm[i]) )
 //
 // Two saturations stack: the DOUBLED product saturates at the wide width, then
 // the accumulate/subtract saturates again.  SQDMULL (the multiply-only sibling)
-// has roundtrip coverage; the accumulating SQDMLAL/SQDMLSL — and their high-half
-// SQDMLAL2/SQDMLSL2 forms — had none, even though the lifter implements them with
-// a dedicated doubling + double-saturation path distinct from plain SMLAL.
+// has roundtrip coverage; the accumulating SQDMLAL/SQDMLSL — and their
+// high-half SQDMLAL2/SQDMLSL2 forms — had none, even though the lifter
+// implements them with a dedicated doubling + double-saturation path distinct
+// from plain SMLAL.
 //
 // The discriminating corners:
 //
-//   1. Product saturation.  2 * (-0x8000)*(-0x8000) = 0x80000000 overflows i32, so
-//      the 4H->4S form must clamp the product to 0x7FFFFFFF *before* accumulating
-//      (the 2S->2D form's corner is 2*(-2^31)^2 = +2^63 -> 0x7FFF_FFFF_FFFF_FFFF).
-//      A handler that doubles without saturating, or that saturates at the wrong
-//      width, diverges here.
+//   1. Product saturation.  2 * (-0x8000)*(-0x8000) = 0x80000000 overflows i32,
+//   so
+//      the 4H->4S form must clamp the product to 0x7FFFFFFF *before*
+//      accumulating (the 2S->2D form's corner is 2*(-2^31)^2 = +2^63 ->
+//      0x7FFF_FFFF_FFFF_FFFF). A handler that doubles without saturating, or
+//      that saturates at the wrong width, diverges here.
 //   2. Accumulate saturation.  Vd seeded at INT_MAX with a positive product (or
 //      INT_MIN with SQDMLSL) forces the *second* clamp; dropping it overflows.
-//   3. SQDMLAL2/SQDMLSL2 read the HIGH half of the Vn/Vm 128-bit sources — a lane
+//   3. SQDMLAL2/SQDMLSL2 read the HIGH half of the Vn/Vm 128-bit sources — a
+//   lane
 //      that read the low half instead would multiply the wrong elements.
 //
 // Vectors are seeded from runtime arguments plus the corner constants so clang
-// keeps the lanes (no constant-folded result), and every lane is folded into the
-// return.  These are base ARMv8-A Advanced SIMD, native on the default Unicorn
-// arm64 CPU; the oracle is original-Unicorn vs lifted-Unicorn.
+// keeps the lanes (no constant-folded result), and every lane is folded into
+// the return.  These are base ARMv8-A Advanced SIMD, native on the default
+// Unicorn arm64 CPU; the oracle is original-Unicorn vs lifted-Unicorn.
 //
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
-class A64NEONSatDblMulAccRT : public SemanticRoundTripFixture,
-                              public ::testing::WithParamInterface<RoundTripTC> {};
+class A64NEONSatDblMulAccRT
+    : public SemanticRoundTripFixture,
+      public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(A64NEONSatDblMulAccRT, Verify) { roundTripAArch64(GetParam()); }
 
 // clang-format off
@@ -129,3 +135,9 @@ static const std::vector<RoundTripTC> kA64 = {
 
 INSTANTIATE_TEST_SUITE_P(NEONSatDblMulAcc, A64NEONSatDblMulAccRT,
                          ::testing::ValuesIn(kA64), rtTCName);
+
+// A signed comparison of a floating value's bits compared its converted
+// value: the C is checked by execution.
+INSTANTIATE_TEST_SUITE_P(
+    NEONSatDblMulAccHighC, A64NEONSatDblMulAccRT,
+    ::testing::ValuesIn(onHighC(kA64, {"sqdmlal_2d", "sqdmlsl_2d"})), rtTCName);

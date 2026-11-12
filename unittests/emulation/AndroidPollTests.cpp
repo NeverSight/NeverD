@@ -105,6 +105,19 @@ TEST_P(AndroidPoll, OriginalImportsAndRawWrappersWaitForSharedReadiness) {
     EXPECT_EQ(Calls, 1u);
   }
 }
+TEST_P(AndroidPoll, MissingReadinessIdentifiesTheTCPConnection) {
+  Options.LinuxNetwork->Connections[0].ReceiveEvents.clear();
+  for (uint64_t Route = 0; Route != 6; ++Route) {
+    SCOPED_TRACE(Route);
+    auto R = run(Route, 0);
+    EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(R.Diagnostic, "socket readiness has no offline observation "
+                            "(TCP connection index 0, read readiness)");
+    ASSERT_FALSE(R.NativeCalls.empty());
+    EXPECT_FALSE(R.NativeCalls.back().Result);
+  }
+}
+
 TEST_P(AndroidPoll, TimeoutsPreserveLibcTimespecAndUseVirtualMilliseconds) {
   auto &C = Options.LinuxNetwork->Connections[0];
   C.ReceiveEvents.clear();

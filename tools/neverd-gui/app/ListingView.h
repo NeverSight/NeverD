@@ -188,6 +188,8 @@ private:
   /// generation moved while it was on its way (generationChanged).
   QString requestedRevision_;
   bool generationBehind_ = false;
+  /// The rows were asked for ahead of the others that hear of a new revision.
+  bool askedAhead_ = false;
   int top_ = 0;
   // Body-relative columns; negative positions select the address prefix.
   int cursorLine_ = 0, cursorColumn_ = 0;

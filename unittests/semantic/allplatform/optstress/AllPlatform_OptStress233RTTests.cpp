@@ -12,11 +12,13 @@
 // tables and then crosses them with noinline calls, high register pressure,
 // nesting, a 64-bit selector and a computed-goto dispatch with calls.
 //
-//   * swcall8 - 8 dense cases, EVERY arm calls a noinline helper (base-after-bl).
+//   * swcall8 - 8 dense cases, EVERY arm calls a noinline helper
+//   (base-after-bl).
 //   * swspill - switch under high live-register pressure (spilled table base).
 //   * nestsw  - switch nested inside a case of an outer switch.
 //   * sw64    - selector taken from the high half of a 64-bit value.
-//   * cgcall  - computed-goto (`goto *tab[op]`) dispatch with calls in handlers.
+//   * cgcall  - computed-goto (`goto *tab[op]`) dispatch with calls in
+//   handlers.
 //   * swret   - switch arms that return early, mixed with a call.
 //
 // Integer in / integer out, LCG-seeded, folded to one integer return.  All
@@ -25,6 +27,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64OptStress233RT : public SemanticRoundTripFixture,
                           public ::testing::WithParamInterface<RoundTripTC> {};
@@ -36,7 +39,8 @@ class A64OptStress233RT : public SemanticRoundTripFixture,
                           public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(A64OptStress233RT, Verify) { roundTripAArch64(GetParam()); }
 class ARM32OptStress233RT : public SemanticRoundTripFixture,
-                            public ::testing::WithParamInterface<RoundTripTC> {};
+                            public ::testing::WithParamInterface<RoundTripTC> {
+};
 TEST_P(ARM32OptStress233RT, Verify) { roundTripARM32(GetParam()); }
 
 // clang-format off
@@ -137,12 +141,26 @@ static std::vector<RoundTripTC> makeOptStress233TC(const char *prefix, const cha
 }
 // clang-format on
 
-static const std::vector<RoundTripTC> kX64 = makeOptStress233TC("x64o233", "long");
-static const std::vector<RoundTripTC> kX86 = makeOptStress233TC("x86o233", "int");
-static const std::vector<RoundTripTC> kA64 = makeOptStress233TC("a64o233", "long");
-static const std::vector<RoundTripTC> kARM = makeOptStress233TC("armo233", "int");
+static const std::vector<RoundTripTC> kX64 =
+    makeOptStress233TC("x64o233", "long");
+static const std::vector<RoundTripTC> kX86 =
+    makeOptStress233TC("x86o233", "int");
+static const std::vector<RoundTripTC> kA64 =
+    makeOptStress233TC("a64o233", "long");
+static const std::vector<RoundTripTC> kARM =
+    makeOptStress233TC("armo233", "int");
 
-INSTANTIATE_TEST_SUITE_P(OptStress233, X64OptStress233RT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress233, X86OptStress233RT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress233, A64OptStress233RT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress233, ARM32OptStress233RT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress233, X64OptStress233RT,
+                         ::testing::ValuesIn(kX64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress233, X86OptStress233RT,
+                         ::testing::ValuesIn(kX86), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress233, A64OptStress233RT,
+                         ::testing::ValuesIn(kA64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress233, ARM32OptStress233RT,
+                         ::testing::ValuesIn(kARM), rtTCName);
+
+// Nested switches of an i386 PIC object, whose unrecovered dispatch HighC
+// called through the image's numbers: the C is checked by execution.
+INSTANTIATE_TEST_SUITE_P(OptStress233HighC, X86OptStress233RT,
+                         ::testing::ValuesIn(onHighC(kX86, {"_nestsw"})),
+                         rtTCName);

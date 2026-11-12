@@ -19,6 +19,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64CGotoRT : public SemanticRoundTripFixture,
                    public ::testing::WithParamInterface<RoundTripTC> {};
@@ -263,26 +264,31 @@ static const std::vector<RoundTripTC> kX86 = makeCGotoTC("x86cg", "int", 2);
 static const std::vector<RoundTripTC> kA64 = makeCGotoTC("a64cg", "long", 2);
 static const std::vector<RoundTripTC> kARM = makeCGotoTC("armcg", "int", 2);
 
-INSTANTIATE_TEST_SUITE_P(CGoto, X64CGotoRT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(CGoto, X86CGotoRT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(CGoto, A64CGotoRT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(CGoto, ARM32CGotoRT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(CGoto, X64CGotoRT, ::testing::ValuesIn(kX64),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(CGoto, X86CGotoRT, ::testing::ValuesIn(kX86),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(CGoto, A64CGotoRT, ::testing::ValuesIn(kA64),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(CGoto, ARM32CGotoRT, ::testing::ValuesIn(kARM),
+                         rtTCName);
 
 // -O0 variants exercise the shared/decoupled computed-goto dispatch clang emits
 // without optimization: each `goto *p` spills the table-loaded target to a
 // common indirect-goto slot and branches to one shared dispatch block (`ldr
 // xT,[slot]; br xT`), so the table load + index sit in *predecessor* goto-site
-// blocks.  This is the P10-note shape the jump-table resolver (cross-block table
-// recovery) and emitter (single-predecessor index in the dominating block;
-// multi-site shared dispatch routed through a common index slot) handle.
+// blocks.  This is the P10-note shape the jump-table resolver (cross-block
+// table recovery) and emitter (single-predecessor index in the dominating
+// block; multi-site shared dispatch routed through a common index slot) handle.
 // The -O0 sets also carry the mixed variable/constant-index dispatch case on
 // all four targets.  A constant goto-site folds to a load from a constant
 // table-slot address; constIndexFromTableLoad recovers the index across the
 // three legal base models, distinguished structurally with no mis-routing risk:
 // absolute base (AArch64 adrp / x86-64 RIP), model-zero PIC/GOT base register
-// (i386 get_pc_thunk), and a PC-relative literal-pool base whose displacement is
-// read from the image (ARM32).  Only the model that yields an in-range, aligned
-// index is accepted; an ambiguous/unresolved site still bails to the loud trap.
+// (i386 get_pc_thunk), and a PC-relative literal-pool base whose displacement
+// is read from the image (ARM32).  Only the model that yields an in-range,
+// aligned index is accepted; an ambiguous/unresolved site still bails to the
+// loud trap.
 static const auto appendConst = [](std::vector<RoundTripTC> v,
                                    std::vector<RoundTripTC> c) {
   v.insert(v.end(), c.begin(), c.end());
@@ -293,7 +299,7 @@ static const auto appendConst = [](std::vector<RoundTripTC> v,
 // x86-64/i386 -O0 copy it scalar-by-scalar (`mov (%rip),%r; mov %r,-k(%rbp)`)
 // with the table-base frame offset riding in the dispatch load displacement;
 // ARM32 -O0 loads the run through a PC-relative literal-pool base and folds the
-// scaled dispatch index into the frame base register.  resolveStackMaterialized-
+// scaled dispatch index into the frame base register. resolveStackMaterialized-
 // TableSource handles all three lowerings (constant RIP base, i386 GOTOFF
 // GOT-base-0, ARM base+scaled-index reuse).
 static const std::vector<RoundTripTC> kX64O0 =
@@ -313,10 +319,23 @@ static const std::vector<RoundTripTC> kARMO0 =
                             makeCGotoConstTC("armcgo0", "int")),
                 makeCGotoLocalTC("armcgo0", "int"));
 
-INSTANTIATE_TEST_SUITE_P(CGotoO0, X64CGotoRT, ::testing::ValuesIn(kX64O0), rtTCName);
-INSTANTIATE_TEST_SUITE_P(CGotoO0, X86CGotoRT, ::testing::ValuesIn(kX86O0), rtTCName);
-INSTANTIATE_TEST_SUITE_P(CGotoO0, A64CGotoRT, ::testing::ValuesIn(kA64O0), rtTCName);
-INSTANTIATE_TEST_SUITE_P(CGotoO0, ARM32CGotoRT, ::testing::ValuesIn(kARMO0), rtTCName);
+INSTANTIATE_TEST_SUITE_P(CGotoO0, X64CGotoRT, ::testing::ValuesIn(kX64O0),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(CGotoO0, X86CGotoRT, ::testing::ValuesIn(kX86O0),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(CGotoO0, A64CGotoRT, ::testing::ValuesIn(kA64O0),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(CGotoO0, ARM32CGotoRT, ::testing::ValuesIn(kARMO0),
+                         rtTCName);
+
+// A label array copied to the frame leaves a table of block addresses, which
+// LLVM C defines inside its function: the C is checked by execution.
+INSTANTIATE_TEST_SUITE_P(CGotoO0LLVMC, X64CGotoRT,
+                         ::testing::ValuesIn(onLLVMC(kX64O0)), rtTCName);
+INSTANTIATE_TEST_SUITE_P(CGotoO0LLVMC, X86CGotoRT,
+                         ::testing::ValuesIn(onLLVMC(kX86O0)), rtTCName);
+INSTANTIATE_TEST_SUITE_P(CGotoO0LLVMC, ARM32CGotoRT,
+                         ::testing::ValuesIn(onLLVMC(kARMO0)), rtTCName);
 #else
 // The standalone CI target is intentionally limited to the eight local-table
 // cases that carry the structural switch assertion.  The monolithic semantic
@@ -332,12 +351,13 @@ static const std::vector<RoundTripTC> kA64Local =
 static const std::vector<RoundTripTC> kARMLocal =
     makeCGotoLocalTC("armcgo0", "int");
 
-INSTANTIATE_TEST_SUITE_P(CGotoLocal, X64CGotoRT,
-                         ::testing::ValuesIn(kX64Local), rtTCName);
-INSTANTIATE_TEST_SUITE_P(CGotoLocal, X86CGotoRT,
-                         ::testing::ValuesIn(kX86Local), rtTCName);
-INSTANTIATE_TEST_SUITE_P(CGotoLocal, A64CGotoRT,
-                         ::testing::ValuesIn(kA64Local), rtTCName);
+INSTANTIATE_TEST_SUITE_P(CGotoLocal, X64CGotoRT, ::testing::ValuesIn(kX64Local),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(CGotoLocal, X86CGotoRT, ::testing::ValuesIn(kX86Local),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(CGotoLocal, A64CGotoRT, ::testing::ValuesIn(kA64Local),
+                         rtTCName);
 INSTANTIATE_TEST_SUITE_P(CGotoLocal, ARM32CGotoRT,
                          ::testing::ValuesIn(kARMLocal), rtTCName);
+
 #endif

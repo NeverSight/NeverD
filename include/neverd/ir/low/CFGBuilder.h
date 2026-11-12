@@ -1758,7 +1758,9 @@ private:
     /// Exact dynamic operand of the final table-address ADD.  For a scaled
     /// table this is the MULT/LEFT output; for a pre-scaled table it is the
     /// byte offset itself.  Composite selector consumers need this byte
-    /// coordinate, not the logical slot index recorded in Indices.
+    /// coordinate, not the logical slot index recorded in Indices.  An AArch64
+    /// original indexed load has no address ADD: under a selected base this
+    /// names the load's own raw index operand, a slot coordinate.
     JumpTableValueOccurrence AddressIndex;
     uint64_t AddressScale = 0;
     /// This LOAD uses a compile-time coordinate rather than a runtime table
@@ -1904,7 +1906,7 @@ private:
 
     /// Runtime-selected table base: the dispatch loads from `(cond ? A :
     /// B)[idx]` with two adjacent code-pointer tables merged into one at
-    /// BaseAddr; the emitter synthesizes a byte-offset selector.  See JumpTable
+    /// BaseAddr; the emitter synthesizes the merged selector.  See JumpTable
     /// for details.
     bool TwoTableSelect = false;
 
@@ -1927,7 +1929,8 @@ private:
     /// Proof-state comparison need not compare it: the outer load role's base
     /// and width and the ExplicitTargets count determine it.
     std::optional<JumpTableStorageRange> TwoLevelIndexRange;
-    /// Byte distance between the two merged tables (entries(lo) * EntrySize).
+    /// Distance between the two merged tables in the selector's coordinate:
+    /// entries(lo) * EntrySize for a byte offset, entries(lo) for a slot index.
     uint32_t TwoTableOffset = 0;
     /// Whether the higher table is selected by the positive (M / SELECT-true)
     /// arm.
@@ -2587,6 +2590,9 @@ private:
   /// Certify one original indexed load without guessing access-EL controls.
   /// Both operands are proved at its exact occurrence, and every possible
   /// accessed byte must have the same address for every CPA2 control choice.
+  /// The base is the role's one table, or the role's SELECT between two
+  /// tables: each input of that SELECT is then proved to be its own table,
+  /// and Capacity counts the slots of one table.
   bool aarch64OriginalTableLoadMatches(
       const LowOp &Load, const JumpTableLoadRole &Role, uint32_t Capacity,
       size_t *AggregateEvidenceBudget, bool &AnalysisComplete,

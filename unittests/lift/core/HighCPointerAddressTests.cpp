@@ -11294,15 +11294,19 @@ TEST(HighCPointerAddresses, X86UnmatchedSubStoreBeforeCallStays) {
   Func.Name = "keep_store";
   Func.Entry = 0x401040;
   Func.ReturnType = NdType::makeVoid();
+  // The address is a value the function receives: a temporary nothing
+  // assigns would be an unknown value, not a name.
+  Func.Params = {{"arg0", NdType::makeInt(4)}};
   MedVar P;
-  P.Kind = MedVar::Temp;
-  P.Id = 7;
+  P.Kind = MedVar::Param;
+  P.Id = 0;
   P.Size = 4;
   P.TheArch = Arch::X86;
   HighStmt Store;
   Store.Kind = StmtKind::Store;
-  Store.StoreAddr = HighExpr::makeBinop(NdOp::INT_SUB, HighExpr::makeVar(P),
-                                        HighExpr::makeConst(4, 4));
+  Store.StoreAddr = HighExpr::makeBinop(
+      NdOp::INT_SUB, HighExpr::makeVar(P, NdType::makeInt(4)),
+      HighExpr::makeConst(4, 4));
   Store.StoreVal = HighExpr::makeConst(41, 4);
   HighStmt Call;
   Call.Kind = StmtKind::Call;
@@ -11310,7 +11314,8 @@ TEST(HighCPointerAddresses, X86UnmatchedSubStoreBeforeCallStays) {
       HighExpr::makeCall("use", 0x401200, {HighExpr::makeConst(7, 4)});
   Func.Body = {Store, Call};
   const std::string Source = emitFunctions({Func}, Arch::X86);
-  expectPortableStore(Source, "uint32_t", "t7) - 4", "0x29");
+  expectPortableStore(Source, "uint32_t", "arg0", "0x29");
+  EXPECT_NE(Source.find(" - 4) = 0x29"), std::string::npos) << Source;
   EXPECT_NE(Source.find("use(7)"), std::string::npos) << Source;
 }
 

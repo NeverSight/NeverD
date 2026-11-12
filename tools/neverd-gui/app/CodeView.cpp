@@ -513,6 +513,9 @@ CodeText::CodeText(Session &session, QWidget *parent)
   for (const auto changed :
        {&Session::revisionChanged, &Session::sourceRefined})
     connect(&session_, changed, this, [this] {
+      // Read already, ahead of the others that hear of the revision.
+      if (std::exchange(readAhead_, false))
+        return;
       if (!function_)
         return;
       if (isVisible())
@@ -520,6 +523,28 @@ CodeText::CodeText(Session &session, QWidget *parent)
       else
         interrupted_ = true;
     });
+  // A view someone looks at reads its page ahead of what else a new revision
+  // sets off, and takes the one an edit's reply carried at once: it is there
+  // already, and shown before the rest of the workbench does its own work.
+  connect(&session_, &Session::shownRevisionChanged, this, [this] {
+    if (!function_ || !isVisible())
+      return;
+    readAhead_ = true;
+    load(*function_, representation_);
+  });
+  connect(&session_, &Session::shownRevisionAsked, this, [this] {
+    if (!readAhead_ || !loading_)
+      return;
+    // A page gives the next one's place: each is asked for as the one before
+    // it is taken.
+    for (int pages = 0;
+         pages < ::neverd::limits::gui::kCodeViewPagesTakenAtOnce && loading_ &&
+         session_.deliverNow(this) > 0;
+         ++pages) {
+    }
+    if (!loading_)
+      viewport()->repaint();
+  });
   // A new default reaches the shown function too, whatever this window
   // chose for it; a hidden window takes it when it shows again.
   connect(&SourceDefaults::instance(), &SourceDefaults::changed, this, [this] {
@@ -630,6 +655,7 @@ void CodeText::clear() {
   interrupted_ = false;
   sourceRows_.clear();
   lineStarts_.clear();
+  linesBefore_.clear();
   regions_ = {};
   regionsValid_ = false;
   prelude_ = {};
@@ -1092,6 +1118,10 @@ void CodeText::appendPage(const QJsonObject &payload, int offset) {
   }
   if (offset == 0) {
     sourceBytes_ = renderedChars_ = renderedRows_ = widestLine_ = 0;
+    // The lines it showed lend the ones that read the same their layouts
+    // (rebuildLines): a page read again after an edit changes few.
+    if (!lines_.isEmpty())
+      linesBefore_ = std::move(lines_);
     lines_.clear();
     lineStarts_.clear();
   }
@@ -1250,6 +1280,10 @@ void CodeText::rebuildLines(bool append) {
   const QVariantList &rows = folding ? library_.mappings() : sourceRows_;
   const int previousLine = cursorLine_;
   if (!append) {
+    // The lines it showed lend the ones that read the same their layouts,
+    // below: a fold, or a page read again, changes few.
+    if (linesBefore_.isEmpty())
+      linesBefore_ = std::move(lines_);
     lines_.clear();
     lineStarts_.clear();
     inComment_ = false;
@@ -1323,6 +1357,20 @@ void CodeText::rebuildLines(bool append) {
                 });
       line.styled.spans = spans;
     }
+  // A line that reads as the one in its place did keeps the layout built for
+  // that one; where lines came or went, as the one as far from the end.
+  if (!linesBefore_.isEmpty()) {
+    const auto count = std::min(linesBefore_.size(), lines_.size());
+    for (qsizetype i = 0; i < count; ++i)
+      layoutsKept_ += lines_[i].styled.adoptLayout(linesBefore_[i].styled);
+    // Whole: the rest of what it showed is let go of.
+    if (!loading_ || refreshPages_) {
+      for (qsizetype i = 1; i <= count; ++i)
+        layoutsKept_ += lines_[lines_.size() - i].styled.adoptLayout(
+            linesBefore_[linesBefore_.size() - i].styled);
+      linesBefore_.clear();
+    }
+  }
   const int lastSourceLine =
       lines_.isEmpty() ? 1 : lines_.back().sourceLine + 1;
   gutterChars_ = std::max(3, int(QString::number(lastSourceLine).size()));

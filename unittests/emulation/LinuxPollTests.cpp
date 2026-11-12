@@ -185,6 +185,8 @@ TEST_P(LinuxPoll, QuietDurationStartsAtConnectAndIsSharedByAliases) {
   entry(0, 4, 1);
   EXPECT_FALSE(call(ServiceKind::Poll, Base + 256, 1, 1));
   EXPECT_EQ(Kernel->clock().elapsed(), 2000072u);
+  EXPECT_EQ(Report.Diagnostic, "socket readiness has no offline observation "
+                               "(TCP connection index 0, read readiness)");
   EXPECT_EQ(events(0), 0xa5a5u);
   EXPECT_FALSE(call(ServiceKind::ReceiveFrom, 4, Base + 128, 1, 0x40));
   ASSERT_EQ(call(ServiceKind::Close, 4), 0u);
@@ -192,6 +194,9 @@ TEST_P(LinuxPoll, QuietDurationStartsAtConnectAndIsSharedByAliases) {
   entry(0, 3, 1);
   EXPECT_EQ(call(ServiceKind::Poll, Base + 256, 1, 2), 0u);
   EXPECT_EQ(Kernel->clock().elapsed(), 4000072u);
+  EXPECT_FALSE(call(ServiceKind::Poll, Base + 256, 1, 1));
+  EXPECT_EQ(Report.Diagnostic, "socket readiness has no offline observation "
+                               "(TCP connection index 1, read readiness)");
 }
 TEST_P(LinuxPoll, UnrepresentableQuietEndDoesNotConsumeTheConnection) {
   auto &Connections = Options.LinuxNetwork->Connections;

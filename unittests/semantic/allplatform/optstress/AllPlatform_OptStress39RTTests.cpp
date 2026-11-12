@@ -24,7 +24,8 @@
 //   * hihalf   - loop mutates only the high 16 bits (offset != 0 sub-field);
 //                low 16 from the seed survive; full word read after.
 //   * escwide  - loop writes a byte, reads a halfword mid-iteration (wider than
-//                the write), then the full word is read after (escalating reads).
+//                the write), then the full word is read after (escalating
+//                reads).
 //   * twoloops - first loop touches only the low byte; a second loop reads the
 //                full word; the parent crosses the loop boundary.
 //   * condlo   - the low byte is updated only on some iterations; untouched
@@ -36,6 +37,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64OptStress39RT : public SemanticRoundTripFixture,
                          public ::testing::WithParamInterface<RoundTripTC> {};
@@ -133,12 +135,24 @@ static std::vector<RoundTripTC> makeOptStress39TC(const char *prefix, const char
 }
 // clang-format on
 
-static const std::vector<RoundTripTC> kX64 = makeOptStress39TC("x64o39", "long");
+static const std::vector<RoundTripTC> kX64 =
+    makeOptStress39TC("x64o39", "long");
 static const std::vector<RoundTripTC> kX86 = makeOptStress39TC("x86o39", "int");
-static const std::vector<RoundTripTC> kA64 = makeOptStress39TC("a64o39", "long");
+static const std::vector<RoundTripTC> kA64 =
+    makeOptStress39TC("a64o39", "long");
 static const std::vector<RoundTripTC> kARM = makeOptStress39TC("armo39", "int");
 
-INSTANTIATE_TEST_SUITE_P(OptStress39, X64OptStress39RT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress39, X86OptStress39RT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress39, A64OptStress39RT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress39, ARM32OptStress39RT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress39, X64OptStress39RT,
+                         ::testing::ValuesIn(kX64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress39, X86OptStress39RT,
+                         ::testing::ValuesIn(kX86), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress39, A64OptStress39RT,
+                         ::testing::ValuesIn(kA64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress39, ARM32OptStress39RT,
+                         ::testing::ValuesIn(kARM), rtTCName);
+
+// A partial write of a register nothing set read an undeclared temporary:
+// the C is checked by building and running it.
+INSTANTIATE_TEST_SUITE_P(OptStress39HighC, X86OptStress39RT,
+                         ::testing::ValuesIn(onHighC(kX86, {"_hihalf"})),
+                         rtTCName);

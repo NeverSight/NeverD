@@ -12299,6 +12299,75 @@ bool containsVariable(const std::vector<HighStmt> &Body) {
   });
   return Found;
 }
+TEST(HighControlFlowSemantics, ReturnTailFoldReachesAnIndirectCallee) {
+  // if (x & 1) { t = v; r = (*(t ? p : q))(); return r; }
+  // t = v; r = (*(t ? p : q))(); return r;
+  // Both copies of the tail assign t and each reads it once, inside the
+  // callee of an indirect call.  The fold counts that read, so it must
+  // replace it too: a read left behind would lose its only definition
+  // (a64tv_fpcond printed `t14` with no declaration).
+  auto Temp = [](int Id, int Ver) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.Id = Id;
+    V.SSAVer = Ver;
+    V.Size = 8;
+    V.TheArch = Arch::X64;
+    return HighExpr::makeVar(V, NdType::makeInt(8));
+  };
+  auto Copy = [&](va_t Address, ExprPtr Dst, ExprPtr Val) {
+    HighStmt S;
+    S.Kind = StmtKind::Assign;
+    S.Addr = Address;
+    S.Dst = std::move(Dst);
+    S.Val = std::move(Val);
+    return S;
+  };
+  auto CallThrough = [&](va_t Address, ExprPtr Dst, ExprPtr Choice) {
+    auto Target =
+        HighExpr::makeBinop(NdOp::SELECT, std::move(Choice), local(2));
+    Target->Operands.push_back(local(3));
+    Target->Type = NdType::makeInt(8);
+    auto Call = HighExpr::makeCall({}, Address, {});
+    Call->IsIndirectCall = true;
+    Call->IndirectTarget = std::move(Target);
+    Call->Type = NdType::makeInt(8);
+    return Copy(Address, std::move(Dst), std::move(Call));
+  };
+  HighStmt Arm;
+  Arm.Kind = StmtKind::If;
+  Arm.Addr = 0x1000;
+  Arm.Cond =
+      HighExpr::makeBinop(NdOp::INT_AND, local(0), HighExpr::makeConst(1, 8));
+  Arm.Body = {Copy(0x1004, Temp(7, 1), local(1)),
+              CallThrough(0x1008, local(4), Temp(7, 1)),
+              result(0x100c, local(4))};
+  HighFunc F;
+  F.Body = {Arm, Copy(0x1014, Temp(7, 1), local(1)),
+            CallThrough(0x1018, local(4), Temp(7, 1)),
+            result(0x101c, local(4))};
+  foldTempsInReturnTails(F.Body);
+  // Whatever the pass folds, no read of t may outlive every assignment of it.
+  size_t Assigns = 0, Reads = 0;
+  std::function<void(const ExprPtr &)> Count = [&](const ExprPtr &E) {
+    if (!E)
+      return;
+    Reads += E->Kind == ExprKind::Var && E->Var.Kind == MedVar::Temp &&
+             E->Var.Id == 7;
+    E->forEachChildExpr(Count);
+  };
+  walkStmts(F.Body, [&](const HighStmt &S) {
+    const bool Defines = S.Kind == StmtKind::Assign && S.Dst &&
+                         S.Dst->Kind == ExprKind::Var &&
+                         S.Dst->Var.Kind == MedVar::Temp && S.Dst->Var.Id == 7;
+    Assigns += Defines;
+    Count(S.Val);
+    Count(S.RetVal);
+    Count(S.Cond);
+  });
+  EXPECT_TRUE(Reads == 0 || Assigns != 0);
+}
+
 } // namespace
 TEST(HighControlFlowDAG, SubstitutionFindsReadAfterLargeUnrelatedDag) {
   auto Condition =

@@ -1224,10 +1224,12 @@ struct JumpTableSelectorUseRef {
 };
 
 /// Exact public recipe for a runtime-selected two-table switch condition.
-/// ByteIndex names the already-scaled dynamic operand of the authenticated
-/// table-address ADD.  Condition names the boolean value whose true/false arm
-/// selected the physical table base.  Backends concatenate the two physical
-/// runs in one selector coordinate as
+/// ByteIndex names the dynamic operand of the authenticated table address:
+/// the already-scaled operand of the table-address ADD, or the raw slot index
+/// of an AArch64 original indexed load, which scales it in the instruction
+/// and leaves no byte offset to name.  Condition names the boolean value
+/// whose true/false arm selected the physical table base.  Backends
+/// concatenate the two physical runs in that operand's coordinate as
 /// `ByteIndex + (Condition ? TrueOffset : FalseOffset)`.
 struct JumpTableCompositeSelectorUseRef {
   enum class Kind : uint8_t { SelectOffset };
@@ -1327,14 +1329,15 @@ struct JumpTable {
   /// loads from `(cond ? A : B)[idx]` where A and B are two adjacent
   /// code-pointer tables.  The resolver merges them into one table at BaseAddr
   /// = min(A,B) with the combined entry count, and the emitter synthesizes the
-  /// switch selector (a byte offset into the merged table) as `idx_bytes + (D
-  /// when the higher table is selected)`, turning the runtime base select into
-  /// a single switch.
+  /// switch selector (an offset into the merged table, see TwoTableOffset) as
+  /// `idx + (D when the higher table is selected)`, turning the runtime base
+  /// select into a single switch.
   bool TwoTableSelect = false;
 
-  /// Byte distance between the two tables (entries(lo) * EntrySize); the
-  /// emitter adds it to the index byte offset when the higher table is
-  /// selected.
+  /// Distance between the two tables in the selector's coordinate: entries(lo)
+  /// * EntrySize for a byte-offset selector (PreScaledIndex), entries(lo) for
+  /// the slot index of an AArch64 original indexed load.  The emitter adds it
+  /// to the selector when the higher table is selected.
   uint32_t TwoTableOffset = 0;
 
   /// True when the higher table (BaseAddr + TwoTableOffset) is selected by the

@@ -66,9 +66,11 @@ inline std::optional<ScalarUnary> scalarUnary(const llvm::CallBase &Call) {
   }
   if ((Bits != 1 && Bits != 8 && Bits != 16 && Bits != 32 && Bits != 64 &&
        Bits != 128) ||
-      (!Input->isFloatTy() && !Input->isDoubleTy()))
+      (!Input->isHalfTy() && !Input->isFloatTy() && !Input->isDoubleTy()))
     throw std::runtime_error("unsupported LLVM scalar saturating conversion");
-  return ScalarUnary{Kind, Bits, Input->isFloatTy() ? 32u : 64u};
+  // A half converts to float exactly, so its helper takes a float.
+  return ScalarUnary{Kind, Bits,
+                     unsigned(Input->getPrimitiveSizeInBits().getFixedValue())};
 }
 
 } // namespace neverd

@@ -1113,8 +1113,17 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C,
   if (llvm::isa<llvm::ConstantAggregateZero>(C))
     return "{0}";
 
-  // In particular, a BlockAddress is a control destination that portable C
-  // cannot carry without a separately proved continuation model. An unknown
+  // A block's address is a label's, which C names inside the label's function
+  // alone: in a label table that function defines (writeLabelTables).
+  if (const auto *Address = llvm::dyn_cast<llvm::BlockAddress>(C);
+      Address && LabelTableOwner && Address->getFunction() == LabelTableOwner) {
+    ReferencedBlocks.insert(Address->getBasicBlock());
+    AddressLabelBlocks.insert(Address->getBasicBlock());
+    return "&&" + blockLabel(Address->getBasicBlock());
+  }
+
+  // Anywhere else a BlockAddress is a control destination that C cannot
+  // carry without a separately proved continuation model. An unknown
   // constant is never authority to substitute a null pointer or integer zero.
   std::string Detail;
   llvm::raw_string_ostream Stream(Detail);

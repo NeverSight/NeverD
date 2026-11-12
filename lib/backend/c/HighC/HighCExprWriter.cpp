@@ -2288,14 +2288,21 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     const auto Source = MemoryIdentifiers.allocate("x87_value_source");
     const auto Result = MemoryIdentifiers.allocate("x87_value_result");
     const auto Control = MemoryIdentifiers.allocate("x87_value_control");
+    const auto Status = MemoryIdentifiers.allocate("x87_value_status");
+    // The assembly samples status into a local of this expression and C hands
+    // it to the thread-local owner, as the scalar helpers do. The address of
+    // a thread-local object as an assembly operand would be formed from the
+    // thread pointer even where the compiler can remove every other use of
+    // the sample.
     return "({ unsigned _BitInt(80) " + Source + " = " +
            exprStr(*E.Operands[0]) + "; unsigned _BitInt(" +
            std::to_string(x87GuardedValueBytes(E.IntrinsicId) * 8) + ") " +
            Result + " = 0; uint16_t " + Control + " = " +
-           exprStr(*E.Operands[1]) + "; " +
-           renderX87GuardedValueAsm(E.IntrinsicId,
-                                    {"&" + Result, "&" + Source, "&" + Control,
-                                     "&neverd_x87_sampled_status"}) +
+           exprStr(*E.Operands[1]) + "; uint16_t " + Status + " = 0; " +
+           renderX87GuardedValueAsm(
+               E.IntrinsicId,
+               {"&" + Result, "&" + Source, "&" + Control, "&" + Status}) +
+           "; neverd_x87_sampled_status = " + Status +
            "; neverd_x87_status_pending = 1; " + Result + "; })";
   }
   if (isX87ConstantControlIntrinsic(E.IntrinsicId)) {
@@ -6086,6 +6093,14 @@ std::string HighCWriter::unknownVarUse(const HighExpr &E,
       return useX87Helper(X87CHelper::ControlWord) + "()";
     return unknownValueText(E, "register");
   }
+  // A temporary no statement assigns is unknown as well: the bytes of an
+  // incoming register a partial write keeps, where the register is no
+  // parameter (i386 `mov dl, 8; mov [esp + 44], edx`).  Nothing declares its
+  // name.
+  if (E.Kind == ExprKind::Var && E.Var.Kind == MedVar::Temp &&
+      E.Var.SSAVer == 0 && Name == RawName && !AssignedNames.count(RawName) &&
+      !isEmittedParamName(RawName))
+    return unknownValueText(E, "value");
   return {};
 }
 
@@ -8155,6 +8170,14 @@ std::optional<va_t> HighCWriter::constAddress(const HighExpr &E) const {
   return std::nullopt;
 }
 
+/// The `$d` mapping interval of an AArch32 ELF image that holds \p Addr:
+/// data wherever it lies, the literal pool of a function among its code.
+static const ARMCodeRegion *armLiteralPoolAt(const BinaryImage &Img,
+                                             va_t Addr) {
+  const ARMCodeRegion *Region = Img.armMappingRegionAt(Addr);
+  return Region && Region->Kind == ARMCodeRegionKind::Data ? Region : nullptr;
+}
+
 bool isImageDataAt(const BinaryImage &Img, va_t Addr) {
   // The image's own headers are `__ImageBase`, never a copied object, and
   // another module's storage an undefined data symbol names is no object of
@@ -8167,9 +8190,10 @@ bool isImageDataAt(const BinaryImage &Img, va_t Addr) {
     return false;
   // Instruction bytes are not data objects.  Read-only constants live in
   // .rdata / .rodata (readable, not writable, not executable), and where
-  // the debug information places data among the code.
+  // the debug information places data among the code, or an AArch32 `$d`
+  // mapping interval does (a literal pool).
   if (Seg->isExecutable() && !Seg->isWritable() &&
-      !isCodeSectionData(&Img, Addr))
+      !isCodeSectionData(&Img, Addr) && !armLiteralPoolAt(Img, Addr))
     return false;
   // An import's slot or stub is no data object either.  Asked last: a code
   // address asks whether a function starts there, which reads the symbols.
@@ -8301,7 +8325,8 @@ HighCWriter::indexedObjectAt(va_t Addr) const {
   // table cannot acquire this route.  An executable section holds data only
   // where the image says it does, as a kernel keeps constants in its paged
   // code.
-  const bool AmongCode = isCodeSectionData(Opts.Image, Addr);
+  const ARMCodeRegion *Pool = armLiteralPoolAt(*Opts.Image, Addr);
+  const bool AmongCode = isCodeSectionData(Opts.Image, Addr) || Pool;
   if ((!Sec && (!Seg || Opts.Image->layoutAddressOwner(Addr) != Seg->VA)) ||
       (Sec ? !Sec->isReadable() || (Sec->isExecutable() && !AmongCode)
            : !Seg->isReadable() || Seg->isExecutable()))
@@ -8341,8 +8366,12 @@ HighCWriter::indexedObjectAt(va_t Addr) const {
       Begin = *Before;
   }
   // Among code, the object starts where the image says, and the next function
-  // ends it as a next object would.
-  if (AmongCode) {
+  // ends it as a next object would.  A literal pool is its mapping interval:
+  // the code may reach any of it from an address inside.
+  if (Pool) {
+    Begin = std::max(Begin, Pool->Start);
+    End = std::min(End, Pool->End);
+  } else if (AmongCode) {
     Begin = std::max(Begin, Addr);
     const auto &CodeStarts = dataObjects().CodeSymbolStarts;
     const auto NextCode = llvm::upper_bound(CodeStarts, Addr);

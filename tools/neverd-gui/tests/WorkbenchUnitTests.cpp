@@ -41,9 +41,11 @@
 #include <QDialogButtonBox>
 #include <QDirIterator>
 #include <QFile>
+#include <QFontDatabase>
 #include <QFontInfo>
 #include <QHash>
 #include <QHoverEvent>
+#include <QImage>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QKeyEvent>
@@ -79,11 +81,13 @@
 #include <QTextBlock>
 #include <QTextDocument>
 #include <QTextLayout>
+#include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QWindow>
+#include <functional>
 #include <kddockwidgets/KDDockWidgets.h>
 #include <kddockwidgets/qtwidgets/views/DockWidget.h>
 #include <kddockwidgets/qtwidgets/views/MainWindow.h>
@@ -534,6 +538,62 @@ private slots:
     StyledLine copy = line;
     QCOMPARE(copy.text, line.text);
     QCOMPARE(copy.spans.size(), line.spans.size());
+  }
+
+  void aLineThatReadsTheSameTakesTheLayoutBuiltForIt() {
+    // A view that reads its page again builds its lines again; one that reads
+    // as the line before it did takes that line's layout, and no other.
+    const QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    const auto color = [](int role) {
+      return role ? QColor(Qt::red) : QColor(Qt::black);
+    };
+    const auto line = [](const QString &text, QVector<StyledSpan> spans) {
+      StyledLine made;
+      made.text = text;
+      made.spans = std::move(spans);
+      return made;
+    };
+    const QString text = QString::fromUtf8("call 中文_😀(x); // n");
+    const QVector<StyledSpan> spans{{5, 5, 3, Address(0x401000)}, {14, 4, 4}};
+    StyledLine before = line(text, spans);
+    QTextLayout *built = &before.layout(font, 7, color);
+    // Another text, other spans, a span's other place or address: not taken.
+    for (auto other :
+         {line(text + QLatin1Char(' '), spans), line(text, {}),
+          line(text, {{5, 5, 3, Address(0x401000)}}),
+          line(text, {{5, 5, 3, Address(0x401000)}, {14, 4, 5}}),
+          line(text, {{5, 5, 3, Address(0x401008)}, {14, 4, 4}}),
+          line(text, {{5, 4, 3, Address(0x401000)}, {14, 4, 4}})}) {
+      QVERIFY(!other.adoptLayout(before));
+      QCOMPARE(&before.layout(font, 7, color), built);
+    }
+    StyledLine after = line(text, spans);
+    QVERIFY(after.adoptLayout(before));
+    // The very layout, under the stamp it was built at.
+    QCOMPARE(&after.layout(font, 7, color), built);
+    // It was lent once: the line it came from builds its own again, and has
+    // none to lend meanwhile.
+    StyledLine third = line(text, spans);
+    QVERIFY(!third.adoptLayout(before));
+    QVERIFY(&before.layout(font, 7, color) != built);
+    // A line with none built has none to give.
+    StyledLine fresh = line(text, spans);
+    QVERIFY(!third.adoptLayout(fresh));
+    // Another stamp builds it anew, as for any line.
+    QVERIFY(&after.layout(font, 8, color) != built);
+    // What it draws is what a line built by itself draws.
+    const auto render = [&](StyledLine &styled) {
+      QImage image(600, 40, QImage::Format_ARGB32_Premultiplied);
+      image.fill(Qt::white);
+      QPainter painter(&image);
+      styled.layout(font, 9, color).draw(&painter, QPointF(4, 4));
+      return image;
+    };
+    StyledLine lender = line(text, spans), taker = line(text, spans),
+               alone = line(text, spans);
+    lender.layout(font, 9, color);
+    QVERIFY(taker.adoptLayout(lender));
+    QCOMPARE(render(taker), render(alone));
   }
 
   void registerFamiliesShareTheirParts() {
@@ -3112,6 +3172,145 @@ private slots:
     QCOMPARE(sent.at(4), QStringLiteral("decompile"));
     QTest::qWait(20);
     QVERIFY(!sent.contains(QStringLiteral("analysis_snapshot")));
+  }
+
+  void aReadThatTakesAnEditsPageStartsAReplicaOnlyWhileTheEditIsAnswered() {
+    // A view's read answered with the page its edit's reply carried goes to
+    // no one, so what a read sent to the owner left behind it is kept by
+    // hand: where the session says snapshots may be taken while such a read
+    // is on its way, a replica starts.  The read that takes a carried page
+    // counts as on its way from the edit's change until the edit has its
+    // own answer, and no longer.
+    QStringList sent, wires;
+    QList<QJsonObject> payloads;
+    QueryService *dispatcher = nullptr;
+    QueryService owner([&](const QString &operation, const QJsonObject &payload,
+                           const QString &) {
+      sent.append(operation);
+      payloads.append(payload);
+      wires.append(QString::number(wires.size() + 1));
+      // What the store holds is all of the renders, each time it is asked:
+      // by itself that starts no replica.
+      if (operation == QLatin1String("kept_renders"))
+        QTimer::singleShot(
+            0, dispatcher, [&, wire = wires.back(), at = sent.size() - 1] {
+              dispatcher->receive(
+                  {{"type", "response"},
+                   {"request_id", wire},
+                   {"operation", sent.at(at)},
+                   {"project_id", "project-one"},
+                   {"revision", dispatcher->revision()},
+                   {"status", "ok"},
+                   {"payload", QJsonObject{{"kept", 1}, {"complete", true}}}});
+            });
+      return wires.back();
+    });
+    dispatcher = &owner;
+    owner.setAvailable(true);
+    const auto reply = [&](int at, QJsonObject response,
+                           const QString &revision) {
+      response.insert("type", "response");
+      response.insert("request_id", wires.at(at));
+      response.insert("operation", sent.at(at));
+      response.insert("project_id", "project-one");
+      response.insert("revision", revision);
+      if (!response.contains("status"))
+        response.insert("status", "ok");
+      owner.receive(response);
+    };
+    // The page of the function as an edit's reply carries it at \p revision.
+    const auto carried = [](const QString &name, const QString &revision) {
+      QJsonArray answers;
+      answers.append(
+          QJsonObject{{"status", "ok"},
+                      {"payload", QJsonObject{{"etag", name},
+                                              {"text", name},
+                                              {"project_id", "project-one"},
+                                              {"revision", revision}}}});
+      return QJsonObject{{"then", answers}};
+    };
+    QObject reader;
+    owner.enqueueCommand("open", {{"path", "fixture-one"}}, &reader, {});
+    QTRY_COMPARE(sent.size(), 1);
+    reply(0, {}, QStringLiteral("1"));
+    QTRY_COMPARE(owner.projectId(), QStringLiteral("project-one"));
+    AnalysisService analysis(owner, QStringLiteral("/nonexistent/worker"));
+    analysis.setOwnerReadsKept(true);
+    const QJsonObject function{{"address", "0x1000"},
+                               {"representation", "source"}};
+    QString shown;
+    const auto read = [&] {
+      shown.clear();
+      analysis.queries().subscribe(
+          {"decompile", function}, &reader, [&](const QJsonObject &response) {
+            shown =
+                response.value("payload").toObject().value("text").toString();
+          });
+    };
+    // The owner gives the page.
+    read();
+    QTRY_VERIFY(sent.contains(QStringLiteral("decompile")));
+    reply(int(sent.indexOf(QStringLiteral("decompile"))),
+          {{"payload", QJsonObject{{"etag", "page-1"}, {"text", "page-1"}}}},
+          QStringLiteral("1"));
+    QTRY_COMPARE(shown, QStringLiteral("page-1"));
+    QTRY_VERIFY(!owner.hasPending());
+    const auto edit = [&](const QString &page, const QString &revision,
+                          std::function<void()> answered) {
+      const auto before = sent.size();
+      owner.enqueueCommand("rename", {{"address", "0x10"}, {"name", page}},
+                           &reader, [answered](const QJsonObject &) {
+                             if (answered)
+                               answered();
+                           });
+      QTRY_VERIFY(sent.size() > before &&
+                  sent.back() == QLatin1String("rename"));
+      // The edit carries the read of the page the owner gave.
+      QCOMPARE(payloads.back().value("then").toArray().size(), 1);
+      reply(int(sent.size()) - 1, carried(page, revision), revision);
+    };
+    const auto pagesTaken = analysis.pagesTaken();
+    const auto ownerReads = analysis.ownerReads();
+    // An edit whose page the view reads once the edit has its answer: the
+    // page is the carried one, the owner is asked nothing, and the session's
+    // word starts no replica.
+    bool edited = false;
+    edit(QStringLiteral("page-2"), QStringLiteral("2"), [&] { edited = true; });
+    QTRY_VERIFY(edited);
+    read();
+    // Said in the same breath as the read is made: it is no read on its way.
+    analysis.setSnapshotBlocked(false);
+    QTRY_COMPARE(shown, QStringLiteral("page-2"));
+    QCOMPARE(analysis.pagesTaken(), pagesTaken + 1);
+    analysis.setSnapshotBlocked(false);
+    QTRY_VERIFY(!owner.hasPending());
+    QVERIFY(!analysis.replicaStarted());
+    // An edit whose page the view reads at its change, as a view shown does;
+    // the session says snapshots may be taken only later, when the edit has
+    // had its answer: no replica either.
+    const auto atTheChange =
+        connect(&owner, &QueryService::contextChanged, &reader, read);
+    edited = false;
+    edit(QStringLiteral("page-3"), QStringLiteral("3"), [&] { edited = true; });
+    QTRY_VERIFY(edited);
+    QTRY_COMPARE(shown, QStringLiteral("page-3"));
+    QCOMPARE(analysis.pagesTaken(), pagesTaken + 2);
+    QTRY_VERIFY(!owner.hasPending());
+    analysis.setSnapshotBlocked(false);
+    QTest::qWait(20);
+    QVERIFY(!analysis.replicaStarted());
+    // The same, and the session says so as it takes the edit's answer in: the
+    // read was on its way then, and a replica starts.
+    edit(QStringLiteral("page-4"), QStringLiteral("4"),
+         [&] { analysis.setSnapshotBlocked(false); });
+    QTRY_COMPARE(shown, QStringLiteral("page-4"));
+    QCOMPARE(analysis.pagesTaken(), pagesTaken + 3);
+    QTRY_VERIFY(analysis.replicaStarted());
+    QTRY_VERIFY(sent.contains(QStringLiteral("analysis_snapshot")));
+    // None of the three reads was asked of the owner.
+    QCOMPARE(analysis.ownerReads(), ownerReads);
+    QCOMPARE(sent.count(QStringLiteral("decompile")), 1);
+    disconnect(atTheChange);
   }
 };
 

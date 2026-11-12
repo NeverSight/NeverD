@@ -7632,6 +7632,168 @@ private slots:
     QVERIFY(!session.analysisReplicaStarted());
   }
 
+  void aViewThatAsksAtAnEditTakesThePageTheOwnerReadWithIt() {
+    QTemporaryDir directory;
+    const auto path = writeFixture(
+        directory,
+        QStringLiteral("summaries-ready-render-store-source-cache.bin"));
+    {
+      // An earlier session renders every function into the project's store.
+      Session session(QString::fromLocal8Bit(TEST_WORKER));
+      session.open(path);
+      QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+      session.prepareFunctionRead(Base);
+      QTRY_COMPARE_WITH_TIMEOUT(session.analysisRenderAheadState(),
+                                QStringLiteral("done"), NativeOpenTimeoutMs);
+    }
+    Session session(QString::fromLocal8Bit(TEST_WORKER));
+    session.open(path);
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    QObject reader;
+    const QJsonObject kept{{"address", hexAddress(Base + 32)},
+                           {"representation", "source"},
+                           {"offset", 0},
+                           {"limit", 4}};
+    QJsonObject shown;
+    const auto read = [&] {
+      shown = {};
+      session.analysisQueries(kept, &reader)
+          .subscribe({"decompile", kept}, &reader,
+                     [&](const QJsonObject &response) {
+                       shown = response.value("payload").toObject();
+                     });
+    };
+    read();
+    QTRY_VERIFY_WITH_TIMEOUT(!shown.isEmpty(), OpenTimeoutMs);
+    const auto given = shown;
+    QVERIFY(!given.value("etag").toString().isEmpty());
+    // As a view does: it reads its page again where the revision changes.
+    int asked = 0;
+    connect(&session, &Session::revisionChanged, &reader, [&] {
+      ++asked;
+      read();
+    });
+    const auto taken = session.analysisPagesTaken();
+    const auto ownerReads = session.analysisOwnerReads();
+    // The edit's reply carries the page, which the view's read takes: the
+    // owner is asked nothing for it.
+    session.setComment(Base + 32, QStringLiteral("taken with the edit"));
+    QTRY_VERIFY_WITH_TIMEOUT(asked == 1, OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(!shown.isEmpty(), OpenTimeoutMs);
+    QVERIFY(shown.value("text").toString().contains(
+        QStringLiteral("taken with the edit")));
+    QVERIFY(shown.value("etag") != given.value("etag"));
+    QCOMPARE(session.analysisPagesTaken(), taken + 1);
+    QCOMPARE(session.analysisOwnerReads(), ownerReads);
+    // The page it keeps from here is the owner's to answer for, as one the
+    // owner was asked for is: the next edit's reply carries it again.
+    session.setComment(Base + 32, QStringLiteral("and taken again"));
+    QTRY_VERIFY_WITH_TIMEOUT(asked == 2, OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(!shown.isEmpty(), OpenTimeoutMs);
+    QVERIFY(shown.value("text").toString().contains(
+        QStringLiteral("and taken again")));
+    QCOMPARE(session.analysisPagesTaken(), taken + 2);
+    QCOMPARE(session.analysisOwnerReads(), ownerReads);
+    QTRY_VERIFY_WITH_TIMEOUT(!session.queries().hasPending(), OpenTimeoutMs);
+  }
+
+  void theViewsThatShowAnEditGoAheadOfTheOthersAtItsRevision() {
+    QTemporaryDir directory;
+    const auto path = writeFixture(
+        directory,
+        QStringLiteral("summaries-ready-render-store-source-cache.bin"));
+    {
+      // An earlier session renders every function into the project's store.
+      Session session(QString::fromLocal8Bit(TEST_WORKER));
+      session.open(path);
+      QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+      session.prepareFunctionRead(Base);
+      QTRY_COMPARE_WITH_TIMEOUT(session.analysisRenderAheadState(),
+                                QStringLiteral("done"), NativeOpenTimeoutMs);
+    }
+    Workbench bench;
+    LoadDialogAcceptor loads;
+    bench.window->openFile(path);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *assembly = bench.window->disassembly();
+    assembly->navigate(Base + 32);
+    QTRY_COMPARE(assembly->currentFunction(),
+                 std::optional<Address>(Base + 32));
+    bench.action(ActionId::ViewPseudocode)->trigger();
+    // The window opens once the listing's jump has landed.
+    QTRY_VERIFY_WITH_TIMEOUT(bench.codeView(QStringLiteral("source")),
+                             OpenTimeoutMs);
+    auto *view = bench.codeView(QStringLiteral("source"));
+    auto *code = view->text();
+    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 2,
+                             OpenTimeoutMs);
+    auto *listing = assembly->listing();
+    QTRY_VERIFY(ListingViewTestAccess::settled(*listing));
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    // What another listener finds when it hears of the revision: the code
+    // view shows the edit's page already, which the reply carried, and the
+    // listing has asked for its rows.
+    QObject reader;
+    QString shown;
+    quint64 asked = 0;
+    bool loading = true;
+    int heard = 0;
+    connect(&bench.session, &Session::revisionChanged, &reader, [&] {
+      ++heard;
+      shown = code->allText();
+      loading = code->loading();
+      asked = ListingViewTestAccess::requests(*listing);
+    });
+    // And when the views take what is there: the listing has asked by then,
+    // so that the worker reads its rows meanwhile.
+    quint64 askedBeforeTaking = 0;
+    connect(&bench.session, &Session::shownRevisionAsked, &reader, [&] {
+      askedBeforeTaking = ListingViewTestAccess::requests(*listing);
+    });
+    const auto taken = bench.session.analysisPagesTaken();
+    const auto requests = ListingViewTestAccess::requests(*listing);
+    // Painted, so that its lines have layouts to lend.
+    QVERIFY(QTest::qWaitForWindowExposed(bench.window.get()));
+    QVERIFY(!code->viewport()->grab().isNull());
+    const auto layouts = code->layoutsKept();
+    bench.session.setComment(Base + 32, QStringLiteral("shown at once"));
+    QTRY_VERIFY_WITH_TIMEOUT(heard == 1, OpenTimeoutMs);
+    QVERIFY2(shown.contains(QStringLiteral("shown at once")),
+             qPrintable(shown));
+    QVERIFY(!loading);
+    QCOMPARE(asked, requests + 1);
+    QCOMPARE(askedBeforeTaking, requests + 1);
+    QCOMPARE(bench.session.analysisPagesTaken(), taken + 1);
+    // The lines the edit left as they read took the layouts built for them.
+    QVERIFY(code->layoutsKept() > layouts);
+    // Each asks once: the word that follows, to everyone, reads nothing again.
+    QTRY_VERIFY_WITH_TIMEOUT(ListingViewTestAccess::settled(*listing) &&
+                                 !bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    QCOMPARE(ListingViewTestAccess::requests(*listing), requests + 1);
+    QVERIFY(code->allText().contains(QStringLiteral("shown at once")));
+    // The lines that read as they did kept their layouts through the page
+    // read again: what they draw is what layouts built afresh draw, which a
+    // change of style has every line build.
+    QTRY_VERIFY(QTest::qWaitForWindowExposed(bench.window.get()));
+    const QImage kept = code->viewport()->grab().toImage();
+    emit Theme::instance().changed();
+    QCoreApplication::processEvents();
+    const QImage afresh = code->viewport()->grab().toImage();
+    QVERIFY(!kept.isNull());
+    QCOMPARE(kept, afresh);
+    // A revision said by itself is read as before.
+    const auto version = code->documentVersion();
+    emit bench.session.revisionChanged();
+    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() &&
+                                 !bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    QVERIFY(code->documentVersion() != version ||
+            code->allText().contains(QStringLiteral("shown at once")));
+    QCOMPARE(heard, 2);
+  }
+
   void aPageAReplicaGaveReadsFromTheReplicaAfterANote() {
     QTemporaryDir directory;
     const auto path = writeFixture(
@@ -9741,8 +9903,11 @@ private slots:
           bench.window->disassembly()->currentFunction().has_value(),
           OpenTimeoutMs);
       bench.action(ActionId::ViewPseudocode)->trigger();
+      // Where the listing's jump is still on its way, the window opens once
+      // it lands (MainWindow::showPseudocode).
+      QTRY_VERIFY_WITH_TIMEOUT(bench.codeView(QStringLiteral("source")),
+                               OpenTimeoutMs);
       auto *view = bench.codeView(QStringLiteral("source"));
-      QVERIFY(view);
       target = view->text()->viewport();
     } else if (targetName == QLatin1String("output"))
       target = bench.window->findChild<OutputWindow *>()
@@ -11245,10 +11410,15 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(
         !readAll(path + ".neverd/renames.json").contains("taken_back_at_once"),
         OpenTimeoutMs);
-    // A step no history read is on its way for is refused as before.
+    // A step no history read is on its way for is refused as before: once
+    // what the session reads behind the edits is in, nothing has changed.
     bench.session.undo();
     QTest::qWait(50);
-    QVERIFY(bench.session.canRedo() && !bench.session.queries().hasPending());
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    QVERIFY(bench.session.canRedo() && !bench.session.canUndo());
+    QVERIFY(
+        !readAll(path + ".neverd/renames.json").contains("taken_back_at_once"));
   }
 
   void undoTakesBackANameAfterAComment() {

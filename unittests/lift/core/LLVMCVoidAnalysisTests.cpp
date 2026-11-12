@@ -14,6 +14,7 @@
 #include "neverd/backend/llvm/X86/LLVMX86FPStateAsm.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
@@ -23,6 +24,7 @@
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/SourceMgr.h"
 
 #include <stdexcept>
 
@@ -409,10 +411,12 @@ TEST(LLVMCVoidAnalysis, FreezeOfMinMaxRetainsLoadedValuesAndPoisonGuard) {
       Builder.SetInsertPoint(
           llvm::BasicBlock::Create(Context, "entry", Function));
       llvm::Value *Value = Builder.CreateLoad(I32, Function->getArg(0));
+      // A dividend that may be poison over a divisor that may be -1: C's
+      // quotient can overflow where LLVM's is only poison.
       if (PoisonOperand)
-        Value = Builder.CreateUDiv(
-            Value, Builder.CreateAdd(Function->getArg(2), Builder.getInt32(1),
-                                     "denominator", false, true));
+        Value = Builder.CreateSDiv(Builder.CreateAdd(Value, Builder.getInt32(1),
+                                                     "dividend", false, true),
+                                   Function->getArg(2));
       auto *Reduced = Builder.CreateBinaryIntrinsic(Kinds[Kind], Value,
                                                     Function->getArg(1));
       auto *Chosen = Builder.CreateFreeze(Reduced, "chosen");
@@ -587,10 +591,9 @@ TEST(LLVMCVoidAnalysis, FreezeOfIntegerCallRejectsUnprovedOperands) {
         llvm::GlobalValue::ExternalLinkage, "unproved_call", Module);
     llvm::IRBuilder<> Builder(
         llvm::BasicBlock::Create(Context, "entry", Function));
-    llvm::Value *Operand = Builder.CreateUDiv(
-        Function->getArg(0),
-        Builder.CreateAdd(Function->getArg(1), Builder.getInt64(1),
-                          "denominator", false, true));
+    // An out-of-range conversion is poison in LLVM and undefined in C.
+    llvm::Value *Operand = Builder.CreateFPToUI(
+        Builder.CreateBitCast(Function->getArg(0), Builder.getDoubleTy()), I64);
     if (Case == 1)
       Operand = llvm::UndefValue::get(I64);
     if (Case == 2)
@@ -846,6 +849,198 @@ int main(void) {
 }
 )",
                 TargetFlags);
+}
+
+TEST(LLVMCVoidAnalysis, FreezeOfARemainderNeedsNoProofOfItsDivisor) {
+  // A poison or zero divisor is immediate undefined behavior in LLVM as in
+  // C, so on a defined execution the divisor is the value C computes too.
+  // Only the dividend can be the poison a later freeze defines, and here it
+  // has a total projection: the recurrence prints, for a divisor nothing is
+  // known about.
+  for (bool Signed : {false, true}) {
+    SCOPED_TRACE(Signed);
+    llvm::LLVMContext Context;
+    llvm::Module Module("freeze-remainder-loop", Context);
+    Module.setDataLayout("e-p:64:64");
+    auto *I32 = llvm::Type::getInt32Ty(Context);
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(I32, {I32, I32, I32}, false),
+        llvm::GlobalValue::ExternalLinkage, "remainder_loop", Module);
+    auto *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
+    auto *Loop = llvm::BasicBlock::Create(Context, "loop", Function);
+    auto *Exit = llvm::BasicBlock::Create(Context, "exit", Function);
+    llvm::IRBuilder<> Builder(Entry);
+    Builder.CreateBr(Loop);
+    Builder.SetInsertPoint(Loop);
+    auto *Index = Builder.CreatePHI(I32, 2);
+    auto *Value = Builder.CreatePHI(I32, 2);
+    Index->addIncoming(Builder.getInt32(0), Entry);
+    Value->addIncoming(Function->getArg(0), Entry);
+    // The step may overflow its flag; the freeze makes it the dividend's
+    // own value before the division.
+    auto *Stepped = Builder.CreateFreeze(
+        Builder.CreateAdd(Value, Builder.getInt32(7), "stepped", true, true),
+        "dividend");
+    auto *Remainder = Signed ? Builder.CreateSRem(Stepped, Function->getArg(1))
+                             : Builder.CreateURem(Stepped, Function->getArg(1));
+    auto *Chosen = Builder.CreateFreeze(
+        Builder.CreateAdd(Remainder, Builder.getInt32(3), "next", true, true),
+        "chosen");
+    auto *NextIndex = Builder.CreateAdd(Index, Builder.getInt32(1));
+    Index->addIncoming(NextIndex, Loop);
+    Value->addIncoming(Chosen, Loop);
+    Builder.CreateCondBr(Builder.CreateICmpULT(NextIndex, Function->getArg(2)),
+                         Loop, Exit);
+    Builder.SetInsertPoint(Exit);
+    Builder.CreateRet(Chosen);
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, {}));
+    compileAndRun(Source + (Signed ? R"(
+int main(void) {
+  const uint32_t divisors[] = {1, 3, 10, 0x7fffffffU, 0xfffffffdU};
+  for (unsigned d = 0; d < 5; ++d) {
+    uint32_t value = 12345;
+    for (unsigned n = 1; n < 24; ++n) {
+      value = (uint32_t)((int32_t)(value + 7U) % (int32_t)divisors[d]) + 3U;
+      if ((uint32_t)remainder_loop(12345, divisors[d], n) != value) return 1;
+    }
+  }
+  return 0;
+}
+)"
+                                   : R"(
+int main(void) {
+  const uint32_t divisors[] = {1, 3, 10, 0x80000000U, 0xffffffffU};
+  for (unsigned d = 0; d < 5; ++d) {
+    uint32_t value = 0xfffffff0U;
+    for (unsigned n = 1; n < 24; ++n) {
+      value = (value + 7U) % divisors[d] + 3U;
+      if ((uint32_t)remainder_loop(0xfffffff0U, divisors[d], n) != value)
+        return 1;
+    }
+  }
+  return 0;
+}
+)"));
+  }
+}
+
+TEST(LLVMCVoidAnalysis, FreezeOfASignedQuotientNeedsItsDividendOrDivisor) {
+  // C's quotient of the least integer by -1 overflows. LLVM agrees when the
+  // dividend is its own value, but not when the dividend is poison and the
+  // least integer is merely C's choice for it: a possibly poison dividend
+  // over a divisor that may be -1 stays refused, through a call as well.
+  for (bool ThroughCall : {false, true}) {
+    SCOPED_TRACE(ThroughCall);
+    llvm::LLVMContext Context;
+    llvm::Module Module("freeze-signed-quotient", Context);
+    auto *I64 = llvm::Type::getInt64Ty(Context);
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(I64, {I64, I64}, false),
+        llvm::GlobalValue::ExternalLinkage, "unproved_quotient", Module);
+    llvm::IRBuilder<> Builder(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    llvm::Value *Quotient = Builder.CreateSDiv(
+        Builder.CreateAdd(Function->getArg(0), Builder.getInt64(1), "dividend",
+                          false, true),
+        Function->getArg(1));
+    if (ThroughCall) {
+      auto Callee = Module.getOrInsertFunction(
+          "integer_service", llvm::FunctionType::get(I64, {I64}, false));
+      Quotient = Builder.CreateCall(Callee, {Quotient});
+    }
+    Builder.CreateRet(Builder.CreateFreeze(Quotient));
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    EXPECT_THROW(neverd::LLVMCEmitter().emit(Module, Out, {}),
+                 std::runtime_error);
+  }
+}
+
+TEST(LLVMCVoidAnalysis, FreezeReadsRotationsCallMembersAndLinkerAddresses) {
+  // Each of these has one bit pattern in C whatever its operands are: a
+  // funnel shift, whose helper reduces the count; a member of the record or
+  // vector a call returned; the result of assembly; an address the linker
+  // computes. A freeze of an expression over them prints as the expression.
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"ir(
+target datalayout = "e-p:64:64"
+@table = internal constant [4 x i32] [i32 3, i32 5, i32 7, i32 11]
+declare i32 @llvm.fshl.i32(i32, i32, i32)
+declare i32 @llvm.bswap.i32(i32)
+declare { i64, i64 } @pair_service(i64)
+declare { i32, i1 } @llvm.uadd.with.overflow.i32(i32, i32)
+define i32 @rotated(i32 %seed, i32 %count, i32 %rounds) {
+entry:
+  br label %loop
+loop:
+  %index = phi i32 [ 0, %entry ], [ %next.index, %loop ]
+  %value = phi i32 [ %seed, %entry ], [ %chosen, %loop ]
+  %turned = call i32 @llvm.fshl.i32(i32 %value, i32 %value, i32 %count)
+  %swapped = call i32 @llvm.bswap.i32(i32 %turned)
+  %sum = add nsw i32 %swapped, 12345
+  %chosen = freeze i32 %sum
+  %next.index = add i32 %index, 1
+  %again = icmp ult i32 %next.index, %rounds
+  br i1 %again, label %loop, label %exit
+exit:
+  ret i32 %chosen
+}
+define i64 @member(i64 %x) {
+  %pair = call { i64, i64 } @pair_service(i64 %x)
+  %low = extractvalue { i64, i64 } %pair, 0
+  %high = extractvalue { i64, i64 } %pair, 1
+  %sum = add nuw i64 %low, %high
+  %chosen = freeze i64 %sum
+  ret i64 %chosen
+}
+define i32 @carried(i32 %a, i32 %b) {
+  %pair = call { i32, i1 } @llvm.uadd.with.overflow.i32(i32 %a, i32 %b)
+  %sum = extractvalue { i32, i1 } %pair, 0
+  %next = add nsw i32 %sum, 1
+  %chosen = freeze i32 %next
+  ret i32 %chosen
+}
+define i64 @linked(i64 %x) {
+  %sum = add nuw i64 %x, ptrtoint (ptr getelementptr inbounds (i8, ptr @table, i64 8) to i64)
+  %chosen = freeze i64 %sum
+  %same = sub i64 %chosen, ptrtoint (ptr @table to i64)
+  ret i64 %same
+}
+)ir",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Out, {}));
+  Source += R"(
+__typeof__(pair_service(0)) pair_service(uint64_t x) {
+  __typeof__(pair_service(0)) result = {x * 3, x >> 7};
+  return result;
+}
+static uint32_t rotl(uint32_t v, uint32_t n) {
+  n %= 32;
+  return n ? (v << n) | (v >> (32 - n)) : v;
+}
+int main(void) {
+  for (uint32_t count = 0; count < 70; count += 3) {
+    uint32_t value = 0x9e3779b9U;
+    for (unsigned n = 1; n < 12; ++n) {
+      value = __builtin_bswap32(rotl(value, count)) + 12345U;
+      if ((uint32_t)rotated(0x9e3779b9U, count, n) != value) return 1;
+    }
+  }
+  if (member(1000) != 1000 * 3 + (1000 >> 7)) return 2;
+  if ((uint32_t)carried(0xfffffff0U, 0x20U) != 0x11U) return 3;
+  if (linked(40) != 48) return 4;
+  return 0;
+}
+)";
+  for (const char *Level : {"-O0", "-O2"})
+    compileAndRun(Source,
+                  {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
 }
 
 } // namespace

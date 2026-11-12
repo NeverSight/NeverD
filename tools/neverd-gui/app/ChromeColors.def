@@ -140,6 +140,16 @@ NEVERD_CHROME_COLOR(SecondaryText, "#717171", "#9D9D9D", "#B2292929",
 NEVERD_CHROME_COLOR(Input, "#FFFFFF", "#3C3C3C", "#FFFFFF", "#000000")
 NEVERD_CHROME_COLOR(InputBorder, "#CECECE", "#3C3C3C", "#0F4A85", "#6FC3DF")
 NEVERD_CHROME_COLOR(DisabledBorder, "#E5E5E5", "#3C3C3C", "#7F7F7F", "#A5A5A5")
+// A button or field that cannot act recedes to a faint plate (#AARRGGBB): the
+// button gray at 40%, as Visual Studio Code fades a disabled button whole and
+// close to Windows 11's ControlFillColorDisabled.  The light theme's plate
+// lies within a twentieth of the window, so it keeps an edge too, Light
+// Modern's button border at that 40%; the dark theme's needs none.  A high
+// contrast theme keeps the outline alone.
+NEVERD_CHROME_COLOR(ControlDisabled, "#66E7E7E7", "#663A3D41", "#00000000",
+                    "#00000000")
+NEVERD_CHROME_COLOR(ControlDisabledBorder, "#0A000000", "#00000000", "#7F7F7F",
+                    "#A5A5A5")
 NEVERD_CHROME_COLOR(CheckboxBackground, "#FFFFFF", "#3C3C3C", "#FFFFFF",
                     "#000000")
 NEVERD_CHROME_COLOR(CheckboxBorder, "#919191", "#6B6B6B", "#0F4A85", "#6FC3DF")

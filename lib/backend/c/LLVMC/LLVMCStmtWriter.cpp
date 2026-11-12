@@ -55,6 +55,7 @@
 #include "neverd/backend/MachineInstructionText.h"
 #include "neverd/backend/c/render/AArch64/AArch64ExclusiveC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
+#include "neverd/backend/c/render/NativeVectorCall.h"
 #include "neverd/backend/c/render/X86/X86SegmentAsm.h"
 #include "neverd/backend/c/render/X86/X87ContextRender.h"
 #include "neverd/backend/c/render/X86/X87GuardedValueRender.h"
@@ -240,6 +241,11 @@ bool freezeHasDefinedCProjection(const llvm::Value *Root,
         case llvm::Intrinsic::usub_sat:
         case llvm::Intrinsic::sadd_sat:
         case llvm::Intrinsic::ssub_sat:
+        // A funnel shift's helper reduces the count modulo the width.
+        case llvm::Intrinsic::fshl:
+        case llvm::Intrinsic::fshr:
+        case llvm::Intrinsic::bswap:
+        case llvm::Intrinsic::bitreverse:
           if (!Type || Type->getBitWidth() > 64)
             return false;
           break;
@@ -257,15 +263,71 @@ bool freezeHasDefinedCProjection(const llvm::Value *Root,
         Users[Argument].push_back(Value);
         Work.push_back(Argument);
       }
-      if (!Callee) {
+      // A called pointer is an operand like any other; assembly text is not
+      // a value.
+      if (!Callee && !Call->isInlineAsm()) {
         Users[Call->getCalledOperand()].push_back(Value);
         Work.push_back(Call->getCalledOperand());
+      }
+      continue;
+    }
+    // An address the linker computes, as an integer: the casts and sums of a
+    // constant expression are those of the instructions below.
+    if (const auto *Expression = llvm::dyn_cast<llvm::ConstantExpr>(Value)) {
+      switch (Expression->getOpcode()) {
+      case llvm::Instruction::PtrToInt:
+      case llvm::Instruction::IntToPtr:
+      case llvm::Instruction::Trunc:
+      case llvm::Instruction::Add:
+      case llvm::Instruction::Sub:
+      case llvm::Instruction::Xor:
+        break;
+      default:
+        return false;
+      }
+      for (const auto &Operand : Expression->operands()) {
+        Users[Operand].push_back(Value);
+        Work.push_back(Operand);
       }
       continue;
     }
     const auto *Inst = llvm::dyn_cast<llvm::Instruction>(Value);
     if (!Inst)
       return false;
+    // One member of a call's result is part of the bit pattern the call
+    // returned. As for a scalar result, the arguments need their own proof.
+    if (llvm::isa<llvm::ExtractValueInst, llvm::ExtractElementInst>(Inst)) {
+      const auto *Call = llvm::dyn_cast<llvm::CallInst>(Inst->getOperand(0));
+      if (!Call || Call->hasOperandBundles() ||
+          Call->getCallingConv() != llvm::CallingConv::C)
+        return false;
+      if (const auto *Index = llvm::dyn_cast<llvm::ExtractElementInst>(Inst);
+          Index && !llvm::isa<llvm::ConstantInt>(Index->getIndexOperand()))
+        return false;
+      if (const auto *Callee = Call->getCalledFunction();
+          Callee && Callee->isIntrinsic())
+        switch (Callee->getIntrinsicID()) {
+        case llvm::Intrinsic::sadd_with_overflow:
+        case llvm::Intrinsic::uadd_with_overflow:
+        case llvm::Intrinsic::ssub_with_overflow:
+        case llvm::Intrinsic::usub_with_overflow:
+        case llvm::Intrinsic::smul_with_overflow:
+        case llvm::Intrinsic::umul_with_overflow:
+          break;
+        default:
+          return false;
+        }
+      Anchors.push_back(Value);
+      for (const auto &Argument : Call->args()) {
+        Users[Argument].push_back(Value);
+        Work.push_back(Argument);
+      }
+      if (!Call->getCalledFunction() && !Call->isInlineAsm()) {
+        Users[Call->getCalledOperand()].push_back(Value);
+        Work.push_back(Call->getCalledOperand());
+      }
+      continue;
+    }
     if (Inst->getOpcode() == llvm::Instruction::SDiv ||
         Inst->getOpcode() == llvm::Instruction::UDiv ||
         Inst->getOpcode() == llvm::Instruction::SRem ||
@@ -285,25 +347,27 @@ bool freezeHasDefinedCProjection(const llvm::Value *Root,
         Anchors.push_back(Value);
         continue;
       }
-      // A C-defined denominator makes a wrapping numerator safe as well.
-      // Ignore poison-generating flags when proving its nonzero value: an
-      // overflowing flagged multiply must not conceal a zero C denominator.
+      // A poison or zero divisor is immediate LLVM UB as well, so on every
+      // defined execution the divisor is a value, C's is that value, and it
+      // is not zero: only the dividend can be the poison freeze defines. It
+      // needs a total projection of its own. A signed division overflows in
+      // C for the least dividend and -1, which is LLVM UB only when that
+      // dividend is LLVM's own value rather than C's choice for a poison one.
       const llvm::SimplifyQuery Query(Layout, &Dominators, nullptr, Inst,
                                       /*UseInstrInfo=*/false,
                                       /*CanUseUndef=*/false);
+      auto *Dividend = Inst->getOperand(0);
       auto *Denominator = Inst->getOperand(1);
-      if (!llvm::isKnownNonZero(Denominator, Query))
-        return false;
       const bool Signed = Inst->getOpcode() == llvm::Instruction::SDiv ||
                           Inst->getOpcode() == llvm::Instruction::SRem;
       if (Signed &&
+          !llvm::isGuaranteedNotToBeUndefOrPoison(Dividend, nullptr, Inst,
+                                                  &Dominators) &&
           !llvm::isKnownNonEqual(Denominator,
                                  llvm::ConstantInt::getSigned(Type, -1), Query))
         return false;
-      for (const auto &Operand : Inst->operands()) {
-        Users[Operand].push_back(Value);
-        Work.push_back(Operand);
-      }
+      Users[Dividend].push_back(Value);
+      Work.push_back(Dividend);
       continue;
     }
     switch (Inst->getOpcode()) {
@@ -1621,6 +1685,9 @@ bool LLVMCWriter::deadNullAssignBlocks(
 }
 
 void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
+  // A block laid out inside another's region prints no label of its own; one
+  // whose address is taken keeps the place its code starts at.
+  noteLabelPlace(Inst.getParent());
   auto Event =
       SourceRecorder ? SourceRecorder->instruction(Inst) : std::nullopt;
   if (Event)
@@ -4611,6 +4678,27 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
     OS << ");\n";
     return true;
   }
+  if (const auto Native = nativeVectorCall(Call, Opts.TheArch)) {
+    emitIndent(Indent);
+    if (!Call.use_empty())
+      OS << getName(&Call) << " = (" << typeToCLLVM(Call.getType()) << ")";
+    if (Native->ResultThrough)
+      OS << Native->ResultThrough << "(";
+    OS << Native->Name << "(";
+    bool First = true;
+    for (const auto &Operand : Native->Operands) {
+      if (!First)
+        OS << ", ";
+      First = false;
+      if (Operand.Type.empty())
+        OS << Operand.Immediate;
+      else
+        OS << "(" << Operand.Type << ")("
+           << valueStr(Call.getArgOperand(Operand.Argument)) << ")";
+    }
+    OS << (Native->ResultThrough ? "));\n" : ");\n");
+    return true;
+  }
   if (IID == llvm::Intrinsic::aarch64_neon_bfmmla) {
     if (!isNativeVectorIntrinsic(Call, Opts.TheArch))
       throw std::runtime_error("BFMMLA requires an AArch64 C projection");
@@ -6445,6 +6533,50 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
       RenderingCalls.pop_back();
       return Expr;
     }
+    // A half-precision conversion to or from a fixed-point integer. The
+    // instruction takes 1 to 32 or 64 fraction bits and arm_fp16.h's
+    // intrinsics 1 to 16, so the instruction itself is written.
+    const bool ToFixed = IID == llvm::Intrinsic::aarch64_fcvtzs_fixed ||
+                         IID == llvm::Intrinsic::aarch64_fcvtzu_fixed;
+    if (ToFixed || IID == llvm::Intrinsic::aarch64_scvtf_fixed ||
+        IID == llvm::Intrinsic::aarch64_ucvtf_fixed) {
+      auto *Integer = ToFixed                ? Call.getType()
+                      : Call.arg_size() == 2 ? Call.getArgOperand(0)->getType()
+                                             : nullptr;
+      auto *Half = ToFixed ? Call.arg_size() == 2
+                                 ? Call.getArgOperand(0)->getType()
+                                 : nullptr
+                           : Call.getType();
+      const auto *Fraction = llvm::dyn_cast_or_null<llvm::ConstantInt>(
+          Call.arg_size() == 2 ? Call.getArgOperand(1) : nullptr);
+      const unsigned Bits =
+          Integer && Integer->isIntegerTy() ? Integer->getIntegerBitWidth() : 0;
+      if (Opts.TheArch != Arch::AArch64 || !llvm::isa<llvm::CallInst>(Call) ||
+          Call.getFunctionType() != Callee->getFunctionType() ||
+          (Bits != 32 && Bits != 64) || !Half || !Half->isHalfTy() ||
+          !Fraction || Fraction->isZero() || Fraction->getValue().ugt(Bits))
+        throw std::runtime_error(
+            "unsupported AArch64 half-precision fixed-point conversion");
+      const bool Unsigned = IID == llvm::Intrinsic::aarch64_fcvtzu_fixed ||
+                            IID == llvm::Intrinsic::aarch64_ucvtf_fixed;
+      const std::string Word = Bits == 64 ? "x" : "w";
+      const std::string IntegerType = typeToCLLVM(Integer);
+      const std::string Operand = valueStr(Call.getArgOperand(0));
+      const std::string Count = std::to_string(Fraction->getZExtValue());
+      std::string Expr;
+      if (ToFixed)
+        Expr = "({ " + IntegerType + " neverd_fixed; __asm__(\"" +
+               (Unsigned ? "fcvtzu" : "fcvtzs") + " %" + Word + "0, %h1, #" +
+               Count + "\" : \"=r\"(neverd_fixed) : \"w\"((_Float16)(" +
+               Operand + "))); neverd_fixed; })";
+      else
+        Expr = std::string("({ _Float16 neverd_half; __asm__(\"") +
+               (Unsigned ? "ucvtf" : "scvtf") + " %h0, %" + Word + "1, #" +
+               Count + "\" : \"=w\"(neverd_half) : \"r\"((" + IntegerType +
+               ")(" + Operand + "))); neverd_half; })";
+      RenderingCalls.pop_back();
+      return Expr;
+    }
     // The floating-point status and control registers are read and written
     // whole, as MRS and MSR do: the compiler's builtin names the register.
     const bool ReadsStatus = IID == llvm::Intrinsic::aarch64_get_fpsr ||
@@ -8276,6 +8408,7 @@ void LLVMCWriter::writePhiCopies(const llvm::BasicBlock *From,
                                  const llvm::PHINode *Declare) {
   if (!From || !To)
     return;
+  noteLabelPlace(From);
   struct PhiCopy {
     const llvm::PHINode *Phi;
     const llvm::Value *Incoming;

@@ -30,6 +30,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/intrinsics/IntrinsicValueEffects.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/AArch64ImmediateMemoryImage.h"
 #include "neverd/ir/low/CFGBuilder.h"
@@ -127,11 +128,27 @@ auto ascendingLowerBound(
 
 using detail::ResolverBlockMemo;
 
+/// Whether Op is a well-formed intrinsic that only checks a condition and
+/// faults where it fails (onlyChecksForAFault): the alignment check of a
+/// `movaps`, a division's precondition.  Such an operation writes no register
+/// and no memory, so a value or a frame cell that reaches it also leaves it.
+bool intrinsicOnlyChecksForAFault(const LowOp &Op) {
+  return Op.Opcode == NdOp::INTRINSIC && Op.NumInputs >= 1 &&
+         Op.Inputs[0].isConst() && Op.Inputs[0].Size == sizeof(Intrinsic) &&
+         Op.Inputs[0].Offset < static_cast<uint64_t>(Intrinsic::_Count) &&
+         Op.Output.Size == 0 &&
+         onlyChecksForAFault(static_cast<Intrinsic>(Op.Inputs[0].Offset));
+}
+
 bool intrinsicMayClobberFrameMemory(const LowOp &Op) {
   if (Op.Opcode != NdOp::INTRINSIC || lowAArch64AddressLoadShapeIsValid(Op))
     return false;
   if (Op.NumInputs < 1 || !Op.Inputs[0].isConst())
     return true;
+  // A check that only faults stores nothing: the frame is as it was on every
+  // path that goes on past it.
+  if (intrinsicOnlyChecksForAFault(Op))
+    return false;
   const Intrinsic Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
   switch (Id) {
   // Ordering/cache hints and trap-only preconditions do not change the stored
@@ -7078,8 +7095,11 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         if (!consumeEvidence())
           return false;
         const LowOp &Op = Ops[I];
+        // A call or an intrinsic may write the register without naming it as
+        // its output.  A check that only faults writes none (the alignment
+        // check of the `movaps` that clears the ring before its first store).
         if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-            Op.Opcode == NdOp::INTRINSIC)
+            (Op.Opcode == NdOp::INTRINSIC && !intrinsicOnlyChecksForAFault(Op)))
           return false;
         const NdVar &Out = Op.Output;
         if (Out.Space != V.Space || Out.Size == 0 ||
@@ -12440,18 +12460,38 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
                      {},
                      {}});
     if (originalAArch64TableLoad(*Load)) {
-      if (Role.IsLiteralCoordinate || Role.AllowedBases.size() != 1 ||
-          Role.HasBaseSelect || Role.HasBaseMaskBlend || HasFrameStorage ||
-          HasDisplacedAddress || Role.AddressIndex.Value.Size ||
+      if (Role.IsLiteralCoordinate || Role.HasBaseMaskBlend ||
+          HasFrameStorage || HasDisplacedAddress ||
           Role.AddressScale != originalAArch64TableLoad(*Load)->accessBytes())
         return false;
+      uint32_t Capacity = Info.PhysicalCapacity ? Info.PhysicalCapacity
+                                                : limits::kMaxJumpTableEntries;
+      if (Role.HasBaseSelect) {
+        // The load selects between two tables and has no address ADD: its own
+        // index operand is the composite selector's dynamic coordinate.  Each
+        // table owns its own run; the merged capacity is not one table's.
+        const auto &Ranges = Info.StorageRanges;
+        if (!Info.TwoTableSelect || Role.AllowedBases.size() != 2 ||
+            Ranges.size() != 2 || Ranges[0].PhysicalSlotCount == 0 ||
+            Ranges[0].PhysicalSlotCount != Ranges[1].PhysicalSlotCount ||
+            Ranges[0].PhysicalSlotCount > limits::kMaxJumpTableEntries ||
+            std::min(Role.TrueBase, Role.FalseBase) != Ranges[0].BaseAddr ||
+            std::max(Role.TrueBase, Role.FalseBase) != Ranges[1].BaseAddr ||
+            Role.AddressIndex.DefinedAtPoint ||
+            Role.AddressIndex.Addr != Load->Addr ||
+            Role.AddressIndex.Seq != Load->Seq ||
+            !sameVar(Role.AddressIndex.Value,
+                     Load->Inputs[kAddressMemoryIndexOperand + 1]))
+          return false;
+        Capacity = static_cast<uint32_t>(Ranges[0].PhysicalSlotCount);
+      } else if (Role.AllowedBases.size() != 1 ||
+                 Role.AddressIndex.Value.Size) {
+        return false;
+      }
       bool AddressComplete = false;
       if (!aarch64OriginalTableLoadMatches(
-              *Load, Role,
-              Info.PhysicalCapacity ? Info.PhysicalCapacity
-                                    : limits::kMaxJumpTableEntries,
-              AggregateEvidenceBudget, AddressComplete, &QueryScope,
-              CertifiedEdgeOverrides, UseGroupContext)) {
+              *Load, Role, Capacity, AggregateEvidenceBudget, AddressComplete,
+              &QueryScope, CertifiedEdgeOverrides, UseGroupContext)) {
         Complete &= AddressComplete;
         return false;
       }
@@ -14113,6 +14153,10 @@ bool CFGBuilder::tableLoadAddressesMatchRole(
       return false;
     JumpTableLoadRole &Role = *Roles[RoleIndex].Role;
     if (Role.AddressIndex.Value.Size == 0)
+      continue;
+    // An original load has no address ADD to choose among: its certificate
+    // above bound this coordinate to the load's own index operand.
+    if (Roles[RoleIndex].OriginalCheckedAddress)
       continue;
     const auto &Addresses = AddressAlternatives[RoleIndex];
     const auto &Indices = AddressIndexAlternatives[RoleIndex];

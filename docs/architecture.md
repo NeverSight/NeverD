@@ -730,7 +730,7 @@ operands before reading the source, clamps shift operands before emitting
 LowIR, and records SF/AF/PF as undefined while defining CF/OF/ZF. APX NF
 preserves all flags. The shared prefix and APX validators retain address
 ownership. Decoder flag metadata is checked separately from architectural
-effects: legacy BEXTR metadata currently over-reports control-flag resets.
+effects, and has to name exactly the flags BEXTR defines and leaves undefined.
 
 `X86LiftBitCount` owns TZCNT, LZCNT and POPCNT admission, arithmetic and
 undefined-output effects across legacy, REX2 and APX/NF forms. F3 selection,
@@ -763,7 +763,12 @@ PDEP/PEXT retain the shared scalar intrinsic contract and native BMI2 lowering.
 `X86LiftADX` owns ADCX/ADOX admission and their independent unsigned CF/OF
 carry chains. It admits legacy map-2 and APX/NDD forms; ADX has no REX2 or NF
 form. It checks raw bytes, all public operands and implicit flags before a
-memory access. ADOX's legacy decoder detail omits TEST_OF and destination read
+memory access. The decoder's opcode detail of a legacy three-byte-map
+instruction is the whole `0F 38 xx` or `0F 3A xx` sequence, and `0F 0F xx` for
+3DNow!, whose selector follows the operands; the ADX, floating-point
+(`parseFPEncoding`) and 3DNow! validators compare every byte of it, so a
+decoder that reports another layout refuses the instruction instead of being
+read loosely. ADOX's legacy decoder detail omits TEST_OF and destination read
 access; the architectural inputs remain explicit in LowIR. Both sources and
 carry are consumed before any destination write, including aliases. Its empty
 undefined-output audit preserves earlier arbitrary flags, while the selected
@@ -6596,6 +6601,21 @@ its fixed parameters as the program's C library does
 requests are ints, glibc's an enumeration and an unsigned long). The GUI offers a separate C choice for non-C
 images and omits it when only C is offered.
 
+A callee typed a scalar float returns its whole vector register on the source
+routes when a direct caller lets a byte past the scalar reach an operation
+(`recoverPackedScalarReturnFromCallers`). Otherwise the LLVM route reads
+the scalar's lane alone where a scalar operation merged it into the
+register's value at entry, which no parameter supplies (`cvtsi2sd` into an
+XMM0 the routine never set): the bytes above the lane are no part of the
+return, so source output reads no unknown machine state for them and they
+pass zero, as an unset register reads on the native route. A temporary no statement assigns,
+the bytes a partial write keeps of a register nothing set, is an unknown leaf
+as such a register is. An AArch32 `$d` interval among code is data, bounded
+by the interval, so a literal pool's address prints as an object. An integer
+comparison, division or remainder of a floating value's bits casts the bit
+cast, never the floating text, and a guarded x87 value samples its status
+into a local that C hands to the thread-local owner.
+
 The reader also recognizes the portable prototype-integer type queries emitted
 by `CTypeRender`: `__typeof__(__builtin_choose_expr(sizeof(T) == N, (T)0,
 (Fixed)0))`. It selects the operand's integer type using the target data model's
@@ -9290,6 +9310,14 @@ block. Visited edge identities close transparent cycles and retain each
 outgoing edge's separate equality facts. No iteration count or guessed source
 replaces this traversal.
 
+The emitter's own audit of a frame, which proves a reload is a plain number
+when its exact stores are not all known, passes the same fault checks: an
+intrinsic with no output that `onlyChecksForAFault` accepts is neither a
+writer of the frame nor an escape of its address, and any other intrinsic
+that takes a frame address still ends the proof. A GOT base that joins its
+certified value and an exact reload of it in PHIs and copies is the certified
+zero when every leaf is, within `kMaxModelZeroJoinValues` values.
+
 The immutable CFG index includes ordinary and exceptional predecessors.
 Writes after the LOAD remain relevant when a backedge can return to it;
 non-returning suffixes cannot supply its value. A local overwrite or kill uses
@@ -9364,6 +9392,26 @@ Each reaching-definition lookup starts strictly before the previous one and
 debits the candidate evidence account, so the finite prefix itself bounds
 these walks. Recursive expression and selector proofs retain their separate
 depth limits; longer copies grant no address, target or domain authority.
+
+An AArch64 load that scales a register index is kept as one original
+instruction, not a load of a sum. The two-table recognizer takes that form
+too: the base and the raw index are the instruction's own operands, the merged
+selector is the slot index, and the address-role proof admits a select of
+bases for it only when the load's base is that select on every path, each arm
+is its own table by address provenance, and the index is masked to one
+table's capacity. A constant-base table's model gives a dispatch only the
+roles of its own load: where the branch's block holds the load, another read
+of the table (a threaded interpreter's other handlers) is no selector of this
+branch, though the consumer group still records it.
+
+A walk that proves a spilled base reaches its reload, or bounds the index of
+a frame store, passes an intrinsic that only checks for a fault
+(`onlyChecksForAFault`): an aligned vector store is lifted as an alignment
+check before its store, and the check writes no register and no memory. A
+dense guarded group whose bootstrap, every member reaching every slot of the
+owner, fails a member runs it once more with each member bound to the table
+its own load names; the two proving rounds are unchanged and still publish
+only what they repeat.
 
 The frozen resolver graph validates scalar operation shapes before retaining
 their records. Known integer/boolean operations require their complete explicit
@@ -10795,6 +10843,28 @@ incoming stack slots to pass on. A call to such a routine records its named
 count (`MedCallInfo::VarArgFixedCount`), so an LLVM declaration of a routine
 the module does not emit stays variadic. A declaration made from one call's
 arguments would cut another call's.
+
+A call through a pointer becomes a direct call where its own block proves the
+pointer is a routine of the image. In a relocatable object, whose sections
+start at zero, a scalar can equal a routine's address, so the proof carries
+what the constant it read is (`MedCallTarget::Provenance`) and only an
+address of the object's own converts (`addressesImage`); a slot, a register
+constant and a scalar stay indirect there. An indirect call's recovered list
+holds its register arguments and then the values stored for the stack. HighC
+pads it up to the register bank before the stored values where a register
+was left out, since C fills every argument register first. Each such register
+passes what the machine has in it at the call: the target, where it holds
+the call's target, and otherwise the value reaching the call, a parameter the
+body only passes on included, so a wrapper that hands its arguments on and
+adds stack arguments declares and passes them. The stored values are an
+upper bound, a local at the stack pointer among them, and a conforming call
+stores an integer for the stack only once the registers are used up: the
+padding applies where every register left out before the bank's last, which
+an alignment or a composite may skip, carries a value, or every floating
+register is taken. There the last register passes zero when the function has
+no value to name for it. A call that leaves more registers without one keeps
+its list, as do i386, variadic calls and a call recovery lists no arguments
+for, which takes the block scan's.
 
 An AAPCS64 register save area also spills q0-q7, which carry only the floating
 and vector arguments a caller passes. Where the function's va_arg reads none of
@@ -12537,6 +12607,58 @@ cast whose operand reads as
 a name, a member or a typed load converts that text as the instruction does:
 `sitofp` of an unsigned carrier is `(float)(int32_t)`, never C's implicit
 unsigned conversion.
+
+An x86 header defines PDEP, PEXT, the CRC32 steps and the RTM instructions
+inline, for a caller that has the feature. The function that calls one names
+the feature in its target attribute (`headerIntrinsicFeature`), beside those
+of its system instructions, so the unit builds with no option.
+
+A target vector intrinsic stays whole when the unit's vectors are scalarized,
+since its lanes are not independent, and prints as the header intrinsic that is
+the same operation (`NativeVectorCall.h`): arm_neon.h's by lane type and width
+(`vqshlq_s32`, `vqshrn_n_u16`, `vmull_p8`, `vmulxq_f32`, and the AES, SHA and
+SM3/SM4 forms), and the x86 headers' string comparisons, MPSADBW, PCLMULQDQ,
+VPERMD and SHA-1 steps. Each vector operand is cast to the header's type and
+the result back to the C vector the value has. A count or lane selector the
+header takes as a constant has to be one, in the header's range, the AArch32
+forms' vector of negated counts included; the carry-less product of two 64-bit
+polynomials goes through `vreinterpretq_u8_p128`. A call with no entry is
+refused as an unsupported vector instruction. An x86 function names the target
+feature the header declares each of these with too; an ARM unit builds for a
+processor that has the instruction, as its HighC does.
+
+C names a label inside its function alone, so a constant table of block
+addresses is defined in the function that owns the blocks, as a static object
+whose initializer spells each address `&&label` (`collectLabelTables`,
+`writeLabelTables`). The lifter leaves such a table when a computed goto's
+label array is still read as data after its dispatch was recovered as a
+switch. It is admitted only when every address in it is one function's block
+and every use is an instruction of that function; a table another function or
+another object names, and a block address anywhere else, are refused as
+before. An address-taken block keeps a label wherever its code is laid out: at
+its first statement, or at the copies and jump of its edge when it has none,
+inside an arm of a switch as well. Nothing jumps through the table, so the
+address the compiler gives a label is its own choice, as on the lift route,
+where a block the optimizer removes leaves no address at all.
+
+`freeze` prints as its operand when the operand has one bit pattern in C
+whatever LLVM says of it (`freezeHasDefinedCProjection`): the wrapping integer
+operations, bounded shifts, funnel shifts and byte or bit reversals, loads, a
+call's result or one member of it, the result of assembly, and an address
+constant. A division or remainder asks nothing of its divisor, which LLVM
+makes immediate undefined behavior when poison or zero, as C does: only the
+dividend can be the poison a freeze defines. A signed one also needs the
+dividend to be LLVM's own value or the divisor known not to be -1, since the
+overflow is undefined in LLVM only then. A floating-point conversion, whose
+out-of-range result is poison in LLVM and undefined in C, keeps its function
+refused.
+
+A saturating conversion of a half is the float's, to which a half converts
+exactly. AArch64's half-precision conversions to and from fixed point take 1
+to 32 or 64 fraction bits, more than arm_fp16.h's intrinsics admit, and print
+as the instruction itself in an assembly statement expression; the scalar
+extended multiply, reciprocal exponent and round-to-odd narrowing are the
+header's `vmulxh_f16`, `vrecpxs_f32` and `vcvtxd_f32_f64` forms.
 
 `ir/X86FPMaskCompareState.h` owns legacy/VEX CMPSS/CMPSD/CMPPS/CMPPD
 completion. Scalar or packed raw mask bits precede outgoing MXCSR in one

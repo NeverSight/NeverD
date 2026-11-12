@@ -168,6 +168,12 @@ public:
   std::string aggregateMemberPath(llvm::Type *Ty,
                                   llvm::ArrayRef<unsigned> Indices);
   void writeGlobals(llvm::Module &Mod);
+  /// Finds the globals that hold addresses of one function's blocks and that
+  /// only that function uses. C names a label inside its function alone, so
+  /// each is defined there, as a static object (writeLabelTables), where its
+  /// initializer spells a block's address as `&&label`.
+  void collectLabelTables(const llvm::Module &Mod);
+  void writeLabelTables(const llvm::Function &Fn);
   void writeImageByteArray(const llvm::GlobalVariable &Global,
                            llvm::StringRef Name);
   /// Declare the image objects \p Fns read or write, and those whose
@@ -963,6 +969,22 @@ public:
   std::map<const llvm::BasicBlock *, std::string> BlockLabels;
   std::map<const llvm::BasicBlock *, size_t> DeferredBlockLabels;
   std::set<const llvm::BasicBlock *> ReferencedBlocks;
+  /// The function each label table is defined in (collectLabelTables).
+  llvm::DenseMap<const llvm::GlobalVariable *, const llvm::Function *>
+      LabelTables;
+  /// The function whose label tables are being written: only there is a
+  /// block's address a constant C can spell.
+  const llvm::Function *LabelTableOwner = nullptr;
+  /// The blocks of the function being written whose address a label table
+  /// takes. Each keeps a label wherever its code is laid out.
+  llvm::SmallPtrSet<const llvm::BasicBlock *, 8> AddressLabelBlocks;
+  /// Notes that \p Block's code starts at the text written next, when a
+  /// label table takes its address: its own statements, or the copies and
+  /// jump of its edge when it has none.
+  void noteLabelPlace(const llvm::BasicBlock *Block) {
+    if (!AddressLabelBlocks.empty() && AddressLabelBlocks.count(Block))
+      DeferredBlockLabels.try_emplace(Block, OS.stream().tell());
+  }
   /// LLVM block order is immutable during one function projection. Rebuild
   /// once in setupFunction so regional layout queries need no function scan.
   llvm::DenseMap<const llvm::BasicBlock *, size_t> BlockLayout;

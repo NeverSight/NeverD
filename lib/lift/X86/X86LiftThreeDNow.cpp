@@ -60,7 +60,7 @@ bool liftThreeDNow(X86Lifter &L, X86Lifter::LiftState &S, const cs_insn *Insn,
   if (Offset + 4 > Insn->size || Insn->bytes[Offset] != 0x0f ||
       Insn->bytes[Offset + 1] != 0x0f ||
       Insn->bytes[Insn->size - 1] != Suffix || X.opcode[0] != 0x0f ||
-      X.opcode[1] != Suffix || X.opcode[2] || X.opcode[3] ||
+      X.opcode[1] != 0x0f || X.opcode[2] != Suffix || X.opcode[3] ||
       X.modrm != Insn->bytes[Offset + 2] ||
       X.encoding.modrm_offset != Offset + 2 || X.prefix[0] ||
       X.prefix[1] != Segment || X.prefix[2] != (Operand16 ? 0x66 : 0) ||

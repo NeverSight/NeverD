@@ -25,6 +25,10 @@ public:
   QSize sizeHint() const override;
   void setGeometry(const QRect &rect) override;
 
+  /// Sets the items of a row \p spacing apart, whatever lies between rows:
+  /// groups of controls stand further apart than the rows they wrap into.
+  void setHorizontalSpacing(int spacing);
+
 private:
   /// The height the items take in \p rect, placing them when \p place.
   int arrange(const QRect &rect, bool place) const;
@@ -32,6 +36,8 @@ private:
   int verticalSpacing() const;
 
   QList<QLayoutItem *> items_;
+  /// Negative: the layout's spacing.
+  int horizontalSpacing_ = -1;
 };
 
 } // namespace neverd::gui

@@ -28,6 +28,15 @@ AnalysisService::AnalysisService(QueryService &owner, QString workerPath,
       workerPath_(std::move(workerPath)) {
   connect(&owner_, &QueryService::contextChanged, this,
           &AnalysisService::reset);
+  connect(&owner_, &QueryService::followed, this, &AnalysisService::take);
+  connect(&queries_, &QueryService::givenRead, this,
+          &AnalysisService::tookGiven);
+  // Once the edit has its own answer, a read that took its page is no read
+  // on its way any more (tookGiven).
+  connect(&owner_, &QueryService::pendingChanged, this, [this] {
+    if (tookSince_ && !owner_.answeringCommand())
+      tookSince_ = false;
+  });
   connect(&client_, &EngineClient::message, this, &AnalysisService::receive);
   connect(&client_, &EngineClient::diagnostic, this,
           &AnalysisService::diagnostic);
@@ -82,6 +91,7 @@ void AnalysisService::reset() {
   const bool retain = (ready_ || refreshingNames_) && updatesNames_ &&
                       queries_.projectId() == owner_.projectId();
   active_.clear();
+  tookSince_ = false;
   preparedRead_.reset();
   preparedDeclaration_.clear();
   forgetKeptRequests();
@@ -106,6 +116,10 @@ void AnalysisService::reset() {
     keptBefore_ = KeptState::Unknown;
   }
   queries_.resetReadContext(owner_.projectId(), owner_.revision());
+  // The pages the owner read with the edit that made this change (take): the
+  // views that show them ask for them now.
+  for (const auto &page : std::exchange(carried_, {}))
+    give(page);
 }
 
 void AnalysisService::abandonRunningRead() {
@@ -201,6 +215,10 @@ void AnalysisService::readKept() {
   // What the store holds says only whether a replica starts beside the owner's
   // answer, so the owner, which answers one request at a time, answers the read
   // first.
+  askKeptState();
+}
+
+void AnalysisService::askKeptState() {
   if (keptState_ != KeptState::Unknown)
     return;
   keptState_ = KeptState::Asked;
@@ -245,16 +263,8 @@ void AnalysisService::askOwner() {
         if (response.value("status") == QLatin1String("ok")) {
           // The page the view keeps from here on is the owner's to answer
           // for.
-          if (operation_ == QLatin1String("decompile")) {
-            const auto name =
-                response.value("payload").toObject().value("etag").toString();
-            if (!name.isEmpty()) {
-              if (ownerPages_.size() >=
-                  ::neverd::limits::gui::kAnalysisOwnerPageNames)
-                ownerPages_.clear();
-              ownerPages_.insert(name);
-            }
-          }
+          if (operation_ == QLatin1String("decompile"))
+            ownerGave(response);
           // The owner's dispatcher says what the answer weighs.
           finish(response, owner_.deliveredBytes());
           return;
@@ -272,6 +282,63 @@ void AnalysisService::askOwner() {
       });
 }
 
+void AnalysisService::ownerGave(const QJsonObject &response) {
+  const auto name =
+      response.value("payload").toObject().value("etag").toString();
+  if (name.isEmpty())
+    return;
+  if (ownerPages_.size() >= ::neverd::limits::gui::kAnalysisOwnerPageNames)
+    ownerPages_.clear();
+  ownerPages_.insert(name);
+}
+
+void AnalysisService::take(const QString &operation, const QJsonObject &payload,
+                           const QString &was, const QJsonObject &response,
+                           qint64 bytes) {
+  // The owner reads for this dispatcher what it keeps (askOwner), under the
+  // read's own payload and that word: only a page it gave so is one of these.
+  if (!ownerReadsKept_ || operation != QLatin1String("decompile") ||
+      was.isEmpty() || !ownerPages_.contains(was) ||
+      !payload.value("kept_only").toBool())
+    return;
+  Carried page{operation, payload, ofTheOwner(response), response, bytes};
+  page.read.remove(QStringLiteral("kept_only"));
+  page.answer["operation"] = operation;
+  if (give(page))
+    return;
+  // The owner says the page ahead of the change it came with: this
+  // dispatcher's reads are those of the state before it until that is said
+  // (reset), which gives the page then.
+  if (response.value("revision").toString() == owner_.revision() &&
+      response.value("project_id").toString() == owner_.projectId())
+    carried_.append(std::move(page));
+}
+
+bool AnalysisService::give(const Carried &page) {
+  if (!queries_.give({page.operation, page.read}, page.answer, page.bytes))
+    return false;
+  ownerGave(page.response);
+  return true;
+}
+
+void AnalysisService::tookGiven() {
+  ++pagesTaken_;
+  // What a view's read leaves behind it where it goes to the owner.  One
+  // made while the edit is still to be given its own answer was on its way
+  // when the session, taking that answer's state in, said snapshots may be
+  // taken, and a replica started or took the change then
+  // (setSnapshotBlocked): so it does for this one.  And the owner is asked
+  // what the store holds now (readKept), behind the reads the views make at
+  // the change: nobody waits for that answer.
+  if (owner_.answeringCommand())
+    tookSince_ = true;
+  const auto serial = serial_;
+  QTimer::singleShot(0, this, [this, serial] {
+    if (serial == serial_)
+      askKeptState();
+  });
+}
+
 void AnalysisService::forgetKeptRequests() {
   if (keptStateRequest_)
     owner_.unsubscribe(std::exchange(keptStateRequest_, 0));
@@ -282,8 +349,13 @@ void AnalysisService::forgetKeptRequests() {
 
 void AnalysisService::setSnapshotBlocked(bool blocked) {
   snapshotBlocked_ = blocked;
-  if (!blocked)
-    requestSnapshot();
+  if (blocked)
+    return;
+  requestSnapshot();
+  // A view's read that took the page its edit's reply carried is no read on
+  // its way, and leaves the same behind it.
+  if (std::exchange(tookSince_, false))
+    startReplica();
 }
 
 void AnalysisService::prepareRead(quint64 address, const QString &declaration) {
@@ -484,9 +556,15 @@ void AnalysisService::dispatch() {
 void AnalysisService::finish(QJsonObject response, qint64 bytes) {
   if (active_.isEmpty())
     return;
-  response["type"] = "response";
+  response = ofTheOwner(std::move(response));
   response["request_id"] = std::exchange(active_, {});
   response["operation"] = operation_;
+  wire_.clear();
+  queries_.receive(response, bytes);
+}
+
+QJsonObject AnalysisService::ofTheOwner(QJsonObject response) const {
+  response["type"] = "response";
   response["project_id"] = owner_.projectId();
   response["revision"] = owner_.revision();
   // A replica's local pipeline/revision never advances the project owner's
@@ -498,8 +576,7 @@ void AnalysisService::finish(QJsonObject response, qint64 bytes) {
   if (payload.contains("revision"))
     payload["revision"] = owner_.revision();
   response["payload"] = payload;
-  wire_.clear();
-  queries_.receive(response, bytes);
+  return response;
 }
 
 void AnalysisService::fail(const QString &code, const QString &message) {
