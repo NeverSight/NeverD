@@ -2815,6 +2815,47 @@ TEST_F(JTE_X86_32, GOTOFFModuloPrefixReplaysEveryDispatchArm) {
   }
 }
 
+TEST_F(JTE_X86_32, DenseMaskGroupProvesAMemberThatReusesTheGOTRegister) {
+  // jt_i386_mask_reused_base spills the GOT base, overwrites its register
+  // between the second dispatch's `add %ecx, %ebx` and its `jmp *%ebx`, and
+  // reloads it in the loop (x86o233_nestsw's inner dispatches).  Read as a
+  // successor of every owner slot, the second dispatch's block would be
+  // entered with that register overwritten; over its own table the group
+  // proves all three members, and the two later rounds repeat the result.
+  auto ImageOrErr = neverd::loadBinary(
+      (fs::path(TEST_OBJ_DIR) / "test_i386_direct_gotoff_group.o").string());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const auto &Image = *ImageOrErr;
+  const auto *Function = Image.findSymbol("jt_i386_mask_reused_base");
+  const auto *First = Image.findSymbol("jt_i386_mask_reused_base_first_table");
+  const auto *Second =
+      Image.findSymbol("jt_i386_mask_reused_base_second_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(First, nullptr);
+  ASSERT_NE(Second, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const auto Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), 3u);
+  EXPECT_EQ(
+      Builder.jumpTableGroupLifecycleStateForTesting().PublishedMemberCount,
+      3u);
+  unsigned FirstConsumers = 0, SecondConsumers = 0;
+  for (const auto &Table : Low.JumpTables) {
+    (Table.BaseAddr == First->Addr ? FirstConsumers : SecondConsumers) += 1;
+    EXPECT_TRUE(Table.BaseAddr == First->Addr ||
+                Table.BaseAddr == Second->Addr);
+    EXPECT_EQ(Table.Targets.size(), 4u);
+  }
+  EXPECT_EQ(FirstConsumers, 2u);
+  EXPECT_EQ(SecondConsumers, 1u);
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
 TEST_F(JTE_X86_32, GOTOFFPrivateFrameSpillSurvivesOnlyNonEscapingCalls) {
   auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
