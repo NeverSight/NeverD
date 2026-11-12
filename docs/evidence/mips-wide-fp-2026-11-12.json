@@ -1,0 +1,766 @@
+{
+  "first_merge": "d751f46fcd9654004f65aa497bee9a34d403aa38",
+  "ctest_passed": 804,
+  "encoding_profiles": 36,
+  "msa64_forms_per_profile": 531,
+  "msa64_source_builds": 16,
+  "msa64_source_executions": 320,
+  "capstone_observable_comparisons": 7077888,
+  "baseline_commit": "bcef8d07e1429f6b62746aedf868bf5c915c15dc",
+  "toolchain": {
+    "compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+    "llvm": "NeverD LLVM 23.0.0git, neverd-llvm-v23.0.0-r6, macOS arm64",
+    "capstone": "ebf11952991d43f44314d261707eddbd1b41141b",
+    "build": [
+      "CMAKE_BUILD_TYPE:STRING=Release",
+      "CMAKE_CXX_FLAGS_RELEASE:STRING=-O3 -DNDEBUG",
+      "CMAKE_C_FLAGS_RELEASE:STRING=-O3 -DNDEBUG"
+    ]
+  },
+  "candidate_toolchain": {
+    "compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+    "llvm": "NeverD LLVM 23.0.0git, neverd-llvm-v23.0.0-r6, macOS arm64",
+    "capstone": "7e761ce29b7e6d321c7ef37bcfd5d7855d413b2a",
+    "build": [
+      "CMAKE_BUILD_TYPE:STRING=Release",
+      "CMAKE_CXX_FLAGS_RELEASE:STRING=-O3 -DNDEBUG",
+      "CMAKE_C_FLAGS_RELEASE:STRING=-O3 -DNDEBUG"
+    ]
+  },
+  "code_sha256": {
+    "mips16-unchanged.bin": "c4ec3219f426053e44892132602906a005b6d3c75028332bbee806378d4f0651",
+    "micromipsel-unchanged.bin": "9289479df5882dab701d4f69714e9c403f5131c0cd3527c8b5a7e5893fe4ca38",
+    "micromips32r6el-unchanged.bin": "bf69ae5def94082ee57dec93db88819a20534e630728d0c266a98a279e2450e1",
+    "micromips64r6el-unchanged.bin": "bf69ae5def94082ee57dec93db88819a20534e630728d0c266a98a279e2450e1",
+    "micromips-unchanged.bin": "d3f77f4f8d0f1c28c1eece2dceb554c34d26cadc0bf83e403f04a05ba35967f6",
+    "micromips64r6-unchanged.bin": "1b827861a373d556a9b614dd64601427bf8da444eb12b79984411e725479cf22",
+    "micromips32r6-unchanged.bin": "1b827861a373d556a9b614dd64601427bf8da444eb12b79984411e725479cf22",
+    "mips16el-unchanged.bin": "6bf26403c9b29524ad2175b5bc9b22667103bf69f456af6e244eabcfb19362fa"
+  },
+  "firmware_sha256": "6e1129aa58cb398a2453876ea4aa2395feecc84ecf78ed8ab43efd534b40e475",
+  "samples_per_variant": 9,
+  "repeats": 100000,
+  "paired_cpu": [
+    {
+      "job": "micromips-capstone",
+      "cpu_A_median": 0.166153,
+      "cpu_B_median": 0.138043,
+      "paired_cpu_delta_percent_median": -16.651163348956675,
+      "paired_cpu_delta_percent_range": [
+        -21.187690771482703,
+        -9.911471178142294
+      ],
+      "wall_A_median": 0.22749924997333437,
+      "wall_B_median": 0.1933492919197306,
+      "rss_A_median": 2162688,
+      "rss_B_median": 2162688
+    },
+    {
+      "job": "micromips-decode",
+      "cpu_A_median": 0.170305,
+      "cpu_B_median": 0.142687,
+      "paired_cpu_delta_percent_median": -16.921628064392713,
+      "paired_cpu_delta_percent_range": [
+        -19.675674477377026,
+        -12.922990546981318
+      ],
+      "wall_A_median": 0.19687358394730836,
+      "wall_B_median": 0.16387249995023012,
+      "rss_A_median": 2097152,
+      "rss_B_median": 2097152
+    },
+    {
+      "job": "micromips-lift",
+      "cpu_A_median": 0.371304,
+      "cpu_B_median": 0.346932,
+      "paired_cpu_delta_percent_median": -9.137914293112392,
+      "paired_cpu_delta_percent_range": [
+        -13.82474913262386,
+        -4.386063724857192
+      ],
+      "wall_A_median": 0.4292966250795871,
+      "wall_B_median": 0.39620633295271546,
+      "rss_A_median": 2162688,
+      "rss_B_median": 2146304
+    },
+    {
+      "job": "micromipsel-capstone",
+      "cpu_A_median": 0.160591,
+      "cpu_B_median": 0.13292,
+      "paired_cpu_delta_percent_median": -18.728322259653417,
+      "paired_cpu_delta_percent_range": [
+        -21.864021611844787,
+        -14.257207472585943
+      ],
+      "wall_A_median": 0.19993083295412362,
+      "wall_B_median": 0.16241441702004522,
+      "rss_A_median": 2097152,
+      "rss_B_median": 2162688
+    },
+    {
+      "job": "micromipsel-decode",
+      "cpu_A_median": 0.174487,
+      "cpu_B_median": 0.141309,
+      "paired_cpu_delta_percent_median": -17.54935815629457,
+      "paired_cpu_delta_percent_range": [
+        -21.081114288267354,
+        -13.976079101425732
+      ],
+      "wall_A_median": 0.212569999974221,
+      "wall_B_median": 0.16687708301469684,
+      "rss_A_median": 2162688,
+      "rss_B_median": 2097152
+    },
+    {
+      "job": "micromipsel-lift",
+      "cpu_A_median": 0.372322,
+      "cpu_B_median": 0.337721,
+      "paired_cpu_delta_percent_median": -9.063721610019538,
+      "paired_cpu_delta_percent_range": [
+        -11.178023736498199,
+        -5.282174323919042
+      ],
+      "wall_A_median": 0.42971300007775426,
+      "wall_B_median": 0.381386624998413,
+      "rss_A_median": 2195456,
+      "rss_B_median": 2146304
+    },
+    {
+      "job": "micromips32r6-capstone",
+      "cpu_A_median": 0.108494,
+      "cpu_B_median": 0.088768,
+      "paired_cpu_delta_percent_median": -17.877760469165217,
+      "paired_cpu_delta_percent_range": [
+        -25.430899404575356,
+        -13.430669563044273
+      ],
+      "wall_A_median": 0.13306904199998826,
+      "wall_B_median": 0.11806845793034881,
+      "rss_A_median": 2064384,
+      "rss_B_median": 2097152
+    },
+    {
+      "job": "micromips32r6-decode",
+      "cpu_A_median": 0.122335,
+      "cpu_B_median": 0.108005,
+      "paired_cpu_delta_percent_median": -12.050517022928842,
+      "paired_cpu_delta_percent_range": [
+        -16.342113515208535,
+        -7.77393755347886
+      ],
+      "wall_A_median": 0.155300333048217,
+      "wall_B_median": 0.13906779198441654,
+      "rss_A_median": 2211840,
+      "rss_B_median": 2080768
+    },
+    {
+      "job": "micromips32r6-lift",
+      "cpu_A_median": 0.262019,
+      "cpu_B_median": 0.244159,
+      "paired_cpu_delta_percent_median": -7.452308589500589,
+      "paired_cpu_delta_percent_range": [
+        -11.209711848265147,
+        -3.7827378841258197
+      ],
+      "wall_A_median": 0.36410841706674546,
+      "wall_B_median": 0.2931818750221282,
+      "rss_A_median": 2179072,
+      "rss_B_median": 2195456
+    },
+    {
+      "job": "micromips32r6el-capstone",
+      "cpu_A_median": 0.120112,
+      "cpu_B_median": 0.092068,
+      "paired_cpu_delta_percent_median": -21.82326921788085,
+      "paired_cpu_delta_percent_range": [
+        -27.113002718054712,
+        -17.210281603649435
+      ],
+      "wall_A_median": 0.18291837500873953,
+      "wall_B_median": 0.1419472909765318,
+      "rss_A_median": 2064384,
+      "rss_B_median": 2064384
+    },
+    {
+      "job": "micromips32r6el-decode",
+      "cpu_A_median": 0.13202,
+      "cpu_B_median": 0.114415,
+      "paired_cpu_delta_percent_median": -13.39741891533891,
+      "paired_cpu_delta_percent_range": [
+        -17.637975322573475,
+        -7.899015765040418
+      ],
+      "wall_A_median": 0.24885266600176692,
+      "wall_B_median": 0.22081229102332145,
+      "rss_A_median": 2080768,
+      "rss_B_median": 2080768
+    },
+    {
+      "job": "micromips32r6el-lift",
+      "cpu_A_median": 0.258411,
+      "cpu_B_median": 0.247168,
+      "paired_cpu_delta_percent_median": -4.484911307167138,
+      "paired_cpu_delta_percent_range": [
+        -7.99678582122646,
+        -1.0246134217313574
+      ],
+      "wall_A_median": 0.30216937500517815,
+      "wall_B_median": 0.28465795796364546,
+      "rss_A_median": 2113536,
+      "rss_B_median": 2195456
+    },
+    {
+      "job": "micromips64r6-capstone",
+      "cpu_A_median": 0.115992,
+      "cpu_B_median": 0.094621,
+      "paired_cpu_delta_percent_median": -20.485221816864176,
+      "paired_cpu_delta_percent_range": [
+        -25.278774276777348,
+        -16.474902669632918
+      ],
+      "wall_A_median": 0.15747600002214313,
+      "wall_B_median": 0.12132041703443974,
+      "rss_A_median": 2097152,
+      "rss_B_median": 2064384
+    },
+    {
+      "job": "micromips64r6-decode",
+      "cpu_A_median": 0.136002,
+      "cpu_B_median": 0.118418,
+      "paired_cpu_delta_percent_median": -11.314263029046556,
+      "paired_cpu_delta_percent_range": [
+        -18.028109091442566,
+        -9.163930094742001
+      ],
+      "wall_A_median": 0.19933070801198483,
+      "wall_B_median": 0.17016658303327858,
+      "rss_A_median": 2080768,
+      "rss_B_median": 2113536
+    },
+    {
+      "job": "micromips64r6-lift",
+      "cpu_A_median": 0.332145,
+      "cpu_B_median": 0.312374,
+      "paired_cpu_delta_percent_median": -4.6498382116149095,
+      "paired_cpu_delta_percent_range": [
+        -10.02566821371249,
+        -1.1005917523177366
+      ],
+      "wall_A_median": 0.48509450000710785,
+      "wall_B_median": 0.39249279198702425,
+      "rss_A_median": 2179072,
+      "rss_B_median": 2260992
+    },
+    {
+      "job": "micromips64r6el-capstone",
+      "cpu_A_median": 0.112932,
+      "cpu_B_median": 0.089643,
+      "paired_cpu_delta_percent_median": -19.638691973473588,
+      "paired_cpu_delta_percent_range": [
+        -24.963217263364392,
+        -14.648638118513801
+      ],
+      "wall_A_median": 0.14556620898656547,
+      "wall_B_median": 0.11404279200360179,
+      "rss_A_median": 2097152,
+      "rss_B_median": 2097152
+    },
+    {
+      "job": "micromips64r6el-decode",
+      "cpu_A_median": 0.134946,
+      "cpu_B_median": 0.114244,
+      "paired_cpu_delta_percent_median": -15.079164498624852,
+      "paired_cpu_delta_percent_range": [
+        -21.98939084006518,
+        -10.041290121533187
+      ],
+      "wall_A_median": 0.1699061250546947,
+      "wall_B_median": 0.13885304203722626,
+      "rss_A_median": 2080768,
+      "rss_B_median": 2146304
+    },
+    {
+      "job": "micromips64r6el-lift",
+      "cpu_A_median": 0.319876,
+      "cpu_B_median": 0.302823,
+      "paired_cpu_delta_percent_median": -5.512761194963045,
+      "paired_cpu_delta_percent_range": [
+        -7.619505020336492,
+        -1.2286064146916464
+      ],
+      "wall_A_median": 0.3682188750244677,
+      "wall_B_median": 0.35732608404941857,
+      "rss_A_median": 2113536,
+      "rss_B_median": 2162688
+    },
+    {
+      "job": "mips16-capstone",
+      "cpu_A_median": 0.188063,
+      "cpu_B_median": 0.151259,
+      "paired_cpu_delta_percent_median": -19.765862870115946,
+      "paired_cpu_delta_percent_range": [
+        -27.052714864998517,
+        -11.504527449214674
+      ],
+      "wall_A_median": 0.2531857080757618,
+      "wall_B_median": 0.20826866698917001,
+      "rss_A_median": 2129920,
+      "rss_B_median": 2097152
+    },
+    {
+      "job": "mips16-decode",
+      "cpu_A_median": 0.189392,
+      "cpu_B_median": 0.15633,
+      "paired_cpu_delta_percent_median": -16.844662065774763,
+      "paired_cpu_delta_percent_range": [
+        -19.984644913627637,
+        -12.30727802652699
+      ],
+      "wall_A_median": 0.21971079101786017,
+      "wall_B_median": 0.18679075001273304,
+      "rss_A_median": 2064384,
+      "rss_B_median": 2162688
+    },
+    {
+      "job": "mips16-lift",
+      "cpu_A_median": 0.466873,
+      "cpu_B_median": 0.432154,
+      "paired_cpu_delta_percent_median": -7.737859910908906,
+      "paired_cpu_delta_percent_range": [
+        -9.695108815100273,
+        -5.309767151252965
+      ],
+      "wall_A_median": 0.5556587089085951,
+      "wall_B_median": 0.5038034589961171,
+      "rss_A_median": 2113536,
+      "rss_B_median": 2162688
+    },
+    {
+      "job": "mips16el-capstone",
+      "cpu_A_median": 0.182126,
+      "cpu_B_median": 0.148175,
+      "paired_cpu_delta_percent_median": -17.38550895622284,
+      "paired_cpu_delta_percent_range": [
+        -24.197668722643296,
+        -13.227823148408902
+      ],
+      "wall_A_median": 0.2316332090413198,
+      "wall_B_median": 0.19120812497567385,
+      "rss_A_median": 2064384,
+      "rss_B_median": 2097152
+    },
+    {
+      "job": "mips16el-decode",
+      "cpu_A_median": 0.191385,
+      "cpu_B_median": 0.158395,
+      "paired_cpu_delta_percent_median": -17.1171748227859,
+      "paired_cpu_delta_percent_range": [
+        -19.105468035634964,
+        -10.699275661681684
+      ],
+      "wall_A_median": 0.22788649995345622,
+      "wall_B_median": 0.19139804202131927,
+      "rss_A_median": 2064384,
+      "rss_B_median": 2162688
+    },
+    {
+      "job": "mips16el-lift",
+      "cpu_A_median": 0.469114,
+      "cpu_B_median": 0.423244,
+      "paired_cpu_delta_percent_median": -10.00616590047314,
+      "paired_cpu_delta_percent_range": [
+        -11.784059189808183,
+        -7.937999469262924
+      ],
+      "wall_A_median": 0.5223149169469252,
+      "wall_B_median": 0.4634852920426056,
+      "rss_A_median": 2179072,
+      "rss_B_median": 2228224
+    },
+    {
+      "job": "ubus-call-highc-1",
+      "cpu_A_median": 0.038804,
+      "cpu_B_median": 0.040245,
+      "paired_cpu_delta_percent_median": 1.5153077002370896,
+      "paired_cpu_delta_percent_range": [
+        -6.134110787171998,
+        9.208660047635608
+      ],
+      "wall_A_median": 0.04718387499451637,
+      "wall_B_median": 0.04699754202738404,
+      "rss_A_median": 33177600,
+      "rss_B_median": 32980992
+    },
+    {
+      "job": "ubus-discovered-highc-1",
+      "cpu_A_median": 0.050398,
+      "cpu_B_median": 0.052323999999999996,
+      "paired_cpu_delta_percent_median": 7.940175348117573,
+      "paired_cpu_delta_percent_range": [
+        1.607710729849643,
+        15.828486714562672
+      ],
+      "wall_A_median": 0.060309624997898936,
+      "wall_B_median": 0.06140883406624198,
+      "rss_A_median": 33980416,
+      "rss_B_median": 33619968
+    },
+    {
+      "job": "ubus-call-llvmc-1",
+      "cpu_A_median": 0.040281,
+      "cpu_B_median": 0.042294,
+      "paired_cpu_delta_percent_median": 4.7918731417244675,
+      "paired_cpu_delta_percent_range": [
+        -9.642695026262905,
+        20.55552681942794
+      ],
+      "wall_A_median": 0.047341707977466285,
+      "wall_B_median": 0.05133666598703712,
+      "rss_A_median": 37683200,
+      "rss_B_median": 37404672
+    },
+    {
+      "job": "ubus-discovered-llvmc-1",
+      "cpu_A_median": 0.043158,
+      "cpu_B_median": 0.041793,
+      "paired_cpu_delta_percent_median": -2.7716403986841387,
+      "paired_cpu_delta_percent_range": [
+        -19.72386222723992,
+        4.7018233101642215
+      ],
+      "wall_A_median": 0.05313074996229261,
+      "wall_B_median": 0.04960170795675367,
+      "rss_A_median": 38027264,
+      "rss_B_median": 37535744
+    },
+    {
+      "job": "ubus-call-highc-default",
+      "cpu_A_median": 0.041814,
+      "cpu_B_median": 0.042453,
+      "paired_cpu_delta_percent_median": 4.650396614207142,
+      "paired_cpu_delta_percent_range": [
+        -6.929546562652378,
+        10.299767399315263
+      ],
+      "wall_A_median": 0.05908662499859929,
+      "wall_B_median": 0.06339720892719924,
+      "rss_A_median": 33193984,
+      "rss_B_median": 32915456
+    },
+    {
+      "job": "ubus-discovered-highc-default",
+      "cpu_A_median": 0.051567999999999996,
+      "cpu_B_median": 0.054375999999999994,
+      "paired_cpu_delta_percent_median": 2.582550742199352,
+      "paired_cpu_delta_percent_range": [
+        -4.3250531556293215,
+        10.144927536231885
+      ],
+      "wall_A_median": 0.06508212501648813,
+      "wall_B_median": 0.06745124992448837,
+      "rss_A_median": 34275328,
+      "rss_B_median": 33931264
+    },
+    {
+      "job": "ubus-call-llvmc-default",
+      "cpu_A_median": 0.041106000000000004,
+      "cpu_B_median": 0.042822,
+      "paired_cpu_delta_percent_median": 3.433362965810538,
+      "paired_cpu_delta_percent_range": [
+        -6.35590455267222,
+        14.270416358583415
+      ],
+      "wall_A_median": 0.04968041693791747,
+      "wall_B_median": 0.051888084039092064,
+      "rss_A_median": 37715968,
+      "rss_B_median": 37404672
+    },
+    {
+      "job": "ubus-discovered-llvmc-default",
+      "cpu_A_median": 0.043484999999999996,
+      "cpu_B_median": 0.045613,
+      "paired_cpu_delta_percent_median": 3.2767269547609335,
+      "paired_cpu_delta_percent_range": [
+        -7.897181164687828,
+        19.431841616828205
+      ],
+      "wall_A_median": 0.05225720792077482,
+      "wall_B_median": 0.05381970794405788,
+      "rss_A_median": 37945344,
+      "rss_B_median": 37748736
+    }
+  ],
+  "limits": "Shared macOS arm64 host, without affinity pinning. Per-stream matched outputs, nine alternating pairs and CPU-time medians. The total dev comparison includes intervening SDK cache-validity, Capstone SPARC, ARM64e publication and Linux diagnostics changes. Firmware request CPU medians range from -2.77% to +7.94%. Source FP qualification requires explicit FR=1, initialized volatile FPR bytes and bounded leaf control flow. General floating call ABI, saved-FPR restoration and physical microMIPS64 execution need additional coverage.",
+  "legacy_dsp_gnu_packed_forms": 101,
+  "legacy_accumulator_original_forms_per_endian": 20,
+  "validated_source_commit": "f75fc2621479db8b3f574718394eff26bbbce9ce",
+  "first_merge_ctest_passed": 791,
+  "r6_scalar_fp_forms": 112,
+  "r6_ordered_arithmetic_conversion_comparison_forms": 98,
+  "classic_fp_original_cases": 1344,
+  "micromips32_fp_original_cases": 672,
+  "micromips64_fp_qualification": "Fixed physical encodings and complete LowIR identity with the classic reference in both byte orders. The I6400 execution model admits classic MIPS64.",
+  "native_fp_assembly_compilation": {
+    "forms": 98,
+    "targets": [
+      "mips32r6-be",
+      "mips32r6-le",
+      "mips64r6-be",
+      "mips64r6-le",
+      "micromips32r6-be",
+      "micromips32r6-le"
+    ],
+    "compiler": "LLVM Clang 22.1.6"
+  },
+  "r6_scalar_fp_source_builds": 48,
+  "r6_scalar_fp_source_executions": 2352,
+  "dsp64_accumulator_source_builds": 160,
+  "dsp64_accumulator_source_executions": 4000,
+  "source_builds_total": 224,
+  "source_executions_total": 6672,
+  "source_qualification": "HighC and LLVMC, O0 and O2, both byte orders. Classic o32/n64 FR=1 leaves. FCSR/DSPControl is compared with original execution.",
+  "unicorn_revision": "dab16e86b6ac4acca71c5f3ba50721efc3891a1e",
+  "benchmark_stream_hex": {
+    "mips16-unchanged.bin": "e4a9e8a0f0106a00e289e8a06544eaaee8a06544e8204a01dca08441ac61e269e8a063fdd40492046303e8a0",
+    "micromipsel-unchanged.bin": "9f4558054069bf45c0ea9f45406958056405740504499f4502015011038e63ee07edbf450bedbf45",
+    "micromips32r6el-unchanged.bin": "83005011e600102b49015042ac01905a0f0290733202004874024038b6028020f8327b003ad3ff007c533930be733412",
+    "micromips64r6el-unchanged.bin": "83005011e600102b49015042ac01905a0f0290733202004874024038b6028020f8327b003ad3ff007c533930be733412",
+    "micromips-unchanged.bin": "459f0558694045bfeac0459f69400558056405744904459f010211508e03ee63ed0745bfed0b45bf",
+    "micromips64r6-unchanged.bin": "0083115000e62b100149425001ac5a90020f7390023248000274384002b6208032f8007bd33a00ff537c303973be1234",
+    "micromips32r6-unchanged.bin": "0083115000e62b100149425001ac5a90020f7390023248000274384002b6208032f8007bd33a00ff537c303973be1234",
+    "mips16el-unchanged.bin": "a9e4a0e810f0006a89e2a0e84465aeeaa0e8446520e8014aa0dc418461ac69e2a0e8fd6304d404920363a0e8"
+  },
+  "binary_sha256": {
+    "A": {
+      "libneverd.dylib": "981e75b7e9029b015d5eeb85aa2024a3fe4b00425f11202a90dc0121329ec5a6",
+      "neverd": "3e3bc130749058fb5b88b407971a02441c0c0123d5f47a3c6b5095530e18aa63",
+      "neverd-mips-bench": "aed89639f5374433f4db88f6a5bcede29fc71d423efd30e58cdf8bb1243f4e45"
+    },
+    "B": {
+      "libneverd.dylib": "9a28c925889c38f2b8b4c9a2f1e56ea69988b8b35c402e3813ad7daf9e47dd63",
+      "neverd": "3e3bc130749058fb5b88b407971a02441c0c0123d5f47a3c6b5095530e18aa63",
+      "neverd-mips-bench": "d08f878fdd6d71740a3ec4501f4ff8bc56bf63047af4ceb5dc661092b5f9afb0"
+    }
+  },
+  "dependency_inputs_sha256": "f8e4cbf50206734e73e718125da1fb8da21f66e12638d66a24de011579b2befe",
+  "firmware_requests_with_identical_source": 8,
+  "encoding_coverage": {
+    "mipsdsp": {
+      "forms": 113,
+      "digest": "224cb6e3ae0960d4",
+      "operations": 2280,
+      "sha256": "50ed97d564b9179744ec1557b1f3c40ec8785990cdeef68d5e428ee9695bf8ad"
+    },
+    "mipsdspel": {
+      "forms": 113,
+      "digest": "224cb6e3ae0960d4",
+      "operations": 2280,
+      "sha256": "b6431da0432c48f9c103a58852d2558b546b70062df79b81b91971def2566498"
+    },
+    "micromipsdsp": {
+      "forms": 113,
+      "digest": "224cb6e3ae0960d4",
+      "operations": 2280,
+      "sha256": "57b55ead137abcca9b0a362b07e5aca791781ce02d5ae2535982761cb650774b"
+    },
+    "micromipsdspel": {
+      "forms": 113,
+      "digest": "224cb6e3ae0960d4",
+      "operations": 2280,
+      "sha256": "3f63d2c77c808dd566554f7b08d4bd4861a34fd6ee7f2a7ac02849f1482662ac"
+    },
+    "mips64dsp": {
+      "forms": 114,
+      "digest": "6159f2df644b9548",
+      "operations": 2651,
+      "sha256": "442ed41dbc19e1bb1ccf82a91725c625274f26193e7c4d22d6f3c36313d6f0d1"
+    },
+    "mips64dspel": {
+      "forms": 114,
+      "digest": "6159f2df644b9548",
+      "operations": 2651,
+      "sha256": "c4f31b1e2206e5f250e1ed4c30268e753d265aeed8c5382998b31b1798654d40"
+    },
+    "micromips64dsp": {
+      "forms": 113,
+      "digest": "8c9f84807e9a8abb",
+      "operations": 2645,
+      "sha256": "57b55ead137abcca9b0a362b07e5aca791781ce02d5ae2535982761cb650774b"
+    },
+    "micromips64dspel": {
+      "forms": 113,
+      "digest": "8c9f84807e9a8abb",
+      "operations": 2645,
+      "sha256": "3f63d2c77c808dd566554f7b08d4bd4861a34fd6ee7f2a7ac02849f1482662ac"
+    },
+    "mipsdspr2": {
+      "forms": 46,
+      "digest": "0bb835116d83fb8f",
+      "operations": 996,
+      "sha256": "1a28559216f71b5d47595048331d359bfecfa5b9519d6f981073c6102027e8d8"
+    },
+    "mipsdspr2el": {
+      "forms": 46,
+      "digest": "0bb835116d83fb8f",
+      "operations": 996,
+      "sha256": "5880eed5dc70f7cb66c416103b9b32ffaa8b8c8a906dde7e586f20188dc7415e"
+    },
+    "micromipsdspr2": {
+      "forms": 46,
+      "digest": "0bb835116d83fb8f",
+      "operations": 996,
+      "sha256": "ee0416b7529d944aea3d6d86f8a3d6a710082d402f79720d27f922861bbfd332"
+    },
+    "micromipsdspr2el": {
+      "forms": 46,
+      "digest": "0bb835116d83fb8f",
+      "operations": 996,
+      "sha256": "f90e9884258277fd42e55351abc7fd7e83dc30fcd8ec0798fcaaa1fc0ec028a3"
+    },
+    "mips64dspr2": {
+      "forms": 46,
+      "digest": "2c5b7ff3e3a184ce",
+      "operations": 1160,
+      "sha256": "1a28559216f71b5d47595048331d359bfecfa5b9519d6f981073c6102027e8d8"
+    },
+    "mips64dspr2el": {
+      "forms": 46,
+      "digest": "2c5b7ff3e3a184ce",
+      "operations": 1160,
+      "sha256": "5880eed5dc70f7cb66c416103b9b32ffaa8b8c8a906dde7e586f20188dc7415e"
+    },
+    "micromips64dspr2": {
+      "forms": 46,
+      "digest": "2c5b7ff3e3a184ce",
+      "operations": 1160,
+      "sha256": "ee0416b7529d944aea3d6d86f8a3d6a710082d402f79720d27f922861bbfd332"
+    },
+    "micromips64dspr2el": {
+      "forms": 46,
+      "digest": "2c5b7ff3e3a184ce",
+      "operations": 1160,
+      "sha256": "f90e9884258277fd42e55351abc7fd7e83dc30fcd8ec0798fcaaa1fc0ec028a3"
+    },
+    "mipsmsa": {
+      "forms": 526,
+      "digest": "c064a06e1f2cd113",
+      "operations": 18140,
+      "sha256": "eb5f4295096c4386134bd97a63488edd45a1b69f8a310a946aa0218aecaadff6"
+    },
+    "mipsmsael": {
+      "forms": 526,
+      "digest": "c064a06e1f2cd113",
+      "operations": 18140,
+      "sha256": "eab6407c8da9e58fe0ff82a18244258384afcbe909cd88955640c795ce9289b3"
+    },
+    "micromipsmsa": {
+      "forms": 526,
+      "digest": "c064a06e1f2cd113",
+      "operations": 18140,
+      "sha256": "66d1288fda2e40a35e59f0ca9d4d0d31cee51feee6101852ec13922ffe84d77b"
+    },
+    "micromipsmsael": {
+      "forms": 526,
+      "digest": "c064a06e1f2cd113",
+      "operations": 18140,
+      "sha256": "a4c470ec14852215f0273e67cefe9ee70afcc6d5b8c2cb40e8c0e3742d773331"
+    },
+    "mips64msa": {
+      "forms": 531,
+      "digest": "eeb4ff447e9bdfd8",
+      "operations": 18178,
+      "sha256": "41269c81fcdca42162c77dfcd36c27b00969e6bad3c40754ef819c3a5f58fd90"
+    },
+    "mips64msael": {
+      "forms": 531,
+      "digest": "eeb4ff447e9bdfd8",
+      "operations": 18178,
+      "sha256": "a152a9f8bde906779ecd096b8b6b1786b5a0a28b8cbf260e41191be4fbef313f"
+    },
+    "micromips64msa": {
+      "forms": 531,
+      "digest": "eeb4ff447e9bdfd8",
+      "operations": 18178,
+      "sha256": "ebe6c8d96cbdfe307967d6b19347dfcc9c0262faf321dce99dde17645d8c5409"
+    },
+    "micromips64msael": {
+      "forms": 531,
+      "digest": "eeb4ff447e9bdfd8",
+      "operations": 18178,
+      "sha256": "2c833119338e8de2f65011448ab310b33461ef76c55f6bf2d22b987fc685eb33"
+    },
+    "mips": {
+      "forms": 4,
+      "digest": "095a71a3dbfecb16",
+      "operations": 14,
+      "sha256": "0ee3edc571d67adff0732f61a9ad90d873b3cb06cc90bb1ef23ba2ccb2819c8d"
+    },
+    "mipsel": {
+      "forms": 4,
+      "digest": "095a71a3dbfecb16",
+      "operations": 14,
+      "sha256": "10d8e5cfef9d296602ba447d35e5fdaba0c451bf5a6c5d124eab213b1dbe993c"
+    },
+    "micromips": {
+      "forms": 4,
+      "digest": "095a71a3dbfecb16",
+      "operations": 14,
+      "sha256": "193b0defb3812a2edbcfdee2da191b630aca84cc46eed3b98cc73b6e6ab33f2a"
+    },
+    "micromipsel": {
+      "forms": 4,
+      "digest": "095a71a3dbfecb16",
+      "operations": 14,
+      "sha256": "ebc5b8263bf96dceaa7f2cbc1cd11abfba727807cc36df0067903ce8effec9b4"
+    },
+    "mips64": {
+      "forms": 34,
+      "digest": "3df3c77a43aefaf5",
+      "operations": 158,
+      "sha256": "8beddc3399acb9e3d0f03aab1af2ca7a69588d0c7805cddc1296fac9ed88c214"
+    },
+    "mips64el": {
+      "forms": 34,
+      "digest": "3df3c77a43aefaf5",
+      "operations": 158,
+      "sha256": "1151824ca84813ca9cc98ee58c9d52ea1823418bedc7c2fb20397ff383c49edc"
+    },
+    "micromips64": {
+      "forms": 34,
+      "digest": "3df3c77a43aefaf5",
+      "operations": 158,
+      "sha256": "cb41a1d643d6e09e7cb89011ca34bc7dd13d9868bfb02aa8d3ccf28d1f0a7c82"
+    },
+    "micromips64el": {
+      "forms": 34,
+      "digest": "3df3c77a43aefaf5",
+      "operations": 158,
+      "sha256": "cea444275aeeba08a51e9157440d343dd3568e4d02275fd3f75ed97137e55dde"
+    },
+    "mips32r6": {
+      "forms": 183,
+      "digest": "4ad37d589008ae97",
+      "operations": 789,
+      "sha256": "ff466bd28e87097b1404738805cdfd35211908130114c16fd75571d9c1acae07"
+    },
+    "mips32r6el": {
+      "forms": 183,
+      "digest": "4ad37d589008ae97",
+      "operations": 789,
+      "sha256": "85dc0c8941ffba5ae26766af09810c7f036feb60e07156f3a7348971ec261586"
+    },
+    "mips64r6": {
+      "forms": 209,
+      "digest": "c8a1745c2380af84",
+      "operations": 1094,
+      "sha256": "6665a9f44e9d8a082dd37282a4dd7b790a93cc8ee42ddb294006c22d3cb2df27"
+    },
+    "mips64r6el": {
+      "forms": 209,
+      "digest": "c8a1745c2380af84",
+      "operations": 1094,
+      "sha256": "cd92b4d4e908f4b47be95bfdeb32727b5eff9a992babe23a0ca1a933bacb457c"
+    }
+  },
+  "integration_base": "b723a8402fe588ec0b666d6b2023f5ef339bf7ba"
+}

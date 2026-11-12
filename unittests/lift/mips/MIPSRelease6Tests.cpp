@@ -15,6 +15,9 @@
 
 #ifdef NEVERD_MIPS_UNICORN_REFERENCE
 #include "unicorn/unicorn.h"
+
+#include "neverd/emulation/arch/mips/R6ScalarFP.h"
+#include "neverd/ir/intrinsics/MIPS/MIPSR6FPOperations.h"
 #endif
 
 namespace neverd {
@@ -65,6 +68,281 @@ protected:
       ASSERT_TRUE(Emu.step(Op)) << ndOpName(Op.Opcode);
   }
 };
+
+#ifdef NEVERD_MIPS_UNICORN_REFERENCE
+TEST_P(MIPSRelease6, ScalarFPUCommitsFlagsAndSuppressesFaultingDestinations) {
+  auto FPU = emulation::createR6ScalarFPExecutor(GetParam());
+  ASSERT_TRUE(bool(FPU)) << llvm::toString(FPU.takeError());
+  MIPSSystemContext C;
+  C.FCSR = 0xc0000;
+  NdOpEmulator E(Image);
+  E.setStrictMode(true);
+  const auto Execute = [&](uint32_t Word) {
+    if (decode(Word) != 4)
+      return false;
+    Ops.clear();
+    Decode.liftUnitToLow(Unit, Ops);
+    for (const auto &Op : Ops) {
+      const auto Id = Op.Opcode == NdOp::INTRINSIC
+                          ? static_cast<Intrinsic>(Op.Inputs[0].Offset)
+                          : Intrinsic::None;
+      if (mips::isR6FPArithmetic(Id) || mips::isR6FPControl(Id)) {
+        if (!E.stepMIPSSystem(Op, C))
+          return false;
+      } else if (!E.step(Op))
+        return false;
+    }
+    return true;
+  };
+  E.setRegister(mipsreg::w(2), 0x3ff0000000000000ull); // +1
+  E.setRegister(mipsreg::w(3), 0);
+  E.setRegister(mipsreg::w(4), 0xdeadbeef);
+  EXPECT_FALSE(Execute(0x46231103)); // div.d f4,f2,f3
+  EXPECT_EQ(E.getRegister(mipsreg::w(4)), 0xdeadbeefu);
+  C.ScalarFPU = FPU->get();
+  ASSERT_TRUE(Execute(0x46231103));
+  EXPECT_EQ(E.getRegister(mipsreg::w(4)), 0x7ff0000000000000ull);
+  EXPECT_EQ(C.FCSR, 0xc8020u);
+  ASSERT_TRUE(Execute(0x4442d000)); // cfc1 v0,FEXR
+  EXPECT_EQ(E.getRegister(mipsreg::V0), 0x8020u);
+  E.setRegister(mipsreg::A0, 0xc0400);
+  ASSERT_TRUE(Execute(0x44c4f800)); // ctc1 a0,FCSR (enable divide by zero)
+  E.setRegister(mipsreg::w(4), 0xdeadbeef);
+  EXPECT_FALSE(Execute(0x46231103));
+  EXPECT_TRUE(C.FloatingPointException);
+  EXPECT_EQ(C.FCSR, 0xc8400u);
+  EXPECT_EQ(E.getRegister(mipsreg::w(4)), 0xdeadbeefu);
+  C.FloatingPointException = false;
+  ASSERT_TRUE(Execute(0x4442f800)); // Handler reads the pending Cause/Enable.
+  EXPECT_EQ(E.getRegister(mipsreg::V0), 0xc8400u);
+  E.setRegister(mipsreg::A0, 0xc0000);
+  ASSERT_TRUE(Execute(0x44c4f800)); // A later CTC1 clears the pending cause.
+  EXPECT_EQ(C.FCSR, 0xc0000u);
+  EXPECT_FALSE(C.FloatingPointException);
+  for (auto [Rounding, Expected] :
+       {std::pair{0u, 2u}, {1u, 1u}, {2u, 2u}, {3u, 1u}}) {
+    C.FCSR = 0xc0000 | Rounding;
+    E.setRegister(mipsreg::w(2), 0x3ff8000000000000ull); // 1.5
+    ASSERT_TRUE(Execute(0x46201124));                    // cvt.w.d f4,f2
+    ASSERT_TRUE(Execute(0x44022000)); // mfc1 v0,f4 (upper word unpredictable)
+    EXPECT_EQ(E.getRegister(mipsreg::V0), Expected);
+    EXPECT_EQ(C.FCSR, 0xc1004u | Rounding);
+  }
+  C.FCSR = 0xc0000;
+  E.setRegister(mipsreg::w(2), 0x3f800001); // (1+2^-23)*(1-2^-23) - 1
+  E.setRegister(mipsreg::w(3), 0x3f7ffffe);
+  E.setRegister(mipsreg::w(4), 0xbf800000);
+  ASSERT_TRUE(Execute(0x46031118)); // maddf.s f4,f2,f3, once rounded
+  ASSERT_TRUE(Execute(0x44022000));
+  EXPECT_EQ(uint32_t(*E.getRegister(mipsreg::V0)), 0xa8800000u);
+  EXPECT_EQ(C.FCSR, 0xc0000u);
+  for (auto [NaN, Invalid] :
+       {std::pair{0x7fc00000u, false}, {0x7f800001u, true}}) {
+    C.FCSR = 0xc0000;
+    E.setRegister(mipsreg::w(2), NaN);
+    ASSERT_TRUE(Execute(0x46831101)); // cmp.un.s f4,f2,f3
+    ASSERT_TRUE(Execute(0x44022000));
+    EXPECT_EQ(uint32_t(*E.getRegister(mipsreg::V0)), UINT32_MAX);
+    EXPECT_EQ(C.FCSR, Invalid ? 0xd0040u : 0xc0000u);
+  }
+  C.FCSR = 0xc0000;
+  E.setRegister(mipsreg::w(2), 0x8000000000000000ull);
+  E.setRegister(mipsreg::w(3), 0);
+  ASSERT_TRUE(Execute(0x4623111c)); // min.d(-0,+0)
+  EXPECT_EQ(E.getRegister(mipsreg::w(4)), 0x8000000000000000ull);
+  E.setRegister(mipsreg::A0, 0x8400);
+  EXPECT_FALSE(Execute(0x44c4e000)); // FENR reserved bits
+  EXPECT_EQ(C.FCSR, 0xc0000u);
+}
+#endif
+
+TEST_P(MIPSRelease6, FloatingCatalogHasIdenticalClassicAndMicroEffects) {
+  struct Row {
+    const char *Name;
+    uint32_t Classic, Micro;
+    unsigned Operands;
+  };
+  constexpr Row Rows[] = {
+#define NEVERD_TEST_R6_FP(Name, Classic, Micro, N) {Name, Classic, Micro, N},
+#include "MIPSR6FloatFixtures.def"
+  };
+  auto Compressed = Image;
+  Compressed.Mode = InstructionMode::MicroMIPS;
+  Compressed.MIPS->HasMicroMIPS = true;
+  Decoder Micro;
+  ASSERT_TRUE(Micro.init(Compressed));
+  Micro.setText(true);
+  Decode.setText(true);
+  const auto Order = archLittleEndian(GetParam()) ? llvm::endianness::little
+                                                  : llvm::endianness::big;
+#ifdef NEVERD_MIPS_UNICORN_REFERENCE
+  auto FPU = emulation::createR6ScalarFPExecutor(GetParam());
+  ASSERT_TRUE(bool(FPU)) << llvm::toString(FPU.takeError());
+  uc_engine *Raw = nullptr;
+  ASSERT_EQ(
+      uc_open(UC_ARCH_MIPS,
+              uc_mode((isMIPS64(GetParam()) ? UC_MODE_MIPS64 : UC_MODE_MIPS32) |
+                      (archLittleEndian(GetParam()) ? 0 : UC_MODE_BIG_ENDIAN)),
+              &Raw),
+      UC_ERR_OK);
+  std::unique_ptr<uc_engine, decltype(&uc_close)> CPU(Raw, uc_close);
+  ASSERT_EQ(
+      uc_ctl_set_cpu_model(Raw, isMIPS64(GetParam())
+                                    ? int(UC_CPU_MIPS64_I6400)
+                                    : int(UC_CPU_MIPS32_MIPS32R6_GENERIC)),
+      UC_ERR_OK);
+  uint64_t Status = 0;
+  ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_CP0_STATUS, &Status), UC_ERR_OK);
+  Status |= 0x24000000;
+  ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_CP0_STATUS, &Status), UC_ERR_OK);
+  ASSERT_EQ(uc_mem_map(Raw, 0x10000, 4096, UC_PROT_ALL), UC_ERR_OK);
+  unsigned Index = 0;
+#endif
+  for (const auto &R : Rows) {
+    SCOPED_TRACE(R.Name);
+    uint8_t Bytes[4];
+    llvm::support::endian::write16(Bytes, R.Micro >> 16, Order);
+    llvm::support::endian::write16(Bytes + 2, R.Micro, Order);
+    DecodedExecutionUnit U;
+    ASSERT_EQ(Micro.decodeUnitForLift(Bytes, 4, 0x10000, U), 4);
+    EXPECT_STREQ(U.Head.Raw->mnemonic, R.Name);
+    EXPECT_TRUE(std::equal(Bytes, Bytes + 4, U.Head.Raw->bytes));
+    std::vector<LowOp> MicroOps;
+    ASSERT_NO_THROW(Micro.liftUnitToLow(U, MicroOps));
+    ASSERT_EQ(decode(R.Classic), 4);
+    EXPECT_STREQ(Unit.Head.Raw->mnemonic, R.Name);
+    Ops.clear();
+    ASSERT_NO_THROW(Decode.liftUnitToLow(Unit, Ops));
+    EXPECT_EQ(MicroOps, Ops);
+#ifdef NEVERD_MIPS_UNICORN_REFERENCE
+    const unsigned Fmt = R.Classic >> 21 & 31, Fn = R.Classic & 63;
+    unsigned Out = (Fmt == 17 || Fmt == 21) ? 8 : 4;
+    if (Fmt < 20 && Fn >= 8 && Fn <= 15)
+      Out = Fn < 12 ? 8 : 4;
+    if (Fn == 32 || Fn == 36)
+      Out = 4;
+    if (Fn == 33 || Fn == 37)
+      Out = 8;
+    llvm::support::endian::write32(Bytes, R.Classic, Order);
+    const auto PC = 0x10100 + 4 * Index++;
+    ASSERT_EQ(uc_mem_write(Raw, PC, Bytes, 4), UC_ERR_OK);
+    // MIPS32R6_GENERIC executes physical microMIPS too. I6400 exposes only
+    // classic execution, so its micro64 check uses the equal LowIR above.
+    if (!isMIPS64(GetParam())) {
+      llvm::support::endian::write16(Bytes, R.Micro >> 16, Order);
+      llvm::support::endian::write16(Bytes + 2, R.Micro, Order);
+      ASSERT_EQ(uc_mem_write(Raw, PC + 0x800, Bytes, 4), UC_ERR_OK);
+    }
+    for (unsigned Sample = 0; Sample < 3; ++Sample) {
+      const uint32_t InitialCSR = 0xc0000 | (Sample == 2 ? 3 : 0);
+      uint32_t CSR = InitialCSR;
+      const uint64_t Inputs[3] = {
+          0x3ff400003fa00000ull,
+          Sample == 1 ? 0x7ff800007fc00000ull : 0xbff80000bfc00000ull,
+          Sample == 2 ? 0x0000000080000000ull : 0x400400003fc00000ull};
+      NdOpEmulator E(Image);
+      E.setStrictMode(true);
+      MIPSSystemContext Context;
+      Context.FCSR = CSR;
+      Context.ScalarFPU = FPU->get();
+      ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_FCSR, &CSR), UC_ERR_OK);
+      for (unsigned I = 0; I < 3; ++I) {
+        E.setRegister(mipsreg::w(2 + 2 * I), Inputs[I]);
+        ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_F2 + 2 * I, &Inputs[I]),
+                  UC_ERR_OK);
+      }
+      ASSERT_EQ(uc_emu_start(Raw, PC, PC + 4, 0, 1), UC_ERR_OK);
+      uint64_t Expected = 0;
+      ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_F2, &Expected), UC_ERR_OK);
+      ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_FCSR, &CSR), UC_ERR_OK);
+      if (!isMIPS64(GetParam())) {
+        ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_FCSR, &InitialCSR), UC_ERR_OK);
+        for (unsigned I = 0; I < 3; ++I)
+          ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_F2 + 2 * I, &Inputs[I]),
+                    UC_ERR_OK);
+        ASSERT_EQ(uc_emu_start(Raw, (PC + 0x800) | 1, PC + 0x804, 0, 1),
+                  UC_ERR_OK);
+        uint64_t Actual = 0;
+        uint32_t MicroCSR = 0;
+        ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_F2, &Actual), UC_ERR_OK);
+        ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_FCSR, &MicroCSR), UC_ERR_OK);
+        EXPECT_EQ(Out == 8 ? Actual : uint32_t(Actual),
+                  Out == 8 ? Expected : uint32_t(Expected));
+        EXPECT_EQ(MicroCSR, CSR);
+      }
+      for (const auto &Op : MicroOps) {
+        const auto Id = Op.Opcode == NdOp::INTRINSIC
+                            ? static_cast<Intrinsic>(Op.Inputs[0].Offset)
+                            : Intrinsic::None;
+        ASSERT_TRUE(mips::isR6FPArithmetic(Id) ? E.stepMIPSSystem(Op, Context)
+                                               : E.step(Op));
+      }
+      if (Out == 8)
+        EXPECT_EQ(E.getRegister(mipsreg::w(2)), Expected);
+      else {
+        run(0x44021000, E); // mfc1 v0,f2
+        EXPECT_EQ(uint32_t(*E.getRegister(mipsreg::V0)), uint32_t(Expected));
+      }
+      EXPECT_EQ(Context.FCSR, CSR);
+    }
+#endif
+  }
+}
+
+TEST_P(MIPSRelease6,
+       MicroScalarTransfersAndCompactFPBranchesKeepTheirEncoding) {
+  auto MicroImage = Image;
+  MicroImage.Mode = InstructionMode::MicroMIPS;
+  MicroImage.MIPS->HasMicroMIPS = true;
+  Decoder Micro;
+  ASSERT_TRUE(Micro.init(MicroImage));
+  const auto Order = archLittleEndian(GetParam()) ? llvm::endianness::little
+                                                  : llvm::endianness::big;
+  const auto Load = [&](uint32_t Word, DecodedExecutionUnit &U) {
+    uint8_t Bytes[4];
+    llvm::support::endian::write16(Bytes, Word >> 16, Order);
+    llvm::support::endian::write16(Bytes + 2, uint16_t(Word), Order);
+    return Micro.decodeUnitForLift(Bytes, 4, 0x10000, U);
+  };
+  struct Row {
+    uint32_t Micro, Classic;
+  };
+  const Row Pairs[] = {{0x5444203b, 0x44022000},
+                       {0x5444283b, 0x44822000},
+                       {0x5444303b, 0x44622000},
+                       {0x5444383b, 0x44e22000},
+                       {0x545f103b, 0x4442f800},
+                       {0x549f183b, 0x44c4f800},
+                       {0x9c440004, 0xc4820004},
+                       {0xbc440008, 0xd4820008},
+                       {0x98440004, 0xe4820004},
+                       {0xb8440008, 0xf4820008},
+                       // CEIL.W.D and FLOOR.W.D retain all five FS bits.
+                       {0x54455b3b, 0x4620288e},
+                       {0x54454b3b, 0x4620288f}};
+  for (const auto &P : Pairs) {
+    SCOPED_TRACE(::testing::Message() << std::hex << P.Micro);
+    DecodedExecutionUnit U;
+    ASSERT_EQ(Load(P.Micro, U), 4);
+    std::vector<LowOp> Actual, Expected;
+    Micro.liftUnitToLow(U, Actual);
+    ASSERT_EQ(decode(P.Classic), 4);
+    Decode.liftUnitToLow(Unit, Expected);
+    EXPECT_EQ(Actual, Expected);
+  }
+  // LLVM assembly and the physical decoder place these in POOL32I (0x10).
+  for (uint32_t Word : {0x41020003u, 0x41220003u}) {
+    DecodedExecutionUnit U;
+    ASSERT_EQ(Load(Word, U), 4);
+    EXPECT_FALSE(U.HasDelaySlot);
+    std::vector<LowOp> O;
+    ASSERT_NO_THROW(Micro.liftUnitToLow(U, O));
+    ASSERT_EQ(O.back().Opcode, NdOp::COND_BR);
+    EXPECT_EQ(O.back().Inputs[0].Offset, 0x1000au);
+    EXPECT_STREQ(U.Head.Raw->mnemonic,
+                 Word == 0x41020003u ? "bc1eqzc" : "bc1nezc");
+  }
+}
 
 TEST_P(MIPSRelease6, IntegerResultsAndArchitecturalState) {
   // GNU as -mips32r6: every destination is v0; sources are a0 and a1.

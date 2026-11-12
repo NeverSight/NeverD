@@ -13,6 +13,7 @@
 #include "neverd/backend/MIPS/MIPSBarrierSource.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/MIPS/MIPSMSASource.h"
+#include "neverd/backend/MIPS/MIPSR6FPSource.h"
 #include "neverd/backend/MIPS/MIPSSourceCompiler.h"
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
@@ -52,7 +53,8 @@ inline bool mipsScalarHighShapeIsValid(const HighExpr &E, Arch Target) {
 }
 
 inline std::pair<Intrinsic, unsigned> mipsScalarHelperKey(const HighExpr &E) {
-  return {E.IntrinsicId, mips::isMSAControl(E.IntrinsicId)
+  return {E.IntrinsicId, (mips::isMSAControl(E.IntrinsicId) ||
+                          mips::isR6FPControl(E.IntrinsicId))
                              ? unsigned(E.Operands[0]->ConstVal)
                              : 0};
 }
@@ -93,6 +95,35 @@ void writeMIPSScalarHelpers(
       OS << ") { unsigned _BitInt(128) result; " << Asm.cStatement(Pointers)
          << " return result; }\n";
       OS << "\n";
+      continue;
+    }
+    if (mips::isR6FPArithmetic(Id) || mips::isR6FPControl(Id)) {
+      if (!Image || !Image->MIPS || Image->MIPS->ISARevision != 6)
+        throw std::runtime_error("native scalar FPU requires Release 6");
+      const auto Asm = mips::r6FPAssembly(Id, Selector, false);
+      OS << "static __attribute__((noinline)) "
+         << mips::instructionModeCAttribute(InstructionMode::MIPSClassic);
+      if (Asm.Read || Asm.Write) {
+        OS << (Asm.Read ? "uint32_t " : "void ") << Name
+           << (Asm.Read ? "(void) { uint32_t v; " : "(uint32_t v) { ")
+           << (Asm.Read ? Asm.cStatement({}, "v")
+                        : Asm.cStatement({std::string("v")}))
+           << (Asm.Read ? " return v; }\n" : " }\n");
+        continue;
+      }
+      const auto &F = mips::r6FPOperation(Id);
+      const auto OutType = F.OutputBytes == 8 ? "uint64_t" : "uint32_t";
+      const auto InType = F.InputBytes == 8 ? "uint64_t" : "uint32_t";
+      OS << OutType << " " << Name << "(";
+      std::vector<std::string> Pointers{"&result"};
+      for (unsigned I = 1; I < Asm.Pointers; ++I) {
+        if (I != 1)
+          OS << ", ";
+        OS << InType << " a" << I;
+        Pointers.push_back("&a" + std::to_string(I));
+      }
+      OS << ") { " << OutType << " result; " << Asm.cStatement(Pointers)
+         << " return result; }\n\n";
       continue;
     }
     if (mips::isStatefulScalar(Id))
@@ -227,12 +258,14 @@ renderMIPSScalar(const HighExpr &E, Arch Target, const std::string &Name,
                  std::optional<uint64_t> GuestAddress, Render &&Expression) {
   if (!mipsScalarHighShapeIsValid(E, Target))
     throw std::runtime_error(mips::kMalformedScalar);
-  if (mips::isMSAControl(E.IntrinsicId)) {
-    return Name + (E.IntrinsicId == Intrinsic::MIPSReadMSAControl
+  if (mips::isMSAControl(E.IntrinsicId) || mips::isR6FPControl(E.IntrinsicId)) {
+    return Name + ((E.IntrinsicId == Intrinsic::MIPSReadMSAControl ||
+                    E.IntrinsicId == Intrinsic::MIPSReadFPControl)
                        ? "()"
                        : "(" + Expression(*E.Operands[1], 1) + ")");
   }
-  if (mips::isMSANativeVector(E.IntrinsicId)) {
+  if (mips::isMSANativeVector(E.IntrinsicId) ||
+      mips::isR6FPArithmetic(E.IntrinsicId)) {
     std::string Call = Name + "(";
     for (unsigned I = 0; I < E.Operands.size(); ++I) {
       if (I)

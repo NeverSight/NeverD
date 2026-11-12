@@ -49,6 +49,26 @@ R6_DOUBLE = (
 )
 
 
+def scalar_fp(bits):
+    rows = ["mfc1 $2,$f4", "mtc1 $2,$f4", "mfhc1 $2,$f4", "mthc1 $2,$f4",
+            "cfc1 $2,$31", "ctc1 $2,$28", "bc1eqz $f4,1f", "bc1nez $f4,1f"]
+    rows.extend(f"{op} $f4,-8($2)" for op in ("lwc1","ldc1","swc1","sdc1"))
+    if bits == 64:
+        rows.extend(["dmfc1 $2,$f4","dmtc1 $2,$f4"])
+    for fmt in ("s","d"):
+        for group, args in (
+            ("add sub mul div min mina max maxa maddf msubf sel seleqz selnez", "$f2,$f4,$f6"),
+            ("abs mov neg sqrt class rint recip rsqrt round.l trunc.l ceil.l floor.l "
+             "round.w trunc.w ceil.w floor.w cvt.w cvt.l", "$f2,$f4"),
+        ):
+            rows.extend(f"{op}.{fmt} {args}" for op in group.split())
+        rows.extend(f"cmp.{cond}.{fmt} $f2,$f4,$f6" for cond in
+                    "af un eq ueq lt ult le ule saf sun seq sueq slt sult sle sule or une ne sor sune sne".split())
+        for src in (("d" if fmt == "s" else "s"), "w", "l"):
+            rows.append(f"cvt.{fmt}.{src} $f2,$f4")
+    return rows
+
+
 MICRO64 = (
     ("$2,$4,$5", "daddu dsubu dsllv dsrlv dsrav drotrv"),
     ("$2,$4,-53", "daddiu"),
@@ -111,7 +131,7 @@ def corpora():
                 f"{name} {operands}"
                 for operands, names in R6 + (R6_DOUBLE if bits == 64 else ())
                 for name in names.split()
-            ],
+            ] + scalar_fp(bits),
         )
 
 

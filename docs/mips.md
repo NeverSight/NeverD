@@ -2,7 +2,7 @@
 
 The experimental MIPS analysis path targets linked ELF programs with classic
 MIPS32/o32 and MIPS64/n64 instructions in either byte order. The profiles below
-cover classic Release 2, classic Release 6 integer instructions, microMIPS32 and microMIPS64 integer profiles,
+cover classic Release 2, classic and microMIPS Release 6 integer and FR=1 floating-point instructions, microMIPS32 and microMIPS64 integer profiles,
 MIPS16e32 and MIPS16e2, and Release 5/o32 and n64 MSA.
 The selected ELF profile determines register width, byte order, stack layout
 and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
@@ -119,7 +119,7 @@ have the extension a narrow C parameter would require. Declared source types
 remain a separate contract.
 
 The n32 ABI, historical MIPS I–V profiles,
-scalar floating point, MSA/DSP forms beyond the slices below, privileged instructions and reservations outside the MIPS16e2 and classic Release 6 LowIR coverage below,
+pre-Release 6 scalar floating point, MSA/DSP forms beyond the slices below, privileged instructions and reservations outside the MIPS16e2 and classic Release 6 LowIR coverage below,
 doubleword merge stores (`SDL`/`SDR`), pre-R6 doubleword division and trapping arithmetic are not admitted by
 the current lifter. Unsupported instructions, missing slots and transfers in a
 delay slot produce errors, not replacement NOPs. Floating/aggregate source ABI
@@ -270,12 +270,14 @@ doubleword load `LDX`. Both C views preserve DSPControl under the n64 ABI.
 An n64 source return requires the complete eight-byte incoming link, including
 when it is restored from a leaf stack slot. A four-byte spill suffices on o32.
 Standalone IR that writes the link and calls a direct target needs the image
-to establish the callee mode on either ABI. Classic n64 also lifts 81 packed GPR forms from the early DSP64 extension,
+to establish the callee mode on either ABI. Classic n64 also lifts all 101 GNU 2.47 packed .OB, .QH and .PW forms from the early DSP64 extension,
 including octal-byte, quad-halfword and paired-word arithmetic, shifts, compares,
 picks and packing. Revision 2.40 deprecated this extension. ELF advertises DSP
 without identifying its historical revision. Concrete use of these encodings
-therefore requires a processor implementing them. The legacy 128-bit
-accumulator instructions require additional coverage. In n64 DSPControl,
+therefore requires a processor implementing them. Twenty dot-product and selected-lane instructions update complete 128-bit
+HI/LO accumulators. Q15/Q31 product saturation, carry/borrow, Q31/Q63 result
+saturation and the selected bank's sticky overflow flag remain explicit IR
+operations. The legacy DEXTR/DEXTP and DMADD families need separate coverage. In n64 DSPControl,
 POS has seven bits and CCOND has eight. RDDSP zero-extends selected bits.
 See the register model and revision history in the
 [MIPS64 DSP Module, revision 3.02](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00375-2B-MIPS64DSP-AFP-03.02.pdf).
@@ -652,16 +654,15 @@ signed ties. The implementation avoids overflowing a host signed integer or
 requiring a 128-bit carrier for each 64-bit-lane sum.
 Inputs are captured before an overlapping destination is written. F registers
 share the low 64 bits of their corresponding W register.
-Scalar floating instructions remain unsupported: their future implementation
-must model the unpredictable remaining W bits, not preserve or zero them by
-assuming a generic subregister write.
+Release 6 scalar floating writes define the low FPR view and leave the
+remaining W bits unpredictable. A single-word result also leaves the FPR
+high word unpredictable. Reads of defined low bytes retain their values.
 
 LowIR accepts all 32 W registers. Source qualification is narrower and runs
 before SSA/dead-code elimination. Each vector input must be initialized on every incoming leaf path. Calls and writes to the saved
 F20/F22/.../F30 low views require a separate ABI proof. Without an Image, all
 W20..W31 writes are refused because other o32 FPABIs preserve additional views.
-MSA64 source is refused at this boundary too; no extra vector parameter is
-invented. Returns must retain the
+The n64 profile preserves F24 through F31. Returns must retain the
 captured entry RA, including when `COPY_S.W` writes RA in a delay slot. General
 vector ABI and saved-FPR restoration remain future work. Both C paths use Clang's bit-precise integer support for any surviving
 128-bit scalar temporaries on MIPS32.
@@ -1046,8 +1047,8 @@ in LowIR. A board supplies implemented CP0 views, including MVH support for
 high-word transfers. Selected performance registers use the encoded RDHWR
 selector. A cache request includes the ISA revision and full virtual address.
 Source generation currently declines live reservation and board-state effects.
-General privileged execution, scalar floating point and optional
-Release 6 ASEs require additional coverage. The [testing guide](testing.md)
+General privileged execution and optional Release 6 ASEs require
+additional coverage. The [testing guide](testing.md)
 covers the linked GNU fixtures. The encoding and execution rules follow the
 [MIPS64 Instruction Set Reference Manual, revision 6.06](https://docs.alexrp.com/mips/mips64_insns_v6_06.pdf).
 
@@ -1085,3 +1086,43 @@ See [the Archer C7 analysis receipt](firmware/archer-c7-v5.md) for the official
 source, hashes, extraction boundary and selected analysis target. Firmware
 containers/mapping are tracked separately by [#1727](https://github.com/NeverSight/NeverD/issues/1727);
 the ISA work belongs to [#97](https://github.com/NeverSight/NeverD/issues/97).
+
+
+### Release 6 scalar FPU
+
+Classic and microMIPS scalar FP use a common COP1 semantic owner in both GPR
+widths and byte orders. The 98 arithmetic, conversion and comparison forms
+include fused MADDF/MSUBF and all 22 implemented mask predicates in each FP
+width. Classification, selectors, register transfers and FP memory accesses
+also have explicit lift rules. Classic BC1EQZ/BC1NEZ retain their delay slots.
+The microMIPS BC1EQZC/BC1NEZC forms have halfword-scaled compact targets.
+
+The ordered arithmetic intrinsics carry numeric FPR bit patterns and preserve
+FCSR dependencies. A caller-bound Release 6 scalar FPU executor supplies
+implementation-specific results. The optional Unicorn adapter selects
+MIPS32R6_GENERIC or I6400, restores the supplied FCSR, and executes the original
+operation. An enabled exception commits Cause state and suppresses the FPR
+destination. FIR/FCSR and the FCCR/FEXR/FENR views are explicit control effects.
+An unavailable implementation or unpredictable control write stops evaluation.
+
+HighC and LLVMC retain native COP1 operations through volatile assembly,
+including ambient FCSR and enabled exceptions. Their source qualification
+requires initialized FPR bytes on all incoming leaf paths, an explicit FR=1 ELF
+profile and volatile registers. General incoming FP call ABI and saved-FPR
+restoration require additional proofs. Function-scoped instruction mode is
+preserved, including physical microMIPS FP assembly.
+
+The independent GNU/LLVM encoding fixtures cover both byte orders. Original
+execution covers classic MIPS32/64 and physical microMIPS32. I6400 supplies the
+classic 64-bit reference. Physical microMIPS64 is checked against fixed encodings
+and the corresponding classic LowIR for every catalog entry. The 112 FP forms
+are exercised with finite values, NaNs and rounding changes. Source round trips
+cover explicit classic o32 and n64 FR=1 leaves in HighC and LLVMC at O0 and O2.
+
+The baseline for decoder measurements is
+bcef8d07e1, with matched Release compiler and dependency inputs except for
+the intentional Capstone revision change. The paired driver defaults to the four
+classic Release 2 profiles from its `.def` catalog. Optional profiles are selected
+explicitly. MSA64, legacy DSP64, scalar FPU validation and nine-pair compressed
+decode/lift results are recorded in
+[the MSA64 and scalar FP qualification receipt](evidence/mips-wide-fp-2026-11-12.json).

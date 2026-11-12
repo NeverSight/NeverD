@@ -35,6 +35,17 @@ def kernels():
         "mips64msafloat", "mips64r5", "msa",
         "fill.d $w0,$4\nfill.d $w1,$5\nfadd.d $w2,$w0,$w1\ncopy_s.d $2,$w2[0]",
     )
+    for instruction in (
+        "dpau.h.obl dpau.h.obr dpsu.h.obl dpsu.h.obr dpaq_s.w.qh dpsq_s.w.qh "
+        "mulsaq_s.w.qh dpaq_sa.l.pw dpsq_sa.l.pw mulsaq_s.l.pw "
+        "maq_sa.w.qhll maq_sa.w.qhlr maq_sa.w.qhrl maq_sa.w.qhrr "
+        "maq_s.w.qhll maq_s.w.qhlr maq_s.w.qhrl maq_s.w.qhrr "
+        "maq_s.l.pwl maq_s.l.pwr"
+    ).split():
+        yield (
+            "mips64acc_" + instruction.replace(".", "_"), "mips64r2", "dsp",
+            "mthi $0\nmtlo $0\n" + instruction + " $ac0,$4,$5\nmflo $2",
+        )
     # The R6 generic core executes the original microMIPS ELF directly.
     yield "micromips32r6", "mips32r6", "", "mul $2,$4,$5\nbitswap $2,$2\njrc16 $ra"
     yield (
@@ -54,6 +65,23 @@ def kernels():
     for bits, multiply in ((32, "mul"), (64, "dmulu")):
         cpu = f"mips{bits}r6"
         d = "d" if bits == 64 else ""
+        transfer = "dmtc1" if bits == 64 else "mtc1"
+        move = "dmfc1" if bits == 64 else "mfc1"
+        fmt = "d" if bits == 64 else "s"
+        yield (
+            cpu + "fp", cpu, "",
+            f"{transfer} $4,$f0\n{transfer} $5,$f2\n"
+            f"add.{fmt} $f4,$f0,$f2\n{move} $2,$f4",
+        )
+        yield (
+            cpu + "fpcompare", cpu, "",
+            f"{transfer} $4,$f0\n{transfer} $5,$f2\n"
+            f"cmp.une.{fmt} $f4,$f0,$f2\n{move} $2,$f4",
+        )
+        yield (
+            cpu + "fpround", cpu, "",
+            f"{transfer} $4,$f0\nrint.{fmt} $f4,$f0\n{move} $2,$f4",
+        )
         yield cpu, cpu, "", f"{multiply} $2,$4,$5\n{d}bitswap $2,$2"
         yield cpu + "div", cpu, "", f"{d}div $2,$4,$5"
         yield cpu + "branch", cpu, "", "or $2,$4,$0\nbgec $4,$5,1f\nori $2,$0,7\n1:"
@@ -66,6 +94,20 @@ def inputs(name, bits):
         for a in (0, 1, -1, 0x11223344, 0x8000000000000001)
         for b in (0, 7, -1, 0xA5A533FF)
     ]
+    if name.startswith("mips64acc_"):
+        return [
+            (a, b)
+            for a in (0, 1, 2, 0x0001000200030004, 0xFFFF00010002FFFF)
+            for b in (0, 5, 6, 0x0005000600070008, 0xFFFF00020001FFFF)
+        ]
+    if "fp" in name:
+        values = (
+            (0, 0x80000000, 0x3FC00000, 0xBF800000, 0x7FC00000, 0x7F800001, 1)
+            if bits == 32 else
+            (0, 0x8000000000000000, 0x3FF8000000000000, 0xBFF0000000000000,
+             0x7FF8000000000000, 0x7FF0000000000001, 1)
+        )
+        return [(a, b) for a in values for b in values]
     if name.endswith("div"):
         return [(a, b) for a, b in pairs if b] + [
             (-(1 << (bits - 1)), -1),
@@ -108,9 +150,14 @@ def observe(elf, bits, little, feature, cases):
             roundtrip.STOP + 0x200,
             ASE["ENABLE_MSA" if feature == "msa" else "ENABLE_DSP"],
         )
+    if not feature:
+        status = uc.reg_read(mips.UC_MIPS_REG_CP0_STATUS) | 0x24000000
+        uc.reg_write(mips.UC_MIPS_REG_CP0_STATUS, status)
     uc.mem_write(roundtrip.DATA, bytes((0x87 + 29 * i) & 255 for i in range(64)))
     observations = []
     for i, pair in enumerate(cases):
+        if not feature:
+            uc.reg_write(mips.UC_MIPS_REG_FCSR, 0xC0000 | (i & 3))
         if feature:
             uc.reg_write(
                 mips.UC_MIPS_REG_A0, 0x01004005 if feature != "msa" and i % 2 else 0
@@ -119,7 +166,7 @@ def observe(elf, bits, little, feature, cases):
                 roundtrip.STOP + 0x300, [0x783E2059 if feature == "msa" else 0x7C81FCF8]
             )
         value = roundtrip.invoke(uc, entry, bits, little, pair)[0]
-        control = None
+        control = uc.reg_read(mips.UC_MIPS_REG_FCSR) if not feature else None
         if feature:
             execute(
                 roundtrip.STOP + 0x400, [0x787E0A19 if feature == "msa" else 0x7C3F44B8]

@@ -12,6 +12,7 @@
 #ifndef NEVERD_BACKEND_MIPS_MIPSMSASOURCE_H
 #define NEVERD_BACKEND_MIPS_MIPSMSASOURCE_H
 
+#include "neverd/backend/MIPS/MIPSFPAssembly.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -23,50 +24,9 @@
 
 namespace neverd::mips {
 
-struct MSANativeAssembly {
-  std::string Text;
-  std::string Constraints;
-  unsigned Pointers = 0;
-  bool ClobbersAT = false;
-  bool Read = false;
-  bool Write = false;
-  std::string llvmText() const {
-    std::string S;
-    for (char C : Text) {
-      if (C == '$')
-        S += '$';
-      S += C == '%' ? '$' : C;
-    }
-    return S;
-  }
-  std::string cStatement(llvm::ArrayRef<std::string> Arguments,
-                         llvm::StringRef Result = {}) const {
-    std::string S;
-    llvm::raw_string_ostream OS(S);
-    OS << "__asm__ volatile(\"";
-    OS.write_escaped(Text);
-    OS << "\" : ";
-    if (Read)
-      OS << "\"=r\"(" << Result << ")";
-    OS << " : ";
-    for (unsigned I = 0; I < Arguments.size(); ++I) {
-      if (I)
-        OS << ", ";
-      OS << "\"r\"(" << Arguments[I] << ")";
-    }
-    OS << " : \"memory\"";
-    if (ClobbersAT)
-      OS << ", \"$1\"";
-    for (unsigned I = 1; I < Pointers; ++I)
-      OS << ", \"$f" << 2 * (I - 1) << "\"";
-    OS << ");";
-    return S;
-  }
-};
-
-inline MSANativeAssembly msaAssembly(Intrinsic Id, unsigned Selector,
-                                     bool Little) {
-  MSANativeAssembly A;
+inline FPNativeAssembly msaAssembly(Intrinsic Id, unsigned Selector,
+                                    bool Little) {
+  FPNativeAssembly A;
   A.Text = ".set push\n.set msa\n";
   A.Read = Id == Intrinsic::MIPSReadMSAControl;
   A.Write = Id == Intrinsic::MIPSWriteMSAControl;

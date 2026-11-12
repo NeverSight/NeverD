@@ -2158,9 +2158,10 @@
         "docs/mips.md"
       ],
       "limitations": [
-        "linked classic MIPS32r6/o32 and MIPS64r6/n64 ELF in either byte order",
-        "bounded integer arithmetic, PC-relative memory, compact transfers and forbidden-slot handling as enumerated in docs/mips.md",
-        "compressed Release 6, optional Release 6 ASEs, scalar floating point and general privileged execution remain outside this profile"
+        "linked MIPS32r6/o32 and MIPS64r6/n64 ELF in either byte order, with classic and microMIPS LowIR coverage",
+        "integer arithmetic, PC-relative memory, compact transfers, forbidden-slot handling and FR=1 scalar FP as enumerated in docs/mips.md",
+        "scalar FP arithmetic and control execution require a bound implementation and FCSR. Native source requires initialized volatile FPR bytes and explicit FR=1 profile evidence",
+        "general incoming floating call ABI, saved-FPR restoration, optional Release 6 ASEs and general privileged execution require additional coverage"
       ],
       "tests": [
         {
@@ -2177,6 +2178,33 @@
           "target": "NeverDMIPSIntegerTests",
           "source": "unittests/lift/mips/MIPSRelease6Tests.cpp",
           "filter": "*/MIPSRelease6.ForbiddenSlotFaultDependsOnFallthrough/*",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPSRelease6Tests.cpp",
+          "filter": "*/MIPSRelease6.FloatingCatalogHasIdenticalClassicAndMicroEffects/*",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPSRelease6Tests.cpp",
+          "filter": "*/MIPSRelease6.ScalarFPUCommitsFlagsAndSuppressesFaultingDestinations/*",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPSRelease6Tests.cpp",
+          "filter": "*/MIPSRelease6.MicroScalarTransfersAndCompactFPBranchesKeepTheirEncoding/*",
           "platforms": [
             "darwin"
           ]
@@ -2202,7 +2230,7 @@
         "docs/mips.md"
       ],
       "limitations": [
-        "linked microMIPS32r2/o32 scalar and DSP/DSPR2 instructions in either byte order with local ISA-mode and ASE evidence. microMIPS64 remains unqualified",
+        "linked microMIPS32r2/o32 scalar and DSP/DSPR2 instructions in either byte order with local ISA-mode and ASE evidence",
         "local mode evidence and physical two/four-byte instruction and slot ownership are required; unknown or conflicting targets fail explicitly",
         "source qualification covers bounded leaves with proven incoming RA; numeric microMIPS callable reconstruction, unknown-mode import values, tail calls and unproved restores across calls are rejected",
         "no complete compressed ISA, typed floating/vector ABI, native rewrite or guest-process execution claim"
@@ -2329,9 +2357,9 @@
         "docs/mips.md"
       ],
       "limitations": [
-        "linked classic MIPS32r2/o32, microMIPS32r2/o32 and MIPS64r2/n64 ELF with DSP ASE evidence. MIPS64 uses 32-bit packed arithmetic with full GPR address inputs and LDX",
+        "linked classic MIPS32r2/o32, microMIPS32r2/o32 and MIPS64r2/n64 ELF with DSP ASE evidence. MIPS64 supports the shared 32-bit forms and all 101 GNU 2.47 legacy .OB/.QH/.PW packed forms",
         "explicit DSPControl state requires an enabled DSP execution environment; no disabled-DSP exception delivery or invented initial state",
-        "AC0 aliases HI/LO. AC1 through AC3 have independent high and low halves. Saturating fractional accumulation, EXTR and position-based extraction observe DSPControl. The 46 DSPR2 instructions require revision-two ABI evidence. Deprecated doubleword packed DSP formats are outside this profile",
+        "AC0 aliases HI/LO. AC1 through AC3 have independent high and low halves. Saturating fractional accumulation, EXTR and position-based extraction observe DSPControl. The 46 DSPR2 instructions require revision-two ABI evidence. Early DSP64 packed dots and selected lanes update 128-bit accumulators. Legacy DEXTR/DEXTP and DMADD families need separate coverage",
         "original-target source preserves DSPControl after return; no portable-host execution or floating/vector ABI claim"
       ],
       "tests": [
@@ -2388,6 +2416,24 @@
           "platforms": [
             "darwin"
           ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPSDSPTests.cpp",
+          "filter": "MIPSDSP64.PackedGPRsMatchOriginalInstructionsAndFullControl",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPSDSPTests.cpp",
+          "filter": "MIPSDSP64.PackedDotsAndSingleLanesUpdateTheSelected128BitAccumulator",
+          "platforms": [
+            "darwin"
+          ]
         }
       ],
       "public_surfaces": {
@@ -2404,15 +2450,17 @@
       "owner": "lift",
       "targets": [
         "mips",
-        "mipsel"
+        "mipsel",
+        "mips64",
+        "mips64el"
       ],
       "docs": [
         "docs/mips.md"
       ],
       "limitations": [
-        "linked classic and microMIPS32r5/o32 ELF with MSA, FP64 ABI and 128-bit CPR1 evidence in either byte order",
+        "linked classic and microMIPS32r5/o32 or MIPS64r5/n64 ELF with MSA, FP64 ABI and 128-bit CPR1 evidence in either byte order",
         "integer lane arithmetic, Q-format products, vector memory, conditional branches, permutations and slides, W/D floating point, and CFCMSA/CTCMSA. Native floating point requires defined vector inputs, an enabled original-target FP environment and WRP clear",
-        "concrete FP requires a bound executor and MSACSR. General partitioned vector execution, disabled-MSA exception delivery, and MSA64 remain outside this profile"
+        "concrete FP requires a bound executor and MSACSR. MSA64 retains complete GPR addresses and doubleword transfers. General partitioned vector execution and disabled-MSA exception delivery need additional coverage"
       ],
       "tests": [
         {
@@ -2483,6 +2531,24 @@
           "target": "NeverDMIPSIntegerTests",
           "source": "unittests/lift/mips/MicroMIPSIntegerTests.cpp",
           "filter": "*/MicroMIPSInteger.MSAPhysicalIdentityAndHalfwordBranchTarget/*",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPSMSATests.cpp",
+          "filter": "MIPSMSA64.DoublewordTransfersAndFullWidthAddresses",
+          "platforms": [
+            "darwin"
+          ]
+        },
+        {
+          "runner": "gtest",
+          "target": "NeverDMIPSIntegerTests",
+          "source": "unittests/lift/mips/MIPSMSATests.cpp",
+          "filter": "MIPSMSA64.I6400ExecutesFloatingLanesAndCSRInBothEndians",
           "platforms": [
             "darwin"
           ]

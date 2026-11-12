@@ -311,6 +311,8 @@ Decoder::decodePhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
   if (MIPSISARevision == 6 && Len >= 4) {
     const auto Word =
         readTargetEndian<uint32_t>(Bytes, archLittleEndian(TargetArch));
+    if ((Word & 0xffc0003c) == 0x4600001c)
+      return decodeR6FloatCompare(Bytes, Word, Addr);
     // The physical decoder aliases paired LL/SC to an offset form and swaps the
     // n64 SC operands. Own this small SPECIAL3 group before public decoding.
     if ((Word & 0xfc00002e) == 0x7c000026)

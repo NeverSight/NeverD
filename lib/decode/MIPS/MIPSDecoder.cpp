@@ -6,6 +6,7 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/intrinsics/MIPS/MIPSR6FPOperations.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 #include "neverd/lift/MIPS/MIPSDSP64.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
@@ -119,6 +120,24 @@ bool Decoder::decodeMicroMIPSRelease6(const uint8_t *Bytes, size_t Len,
                             ? First
                             : (uint32_t(First) << 16) |
                                   readTargetEndian<uint16_t>(Bytes + 2, Little);
+  if (Size == 4) {
+    if (auto FP = mips::microR6Float(Word)) {
+      if (((*FP & 0xffc00030) == 0x46800010) ||
+          ((*FP & 0xffc0003c) == 0x4600001c))
+        return decodeR6FloatCompare(Bytes, *FP, Addr);
+      const bool Branch = Major == 0x10;
+      if (!decodeMIPSEquivalent(Bytes, *FP, Addr, Branch))
+        return false;
+      if (Branch) {
+        InsnBuf->id =
+            (Word >> 21 & 31) == 8 ? MIPS_INS_BC1EQZC : MIPS_INS_BC1NEZC;
+        if (Text)
+          std::snprintf(InsnBuf->mnemonic, sizeof(InsnBuf->mnemonic), "%s",
+                        cs_insn_name(Handle, InsnBuf->id));
+      }
+      return true;
+    }
+  }
   if (Size == 4 && Major == 0x18 && ((Word >> 12) & 1)) {
     const auto Classic = mips::microR6Reservation(Word);
     return Classic && decodeMIPSReservation(Bytes, *Classic, Addr);
@@ -202,6 +221,8 @@ bool Decoder::decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr) {
   }
   const auto Physical = readTargetEndian<uint32_t>(Bytes, Little);
   if (MIPSISARevision == 6) {
+    if ((Physical & 0xffc00030) == 0x46800010)
+      return decodeR6FloatCompare(Bytes, Physical, Addr);
     const unsigned RS = (Physical >> 21) & 31;
     if ((Physical & 0xfc0007f8) == 0x40000000 && (RS == 2 || RS == 6)) {
       // MFHC0/MTHC0 have the same operand roles as MFC0/MTC0.
@@ -250,6 +271,23 @@ bool Decoder::decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr) {
     return false;
   return decodeMIPSEquivalent(Bytes, *Classic, Addr,
                               MIPSLifter::hasDelaySlot(*Classic));
+}
+
+bool Decoder::decodeR6FloatCompare(const uint8_t *Bytes, uint32_t Classic,
+                                   va_t Addr) {
+  const auto Id = mips::r6FPArithmetic(Classic);
+  const auto Equivalent =
+      (Classic & 0xffc00030) == 0x46800010 ? Classic & ~16u : Classic;
+  if (!Id || !decodeMIPSEquivalent(Bytes, Equivalent, Addr))
+    return false;
+  // Capstone omits complemented symmetric predicates and interchanges MINA
+  // with MAX. Their decoded counterparts have the same operand and FCSR roles.
+  InsnBuf->id = MIPS_INS_ENDING + 0x1000 + unsigned(*Id) -
+                unsigned(Intrinsic::MIPSFPADD_S);
+  if (Text)
+    std::snprintf(InsnBuf->mnemonic, sizeof(InsnBuf->mnemonic), "%s",
+                  mips::r6FPOperation(*Id).Mnemonic);
+  return true;
 }
 
 bool Decoder::decodeR6HardwareRegister(const uint8_t *Bytes, uint32_t Word,

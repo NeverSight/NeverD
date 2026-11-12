@@ -213,6 +213,15 @@ bool MIPSLifter::liftR6Float(State &S, uint32_t Word) const {
   }
   if (Op != 17)
     return false;
+  if (Mode == InstructionMode::MicroMIPS && (Fmt == 9 || Fmt == 13)) {
+    const auto Bit = S.binary(NdOp::INT_AND, FPR(FT, 4), NdVar::cst(1, 4));
+    const auto Taken = S.binary(Fmt == 9 ? NdOp::INT_EQUAL : NdOp::INT_NOTEQUAL,
+                                Bit, NdVar::cst(0, 4), 1);
+    S.emit(
+        NdOp::COND_BR, {},
+        {NdVar::cst(r6BranchTarget(Word, S.Addr, S.InsnSize), S.Width), Taken});
+    return true;
+  }
   if (Fmt < 8) {
     if ((Word & 0x7ff) || ((Fmt == 1 || Fmt == 5) && S.Width != 8))
       return false;
@@ -231,6 +240,23 @@ bool MIPSLifter::liftR6Float(State &S, uint32_t Word) const {
         S.emit(NdOp::NOP, {}, {}); // Move into the hardwired zero register.
       return true;
     }
+    case 2:   // CFC1
+    case 6: { // CTC1
+      const bool Write = Fmt == 6;
+      if (!mips::r6FPControlSelector(FS, Write))
+        return false;
+      const auto Selector = NdVar::cst(FS, 1);
+      if (Write)
+        S.emitIntrinsic(Intrinsic::MIPSWriteFPControl, {},
+                        {Selector, S.read(FT, 4)});
+      else {
+        const auto Value = S.makeTemp(4);
+        S.emitIntrinsic(Intrinsic::MIPSReadFPControl, Value, {Selector});
+        if (FT)
+          S.write(FT, Value);
+      }
+      return true;
+    }
     case 4:
     case 5: // MTC1, DMTC1
       StoreFPR(FS, S.read(FT, Fmt == 4 ? 4 : 8));
@@ -241,6 +267,19 @@ bool MIPSLifter::liftR6Float(State &S, uint32_t Word) const {
     default:
       return false;
     }
+  }
+  if (const auto Id = mips::r6FPArithmetic(Word)) {
+    const auto &F = mips::r6FPOperation(*Id);
+    const auto Out = S.makeTemp(F.OutputBytes);
+    const auto X = FPR(FS, F.InputBytes), Y = FPR(FT, F.InputBytes);
+    if (F.Arity == 3)
+      S.emitIntrinsic(*Id, Out, {FPR(FD, F.InputBytes), X, Y});
+    else if (F.Arity == 2)
+      S.emitIntrinsic(*Id, Out, {X, Y});
+    else
+      S.emitIntrinsic(*Id, Out, {X});
+    StoreFPR(FD, Out);
+    return true;
   }
   if (Fmt != 16 && Fmt != 17)
     return false;
