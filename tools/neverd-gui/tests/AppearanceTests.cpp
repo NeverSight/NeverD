@@ -60,6 +60,7 @@
 #include <QStyleOption>
 #include <QSvgRenderer>
 #include <QTabBar>
+#include <QTableView>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTextLayout>
@@ -1273,6 +1274,41 @@ private slots:
                qPrintable(QString::number(contrast(part, surface))));
     QVERIFY(contrast(plate, surface) <
             contrast(theme.chrome("Button"), surface));
+  }
+
+  void columnHeadingsStartWithTheirColumnsAndKeepTheirWeight() {
+    // Qt centers a table's headings over cells that start at the left and
+    // draws them bold while a cell of their column is selected, where a
+    // tree's list keeps them left and plain: x87 support's headings turned
+    // bold with its first row, and Binary comparison's and the version
+    // graph's stood centered beside lists whose headings start at the left.
+    Theme::instance().apply();
+    QStandardItemModel model(2, 2);
+    model.setHorizontalHeaderLabels(
+        {QStringLiteral("Function"), QStringLiteral("Address")});
+    for (int row = 0; row < 2; ++row)
+      for (int column = 0; column < 2; ++column)
+        model.setItem(row, column, new QStandardItem(QStringLiteral("cell")));
+    QTableView table;
+    QTreeView tree;
+    for (QAbstractItemView *view : {static_cast<QAbstractItemView *>(&table),
+                                    static_cast<QAbstractItemView *>(&tree)}) {
+      view->setModel(&model);
+      view->resize(400, 160);
+      view->show();
+      QVERIFY(QTest::qWaitForWindowExposed(view));
+    }
+    for (const QHeaderView *header :
+         {table.horizontalHeader(), tree.header()}) {
+      QCOMPARE(header->defaultAlignment(),
+               Qt::Alignment(Qt::AlignLeft | Qt::AlignVCenter));
+      QVERIFY(!header->highlightSections());
+    }
+    // Selecting a row leaves the headings as they were drawn.
+    const QImage before = table.horizontalHeader()->grab().toImage();
+    table.selectRow(0);
+    QCoreApplication::processEvents();
+    QCOMPARE(table.horizontalHeader()->grab().toImage(), before);
   }
 
   void splitterHandlesKeepAHairlineInTheirRoom_data() {

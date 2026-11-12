@@ -1115,10 +1115,18 @@ void WorkbenchStyle::polish(QWidget *widget) {
   // table starts as wide as its heading, in every language.
   if (auto *header = qobject_cast<QHeaderView *>(widget)) {
     header->setTextElideMode(Qt::ElideRight);
-    if (header->orientation() == Qt::Horizontal &&
-        !header->property(FittedHeadings).toBool()) {
-      header->setProperty(FittedHeadings, true);
-      new HeadingFitter(header);
+    if (header->orientation() == Qt::Horizontal) {
+      // A heading starts where its column's text does and keeps its weight.
+      // Qt centers a table's headings and draws them bold while a cell of
+      // their column is selected, where a tree's stay left and plain, so one
+      // window's lists read two ways.  A model that aligns a heading itself
+      // still does.
+      header->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+      header->setHighlightSections(false);
+      if (!header->property(FittedHeadings).toBool()) {
+        header->setProperty(FittedHeadings, true);
+        new HeadingFitter(header);
+      }
     }
   }
   // Qt's own file dialog lists folders and files with the icon theme's
