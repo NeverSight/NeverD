@@ -420,4 +420,59 @@ int main(int argc, char **argv) {
     }
 #endif
 }
+// The guarded projection hands its status sample to the thread-local owner
+// with a C assignment, as the scalar helpers do.  The owner's address as an
+// assembly operand is formed from the thread pointer, and that access stays
+// in a build that removes every other use of the sample, so the function
+// cannot run in an image without thread storage.
+TEST(X87GuardedValue, HighCSamplesStatusIntoALocalOfTheExpression) {
+  for (Arch A : {Arch::X86, Arch::X64})
+    for (unsigned Kind = 0; Kind != 5; ++Kind) {
+      SCOPED_TRACE(unsigned(A));
+      SCOPED_TRACE(Kind);
+      const uint8_t Base = A == Arch::X86 ? 1 : 7;
+      std::vector<uint8_t> Bytes =
+          A == Arch::X86 ? std::vector<uint8_t>{0x8b, 0x4c, 0x24, 4}
+                         : std::vector<uint8_t>{};
+      Bytes.insert(Bytes.end(), {0xdb, 0xe3,                       // FNINIT
+                                 0xd9, uint8_t(0x68 | Base), 32}); // FLDCW
+      if (Kind == 0) // FBLD m80bcd; FSTP m80
+        Bytes.insert(Bytes.end(), {0xdf, uint8_t(0x20 | Base), 0xdb,
+                                   uint8_t(0x78 | Base), 16});
+      else if (Kind == 1) // FLD m80; FBSTP m80bcd
+        Bytes.insert(Bytes.end(), {0xdb, uint8_t(0x28 | Base), 0xdf,
+                                   uint8_t(0x70 | Base), 16});
+      else { // FLD m80; FPTAN, FSINCOS or FXTRACT; FSTP m80 for each result
+        const uint8_t Opcodes[] = {0xf2, 0xfb, 0xf4};
+        Bytes.insert(Bytes.end(),
+                     {0xdb, uint8_t(0x28 | Base), 0xd9, Opcodes[Kind - 2], 0xdb,
+                      uint8_t(0x78 | Base), 16, 0xdb, uint8_t(0x78 | Base),
+                      48});
+      }
+      Bytes.push_back(0xc3);
+      auto Image = image(A, BinaryFormat::ELF, Bytes);
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      auto High = Pipeline().run(Image, Context, Options);
+      ASSERT_TRUE(High.Success) << High.Error;
+      CEmitterOptions Emit;
+      Emit.TheArch = A;
+      Emit.Format = BinaryFormat::ELF;
+      Emit.Image = &Image;
+      std::string C;
+      llvm::raw_string_ostream OS(C);
+      ASSERT_TRUE(HighCEmitter().emit(High.HighFuncs, OS, Emit));
+      // No assembly operand is the thread-local owner's address.
+      EXPECT_EQ(C.find("&neverd_x87_sampled_status"), std::string::npos) << C;
+      // Status is still sampled inside the instruction's own assembly block,
+      // into the expression's local, whatever suffix the allocator gives it.
+      EXPECT_NE(C.find("fnstsw (%3)"), std::string::npos) << C;
+      EXPECT_NE(C.find("\"r\"(&x87_value_status"), std::string::npos) << C;
+      EXPECT_NE(C.find("neverd_x87_sampled_status = x87_value_status"),
+                std::string::npos)
+          << C;
+    }
+}
+
 } // namespace

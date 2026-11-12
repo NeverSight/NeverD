@@ -2288,14 +2288,21 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     const auto Source = MemoryIdentifiers.allocate("x87_value_source");
     const auto Result = MemoryIdentifiers.allocate("x87_value_result");
     const auto Control = MemoryIdentifiers.allocate("x87_value_control");
+    const auto Status = MemoryIdentifiers.allocate("x87_value_status");
+    // The assembly samples status into a local of this expression and C hands
+    // it to the thread-local owner, as the scalar helpers do. The address of
+    // a thread-local object as an assembly operand would be formed from the
+    // thread pointer even where the compiler can remove every other use of
+    // the sample.
     return "({ unsigned _BitInt(80) " + Source + " = " +
            exprStr(*E.Operands[0]) + "; unsigned _BitInt(" +
            std::to_string(x87GuardedValueBytes(E.IntrinsicId) * 8) + ") " +
            Result + " = 0; uint16_t " + Control + " = " +
-           exprStr(*E.Operands[1]) + "; " +
-           renderX87GuardedValueAsm(E.IntrinsicId,
-                                    {"&" + Result, "&" + Source, "&" + Control,
-                                     "&neverd_x87_sampled_status"}) +
+           exprStr(*E.Operands[1]) + "; uint16_t " + Status + " = 0; " +
+           renderX87GuardedValueAsm(
+               E.IntrinsicId,
+               {"&" + Result, "&" + Source, "&" + Control, "&" + Status}) +
+           "; neverd_x87_sampled_status = " + Status +
            "; neverd_x87_status_pending = 1; " + Result + "; })";
   }
   if (isX87ConstantControlIntrinsic(E.IntrinsicId)) {
