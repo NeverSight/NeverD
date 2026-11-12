@@ -8,6 +8,7 @@
 /// Authored machine code is analyzed, never executed.
 //===----------------------------------------------------------------------===//
 
+#include "../ResourceLimits.h"
 #include "ComparisonSession.h"
 #include "Language.h"
 #include "LineageDialog.h"
@@ -21,6 +22,7 @@
 #include <QClipboard>
 #include <QCryptographicHash>
 #include <QDateTimeEdit>
+#include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
@@ -49,6 +51,7 @@
 #include <QTimer>
 #include <QToolButton>
 #include <QTranslator>
+#include <QVBoxLayout>
 
 using namespace neverd::gui;
 namespace {
@@ -135,6 +138,67 @@ private slots:
                      });
       QTRY_VERIFY_WITH_TIMEOUT(Saved, Timeout);
       Reports.append(Path);
+    }
+  }
+  void panesStandApartAndReturnStaysInTheWindow() {
+    // The pages' tabs stood on the line between the panes, the snapshot list
+    // was set in from the commands above it, and four commands stretched
+    // across their panes.  The window has no default button, but QDialog
+    // presses the default of any window open inside it: with a member list
+    // open, Return in the function filter pressed that list's button.
+    LineageDialog View(TEST_LINEAGE_WORKER);
+    View.setAttribute(Qt::WA_DeleteOnClose, false);
+    View.resize(1180, 780);
+    View.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&View));
+    QDialog Child(&View);
+    auto *ChildLayout = new QVBoxLayout(&Child);
+    auto *Close = new QPushButton("Close", &Child);
+    ChildLayout->addWidget(Close);
+    Close->setDefault(true);
+    int Clicks = 0;
+    connect(Close, &QPushButton::clicked, &Child, [&Clicks] { ++Clicks; });
+    Child.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&Child));
+    auto *Search = View.findChild<QLineEdit *>("lineageSearch");
+    QVERIFY(Search);
+    Search->setFocus();
+    QTest::keyClick(Search, Qt::Key_Return);
+    QCOMPARE(Clicks, 0);
+    Child.hide();
+
+    auto *Tabs = View.findChild<QTabWidget *>("lineageTabs");
+    auto *Versions = View.findChild<LineagePageView *>("lineageVersions");
+    auto *Add = View.findChild<QPushButton *>("lineageAdd");
+    QVERIFY(Tabs && Versions && Add);
+    const auto Left = [&View](const QWidget *W) {
+      return W->mapTo(&View, QPoint()).x();
+    };
+    // From the snapshot list to the pages: the gutter, and nothing of
+    // either pane inside it.
+    QCOMPARE(Left(Tabs) - (Left(Versions) + Versions->width()),
+             ::neverd::limits::gui::kPaneGutter);
+    QCOMPARE(Left(Versions), Left(Add));
+    for (int Page = 0; Page < Tabs->count(); ++Page) {
+      Tabs->setCurrentIndex(Page);
+      QCoreApplication::processEvents();
+      // No command is wider than the widest label beside it: alone it
+      // keeps its own width, and a block of commands shares a column's.
+      for (const auto *Button : View.findChildren<QPushButton *>()) {
+        if (!Button->isVisible() || Button->window() != &View)
+          continue;
+        int Widest = 0;
+        for (const auto *Beside :
+             Button->parentWidget()->findChildren<QPushButton *>(
+                 Qt::FindDirectChildrenOnly))
+          if (Beside->isVisible())
+            Widest = qMax(Widest, Beside->sizeHint().width());
+        QVERIFY2(Button->width() <= Widest,
+                 qPrintable(QStringLiteral("%1: %2 > %3")
+                                .arg(Button->text())
+                                .arg(Button->width())
+                                .arg(Widest)));
+      }
     }
   }
 

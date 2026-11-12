@@ -547,7 +547,7 @@ field looked sharp. Chrome boxes and hairlines do not have to look like this.
   `WorkbenchStyle` draws a handle's hairline along the middle of its room,
   under a dock separator's bar while the pointer is over it, so a wider
   handle is a gutter: a layout's spacing on either side of the line
-  (`kComparisonPaneGutter`). Across such a gutter, put what the panes show
+  (`kPaneGutter`). Across such a gutter, put what the panes show
   first on one row (the details' title on the inventory's filters' row), so
   the rows below start level.
 - Verify at 125%, 150% and 175% with

@@ -1,5 +1,6 @@
 #include "ConnectionsDialog.h"
 
+#include "../ResourceLimits.h"
 #include "DialogReturnKey.h"
 #include "Icons.h"
 #include "KeepTranslated.h"
@@ -113,7 +114,10 @@ ConnectionsDialog::ConnectionsDialog(Session &session,
     connect(field, &QLineEdit::returnPressed, connect_, &QPushButton::click);
 
   // Catalog and result.
+  // The result's title stood on the edge of the catalog's last tab and read
+  // as a fourth; a gutter parts the panes.
   auto *splitter = new QSplitter(this);
+  splitter->setHandleWidth(::neverd::limits::gui::kPaneGutter);
   auto *left = new QWidget(splitter);
   auto *leftLayout = new QVBoxLayout(left);
   leftLayout->setContentsMargins(0, 0, 0, 0);

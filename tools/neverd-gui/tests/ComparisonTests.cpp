@@ -291,7 +291,7 @@ private slots:
     const Theme &Colors = Theme::instance();
     const QImage Image = View.grab().toImage();
     const int From = At(Kinds).x() + Kinds->width(), To = At(Title).x();
-    QCOMPARE(To - From, ::neverd::limits::gui::kComparisonPaneGutter);
+    QCOMPARE(To - From, ::neverd::limits::gui::kPaneGutter);
     const int Row = At(Kinds).y() + Kinds->height() / 2;
     int Lines = 0;
     for (int X = From; X < To; ++X) {

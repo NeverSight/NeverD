@@ -2848,6 +2848,17 @@ private slots:
           refused = refused || label->text().contains("JSON array");
         QVERIFY(refused);
         QCOMPARE(texts(), before);
+        // The catalog's tabs end and the result's title begins a gutter
+        // apart; on the hairline alone the title read as a fourth tab.
+        const auto *tabs = dialog->findChild<QTabBar *>();
+        const QLabel *title = nullptr;
+        for (const auto *label : dialog->findChildren<QLabel *>())
+          if (label->text() == QLatin1String("Result"))
+            title = label;
+        QVERIFY(tabs && title);
+        QCOMPARE(title->mapTo(dialog, QPoint()).x() -
+                     (tabs->mapTo(dialog, QPoint()).x() + tabs->width()),
+                 ::neverd::limits::gui::kPaneGutter);
       }
       for (const auto *button : dialog->findChildren<QPushButton *>())
         QVERIFY2(!button->isDefault() && !button->autoDefault(),
