@@ -93,6 +93,101 @@ constexpr PureCase PureCases[] = {
 #include "MIPSDSPExpandFixtures.def"
 };
 class MIPSDSPRegisterWidth : public ::testing::TestWithParam<Arch> {};
+TEST(MIPSDSP64, PackedGPRsMatchOriginalInstructionsAndFullControl) {
+  struct Case {
+    const char *Mnemonic;
+    uint32_t Word;
+  };
+  constexpr Case Cases[] = {
+#define NEVERD_TEST_DSP64(Name, Word) {Name, Word},
+#include "MIPSDSP64Fixtures.def"
+  };
+  for (Arch Target : {Arch::MIPS64, Arch::MIPS64EL}) {
+    auto Image = dspImage(Target);
+    Decoder D;
+    ASSERT_TRUE(D.init(Image));
+    D.setText(true);
+#ifdef NEVERD_MIPS_UNICORN_REFERENCE
+    uc_engine *Raw = nullptr;
+    ASSERT_EQ(
+        uc_open(UC_ARCH_MIPS,
+                uc_mode(UC_MODE_MIPS64 |
+                        (archLittleEndian(Target) ? 0 : UC_MODE_BIG_ENDIAN)),
+                &Raw),
+        UC_ERR_OK);
+    std::unique_ptr<uc_engine, decltype(&uc_close)> CPU(Raw, uc_close);
+    ASSERT_EQ(uc_ctl_set_cpu_model(Raw, UC_CPU_MIPS64_MIPS64DSPR2), UC_ERR_OK);
+    ASSERT_EQ(uc_mem_map(Raw, 0x10000, 0x2000, UC_PROT_ALL), UC_ERR_OK);
+    const auto Install = [&](uint64_t PC, llvm::ArrayRef<uint32_t> Words) {
+      auto Code = encodeDSP(Words, Target);
+      ASSERT_EQ(uc_mem_write(Raw, PC, Code.data(), Code.size()), UC_ERR_OK);
+    };
+    Install(0x10000, {0x40086000, 0x3c090100, 0x01094025, 0x40886000, 0xc0});
+    ASSERT_EQ(uc_emu_start(Raw, 0x10000, 0x10014, 0, 5), UC_ERR_OK);
+#endif
+    unsigned Row = 0;
+    for (const auto &C : Cases) {
+      SCOPED_TRACE(C.Mnemonic);
+      auto Code = encodeDSP({C.Word}, Target);
+      DecodedInsn Insn;
+      ASSERT_EQ(D.decodeOne(Code.data(), Code.size(), 0x10000, Insn), 4);
+      EXPECT_STREQ(Insn.Raw->mnemonic, C.Mnemonic);
+      std::vector<LowOp> Ops;
+      ASSERT_NO_THROW(D.liftToLow(Insn, Ops));
+      ASSERT_FALSE(Ops.empty());
+#ifdef NEVERD_MIPS_UNICORN_REFERENCE
+      const uint64_t PC = 0x10040 + 12 * Row;
+      // Write DSPControl from a2, execute the original, and read it via rddsp.
+      Install(PC, {0x7cc1fcf8, C.Word, 0x7c3f44b8});
+      for (uint64_t A :
+           {0ull, 0xffff800000017fffull, 0x80706050a0b0c0d0ull, ~0ull}) {
+        for (uint64_t B :
+             {0x80007fff80007fffull, 0x0123456789abcdefull, ~0ull}) {
+          uint64_t Control = 0xa52140c0, Out = 0x123456789abcdef0;
+          NdOpEmulator E(Image);
+          E.setStrictMode(true);
+          E.setRegister(mipsreg::DSPControl, Control);
+          E.setRegister(mipsreg::A0, A);
+          E.setRegister(mipsreg::A1, B);
+          E.setRegister(mipsreg::V0, Out);
+          ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_4, &A), UC_ERR_OK);
+          ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_5, &B), UC_ERR_OK);
+          ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_6, &Control), UC_ERR_OK);
+          ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_2, &Out), UC_ERR_OK);
+          ASSERT_EQ(uc_emu_start(Raw, PC, PC + 12, 0, 3), UC_ERR_OK);
+          ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_2, &Out), UC_ERR_OK);
+          ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_8, &Control), UC_ERR_OK);
+          // The pinned Unicorn helper dispatches OB add/sub over its four
+          // halfwords. Use an independent eight-lane integer oracle for these
+          // four results and their sticky OUflag20.
+          const unsigned Minor = C.Word & 0x7ff;
+          if (Minor == 0x14 || Minor == 0x54 || Minor == 0x114 ||
+              Minor == 0x154) {
+            Out = 0;
+            Control = 0xa52140c0 & 0xffff7fff;
+            for (unsigned Lane = 0; Lane < 8; ++Lane) {
+              const int X = uint8_t(A >> (8 * Lane)),
+                        Y = uint8_t(B >> (8 * Lane));
+              const int V = (Minor & 0x40) ? X - Y : X + Y;
+              if (V < 0 || V > 255)
+                Control |= 1u << 20;
+              Out |=
+                  uint64_t(uint8_t((Minor & 0x100) ? std::clamp(V, 0, 255) : V))
+                  << (8 * Lane);
+            }
+          }
+          for (const auto &Op : Ops)
+            ASSERT_TRUE(E.step(Op)) << ndOpName(Op.Opcode);
+          EXPECT_EQ(E.getRegister(mipsreg::V0), Out);
+          EXPECT_EQ(E.getRegister(mipsreg::DSPControl), uint32_t(Control));
+        }
+      }
+#endif
+      ++Row;
+    }
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(BothWidthsAndByteOrders, MIPSDSPRegisterWidth,
                          ::testing::Values(Arch::MIPS32, Arch::MIPS32EL,
                                            Arch::MIPS64, Arch::MIPS64EL));

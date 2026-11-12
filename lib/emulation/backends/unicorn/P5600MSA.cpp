@@ -23,21 +23,24 @@ constexpr unsigned SetupWords = 11;
 constexpr uint64_t InputPC = Code + 64, OutputPC = InputPC + 64,
                    OperationsPC = OutputPC + 64;
 
-class P5600MSAExecutor final : public MIPSMSAExecutor {
+class UnicornMSAExecutor final : public MIPSMSAExecutor {
 public:
-  ~P5600MSAExecutor() override {
+  ~UnicornMSAExecutor() override {
     if (Initial)
       uc_context_free(Initial);
     if (CPU)
       uc_close(CPU);
   }
   llvm::Error initialize(Arch Target) {
+    Wide = isMIPS64(Target);
     const bool Little = archLittleEndian(Target);
-    auto Error = uc_open(
-        UC_ARCH_MIPS,
-        uc_mode(UC_MODE_MIPS32 | (Little ? 0 : UC_MODE_BIG_ENDIAN)), &CPU);
+    auto Error = uc_open(UC_ARCH_MIPS,
+                         uc_mode((Wide ? UC_MODE_MIPS64 : UC_MODE_MIPS32) |
+                                 (Little ? 0 : UC_MODE_BIG_ENDIAN)),
+                         &CPU);
     if (!Error)
-      Error = uc_ctl_set_cpu_model(CPU, UC_CPU_MIPS32_P5600);
+      Error = uc_ctl_set_cpu_model(CPU, Wide ? int(UC_CPU_MIPS64_I6400)
+                                             : int(UC_CPU_MIPS32_P5600));
     if (!Error)
       Error = uc_mem_map(CPU, Code, 4096, UC_PROT_ALL);
     const auto Install = [&](uint64_t PC, uint32_t Word) {
@@ -71,13 +74,13 @@ public:
     if (!Error)
       Error = uc_emu_start(CPU, Code, Code + 4 * SetupWords, 0, SetupWords);
     if (!Error)
-      Error = uc_reg_read(CPU, UC_MIPS_REG_T0, &Implementation);
+      Error = readWord(UC_MIPS_REG_8, Implementation);
     if (!Error)
       Error = uc_context_alloc(CPU, &Initial);
     if (!Error)
       Error = uc_context_save(CPU, Initial);
     if (Error)
-      return llvm::createStringError("P5600 MSA setup: %s", uc_strerror(Error));
+      return llvm::createStringError("MIPS MSA setup: %s", uc_strerror(Error));
     return llvm::Error::success();
   }
   std::optional<MIPSMSAResult>
@@ -94,14 +97,14 @@ public:
     // FP arithmetic replaces Cause. Reinstalling stale enabled Cause via
     // CTCMSA would itself trap before evaluating the requested instruction.
     uint32_t InitialCSR = CSR & ~0x3f000u;
-    if (uc_reg_write(CPU, UC_MIPS_REG_S0, &InitialCSR) != UC_ERR_OK)
+    if (writeWord(UC_MIPS_REG_16, InitialCSR) != UC_ERR_OK)
       return std::nullopt;
     for (unsigned R = 0; R < Inputs.size(); ++R) {
       for (unsigned I = 0; I < 4; ++I) {
         uint32_t Word = 0;
         for (unsigned J = 0; J < 4; ++J)
           Word |= uint32_t(Inputs[R][4 * I + J]) << (8 * J);
-        if (uc_reg_write(CPU, UC_MIPS_REG_4 + 4 * R + I, &Word) != UC_ERR_OK)
+        if (writeWord(UC_MIPS_REG_4 + 4 * R + I, Word) != UC_ERR_OK)
           return std::nullopt;
       }
     }
@@ -118,7 +121,7 @@ public:
                      (OutputPC + 20 - ReadPC) / 4) != UC_ERR_OK)
       return std::nullopt;
     uint32_t State = 0;
-    if (uc_reg_read(CPU, UC_MIPS_REG_T0, &State) != UC_ERR_OK)
+    if (readWord(UC_MIPS_REG_8, State) != UC_ERR_OK)
       return std::nullopt;
     const bool Traps = ((State >> 12) & ((State >> 7 & 31) | 32) & 63) != 0;
     if (Status == UC_ERR_EXCEPTION && !Traps)
@@ -128,7 +131,7 @@ public:
       Result.Destination.emplace();
       for (unsigned I = 0; I < 4; ++I) {
         uint32_t Word = 0;
-        if (uc_reg_read(CPU, UC_MIPS_REG_4 + I, &Word) != UC_ERR_OK)
+        if (readWord(UC_MIPS_REG_4 + I, Word) != UC_ERR_OK)
           return std::nullopt;
         for (unsigned J = 0; J < 4; ++J)
           (*Result.Destination)[4 * I + J] = Word >> (8 * J);
@@ -138,19 +141,44 @@ public:
   }
 
 private:
+  uc_err readWord(int Reg, uint32_t &Word) {
+    if (!Wide)
+      return uc_reg_read(CPU, Reg, &Word);
+    uint64_t Value = 0;
+    const auto Error = uc_reg_read(CPU, Reg, &Value);
+    Word = uint32_t(Value);
+    return Error;
+  }
+  uc_err writeWord(int Reg, uint32_t Word) {
+    if (!Wide)
+      return uc_reg_write(CPU, Reg, &Word);
+    const uint64_t Value = Word;
+    return uc_reg_write(CPU, Reg, &Value);
+  }
+  bool Wide = false;
   uc_engine *CPU = nullptr;
   uc_context *Initial = nullptr;
   uint32_t Implementation = 0;
 };
+llvm::Expected<std::unique_ptr<MIPSMSAExecutor>> createExecutor(Arch Target) {
+  auto Result = std::make_unique<UnicornMSAExecutor>();
+  if (auto Err = Result->initialize(Target))
+    return Err;
+  return Result;
+}
 } // namespace
 
 llvm::Expected<std::unique_ptr<MIPSMSAExecutor>>
 createP5600MSAExecutor(Arch Target) {
   if (Target != Arch::MIPS32 && Target != Arch::MIPS32EL)
     return llvm::createStringError("P5600 MSA requires a MIPS32 target");
-  auto Result = std::make_unique<P5600MSAExecutor>();
-  if (auto Err = Result->initialize(Target))
-    return Err;
-  return Result;
+  return createExecutor(Target);
+}
+
+llvm::Expected<std::unique_ptr<MIPSMSAExecutor>>
+createI6400MSAExecutor(Arch Target) {
+  if (!isMIPS64(Target))
+    return llvm::createStringError("I6400 MSA requires a MIPS64 target");
+  return createExecutor(Target);
 }
 } // namespace neverd::emulation

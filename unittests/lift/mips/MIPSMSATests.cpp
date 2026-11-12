@@ -40,12 +40,12 @@ namespace {
 BinaryImage msaImage(Arch Target) {
   BinaryImage Image;
   Image.Arch = Target;
-  Image.Bits = Bitness::Bits32;
+  Image.Bits = isMIPS64(Target) ? Bitness::Bits64 : Bitness::Bits32;
   Image.Entry = 0x10000;
   Image.MIPS.emplace();
   Image.MIPS->ISARevision = 5;
   Image.MIPS->HasMSA = true;
-  Image.MIPS->FPABI = 6;
+  Image.MIPS->FPABI = isMIPS64(Target) ? 1 : 6;
   return Image;
 }
 
@@ -1370,6 +1370,90 @@ TEST_P(MIPSMSA,
   EXPECT_EQ(E.getRegisterBytes(mipsreg::w(2)),
             msaBytes({0x7f800000, 0x7f800000, 0x7f800000, 0x7f800000}, true));
   EXPECT_EQ(C.MSAControl, (1u << 15) | (1u << 5));
+}
+#endif
+
+TEST(MIPSMSA64, DoublewordTransfersAndFullWidthAddresses) {
+  for (const Arch Target : {Arch::MIPS64, Arch::MIPS64EL}) {
+    auto Image = msaImage(Target);
+    for (uint64_t VA : {0x4000ull, 0x200004000ull}) {
+      Segment Data;
+      Data.VA = VA;
+      Data.Size = Data.FileSz = 128;
+      Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      Data.Data.resize(Data.Size);
+      Image.Segments.push_back(std::move(Data));
+    }
+    Decoder D;
+    ASSERT_TRUE(D.init(Image));
+    NdOpEmulator E(Image);
+    E.setStrictMode(true);
+    const uint64_t X = 0x89abcdef76543210, Y = 0xfedcba9880000000;
+    E.setRegister(mipsreg::A0, X);
+    ASSERT_TRUE(msaExecute(D, Target, 0x7b03205e, E)); // fill.d w1,a0
+    E.setRegister(mipsreg::A1, Y);
+    ASSERT_TRUE(msaExecute(D, Target, 0x79392859, E)); // insert.d w1[1],a1
+    EXPECT_EQ(E.getRegisterBytes(mipsreg::w(1)),
+              msaBytes({uint32_t(X), uint32_t(X >> 32), uint32_t(Y),
+                        uint32_t(Y >> 32)},
+                       true));
+    ASSERT_TRUE(msaExecute(D, Target, 0x78b90899, E)); // copy_s.d v0,w1[1]
+    EXPECT_EQ(E.getRegister(mipsreg::V0), Y);
+    ASSERT_TRUE(msaExecute(D, Target, 0x78f20899, E)); // copy_u.w v0,w1[2]
+    EXPECT_EQ(E.getRegister(mipsreg::V0), 0x80000000ull);
+    ASSERT_TRUE(msaExecute(D, Target, 0x78b20899, E)); // copy_s.w v0,w1[2]
+    EXPECT_EQ(E.getRegister(mipsreg::V0), 0xffffffff80000000ull);
+    // Distinct addresses with identical low words must not alias. Each
+    // store uses a negative element offset and a deliberately unaligned base.
+    const uint64_t Base = 0x200004031;
+    E.setRegister(mipsreg::A0, Base);
+    ASSERT_TRUE(msaExecute(D, Target, 0x7bff2067, E)); // st.d w1,-8(a0)
+    E.setRegister(mipsreg::A0, uint32_t(Base));
+    ASSERT_TRUE(msaExecute(D, Target, 0x7b03005e, E)); // fill.d w1,zero
+    ASSERT_TRUE(msaExecute(D, Target, 0x7bff2067, E));
+    E.setRegister(mipsreg::A0, Base);
+    ASSERT_TRUE(msaExecute(D, Target, 0x7bff2063, E)); // ld.d w1,-8(a0)
+    ASSERT_TRUE(msaExecute(D, Target, 0x78b90899, E));
+    EXPECT_EQ(E.getRegister(mipsreg::V0), Y);
+    MIPSLifter L(Target);
+    L.setMSAEnabled(true);
+    cs_insn Insn{};
+    Insn.size = 4;
+    const auto Reserved = msaBytes({0x78f90899}, archLittleEndian(Target));
+    std::copy(Reserved.begin(), Reserved.end(), Insn.bytes);
+    std::vector<LowOp> Ops;
+    EXPECT_THROW(L.lift(Insn, Ops), UnliftedInstruction); // COPY_U.D
+    EXPECT_TRUE(Ops.empty());
+  }
+}
+
+#ifdef NEVERD_MIPS_UNICORN_REFERENCE
+TEST(MIPSMSA64, I6400ExecutesFloatingLanesAndCSRInBothEndians) {
+  for (const Arch Target : {Arch::MIPS64, Arch::MIPS64EL}) {
+    auto CPU = emulation::createI6400MSAExecutor(Target);
+    ASSERT_TRUE(bool(CPU)) << llvm::toString(CPU.takeError());
+    auto Image = msaImage(Target);
+    Decoder D;
+    ASSERT_TRUE(D.init(Image));
+    NdOpEmulator E(Image);
+    E.setStrictMode(true);
+    MIPSSystemContext C;
+    C.MSAFloat = CPU->get();
+    C.MSAImplementation = 0x300;
+    C.MSAControl = 0;
+    E.setRegisterBytes(
+        mipsreg::w(0),
+        msaBytes({0x3f800000, 0x40000000, 0xbf800000, 0xc0000000}, true));
+    E.setRegisterBytes(
+        mipsreg::w(1),
+        msaBytes({0x3f800000, 0x40000000, 0xbf800000, 0xc0000000}, true));
+    auto Ops = msaLift(D, Target, 0x7801009b); // fadd.w w2,w0,w1
+    ASSERT_EQ(Ops.size(), 1u);
+    ASSERT_TRUE(E.stepMIPSSystem(Ops.front(), C));
+    EXPECT_FALSE(C.MSAFloatingPointException);
+    EXPECT_EQ(E.getRegisterBytes(mipsreg::w(2)),
+              msaBytes({0x40000000, 0x40800000, 0xc0000000, 0xc0800000}, true));
+  }
 }
 #endif
 

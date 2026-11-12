@@ -51,7 +51,7 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
   const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
   const bool Wide = isMIPS64(Img.Arch);
   const bool R6 = Img.MIPS && Img.MIPS->ISARevision == 6;
-  if (Wide && !R6)
+  if (Wide && !R6 && !mips::isMSANativeVector(Id) && !mips::isMSAControl(Id))
     return false;
   if (Id == Intrinsic::MIPSExecutionHazardBarrier) {
     Context.ExecutionHazardPending = false;
@@ -463,8 +463,9 @@ bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
         Id == Intrinsic::MIPSWriteDSPControl ? Op.Inputs[1] : State;
     if (!availableOperandBytes(Source, 0, 4))
       return false;
-    auto Value = uint32_t(readOperand(Source)) & mips::DSPControlBits;
-    auto Unknown = uint32_t(unknownOperandBits(Source)) & mips::DSPControlBits;
+    const auto Mask = mips::dspControlMask(63, isMIPS64(Img.Arch));
+    auto Value = uint32_t(readOperand(Source)) & Mask;
+    auto Unknown = uint32_t(unknownOperandBits(Source)) & Mask;
     if (mips::isDSPHalfCompare(Id)) {
       if (!knownOperandBytes(Op.Inputs[1], 0, 4) ||
           !knownOperandBytes(Op.Inputs[2], 0, 4))

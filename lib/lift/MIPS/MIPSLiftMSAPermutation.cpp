@@ -29,17 +29,8 @@ bool MIPSLifter::liftMSAPermutation(State &S, uint32_t Word) const {
     Bytes = 1u << Size;
   }
   if (Element) {
-    // ELM width tags are 00nnnn, 100nnn, 1100nn, 11100n.
-    const unsigned Tag = (Word >> 16) & 63;
-    if (Tag < 16)
-      Bytes = 1;
-    else if ((Tag & 56) == 32)
-      Bytes = 2;
-    else if ((Tag & 60) == 48)
-      Bytes = 4;
-    else if ((Tag & 62) == 56)
-      Bytes = 8;
-    else
+    Bytes = msaElementBytes((Word >> 16) & 63);
+    if (!Bytes)
       return false;
   }
   const unsigned Count = 16 / Bytes;
@@ -106,7 +97,7 @@ bool MIPSLifter::liftMSAPermutation(State &S, uint32_t Word) const {
   }
   if ((Element && Major == 1) || (Fn == 20 && Op == 1)) {
     const auto Value = Element ? S.vectorElement(WS, Index, Bytes)
-                               : Indexed(ReadHalves(WS), S.read(WT));
+                               : Indexed(ReadHalves(WS), S.read(WT, 4));
     Values.fill(Value);
     return Finish(Count);
   }
@@ -116,7 +107,7 @@ bool MIPSLifter::liftMSAPermutation(State &S, uint32_t Word) const {
   const unsigned Chunk = std::min(Count, 8u), Chunks = 16 / Chunk;
   const auto N =
       Element ? NdVar::cst(Index, 4)
-              : S.binary(NdOp::INT_AND, S.read(WT), NdVar::cst(Count - 1, 4));
+              : S.binary(NdOp::INT_AND, S.read(WT, 4), NdVar::cst(Count - 1, 4));
   if (Element && !Index) {
     S.emit(NdOp::COPY, NdVar::reg(mipsreg::w(WD), 16),
            {NdVar::reg(mipsreg::w(WS), 16)});

@@ -288,13 +288,12 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
     return false;
   if (isMSANativeVector(Id)) {
     const unsigned N = msaNativeOperation(Id).Arity;
-    return !isMIPS64(S.Target) && S.OutputWritable && S.OutputBytes == 16 &&
-           S.Inputs == N + 1 && S.FirstBytes == 16 &&
-           (N < 2 || S.SecondBytes == 16) && (N < 3 || S.ThirdBytes == 16);
+    return S.OutputWritable && S.OutputBytes == 16 && S.Inputs == N + 1 &&
+           S.FirstBytes == 16 && (N < 2 || S.SecondBytes == 16) &&
+           (N < 3 || S.ThirdBytes == 16);
   }
   if (isMSAControl(Id)) {
-    if (isMIPS64(S.Target) || !S.FirstConstant || *S.FirstConstant >= 32 ||
-        S.FirstBytes != 1)
+    if (!S.FirstConstant || *S.FirstConstant >= 32 || S.FirstBytes != 1)
       return false;
     return Id == Intrinsic::MIPSReadMSAControl
                ? S.Inputs == 2 && S.OutputWritable && S.OutputBytes == 4
