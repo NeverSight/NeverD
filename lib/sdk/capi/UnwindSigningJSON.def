@@ -20,6 +20,7 @@
 NEVERD_RA_JSON_TEXT(kReturnAddress, "return_address")
 NEVERD_RA_JSON_TEXT(kQueryPC, "query_pc")
 NEVERD_RA_JSON_TEXT(kDwarfStateAtPC, "dwarf_state_at_pc")
+NEVERD_RA_JSON_TEXT(kInstructionStateAtPC, "instruction_state_at_pc")
 NEVERD_RA_JSON_TEXT(kCompactRecipe, "compact_recipe")
 NEVERD_RA_JSON_TEXT(kStatus, "status")
 NEVERD_RA_JSON_TEXT(kDiagnostic, "diagnostic")

@@ -193,6 +193,37 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   EXPECT_FALSE(Patcher.patch(Input, Rejected, *Changed, Image->Arch).Success);
   EXPECT_FALSE(std::filesystem::exists(Rejected));
 
+  if (ScratchFrame) {
+    // Withholding a generic body is only legal when its entire native body
+    // can be installed. Even an unused, decodable instruction outside the
+    // native producer's vocabulary must leave no partial module.
+    const auto Unqualified = (Root / kUnknownStackInput).string();
+    auto UnknownCompile = Compile;
+    UnknownCompile.back() = Unqualified;
+    UnknownCompile.insert(UnknownCompile.begin() + 1, kUnknownStackOperation);
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, UnknownCompile), 0);
+    auto UnknownImage = Reader->load(Unqualified);
+    ASSERT_TRUE(bool(UnknownImage)) << llvm::toString(UnknownImage.takeError());
+    auto Refused = Pipeline().run(*UnknownImage, Context, Options);
+    EXPECT_FALSE(Refused.Success);
+    EXPECT_FALSE(Refused.LlvmModule);
+
+    auto ChangedBit = llvm::CloneModule(Module);
+    auto *Entry = ChangedBit->getFunction(kDifference);
+    ASSERT_NE(Entry, nullptr);
+    ASSERT_TRUE(Entry->hasFnAttribute(llvm::Attribute::Naked));
+    auto *Native = llvm::dyn_cast<llvm::CallInst>(&Entry->front().front());
+    ASSERT_TRUE(Native && Native->isInlineAsm());
+    const auto Bit = llvm::find_if(Native->args(), [](const llvm::Use &Arg) {
+      const auto *C = llvm::dyn_cast<llvm::ConstantInt>(Arg.get());
+      return C && C->equalsInt(kHighBranchBit);
+    });
+    ASSERT_NE(Bit, Native->arg_end());
+    Bit->set(llvm::ConstantInt::get(Bit->get()->getType(), kHighBranchBit - 1));
+    EXPECT_FALSE(
+        Patcher.patch(Input, Rejected, *ChangedBit, Image->Arch).Success);
+    EXPECT_FALSE(std::filesystem::exists(Rejected));
+  }
   if (Check == LeafCheck::ErrorResult || Check == LeafCheck::FramedError ||
       Indexed) {
     auto MissingWrite = llvm::CloneModule(Module);

@@ -72,6 +72,7 @@ UnwindInfoDialog::UnwindInfoDialog(QueryService &Service, Address PC,
       Epoch(Service.sessionEpoch()), Project(Service.projectId()),
       Revision(Service.revision()), Status(new QLabel(this)),
       Dwarf(new QPlainTextEdit(this)), Compact(new QPlainTextEdit(this)),
+      Instruction(new QPlainTextEdit(this)),
       Reload(new QPushButton(translated(kRefresh), this)) {
   setObjectName(kDialogObject);
   setWindowTitle(translated(kTitle).arg(hexAddress(QueryPC)));
@@ -102,8 +103,13 @@ UnwindInfoDialog::UnwindInfoDialog(QueryService &Service, Address PC,
     View->setTabChangesFocus(true);
     Layout->addWidget(Label);
     Layout->addWidget(View);
+    return Label;
   };
   AddSource(Dwarf, kDwarfTitle, kDwarfObject);
+  InstructionLabel =
+      AddSource(Instruction, kInstructionTitle, kInstructionObject);
+  Instruction->hide();
+  InstructionLabel->hide();
   AddSource(Compact, kCompactTitle, kCompactObject);
   auto *Buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
   Reload->setObjectName(kRefreshObject);
@@ -136,6 +142,9 @@ void UnwindInfoDialog::clear() {
   ++Generation;
   if (Queries)
     Queries->unsubscribeOwner(this);
+  Instruction->clear();
+  Instruction->hide();
+  InstructionLabel->hide();
   Dwarf->clear();
   Compact->clear();
 }
@@ -225,6 +234,11 @@ void UnwindInfoDialog::present(const QJsonValue &Value) {
   Status->setText(
       translated(kFrameRange).arg(hexAddress(*Begin), hexAddress(*End)));
   Dwarf->setPlainText(sourceText(Report.value(kDwarfState)));
+  if (Report.contains(kInstructionState)) {
+    Instruction->setPlainText(sourceText(Report.value(kInstructionState)));
+    Instruction->show();
+    InstructionLabel->show();
+  }
   Compact->setPlainText(sourceText(Report.value(kCompactRecipe)));
 }
 } // namespace neverd::gui

@@ -1924,6 +1924,14 @@ as full PC-signing qualification. See the
 [native qualification record](arm64e-native-validation.md#instruction-address-signal-recipes-and-remembered-frames).
 These tests do not execute native signed exception unwinding.
 
+`NeverDArm64eUnwindRecoveryTests` runs without Apple hardware. It checks
+implicit signing at exact instruction boundaries, including conflicting
+paths, live and spilled LR, stale stack slots, missing preserved registers,
+relocated signing instructions and analysis limits. The lifted-image suite
+also compiles a compact-only Apple Clang dylib. With native replay enabled,
+it checks both that dylib and the system cursor's next frame after crossing
+the real signal trampoline. See the [system signal qualification](arm64e-native-validation.md#system-signal-trampoline-and-implicit-signing-rows).
+
 `AArch64LinkedUnwind` assembles and links real arm64e dylibs with the host
 Apple toolchain, then loads them through the public Mach-O loader. Its explicit
 mode-5 compact row checks linker transport and the PACIBSPPC offset; it does

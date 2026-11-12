@@ -993,11 +993,11 @@ leave the cursor unchanged. The native interruption test reaches the system
 `_sigtramp`, recovers the interrupted return and its signed parent, and
 cross-checks the parent through Darwin's frame-pointer backtrace.
 
-For the installed implicit-signing fixture, the test transfers signing rows
-from its explicitly described original after checking that the complete
-instruction ranges are identical. Each image supplies its own CFA and LR
-location rows. The unmodified system `unw_step` path across `_sigtramp` retains
-the earlier failure record.
+In the original qualification, the installed implicit-signing fixture used the
+signing rows of the explicitly described original after checking identical
+machine code. The [system signal qualification below](#system-signal-trampoline-and-implicit-signing-rows)
+recovers the installed rows independently and records the behavior of an
+unmodified system `unw_step` at `_sigtramp`.
 
 Release verification at `7bf3d8571ab87cb8de5f20145e786621d3dc4659` uses the
 tracked Capstone and Unicorn revisions and LLVM fork
@@ -1080,6 +1080,53 @@ failures match the earlier recorded LLVM r6 baseline; the native r6 replay
 explicitly excludes those cases. The
 [verification record](evidence/arm64e-signing-recipes-and-remembered-frames-2026-11-12.json)
 binds source, dependencies, host binaries, native reports and exclusions.
-Automatic implicit-signing row recovery, the unmodified system walk across
-`_sigtramp`, additional arbitrary-image profiles and native PC-sensitive or
-CPTA-on execution remain separate coverage gaps.
+At that revision the installed rows still depended on the original. The
+following qualification supersedes that part of the earlier result.
+
+### System signal trampoline and implicit signing rows
+
+Resolve a Darwin frame with `recoverDarwinAArch64Unwind` outside the signal
+handler. For an implicit FDE, its CFA and register columns select the actual
+live LR or saved stack slot. For a compact-only frame the analysis instead
+tracks the incoming SP, register values and active frame saves. It follows
+reachable direct branches, joins agreeing facts, and accounts for call
+clobbers, stack writeback, classic IA/IB, PACM and explicit PAuth_LR. A failed
+proof has no unsigned default. Opaque control flow, alternate entries, LSDA
+edges and exceeded budgets cannot authorize a native handoff.
+
+Select the row at the interrupted instruction. `prepareDarwinArm64eSystemCaller`
+binds its signing PC to the loaded address and checks that the caller's integer
+register locations can be represented. With the system cursor positioned at
+the real signal trampoline, `ndDarwinArm64eCrossSignalTrampoline` consumes the
+matching kernel `ucontext_t` and mapped stack bounds. It verifies the return
+signature, restores SP, FP and X19–X28, and positions that same system cursor
+at the caller. Invalid or duplicate saves fail before changing the cursor.
+Discard the cursor on a system API failure or if the return PC selects a
+different function's unwind record. This is a stack-walking interface; it
+does not provide exception resumption or restore SIMD state.
+
+The public frame query exposes a separate `instruction_state_at_pc` where
+applicable. It leaves `dwarf_state_at_pc` and `compact_recipe` unchanged. The
+GUI presents the instruction result separately. Resolve once and reuse the
+row table when sampling; the public exact-PC query performs bounded analysis.
+
+Two independent [system controls](https://github.com/gmh5225/test_mac_intel/actions/runs/43196724884)
+found the same behavior on both hosted Apple profiles: unmodified system
+stepping at the trampoline skipped the interrupted PC for unsigned LR and
+raised SIGTRAP at all three signed stages. Seeding the proved caller let the
+system walk to the correct grandparent in all five stages of both frame
+profiles. The [in-place bridge test](https://github.com/gmh5225/test_mac_intel/actions/runs/43202351334)
+also checked a clobbered X19 restored from the frame. This is observed
+behavior on those Darwin runtimes; it is not a guarantee that a future system
+libunwind will permit setting IP across functions.
+
+Native register-result publication now emits local TBZ/TBNZ targets as labels,
+keeps the tested bit as an LLVM operand, and preserves indexed memory operands
+including LSL, UXTW, SXTW and SXTX. Final linked bytes still have to match the
+source at each instruction. For indexed SP accesses the generic LLVM emitter
+declares the function with its recovered prototype. Before exposing the module,
+the patch pipeline requires its verified, complete native register body: its
+machine instructions use the physical SP. A partial body, an unsupported
+operation or a changed tested bit prevents publication. This does not qualify
+an ordinary LLVM function using a synthetic stack. No LLVM overlay or new
+prebuilt package is needed.

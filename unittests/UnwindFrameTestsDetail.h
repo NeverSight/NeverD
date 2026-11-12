@@ -27,6 +27,7 @@
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -58,6 +59,7 @@ struct ImageOptions {
   bool Dwarf = true;
   bool Compact = true;
   bool DwarfFallback = false;
+  bool ImplicitBody = false;
   uint32_t CompactEncoding = kSignedCompact;
   uint64_t DwarfRange = dwarf::kRange;
 };
@@ -129,6 +131,10 @@ inline std::vector<uint8_t> makeMachO(llvm::ArrayRef<uint8_t> Program,
              S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS);
   std::copy(std::begin(dwarf::kNopCode), std::end(dwarf::kNopCode),
             Bytes.begin() + kCodeOffset);
+  if (Options.ImplicitBody)
+    for (size_t I = 0; I < std::size(kImplicitBody); ++I)
+      writeLE<uint32_t>(Bytes.data() + kCodeOffset + I * sizeof(uint32_t),
+                        kImplicitBody[I]);
   if (Options.Dwarf) {
     AddSection(dwarf::kMachOFrameSection, kFrameOffset, Frames.size(), 0);
     std::copy(Frames.begin(), Frames.end(), Bytes.begin() + kFrameOffset);

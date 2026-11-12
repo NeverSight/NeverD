@@ -25,13 +25,20 @@ class Module;
 
 namespace neverd {
 struct BinaryImage;
+struct MedFunc;
 
-/// Lower patch-mode entries that expose Darwin variadic cursors or X8/X9
-/// results consumed by an image-local direct caller.
-/// Keep their physical register operands, local control flow and unwind rows
-/// together in the native LLVM body before any client rewrite.
-void lowerMachORegisterResults(llvm::Module &Module, const BinaryImage &Image,
-                               llvm::ArrayRef<va_t> AdmittedEntries);
+/// An indexed access using the physical SP cannot use a reconstructed stack.
+bool needsMachONativeStackIndex(const MedFunc &Function);
+
+/// Lower audited patch-mode entries that use Darwin variadic cursors, indexed
+/// SP accesses or X8/X9 results consumed by an image-local direct caller.
+/// Keep physical operands, control flow and unwind rows in one native body.
+/// Return an error if any declaration withheld for a physical SP access
+/// cannot be defined; the caller must discard the incomplete module.
+llvm::Error
+lowerMachORegisterResults(llvm::Module &Module, const BinaryImage &Image,
+                          llvm::ArrayRef<va_t> AdmittedEntries,
+                          llvm::ArrayRef<va_t> RequiredNativeEntries);
 
 /// Check each register body and its symbolic call operands against the image
 /// before submitting its inline assembly to MC. Returns the original entries

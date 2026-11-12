@@ -2448,10 +2448,15 @@ add_neverd_unittest(NeverDDyldSharedCacheTests
   LINK_COMPONENTS Loader Support
 )
 
+add_neverd_unittest(NeverDArm64eUnwindRecoveryTests
+  aarch64/AArch64UnwindRecoveryTests.cpp
+  LINK_COMPONENTS AArch64UnwindRecovery
+)
+
 add_neverd_unittest(NeverDArm64eLiftedImageTests
   aarch64/AArch64AsyncUnwindTests.cpp
   aarch64/AArch64LiftedLeafTests.cpp
-  LINK_COMPONENTS CodeGen Pipeline
+  LINK_COMPONENTS CodeGen Pipeline AArch64UnwindRecovery
 )
 
 add_neverd_unittest(NeverDArm64eAnalysisTests

@@ -50,6 +50,7 @@ ASYNC_FRAME_TEXT(kOriginalRules, "original.rules")
 ASYNC_FRAME_TEXT(kPublishedRules, "installed.rules")
 ASYNC_FRAME_TEXT(kParents, "native_authenticated_parent_frames")
 ASYNC_FRAME_TEXT(kTrampolines, "native_sigtramp_context_handoffs")
+ASYNC_FRAME_TEXT(kSystemSteps, "native_system_caller_steps")
 ASYNC_FRAME_TEXT(kHeaderRoot, "NEVERD_ARM64E_TEST_INCLUDE_DIR")
 ASYNC_FRAME_TEXT(kSourceIncludes, "../../../include")
 ASYNC_FRAME_TEXT(kIncludeFlag, "-I")
@@ -74,6 +75,39 @@ ASYNC_FRAME_VALUE(unsigned, kDwarfLR, 30)
 ASYNC_FRAME_VALUE(unsigned, kFrameSize, 16)
 ASYNC_FRAME_VALUE(uint32_t, kSignLR, 0xd503237f)
 ASYNC_FRAME_VALUE(uint32_t, kAuthenticateLR, 0xd50323ff)
+ASYNC_FRAME_TEXT(kCompactSource, "compact.c")
+ASYNC_FRAME_TEXT(kFramePointer, "-fno-omit-frame-pointer")
+ASYNC_FRAME_TEXT(kCompactParent, "_compact")
+ASYNC_FRAME_TEXT(kCompactLeaf, "_compact_inner")
+ASYNC_FRAME_TEXT(kCompactCalls, "native_compact_calls")
+ASYNC_FRAME_TEXT(kCompactBody, R"c(
+__attribute__((noinline)) unsigned compact_inner(unsigned x) {
+  __asm__ volatile("" : "+r"(x));
+  return x + 1;
+}
+__attribute__((noinline)) unsigned compact(unsigned x) {
+  unsigned y = compact_inner(x);
+  __asm__ volatile("" : "+r"(y));
+  return y + 1;
+}
+)c")
+ASYNC_FRAME_TEXT(kCompactDriver, R"c(
+#include <dlfcn.h>
+#include <limits.h>
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  typedef unsigned (*call)(unsigned);
+  call parent = (call)dlsym(image, "compact");
+  const unsigned inputs[] = {0, 11, UINT_MAX};
+  if (!parent) return 3;
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i)
+    if (parent(inputs[i]) != inputs[i] + 2) return 4;
+  return dlclose(image);
+}
+)c")
+ASYNC_FRAME_VALUE(unsigned, kCompactInputs, 3)
 ASYNC_FRAME_TEXT(kAssembly, R"asm(
 .text
 .p2align 2
@@ -100,10 +134,13 @@ _stages:
   stage 2
   sub sp, sp, #16
 .cfi_def_cfa_offset 16
-  str x30, [sp,#8]
+  stp x19, x30, [sp]
+.cfi_offset 19, -16
 .cfi_offset 30, -8
+  mov x19, xzr
   stage 3
-  ldr x30, [sp,#8]
+  ldp x19, x30, [sp]
+.cfi_restore 19
 .cfi_restore 30
   add sp, sp, #16
 .cfi_def_cfa_offset 0
@@ -154,6 +191,9 @@ _invoke_stages:
 .cfi_offset x30,-8
   mov x29, sp
 .cfi_def_cfa x29, 16
+  str x19, [sp,#-16]!
+.cfi_offset x19,-32
+  mov x19,#0x5a19
   adr x2, Lreturn_site
   mov w5, #8
 Lselect_sp:
@@ -173,10 +213,15 @@ Lcall:
   add x7, x7, _stage_entry_sp@PAGEOFF
   mov x4, sp
   stlr x4, [x7]
+  adrp x7, _incoming_x19@PAGE
+  add x7, x7, _incoming_x19@PAGEOFF
+  stlr x19, [x7]
   mov x16, x0
   mov x0, x1
   blraaz x16
 Lreturn_site:
+  ldur x19, [x29,#-16]
+.cfi_restore x19
   mov sp, x29
   ldp x29,x30,[sp],#16
   retab
@@ -226,7 +271,7 @@ _outer_return_address:
   ret
 )asm")
 ASYNC_FRAME_TEXT(kObserver, R"c(
-#include "neverd/runtime/DarwinArm64eSignalCursor.h"
+#include "neverd/runtime/DarwinArm64eSystemUnwind.h"
 #include <dlfcn.h>
 #include <execinfo.h>
 #include <libunwind.h>
@@ -257,14 +302,14 @@ typedef void (*entry)(struct handshake *);
 extern void call_outer(entry, struct handshake *);
 extern uintptr_t outer_return_address(void);
 extern uintptr_t return_address(void);
-_Atomic uintptr_t stage_entry_sp;
+_Atomic uintptr_t stage_entry_sp, incoming_x19;
 static struct handshake state;
 static struct sample samples[stages_count];
 static pthread_t worker;
 static uintptr_t expected_return, expected_outer, owner, stack_low, stack_high;
 struct stack_rule {
   uintptr_t offset, depth;
-  unsigned saved_lr, signed_lr;
+  unsigned saved_lr, signed_lr, saved_x19;
 };
 static struct stack_rule *rules;
 static size_t rule_count;
@@ -281,8 +326,8 @@ static int read_rules(const char *path) {
   }
   for (size_t i = 0; i < rule_count; ++i) {
     struct stack_rule *r = &rules[i];
-    if (fscanf(file, "%" SCNuPTR " %" SCNuPTR " %u %u", &r->offset,
-               &r->depth, &r->saved_lr, &r->signed_lr) != 4) {
+    if (fscanf(file, "%" SCNuPTR " %" SCNuPTR " %u %u %u", &r->offset,
+               &r->depth, &r->saved_lr, &r->signed_lr, &r->saved_x19) != 5) {
       fclose(file);
       return 0;
     }
@@ -290,21 +335,20 @@ static int read_rules(const char *path) {
   return fclose(file) == 0;
 }
 
-static int at_signal_trampoline(void) {
+static int at_signal_trampoline(unw_cursor_t *cursor) {
   unw_context_t context;
-  unw_cursor_t cursor;
-  if (unw_getcontext(&context) || unw_init_local(&cursor, &context))
+  if (unw_getcontext(&context) || unw_init_local(cursor, &context))
     return 0;
   for (;;) {
     unw_word_t ip;
-    if (unw_get_reg(&cursor, UNW_REG_IP, &ip))
+    if (unw_get_reg(cursor, UNW_REG_IP, &ip))
       return 0;
     const void *address = ptrauth_strip((void *)ip, ptrauth_key_return_address);
     Dl_info symbol;
     if (dladdr(address, &symbol) && symbol.dli_sname &&
         !strcmp(symbol.dli_sname, "_sigtramp"))
       return 1;
-    if (unw_step(&cursor) <= 0)
+    if (unw_step(cursor) <= 0)
       return 0;
   }
 }
@@ -355,7 +399,8 @@ static void observe(int signal, siginfo_t *info, void *context) {
   __asm__ volatile("autib %0, %1" : "+r"(parent) : "r"(parent_cfa));
   if (parent_raw == parent || parent != expected_outer)
     _exit(15);
-  if (!at_signal_trampoline())
+  unw_cursor_t system;
+  if (!at_signal_trampoline(&system))
     _exit(16);
   NDDarwinArm64eCursor cursor = ndDarwinArm64eSignalCursor(uc);
   if (cursor.PC != s->pc || cursor.SP != sp)
@@ -367,6 +412,31 @@ static void observe(int signal, siginfo_t *info, void *context) {
   if (!ndDarwinArm64eStepFrame(&cursor, interrupted, stack_low, stack_high) ||
       cursor.PC != expected_return || cursor.SP != cfa)
     _exit(18);
+  const NDDarwinArm64eSavedGPR saved = {NDArm64eFirstPreservedGPR, -frame_bytes};
+  if (rule->saved_x19) {
+    unw_word_t before, after;
+    const NDDarwinArm64eSavedGPR duplicate[] = {saved, saved};
+    const NDDarwinArm64eSavedGPR outside = {NDArm64eFirstPreservedGPR, PTRDIFF_MAX};
+    if (unw_get_reg(&system, UNW_REG_IP, &before) ||
+        ndDarwinArm64eCrossSignalTrampoline(&system, uc, interrupted, duplicate, 2,
+                                            stack_low, stack_high, false) ||
+        ndDarwinArm64eCrossSignalTrampoline(&system, uc, interrupted, &outside, 1,
+                                            stack_low, stack_high, false) ||
+        unw_get_reg(&system, UNW_REG_IP, &after) || before != after)
+      _exit(26);
+  }
+  if (!ndDarwinArm64eCrossSignalTrampoline(&system, uc, interrupted, &saved, rule->saved_x19,
+                                     stack_low, stack_high, false))
+    _exit(23);
+  unw_word_t system_pc, preserved;
+  if (unw_get_reg(&system, UNW_ARM64_X19, &preserved) ||
+      preserved != atomic_load_explicit(&incoming_x19, memory_order_acquire))
+    _exit(25);
+  if (unw_get_reg(&system, UNW_REG_IP, &system_pc) ||
+      (uintptr_t)ptrauth_strip((void *)system_pc, ptrauth_key_return_address) != expected_return ||
+      unw_step(&system) <= 0 || unw_get_reg(&system, UNW_REG_IP, &system_pc) ||
+      (uintptr_t)ptrauth_strip((void *)system_pc, ptrauth_key_return_address) != expected_outer)
+    _exit(24);
   void *frames[2];
   const int count = backtrace_from_fp((void *)cursor.FP, frames, 2);
   const NDDarwinArm64eUnwindRow framed = {
