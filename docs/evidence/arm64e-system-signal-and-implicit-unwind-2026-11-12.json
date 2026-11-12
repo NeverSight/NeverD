@@ -635,7 +635,7 @@
   "limits": [
     "The system bridge walks an authenticated caller with known integer register locations. It does not resume exceptions or restore vector state.",
     "Unmodified Darwin stepping from the trampoline still traps on the signed control; the successful walk uses the NeverD handoff.",
-    "Opaque control flow, unmodelled register locations or landing-pad edges cannot authorize an implicit row.",
+    "Opaque control flow and unproven register locations prevent implicit row recovery. See signed_cxx_landing_pads for the address-based Darwin C++ personality.",
     "Publication is qualified for the tested inputs, including the nine-function mixed variadic images at O0 and O2; arbitrary image publication is not established.",
     "The observed hosts do not qualify explicit PAuth_LR, PC-sensitive PACM or native CPTA-on."
   ],
@@ -955,5 +955,175 @@
     ],
     "query_source_revision": "a6ffeb9bd9e3a9799c56d60418ed05abf8b01a1b",
     "outcome": "Compiler-linked typed C++ catch, compact frame and LSDA. The analyzer leaves implicit signing unavailable on this profile."
+  },
+  "signed_cxx_landing_pads": {
+    "source": "87ee21eef80b1d079fc41bd72654e2497da85225",
+    "pull_request": "https://github.com/NeverSight/NeverD/pull/2343",
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43290127091",
+    "llvm_fork": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+    "test_host_sha256": "458c148852ded9ac8036edbd0f47de8f6cb4ba905534a6b7d81e9f8b0d4ea828",
+    "local_release": {
+      "recovery": {
+        "passed": 11,
+        "skipped": []
+      },
+      "full": {
+        "passed": 32,
+        "skipped": []
+      },
+      "installation": {
+        "passed": 40,
+        "skipped": []
+      },
+      "analysis": {
+        "passed": 81,
+        "skipped": [
+          "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+          "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections"
+        ]
+      },
+      "language": {
+        "passed": 315,
+        "skipped": []
+      }
+    },
+    "runners": {
+      "macos-26": {
+        "hardware": "Apple M1 (Virtual)",
+        "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+        "passed": 32,
+        "native_image_executions": 60,
+        "native_cxx_exception_paths": 34,
+        "native_cxx_unwinder_pac_traps": 6,
+        "native_interrupted_frames": 10,
+        "native_system_caller_steps": 10,
+        "native_compact_calls": 3,
+        "explicit_pauth_lr": false,
+        "pc_sensitive_pacm": false,
+        "qualification_sha256": "29e5be28225df5379865e803797a9e2f1955308f3709f60fb40c5def3bbab1a4",
+        "native_cpta": {
+          "status": "unavailable",
+          "observed_el0": false,
+          "x1_qualified": false,
+          "profiles": {
+            "arm64": "undefined-instruction",
+            "arm64e": "undefined-instruction",
+            "arm64e.x1": "slice-unavailable"
+          }
+        }
+      },
+      "xcode-27": {
+        "hardware": "Apple M1 (Virtual)",
+        "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+        "passed": 32,
+        "native_image_executions": 60,
+        "native_cxx_exception_paths": 34,
+        "native_cxx_unwinder_pac_traps": 6,
+        "native_interrupted_frames": 10,
+        "native_system_caller_steps": 10,
+        "native_compact_calls": 3,
+        "explicit_pauth_lr": false,
+        "pc_sensitive_pacm": false,
+        "qualification_sha256": "98e72d4e67ed65a3069c5f8f709ea31d94684ee375806eb5d16cc0c3e17ebf25",
+        "native_cpta": {
+          "status": "unavailable",
+          "observed_el0": false,
+          "x1_qualified": false,
+          "profiles": {
+            "arm64": "undefined-instruction",
+            "arm64e": "undefined-instruction",
+            "arm64e.x1": "did-not-start"
+          }
+        }
+      }
+    },
+    "m4_max_cpta": {
+      "status": "unavailable",
+      "native_el0": false,
+      "x1": false,
+      "profiles": {
+        "arm64": "undefined-instruction",
+        "arm64e": "did-not-start",
+        "arm64e.x1": "slice-unavailable"
+      }
+    },
+    "compiler_profiles": [
+      "O0 compact, sealed GOT",
+      "O2 compact, sealed GOT",
+      "O2 compact, writable GOT",
+      "O2 indexed DWARF, sealed GOT",
+      "O2 indexed DWARF, outgoing argument area and sealed GOT"
+    ],
+    "native_paths_per_input": [
+      "normal return",
+      "matching int catch",
+      "unmatched long propagates",
+      "throw from inside the catch runs cleanup and propagates"
+    ],
+    "installed_entry": "Each published driver calls the original exported address and checks the changed return values from the replacement.",
+    "implicit_dwarf_before": {
+      "fixture": "independent Apple Clang indexed-DWARF catcher",
+      "unavailable_offsets": [
+        8,
+        32
+      ]
+    },
+    "independent_darwin_stack_control": {
+      "0": {
+        "exit": 0,
+        "observation": "5 -16"
+      },
+      "16": {
+        "exit": 0,
+        "observation": "5 0"
+      }
+    },
+    "compiler_objects": {
+      "cursor-macos-26/O0": {
+        "exit": 0,
+        "diagnostic": "",
+        "original_sha256": "facc185a667b33cff110273afc0293f6aaeeb6f04c4e26c8dc61c49e201d9c7a"
+      },
+      "cursor-macos-26/O2": {
+        "exit": 0,
+        "diagnostic": "",
+        "original_sha256": "7bc50a244009d4cecac5004e4f1ce0a71e7a8728f0fddcad458215a249a0c9ae"
+      },
+      "cursor-macos-26/dwarf": {
+        "exit": 0,
+        "diagnostic": "",
+        "original_sha256": "d2b49dae9b115c2768fb63c3e2899742304a4234eaca6e02935b7f7bcc89e709"
+      },
+      "cursor-macos-26/args": {
+        "exit": 0,
+        "diagnostic": "",
+        "original_sha256": "a1d5d5c539366aeca7c8efaee612c0576a338ffb92c058169e00a38654913146"
+      },
+      "cursor-xcode-27/O0": {
+        "exit": 0,
+        "diagnostic": "",
+        "original_sha256": "880ea77185eca04c3aa5dfb641ae69ce2db6e15de833c22ba164dab267777dde"
+      },
+      "cursor-xcode-27/O2": {
+        "exit": 0,
+        "diagnostic": "",
+        "original_sha256": "fe6c3db4c09ce73a42fafb83992427841ee9c166e5236d020039309cafd75714"
+      },
+      "cursor-xcode-27/dwarf": {
+        "exit": 0,
+        "diagnostic": "",
+        "original_sha256": "88feb8244efa244bb92248142c0fefa22ec92ab4385e501bc5f47c8fe5953f45"
+      },
+      "cursor-xcode-27/args": {
+        "exit": 0,
+        "diagnostic": "",
+        "original_sha256": "6f826a62803c00a9353ccb1093148b1a3a93ff87a1b20995f762511bfd563e5b"
+      }
+    },
+    "hosted_compiler_controls": "https://github.com/gmh5225/test_mac_intel/actions/runs/43285004955",
+    "system_unwinder_debugger": "https://github.com/gmh5225/test_mac_intel/actions/runs/43285706120",
+    "nonzero_outgoing_argument_control": "Both Apple hosts and the isolated untouched arm64e program trap at BRK #0xc471 in libunwind::UnwindCursor::setReg. The ordinary arm64 controls resume with SP advanced by 16. Final replay separately counts normal C++ outcomes and reproduced system PAC traps.",
+    "xcode_27_terminal_index": "The final compact lookup address extends one byte into an adjacent S_SYMBOL_STUBS section. The raw lookup endpoint is preserved and the decoded instruction extent ends at the text/stub boundary, including after the original sentinel becomes a no-unwind gap.",
+    "original_got_control": "On the parent code, canonical typed catches at O0 and O2 required extra header space. A catch-all compiled from the same source installed with the default layout."
   }
 }

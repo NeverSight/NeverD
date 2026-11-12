@@ -1200,6 +1200,21 @@ the incoming SP, recovery derives the CFA and integer register locations from
 the reachable instructions. Registers the producer marked undefined stay
 undefined.
 
+The [signed C++ execution run](https://github.com/gmh5225/test_mac_intel/actions/runs/43290127091) passed all 32
+publication tests on each Apple M1 runner. Each recorded 34 successful C++ outcomes and six system
+PAC traps across five compiler profiles, exercising the original and redirected
+entry. The four conventional profiles returned the expected values, propagated
+unmatched exceptions and ran cleanup for a new exception thrown inside a catch.
+With a nonzero DWARF outgoing-argument size, both untouched and published
+arm64e code returned normally on the nonthrowing path. On the throwing paths
+the system unwinder trapped before installing the handler. The
+[debugger control](https://github.com/gmh5225/test_mac_intel/actions/runs/43285706120) located the same authenticated-pointer
+`BRK #0xc471` in system libunwind on both hosts. Ordinary arm64 completed
+the corresponding controls. The system signal suite also crossed ten interrupted
+frames on each runner. The [verification record](evidence/arm64e-system-signal-and-implicit-unwind-2026-11-12.json)
+records the source revision, host digest, per-runner observations and local
+regressions.
+
 To repeat the interrupted-frame test on a Mac that can launch arm64e
 executables, build the test host against the tracked LLVM fork and require
 native execution:
