@@ -217,6 +217,56 @@ SymRef parityWord(SymContext &Ctx, SymRef V, WorkBudget &Budget,
   return Op == SymOp::Add ? Ctx.mkXor(Inputs) : Ctx.mkAnd(Inputs);
 }
 
+// In a parity column, A ^ (A | B) equals B & ~A. Collect
+// other AND terms containing B before constructing the final XOR. This
+// identity holds at every bit, including when the words overlap.
+SymRef collectColumnUnion(SymContext &Ctx, SymRef Body, WorkBudget &Budget,
+                          size_t Storage) {
+  if (Ctx.op(Body) != SymOp::Xor)
+    return Body;
+  const size_t N = Ctx.numOperands(Body);
+  if (N < 3 || N > limits::kMaxResidueBaseTerms ||
+      N > Storage / (3 * sizeof(SymRef)) || !Budget.canConsume(N))
+    return Body;
+  Budget.consume(N);
+  const auto Terms = Ctx.operands(Body);
+  for (auto Union : Terms) {
+    if (Ctx.op(Union) != SymOp::Or || Ctx.numOperands(Union) != 2)
+      continue;
+    for (unsigned I : {0u, 1u}) {
+      const auto A = Ctx.operand(Union, I);
+      const auto B = Ctx.operand(Union, 1 - I);
+      if (!Budget.canConsume(N))
+        return Body;
+      Budget.consume(N);
+      if (!llvm::is_contained(Terms, A))
+        continue;
+      if (!Budget.canConsume(2 * N))
+        return Body;
+      Budget.consume(2 * N);
+      llvm::SmallVector<SymRef, 8> Rest, Cofactors;
+      for (auto T : Terms) {
+        if (T == A || T == Union)
+          continue;
+        if (Ctx.op(T) == SymOp::And && Ctx.numOperands(T) == 2 &&
+            (Ctx.operand(T, 0) == B || Ctx.operand(T, 1) == B)) {
+          Cofactors.push_back(Ctx.operand(T, Ctx.operand(T, 0) == B ? 1 : 0));
+          continue;
+        }
+        Rest.push_back(T);
+      }
+      if (Cofactors.empty())
+        continue;
+      // Move the single complement from A to the first cofactor in the XOR.
+      Cofactors.front() = Ctx.mkNot(Cofactors.front());
+      Cofactors.push_back(A);
+      Rest.push_back(Ctx.mkAnd(B, Ctx.mkXor(Cofactors)));
+      return Ctx.mkXor(Rest);
+    }
+  }
+  return Body;
+}
+
 // The canonical sum has already combined equal disturbances. Its surviving
 // high coefficients can therefore observe fewer bits than any input factor.
 SymRef factorHighSum(SymContext &Ctx, SymRef Sum, WorkBudget &Budget,
@@ -430,16 +480,88 @@ SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
       Edges > Budget.available())
     return Root;
   const size_t Available = (Budget.available() - Edges) / Factors.size();
-  if (Available < FixedWork || Words > (Available - FixedWork) / 5 / Words)
+  const bool NativeColumn =
+      !Mixed && !HasMaskedDisturbance && Width <= 64 && First;
+  const bool CanExpand =
+      Available >= FixedWork && Words <= (Available - FixedWork) / 5 / Words;
+  const size_t ScanWork = 7 * Factors.size();
+  if (!CanExpand && (!NativeColumn || !Budget.canConsume(ScanWork)))
     return Root;
-  Budget.consume(Edges + Factors.size() * (5 * Words * Words + FixedWork));
+  const size_t ExpansionWork =
+      CanExpand ? Edges + Factors.size() * (5 * Words * Words + FixedWork) : 0;
   Storage -= EdgeBytes + (Factors.size() + 1) * Bytes;
 
   llvm::SmallVector<llvm::APInt, 16> Prefix;
   Prefix.reserve(Factors.size() + 1);
   Prefix.push_back(Scale ? Ctx.constValue(Scale) : llvm::APInt(Width, 1));
-  for (auto F : Factors)
-    Prefix.push_back(Prefix.back() * Ctx.constValue(Ctx.operand(F, 0)));
+  if (NativeColumn) {
+    // For a nonzero product C of the offsets, the coefficient of word i
+    // has valuation v2(C) - v2(a_i) + v2(b_i). Track the smallest value
+    // while building the same prefixes needed by a lower-column fallback.
+    // Two inline literal reads, two valuations, a multiply, and the
+    // prefix/minimum updates per factor. A general expansion also needs
+    // suffix products and construction of a weighted sum for every factor.
+    Budget.consume(ScanWork);
+    llvm::SmallVector<SymRef, 8> Lowest;
+    uint64_t Product = Prefix.front().getZExtValue();
+    int Minimum = Width;
+    for (auto F : Factors) {
+      const uint64_t A = Ctx.node(Ctx.operand(F, 0)).Aux;
+      const auto D = Ctx.operand(F, 1);
+      const uint64_t B = Ctx.node(Ctx.operand(D, 0)).Aux;
+      const int Delta = std::countr_zero(B) - std::countr_zero(A);
+      if (Delta < Minimum) {
+        Lowest.clear();
+        Minimum = Delta;
+      }
+      if (Delta == Minimum)
+        Lowest.push_back(D);
+      Product *= A;
+      Prefix.emplace_back(Width, Product, false, true);
+    }
+    if (!Prefix.back().isZero() &&
+        int(Prefix.back().countr_zero()) + Minimum >= int(Width) - 1) {
+      const int Live = int(Width) - 1 - int(Prefix.back().countr_zero());
+      const auto Sign = llvm::APInt::getSignMask(Width);
+      auto Constant = Prefix.back();
+      if (Minimum > Live)
+        Lowest.clear();
+      // Only surviving words need rebuilding and sorting.
+      const size_t EmitWork =
+          Edges + Lowest.size() * (3 + std::bit_width(Lowest.size()));
+      if (!Budget.canConsume(EmitWork))
+        return Root;
+      Budget.consume(EmitWork);
+      for (auto &D : Lowest) {
+        const auto Tail = Ctx.operands(D).drop_front();
+        auto V = Tail.size() == 1 ? Tail.front() : Ctx.mkMul(Tail);
+        if (Ctx.op(V) == SymOp::Not) {
+          Constant -= Sign;
+          V = Ctx.operand(V, 0);
+        }
+        D = parityWord(Ctx, V, Budget, Storage);
+      }
+      auto Result = Ctx.mkConst(Constant);
+      if (!Lowest.empty()) {
+        auto Body = collectColumnUnion(Ctx, Ctx.mkXor(Lowest), Budget, Storage);
+        if (Constant.isMinSignedValue()) {
+          Body = Ctx.mkNot(Body);
+          Constant.clearAllBits();
+        }
+        Result = Ctx.mkAdd(Ctx.mkConst(Constant),
+                           Ctx.mkMul(Ctx.mkConst(Sign), Body));
+      }
+      return readingScore(Ctx, Result) < readingScore(Ctx, Root) ? Result
+                                                                 : Root;
+    }
+    if (!CanExpand)
+      return Root;
+    Budget.consume(ExpansionWork - ScanWork);
+  } else {
+    Budget.consume(ExpansionWork);
+    for (auto F : Factors)
+      Prefix.push_back(Prefix.back() * Ctx.constValue(Ctx.operand(F, 0)));
+  }
 
   llvm::SmallVector<SymRef, 16> Terms;
   Terms.reserve(Factors.size() + 1);

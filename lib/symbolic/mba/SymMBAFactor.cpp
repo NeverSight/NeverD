@@ -279,6 +279,12 @@ static SymRef solveProductCofactorsImpl(
   if (Higher < 2) {
     if (!NestedSum)
       return E;
+    // A standalone residue polynomial is already factored, including when
+    // a live masked neighbor remains as a second factor. Re-expanding that
+    // product cannot expose a cofactor shared with another summand.
+    if (Ctx.op(E) == SymOp::Mul &&
+        hasCompletedResidueReading(Ctx, E, Budget, /*GeneratedOnly=*/true))
+      return E;
     // The low factors in a proved product may still contain sums. Keep
     // that factorization beside atoms that share none of its direct factors.
     // XOR remains one opaque coordinate in the nested arithmetic search.

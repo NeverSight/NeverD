@@ -6185,6 +6185,14 @@ before grouping its factors. Polynomial arithmetic is charged at its actual
 coefficient precision. Completed polynomial groups remain factored beside
 independent scaled variables or XOR words; a shared direct factor or an AND
 partition still admits the nested reconstruction search.
+A product can also group different views of a word when their live low bits
+agree. A mask or addend that changes only higher bits drops out; a mask
+that changes even one live bit stays. If every weight has at least `s` low
+zeros, the degree-`k` coefficient is a multiple of `2^(k*s)`. Its quotient
+needs only `P-k*s` bits at precision `P`. When all nonconstant terms of a
+linearized product reach only the sign bit, their words combine by XOR. A
+completed polynomial product keeps a factor that still changes a live bit;
+cofactor search resumes when a surrounding sum provides other terms.
 Equal or opposite weights can share a factor. After removing a common power
 of two, an odd weight is invertible at the remaining width, which lets long
 literal coefficients share one scale. The simplifier compares expression
