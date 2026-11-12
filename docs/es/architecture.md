@@ -1275,6 +1275,8 @@ Si quedan términos cruzados, solo se agrupan los factores cuya perturbación ti
 
 Cuando varios factores comparten una expresión `u`, los ceros finales de sus coeficientes determinan qué potencias se conservan. El polinomio se evalúa con el método de Horner. Los demás factores pueden reducir la precisión necesaria. El producto de `j` enteros consecutivos es divisible por `j!`, lo cual permite eliminar más términos de grado alto. Las entradas de los grupos pueden depender unas de otras.
 
+Antes de agrupar los factores, las expresiones afines anidadas se componen con la precisión observable. El presupuesto del cálculo polinómico corresponde a la precisión real de los coeficientes. Los grupos ya reconstruidos permanecen factorizados junto a variables escaladas o términos XOR independientes; un factor directo compartido o una partición AND aún permite la reconstrucción anidada.
+
 El texto se genera mediante un recorrido iterativo en postorden, sin ordenar nodos, y las hojas se imprimen directamente. Si la clasificación existente no requiere entradas ocultas, entradas para máscaras literales ni reescritura de complementos aritméticos, la abstracción MBA reutiliza el DAG original. La verificación independiente de identidades y la contabilidad del trabajo permanecen intactas.
 
 Los desplazamientos y factores literales de una base afín ya opaca construyen directamente los coeficientes, sin un árbol temporal de trabajo. Los hijos lineales mantienen el recorrido general; el almacenamiento y las operaciones de palabra se contabilizan antes de publicar una relación completa.

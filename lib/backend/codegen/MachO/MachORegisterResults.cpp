@@ -23,10 +23,12 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Errc.h"
+#include "llvm/Support/LEB128.h"
 #include "llvm/Support/ModRef.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -87,7 +89,8 @@ bool independent(const DecodedInsn &I) {
         llvm::ArrayRef(D.operands, D.op_count),
         [](const cs_aarch64_op &Op) { return Op.type == AARCH64_OP_MEM; });
   case AARCH64_INS_HINT:
-    return I.Raw->alias_id == AARCH64_INS_ALIAS_PACIBSP;
+    return I.Raw->alias_id == AARCH64_INS_ALIAS_PACIBSP ||
+           I.Raw->alias_id == AARCH64_INS_ALIAS_AUTIBSP;
   case AARCH64_INS_RETAB:
   case AARCH64_INS_RET:
     return D.op_count == 0;
@@ -198,6 +201,17 @@ bool emitFrameRow(const CFIInstruction &Row, llvm::raw_ostream &OS) {
   case CFIOpKind::Nop:
   case CFIOpKind::AdvanceLoc:
     return true;
+  case CFIOpKind::DefCFA:
+    if (Row.Offset < 0 ||
+        (Row.Register != kDwarfFP && Row.Register != kDwarfSP))
+      return false;
+    OS << kCFA << Row.Register << kSeparator << Row.Offset << '\n';
+    return true;
+  case CFIOpKind::DefCFARegister:
+    if (Row.Register != kDwarfFP && Row.Register != kDwarfSP)
+      return false;
+    OS << kCFARegister << Row.Register << '\n';
+    return true;
   case CFIOpKind::DefCFAOffset:
     if (Row.Offset < 0)
       return false;
@@ -210,10 +224,30 @@ bool emitFrameRow(const CFIInstruction &Row, llvm::raw_ostream &OS) {
     OS << kSpill << Row.Register << kSeparator << Row.Offset << '\n';
     return true;
   case CFIOpKind::Restore:
+  case CFIOpKind::SameValue:
     if (Row.Register != kDwarfFP && Row.Register != kDwarfLR)
       return false;
-    OS << kRestore << Row.Register << '\n';
+    OS << (Row.Kind == CFIOpKind::Restore ? kRestore : kSameValue)
+       << Row.Register << '\n';
     return true;
+  case CFIOpKind::RememberState:
+    OS << kRememberState;
+    return true;
+  case CFIOpKind::RestoreState:
+    OS << kRestoreState;
+    return true;
+  case CFIOpKind::GnuArgsSize: {
+    if (Row.Offset < 0)
+      return false;
+    llvm::SmallVector<char> Bytes;
+    llvm::raw_svector_ostream Encoded(Bytes);
+    llvm::encodeULEB128(Row.Offset, Encoded);
+    OS << kEscape << unsigned(llvm::dwarf::DW_CFA_GNU_args_size);
+    for (unsigned char Byte : Bytes)
+      OS << kSeparator << unsigned(Byte);
+    OS << '\n';
+    return true;
+  }
   default:
     return false;
   }
@@ -245,11 +279,15 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
   const auto &Compact = *Frame->Compact;
   const bool Indexed = (Compact.NativeEncoding & macho_unwind::kModeMask) ==
                        macho_unwind::kARM64ModeDwarf;
+  const DwarfCIE *CIE = nullptr;
   llvm::ArrayRef<CFIInstruction> Rows;
   if (Indexed) {
     if (!Frame->Dwarf || Frame->Dwarf->InitialLocation != Start ||
         Frame->Dwarf->AddressRange != End - Start || Frame->Dwarf->LSDAVA ||
         Frame->Dwarf->ParseStatus != ExceptionParseStatus::Complete)
+      return std::nullopt;
+    CIE = Image.ExceptionMetadata.findCIE(Frame->Dwarf->CIESectionOffset);
+    if (!CIE || CIE->ParseStatus != ExceptionParseStatus::Complete)
       return std::nullopt;
     Rows = Frame->Dwarf->Instructions;
   } else if (Frame->Dwarf || (Compact.NativeEncoding &
@@ -260,6 +298,8 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
 
   RegisterBody Body;
   llvm::raw_string_ostream OS(Body.Assembly);
+  if (CIE && CIE->HasPointerAuth)
+    OS << kBKeyFrame;
   llvm::Function *LastCallee = nullptr;
   unsigned LiveScratch = 0;
   for (va_t PC = Start; PC < End; PC += Word) {

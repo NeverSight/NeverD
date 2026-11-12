@@ -316,4 +316,48 @@ TEST(AArch64AsyncUnwind,
   GTEST_SKIP() << kUnavailable;
 #endif
 }
+
+TEST(AArch64AsyncUnwind, InstructionAddressRecipesUseTheActualSigningPC) {
+#if defined(__APPLE__) && defined(__aarch64__)
+  llvm::SmallString<128> Dir;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kDirectory, Dir));
+  const std::filesystem::path Root(Dir.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto *IncludeOverride = std::getenv(kHeaderRoot);
+  const auto Include =
+      IncludeOverride
+          ? std::string(IncludeOverride)
+          : (std::filesystem::path(__FILE__).parent_path() / kSourceIncludes)
+                .lexically_normal()
+                .string();
+  const auto Source =
+      (std::filesystem::path(Include).parent_path() / kCursorSource).string();
+  const auto Driver = (Root / kDriver).string();
+  unsigned PACMProfiles = 0, ExplicitProfiles = 0;
+  for (const auto &[Language, Standard] :
+       {std::pair(kCLanguage, kCStandard),
+        std::pair(kCXXLanguage, kCXXStandard)}) {
+    for (const char *Optimize : {kNoOptimize, kOptimize}) {
+      ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                    kCompiler, {kCompiler, kTargetFlag, kTarget, Standard,
+                                kAllWarnings, kExtraWarnings, kErrorWarnings,
+                                Optimize, kIncludeFlag, Include, kLanguageFlag,
+                                Language, Source, kOutput, Driver}),
+                0);
+      if (!std::getenv(kExecute))
+        continue;
+      ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, kPACMMode}), 0);
+      ++PACMProfiles;
+      const int Explicit =
+          llvm::sys::ExecuteAndWait(Driver, {Driver, kExplicitMode});
+      ASSERT_TRUE(Explicit == 0 || Explicit == kUnavailableCode);
+      ExplicitProfiles += Explicit == 0;
+    }
+  }
+  RecordProperty(kCursorPACMProfiles, PACMProfiles);
+  RecordProperty(kCursorExplicitProfiles, ExplicitProfiles);
+#else
+  GTEST_SKIP() << kUnavailable;
+#endif
+}
 } // namespace

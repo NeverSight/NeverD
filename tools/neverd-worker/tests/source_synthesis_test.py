@@ -313,7 +313,7 @@ def carry_product_elf(degree, product=True, needed=7, high_bits=None, additive=F
     return elf(code), f"x+y+z+{scale}U*" + "*".join(factors)
 
 
-def high_perturbation_elf(degree, low_factors=(), shift_base=16):
+def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0):
     code = bytearray.fromhex("b801000000")  # eax = 1
     factors = []
     for i in range(degree):
@@ -323,7 +323,14 @@ def high_perturbation_elf(degree, low_factors=(), shift_base=16):
         shift = i % 4 if i in low_factors else shift_base + i % 3
         coefficient = ((2 * i + 1) << shift) & 0xffffffff
         offset = 2 * i + 1
-        code += bytes.fromhex("89f9" + op + "69c9") + struct.pack("<I", coefficient)
+        code += bytes.fromhex("89f9" + op)
+        for layer in range(affine_depth):
+            inner_weight = (-3 if layer % 2 else 5) & 0xffffffff
+            inner_offset = 3 + i + layer
+            code += bytes.fromhex("69c9") + struct.pack("<I", inner_weight)
+            code += bytes.fromhex("81c1") + struct.pack("<I", inner_offset)
+            value = f"({inner_offset}U+{inner_weight}U*{value})"
+        code += bytes.fromhex("69c9") + struct.pack("<I", coefficient)
         code += bytes.fromhex("81c1") + struct.pack("<I", offset)
         code += bytes.fromhex("0fafc1")
         factors.append(f"({offset}U+{coefficient}U*{value})")
@@ -462,7 +469,7 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
-        elif kind.startswith("truncated-perturbation-"):
+        elif kind.startswith(("truncated-perturbation-", "affine-perturbation-")):
             code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
             assert code.count("*") <= 12, text
         elif kind.startswith(("power-group-", "high-perturbation-", "mixed-perturbation-")):
@@ -524,7 +531,7 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
                 function_name(enhanced)
                 enhanced_shape(enhanced)
                 if representation == "source":
-                    if kind.startswith(("residue-", "multiple-residual-", "carry-product-", "carry-cofactor-", "power-group-", "high-perturbation-", "mixed-perturbation-", "truncated-perturbation-")) or kind in ("affine-residue-neighbor", "prefix-residue-neighbor", "coarse-residue-neighbor", "distributed-residue-neighbor"):
+                    if kind.startswith(("residue-", "multiple-residual-", "carry-product-", "carry-cofactor-", "power-group-", "high-perturbation-", "mixed-perturbation-", "truncated-perturbation-", "affine-perturbation-")) or kind in ("affine-residue-neighbor", "prefix-residue-neighbor", "coarse-residue-neighbor", "distributed-residue-neighbor"):
                         code = re.sub(r"/\*.*?\*/|//[^\n]*", "", ordinary,
                                       flags=re.S)
                         assert "*" in code, ordinary
@@ -633,6 +640,7 @@ if __name__ == "__main__":
             ("high-perturbation-33", *high_perturbation_elf(33)),
             ("mixed-perturbation-49", *high_perturbation_elf(49, (0, 19, 48))),
             ("truncated-perturbation-63", *high_perturbation_elf(63, shift_base=7)),
+            ("affine-perturbation-63", *high_perturbation_elf(63, shift_base=7, affine_depth=2)),
             ("power-group-16", *residue_power_elf(16, 4)),
             ("power-group-64", *residue_power_elf(64, 6)),
             ("power-group-perturbed-128", *residue_power_elf(128, 4, 1)),

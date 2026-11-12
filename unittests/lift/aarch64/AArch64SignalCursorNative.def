@@ -1,0 +1,274 @@
+//===- AArch64SignalCursorNative.def - Native cursor oracle ------*- C -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Compile as C. Independent SP/PC signing instructions exercise the public
+/// cursor; unsupported explicit instructions are probed before the test matrix.
+///
+//===----------------------------------------------------------------------===//
+
+#include "neverd/runtime/DarwinArm64eSignalCursor.h"
+
+#include <inttypes.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+enum { Samples = 64, Unavailable = 2 };
+typedef struct {
+  uintptr_t LR, CFA, PC;
+} Signature;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern void signPACMIA(uintptr_t, Signature *);
+extern void signPACMIB(uintptr_t, Signature *);
+extern void signExplicitIA(uintptr_t, Signature *);
+extern void signExplicitIB(uintptr_t, Signature *);
+extern void signZeroPACMIA(uintptr_t, Signature *);
+extern void signZeroPACMIB(uintptr_t, Signature *);
+extern void signZeroExplicitIA(uintptr_t, Signature *);
+extern void signZeroExplicitIB(uintptr_t, Signature *);
+#ifdef __cplusplus
+}
+#endif
+
+// PACIASP/IBSP and their explicit PC forms use the actual SP and instruction
+// address. The cursor instead materializes both into x16/x15.
+__asm__(".text\n"
+        ".p2align 2\n"
+        ".macro signer name, word, prefix=0\n"
+        ".globl _\\name\n"
+        "_\\name:\n"
+        "mov x9,x30\n"
+        "mov x30,x0\n"
+        "adr x3,1f\n"
+        "mov x4,sp\n"
+        ".if \\prefix\n"
+        ".inst 0xd50324ff\n"
+        ".endif\n"
+        "1: .inst \\word\n"
+        "str x30,[x1]\n"
+        "stp x4,x3,[x1,#8]\n"
+        "mov x30,x9\n"
+        "ret\n"
+        ".endm\n"
+        "signer signPACMIA,0xd503233f,1\n"
+        "signer signPACMIB,0xd503237f,1\n"
+        "signer signExplicitIA,0xdac1a3fe\n"
+        "signer signExplicitIB,0xdac1a7fe\n"
+        ".macro zero_signer name, word, prefix=0\n"
+        ".globl _\\name\n"
+        "_\\name:\n"
+        "mov x17,x0\n"
+        "mov x16,sp\n"
+        "mov x15,xzr\n"
+        ".if \\prefix\n"
+        ".inst 0xd50324ff\n"
+        ".endif\n"
+        ".inst \\word\n"
+        "str x17,[x1]\n"
+        "stp x16,x15,[x1,#8]\n"
+        "ret\n"
+        ".endm\n"
+        "zero_signer signZeroPACMIA,0xd503211f,1\n"
+        "zero_signer signZeroPACMIB,0xd503215f,1\n"
+        "zero_signer signZeroExplicitIA,0xdac18bfe\n"
+        "zero_signer signZeroExplicitIB,0xdac18ffe\n");
+
+static void unavailable(int Signal) {
+  (void)Signal;
+  _Exit(Unavailable);
+}
+
+static bool sameCursor(NDDarwinArm64eCursor A, NDDarwinArm64eCursor B) {
+  return A.PC == B.PC && A.SP == B.SP && A.FP == B.FP && A.LR == B.LR;
+}
+
+static unsigned Checks;
+static void check(bool Condition) {
+  ++Checks;
+  if (!Condition) {
+    fprintf(stderr, "failed cursor check %u\n", Checks);
+    exit(EXIT_FAILURE);
+  }
+}
+
+static bool step(NDDarwinArm64eCursor *Cursor, NDDarwinArm64eUnwindRow Row,
+                 uintptr_t Low, uintptr_t High, bool Explicit) {
+  const NDDarwinArm64eCursor Before = *Cursor;
+  const bool OK =
+      ndDarwinArm64eStepFrameWithPAuthLR(Cursor, Row, Low, High, Explicit);
+  if (!OK)
+    check(sameCursor(Before, *Cursor));
+  return OK;
+}
+
+static void checkStackRows(void) {
+  uintptr_t Stack[4] = {0};
+  const uintptr_t Low = (uintptr_t)Stack, High = (uintptr_t)(Stack + 4);
+  const uintptr_t CFA = (uintptr_t)(Stack + 2);
+  const uintptr_t PC = 0x12340, FP = CFA + sizeof(uintptr_t);
+  Stack[0] = FP;
+  Stack[1] = PC;
+  NDDarwinArm64eCursor Cursor = {0x100, Low, CFA, 0};
+  NDDarwinArm64eUnwindRow Row = {false,
+                                 2 * sizeof(uintptr_t),
+                                 true,
+                                 true,
+                                 -2 * (ptrdiff_t)sizeof(uintptr_t),
+                                 -(ptrdiff_t)sizeof(uintptr_t),
+                                 NDArm64eUnsigned,
+                                 0};
+  check(step(&Cursor, Row, Low, High, false));
+  check(Cursor.PC == PC && Cursor.SP == CFA && Cursor.FP == FP && !Cursor.LR);
+  Cursor = (NDDarwinArm64eCursor){0x100, Low, CFA, 0};
+  Row.CFAFromFP = true;
+  Row.CFAOffset = 0;
+  check(step(&Cursor, Row, Low, High, false));
+  Cursor = (NDDarwinArm64eCursor){0x100, Low, CFA, 0};
+  check(!step(&Cursor, Row, Low + 1, High, false));
+  check(!step(&Cursor, Row, Low, CFA - 1, false));
+  Row.LROffset = High - CFA;
+  check(!step(&Cursor, Row, Low, High, false));
+  Row.LROffset = PTRDIFF_MIN;
+  check(!step(&Cursor, Row, Low, High, false));
+  Row.CFAOffset = PTRDIFF_MIN;
+  check(!step(&Cursor, Row, Low, High, false));
+  Row.CFAFromFP = false;
+  Row.CFAOffset = 1;
+  Cursor.SP = UINTPTR_MAX;
+  check(!step(&Cursor, Row, Low, High, false));
+  Cursor = (NDDarwinArm64eCursor){0x100, CFA, CFA, PC};
+  Row = (NDDarwinArm64eUnwindRow){
+      false, 0, false, false, 0, 0, NDArm64eUnsigned, 0};
+  check(step(&Cursor, Row, Low, High, false));
+  Cursor.LR = 0;
+  check(!step(&Cursor, Row, Low, High, false));
+  Cursor.LR = PC;
+  Row.Signing = NDArm64eSigningUnknown;
+  check(!step(&Cursor, Row, Low, High, false));
+  Row.Signing = (NDDarwinArm64eSigning)-1;
+  check(!step(&Cursor, Row, Low, High, false));
+  // An explicit recipe must be refused before any unsupported instruction.
+  for (unsigned Key = 0; Key != 2; ++Key) {
+    Row.Signing = Key ? NDArm64eSignedIBWithCFAPC : NDArm64eSignedIAWithCFAPC;
+    check(!step(&Cursor, Row, Low, High, false));
+    check(!ndDarwinArm64eStepFrame(&Cursor, Row, Low, High));
+  }
+  for (unsigned Key = 0; Key != 2; ++Key) {
+    Row.Signing = Key ? NDArm64eSignedIBWithCFA : NDArm64eSignedIAWithCFA;
+    Cursor.LR = (uintptr_t)(Key ? ptrauth_sign_unauthenticated(
+                                      (void *)PC, ptrauth_key_asib, CFA)
+                                : ptrauth_sign_unauthenticated(
+                                      (void *)PC, ptrauth_key_asia, CFA));
+    check(ndDarwinArm64eStepFrame(&Cursor, Row, Low, High));
+    check(Cursor.PC == PC && Cursor.SP == CFA && !Cursor.LR);
+  }
+}
+
+static void checkRecipes(bool Explicit) {
+  const uintptr_t High = (uintptr_t)pthread_get_stackaddr_np(pthread_self());
+  const uintptr_t Low = High - pthread_get_stacksize_np(pthread_self());
+  unsigned Signed[2] = {0}, PCRejected[2] = {0}, KeyRejected[2] = {0};
+  unsigned RecipeRejected[2] = {0};
+  for (unsigned Key = 0; Key != 2; ++Key) {
+    for (unsigned I = 0; I != Samples; ++I) {
+      const uintptr_t PC = 0x12340 + I * sizeof(uint32_t);
+      Signature Value;
+      if (Explicit) {
+        if (Key)
+          signExplicitIB(PC, &Value);
+        else
+          signExplicitIA(PC, &Value);
+      } else if (Key) {
+        signPACMIB(PC, &Value);
+      } else {
+        signPACMIA(PC, &Value);
+      }
+      const NDDarwinArm64eSigning Kind =
+          Explicit
+              ? (Key ? NDArm64eSignedIBWithCFAPC : NDArm64eSignedIAWithCFAPC)
+              : (Key ? NDArm64eSignedIBWithCFAPACM
+                     : NDArm64eSignedIAWithCFAPACM);
+      NDDarwinArm64eUnwindRow Row = {false, 0, false, false,
+                                     0,     0, Kind,  Value.PC};
+      const NDDarwinArm64eCursor Input = {Value.PC, Value.CFA, Low, Value.LR};
+      NDDarwinArm64eCursor Cursor = Input;
+      check(step(&Cursor, Row, Low, High, Explicit));
+      check(Cursor.PC == PC && Cursor.SP == Value.CFA && Cursor.FP == Low &&
+            !Cursor.LR);
+      // Toggle a PAC bit while preserving the canonical address.
+      const uintptr_t PAC = Value.LR ^ PC;
+      if (PAC) {
+        ++Signed[Key];
+        Cursor = Input;
+        Cursor.LR ^= PAC & (0 - PAC);
+        check(!step(&Cursor, Row, Low, High, Explicit));
+      }
+      // PAC collisions are legal. Record sensitivity across independent inputs
+      // instead of requiring every pair of signatures to differ.
+      Cursor = Input;
+      Row.SigningPC = 0; // A valid modifier, never an "unknown PC" sentinel.
+      PCRejected[Key] += !step(&Cursor, Row, Low, High, Explicit);
+      Cursor = Input;
+      Row.SigningPC = Value.PC;
+      Row.Signing = Explicit ? (Key ? NDArm64eSignedIAWithCFAPC
+                                    : NDArm64eSignedIBWithCFAPC)
+                             : (Key ? NDArm64eSignedIAWithCFAPACM
+                                    : NDArm64eSignedIBWithCFAPACM);
+      KeyRejected[Key] += !step(&Cursor, Row, Low, High, Explicit);
+      Cursor = Input;
+      Row.Signing = Key ? NDArm64eSignedIBWithCFA : NDArm64eSignedIAWithCFA;
+      RecipeRejected[Key] += !step(&Cursor, Row, Low, High, Explicit);
+      // A zero signing address must also succeed when it really signed LR.
+      if (Explicit) {
+        if (Key)
+          signZeroExplicitIB(PC, &Value);
+        else
+          signZeroExplicitIA(PC, &Value);
+      } else if (Key) {
+        signZeroPACMIB(PC, &Value);
+      } else {
+        signZeroPACMIA(PC, &Value);
+      }
+      check(Value.PC == 0);
+      Row.Signing = Kind;
+      Row.SigningPC = Value.PC;
+      Cursor = (NDDarwinArm64eCursor){Value.PC, Value.CFA, Low, Value.LR};
+      check(step(&Cursor, Row, Low, High, Explicit));
+      check(Cursor.PC == PC && Cursor.SP == Value.CFA && !Cursor.LR);
+    }
+    check(Signed[Key] && KeyRejected[Key]);
+    if (Explicit)
+      check(PCRejected[Key] && RecipeRejected[Key]);
+  }
+  printf("{\"checks\":%u,\"signed\":[%u,%u],\"pc_rejected\":[%u,%u],"
+         "\"key_rejected\":[%u,%u],\"recipe_rejected\":[%u,%u]}\n",
+         Checks, Signed[0], Signed[1], PCRejected[0], PCRejected[1],
+         KeyRejected[0], KeyRejected[1], RecipeRejected[0], RecipeRejected[1]);
+}
+
+int main(int Argc, char **Argv) {
+  if (Argc != 2 || (strcmp(Argv[1], "pacm") && strcmp(Argv[1], "explicit")))
+    return EXIT_FAILURE;
+  puts("cursor-started");
+  fflush(stdout);
+  const bool Explicit = !strcmp(Argv[1], "explicit");
+  if (Explicit) {
+    signal(SIGILL, unavailable);
+    Signature Probe;
+    signExplicitIA(0x12340, &Probe);
+    signExplicitIB(0x12340, &Probe);
+    signal(SIGILL, SIG_DFL);
+  }
+  checkStackRows();
+  checkRecipes(Explicit);
+  return EXIT_SUCCESS;
+}

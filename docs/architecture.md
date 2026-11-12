@@ -2319,6 +2319,13 @@ the absolute-state extension is still Alpha. Runtime register/expression
 rules stay unknown, and incomplete or reserved CFI never supplies an unsigned
 default. The query validates the entire program before publishing a result.
 This describes a signing recipe, without authenticating a live return address.
+`runtime/DarwinArm64eSignalCursor.h` consumes a separately resolved CFA/FP/LR
+row in the interrupted thread. Its PC-dependent IA/IB recipes retain the
+distinction between explicit PAuth_LR and PACM hints, using the same assembly
+contracts as the lifting emitters. Instruction availability is established
+outside the signal handler; absent capability refuses explicit instructions.
+The cursor compares a newly signed canonical address before changing state.
+It does not turn unknown CFI or a compact prologue recipe into an exact-PC row.
 `queryAArch64UnwindSigning` owns admission of normalized image and function
 metadata, then returns independent DWARF state at the exact requested PC and
 compact completed-prologue recipes. Partial provenance cannot become a known
@@ -6168,6 +6175,11 @@ multiplied together, including when their input words overlap. A degree
 can drop again when its falling factorial vanishes because the product of `j`
 consecutive integers is always divisible by `j!`. The solver compares the
 two exact polynomial readings at the observed width.
+Nested affine spellings of a word are composed at the observed precision
+before grouping its factors. Polynomial arithmetic is charged at its actual
+coefficient precision. Completed polynomial groups remain factored beside
+independent scaled variables or XOR words; a shared direct factor or an AND
+partition still admits the nested reconstruction search.
 Equal or opposite weights can share a factor. After removing a common power
 of two, an odd weight is invertible at the remaining width, which lets long
 literal coefficients share one scale. The simplifier compares expression

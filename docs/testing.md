@@ -1908,6 +1908,20 @@ work across multiple FDEs. Callback code relocation still rejects these new
 recipes. `AppleSignedCallbacks/SourcePatchPAuthLRCallbackMatrix`
 in `NeverDSourcePatchMatrixTests` rejects exact and interior original callbacks
 whose compact recipe requires PAuth_LR, leaving image and output unchanged.
+
+`NeverDArm64eLiftedImageTests` checks register-result publication with FP/SP
+CFA changes, explicit B-key augmentation, remembered states and two epilogues.
+It compares the final linked CFI with the original and rejects altered source
+spill rules. Native replay exercises both exits over an integer input matrix.
+`InstructionAddressRecipesUseTheActualSigningPC` compiles the public Darwin
+signal cursor and an independent SP/PC signing oracle as C11 and C++20 at
+O0/O2. Set `NEVERD_ARM64E_ASYNC_NATIVE=1` only in a qualified arm64e process
+environment to execute it. Separate properties count PACM and explicit
+PAuth_LR profiles; an unavailable explicit instruction is not counted.
+`verify_arm64e_native.py probe-cursor` additionally records whether the PC
+modifier changes signatures, rather than treating old-CPU PACM hint fallback
+as full PC-signing qualification. See the
+[native qualification record](arm64e-native-validation.md#instruction-address-signal-recipes-and-remembered-frames).
 These tests do not execute native signed exception unwinding.
 
 `AArch64LinkedUnwind` assembles and links real arm64e dylibs with the host
@@ -4180,6 +4194,17 @@ for 84 cases on both sides of a falling-factorial precision boundary. A
 63-factor x64 fixture exercises the CLI and worker source routes. The native
 tests also exhaust the six-bit input pair and prove overlapping products
 equivalent at 16, 65 and 257 bits with Z3.
+Use `--family affine-product --count 12` for 96 products of 23 to 137
+factors with nested affine coordinates, scaled XOR tails and widths through
+513 bits. The native regressions preserve even weights, zero content and
+limited work/storage, exhaust a six-bit input pair, and prove nested
+coordinates at full width with Z3. An additional 63-factor x64 fixture
+exercises two affine layers through both CLI and GUI worker source paths.
+For latency comparisons, retain per-run and pooled per-input P95, separate
+thread CPU from wall time, and include same-binary A/A controls. Pooling input
+medians can change the sample at the 95th percentile and reverse the apparent
+direction of individual runs. Keep raw timings and paired intervals when
+interpreting small changes.
 The LLVM
 translator checks scaled offsets against exhaustive byte domains, including
 overlap and no-wrap flags that can make the input poison.

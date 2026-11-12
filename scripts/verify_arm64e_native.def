@@ -312,7 +312,8 @@
     "run-executable",
     "run-default-executable",
     "run-generated",
-    "run-generated-executable"
+    "run-generated-executable",
+    "probe-cursor"
   ],
   "cpta_probe": {
     "source": "scripts/arm64e_native_cpta.def",
@@ -473,5 +474,66 @@
   "generated_test_regex": "^AppleClang/MachOArm64eNativeObjectInstallation[.]GeneratedIREntriesExecute/",
   "generated_executable_test_regex": "^AppleClang/MachOArm64eNativeObjectInstallation[.]GeneratedExecutableStarts/",
   "ir_compiler_key": "ir_compiler",
-  "cpta_qualification_key": "native_apple_cpta_qualified"
+  "cpta_qualification_key": "native_apple_cpta_qualified",
+  "cursor_probe": {
+    "mode": "probe-cursor",
+    "source": "unittests/lift/aarch64/AArch64SignalCursorNative.def",
+    "source_files": [
+      "include/neverd/runtime/DarwinArm64eSignalCursor.h",
+      "include/neverd/runtime/DarwinArm64eSignatures.def",
+      "include/neverd/ir/intrinsics/AArch64/AArch64PAuthLR.def",
+      "include/neverd/ir/intrinsics/AArch64/AArch64PAuthM.def"
+    ],
+    "compile": [
+      "/usr/bin/clang",
+      "-target",
+      "arm64e-apple-macosx15.0",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-{optimization}",
+      "-I",
+      "{include}",
+      "-x",
+      "c",
+      "{source}",
+      "-o",
+      "{binary}"
+    ],
+    "optimizations": [
+      "O0",
+      "O2"
+    ],
+    "recipes": [
+      "pacm",
+      "explicit"
+    ],
+    "started": "cursor-started",
+    "unavailable_code": 2,
+    "baseline_key": "native_cursor_qualified",
+    "explicit_key": "explicit_pauth_lr_qualified",
+    "pacm_pc_key": "pacm_pc_qualified",
+    "samples": 64,
+    "counts": [
+      "signed",
+      "pc_rejected",
+      "key_rejected",
+      "recipe_rejected"
+    ],
+    "required": [
+      "signed",
+      "key_rejected"
+    ],
+    "explicit_required": [
+      "pc_rejected",
+      "recipe_rejected"
+    ],
+    "recipe_pacm": "pacm",
+    "recipe_explicit": "explicit",
+    "profile_label": "{optimization}-{recipe}",
+    "binary_label": "cursor-{optimization}",
+    "invalid_report": "native cursor did not produce a complete, successful observation",
+    "include": "include"
+  }
 }

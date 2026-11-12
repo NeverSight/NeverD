@@ -280,23 +280,33 @@ static SymRef solveProductCofactorsImpl(
     if (!NestedSum)
       return E;
     // The low factors in a proved product may still contain sums. Keep
-    // that factorization beside leaves that share none of its direct factors.
+    // that factorization beside atoms that share none of its direct factors.
+    // XOR remains one opaque coordinate in the nested arithmetic search.
     if (Budget.Residues && Ctx.op(E) == SymOp::Add) {
       SymRef Product;
-      bool OnlyLeafNeighbors = true;
-      for (auto Term : Ctx.operands(E)) {
-        if (Ctx.isConst(Term) || Ctx.isVar(Term))
+      auto Unscaled = [&](SymRef Term) {
+        if (Ctx.op(Term) == SymOp::Mul && Ctx.numOperands(Term) == 2 &&
+            Ctx.isConst(Ctx.operand(Term, 0)))
+          return Ctx.operand(Term, 1);
+        return Term;
+      };
+      bool OnlyAtomNeighbors = true;
+      for (auto Original : Ctx.operands(E)) {
+        const auto Term = Unscaled(Original);
+        if (Ctx.isConst(Term) || Ctx.isVar(Term) || Ctx.op(Term) == SymOp::Xor)
           continue;
         if (Product || Ctx.op(Term) != SymOp::Mul) {
-          OnlyLeafNeighbors = false;
+          OnlyAtomNeighbors = false;
           break;
         }
-        Product = Term;
+        Product = Original;
       }
-      if (OnlyLeafNeighbors && Product &&
+      if (OnlyAtomNeighbors && Product &&
           hasCompletedResidueReading(Ctx, Product, Budget, true) &&
           llvm::none_of(Ctx.operands(Product), [&](SymRef F) {
-            return Ctx.isVar(F) && llvm::is_contained(Ctx.operands(E), F);
+            return !Ctx.isConst(F) &&
+                   llvm::any_of(Ctx.operands(E),
+                                [&](SymRef T) { return Unscaled(T) == F; });
           }))
         return E;
     }
