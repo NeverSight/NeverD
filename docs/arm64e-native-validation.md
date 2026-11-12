@@ -980,7 +980,8 @@ A local direct caller can also establish a non-variadic X8/X9 result contract.
 The register reader checks physical reads and writes after the call, including
 W-register definitions. The callee and its supported callers use the same
 native lowering. Local tail forwarders retain the complete register result,
-and the installer resolves their B targets against the published entry map. The custom-caller test consumes both results and checks a
+and the installer resolves their B targets against the published entry map.
+The custom-caller test consumes both results and checks a
 matrix of ordinary, wrapping and high-bit scalar values.
 
 `DarwinArm64eSignalCursor.h` provides a signal-context cursor for classic
@@ -997,3 +998,27 @@ from its explicitly described original after checking that the complete
 instruction ranges are identical. Each image supplies its own CFA and LR
 location rows. The unmodified system `unw_step` path across `_sigtramp` retains
 the earlier failure record.
+
+Release verification at `7bf3d8571ab87cb8de5f20145e786621d3dc4659` uses the
+tracked Capstone and Unicorn revisions and LLVM fork
+`5676029e378c9e37adc16c8216a8e8453ffafcae`. The fork passes all 28 lifted-image
+cases locally and on both Apple runners. Each runner executes 58 ordinary
+images, compares 54 register input cases across the O0/O2 nine-function
+fixtures, and completes 10 interrupted-frame returns, 10 authenticated parent
+returns and 10 signal-context handoffs. Prebuilt r6 passes its 23 locally
+supported cases on both runners, with 48 ordinary image executions per host.
+The five r6 failures match the recorded baseline. Both local configurations
+pass all 87 shared Pipeline and variadic regressions. The public `neverd patch`
+entry point publishes both nine-function images and their signatures verify.
+The verification record contains source and host hashes, dependency revisions,
+native image properties and runner artifacts.
+[Verification record](evidence/arm64e-register-results-and-signal-2026-11-12.json)
+
+The native ADDPT controls report an undefined instruction in both arm64 and
+arm64e processes on both M1 runners. Xcode 27 emits an arm64e.x1 slice whose
+launch fails with `EBADARCH`. The local M4 control also reports an undefined
+ADDPT instruction. Native CPTA-on remains unavailable on these environments.
+The explicit signal-context cursor covers unsigned and IA/IB-with-CFA rows.
+Instruction-address-diversified returns, the direct system `_sigtramp` walk
+and additional arbitrary image instruction and unwind profiles still require
+qualification.
