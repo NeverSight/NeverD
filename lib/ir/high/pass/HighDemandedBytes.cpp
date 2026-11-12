@@ -16,6 +16,10 @@
 // pure definitions reuse integer bit projection. Observed unknown bits, calls,
 // loads and possible traps retain their evaluation.
 //
+// A compare REP (CMPS, SCAS) takes the arithmetic flags only to return them
+// unchanged when it runs no element: its flags result alone shows them, so
+// they are demanded as that result is.
+//
 //===----------------------------------------------------------------------===//
 
 #include "HighDCEDetail.h"
@@ -24,6 +28,7 @@
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/ir/high/HighIntegerProjection.h"
 #include "neverd/ir/high/HighSourceFlow.h"
+#include "neverd/ir/intrinsics/X86/X86RepState.h"
 #include "neverd/ir/intrinsics/X86/X86VectorLaneReads.h"
 
 #include "llvm/ADT/APInt.h"
@@ -130,6 +135,10 @@ private:
   /// Variables a join copy assigns: their definitions need not cover every
   /// path that reaches a use.
   std::set<HighSourceLocalIdentity> JoinCopied;
+  /// The status operands of the compare REPs met so far, by the variable
+  /// each returns its flags in.
+  std::map<HighSourceLocalIdentity, std::vector<const HighExpr *>>
+      RepStatusByFlags;
   std::vector<const HighExpr *> Pending;
 
   /// A register, flag or temporary, which only its uses read.  A stack slot
@@ -305,10 +314,43 @@ private:
     });
   }
 
+  /// The status bits a compare REP reads for the bits read of its flags
+  /// result \p Flags: the direction, and each flag it may return unchanged.
+  BitMask repStatusDemand(const HighSourceLocalIdentity &Flags) const {
+    BitMask Bits = BitMask::getOneBitSet(MaskWidth, X86RepDirectionShift);
+    if (const auto Read = VarDemand.find(Flags); Read != VarDemand.end())
+      Bits |= Read->second & BitMask(MaskWidth, X86RepFlagsMask);
+    return Bits;
+  }
+
+  /// The status operand of \p E, a compare REP, which then joins those a
+  /// later read of its flags result reaches.
+  const HighExpr *repStatusOf(const HighExpr &E) {
+    const auto Rep = x86RepContract(E.IntrinsicId);
+    if (E.Kind != ExprKind::Call || !Rep || !Rep->Compare ||
+        E.Operands.size() != 5 ||
+        E.IntrinsicOutputs.size() != Rep->auxiliaryOutputs() ||
+        !E.Operands[3] || exprBytes(*E.Operands[3]) != X86RepStatusBytes)
+      return nullptr;
+    const HighExpr *Status = E.Operands[3].get();
+    auto &Known =
+        RepStatusByFlags[highSourceLocalIdentity(E.IntrinsicOutputs.back())];
+    if (std::find(Known.begin(), Known.end(), Status) == Known.end())
+      Known.push_back(Status);
+    return Status;
+  }
+
   /// Demand what observable \p E reads of each operand: every byte, except
-  /// where an intrinsic reads only some bytes of its vector operands.
+  /// where an intrinsic reads only some bytes of its vector operands or a
+  /// compare REP only some bits of its status.
   void demandOperandsOf(const HighExpr &E) {
+    const HighExpr *RepStatus = repStatusOf(E);
     E.forEachChildExpr([&](const ExprPtr &C) {
+      if (C && C.get() == RepStatus) {
+        demand(C.get(), repStatusDemand(highSourceLocalIdentity(
+                            E.IntrinsicOutputs.back())));
+        return;
+      }
       if (C && E.Kind == ExprKind::Call && E.IntrinsicId != Intrinsic::None)
         if (const auto Read =
                 x86VectorOperandReadBytes(E.IntrinsicId, exprBytes(*C))) {
@@ -375,6 +417,12 @@ private:
       if (It != Definitions.end())
         for (const HighExpr *Value : It->second)
           demand(Value, Current);
+      // A compare REP that returns its flags here reads them in its status.
+      if (const auto Rep =
+              RepStatusByFlags.find(highSourceLocalIdentity(E.Var));
+          Rep != RepStatusByFlags.end())
+        for (const HighExpr *Status : Rep->second)
+          demand(Status, repStatusDemand(Rep->first));
       return;
     }
     case ExprKind::Const:
@@ -517,6 +565,16 @@ private:
       demand(L.get(), D & allBytes(Bytes));
       demand(R.get(), D & allBytes(exprBytes(*R)));
       return;
+    case NdOp::INT_EQUAL:
+    case NdOp::INT_NOTEQUAL:
+    case NdOp::INT_LESS:
+    case NdOp::INT_LESSEQUAL:
+    case NdOp::INT_SLESS:
+    case NdOp::INT_SLESSEQUAL:
+      // A comparison is zero or one: only its lowest bit reads its operands.
+      if (!D[0])
+        return;
+      break;
     case NdOp::INT_MULT:
       // An exact same-width power-of-two product is a left shift. General
       // carry demand would keep every lower predicate bit alive even when
