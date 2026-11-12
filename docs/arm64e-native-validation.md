@@ -1191,6 +1191,12 @@ An ordinary RTTI reference and an authenticated personality reference keep
 their respective pointer encodings. A writable source slot requires separate
 GOT storage for the published reference.
 
+Apple Clang can leave a synchronous DWARF row in force through part of the
+prologue or epilogue. At an interrupt where its CFA cannot be proved to equal
+the incoming SP, recovery derives the CFA and integer register locations from
+the reachable instructions. Registers the producer marked undefined stay
+undefined.
+
 To repeat the interrupted-frame test on a Mac that can launch arm64e
 executables, build the test host against the tracked LLVM fork and require
 native execution:

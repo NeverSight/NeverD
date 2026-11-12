@@ -453,10 +453,14 @@ bool transfer(State &S, const State &Before, Decoder &Decode,
   return true;
 }
 
-// A compact word describes the completed prologue. At an arbitrary interrupt
-// use only carriers proven to hold the incoming register on every path. A
-// stack copy below current SP is not a live frame save.
-FrameRow compactFrameRow(const State &S) {
+// Compact unwind describes a completed prologue. Synchronous DWARF can also
+// leave that row in effect while the frame is being built or torn down.
+// Use its register columns when the declared CFA is the incoming SP. Otherwise
+// reconstruct an interrupt row from carriers that agree on every path.
+FrameRow instructionFrameRow(const State &S, const FrameRow *Declared) {
+  if (Declared && add(S.Registers[*Declared->CFARegister].StackOffset,
+                      Declared->CFAOffset) == 0)
+    return *Declared;
   FrameRow Row;
   const auto SP = S.Registers[kSP].StackOffset;
   for (unsigned Base : {kSP, kFP}) {
@@ -468,6 +472,11 @@ FrameRow compactFrameRow(const State &S) {
     }
   }
   for (unsigned R = 0; R < kRegisters; ++R) {
+    if (Declared &&
+        Declared->Registers[R].Location == AArch64UnwindRegister::Undefined) {
+      Row.Registers[R] = Declared->Registers[R];
+      continue;
+    }
     const auto Holds = [&](const Value &V) {
       return R == kLR ? V.Return.has_value() : V.IncomingRegister == R;
     };
@@ -707,18 +716,15 @@ recoverImplicitFrame(const BinaryImage &Image,
   std::vector<AArch64RecoveredUnwindRow> Result;
   for (size_t I = 0; I < Count; ++I) {
     const auto Offset = I * neverd::aarch64::kInsnSize;
+    const FrameRow *Declared =
+        Rules.empty() ? nullptr : &std::prev(Rules.upper_bound(Offset))->second;
     FrameRow Rule;
-    if (!Rules.empty())
-      Rule = std::prev(Rules.upper_bound(Offset))->second;
-    else if (States[I])
-      Rule = compactFrameRow(*States[I]);
     std::optional<AArch64ReturnAddressState> Signing;
-    if (States[I] && Rule.CFARegister) {
+    if (States[I]) {
       const auto &S = *States[I];
-      const auto CFA =
-          add(S.Registers[*Rule.CFARegister].StackOffset, Rule.CFAOffset);
-      const auto &LR = Rule.Registers[kLR];
-      if (CFA == 0) {
+      Rule = instructionFrameRow(S, Declared);
+      if (Rule.CFARegister) {
+        const auto &LR = Rule.Registers[kLR];
         if (LR.Location == AArch64UnwindRegister::SameValue)
           Signing = S.Registers[kLR].Return;
         else if (LR.Location == AArch64UnwindRegister::AtCFA) {
@@ -727,6 +733,8 @@ recoverImplicitFrame(const BinaryImage &Image,
             Signing = Slot->second.Return;
         }
       }
+    } else if (Declared) {
+      Rule = *Declared;
     }
     if (!Result.empty() && Result.back().CFARegister == Rule.CFARegister &&
         Result.back().CFAOffset == Rule.CFAOffset &&

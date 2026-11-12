@@ -5,8 +5,8 @@
 //===----------------------------------------------------------------------===//
 /// \file
 /// Recover incoming-return signing from reachable instructions and the owning
-/// frame's declared register locations, or from surviving register and stack
-/// values in a compact-only frame. Resolve outside signal handlers.
+/// frame's declared register locations or surviving register and stack values.
+/// Resolve outside signal handlers.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_ANALYSIS_AARCH64UNWINDRECOVERY_H
@@ -52,10 +52,10 @@ struct AArch64UnwindRecoveryLimits {
 };
 
 /// Rows start at exact instruction boundaries and extend to the next row or
-/// frame end. Unknown joins and unreachable instructions remain Unknown. Saved
-/// locations retain the source CFI contract; this does not authenticate memory
-/// or prove that a running program has not corrupted its declared frame.
-/// Compact-only rows use live incoming values or proved active frame saves.
+/// frame end. Unknown joins and unreachable instructions remain Unknown.
+/// A DWARF row with a proven CFA retains its declared register locations.
+/// Compact and partial-prologue/epilogue rows use live incoming values or
+/// active frame saves. A declared undefined register stays undefined.
 /// Explicit signing columns retain the loader's separate metadata query.
 llvm::Expected<std::vector<AArch64RecoveredUnwindRow>>
 recoverDarwinAArch64Unwind(const BinaryImage &Image,

@@ -207,6 +207,37 @@ TEST(AArch64ImplicitUnwind, CompactRowsRecoverActualCarriersAtInterruption) {
   EXPECT_EQ(Plan->Frame.Signing, NDArm64eSignedIBWithCFA);
 }
 
+TEST(AArch64ImplicitUnwind, SynchronousDwarfLeavesPartialFrameRowsImplicit) {
+  Frame F{SignB, PushFP, MoveFP, Call, PopFP, AuthB, Ret};
+  F.saveRow(3);
+  auto &CFI = F.Function.Dwarf->Instructions;
+  const auto BodyOffset = 3 * sizeof(uint32_t);
+  CFI.push_back({.Kind = CFIOpKind::DefCFARegister,
+                 .CodeOffset = BodyOffset,
+                 .Register = kFP});
+  CFI.push_back({.Kind = CFIOpKind::Offset,
+                 .CodeOffset = BodyOffset,
+                 .Register = kFP,
+                 .Offset = -2 * int(kRegisterBytes)});
+  auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+  ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+  for (auto Index : {2u, 3u, 5u}) {
+    const auto &Row = aarch64UnwindRowAt(*Rows, Index * sizeof(uint32_t));
+    ASSERT_TRUE(Row.Signing.State);
+    EXPECT_EQ(Row.Signing.State->Kind, Kind::SP);
+    const auto Plan =
+        prepareDarwinArm64eSystemCaller(Row, F.Function.CodeRange, 0);
+    ASSERT_TRUE(Plan);
+    EXPECT_EQ(Plan->Frame.CFAFromFP, Index == 3);
+    EXPECT_EQ(Plan->Frame.CFAOffset, Index == 5 ? 0u : 2 * kRegisterBytes);
+    EXPECT_EQ(Plan->Frame.SavedLR, Index == 3);
+  }
+  CFI.push_back({.Kind = CFIOpKind::Undefined,
+                 .CodeOffset = BodyOffset,
+                 .Register = kLR});
+  EXPECT_EQ(F.at(5).Status, Status::Unknown);
+}
+
 TEST(AArch64ImplicitUnwind, IncompleteFramesAndUnknownEdgesFailClosed) {
   for (auto Branch : {Indirect, LocalCall}) {
     Frame F{Branch, Nop, Ret};
