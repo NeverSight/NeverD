@@ -17,6 +17,7 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
+#include <QFontInfo>
 #include <QInputDialog>
 #include <QJsonDocument>
 #include <QLabel>
@@ -25,6 +26,7 @@
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QScrollBar>
 #include <QSettings>
 #include <QSpinBox>
@@ -699,7 +701,7 @@ private slots:
     QVERIFY(View->text()->findText("sub_4000B8(7", true));
     View->text()->setFocus();
     QTRY_VERIFY(Window.actions().action(ActionId::EditCallType)->isEnabled());
-    bool Edited = false, Primary = false;
+    bool Edited = false, Primary = false, Wraps = false;
     QTimer Editor;
     connect(&Editor, &QTimer::timeout, this, [&] {
       auto *Dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
@@ -721,6 +723,11 @@ private slots:
       const auto *Reset = Dialog->findChild<QPushButton *>("callTypeReset");
       Primary =
           Apply->isDefault() && !Reset->isDefault() && !Reset->autoDefault();
+      // The line about variadic arguments is longer than the dialog is
+      // wide at a desktop's font, where it ended at "default p": it wraps.
+      for (const auto *Label : Dialog->findChildren<QLabel *>())
+        if (Label->text().startsWith("Actual variadic"))
+          Wraps = Label->wordWrap();
       Dialog->findChild<QPushButton *>("callTypeApply")->click();
     });
     Editor.start(10);
@@ -732,6 +739,7 @@ private slots:
     Window.actions().action(ActionId::EditCallType)->trigger();
     QTRY_VERIFY_WITH_TIMEOUT(Edited, 30000);
     QVERIFY(Primary);
+    QVERIFY(Wraps);
     QTRY_VERIFY_WITH_TIMEOUT(
         View->text()->allText().contains("(*)(uint32_t, ...)"), 30000);
     QVERIFY2(Session.lastError().isEmpty(), qPrintable(Session.lastError()));

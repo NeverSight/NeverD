@@ -5710,10 +5710,13 @@ void MainWindow::editCallType(bool resetAll) {
         declaration->setPlainText(
             stated.value("declaration").toString("int64_t call(void);"));
         layout->addWidget(declaration);
-        layout->addWidget(new QLabel(
+        // Longer than the dialog is wide: unwrapped, it ended at "default p".
+        auto *actualsLabel = new QLabel(
             tr("Actual variadic argument types for this call, one per line "
                "(use int or double after default promotions):"),
-            &dialog));
+            &dialog);
+        actualsLabel->setWordWrap(true);
+        layout->addWidget(actualsLabel);
         auto *actuals = new QPlainTextEdit(&dialog);
         actuals->setObjectName("callTypeActuals");
         QStringList types;
