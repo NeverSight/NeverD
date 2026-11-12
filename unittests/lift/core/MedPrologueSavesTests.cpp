@@ -197,6 +197,30 @@ TEST_P(MedPrologueSaves, OnlyUnobservedRestoredExtensionsKeepTheSave) {
   }
 }
 
+// AArch64 `ldp d11, d10, [sp, #N]` writes the Q registers too, and where the
+// body wrote one of them whole the lifter takes the D view back out of the
+// restored Q: a piece of the restored value, extended again.
+TEST_P(MedPrologueSaves, OnlyUnobservedPiecesOfARestoreKeepTheSave) {
+  for (bool Observed : {false, true}) {
+    SCOPED_TRACE(Observed);
+    MedFunc Func = pushedRbx();
+    auto &Ops = Func.Blocks.front().Ops;
+    MedVar Wide = temp(20);
+    Wide.Size *= 2;
+    const MedVar Piece = temp(21);
+    MedVar Again = temp(22);
+    Again.Size *= 2;
+    Ops.insert(Ops.end() - 1, op(NdOp::INT_ZEXT, Wide, {temp(10)}));
+    Ops.insert(Ops.end() - 1,
+               op(NdOp::SUBBYTES, Piece, {Wide, MedVar::makeConst(0, 8)}));
+    Ops.insert(Ops.end() - 1, op(NdOp::INT_ZEXT, Again, {Piece}));
+    if (Observed)
+      Ops.back() = op(NdOp::RETURN, none(), {Piece});
+    markStackAccesses(Func, Arch::X64, BinaryFormat::ELF);
+    EXPECT_EQ(save(Func).PrologueSave, !Observed);
+  }
+}
+
 /// pushedRbx() with a body read of the save's bytes after the save, at
 /// \p Position in its entry block, whose value only a comparison takes.
 MedFunc readsSavedRbx(size_t Position = 6) {

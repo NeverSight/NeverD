@@ -153,11 +153,13 @@ struct ValueReads {
   }
 
   /// Callee-save restores may flow through dead copies, zero extensions and
-  /// joins, and through the CONCAT that rebuilds a wider register from its
-  /// restored halves (ARM32 VPOP of D8-D15 writes Q4-Q7 too). Each such value
-  /// must be dead itself. Scratch restores still use unread(): later ABI
-  /// recovery can observe their register writes implicitly, so they need the
-  /// separate overwrite proof.
+  /// joins, through the CONCAT that rebuilds a wider register from its
+  /// restored halves (ARM32 VPOP of D8-D15 writes Q4-Q7 too), and through a
+  /// piece taken back out of one (AArch64 `ldp d11, d10` extends into Q11,
+  /// and where the body wrote Q11 whole its D view is read out of that
+  /// again). Each such value must be dead itself. Scratch restores still use
+  /// unread(): later ABI recovery can observe their register writes implicitly,
+  /// so they need the separate overwrite proof.
   bool onlyDeadCopiesAndExtensions(const MedVar &V, size_t &Budget) const {
     std::vector<ValueKey> Pending{keyOf(V)};
     std::set<ValueKey> Seen;
@@ -178,7 +180,9 @@ struct ValueReads {
               Read->NumInputs == 1;
           const bool Join =
               Read->Opcode == NdOp::CONCAT && Read->NumInputs == 2;
-          if (!Budget || !(Unary || Join) || Read->Output.Id < 0)
+          const bool Piece = Read->Opcode == NdOp::SUBBYTES &&
+                             Read->NumInputs == 2 && Read->Inputs[1].isConst();
+          if (!Budget || !(Unary || Join || Piece) || Read->Output.Id < 0)
             return false;
           --Budget;
           Pending.push_back(keyOf(Read->Output));
