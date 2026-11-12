@@ -129,8 +129,13 @@ void FindInViewDialog::search(CodeText *code, ListingView *listing) {
   if (!target())
     return;
   target()->installEventFilter(this);
-  Connections.append(
-      connect(target(), &QObject::destroyed, this, [this] { reject(); }));
+  Connections.append(connect(target(), &QObject::destroyed, this, [this] {
+    // Only the view's QObject is left by now: it has no search highlight to
+    // take back, and nothing of the view is there to call.
+    Code.clear();
+    Listing.clear();
+    reject();
+  }));
   if (Code) {
     Scope->setText(tr("%1: current function, including folded code")
                        .arg(CodeView::titleOf(Code->representation())));
