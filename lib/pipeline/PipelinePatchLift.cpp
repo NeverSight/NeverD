@@ -23,6 +23,7 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/ImportCallee.h"
+#include "neverd/ir/med/MIPS/MIPSSourceVectors.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedNoReturn.h"
 #include "neverd/ir/med/MedTypePass.h"
@@ -331,6 +332,9 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
 
   if (Opts.MedAnalysisOnly)
     return true;
+
+  for (auto &Function : Result.MedFuncs)
+    discardUnobservedMIPSFPUpperBits(Function, Img.Arch);
 
   if (medStackProjection(Opts) == MedStackProjection::Source) {
     prepareRecoveredSourceStackAccesses(Img, Result, Result.LowFuncs);

@@ -1,18 +1,21 @@
-//===- MedMIPSSourceVectors.cpp - Scalar MSA leaf source contracts --------===//
+//===- MedMIPSSourceVectors.cpp - MIPS FP source contracts --------------===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// MSA source uses volatile vectors initialized on every reaching leaf path.
-/// Incoming vector ABI, calls and saved FPR restoration need their
-/// own proofs; a scalar result alone does not establish those contracts.
+/// Track defined scalar FPR bytes and locally initialized MSA vectors. Complete
+/// fixed scalar call descriptors own argument reads, clobbers and results.
+/// Incoming MSA vectors and saved FPR restoration still need separate proofs.
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ArchSupport.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/LowToMedError.h"
+#include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/med/MIPS/MIPSSourceVectors.h"
+#include "neverd/ir/med/MedIR.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/BinaryImage.h"
 
@@ -20,33 +23,47 @@
 
 #include <bitset>
 #include <optional>
+#include <set>
+#include <tuple>
 #include <vector>
 
 namespace neverd {
 
-void requireMIPSSourceVectors(const LowFunc &Function, Arch Target,
-                              const BinaryImage *Image) {
+void requireMIPSSourceVectors(
+    const LowFunc &Function, Arch Target, const BinaryImage *Image,
+    const std::map<va_t, FloatingCallArguments> *Calls) {
   const auto IsVector = [](const NdVar &V) {
     return V.isReg() && mipsreg::isVector(V.Offset);
+  };
+  const auto SignatureOf =
+      [&](const LowOp &Op) -> const FloatingCallArguments * {
+    if (Calls && (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+        Op.NumInputs && Op.Inputs[0].isConst())
+      if (const auto Call = Calls->find(Op.Inputs[0].Offset);
+          Call != Calls->end())
+        return &Call->second;
+    return nullptr;
   };
   bool HasVectors = false;
   for (const auto &Block : Function.Blocks)
     for (const auto &Op : Block.Ops) {
-      HasVectors |= IsVector(Op.Output);
+      HasVectors |= IsVector(Op.Output) || SignatureOf(Op);
       for (unsigned I = 0; I != Op.NumInputs; ++I)
         HasVectors |= IsVector(Op.Inputs[I]);
     }
   if (!HasVectors)
     return;
   if (!isMIPS(Target))
-    throw LowToMedConversionError("MSA source requires a MIPS target");
+    throw LowToMedConversionError(
+        "MIPS FP/vector source requires a MIPS target");
   const bool Wide = isMIPS64(Target);
   const bool FP64 = Image && Image->MIPS &&
                     ((Image->MIPS->HasMSA && Image->MIPS->ISARevision == 5) ||
                      Image->MIPS->ISARevision == 6) &&
                     Image->MIPS->FPABI == (Wide ? 1 : 6);
   if (Image && !FP64)
-    throw LowToMedConversionError("MSA source requires explicit FP64 profile");
+    throw LowToMedConversionError(
+        "MIPS FP/vector source requires explicit FP64 profile");
   using Mask = std::bitset<mipsreg::VectorCount * mipsreg::VectorBytes>;
   struct Transfer {
     Mask Needs, Defines, Kills;
@@ -72,8 +89,35 @@ void requireMIPSSourceVectors(const LowFunc &Function, Arch Target,
       throw LowToMedConversionError(
           "MSA source requires ordinary control flow");
     for (const auto &Op : Block.Ops) {
-      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
-        throw LowToMedConversionError("MSA source call ABI is not qualified");
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+        const FloatingCallArguments *Signature = SignatureOf(Op);
+        if (!FP64 || !Signature ||
+            !floatingCallTypes(Target, BinaryFormat::ELF, *Signature))
+          throw LowToMedConversionError(
+              "MIPS floating call ABI is not qualified");
+        for (const auto &P : Signature->Scalars) {
+          if (P.Kind != SourceABICarrierKind::FloatingRegister)
+            continue;
+          const auto Read = Bytes(NdVar::reg(P.Register, P.Bytes));
+          if ((T.Kills & Read).any())
+            throw LowToMedConversionError("MIPS call reads undefined FP bytes");
+          T.Needs |= Read & ~T.Defines;
+        }
+        const auto &TRI = getTargetRegInfo(Target);
+        Mask Clobbered;
+        Clobbered.set();
+        for (unsigned R = 0; R < mipsreg::VectorCount; ++R)
+          if (TRI.isCallPreserved(mipsreg::w(R), 8))
+            Clobbered &= ~Bytes(NdVar::reg(mipsreg::w(R), 8));
+        T.Defines &= ~Clobbered;
+        T.Kills |= Clobbered;
+        if (Signature->ReturnKind == NdTypeKind::Float) {
+          const auto Result =
+              Bytes(NdVar::reg(TRI.FPReturnReg, Signature->ReturnBytes));
+          T.Defines |= Result;
+          T.Kills &= ~Result;
+        }
+      }
       for (unsigned J = 0; J != Op.NumInputs; ++J) {
         if (!IsVector(Op.Inputs[J]))
           continue;
@@ -101,7 +145,11 @@ void requireMIPSSourceVectors(const LowFunc &Function, Arch Target,
   // A join may use a vector only when every incoming execution defines it.
   // Revisiting the entry through a back edge cannot initialize a caller input.
   std::vector<size_t> Work{0};
-  Effects.front().Incoming = Mask{};
+  Mask Entry;
+  if (FP64)
+    for (uint64_t Register : getTargetRegInfo(Target).FPParamRegs)
+      Entry |= Bytes(NdVar::reg(Register, 8));
+  Effects.front().Incoming = Entry;
   while (!Work.empty()) {
     const auto I = Work.back();
     Work.pop_back();
@@ -126,6 +174,129 @@ void requireMIPSSourceVectors(const LowFunc &Function, Arch Target,
     if (!T.Incoming && T.Needs.any())
       throw LowToMedConversionError(
           "MSA unreachable block has unbound vector inputs");
+}
+
+void discardUnobservedMIPSFPUpperBits(MedFunc &Function, Arch Target) {
+  if (!isMIPS(Target) || Function.SkippedSSA || !Function.ReturnType ||
+      Function.ReturnType->Kind != NdTypeKind::Float ||
+      Function.ReturnType->Size != 4 || !Function.MultiReturn.empty())
+    return;
+  std::vector<MedOp *> Candidates;
+  for (auto &Block : Function.Blocks)
+    for (auto &Op : Block.Ops)
+      if (mipsScalarMedShapeIsValid(Op, Target) &&
+          static_cast<Intrinsic>(Op.Inputs[0].ConstVal) ==
+              Intrinsic::MIPSUnpredictable)
+        Candidates.push_back(&Op);
+  if (Candidates.empty())
+    return;
+
+  using Key = std::tuple<MedVar::VarKind, int, int>;
+  const auto KeyOf = [](const MedVar &V) {
+    return Key{V.Kind, V.Id, V.SSAVer};
+  };
+  struct Use {
+    const MedOp *Op = nullptr;
+    const PhiNode *Phi = nullptr;
+    unsigned Input = 0;
+    uint16_t Bytes = 0;
+  };
+  std::map<Key, std::vector<Use>> Uses;
+  bool CompleteCalls = true;
+  for (const auto &Block : Function.Blocks) {
+    for (const auto &Phi : Block.Phis) {
+      for (const auto &[Pred, Arg] : Phi.Args)
+        Uses[KeyOf(Arg)].push_back({nullptr, &Phi, 0, Arg.Size});
+      if (Phi.ExceptionalEntry)
+        Uses[KeyOf(*Phi.ExceptionalEntry)].push_back(
+            {nullptr, &Phi, 0, Phi.ExceptionalEntry->Size});
+    }
+    for (const auto &Op : Block.Ops) {
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+        CompleteCalls &= bool(Op.ScalarCallSignature);
+      for (unsigned I = 0; I < Op.NumInputs; ++I)
+        Uses[KeyOf(Op.Inputs[I])].push_back(
+            {&Op, nullptr, I, Op.Inputs[I].Size});
+    }
+  }
+  for (const auto &Call : Function.CallInfos)
+    for (const auto &Arg : Call.Args)
+      Uses[KeyOf(Arg)].push_back({nullptr, nullptr, 0, Arg.Size});
+  if (!CompleteCalls)
+    return;
+  // Partial-preservation records have implicit uses outside Ops. MIPS
+  // currently refuses saved FPR writes at source admission; retain the
+  // conservative result if such a record nevertheless reaches this pass.
+  for (const auto &Clobber : Function.CallClobbers)
+    if (Clobber.PreservedPrefixSize)
+      return;
+
+  const auto &TRI = getTargetRegInfo(Target);
+  const auto Observed = [&](MedVar Root) {
+    struct Span {
+      MedVar Value;
+      unsigned First, End;
+    };
+    std::vector<Span> Work{{Root, 0, Root.Size}};
+    std::set<std::tuple<Key, unsigned, unsigned>> Seen;
+    while (!Work.empty()) {
+      const auto [Value, First, End] = Work.back();
+      Work.pop_back();
+      if (!Seen.emplace(KeyOf(Value), First, End).second)
+        continue;
+      // Keep every potentially returned FPR definition conservative; the
+      // ABI reads its low word even when RETURN still carries the GPR seed.
+      if (Value.Kind == MedVar::Reg && Value.RegOff == TRI.FPReturnReg &&
+          First < Function.ReturnType->Size)
+        return true;
+      if (Value.Kind == MedVar::Reg &&
+          TRI.isCallPreserved(Value.RegOff, Value.Size))
+        return true;
+      for (const auto &Use : Uses[KeyOf(Value)]) {
+        const unsigned Last = std::min<unsigned>(End, Use.Bytes);
+        if (First >= Last)
+          continue;
+        if (Use.Phi) {
+          Work.push_back({Use.Phi->Output, First, Last});
+          continue;
+        }
+        if (!Use.Op)
+          return true;
+        const auto &Op = *Use.Op;
+        if (Op.MemoryOrdering != NdMemoryOrdering::None ||
+            Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+          return true;
+        if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+            Op.Output.Size == Op.Inputs[0].Size) {
+          Work.push_back({Op.Output, First, Last});
+        } else if (Op.Opcode == NdOp::CONCAT && Op.NumInputs == 2 &&
+                   Op.Output.Size == Op.Inputs[0].Size + Op.Inputs[1].Size) {
+          const unsigned Bias = Use.Input == 0 ? Op.Inputs[1].Size : 0;
+          Work.push_back({Op.Output, First + Bias, Last + Bias});
+        } else if (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
+                   Use.Input == 0 && Op.Inputs[1].isConst() &&
+                   Op.Inputs[1].ConstVal <= Op.Inputs[0].Size &&
+                   Op.Output.Size <=
+                       Op.Inputs[0].Size - Op.Inputs[1].ConstVal) {
+          const unsigned Begin = Op.Inputs[1].ConstVal;
+          const unsigned L = std::max(First, Begin);
+          const unsigned H = std::min(Last, Begin + Op.Output.Size);
+          if (L < H)
+            Work.push_back({Op.Output, L - Begin, H - Begin});
+        } else {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+  for (auto *Op : Candidates)
+    if (!Observed(Op->Output)) {
+      // This canonical fill is outside all observable source byte ranges.
+      // It grants no value, CSE, or motion contract to a live occurrence.
+      Op->Opcode = NdOp::COPY;
+      Op->Inputs[0] = MedVar::makeConst(0, Op->Output.Size);
+    }
 }
 
 } // namespace neverd

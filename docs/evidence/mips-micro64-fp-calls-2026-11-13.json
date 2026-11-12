@@ -1,0 +1,97 @@
+{
+  "independent_execution": {
+    "unicorn_commit": "36bedffadac229fc4ef75baa905edab5800a205f",
+    "reference_model": "generic microMIPS64 R6",
+    "byte_orders": [
+      "big",
+      "little"
+    ],
+    "integer_forms": 21,
+    "wide_operand_pairs_per_form_and_byte_order": 18,
+    "integer_state_comparisons": 756,
+    "high_pc": "0x100010000",
+    "high_load_store": "0x100040000",
+    "low_canary": "0x40000",
+    "classic_reference_control": "I6400",
+    "classic_control_states_sha256": "54b3f17d51f918dbe3b7b3ca96dd8356a8f606d9814269669a298fc5c9f790e8"
+  },
+  "fixed_calls": {
+    "architecture": [
+      "classic ELF o32 FP64 FR=1",
+      "classic ELF n64 FR=1"
+    ],
+    "byte_orders": [
+      "big",
+      "little"
+    ],
+    "layouts": [
+      "after-integer",
+      "narrow-arguments",
+      "overflow",
+      "pointer-result",
+      "prefix",
+      "void-result",
+      "word-result"
+    ],
+    "case_groups": 56,
+    "original_cases": 1120,
+    "recompiled_callers": 224,
+    "recompiled_comparisons": 4480,
+    "views": [
+      "HighC",
+      "LLVMC"
+    ],
+    "optimization": [
+      "-O0",
+      "-O2"
+    ],
+    "observations": [
+      "result bits",
+      "FCSR",
+      "SP",
+      "return PC",
+      "preserved FPRs"
+    ],
+    "source_and_execution_hash_list_sha256": "3af46bea2366e311a3137d2b6c9be41c14f91f5df9fce8f8492bf21a725aa353"
+  },
+  "firmware": {
+    "device": "TP-Link Archer C7 V5 US",
+    "entry": "0x4012d0",
+    "architecture": "big-endian ELF32 MIPS o32",
+    "elf_sha256": "6e1129aa58cb398a2453876ea4aa2395feecc84ecf78ed8ab43efd534b40e475",
+    "original_cases": 12,
+    "recompiled_comparisons": 48,
+    "observations": [
+      "return value",
+      "ordered imported call targets and arguments"
+    ],
+    "imports": "Controlled ABI fixture for the imported functions"
+  },
+  "owner_tests": {
+    "NeverDMIPSIntegerTests": {
+      "tests": 417,
+      "skipped": 0
+    },
+    "NeverDMIPSPipelineTests": {
+      "tests": 155,
+      "skipped": 0
+    },
+    "NeverDHighControlFlowTests": {
+      "tests": 68,
+      "skipped": 0
+    },
+    "NeverDMedDceTests": {
+      "tests": 11,
+      "skipped": 0
+    },
+    "NeverDReturnContractTests": {
+      "tests": 30,
+      "skipped": 0
+    }
+  },
+  "limits": [
+    "The reference is a generic microMIPS64 R6 CPU model. High virtual addresses use Status.KX and identity mapping.",
+    "Fixed calls use complete declared scalar signatures with floating, pointer, one-GPR integer or void results. Indirect and variadic calls, narrow/paired GPR results, aggregate results and general saved-FPR restoration are outside this qualification.",
+    "The vendor ubus is big endian. Little-endian and 64-bit checks use owned fixtures."
+  ]
+}

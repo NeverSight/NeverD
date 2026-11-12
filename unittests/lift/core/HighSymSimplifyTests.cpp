@@ -3670,6 +3670,26 @@ TEST(HighExprSimplify, SharedSeedsStillDemandEachRootsValue) {
   }
 }
 
+TEST(HighExprSimplify, ByteDemandKeepsBothSidesOfTheInlineMaskBoundary) {
+  for (uint16_t Bytes : {8, 16, 64})
+    for (bool ReadHigh : {false, true}) {
+      auto Low = HighExpr::makeUndef(Bytes / 2);
+      auto High = HighExpr::makeUndef(Bytes / 2);
+      auto Joined = HighExpr::makeBinop(NdOp::CONCAT, High, Low);
+      Joined->Type = NdType::makeInt(Bytes, false);
+      auto Read =
+          HighExpr::makeBinop(NdOp::SUBBYTES, Joined,
+                              HighExpr::makeConst(ReadHigh ? Bytes - 4 : 0, 4));
+      Read->Type = NdType::makeInt(4, false);
+      HighFunc F;
+      F.ReturnType = Read->Type;
+      F.Body = {returnValue(Read)};
+      zeroUndemandedUnknownBytes(F, Arch::X64);
+      EXPECT_TRUE(containsNode(F.Body.front().RetVal, ReadHigh ? High : Low));
+      EXPECT_FALSE(containsNode(F.Body.front().RetVal, ReadHigh ? Low : High));
+    }
+}
+
 TEST(HighExprSimplify, SharedObservableSeedsTerminateCycles) {
   auto Address = HighExpr::makeUndef(8);
   const auto Load = HighExpr::makeLoad(Address, Address->Type);

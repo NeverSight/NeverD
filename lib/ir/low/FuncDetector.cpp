@@ -849,7 +849,8 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
       // Most targets classify the initial linear probe from the instruction id
       // alone.  ARM PC-writing loads, register lists, and data-processing
       // instructions require operand detail to distinguish a real terminator
-      // from (for example) `pop {r4}`.
+      // from (for example) `pop {r4}`. MIPS verifies complete lifted units
+      // from their physical bytes and does not need Capstone operand detail.
       const bool PrevDetail = Dec.detailEnabled();
       Dec.setDetail(Img.Arch == Arch::ARM);
       for (size_t I : NeedVerify)

@@ -8,6 +8,7 @@
 
 #include "TargetRegInfoDetail.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/ARM/ARMRegs.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -317,6 +318,12 @@ bool TargetRegInfo::isCallPreserved(uint64_t RegOff, uint16_t Size) const {
            Size <= PreservedEnd - RegOff;
   }
 
+  if (isMIPS(TheArch) && isVectorReg(RegOff)) {
+    const unsigned Index = (RegOff - VecRegBase) / VecRegStride;
+    return Size <= 8 &&
+           (isMIPS64(TheArch) ? Index >= 24 : Index >= 20 && Index % 2 == 0);
+  }
+
   // AAPCS64 requires callees to preserve only the low 64 bits of v8-v15.
   // Treating the whole Q register as callee-saved would retain an upper half
   // the callee may overwrite; treating it as volatile loses valid D-register
@@ -331,6 +338,8 @@ uint16_t TargetRegInfo::callPreservedPrefixSize(uint64_t RegOff,
                                                 uint16_t Size) const {
   if (isCallPreserved(RegOff, Size))
     return Size;
+  if (isMIPS(TheArch) && Size > 8 && isCallPreserved(RegOff, 8))
+    return 8;
   if (TheArch != Arch::AArch64 || Size <= 8 || !isVectorReg(RegOff))
     return 0;
   unsigned VecIdx = static_cast<unsigned>((RegOff - VecRegBase) / VecRegStride);

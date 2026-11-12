@@ -383,6 +383,12 @@ TypeRef MedToHighConverter::sourceCallResultType(const MedOp &Op) const {
     if (auto Type = sourceABICallResultType(Op.SourceCallHint->Signature);
         Type && Type->Size == Op.Output.Size)
       return Type;
+  if (Op.ScalarCallSignature &&
+      Op.ScalarCallSignature->ReturnKind != NdTypeKind::Float)
+    if (const auto Types = floatingCallTypes(
+            TargetArch, Image ? Image->abiFormat() : BinaryFormat::Unknown,
+            *Op.ScalarCallSignature))
+      return Types->Result;
   // The packed MedIR temporary owns all HFA result registers. Keep those
   // fields in HighIR instead of inventing an integer wider than the C target
   // supports. The bound signature validates every result and argument lane.

@@ -15,6 +15,15 @@ struct R6FPOperation {
   uint16_t Key;
   uint8_t Arity, InputBytes, OutputBytes;
   const char *Mnemonic;
+  constexpr bool hasFloatingResult() const {
+    const unsigned Format = Key >> 6, Function = Key & 63;
+    // CVT.S/D also accepts W/L. Comparisons and conversions to W/L
+    // write raw integer bits into the FPR and are not floating producers.
+    return Function == 32 || Function == 33 ||
+           ((Format == 16 || Format == 17) &&
+            !(Function >= 8 && Function <= 15) && Function != 36 &&
+            Function != 37);
+  }
   uint32_t encoding() const {
     return 0x44000000u | (uint32_t(Key >> 6) << 21) | (Key & 63);
   }
