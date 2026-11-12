@@ -13,6 +13,7 @@
 #include "../ResourceLimits.h"
 #include "ComparisonModel.h"
 #include "ComparisonSession.h"
+#include "DialogReturnKey.h"
 #include "Icons.h"
 
 #include "neverd/diff/Limits.h"
@@ -37,6 +38,9 @@ ComparisonReviewDialog::ComparisonReviewDialog(ComparisonSession &S,
                                                QWidget *Parent)
     : QDialog(Parent), Session(S), Revision(S.revision()) {
   setObjectName("comparisonReviewDialog");
+  // Refresh history was the default by Qt's choice of the first push button
+  // and ran beside the filter's own search for Return in it.
+  leaveWithoutDefaultButton(*this);
   setWindowTitle(tr("Analyst review — NeverD"));
   setWindowIcon(icon("compare"));
   resize(::neverd::limits::gui::kComparisonReviewInitialWidth,

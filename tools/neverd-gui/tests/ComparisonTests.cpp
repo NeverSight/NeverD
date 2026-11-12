@@ -159,6 +159,102 @@ private slots:
     QVERIFY(Tabs->currentWidget() != Source);
     QCOMPARE(Failures.size(), 0);
   }
+  void reviewWindowsKeepReturnToTheirListsAndFields() {
+    // Each review window took its first push button for a default by Qt's
+    // choice: Refresh review, Refresh history, Check again and Trace then
+    // took Return from the lists and filters beside them, and ran again.
+    QTemporaryDir Directory;
+    const auto A = Directory.filePath("review-before.bin");
+    const auto B = Directory.filePath("review-after.bin");
+    QVERIFY(write(A, QByteArray::fromHex("e00080d2000c0091c0035fd6")));
+    QVERIFY(write(B, QByteArray::fromHex("200180d2000c0091c0035fd6")));
+    ComparisonDialog View(TEST_COMPARISON_WORKER);
+    auto &Session = View.session();
+    View.show();
+    QTRY_VERIFY_WITH_TIMEOUT(Session.ready(), Timeout);
+    View.findChild<QLineEdit *>("comparisonPrimary")->setText(A);
+    View.findChild<QLineEdit *>("comparisonSecondary")->setText(B);
+    for (const auto *Name : {"primaryLoader", "secondaryLoader"}) {
+      auto *Loader = View.findChild<QComboBox *>(Name);
+      Loader->setCurrentIndex(Loader->findData("aarch64"));
+    }
+    View.findChild<QLineEdit *>("primaryBase")->setText("0x1000");
+    View.findChild<QLineEdit *>("secondaryBase")->setText("0x8000");
+    View.findChild<QPushButton *>("comparisonStart")->click();
+    QTRY_VERIFY_WITH_TIMEOUT(!Session.busy() && !Session.revision().isEmpty(),
+                             Timeout);
+    auto *Functions = View.findChild<QTableView *>("comparisonFunctions");
+    QTRY_VERIFY_WITH_TIMEOUT(Functions->model()->rowCount() > 0, Timeout);
+    Functions->setCurrentIndex(Functions->model()->index(0, 0));
+    int Seen = 0;
+    for (const auto *Name :
+         {"comparisonChangesReview", "comparisonReviewHistory",
+          "comparisonValidateReturns", "comparisonImpactReview"}) {
+      auto *Open = View.findChild<QPushButton *>(Name);
+      QVERIFY2(Open, Name);
+      QTRY_VERIFY2_WITH_TIMEOUT(Open->isEnabled(), Name, Timeout);
+      QSet<QDialog *> Before;
+      for (auto *Dialog : View.findChildren<QDialog *>())
+        if (Dialog->isVisible())
+          Before.insert(Dialog);
+      Open->click();
+      QDialog *Review = nullptr;
+      QTRY_VERIFY2_WITH_TIMEOUT(
+          ([&] {
+            for (auto *Dialog : View.findChildren<QDialog *>())
+              if (Dialog->isVisible() && !Before.contains(Dialog))
+                Review = Dialog;
+            return Review != nullptr;
+          })(),
+          Name, Timeout);
+      QTRY_VERIFY2_WITH_TIMEOUT(!Session.busy(), Name, Timeout);
+      int Clicks = 0;
+      for (auto *Button : Review->findChildren<QPushButton *>())
+        connect(Button, &QPushButton::clicked, Review, [&Clicks] { ++Clicks; });
+      // Return from a list, or from the window itself where it has none.
+      QWidget *From = Review->findChild<QTableView *>();
+      if (!From)
+        From = Review;
+      From->setFocus();
+      QTest::keyClick(From, Qt::Key_Return);
+      QCoreApplication::processEvents();
+      QVERIFY2(Clicks == 0, Name);
+      for (const auto *Button : Review->findChildren<QPushButton *>())
+        QVERIFY2(!Button->isDefault() && !Button->autoDefault(),
+                 qPrintable(QStringLiteral("%1: %2").arg(QLatin1String(Name),
+                                                         Button->text())));
+      QTRY_VERIFY2_WITH_TIMEOUT(!Session.busy(), Name, Timeout);
+      Review->close();
+      ++Seen;
+    }
+    QCOMPARE(Seen, 4);
+    // Dependency evidence parts its panes as the comparison does: the
+    // operations' title stood against the side's list of choices, and the
+    // table under the list started lower than the one under the title.
+    QTest::mouseClick(View.findChild<QPushButton *>("comparisonFlowReview"),
+                      Qt::LeftButton);
+    auto *Flow = View.findChild<ComparisonFlowDialog *>("comparisonFlowDialog");
+    QVERIFY(Flow);
+    QTRY_VERIFY_WITH_TIMEOUT(Flow->isVisible(), Timeout);
+    const auto *Side = Flow->findChild<QComboBox *>("flowSide");
+    const auto *Title = Flow->findChild<QLabel *>("flowFunctionStatus");
+    const auto *Under = Flow->findChild<QTableView *>("flowFunctions");
+    QVERIFY(Side && Title && Under);
+    const auto At = [Flow](const QWidget *W) {
+      return W->mapTo(Flow, QPoint());
+    };
+    QCOMPARE(At(Title).x() - (At(Side).x() + Side->width()),
+             ::neverd::limits::gui::kPaneGutter);
+    QCOMPARE(At(Title).y(), At(Side).y());
+    int Beside = -1;
+    for (const auto *Table : Flow->findChildren<QTableView *>())
+      if (Table != Under && Table->isVisible() &&
+          (Beside < 0 || At(Table).y() < Beside))
+        Beside = At(Table).y();
+    QCOMPARE(At(Under).y(), Beside);
+    Flow->close();
+  }
+
   void compareIsTheDefaultOnlyUntilAComparisonExists() {
     const auto A = Directory.filePath("default-before.bin");
     const auto B = Directory.filePath("default-after.bin");
@@ -230,9 +326,9 @@ private slots:
     QVERIFY(Kinds && !Kinds->isEditable());
     Kinds->setFocus();
     QTest::keyClick(Kinds, Qt::Key_Return);
-    // Nor does it press a button of a review window that is open, though
-    // Qt looks for a dialog's default among all its descendants and gives
-    // that window one as it shows.
+    // Nor does it press the default button of a window that is open inside
+    // it, though Qt looks for a dialog's default among all its descendants.
+    // The review windows no longer take one, so this one is given it.
     QTest::mouseClick(View.findChild<QPushButton *>("comparisonReviewHistory"),
                       Qt::LeftButton);
     auto *Review =
@@ -240,7 +336,9 @@ private slots:
     QVERIFY(Review);
     QTRY_VERIFY_WITH_TIMEOUT(Review->isVisible(), Timeout);
     auto *Refresh = Review->findChild<QPushButton *>("reviewRefresh");
-    QVERIFY(Refresh && Refresh->isDefault() && Refresh->isVisible());
+    QVERIFY(Refresh && !Refresh->isDefault());
+    Refresh->setDefault(true);
+    QVERIFY(Refresh->isDefault() && Refresh->isVisible());
     QSignalSpy Refreshes(Refresh, &QPushButton::clicked);
     Search->setFocus();
     QTest::keyClick(Search, Qt::Key_Return);

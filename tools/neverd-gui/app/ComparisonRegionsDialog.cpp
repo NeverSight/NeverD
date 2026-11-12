@@ -13,6 +13,7 @@
 #include "../ResourceLimits.h"
 #include "ComparisonModel.h"
 #include "ComparisonSession.h"
+#include "DialogReturnKey.h"
 #include "Icons.h"
 
 #include <QAction>
@@ -72,6 +73,9 @@ ComparisonRegionsDialog::ComparisonRegionsDialog(ComparisonSession &S,
                                                  QWidget *Parent, bool SSA)
     : QDialog(Parent), Session(S), Flow(SSA) {
   setObjectName(Flow ? "comparisonFlowRegions" : "comparisonRegions");
+  // Inspect primary function was the default by Qt's choice of the first
+  // push button, though inspecting the secondary is as likely.
+  leaveWithoutDefaultButton(*this);
   setWindowTitle(Flow ? tr("SSA region hypotheses — Binary comparison")
                       : tr("Region hypotheses — Binary comparison"));
   setWindowIcon(icon("compare"));
