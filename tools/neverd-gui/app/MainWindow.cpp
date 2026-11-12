@@ -4446,9 +4446,6 @@ void MainWindow::stringOptionsDialog(const QJsonArray &encodings,
   QDialog dialog(owner);
   dialog.setWindowTitle(tr("String literals"));
   auto *form = new QFormLayout(&dialog);
-  auto *choices = new QWidget(&dialog);
-  auto *column = new QVBoxLayout(choices);
-  column->setContentsMargins(0, 0, 0, 0);
   QStringList chosen;
   for (const auto &name : current.value("encodings").toArray())
     chosen.append(name.toString());
@@ -4472,13 +4469,18 @@ void MainWindow::stringOptionsDialog(const QJsonArray &encodings,
       continue;
     }
     // Plain ASCII has no listing spelling of its own.
+    // Each encoding is a row of the form, the first beside the label: one
+    // field holding them all had the label centered on its first lines, below
+    // the box it names.
     auto *box = new QCheckBox(
-        spelling.isEmpty() ? QStringLiteral("ASCII") : spelling, choices);
+        spelling.isEmpty() ? QStringLiteral("ASCII") : spelling, &dialog);
     box->setChecked(chosen.contains(name));
-    column->addWidget(box);
+    if (boxes.isEmpty())
+      form->addRow(tr("Encodings:"), box);
+    else
+      form->setWidget(form->rowCount(), QFormLayout::FieldRole, box);
     boxes.append({name, box});
   }
-  form->addRow(tr("Encodings:"), choices);
   auto *detect = new QCheckBox(tr("Detect common code pages"), &dialog);
   detect->setChecked(
       !common.isEmpty() &&

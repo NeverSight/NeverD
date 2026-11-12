@@ -2780,6 +2780,59 @@ private slots:
     QTRY_VERIFY(inspected);
   }
 
+  void theEncodingsLabelStandsBesideTheFirstEncoding() {
+    // One field held every encoding's box, and the form centered its label
+    // on that field's first lines: seven pixels below the box it names.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loads;
+    bench.window->openFile(writeFixture(directory, "byte-export.bin"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    bool inspected = false;
+    QTimer answer;
+    connect(&answer, &QTimer::timeout, this, [&] {
+      auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+      if (!dialog)
+        return;
+      const QLabel *label = nullptr;
+      for (const auto *candidate : dialog->findChildren<QLabel *>())
+        if (candidate->text() == QLatin1String("Encodings:"))
+          label = candidate;
+      if (!label)
+        return;
+      answer.stop();
+      const auto close = qScopeGuard([dialog] { dialog->reject(); });
+      inspected = true;
+      // The encodings' boxes: the dialog also holds one for code pages,
+      // which it shows only where the engine reads any.
+      QList<QCheckBox *> boxes;
+      for (auto *box : dialog->findChildren<QCheckBox *>())
+        if (box->isVisible() &&
+            box->text() != QLatin1String("Detect common code pages"))
+          boxes.append(box);
+      QVERIFY(boxes.size() >= 2);
+      const QCheckBox *first = boxes.first();
+      for (const auto *box : boxes)
+        if (box->mapTo(dialog, QPoint()).y() <
+            first->mapTo(dialog, QPoint()).y())
+          first = box;
+      const auto middle = [dialog](const QWidget *widget) {
+        return widget->mapTo(dialog, widget->rect().center()).y();
+      };
+      QVERIFY2(qAbs(middle(label) - middle(first)) <= 1,
+               qPrintable(QStringLiteral("%1 beside %2")
+                              .arg(middle(label))
+                              .arg(middle(first))));
+      // The boxes still start on one edge.
+      for (const auto *box : boxes)
+        QCOMPARE(box->mapTo(dialog, QPoint()).x(),
+                 first->mapTo(dialog, QPoint()).x());
+    });
+    answer.start(10);
+    bench.action(ActionId::OptionsStrings)->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(inspected, OpenTimeoutMs);
+  }
+
   void toolWindowsLeaveReturnToTheirFields_data() {
     QTest::addColumn<int>("command");
     QTest::addColumn<QString>("name");

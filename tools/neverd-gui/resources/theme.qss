@@ -135,6 +135,10 @@ QCheckBox:disabled, QRadioButton:disabled, QLabel:disabled, QGroupBox:disabled {
    outline while it cannot act.  It frames a group too. */
 QCheckBox::indicator, QRadioButton::indicator, QGroupBox::indicator, QAbstractItemView::indicator { width: 14px; height: 14px; border: 1px native; }
 QGroupBox { border: 1px native; margin-top: 8px; padding-top: 6px; }
+/* A box without a title keeps no room for one above its frame, which then
+   starts level with the fields beside it.  It says so itself: the sheet reads
+   an empty title as no title property at all. */
+QGroupBox[untitled="true"] { margin-top: 0; }
 QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }
 QScrollBar:vertical { background: transparent; width: 12px; margin: 0; border: none; }
 QScrollBar:horizontal { background: transparent; height: 12px; margin: 0; border: none; }

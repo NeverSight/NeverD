@@ -11,6 +11,7 @@
 #include "ActionRegistry.h"
 #include "DevicePixels.h"
 #include "Docking.h"
+#include "FunctionEditDialog.h"
 #include "GnomeModalDialogs.h"
 #include "HighlightLocks.h"
 #include "Language.h"
@@ -40,6 +41,7 @@
 #include <QImage>
 #include <QInputDialog>
 #include <QItemSelectionModel>
+#include <QJsonObject>
 #include <QKeySequence>
 #include <QLineEdit>
 #include <QMenu>
@@ -1274,6 +1276,56 @@ private slots:
                qPrintable(QString::number(contrast(part, surface))));
     QVERIFY(contrast(plate, surface) <
             contrast(theme.chrome("Button"), surface));
+  }
+
+  void editFunctionStartsItsFieldsAndItsFlagsLevel() {
+    // Two forms stood one above the other, each with a label column of its
+    // own width, so the frame sizes' fields started 17 pixels to the right
+    // of the name's.  And the box of flags, which has no title, kept the
+    // room of one above its frame, whose top then stood 8 pixels below the
+    // first field's.
+    Theme::instance().setMode(Theme::Mode::Dark);
+    Theme::instance().apply();
+    FunctionEditDialog dialog(QJsonObject{{"name", "sub_401000"}},
+                              QStringLiteral(".text:0000000000401000"),
+                              QStringLiteral(".text:0000000000401040"));
+    dialog.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+    const auto at = [&dialog](const QWidget *widget) {
+      return widget->mapTo(&dialog, QPoint());
+    };
+    const auto fields = dialog.findChildren<QLineEdit *>();
+    QVERIFY(fields.size() >= 7);
+    const auto *name = dialog.findChild<QLineEdit *>(QStringLiteral("name"));
+    const auto *color =
+        dialog.findChild<QPushButton *>(QStringLiteral("color"));
+    QVERIFY(name && color);
+    for (const QLineEdit *field : fields)
+      QCOMPARE(at(field).x(), at(name).x());
+    QCOMPARE(at(color).x(), at(name).x());
+    auto *flags = dialog.findChild<QGroupBox *>();
+    QVERIFY(flags && flags->title().isEmpty());
+    QStyleOptionGroupBox box;
+    box.initFrom(flags);
+    box.subControls = QStyle::SC_GroupBoxFrame;
+    box.lineWidth = 1;
+    const QRect frame = flags->style()->subControlRect(
+        QStyle::CC_GroupBox, &box, QStyle::SC_GroupBoxFrame, flags);
+    QCOMPARE(at(flags).y() + frame.top(), at(name).y());
+    // A box with a title still keeps its room.
+    QGroupBox titled(QStringLiteral("Options"));
+    titled.resize(160, 80);
+    titled.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&titled));
+    QStyleOptionGroupBox other;
+    other.initFrom(&titled);
+    other.text = titled.title();
+    other.subControls = QStyle::SC_GroupBoxFrame | QStyle::SC_GroupBoxLabel;
+    other.lineWidth = 1;
+    QVERIFY(titled.style()
+                ->subControlRect(QStyle::CC_GroupBox, &other,
+                                 QStyle::SC_GroupBoxFrame, &titled)
+                .top() > 0);
   }
 
   void aFlatGroupBoxFramesNothing() {
