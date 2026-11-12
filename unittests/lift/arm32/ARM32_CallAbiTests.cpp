@@ -189,6 +189,173 @@ std::string definitionOf(const std::string &C, const std::string &Name) {
 }
 } // namespace
 
+// A 64-bit argument takes an even-odd register pair: r3 (after three narrow
+// arguments) or r1 (after one) carries nothing, and the caller never sets it.
+// Neither callee reads the register, so each call passes zero there.  In
+// `mixarg` r1 is a loop join whose entry arm is the register's incoming
+// value; the callee returns r0:r1 and writes r1 before it returns.
+TEST_F(ARM32_CallAbi, APaddingRegisterTheCalleeNeverReadsPassesZero) {
+  HostFlags = {"-m32"};
+  expectHighCRunsLikeSource(SoftFp, R"C(
+static long long hm(signed char a, short b, int c, long long d)
+    __attribute__((noinline));
+int pmix(int a) {
+  unsigned w = (unsigned)a | 1u;
+  long long acc = 0;
+  for (int i = 0; i < 48; i++) {
+    w = w * 1103515245u + 12345u;
+    long long d = ((long long)(unsigned)w << 19) ^ ((long long)i * 2654435761LL);
+    acc += hm((signed char)(w >> 2), (short)(w >> 7), (int)w, d);
+  }
+  return (int)(acc ^ (acc >> 32));
+}
+static long long hm(signed char a, short b, int c, long long d) {
+  return (long long)a * 1000003LL + (long long)b * 131 + (long long)c +
+         (d ^ (d >> 17));
+}
+)C",
+                            "pmix", {"pmix", "hm"}, {0, 1, -1, 0x55AA, 77});
+  expectHighCRunsLikeSource(SoftFp, R"C(
+static long long ma(int x, long long y, int z) __attribute__((noinline));
+int mixarg(int a) {
+  unsigned w = (unsigned)a ^ 0xa5u;
+  long long acc = 0;
+  for (int i = 0; i < 40; i++) {
+    w = w * 22695477u + 1u;
+    long long y = (long long)(int)w * (long long)(int)(w >> 9);
+    long long r = ma((int)(w >> 3), y, (int)(w >> 17));
+    acc += r ^ (r >> 32);
+  }
+  return (int)(acc ^ (acc >> 32));
+}
+static long long ma(int x, long long y, int z) {
+  return y + (long long)x * (long long)z + ((y >> 32) ^ (long long)(x + z));
+}
+)C",
+                            "mixarg", {"mixarg", "ma"}, {0, 1, -1, 0x55AA, 77});
+}
+
+// An 8-byte stack argument is 8-byte aligned: the 4-byte lane before it is
+// never stored.  Inside a loop the previous call ends the stored-slot proof
+// (recoverCallAbi keeps the position unknown), and the callee's body, which
+// reads no byte of the lane, lets the call pass zero.
+TEST_F(ARM32_CallAbi, AStackPaddingLaneTheCalleeNeverReadsPassesZero) {
+  HostFlags = {"-m32"};
+  for (const char *Level : {"-O0", "-O2"}) {
+    KernelOptimization = Level;
+    expectHighCRunsLikeSource(SoftFp, R"C(
+static long long hmw(int a, long long b, int c, long long d, int e, long long f)
+    __attribute__((noinline));
+int amixw(int a) {
+  unsigned w = (unsigned)a | 1u;
+  long long acc = 0;
+  for (int i = 0; i < 32; i++) {
+    w = w * 1103515245u + 12345u;
+    long long b = ((long long)(unsigned)w << 19) ^ ((long long)i * 2654435761LL);
+    acc = acc * 131 +
+          hmw((int)w, b, (int)(w >> 3), b ^ 0x55557777LL, (int)(w >> 7), b * 3);
+  }
+  return (int)(acc ^ (acc >> 31));
+}
+static long long hmw(int a, long long b, int c, long long d, int e, long long f) {
+  return (long long)a + b - (long long)c * 5 + d * 3 - (long long)e + f;
+}
+)C",
+                              "amixw", {"amixw", "hmw"},
+                              {0, 1, -1, 0x55AA, 77});
+  }
+}
+
+// The callers declare pair-aligned prototypes; the definitions, bound to the
+// same symbols, take every lane as an int.  Where a definition reads the lane
+// its caller left unset (directly, through a tail call, through an escaped
+// address, or by returning r1 as it was passed), the call keeps its unknown
+// value.  `ok` reads neither padding lane and passes zero.
+TEST_F(ARM32_CallAbi, APaddingPositionTheCalleeReadsKeepsItsUnknownValue) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target compilation requires Clang";
+  const std::string Kernel = R"C(
+#define NI __attribute__((noinline))
+#define STACK_CALLER(N) int N(int a) { unsigned h = a, acc = 0; \
+  for (int i = 0; i < 9; i++) { h = h * 1103515245u + 12345u; \
+    acc = acc * 131u + (unsigned)N##_callee((int)h, ((long long)h << 20) ^ i, \
+                                            (int)(h >> 5), ((long long)h << 16) + i); } \
+  return (int)acc; }
+#define R1_CALLER(N) int N(int a) { unsigned w = (unsigned)a ^ 0xa5u; long long acc = 0; \
+  for (int i = 0; i < 40; i++) { w = w * 22695477u + 1u; \
+    long long y = (long long)(int)w * (long long)(int)(w >> 9); \
+    long long r = N##_callee((int)(w >> 3), y, (int)(w >> 17)); acc += r ^ (r >> 32); } \
+  return (int)(acc ^ (acc >> 32)); }
+struct tail { int c, p5, dlo, dhi; };
+
+int rdpad_callee(int, long long, int, long long) __asm__("rdpad_sym");
+NI int rdpad_def(int a, int p1, int blo, int bhi, int c, int p5, int dlo, int dhi) __asm__("rdpad_sym");
+NI int rdpad_def(int a, int p1, int blo, int bhi, int c, int p5, int dlo, int dhi) {
+  return a + blo * 3 + bhi * 5 + c * 7 + p5 * 11 + dlo * 13 + dhi * 17; }
+STACK_CALLER(rdpad)
+
+int fwd_callee(int, long long, int, long long) __asm__("fwd_sym");
+NI int fwd_def(int a, int p1, int blo, int bhi, int c, int p5, int dlo, int dhi) __asm__("fwd_sym");
+NI int fwd_def(int a, int p1, int blo, int bhi, int c, int p5, int dlo, int dhi) {
+  return rdpad_def(a, p1, blo, bhi, c, p5, dlo, dhi); }
+STACK_CALLER(fwd)
+
+NI int sum(const struct tail *t) { return t->c + t->p5 * 3 + t->dlo * 5 + t->dhi * 7; }
+int esc_callee(int, long long, int, long long) __asm__("esc_sym");
+NI int esc_def(int a, int p1, int blo, int bhi, struct tail t) __asm__("esc_sym");
+NI int esc_def(int a, int p1, int blo, int bhi, struct tail t) { return sum(&t) + a + blo + bhi; }
+STACK_CALLER(esc)
+
+int ok_callee(int, long long, int, long long) __asm__("ok_sym");
+NI int ok_def(int a, int p1, int blo, int bhi, int c, int p5, int dlo, int dhi) __asm__("ok_sym");
+NI int ok_def(int a, int p1, int blo, int bhi, int c, int p5, int dlo, int dhi) {
+  return a + blo * 3 + bhi * 5 + c * 7 + dlo * 13 + dhi * 17; }
+STACK_CALLER(ok)
+
+long long rdr1_callee(int, long long, int) __asm__("rdr1_sym");
+NI long long rdr1_def(int x, int p1, int ylo, int yhi, int z) __asm__("rdr1_sym");
+NI long long rdr1_def(int x, int p1, int ylo, int yhi, int z) {
+  return (long long)x * z + p1 * 9 + ylo + ((long long)yhi << 32); }
+R1_CALLER(rdr1)
+
+long long retr1_callee(int, long long, int) __asm__("retr1_sym");
+NI long long retr1_def(int x, int p1, int ylo, int yhi, int z) __asm__("retr1_sym");
+NI long long retr1_def(int x, int p1, int ylo, int yhi, int z) {
+  return ((long long)p1 << 32) | (unsigned)(x * z + ylo + yhi); }
+R1_CALLER(retr1)
+
+extern int (*hook)(int);
+long long ind_callee(int, long long, int) __asm__("ind_sym");
+NI long long ind_def(int x, int p1, int ylo, int yhi, int z) __asm__("ind_sym");
+NI long long ind_def(int x, int p1, int ylo, int yhi, int z) {
+  return hook(x) + (long long)z + ylo + ((long long)yhi << 32); }
+R1_CALLER(ind)
+int (*hook)(int);
+)C";
+  const auto Source = tmpFile("padding-readers.c");
+  const auto Object = tmpFile("padding-readers.o");
+  std::ofstream(Source) << Kernel;
+  const auto Compiled =
+      exec(NEVERD_TEST_CLANG, {"-target", "arm-linux-gnueabi",
+                               "-mcpu=cortex-a15", "-mfloat-abi=softfp", "-O2",
+                               "-c", Source.string(), "-o", Object.string()});
+  ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err;
+  const auto Decompiled = decompileToHighC(Object);
+  ASSERT_EQ(Decompiled.exitCode, 0) << Decompiled.err;
+  std::ifstream Input(tmpFile("decompiled_high.c"));
+  ASSERT_TRUE(Input.good());
+  const std::string C((std::istreambuf_iterator<char>(Input)),
+                      std::istreambuf_iterator<char>());
+  for (const char *Reader : {"rdpad", "fwd", "esc", "rdr1", "retr1", "ind"}) {
+    const std::string Body = definitionOf(C, Reader);
+    ASSERT_FALSE(Body.empty()) << Reader << C;
+    EXPECT_NE(Body.find("unknown value"), std::string::npos) << Reader << Body;
+  }
+  const std::string Unread = definitionOf(C, "ok");
+  ASSERT_FALSE(Unread.empty()) << C;
+  EXPECT_EQ(Unread.find("unknown value"), std::string::npos) << Unread;
+}
+
 // `lsreq r9, r1, r10; tsteq r9, #1` tests the value the first instruction
 // computed: both select on one condition, so the test never reads what r9
 // held before, which is the caller's on the first iteration.

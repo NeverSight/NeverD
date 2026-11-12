@@ -28,8 +28,10 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/ir/low/SourceCallOccurrence.h"
+#include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/LowToMedError.h"
+#include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedCallReturnReads.h"
 #include "neverd/ir/med/MedPrologueSaves.h"
 #include "neverd/ir/med/MedStackAlignment.h"
@@ -39,18 +41,22 @@
 #include "neverd/support/Diagnostic.h"
 #include "neverd/support/Parallel.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -174,6 +180,527 @@ prepareSourceStackBody(const MedFunc &Source, const BinaryImage &Image,
   return Prepared;
 }
 
+namespace {
+
+using SourceValueKey = std::tuple<int, int, int>;
+
+SourceValueKey sourceValueKey(const MedVar &V) {
+  return {static_cast<int>(V.Kind), V.Id, V.SSAVer};
+}
+
+/// The copy that names the value a register holds at entry.
+bool namesEntryValue(const MedOp &Op) {
+  return Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+         Op.Output.Kind == MedVar::Reg && Op.Inputs[0] == Op.Output;
+}
+
+/// The argument positions of \p Func that its body never reads: the register
+/// positions first, then the stack slots, as its callers number them.  A
+/// convention that aligns a wide argument (PairAlignedWideArguments) leaves
+/// the register or stack lane before it unused, and a caller stores nothing
+/// there, so the position holds whatever earlier code left.
+///
+/// A position is unread when no operation, join or recovered call argument of
+/// the body names its entry value, and nothing can take the value another
+/// way.  A register position needs every call of the body to be one whose
+/// arguments recovery lists, and the register to carry no result the function
+/// could return unwritten.  A stack position needs every address the body
+/// derives from the entry stack pointer to keep a known offset and to be used
+/// only to address a load or store: a load from the incoming area reads its
+/// slots, and an address that escapes, a tail call, which passes the incoming
+/// area on, or a slot the function keeps as a mutable home ends the proof.
+/// Variadic, source-bound and incompletely lifted bodies prove nothing.
+std::set<unsigned> unreadArgumentPositions(const MedFunc &Func,
+                                           const BinaryImage &Image,
+                                           size_t &Work) {
+  const auto &TRI = getTargetRegInfo(Image.Arch);
+  const IntegerArgumentLayout Layout =
+      TRI.integerArgumentLayout(Image.abiFormat());
+  const size_t Registers = Layout.Registers.size();
+  if (Func.Blocks.empty() || !Func.Blocks.front().Preds.empty() ||
+      Func.Blocks.front().StartAddr != Func.Entry ||
+      !Func.CompleteLiftCoverage ||
+      !Func.UnsafeIndirectBranchAddresses.empty() || Func.SkippedSSA ||
+      Func.AnalysisOnly || Func.AnalystStackFrame || Func.SourceTypeHint ||
+      Func.SourceParametersBound || Func.HasUnresolvedSEHFrame ||
+      Func.EntryKind != StackEntryKind::Call || Func.IsVariadic ||
+      Func.VaListDisplacement || Func.VaRegisterSaveArea ||
+      !Func.IntegerArgumentRegisters.empty() ||
+      !Func.FPParamScalarBytes.empty() || Func.ConsumesX87Argument ||
+      Func.Params.empty() ||
+      Func.Params.size() >
+          static_cast<size_t>(limits::ir::kMaxSourceABIParameters) ||
+      !Layout.SlotBytes)
+    return {};
+  // Position I is the Ith register of the layout, and past them a stack
+  // slot.  A register placeholder (MedVar::Id below zero) is one the body's
+  // own recovery found no read of; a promoted one is named by a call.
+  std::set<unsigned> Unread;
+  for (size_t I = 0; I < Func.Params.size(); ++I) {
+    const MedVar &P = Func.Params[I];
+    if (P.Kind != MedVar::Param ||
+        (I < Registers
+             ? P.RegOff != Layout.Registers[I]
+             : P.RegOff != kNoParamReg || P.Id != static_cast<int>(I)))
+      return {};
+    if (I >= Registers || P.Id < 0)
+      Unread.insert(static_cast<unsigned>(I));
+  }
+  const uint16_t Width = TRI.FullRegWidth;
+  const auto overlaps = [](uint64_t A, uint64_t ABytes, uint64_t B,
+                           uint64_t BBytes) {
+    return A < B + BBytes && B < A + ABytes;
+  };
+  const auto charge = [&](size_t Cost) {
+    if (Work < Cost) {
+      Work = 0;
+      return false;
+    }
+    Work -= Cost;
+    return true;
+  };
+
+  // The values the body defines.  Any other register value is the one the
+  // register holds at entry.
+  std::set<SourceValueKey> Defined;
+  std::map<int, const MedBlock *> Blocks;
+  for (const MedBlock &Block : Func.Blocks) {
+    if (!charge(1 + Block.Phis.size() + Block.Ops.size()) ||
+        !Block.ExceptionalPreds.empty() || !Block.ExceptionalSuccs.empty() ||
+        (&Block != &Func.Blocks.front() && Block.Preds.empty()) ||
+        !Blocks.emplace(Block.Id, &Block).second)
+      return {};
+    // Another analysis root inside the body is an entry no caller of this
+    // one passes arguments to.
+    if (const auto Root = Func.ModuleAnalysisRoots.upper_bound(Block.StartAddr);
+        (Root != Func.ModuleAnalysisRoots.end() && *Root < Block.EndAddr) ||
+        (Func.ModuleAnalysisRoots.count(Block.StartAddr) &&
+         Block.StartAddr != Func.Entry))
+      return {};
+    for (const PhiNode &Phi : Block.Phis) {
+      if (Phi.ExceptionalEntry)
+        return {};
+      Defined.insert(sourceValueKey(Phi.Output));
+    }
+    for (const MedOp &Op : Block.Ops) {
+      if (Op.Output.Size && !namesEntryValue(Op))
+        Defined.insert(sourceValueKey(Op.Output));
+      for (const MedVar &Aux : Op.IntrinsicOutputs)
+        Defined.insert(sourceValueKey(Aux));
+    }
+  }
+  const auto entryRegister = [&](const MedVar &V) {
+    return V.Kind == MedVar::Reg && V.Size && !Defined.count(sourceValueKey(V));
+  };
+
+  bool StackOpen = false;
+  // A parameter variable can name its position by register or by id, and a
+  // register's entry value names the register's position.
+  const auto read = [&](const MedVar &V) {
+    if (V.Kind == MedVar::Stack) {
+      StackOpen = true;
+    } else if (V.Kind == MedVar::Param) {
+      for (size_t I = 0; I < Func.Params.size(); ++I) {
+        const MedVar &P = Func.Params[I];
+        if ((V.RegOff != kNoParamReg && P.RegOff == V.RegOff) ||
+            (V.Id >= 0 && P.Id == V.Id) ||
+            (V.Id >= 0 && static_cast<size_t>(V.Id) == I))
+          Unread.erase(static_cast<unsigned>(I));
+      }
+    } else if (entryRegister(V)) {
+      for (size_t I = 0; I < Registers && I < Func.Params.size(); ++I)
+        if (overlaps(V.RegOff, V.Size, Layout.Registers[I], Width))
+          Unread.erase(static_cast<unsigned>(I));
+    }
+  };
+
+  // The calls whose arguments recovery lists: source lowering passes those
+  // alone.  Any other call may take a register this function never set.
+  std::set<std::pair<int, int>> ListedCalls;
+  for (const MedCallInfo &Call : Func.CallInfos) {
+    if (!charge(1 + Call.Args.size()))
+      return {};
+    for (const MedVar &Argument : Call.Args)
+      read(Argument);
+    if (!Call.IsIndirect)
+      ListedCalls.emplace(Call.BlockId, Call.OpIdx);
+  }
+  bool RegistersOpen = false;
+  for (const MedBlock &Block : Func.Blocks) {
+    for (const PhiNode &Phi : Block.Phis)
+      for (const auto &[Pred, Incoming] : Phi.Args)
+        read(Incoming);
+    for (size_t I = 0; I < Block.Ops.size(); ++I) {
+      const MedOp &Op = Block.Ops[I];
+      if (namesEntryValue(Op))
+        continue;
+      for (uint8_t K = 0; K < Op.NumInputs; ++K)
+        read(Op.Inputs[K]);
+      const bool Call =
+          Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL;
+      if (Call ? Op.Opcode == NdOp::INDIR_CALL ||
+                     !ListedCalls.count({Block.Id, static_cast<int>(I)})
+               : endsCallArgumentSetup(Op, /*RegistersOnly=*/true))
+        RegistersOpen = true;
+      StackOpen |= Op.IsTailCall;
+    }
+  }
+  for (const auto &[Position, Home] : Func.MutableStackParamHomes)
+    if (Position >= 0)
+      Unread.erase(static_cast<unsigned>(Position));
+
+  // A result register returns the caller's value where the function never
+  // writes it.  The entry block's write reaches every return.
+  const bool NarrowResult = Func.MultiReturn.empty() && Func.ReturnType &&
+                            Func.ReturnType->Size <= TRI.PointerSize;
+  const auto writtenAtEntry = [&](uint64_t Register) {
+    return llvm::any_of(Func.Blocks.front().Ops, [&](const MedOp &Op) {
+      return Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL &&
+             Op.Output.Kind == MedVar::Reg && Op.Output.Size &&
+             !namesEntryValue(Op) && Op.Output.RegOff <= Register &&
+             Register + Width <= Op.Output.RegOff + Op.Output.Size;
+    });
+  };
+  for (size_t I = 0; I < Registers && I < Func.Params.size(); ++I) {
+    const uint64_t Register = Layout.Registers[I];
+    const bool Result =
+        TRI.isReturnReg(Register) ||
+        llvm::is_contained(TRI.IntReturnRegs, Register) ||
+        llvm::any_of(Func.MultiReturn, [&](const MedReturnReg &Field) {
+          return overlaps(Field.RegOff, Field.Size, Register, Width);
+        });
+    if (RegistersOpen || Register == TRI.IntReturnReg ||
+        (Result && !NarrowResult && !writtenAtEntry(Register)))
+      Unread.erase(static_cast<unsigned>(I));
+  }
+
+  // The stack positions.  Frame holds every value derived from the entry
+  // stack pointer with its offset from it, or none once paths disagree or an
+  // operation other than a copy or a constant displacement computes it.
+  if (Func.Params.size() <= Registers)
+    return Unread;
+  const auto dropStack = [&] {
+    Unread.erase(Unread.lower_bound(static_cast<unsigned>(Registers)),
+                 Unread.end());
+    return Unread;
+  };
+  if (StackOpen)
+    return dropStack();
+  std::map<SourceValueKey, std::optional<int64_t>> Frame;
+  const auto frameOffset =
+      [&](const MedVar &V) -> std::optional<std::optional<int64_t>> {
+    if (V.isConst() || !V.Size)
+      return std::nullopt;
+    if (entryRegister(V))
+      return TRI.isStackPointer(V.RegOff)
+                 ? std::optional<std::optional<int64_t>>(
+                       std::optional<int64_t>(0))
+                 : std::nullopt;
+    const auto At = Frame.find(sourceValueKey(V));
+    return At == Frame.end()
+               ? std::nullopt
+               : std::optional<std::optional<int64_t>>(At->second);
+  };
+  const auto derive = [&](const MedVar &Output, std::optional<int64_t> Offset) {
+    auto [At, Added] = Frame.emplace(sourceValueKey(Output), Offset);
+    if (Added)
+      return true;
+    if (At->second == Offset || !At->second)
+      return false;
+    At->second.reset();
+    return true;
+  };
+  const auto displaced = [&](const MedOp &Op) -> std::optional<int64_t> {
+    // The offset the operation gives its output, when it moves a frame
+    // address by a constant.
+    if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+        Op.Inputs[0].Size == Op.Output.Size)
+      if (const auto Base = frameOffset(Op.Inputs[0]); Base && *Base)
+        return **Base;
+    if ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
+        Op.NumInputs == 2 && Op.Output.Size == TRI.PointerSize) {
+      const bool Swapped = Op.Opcode == NdOp::INT_ADD && Op.Inputs[0].isConst();
+      const MedVar &Address = Op.Inputs[Swapped ? 1 : 0];
+      const MedVar &Constant = Op.Inputs[Swapped ? 0 : 1];
+      if (const auto Base = frameOffset(Address);
+          Base && *Base && Constant.isConst() && Constant.Size &&
+          Constant.Size <= sizeof(uint64_t) &&
+          Address.Size == TRI.PointerSize) {
+        const int64_t Value =
+            llvm::SignExtend64(Constant.ConstVal, Constant.Size * 8u);
+        return Op.Opcode == NdOp::INT_ADD ? **Base + Value : **Base - Value;
+      }
+    }
+    return std::nullopt;
+  };
+  for (bool Changed = true; Changed;) {
+    Changed = false;
+    for (const MedBlock &Block : Func.Blocks) {
+      if (!charge(1 + Block.Phis.size() + Block.Ops.size()))
+        return dropStack();
+      for (const PhiNode &Phi : Block.Phis) {
+        bool Derived = false, Agree = true;
+        std::optional<int64_t> Common;
+        for (const auto &[Pred, Incoming] : Phi.Args) {
+          const auto Offset = frameOffset(Incoming);
+          if (!Offset) {
+            Agree = false;
+            continue;
+          }
+          Agree &= *Offset && (!Derived || Common == *Offset);
+          Common = *Offset;
+          Derived = true;
+        }
+        if (Derived)
+          Changed |=
+              derive(Phi.Output, Agree ? Common : std::optional<int64_t>());
+      }
+      for (const MedOp &Op : Block.Ops) {
+        // A load yields what its slot holds, and no frame address is ever
+        // stored: the check below ends the proof at such a store.
+        if (namesEntryValue(Op) || !Op.Output.Size || Op.Opcode == NdOp::LOAD)
+          continue;
+        bool Derived = false;
+        for (uint8_t K = 0; K < Op.NumInputs; ++K)
+          Derived |= frameOffset(Op.Inputs[K]).has_value();
+        if (Derived)
+          Changed |= derive(Op.Output, displaced(Op));
+        for (const MedVar &Aux : Op.IntrinsicOutputs)
+          if (Derived)
+            Changed |= derive(Aux, std::nullopt);
+      }
+    }
+  }
+  // An argument or result register that holds a frame address may pass it
+  // to a callee or to the caller.
+  for (const auto &[Key, Offset] : Frame)
+    if (!Offset)
+      return dropStack();
+  const auto mayLeave = [&](const MedVar &V) {
+    if (V.Kind != MedVar::Reg || !frameOffset(V))
+      return false;
+    return TRI.isReturnReg(V.RegOff) ||
+           llvm::any_of(Layout.Registers, [&](uint64_t Register) {
+             return overlaps(V.RegOff, V.Size, Register, Width);
+           });
+  };
+  for (const MedCallInfo &Call : Func.CallInfos)
+    for (const MedVar &Argument : Call.Args)
+      if (frameOffset(Argument))
+        return dropStack();
+  const int64_t First = Layout.EntryStackBase;
+  for (const MedBlock &Block : Func.Blocks) {
+    for (const PhiNode &Phi : Block.Phis)
+      if (mayLeave(Phi.Output))
+        return dropStack();
+    for (const MedOp &Op : Block.Ops) {
+      if (namesEntryValue(Op))
+        continue;
+      if (mayLeave(Op.Output))
+        return dropStack();
+      const bool Memory =
+          (Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&
+          Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
+          Op.MemoryOrdering == NdMemoryOrdering::None;
+      for (uint8_t K = 0; K < Op.NumInputs; ++K) {
+        const auto Offset = frameOffset(Op.Inputs[K]);
+        if (!Offset)
+          continue;
+        if (Memory && K == 0) {
+          if (Op.Opcode == NdOp::STORE)
+            continue;
+          // A load reads every incoming slot it overlaps.
+          const int64_t Begin = **Offset;
+          const int64_t End = Begin + std::max<int64_t>(Op.Output.Size, 1);
+          for (size_t I = Registers; I < Func.Params.size(); ++I) {
+            const int64_t Slot =
+                First + static_cast<int64_t>(I - Registers) * Layout.SlotBytes;
+            if (Begin < Slot + Layout.SlotBytes && Slot < End)
+              Unread.erase(static_cast<unsigned>(I));
+          }
+          // Past the last parameter the caller's frame begins.
+          if (End >
+              First + static_cast<int64_t>(Func.Params.size() - Registers) *
+                          Layout.SlotBytes)
+            return dropStack();
+          continue;
+        }
+        // Moving the address keeps it; any other use lets it escape.
+        if (!displaced(Op))
+          return dropStack();
+      }
+    }
+  }
+  return Unread;
+}
+
+/// Whether \p V may hold a value \p Func does not determine at a call: an
+/// unspecified value, what an earlier call left in a register, a register's
+/// entry value where no parameter arrives in it, or a join or copy of one.
+class UndeterminedCallValues {
+public:
+  explicit UndeterminedCallValues(const MedFunc &Func) : Func(Func) {}
+
+  bool contains(const MedVar &V, size_t &Work) {
+    Seen.clear();
+    return visit(V, Work);
+  }
+
+private:
+  void index() {
+    if (Built)
+      return;
+    Built = true;
+    for (const MedBlock &Block : Func.Blocks) {
+      for (const PhiNode &Phi : Block.Phis)
+        Joins.emplace(sourceValueKey(Phi.Output), &Phi);
+      for (const MedOp &Op : Block.Ops)
+        if (Op.Output.Size && !namesEntryValue(Op))
+          Definitions.emplace(sourceValueKey(Op.Output), &Op);
+    }
+    for (const MedCallClobber &Clobber : Func.CallClobbers)
+      Clobbers.insert(sourceValueKey(Clobber.Value));
+  }
+
+  bool visit(const MedVar &V, size_t &Work) {
+    if (V.Kind == MedVar::Unspecified)
+      return true;
+    if ((V.Kind != MedVar::Reg && V.Kind != MedVar::Temp) || !V.Size)
+      return false;
+    index();
+    // An exhausted budget or a join already on the path adds nothing: the
+    // argument then keeps the value it has.
+    if (!Work || !Seen.insert(sourceValueKey(V)).second)
+      return false;
+    --Work;
+    if (Clobbers.count(sourceValueKey(V)))
+      return true;
+    if (const auto Join = Joins.find(sourceValueKey(V)); Join != Joins.end()) {
+      if (Join->second->ExceptionalEntry &&
+          visit(*Join->second->ExceptionalEntry, Work))
+        return true;
+      return llvm::any_of(Join->second->Args, [&](const auto &Incoming) {
+        return visit(Incoming.second, Work);
+      });
+    }
+    if (const auto Definition = Definitions.find(sourceValueKey(V));
+        Definition != Definitions.end()) {
+      const MedOp &Op = *Definition->second;
+      return Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+             Op.Inputs[0].Size == V.Size && visit(Op.Inputs[0], Work);
+    }
+    // No definition: the register's entry value, which is a parameter's
+    // where the function has one the body reads there.
+    return V.Kind == MedVar::Reg &&
+           llvm::none_of(Func.Params, [&](const MedVar &P) {
+             return P.RegOff == V.RegOff && P.Id >= 0;
+           });
+  }
+
+  const MedFunc &Func;
+  bool Built = false;
+  std::map<SourceValueKey, const PhiNode *> Joins;
+  std::map<SourceValueKey, const MedOp *> Definitions;
+  std::set<SourceValueKey> Clobbers;
+  std::set<SourceValueKey> Seen;
+};
+
+/// The arguments of \p Func's direct calls that pass a value the function
+/// does not determine in a position the callee's body never reads
+/// (unreadArgumentPositions), appended to \p Unobserved.  Such a value has no
+/// reader, so the source need not evaluate it only to fail: the caller of
+/// this passes zero there, where an argument it determines follows: the
+/// undetermined values that end a list are dropped as before.  A value the
+/// function determines stays, as does every position the callee may read; the
+/// callee keeps its parameters.
+void collectUnobservedArguments(
+    MedFunc &Func, const std::map<va_t, const MedFunc *> &Callees,
+    const BinaryImage &Image, std::map<va_t, std::set<unsigned>> &Unread,
+    std::vector<std::pair<MedCallInfo *, size_t>> &Unobserved) {
+  const auto &TRI = getTargetRegInfo(Image.Arch);
+  const size_t Registers =
+      TRI.integerArgumentLayout(Image.abiFormat()).Registers.size();
+  std::optional<UndeterminedCallValues> Undetermined;
+  std::optional<std::map<int, const MedBlock *>> Blocks;
+  size_t Work = limits::ir::kSourceEntrySpillWork;
+  for (MedCallInfo &Call : Func.CallInfos) {
+    if (Call.IsIndirect || Call.SourceCallHint ||
+        Call.ArgumentsInCalleeRegisterOrder || Call.ArgumentsFromPrototype ||
+        Call.FloatingRegisterArgCount > 0 || Call.BlockId < 0 || Call.OpIdx < 0)
+      continue;
+    const auto Callee = Callees.find(Call.TargetAddr);
+    if (Callee == Callees.end() ||
+        Callee->second->Params.size() != Call.Args.size() ||
+        Call.IntegerRegisterArgCount !=
+            static_cast<int>(std::min(Registers, Call.Args.size())))
+      continue;
+    const MedFunc &Body = *Callee->second;
+    // The recovered call still names this callee, and its caller reads no
+    // more result bytes than the callee returns: a register the callee left
+    // as it was passed would otherwise have a reader after the call.
+    std::optional<bool> Bound;
+    const auto bound = [&] {
+      if (!Blocks) {
+        Blocks.emplace();
+        for (const MedBlock &Block : Func.Blocks)
+          Blocks->emplace(Block.Id, &Block);
+      }
+      const auto Block = Blocks->find(Call.BlockId);
+      if (Block == Blocks->end() ||
+          static_cast<size_t>(Call.OpIdx) >= Block->second->Ops.size())
+        return false;
+      const MedOp &Op = Block->second->Ops[static_cast<size_t>(Call.OpIdx)];
+      return Op.Opcode == NdOp::CALL && Op.NumInputs &&
+             Op.Inputs[0].isConst() &&
+             Op.Inputs[0].ConstVal == Call.TargetAddr && !Op.SourceCallHint &&
+             (!Body.MultiReturn.empty() ||
+              Op.Output.Size <= std::max<uint16_t>(Body.ReturnType
+                                                       ? Body.ReturnType->Size
+                                                       : TRI.PointerSize,
+                                                   TRI.PointerSize));
+    };
+    // Only a position an argument follows needs a value: the source drops
+    // the undetermined values that end a call's list, and a zero among them
+    // would print an argument the program never passed.
+    std::vector<size_t> Candidates;
+    std::optional<size_t> LastDetermined;
+    for (size_t P = 0; P < Call.Args.size(); ++P) {
+      const MedVar &Argument = Call.Args[P];
+      // A constant or a parameter is determined.
+      if (Argument.isConst() || Argument.Kind == MedVar::Param) {
+        LastDetermined = P;
+        continue;
+      }
+      if (!Undetermined)
+        Undetermined.emplace(Func);
+      if (!Undetermined->contains(Argument, Work)) {
+        LastDetermined = P;
+        continue;
+      }
+      // A register the callee's own recovery found a read of is no
+      // candidate.
+      if (P < Registers && Body.Params[P].Id >= 0)
+        continue;
+      if (!Bound)
+        Bound = bound();
+      if (!*Bound)
+        break;
+      auto [Proof, Missing] = Unread.try_emplace(Call.TargetAddr);
+      if (Missing) {
+        size_t ProofWork = limits::ir::kSourceEntrySpillWork;
+        Proof->second = unreadArgumentPositions(Body, Image, ProofWork);
+      }
+      if (Proof->second.count(static_cast<unsigned>(P)))
+        Candidates.push_back(P);
+    }
+    for (const size_t P : Candidates)
+      if (LastDetermined && P < *LastDetermined)
+        Unobserved.emplace_back(&Call, P);
+  }
+}
+
+} // namespace
+
 void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
                                          PipelineResult &Result,
                                          llvm::ArrayRef<LowFunc> Originals) {
@@ -220,6 +747,23 @@ void prepareRecoveredSourceStackAccesses(const BinaryImage &Image,
       markUnobservedBorrowedFrameStores(Func, Image.Arch, Image.abiFormat(),
                                         Callees);
     markUndefinedScratchStores(Func, Image.Arch, Image.abiFormat());
+  }
+  // A pair-aligned wide argument leaves the lane before it unset.  Where a
+  // callee's body never reads such a position, its callers pass zero there
+  // instead of the value no one determined.  Every proof reads the bodies as
+  // call recovery left them: the replacements follow all of them, so the
+  // order of the functions changes no result.
+  if (const CallArgumentConvention *Convention =
+          callArgumentConvention(Image.Arch, Image.abiFormat());
+      Convention && Convention->PairAlignedWideArguments &&
+      Convention->ArgumentsFromCallSetup) {
+    std::map<va_t, std::set<unsigned>> Unread;
+    std::vector<std::pair<MedCallInfo *, size_t>> Unobserved;
+    for (MedFunc &Func : Result.MedFuncs)
+      collectUnobservedArguments(Func, Callees, Image, Unread, Unobserved);
+    for (const auto &[Call, Position] : Unobserved)
+      Call->Args[Position] = MedVar::makeConst(
+          0, Call->Args[Position].Size, ConstantAddressProvenance::Scalar);
   }
   if (!HasCallerBatch)
     return;
