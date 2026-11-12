@@ -1965,19 +1965,59 @@ bool MedLLVMEmitter::valueIsAuthenticatedModelZero(const MedVar &V) const {
                                 addressProvenanceVarKey(Model.Value) == Key;
                        });
   };
-  if (certified(V))
-    return true;
   // Register pressure spills the GOT base and reloads it where it is used.
   // Emission stores the certified zero, so an exact reload whose every
   // reaching store writes a certified base reads that zero back.
+  auto reloaded = [&](const MedVar &Value) {
+    const MedOp *Def = lookupDef(Value);
+    std::vector<MedVar> Sources;
+    if (!Def || Def->Opcode != NdOp::LOAD ||
+        !collectFrameReloadSources(*Def, Sources) || Sources.empty())
+      return false;
+    return std::all_of(Sources.begin(), Sources.end(),
+                       [&](const MedVar &Source) {
+                         return !Source.isConst() &&
+                                Source.Size == Value.Size && certified(Source);
+                       });
+  };
+  if (certified(V) || reloaded(V))
+    return true;
+  // A block the base reaches both in its register and through a reload (the
+  // inner dispatch of a nested switch, entered from the peeled outer dispatch
+  // and from the loop's) joins the two in a PHI, and a register move copies
+  // either.  A join computes nothing: every value it can take is one of its
+  // leaves, so it is the certified zero when each leaf is.  A leaf of any
+  // other kind, an exceptional entry or a join past the budget is unproved.
   const MedOp *Def = lookupDef(V);
-  std::vector<MedVar> Sources;
-  if (!Def || Def->Opcode != NdOp::LOAD ||
-      !collectFrameReloadSources(*Def, Sources) || Sources.empty())
+  if (Def ? Def->Opcode != NdOp::COPY : !lookupPhi(V))
     return false;
-  return std::all_of(Sources.begin(), Sources.end(), [&](const MedVar &Source) {
-    return !Source.isConst() && Source.Size == V.Size && certified(Source);
-  });
+  std::vector<MedVar> Work{V};
+  std::set<std::tuple<int, int, int>> Seen;
+  unsigned Budget = ::neverd::limits::backend::kMaxModelZeroJoinValues;
+  while (!Work.empty()) {
+    const MedVar Cur = Work.back();
+    Work.pop_back();
+    if (Cur.isConst() || Cur.Size != V.Size)
+      return false;
+    if (!Seen.insert({static_cast<int>(Cur.Kind), Cur.Id, Cur.SSAVer}).second)
+      continue;
+    if (Budget-- == 0)
+      return false;
+    if (certified(Cur) || reloaded(Cur))
+      continue;
+    if (const MedOp *Copy = lookupDef(Cur)) {
+      if (Copy->Opcode != NdOp::COPY || Copy->NumInputs != 1)
+        return false;
+      Work.push_back(Copy->Inputs[0]);
+      continue;
+    }
+    const PhiNode *Phi = lookupPhi(Cur);
+    if (!Phi || Phi->Args.empty() || Phi->ExceptionalEntry)
+      return false;
+    for (const auto &Arg : Phi->Args)
+      Work.push_back(Arg.second);
+  }
+  return true;
 }
 
 bool MedLLVMEmitter::valueHasNonNullIndirectCallGuards(
