@@ -2,6 +2,7 @@
 """Qualify native Apple PAC before running the signed language install matrix."""
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -85,6 +86,71 @@ def check_binary(binary):
         raise ValueError(POLICY["errors"]["binary"])
     return {"sha256": digest(binary), "bytes": len(raw),
             "cpu_subtype": fields[2]}
+
+
+def probe_cpta(output):
+    policy = POLICY["cpta_probe"]
+    source = ROOT / policy["source"]
+    report = {**provenance(), "platform": platform.platform(), "profiles": {},
+              "status": POLICY["failed"], policy["observed_key"]: False,
+              policy["qualified_key"]: False}
+    report["source_sha256"][policy["source"]] = digest(source)
+    try:
+        if platform.system() != POLICY["host_os"] or platform.machine() not in POLICY["host_arches"]:
+            report["status"] = POLICY["unavailable"]
+            return report
+        with OwnedProducts(output, False) as products:
+            for name, argv in POLICY["environment_commands"].items():
+                command(products, output, name, argv, POLICY["tool_timeout"])
+            for arch, subtype in policy["profiles"].items():
+                binary = output / (arch + POLICY["binary_suffix"])
+                products.append(binary)
+                argv = [arg.format(arch=arch, source=source, binary=binary) for arg in policy["compile"]]
+                built = command(products, output, arch + POLICY["compile_suffix"], argv, POLICY["tool_timeout"])
+                profile = report["profiles"][arch] = {"outcome": policy["unexpected"]}
+                if built.returncode:
+                    if arch == policy["x1"] and any(t in built.stderr.lower() for t in policy["unsupported_compiler"]):
+                        profile["outcome"] = policy["slice_unavailable"]
+                    continue
+                raw = binary.read_bytes()
+                magic, cpu, actual = struct.unpack_from(POLICY["header_format"], raw)
+                profile.update(sha256=digest(binary), cpu_subtype=actual)
+                if (magic, cpu, actual & POLICY["subtype_mask"]) != (POLICY["macho_magic"], POLICY["cpu_type"], subtype):
+                    continue
+                vectors = policy["vectors"]
+                arguments = [binary, *(v for row in vectors for v in row[:2])]
+                try:
+                    result = command(products, output, arch, arguments, POLICY["tool_timeout"])
+                except OSError as error:
+                    if error.errno != errno.EBADARCH:
+                        raise
+                    profile.update(outcome=policy["loader_unavailable"], errno=error.errno)
+                    continue
+                lines = result.stdout.splitlines()
+                if not lines:
+                    if result.returncode < 0:
+                        profile["outcome"] = policy["loader_unavailable"]
+                    continue
+                if lines[0] != policy["started"]:
+                    continue
+                profile["results"] = lines[1:]
+                if result.returncode == policy["undefined_instruction"] and len(lines) == 1:
+                    profile["outcome"] = policy["isa_unavailable"]
+                elif result.returncode == 0:
+                    if lines[1:] == [row[3] for row in vectors]:
+                        profile["outcome"] = policy["checked"]
+                    elif lines[1:] == [row[2] for row in vectors]:
+                        profile["outcome"] = policy["unchecked"]
+            outcomes = {name: profile["outcome"] for name, profile in report["profiles"].items()}
+            report[policy["observed_key"]] = policy["checked"] in outcomes.values()
+            report[policy["qualified_key"]] = outcomes[policy["x1"]] == policy["checked"]
+            if policy["unexpected"] in outcomes.values():
+                report["status"] = POLICY["failed"]
+            else:
+                report["status"] = POLICY["passed"] if report[policy["qualified_key"]] else POLICY["unavailable"]
+        return report
+    finally:
+        save(output / POLICY["report_name"], report)
 
 
 def legacy_cases(contract):
@@ -424,6 +490,8 @@ def main():
             raise ValueError(POLICY["errors"]["startup_fixups"])
         if args.mode == POLICY["probe_mode"]:
             report = probe(output)
+        elif args.mode == POLICY["cpta_probe"]["mode"]:
+            report = probe_cpta(output)
         elif args.mode == POLICY["startup_mode"]:
             report = probe(output, startup=True, userspace_fixups=userspace)
         elif args.mode == POLICY["legacy_mode"]:

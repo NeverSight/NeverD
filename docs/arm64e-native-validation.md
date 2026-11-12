@@ -954,12 +954,24 @@ frames and 10 authenticated parent returns. The
 [verification record](evidence/arm64e-darwin-variadic-2026-11-12.json)
 identifies the tested sources, host binaries and Actions artifacts.
 
-The nine-function variadic input still fails whole-image publication. An
-assembly caller executed the original and generated instruction bytes from
-the first rejected entry at each optimization level. At O0 both versions of
-`leaf_sum` returned 109, but X8 contained the seed 100 in the original and
-entry SP + 8 in the generated body. At O2 both versions of `leaf_difference`
-returned 77. The original left 23 in X9 and the generated body preserved its
-incoming value of 85. These registers are volatile for Darwin C callers.
-A custom caller can observe them, so accepting such substitutions requires
-evidence about the actual register contract.
+The nine-function mixed variadic fixture exercises a custom caller that reads
+X8 and X9 after return. The earlier O0 `leaf_sum` preserved the C result
+109 while changing X8 from 100 to entry SP + 8. The earlier O2
+`leaf_difference` returned 77 while changing X9 from 23 to 85.
+
+For these stack argument entries and their local callers, patch-mode lifting
+retains the source register operands in an LLVM native body. Immediates and
+local function targets are explicit LLVM operands. MC assembles each body
+at its new address, including local branches and unwind directives. Before
+writing the output, the installer checks the final machine instructions, call
+destinations and compact or indexed DWARF frame rows. The O0 and O2 tests
+require all nine relocated owners and reject changes to X9, a stack
+displacement or the called function. The native observer compares X0, X8,
+X9, D0 and SP immediately after each call across three input vectors.
+
+`python3 scripts/verify_arm64e_native.py probe-cpta --output <directory>`
+builds thin arm64, arm64e and arm64e.x1 controls. Each executable records
+the results of ADDPT on a non-overflowing pointer, a top-byte carry, a borrow
+and an existing poison bit. The report identifies the exact executed slice,
+an unavailable instruction or slice, and effective checked EL0 arithmetic.
+The privileged EL1 controls have a separate verification record.

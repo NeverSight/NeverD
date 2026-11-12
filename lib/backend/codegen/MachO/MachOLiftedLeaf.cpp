@@ -11,6 +11,7 @@
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/MachO/MachOCompactUnwindPatch.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
+#include "neverd/backend/codegen/MachO/MachOVariadicRegisters.h"
 #include "neverd/backend/codegen/SourcePatch.h"
 #include "neverd/backend/llvm/AArch64/LLVMEntryABI.h"
 #include "neverd/decode/Decoder.h"
@@ -495,7 +496,8 @@ bool sameIndexedLinkFrame(const BinaryImage &Original,
 llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
                          llvm::ArrayRef<SourcePatchMapping> Mappings,
                          const CompiledImage &Generated, va_t Slide,
-                         llvm::ArrayRef<NativeMachOCompactRange> Ranges) {
+                         llvm::ArrayRef<NativeMachOCompactRange> Ranges,
+                         const llvm::DenseSet<va_t> &RegisterEntries) {
   using Kind = llvm::mc_rewrite::RewriteSectionKind;
   const CompiledSection *Code = nullptr;
   dwarf_eh::ParseResult LinkedFrames;
@@ -574,7 +576,8 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
                                     Range.mapped()->EndVA - Owner->second);
     if (Source.empty() || Source.size() % aarch64::kInsnSize)
       return refuse(kLeafCode);
-    if (Native == macho_unwind::kARM64ModeFrameless &&
+    if (!RegisterEntries.contains(Start) &&
+        Native == macho_unwind::kARM64ModeFrameless &&
         Source.size() > Emitted.size() &&
         elidesUnusedStackFrame(Decode, Source, Emitted, Start, Owner->second,
                                *Frame->Compact)) {
@@ -600,6 +603,32 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
         return refuse(kLeafFrame);
     } else if (SourceEncoding != Native) {
       return refuse(kLeafFrame);
+    }
+
+    if (RegisterEntries.contains(Start)) {
+      // The register lowering emits one instruction at each original offset.
+      // A local branch therefore has the same displacement. Calls cross entry
+      // boundaries and must resolve to the new symbol after final placement.
+      if (!Indexed && (FDEs.count(Owner->second) || Frame->Dwarf))
+        return refuse(kLeafFrame);
+      for (size_t Offset = 0; Offset < Source.size();
+           Offset += aarch64::kInsnSize) {
+        auto Before = Source.drop_front(Offset);
+        auto After = Emitted.drop_front(Offset);
+        if (decodeDirectBranch(Original.Arch, InstructionMode::Default,
+                               Before.data(), Before.size(), Start + Offset,
+                               {.Jumps = false, .Calls = true})) {
+          if (!matchesDirectTransfer(Before, Start + Offset, After,
+                                     Owner->second + Offset, Mappings,
+                                     Generated, Original, Slide,
+                                     {.Jumps = false, .Calls = true}))
+            return refuse(kDirectTarget);
+        } else if (!equivalentLeafWord(readLE<uint32_t>(Before.data()),
+                                       readLE<uint32_t>(After.data()))) {
+          return refuse(kLeafCode);
+        }
+      }
+      continue;
     }
 
     const bool Framed =
@@ -726,6 +755,9 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
         return S.isExecutable() && S.Name != section_names::macho::TextSeg;
       }))
     return refuse(kSourceText);
+  auto RegisterEntries = validateMachOVariadicRegisters(Module, Image);
+  if (!RegisterEntries)
+    return RegisterEntries.takeError();
   std::vector<SourcePatchMapping> Mappings;
   std::vector<SourcePatchBinding> Bindings;
   for (const auto &F : Module) {
@@ -750,7 +782,7 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
     for (const auto &B : F)
       for (const auto &I : B)
         if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
-            Call && Call->isInlineAsm())
+            Call && Call->isInlineAsm() && !RegisterEntries->contains(**Entry))
           return refuse(kLeafModule);
     Mappings.push_back({F.getName().str(), **Entry});
   }
@@ -886,7 +918,8 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
       Image, Mappings, Bindings, Output,
       [&](const CompiledImage &Generated, va_t Slide,
           llvm::ArrayRef<NativeMachOCompactRange> Ranges) {
-        return verifyLeaves(Image, *Text, Mappings, Generated, Slide, Ranges);
+        return verifyLeaves(Image, *Text, Mappings, Generated, Slide, Ranges,
+                            *RegisterEntries);
       });
 }
 } // namespace neverd

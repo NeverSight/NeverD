@@ -305,6 +305,7 @@
   "mode_argument": "mode",
   "modes": [
     "probe",
+    "probe-cpta",
     "run",
     "legacy",
     "probe-startup",
@@ -313,6 +314,70 @@
     "run-generated",
     "run-generated-executable"
   ],
+  "cpta_probe": {
+    "source": "scripts/arm64e_native_cpta.def",
+    "mode": "probe-cpta",
+    "observed_key": "native_el0_cpta_observed",
+    "qualified_key": "x1_el0_cpta_qualified",
+    "profiles": {
+      "arm64": 0,
+      "arm64e": 2,
+      "arm64e.x1": 12
+    },
+    "x1": "arm64e.x1",
+    "compile": [
+      "/usr/bin/clang",
+      "-arch",
+      "{arch}",
+      "-O2",
+      "-x",
+      "c",
+      "{source}",
+      "-o",
+      "{binary}"
+    ],
+    "unsupported_compiler": [
+      "invalid arch name",
+      "unknown target triple",
+      "unsupported architecture",
+      "unsupported argument",
+      "unknown architecture"
+    ],
+    "started": "running-addpt",
+    "undefined_instruction": 132,
+    "vectors": [
+      [
+        "1200000000000100",
+        "8",
+        "1200000000000108",
+        "1200000000000108"
+      ],
+      [
+        "00ffffffffffffff",
+        "1",
+        "0100000000000000",
+        "0080000000000000"
+      ],
+      [
+        "1200000000000000",
+        "ffffffffffffffff",
+        "11ffffffffffffff",
+        "127fffffffffffff"
+      ],
+      [
+        "1240000000000000",
+        "ffc0000000000000",
+        "1200000000000000",
+        "1240000000000000"
+      ]
+    ],
+    "checked": "checked",
+    "unchecked": "unchecked",
+    "isa_unavailable": "undefined-instruction",
+    "slice_unavailable": "slice-unavailable",
+    "loader_unavailable": "did-not-start",
+    "unexpected": "unexpected-result"
+  },
   "probe_mode": "probe",
   "output_argument": "--output",
   "build_argument": "--build-dir",

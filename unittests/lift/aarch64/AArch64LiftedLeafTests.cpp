@@ -24,6 +24,7 @@
 #include "llvm/BinaryFormat/Magic.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/FileSystem.h"
@@ -587,6 +588,136 @@ void verifyVariadicEntry(const char *Optimization) {
 #else
   GTEST_SKIP() << kUnavailable;
 #endif
+}
+
+void verifyVariadicRegisterImage(const char *Optimization) {
+#if defined(__APPLE__) && defined(__aarch64__)
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kTemporary, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Input = (Root / kOriginal).string();
+  const auto Output = (Root / kOutput).string();
+  const auto Rejected = (Root / kRejected).string();
+  const auto Source = (Root / kSource).string();
+  std::ofstream(Source) << kVariadicLeaves;
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                kCompiler, {kCompiler, kTargetFlag, kTarget, Optimization,
+                            kOmitFrame, kDylib, Source, kOut, Input}),
+            0);
+  auto Reader = Loader::create(BinaryFormat::MachO);
+  auto Image = Reader->load(Input);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  PipelineOptions Options;
+  Options.PatchMode = true;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  auto Lift = Pipeline().run(*Image, Context, Options);
+  ASSERT_TRUE(Lift.Success) << Lift.Error;
+  ASSERT_TRUE(Lift.LlvmModule);
+  ASSERT_EQ(Lift.FunctionAudits.size(), kMixedEntries);
+  for (const auto &Audit : Lift.FunctionAudits)
+    ASSERT_TRUE(Audit.HasLLVMDefinition) << Audit.Name;
+  auto &Module = *Lift.LlvmModule;
+  symbolizeImageAbsolutePointers(Module, *Image);
+  MachOPatcher Patcher;
+  Patcher.setImageContext(&*Image);
+
+  auto Wrong = llvm::CloneModule(Module);
+  auto *Difference = Wrong->getFunction(kDifference);
+  ASSERT_TRUE(Difference && !Difference->empty());
+  auto *Call = llvm::dyn_cast<llvm::CallInst>(&Difference->front().front());
+  ASSERT_TRUE(Call && Call->isInlineAsm());
+  auto *Asm = llvm::cast<llvm::InlineAsm>(Call->getCalledOperand());
+  std::string ChangedAsm = Asm->getAsmString().str();
+  const auto Return = ChangedAsm.rfind(kReturnMnemonic);
+  ASSERT_NE(Return, std::string::npos);
+  ChangedAsm.insert(Return, kChangeScratch);
+  Call->setCalledOperand(llvm::InlineAsm::get(
+      Call->getFunctionType(), ChangedAsm, Asm->getConstraintString(), true));
+  EXPECT_FALSE(Patcher.patch(Input, Rejected, *Wrong, Image->Arch).Success);
+  EXPECT_FALSE(std::filesystem::exists(Rejected));
+
+  Wrong = llvm::CloneModule(Module);
+  auto *ImmediateCall = llvm::cast<llvm::CallInst>(
+      &Wrong->getFunction(kDifference)->front().front());
+  auto Immediate =
+      llvm::find_if(ImmediateCall->args(), [](const llvm::Use &Arg) {
+        return llvm::isa<llvm::ConstantInt>(Arg.get());
+      });
+  ASSERT_NE(Immediate, ImmediateCall->arg_end());
+  auto *Amount = llvm::cast<llvm::ConstantInt>(Immediate->get());
+  Immediate->set(
+      llvm::ConstantInt::get(Amount->getType(), Amount->getValue() + 1));
+  EXPECT_FALSE(Patcher.patch(Input, Rejected, *Wrong, Image->Arch).Success);
+  EXPECT_FALSE(std::filesystem::exists(Rejected));
+
+  Wrong = llvm::CloneModule(Module);
+  auto *Direct = Wrong->getFunction(kVariadicDirect);
+  ASSERT_TRUE(Direct && !Direct->empty());
+  auto *Branch = llvm::dyn_cast<llvm::CallInst>(&Direct->front().front());
+  ASSERT_TRUE(Branch && Branch->isInlineAsm());
+  auto Target = llvm::find_if(Branch->args(), [](const llvm::Use &Arg) {
+    return llvm::isa<llvm::Function>(Arg.get());
+  });
+  ASSERT_NE(Target, Branch->arg_end());
+  Target->set(Wrong->getFunction(kDifference));
+  EXPECT_FALSE(Patcher.patch(Input, Rejected, *Wrong, Image->Arch).Success);
+  EXPECT_FALSE(std::filesystem::exists(Rejected));
+
+  auto Installed = Patcher.patch(Input, Output, Module, Image->Arch);
+  ASSERT_TRUE(Installed.Success);
+  ASSERT_EQ(Installed.PatchedFunctions.size(), kMixedEntries);
+  testing::Test::RecordProperty(kInstalledEntries, kMixedEntries);
+  auto Final = Reader->load(Output);
+  ASSERT_TRUE(bool(Final)) << llvm::toString(Final.takeError());
+  for (const auto &Entry : Installed.PatchedFunctions) {
+    EXPECT_NE(Entry.OriginalVA, Entry.OwnerVA);
+    EXPECT_TRUE(Final->ExceptionMetadata.findFunction(Entry.OwnerVA));
+  }
+  EXPECT_EQ(llvm::sys::ExecuteAndWait(kCodesign,
+                                      {kCodesign, kVerify, kStrict, Output}),
+            0);
+  testing::Test::RecordProperty(
+      kOriginalHash, llvm::toHex(llvm::SHA256::hash(Image->Raw), true));
+  testing::Test::RecordProperty(
+      kPublishedHash, llvm::toHex(llvm::SHA256::hash(Final->Raw), true));
+  if (!std::getenv(kExecute))
+    return;
+  const auto Caller = (Root / kDriverSource).string();
+  const auto Driver = (Root / kDriver).string();
+  std::ofstream(Caller) << kExtendedVariadics << kVariadicCaller;
+  ASSERT_EQ(
+      llvm::sys::ExecuteAndWait(kCompiler, {kCompiler, kTargetFlag, kTarget,
+                                            kOptimize, Caller, kOut, Driver}),
+      0);
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Input}), 0);
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Output}), 0);
+  const auto RegisterC = (Root / kRegisterCallerC).string();
+  const auto RegisterS = (Root / kRegisterCallerName).string();
+  const auto Observer = (Root / kRegisterDriver).string();
+  std::ofstream(RegisterC) << kRegisterCallerSource;
+  std::ofstream(RegisterS) << kRegisterCallerAssembly;
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, {kCompiler, kTargetFlag,
+                                                  kTarget, kOptimize, RegisterC,
+                                                  RegisterS, kOut, Observer}),
+            0);
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(Observer, {Observer, Input, Output}), 0);
+  testing::Test::RecordProperty(kNativeImages, kCount);
+  testing::Test::RecordProperty(kRegisterObservations, kMixedEntries);
+  testing::Test::RecordProperty(kRegisterMatrix,
+                                kMixedEntries * kRegisterInputs);
+#else
+  GTEST_SKIP() << kUnavailable;
+#endif
+}
+
+TEST(AArch64DarwinVariadic, OptimizedImagePreservesReturnedRegisters) {
+  verifyVariadicRegisterImage(kOptimize);
+}
+
+TEST(AArch64DarwinVariadic, UnoptimizedImagePreservesReturnedRegisters) {
+  verifyVariadicRegisterImage(kUnoptimized);
 }
 
 TEST(AArch64DarwinVariadic, OptimizedCalleeWalksTheNativeArgumentArea) {

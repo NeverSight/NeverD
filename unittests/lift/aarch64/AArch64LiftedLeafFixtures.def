@@ -75,6 +75,105 @@ A64_LEAF_TEXT(kUnoptimized, "-O0")
 A64_LEAF_TEXT(kClassicABI, "ptrauth.abi-version")
 A64_LEAF_VALUE(unsigned, kClassicABIVersion, 0)
 A64_LEAF_TEXT(kExtendedVariadics, "#define TEST_VARIADIC_EXTENDED 1\n")
+A64_LEAF_VALUE(unsigned, kMixedEntries, 9)
+A64_LEAF_TEXT(kRegisterCallerName, "observe.S")
+A64_LEAF_TEXT(kRegisterCallerC, "register_caller.c")
+A64_LEAF_TEXT(kRegisterDriver, "register-caller")
+A64_LEAF_TEXT(kRegisterObservations, "native_register_entries_compared")
+A64_LEAF_TEXT(kRegisterMatrix, "native_register_input_comparisons")
+A64_LEAF_TEXT(kInstalledEntries, "installed_register_entries")
+A64_LEAF_VALUE(unsigned, kRegisterInputs, 3)
+A64_LEAF_TEXT(kReturnMnemonic, "ret")
+A64_LEAF_TEXT(kChangeScratch, "mov x9, xzr\n")
+A64_LEAF_TEXT(kVariadicDirect, "va_direct")
+A64_LEAF_TEXT(kRegisterCallerAssembly, R"asm(
+.text
+.p2align 2
+.globl _observe
+_observe:
+#if __arm64e__
+  pacibsp
+#endif
+  stp x29, x30, [sp, #-16]!
+  mov x29, sp
+  stp x19, x20, [sp, #-16]!
+  sub sp, sp, #64
+  mov x19, x3
+  mov x16, x0
+  mov x17, x1
+  ldp x10, x11, [x2]
+  stp x10, x11, [sp]
+  ldp x10, x11, [x2, #16]
+  stp x10, x11, [sp, #16]
+  ldp x10, x11, [x2, #32]
+  stp x10, x11, [sp, #32]
+  ldp x10, x11, [x2, #48]
+  stp x10, x11, [sp, #48]
+  ldp x0, x1, [x17]
+  ldp x2, x3, [x17, #16]
+  ldp x4, x5, [x17, #32]
+  ldp x6, x7, [x17, #48]
+  mov x8, #68
+  mov x9, #85
+  fmov d0, xzr
+#if __arm64e__
+  blraaz x16
+#else
+  blr x16
+#endif
+  stp x0, x8, [x19]
+  str x9, [x19, #16]
+  str d0, [x19, #24]
+  mov x10, sp
+  str x10, [x19, #32]
+  add sp, sp, #64
+  ldp x19, x20, [sp], #16
+  ldp x29, x30, [sp], #16
+#if __arm64e__
+  retab
+#else
+  ret
+#endif
+)asm")
+A64_LEAF_TEXT(kRegisterCallerSource, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+typedef void (*entry)(void);
+struct result { uint64_t x0, x8, x9, d0, sp; };
+extern void observe(entry, const uint64_t *, const uint64_t *, struct result *);
+int main(int argc, char **argv) {
+  if (argc != 3) return 1;
+  void *original = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  void *installed = dlopen(argv[2], RTLD_NOW | RTLD_LOCAL);
+  if (!original || !installed) return 2;
+  const char *names[] = {"leaf_sum", "leaf_difference", "va_walk", "va_named",
+                         "va_sentinel", "va_direct", "va_copied", "va_wide", "va_fp"};
+  for (unsigned i = 0; i != sizeof(names) / sizeof(*names); ++i) {
+    entry a = (entry)dlsym(original, names[i]), b = (entry)dlsym(installed, names[i]);
+    if (!a || !b || a == b) return 3;
+    for (unsigned round = 0; round != 3; ++round) {
+      uint64_t regs[8] = {round, 1, 2, 3, 4, 5, 6, 7};
+      uint64_t args[8] = {9, 23, 7, 0, 1, 2, 3, 4};
+      if (i < 2) regs[0] = 100;
+      if (round == 1) args[0] = 0;
+      struct result x, y;
+      observe(a, regs, args, &x);
+      observe(b, regs, args, &y);
+      if (memcmp(&x, &y, sizeof(x))) {
+        fprintf(stderr, "%s[%u] x0 %llx/%llx x8 %llx/%llx x9 %llx/%llx d0 %llx/%llx sp %llx/%llx\n",
+                names[i], round, x.x0, y.x0, x.x8, y.x8, x.x9, y.x9,
+                x.d0, y.d0, x.sp, y.sp);
+        return 4;
+      }
+      if (i == 0 && x.x0 != 100 + args[0]) return 5;
+      if (i == 1 && x.x0 != 77) return 6;
+    }
+  }
+  return 0;
+}
+)c")
 A64_LEAF_TEXT(kVariadicLeaves, R"c(
 #include <stdarg.h>
 typedef unsigned long word;

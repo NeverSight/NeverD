@@ -16,6 +16,8 @@
 #include "PipelineReturnModelingDetail.h"
 #include "PipelineSourceStackAccesses.h"
 
+#include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/codegen/MachO/MachOVariadicRegisters.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -510,10 +512,20 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     }
   }
 
+  llvm::DenseSet<va_t> DefinedEntries;
   Result.LLVMDefinitionNames.clear();
-  for (const auto &Function : *Result.LlvmModule)
-    if (!Function.isDeclaration())
-      Result.LLVMDefinitionNames.push_back(Function.getName().str());
+  for (const auto &Function : *Result.LlvmModule) {
+    if (Function.isDeclaration())
+      continue;
+    Result.LLVMDefinitionNames.push_back(Function.getName().str());
+    auto Source = rewrite_source::getOriginalVA(Function);
+    if (!Source) {
+      Result.Error = llvm::toString(Source.takeError());
+      return false;
+    }
+    if (*Source)
+      DefinedEntries.insert(**Source);
+  }
   std::sort(Result.LLVMDefinitionNames.begin(),
             Result.LLVMDefinitionNames.end());
 
@@ -521,6 +533,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     if (!Audit.HasMedIR)
       continue;
     Audit.HasLLVMDefinition =
+        DefinedEntries.contains(Audit.Entry) ||
         std::binary_search(Result.LLVMDefinitionNames.begin(),
                            Result.LLVMDefinitionNames.end(), Audit.Name);
   }
@@ -537,6 +550,16 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     Result.Error =
         "final LLVM verification failed: resolved call signature mismatch";
     return false;
+  }
+  if (Opts.PatchMode && Img.isArm64e()) {
+    llvm::SmallVector<va_t> Admitted;
+    for (const auto &Audit : Result.FunctionAudits)
+      if (Audit.HasLLVMDefinition && Audit.HasMedIR &&
+          Audit.UnsupportedInstructions.empty() &&
+          Audit.DecodeFailures.empty() && Audit.TruncatedPaths.empty() &&
+          Audit.UnprovenReturns.empty())
+        Admitted.push_back(Audit.Entry);
+    lowerMachOVariadicRegisters(*Result.LlvmModule, Img, Admitted);
   }
   Result.LLVMVerifierFailed =
       llvm::verifyModule(*Result.LlvmModule, &FinalVerifyStream);
