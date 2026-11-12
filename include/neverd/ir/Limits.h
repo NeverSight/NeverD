@@ -150,6 +150,9 @@ inline constexpr size_t kHighDeadStoreElimElimUnreadPrivateFrameStoresBudget =
     100000;
 inline constexpr size_t
     kHighDeadStoreElimElimUndefinedEntryScratchStoresBudget = 100000;
+// Statements and expression nodes one function's proofs that a private frame
+// store is overwritten before anything observes it may visit.
+inline constexpr size_t kHighDeadStoreElimFrameStoreObserversBudget = 200000;
 
 // lib/ir/high/pass/HighDemandedBytes.cpp
 inline constexpr size_t kHighDemandedBytesVisitBudget = 2000000;
@@ -552,6 +555,7 @@ inline constexpr int
     kHighDeadStoreElimNarrowSourceConcatLocalsCopyShapeDepthLimit = 8;
 inline constexpr int
     kHighDeadStoreElimNarrowUnreadRegisterBytesLowPrefixDepthLimit = 16;
+inline constexpr unsigned kHighDeadStoreElimFrameStoreObserversDepthLimit = 128;
 
 // lib/ir/high/pass/HighDemandedBytes.cpp
 inline constexpr int kHighDemandedBytesShiftAmountsDepthLimit = 4;

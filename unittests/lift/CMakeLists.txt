@@ -556,6 +556,7 @@ add_neverd_unittest(NeverDLiftTests
   core/SourceCallReturnTests.cpp
   core/SourceCallIntegerViewTests.cpp
   core/HighSSADefinitionTests.cpp
+  core/HighEntryScratchStoreTests.cpp
   core/HighEntryStackOffsetsTests.cpp
   core/HighSourceRangeTests.cpp
   core/ObjCCallHintTests.cpp
@@ -1934,6 +1935,7 @@ add_neverd_unittest(NeverDHighControlFlowTests
   core/HighValueForwardTests.cpp
   core/HighCIntegerConversionTests.cpp
   core/HighSSADefinitionTests.cpp
+  core/HighEntryScratchStoreTests.cpp
   core/HighEntryStackOffsetsTests.cpp
   core/HighSourceRangeTests.cpp
   core/HighFrameTemporaryTests.cpp
