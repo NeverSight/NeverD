@@ -78,6 +78,10 @@ inline constexpr double kComparisonZoomStep = 1.2;
 inline constexpr int kComparisonInitialWidth = 1280;
 inline constexpr int kComparisonInitialHeight = 800;
 inline constexpr int kComparisonMinimumWidth = 760;
+/// Commands of one group stand this close in their row, and the groups this
+/// far apart.
+inline constexpr int kComparisonCommandSpacing = 2;
+inline constexpr int kComparisonCommandGroupSpacing = 12;
 /// Keep source code readable below the comparison and paging controls.
 inline constexpr int kComparisonMinimumHeight = 640;
 /// Digest display prefix; full identities remain in row evidence and tooltips.

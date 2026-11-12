@@ -21,6 +21,7 @@
 #include "ComparisonReviewDialog.h"
 #include "ComparisonSourceView.h"
 #include "ComparisonValidationDialog.h"
+#include "FlowLayout.h"
 #include "Icons.h"
 #include "ModelessDialog.h"
 #include "Theme.h"
@@ -37,6 +38,7 @@
 #include <QGuiApplication>
 #include <QHeaderView>
 #include <QJsonArray>
+#include <QKeyEvent>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
@@ -54,6 +56,8 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <initializer_list>
+#include <iterator>
 #include <utility>
 
 namespace neverd::gui {
@@ -159,6 +163,17 @@ QLabel *label(QWidget *Parent, const QString &Text = {}) {
                              Qt::TextSelectableByKeyboard);
   return L;
 }
+/// Commands that belong together: close to each other, and in one piece
+/// where their row wraps.
+QWidget *group(QWidget *Parent, std::initializer_list<QPushButton *> Commands) {
+  auto *Together = new QWidget(Parent);
+  auto *Row = new QHBoxLayout(Together);
+  Row->setContentsMargins(0, 0, 0, 0);
+  Row->setSpacing(limits::kComparisonCommandSpacing);
+  for (auto *Command : Commands)
+    Row->addWidget(Command);
+  return Together;
+}
 QTableView *table(QWidget *Parent, ComparisonModel *Model, const char *Name) {
   auto *T = new QTableView(Parent);
   T->setObjectName(Name);
@@ -245,7 +260,8 @@ ComparisonDialog::ComparisonDialog(const QString &Worker,
   Root->addLayout(Inputs);
   Paths[0]->setText(PrimaryPath);
 
-  auto *Actions = new QHBoxLayout;
+  auto *Actions = new FlowLayout;
+  Actions->setHorizontalSpacing(limits::kComparisonCommandGroupSpacing);
   Start = new QPushButton(icon("compare"), tr("Compare"), this);
   Start->setObjectName("comparisonStart");
   Cancel = new QPushButton(tr("Cancel"), this);
@@ -304,10 +320,14 @@ ComparisonDialog::ComparisonDialog(const QString &Worker,
   SettingsButton->setObjectName("comparisonSettings");
   SettingsButton->setText(tr("Settings"));
   SettingsButton->setCheckable(true);
-  for (auto *B : {Start, Cancel, Reopen, Save, Regions, DataFlow})
-    Actions->addWidget(B);
+  // Until a comparison exists, Compare is the dialog's default action: it
+  // takes the accent, and Return starts it (update).  It stands with Cancel,
+  // apart from the commands on a comparison and from Settings, and the row
+  // wraps by those groups where the window is narrow.
+  Start->setDefault(true);
+  Actions->addWidget(group(this, {Start, Cancel}));
+  Actions->addWidget(group(this, {Reopen, Save, Regions, DataFlow}));
   Actions->addWidget(SettingsButton);
-  Actions->addStretch();
   Root->addLayout(Actions);
   auto *Settings = new QWidget(this);
   auto *SettingsLayout = new QGridLayout(Settings);
@@ -514,7 +534,14 @@ ComparisonDialog::ComparisonDialog(const QString &Worker,
       label(Details, tr("Select a function to inspect its counterpart."));
   FunctionTitle->setObjectName("comparisonFunctionTitle");
   DetailsLayout->addWidget(FunctionTitle);
-  auto *Edits = new QGridLayout;
+  // The commands on the selected function and its pair, in groups along one
+  // row that wraps: its counterpart, the mapping edits, their history, what
+  // inspects the pair and what reviews it.  Until a comparison exists there
+  // is no function to select, and the row stays away (update).
+  PairCommands = new QWidget(Details);
+  PairCommands->setObjectName("comparisonPairCommands");
+  auto *Edits = new FlowLayout(PairCommands);
+  Edits->setHorizontalSpacing(limits::kComparisonCommandGroupSpacing);
   Counterpart = new QPushButton(tr("Counterpart"), Details);
   Confirm = new QPushButton(tr("Confirm pair"), Details);
   Unmatch = new QPushButton(tr("Unmatch"), Details);
@@ -524,34 +551,24 @@ ComparisonDialog::ComparisonDialog(const QString &Worker,
   Undo->setObjectName("comparisonUndo");
   Redo = new QPushButton(icon("redo"), tr("Redo"), Details);
   Redo->setObjectName("comparisonRedo");
-  int EditIndex = 0;
-  for (auto *B : {Counterpart, Confirm, Unmatch, Remap, Undo, Redo}) {
-    Edits->addWidget(B, EditIndex / 3, EditIndex % 3);
-    B->setMinimumWidth(B->sizeHint().width());
-    ++EditIndex;
-  }
   Impact = new QPushButton(tr("Call paths…"), Details);
   Impact->setObjectName("comparisonImpactReview");
   RetryDetail = new QPushButton(tr("Retry difference"), Details);
   RetryDetail->setObjectName("comparisonRetryDetail");
   RetryDetail->setToolTip(
       tr("Recompute a cancelled or timed-out function difference."));
-  Edits->addWidget(RetryDetail, 1, 3);
   connect(RetryDetail, &QPushButton::clicked, this, [this] {
     selectFunction(SelectedSide, SelectedSide == "primary" ? PrimaryAddress
                                                            : SecondaryAddress);
   });
   Impact->setToolTip(
       tr("Trace observed callers, callees and entry points of this function."));
-  Edits->addWidget(Impact, 0, 3);
-  Edits->setColumnStretch(4, 1);
   connect(Impact, &QPushButton::clicked, this, [this] {
     showImpact(SelectedSide,
                SelectedSide == "primary" ? PrimaryAddress : SecondaryAddress);
   });
   Changes = new QPushButton(tr("Change review…"), Details);
   Changes->setObjectName("comparisonChangesReview");
-  Edits->addWidget(Changes, 2, 0, Qt::AlignLeft);
   connect(Changes, &QPushButton::clicked, this, [this] {
     if (!ChangesView) {
       ChangesView = new ComparisonChangesDialog(Session, this);
@@ -573,10 +590,8 @@ ComparisonDialog::ComparisonDialog(const QString &Worker,
   });
   Reviews = new QPushButton(tr("Analyst review…"), Details);
   Reviews->setObjectName("comparisonReviewHistory");
-  Edits->addWidget(Reviews, 2, 1, Qt::AlignLeft);
   Validate = new QPushButton(tr("Validate returns…"), Details);
   Validate->setObjectName("comparisonValidateReturns");
-  Edits->addWidget(Validate, 2, 2, 1, 2, Qt::AlignLeft);
   connect(Validate, &QPushButton::clicked, this, [this] {
     if (!ValidationView)
       ValidationView = new ComparisonValidationDialog(Session, this);
@@ -600,7 +615,12 @@ ComparisonDialog::ComparisonDialog(const QString &Worker,
                                          ? PrimaryAddress
                                          : SecondaryAddress);
   });
-  DetailsLayout->addLayout(Edits);
+  Edits->addWidget(group(PairCommands, {Counterpart}));
+  Edits->addWidget(group(PairCommands, {Confirm, Unmatch, Remap}));
+  Edits->addWidget(group(PairCommands, {Undo, Redo}));
+  Edits->addWidget(group(PairCommands, {Impact, RetryDetail}));
+  Edits->addWidget(group(PairCommands, {Changes, Reviews, Validate}));
+  DetailsLayout->addWidget(PairCommands);
   auto *Tabs = new QTabWidget(Details);
   DetailsLayout->addWidget(Tabs, 1);
   Instructions =
@@ -682,6 +702,11 @@ ComparisonDialog::ComparisonDialog(const QString &Worker,
   Footer->addWidget(Progress);
   Root->addLayout(Footer);
 
+  // Qt makes the first button in a dialog its default, which was Browse, and
+  // then any button the keyboard reaches: each took the accent, and Return in
+  // the filter or a table pressed it.
+  for (auto *B : findChildren<QPushButton *>())
+    B->setAutoDefault(false);
   connect(Start, &QPushButton::clicked, this, [this] { run(); });
   connect(Cancel, &QPushButton::clicked, &Session, &ComparisonSession::cancel);
   connect(Reopen, &QPushButton::clicked, this, [this] {
@@ -784,6 +809,7 @@ ComparisonDialog::ComparisonDialog(const QString &Worker,
   update();
 }
 void ComparisonDialog::run(const QString &Restore) {
+  Compared = inputs();
   QJsonObject Inputs[2];
   for (int I = 0; I < 2; ++I) {
     Inputs[I]["path"] = Paths[I]->text();
@@ -853,6 +879,11 @@ void ComparisonDialog::update() {
         ::neverd::limits::diff::kDefaultFlowFunctions));
     Threshold->setValue(Settings["min_similarity"].toDouble());
   }
+  // With a comparison to review, Return in its filter or tables must not
+  // start another.
+  const bool Compared = !Session.revision().isEmpty();
+  Start->setDefault(!Compared);
+  PairCommands->setVisible(Compared);
   const bool Editable = Idle && !S["stale"].toBool();
   RetryDetail->setEnabled(Editable && DetailStopped && !Session.cancellable());
   Undo->setEnabled(Editable && S["can_undo"].toBool());
@@ -1020,5 +1051,44 @@ void ComparisonDialog::edit(const QString &Kind) {
 void ComparisonDialog::closeEvent(QCloseEvent *Event) {
   QSettings().setValue("comparison/geometry", saveGeometry());
   QDialog::closeEvent(Event);
+}
+QStringList ComparisonDialog::inputs() const {
+  QStringList Named;
+  for (int I = 0; I < 2; ++I)
+    Named << Paths[I]->text() << Loaders[I]->currentData().toString()
+          << Bases[I]->text();
+  return Named;
+}
+void ComparisonDialog::keyPressEvent(QKeyEvent *Event) {
+  const bool Return =
+      (Event->key() == Qt::Key_Return || Event->key() == Qt::Key_Enter) &&
+      (Event->modifiers() & ~Qt::KeypadModifier) == Qt::NoModifier;
+  if (!Return) {
+    QDialog::keyPressEvent(Event);
+    return;
+  }
+  // This window answers Return itself.  QDialog presses the first default
+  // button among all its descendants: once a comparison exists none is left
+  // here, and the key would press one in a review window that is open.  Nor
+  // does a button here take the default as focus reaches it, so Return on
+  // Browse would start a comparison.
+  QWidget *Focus = focusWidget();
+  const auto Holds = [Focus](const auto &Controls) {
+    return std::find(std::begin(Controls), std::end(Controls), Focus) !=
+           std::end(Controls);
+  };
+  if (qobject_cast<QPushButton *>(Focus) ||
+      qobject_cast<QToolButton *>(Focus)) {
+    // The button that holds focus.
+    static_cast<QAbstractButton *>(Focus)->click();
+  } else if (Holds(Paths) || Holds(Bases) || Holds(Loaders)) {
+    // An input: the comparison of what the inputs now name.  Where that is
+    // the one shown, the key must not throw its review away.
+    if (inputs() != Compared)
+      Start->click();
+  } else if (Start->isDefault()) {
+    // Elsewhere the default, which is Compare until a comparison exists.
+    Start->click();
+  }
 }
 } // namespace neverd::gui

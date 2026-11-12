@@ -46,6 +46,7 @@ public:
 
 protected:
   void closeEvent(QCloseEvent *Event) override;
+  void keyPressEvent(QKeyEvent *Event) override;
 
 private:
   ComparisonSession Session;
@@ -59,6 +60,7 @@ private:
   QSpinBox *Timeout, *FlowFunctions;
   QTableView *FunctionTable, *InstructionTable;
   QLabel *Summary, *Status, *FunctionTitle;
+  QWidget *PairCommands;
   QPlainTextEdit *Evidence;
   ComparisonSourceView *Source;
   QPushButton *Start, *Cancel, *Save, *Reopen, *Undo, *Redo, *Confirm, *Unmatch,
@@ -74,6 +76,9 @@ private:
   QProgressBar *Progress;
   QTimer Filter;
   QString SavedPath, PrimaryAddress, SecondaryAddress, SelectedSide = "primary";
+  /// What the input controls named as the comparison last started from them.
+  QStringList Compared;
+  QStringList inputs() const;
   bool RestoreSettings = false;
   bool DetailStopped = false;
   void run(const QString &Restore = {});

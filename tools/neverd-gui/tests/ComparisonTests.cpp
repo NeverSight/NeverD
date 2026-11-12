@@ -20,6 +20,7 @@
 #include "ComparisonReviewDialog.h"
 #include "ComparisonSourceView.h"
 #include "ComparisonValidationDialog.h"
+#include "DialogReturnKey.h"
 #include "ProjectDatabase.h"
 #include "Theme.h"
 
@@ -56,6 +57,7 @@
 #include <QToolButton>
 #include <QTranslator>
 #include <algorithm>
+#include <memory>
 
 using namespace neverd::gui;
 namespace {
@@ -155,6 +157,98 @@ private slots:
     QVERIFY(Navigate->isEnabled());
     QTest::mouseClick(Navigate, Qt::LeftButton);
     QVERIFY(Tabs->currentWidget() != Source);
+    QCOMPARE(Failures.size(), 0);
+  }
+  void compareIsTheDefaultOnlyUntilAComparisonExists() {
+    const auto A = Directory.filePath("default-before.bin");
+    const auto B = Directory.filePath("default-after.bin");
+    QVERIFY(write(A, QByteArray::fromHex("e00080d2000c0091c0035fd6")));
+    QVERIFY(write(B, QByteArray::fromHex("200180d2000c0091c0035fd6")));
+    ComparisonDialog View(TEST_COMPARISON_WORKER);
+    auto &Session = View.session();
+    QSignalSpy Failures(&Session, &ComparisonSession::failed);
+    View.show();
+    QTRY_VERIFY_WITH_TIMEOUT(Session.ready(), Timeout);
+    auto *Start = View.findChild<QPushButton *>("comparisonStart");
+    auto *Commands = View.findChild<QWidget *>("comparisonPairCommands");
+    QVERIFY(Start && Commands);
+    // Compare alone takes the accent, whichever button the keyboard reaches;
+    // Qt would give it to Browse, the first button, and then to each focused
+    // one.  The commands on a pair wait for a comparison.
+    for (const auto *Button : View.findChildren<QPushButton *>()) {
+      QCOMPARE(Button->isDefault(), Button == Start);
+      QVERIFY2(!Button->autoDefault(), qPrintable(Button->text()));
+    }
+    QVERIFY(!Commands->isVisible());
+    View.findChild<QLineEdit *>("comparisonPrimary")->setText(A);
+    auto *Secondary = View.findChild<QLineEdit *>("comparisonSecondary");
+    Secondary->setText(B);
+    for (const auto *Name : {"primaryLoader", "secondaryLoader"}) {
+      auto *Loader = View.findChild<QComboBox *>(Name);
+      Loader->setCurrentIndex(Loader->findData("aarch64"));
+    }
+    View.findChild<QLineEdit *>("primaryBase")->setText("0x1000");
+    View.findChild<QLineEdit *>("secondaryBase")->setText("0x8000");
+    // Return on a button the keyboard reached presses that button and not
+    // Compare, although none but Compare takes the default.
+    QVERIFY(Start->isEnabled());
+    auto *Reached = new QPushButton("Reached", &View);
+    Reached->setAutoDefault(false);
+    Reached->show();
+    QSignalSpy Presses(Reached, &QPushButton::clicked);
+    Reached->setFocus();
+    QCOMPARE(View.focusWidget(), Reached);
+    QTest::keyClick(Reached, Qt::Key_Return);
+    QCOMPARE(Presses.size(), 1);
+    QVERIFY(!Session.busy() && Session.revision().isEmpty());
+    // Return in an input's field starts the comparison.
+    Secondary->setFocus();
+    QTest::keyClick(Secondary, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(!Session.busy() && !Session.revision().isEmpty(),
+                             Timeout);
+    QCOMPARE(Failures.size(), 0);
+    QVERIFY(Commands->isVisible());
+    // With a comparison to review, Return in its filter starts no other.
+    QVERIFY(!Start->isDefault());
+    const auto Revision = Session.revision();
+    auto *Search = View.findChild<QLineEdit *>("comparisonSearch");
+    Search->setFocus();
+    QTest::keyClick(Search, Qt::Key_Return);
+    // Nor does Return on a list of choices, which the workbench passes to a
+    // dialog's default button.
+    const std::unique_ptr<QObject> ReturnKey(acceptDialogsOnReturn(*qApp));
+    auto *Kinds = View.findChild<QComboBox *>("comparisonFilter");
+    QVERIFY(Kinds && !Kinds->isEditable());
+    Kinds->setFocus();
+    QTest::keyClick(Kinds, Qt::Key_Return);
+    // Nor does it press a button of a review window that is open, though
+    // Qt looks for a dialog's default among all its descendants and gives
+    // that window one as it shows.
+    QTest::mouseClick(View.findChild<QPushButton *>("comparisonReviewHistory"),
+                      Qt::LeftButton);
+    auto *Review =
+        View.findChild<ComparisonReviewDialog *>("comparisonReviewDialog");
+    QVERIFY(Review);
+    QTRY_VERIFY_WITH_TIMEOUT(Review->isVisible(), Timeout);
+    auto *Refresh = Review->findChild<QPushButton *>("reviewRefresh");
+    QVERIFY(Refresh && Refresh->isDefault() && Refresh->isVisible());
+    QSignalSpy Refreshes(Refresh, &QPushButton::clicked);
+    Search->setFocus();
+    QTest::keyClick(Search, Qt::Key_Return);
+    QCOMPARE(Refreshes.size(), 0);
+    // Return in an input's field leaves the comparison it names alone.
+    Secondary->setFocus();
+    QTest::keyClick(Secondary, Qt::Key_Return);
+    QTest::qWait(300);
+    QVERIFY(!Session.busy());
+    QCOMPARE(Session.revision(), Revision);
+    // Once the input names another file, the key compares that one.
+    const auto C = Directory.filePath("default-other.bin");
+    QVERIFY(write(C, QByteArray::fromHex("400180d2000c0091c0035fd6")));
+    Secondary->setText(C);
+    QTest::keyClick(Secondary, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(!Session.busy() && Session.revision() != Revision,
+                             Timeout);
     QCOMPARE(Failures.size(), 0);
   }
   void unresolvedReferencesStayDistinctFromObservedChanges() {

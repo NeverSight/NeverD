@@ -271,6 +271,26 @@ rules below do, not from taste.
   behind gray text read as an enabled button that had broken.
 - A checked tool button that cannot act keeps that plate in place of its
   fill; a toggle whose glyph shows its state keeps neither.
+- Do not show commands that cannot apply yet as a block of disabled buttons.
+  Hide by mode, disable by selection, as the Windows guidelines put it:
+  Binary comparison's eleven commands on a pair appear with the first
+  comparison, before which there is no function to select, and from then on
+  each disables in place. Group a row of commands by what they act on, with
+  a wider gap between groups than within one, at their natural widths in a
+  `FlowLayout` that wraps a group whole; a grid stretched them to its columns
+  and scattered them.
+- Give a window at most one default action, and only while it is the next
+  step. Qt makes a dialog's first push button its default and then each
+  button the keyboard reaches, so Binary comparison drew Browse in the accent
+  and Return in its filter pressed it. Turn `autoDefault` off for a tool
+  window's buttons, as Lineage does, and set the default yourself: Compare
+  until a comparison exists and none after, when Return in the filter would
+  start another. Such a window must then answer Return itself. `QDialog`
+  presses the first default button among all its descendants, those of an
+  open child window included, and a button without `autoDefault` passes the
+  key up to it. Binary comparison presses the button that holds focus,
+  compares from an input field only where the inputs differ from the
+  comparison shown, and otherwise swallows the key.
 - A spin box's arrow dims where its range ends. Qt marks that arrow `:off`,
   from `stepEnabled`, not `:disabled`.
 - Make hover visible. `ToolBarHover` sat within two levels of the dark
@@ -617,6 +637,13 @@ perfect aesthetics or using decorative effects as a substitute for hierarchy.
   [Dark Modern](https://github.com/microsoft/vscode/blob/main/extensions/theme-defaults/themes/dark_modern.json)
   and [Light Modern](https://github.com/microsoft/vscode/blob/main/extensions/theme-defaults/themes/light_modern.json)
   button colors.
+- [Windows guidelines: dialog boxes](https://learn.microsoft.com/en-us/windows/win32/uxguide/win-dialog-box#disabling-or-removing-controls-vs-giving-error-messages)
+  (remove a control users do not expect to apply, disable one whose state
+  changes often) and
+  [command buttons](https://learn.microsoft.com/en-us/windows/win32/uxguide/ctrl-command-buttons)
+  (the default button, at most two widths in a window).
+- [Visual Studio Code: views](https://code.visualstudio.com/api/ux-guidelines/views)
+  — buttons only for primary actions, and few of them.
 - [WinUI theme resources](https://github.com/microsoft/microsoft-ui-xaml/tree/main/controls/dev/CommonStyles)
   — `Common_themeresources_any.xaml` and the Button, TextBox, ComboBox,
   CheckBox and ToggleButton resources give Windows 11's disabled fill,
