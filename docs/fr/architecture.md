@@ -1280,6 +1280,8 @@ Dans un produit de sommes d’une constante et d’un terme variable, si la somm
 
 Lorsque certains produits croisés subsistent, seuls les facteurs dont la perturbation a au moins la moitié de la largeur observée en bits de poids faible nuls (arrondie au supérieur) sont regroupés. Les autres facteurs multiplient tout le résultat, ce qui conserve les interactions observables. Les coefficients égaux ou opposés peuvent être mis en facteur.
 
+Pour les facteurs qui partagent une expression `u`, les zéros de poids faible des coefficients déterminent les puissances observables. Le schéma de Horner évalue le polynôme. Les autres facteurs peuvent encore réduire la précision nécessaire. Le produit de `j` entiers consécutifs est divisible par `j!`, ce qui peut éliminer des termes de degré supérieur. Les entrées des groupes peuvent être interdépendantes.
+
 Le rendu suit un parcours postfixe itératif, sans tri des nœuds, et traite directement les feuilles. Lorsque la classification existante ne demande ni entrée cachée, ni entrée représentant un masque littéral, ni réécriture d’un complément arithmétique, l’abstraction MBA réutilise le DAG original. La vérification indépendante des identités et la comptabilisation du travail restent inchangées.
 
 Les décalages et facteurs littéraux d’une base affine déjà opaque construisent directement le résultat des coefficients, sans arbre temporaire. Les enfants linéaires conservent le parcours général ; le stockage du résultat et les opérations sur mots sont comptabilisés avant la publication d’une relation complète.

@@ -31,6 +31,7 @@ add_neverd_component_library(NeverDSymbolic
   mba/SymMBAResidueDecision.cpp
   mba/SymMBAResidue.cpp
   mba/SymMBAHighProduct.cpp
+  mba/SymMBATruncatedProduct.cpp
   mba/SymWideArithmetic.cpp
   parse/SymParse.cpp
   parse/SymParseCall.cpp

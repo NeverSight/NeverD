@@ -6160,6 +6160,14 @@ When some cross terms survive, collect only the factors whose disturbances
 have at least half the observed bits clear at the low end, rounding up.
 The other factors multiply the entire collected polynomial. Their mutual
 products and their interactions with the high terms survive at full width.
+For repeated factors of the form `a + b * u` on the same word, the sum of
+the smallest trailing-zero counts of the weights bounds which powers of
+`u` survive. Other factors can further reduce the required coefficient
+precision. Each group is evaluated in Horner form and the groups are
+multiplied together, including when their input words overlap. A degree
+can drop again when its falling factorial vanishes because the product of `j`
+consecutive integers is always divisible by `j!`. The solver compares the
+two exact polynomial readings at the observed width.
 Equal or opposite weights can share a factor. After removing a common power
 of two, an odd weight is invertible at the remaining width, which lets long
 literal coefficients share one scale. The simplifier compares expression

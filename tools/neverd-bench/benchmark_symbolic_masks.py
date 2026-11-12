@@ -1187,6 +1187,55 @@ def mixed_perturbation_corpus(width, count):
 
 
 
+def truncated_product_corpus(width, count):
+    """Repeated bitwise words with nonvanishing quadratic and higher cross terms."""
+    words = ("(x^y)", "((x&z)^(y|w))", "((x+y)^(z&w))", "(~(x|z))", "((x^w)|(y&z))")
+    tails = ("(x^y)+2*(x&y)", "((z^w)*(x|y))", "x+(w&z)", "(x+y)")
+    rows = []
+    for case in range(count):
+        rng = random.Random(15837013 + width * 1411 + case * 19)
+        observed = width - (width // 5 if case % 4 == 1 else 0)
+        scale = 1 if observed == width else 3 << (width - observed)
+        degree = (11, 19, 29, 41, 67, 89)[case % 6]
+        order = 2 + (case // 2) % 4
+        shift = (observed + order) // (order + 1)
+        groups = 1 + case % 3
+        factors = []
+        for j in range(degree):
+            word = words[((j + case) % groups + case) % len(words)]
+            weight = (rng.randrange(-31, 32) | 1) << (shift + j % 3)
+            offset = rng.randrange(-31, 32) | 1
+            if case % 6 == 5 and j in (0, degree // 2):
+                offset = (offset + 1) or 2
+            factors.append(f"({offset}+({weight}*{word}))")
+        rng.shuffle(factors)
+        rows.append(f"({scale}*" + "*".join(factors) + ")+" + tails[case % 4])
+    return rows
+
+
+def integer_product_corpus(width, count):
+    """Neighboring precisions on either side of a falling-factorial divisor."""
+    words = ("(x^y)", "((x&z)^(y|w))", "((x+y)^(z&w))", "(~(x|z))", "((x^w)|(y&z))")
+    rows = []
+    for case in range(count):
+        degree = 3 + case % 6
+        factorial_bits = degree - degree.bit_count() + (case // 6) % 2
+        shift = max(1, (width - factorial_bits) // degree)
+        observed = min(width, shift * degree + factorial_bits)
+        word = words[(width + case) % len(words)]
+        length = (1 << (degree.bit_length() + 1 + case % 2)) - 1
+        rng = random.Random(1070021 + width * 193 + case)
+        factors = []
+        for _ in range(length):
+            offset = rng.randrange(-61, 62) | 1
+            weight = (rng.randrange(-31, 32) | 1) << shift
+            factors.append(f"({offset}+({weight}*{word}))")
+        rng.shuffle(factors)
+        rows.append(f"(({3 << (width - observed)})*" + "*".join(factors) + ")+(x&y)+(x|y)")
+    return rows
+
+
+
 def sparse_linear_mixed_degree_corpus(width, count):
     """Degree-4–18 products with disjoint constant, linear and perturbed tails.
 
@@ -1386,7 +1435,7 @@ def main():
                  "narrow-product-cross-terms", "masked-product-window",
                  "residue-power", "residue-quotient", "residue-subgroup",
                  "sparse-linear-mixed-degree", "upper-perturbation", "masked-perturbation",
-                 "mixed-perturbation"),
+                 "mixed-perturbation", "truncated-product", "integer-product"),
         default="complement",
     )
     args = parser.parse_args()
@@ -1404,6 +1453,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="neverd-mask-bench-") as directory:
         path = Path(directory) / "expressions.txt"
         widths = {
+            "truncated-product": (8, 16, 32, 63, 65, 129, 257),
+            "integer-product": (8, 16, 31, 64, 97, 193, 257),
             "mixed-perturbation": (8, 16, 32, 64, 65, 129, 257),
             "upper-perturbation": (8, 16, 32, 64, 65, 97, 129, 257),
             "masked-perturbation": (9, 24, 63, 127, 256),
@@ -1440,6 +1491,8 @@ def main():
                 "upper-perturbation": upper_perturbation_corpus,
                 "masked-perturbation": masked_perturbation_corpus,
                 "mixed-perturbation": mixed_perturbation_corpus,
+                "truncated-product": truncated_product_corpus,
+                "integer-product": integer_product_corpus,
             }[args.family]
             expressions = generate(width, args.count)
             path.write_text("\n".join(expressions) + "\n", encoding="utf-8")
