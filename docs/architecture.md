@@ -6601,6 +6601,21 @@ its fixed parameters as the program's C library does
 requests are ints, glibc's an enumeration and an unsigned long). The GUI offers a separate C choice for non-C
 images and omits it when only C is offered.
 
+A callee typed a scalar float returns its whole vector register on the source
+routes when a direct caller lets a byte past the scalar reach an operation
+(`recoverPackedScalarReturnFromCallers`). Otherwise the LLVM route reads
+the scalar's lane alone where a scalar operation merged it into the
+register's value at entry, which no parameter supplies (`cvtsi2sd` into an
+XMM0 the routine never set): the bytes above the lane are no part of the
+return, so source output reads no unknown machine state for them and they
+pass zero, as an unset register reads on the native route. A temporary no statement assigns,
+the bytes a partial write keeps of a register nothing set, is an unknown leaf
+as such a register is. An AArch32 `$d` interval among code is data, bounded
+by the interval, so a literal pool's address prints as an object. An integer
+comparison, division or remainder of a floating value's bits casts the bit
+cast, never the floating text, and a guarded x87 value samples its status
+into a local that C hands to the thread-local owner.
+
 The reader also recognizes the portable prototype-integer type queries emitted
 by `CTypeRender`: `__typeof__(__builtin_choose_expr(sizeof(T) == N, (T)0,
 (Fixed)0))`. It selects the operand's integer type using the target data model's
@@ -9295,6 +9310,14 @@ block. Visited edge identities close transparent cycles and retain each
 outgoing edge's separate equality facts. No iteration count or guessed source
 replaces this traversal.
 
+The emitter's own audit of a frame, which proves a reload is a plain number
+when its exact stores are not all known, passes the same fault checks: an
+intrinsic with no output that `onlyChecksForAFault` accepts is neither a
+writer of the frame nor an escape of its address, and any other intrinsic
+that takes a frame address still ends the proof. A GOT base that joins its
+certified value and an exact reload of it in PHIs and copies is the certified
+zero when every leaf is, within `kMaxModelZeroJoinValues` values.
+
 The immutable CFG index includes ordinary and exceptional predecessors.
 Writes after the LOAD remain relevant when a backedge can return to it;
 non-returning suffixes cannot supply its value. A local overwrite or kill uses
@@ -9369,6 +9392,26 @@ Each reaching-definition lookup starts strictly before the previous one and
 debits the candidate evidence account, so the finite prefix itself bounds
 these walks. Recursive expression and selector proofs retain their separate
 depth limits; longer copies grant no address, target or domain authority.
+
+An AArch64 load that scales a register index is kept as one original
+instruction, not a load of a sum. The two-table recognizer takes that form
+too: the base and the raw index are the instruction's own operands, the merged
+selector is the slot index, and the address-role proof admits a select of
+bases for it only when the load's base is that select on every path, each arm
+is its own table by address provenance, and the index is masked to one
+table's capacity. A constant-base table's model gives a dispatch only the
+roles of its own load: where the branch's block holds the load, another read
+of the table (a threaded interpreter's other handlers) is no selector of this
+branch, though the consumer group still records it.
+
+A walk that proves a spilled base reaches its reload, or bounds the index of
+a frame store, passes an intrinsic that only checks for a fault
+(`onlyChecksForAFault`): an aligned vector store is lifted as an alignment
+check before its store, and the check writes no register and no memory. A
+dense guarded group whose bootstrap, every member reaching every slot of the
+owner, fails a member runs it once more with each member bound to the table
+its own load names; the two proving rounds are unchanged and still publish
+only what they repeat.
 
 The frozen resolver graph validates scalar operation shapes before retaining
 their records. Known integer/boolean operations require their complete explicit
@@ -10800,6 +10843,28 @@ incoming stack slots to pass on. A call to such a routine records its named
 count (`MedCallInfo::VarArgFixedCount`), so an LLVM declaration of a routine
 the module does not emit stays variadic. A declaration made from one call's
 arguments would cut another call's.
+
+A call through a pointer becomes a direct call where its own block proves the
+pointer is a routine of the image. In a relocatable object, whose sections
+start at zero, a scalar can equal a routine's address, so the proof carries
+what the constant it read is (`MedCallTarget::Provenance`) and only an
+address of the object's own converts (`addressesImage`); a slot, a register
+constant and a scalar stay indirect there. An indirect call's recovered list
+holds its register arguments and then the values stored for the stack. HighC
+pads it up to the register bank before the stored values where a register
+was left out, since C fills every argument register first. Each such register
+passes what the machine has in it at the call: the target, where it holds
+the call's target, and otherwise the value reaching the call, a parameter the
+body only passes on included, so a wrapper that hands its arguments on and
+adds stack arguments declares and passes them. The stored values are an
+upper bound, a local at the stack pointer among them, and a conforming call
+stores an integer for the stack only once the registers are used up: the
+padding applies where every register left out before the bank's last, which
+an alignment or a composite may skip, carries a value, or every floating
+register is taken. There the last register passes zero when the function has
+no value to name for it. A call that leaves more registers without one keeps
+its list, as do i386, variadic calls and a call recovery lists no arguments
+for, which takes the block scan's.
 
 An AAPCS64 register save area also spills q0-q7, which carry only the floating
 and vector arguments a caller passes. Where the function's va_arg reads none of
