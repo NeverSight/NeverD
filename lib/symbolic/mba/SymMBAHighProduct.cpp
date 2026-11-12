@@ -365,9 +365,22 @@ SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     // Keep the low factors as an exact multiplier. Among disturbances with
     // at least ceil(Observed / 2) trailing zeros, every cross term vanishes.
     const unsigned Half = Observed / 2 + Observed % 2;
+    unsigned MiddleBits = 0;
     auto IsHigh = [&](SymRef F) {
-      const auto Mask = ZeroMask(Disturbance(F));
-      return Mask && Ctx.constValue(Mask).countr_zero() >= Half;
+      const auto D = Disturbance(F);
+      const auto Mask = ZeroMask(D);
+      if (!Mask)
+        return false;
+      const unsigned Zeros = Ctx.constValue(Mask).countr_zero();
+      if (Zeros && Zeros < Half && Ctx.op(D) == SymOp::Mul)
+        MiddleBits += std::min(Observed - MiddleBits, Zeros);
+      return Zeros >= Half;
+    };
+    auto Truncated = [&] {
+      return MiddleBits == Observed
+                 ? foldTruncatedProduct(Ctx, Root, Observed, Budget, Storage,
+                                        EmittedReading)
+                 : Root;
     };
     // Check for a candidate before reserving both partitions. Unit-offset
     // families commonly have no scaled or masked high word anywhere.
@@ -379,7 +392,7 @@ SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
         (FirstHigh - Factors.begin() + unsigned(FirstHigh != Factors.end())) *
         (1 + Words));
     if (FirstHigh == Factors.end())
-      return Root;
+      return Truncated();
     const size_t Remaining = Factors.end() - FirstHigh;
     if (Count + 1 > Storage / (2 * sizeof(SymRef)) ||
         Remaining > Budget.available() / (Words + 2))
@@ -401,6 +414,8 @@ SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
       Edges += Ctx.numOperands(D);
       High.push_back(F);
     }
+    if (const auto Polynomial = Truncated(); Polynomial != Root)
+      return Polynomial;
     if (High.size() < 2)
       return Root;
     Factors = High;
@@ -410,7 +425,8 @@ SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
       sizeof(llvm::APInt) + 2 * sizeof(SymRef) + 3 * Words * sizeof(uint64_t);
   const size_t EdgeBytes = Edges * (4 * sizeof(SymRef));
   const size_t FixedWork = 8 + std::bit_width(Factors.size());
-  if (Factors.size() + 1 > (Storage - EdgeBytes) / Bytes ||
+  if (EdgeBytes > Storage ||
+      Factors.size() + 1 > (Storage - EdgeBytes) / Bytes ||
       Edges > Budget.available())
     return Root;
   const size_t Available = (Budget.available() - Edges) / Factors.size();

@@ -313,14 +313,14 @@ def carry_product_elf(degree, product=True, needed=7, high_bits=None, additive=F
     return elf(code), f"x+y+z+{scale}U*" + "*".join(factors)
 
 
-def high_perturbation_elf(degree, low_factors=()):
+def high_perturbation_elf(degree, low_factors=(), shift_base=16):
     code = bytearray.fromhex("b801000000")  # eax = 1
     factors = []
     for i in range(degree):
-        # ecx holds a mixed input word, with the coefficient in the upper half.
+        # The shift controls which cross terms between the three words survive.
         op, value = (("31f1", "(x^y)"), ("09d1", "(x|z)"),
                      ("21f1", "(x&y)"))[i % 3]
-        shift = i % 4 if i in low_factors else 16 + i % 3
+        shift = i % 4 if i in low_factors else shift_base + i % 3
         coefficient = ((2 * i + 1) << shift) & 0xffffffff
         offset = 2 * i + 1
         code += bytes.fromhex("89f9" + op + "69c9") + struct.pack("<I", coefficient)
@@ -462,6 +462,9 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
+        elif kind.startswith("truncated-perturbation-"):
+            code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
+            assert code.count("*") <= 12, text
         elif kind.startswith(("power-group-", "high-perturbation-", "mixed-perturbation-")):
             code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
             assert code.count("*") < int(kind.rsplit("-", 1)[1]) // 2, text
@@ -521,7 +524,7 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
                 function_name(enhanced)
                 enhanced_shape(enhanced)
                 if representation == "source":
-                    if kind.startswith(("residue-", "multiple-residual-", "carry-product-", "carry-cofactor-", "power-group-", "high-perturbation-", "mixed-perturbation-")) or kind in ("affine-residue-neighbor", "prefix-residue-neighbor", "coarse-residue-neighbor", "distributed-residue-neighbor"):
+                    if kind.startswith(("residue-", "multiple-residual-", "carry-product-", "carry-cofactor-", "power-group-", "high-perturbation-", "mixed-perturbation-", "truncated-perturbation-")) or kind in ("affine-residue-neighbor", "prefix-residue-neighbor", "coarse-residue-neighbor", "distributed-residue-neighbor"):
                         code = re.sub(r"/\*.*?\*/|//[^\n]*", "", ordinary,
                                       flags=re.S)
                         assert "*" in code, ordinary
@@ -629,6 +632,7 @@ if __name__ == "__main__":
             ("carry-cofactor-zero-witness-256", *carry_product_elf(256, True, 6, 2, complemented=True)),
             ("high-perturbation-33", *high_perturbation_elf(33)),
             ("mixed-perturbation-49", *high_perturbation_elf(49, (0, 19, 48))),
+            ("truncated-perturbation-63", *high_perturbation_elf(63, shift_base=7)),
             ("power-group-16", *residue_power_elf(16, 4)),
             ("power-group-64", *residue_power_elf(64, 6)),
             ("power-group-perturbed-128", *residue_power_elf(128, 4, 1)),

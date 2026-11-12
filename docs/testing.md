@@ -4174,6 +4174,12 @@ factors with one to four low disturbances. The native tests exhaust the
 five-bit input pair and check mixed products with independent full-width Z3
 proofs at 16, 65 and 257 bits. A 49-factor executable retains three low
 factors through the CLI and worker source routes.
+Use `--family truncated-product --count 18` for 126 products of 11 to 89
+factors with surviving higher powers, and `--family integer-product --count 12`
+for 84 cases on both sides of a falling-factorial precision boundary. A
+63-factor x64 fixture exercises the CLI and worker source routes. The native
+tests also exhaust the six-bit input pair and prove overlapping products
+equivalent at 16, 65 and 257 bits with Z3.
 The LLVM
 translator checks scaled offsets against exhaustive byte domains, including
 overlap and no-wrap flags that can make the input poison.

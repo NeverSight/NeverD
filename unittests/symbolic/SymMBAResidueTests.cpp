@@ -483,6 +483,203 @@ TEST(SymMBAResidue, PreservesAllCrossTermsOfTheRemainingLowFactors) {
   }
 }
 
+TEST(SymMBAResidue, TruncatesRepeatedMixedWordsWithoutLosingCrossTerms) {
+  std::mt19937_64 Random(53491);
+  for (unsigned Width : {6u, 16u, 65u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto U = Ctx.mkXor(X, Y), V = Ctx.mkMul(X, Ctx.mkOr(X, Y));
+    const unsigned Observed = Width - Width / 5, Shift = (Observed + 3) / 4;
+    const auto Scale = llvm::APInt(Width, 3).shl(Width - Observed);
+    llvm::SmallVector<SymRef, 32> Factors{Ctx.mkConst(Scale), Y};
+    llvm::SmallVector<llvm::APInt, 32> Weights;
+    for (unsigned J = 0; J < 23; ++J) {
+      auto Word = J % 2 ? V : U;
+      if (J % 5 == 3)
+        Word = Ctx.mkNot(Word);
+      auto Weight =
+          llvm::APInt(Width, 3 + 2 * J).shl(J == 2 ? 0 : Shift + J % 2);
+      if (J % 3 == 0)
+        Weight.negate();
+      Weights.push_back(Weight);
+      Factors.push_back(Ctx.mkAdd(Ctx.mkConst(Width, J == 4 ? 6 : 2 * J + 1),
+                                  Ctx.mkMul(Ctx.mkConst(Weight), Word)));
+    }
+    const auto Input = Ctx.mkMul(Factors);
+    detail::WorkBudget Budget(65536);
+    size_t Storage = 1 << 20;
+    const auto Output =
+        detail::foldProductResidues(Ctx, Input, Budget, Storage);
+    ASSERT_LT(Ctx.readabilityCost(Output), Ctx.readabilityCost(Input) / 2);
+    EXPECT_LT(Budget.used(), 32768u);
+    SymEvalPlan Plan(Ctx, Output);
+    auto Check = [&](SymEvalPlan &Evaluator, const llvm::APInt &A,
+                     const llvm::APInt &B) {
+      auto Expected = Scale * B;
+      for (unsigned J = 0; J < Weights.size(); ++J) {
+        auto Word = J % 2 ? A * (A | B) : A ^ B;
+        if (J % 5 == 3)
+          Word.flipAllBits();
+        Expected *= Weights[J] * Word + (J == 4 ? 6 : 2 * J + 1);
+      }
+      EXPECT_EQ(Evaluator.eval({A, B}), Expected);
+    };
+    if (Width == 6) {
+      for (unsigned A = 0; A < 64; ++A)
+        for (unsigned B = 0; B < 64; ++B)
+          Check(Plan, llvm::APInt(Width, A), llvm::APInt(Width, B));
+    } else {
+      auto Word = [&] {
+        auto Value = llvm::APInt(Width, 0);
+        for (unsigned Bit = 0; Bit < Width; Bit += 64)
+          Value |= llvm::APInt(Width, Random(), false, true).shl(Bit);
+        return Value;
+      };
+      for (unsigned J = 0; J < 64; ++J)
+        Check(Plan, Word(), Word());
+    }
+    for (auto [Work, Bytes] :
+         {std::pair<size_t, size_t>{2, 1 << 20}, {65536, 1}}) {
+      detail::WorkBudget Short(Work);
+      EXPECT_EQ(detail::foldProductResidues(Ctx, Input, Short, Bytes), Input);
+      EXPECT_LE(Short.used(), Work);
+    }
+    // Exercise a declined middle-product reconstruction followed by the
+    // existing high-product path with the same remaining storage.
+    for (size_t Bytes : {128u, 512u, 1024u, 2048u, 4096u}) {
+      detail::WorkBudget Limited(65536);
+      size_t Remaining = Bytes;
+      const auto Candidate =
+          detail::foldProductResidues(Ctx, Input, Limited, Remaining);
+      EXPECT_LE(Remaining, Bytes);
+      EXPECT_LE(Limited.used(), 65536u);
+      SymEvalPlan Evaluator(Ctx, Candidate);
+      Check(Evaluator, llvm::APInt(Width, 3), llvm::APInt::getAllOnes(Width));
+      Check(Evaluator, llvm::APInt::getAllOnes(Width), llvm::APInt(Width, 7));
+    }
+  }
+}
+
+TEST(SymMBAResidue, DropsTheCubicOnlyWhenEveryFallingFactorialIsAnnihilated) {
+  // The third forward difference of (1 + 4*x)^7 is 128 modulo 256.
+  // Seven observed bits admit a quadratic; eight still require a cubic.
+  for (unsigned Observed : {7u, 8u}) {
+    constexpr unsigned Width = 65;
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width);
+    const auto F =
+        Ctx.mkAdd(Ctx.mkConst(Width, 1), Ctx.mkMul(Ctx.mkConst(Width, 4), X));
+    const auto Scale = llvm::APInt(Width, 1).shl(Width - Observed);
+    llvm::SmallVector<SymRef, 8> Factors(7, F);
+    Factors.push_back(Ctx.mkConst(Scale));
+    const auto Input = Ctx.mkMul(Factors);
+    detail::WorkBudget Budget(65536);
+    size_t Storage = 1 << 20;
+    const auto Output =
+        detail::foldProductResidues(Ctx, Input, Budget, Storage);
+    ASSERT_NE(Output, Input);
+    unsigned Uses = 0;
+    llvm::SmallVector<SymRef, 16> Pending{Output};
+    while (!Pending.empty()) {
+      const auto Value = Pending.pop_back_val();
+      Uses += Value == X;
+      const auto Operands = Ctx.operands(Value);
+      Pending.append(Operands.begin(), Operands.end());
+    }
+    EXPECT_EQ(Uses, Observed == 7 ? 2u : 3u);
+    SymEvalPlan Plan(Ctx, Output);
+    for (unsigned I = 0; I < (1u << Observed); ++I) {
+      llvm::APInt Expected = Scale;
+      for (unsigned J = 0; J < 7; ++J)
+        Expected *= 1 + I * 4;
+      EXPECT_EQ(Plan.eval({llvm::APInt(Width, I)}), Expected);
+    }
+  }
+}
+
+TEST(SymMBAResidue,
+     KeepsACompletedPolynomialBesideADisjointMonomialWithinBudget) {
+  constexpr unsigned Width = 257;
+  SymContext Ctx;
+  const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+  const auto Z = Ctx.mkVar("z", Width), W = Ctx.mkVar("w", Width);
+  const std::array Words{Ctx.mkXor(X, Y),
+                         Ctx.mkXor(Ctx.mkAnd(X, Z), Ctx.mkOr(Y, W)),
+                         Ctx.mkXor(Ctx.mkAdd(X, Y), Ctx.mkAnd(Z, W))};
+  const auto Scale = llvm::APInt(Width, 3).shl(51);
+  llvm::SmallVector<SymRef, 96> Factors{Ctx.mkConst(Scale)};
+  llvm::SmallVector<llvm::APInt, 96> Weights, Offsets;
+  for (unsigned I = 0; I < 89; ++I) {
+    const int Weight = (int(I * 17 % 63) - 31) | 1;
+    int Offset = (int(I * 13 % 61) - 31) | 1;
+    if (I == 0 || I == 44) {
+      ++Offset;
+      if (!Offset)
+        Offset = 2;
+    }
+    Weights.push_back(llvm::APInt(Width, Weight, true).shl(42));
+    Offsets.push_back(llvm::APInt(Width, Offset, true));
+    Factors.push_back(
+        Ctx.mkAdd(Ctx.mkConst(Offsets.back()),
+                  Ctx.mkMul(Ctx.mkConst(Weights.back()), Words[(I + 5) % 3])));
+  }
+  const auto Input =
+      Ctx.mkAdd(Ctx.mkMul(Factors), Ctx.mkMul(Ctx.mkXor(Z, W), Ctx.mkOr(X, Y)));
+  MBAOptions Opts;
+  Opts.MaxWork = 65536;
+  const auto R = simplifyMBADeep(Ctx, Input, Opts);
+  EXPECT_LT(R.Work, Opts.MaxWork / 2);
+  EXPECT_LT(R.SizeAfter, 200u);
+  SymEvalPlan Plan(Ctx, R.Expr);
+  std::mt19937_64 Random(87331);
+  for (unsigned I = 0; I < 32; ++I) {
+    std::array<llvm::APInt, 4> Inputs;
+    for (auto &Value : Inputs) {
+      Value = llvm::APInt(Width, 0);
+      for (unsigned Bit = 0; Bit < Width; Bit += 64)
+        Value |= llvm::APInt(Width, Random()).shl(Bit);
+    }
+    const auto &A = Inputs[0], &B = Inputs[1], &C = Inputs[2], &D = Inputs[3];
+    const std::array Values{A ^ B, (A & C) ^ (B | D), (A + B) ^ (C & D)};
+    auto Expected = Scale;
+    for (unsigned J = 0; J < Weights.size(); ++J)
+      Expected *= Offsets[J] + Weights[J] * Values[(J + 5) % 3];
+    EXPECT_EQ(Plan.eval(Inputs), Expected + (C ^ D) * (A | B));
+  }
+}
+
+TEST(SymMBAResidue, ProvesOverlappingTruncatedProductsAtFullWidth) {
+  if (!solver::proofBackendAvailable(solver::ProofBackend::Z3))
+    GTEST_SKIP() << "Z3 unavailable";
+  for (unsigned Width : {16u, 65u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto U = Ctx.mkXor(X, Y), V = Ctx.mkOr(X, Y);
+    llvm::SmallVector<SymRef, 16> Factors{
+        Ctx.mkConst(llvm::APInt(Width, 1).shl(Width - 6))};
+    for (unsigned I = 0; I < 8; ++I) {
+      auto Word = I % 2 ? U : V;
+      if (I == 3)
+        Word = Ctx.mkNot(Word);
+      auto Weight = llvm::APInt(Width, I * 2 + 1).shl(I == 1 ? 0 : 2);
+      if (I % 3 == 1)
+        Weight.negate();
+      Factors.push_back(Ctx.mkAdd(Ctx.mkConst(Width, I == 5 ? 2 : 2 * I + 1),
+                                  Ctx.mkMul(Ctx.mkConst(Weight), Word)));
+    }
+    const auto Input = Ctx.mkMul(Factors);
+    detail::WorkBudget Budget(65536);
+    size_t Storage = 1 << 20;
+    const auto Output =
+        detail::foldProductResidues(Ctx, Input, Budget, Storage);
+    ASSERT_LT(Ctx.readabilityCost(Output), Ctx.readabilityCost(Input));
+    solver::SymSynthVerifier Verify({}, solver::ProofBackend::Z3, 15000);
+    EXPECT_EQ(Verify(Ctx, Input, Output), SynthVerification::Equivalent);
+  }
+}
+
 TEST(SymMBAResidue, ProvesAMixedSubsetWithEvenAndNegativeCoefficients) {
   if (!solver::proofBackendAvailable(solver::ProofBackend::Z3))
     GTEST_SKIP() << "Z3 unavailable";

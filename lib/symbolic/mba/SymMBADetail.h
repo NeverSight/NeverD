@@ -642,6 +642,12 @@ SymRef foldProductResidues(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
 SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
                             size_t &Storage, bool *EmittedReading);
 
+/// Truncate products of repeated affine offsets on the same arbitrary word
+/// modulo the observed width. The caller has established a mixed product.
+SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
+                            WorkBudget &Budget, size_t &Storage,
+                            bool *EmittedReading);
+
 /// Absorb a top-bit correction into an adjacent sum by its exact parity.
 SymRef foldResidueParitySum(SymContext &Ctx, SymRef Root,
                             const MBAOptions &Opts, WorkBudget &Budget,

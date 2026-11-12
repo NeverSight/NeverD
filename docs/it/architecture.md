@@ -1270,6 +1270,8 @@ In un prodotto di somme di una costante e un termine variabile, tutti i termini 
 
 Se rimangono termini incrociati, si raggruppano solo i fattori la cui perturbazione ha un numero di bit bassi nulli pari ad almeno metà della larghezza osservata, arrotondata per eccesso. Gli altri fattori moltiplicano il risultato intero e conservano le interazioni osservabili. I coefficienti uguali o opposti possono essere raccolti a fattor comune.
 
+Per i fattori con la stessa espressione `u`, gli zeri finali dei coefficienti determinano quali potenze restano osservabili. Il polinomio viene valutato con il metodo di Horner. Gli altri fattori possono ridurre ulteriormente la precisione necessaria. Il prodotto di `j` interi consecutivi è divisibile per `j!` e può quindi annullare altri termini di grado elevato. Gli ingressi dei gruppi possono dipendere gli uni dagli altri.
+
 Il rendering usa una visita iterativa in postordine, senza ordinare i nodi, e stampa direttamente le foglie. Se la classificazione esistente non richiede ingressi nascosti, ingressi per maschere letterali o riscritture di complementi aritmetici, l’astrazione MBA riutilizza il DAG originale. La verifica indipendente delle identità e il conteggio del lavoro restano invariati.
 
 Gli offset e i fattori letterali di una base affine già opaca costruiscono direttamente i coefficienti, evitando un albero temporaneo. I figli lineari mantengono la visita generale; memoria del risultato e operazioni sulle parole sono conteggiate prima di pubblicare una relazione completa.

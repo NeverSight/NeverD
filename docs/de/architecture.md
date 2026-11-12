@@ -1274,6 +1274,8 @@ Bei Produkten aus Konstanten und additiven Störtermen verschwinden alle gemisch
 
 Bleiben Kreuzterme erhalten, werden nur Faktoren zusammengefasst, deren Störterm mindestens die Hälfte der beobachteten Bitbreite (aufgerundet) an niederwertigen Nullbits besitzt. Die übrigen Faktoren multiplizieren das gesamte Ergebnis und erhalten damit alle beobachtbaren Wechselwirkungen. Gleiche oder entgegengesetzte Koeffizienten lassen sich ausklammern.
 
+Bei Faktoren mit demselben Ausdruck `u` bestimmen die nachgestellten Nullbits der Koeffizienten, welche Potenzen erhalten bleiben. Die Auswertung erfolgt mit dem Horner-Schema. Andere Faktoren können die erforderliche Genauigkeit weiter verringern. Das Produkt von `j` aufeinanderfolgenden ganzen Zahlen ist durch `j!` teilbar, sodass weitere hohe Grade entfallen können. Die Eingaben der Gruppen dürfen voneinander abhängen.
+
 Die Ausgabe verwendet eine iterative Nachordnung ohne Knotensortierung und gibt Blätter direkt aus. Verlangt die bestehende Klassifikation weder verborgene Eingaben noch Träger für literale Masken oder eine Umschreibung arithmetischer Komplemente, verwendet die MBA-Abstraktion den ursprünglichen DAG wieder. Unabhängige Identitätsprüfung und Arbeitsabrechnung bleiben unverändert.
 
 Literale Offsets und Faktoren einer bereits opaken affinen Basis erzeugen das Koeffizientenergebnis direkt, ohne temporären Arbeitsbaum. Lineare Kinder behalten den allgemeinen Durchlauf; Ergebnisspeicher und Wortoperationen werden vor Veröffentlichung einer vollständigen Relation berechnet.

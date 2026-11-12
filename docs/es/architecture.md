@@ -1273,6 +1273,8 @@ En un producto de sumas de una constante y un término variable, si los dos meno
 
 Si quedan términos cruzados, solo se agrupan los factores cuya perturbación tiene al menos la mitad del ancho observado (redondeada hacia arriba) de bits bajos a cero. Los demás factores multiplican el resultado completo y conservan todas las interacciones observables. Los coeficientes iguales u opuestos se pueden sacar como factor común.
 
+Cuando varios factores comparten una expresión `u`, los ceros finales de sus coeficientes determinan qué potencias se conservan. El polinomio se evalúa con el método de Horner. Los demás factores pueden reducir la precisión necesaria. El producto de `j` enteros consecutivos es divisible por `j!`, lo cual permite eliminar más términos de grado alto. Las entradas de los grupos pueden depender unas de otras.
+
 El texto se genera mediante un recorrido iterativo en postorden, sin ordenar nodos, y las hojas se imprimen directamente. Si la clasificación existente no requiere entradas ocultas, entradas para máscaras literales ni reescritura de complementos aritméticos, la abstracción MBA reutiliza el DAG original. La verificación independiente de identidades y la contabilidad del trabajo permanecen intactas.
 
 Los desplazamientos y factores literales de una base afín ya opaca construyen directamente los coeficientes, sin un árbol temporal de trabajo. Los hijos lineales mantienen el recorrido general; el almacenamiento y las operaciones de palabra se contabilizan antes de publicar una relación completa.
