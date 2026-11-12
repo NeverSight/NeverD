@@ -61,7 +61,7 @@ public:
   Readiness observe() const {
     // Explicit completion errors are receive outcomes, not poll observations.
     if (const auto *E = event(); E && E->Error && socket().Sent >= E->AfterSend)
-      return {1, {}, nullptr};
+      return {1, {}, {}};
     return Files.socketReadiness(socket(), 1);
   }
   bool ready() const override {
@@ -81,7 +81,7 @@ public:
   resume(ProcessResult &Result) override {
     const auto R = observe();
     if (R.Unknown)
-      return unsupported(Result, R.Unknown);
+      return R.Unknown.stop(Result);
     // An arrival at the deadline is available before the timeout check.
     if (!(R.Available & 1)) {
       if (Deadline && Files.Clock->elapsed() >= *Deadline)
