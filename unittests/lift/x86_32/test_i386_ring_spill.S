@@ -2,8 +2,17 @@
 // write through a masked index.  The ring occupies 0x10..0x1f(%esp) and the
 // GOT base is spilled at 0x20(%esp): with RING_MASK 15 no ring write reaches
 // the spill slot, while RING_MASK 31 may overwrite it.
+//
+// ALIGNED_CLEAR adds the aligned `movaps` a compiler clears the ring with,
+// whose alignment check faults or changes nothing.  1 puts it where a peeled
+// first iteration has it: after the mask of the first ring index and before
+// the spill, so the index of the first ring store reaches that store across
+// the check.  2 puts it in the loop, between the spill and each reload.
 #ifndef RING_MASK
 #define RING_MASK 15
+#endif
+#ifndef ALIGNED_CLEAR
+#define ALIGNED_CLEAR 0
 #endif
 
 .text
@@ -20,11 +29,25 @@ i386_ring_spill:
 .Lgot:
   .long .Lgot - .Lpc
   .reloc .Lgot, R_386_GOTPC, _GLOBAL_OFFSET_TABLE_
+#if ALIGNED_CLEAR == 1
+  movl 0x38(%esp), %ebx
+  movl %ebx, %edx
+  andl $RING_MASK, %edx
+  xorps %xmm0, %xmm0
+  movaps %xmm0, 0x10(%esp)
+  movl %esi, 0x20(%esp)
+  movb %bl, 0x10(%esp,%edx,1)
+#else
   movl %esi, 0x20(%esp)
   movl 0x38(%esp), %ebx
+#endif
   xorl %eax, %eax
   movl $16, %ecx
 .Lloop:
+#if ALIGNED_CLEAR == 2
+  xorps %xmm0, %xmm0
+  movaps %xmm0, 0x10(%esp)
+#endif
   movl %ebx, %edx
   andl $RING_MASK, %edx
   movb %bl, 0x10(%esp,%edx,1)

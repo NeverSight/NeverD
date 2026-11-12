@@ -3992,6 +3992,20 @@ foreach(ring_mask 15 31)
     DEPENDS ${i386_ring_spill_src}
     COMMENT "Assembling the i386 GOT spill beside a ring of mask ${ring_mask}")
   list(APPEND TEST_OBJECTS ${i386_ring_spill_obj})
+  # The same ring behind an aligned vector clear: 1 before the spill, where a
+  # peeled first iteration has it, 2 in the loop between spill and reload.
+  foreach(aligned_clear 1 2)
+    set(i386_ring_clear_obj
+        "${CMAKE_CURRENT_BINARY_DIR}/test_i386_ring_spill_${ring_mask}_clear${aligned_clear}.o")
+    add_custom_command(
+      OUTPUT ${i386_ring_clear_obj}
+      COMMAND ${CLANG_EXEC} -target i386-linux-gnu -nostdlib -nostdlibinc -c
+              -DRING_MASK=${ring_mask} -DALIGNED_CLEAR=${aligned_clear}
+              ${i386_ring_spill_src} -o ${i386_ring_clear_obj}
+      DEPENDS ${i386_ring_spill_src}
+      COMMENT "Assembling the i386 GOT spill beside a cleared ring of mask ${ring_mask}, form ${aligned_clear}")
+    list(APPEND TEST_OBJECTS ${i386_ring_clear_obj})
+  endforeach()
 endforeach()
 
 set(i386_adjacent_function_pointer_src

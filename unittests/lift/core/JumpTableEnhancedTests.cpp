@@ -691,6 +691,55 @@ TEST_F(JTE_X86_32, WiderRingStoreMayOverwriteTheSpilledGOTBase) {
   EXPECT_TRUE(Low.JumpTables.empty());
 }
 
+static neverd::LowFunc buildI386RingSpill(unsigned RingMask,
+                                          unsigned AlignedClear) {
+  auto ImageOrErr =
+      neverd::loadBinary(fs::path(TEST_OBJ_DIR) /
+                         ("test_i386_ring_spill_" + std::to_string(RingMask) +
+                          "_clear" + std::to_string(AlignedClear) + ".o"));
+  if (!ImageOrErr) {
+    ADD_FAILURE() << llvm::toString(ImageOrErr.takeError());
+    return {};
+  }
+  const neverd::Symbol *Function = ImageOrErr->findSymbol("i386_ring_spill");
+  neverd::Decoder Decoder;
+  if (!Function || !Decoder.init(ImageOrErr->Arch, ImageOrErr->Mode)) {
+    ADD_FAILURE() << "i386_ring_spill cannot be decoded";
+    return {};
+  }
+  neverd::CFGBuilder Builder;
+  return Builder.build(*ImageOrErr, Decoder, Function->Addr, Function->Name);
+}
+
+TEST_F(JTE_X86_32, AlignmentCheckBeforeAPeeledRingStoreKeepsItsIndexBound) {
+  // `and $15, %edx; movaps %xmm0, 0x10(%esp); mov %esi, 0x20(%esp);
+  // movb %bl, 0x10(%esp,%edx,1)`: the movaps only checks its address, so the
+  // index it follows still reaches the ring store masked, and the store
+  // misses the GOT base spilled at 0x20 (x86o64_megamix's entry block).
+  const neverd::LowFunc Low = buildI386RingSpill(15, 1);
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().Targets.size(), 4u);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+}
+
+TEST_F(JTE_X86_32, AlignmentCheckBetweenASpillAndItsReloadWritesNoFrameCell) {
+  // The loop clears the ring with `movaps %xmm0, 0x10(%esp)` between the
+  // spill of the GOT base and each reload.  The check stores nothing.
+  const neverd::LowFunc Low = buildI386RingSpill(15, 2);
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().Targets.size(), 4u);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
+TEST_F(JTE_X86_32, AlignmentChecksDoNotNarrowAWiderRingStore) {
+  // With edx = x & 31 the ring store may still cover the spill at 0x20.
+  for (unsigned AlignedClear : {1u, 2u}) {
+    SCOPED_TRACE(AlignedClear);
+    EXPECT_TRUE(buildI386RingSpill(31, AlignedClear).JumpTables.empty());
+  }
+}
+
 static neverd::LowFunc buildI386ForeignStore(const char *Name) {
   auto ImageOrErr = neverd::loadBinary(fs::path(TEST_OBJ_DIR) /
                                        "test_jumptable_foreign_store_i386.o");
