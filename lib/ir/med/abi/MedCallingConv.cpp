@@ -19,6 +19,7 @@
 
 #include "../pass/MedEntryStackOffsets.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -53,6 +54,11 @@ void detectFPParams(
     MedFunc &Func, const MedBlock &Entry, const TargetRegInfo &TRI,
     const std::map<std::pair<uint64_t, uint16_t>, int> &RegVarMap,
     Arch TargetArch, BinaryFormat TargetFormat);
+
+// ---- MIPS fixed hard-float parameter order (MIPS/MedCallConventionMIPS.cpp)
+// ----
+void orderMIPSO32FloatingParameters(MedFunc &Func, const TargetRegInfo &TRI,
+                                    BinaryFormat Fmt);
 
 // ---- x86-specific helpers (MedCallingConvX86.cpp) ----
 void detectSummaryVectorParams(MedFunc &Func, const TargetRegInfo &TRI,
@@ -1552,6 +1558,9 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
                                    static_cast<uint8_t>(VectorRegs.size()));
     }
   }
+
+  if (isMIPS(TheArch) && !isMIPS64(TheArch) && !Func.IsVariadic)
+    orderMIPSO32FloatingParameters(Func, TRI, Fmt);
 
   // Past its spilled argument registers, a variadic function whose summary
   // names its first variadic one reads every incoming stack argument through

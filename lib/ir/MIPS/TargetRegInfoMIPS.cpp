@@ -23,6 +23,11 @@ constexpr uint64_t O32Parameters[] = {mipsreg::r(4), mipsreg::r(5),
 constexpr uint64_t N64Parameters[] = {
     mipsreg::r(4), mipsreg::r(5), mipsreg::r(6),  mipsreg::r(7),
     mipsreg::r(8), mipsreg::r(9), mipsreg::r(10), mipsreg::r(11)};
+constexpr uint64_t O32FPParameters[] = {mipsreg::w(12), mipsreg::w(14)};
+constexpr uint64_t N64FPParameters[] = {
+    mipsreg::w(12), mipsreg::w(13), mipsreg::w(14), mipsreg::w(15),
+    mipsreg::w(16), mipsreg::w(17), mipsreg::w(18), mipsreg::w(19)};
+constexpr uint64_t FPReturnRegisters[] = {mipsreg::w(0), mipsreg::w(2)};
 constexpr uint64_t O32Saved[] = {mipsreg::r(16), mipsreg::r(17), mipsreg::r(18),
                                  mipsreg::r(19), mipsreg::r(20), mipsreg::r(21),
                                  mipsreg::r(22), mipsreg::r(23), mipsreg::FP};
@@ -63,6 +68,11 @@ const TargetRegInfo &getMIPSRegInfo(Arch Target) {
       Info.SubRegs = VectorViews;
       Info.IntParamRegs =
           Wide ? llvm::ArrayRef(N64Parameters) : llvm::ArrayRef(O32Parameters);
+      Info.FPParamRegs = Wide ? llvm::ArrayRef(N64FPParameters)
+                              : llvm::ArrayRef(O32FPParameters);
+      Info.FPReturnReg = mipsreg::w(0);
+      Info.FPReturnRegs = FPReturnRegisters;
+      Info.FPABIRegWidth = 8;
       Info.IntReturnReg = mipsreg::V0;
       Info.IntReturnReg2 = mipsreg::V1;
       Info.IntegerReturnPairHighFirst =

@@ -12,6 +12,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/FuncDetector.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/LowToMedError.h"
@@ -19,6 +20,7 @@
 
 #include "llvm/Support/Error.h"
 
+#include <algorithm>
 #include <vector>
 
 using namespace neverd;
@@ -111,6 +113,55 @@ TEST_P(MIPSControl, DelayedUnitOwnsBothInstructionsAndActiveOperandDetails) {
         FAIL() << "unexpected operand in JAL/LW fixture";
       }
     }
+  }
+}
+
+TEST_P(MIPSControl,
+       UntrustedDiscoveryKeepsOperandDetailAcrossRepeatedRequests) {
+  // The call target has no symbol: verification must lift its JR and slot.
+  // Reusing a decoder exercises the former detail-off scan transition.
+  auto Image = image({0x0c000404, 0, 0x03e00008, 0, 0x00851021, 0x03e00008, 0},
+                     GetParam());
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(Image));
+  for (unsigned I = 0; I != 16; ++I) {
+    Image.VerifiedFunctionEntries.clear();
+    FuncDetector Detector;
+    const auto Functions = Detector.detect(Image, Decode);
+    EXPECT_EQ(Image.VerifiedFunctionEntries.count(0x1010), 1u);
+    EXPECT_TRUE(Decode.detailEnabled());
+    EXPECT_TRUE(std::any_of(Functions.begin(), Functions.end(),
+                            [](const auto &F) { return F.first == 0x1010; }));
+  }
+}
+
+TEST_P(MIPSControl, DetailOffSnapshotsNeverReadStaleOperandCounts) {
+  const auto Code = encode({0x03e00008, 0x24820001}, GetParam());
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(GetParam()));
+  DecodedExecutionUnit Unit;
+  ASSERT_EQ(Decode.decodeUnitForLift(Code.data(), Code.size(), 0x1000, Unit),
+            8);
+  std::vector<LowOp> Expected;
+  const auto ExpectedSlot = Decode.liftUnitToLow(Unit, Expected);
+  for (bool Detail : {false, true, false, true}) {
+    // Poison the retained allocation before disabling detail. The next scan
+    // must not use this count to copy beyond the actual MIPS operand bank.
+    DecodedInsn Physical;
+    ASSERT_EQ(
+        Decode.decodeOneForLift(Code.data(), Code.size(), 0x1000, Physical), 4);
+    ASSERT_NE(Physical.Raw->detail, nullptr);
+    Physical.Raw->detail->mips.op_count = 255;
+    Decode.setDetail(Detail);
+    ASSERT_EQ(Decode.decodeUnitForLift(Code.data(), Code.size(), 0x1000, Unit),
+              8);
+    ASSERT_TRUE(Unit.HasDelaySlot);
+    EXPECT_EQ(Unit.Head.Raw->detail != nullptr, Detail);
+    EXPECT_EQ(Unit.Slot.Raw->detail != nullptr, Detail);
+    std::vector<LowOp> Actual;
+    EXPECT_EQ(Decode.liftUnitToLow(Unit, Actual), ExpectedSlot);
+    EXPECT_EQ(Actual, Expected);
+    Decode.setDetail(true);
   }
 }
 

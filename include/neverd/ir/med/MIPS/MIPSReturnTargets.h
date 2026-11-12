@@ -18,8 +18,9 @@ struct MedFunc;
 
 /// Every original return must use the exact incoming RA, including its mode
 /// tag. Qualify the captured operand, not the register after the delay slot.
-/// This initial proof accepts scalar identity transports and exact leaf-frame
-/// spills. Calls and opaque memory effects do not authorize stack restoration.
+/// Accept scalar identity transports and exact private frame spills. Complete
+/// fixed FP calls preserve a spill only when its slot is outside the outgoing
+/// arguments and no argument can expose the frame. Opaque effects fail closed.
 bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
                                 Arch Target, BinaryFormat Format);
 

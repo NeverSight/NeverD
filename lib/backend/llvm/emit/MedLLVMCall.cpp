@@ -10,6 +10,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "neverd/ArchSupport.h"
 #include "neverd/Common.h"
 #include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/LLVMValueProvenance.h"
@@ -92,6 +93,30 @@ bool floatingHeaderCall(const FunctionSym &Function, Arch Architecture,
         !(Call.Args[I] == Op.Inputs[I + 1]))
       return false;
   return true;
+}
+
+// LLVM integer types have no signedness. Preserve the source spelling as well
+// as the actual MIPS ABI extension on the declaration and every call site.
+static llvm::AttributeList
+mipsFloatingCallAttributes(llvm::LLVMContext &C, llvm::AttributeList Attrs,
+                           const FloatingCallArguments &Signature) {
+  if (Signature.SignedResult)
+    Attrs = Attrs.addFnAttribute(C, LLVMSourceSignedResult);
+  for (unsigned I = 0; I != Signature.Scalars.size(); ++I) {
+    const auto &P = Signature.Scalars[I];
+    if (P.Floating || P.Pointer)
+      continue;
+    if (P.Signed)
+      Attrs = Attrs.addParamAttribute(C, I, LLVMSourceSignedParameter);
+    // Both signed and unsigned 32-bit arguments are sign-extended on n64.
+    // At smaller widths the declared integer type selects the extension.
+    if (P.Bytes <= 4)
+      Attrs = Attrs.addParamAttribute(C, I,
+                                      P.Signed || P.Bytes == 4
+                                          ? llvm::Attribute::SExt
+                                          : llvm::Attribute::ZExt);
+  }
+  return Attrs;
 }
 
 llvm::GlobalValue *constantCallIdentity(llvm::Value *Value,
@@ -2049,6 +2074,19 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         CalleeTy, Callable, CoercedArgs, AuthenticationBundles,
         CalleeTy->getReturnType()->isVoidTy() ? "" : "call");
     Call->setCallingConv(Callee->getCallingConv());
+    if (isMIPS(TargetArch) && Op.ScalarCallSignature) {
+      const auto &Signature = *Op.ScalarCallSignature;
+      if (CalleeTy != floatingCallType(*Ctx, Signature)) {
+        syncError() << "med_llvm_emitter: MIPS floating call disagrees with "
+                       "its declared LLVM carriers\n";
+        FatalCodePointerResolution = true;
+        return;
+      }
+      Callee->setAttributes(
+          mipsFloatingCallAttributes(*Ctx, Callee->getAttributes(), Signature));
+      Call->setAttributes(
+          mipsFloatingCallAttributes(*Ctx, Call->getAttributes(), Signature));
+    }
     // A direct arm64e tail transfer forwards the caller's LR. Mark direct
     // argument forwarding so instruction selection can preserve that jump.
     // Restrict it to incoming values, which cannot refer to this frame.

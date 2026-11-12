@@ -454,6 +454,20 @@ void recoverVectorReturnFromCallers(const BinaryImage &Img,
   if (!TRI.hasFPReturnReg() || !TRI.isVectorReg(TRI.FPReturnReg) ||
       TRI.ReturnsFPInX87)
     return;
+  const auto DirectResult = [](const MedOp &Op) {
+    return !Op.SourceCallHint && Op.Opcode == NdOp::CALL && Op.NumInputs &&
+           Op.Inputs[0].isConst() && Op.Output.Kind == MedVar::Reg;
+  };
+  // The integer-read veto matters only if some call can supply the positive
+  // vector evidence. Avoid indexing every SSA use in an integer-only image.
+  if (llvm::none_of(Result.MedFuncs, [&](const MedFunc &Caller) {
+        return llvm::any_of(Caller.Blocks, [&](const MedBlock &Block) {
+          return llvm::any_of(Block.Ops, [&](const MedOp &Op) {
+            return DirectResult(Op) && Op.Output.RegOff == TRI.FPReturnReg;
+          });
+        });
+      }))
+    return;
   std::set<va_t> ReadAsVector, ReadAsInteger;
   for (const auto &Caller : Result.MedFuncs) {
     std::set<std::pair<int, int>> Read;
@@ -467,9 +481,7 @@ void recoverVectorReturnFromCallers(const BinaryImage &Img,
     }
     for (const auto &Blk : Caller.Blocks)
       for (const auto &Op : Blk.Ops) {
-        if (Op.SourceCallHint || Op.Opcode != NdOp::CALL || Op.NumInputs < 1 ||
-            !Op.Inputs[0].isConst() || Op.Output.Kind != MedVar::Reg ||
-            !Read.count({Op.Output.Id, Op.Output.SSAVer}))
+        if (!DirectResult(Op) || !Read.count({Op.Output.Id, Op.Output.SSAVer}))
           continue;
         if (Op.Output.RegOff == TRI.FPReturnReg)
           ReadAsVector.insert(Op.Inputs[0].ConstVal);

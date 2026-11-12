@@ -299,13 +299,13 @@ struct TargetRegInfo {
 
   /// Whether a call preserves this exact register view.  This is usually an
   /// offset-only callee-save query, except for ABIs with partially preserved
-  /// FP/vector register banks (AAPCS/AAPCS64).
+  /// FP/vector register banks (AAPCS/AAPCS64 and MIPS hard float).
   bool isCallPreserved(uint64_t RegOff, uint16_t Size) const;
 
   /// Number of low-order bytes preserved across a call for this register
   /// view.  Equal to Size for a fully callee-saved view and zero for a fully
-  /// caller-saved view.  AAPCS64 v8-v15 are the only partial case: their low
-  /// 8 bytes are preserved even when a wider Q-register view is used.
+  /// caller-saved view. AAPCS64 v8-v15 and MIPS saved FPRs preserve their
+  /// low 8 bytes even when a wider vector view is used.
   uint16_t callPreservedPrefixSize(uint64_t RegOff, uint16_t Size) const;
 
   /// The same queries under the calling convention \p Format selects.

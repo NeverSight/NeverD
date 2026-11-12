@@ -35,15 +35,20 @@ inline llvm::Type *floatingCallElementType(llvm::LLVMContext &Context,
 inline llvm::FunctionType *
 floatingCallType(llvm::LLVMContext &Context,
                  const FloatingCallArguments &Signature) {
+  const auto ScalarType = [&](unsigned Bytes, bool Floating,
+                              bool Pointer) -> llvm::Type * {
+    if (Floating)
+      return floatingCallElementType(Context, Bytes);
+    if (Pointer)
+      return llvm::PointerType::getUnqual(Context);
+    return llvm::Type::getIntNTy(Context, Bytes * 8);
+  };
   std::vector<llvm::Type *> Scalars;
   for (unsigned Bytes : Signature.ParameterBytes)
     Scalars.push_back(floatingCallElementType(Context, Bytes));
   for (const auto &Parameter : Signature.Scalars)
     Scalars.push_back(
-        Parameter.Floating ? floatingCallElementType(Context, Parameter.Bytes)
-        : Parameter.Pointer
-            ? static_cast<llvm::Type *>(llvm::PointerType::getUnqual(Context))
-            : llvm::Type::getIntNTy(Context, Parameter.Bytes * 8));
+        ScalarType(Parameter.Bytes, Parameter.Floating, Parameter.Pointer));
   std::vector<llvm::Type *> Parameters;
   if (Signature.ParameterElements.empty()) {
     Parameters = std::move(Scalars);
@@ -55,12 +60,18 @@ floatingCallType(llvm::LLVMContext &Context,
       At += Count ? Count : 1;
     }
   }
-  llvm::Type *Return = floatingCallElementType(Context, Signature.ReturnBytes);
+  llvm::Type *Return;
   if (Signature.ReturnElements) {
     llvm::Type *Element = floatingCallElementType(
         Context, Signature.ReturnBytes / Signature.ReturnElements);
     Return = llvm::StructType::get(
         Context, std::vector<llvm::Type *>(Signature.ReturnElements, Element));
+  } else if (Signature.ReturnKind == NdTypeKind::Void) {
+    Return = llvm::Type::getVoidTy(Context);
+  } else {
+    Return = ScalarType(Signature.ReturnBytes,
+                        Signature.ReturnKind == NdTypeKind::Float,
+                        Signature.ReturnKind == NdTypeKind::Ptr);
   }
   return llvm::FunctionType::get(Return, Parameters, false);
 }

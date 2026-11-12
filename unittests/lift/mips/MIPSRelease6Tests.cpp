@@ -188,7 +188,7 @@ TEST_P(MIPSRelease6, FloatingCatalogHasIdenticalClassicAndMicroEffects) {
   std::unique_ptr<uc_engine, decltype(&uc_close)> CPU(Raw, uc_close);
   ASSERT_EQ(
       uc_ctl_set_cpu_model(Raw, isMIPS64(GetParam())
-                                    ? int(UC_CPU_MIPS64_I6400)
+                                    ? int(UC_CPU_MIPS64_MICROMIPS64R6_GENERIC)
                                     : int(UC_CPU_MIPS32_MIPS32R6_GENERIC)),
       UC_ERR_OK);
   uint64_t Status = 0;
@@ -226,9 +226,9 @@ TEST_P(MIPSRelease6, FloatingCatalogHasIdenticalClassicAndMicroEffects) {
     llvm::support::endian::write32(Bytes, R.Classic, Order);
     const auto PC = 0x10100 + 4 * Index++;
     ASSERT_EQ(uc_mem_write(Raw, PC, Bytes, 4), UC_ERR_OK);
-    // MIPS32R6_GENERIC executes physical microMIPS too. I6400 exposes only
-    // classic execution, so its micro64 check uses the equal LowIR above.
-    if (!isMIPS64(GetParam())) {
+    // Both generic reference cores execute physical microMIPS directly.
+    // NeverD normalization is not involved in this independent execution.
+    {
       llvm::support::endian::write16(Bytes, R.Micro >> 16, Order);
       llvm::support::endian::write16(Bytes + 2, R.Micro, Order);
       ASSERT_EQ(uc_mem_write(Raw, PC + 0x800, Bytes, 4), UC_ERR_OK);
@@ -255,7 +255,7 @@ TEST_P(MIPSRelease6, FloatingCatalogHasIdenticalClassicAndMicroEffects) {
       uint64_t Expected = 0;
       ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_F2, &Expected), UC_ERR_OK);
       ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_FCSR, &CSR), UC_ERR_OK);
-      if (!isMIPS64(GetParam())) {
+      {
         ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_FCSR, &InitialCSR), UC_ERR_OK);
         for (unsigned I = 0; I < 3; ++I)
           ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_F2 + 2 * I, &Inputs[I]),

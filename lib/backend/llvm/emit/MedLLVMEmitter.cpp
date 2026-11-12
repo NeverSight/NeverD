@@ -680,10 +680,11 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
     // through the integer registers instead.
     if (P.RegOff != kNoParamReg && TRI.isFPArgReg(P.RegOff, TargetFormat)) {
       const auto Scalar = Func.FPParamScalarBytes.find(P.RegOff);
-      ParamTypes.push_back(fpAbiType(
-          TargetArch == Arch::AArch64 && Scalar != Func.FPParamScalarBytes.end()
-              ? Scalar->second
-              : P.Size));
+      ParamTypes.push_back(
+          fpAbiType((TargetArch == Arch::AArch64 || isMIPS(TargetArch)) &&
+                            Scalar != Func.FPParamScalarBytes.end()
+                        ? Scalar->second
+                        : P.Size));
       continue;
     }
     if (HaveTypes)
