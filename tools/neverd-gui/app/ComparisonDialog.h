@@ -76,8 +76,12 @@ private:
   QProgressBar *Progress;
   QTimer Filter;
   QString SavedPath, PrimaryAddress, SecondaryAddress, SelectedSide = "primary";
-  /// What the input controls named as the comparison last started from them.
-  QStringList Compared;
+  /// What the input controls named as the comparison shown was started from
+  /// them, and as the last start was: one that fails or is cancelled leaves
+  /// the earlier comparison, or none.
+  QStringList Compared, Started;
+  /// A start from the controls is under way, and the session took it up.
+  bool Starting = false, Began = false;
   QStringList inputs() const;
   bool RestoreSettings = false;
   bool DetailStopped = false;

@@ -809,7 +809,9 @@ ComparisonDialog::ComparisonDialog(const QString &Worker,
   update();
 }
 void ComparisonDialog::run(const QString &Restore) {
-  Compared = inputs();
+  Started = inputs();
+  Starting = true;
+  Began = false;
   QJsonObject Inputs[2];
   for (int I = 0; I < 2; ++I) {
     Inputs[I]["path"] = Paths[I]->text();
@@ -879,11 +881,22 @@ void ComparisonDialog::update() {
         ::neverd::limits::diff::kDefaultFlowFunctions));
     Threshold->setValue(Settings["min_similarity"].toDouble());
   }
+  // A start that brought a comparison names what is shown from now on.  One
+  // that failed or was cancelled left its message and the earlier comparison,
+  // or none, and Return in an input may try again.
+  if (Starting && Session.busy()) {
+    Began = true;
+  } else if (Starting) {
+    if (Began && Session.operationMessage().isEmpty() &&
+        !Session.revision().isEmpty())
+      Compared = Started;
+    Starting = Began = false;
+  }
   // With a comparison to review, Return in its filter or tables must not
   // start another.
-  const bool Compared = !Session.revision().isEmpty();
-  Start->setDefault(!Compared);
-  PairCommands->setVisible(Compared);
+  const bool Shown = !Session.revision().isEmpty();
+  Start->setDefault(!Shown);
+  PairCommands->setVisible(Shown);
   const bool Editable = Idle && !S["stale"].toBool();
   RetryDetail->setEnabled(Editable && DetailStopped && !Session.cancellable());
   Undo->setEnabled(Editable && S["can_undo"].toBool());

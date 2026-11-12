@@ -201,12 +201,21 @@ private slots:
     QTest::keyClick(Reached, Qt::Key_Return);
     QCOMPARE(Presses.size(), 1);
     QVERIFY(!Session.busy() && Session.revision().isEmpty());
-    // Return in an input's field starts the comparison.
+    // Return in an input's field starts the comparison.  One that fails
+    // leaves none, and the key tries again.
+    const auto Missing = Directory.filePath("default-missing.bin");
+    Secondary->setText(Missing);
     Secondary->setFocus();
+    QTest::keyClick(Secondary, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(Failures.size() == 1 && !Session.busy(), Timeout);
+    QVERIFY(Session.revision().isEmpty());
+    QTest::keyClick(Secondary, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(Failures.size() == 2 && !Session.busy(), Timeout);
+    Secondary->setText(B);
     QTest::keyClick(Secondary, Qt::Key_Return);
     QTRY_VERIFY_WITH_TIMEOUT(!Session.busy() && !Session.revision().isEmpty(),
                              Timeout);
-    QCOMPARE(Failures.size(), 0);
+    QCOMPARE(Failures.size(), 2);
     QVERIFY(Commands->isVisible());
     // With a comparison to review, Return in its filter starts no other.
     QVERIFY(!Start->isDefault());
@@ -242,6 +251,17 @@ private slots:
     QTest::qWait(300);
     QVERIFY(!Session.busy());
     QCOMPARE(Session.revision(), Revision);
+    // A start that fails leaves the comparison shown, and the key still
+    // starts nothing for the inputs that one came from.
+    Secondary->setText(Missing);
+    QTest::keyClick(Secondary, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(Failures.size() == 3 && !Session.busy(), Timeout);
+    QCOMPARE(Session.revision(), Revision);
+    Secondary->setText(B);
+    QTest::keyClick(Secondary, Qt::Key_Return);
+    QTest::qWait(300);
+    QVERIFY(!Session.busy());
+    QCOMPARE(Session.revision(), Revision);
     // Once the input names another file, the key compares that one.
     const auto C = Directory.filePath("default-other.bin");
     QVERIFY(write(C, QByteArray::fromHex("400180d2000c0091c0035fd6")));
@@ -249,7 +269,7 @@ private slots:
     QTest::keyClick(Secondary, Qt::Key_Return);
     QTRY_VERIFY_WITH_TIMEOUT(!Session.busy() && Session.revision() != Revision,
                              Timeout);
-    QCOMPARE(Failures.size(), 0);
+    QCOMPARE(Failures.size(), 3);
   }
   void unresolvedReferencesStayDistinctFromObservedChanges() {
     const auto A = Directory.filePath("reference-before.bin");
