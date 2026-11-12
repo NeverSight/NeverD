@@ -130,8 +130,22 @@ bool replayableIntegerNode(const HighExpr &E) {
   case ExprKind::BinOp:
     if (E.Operands.size() != 2 || !isForwardableInteger(E.Type) ||
         !isForwardableInteger(E.Operands[0]->Type) ||
-        !isForwardableInteger(E.Operands[1]->Type) ||
-        E.Type->Size != E.Operands[0]->Type->Size)
+        !isForwardableInteger(E.Operands[1]->Type))
+      return false;
+    // A comparison of two equally wide integers is total as well; its result
+    // has a width of its own.
+    switch (E.Op) {
+    case NdOp::INT_EQUAL:
+    case NdOp::INT_NOTEQUAL:
+    case NdOp::INT_LESS:
+    case NdOp::INT_LESSEQUAL:
+    case NdOp::INT_SLESS:
+    case NdOp::INT_SLESSEQUAL:
+      return E.Operands[0]->Type->Size == E.Operands[1]->Type->Size;
+    default:
+      break;
+    }
+    if (E.Type->Size != E.Operands[0]->Type->Size)
       return false;
     switch (E.Op) {
     case NdOp::INT_LEFT:
