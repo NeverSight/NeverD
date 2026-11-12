@@ -2268,6 +2268,18 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
             break;
           }
       }
+      // When the branch-local trace found Rec's own same-block LOAD and that
+      // LOAD is the table model, Rec's target is exactly its output: no other
+      // definition reaches the branch.  Another read of the same table, such
+      // as the LOAD of a tail-duplicated sibling dispatch, can be a member of
+      // the atomic consumer group but is never a target, address or selector
+      // role of Rec.  Publishing it as one would give this single-selector
+      // dispatch a second selector occurrence, which no consumer can bind to
+      // the branch.
+      const bool IsRoleOfBranch =
+          !BranchLocalPointerLoadAddr ||
+          Info.TableLoadAddr != *BranchLocalPointerLoadAddr ||
+          L.Addr == *BranchLocalPointerLoadAddr;
       JumpTableValueOccurrence IndexOccurrence{ExactIndex, IndexUseAddr,
                                                IndexUseSeq,
                                                /*DefinedAtPoint=*/false};
@@ -2278,32 +2290,34 @@ bool CFGBuilder::tryConstBaseAbsoluteTable(
                                               /*DefinedAtPoint=*/true};
       if (ShapeClaimed)
         *ShapeClaimed = true;
-      if ((!LiteralCoordinate &&
+      if ((!LiteralCoordinate && IsRoleOfBranch &&
            !ensureAppendCapacity(Info.IndexValueAlternatives)) ||
-          !ensureAppendCapacity(Info.TargetLoads) ||
-          !ensureAppendCapacity(Info.LoadRoles) ||
+          (IsRoleOfBranch && (!ensureAppendCapacity(Info.TargetLoads) ||
+                              !ensureAppendCapacity(Info.LoadRoles))) ||
           (ScanWholeFunction && ExactConsumerGroup && !LiteralCoordinate &&
            !AllowI386GOTOFFRelay &&
            (!ensureAppendCapacity(ExactConsumerGroup->IndexOccurrences) ||
             !ensureAppendCapacity(ExactConsumerGroup->BranchAddrs))) ||
           !consume(8))
         return false;
-      if (!LiteralCoordinate)
-        Info.IndexValueAlternatives.push_back(IndexOccurrence);
-      Info.TargetLoads.push_back(LoadOccurrence);
-      JumpTableLoadRole Role;
-      Role.Load = LoadOccurrence;
-      Role.LoadWidth = W;
-      Role.FrameStorage = std::move(FrameStorage);
-      if (!ensureAppendCapacity(Role.AllowedBases) ||
-          !ensureAppendCapacity(Role.Indices) || !consume(4))
-        return false;
-      Role.AllowedBases.push_back(RoleBase);
-      Role.Indices.push_back(RoleIndexOccurrence);
-      Role.AddressScale = RoleAddressScale;
-      Role.IsLiteralCoordinate = LiteralCoordinate.has_value();
-      Role.LiteralCoordinate = LiteralCoordinate.value_or(0);
-      Info.LoadRoles.push_back(std::move(Role));
+      if (IsRoleOfBranch) {
+        if (!LiteralCoordinate)
+          Info.IndexValueAlternatives.push_back(IndexOccurrence);
+        Info.TargetLoads.push_back(LoadOccurrence);
+        JumpTableLoadRole Role;
+        Role.Load = LoadOccurrence;
+        Role.LoadWidth = W;
+        Role.FrameStorage = std::move(FrameStorage);
+        if (!ensureAppendCapacity(Role.AllowedBases) ||
+            !ensureAppendCapacity(Role.Indices) || !consume(4))
+          return false;
+        Role.AllowedBases.push_back(RoleBase);
+        Role.Indices.push_back(RoleIndexOccurrence);
+        Role.AddressScale = RoleAddressScale;
+        Role.IsLiteralCoordinate = LiteralCoordinate.has_value();
+        Role.LiteralCoordinate = LiteralCoordinate.value_or(0);
+        Info.LoadRoles.push_back(std::move(Role));
+      }
       if (ScanWholeFunction && ExactConsumerGroup && !LiteralCoordinate &&
           !AllowI386GOTOFFRelay) {
         ExactConsumerGroup->IndexOccurrences.push_back(IndexOccurrence);

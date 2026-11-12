@@ -11448,6 +11448,173 @@ TEST_F(JTE_AArch64, CheckedIndexedLoadsKeepReadAndEscapeEffectsDistinct) {
   }
 }
 
+static fs::path siblingCheckedA64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_sibling_checked_a64.o";
+}
+
+// Checks that the dispatch whose INDIR_BR lies in [BeginName, EndName)
+// publishes exactly its own retained table load and the index input of that
+// load.
+static void expectOwnCheckedLoadOccurrences(
+    const neverd::BinaryImage &Image, const neverd::LowFunc &Low,
+    const char *BeginName, const char *EndName, neverd::va_t TableBase,
+    const std::vector<neverd::va_t> &Targets,
+    std::set<std::pair<neverd::va_t, int>> &LoadOccurrences) {
+  const neverd::Symbol *Begin = Image.findSymbol(BeginName);
+  const neverd::Symbol *End = Image.findSymbol(EndName);
+  ASSERT_NE(Begin, nullptr) << BeginName;
+  ASSERT_NE(End, nullptr) << EndName;
+  const neverd::JumpTable *JT = nullptr;
+  for (const neverd::JumpTable &Candidate : Low.JumpTables)
+    if (Candidate.InsnAddr >= Begin->Addr && Candidate.InsnAddr < End->Addr) {
+      ASSERT_EQ(JT, nullptr) << BeginName;
+      JT = &Candidate;
+    }
+  ASSERT_NE(JT, nullptr) << BeginName;
+
+  EXPECT_TRUE(JT->HasBaseAddr);
+  EXPECT_EQ(JT->BaseAddr, TableBase);
+  EXPECT_EQ(JT->Targets, Targets) << BeginName;
+
+  ASSERT_EQ(JT->AuthenticatedTableLoads.size(), 1u)
+      << "another read of the table is not a read of this dispatch";
+  const neverd::JumpTableOpOccurrence &Load =
+      JT->AuthenticatedTableLoads.front();
+  EXPECT_GE(Load.Addr, Begin->Addr);
+  EXPECT_LT(Load.Addr, End->Addr);
+  const neverd::LowOp *LoadOp =
+      findExactLowOp(Low, Load.Addr, Load.Seq, neverd::NdOp::INTRINSIC);
+  ASSERT_NE(LoadOp, nullptr);
+  ASSERT_TRUE(neverd::originalAArch64TableLoad(*LoadOp).has_value());
+  EXPECT_TRUE(LoadOccurrences.insert({Load.Addr, Load.Seq}).second);
+
+  ASSERT_EQ(JT->SelectorUseRefs.size(), 1u)
+      << "another read's index is not a selector of this dispatch";
+  const neverd::JumpTableSelectorUseRef &Selector = JT->SelectorUseRefs.front();
+  EXPECT_EQ(Selector.Addr, Load.Addr)
+      << "the selector is the index input of the dispatch's own load";
+  EXPECT_EQ(Selector.Seq, Load.Seq);
+  EXPECT_EQ(Selector.ExpectedOpcode, neverd::NdOp::INTRINSIC);
+  EXPECT_EQ(Selector.Role, neverd::JumpTableSelectorUseRef::ValueRole::Input);
+  EXPECT_EQ(Selector.InputNo, neverd::kAddressMemoryIndexOperand + 1);
+  EXPECT_EQ(Selector.ExpectedSize, neverd::kAddressMemoryNarrowIndexBytes);
+}
+
+static size_t llvmSwitchCount(const std::string &Body) {
+  size_t Count = 0;
+  for (std::string::size_type At = Body.find("  switch i");
+       At != std::string::npos; At = Body.find("  switch i", At + 1))
+    ++Count;
+  return Count;
+}
+
+// The AArch64 form of
+// JTE_X86_64.SiblingCandidatesPublishFromOneStageSnapshotWithOwnOccurrences.
+// Every tail-duplicated dispatch reads the shared table with its own retained
+// register-offset load, so the constant-base strategy recovers each branch and
+// inventories the others for the consumer group.  A sibling's load is a group
+// member only: each branch publishes its own load and the exact index input of
+// that load.  The entry overwrites its index register before the branch and
+// the target bodies load the entry over their index, so a register read at
+// the branch would name the wrong value.
+TEST_F(JTE_AArch64, CheckedLoadSiblingsPublishOwnOccurrences) {
+  auto ImageOrErr = neverd::loadBinary(siblingCheckedA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+
+  const neverd::Symbol *Function =
+      Image.findSymbol("a64_sibling_checked_loads");
+  const neverd::Symbol *Table = Image.findSymbol("a64_sibling_checked_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 4u * 8u);
+
+  struct Sibling {
+    const char *BeginName;
+    const char *EndName;
+  };
+  const std::array<Sibling, 5> Siblings = {{
+      {"a64_sibling_checked_entry_begin", "a64_sibling_checked_entry_end"},
+      {"a64_sibling_checked_t0_begin", "a64_sibling_checked_t0_end"},
+      {"a64_sibling_checked_t1_begin", "a64_sibling_checked_t1_end"},
+      {"a64_sibling_checked_t2_begin", "a64_sibling_checked_t2_end"},
+      {"a64_sibling_checked_t3_begin", "a64_sibling_checked_t3_end"},
+  }};
+  std::vector<neverd::va_t> Targets;
+  for (size_t I = 1; I < Siblings.size(); ++I) {
+    const neverd::Symbol *Target = Image.findSymbol(Siblings[I].BeginName);
+    ASSERT_NE(Target, nullptr) << Siblings[I].BeginName;
+    Targets.push_back(Target->Addr);
+  }
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), Siblings.size())
+      << "the entry and all four target bodies dispatch through the table";
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+
+  std::set<std::pair<neverd::va_t, int>> LoadOccurrences;
+  for (const Sibling &Expected : Siblings)
+    expectOwnCheckedLoadOccurrences(Image, Low, Expected.BeginName,
+                                    Expected.EndName, Table->Addr, Targets,
+                                    LoadOccurrences);
+
+  // One selector per dispatch is what lets every consumer bind it: all five
+  // branches lower to a switch on the index their own load read.
+  auto R = liftToLLVMIRUnopt(siblingCheckedA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body = llvmFunctionBody(R.out, "a64_sibling_checked_loads");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  EXPECT_EQ(llvmSwitchCount(Body), Siblings.size()) << Body;
+  EXPECT_NE(Body.find("neverd.address.load"), std::string::npos) << Body;
+}
+
+// A read of the table in a predecessor block feeds no branch.  The dispatch
+// has its own same-block load, so that read is not one of its roles either.
+TEST_F(JTE_AArch64, CheckedDispatchIgnoresUnrelatedTableRead) {
+  auto ImageOrErr = neverd::loadBinary(siblingCheckedA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+
+  const neverd::Symbol *Function =
+      Image.findSymbol("a64_checked_load_beside_dispatch");
+  const neverd::Symbol *Table = Image.findSymbol("a64_beside_dispatch_table");
+  const neverd::Symbol *End = Image.findSymbol("a64_beside_dispatch_end");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_NE(End, nullptr);
+  // The four two-instruction target bodies follow the dispatch in table order.
+  const std::vector<neverd::va_t> Targets = {End->Addr, End->Addr + 8,
+                                             End->Addr + 16, End->Addr + 24};
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  std::set<std::pair<neverd::va_t, int>> LoadOccurrences;
+  expectOwnCheckedLoadOccurrences(Image, Low, "a64_beside_dispatch_begin",
+                                  "a64_beside_dispatch_end", Table->Addr,
+                                  Targets, LoadOccurrences);
+
+  auto R = liftToLLVMIRUnopt(siblingCheckedA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_checked_load_beside_dispatch");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  EXPECT_EQ(llvmSwitchCount(Body), 1u) << Body;
+  for (int Case = 0; Case < 4; ++Case)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Body;
+}
+
 TEST_F(JTE_AArch64, WSelfCopyPreservesWritableTableArgumentEscape) {
   auto Low = liftToLowIR(indexIdentityA64Obj());
   ASSERT_EQ(Low.exitCode, 0) << Low.err;
