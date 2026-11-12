@@ -30,6 +30,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
+#include <string>
 #include <vector>
 
 namespace {
@@ -496,7 +498,7 @@ TEST(AArch64AsyncUnwind, CompilerCatchAndCleanupRecoverTheSavedSignedLR) {
                                        kCXXStandard, kOptimize, kDylib,
                                        ProviderSource, kOutput, Provider}),
             0);
-  unsigned Paths = 0;
+  unsigned Paths = 0, UnwinderTraps = 0;
   struct Profile {
     const char *Opt;
     bool Writable;
@@ -559,15 +561,37 @@ TEST(AArch64AsyncUnwind, CompilerCatchAndCleanupRecoverTheSavedSignedLR) {
                                            kCXXStandard, Opt, DriverSource,
                                            kOutput, Driver}),
                 0);
-      ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Dylib}), 0);
-      Paths += kCxxInputs;
-      ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Output, kPublished}),
-                0);
-      Paths += kCxxInputs;
+      const auto Run = [&](const std::string &File, unsigned Adjustment,
+                           std::optional<unsigned> Input = std::nullopt) {
+        const auto Delta = std::to_string(Adjustment);
+        const auto Case = Input ? std::to_string(*Input) : std::string();
+        llvm::SmallVector<llvm::StringRef> Args{Driver, File, Delta};
+        if (Input)
+          Args.push_back(Case);
+        return llvm::sys::ExecuteAndWait(Driver, Args);
+      };
+      if (StackArgs) {
+        for (unsigned I = 0; I < kCxxInputs; ++I) {
+          SCOPED_TRACE(I);
+          const int Original = Run(Dylib, 0, I);
+          ASSERT_TRUE(Original == 0 || (I && Original == kUnwinderPACTrapExit))
+              << Original;
+          ASSERT_EQ(Run(Output, 1, I), Original);
+          if (Original)
+            UnwinderTraps += 2;
+          else
+            Paths += 2;
+        }
+      } else {
+        ASSERT_EQ(Run(Dylib, 0), 0);
+        ASSERT_EQ(Run(Output, 1), 0);
+        Paths += 2 * kCxxInputs;
+      }
     }
     ASSERT_TRUE(std::filesystem::remove(Output));
   }
   RecordProperty(kCxxPaths, Paths);
+  RecordProperty(kCxxTraps, UnwinderTraps);
 #else
   GTEST_SKIP() << kUnavailable;
 #endif

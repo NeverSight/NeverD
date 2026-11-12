@@ -120,6 +120,8 @@ ASYNC_FRAME_TEXT(kCatchImportsFile, "provider.cpp")
 ASYNC_FRAME_TEXT(kCatchImports, "provider.dylib")
 ASYNC_FRAME_TEXT(kCatchDriverFile, "catch-driver.cpp")
 ASYNC_FRAME_TEXT(kCxxPaths, "native_cxx_exception_paths")
+ASYNC_FRAME_TEXT(kCxxTraps, "native_cxx_unwinder_pac_traps")
+ASYNC_FRAME_VALUE(int, kUnwinderPACTrapExit, 85)
 ASYNC_FRAME_VALUE(unsigned, kCxxInputs, 4)
 ASYNC_FRAME_VALUE(unsigned, kCxxCallArgumentBytes, 16)
 ASYNC_FRAME_TEXT(kCatchBody, R"cpp(
@@ -172,19 +174,72 @@ extern "C" int observe_catch(int v) {
 )cpp")
 ASYNC_FRAME_TEXT(kCatchDriver, R"cpp(
 #include <dlfcn.h>
+#include <mach-o/loader.h>
+#include <mach/arm/thread_status.h>
+#include <ptrauth.h>
+#include <signal.h>
+#include <sys/ucontext.h>
+#include <unistd.h>
+
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <exception>
-#include <initializer_list>
+
+static uintptr_t UnwindText;
+static uint64_t UnwindSize;
+static void trap(int, siginfo_t *, void *Context) {
+  auto &State = static_cast<ucontext_t *>(Context)->uc_mcontext->__ss;
+  uintptr_t PC = arm_thread_state64_get_pc(State);
+  // Accept the authenticated-pointer BRK observed inside system libunwind.
+  if (PC >= UnwindText && PC - UnwindText < UnwindSize &&
+      *reinterpret_cast<const uint32_t *>(PC) == 0xd4388e20)
+    _exit(85);
+  _exit(86);
+}
+static bool observeUnwinder() {
+  Dl_info Info{};
+  auto Address = ptrauth_strip(dlsym(RTLD_DEFAULT, "unw_set_reg"),
+                               ptrauth_key_function_pointer);
+  if (!dladdr(Address, &Info))
+    return false;
+  const auto *Header = static_cast<const mach_header_64 *>(Info.dli_fbase);
+  const auto *Command = reinterpret_cast<const load_command *>(Header + 1);
+  for (unsigned I = 0; I < Header->ncmds; ++I) {
+    if (Command->cmd == LC_SEGMENT_64) {
+      const auto *Seg = reinterpret_cast<const segment_command_64 *>(Command);
+      if (std::strcmp(Seg->segname, SEG_TEXT) == 0) {
+        UnwindText = reinterpret_cast<uintptr_t>(Header);
+        UnwindSize = Seg->vmsize;
+        break;
+      }
+    }
+    Command = reinterpret_cast<const load_command *>(
+        reinterpret_cast<const char *>(Command) + Command->cmdsize);
+  }
+  struct sigaction Action{};
+  Action.sa_sigaction = trap;
+  Action.sa_flags = SA_SIGINFO;
+  return UnwindSize && sigaction(SIGTRAP, &Action, nullptr) == 0;
+}
 int main(int argc, char **argv) {
-  if (argc != 2 && argc != 3)
+  if (argc != 3 && argc != 4)
     return 1;
   auto *Image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
   if (!Image)
     return 1;
   auto catcher = reinterpret_cast<int (*)(int)>(dlsym(Image, "catcher"));
-  const int Adjustment = argc == 3;
-  if (!catcher || catcher(0) != Adjustment || catcher(1) != 8 + Adjustment)
+  const int Adjustment = std::atoi(argv[2]);
+  if (!catcher || (argc == 4 && !observeUnwinder()))
     return 1;
-  for (int x : {2, 3}) {
+  const int First = argc == 4 ? std::atoi(argv[3]) : 0;
+  const int End = argc == 4 ? First + 1 : 4;
+  for (int x = First; x < End; ++x) {
+    if (x < 2) {
+      if (catcher(x) != (x ? 8 : 0) + Adjustment)
+        return 1;
+      continue;
+    }
     try {
       catcher(x);
       return 2;
