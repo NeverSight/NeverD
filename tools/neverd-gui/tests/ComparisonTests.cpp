@@ -271,6 +271,43 @@ private slots:
                              Timeout);
     QCOMPARE(Failures.size(), 3);
   }
+  void theInventoryStandsApartFromAFunctionsDetails() {
+    ComparisonDialog View(TEST_COMPARISON_WORKER);
+    View.resize(1247, 770);
+    View.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&View));
+    auto *Kinds = View.findChild<QComboBox *>("comparisonFilter");
+    auto *Search = View.findChild<QLineEdit *>("comparisonSearch");
+    auto *Title = View.findChild<QLabel *>("comparisonFunctionTitle");
+    auto *Tabs = View.findChild<QTabWidget *>();
+    QVERIFY(Kinds && Search && Title && Tabs);
+    const auto At = [&](const QWidget *Widget) {
+      return Widget->mapTo(&View, QPoint(0, 0));
+    };
+    // Between the inventory's filter and the title across from it lies the
+    // window with one hairline in its middle.  The handle between the panes,
+    // filled whole, was a band of the fields' own gray that the filter ran
+    // into, and the title stood flush against it.
+    const Theme &Colors = Theme::instance();
+    const QImage Image = View.grab().toImage();
+    const int From = At(Kinds).x() + Kinds->width(), To = At(Title).x();
+    QCOMPARE(To - From, ::neverd::limits::gui::kComparisonPaneGutter);
+    const int Row = At(Kinds).y() + Kinds->height() / 2;
+    int Lines = 0;
+    for (int X = From; X < To; ++X) {
+      const QColor Color = Image.pixelColor(X, Row);
+      if (Color == Colors.chrome("DockSeparator"))
+        ++Lines;
+      else
+        QCOMPARE(Color, Colors.chrome("Window"));
+    }
+    QCOMPARE(Lines, 1);
+    // The title reads on the filters' row, and what follows it starts level
+    // with the search field.
+    QCOMPARE(At(Title).y(), At(Kinds).y());
+    QCOMPARE(Title->height(), Kinds->height());
+    QCOMPARE(At(Tabs).y(), At(Search).y());
+  }
   void unresolvedReferencesStayDistinctFromObservedChanges() {
     const auto A = Directory.filePath("reference-before.bin");
     const auto B = Directory.filePath("reference-after.bin");

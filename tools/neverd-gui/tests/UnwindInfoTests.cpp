@@ -124,6 +124,11 @@ private slots:
     QVERIFY(dwarf(Dialog)->toPlainText().contains(fixture::kPlainDiagnostic));
     QVERIFY(!dwarf(Dialog)->toPlainText().contains(fixture::kUnsigned));
     QVERIFY(compact(Dialog)->toPlainText().contains(fixture::kZeroSigningPC));
+    auto *Instruction =
+        Dialog.findChild<QPlainTextEdit *>(unwind_info::kInstructionObject);
+    QVERIFY(Instruction);
+    QVERIFY(!Instruction->isHidden());
+    QVERIFY(Instruction->toPlainText().contains(fixture::kUnsigned));
     QVERIFY(dwarf(Dialog)->isReadOnly());
     QVERIFY(compact(Dialog)->isReadOnly());
     QCOMPARE(H.Queries.revision(), fixture::kFirstRevision);

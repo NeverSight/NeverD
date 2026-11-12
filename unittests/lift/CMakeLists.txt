@@ -2448,10 +2448,15 @@ add_neverd_unittest(NeverDDyldSharedCacheTests
   LINK_COMPONENTS Loader Support
 )
 
+add_neverd_unittest(NeverDArm64eUnwindRecoveryTests
+  aarch64/AArch64UnwindRecoveryTests.cpp
+  LINK_COMPONENTS AArch64UnwindRecovery
+)
+
 add_neverd_unittest(NeverDArm64eLiftedImageTests
   aarch64/AArch64AsyncUnwindTests.cpp
   aarch64/AArch64LiftedLeafTests.cpp
-  LINK_COMPONENTS CodeGen Pipeline
+  LINK_COMPONENTS CodeGen Pipeline AArch64UnwindRecovery
 )
 
 add_neverd_unittest(NeverDArm64eAnalysisTests
@@ -3698,10 +3703,6 @@ if(APPLE)
       "${CMAKE_CURRENT_SOURCE_DIR}/aarch64/test_call_abi_a64_macho.c")
   set(call_abi_a64_macho_provider_src
       "${CMAKE_CURRENT_SOURCE_DIR}/aarch64/test_call_abi_provider_a64_macho.c")
-  set(call_abi_a64_macho_dylib
-      "${CMAKE_CURRENT_BINARY_DIR}/libtest_call_abi_a64_macho.dylib")
-  set(call_abi_a64_macho_exe
-      "${CMAKE_CURRENT_BINARY_DIR}/test_call_abi_a64_macho")
   set(call_arg_phi_a64_macho_src
       "${CMAKE_CURRENT_SOURCE_DIR}/aarch64/test_call_arg_phi_a64_macho.s")
   set(call_arg_phi_a64_macho_exe
@@ -3726,22 +3727,30 @@ if(APPLE)
       "${CMAKE_CURRENT_SOURCE_DIR}/format/test_writable_pointer_table_induction_x64_macho.s")
   set(writable_pointer_induction_x64_macho_exe
       "${CMAKE_CURRENT_BINARY_DIR}/test_writable_pointer_table_induction_x64_macho")
-  add_custom_command(
-    OUTPUT ${call_abi_a64_macho_dylib}
-    COMMAND /usr/bin/clang -target arm64-apple-macos14 -dynamiclib
-            -fno-stack-protector ${call_abi_a64_macho_provider_src}
-            -Wl,-install_name,@rpath/libtest_call_abi_a64_macho.dylib
-            -o ${call_abi_a64_macho_dylib}
-    DEPENDS ${call_abi_a64_macho_provider_src}
-    COMMENT "Linking AArch64 Mach-O call-ABI provider dylib")
-  add_custom_command(
-    OUTPUT ${call_abi_a64_macho_exe}
-    COMMAND /usr/bin/clang -target arm64-apple-macos14
-            -fno-stack-protector ${call_abi_a64_macho_src}
-            ${call_abi_a64_macho_dylib} -Wl,-e,_indirect_double_call
-            -o ${call_abi_a64_macho_exe}
-    DEPENDS ${call_abi_a64_macho_src} ${call_abi_a64_macho_dylib}
-    COMMENT "Linking AArch64 Mach-O call-ABI fixture")
+  foreach(slice IN ITEMS arm64 arm64e)
+    get_filename_component(call_abi_name "${call_abi_a64_macho_src}" NAME_WE)
+    if(slice STREQUAL arm64e)
+      string(APPEND call_abi_name "_arm64e")
+    endif()
+    set(call_abi_provider "lib${call_abi_name}.dylib")
+    set(call_abi_dylib "${CMAKE_CURRENT_BINARY_DIR}/${call_abi_provider}")
+    set(call_abi_exe "${CMAKE_CURRENT_BINARY_DIR}/${call_abi_name}")
+    add_custom_command(
+      OUTPUT ${call_abi_dylib}
+      COMMAND /usr/bin/clang -target ${slice}-apple-macos14 -dynamiclib
+              -fno-stack-protector ${call_abi_a64_macho_provider_src}
+              -Wl,-install_name,@rpath/${call_abi_provider} -o ${call_abi_dylib}
+      DEPENDS ${call_abi_a64_macho_provider_src}
+      COMMENT "Linking ${slice} Mach-O call-ABI provider")
+    add_custom_command(
+      OUTPUT ${call_abi_exe}
+      COMMAND /usr/bin/clang -target ${slice}-apple-macos14 -fno-stack-protector
+              ${call_abi_a64_macho_src} ${call_abi_dylib}
+              -Wl,-e,_indirect_double_call -o ${call_abi_exe}
+      DEPENDS ${call_abi_a64_macho_src} ${call_abi_dylib}
+      COMMENT "Linking ${slice} Mach-O call-ABI fixture")
+    list(APPEND TEST_OBJECTS ${call_abi_exe})
+  endforeach()
   add_custom_command(
     OUTPUT ${call_arg_phi_a64_macho_exe}
     COMMAND /usr/bin/clang -target arm64-apple-macos14
@@ -3783,8 +3792,7 @@ if(APPLE)
             -o ${writable_pointer_induction_x64_macho_exe}
     DEPENDS ${writable_pointer_induction_x64_macho_src}
     COMMENT "Linking x64 Mach-O writable pointer-table induction fixture")
-  list(APPEND TEST_OBJECTS ${call_abi_a64_macho_exe}
-                           ${call_arg_phi_a64_macho_exe}
+  list(APPEND TEST_OBJECTS ${call_arg_phi_a64_macho_exe}
                            ${reentrant_feasible_phi_a64_macho_exe}
                            ${bounded_mixed_pointer_table_a64_macho_exe}
                            ${scalar_index_cycle_a64_macho_exe}

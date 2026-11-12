@@ -1,0 +1,38 @@
+//===- AArch64UnwindRecovery.def - Darwin unwind proof policy -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_UNWIND_VALUE
+#define NEVERD_UNWIND_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_UNWIND_TEXT
+#define NEVERD_UNWIND_TEXT(Name, Text)
+#endif
+NEVERD_UNWIND_VALUE(unsigned, kRegisters, 31)
+NEVERD_UNWIND_VALUE(unsigned, kSP, 31)
+NEVERD_UNWIND_VALUE(unsigned, kFP, 29)
+NEVERD_UNWIND_VALUE(unsigned, kLR, 30)
+NEVERD_UNWIND_VALUE(unsigned, kVolatileEnd, 19)
+NEVERD_UNWIND_VALUE(unsigned, kPACMAuthModifier, 16)
+NEVERD_UNWIND_VALUE(unsigned, kHintDestination, 17)
+NEVERD_UNWIND_VALUE(unsigned, kRegisterBytes, 8)
+NEVERD_UNWIND_VALUE(size_t, kMaxInstructions, 1u << 12)
+NEVERD_UNWIND_VALUE(size_t, kMaxTransitions, 1u << 16)
+NEVERD_UNWIND_VALUE(size_t, kMaxStackCells, 64)
+NEVERD_UNWIND_TEXT(
+    kProfile,
+    "implicit unwind recovery requires a complete implicit arm64e frame")
+NEVERD_UNWIND_TEXT(
+    kCFI, "implicit unwind recovery cannot resolve this CFA or register rule")
+NEVERD_UNWIND_TEXT(
+    kCode, "implicit unwind recovery cannot decode the complete control flow")
+NEVERD_UNWIND_TEXT(
+    kBudget, "implicit unwind recovery exceeded its work or stack-state budget")
+NEVERD_UNWIND_TEXT(kUnaligned,
+                   "requested PC is not an AArch64 instruction boundary")
+NEVERD_UNWIND_TEXT(kUnknown, "incoming return signing differs across paths or "
+                             "has an unproved definition")
+#undef NEVERD_UNWIND_VALUE
+#undef NEVERD_UNWIND_TEXT

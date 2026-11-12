@@ -10731,6 +10731,10 @@ Your previous graph is still available.</source>
         <translation>所選 PC 處的 DWARF 狀態</translation>
     </message>
     <message>
+        <source>Signing state recovered from instructions at the selected PC</source>
+        <translation>從指令還原所選 PC 處的簽章狀態</translation>
+    </message>
+    <message>
         <source>Compact unwind: completed-prologue recipe</source>
         <translation>精簡展開：序言完成後的規則</translation>
     </message>

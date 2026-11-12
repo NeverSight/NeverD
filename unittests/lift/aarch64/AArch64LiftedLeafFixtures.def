@@ -67,6 +67,7 @@ A64_LEAF_TEXT(kOut, "-o")
 A64_LEAF_TEXT(kSum, "leaf_sum")
 A64_LEAF_TEXT(kDifference, "leaf_difference")
 A64_LEAF_VALUE(unsigned, kCount, 2)
+A64_LEAF_VALUE(unsigned, kHighBranchBit, 40)
 A64_LEAF_VALUE(unsigned, kTamperedResult, 19)
 A64_LEAF_TEXT(kHostTarget, "arm64-apple-macosx15.0")
 A64_LEAF_TEXT(kLiftedIR, "lifted.ll")
@@ -89,6 +90,8 @@ A64_LEAF_TEXT(kReturnMnemonic, "ret")
 A64_LEAF_TEXT(kChangeScratch, "mov x9, xzr\n")
 A64_LEAF_TEXT(kVariadicDirect, "va_direct")
 A64_LEAF_TEXT(kScratchTail, "#define NEVERD_TEST_SCRATCH_FORWARD 1\n")
+A64_LEAF_TEXT(kUnknownStackOperation, "-DNEVERD_TEST_UNSUPPORTED_STACK_BODY")
+A64_LEAF_TEXT(kUnknownStackInput, "unsupported-stack.dylib")
 A64_LEAF_TEXT(kScratchFrame, "#define NEVERD_TEST_SCRATCH_FRAME 1\n")
 A64_LEAF_VALUE(unsigned, kScratchTailEntries, 3)
 A64_LEAF_TEXT(kScratchResultSource, R"asm(
@@ -128,10 +131,24 @@ _leaf_difference:
 .cfi_def_cfa_register x29
 #endif
   bl _leaf_sum
+#ifdef NEVERD_TEST_SCRATCH_FRAME
+#ifdef NEVERD_TEST_UNSUPPORTED_STACK_BODY
+  rbit x12, x0
+#endif
+  mov x10,#1
+  str x8,[sp,x10,lsl #3]
+  ldr x8,[sp,w10,uxtw #3]
+  sub x11,x10,#1
+  str x9,[sp,w11,sxtw #3]
+  ldr x9,[sp,x11,sxtx #3]
+#endif
   sub x0, x8, x9
 #ifdef NEVERD_TEST_SCRATCH_FRAME
 .cfi_remember_state
   cbz x0, Lzero
+  tbz x0, #40, Lpositive
+  tbnz w0, #0, Lzero
+Lpositive:
 #endif
   ldp x29, x30, [sp, #16]
 #ifdef NEVERD_TEST_SCRATCH_FRAME

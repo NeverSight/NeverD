@@ -13,6 +13,8 @@
 #ifndef NEVERD_RUNTIME_DARWINARM64ESIGNALCURSOR_H
 #define NEVERD_RUNTIME_DARWINARM64ESIGNALCURSOR_H
 
+#include "neverd/runtime/DarwinArm64eUnwindRow.h"
+
 #if defined(__APPLE__) && defined(__arm64e__)
 #include <mach/arm/thread_status.h>
 #include <ptrauth.h>
@@ -29,32 +31,6 @@ typedef struct {
   uintptr_t FP;
   uintptr_t LR;
 } NDDarwinArm64eCursor;
-
-typedef enum {
-  NDArm64eSigningUnknown,
-  NDArm64eUnsigned,
-  NDArm64eSignedIAWithCFA,
-  NDArm64eSignedIBWithCFA,
-  NDArm64eSignedIAWithCFAPC,
-  NDArm64eSignedIBWithCFAPC,
-  NDArm64eSignedIAWithCFAPACM,
-  NDArm64eSignedIBWithCFAPACM
-} NDDarwinArm64eSigning;
-
-/// A resolved instruction-boundary unwind row. A saved register is loaded
-/// from CFA + its offset. Otherwise its interrupted register is used.
-typedef struct {
-  bool CFAFromFP;
-  ptrdiff_t CFAOffset;
-  bool SavedFP;
-  bool SavedLR;
-  ptrdiff_t FPOffset;
-  ptrdiff_t LROffset;
-  NDDarwinArm64eSigning Signing;
-  /// The resolved signing instruction address, including a valid zero address.
-  /// Used only by the CFAPC and CFAPACM recipes.
-  uintptr_t SigningPC;
-} NDDarwinArm64eUnwindRow;
 
 #define NEVERD_ARM64E_SIGNER(Name, Asm, Pointer, Modifier, PC, Output, Input)  \
   static inline uintptr_t Name(uintptr_t Address, uintptr_t CFA,               \

@@ -1,6 +1,11 @@
 add_subdirectory(core)
 add_subdirectory(bytecode)
 
+add_neverd_component_library(NeverDAArch64UnwindRecovery
+  arch/aarch64/AArch64UnwindRecovery.cpp
+  LINK_COMPONENTS Decode Loader
+)
+
 add_neverd_component_library(NeverDLLVMMemoryAnalysis
   llvm/LLVMMemoryAnalysis.cpp
   llvm/LLVMPrivateFrameProjection.cpp

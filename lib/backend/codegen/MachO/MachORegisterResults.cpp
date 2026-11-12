@@ -13,6 +13,7 @@
 
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/DirectBranch.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
@@ -49,6 +50,7 @@ struct RegisterBody {
   llvm::SmallVector<llvm::Value *> Operands;
   llvm::SmallVector<llvm::Function *> ObservedCallees;
   llvm::SmallVector<llvm::Function *> TailCallees;
+  bool HasStackIndex = false;
   bool LoadsStackArgument = false;
   bool MaterializesCursor = false;
 };
@@ -57,14 +59,17 @@ llvm::Error invalidBody() {
   return llvm::createStringError(llvm::errc::not_supported, kInvalidBody);
 }
 
-llvm::Expected<Entries> definedEntries(llvm::Module &M) {
+llvm::Expected<Entries>
+definedEntries(llvm::Module &M, const llvm::DenseSet<va_t> &Required = {}) {
   Entries Functions;
   for (llvm::Function &F : M) {
-    if (F.isDeclaration())
+    if (F.isDeclaration() && Required.empty())
       continue;
     auto Entry = rewrite_source::getOriginalVA(F);
     if (!Entry)
       return Entry.takeError();
+    if (F.isDeclaration() && (!*Entry || !Required.contains(**Entry)))
+      continue;
     if (!*Entry || !Functions.try_emplace(**Entry, &F).second)
       return invalidBody();
   }
@@ -141,7 +146,7 @@ bool emitOperands(RegisterBody &Body, llvm::raw_ostream &OS, Decoder &Decode,
       OS << kSeparator;
     else
       OS << ' ';
-    if (Op.ext != AARCH64_EXT_INVALID)
+    if (Op.type != AARCH64_OP_MEM && Op.ext != AARCH64_EXT_INVALID)
       return false;
     switch (Op.type) {
     case AARCH64_OP_REG:
@@ -153,10 +158,39 @@ bool emitOperands(RegisterBody &Body, llvm::raw_ostream &OS, Decoder &Decode,
       Immediate(Op.imm);
       break;
     case AARCH64_OP_MEM:
-      if (Op.mem.index != AARCH64_REG_INVALID || Op.shift.value)
-        return false;
       OS << '[';
       if (!Reg(Op.mem.base))
+        return false;
+      if (Op.mem.index != AARCH64_REG_INVALID) {
+        if (Op.mem.disp || D.post_index || I.Raw->detail->writeback)
+          return false;
+        OS << kSeparator;
+        if (!Reg(Op.mem.index))
+          return false;
+        switch (Op.ext) {
+        case AARCH64_EXT_INVALID:
+          if (Op.shift.type != AARCH64_SFT_INVALID &&
+              Op.shift.type != AARCH64_SFT_LSL)
+            return false;
+          if (Op.shift.value)
+            OS << kShiftLeft;
+          break;
+#define MACHO_REGISTER_EXTEND(Name, Spelling)                                  \
+  case AARCH64_EXT_##Name:                                                     \
+    OS << Spelling;                                                            \
+    if (Op.shift.value)                                                        \
+      OS << kShiftAmount;                                                      \
+    break;
+#include "MachORegisterResults.def"
+        default:
+          return false;
+        }
+        if (Op.shift.value)
+          Immediate(Op.shift.value);
+        OS << ']';
+        continue;
+      }
+      if (Op.ext != AARCH64_EXT_INVALID || Op.shift.value)
         return false;
       if (D.post_index)
         OS << ']';
@@ -317,6 +351,10 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
     const auto Ops = llvm::ArrayRef(D.operands, D.op_count);
     OS << kLocal << (PC - Start) / Word << kEndLabel;
 
+    Body.HasStackIndex |= llvm::any_of(Ops, [](const auto &Op) {
+      return Op.type == AARCH64_OP_MEM && Op.mem.base == AARCH64_REG_SP &&
+             Op.mem.index != AARCH64_REG_INVALID;
+    });
     if (LiveScratch && I.Id != AARCH64_INS_BL) {
       cs_regs Reads, Writes;
       uint8_t NumReads = 0, NumWrites = 0;
@@ -343,18 +381,22 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
       OS << '\n';
       continue;
     }
+    const bool TestBit = I.Id == AARCH64_INS_TBZ || I.Id == AARCH64_INS_TBNZ;
     if (I.Id == AARCH64_INS_B || I.Id == AARCH64_INS_CBZ ||
-        I.Id == AARCH64_INS_CBNZ) {
+        I.Id == AARCH64_INS_CBNZ || TestBit) {
       LiveScratch = 0;
       const bool TestReg = I.Id != AARCH64_INS_B;
-      if (Ops.size() != (TestReg ? 2u : 1u) ||
+      if (Ops.size() != (TestBit   ? 3u
+                         : TestReg ? 2u
+                                   : 1u) ||
+          (TestBit && Ops[1].type != AARCH64_OP_IMM) ||
           Ops.back().type != AARCH64_OP_IMM ||
           (TestReg && Ops.front().type != AARCH64_OP_REG))
         return std::nullopt;
       const auto Target = va_t(Ops.back().imm);
       if (Target < Start || Target >= End) {
         const auto Tail = Functions.find(Target);
-        if (Tail == Functions.end() ||
+        if (TestReg || Tail == Functions.end() ||
             !decodeDirectBranch(Image.Arch, InstructionMode::Default,
                                 I.Raw->bytes, Word, PC, {.Jumps = true}))
           return std::nullopt;
@@ -369,6 +411,15 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
       OS << I.Raw->mnemonic << ' ';
       if (TestReg)
         OS << cs_reg_name(Decode.getHandle(), Ops.front().reg) << kSeparator;
+      if (TestBit) {
+        OS << '#';
+        emitOperand(Body, OS,
+                    llvm::ConstantInt::get(
+                        llvm::Type::getInt64Ty(Owner->second->getContext()),
+                        Ops[1].imm),
+                    kImmediateConstraint);
+        OS << kSeparator;
+      }
       OS << kLocal << (Target - Start) / Word << '\n';
       continue;
     }
@@ -382,6 +433,7 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
     if (!Indexed && (I.Id == AARCH64_INS_LDR || I.Id == AARCH64_INS_LDP))
       for (const auto &Op : Ops)
         if (Op.type == AARCH64_OP_MEM && Op.mem.base == AARCH64_REG_SP &&
+            Op.mem.index == AARCH64_REG_INVALID &&
             (D.post_index ? 0 : Op.mem.disp) >= int64_t(Compact.StackSize) &&
             llvm::any_of(Ops, [](const auto &Dst) {
               return Dst.type == AARCH64_OP_REG &&
@@ -441,16 +493,34 @@ llvm::InlineAsm *assembly(llvm::Function &F, const RegisterBody &Body) {
 }
 } // namespace
 
-void lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
-                               llvm::ArrayRef<va_t> AdmittedEntries) {
-  auto Functions = definedEntries(M);
+bool needsMachONativeStackIndex(const MedFunc &Function) {
+  return llvm::any_of(Function.Blocks, [](const MedBlock &Block) {
+    return llvm::any_of(Block.Ops, [](const MedOp &Op) {
+      if (!aarch64AddressMemoryMedShapeIsValid(Op))
+        return false;
+      const auto I = *aarch64AddressMemoryInstruction(
+          Op.Inputs[kAddressMemoryWordOperand + 1].ConstVal);
+      return I.stackBase() && I.hasRegisterIndex();
+    });
+  });
+}
+
+llvm::Error
+lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
+                          llvm::ArrayRef<va_t> AdmittedEntries,
+                          llvm::ArrayRef<va_t> RequiredNativeEntries) {
+  llvm::DenseSet<va_t> Required(RequiredNativeEntries.begin(),
+                                RequiredNativeEntries.end());
+  auto Functions = definedEntries(M, Required);
   if (!Functions) {
+    if (!Required.empty())
+      return Functions.takeError();
     llvm::consumeError(Functions.takeError());
-    return;
+    return llvm::Error::success();
   }
   Decoder Decode;
   if (!Decode.init(Image))
-    return;
+    return Required.empty() ? llvm::Error::success() : invalidBody();
   llvm::DenseSet<va_t> Admitted(AdmittedEntries.begin(), AdmittedEntries.end());
   std::map<llvm::Function *, RegisterBody> Bodies;
   bool HasVariadicCursor = false;
@@ -470,6 +540,17 @@ void lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
     if (Selected.insert(F).second)
       Worklist.push_back(F);
   };
+  // A declaration withheld from ordinary LLVM emission must acquire its
+  // complete machine implementation here or the whole patch fails.
+  for (va_t VA : Required) {
+    const auto Entry = Functions->find(VA);
+    if (Entry == Functions->end())
+      return invalidBody();
+    const auto Body = Bodies.find(Entry->second);
+    if (Body == Bodies.end() || !Body->second.HasStackIndex)
+      return invalidBody();
+    Select(Entry->second);
+  }
   for (const auto &[F, Body] : Bodies) {
     if (HasVariadicCursor &&
         (F->isVarArg() || Body.MaterializesCursor || Body.LoadsStackArgument))
@@ -479,7 +560,7 @@ void lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
         Select(Callee);
   }
   if (Selected.empty())
-    return;
+    return llvm::Error::success();
   // Direct callers can pass the complete register result on to their own
   // callers, including through a chain of non-variadic functions.
   llvm::DenseMap<llvm::Function *, llvm::SmallVector<llvm::Function *>> Callers;
@@ -513,6 +594,7 @@ void lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
     B.CreateCall(assembly(*F, Body), Body.Operands)->setDoesNotReturn();
     B.CreateUnreachable();
   }
+  return llvm::Error::success();
 }
 
 llvm::Expected<llvm::DenseSet<va_t>>

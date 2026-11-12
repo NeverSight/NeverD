@@ -93,6 +93,10 @@ TEST_F(UnwindFrameCLI, ExactPCNullAndZeroSigningAddressMatchThePublicQuery) {
       kSignedWithPC, -int64_t((kImageBase + kCodeOffset) / kCodeAlign));
   ASSERT_NO_FATAL_FAILURE(load(Zero));
   ASSERT_NO_FATAL_FAILURE(compare(kImageBase + kCodeOffset));
+  ImageOptions Implicit;
+  Implicit.ImplicitBody = Implicit.DwarfFallback = true;
+  ASSERT_NO_FATAL_FAILURE(load(kStackCFA, Implicit));
+  ASSERT_NO_FATAL_FAILURE(compare(kImageBase + kCodeOffset + kCodeAlign));
 }
 
 TEST_F(UnwindFrameCLI, AllUnavailableStatusesAndAbsentSourcesRemainUnchanged) {

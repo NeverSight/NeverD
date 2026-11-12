@@ -57,6 +57,9 @@ namespace neverd {
 
 namespace {
 
+#define NEVERD_PATCH_LIFT_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "PipelinePatchLift.def"
+
 bool isFatalOptimizationStop(OptimizationStopReason Stop) {
   return Stop == OptimizationStopReason::InputInvalid ||
          Stop == OptimizationStopReason::VerificationFailed;
@@ -365,6 +368,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
                    Result.MedFuncs.size() >= 8 &&
                    !requiresSerialLLVMEmission(Result.MedFuncs, Img);
 
+  llvm::SmallVector<va_t> NativeStackEntries;
   // The bodies the module declares only, by index into MedFuncs, with why.
   std::vector<std::pair<size_t, std::string>> LeftOut;
   if (UseShards) {
@@ -404,6 +408,14 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     const bool OmitRefused = Opts.OmitRefusedLLVMBodies && !Opts.PatchMode &&
                              !Result.InterpreterMachineSourceABI;
     std::vector<char> Mask;
+    if (Opts.PatchMode && Img.isArm64e())
+      for (const auto &[Index, F] : llvm::enumerate(Result.MedFuncs))
+        if (needsMachONativeStackIndex(F)) {
+          if (Mask.empty())
+            Mask.assign(Result.MedFuncs.size(), 1);
+          Mask[Index] = 0;
+          NativeStackEntries.push_back(F.Entry);
+        }
     uint64_t UnhandledValueIntrinsics = 0;
     // Why a refused body fails a lift that cannot leave it out.
     std::string Refusal;
@@ -516,6 +528,28 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     }
   }
 
+  if (!normalizeResolvedLLVMCalls(*Result.LlvmModule,
+                                  Result.LLVMSources.get())) {
+    Result.Error = kCallSignatureMismatch;
+    return false;
+  }
+  if (Opts.PatchMode && Img.isArm64e()) {
+    llvm::SmallVector<va_t> Admitted;
+    for (const auto &Audit : Result.FunctionAudits)
+      if (Audit.HasMedIR && Audit.MedIRVerified &&
+          Audit.UnsupportedInstructions.empty() &&
+          Audit.DecodeFailures.empty() && Audit.TruncatedPaths.empty() &&
+          Audit.UnprovenReturns.empty())
+        Admitted.push_back(Audit.Entry);
+    if (auto Error = lowerMachORegisterResults(*Result.LlvmModule, Img,
+                                               Admitted, NativeStackEntries)) {
+      Result.Error = llvm::toString(std::move(Error));
+      Result.LlvmModule.reset();
+      Result.LLVMSources.reset();
+      return false;
+    }
+  }
+
   llvm::DenseSet<va_t> DefinedEntries;
   Result.LLVMDefinitionNames.clear();
   for (const auto &Function : *Result.LlvmModule) {
@@ -549,22 +583,6 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
 
   std::string FinalVerifyError;
   llvm::raw_string_ostream FinalVerifyStream(FinalVerifyError);
-  if (!normalizeResolvedLLVMCalls(*Result.LlvmModule,
-                                  Result.LLVMSources.get())) {
-    Result.Error =
-        "final LLVM verification failed: resolved call signature mismatch";
-    return false;
-  }
-  if (Opts.PatchMode && Img.isArm64e()) {
-    llvm::SmallVector<va_t> Admitted;
-    for (const auto &Audit : Result.FunctionAudits)
-      if (Audit.HasLLVMDefinition && Audit.HasMedIR &&
-          Audit.UnsupportedInstructions.empty() &&
-          Audit.DecodeFailures.empty() && Audit.TruncatedPaths.empty() &&
-          Audit.UnprovenReturns.empty())
-        Admitted.push_back(Audit.Entry);
-    lowerMachORegisterResults(*Result.LlvmModule, Img, Admitted);
-  }
   Result.LLVMVerifierFailed =
       llvm::verifyModule(*Result.LlvmModule, &FinalVerifyStream);
   if (Result.LLVMVerifierFailed) {
@@ -573,8 +591,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     return false;
   }
   if (!validateResolvedLLVMCallSignatures(*Result.LlvmModule)) {
-    Result.Error =
-        "final LLVM verification failed: resolved call signature mismatch";
+    Result.Error = kCallSignatureMismatch;
     return false;
   }
 

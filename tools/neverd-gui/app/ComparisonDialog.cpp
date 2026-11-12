@@ -533,6 +533,9 @@ ComparisonDialog::ComparisonDialog(const QString &Worker,
   FunctionTitle =
       label(Details, tr("Select a function to inspect its counterpart."));
   FunctionTitle->setObjectName("comparisonFunctionTitle");
+  // On the row of the inventory's filters across the gutter, so the title
+  // reads on their line and what follows starts level with the search field.
+  FunctionTitle->setMinimumHeight(Side->sizeHint().height());
   DetailsLayout->addWidget(FunctionTitle);
   // The commands on the selected function and its pair, in groups along one
   // row that wraps: its counterpart, the mapping edits, their history, what
@@ -687,7 +690,7 @@ ComparisonDialog::ComparisonDialog(const QString &Worker,
                                        QAbstractItemView::PositionAtCenter);
             InstructionTable->setFocus();
           });
-  Split->setHandleWidth(6);
+  Split->setHandleWidth(limits::kComparisonPaneGutter);
   Split->setChildrenCollapsible(false);
   Split->setStretchFactor(0, 1);
   Split->setStretchFactor(1, 2);

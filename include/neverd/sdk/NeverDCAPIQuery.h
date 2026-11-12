@@ -59,15 +59,18 @@ NEVERD_API const char *neverd_import_slots_json(neverd_session_t Sess);
 /// true when the record carries decoded language-specific data.
 /// AArch64 additionally returns "return_address" with the exact "query_pc"
 /// (no return-PC subtraction), "dwarf_state_at_pc" and "compact_recipe".
-/// Either source is null when absent, otherwise an object with "status":
-/// known, unknown, unsupported, malformed, out_of_range or resource_limit;
-/// an optional "diagnostic" explains unavailable results. Known results have
-/// "kind": unsigned, sp or sp_and_pc. Signed kinds also have "key": a or b;
-/// sp_and_pc adds "recipe": hint_pacm or non_hint_pauth_lr, and "signing_pc".
-/// Addresses use the same hexadecimal-string convention as begin/end.
-/// A compact recipe describes the completed prologue, not whether the return
-/// address is already signed at query_pc. It never replaces a failed DWARF
-/// state query. These static results do not authenticate or unwind a pointer.
+/// An implicit Darwin FDE or supported compact-only frame also has
+/// "instruction_state_at_pc", derived from bounded instruction and frame
+/// analysis independently of the DWARF result. Either metadata source is null
+/// when absent. Present results have "status": known, unknown, unsupported,
+/// malformed, out_of_range or resource_limit; an optional "diagnostic" explains
+/// unavailable results. Known results have "kind": unsigned, sp or sp_and_pc.
+/// Signed kinds also have "key": a or b; sp_and_pc adds "recipe": hint_pacm or
+/// non_hint_pauth_lr, and "signing_pc". Addresses use the same
+/// hexadecimal-string convention as begin/end. A compact recipe describes the
+/// completed prologue, not whether the return address is already signed at
+/// query_pc. It never replaces a failed DWARF state query. These static results
+/// do not authenticate or unwind a pointer.
 NEVERD_API const char *neverd_unwind_frame_json(neverd_session_t Sess,
                                                 neverd_va_t Address);
 /// The parts of functions that lie apart from their bodies, as

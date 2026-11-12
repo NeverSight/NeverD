@@ -27,6 +27,8 @@ struct AArch64UnwindSigningQuery {
   /// An absent optional means that this source metadata does not exist. A
   /// present Unknown result never contains a fabricated unsigned state.
   std::optional<dwarf_eh::AArch64RAQueryResult> DwarfStateAtPC;
+  /// The validated Darwin CIE/FDE has no explicit signing column.
+  bool HasImplicitDarwinSigning = false;
   /// A compact row describes the completed prologue. Even a Known recipe
   /// does not prove that the return address is already signed at QueryPC.
   std::optional<dwarf_eh::AArch64RAQueryResult> CompactRecipe;

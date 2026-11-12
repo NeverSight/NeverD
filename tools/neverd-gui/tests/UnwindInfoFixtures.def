@@ -60,7 +60,7 @@ NEVERD_UNWIND_GUI_TEST_TEXT(kZeroSigningPC, "Signing PC: 0x0")
 NEVERD_UNWIND_GUI_TEST_TEXT(kPlainDiagnostic, "<b>runtime register 34</b>")
 NEVERD_UNWIND_GUI_TEST_TEXT(
     kStates,
-    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","return_address":{"query_pc":"0xffff800012340004","dwarf_state_at_pc":{"status":"unknown","diagnostic":"<b>runtime register 34</b>"},"compact_recipe":{"status":"known","kind":"sp_and_pc","key":"b","recipe":"non_hint_pauth_lr","signing_pc":"0x0"}}})json")
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","return_address":{"query_pc":"0xffff800012340004","dwarf_state_at_pc":{"status":"unknown","diagnostic":"<b>runtime register 34</b>"},"instruction_state_at_pc":{"status":"known","kind":"unsigned"},"compact_recipe":{"status":"known","kind":"sp_and_pc","key":"b","recipe":"non_hint_pauth_lr","signing_pc":"0x0"}}})json")
 NEVERD_UNWIND_GUI_TEST_TEXT(
     kZeroQuery,
     R"json({"begin":"0x0","end":"0x40","return_address":{"query_pc":"0x0","dwarf_state_at_pc":{"status":"known","kind":"unsigned"},"compact_recipe":null}})json")

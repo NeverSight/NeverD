@@ -1924,6 +1924,14 @@ as full PC-signing qualification. See the
 [native qualification record](arm64e-native-validation.md#instruction-address-signal-recipes-and-remembered-frames).
 These tests do not execute native signed exception unwinding.
 
+`NeverDArm64eUnwindRecoveryTests` runs without Apple hardware. It checks
+implicit signing at exact instruction boundaries, including conflicting
+paths, live and spilled LR, stale stack slots, missing preserved registers,
+relocated signing instructions and analysis limits. The lifted-image suite
+also compiles a compact-only Apple Clang dylib. With native replay enabled,
+it checks both that dylib and the system cursor's next frame after crossing
+the real signal trampoline. See the [system signal qualification](arm64e-native-validation.md#system-signal-trampoline-and-implicit-signing-rows).
+
 `AArch64LinkedUnwind` assembles and links real arm64e dylibs with the host
 Apple toolchain, then loads them through the public Mach-O loader. Its explicit
 mode-5 compact row checks linker transport and the PACIBSPPC offset; it does
@@ -2300,8 +2308,10 @@ provenance, exact PCs, source scopes and bounded CIE lookup.
 `NeverDUnwindFrameCAPITests` loads independent Mach-O fixtures through the
 public session API and covers all six query statuses, unsigned and absent
 sources, a shorter FDE than compact range, half-open boundaries and signing
-address zero. `NeverDUnwindFrameCLITests` compares complete CLI JSON against
-that same public API without adding dependencies to the C API suite.
+address zero. For an implicit arm64e frame the C API tests check that an
+unknown DWARF result coexists with a known instruction result at the queried
+PC. `NeverDUnwindFrameCLITests` compares complete CLI JSON against that same
+public API without adding dependencies to the C API suite.
 `pluginsdk/python/tests/test_unwind_query.py` checks the Python adapter's
 ownership, integer validation and complete JSON retention.
 `NeverDLinkedUnwindQuery` rebuilds the three Apple-linked fixtures and compares
@@ -4200,6 +4210,14 @@ factors with nested affine coordinates, scaled XOR tails and widths through
 limited work/storage, exhaust a six-bit input pair, and prove nested
 coordinates at full width with Z3. An additional 63-factor x64 fixture
 exercises two affine layers through both CLI and GUI worker source paths.
+Use `--family residue-view --count 12` for 84 products with 23 to 137 factors
+at widths from 9 to 513 bits. Masks and high addends disguise the coordinates.
+Native tests change a single observed bit, exhaust a six-bit input pair and
+check full-width equivalence with Z3. Both an outer scale and a scale already
+multiplied into one factor must preserve the same observations. A 63-factor executable uses these masks
+through CLI and GUI worker source paths. The 32-bit top-column regression
+requires the same 16-node reading at a 256-unit work limit and at the usual
+limit; Z3 verifies the short-budget result.
 For latency comparisons, retain per-run and pooled per-input P95, separate
 thread CPU from wall time, and include same-binary A/A controls. Pooling input
 medians can change the sample at the 95th percentile and reverse the apparent

@@ -10803,6 +10803,10 @@ Your previous graph is still available.</source>
         <translation>Состояние DWARF для выбранного PC</translation>
     </message>
     <message>
+        <source>Signing state recovered from instructions at the selected PC</source>
+        <translation>Состояние подписи в выбранной точке PC, восстановленное по инструкциям</translation>
+    </message>
+    <message>
         <source>Compact unwind: completed-prologue recipe</source>
         <translation>Компактная раскрутка: рецепт для завершённого пролога</translation>
     </message>

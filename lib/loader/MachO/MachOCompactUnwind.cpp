@@ -731,6 +731,24 @@ ParseResult parseCompactUnwind(const BinaryImage &Img) {
       partial("__unwind_info code range is empty after mode normalization");
       continue;
     }
+    // Some Apple linkers place the final lookup sentinel one byte beyond
+    // __text. Preserve the raw index, but do not assign the first non-code
+    // byte to the last ARM64 instruction range. An interior page boundary or
+    // a partial final instruction has no such interpretation.
+    if (Img.Arch == Arch::AArch64 && I + 1 == Raw.size() &&
+        End == SentinelOffset &&
+        Entry.CodeRange.End % kARM64InstructionBytes ==
+            kARM64TerminalLookupByte) {
+      const va_t TextEnd = Entry.CodeRange.End - kARM64TerminalLookupByte;
+      const Section *Text = Img.getSectionFor(Entry.CodeRange.Begin);
+      if (Text && TextEnd > Entry.CodeRange.Begin &&
+          TextEnd - Text->VA == Text->Size &&
+          Entry.CodeRange.Begin % kARM64InstructionBytes == 0 &&
+          Img.isCodeRange(Entry.CodeRange.Begin,
+                          TextEnd - Entry.CodeRange.Begin) &&
+          !Img.isCodeAddress(TextEnd))
+        Entry.CodeRange.End = TextEnd;
+    }
     Entry.NativeEncoding = Raw[I].Encoding;
     if (!decodeEncoding(Img.Arch, Raw[I].Encoding, Entry)) {
       if (Entry.Kind != CompactUnwindKind::Unknown)

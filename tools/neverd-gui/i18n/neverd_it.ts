@@ -10767,6 +10767,10 @@ Il grafo precedente è ancora disponibile.</translation>
         <translation>Stato DWARF al PC selezionato</translation>
     </message>
     <message>
+        <source>Signing state recovered from instructions at the selected PC</source>
+        <translation>Stato della firma ricavato dalle istruzioni al PC selezionato</translation>
+    </message>
+    <message>
         <source>Compact unwind: completed-prologue recipe</source>
         <translation>Unwind compatto: ricetta del prologo completato</translation>
     </message>
