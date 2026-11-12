@@ -234,5 +234,7 @@
       "rss_B_median": 37797888
     }
   ],
-  "limits": "Shared host, no CPU affinity pinning. Direct Capstone is a decode-only comparator; added word guards/new instruction forms are excluded from same-output speedup claims. No world-leading claim."
+  "limits": "Shared host, no CPU affinity pinning. Direct Capstone is a decode-only comparator; added word guards/new instruction forms are excluded from same-output speedup claims. No world-leading claim.",
+  "legacy_dsp_gnu_packed_forms": 101,
+  "legacy_accumulator_original_forms_per_endian": 20
 }

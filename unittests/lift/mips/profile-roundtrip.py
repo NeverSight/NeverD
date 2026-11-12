@@ -35,6 +35,15 @@ def kernels():
         "mips64msafloat", "mips64r5", "msa",
         "fill.d $w0,$4\nfill.d $w1,$5\nfadd.d $w2,$w0,$w1\ncopy_s.d $2,$w2[0]",
     )
+    for instruction in (
+        "dpau.h.obl dpau.h.obr dpsu.h.obl dpsu.h.obr dpaq_s.w.qh dpsq_s.w.qh "
+        "mulsaq_s.w.qh dpaq_sa.l.pw dpsq_sa.l.pw mulsaq_s.l.pw "
+        "maq_sa.w.qhll maq_sa.w.qhlr maq_sa.w.qhrl maq_sa.w.qhrr "
+        "maq_s.w.qhll maq_s.w.qhlr maq_s.w.qhrl maq_s.w.qhrr "
+        "maq_s.l.pwl maq_s.l.pwr"
+    ).split():
+        yield ("mips64acc_"+instruction.replace(".","_"),"mips64r2","dsp",
+               "mthi $0\nmtlo $0\n"+instruction+" $ac0,$4,$5\nmflo $2")
     # The R6 generic core executes the original microMIPS ELF directly.
     yield "micromips32r6", "mips32r6", "", "mul $2,$4,$5\nbitswap $2,$2\njrc16 $ra"
     yield (
@@ -72,6 +81,9 @@ def inputs(name, bits):
         for a in (0, 1, -1, 0x11223344, 0x8000000000000001)
         for b in (0, 7, -1, 0xA5A533FF)
     ]
+    if name.startswith("mips64acc_"):
+        return [(a,b) for a in (0,1,2,0x0001000200030004,0xffff00010002ffff)
+                for b in (0,5,6,0x0005000600070008,0xffff00020001ffff)]
     if "fp" in name:
         values=(0,0x80000000,0x3fc00000,0xbf800000,0x7fc00000,0x7f800001,1) if bits==32 else (
             0,0x8000000000000000,0x3ff8000000000000,0xbff0000000000000,0x7ff8000000000000,0x7ff0000000000001,1)

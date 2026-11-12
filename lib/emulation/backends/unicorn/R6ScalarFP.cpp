@@ -11,6 +11,7 @@
 #include "neverd/ir/intrinsics/MIPS/MIPSR6FPOperations.h"
 
 #include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 
@@ -101,9 +102,24 @@ public:
 private:
   bool restore(uint32_t CSR) {
     uint32_t Observed = 0;
-    return uc_context_restore(CPU, Initial) == UC_ERR_OK &&
-           uc_reg_write(CPU, UC_MIPS_REG_FCSR, &CSR) == UC_ERR_OK &&
-           uc_reg_read(CPU, UC_MIPS_REG_FCSR, &Observed) == UC_ERR_OK &&
+    if (uc_context_restore(CPU, Initial) != UC_ERR_OK)
+      return false;
+    const auto Written = uc_reg_write(CPU, UC_MIPS_REG_FCSR, &CSR);
+    if (Written == UC_ERR_EXCEPTION) {
+      // The public register setter refuses a pending enabled Cause. A real
+      // CTC1 commits that state before trapping, allowing a handler to read
+      // it and clear the cause on a subsequent invocation.
+      uint32_t Cleared = CSR & ~0x0003f000u;
+      uint64_t Value = CSR;
+      if (uc_reg_write(CPU, UC_MIPS_REG_FCSR, &Cleared) != UC_ERR_OK ||
+          uc_reg_write(CPU, UC_MIPS_REG_8, &Value) != UC_ERR_OK)
+        return false;
+      const auto PC = ControlPC + 8 * 31 + 4;
+      if (uc_emu_start(CPU, PC, PC + 4, 0, 1) != UC_ERR_EXCEPTION)
+        return false;
+    } else if (Written != UC_ERR_OK)
+      return false;
+    return uc_reg_read(CPU, UC_MIPS_REG_FCSR, &Observed) == UC_ERR_OK &&
            Observed == CSR;
   }
   std::optional<MIPSR6FPResult> run(uint64_t PC, int OutputRegister) {

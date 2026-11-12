@@ -10,7 +10,9 @@
 #include "neverd/backend/MIPS/MIPSFPAssembly.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSR6FPOperations.h"
 
+#include <cstdint>
 #include <stdexcept>
+#include <string>
 
 namespace neverd::mips {
 inline FPNativeAssembly r6FPAssembly(Intrinsic Id, unsigned Selector,

@@ -51,7 +51,7 @@ R6_DOUBLE = (
 
 def scalar_fp(bits):
     rows = ["mfc1 $2,$f4", "mtc1 $2,$f4", "mfhc1 $2,$f4", "mthc1 $2,$f4",
-            "cfc1 $2,$31", "ctc1 $2,$28"]
+            "cfc1 $2,$31", "ctc1 $2,$28", "bc1eqz $f4,1f", "bc1nez $f4,1f"]
     rows.extend(f"{op} $f4,-8($2)" for op in ("lwc1","ldc1","swc1","sdc1"))
     if bits == 64:
         rows.extend(["dmfc1 $2,$f4","dmtc1 $2,$f4"])

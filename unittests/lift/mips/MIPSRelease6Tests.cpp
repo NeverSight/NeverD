@@ -113,6 +113,12 @@ TEST_P(MIPSRelease6, ScalarFPUCommitsFlagsAndSuppressesFaultingDestinations) {
   EXPECT_EQ(C.FCSR, 0xc8400u);
   EXPECT_EQ(E.getRegister(mipsreg::w(4)), 0xdeadbeefu);
   C.FloatingPointException = false;
+  ASSERT_TRUE(Execute(0x4442f800)); // Handler reads the pending Cause/Enable.
+  EXPECT_EQ(E.getRegister(mipsreg::V0), 0xc8400u);
+  E.setRegister(mipsreg::A0, 0xc0000);
+  ASSERT_TRUE(Execute(0x44c4f800)); // A later CTC1 clears the pending cause.
+  EXPECT_EQ(C.FCSR, 0xc0000u);
+  EXPECT_FALSE(C.FloatingPointException);
   for (auto [Rounding, Expected] :
        {std::pair{0u, 2u}, {1u, 1u}, {2u, 2u}, {3u, 1u}}) {
     C.FCSR = 0xc0000 | Rounding;
