@@ -4,19 +4,20 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Variadic (`...`) calls take an ABI path none of the earlier call probes reach:
-// the callee materializes a register save area in its prologue (x86-64 spills the
-// integer arg registers plus, gated on AL, the XMM registers; AArch64 spills the
-// GPR/FPR save areas; arm32 spills r0-r3) and `va_arg` walks gp_offset / the
-// overflow area.  The caller side must also satisfy the variadic convention
-// (x86-64 sets AL = number of vector registers used).  A lifter that models the
-// callee's fixed prologue spills as ordinary stack params, or drops AL on the
-// caller, mis-sums every argument.
+// Variadic (`...`) calls take an ABI path none of the earlier call probes
+// reach: the callee materializes a register save area in its prologue (x86-64
+// spills the integer arg registers plus, gated on AL, the XMM registers;
+// AArch64 spills the GPR/FPR save areas; arm32 spills r0-r3) and `va_arg` walks
+// gp_offset / the overflow area.  The caller side must also satisfy the
+// variadic convention (x86-64 sets AL = number of vector registers used).  A
+// lifter that models the callee's fixed prologue spills as ordinary stack
+// params, or drops AL on the caller, mis-sums every argument.
 //
 //   * vsum_i   - sum of N int varargs (register + overflow area walk).
 //   * vsum_big - more varargs than parameter registers (forces the overflow
 //                area / pure stack on i386).
-//   * vmax_i   - running max over int varargs (varargs feeding a compare/select).
+//   * vmax_i   - running max over int varargs (varargs feeding a
+//   compare/select).
 //   * vsum_ll  - mixed fixed int + variadic long long (8-byte slot stepping).
 //
 // Every kernel folds to a single integer return so native and lifted emulation
@@ -25,6 +26,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64VariadicAbiRT : public SemanticRoundTripFixture,
                          public ::testing::WithParamInterface<RoundTripTC> {};
@@ -103,15 +105,34 @@ static std::vector<RoundTripTC> makeVariadicAbiTC(const char *prefix, const char
 // Every shape round-trips on all four targets: the register save area forwards
 // through ordinary register parameters, and the overflow (incoming-stack)
 // arguments are recovered as trailing stack parameters and spilled into the
-// frame headroom so the va_arg walk reads them — see the Unicorn unsupported-instructions doc
-// #429 (x64/a64 overflow area, ARM32 vectorized walk + long-long varargs) and
-// #428 (i386 clang IPO + PIC noise).
+// frame headroom so the va_arg walk reads them — see the Unicorn
+// unsupported-instructions doc #429 (x64/a64 overflow area, ARM32 vectorized
+// walk + long-long varargs) and #428 (i386 clang IPO + PIC noise).
 static const std::vector<RoundTripTC> kX64 = makeVariadicAbiTC("x64va", "long");
 static const std::vector<RoundTripTC> kX86 = makeVariadicAbiTC("x86va", "int");
 static const std::vector<RoundTripTC> kA64 = makeVariadicAbiTC("a64va", "long");
 static const std::vector<RoundTripTC> kARM = makeVariadicAbiTC("armva", "int");
 
-INSTANTIATE_TEST_SUITE_P(VariadicAbi, X64VariadicAbiRT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(VariadicAbi, X86VariadicAbiRT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(VariadicAbi, A64VariadicAbiRT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(VariadicAbi, ARM32VariadicAbiRT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(VariadicAbi, X64VariadicAbiRT,
+                         ::testing::ValuesIn(kX64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(VariadicAbi, X86VariadicAbiRT,
+                         ::testing::ValuesIn(kX86), rtTCName);
+INSTANTIATE_TEST_SUITE_P(VariadicAbi, A64VariadicAbiRT,
+                         ::testing::ValuesIn(kA64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(VariadicAbi, ARM32VariadicAbiRT,
+                         ::testing::ValuesIn(kARM), rtTCName);
+
+// Clang unrolls these walks and keeps the save area's pointers in registers:
+// the proof that nothing reads the spilled q0-q7 refused them, and both
+// source routes failed on the unknown registers. The C is checked by
+// execution.
+INSTANTIATE_TEST_SUITE_P(VariadicAbiHighC, A64VariadicAbiRT,
+                         ::testing::ValuesIn(onHighC(kA64,
+                                                     {"_vmax_i", "_vsum_big",
+                                                      "_vsum_i", "_vsum_ll"})),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(VariadicAbiLLVMC, A64VariadicAbiRT,
+                         ::testing::ValuesIn(onLLVMC(kA64,
+                                                     {"_vmax_i", "_vsum_big",
+                                                      "_vsum_i", "_vsum_ll"})),
+                         rtTCName);
