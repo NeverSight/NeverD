@@ -12543,6 +12543,11 @@ a name, a member or a typed load converts that text as the instruction does:
 `sitofp` of an unsigned carrier is `(float)(int32_t)`, never C's implicit
 unsigned conversion.
 
+An x86 header defines PDEP, PEXT, the CRC32 steps and the RTM instructions
+inline, for a caller that has the feature. The function that calls one names
+the feature in its target attribute (`headerIntrinsicFeature`), beside those
+of its system instructions, so the unit builds with no option.
+
 `ir/X86FPMaskCompareState.h` owns legacy/VEX CMPSS/CMPSD/CMPPS/CMPPD
 completion. Scalar or packed raw mask bits precede outgoing MXCSR in one
 aggregate; they never acquire floating-point result provenance. Full imm8 is

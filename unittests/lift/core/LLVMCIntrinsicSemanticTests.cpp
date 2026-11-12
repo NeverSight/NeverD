@@ -4515,4 +4515,101 @@ TEST(LLVMCIntrinsicSemantics, NativeAdditionRejectsChangedContracts) {
   checkNativeRmwContract(NdOp::ATOMIC_ADD);
 }
 
+/// The C of \p IR for \p Architecture as one unit that names what it leaves
+/// out, with \p Refused taking those names.
+std::string emitUnit(const char *IR, Arch Architecture, const char *Triple,
+                     std::vector<CEmitterOptions::RefusedDefinition> &Refused,
+                     bool Includes = false) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(IR, Error, Context);
+  EXPECT_TRUE(Module) << Error.getMessage().str();
+  if (!Module)
+    return {};
+  Module->setTargetTriple(llvm::Triple(Triple));
+  CEmitterOptions Options;
+  Options.TheArch = Architecture;
+  Options.EmitIncludes = Includes;
+  Options.RefusedDefinitions = &Refused;
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  EXPECT_TRUE(LLVMCEmitter().emit(*Module, OS, Options));
+  return Text;
+}
+
+/// Whether \p Compiler builds the C \p Source to an object with
+/// \p Arguments, its diagnostics in \p Diagnostics when it does not.
+bool buildsObject(llvm::StringRef Compiler,
+                  llvm::ArrayRef<llvm::StringRef> Arguments,
+                  llvm::StringRef Source, std::string &Diagnostics) {
+  llvm::SmallString<128> Input, Output, Errors;
+  if (llvm::sys::fs::createTemporaryFile("neverd-unit", "c", Input) ||
+      llvm::sys::fs::createTemporaryFile("neverd-unit", "o", Output) ||
+      llvm::sys::fs::createTemporaryFile("neverd-unit", "err", Errors))
+    return false;
+  llvm::FileRemover RemoveInput(Input), RemoveOutput(Output),
+      RemoveErrors(Errors);
+  {
+    std::error_code EC;
+    llvm::raw_fd_ostream OS(Input, EC);
+    if (EC)
+      return false;
+    OS << Source;
+  }
+  std::vector<llvm::StringRef> Command = {Compiler};
+  Command.insert(Command.end(), Arguments.begin(), Arguments.end());
+  Command.insert(Command.end(), {"-w", "-c", Input, "-o", Output});
+  const std::optional<llvm::StringRef> Redirects[] = {
+      llvm::StringRef(), llvm::StringRef(), Errors.str()};
+  const int Status =
+      llvm::sys::ExecuteAndWait(Compiler, Command, std::nullopt, Redirects, 60);
+  if (auto Log = llvm::MemoryBuffer::getFile(Errors))
+    Diagnostics = (*Log)->getBuffer().str();
+  return Status == 0;
+}
+
+TEST(LLVMCIntrinsicSemantics, HeaderScalarIntrinsicsNameTheirTargetFeature) {
+  // The header defines PDEP, PEXT and the CRC32 steps inline, for a caller
+  // that has the feature. The function that calls one names it, so the unit
+  // builds with no option.
+  std::vector<CEmitterOptions::RefusedDefinition> Refused;
+  const std::string Text =
+      emitUnit(R"ir(
+declare i64 @llvm.x86.bmi.pdep.64(i64, i64)
+declare i32 @llvm.x86.bmi.pext.32(i32, i32)
+declare i32 @llvm.x86.sse42.crc32.32.8(i32, i8)
+define i64 @deposit(i64 %value, i64 %mask) {
+  %r = call i64 @llvm.x86.bmi.pdep.64(i64 %value, i64 %mask)
+  ret i64 %r
+}
+define i32 @extract(i32 %value, i32 %mask) {
+  %r = call i32 @llvm.x86.bmi.pext.32(i32 %value, i32 %mask)
+  ret i32 %r
+}
+define i32 @checksum(i32 %sum, i8 %byte) {
+  %r = call i32 @llvm.x86.sse42.crc32.32.8(i32 %sum, i8 %byte)
+  ret i32 %r
+}
+define i32 @plain(i32 %a) {
+  %r = add i32 %a, 1
+  ret i32 %r
+}
+)ir",
+               Arch::X64, "x86_64-linux-gnu", Refused, true);
+  EXPECT_TRUE(Refused.empty()) << Refused.front().Reason;
+  EXPECT_NE(Text.find("target(\"bmi2\")"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("target(\"crc32\")"), std::string::npos) << Text;
+  const size_t Plain = Text.rfind("plain(");
+  ASSERT_NE(Plain, std::string::npos) << Text;
+  const size_t Line = Text.rfind('\n', Text.rfind('\n', Plain) - 1);
+  EXPECT_EQ(Text.substr(Line, Plain - Line).find("target("), std::string::npos)
+      << Text;
+  const auto Compiler = llvm::sys::findProgramByName("clang");
+  std::string Diagnostics;
+  if (Compiler && neverd::test::hostRunsX86())
+    EXPECT_TRUE(buildsObject(*Compiler, {}, Text, Diagnostics))
+        << Diagnostics << "\n"
+        << Text;
+}
+
 } // namespace
