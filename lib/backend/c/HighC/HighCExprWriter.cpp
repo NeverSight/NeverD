@@ -6093,6 +6093,14 @@ std::string HighCWriter::unknownVarUse(const HighExpr &E,
       return useX87Helper(X87CHelper::ControlWord) + "()";
     return unknownValueText(E, "register");
   }
+  // A temporary no statement assigns is unknown as well: the bytes of an
+  // incoming register a partial write keeps, where the register is no
+  // parameter (i386 `mov dl, 8; mov [esp + 44], edx`).  Nothing declares its
+  // name.
+  if (E.Kind == ExprKind::Var && E.Var.Kind == MedVar::Temp &&
+      E.Var.SSAVer == 0 && Name == RawName && !AssignedNames.count(RawName) &&
+      !isEmittedParamName(RawName))
+    return unknownValueText(E, "value");
   return {};
 }
 
