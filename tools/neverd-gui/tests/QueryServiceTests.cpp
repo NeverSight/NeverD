@@ -80,6 +80,15 @@ QJsonObject graph(const QString &address, const QString &layout) {
       {"complete", true}};
 }
 
+/// An array of \p item alone.  Braces around one array are read as an array
+/// holding it by some compilers and as its copy by others, and a delta of one
+/// change is such an array.
+QJsonArray only(const QJsonValue &item) {
+  QJsonArray array;
+  array.append(item);
+  return array;
+}
+
 QString errorCode(const QJsonObject &response) {
   return response["error"].toObject()["code"].toString();
 }
@@ -180,11 +189,11 @@ private slots:
     h.reply(1, {{"base", "listing-1"},
                 {"etag", "listing-2"},
                 {"delta",
-                 QJsonArray{QJsonArray{
+                 only(QJsonArray{
                      "items", "lines",
                      QJsonArray{QJsonArray{"same", 1},
                                 QJsonArray{"put", QJsonArray{QJsonObject{
-                                                      {"text", "c"}}}}}}}}});
+                                                      {"text", "c"}}}}}})}});
     QTRY_VERIFY(!second.isEmpty());
     const auto page = second.value("payload").toObject();
     QCOMPARE(page.value("etag"), QJsonValue("listing-2"));
@@ -272,13 +281,13 @@ private slots:
         QJsonArray{QJsonObject{
             {"status", "ok"},
             {"payload",
-             QJsonObject{{"delta", QJsonArray{QJsonArray{
-                                       "lines", "text", 2,
-                                       QJsonArray{QJsonArray{1, "line 2"}}}}},
-                         {"base", "tag-7-0-2"},
-                         {"etag", "tag-8-0-2"},
-                         {"project_id", "project-one"},
-                         {"revision", "2"}}}}});
+             QJsonObject{
+                 {"delta", only(QJsonArray{"lines", "text", 2,
+                                           only(QJsonArray{1, "line 2"})})},
+                 {"base", "tag-7-0-2"},
+                 {"etag", "tag-8-0-2"},
+                 {"project_id", "project-one"},
+                 {"revision", "2"}}}}});
     QTRY_VERIFY(edited);
     QVERIFY(!edit.contains("then"));
     QJsonObject second;
@@ -338,9 +347,8 @@ private slots:
     const QJsonObject delta{
         {"status", "ok"},
         {"payload",
-         QJsonObject{{"delta", QJsonArray{QJsonArray{
-                                   "lines", "text", 2,
-                                   QJsonArray{QJsonArray{1, "line 2"}}}}},
+         QJsonObject{{"delta", only(QJsonArray{"lines", "text", 2,
+                                               only(QJsonArray{1, "line 2"})})},
                      {"base", "tag-7-0-2"},
                      {"etag", "tag-8-0-2"},
                      {"project_id", "project-one"},
@@ -777,13 +785,13 @@ private slots:
         QJsonArray{QJsonObject{
             {"status", "ok"},
             {"payload",
-             QJsonObject{{"delta", QJsonArray{QJsonArray{
-                                       "lines", "text", 2,
-                                       QJsonArray{QJsonArray{1, "line 2"}}}}},
-                         {"base", "tag-7-0-2"},
-                         {"etag", "tag-8-0-2"},
-                         {"project_id", "project-one"},
-                         {"revision", "2"}}}}});
+             QJsonObject{
+                 {"delta", only(QJsonArray{"lines", "text", 2,
+                                           only(QJsonArray{1, "line 2"})})},
+                 {"base", "tag-7-0-2"},
+                 {"etag", "tag-8-0-2"},
+                 {"project_id", "project-one"},
+                 {"revision", "2"}}}}});
     // The listing is sent, and the view has its page with no answer to it.
     QTRY_COMPARE(shown["status"].toString(), "ok");
     QCOMPARE(h.sent.size(), 3);
@@ -1001,7 +1009,7 @@ private slots:
     QCOMPARE(h.sent[2].payload["if_none_match"].toString(), "tag-7-0-3");
     QVERIFY(h.sent[2].payload["page_delta"].toBool());
     const QJsonArray changes{
-        QJsonArray{"lines", "text", 3, QJsonArray{QJsonArray{0, "a // x"}}},
+        QJsonArray{"lines", "text", 3, only(QJsonArray{0, "a // x"})},
         QJsonArray{"each", "code_names", QJsonObject{{"identity", "0x2"}}},
         QJsonArray{"items", "code_names",
                    QJsonArray{QJsonArray{"same", 1},
@@ -1040,13 +1048,12 @@ private slots:
     QCOMPARE(h.sent[4].payload["if_none_match"].toString(), "tag-8-0-3");
     // Changes that do not fit the kept page are not taken: the page is read
     // whole, with no changes asked for.
-    h.reply(
-        4,
-        {{"delta", QJsonArray{QJsonArray{"lines", "text", 9, QJsonArray{}}}},
-         {"base", "tag-8-0-3"},
-         {"etag", "tag-9-0-3"},
-         {"revision", "3"}},
-        "3");
+    h.reply(4,
+            {{"delta", only(QJsonArray{"lines", "text", 9, QJsonArray{}})},
+             {"base", "tag-8-0-3"},
+             {"etag", "tag-9-0-3"},
+             {"revision", "3"}},
+            "3");
     QTRY_COMPARE(h.sent.size(), 6);
     QCOMPARE(h.sent[5].payload["if_none_match"].toString(), QString());
     QVERIFY(!h.sent[5].payload.contains("page_delta"));
