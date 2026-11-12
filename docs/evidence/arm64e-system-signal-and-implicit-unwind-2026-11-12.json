@@ -107,6 +107,24 @@
         "NEVERD_ENABLE_WEB_ANALYSIS": "ON"
       },
       "scope": "Static unwind queries through C API, CLI, GUI and worker; native execution qualified separately."
+    },
+    "call_abi": {
+      "discovered": 13,
+      "passed": 13,
+      "failed": [],
+      "skipped": []
+    },
+    "variadic_wrapper_clang_reference": {
+      "arm64-apple-macos14": {
+        "fixture_sha256": "8cba04a11c917e8fd466e7f4e23c432aeedbba1ea337b09b8491ff1fd88318de",
+        "apple_clang_call": "%3 = tail call i32 (i32, ptr, ...) @forward_va_list_with_context(i32 noundef %0, ptr noundef nonnull @.str, ptr noundef %1)",
+        "stack_argument": "str\tx1, [sp]"
+      },
+      "arm64e-apple-macos14": {
+        "fixture_sha256": "79f2fedeea9a3cfdc1eed62e06794a8efadb1c94a81be668a90657779289c96d",
+        "apple_clang_call": "%3 = tail call i32 (i32, ptr, ...) @forward_va_list_with_context(i32 noundef %0, ptr noundef nonnull @.str, ptr noundef %1)",
+        "stack_argument": "str\tx1, [sp]"
+      }
     }
   },
   "ubuntu_qt_comparison": {

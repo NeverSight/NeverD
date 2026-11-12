@@ -1150,6 +1150,12 @@ fixture. The nine-function variadic images each compared 27 register inputs
 at O0 and again at O2. Neither runner qualified explicit PAuth_LR,
 PC-sensitive PACM or native CPTA-on.
 
+The call-ABI suite also lifts Apple-linked arm64 and arm64e copies of a C
+variadic wrapper. Its context and format are fixed parameters. Apple Clang
+passes the third actual argument on the stack. The regression parses NeverD's
+LLVM output and checks the types at the definition and the call, including
+the single variadic operand. All 13 tests in the call-ABI suite passed.
+
 The unchanged [r6 replay](https://github.com/gmh5225/test_mac_intel/actions/runs/43215695747)
 passed its 26 supported tests on each runner, with 50 image executions, the
 same 10 system-caller continuations and three compact-fixture calls. The

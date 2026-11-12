@@ -20,6 +20,7 @@
 
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <regex>
 
 class AArch64_CallAbi : public NeverDLiftTest {};
@@ -28,6 +29,17 @@ namespace {
 #define CALL_ABI_VALUE(Type, Name, Value) inline constexpr Type Name = Value;
 #define CALL_ABI_TEXT(Name, Text) inline constexpr char Name[] = Text;
 #include "AArch64CallAbiFixtures.def"
+
+void parseCallABIModule(llvm::StringRef Output, llvm::LLVMContext &Context,
+                        std::unique_ptr<llvm::Module> &Module) {
+  const size_t Begin = Output.find(kCallABIModuleStart);
+  ASSERT_NE(Begin, llvm::StringRef::npos) << Output.str();
+  llvm::SMDiagnostic Diagnostic;
+  Module =
+      llvm::parseAssemblyString(Output.drop_front(Begin), Diagnostic, Context);
+  ASSERT_TRUE(Module) << Diagnostic.getMessage().str();
+  ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+}
 
 // Follow only transformations that preserve the low double-width bits.
 // This accepts both vector extraction and integer carrier legalization while
@@ -73,7 +85,7 @@ llvm::Value *callABILowDoubleOrigin(llvm::Value *Value) {
 } // namespace
 
 static fs::path callAbiObj() {
-  return fs::path(TEST_OBJ_DIR) / "test_call_abi_a64_macho";
+  return fs::path(TEST_OBJ_DIR) / kDarwinArm64CallAbiImage;
 }
 
 static fs::path callArgPhiMachOObj() {
@@ -110,7 +122,7 @@ static std::string callAbiFunctionText(llvm::StringRef IR,
 
 TEST_F(AArch64_CallAbi, IndirectFPCallUsesV0ForArgumentAndReturn) {
   if (!fs::exists(callAbiObj()))
-    GTEST_SKIP() << "AArch64 Mach-O ABI fixture is only built on Apple hosts";
+    GTEST_SKIP() << kDarwinMachOFixtureUnavailable;
   auto R = liftToLLVMIRUnopt(callAbiObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
 
@@ -128,15 +140,9 @@ TEST_F(AArch64_CallAbi, IndirectFPCallUsesV0ForArgumentAndReturn) {
 
   auto Opt = liftToLLVMIR(callAbiObj());
   ASSERT_EQ(Opt.exitCode, 0) << Opt.err;
-  const llvm::StringRef Output(Opt.out);
-  const size_t ModuleBegin = Output.find(kCallABIModuleStart);
-  ASSERT_NE(ModuleBegin, llvm::StringRef::npos) << Opt.out;
   llvm::LLVMContext Context;
-  llvm::SMDiagnostic Diagnostic;
-  const auto Module = llvm::parseAssemblyString(Output.drop_front(ModuleBegin),
-                                                Diagnostic, Context);
-  ASSERT_TRUE(Module) << Diagnostic.getMessage().str();
-  ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+  std::unique_ptr<llvm::Module> Module;
+  ASSERT_NO_FATAL_FAILURE(parseCallABIModule(Opt.out, Context, Module));
   const auto *Function = Module->getFunction(kCallABIIndirectDouble);
   ASSERT_NE(Function, nullptr);
   EXPECT_TRUE(Function->getReturnType()->isDoubleTy());
@@ -160,7 +166,7 @@ TEST_F(AArch64_CallAbi, IndirectFPCallUsesV0ForArgumentAndReturn) {
 
 TEST_F(AArch64_CallAbi, ExternalPairCallPreservesX0AndX1) {
   if (!fs::exists(callAbiObj()))
-    GTEST_SKIP() << "AArch64 Mach-O ABI fixture is only built on Apple hosts";
+    GTEST_SKIP() << kDarwinMachOFixtureUnavailable;
   auto R = liftToLLVMIRUnopt(callAbiObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
 
@@ -175,7 +181,7 @@ TEST_F(AArch64_CallAbi, ExternalPairCallPreservesX0AndX1) {
 
 TEST_F(AArch64_CallAbi, ExternalDarwinVarargsKeepOutgoingStackValues) {
   if (!fs::exists(callAbiObj()))
-    GTEST_SKIP() << "AArch64 Mach-O ABI fixture is only built on Apple hosts";
+    GTEST_SKIP() << kDarwinMachOFixtureUnavailable;
   auto R = liftToLLVMIRUnopt(callAbiObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
 
@@ -189,7 +195,7 @@ TEST_F(AArch64_CallAbi, ExternalDarwinVarargsKeepOutgoingStackValues) {
 
 TEST_F(AArch64_CallAbi, DarwinVarargsAtJoinKeepAllOutgoingStackValues) {
   if (!fs::exists(callAbiObj()))
-    GTEST_SKIP() << "AArch64 Mach-O ABI fixture is only built on Apple hosts";
+    GTEST_SKIP() << kDarwinMachOFixtureUnavailable;
   auto R = liftToLLVMIRUnopt(callAbiObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
 
@@ -208,7 +214,7 @@ TEST_F(AArch64_CallAbi, DarwinVarargsAtJoinKeepAllOutgoingStackValues) {
 
 TEST_F(AArch64_CallAbi, DarwinVaListForwarderUsesExactConsumerCertificate) {
   if (!fs::exists(callAbiObj()))
-    GTEST_SKIP() << "AArch64 Mach-O ABI fixture is only built on Apple hosts";
+    GTEST_SKIP() << kDarwinMachOFixtureUnavailable;
   auto R = liftToLLVMIRUnopt(callAbiObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
 
@@ -220,38 +226,55 @@ TEST_F(AArch64_CallAbi, DarwinVaListForwarderUsesExactConsumerCertificate) {
 }
 
 TEST_F(AArch64_CallAbi, DarwinVaListWrapperKeepsFixedRegisterPrefix) {
-  if (!fs::exists(callAbiObj()))
-    GTEST_SKIP() << "AArch64 Mach-O ABI fixture is only built on Apple hosts";
-  auto R = liftToLLVMIRUnopt(callAbiObj());
-  ASSERT_EQ(R.exitCode, 0) << R.err;
+#if defined(__APPLE__)
+  for (const auto &Image :
+       {callAbiObj(), fs::path(TEST_OBJ_DIR) / kDarwinArm64eCallAbiImage}) {
+    SCOPED_TRACE(Image.string());
+    ASSERT_TRUE(fs::exists(Image));
+    auto R = liftToLLVMIRUnopt(Image);
+    ASSERT_EQ(R.exitCode, 0) << R.err;
 
-  std::string Wrapper =
-      callAbiFunctionText(R.out, "forward_va_list_with_context");
-  ASSERT_FALSE(Wrapper.empty()) << R.out;
-  EXPECT_NE(Wrapper.find("@forward_va_list_with_context(i32 %arg0, i64 %arg1"),
-            std::string::npos)
-      << Wrapper;
+    llvm::LLVMContext Context;
+    std::unique_ptr<llvm::Module> Module;
+    ASSERT_NO_FATAL_FAILURE(parseCallABIModule(R.out, Context, Module));
+    const auto *Wrapper = Module->getFunction(kDarwinVaWrapper);
+    const auto *Caller = Module->getFunction(kDarwinVaCaller);
+    ASSERT_NE(Wrapper, nullptr);
+    ASSERT_NE(Caller, nullptr);
+    const auto *Signature = Wrapper->getFunctionType();
+    ASSERT_TRUE(Signature->isVarArg());
+    ASSERT_EQ(Signature->getNumParams(), kDarwinVaFixedParameters);
+    EXPECT_EQ(Signature->getParamType(0), llvm::Type::getInt32Ty(Context));
+    EXPECT_EQ(Signature->getParamType(1), llvm::Type::getInt64Ty(Context));
 
-  std::string Caller =
-      callAbiFunctionText(R.out, "call_forward_va_list_with_context");
-  ASSERT_FALSE(Caller.empty()) << R.out;
-  size_t Call = Caller.find("@forward_va_list_with_context(");
-  ASSERT_NE(Call, std::string::npos) << Caller;
-  size_t LineBegin = Caller.rfind('\n', Call);
-  size_t LineEnd = Caller.find('\n', Call);
-  std::string CallLine = Caller.substr(LineBegin + 1, LineEnd - LineBegin - 1);
-  EXPECT_NE(CallLine.find("call i64 (i32, i64, i64, ...)"), std::string::npos)
-      << CallLine;
-  size_t ContextArg = CallLine.find("i32 %");
-  ASSERT_NE(ContextArg, std::string::npos) << CallLine;
-  size_t FixedArg = CallLine.find("i64 ", ContextArg);
-  ASSERT_NE(FixedArg, std::string::npos) << CallLine;
-  EXPECT_NE(CallLine.find("i64 ", FixedArg + 4), std::string::npos) << CallLine;
+    const llvm::CallBase *Call = nullptr;
+    for (const auto *User : Wrapper->users()) {
+      const auto *Site = llvm::dyn_cast<llvm::CallBase>(User);
+      if (Site && Site->getFunction() == Caller &&
+          Site->getCalledFunction() == Wrapper) {
+        ASSERT_EQ(Call, nullptr);
+        Call = Site;
+      }
+    }
+    ASSERT_NE(Call, nullptr);
+    EXPECT_EQ(Call->getFunctionType(), Signature);
+    ASSERT_EQ(Call->arg_size(), kDarwinVaCallArguments);
+    // The fixture passes its context, a constant format, and one stack
+    // argument.
+    EXPECT_FALSE(llvm::isa<llvm::Constant>(Call->getArgOperand(0)));
+    EXPECT_TRUE(llvm::isa<llvm::Constant>(Call->getArgOperand(1)));
+    const auto *StackArgument = Call->getArgOperand(kDarwinVaFixedParameters);
+    EXPECT_EQ(StackArgument->getType(), llvm::Type::getInt64Ty(Context));
+    EXPECT_FALSE(llvm::isa<llvm::Constant>(StackArgument));
+  }
+#else
+  GTEST_SKIP() << kDarwinMachOFixtureUnavailable;
+#endif
 }
 
 TEST_F(AArch64_CallAbi, FixedPointerArgumentUsesFullWidthPhiAlias) {
   if (!fs::exists(callArgPhiMachOObj()))
-    GTEST_SKIP() << "AArch64 Mach-O ABI fixture is only built on Apple hosts";
+    GTEST_SKIP() << kDarwinMachOFixtureUnavailable;
   auto R = liftToLLVMIRUnopt(callArgPhiMachOObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
 
@@ -317,7 +340,7 @@ TEST_F(AArch64_CallAbi, PEFixedPointerArgumentUsesFullWidthPhiAlias) {
 
 TEST_F(AArch64_CallAbi, ExternalZeroArgPrototypeIsStableAcrossCallSites) {
   if (!fs::exists(callAbiObj()))
-    GTEST_SKIP() << "AArch64 Mach-O ABI fixture is only built on Apple hosts";
+    GTEST_SKIP() << kDarwinMachOFixtureUnavailable;
   auto R = liftToLLVMIRUnopt(callAbiObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
 
@@ -332,7 +355,7 @@ TEST_F(AArch64_CallAbi, ExternalZeroArgPrototypeIsStableAcrossCallSites) {
 
 TEST_F(AArch64_CallAbi, InternalNoReturnCallTerminatesFailingEdge) {
   if (!fs::exists(callAbiObj()))
-    GTEST_SKIP() << "AArch64 Mach-O ABI fixture is only built on Apple hosts";
+    GTEST_SKIP() << kDarwinMachOFixtureUnavailable;
   auto R = liftToLLVMIRUnopt(callAbiObj());
   ASSERT_EQ(R.exitCode, 0) << R.err;
 
@@ -350,7 +373,7 @@ TEST_F(AArch64_CallAbi, InternalNoReturnCallTerminatesFailingEdge) {
 
 TEST_F(AArch64_CallAbi, AllStagesPass) {
   if (!fs::exists(callAbiObj()))
-    GTEST_SKIP() << "AArch64 Mach-O ABI fixture is only built on Apple hosts";
+    GTEST_SKIP() << kDarwinMachOFixtureUnavailable;
   verifyAllStages(callAbiObj());
   verifyLLVMIRNoVerifierErrors(callAbiObj());
 }
