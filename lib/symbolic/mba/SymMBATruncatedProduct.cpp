@@ -120,12 +120,12 @@ SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
       Parts.push_back(F);
       continue;
     }
-    const auto Weight = Ctx.operand(D, 0);
-    const unsigned Zeros = Ctx.constValue(Weight).countr_zero();
-    const auto Offset = Ctx.operand(F, 0);
-    const unsigned Content =
-        std::min(Zeros, Ctx.constValue(Offset).countr_zero());
-    TotalZeros += std::min(Observed - TotalZeros, Content);
+    auto Weight = Ctx.operand(D, 0);
+    auto Offset = Ctx.operand(F, 0);
+    const unsigned InitialContent =
+        std::min(Ctx.constValue(Weight).countr_zero(),
+                 Ctx.constValue(Offset).countr_zero());
+    TotalZeros += std::min(Observed - TotalZeros, InitialContent);
     if (TotalZeros == Observed)
       return Ctx.mkZero(Width);
     const auto Tail = Ctx.operands(D).drop_front();
@@ -133,7 +133,41 @@ SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
         !Budget.consume(Tail.size()))
       return Root;
     Storage -= Tail.size() * 3 * sizeof(SymRef);
-    const auto Word = Tail.size() == 1 ? Tail.front() : Ctx.mkMul(Tail);
+    auto Word = Tail.size() == 1 ? Tail.front() : Ctx.mkMul(Tail);
+    // Read nested affine coordinates without distributing the product. Only
+    // the observed bits can survive multiplication by the outer coefficient.
+    auto IsAffine = [&] {
+      return (Ctx.op(Word) == SymOp::Add || Ctx.op(Word) == SymOp::Mul) &&
+             Ctx.numOperands(Word) == 2 && Ctx.isConst(Ctx.operand(Word, 0));
+    };
+    if (IsAffine()) {
+      const size_t ReadBytes =
+          2 * (sizeof(llvm::APInt) + Words * sizeof(uint64_t));
+      if (ReadBytes > Storage || !Budget.consume(2 + 2 * Words))
+        return Root;
+      Storage -= ReadBytes;
+      const size_t ReadWords = llvm::APInt::getNumWords(Observed);
+      auto A = Ctx.constValue(Offset).trunc(Observed);
+      auto B = Ctx.constValue(Weight).trunc(Observed);
+      do {
+        if (!Budget.consume(3 + ReadWords + ReadWords * ReadWords))
+          return Root;
+        const auto K = Ctx.constValue(Ctx.operand(Word, 0)).trunc(Observed);
+        if (Ctx.op(Word) == SymOp::Add)
+          A += B * K;
+        else
+          B *= K;
+        Word = Ctx.operand(Word, 1);
+      } while (IsAffine());
+      Offset = Ctx.mkConst(A.sextOrTrunc(Width));
+      Weight = Ctx.mkConst(B.sextOrTrunc(Width));
+    }
+    const unsigned Zeros = Ctx.constValue(Weight).countr_zero();
+    const unsigned Content =
+        std::min(Zeros, Ctx.constValue(Offset).countr_zero());
+    TotalZeros += std::min(Observed - TotalZeros, Content - InitialContent);
+    if (TotalZeros == Observed)
+      return Ctx.mkZero(Width);
     const bool Complement = Ctx.op(Word) == SymOp::Not;
     Rows.push_back({F, Complement ? Ctx.operand(Word, 0) : Word, Weight, Offset,
                     Zeros, Content, Complement});
@@ -187,7 +221,9 @@ SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
     size_t Used = End - I;
     const size_t Bytes =
         sizeof(llvm::APInt) + 4 * sizeof(SymRef) + 5 * Words * sizeof(uint64_t);
-    const size_t Step = 3 + Words + 2 * Words * Words;
+    const size_t CoefficientWords = llvm::APInt::getNumWords(Precision);
+    const size_t Step =
+        3 + CoefficientWords + 2 * CoefficientWords * CoefficientWords;
     if (Degree >= Used || Used < 2 || (Degree + 1) > Storage / Bytes ||
         (Degree + 1) > Budget.available() / Step / Used) {
       Used = 0;

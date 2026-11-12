@@ -1213,6 +1213,34 @@ def truncated_product_corpus(width, count):
     return rows
 
 
+
+def affine_product_corpus(width, count):
+    """Repeated words hidden under up to three affine coordinate changes."""
+    axes = ("(x^y)", "((x&z)^(y|w))", "((x+y)^(z&w))")
+    rows = []
+    for case in range(count):
+        rng = random.Random(0x9318A + width * 5191 + case * 177)
+        observed = width if width <= 97 else width // 3
+        degree = (23, 47, 89, 137)[case % 4]
+        order = 2 + 2 * (case % 4)
+        shift = max(1, (observed + order) // (order + 1))
+        scale = 3 << (width - observed)
+        factors = []
+        for j in range(degree):
+            word = axes[(j + case) % (1 + case % 3)]
+            for _ in range(1 + case % 3):
+                offset = rng.randrange(-21, 22)
+                weight = rng.randrange(-15, 16) | 1
+                word = f"({offset}+({weight})*{word})"
+            offset = rng.randrange(-31, 32) | 1
+            weight = (rng.randrange(-31, 32) | 1) << (shift + j % 2)
+            factors.append(f"({offset}+({weight})*{word})")
+        tail = ("(x|y)+(x&y)+(z^w)", "3*x+5*y+7*(z^w)",
+                "(z^w)*(x|y)")[case % 3]
+        rows.append(f"({scale}*" + "*".join(factors) + ")+(" + tail + ")")
+    return rows
+
+
 def integer_product_corpus(width, count):
     """Neighboring precisions on either side of a falling-factorial divisor."""
     words = ("(x^y)", "((x&z)^(y|w))", "((x+y)^(z&w))", "(~(x|z))", "((x^w)|(y&z))")
@@ -1435,7 +1463,7 @@ def main():
                  "narrow-product-cross-terms", "masked-product-window",
                  "residue-power", "residue-quotient", "residue-subgroup",
                  "sparse-linear-mixed-degree", "upper-perturbation", "masked-perturbation",
-                 "mixed-perturbation", "truncated-product", "integer-product"),
+                 "mixed-perturbation", "truncated-product", "integer-product", "affine-product"),
         default="complement",
     )
     args = parser.parse_args()
@@ -1456,6 +1484,7 @@ def main():
             "truncated-product": (8, 16, 32, 63, 65, 129, 257),
             "integer-product": (8, 16, 31, 64, 97, 193, 257),
             "mixed-perturbation": (8, 16, 32, 64, 65, 129, 257),
+            "affine-product": (8, 9, 16, 32, 65, 97, 257, 513),
             "upper-perturbation": (8, 16, 32, 64, 65, 97, 129, 257),
             "masked-perturbation": (9, 24, 63, 127, 256),
         }.get(args.family, (8, 16, 32, 64))
@@ -1491,6 +1520,7 @@ def main():
                 "upper-perturbation": upper_perturbation_corpus,
                 "masked-perturbation": masked_perturbation_corpus,
                 "mixed-perturbation": mixed_perturbation_corpus,
+                "affine-product": affine_product_corpus,
                 "truncated-product": truncated_product_corpus,
                 "integer-product": integer_product_corpus,
             }[args.family]
