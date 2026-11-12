@@ -107,7 +107,7 @@ qreal contrast(const QColor &ink, const QColor &surface) {
 }
 
 /// Whether \p a and \p b differ by at most \p tolerance in every channel.
-bool near(const QColor &a, const QColor &b, int tolerance) {
+bool withinTolerance(const QColor &a, const QColor &b, int tolerance) {
   return std::abs(a.red() - b.red()) <= tolerance &&
          std::abs(a.green() - b.green()) <= tolerance &&
          std::abs(a.blue() - b.blue()) <= tolerance;
@@ -876,7 +876,7 @@ private slots:
       const int middle = row.top() + row.height() / 2;
       QCOMPARE(at(row.left(), middle), outline);
       QCOMPARE(at(row.right(), middle), outline);
-      QVERIFY(near(at(row.left() + 2, middle), tint, 1));
+      QVERIFY(withinTolerance(at(row.left() + 2, middle), tint, 1));
       // Its text stays legible on the tint.
       qreal best = 1;
       for (int y = row.top() + 3; y <= row.bottom() - 3; ++y)
