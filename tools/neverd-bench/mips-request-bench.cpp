@@ -17,8 +17,13 @@
 #include <string_view>
 
 int main(int Argc, char **Argv) {
+  const bool LLVMRoute =
+      Argc > 1 && std::string_view(Argv[Argc - 1]) == "--llvm";
+  if (LLVMRoute)
+    --Argc;
   if (Argc != 4 && Argc != 5) {
-    std::fprintf(stderr, "usage: %s IMAGE REPEATS OUTPUT [HEX_ENTRY]\n",
+    std::fprintf(stderr,
+                 "usage: %s IMAGE REPEATS OUTPUT [HEX_ENTRY] [--llvm]\n",
                  Argv[0]);
     return 2;
   }
@@ -43,15 +48,20 @@ int main(int Argc, char **Argv) {
       neverd_session_create(), neverd_session_destroy);
   if (!Session || !neverd_session_load(Session.get(), Argv[1]))
     return 1;
+  const auto Decompile = [&] {
+    if (Argc == 4)
+      return neverd_decompile_all(Session.get(), Argv[1], LLVMRoute, 0, 250);
+    if (LLVMRoute)
+      return neverd_decompile_llvm_ex(Session.get(), Entry, 0);
+    return neverd_decompile_functions(Session.get(), Argv[1], NEVERD_OUTPUT_C,
+                                      &Entry, 1);
+  };
   std::string Expected;
   const auto CPUStart = std::clock();
   const auto Start = std::chrono::steady_clock::now();
   for (unsigned I = 0; I < Repeats; ++I) {
     std::unique_ptr<const char, decltype(&neverd_free_string)> Source(
-        Argc == 5 ? neverd_decompile_functions(Session.get(), Argv[1],
-                                               NEVERD_OUTPUT_C, &Entry, 1)
-                  : neverd_decompile_all(Session.get(), Argv[1], 0, 0, 250),
-        neverd_free_string);
+        Decompile(), neverd_free_string);
     if (!Source) {
       std::unique_ptr<const char, decltype(&neverd_free_string)> Error(
           neverd_last_error(Session.get()), neverd_free_string);
