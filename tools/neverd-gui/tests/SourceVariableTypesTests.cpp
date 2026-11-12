@@ -4,6 +4,7 @@
 #include "Docking.h"
 #include "ListingView.h"
 #include "MainWindow.h"
+#include "PaintCheck.h"
 #include "Session.h"
 #include "SetTypeDialog.h"
 #include "mcp/GuiSessionBroker.h"
@@ -79,8 +80,19 @@ QString createdFunctionFixture(const QTemporaryDir &Directory,
 class SourceVariableTypesTests : public QObject {
   Q_OBJECT
   QTemporaryDir Settings;
+  quint64 StalePaints = 0;
 private slots:
+  void init() { StalePaints = PaintCheck::stalePaints(); }
+
+  void cleanup() {
+    // No view kept a row that another state of it had painted.
+    QCOMPARE(PaintCheck::stalePaints(), StalePaints);
+  }
+
   void initTestCase() {
+    // The views that repaint rows of themselves are compared, at each paint,
+    // with all of themselves painted afresh.
+    PaintCheck::setEnabled(true);
     QCoreApplication::setOrganizationName("NeverDTests");
     QCoreApplication::setApplicationName("SourceVariableTypes");
     QSettings::setDefaultFormat(QSettings::IniFormat);
