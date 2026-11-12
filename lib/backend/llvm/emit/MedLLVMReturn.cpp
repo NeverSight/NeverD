@@ -92,6 +92,56 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     return GetReturnValue(Op.Inputs[Idx]);
   };
   auto *RetTy = CurFunc->getReturnType();
+  // A scalar floating return carried in a vector register is the register's
+  // low lane.  A scalar operation merges its result into the register it
+  // found (`cvtsi2sd`, `movsd xmm, xmm`), so the bytes above the lane can be
+  // the register's own value at entry, which no parameter supplies: unknown
+  // machine state, and no part of what the function returns.  The lane is
+  // read without them and the type's widening leaves them zero, as an unset
+  // register reads on the native route; reading the whole register would
+  // make source output fail on a value no caller observes.  Bytes the body
+  // computed stay: a caller that reads past the scalar makes the function
+  // return the whole register (recoverPackedScalarReturnFromCallers).
+  auto EntryStateFrom = [&](const MedVar &Value, uint64_t From) {
+    const MedVar *Whole = &Value;
+    for (;;) {
+      if (Whole->isConst() || Whole->Kind != MedVar::Reg || lookupPhi(*Whole))
+        return false;
+      const MedOp *Def = lookupDef(*Whole);
+      const bool EntryMarker = Def && Def->Opcode == NdOp::COPY &&
+                               Def->NumInputs == 1 &&
+                               Def->Inputs[0] == Def->Output;
+      if (!Def || EntryMarker)
+        return Whole->SSAVer == 0 &&
+               llvm::none_of(CurMedFunc->Params, [&](const MedVar &Parameter) {
+                 return Parameter.RegOff == Whole->RegOff;
+               });
+      // A later merge keeps the bytes above its own low part.
+      if (Def->Opcode != NdOp::CONCAT || Def->NumInputs != 2 ||
+          From < Def->Inputs[1].Size)
+        return false;
+      const MedOp *High = lookupDef(Def->Inputs[0]);
+      if (!High || High->Opcode != NdOp::SUBBYTES || High->NumInputs != 2 ||
+          !High->Inputs[1].isConst() ||
+          High->Inputs[1].ConstVal != Def->Inputs[1].Size ||
+          High->Output.Size + Def->Inputs[1].Size != Whole->Size)
+        return false;
+      Whole = &High->Inputs[0];
+    }
+  };
+  auto ReturnRegisterValue = [&](const MedVar &Register) -> llvm::Value * {
+    if (CurMedFunc && RetTy->isVectorTy() && CurMedFunc->ReturnType &&
+        CurMedFunc->ReturnType->Kind == NdTypeKind::Float &&
+        !CurMedFunc->ReturnsVectorRegister && !CurMedFunc->FPReturnViaX87)
+      if (const MedOp *Def = lookupDef(Register);
+          Def && Def->Opcode == NdOp::CONCAT && Def->NumInputs == 2 &&
+          !Def->Inputs[1].isConst() &&
+          Def->Inputs[1].Size == CurMedFunc->ReturnType->Size &&
+          Def->Inputs[1].Size < Register.Size &&
+          EntryStateFrom(Register, Def->Inputs[1].Size))
+        return GetReturnValue(Def->Inputs[1]);
+    return GetReturnValue(Register);
+  };
   llvm::Value *FilterResult = nullptr;
   if (AnalysisRecoveryForSource && TargetArch == Arch::X86 &&
       TargetFormat == BinaryFormat::COFF && CurMedFunc &&
@@ -397,7 +447,7 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       }
       if (RetVar) {
         rejectEscapingAddressFragment(*RetVar, "a return value");
-        RetVal = GetReturnValue(*RetVar);
+        RetVal = ReturnRegisterValue(*RetVar);
         const ConstantProvenanceSummary ReturnOccurrence =
             summarizeConstantProvenance(*RetVar);
         // A returned address into a WRITABLE global (`return &g[index]` /
@@ -492,7 +542,7 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         }
         if (RetVar) {
           rejectEscapingAddressFragment(*RetVar, "a return value");
-          RetVal = GetReturnValue(*RetVar);
+          RetVal = ReturnRegisterValue(*RetVar);
           break;
         }
         for (auto &Phi : Blk.Phis) {
