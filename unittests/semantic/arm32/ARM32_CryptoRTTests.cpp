@@ -1,4 +1,4 @@
-//===- ARM32_CryptoRTTests.cpp - ARMv8 AArch32 AES/SHA roundtrip -----------===//
+//===- ARM32_CryptoRTTests.cpp - ARMv8 AArch32 AES/SHA roundtrip ----------===//
 //
 // NeverD Decompiler
 //
@@ -19,15 +19,16 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class ARM32CryptoRT : public SemanticRoundTripFixture,
                       public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(ARM32CryptoRT, Verify) { roundTripARM32(GetParam()); }
 
 // ARMv8 AArch32 crypto needs an ARMv8 target + the MAX CPU for emulation.
-#define A32CRYPTO "Crypto", 1, \
-  "-march=armv8-a+crypto -mfpu=crypto-neon-fp-armv8", false, \
-  "armv8-linux-gnueabihf", UC_CPU_ARM_MAX
+#define A32CRYPTO                                                              \
+  "Crypto", 1, "-march=armv8-a+crypto -mfpu=crypto-neon-fp-armv8", false,      \
+      "armv8-linux-gnueabihf", UC_CPU_ARM_MAX
 
 // clang-format off
 
@@ -213,4 +214,10 @@ static const std::vector<RoundTripTC> kArm32Crypto = {
 
 INSTANTIATE_TEST_SUITE_P(Crypto, ARM32CryptoRT,
                          ::testing::ValuesIn(kArm32Crypto),
+                         [](const auto &P) { return P.param.Name; });
+
+// The AES and SHA operations print as their header intrinsics on the LLVM C
+// route, the AArch32 forms among them: checked by execution.
+INSTANTIATE_TEST_SUITE_P(CryptoLLVMC, ARM32CryptoRT,
+                         ::testing::ValuesIn(onLLVMC(kArm32Crypto)),
                          [](const auto &P) { return P.param.Name; });

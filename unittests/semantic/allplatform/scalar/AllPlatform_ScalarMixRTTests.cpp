@@ -17,6 +17,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64ScalarMixRT : public SemanticRoundTripFixture,
                        public ::testing::WithParamInterface<RoundTripTC> {};
@@ -125,3 +126,9 @@ INSTANTIATE_TEST_SUITE_P(ScalarMix, A64ScalarMixRT, ::testing::ValuesIn(kA64SM),
                          rtTCName);
 INSTANTIATE_TEST_SUITE_P(ScalarMix, ARM32ScalarMixRT,
                          ::testing::ValuesIn(kARM32SM), rtTCName);
+
+// An alignment guard through the GOT register left its object unaligned:
+// the C is checked by execution.
+INSTANTIATE_TEST_SUITE_P(ScalarMixHighC, X86ScalarMixRT,
+                         ::testing::ValuesIn(onHighC(kX86SM, {"_histbyte"})),
+                         rtTCName);
