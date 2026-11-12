@@ -730,7 +730,7 @@ operands before reading the source, clamps shift operands before emitting
 LowIR, and records SF/AF/PF as undefined while defining CF/OF/ZF. APX NF
 preserves all flags. The shared prefix and APX validators retain address
 ownership. Decoder flag metadata is checked separately from architectural
-effects: legacy BEXTR metadata currently over-reports control-flag resets.
+effects, and has to name exactly the flags BEXTR defines and leaves undefined.
 
 `X86LiftBitCount` owns TZCNT, LZCNT and POPCNT admission, arithmetic and
 undefined-output effects across legacy, REX2 and APX/NF forms. F3 selection,
@@ -763,7 +763,12 @@ PDEP/PEXT retain the shared scalar intrinsic contract and native BMI2 lowering.
 `X86LiftADX` owns ADCX/ADOX admission and their independent unsigned CF/OF
 carry chains. It admits legacy map-2 and APX/NDD forms; ADX has no REX2 or NF
 form. It checks raw bytes, all public operands and implicit flags before a
-memory access. ADOX's legacy decoder detail omits TEST_OF and destination read
+memory access. The decoder's opcode detail of a legacy three-byte-map
+instruction is the whole `0F 38 xx` or `0F 3A xx` sequence, and `0F 0F xx` for
+3DNow!, whose selector follows the operands; the ADX, floating-point
+(`parseFPEncoding`) and 3DNow! validators compare every byte of it, so a
+decoder that reports another layout refuses the instruction instead of being
+read loosely. ADOX's legacy decoder detail omits TEST_OF and destination read
 access; the architectural inputs remain explicit in LowIR. Both sources and
 carry are consumed before any destination write, including aliases. Its empty
 undefined-output audit preserves earlier arbitrary flags, while the selected
