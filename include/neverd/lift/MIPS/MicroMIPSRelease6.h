@@ -76,7 +76,7 @@ inline std::optional<uint32_t> microR6Float(uint32_t Word) {
                                         : 53;
     return Op << 26 | S << 21 | T << 16 | uint16_t(Word);
   }
-  case 0x11:
+  case 0x10:
     if (T == 8 || T == 9)
       return (T == 8 ? 0x45200000u : 0x45a00000u) | S << 16 | uint16_t(Word);
     return std::nullopt;

@@ -3216,6 +3216,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
             {row["id"]: row["status"] for row in document["capabilities"]},
             {
                 "analysis.mips.classic-r2": "experimental",
+                "analysis.mips.classic-r6": "experimental",
                 "analysis.mips.micromips32-r2": "experimental",
                 "analysis.mips.dsp32-r2": "experimental",
                 "analysis.mips.mips16-r2": "experimental",
@@ -3252,6 +3253,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
         no_surfaces = {"c": [], "python": [], "cli": [], "json": []}
         expected_surfaces = {
             "analysis.mips.classic-r2": no_surfaces,
+            "analysis.mips.classic-r6": no_surfaces,
             "analysis.mips.micromips32-r2": no_surfaces,
             "analysis.mips.dsp32-r2": no_surfaces,
             "analysis.mips.mips16-r2": no_surfaces,

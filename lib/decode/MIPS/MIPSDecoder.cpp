@@ -122,9 +122,10 @@ bool Decoder::decodeMicroMIPSRelease6(const uint8_t *Bytes, size_t Len,
                                   readTargetEndian<uint16_t>(Bytes + 2, Little);
   if (Size == 4) {
     if (auto FP = mips::microR6Float(Word)) {
-      if (((*FP & 0xffc00030) == 0x46800010))
+      if (((*FP & 0xffc00030) == 0x46800010) ||
+          ((*FP & 0xffc0003c) == 0x4600001c))
         return decodeR6FloatCompare(Bytes, *FP, Addr);
-      const bool Branch = Major == 0x11;
+      const bool Branch = Major == 0x10;
       if (!decodeMIPSEquivalent(Bytes, *FP, Addr, Branch))
         return false;
       if (Branch) {
@@ -275,10 +276,12 @@ bool Decoder::decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr) {
 bool Decoder::decodeR6FloatCompare(const uint8_t *Bytes, uint32_t Classic,
                                    va_t Addr) {
   const auto Id = mips::r6FPArithmetic(Classic);
-  if (!Id || !decodeMIPSEquivalent(Bytes, Classic & ~16u, Addr))
+  const auto Equivalent =
+      (Classic & 0xffc00030) == 0x46800010 ? Classic & ~16u : Classic;
+  if (!Id || !decodeMIPSEquivalent(Bytes, Equivalent, Addr))
     return false;
-  // Capstone omits the R6 complemented symmetric predicates. Their positive
-  // predicates have the same register roles and implicit FCSR effects.
+  // Capstone omits complemented symmetric predicates and interchanges MINA
+  // with MAX. Their decoded counterparts have the same operand and FCSR roles.
   InsnBuf->id = MIPS_INS_ENDING + 0x1000 + unsigned(*Id) -
                 unsigned(Intrinsic::MIPSFPADD_S);
   if (Text)

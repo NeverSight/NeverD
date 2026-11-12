@@ -215,11 +215,27 @@ TEST_P(MIPSRelease6, FloatingCatalogHasIdenticalClassicAndMicroEffects) {
     ASSERT_NO_THROW(Decode.liftUnitToLow(Unit, Ops));
     EXPECT_EQ(MicroOps, Ops);
 #ifdef NEVERD_MIPS_UNICORN_REFERENCE
+    const unsigned Fmt = R.Classic >> 21 & 31, Fn = R.Classic & 63;
+    unsigned Out = (Fmt == 17 || Fmt == 21) ? 8 : 4;
+    if (Fmt < 20 && Fn >= 8 && Fn <= 15)
+      Out = Fn < 12 ? 8 : 4;
+    if (Fn == 32 || Fn == 36)
+      Out = 4;
+    if (Fn == 33 || Fn == 37)
+      Out = 8;
     llvm::support::endian::write32(Bytes, R.Classic, Order);
     const auto PC = 0x10100 + 4 * Index++;
     ASSERT_EQ(uc_mem_write(Raw, PC, Bytes, 4), UC_ERR_OK);
+    // MIPS32R6_GENERIC executes physical microMIPS too. I6400 exposes only
+    // classic execution, so its micro64 check uses the equal LowIR above.
+    if (!isMIPS64(GetParam())) {
+      llvm::support::endian::write16(Bytes, R.Micro >> 16, Order);
+      llvm::support::endian::write16(Bytes + 2, R.Micro, Order);
+      ASSERT_EQ(uc_mem_write(Raw, PC + 0x800, Bytes, 4), UC_ERR_OK);
+    }
     for (unsigned Sample = 0; Sample < 3; ++Sample) {
-      uint32_t CSR = 0xc0000 | (Sample == 2 ? 3 : 0);
+      const uint32_t InitialCSR = 0xc0000 | (Sample == 2 ? 3 : 0);
+      uint32_t CSR = InitialCSR;
       const uint64_t Inputs[3] = {
           0x3ff400003fa00000ull,
           Sample == 1 ? 0x7ff800007fc00000ull : 0xbff80000bfc00000ull,
@@ -239,6 +255,21 @@ TEST_P(MIPSRelease6, FloatingCatalogHasIdenticalClassicAndMicroEffects) {
       uint64_t Expected = 0;
       ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_F2, &Expected), UC_ERR_OK);
       ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_FCSR, &CSR), UC_ERR_OK);
+      if (!isMIPS64(GetParam())) {
+        ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_FCSR, &InitialCSR), UC_ERR_OK);
+        for (unsigned I = 0; I < 3; ++I)
+          ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_F2 + 2 * I, &Inputs[I]),
+                    UC_ERR_OK);
+        ASSERT_EQ(uc_emu_start(Raw, (PC + 0x800) | 1, PC + 0x804, 0, 1),
+                  UC_ERR_OK);
+        uint64_t Actual = 0;
+        uint32_t MicroCSR = 0;
+        ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_F2, &Actual), UC_ERR_OK);
+        ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_FCSR, &MicroCSR), UC_ERR_OK);
+        EXPECT_EQ(Out == 8 ? Actual : uint32_t(Actual),
+                  Out == 8 ? Expected : uint32_t(Expected));
+        EXPECT_EQ(MicroCSR, CSR);
+      }
       for (const auto &Op : MicroOps) {
         const auto Id = Op.Opcode == NdOp::INTRINSIC
                             ? static_cast<Intrinsic>(Op.Inputs[0].Offset)
@@ -246,14 +277,6 @@ TEST_P(MIPSRelease6, FloatingCatalogHasIdenticalClassicAndMicroEffects) {
         ASSERT_TRUE(mips::isR6FPArithmetic(Id) ? E.stepMIPSSystem(Op, Context)
                                                : E.step(Op));
       }
-      const unsigned Fmt = R.Classic >> 21 & 31, Fn = R.Classic & 63;
-      unsigned Out = (Fmt == 17 || Fmt == 21) ? 8 : 4;
-      if (Fmt < 20 && Fn >= 8 && Fn <= 15)
-        Out = Fn < 12 ? 8 : 4;
-      if (Fn == 32 || Fn == 36)
-        Out = 4;
-      if (Fn == 33 || Fn == 37)
-        Out = 8;
       if (Out == 8)
         EXPECT_EQ(E.getRegister(mipsreg::w(2)), Expected);
       else {
@@ -288,7 +311,9 @@ TEST_P(MIPSRelease6,
                        {0x5444303b, 0x44622000}, {0x5444383b, 0x44e22000},
                        {0x545f103b, 0x4442f800}, {0x549f183b, 0x44c4f800},
                        {0x9c440004, 0xc4820004}, {0xbc440008, 0xd4820008},
-                       {0x98440004, 0xe4820004}, {0xb8440008, 0xf4820008}};
+                       {0x98440004, 0xe4820004}, {0xb8440008, 0xf4820008},
+                       // CEIL.W.D and FLOOR.W.D retain all five FS bits.
+                       {0x54455b3b, 0x4620288e}, {0x54454b3b, 0x4620288f}};
   for (const auto &P : Pairs) {
     SCOPED_TRACE(::testing::Message() << std::hex << P.Micro);
     DecodedExecutionUnit U;
@@ -299,7 +324,8 @@ TEST_P(MIPSRelease6,
     Decode.liftUnitToLow(Unit, Expected);
     EXPECT_EQ(Actual, Expected);
   }
-  for (uint32_t Word : {0x45020003u, 0x45220003u}) {
+  // LLVM assembly and the physical decoder place these in POOL32I (0x10).
+  for (uint32_t Word : {0x41020003u, 0x41220003u}) {
     DecodedExecutionUnit U;
     ASSERT_EQ(Load(Word, U), 4);
     EXPECT_FALSE(U.HasDelaySlot);
@@ -308,7 +334,7 @@ TEST_P(MIPSRelease6,
     ASSERT_EQ(O.back().Opcode, NdOp::COND_BR);
     EXPECT_EQ(O.back().Inputs[0].Offset, 0x1000au);
     EXPECT_STREQ(U.Head.Raw->mnemonic,
-                 Word == 0x45020003u ? "bc1eqzc" : "bc1nezc");
+                 Word == 0x41020003u ? "bc1eqzc" : "bc1nezc");
   }
 }
 
