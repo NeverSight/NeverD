@@ -8170,6 +8170,14 @@ std::optional<va_t> HighCWriter::constAddress(const HighExpr &E) const {
   return std::nullopt;
 }
 
+/// The `$d` mapping interval of an AArch32 ELF image that holds \p Addr:
+/// data wherever it lies, the literal pool of a function among its code.
+static const ARMCodeRegion *armLiteralPoolAt(const BinaryImage &Img,
+                                             va_t Addr) {
+  const ARMCodeRegion *Region = Img.armMappingRegionAt(Addr);
+  return Region && Region->Kind == ARMCodeRegionKind::Data ? Region : nullptr;
+}
+
 bool isImageDataAt(const BinaryImage &Img, va_t Addr) {
   // The image's own headers are `__ImageBase`, never a copied object, and
   // another module's storage an undefined data symbol names is no object of
@@ -8182,9 +8190,10 @@ bool isImageDataAt(const BinaryImage &Img, va_t Addr) {
     return false;
   // Instruction bytes are not data objects.  Read-only constants live in
   // .rdata / .rodata (readable, not writable, not executable), and where
-  // the debug information places data among the code.
+  // the debug information places data among the code, or an AArch32 `$d`
+  // mapping interval does (a literal pool).
   if (Seg->isExecutable() && !Seg->isWritable() &&
-      !isCodeSectionData(&Img, Addr))
+      !isCodeSectionData(&Img, Addr) && !armLiteralPoolAt(Img, Addr))
     return false;
   // An import's slot or stub is no data object either.  Asked last: a code
   // address asks whether a function starts there, which reads the symbols.
@@ -8316,7 +8325,8 @@ HighCWriter::indexedObjectAt(va_t Addr) const {
   // table cannot acquire this route.  An executable section holds data only
   // where the image says it does, as a kernel keeps constants in its paged
   // code.
-  const bool AmongCode = isCodeSectionData(Opts.Image, Addr);
+  const ARMCodeRegion *Pool = armLiteralPoolAt(*Opts.Image, Addr);
+  const bool AmongCode = isCodeSectionData(Opts.Image, Addr) || Pool;
   if ((!Sec && (!Seg || Opts.Image->layoutAddressOwner(Addr) != Seg->VA)) ||
       (Sec ? !Sec->isReadable() || (Sec->isExecutable() && !AmongCode)
            : !Seg->isReadable() || Seg->isExecutable()))
@@ -8356,8 +8366,12 @@ HighCWriter::indexedObjectAt(va_t Addr) const {
       Begin = *Before;
   }
   // Among code, the object starts where the image says, and the next function
-  // ends it as a next object would.
-  if (AmongCode) {
+  // ends it as a next object would.  A literal pool is its mapping interval:
+  // the code may reach any of it from an address inside.
+  if (Pool) {
+    Begin = std::max(Begin, Pool->Start);
+    End = std::min(End, Pool->End);
+  } else if (AmongCode) {
     Begin = std::max(Begin, Addr);
     const auto &CodeStarts = dataObjects().CodeSymbolStarts;
     const auto NextCode = llvm::upper_bound(CodeStarts, Addr);
