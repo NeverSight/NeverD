@@ -1110,6 +1110,14 @@ applicable. It leaves `dwarf_state_at_pc` and `compact_recipe` unchanged. The
 GUI presents the instruction result separately. Resolve once and reuse the
 row table when sampling; the public exact-PC query performs bounded analysis.
 
+The [compiler comparison](https://github.com/gmh5225/test_mac_intel/actions/runs/43209395729)
+produced identical instructions and compact encodings on the two hosts.
+Apple's newer linker put the last lookup sentinel at `0x305`, one byte past
+the end of `__text` at `0x304`; the older linker used `0x304`. The loader
+retains the raw sentinel for rewriting and bounds the decoded instruction
+range at the proven end of the code section. Interior entries and partial
+instructions inside a code section are not rounded down.
+
 Two independent [system controls](https://github.com/gmh5225/test_mac_intel/actions/runs/43196724884)
 found the same behavior on both hosted Apple profiles: unmodified system
 stepping at the trampoline skipped the interrupted PC for unsigned LR and

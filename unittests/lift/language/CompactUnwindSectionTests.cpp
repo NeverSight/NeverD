@@ -10,6 +10,7 @@
 
 #include "neverd/loader/MachO/MachOExceptions.h"
 #include "neverd/loader/SourceUnwind.h"
+#include "neverd/object/SectionNames.h"
 
 #include <cstring>
 #include <limits>
@@ -248,6 +249,36 @@ std::vector<uint8_t> buildBigEndianRawRegularInfo() {
 //===----------------------------------------------------------------------===//
 // Frameless indirect
 //===----------------------------------------------------------------------===//
+
+TEST(CompactUnwindSection, TerminalLookupByteIsNotAnArm64Instruction) {
+  using namespace fixture;
+  for (const bool ExtraByteIsCode : {false, true}) {
+    auto Img = makeImage(Arch::AArch64);
+    Section Text;
+    Text.Name = section_names::macho::Text;
+    Text.SegmentName = section_names::macho::TextSeg;
+    Text.VA = kImageBase + kTerminalLeafStart;
+    Text.Size = (ExtraByteIsCode ? kTerminalLookupEnd : kTerminalTextEnd) -
+                kTerminalLeafStart;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Type = llvm::MachO::S_ATTR_PURE_INSTRUCTIONS;
+    Img.Sections.push_back(std::move(Text));
+    auto Bytes = buildUnwindInfo({{kTerminalLeafStart, kARM64ModeFrameless},
+                                  {kTerminalCallerStart, kARM64ModeFrame}},
+                                 kTerminalLookupEnd);
+    auto Raw = parseCompactUnwindRaw(Bytes);
+    ASSERT_TRUE(bool(Raw)) << llvm::toString(Raw.takeError());
+    EXPECT_EQ(Raw->Index.back().FunctionOffset, kTerminalLookupEnd);
+    attachUnwindInfo(Img, std::move(Bytes));
+    const auto Parsed = parseCompactUnwind(Img);
+    ASSERT_EQ(Parsed.Entries.size(), 2u);
+    EXPECT_EQ(Parsed.Entries.front().CodeRange.End,
+              kImageBase + kTerminalCallerStart);
+    EXPECT_EQ(Parsed.Entries.back().CodeRange.End,
+              kImageBase +
+                  (ExtraByteIsCode ? kTerminalLookupEnd : kTerminalTextEnd));
+  }
+}
 
 TEST(CompactUnwindIndirect, ReadsTheFrameSizeFromThePrologue) {
   BinaryImage Img = makeImage();
