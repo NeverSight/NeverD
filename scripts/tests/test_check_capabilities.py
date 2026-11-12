@@ -3205,6 +3205,9 @@ class RepositoryCapabilityTests(unittest.TestCase):
         document = json.loads(
             (ROOT / "docs" / "capabilities.json").read_text(encoding="utf-8")
         )
+        expected_mips = json.loads(
+            Path(__file__).with_suffix(".def").read_text(encoding="utf-8")
+        )
 
         self.assertEqual(
             capabilities.validate_manifest(
@@ -3215,12 +3218,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
         self.assertEqual(
             {row["id"]: row["status"] for row in document["capabilities"]},
             {
-                "analysis.mips.classic-r2": "experimental",
-                "analysis.mips.classic-r6": "experimental",
-                "analysis.mips.micromips32-r2": "experimental",
-                "analysis.mips.dsp32-r2": "experimental",
-                "analysis.mips.mips16-r2": "experimental",
-                "analysis.mips.msa32-r5": "experimental",
+                **expected_mips,
                 "analysis.ir-view.instruction-anchors": "experimental",
                 "analysis.materialized-image-sections": "experimental",
                 "analysis.external-bytecode-recovery": "experimental",
@@ -3252,12 +3250,7 @@ class RepositoryCapabilityTests(unittest.TestCase):
         )
         no_surfaces = {"c": [], "python": [], "cli": [], "json": []}
         expected_surfaces = {
-            "analysis.mips.classic-r2": no_surfaces,
-            "analysis.mips.classic-r6": no_surfaces,
-            "analysis.mips.micromips32-r2": no_surfaces,
-            "analysis.mips.dsp32-r2": no_surfaces,
-            "analysis.mips.mips16-r2": no_surfaces,
-            "analysis.mips.msa32-r5": no_surfaces,
+            **dict.fromkeys(expected_mips, no_surfaces),
             "rewrite.interactive-byte-overlay": {
                 "c": [
                     "neverd_assemble_json",

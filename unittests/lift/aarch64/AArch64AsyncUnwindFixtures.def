@@ -33,6 +33,10 @@ ASYNC_FRAME_TEXT(kOriginalSamples, "original.samples")
 ASYNC_FRAME_TEXT(kOriginalRules, "original.rules")
 ASYNC_FRAME_TEXT(kPublishedRules, "installed.rules")
 ASYNC_FRAME_TEXT(kParents, "native_authenticated_parent_frames")
+ASYNC_FRAME_TEXT(kTrampolines, "native_sigtramp_context_handoffs")
+ASYNC_FRAME_TEXT(kHeaderRoot, "NEVERD_ARM64E_TEST_INCLUDE_DIR")
+ASYNC_FRAME_TEXT(kSourceIncludes, "../../../include")
+ASYNC_FRAME_TEXT(kIncludeFlag, "-I")
 ASYNC_FRAME_TEXT(kInstalledSamples, "installed.samples")
 ASYNC_FRAME_TEXT(kCompiler, "/usr/bin/clang")
 ASYNC_FRAME_TEXT(kTargetFlag, "-target")
@@ -206,7 +210,10 @@ _outer_return_address:
   ret
 )asm")
 ASYNC_FRAME_TEXT(kObserver, R"c(
+#include "neverd/runtime/DarwinArm64eSignalCursor.h"
 #include <dlfcn.h>
+#include <execinfo.h>
+#include <libunwind.h>
 #include <inttypes.h>
 #include <mach/arm/thread_status.h>
 #include <ptrauth.h>
@@ -238,10 +245,10 @@ _Atomic uintptr_t stage_entry_sp;
 static struct handshake state;
 static struct sample samples[stages_count];
 static pthread_t worker;
-static uintptr_t expected_return, expected_outer, owner;
+static uintptr_t expected_return, expected_outer, owner, stack_low, stack_high;
 struct stack_rule {
   uintptr_t offset, depth;
-  unsigned saved_lr;
+  unsigned saved_lr, signed_lr;
 };
 static struct stack_rule *rules;
 static size_t rule_count;
@@ -258,13 +265,32 @@ static int read_rules(const char *path) {
   }
   for (size_t i = 0; i < rule_count; ++i) {
     struct stack_rule *r = &rules[i];
-    if (fscanf(file, "%" SCNuPTR " %" SCNuPTR " %u", &r->offset,
-               &r->depth, &r->saved_lr) != 3) {
+    if (fscanf(file, "%" SCNuPTR " %" SCNuPTR " %u %u", &r->offset,
+               &r->depth, &r->saved_lr, &r->signed_lr) != 4) {
       fclose(file);
       return 0;
     }
   }
   return fclose(file) == 0;
+}
+
+static int at_signal_trampoline(void) {
+  unw_context_t context;
+  unw_cursor_t cursor;
+  if (unw_getcontext(&context) || unw_init_local(&cursor, &context))
+    return 0;
+  for (;;) {
+    unw_word_t ip;
+    if (unw_get_reg(&cursor, UNW_REG_IP, &ip))
+      return 0;
+    const void *address = ptrauth_strip((void *)ip, ptrauth_key_return_address);
+    Dl_info symbol;
+    if (dladdr(address, &symbol) && symbol.dli_sname &&
+        !strcmp(symbol.dli_sname, "_sigtramp"))
+      return 1;
+    if (unw_step(&cursor) <= 0)
+      return 0;
+  }
 }
 
 static void observe(int signal, siginfo_t *info, void *context) {
@@ -313,6 +339,49 @@ static void observe(int signal, siginfo_t *info, void *context) {
   __asm__ volatile("autib %0, %1" : "+r"(parent) : "r"(parent_cfa));
   if (parent_raw == parent || parent != expected_outer)
     _exit(15);
+  if (!at_signal_trampoline())
+    _exit(16);
+  NDDarwinArm64eCursor cursor = ndDarwinArm64eSignalCursor(uc);
+  if (cursor.PC != s->pc || cursor.SP != sp)
+    _exit(17);
+  NDDarwinArm64eUnwindRow interrupted = {
+      .CFAOffset = rule->depth, .SavedLR = rule->saved_lr,
+      .LROffset = -(ptrdiff_t)sizeof(uintptr_t),
+      .Signing = rule->signed_lr ? NDArm64eSignedIBWithCFA : NDArm64eUnsigned};
+  if (!ndDarwinArm64eStepFrame(&cursor, interrupted, stack_low, stack_high) ||
+      cursor.PC != expected_return || cursor.SP != cfa)
+    _exit(18);
+  void *frames[2];
+  const int count = backtrace_from_fp((void *)cursor.FP, frames, 2);
+  const NDDarwinArm64eUnwindRow framed = {
+      .CFAFromFP = true, .CFAOffset = frame_bytes, .SavedFP = true,
+      .SavedLR = true, .FPOffset = -frame_bytes,
+      .LROffset = -(ptrdiff_t)sizeof(uintptr_t),
+      .Signing = NDArm64eSignedIBWithCFA};
+  // The fixture independently proved the parent has a nonzero IB signature.
+  // Replacing it with its canonical address must leave the cursor untouched.
+  NDDarwinArm64eCursor forged = cursor;
+  forged.LR = expected_outer;
+  const NDDarwinArm64eCursor before = forged;
+  NDDarwinArm64eUnwindRow live = framed;
+  live.SavedLR = false;
+  if (ndDarwinArm64eStepFrame(&forged, live, stack_low, stack_high) ||
+      memcmp(&before, &forged, sizeof(before)))
+    _exit(20);
+  live.Signing = NDArm64eSigningUnknown;
+  if (ndDarwinArm64eStepFrame(&forged, live, stack_low, stack_high) ||
+      ndDarwinArm64eStepFrame(&forged, framed, stack_low, parent_cfa - 1))
+    _exit(21);
+  live.Signing = NDArm64eSignedIAWithCFA;
+  forged.LR = (uintptr_t)ptrauth_sign_unauthenticated(
+      (void *)expected_outer, ptrauth_key_asia, parent_cfa);
+  if (!ndDarwinArm64eStepFrame(&forged, live, stack_low, stack_high) ||
+      forged.PC != expected_outer)
+    _exit(22);
+  if (!ndDarwinArm64eStepFrame(&cursor, framed, stack_low, stack_high) ||
+      cursor.PC != expected_outer || cursor.SP != parent_cfa || count <= 0 ||
+      (uintptr_t)ptrauth_strip(frames[0], ptrauth_key_function_pointer) != cursor.PC)
+    _exit(19);
   atomic_store(&state.done, stage);
 }
 
@@ -344,6 +413,8 @@ int main(int argc, char **argv) {
     return 9;
   owner = public_entry + strtoull(argv[2], NULL, 10);
   worker = pthread_self();
+  stack_high = (uintptr_t)pthread_get_stackaddr_np(worker);
+  stack_low = stack_high - pthread_get_stacksize_np(worker);
   expected_return = return_address();
   expected_outer = outer_return_address();
   struct sigaction action = {.sa_sigaction = observe, .sa_flags = SA_SIGINFO};

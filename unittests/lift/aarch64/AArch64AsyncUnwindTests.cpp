@@ -181,9 +181,17 @@ TEST(AArch64AsyncUnwind,
                 kCompiler, {kCompiler, kTargetFlag, kTarget, kCompile,
                             NewCompanion, kOutput, Object}),
             0);
-  ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, {kCompiler, kTargetFlag,
-                                                  kTarget, kOptimize, Observer,
-                                                  Wrapper, kOutput, Driver}),
+  const auto *IncludeOverride = std::getenv(kHeaderRoot);
+  const auto Include =
+      IncludeOverride
+          ? std::string(IncludeOverride)
+          : (std::filesystem::path(__FILE__).parent_path() / kSourceIncludes)
+                .lexically_normal()
+                .string();
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler,
+                                      {kCompiler, kTargetFlag, kTarget,
+                                       kOptimize, kIncludeFlag, Include,
+                                       Observer, Wrapper, kOutput, Driver}),
             0);
   auto Reader = Loader::create(BinaryFormat::MachO);
   auto Original = Reader->load(Input);
@@ -237,12 +245,37 @@ TEST(AArch64AsyncUnwind,
     EXPECT_FALSE(Implicit.DwarfStateAtPC->State);
   }
   if (std::getenv(kExecute)) {
-    const auto WriteRules = [](const std::filesystem::path &Path,
-                               llvm::ArrayRef<StackRow> Rules) {
+    // The installed frame has implicit signing. Its complete instruction range
+    // matched the explicitly described original above. Transfer the original's
+    // signing state by instruction offset, keeping each image's own CFA/LR
+    // rows.
+    const auto WriteRules = [&](const std::filesystem::path &Path,
+                                llvm::ArrayRef<StackRow> Rules) {
+      std::vector<std::pair<StackRow, bool>> Resolved;
+      for (uint64_t Off = 0; Off < Size; Off += aarch64::kInsnSize) {
+        const auto At =
+            queryAArch64UnwindSigning(*Original, *OldFrame, Entry + Off);
+        if (!At.DwarfStateAtPC || !At.DwarfStateAtPC->State)
+          return false;
+        const auto &State = *At.DwarfStateAtPC->State;
+        const bool Signed = State.Kind == dwarf_eh::AArch64RASigningKind::SP &&
+                            State.Key == dwarf_eh::AArch64RAKey::B;
+        if (!Signed && State.Kind != dwarf_eh::AArch64RASigningKind::Unsigned)
+          return false;
+        const StackRow &Row = *std::prev(
+            llvm::upper_bound(Rules, Off, [](uint64_t PC, const StackRow &R) {
+              return PC < R.Offset;
+            }));
+        if (Resolved.empty() || Resolved.back().second != Signed ||
+            Resolved.back().first.Depth != Row.Depth ||
+            Resolved.back().first.SavedLR != Row.SavedLR)
+          Resolved.emplace_back(StackRow{Off, Row.Depth, Row.SavedLR}, Signed);
+      }
       std::ofstream Out(Path);
-      Out << Rules.size() << '\n';
-      for (const auto &Row : Rules)
-        Out << Row.Offset << ' ' << Row.Depth << ' ' << Row.SavedLR << '\n';
+      Out << Resolved.size() << '\n';
+      for (const auto &[Row, Signed] : Resolved)
+        Out << Row.Offset << ' ' << Row.Depth << ' ' << Row.SavedLR << ' '
+            << Signed << '\n';
       Out.close();
       return bool(Out);
     };
@@ -277,6 +310,7 @@ TEST(AArch64AsyncUnwind,
     }
     RecordProperty(kSamples, 2 * kStages);
     RecordProperty(kParents, 2 * kStages);
+    RecordProperty(kTrampolines, 2 * kStages);
   }
 #else
   GTEST_SKIP() << kUnavailable;
