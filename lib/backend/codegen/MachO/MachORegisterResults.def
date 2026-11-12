@@ -17,6 +17,13 @@
 #define MACHO_REGISTER_MEMORY(Name)
 #endif
 
+#ifndef MACHO_REGISTER_EXTEND
+#define MACHO_REGISTER_EXTEND(Name, Spelling)
+#endif
+MACHO_REGISTER_EXTEND(UXTW, ", uxtw")
+MACHO_REGISTER_EXTEND(SXTW, ", sxtw")
+MACHO_REGISTER_EXTEND(SXTX, ", sxtx")
+MACHO_REGISTER_TEXT(kShiftAmount, " #")
 MACHO_REGISTER_TEXT(kRegisterBody, "neverd.arm64e.register-results")
 MACHO_REGISTER_TEXT(kInvalidBody,
                     "arm64e native register body disagrees with its source "
@@ -75,5 +82,6 @@ MACHO_REGISTER_MEMORY(STP)
 
 #undef MACHO_REGISTER_VALUE
 #undef MACHO_REGISTER_TEXT
+#undef MACHO_REGISTER_EXTEND
 #undef MACHO_REGISTER_ALU
 #undef MACHO_REGISTER_MEMORY

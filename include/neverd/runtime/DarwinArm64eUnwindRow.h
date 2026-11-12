@@ -1,0 +1,50 @@
+//===- DarwinArm64eUnwindRow.h - Predecoded stack-walk rows -----*- C -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_RUNTIME_DARWINARM64EUNWINDROW_H
+#define NEVERD_RUNTIME_DARWINARM64EUNWINDROW_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+typedef enum {
+  NDArm64eSigningUnknown,
+  NDArm64eUnsigned,
+  NDArm64eSignedIAWithCFA,
+  NDArm64eSignedIBWithCFA,
+  NDArm64eSignedIAWithCFAPC,
+  NDArm64eSignedIBWithCFAPC,
+  NDArm64eSignedIAWithCFAPACM,
+  NDArm64eSignedIBWithCFAPACM
+} NDDarwinArm64eSigning;
+
+/// A resolved instruction-boundary unwind row. A saved register is loaded
+/// from CFA + its offset. Otherwise its interrupted register is used.
+typedef struct {
+  bool CFAFromFP;
+  ptrdiff_t CFAOffset;
+  bool SavedFP;
+  bool SavedLR;
+  ptrdiff_t FPOffset;
+  ptrdiff_t LROffset;
+  NDDarwinArm64eSigning Signing;
+  /// The resolved signing instruction address, including a valid zero address.
+  /// Used only by the CFAPC and CFAPACM recipes.
+  uintptr_t SigningPC;
+} NDDarwinArm64eUnwindRow;
+
+enum {
+#define NEVERD_SYSTEM_UNWIND_VALUE(Name, Value) Name = Value,
+#include "neverd/runtime/DarwinArm64eSystemUnwind.def"
+};
+
+typedef struct {
+  unsigned Register; // Architectural X19 through X28.
+  ptrdiff_t CFAOffset;
+} NDDarwinArm64eSavedGPR;
+
+#endif // NEVERD_RUNTIME_DARWINARM64EUNWINDROW_H

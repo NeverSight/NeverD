@@ -993,11 +993,11 @@ leave the cursor unchanged. The native interruption test reaches the system
 `_sigtramp`, recovers the interrupted return and its signed parent, and
 cross-checks the parent through Darwin's frame-pointer backtrace.
 
-For the installed implicit-signing fixture, the test transfers signing rows
-from its explicitly described original after checking that the complete
-instruction ranges are identical. Each image supplies its own CFA and LR
-location rows. The unmodified system `unw_step` path across `_sigtramp` retains
-the earlier failure record.
+In the original qualification, the installed implicit-signing fixture used the
+signing rows of the explicitly described original after checking identical
+machine code. The [system signal qualification below](#system-signal-trampoline-and-implicit-signing-rows)
+recovers the installed rows independently and records the behavior of an
+unmodified system `unw_step` at `_sigtramp`.
 
 Release verification at `7bf3d8571ab87cb8de5f20145e786621d3dc4659` uses the
 tracked Capstone and Unicorn revisions and LLVM fork
@@ -1020,8 +1020,10 @@ launch fails with `EBADARCH`. The local M4 control also reports an undefined
 ADDPT instruction. Native CPTA-on remains unavailable on these environments.
 That qualification covers unsigned and IA/IB-with-CFA signal rows. The
 instruction-address recipes added below have separate hardware qualification.
-The direct system `_sigtramp` walk and additional arbitrary image instruction
-and unwind profiles still require qualification.
+At that revision, continuing the system cursor beyond `_sigtramp` had not
+been demonstrated. The [later bridge qualification](#system-signal-trampoline-and-implicit-signing-rows)
+covers the caller handoff. Additional image instruction and unwind profiles
+still require qualification.
 
 ## Instruction-address signal recipes and remembered frames
 
@@ -1080,6 +1082,109 @@ failures match the earlier recorded LLVM r6 baseline; the native r6 replay
 explicitly excludes those cases. The
 [verification record](evidence/arm64e-signing-recipes-and-remembered-frames-2026-11-12.json)
 binds source, dependencies, host binaries, native reports and exclusions.
-Automatic implicit-signing row recovery, the unmodified system walk across
-`_sigtramp`, additional arbitrary-image profiles and native PC-sensitive or
-CPTA-on execution remain separate coverage gaps.
+At that revision the installed rows still depended on the original. The
+following qualification supersedes that part of the earlier result.
+
+### System signal trampoline and implicit signing rows
+
+Resolve a Darwin frame with `recoverDarwinAArch64Unwind` outside the signal
+handler. For an implicit FDE, its CFA and register columns select the actual
+live LR or saved stack slot. For a compact-only frame the analysis instead
+tracks the incoming SP, register values and active frame saves. It follows
+reachable direct branches, joins agreeing facts, and accounts for call
+clobbers, stack writeback, classic IA/IB, PACM and explicit PAuth_LR. A failed
+proof has no unsigned default. Opaque control flow, alternate entries, LSDA
+edges and exceeded budgets cannot authorize a native handoff.
+
+Select the row at the interrupted instruction. `prepareDarwinArm64eSystemCaller`
+binds its signing PC to the loaded address and checks that the caller's integer
+register locations can be represented. With the system cursor positioned at
+the real signal trampoline, `ndDarwinArm64eCrossSignalTrampoline` consumes the
+matching kernel `ucontext_t` and mapped stack bounds. It verifies the return
+signature, restores SP, FP and X19–X28, and positions that same system cursor
+at the caller. Invalid or duplicate saves fail before changing the cursor.
+Discard the cursor on a system API failure or if the return PC selects a
+different function's unwind record. This is a stack-walking interface; it
+does not provide exception resumption or restore SIMD state.
+
+The public frame query exposes a separate `instruction_state_at_pc` where
+applicable. It leaves `dwarf_state_at_pc` and `compact_recipe` unchanged. The
+GUI presents the instruction result separately. Resolve once and reuse the
+row table when sampling; the public exact-PC query performs bounded analysis.
+
+The [compiler comparison](https://github.com/gmh5225/test_mac_intel/actions/runs/43209395729)
+produced identical instructions and compact encodings on the two hosts.
+Apple's newer linker put the last lookup sentinel at `0x305`, one byte past
+the end of `__text` at `0x304`; the older linker used `0x304`. The loader
+retains the raw sentinel for rewriting and bounds the decoded instruction
+range at the proven end of the code section. Interior entries and partial
+instructions inside a code section are not rounded down.
+
+Two independent [system controls](https://github.com/gmh5225/test_mac_intel/actions/runs/43196724884)
+found the same behavior on both hosted Apple profiles: unmodified system
+stepping at the trampoline skipped the interrupted PC for unsigned LR and
+raised SIGTRAP at all three signed stages. Seeding the proved caller let the
+system walk to the correct grandparent in all five stages of both frame
+profiles. The [in-place bridge test](https://github.com/gmh5225/test_mac_intel/actions/runs/43202351334)
+also checked a clobbered X19 restored from the frame. This is observed
+behavior on those Darwin runtimes; it is not a guarantee that a future system
+libunwind will permit setting IP across functions.
+
+Native register-result publication now emits local TBZ/TBNZ targets as labels,
+keeps the tested bit as an LLVM operand, and preserves indexed memory operands
+including LSL, UXTW, SXTW and SXTX. Final linked bytes still have to match the
+source at each instruction. For indexed SP accesses the generic LLVM emitter
+declares the function with its recovered prototype. Before exposing the module,
+the patch pipeline requires its verified, complete native register body: its
+machine instructions use the physical SP. A partial body, an unsupported
+operation or a changed tested bit prevents publication. This does not qualify
+an ordinary LLVM function using a synthetic stack. No LLVM overlay or new
+prebuilt package is needed.
+
+At `a6ffeb9bd9e3a9799c56d60418ed05abf8b01a1b`, the
+[source LLVM replay](https://github.com/gmh5225/test_mac_intel/actions/runs/43210663619)
+passed all 31 tests on each runner. Each executed 60 original or published
+images, continued the system cursor at all 10 interruptions across the two
+images, and made three native calls through the compiler-generated compact
+fixture. The nine-function variadic images each compared 27 register inputs
+at O0 and again at O2. Neither runner qualified explicit PAuth_LR,
+PC-sensitive PACM or native CPTA-on.
+
+The call-ABI suite also lifts Apple-linked arm64 and arm64e copies of a C
+variadic wrapper. Its context and format are fixed parameters. Apple Clang
+passes the third actual argument on the stack. The regression parses NeverD's
+LLVM output and checks the types at the definition and the call, including
+the single variadic operand. All 13 tests in the call-ABI suite passed.
+
+The unchanged [r6 replay](https://github.com/gmh5225/test_mac_intel/actions/runs/43215695747)
+passed its 26 supported tests on each runner, with 50 image executions, the
+same 10 system-caller continuations and three compact-fixture calls. The
+local unfiltered run executed all 31 tests and reproduced exactly the five
+previous r6 failures; the compatibility replay explicitly excludes those
+five. No LLVM patch, fork revision change or replacement prebuilt is used.
+The [verification record](evidence/arm64e-system-signal-and-implicit-unwind-2026-11-12.json)
+includes the per-runner signal samples, test-host hashes, local suite results
+and hardware capabilities.
+
+The [integrated source replay](https://github.com/gmh5225/test_mac_intel/actions/runs/43271432365) repeated the 31-test native suite on both Apple profiles after merging `dev` at
+`cee06981844f5597004da9be6bcc778db813d6b2`. Each profile again recorded
+60 image executions and 10 system-caller continuations. A separate Apple
+Clang fixture with a typed C++ catch has a compact frame and LSDA. Its
+implicit signing rule was unavailable at entry and at the next two
+instructions. The verification record includes the source and all three
+query results.
+
+To repeat the interrupted-frame test on a Mac that can launch arm64e
+executables, build the test host against the tracked LLVM fork and require
+native execution:
+
+```bash
+python3 scripts/build.py build-release --target NeverDArm64eLiftedImageTests
+NEVERD_ARM64E_ASYNC_NATIVE=1 build-release/bin/NeverDArm64eLiftedImageTests \
+  --gtest_filter=AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions \
+  --gtest_output=xml:signal-results.xml
+```
+
+The XML property `native_system_caller_steps` must be 10. Without the
+environment variable the test can check publication and the recovered rows
+without performing those native steps.

@@ -10767,6 +10767,10 @@ Your previous graph is still available.</translation>
         <translation>DWARF state at the selected PC</translation>
     </message>
     <message>
+        <source>Signing state recovered from instructions at the selected PC</source>
+        <translation>Signing state recovered from instructions at the selected PC</translation>
+    </message>
+    <message>
         <source>Compact unwind: completed-prologue recipe</source>
         <translation>Compact unwind: completed-prologue recipe</translation>
     </message>

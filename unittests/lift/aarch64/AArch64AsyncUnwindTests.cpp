@@ -6,6 +6,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/analysis/AArch64UnwindRecovery.h"
 #include "neverd/backend/codegen/PatchObject.h"
 #include "neverd/loader/DWARF/AArch64ReturnAddressState.h"
 #include "neverd/loader/Loader.h"
@@ -40,6 +41,7 @@ struct StackRow {
   uint64_t Offset;
   int32_t Depth;
   bool SavedLR;
+  bool SavedX19;
   bool operator==(const StackRow &) const = default;
 };
 
@@ -73,11 +75,17 @@ void readStackRows(const BinaryImage &Image, va_t Entry,
       if (Saved)
         ASSERT_EQ(*LR,
                   Location::createAtCFAPlusOffset(-int32_t(sizeof(uint64_t))));
+      const auto X19 = Row.getRegisterLocations().getRegisterLocation(
+          NDArm64eFirstPreservedGPR);
+      const bool SavedX19 = X19 && X19->getLocation() != Location::Same;
+      if (SavedX19)
+        ASSERT_EQ(*X19, Location::createAtCFAPlusOffset(-int32_t(kFrameSize)));
       ASSERT_TRUE(Row.hasAddress());
       ASSERT_GE(Row.getAddress(), Entry);
       if (Rows.empty() || Rows.back().Depth != CFA.getOffset() ||
-          Rows.back().SavedLR != Saved)
-        Rows.push_back({Row.getAddress() - Entry, CFA.getOffset(), Saved});
+          Rows.back().SavedLR != Saved || Rows.back().SavedX19 != SavedX19)
+        Rows.push_back(
+            {Row.getAddress() - Entry, CFA.getOffset(), Saved, SavedX19});
     }
   }
   ASSERT_FALSE(Rows.empty());
@@ -86,7 +94,8 @@ void readStackRows(const BinaryImage &Image, va_t Entry,
 
 void checkFrame(const BinaryImage &Image, va_t Entry,
                 const std::filesystem::path &Samples,
-                llvm::ArrayRef<StackRow> Rows) {
+                llvm::ArrayRef<StackRow> Rows,
+                llvm::ArrayRef<AArch64RecoveredUnwindRow> Recovered = {}) {
   const auto *Frame = Image.ExceptionMetadata.findFunction(Entry);
   ASSERT_NE(Frame, nullptr);
   ASSERT_TRUE(Frame->Dwarf);
@@ -97,18 +106,23 @@ void checkFrame(const BinaryImage &Image, va_t Entry,
   ASSERT_EQ(FDE.InitialLocation, Entry);
   const auto *Code = Image.readVA(Entry, FDE.AddressRange);
   ASSERT_NE(Code, nullptr);
+  const auto StateAt =
+      [&](uint64_t Off) -> std::optional<dwarf_eh::AArch64ReturnAddressState> {
+    if (!Recovered.empty())
+      return aarch64UnwindRowAt(Recovered, Off).Signing.State;
+    const auto At = queryAArch64UnwindSigning(Image, *Frame, Entry + Off);
+    return At.DwarfStateAtPC ? At.DwarfStateAtPC->State : std::nullopt;
+  };
   bool Signed = false;
   unsigned Signs = 0, Auths = 0;
   for (uint64_t Off = 0; Off < FDE.AddressRange; Off += aarch64::kInsnSize) {
     ASSERT_GE(FDE.AddressRange - Off, aarch64::kInsnSize);
-    const auto At = queryAArch64UnwindSigning(Image, *Frame, Entry + Off);
-    ASSERT_TRUE(At.DwarfStateAtPC && At.DwarfStateAtPC->State);
-    const auto &State = *At.DwarfStateAtPC;
-    EXPECT_EQ(State.State->Kind,
-              Signed ? dwarf_eh::AArch64RASigningKind::SP
-                     : dwarf_eh::AArch64RASigningKind::Unsigned);
+    const auto State = StateAt(Off);
+    ASSERT_TRUE(State);
+    EXPECT_EQ(State->Kind, Signed ? dwarf_eh::AArch64RASigningKind::SP
+                                  : dwarf_eh::AArch64RASigningKind::Unsigned);
     if (Signed)
-      EXPECT_EQ(State.State->Key, dwarf_eh::AArch64RAKey::B);
+      EXPECT_EQ(State->Key, dwarf_eh::AArch64RAKey::B);
     const auto Word = readLE<uint32_t>(Code + Off);
     if (Word == kSignLR) {
       ++Signs;
@@ -131,12 +145,10 @@ void checkFrame(const BinaryImage &Image, va_t Entry,
     ASSERT_TRUE(Input >> Off >> IsSigned >> CFAOffset >> StackMatches);
     ASSERT_LT(Off, FDE.AddressRange);
     EXPECT_EQ(Off % aarch64::kInsnSize, 0u);
-    const auto At = queryAArch64UnwindSigning(Image, *Frame, Entry + Off);
-    ASSERT_TRUE(At.DwarfStateAtPC && At.DwarfStateAtPC->State);
-    const auto &State = *At.DwarfStateAtPC;
-    EXPECT_EQ(State.State->Kind,
-              IsSigned ? dwarf_eh::AArch64RASigningKind::SP
-                       : dwarf_eh::AArch64RASigningKind::Unsigned);
+    const auto State = StateAt(Off);
+    ASSERT_TRUE(State);
+    EXPECT_EQ(State->Kind, IsSigned ? dwarf_eh::AArch64RASigningKind::SP
+                                    : dwarf_eh::AArch64RASigningKind::Unsigned);
     EXPECT_EQ(IsSigned, Stage != 1 && Stage != kStages);
     EXPECT_EQ(CFAOffset, Stage == kSpillStage ? kFrameSize : 0u);
     EXPECT_EQ(StackMatches, Stage == kSpillStage);
@@ -236,53 +248,80 @@ TEST(AArch64AsyncUnwind,
   const auto *After = Published->readVA(Owner, Size);
   ASSERT_TRUE(Before && After);
   ASSERT_EQ(llvm::ArrayRef(Before, Size), llvm::ArrayRef(After, Size));
+  auto Recovered = recoverDarwinAArch64Unwind(*Published, *NewFrame);
+  ASSERT_TRUE(bool(Recovered)) << llvm::toString(Recovered.takeError());
   for (uint64_t Off = 0; Off < Size; Off += aarch64::kInsnSize) {
-    const auto Implicit =
-        queryAArch64UnwindSigning(*Published, *NewFrame, Owner + Off);
-    ASSERT_TRUE(Implicit.DwarfStateAtPC);
-    EXPECT_EQ(Implicit.DwarfStateAtPC->Status,
-              dwarf_eh::AArch64RAQueryStatus::Unknown);
-    EXPECT_FALSE(Implicit.DwarfStateAtPC->State);
+    const auto &Implicit = aarch64UnwindRowAt(*Recovered, Off).Signing;
+    const auto Explicit =
+        queryAArch64UnwindSigning(*Original, *OldFrame, Entry + Off);
+    ASSERT_TRUE(Implicit.State && Explicit.DwarfStateAtPC &&
+                Explicit.DwarfStateAtPC->State)
+        << Off;
+    EXPECT_EQ(Implicit.State->Kind, Explicit.DwarfStateAtPC->State->Kind)
+        << Off;
+    if (Implicit.State->Kind != dwarf_eh::AArch64RASigningKind::Unsigned)
+      EXPECT_EQ(Implicit.State->Key, Explicit.DwarfStateAtPC->State->Key);
   }
   if (std::getenv(kExecute)) {
-    // The installed frame has implicit signing. Its complete instruction range
-    // matched the explicitly described original above. Transfer the original's
-    // signing state by instruction offset, keeping each image's own CFA/LR
-    // rows.
     const auto WriteRules = [&](const std::filesystem::path &Path,
-                                llvm::ArrayRef<StackRow> Rules) {
+                                llvm::ArrayRef<StackRow> Rules,
+                                bool Installed) {
       std::vector<std::pair<StackRow, bool>> Resolved;
       for (uint64_t Off = 0; Off < Size; Off += aarch64::kInsnSize) {
-        const auto At =
-            queryAArch64UnwindSigning(*Original, *OldFrame, Entry + Off);
-        if (!At.DwarfStateAtPC || !At.DwarfStateAtPC->State)
+        dwarf_eh::AArch64RAQueryResult Signing;
+        StackRow Row{};
+        if (Installed) {
+          const auto &Rule = aarch64UnwindRowAt(*Recovered, Off);
+          const auto Plan =
+              prepareDarwinArm64eSystemCaller(Rule, NewFrame->CodeRange, Owner);
+          if (!Plan || Plan->Frame.CFAFromFP || Plan->Frame.SavedFP ||
+              (Plan->Frame.SavedLR &&
+               Plan->Frame.LROffset != -int(sizeof(uint64_t))) ||
+              Plan->Count > 1 ||
+              (Plan->Count &&
+               (Plan->Saved[0].Register != NDArm64eFirstPreservedGPR ||
+                Plan->Saved[0].CFAOffset != -int(kFrameSize))))
+            return false;
+          Row = {Off, int32_t(Plan->Frame.CFAOffset), Plan->Frame.SavedLR,
+                 Plan->Count != 0};
+          Signing = Rule.Signing;
+        } else {
+          const auto At =
+              queryAArch64UnwindSigning(*Original, *OldFrame, Entry + Off);
+          if (!At.DwarfStateAtPC)
+            return false;
+          Signing = *At.DwarfStateAtPC;
+          Row = *std::prev(
+              llvm::upper_bound(Rules, Off, [](uint64_t PC, const StackRow &R) {
+                return PC < R.Offset;
+              }));
+          Row.Offset = Off;
+        }
+        if (!Signing.State)
           return false;
-        const auto &State = *At.DwarfStateAtPC->State;
+        const auto &State = *Signing.State;
         const bool Signed = State.Kind == dwarf_eh::AArch64RASigningKind::SP &&
                             State.Key == dwarf_eh::AArch64RAKey::B;
         if (!Signed && State.Kind != dwarf_eh::AArch64RASigningKind::Unsigned)
           return false;
-        const StackRow &Row = *std::prev(
-            llvm::upper_bound(Rules, Off, [](uint64_t PC, const StackRow &R) {
-              return PC < R.Offset;
-            }));
         if (Resolved.empty() || Resolved.back().second != Signed ||
             Resolved.back().first.Depth != Row.Depth ||
-            Resolved.back().first.SavedLR != Row.SavedLR)
-          Resolved.emplace_back(StackRow{Off, Row.Depth, Row.SavedLR}, Signed);
+            Resolved.back().first.SavedLR != Row.SavedLR ||
+            Resolved.back().first.SavedX19 != Row.SavedX19)
+          Resolved.emplace_back(Row, Signed);
       }
       std::ofstream Out(Path);
       Out << Resolved.size() << '\n';
       for (const auto &[Row, Signed] : Resolved)
         Out << Row.Offset << ' ' << Row.Depth << ' ' << Row.SavedLR << ' '
-            << Signed << '\n';
+            << Signed << ' ' << Row.SavedX19 << '\n';
       Out.close();
       return bool(Out);
     };
     const auto OriginalRules = (Root / kOriginalRules).string();
     const auto InstalledRules = (Root / kPublishedRules).string();
-    ASSERT_TRUE(WriteRules(OriginalRules, OriginalRows));
-    ASSERT_TRUE(WriteRules(InstalledRules, PublishedRows));
+    ASSERT_TRUE(WriteRules(OriginalRules, OriginalRows, false));
+    ASSERT_TRUE(WriteRules(InstalledRules, {}, true));
     const auto OriginalSamples = (Root / kOriginalSamples).string();
     const auto InstalledSamples = (Root / kInstalledSamples).string();
     ASSERT_EQ(
@@ -297,10 +336,8 @@ TEST(AArch64AsyncUnwind,
                            std::to_string(kNewValue), InstalledSamples,
                            InstalledRules}),
               0);
-    // Both bodies have identical machine instructions at the same offsets.
-    // Only the original describes the signing transitions in its DWARF rows.
-    ASSERT_NO_FATAL_FAILURE(
-        checkFrame(*Original, Entry, InstalledSamples, PublishedRows));
+    ASSERT_NO_FATAL_FAILURE(checkFrame(*Published, Owner, InstalledSamples,
+                                       PublishedRows, *Recovered));
     for (auto [Path, Property] :
          {std::pair(OriginalSamples, kOriginalRows),
           std::pair(InstalledSamples, kPublishedRows)}) {
@@ -311,6 +348,65 @@ TEST(AArch64AsyncUnwind,
     RecordProperty(kSamples, 2 * kStages);
     RecordProperty(kParents, 2 * kStages);
     RecordProperty(kTrampolines, 2 * kStages);
+    RecordProperty(kSystemSteps, 2 * kStages);
+  }
+#else
+  GTEST_SKIP() << kUnavailable;
+#endif
+}
+
+TEST(AArch64AsyncUnwind,
+     CompilerCompactFramesRecoverTheSavedCallerWithoutDwarf) {
+#if defined(__APPLE__) && defined(__aarch64__)
+  llvm::SmallString<128> Dir;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kDirectory, Dir));
+  const std::filesystem::path Root(Dir.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Source = (Root / kCompactSource).string();
+  const auto Dylib = (Root / kOriginal).string();
+  std::ofstream(Source) << kCompactBody;
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                kCompiler, {kCompiler, kTargetFlag, kTarget, kOptimize,
+                            kFramePointer, kDylib, Source, kOutput, Dylib}),
+            0);
+  auto Image = Loader::create(BinaryFormat::MachO)->load(Dylib);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  for (const char *Name : {kCompactParent, kCompactLeaf}) {
+    const auto Sym = llvm::find_if(Image->Symbols, [&](const Symbol &S) {
+      return S.IsFunc && S.Name == Name;
+    });
+    ASSERT_NE(Sym, Image->Symbols.end());
+    const auto *Frame = Image->ExceptionMetadata.findFunction(Sym->Addr);
+    ASSERT_TRUE(Frame && Frame->Compact && !Frame->Dwarf);
+    auto Rows = recoverDarwinAArch64Unwind(*Image, *Frame);
+    ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+    bool SawSavedLR = false;
+    for (const auto &R : *Rows) {
+      auto Plan = prepareDarwinArm64eSystemCaller(R, Frame->Compact->CodeRange,
+                                                  Sym->Addr);
+      ASSERT_TRUE(Plan) << R.CodeOffset;
+      if (Plan->Frame.SavedLR) {
+        SawSavedLR = true;
+        EXPECT_TRUE(Plan->Frame.SavedFP);
+        EXPECT_EQ(Plan->Frame.LROffset, -int(sizeof(uint64_t)));
+        EXPECT_EQ(Plan->Frame.Signing, NDArm64eSignedIBWithCFA);
+      }
+    }
+    EXPECT_EQ(SawSavedLR, Name == kCompactParent);
+    ASSERT_TRUE(Rows->front().Signing.State);
+    EXPECT_EQ(Rows->front().Signing.State->Kind,
+              dwarf_eh::AArch64RASigningKind::Unsigned);
+  }
+  if (std::getenv(kExecute)) {
+    const auto DriverSource = (Root / kDriverSource).string();
+    const auto Driver = (Root / kDriver).string();
+    std::ofstream(DriverSource) << kCompactDriver;
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                  kCompiler, {kCompiler, kTargetFlag, kTarget, kOptimize,
+                              DriverSource, kOutput, Driver}),
+              0);
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Dylib}), 0);
+    RecordProperty(kCompactCalls, kCompactInputs);
   }
 #else
   GTEST_SKIP() << kUnavailable;

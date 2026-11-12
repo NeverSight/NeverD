@@ -30,7 +30,7 @@ NEVERD_PY_UNWIND_CASE(
     R"json({"return_address":{"query_pc":"0xffff800012340004","dwarf_state_at_pc":{"status":"known","kind":"sp_and_pc","key":"b","recipe":"non_hint_pauth_lr","signing_pc":"0x0"},"compact_recipe":{"status":"known","kind":"sp_and_pc","key":"b","recipe":"non_hint_pauth_lr","signing_pc":"0xffff800012340008"}}})json")
 NEVERD_PY_UNWIND_CASE(
     4,
-    R"json({"return_address":{"query_pc":"0x4","dwarf_state_at_pc":{"status":"unknown","diagnostic":"register 34"},"compact_recipe":null}})json")
+    R"json({"return_address":{"query_pc":"0x4","dwarf_state_at_pc":{"status":"unknown","diagnostic":"implicit Darwin signing"},"compact_recipe":null,"instruction_state_at_pc":{"status":"known","kind":"sp","key":"b"}}})json")
 NEVERD_PY_UNWIND_CASE(
     8,
     R"json({"return_address":{"query_pc":"0x8","dwarf_state_at_pc":{"status":"unsupported","diagnostic":"reserved state"},"compact_recipe":null}})json")

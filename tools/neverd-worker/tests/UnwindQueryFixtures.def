@@ -37,8 +37,8 @@ NEVERD_UNWIND_TEST_CASE(
 
 NEVERD_UNWIND_TEST_CASE(
     "0xffff800012340008",
-    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","encoding":"compact-unwind","language_data":false,"return_address":{"query_pc":"0xffff800012340008","dwarf_state_at_pc":{"status":"unknown","diagnostic":"runtime register 34"},"compact_recipe":{"status":"known","kind":"sp_and_pc","key":"b","recipe":"non_hint_pauth_lr","signing_pc":"0x0"}}})json",
-    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","encoding":"compact-unwind","language_data":false,"return_address":{"query_pc":"0xffff800012340008","dwarf_state_at_pc":{"status":"unknown","diagnostic":"runtime register 34"},"compact_recipe":{"status":"known","kind":"sp_and_pc","key":"b","recipe":"non_hint_pauth_lr","signing_pc":"0x0"}}})json")
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","encoding":"compact-unwind","language_data":false,"return_address":{"query_pc":"0xffff800012340008","dwarf_state_at_pc":{"status":"unknown","diagnostic":"runtime register 34"},"instruction_state_at_pc":{"status":"known","kind":"sp","key":"b"},"compact_recipe":{"status":"known","kind":"sp_and_pc","key":"b","recipe":"non_hint_pauth_lr","signing_pc":"0x0"}}})json",
+    R"json({"begin":"0xffff800012340000","end":"0xffff800012340040","encoding":"compact-unwind","language_data":false,"return_address":{"query_pc":"0xffff800012340008","dwarf_state_at_pc":{"status":"unknown","diagnostic":"runtime register 34"},"instruction_state_at_pc":{"status":"known","kind":"sp","key":"b"},"compact_recipe":{"status":"known","kind":"sp_and_pc","key":"b","recipe":"non_hint_pauth_lr","signing_pc":"0x0"}}})json")
 
 NEVERD_UNWIND_TEST_CASE(
     "0xffff80001234000c",
