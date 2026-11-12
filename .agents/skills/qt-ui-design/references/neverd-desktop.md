@@ -474,6 +474,18 @@ field looked sharp. Chrome boxes and hairlines do not have to look like this.
   read-only editors, must stay.
 - Qt passes the splitter, not the handle, as `CE_Splitter`'s widget; a
   default-constructed `QSizeF` is -1 by -1, not empty.
+- A splitter between panes that hold controls needs a gutter. The theme's
+  handle is a hairline, 1 pixel that Qt lets the pointer grab over 5, which
+  suits panes that are surfaces, such as two tables. Binary comparison set a
+  6-pixel handle to keep its combo boxes off the next pane, and the style
+  filled all of it: a band of the fields' own gray that the "All functions"
+  box ran into, with the next pane's title flush against it ("太左了").
+  `WorkbenchStyle` draws a handle's hairline along the middle of its room,
+  under a dock separator's bar while the pointer is over it, so a wider
+  handle is a gutter: a layout's spacing on either side of the line
+  (`kComparisonPaneGutter`). Across such a gutter, put what the panes show
+  first on one row (the details' title on the inventory's filters' row), so
+  the rows below start level.
 - Verify at 125%, 150% and 175% with
   `AppearanceTests::controlsKeepTheirLinesOnDevicePixels`: render the window
   with `QWidget::render` into a `QImage` whose device pixel ratio is the scale,
