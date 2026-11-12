@@ -1093,8 +1093,9 @@ live LR or saved stack slot. For a compact-only frame the analysis instead
 tracks the incoming SP, register values and active frame saves. It follows
 reachable direct branches, joins agreeing facts, and accounts for call
 clobbers, stack writeback, classic IA/IB, PACM and explicit PAuth_LR. A failed
-proof has no unsigned default. Opaque control flow, alternate entries, LSDA
-edges and exceeded budgets cannot authorize a native handoff.
+proof has no unsigned default. Opaque control flow, alternate entries,
+unrecognized personalities and exceeded budgets cannot authorize a native
+handoff.
 
 Select the row at the interrupted instruction. `prepareDarwinArm64eSystemCaller`
 binds its signing PC to the loaded address and checks that the caller's integer
@@ -1172,7 +1173,47 @@ The [integrated source replay](https://github.com/gmh5225/test_mac_intel/actions
 Clang fixture with a typed C++ catch has a compact frame and LSDA. Its
 implicit signing rule was unavailable at entry and at the next two
 instructions. The verification record includes the source and all three
-query results.
+query results for that revision.
+
+For Darwin C++ frames using `__gxx_personality_v0`, instruction recovery
+follows the decoded LSDA call-site ranges to their catch and cleanup landing
+pads. The handler receives only surviving callee-saved registers and stack
+slots. For a protected non-call instruction the analysis intersects the
+states on both sides. A call to a known non-returning function can still
+reach its handler. An unaligned, overlapping or out-of-frame range, a missing
+LSDA or a different personality prevents this proof. At a protected PC with
+a DWARF outgoing-argument size, the exceptional edge advances SP and drops
+the released stack slots. Ordinary return retains the argument area. See the
+[Itanium exception ABI](https://itanium-cxx-abi.github.io/cxx-abi/abi-eh.html#base-personality)
+and [libunwind context installation](https://github.com/llvm/llvm-project/blob/main/libunwind/src/libunwind.cpp#L205-L212).
+
+Native Mach-O object publication can reuse a dyld-bound RTTI slot in a
+non-lazy pointer section sealed after fixups. The import table must select
+one provider and weak-import policy, and the binding must have zero addend.
+An ordinary RTTI reference and an authenticated personality reference keep
+their respective pointer encodings. A writable source slot requires separate
+GOT storage for the published reference.
+
+Apple Clang can leave a synchronous DWARF row in force through part of the
+prologue or epilogue. At an interrupt where its CFA cannot be proved to equal
+the incoming SP, recovery derives the CFA and integer register locations from
+the reachable instructions. Registers the producer marked undefined stay
+undefined.
+
+The [signed C++ execution run](https://github.com/gmh5225/test_mac_intel/actions/runs/43290127091) passed all 32
+publication tests on each Apple M1 runner. Each recorded 34 successful C++ outcomes and six system
+PAC traps across five compiler profiles, exercising the original and redirected
+entry. The four conventional profiles returned the expected values, propagated
+unmatched exceptions and ran cleanup for a new exception thrown inside a catch.
+With a nonzero DWARF outgoing-argument size, both untouched and published
+arm64e code returned normally on the nonthrowing path. On the throwing paths
+the system unwinder trapped before installing the handler. The
+[debugger control](https://github.com/gmh5225/test_mac_intel/actions/runs/43285706120) located the same authenticated-pointer
+`BRK #0xc471` in system libunwind on both hosts. Ordinary arm64 completed
+the corresponding controls. The system signal suite also crossed ten interrupted
+frames on each runner. The [verification record](evidence/arm64e-system-signal-and-implicit-unwind-2026-11-12.json)
+records the source revision, host digest, per-runner observations and local
+regressions.
 
 To repeat the interrupted-frame test on a Mac that can launch arm64e
 executables, build the test host against the tracked LLVM fork and require

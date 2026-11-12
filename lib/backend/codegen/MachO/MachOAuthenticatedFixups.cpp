@@ -246,15 +246,7 @@ neverd::collectMachOAuthenticatedFixups(
   if (State->CPUType != CPU_TYPE_ARM64 ||
       !arm64e::isSubtype(State->CPUSubtype) || !Chains.CommandOffset)
     return fail(kImageABI);
-  using Provider = std::pair<int64_t, bool>;
-  std::map<std::string, std::optional<Provider>> Providers;
-  for (const auto &Import : Chains.Imports) {
-    const Provider Identity{Import.Ordinal,
-                            bool(Import.Flags & BIND_SYMBOL_FLAGS_WEAK_IMPORT)};
-    auto [It, Added] = Providers.emplace(Import.Name, Identity);
-    if (!Added && It->second != Identity)
-      It->second.reset();
-  }
+  auto Providers = Chains.uniqueImportProviders();
   std::map<llvm::StringRef, unsigned> LibraryOrdinals;
   if (!Dependencies.empty())
     for (unsigned I = 0; I < Chains.Libraries.size(); ++I)
@@ -267,7 +259,7 @@ neverd::collectMachOAuthenticatedFixups(
     if (Library == LibraryOrdinals.end() ||
         !Declared.emplace(Name, false).second)
       return fail(kDeclaredProvider);
-    Providers[Name] = Provider{Library->second, false};
+    Providers[Name] = MachOChainedFixups::Provider{Library->second, false};
   }
   for (const auto &Section : Image.Sections) {
     const bool ExternalRelro = isExternalMachORelro(Image, Section);

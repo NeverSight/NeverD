@@ -3,7 +3,7 @@ add_subdirectory(bytecode)
 
 add_neverd_component_library(NeverDAArch64UnwindRecovery
   arch/aarch64/AArch64UnwindRecovery.cpp
-  LINK_COMPONENTS Decode Loader
+  LINK_COMPONENTS Decode LibC Loader
 )
 
 add_neverd_component_library(NeverDLLVMMemoryAnalysis

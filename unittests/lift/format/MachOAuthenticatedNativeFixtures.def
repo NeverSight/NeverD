@@ -621,7 +621,7 @@ MACHO_AUTH_NATIVE_VALUE(uint8_t, kUnsupportedLSDAEncoding, 0x7f)
 
 MACHO_AUTH_NATIVE_TEXT(kCxxLibrary, "/usr/lib/libc++.1.dylib")
 MACHO_AUTH_NATIVE_TEXT(kCxxPersonality, "__gxx_personality_v0")
-MACHO_AUTH_NATIVE_VALUE(unsigned, kOrdinaryPointerCount, 3)
+MACHO_AUTH_NATIVE_VALUE(unsigned, kOrdinaryObjectPointers, 2)
 
 MACHO_AUTH_NATIVE_ARGS(kDwarfInfoArgs, "dwarfdump", "--eh-frame")
 MACHO_AUTH_NATIVE_TEXT(kDwarfInfoFile, "native-dwarf.txt")

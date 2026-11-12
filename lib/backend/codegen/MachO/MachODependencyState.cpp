@@ -823,6 +823,20 @@ struct Reader {
 };
 } // namespace
 
+std::map<std::string, std::optional<MachOChainedFixups::Provider>>
+MachOChainedFixups::uniqueImportProviders() const {
+  std::map<std::string, std::optional<Provider>> Providers;
+  for (const auto &Import : Imports) {
+    const Provider Identity{
+        Import.Ordinal,
+        bool(Import.Flags & llvm::MachO::BIND_SYMBOL_FLAGS_WEAK_IMPORT)};
+    auto [It, Added] = Providers.emplace(Import.Name, Identity);
+    if (!Added && It->second != Identity)
+      It->second.reset();
+  }
+  return Providers;
+}
+
 llvm::Expected<MachODependencyState>
 readMachODependencyState(llvm::ArrayRef<uint8_t> B,
                          MachOChainedFixups *Chained) {

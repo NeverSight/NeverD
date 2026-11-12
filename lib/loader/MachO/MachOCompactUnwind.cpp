@@ -12,6 +12,7 @@
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/raw_ostream.h"
@@ -731,22 +732,28 @@ ParseResult parseCompactUnwind(const BinaryImage &Img) {
       partial("__unwind_info code range is empty after mode normalization");
       continue;
     }
-    // Some Apple linkers place the final lookup sentinel one byte beyond
-    // __text. Preserve the raw index, but do not assign the first non-code
-    // byte to the last ARM64 instruction range. An interior page boundary or
-    // a partial final instruction has no such interpretation.
-    if (Img.Arch == Arch::AArch64 && I + 1 == Raw.size() &&
-        End == SentinelOffset &&
+    // Some Apple linkers include the first byte past __text in the final
+    // lookup range. When a publisher appends code, a no-unwind gap retains
+    // that boundary. In both layouts the instruction extent ends at __text.
+    const bool EndsLookup = I + 1 == Raw.size()
+                                ? End == SentinelOffset
+                                : End == Raw[I + 1].FunctionOffset &&
+                                      Raw[I + 1].Encoding == kARM64ModeNone;
+    if (Img.Arch == Arch::AArch64 && EndsLookup &&
         Entry.CodeRange.End % kARM64InstructionBytes ==
             kARM64TerminalLookupByte) {
       const va_t TextEnd = Entry.CodeRange.End - kARM64TerminalLookupByte;
       const Section *Text = Img.getSectionFor(Entry.CodeRange.Begin);
+      const Section *Next = Img.getSectionFor(TextEnd);
+      const bool StartsStubs = Next && Next->VA == TextEnd &&
+                               (Next->Type & llvm::MachO::SECTION_TYPE) ==
+                                   llvm::MachO::S_SYMBOL_STUBS;
       if (Text && TextEnd > Entry.CodeRange.Begin &&
           TextEnd - Text->VA == Text->Size &&
           Entry.CodeRange.Begin % kARM64InstructionBytes == 0 &&
           Img.isCodeRange(Entry.CodeRange.Begin,
                           TextEnd - Entry.CodeRange.Begin) &&
-          !Img.isCodeAddress(TextEnd))
+          (StartsStubs || !Img.isCodeAddress(TextEnd)))
         Entry.CodeRange.End = TextEnd;
     }
     Entry.NativeEncoding = Raw[I].Encoding;
