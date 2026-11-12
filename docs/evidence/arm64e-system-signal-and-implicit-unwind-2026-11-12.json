@@ -638,5 +638,322 @@
     "Opaque control flow, unmodelled register locations or landing-pad edges cannot authorize an implicit row.",
     "Publication is qualified for the tested inputs, including the nine-function mixed variadic images at O0 and O2; arbitrary image publication is not established.",
     "The observed hosts do not qualify explicit PAuth_LR, PC-sensitive PACM or native CPTA-on."
-  ]
+  ],
+  "integrated_dev": {
+    "revision": "00689dc1ce3dc102ae4740d52bab7910b6645562",
+    "dev_parent": "cee06981844f5597004da9be6bcc778db813d6b2",
+    "dependencies": {
+      "llvm-project": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+      "capstone": "0ceacc58a612b3b3b2426459e734dcea7aab00ea",
+      "unicorn": "dab16e86b6ac4acca71c5f3ba50721efc3891a1e"
+    },
+    "local": {
+      "passed_publication": 31,
+      "passed_implicit_recovery": 6,
+      "physical_sp_cpa_pauth_and_dyld_installation": {
+        "discovered": 83,
+        "passed": 81,
+        "skipped": [
+          "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+          "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections"
+        ]
+      }
+    },
+    "native": {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43271432365",
+      "test_host_sha256": "0bfa9c2c30e2e1f7467c7a685dabcf78cfb0551b89e61abde532c3a76e6b00fd",
+      "archive_sha256": "d3a175ae0719e9e75db86110a5bf175e0a512e701d3c348aae89b3ba85dc235c",
+      "runners": {
+        "macos-26": {
+          "hardware": "Apple M1 (Virtual)",
+          "os": [
+            "ProductName:\t\tmacOS",
+            "ProductVersion:\t\t26.7.2",
+            "BuildVersion:\t\t25G332"
+          ],
+          "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+          "passed": 31,
+          "native_image_executions": 60,
+          "native_interrupted_frames": 10,
+          "native_system_caller_steps": 10,
+          "signal_sample_columns": [
+            "frame_relative_pc",
+            "signed",
+            "cfa_minus_sp",
+            "saved_lr_observed"
+          ],
+          "original_signal_samples": [
+            [
+              16,
+              0,
+              0,
+              0
+            ],
+            [
+              40,
+              1,
+              0,
+              0
+            ],
+            [
+              76,
+              1,
+              16,
+              1
+            ],
+            [
+              108,
+              1,
+              0,
+              0
+            ],
+            [
+              140,
+              0,
+              0,
+              0
+            ]
+          ],
+          "published_signal_samples": [
+            [
+              16,
+              0,
+              0,
+              0
+            ],
+            [
+              40,
+              1,
+              0,
+              0
+            ],
+            [
+              80,
+              1,
+              16,
+              1
+            ],
+            [
+              112,
+              1,
+              0,
+              0
+            ],
+            [
+              140,
+              0,
+              0,
+              0
+            ]
+          ],
+          "native_compact_calls": 3,
+          "mixed_variadic_O0_O2": [
+            {
+              "native_register_entries_compared": 9,
+              "native_register_input_comparisons": 27,
+              "installed_register_entries": 9
+            },
+            {
+              "native_register_entries_compared": 9,
+              "native_register_input_comparisons": 27,
+              "installed_register_entries": 9
+            }
+          ],
+          "original_native_pac": true,
+          "original_signed_call_and_exception": true,
+          "native_signal_cursor": true,
+          "explicit_pauth_lr": false,
+          "pc_sensitive_pacm": false,
+          "cpta": {
+            "status": "unavailable",
+            "observed_el0": false,
+            "x1_qualified": false,
+            "profiles": {
+              "arm64": "undefined-instruction",
+              "arm64e": "undefined-instruction",
+              "arm64e.x1": "slice-unavailable"
+            }
+          },
+          "qualification_sha256": "a0f52797da9a49643546bd81cf6fa85f2b08bdcd34c4c0db7682ebb263150a80",
+          "original_controls_sha256": "9ba2648d472366865296ae763e7587396bbd819500d0a4a2c1cc30c0e1366968",
+          "cpta_report_sha256": "a86afb399ad1abc410887624bbc6d228063a9b34b266cfd3fa14b1b736e0967f",
+          "cursor_report_sha256": "272504e31b9f176cce886e25b94004bf8e2a0518932c28a42383fe920099641e"
+        },
+        "xcode-27": {
+          "hardware": "Apple M1 (Virtual)",
+          "os": [
+            "ProductName:\t\tmacOS",
+            "ProductVersion:\t\t27.0.1",
+            "BuildVersion:\t\t26A434"
+          ],
+          "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+          "passed": 31,
+          "native_image_executions": 60,
+          "native_interrupted_frames": 10,
+          "native_system_caller_steps": 10,
+          "signal_sample_columns": [
+            "frame_relative_pc",
+            "signed",
+            "cfa_minus_sp",
+            "saved_lr_observed"
+          ],
+          "original_signal_samples": [
+            [
+              16,
+              0,
+              0,
+              0
+            ],
+            [
+              40,
+              1,
+              0,
+              0
+            ],
+            [
+              80,
+              1,
+              16,
+              1
+            ],
+            [
+              112,
+              1,
+              0,
+              0
+            ],
+            [
+              140,
+              0,
+              0,
+              0
+            ]
+          ],
+          "published_signal_samples": [
+            [
+              16,
+              0,
+              0,
+              0
+            ],
+            [
+              44,
+              1,
+              0,
+              0
+            ],
+            [
+              80,
+              1,
+              16,
+              1
+            ],
+            [
+              112,
+              1,
+              0,
+              0
+            ],
+            [
+              136,
+              0,
+              0,
+              0
+            ]
+          ],
+          "native_compact_calls": 3,
+          "mixed_variadic_O0_O2": [
+            {
+              "native_register_entries_compared": 9,
+              "native_register_input_comparisons": 27,
+              "installed_register_entries": 9
+            },
+            {
+              "native_register_entries_compared": 9,
+              "native_register_input_comparisons": 27,
+              "installed_register_entries": 9
+            }
+          ],
+          "original_native_pac": true,
+          "original_signed_call_and_exception": true,
+          "native_signal_cursor": true,
+          "explicit_pauth_lr": false,
+          "pc_sensitive_pacm": false,
+          "cpta": {
+            "status": "unavailable",
+            "observed_el0": false,
+            "x1_qualified": false,
+            "profiles": {
+              "arm64": "undefined-instruction",
+              "arm64e": "undefined-instruction",
+              "arm64e.x1": "did-not-start"
+            }
+          },
+          "qualification_sha256": "34681bb0007ae3bd9812763bd2a5e69f98925793c40a4f72e518c367e5d04a5f",
+          "original_controls_sha256": "f7dc03636e00aca92735331e15da9668c32ee25b42614238a16a32211e5f9b9f",
+          "cpta_report_sha256": "6575f052909aa8552a7f0736fe139c501e69fa1a72867269ca64e3b8a26af4c7",
+          "cursor_report_sha256": "716549aa35123eb09fc4ba7a7f2c5bf7d54ba5f52cc09ccf5c03bd70d1988f15"
+        }
+      }
+    }
+  },
+  "held_out_cpp_landing_pad": {
+    "compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+    "sha256": "58c63cdaba781e47fea546b9341f57bb420112c9fccb3f30a6f35ea1ca497959",
+    "compiler_control": [
+      ".cfi_personality 155, ___gxx_personality_v0",
+      ".cfi_lsda 16, Lexception0",
+      "pacibsp",
+      ".cfi_def_cfa w29, 16",
+      "bl\t_source_throw",
+      "bl\t_observe_catch"
+    ],
+    "address": "0x510",
+    "queries": {
+      "0x0": {
+        "compact_recipe": {
+          "diagnostic": "compact encoding does not declare a return-address signing recipe",
+          "status": "unknown"
+        },
+        "dwarf_state_at_pc": null,
+        "query_pc": "0x510"
+      },
+      "0x4": {
+        "compact_recipe": {
+          "diagnostic": "compact encoding does not declare a return-address signing recipe",
+          "status": "unknown"
+        },
+        "dwarf_state_at_pc": null,
+        "query_pc": "0x514"
+      },
+      "0x8": {
+        "compact_recipe": {
+          "diagnostic": "compact encoding does not declare a return-address signing recipe",
+          "status": "unknown"
+        },
+        "dwarf_state_at_pc": null,
+        "query_pc": "0x518"
+      }
+    },
+    "frame_summary": {
+      "begin": "0x510",
+      "encoding": "compact-unwind",
+      "end": "0x570",
+      "language_data": true,
+      "personality": "___gxx_personality_v0"
+    },
+    "source": "extern \"C\" void source_throw(int);\nextern \"C\" int observe_catch(int);\nextern \"C\" __attribute__((noinline)) int catcher(int x) {\n  try { source_throw(x); return x; } catch (int v) { return observe_catch(v); }\n}\n",
+    "source_sha256": "1d11b60b261f55712abedbb65b0028fea569636163c95dd48bfbbde09d68bfae",
+    "options": [
+      "-target",
+      "arm64e-apple-macos14",
+      "-O1",
+      "-fno-omit-frame-pointer",
+      "-fexceptions",
+      "-dynamiclib",
+      "-Wl,-undefined,dynamic_lookup"
+    ],
+    "query_source_revision": "a6ffeb9bd9e3a9799c56d60418ed05abf8b01a1b",
+    "outcome": "Compiler-linked typed C++ catch, compact frame and LSDA. The analyzer leaves implicit signing unavailable on this profile."
+  }
 }

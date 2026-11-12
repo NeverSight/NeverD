@@ -1166,6 +1166,14 @@ The [verification record](evidence/arm64e-system-signal-and-implicit-unwind-2026
 includes the per-runner signal samples, test-host hashes, local suite results
 and hardware capabilities.
 
+The [integrated source replay](https://github.com/gmh5225/test_mac_intel/actions/runs/43271432365) repeated the 31-test native suite on both Apple profiles after merging `dev` at
+`cee06981844f5597004da9be6bcc778db813d6b2`. Each profile again recorded
+60 image executions and 10 system-caller continuations. A separate Apple
+Clang fixture with a typed C++ catch has a compact frame and LSDA. Its
+implicit signing rule was unavailable at entry and at the next two
+instructions. The verification record includes the source and all three
+query results.
+
 To repeat the interrupted-frame test on a Mac that can launch arm64e
 executables, build the test host against the tracked LLVM fork and require
 native execution:
