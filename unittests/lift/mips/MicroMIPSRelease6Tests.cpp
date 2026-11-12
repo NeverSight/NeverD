@@ -366,6 +366,85 @@ TEST(MicroMIPS64Release6, PhysicalDoublewordFieldsMatchClassicLowIR) {
   }
 }
 
+#ifdef NEVERD_MIPS_UNICORN_REFERENCE
+TEST(MicroMIPS64Release6, NativeDoublewordResultsMatchIndependentExecution) {
+  // Literal physical halfwords, independently executed by Unicorn's
+  // microMIPS64 R6 model. No NeverD translation feeds the reference engine.
+  const uint32_t Words[] = {
+      0x58a41018, 0x58a41058, 0x58a41098, 0x58a410d8, // multiply
+      0x58a41118, 0x58a41158, 0x58a41198, 0x58a411d8, // divide/remainder
+      0x58445b3c, 0x58444b3c, 0x58820b3c, 0x58a4161c, // count/permute
+      0x4224fffc, 0x4204fffc, 0xf0440005,             // upper immediates
+      0x58442808, 0x58447b3c, 0x5844fb3c,             // shift/permute
+      0x5c44fff8, 0x58a41150, 0x58a411d0};            // add/subtract
+  constexpr va_t PC = 0x10000;
+  for (Arch Target : {Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(unsigned(Target));
+    const auto Order = archLittleEndian(Target) ? llvm::endianness::little
+                                                : llvm::endianness::big;
+    BinaryImage Image;
+    Image.Arch = Target;
+    Image.Bits = Bitness::Bits64;
+    Image.Mode = InstructionMode::MicroMIPS;
+    Image.MIPS.emplace();
+    Image.MIPS->ABI = MIPSABI::N64;
+    Image.MIPS->ISARevision = 6;
+    Image.MIPS->HasMicroMIPS = true;
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Image));
+    uc_engine *Raw = nullptr;
+    const auto Mode = static_cast<uc_mode>(
+        UC_MODE_MIPS64 | (archLittleEndian(Target) ? UC_MODE_LITTLE_ENDIAN
+                                                   : UC_MODE_BIG_ENDIAN));
+    ASSERT_EQ(uc_open(UC_ARCH_MIPS, Mode, &Raw), UC_ERR_OK);
+    std::unique_ptr<uc_engine, decltype(&uc_close)> Reference(Raw, uc_close);
+    ASSERT_EQ(uc_ctl_set_cpu_model(Raw, UC_CPU_MIPS64_MICROMIPS64R6_GENERIC),
+              UC_ERR_OK);
+    ASSERT_EQ(uc_mem_map(Raw, PC, 0x1000, UC_PROT_ALL), UC_ERR_OK);
+    for (unsigned I = 0; I < std::size(Words); ++I) {
+      uint8_t Bytes[4];
+      llvm::support::endian::write16(Bytes, Words[I] >> 16, Order);
+      llvm::support::endian::write16(Bytes + 2, uint16_t(Words[I]), Order);
+      ASSERT_EQ(uc_mem_write(Raw, PC + I * 4, Bytes, 4), UC_ERR_OK);
+    }
+    for (unsigned I = 0; I < std::size(Words); ++I) {
+      SCOPED_TRACE(::testing::Message() << std::hex << Words[I]);
+      uint8_t Bytes[4];
+      ASSERT_EQ(uc_mem_read(Raw, PC + I * 4, Bytes, 4), UC_ERR_OK);
+      DecodedExecutionUnit Unit;
+      ASSERT_EQ(Decode.decodeUnitForLift(Bytes, 4, PC + I * 4, Unit), 4);
+      std::vector<LowOp> Ops;
+      Decode.liftUnitToLow(Unit, Ops);
+      for (uint64_t X : {uint64_t{0}, uint64_t{3}, uint64_t{0x100000001},
+                         uint64_t{0x8000000000000001}, ~uint64_t{0}}) {
+        SCOPED_TRACE(X);
+        NdOpEmulator E(Image);
+        E.setStrictMode(true);
+        for (unsigned R = 1; R < 32; ++R) {
+          const uint64_t Value = R == 4   ? X
+                                 : R == 5 ? 3
+                                          : 0x1234567800000000 + R;
+          ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_0 + R, &Value), UC_ERR_OK);
+          E.setRegister(mipsreg::r(R), Value);
+        }
+        ASSERT_EQ(uc_emu_start(Raw, (PC + I * 4) | 1, PC + 0x1000, 0, 1),
+                  UC_ERR_OK);
+        for (const auto &Op : Ops)
+          ASSERT_TRUE(E.step(Op));
+        for (unsigned R = 1; R < 32; ++R) {
+          uint64_t Actual = 0;
+          ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_0 + R, &Actual), UC_ERR_OK);
+          EXPECT_EQ(E.getRegister(mipsreg::r(R)), Actual) << "register " << R;
+        }
+        uint64_t Next = 0;
+        ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_PC, &Next), UC_ERR_OK);
+        EXPECT_EQ(Next, PC + (I + 1) * 4);
+      }
+    }
+  }
+}
+#endif
+
 INSTANTIATE_TEST_SUITE_P(ByteOrders, MicroMIPSRelease6,
                          ::testing::Values(Arch::MIPS32, Arch::MIPS32EL));
 

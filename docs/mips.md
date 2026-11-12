@@ -1107,17 +1107,55 @@ An unavailable implementation or unpredictable control write stops evaluation.
 
 HighC and LLVMC retain native COP1 operations through volatile assembly,
 including ambient FCSR and enabled exceptions. Their source qualification
-requires initialized FPR bytes on all incoming leaf paths, an explicit FR=1 ELF
-profile and volatile registers. General incoming FP call ABI and saved-FPR
-restoration require additional proofs. Function-scoped instruction mode is
-preserved, including physical microMIPS FP assembly.
+requires initialized FPR bytes on every incoming path and an explicit FR=1 ELF
+profile. Scalar float/double entry parameters and results use the o32 FP64 or
+n64 hard-float convention. o32's leading f12/f14 arguments consume aligned
+integer word positions; n64 shares argument positions between a0–a7 and
+f12–f19. Floating overflow values start at the lowest addressed bytes of their
+stack slots in either byte order. Integer right justification is unchanged.
+
+Complete fixed declarations bind mixed integer, pointer and floating operands
+before SSA, including o32 register pairs and stack overflow. Direct imported
+and explicitly declared exported calls returning float/double retain these
+carriers. Unknown calls, indirect target recovery, variadic floating calls,
+aggregate results and general saved-FPR restoration still need additional
+proofs. The register model preserves only the low eight bytes of o32's even
+F20–F30 or n64's F24–F31, not the overlaid 128-bit MSA register.
+
+A nonleaf's saved link is accepted only when exact reaching stores preserve
+the original RA and mode, its slot lies outside the callee's complete outgoing
+argument area, and no argument or other store exposes the private frame.
+Byte provenance ignores unread upper FPR bytes; stack arguments require their
+own reaching-store proof. Unresolved memory effects remain rejected.
+Function-scoped instruction mode is preserved, including physical microMIPS FP
+assembly. LLVMC copies floating views of integer storage as object bytes;
+ordinary C assignment would change these bit patterns numerically.
 
 The independent GNU/LLVM encoding fixtures cover both byte orders. Original
-execution covers classic MIPS32/64 and physical microMIPS32. I6400 supplies the
-classic 64-bit reference. Physical microMIPS64 is checked against fixed encodings
-and the corresponding classic LowIR for every catalog entry. The 112 FP forms
-are exercised with finite values, NaNs and rounding changes. Source round trips
-cover explicit classic o32 and n64 FR=1 leaves in HighC and LLVMC at O0 and O2.
+execution covers classic MIPS32/64 and physical microMIPS32/64. I6400 supplies
+the classic 64-bit reference. The pinned Unicorn fork adds a
+[generic microMIPS64 R6 model](https://github.com/NeverSight/unicorn/pull/23)
+using its existing QEMU micro decoder; it is not a claim about I6400 hardware.
+The 112 FP forms execute their original micro bytes in both GPR widths and byte
+orders, with finite values, NaNs and rounding changes. Reference tests also
+cover double transfers and compact FP branches. Its [native doubleword decoder](https://github.com/NeverSight/unicorn/pull/24) also executes physical integer
+encodings directly: 21 forms, five wide/sign-edge inputs and both byte orders
+are compared against NeverD, including every GPR and next PC.
+Fixed call round trips use explicit classic o32 and n64 FR=1 profiles in HighC
+and LLVMC at O0 and O2: single/double precision, an integer parameter after an
+FP entry parameter, nine-argument overflow, and a floating call argument after
+an integer (including o32 register pairs). The 96 compiled outputs match 1,920
+original executions in return bits, FCSR, SP, RA and preserved FPRs.
+Single-precision result inference follows the arithmetic operation rather than
+the FPR container. A final source byte-use proof may canonicalize unread upper
+bits; stores, calls, preserved registers and observed return bytes block that
+proof. LowIR and analysis-only MedIR retain the original unpredictable state.
+
+Discovery keeps the detail-off decode path: a delayed-unit snapshot never reads
+Capstone's retained but unpopulated operand allocation. MIPS lifting uses the
+physical bytes, so discovery does not need to enable operand detail merely to
+avoid a stale operand count. Repeated SDK requests and poisoned detail counts
+exercise this boundary separately from instruction semantics.
 
 The baseline for decoder measurements is
 bcef8d07e1, with matched Release compiler and dependency inputs except for

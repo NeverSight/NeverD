@@ -47,9 +47,9 @@ namespace {
 using BitMask = llvm::APInt;
 constexpr unsigned kDemandBits = 64 * 8;
 
-BitMask allBytes(uint16_t Bytes) {
-  return BitMask::getLowBitsSet(kDemandBits, !Bytes || Bytes >= 64 ? kDemandBits
-                                                                   : Bytes * 8);
+BitMask allBytes(uint16_t Bytes, unsigned Width) {
+  return BitMask::getLowBitsSet(
+      Width, !Bytes ? Width : std::min<unsigned>(Width, Bytes * 8));
 }
 
 uint16_t exprBytes(const HighExpr &E) {
@@ -61,19 +61,20 @@ uint16_t exprBytes(const HighExpr &E) {
 /// The bits at or below the highest demanded one: a sum, difference,
 /// product or negation carries only upward.
 BitMask carryFill(const BitMask &Demand) {
-  return BitMask::getLowBitsSet(kDemandBits, Demand.getActiveBits());
+  return BitMask::getLowBitsSet(Demand.getBitWidth(), Demand.getActiveBits());
 }
 
 /// The nonzero bits of \p Value, in a \p Bytes wide operand.
-BitMask nonzeroBytes(uint64_t Value, uint16_t Bytes) {
-  return BitMask(kDemandBits, Value) & allBytes(Bytes);
+BitMask nonzeroBytes(uint64_t Value, uint16_t Bytes, unsigned Width) {
+  return BitMask(Width, Value) & allBytes(Bytes, Width);
 }
 
 /// The operand bits a left shift by \p Bits reads for the result bits in
 /// \p Demand: result bit b is operand bit b - Bits.
 BitMask leftShiftSource(const BitMask &Demand, uint64_t Bits, uint16_t Bytes) {
-  return Bits >= kDemandBits ? BitMask(kDemandBits, 0)
-                             : Demand.lshr(Bits) & allBytes(Bytes);
+  const unsigned Width = Demand.getBitWidth();
+  return Bits >= Width ? BitMask(Width, 0)
+                       : Demand.lshr(Bits) & allBytes(Bytes, Width);
 }
 
 /// The operand bits a right shift by \p Bits reads for the result bits in
@@ -81,14 +82,15 @@ BitMask leftShiftSource(const BitMask &Demand, uint64_t Bits, uint16_t Bytes) {
 /// arithmetic shift past the top.
 BitMask rightShiftSource(const BitMask &Demand, uint64_t Bits, uint16_t Bytes,
                          bool Arithmetic) {
-  BitMask Source(kDemandBits, 0);
+  const unsigned Width = Demand.getBitWidth();
+  BitMask Source(Width, 0);
   const uint64_t Top = uint64_t(Bytes) * 8;
-  if (Bits < kDemandBits)
-    Source = Demand.shl(Bits) & allBytes(Bytes);
-  if (Arithmetic && Top && Top <= kDemandBits &&
+  if (Bits < Width)
+    Source = Demand.shl(Bits) & allBytes(Bytes, Width);
+  if (Arithmetic && Top && Top <= Width &&
       (Bits >= Top ? !Demand.isZero() : Demand.getActiveBits() > Top - Bits))
     Source.setBit(Top - 1);
-  return Source & allBytes(Bytes);
+  return Source & allBytes(Bytes, Width);
 }
 
 class DemandedBits {
@@ -113,6 +115,13 @@ public:
 private:
   HighFunc &Func;
   Arch Architecture;
+  // LLVM APInt stores a 64-bit mask inline. Keep the full vector domain when
+  // any expression has a wide or unknown extent; otherwise scalar masks need
+  // no heap allocation. Selection finishes before the first demand is seeded.
+  unsigned MaskWidth = 64;
+  BitMask allBytes(uint16_t Bytes) const {
+    return ::neverd::allBytes(Bytes, MaskWidth);
+  }
   size_t Budget = ::neverd::limits::ir::kHighDemandedBytesVisitBudget;
   std::unordered_map<const HighExpr *, BitMask> NodeDemand;
   std::map<HighSourceLocalIdentity, BitMask> VarDemand;
@@ -132,7 +141,30 @@ private:
 
   /// Each variable's assigned values, which its uses' demand reaches.
   void collectDefinitions() {
+    HighExprSet Seen;
     walkStmts(Func.Body, [&](HighStmt &S) {
+      if (MaskWidth == 64)
+        forEachExpr(S, [&](const ExprPtr &Root) {
+          llvm::SmallVector<const HighExpr *, 16> Work;
+          if (Root)
+            Work.push_back(Root.get());
+          while (!Work.empty() && MaskWidth == 64) {
+            const auto *E = Work.pop_back_val();
+            if (!Seen.insert(E).second)
+              continue;
+            const bool VoidEffect = E->Type &&
+                                    E->Type->Kind == NdTypeKind::Void &&
+                                    observableEvaluation(*E);
+            if (exprBytes(*E) > 8 || (!exprBytes(*E) && !VoidEffect)) {
+              MaskWidth = kDemandBits;
+              break;
+            }
+            E->forEachChildExpr([&](const ExprPtr &Child) {
+              if (Child)
+                Work.push_back(Child.get());
+            });
+          }
+        });
       if (S.Kind != StmtKind::Assign || !S.Dst || S.Dst->Kind != ExprKind::Var)
         return;
       Assigned.insert(highSourceLocalIdentity(S.Dst->Var));
@@ -152,7 +184,7 @@ private:
     if (Depth > ::neverd::limits::ir::kHighDemandedBytesMaxConstantMaskDepth)
       return std::nullopt;
     if (E.Kind == ExprKind::Const)
-      return nonzeroBytes(E.ConstVal, exprBytes(E));
+      return nonzeroBytes(E.ConstVal, exprBytes(E), MaskWidth);
     if (E.Kind == ExprKind::BinOp && E.Op == NdOp::CONCAT &&
         E.Operands.size() == 2 && E.Operands[0] && E.Operands[1]) {
       const uint16_t LowBytes = exprBytes(*E.Operands[1]);
@@ -182,7 +214,7 @@ private:
     if (!E || Mask.isZero() || !Budget)
       return;
     --Budget;
-    auto &Current = NodeDemand.try_emplace(E, kDemandBits, 0).first->second;
+    auto &Current = NodeDemand.try_emplace(E, MaskWidth, 0).first->second;
     if ((Current | Mask) == Current)
       return;
     Current |= Mask;
@@ -272,8 +304,8 @@ private:
       if (C && E.Kind == ExprKind::Call && E.IntrinsicId != Intrinsic::None)
         if (const auto Read =
                 x86VectorOperandReadBytes(E.IntrinsicId, exprBytes(*C))) {
-          BitMask Bits(kDemandBits, 0);
-          for (unsigned I = 0; I != 64; ++I)
+          BitMask Bits(MaskWidth, 0);
+          for (unsigned I = 0; I != MaskWidth / 8; ++I)
             if ((*Read >> I) & 1)
               Bits.setBits(I * 8, (I + 1) * 8);
           demand(C.get(), std::move(Bits));
@@ -326,7 +358,7 @@ private:
       [[fallthrough]];
     case ExprKind::Var: {
       auto &Current =
-          VarDemand.try_emplace(highSourceLocalIdentity(E.Var), kDemandBits, 0)
+          VarDemand.try_emplace(highSourceLocalIdentity(E.Var), MaskWidth, 0)
               .first->second;
       if ((Current | D) == Current)
         return;
@@ -437,7 +469,10 @@ private:
     switch (E.Op) {
     case NdOp::SUBBYTES:
       if (Constant(R) && R->ConstVal < 64) {
-        demand(L.get(), (D << (R->ConstVal * 8)) & allBytes(Bytes));
+        demand(L.get(),
+               (R->ConstVal * 8 >= MaskWidth ? BitMask(MaskWidth, 0)
+                                             : D << (R->ConstVal * 8)) &
+                   allBytes(Bytes));
         return;
       }
       break;
@@ -447,8 +482,8 @@ private:
       if (!Low || !integer(R))
         break;
       demand(R.get(), D & allBytes(Low));
-      demand(L.get(), Low < 64 ? D.lshr(Low * 8) & allBytes(Bytes)
-                               : BitMask(kDemandBits, 0));
+      demand(L.get(), Low * 8 < MaskWidth ? D.lshr(Low * 8) & allBytes(Bytes)
+                                          : BitMask(MaskWidth, 0));
       return;
     }
     case NdOp::INT_AND:
@@ -486,7 +521,8 @@ private:
             exprBytes(*Factor) != exprBytes(E) ||
             exprBytes(*Value) != exprBytes(E))
           continue;
-        const BitMask Scale = nonzeroBytes(Factor->ConstVal, exprBytes(E));
+        const BitMask Scale =
+            nonzeroBytes(Factor->ConstVal, exprBytes(E), MaskWidth);
         if (!Scale.isPowerOf2())
           continue;
         demand(Value.get(),
@@ -507,7 +543,7 @@ private:
       llvm::SmallVector<uint64_t, 2> Amounts;
       if (!shiftAmounts(*R, Amounts, 0))
         break;
-      BitMask Source(kDemandBits, 0);
+      BitMask Source(MaskWidth, 0);
       for (const uint64_t Amount : Amounts)
         Source |=
             E.Op == NdOp::INT_LEFT

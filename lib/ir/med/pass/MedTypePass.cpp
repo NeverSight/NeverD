@@ -22,6 +22,7 @@
 #include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
+#include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/med/MedSourceParameterUses.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/X86/X86NativeMemory.h"
@@ -65,6 +66,20 @@ static bool isFloatProducer(NdOp Opc) {
 static bool isFloatCompare(NdOp Opc) {
   return Opc == NdOp::FLOAT_EQUAL || Opc == NdOp::FLOAT_NOTEQUAL ||
          Opc == NdOp::FLOAT_LESS || Opc == NdOp::FLOAT_LESSEQUAL;
+}
+
+static uint16_t floatProducerBytes(const MedOp &Op) {
+  if (isFloatProducer(Op.Opcode))
+    return Op.Output.Size;
+  if (mipsScalarMedShapeIsValid(Op)) {
+    const auto Id = static_cast<Intrinsic>(Op.Inputs[0].ConstVal);
+    if (mips::isR6FPArithmetic(Id)) {
+      const auto &Operation = mips::r6FPOperation(Id);
+      if (Operation.hasFloatingResult())
+        return Operation.OutputBytes;
+    }
+  }
+  return 0;
 }
 
 // The byte size of the scalar floating-point value a write to the FP return
@@ -153,8 +168,8 @@ fpReturnElemSize(const std::map<std::pair<int, int>, const MedOp *> &Defs,
          ElemSize.ConstVal == 8))
       return static_cast<uint16_t>(ElemSize.ConstVal);
   }
-  if (isFloatProducer(Def->Opcode))
-    return Def->Output.Size <= 4 ? 4 : 8;
+  if (const auto Bytes = floatProducerBytes(*Def))
+    return Bytes <= 4 ? 4 : 8;
   if (Def->Opcode == NdOp::CONCAT && Def->NumInputs >= 2)
     return fpReturnElemSize(Defs, Def->Inputs[1], Depth + 1); // low lane
   // A choice between floating-point values: minsd/maxsd select one of the
@@ -921,6 +936,10 @@ class DefinedLowBytes {
     if (It == Defs.end())
       return 0;
     const MedOp &Op = *It->second;
+    if (mipsScalarMedShapeIsValid(Op) &&
+        static_cast<Intrinsic>(Op.Inputs[0].ConstVal) ==
+            Intrinsic::MIPSUnpredictable)
+      return 0;
     if (const uint16_t Width = declaredFloatCallBytes(Op, TRI, FloatReturns))
       return Width;
     if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
@@ -1063,10 +1082,10 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
       for (const auto &[Pred, Input] : Phi.Args)
         FloatUse(Phi.Output, Input);
     for (const auto &Op : Block.Ops) {
+      const uint16_t Produced = floatProducerBytes(Op);
       const uint16_t Width =
-          isFloatProducer(Op.Opcode)
-              ? Op.Output.Size
-              : declaredFloatCallBytes(Op, TRI, CalleeFloatReturns);
+          Produced ? Produced
+                   : declaredFloatCallBytes(Op, TRI, CalleeFloatReturns);
       if (Width && Width <= Op.Output.Size) {
         const ValueKey Key{Op.Output.Id, Op.Output.SSAVer};
         ForwardedFloat[Key] = Width;

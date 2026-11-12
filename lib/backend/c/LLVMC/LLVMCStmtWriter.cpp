@@ -2067,6 +2067,13 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
       return;
     if (const llvm::AllocaInst *Slot =
             asAllocaPointer(LI->getPointerOperand())) {
+      // Opaque LLVM pointers can read a floating view of integer storage (or
+      // the reverse). Assignment would numerically convert the value in C.
+      if (Slot->getAllocatedType() != LI->getType() &&
+          (Slot->getAllocatedType()->isFloatingPointTy() ||
+           LI->getType()->isFloatingPointTy()) &&
+          writeRawMemoryCopy(Inst, Indent))
+        return;
       if (auto It = AllocaTypes.find(Slot); It != AllocaTypes.end())
         ValueTypes[&Inst] = It->second;
       if (isTypedRecordCursorSlot(Slot))
@@ -2151,6 +2158,11 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
     if (const llvm::AllocaInst *Slot =
             asAllocaPointer(SI->getPointerOperand())) {
       const llvm::Value *Stored = SI->getValueOperand();
+      if (Slot->getAllocatedType() != Stored->getType() &&
+          (Slot->getAllocatedType()->isFloatingPointTy() ||
+           Stored->getType()->isFloatingPointTy()) &&
+          writeRawMemoryCopy(Inst, Indent))
+        return;
       noteAllocaStore(Slot, Stored);
       if (isKilledEntryZeroStore(SI, Slot))
         return;

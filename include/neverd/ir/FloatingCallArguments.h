@@ -46,6 +46,7 @@ struct FloatingCallArguments {
   /// A mixed scalar signature, in source order. Empty retains the consecutive
   /// floating-register representation above. Locations come exclusively from
   /// SourceParameterPlacement, including the entry-SP bias of stack values.
+  /// An o32 double in a GPR pair occupies one logical entry at its first word.
   std::vector<ScalarParameter> Scalars;
   bool operator==(const FloatingCallArguments &) const = default;
 };

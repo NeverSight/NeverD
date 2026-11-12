@@ -15,6 +15,7 @@
 #include "MedABIPassDetail.h"
 #include "MedStackDeltaCache.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceCallABI.h"
@@ -629,7 +630,7 @@ boundFloatingCallArguments(const MedOp &Op, Arch A, BinaryFormat F) {
         Op.Output.Size != Signature.ReturnBytes ||
         Signature.ReturnElements > Registers.FPReturnRegs.size())
       return std::nullopt;
-  } else if ((A != Arch::X86 && Signature.Scalars.empty()) ||
+  } else if ((A != Arch::X86 && !isMIPS(A) && Signature.Scalars.empty()) ||
              Op.CalleeFloatReturnBytes != Signature.ReturnBytes ||
              Op.Output.Kind != MedVar::Reg ||
              (A == Arch::X86 ? (!Registers.isX87StackReg(Op.Output.RegOff) ||

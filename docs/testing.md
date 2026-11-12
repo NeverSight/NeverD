@@ -24018,6 +24018,30 @@ source fixtures execute zero/mid/full immediate counts on both byte orders.
 
 ### MIPS decode/lift and firmware performance
 
+Fixed hard-float call execution uses owned assembly and explicit declarations:
+
+```sh
+PYTHONPATH=third_party/unicorn/bindings/python LIBUNICORN_PATH=/path/to/unicorn-build \
+  python3 unittests/lift/mips/floating-abi-roundtrip.py \
+  --neverd build-mips/bin/neverd --assembler /path/to/mips-as \
+  --linker /path/to/mips-ld --clang /path/to/clang \
+  --output build-mips/floating-abi-roundtrip
+```
+
+The runner compares original machine code with recompiled HighC and LLVMC at
+O0/O2 for o32/n64, both byte orders, float/double mixed entry arguments and
+nine-argument FP overflow. It checks result bits, FCSR, SP, return target and
+preserved FPRs. `NeverDMIPSPipelineTests` additionally rejects escaped frame
+pointers, callee-owned link spills and reads of volatile FP state after a call.
+`NeverDMIPSFlowTests` covers delayed snapshots with detail disabled and poisoned
+operand counts. `NeverDLLVMCAllocaTests` executes floating/integer storage views
+against original LLVM, including negative zero and NaN payloads.
+
+The opt-in `neverd-mips-request-bench` target repeatedly decompiles one loaded
+SDK session and refuses changing source output. Supply `IMAGE REPEATS OUTPUT`;
+its JSON reports wall/CPU time and output size. It exercises request reuse in
+addition to the fresh CLI requests measured by the paired runner below.
+
 `neverd-mips-bench` is an opt-in target, excluded from the default build:
 
 ```sh

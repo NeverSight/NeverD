@@ -11,6 +11,7 @@
 
 #include "neverd/ir/FloatingCallArguments.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 
@@ -22,7 +23,7 @@ namespace neverd {
 std::optional<FloatingCallArguments>
 floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
                       llvm::ArrayRef<TypeRef> Parameters) {
-  if (A != Arch::X86 && A != Arch::X64 && A != Arch::AArch64)
+  if (A != Arch::X86 && A != Arch::X64 && A != Arch::AArch64 && !isMIPS(A))
     return std::nullopt;
   const auto Scalar = [](const TypeRef &Type) {
     return Type && Type->Kind == NdTypeKind::Float &&
@@ -139,7 +140,8 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
       if (!ScalarParameter(Type))
         return std::nullopt;
     }
-  if (A != Arch::X86 && AllFloating && Parameters.size() > Registers.size())
+  if (A != Arch::X86 && !isMIPS(A) && AllFloating &&
+      Parameters.size() > Registers.size())
     return std::nullopt;
   const auto Placement = placeSourceParameters(A, F, ReturnType, Parameters);
   if (!Placement || Placement->ResultPointer ||
@@ -147,9 +149,28 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
     return std::nullopt;
   FloatingCallArguments Result;
   Result.ReturnBytes = ReturnType->Size;
-  if (A == Arch::X86 || !AllFloating) {
+  if (A == Arch::X86 || !AllFloating || isMIPS(A)) {
     for (size_t I = 0; I < Parameters.size(); ++I) {
       const auto &Pieces = Placement->Parameters[I];
+      // o32 passes an eight-byte scalar outside the FP prefix as two
+      // consecutive words. Keep one logical call argument; lowering joins
+      // the register pair, or reads the contiguous stack object, once.
+      if (isMIPS(A) && !isMIPS64(A) && Parameters[I]->Size == 8 &&
+          Pieces.size() == 2) {
+        const auto &First = Pieces[0].Location;
+        const auto &Second = Pieces[1].Location;
+        if (First.Kind == SourceABICarrierKind::IntegerRegister) {
+          Result.Scalars.push_back({First.Kind, First.RegisterOffset, 0, 8,
+                                    Scalar(Parameters[I]), false});
+        } else if (First.Kind == SourceABICarrierKind::Stack &&
+                   Second.Kind == First.Kind) {
+          Result.Scalars.push_back({First.Kind, 0, First.EntryStackOffset, 8,
+                                    Scalar(Parameters[I]), false});
+        } else {
+          return std::nullopt;
+        }
+        continue;
+      }
       if (Pieces.size() != 1 || Pieces[0].Indirect || Pieces[0].Offset != 0 ||
           Pieces[0].Location.ValueBytes != Parameters[I]->Size)
         return std::nullopt;
@@ -180,7 +201,7 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
 std::optional<FloatingCallTypes>
 floatingCallTypes(Arch A, BinaryFormat F,
                   const FloatingCallArguments &Signature) {
-  if ((A != Arch::X86 && A != Arch::X64 && A != Arch::AArch64) ||
+  if ((A != Arch::X86 && A != Arch::X64 && A != Arch::AArch64 && !isMIPS(A)) ||
       Signature.Scalars.size() >
           static_cast<size_t>(limits::kMaxBoundSourceCallArgs) ||
       Signature.ParameterBytes.size() >

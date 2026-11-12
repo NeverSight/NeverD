@@ -19,8 +19,14 @@
 namespace neverd {
 namespace {
 
-void snapshotMIPS(DecodedInsn &Insn, cs_insn &Storage, cs_detail &Detail) {
+void snapshotMIPS(DecodedInsn &Insn, cs_insn &Storage, cs_detail &Detail,
+                  bool HasDetail) {
   Storage = *Insn.Raw;
+  // cs_malloc retains its detail allocation while CS_OPT_DETAIL is off, but
+  // cs_disasm_iter does not populate it. MIPS lifting reads the encoded word,
+  // so a discovery scan needs only the physical instruction snapshot.
+  if (!HasDetail)
+    Storage.detail = nullptr;
   if (const cs_detail *Source = Storage.detail) {
     // Capstone publishes the common header and exactly op_count MIPS operands.
     // Other architectures occupy the unused tail of the cs_detail union.
@@ -55,7 +61,7 @@ int Decoder::decodeUnitForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
       (!isMIPS64(TargetArch) && Addr > UINT32_MAX - Size))
     return 0;
 
-  snapshotMIPS(Out.Head, Out.HeadStorage, Out.HeadDetail);
+  snapshotMIPS(Out.Head, Out.HeadStorage, Out.HeadDetail, Detail);
   const int SlotSize =
       decodeOneForLift(Bytes + Size, Len - Size, Addr + Size, Out.Slot);
   if (SlotSize <= 0 ||
@@ -65,7 +71,7 @@ int Decoder::decodeUnitForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
     Out.Slot = {};
     return 0;
   }
-  snapshotMIPS(Out.Slot, Out.SlotStorage, Out.SlotDetail);
+  snapshotMIPS(Out.Slot, Out.SlotStorage, Out.SlotDetail, Detail);
   Out.HasDelaySlot = true;
   return Out.spanBytes();
 }

@@ -20,6 +20,7 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MIPS/MIPSSourceAccumulators.h"
+#include "neverd/ir/med/MedTypePass.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -40,6 +41,260 @@ using namespace neverd;
 namespace {
 
 class MIPSPipeline : public ::testing::TestWithParam<Arch> {};
+
+TEST_P(MIPSPipeline, MixedFloatingEntryKeepsSourceParameterOrder) {
+  mips_test::ELFBytes File(GetParam());
+  File.abiFlags();
+  File.put(File.Is64 ? 48 : 36, File.Is64 ? 0xa0000000 : 0x90001000, 4);
+  File.Bytes[0xe3] = 6;
+  File.Bytes[0xe5] = 2;
+  File.Bytes[0xe7] = File.Is64 ? 1 : 6;
+  // double kernel(double value, int bias): value + (double)bias.
+  // The double consumes one n64 position, or two o32 word positions.
+  const uint32_t Words[] = {File.Is64 ? 0x44851000u : 0x44861000u, 0x468010a1,
+                            0x46226000, 0x03e00009, 0};
+  for (size_t I = 0; I != std::size(Words); ++I)
+    File.put(0x100 + I * 4, Words[I], 4);
+  ELFLoader Loader;
+  auto Image = Loader.loadBuffer(File.buffer());
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  auto Symbol = Symbol::makeFunc(Image->Entry, sizeof(Words));
+  Symbol.Name = "fp_mixed_entry";
+  Image->Symbols.push_back(std::move(Symbol));
+  llvm::LLVMContext Context;
+  PipelineOptions Options;
+  Options.OnlyFunctionEntries = {Image->Entry};
+  Options.LiftMode = true;
+  Options.EmitDumpOutput = false;
+  auto Result = Pipeline().run(*Image, Context, Options);
+  ASSERT_TRUE(Result.Success) << Result.Error;
+  ASSERT_EQ(Result.MedFuncs.size(), 1u);
+  const auto &Function = Result.MedFuncs.front();
+  ASSERT_EQ(Function.Params.size(), 2u);
+  EXPECT_EQ(Function.Params[0].RegOff, mipsreg::w(12));
+  EXPECT_EQ(Function.Params[0].Size, 8);
+  EXPECT_EQ(Function.Params[1].RegOff, mipsreg::r(File.Is64 ? 5 : 6));
+  ASSERT_NE(Result.LlvmModule, nullptr);
+  EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+  const auto *Body = Result.LlvmModule->getFunction("fp_mixed_entry");
+  ASSERT_NE(Body, nullptr);
+  ASSERT_EQ(Body->arg_size(), 2u);
+  EXPECT_TRUE(Body->getArg(0)->getType()->isDoubleTy());
+  EXPECT_TRUE(Body->getArg(1)->getType()->isIntegerTy());
+}
+
+TEST_P(MIPSPipeline, ScalarFloatingEntryAndResultFollowHardFloatABI) {
+  for (unsigned Bytes : {4u, 8u}) {
+    SCOPED_TRACE(Bytes);
+    mips_test::ELFBytes File(GetParam());
+    File.abiFlags();
+    File.put(File.Is64 ? 48 : 36, File.Is64 ? 0xa0000000 : 0x90001000, 4);
+    File.Bytes[0xe3] = 6;
+    File.Bytes[0xe5] = 2;
+    File.Bytes[0xe7] = File.Is64 ? 1 : 6;
+    // ADD.S/D f0,f12,f13 (n64), or f14 (o32); JR ra; NOP.
+    File.put(
+        0x100,
+        (File.Is64 ? 0x460d6000 : 0x460e6000) | (Bytes == 8 ? 0x200000 : 0), 4);
+    File.put(0x104, 0x03e00009, 4);
+    File.put(0x108, 0, 4);
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    auto Symbol = Symbol::makeFunc(Image->Entry, 12);
+    Symbol.Name = "fp_entry";
+    Image->Symbols.push_back(std::move(Symbol));
+    for (bool LLVM : {false, true}) {
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.OnlyFunctionEntries = {Image->Entry};
+      Options.LiftMode = LLVM;
+      Options.EmitDumpOutput = false;
+      auto Result = Pipeline().run(*Image, Context, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      ASSERT_EQ(Result.MedFuncs.size(), 1u);
+      const auto &Function = Result.MedFuncs.front();
+      ASSERT_EQ(Function.Params.size(), 2u);
+      EXPECT_EQ(Function.Params[0].RegOff, mipsreg::w(12));
+      EXPECT_EQ(Function.Params[1].RegOff, mipsreg::w(File.Is64 ? 13 : 14));
+      ASSERT_NE(Function.ReturnType, nullptr);
+      EXPECT_EQ(Function.ReturnType->Kind, NdTypeKind::Float);
+      EXPECT_EQ(Function.ReturnType->Size, Bytes);
+      if (LLVM) {
+        ASSERT_NE(Result.LlvmModule, nullptr);
+        EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+        const auto *Body = Result.LlvmModule->getFunction("fp_entry");
+        ASSERT_NE(Body, nullptr);
+        EXPECT_TRUE(Bytes == 8 ? Body->getReturnType()->isDoubleTy()
+                               : Body->getReturnType()->isFloatTy());
+        ASSERT_EQ(Body->arg_size(), 2u);
+        for (const auto &Argument : Body->args())
+          EXPECT_TRUE(Bytes == 8 ? Argument.getType()->isDoubleTy()
+                                 : Argument.getType()->isFloatTy());
+      }
+    }
+  }
+}
+
+TEST_P(MIPSPipeline, SinglePrecisionUpperWordCannotEscapeToMemory) {
+  mips_test::ELFBytes File(GetParam());
+  File.abiFlags();
+  File.put(File.Is64 ? 48 : 36, File.Is64 ? 0xa0000000 : 0x90001000, 4);
+  File.Bytes[0xe3] = 6;
+  File.Bytes[0xe5] = 2;
+  File.Bytes[0xe7] = File.Is64 ? 1 : 6;
+  // ADD.S f0,f12,f12; MFHC1 $8,f0; SW $8,0(a2); JR ra; NOP.
+  // Only the low word is returned, but memory observes the unknown high word.
+  const uint32_t Words[] = {0x460c6000, 0x44680000, 0xacc80000, 0x03e00009, 0};
+  for (size_t I = 0; I < std::size(Words); ++I)
+    File.put(0x100 + I * 4, Words[I], 4);
+  ELFLoader Loader;
+  auto Image = Loader.loadBuffer(File.buffer());
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  Image->Symbols.push_back(Symbol::makeFunc(Image->Entry, sizeof(Words)));
+  llvm::LLVMContext Context;
+  PipelineOptions Options;
+  Options.OnlyFunctionEntries = {Image->Entry};
+  Options.LiftMode = true;
+  Options.EmitDumpOutput = false;
+  auto Result = Pipeline().run(*Image, Context, Options);
+  EXPECT_FALSE(Result.Success);
+  EXPECT_NE(Result.Error.find("architecturally unpredictable"),
+            std::string::npos)
+      << Result.Error;
+}
+
+TEST_P(MIPSPipeline, FloatingCallPreservesOnlyPrivateLinkSlots) {
+  for (unsigned Variant = 0; Variant < 6; ++Variant) {
+    mips_test::ELFBytes File(GetParam());
+    File.abiFlags();
+    File.put(File.Is64 ? 48 : 36, File.Is64 ? 0xa0000000 : 0x90001000, 4);
+    File.Bytes[0xe3] = 6;
+    File.Bytes[0xe5] = 2;
+    File.Bytes[0xe7] = File.Is64 ? 1 : 6;
+    // A fixed double call with an explicitly saved RA and restored SP.
+    // Variant 1 spills into callee-owned storage; 2 observes volatile F12;
+    // 3 passes this frame's address to the callee; 4 has no parameters;
+    // 5 forwards the result without any explicit COP1 instruction.
+    const uint16_t Slot =
+        Variant == 1 ? (File.Is64 ? 0xfff8 : 8) : (File.Is64 ? 24 : 28);
+    const std::vector<uint32_t> Words{
+        File.Is64 ? 0x67bdffe0u : 0x27bdffe0u,
+        (File.Is64 ? 0xffbf0000u : 0xafbf0000u) | Slot,
+        Variant == 3 ? 0x03a02025u : 0u,                       // or a0,sp,zero
+        0xe8000000u | uint32_t((0x20000 - (0x1010c + 4)) / 4), // balc
+        Variant == 5   ? 0u
+        : Variant == 2 ? 0x462c6000u
+                       : 0x46200000u, // add.d
+        (File.Is64 ? 0xdfbf0000u : 0x8fbf0000u) | Slot,
+        File.Is64 ? 0x67bd0020u : 0x27bd0020u,
+        0x03e00009,
+        0};
+    File.Bytes.resize(0x100 + Words.size() * 4);
+    const auto P = File.Is64 ? 64 : 52;
+    File.put(P + (File.Is64 ? 32 : 16), File.Bytes.size(), File.Is64 ? 8 : 4);
+    File.put(P + (File.Is64 ? 40 : 20), File.Bytes.size(), File.Is64 ? 8 : 4);
+    for (size_t I = 0; I < Words.size(); ++I)
+      File.put(0x100 + I * 4, Words[I], 4);
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    Image->Symbols.push_back(Symbol::makeFunc(Image->Entry, Words.size() * 4));
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(*Image));
+    CFGBuilder Builder;
+    auto Low = Builder.build(*Image, Decode, Image->Entry, "fp_call");
+    ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+    auto Pointer = NdType::makePtr(NdType::makeVoid());
+    Pointer->Size = File.Is64 ? 8 : 4;
+    std::vector<TypeRef> Parameters;
+    if (Variant != 4)
+      Parameters.push_back(Variant == 3 ? Pointer : NdType::makeFloat(8));
+    const auto Signature = floatingCallArguments(
+        GetParam(), BinaryFormat::ELF, NdType::makeFloat(8), Parameters);
+    ASSERT_TRUE(Signature);
+    const std::map<va_t, FloatingCallArguments> Calls{{0x20000, *Signature}};
+    LowToMedConverter Convert;
+    Convert.setBinaryImage(&*Image);
+    Convert.setCallEntryFloatingArguments(&Calls);
+    if (Variant > 0 && Variant < 4)
+      EXPECT_THROW(Convert.convert(Low, GetParam(), BinaryFormat::ELF),
+                   LowToMedConversionError);
+    else {
+      auto Med = Convert.convert(Low, GetParam(), BinaryFormat::ELF);
+      inferMedTypes(Med, GetParam());
+      ASSERT_TRUE(Med.ReturnType);
+      EXPECT_EQ(Med.ReturnType->Kind, NdTypeKind::Float);
+      EXPECT_EQ(Med.ReturnType->Size, 8);
+      if (Variant == 5) {
+        auto WrongProfile = *Image;
+        WrongProfile.MIPS->FPABI = 0;
+        Convert.setBinaryImage(&WrongProfile);
+        EXPECT_THROW(Convert.convert(Low, GetParam(), BinaryFormat::ELF),
+                     LowToMedConversionError);
+        Convert.setBinaryImage(&*Image);
+      }
+      class FloatingDebug final : public NullDebugContext {
+      public:
+        bool NoParameters = false;
+        std::optional<FunctionSym>
+        resolveFunction(va_t Address) const override {
+          if (Address != 0x20000)
+            return std::nullopt;
+          FunctionSym F;
+          F.Addr = Address;
+          F.Name = "fp_callee";
+          F.ReturnType = NdType::makeFloat(8);
+          if (!NoParameters)
+            F.Params = {{"value", NdType::makeFloat(8)}};
+          F.PlatformConvention = true;
+          F.PrototypeFromHeader = true;
+          return F;
+        }
+        std::optional<FunctionSym>
+        resolvePrototypeABI(llvm::StringRef Name) const override {
+          return Name == "fp_callee" ? resolveFunction(0x20000) : std::nullopt;
+        }
+        bool hasInfo() const override { return true; }
+      } Debug;
+      Debug.NoParameters = Variant == 4;
+      for (bool Imported : {false, true}) {
+        Image->Exports.clear();
+        Image->Imports.clear();
+        if (Imported) {
+          Import I;
+          I.Name = "fp_callee";
+          I.IATAddr = 0x20000;
+          Image->Imports.push_back(std::move(I));
+        } else {
+          Export E;
+          E.Name = "fp_callee";
+          E.Addr = 0x20000;
+          Image->Exports.push_back(std::move(E));
+        }
+        for (bool LLVM : {false, true}) {
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.OnlyFunctionEntries = {Image->Entry};
+          Options.LiftMode = LLVM;
+          Options.EmitDumpOutput = false;
+          auto Result = Pipeline().run(*Image, Context, Options, &Debug);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          ASSERT_EQ(Result.MedFuncs.size(), 1u);
+          EXPECT_EQ(Result.MedFuncs.front().ReturnType->Kind,
+                    NdTypeKind::Float);
+          ASSERT_EQ(Result.MedFuncs.front().CallInfos.size(), 1u);
+          EXPECT_EQ(Result.MedFuncs.front().CallInfos.front().Args.size(),
+                    Parameters.size());
+          if (LLVM) {
+            ASSERT_NE(Result.LlvmModule, nullptr);
+            EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+          }
+        }
+      }
+    }
+  }
+}
 
 TEST_P(MIPSPipeline, NarrowReadsRetainTheIncomingIntegerCarrier) {
   // SEB/SEH on n64 also require a sign-extended word. SB/SH read only the

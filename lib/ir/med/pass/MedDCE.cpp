@@ -15,6 +15,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
 #include "neverd/ir/med/X86/X86RegistrationSEHParentExit.h"
@@ -401,6 +402,13 @@ void LowToMedConverter::runDce(MedFunc &Func) {
           (Call.Opcode == NdOp::CALL || Call.Opcode == NdOp::INDIR_CALL ||
            IsTail))
         seedReachingDef(Blk, static_cast<int>(I) - 1, TRI.indirectResultReg());
+      // A complete fixed FP signature already names every argument, including
+      // outgoing stack loads. Scratch vector writes are not implicit inputs.
+      if (Call.ScalarCallSignature &&
+          boundFloatingCallArguments(Call, TargetArch, TargetFormat)) {
+        HasCall = true;
+        continue;
+      }
       const bool DirectCall =
           Call.Opcode == NdOp::CALL && Call.NumInputs >= 1 &&
           Call.Inputs[0].isConst() &&

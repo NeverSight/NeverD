@@ -4047,6 +4047,23 @@ ImportPrototypeArguments importPrototypeArguments(
       if (!Routine)
         Routine = DecoratedArguments(Addr);
     } else {
+      // An exported body follows its explicitly declared platform prototype
+      // for internal callers too. Preserve the complete FP carriers before
+      // SSA, just as for an imported declaration; a source-parameter count
+      // cannot represent mixed registers, aligned pairs or stack values.
+      if (Dbg && RegisterArguments && Exported(Addr) && Convention &&
+          (Convention->ArgumentsFromCallSetup ||
+           Convention->RegisterArgumentsFromCalleeSummary))
+        if (const auto Function = Dbg->resolveFunction(Addr))
+          if (auto Floating = libc::floatingCallArguments(*Function, Img.Arch,
+                                                          Img.abiFormat())) {
+            Result.FloatReturns[Addr] = Floating->ReturnBytes;
+            Result.FloatingArguments.emplace(Addr, std::move(*Floating));
+            Result.PrototypeDeclared.insert(Addr);
+            if (Function->PrototypeLibrary == UserPrototypeLibrary)
+              Result.UserDeclared.insert(Addr);
+            return;
+          }
       Routine = ExportedArguments(Addr);
       if (!Routine)
         return;

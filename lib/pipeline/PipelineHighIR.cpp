@@ -23,6 +23,7 @@
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/low/SourceFrameBytes.h"
+#include "neverd/ir/med/MIPS/MIPSSourceVectors.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedTypePass.h"
@@ -262,6 +263,7 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
       Found->second = nullptr;
   }
   for (auto &Function : Result.MedFuncs) {
+    discardUnobservedMIPSFPUpperBits(Function, Img.Arch);
     Function.FrameBytes.clear();
     if (const auto Original = OriginalFunctions.find(Function.Entry);
         !Function.AnalystStackFrame && Original != OriginalFunctions.end() &&

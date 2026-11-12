@@ -523,8 +523,8 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
          (LOp.Output.isReg() && TRI.isX87StackReg(LOp.Output.Offset) &&
           LOp.Output.Size == x86reg::FPURegSize))) {
       const auto &Signature = F->second;
-      if (TargetArch == Arch::X86 || !Signature.Scalars.empty() ||
-          Signature.ReturnElements) {
+      if (TargetArch == Arch::X86 || isMIPS(TargetArch) ||
+          !Signature.Scalars.empty() || Signature.ReturnElements) {
         // TOP normalization owns the physical x87 result slot. A declaration
         // cannot overwrite an unproved or context-based call with guessed ST0.
         MOp.ScalarCallSignature =
@@ -541,6 +541,43 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
           return Value;
         };
         for (const auto &Parameter : Signature.Scalars) {
+          if (isMIPS(TargetArch) &&
+              Parameter.Kind == SourceABICarrierKind::FloatingRegister &&
+              Parameter.Bytes < TRI.FPABIRegWidth) {
+            // A float observes only the low word of an FR=1 FPR. Materialize
+            // that view before SSA/DCE so an undefined upper word does not
+            // become an input of an otherwise complete fixed call.
+            MedOp Slice;
+            Slice.Opcode = NdOp::SUBBYTES;
+            Slice.Output = Temporary(Parameter.Bytes);
+            Slice.Addr = LOp.Addr;
+            Slice.OriginSeq = LOp.Seq;
+            Slice.addInput(ndVarToMedVar(
+                NdVar::reg(Parameter.Register, TRI.FPABIRegWidth)));
+            Slice.addInput(MedVar::makeConst(0, TRI.PointerSize));
+            MOp.addInput(Slice.Output);
+            Block.Ops.push_back(std::move(Slice));
+            continue;
+          }
+          if (isMIPS(TargetArch) && !isMIPS64(TargetArch) &&
+              Parameter.Kind == SourceABICarrierKind::IntegerRegister &&
+              Parameter.Bytes == 8) {
+            const auto Layout = TRI.integerArgumentLayout(TargetFormat);
+            const int First = Layout.registerIndex(Parameter.Register);
+            MedOp Join;
+            Join.Opcode = NdOp::CONCAT;
+            Join.Output = Temporary(8);
+            Join.Addr = LOp.Addr;
+            Join.OriginSeq = LOp.Seq;
+            const bool Little = archLittleEndian(TargetArch);
+            Join.addInput(
+                ndVarToMedVar(NdVar::reg(Layout.Registers[First + Little], 4)));
+            Join.addInput(ndVarToMedVar(
+                NdVar::reg(Layout.Registers[First + !Little], 4)));
+            MOp.addInput(Join.Output);
+            Block.Ops.push_back(std::move(Join));
+            continue;
+          }
           if (Parameter.Kind != SourceABICarrierKind::Stack) {
             MOp.addInput(ndVarToMedVar(NdVar::reg(
                 Parameter.Register,
@@ -791,7 +828,7 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
     Physical = std::move(SEHPhysical->Function);
   const LowFunc &Low = Physical ? *Physical : SourceLow;
   if (isMIPS(TheArch))
-    requireMIPSSourceVectors(Low, TheArch, Image);
+    requireMIPSSourceVectors(Low, TheArch, Image, CallEntryFloatingArguments);
   const bool QualifyMIPSReturns =
       isMIPS(TheArch) &&
       (Image

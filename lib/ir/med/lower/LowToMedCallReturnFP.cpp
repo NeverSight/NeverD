@@ -78,6 +78,10 @@ void LowToMedConverter::modelCallFPReturn(MedFunc &Func) {
   if (FPRet == 0 || !TRI.isVectorReg(FPRet))
     return;
 
+  const auto ReturnView = RegVarMap.lower_bound({FPRet, 0});
+  if (ReturnView == RegVarMap.end() || ReturnView->first.first != FPRet)
+    return;
+
   // The widest reference to the FP return register is its full vector form; its
   // Id is shared by every SSA version, keying the reads that must be rewired.
   int VecId = -1;
