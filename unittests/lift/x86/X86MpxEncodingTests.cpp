@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 using namespace neverd;
@@ -280,6 +281,30 @@ TEST(X86MpxEncoding, IgnoredAddressPrefixKeepsHighRegistersAndRip) {
     EXPECT_EQ(M.scale, C.Scale);
     EXPECT_EQ(M.disp, C.Disp);
     EXPECT_STREQ(I.Raw->op_str, C.Text);
+  }
+}
+
+TEST(X86MpxEncoding, RegisterDetailInitializesTheEntirePublicRecord) {
+  for (const auto A : {Arch::X86, Arch::X64}) {
+    const auto E = decodeX86MpxEncoding({0xf2, 0x0f, 0x1a, 0xc1}, A);
+    ASSERT_TRUE(E);
+    ASSERT_EQ(E->Id, X86_INS_BNDCU);
+
+    cs_x86 Expected;
+    std::memset(&Expected, 0, sizeof(Expected));
+    Expected.opcode[0] = 0x0f;
+    Expected.opcode[1] = 0x1a;
+    Expected.addr_size = A == Arch::X64 ? 8 : 4;
+    Expected.modrm = 0xc1;
+    Expected.encoding.modrm_offset = 3;
+    Expected.op_count = 2;
+    Expected.operands[0].type = Expected.operands[1].type = X86_OP_REG;
+    Expected.operands[0].access = Expected.operands[1].access = CS_AC_READ;
+    Expected.operands[0].reg = X86_REG_BND0;
+    Expected.operands[0].size = 16;
+    Expected.operands[1].reg = A == Arch::X64 ? X86_REG_RCX : X86_REG_ECX;
+    Expected.operands[1].size = Expected.addr_size;
+    EXPECT_EQ(std::memcmp(&Expected, &E->Detail, sizeof(Expected)), 0);
   }
 }
 
