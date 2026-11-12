@@ -13,13 +13,15 @@
 //
 //   * rpn    - reverse-polish (postfix) evaluator over a rodata token stream
 //              using an explicit value stack.  Pins a push/pop stack machine
-//              with a `switch` ALU (distinct from any straight-line accumulate).
+//              with a `switch` ALU (distinct from any straight-line
+//              accumulate).
 //   * paren  - multi-type bracket matcher over a rotated rodata stream tracking
 //              stack depth and validity.  Pins a LIFO open/close pairing
 //              (distinct from the RPN value stack: pure structure, no ALU).
 //   * dfa    - table-driven finite automaton over a rodata transition table and
-//              a rodata input stream.  Pins a `state=trans[state*K+sym]` indexed
-//              transition walk (distinct from the prefix automaton in #129).
+//              a rodata input stream.  Pins a `state=trans[state*K+sym]`
+//              indexed transition walk (distinct from the prefix automaton in
+//              #129).
 //
 // Integer in / integer out, file-scope const (rodata) arrays, LCG-seeded,
 // folded to one integer return; no float / 64-bit divide / libcall.  All four
@@ -28,6 +30,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64OptStress139RT : public SemanticRoundTripFixture,
                           public ::testing::WithParamInterface<RoundTripTC> {};
@@ -39,7 +42,8 @@ class A64OptStress139RT : public SemanticRoundTripFixture,
                           public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(A64OptStress139RT, Verify) { roundTripAArch64(GetParam()); }
 class ARM32OptStress139RT : public SemanticRoundTripFixture,
-                            public ::testing::WithParamInterface<RoundTripTC> {};
+                            public ::testing::WithParamInterface<RoundTripTC> {
+};
 TEST_P(ARM32OptStress139RT, Verify) { roundTripARM32(GetParam()); }
 
 // clang-format off
@@ -102,12 +106,30 @@ static std::vector<RoundTripTC> makeOptStress139TC(const char *prefix, const cha
 }
 // clang-format on
 
-static const std::vector<RoundTripTC> kX64 = makeOptStress139TC("x64o139", "long");
-static const std::vector<RoundTripTC> kX86 = makeOptStress139TC("x86o139", "int");
-static const std::vector<RoundTripTC> kA64 = makeOptStress139TC("a64o139", "long");
-static const std::vector<RoundTripTC> kARM = makeOptStress139TC("armo139", "int");
+static const std::vector<RoundTripTC> kX64 =
+    makeOptStress139TC("x64o139", "long");
+static const std::vector<RoundTripTC> kX86 =
+    makeOptStress139TC("x86o139", "int");
+static const std::vector<RoundTripTC> kA64 =
+    makeOptStress139TC("a64o139", "long");
+static const std::vector<RoundTripTC> kARM =
+    makeOptStress139TC("armo139", "int");
 
-INSTANTIATE_TEST_SUITE_P(OptStress139, X64OptStress139RT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress139, X86OptStress139RT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress139, A64OptStress139RT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress139, ARM32OptStress139RT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress139, X64OptStress139RT,
+                         ::testing::ValuesIn(kX64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress139, X86OptStress139RT,
+                         ::testing::ValuesIn(kX86), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress139, A64OptStress139RT,
+                         ::testing::ValuesIn(kA64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress139, ARM32OptStress139RT,
+                         ::testing::ValuesIn(kARM), rtTCName);
+
+// A predicated test of the predicated result before it read the register's
+// earlier value on the path the run does not take: the C of both source
+// routes is checked by execution.
+INSTANTIATE_TEST_SUITE_P(OptStress139HighC, ARM32OptStress139RT,
+                         ::testing::ValuesIn(onHighC(kARM, {"_paren"})),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress139LLVMC, ARM32OptStress139RT,
+                         ::testing::ValuesIn(onLLVMC(kARM, {"_paren"})),
+                         rtTCName);

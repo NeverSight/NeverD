@@ -23,6 +23,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64OptStress340RT : public SemanticRoundTripFixture,
                           public ::testing::WithParamInterface<RoundTripTC> {};
@@ -103,4 +104,8 @@ INSTANTIATE_TEST_SUITE_P(OptStress340, X64OptStress340RT, ::testing::ValuesIn(kX
 INSTANTIATE_TEST_SUITE_P(OptStress340, X86OptStress340RT, ::testing::ValuesIn(kX86), rtTCName);
 INSTANTIATE_TEST_SUITE_P(OptStress340, A64OptStress340RT, ::testing::ValuesIn(kA64), rtTCName);
 INSTANTIATE_TEST_SUITE_P(OptStress340, ARM32OptStress340RT, ::testing::ValuesIn(kARM), rtTCName);
+
+// The register a pair-aligned double skips is a loop join of the caller's
+// own entry value, which no callee reads: the C is checked by execution.
+INSTANTIATE_TEST_SUITE_P(OptStress340HighC, ARM32OptStress340RT, ::testing::ValuesIn(onHighC(kARM, {"_halfdd", "_passdd", "_swapdd"})), rtTCName);
 // clang-format on
