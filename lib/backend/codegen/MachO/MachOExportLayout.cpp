@@ -198,7 +198,8 @@ writeMachOExportLayout(const MachOExportMap &Exports) {
 }
 llvm::Expected<std::vector<uint8_t>>
 machOExportIdentities(llvm::ArrayRef<uint8_t> B, uint64_t HeaderVA,
-                      uint32_t FileType) {
+                      uint32_t FileType,
+                      std::map<std::string, uint64_t> *WeakDefinitions) {
   auto Exports = readMachOExportLayout(B);
   if (!Exports)
     return Exports.takeError();
@@ -214,6 +215,11 @@ machOExportIdentities(llvm::ArrayRef<uint8_t> B, uint64_t HeaderVA,
         E.Address += HeaderVA;
       if (E.Flags & EXPORT_SYMBOL_FLAGS_STUB_AND_RESOLVER)
         E.Resolver += HeaderVA;
+    }
+    if (WeakDefinitions && E.Flags == EXPORT_SYMBOL_FLAGS_WEAK_DEFINITION) {
+      auto [Entry, Added] = WeakDefinitions->emplace(Name, E.Address);
+      if (!Added && Entry->second != E.Address)
+        return fail();
     }
   }
   return writeMachOExportLayout(*Exports);

@@ -8,6 +8,8 @@
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
+#include "neverd/ir/intrinsics/IntrinsicTermination.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExceptionFunction.h"
@@ -306,10 +308,15 @@ bool pointerOperation(State &S, const State &Before, uint32_t Word, va_t PC) {
 // resolved recipe, just as the source CFI requires uncorrupted register saves.
 void memory(State &S, const State &Before, const DecodedInsn &I) {
   const auto &D = I.Raw->detail->aarch64;
-  const bool Load = I.Id == AARCH64_INS_LDR || I.Id == AARCH64_INS_LDUR ||
-                    I.Id == AARCH64_INS_LDP;
-  const bool Store = I.Id == AARCH64_INS_STR || I.Id == AARCH64_INS_STUR ||
-                     I.Id == AARCH64_INS_STP;
+  const auto Word = readLE<uint32_t>(I.Raw->bytes);
+  const auto AddressOp = aarch64AddressMemoryInstruction(Word);
+  const auto WritebackOp = aarch64WritebackMemoryInstruction(Word);
+  const unsigned Bytes = AddressOp     ? AddressOp->accessBytes()
+                         : WritebackOp ? WritebackOp->accessBytes()
+                                       : 0;
+  const bool Load =
+      AddressOp ? AddressOp->isLoad() : WritebackOp && WritebackOp->isLoad();
+  const bool Store = Bytes && !Load;
   const auto Ops = llvm::ArrayRef(D.operands, D.op_count);
   for (const auto &[Index, Op] : llvm::enumerate(Ops)) {
     if (Op.type != AARCH64_OP_MEM)
@@ -356,9 +363,8 @@ void memory(State &S, const State &Before, const DecodedInsn &I) {
       if (Ops[N].type != AARCH64_OP_REG)
         continue;
       const auto R = reg(Ops[N].reg);
-      const bool Wide = wide(Ops[N].reg);
-      const auto Slot =
-          add(Address, N * (Wide ? kRegisterBytes : kRegisterBytes / 2));
+      const bool Wide = wide(Ops[N].reg) && Bytes == kRegisterBytes;
+      const auto Slot = add(Address, N * Bytes);
       if (!Slot)
         continue;
       if (Store) {
@@ -366,8 +372,7 @@ void memory(State &S, const State &Before, const DecodedInsn &I) {
           const bool Overlaps =
               It->first <= *Slot
                   ? uint64_t(*Slot) - uint64_t(It->first) < kRegisterBytes
-                  : uint64_t(It->first) - uint64_t(*Slot) <
-                        (Wide ? kRegisterBytes : kRegisterBytes / 2);
+                  : uint64_t(It->first) - uint64_t(*Slot) < Bytes;
           if (Overlaps)
             It = S.Stack.erase(It);
           else
@@ -531,7 +536,7 @@ bool implicitProfile(const BinaryImage &Image,
          !(Entry.NativeEncoding & macho_unwind::kIsNotFunctionStart);
 }
 
-// The C++ personality selects a landing pad by the protected instruction
+// Darwin C++ and Objective-C personalities select a landing pad by its PC
 // range. Index only the owning frame's aligned, disjoint ranges. In
 // particular, the entry order of an SJLJ table does not describe PC ranges.
 llvm::Expected<std::vector<size_t>>
@@ -546,7 +551,9 @@ landingPads(const ExceptionFunction &Function, ExceptionAddressRange Range,
   if (!Function.Itanium && !DwarfLSDA && !CompactLSDA && !HasCompactLSDA)
     return std::vector<size_t>{};
   const auto &Info = Function.Itanium;
-  if (!Info || Function.Personality != ExceptionPersonality::GxxPersonalityV0 ||
+  if (!Info ||
+      (Function.Personality != ExceptionPersonality::GxxPersonalityV0 &&
+       Function.Personality != ExceptionPersonality::ObjCPersonalityV0) ||
       !Info->IsCallSiteAddressForm || !Info->LSDAVA ||
       (!DwarfLSDA && !CompactLSDA) ||
       (DwarfLSDA && DwarfLSDA != Info->LSDAVA) ||
@@ -719,8 +726,13 @@ recoverImplicitFrame(const BinaryImage &Image,
       if (Index + 1 == Count)
         return fail(kCode);
       Queue(Index + 1, After);
-    } else if (I.Id == AARCH64_INS_BRK || I.Id == AARCH64_INS_HLT ||
-               I.Id == AARCH64_INS_UDF ||
+    } else if (I.Id == AARCH64_INS_HLT || I.Id == AARCH64_INS_UDF ||
+               (I.Id == AARCH64_INS_BRK && Ops.size() == 1 &&
+                Ops.front().type == AARCH64_OP_IMM &&
+                intrinsicNeverReturns(Intrinsic::Brk, Ops.front().imm))) {
+      // A compiler trap ends this path. The interrupted PC still has a row.
+      continue;
+    } else if (I.Id == AARCH64_INS_BRK ||
                cs_insn_group(Decode.getHandle(), I.Raw, CS_GRP_INT) ||
                cs_insn_group(Decode.getHandle(), I.Raw, CS_GRP_JUMP) ||
                cs_insn_group(Decode.getHandle(), I.Raw, CS_GRP_IRET)) {

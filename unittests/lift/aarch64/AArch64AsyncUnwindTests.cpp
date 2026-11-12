@@ -167,8 +167,10 @@ void checkFrame(const BinaryImage &Image, va_t Entry,
   EXPECT_TRUE((Input >> std::ws).eof());
 }
 
-void checkCxxLandingPads(const BinaryImage &Image, va_t Entry, bool Dwarf,
-                         bool StackArgs, va_t &TypeSlot) {
+void checkLanguageLandingPads(
+    const BinaryImage &Image, va_t Entry, bool Dwarf, bool StackArgs,
+    va_t &TypeSlot,
+    ExceptionPersonality Personality = ExceptionPersonality::GxxPersonalityV0) {
   const auto *Frame = Image.ExceptionMetadata.findFunction(Entry);
   ASSERT_NE(Frame, nullptr);
   ASSERT_EQ(bool(Frame->Dwarf), Dwarf);
@@ -179,12 +181,14 @@ void checkCxxLandingPads(const BinaryImage &Image, va_t Entry, bool Dwarf,
                                     I.Offset == kCxxCallArgumentBytes;
                            }),
               StackArgs);
-  ASSERT_EQ(Frame->Personality, ExceptionPersonality::GxxPersonalityV0);
+  ASSERT_EQ(Frame->Personality, Personality);
   ASSERT_TRUE(Frame->Itanium);
-  ASSERT_EQ(Frame->Itanium->TypeTable.size(), 1u);
-  const auto &Type = Frame->Itanium->TypeTable.front();
-  ASSERT_FALSE(Type.IsCatchAll);
-  TypeSlot = Type.TypeInfoSlotVA;
+  const auto &Types = Frame->Itanium->TypeTable;
+  if (Personality == ExceptionPersonality::GxxPersonalityV0)
+    ASSERT_EQ(Types.size(), 1u);
+  const auto Typed = [](const auto &Type) { return !Type.IsCatchAll; };
+  ASSERT_EQ(llvm::count_if(Types, Typed), 1);
+  TypeSlot = llvm::find_if(Types, Typed)->TypeInfoSlotVA;
   ASSERT_NE(TypeSlot, 0u);
   ASSERT_TRUE(Image.DyldBindSlots.contains(TypeSlot));
   EXPECT_FALSE(Image.MachOAuthenticatedPointers.contains(TypeSlot));
@@ -532,8 +536,8 @@ TEST(AArch64AsyncUnwind, CompilerCatchAndCleanupRecoverTheSavedSignedLR) {
     const auto *Sym = Image->findSymbol(kCatchSymbol);
     ASSERT_NE(Sym, nullptr);
     va_t OriginalTypeSlot = 0;
-    ASSERT_NO_FATAL_FAILURE(checkCxxLandingPads(*Image, Sym->Addr, Dwarf,
-                                                StackArgs, OriginalTypeSlot));
+    ASSERT_NO_FATAL_FAILURE(checkLanguageLandingPads(
+        *Image, Sym->Addr, Dwarf, StackArgs, OriginalTypeSlot));
     Compile.append({kCatchReplacement, kCompile, Source, kOutput, Object});
     ASSERT_EQ(llvm::sys::ExecuteAndWait(kCxxCompiler, Compile), 0);
     auto Bytes = llvm::MemoryBuffer::getFile(Object);
@@ -548,8 +552,8 @@ TEST(AArch64AsyncUnwind, CompilerCatchAndCleanupRecoverTheSavedSignedLR) {
     auto Published = Loader::create(BinaryFormat::MachO)->load(Output);
     ASSERT_TRUE(bool(Published)) << llvm::toString(Published.takeError());
     va_t PublishedTypeSlot = 0;
-    ASSERT_NO_FATAL_FAILURE(checkCxxLandingPads(*Published, Owner, Dwarf,
-                                                StackArgs, PublishedTypeSlot));
+    ASSERT_NO_FATAL_FAILURE(checkLanguageLandingPads(
+        *Published, Owner, Dwarf, StackArgs, PublishedTypeSlot));
     const auto SlidTypeSlot = OriginalTypeSlot + Patch->OriginalSectionSlide;
     if (Writable)
       EXPECT_NE(PublishedTypeSlot, SlidTypeSlot);
@@ -571,7 +575,7 @@ TEST(AArch64AsyncUnwind, CompilerCatchAndCleanupRecoverTheSavedSignedLR) {
         return llvm::sys::ExecuteAndWait(Driver, Args);
       };
       if (StackArgs) {
-        for (unsigned I = 0; I < kCxxInputs; ++I) {
+        for (unsigned I = 0; I < kExceptionInputs; ++I) {
           SCOPED_TRACE(I);
           const int Original = Run(Dylib, 0, I);
           ASSERT_TRUE(Original == 0 || (I && Original == kUnwinderPACTrapExit))
@@ -585,7 +589,7 @@ TEST(AArch64AsyncUnwind, CompilerCatchAndCleanupRecoverTheSavedSignedLR) {
       } else {
         ASSERT_EQ(Run(Dylib, 0), 0);
         ASSERT_EQ(Run(Output, 1), 0);
-        Paths += 2 * kCxxInputs;
+        Paths += 2 * kExceptionInputs;
       }
     }
     ASSERT_TRUE(std::filesystem::remove(Output));
@@ -640,4 +644,133 @@ TEST(AArch64AsyncUnwind, InstructionAddressRecipesUseTheActualSigningPC) {
   GTEST_SKIP() << kUnavailable;
 #endif
 }
+TEST(AArch64AsyncUnwind, ObjectiveCCatchesAndFinallyPreserveSignedCallers) {
+#if defined(__APPLE__) && defined(__aarch64__)
+  llvm::SmallString<128> Dir;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kDirectory, Dir));
+  const std::filesystem::path Root(Dir.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Source = (Root / kObjCFile).string();
+  const auto ProviderSource = (Root / kObjCProviderFile).string();
+  const auto DriverSource = (Root / kObjCDriverFile).string();
+  const auto Provider = (Root / kCatchImports).string();
+  const auto Object = (Root / kObject).string();
+  const auto Output = (Root / kPublished).string();
+  const auto Driver = (Root / kDriver).string();
+  std::ofstream(Source) << kObjCBody;
+  std::ofstream(ProviderSource) << kObjCProvider;
+  std::ofstream(DriverSource) << kObjCDriver;
+
+  unsigned Paths = 0;
+  auto Reader = Loader::create(BinaryFormat::MachO);
+  for (const auto *Opt : {kNoOptimize, kOptimize}) {
+    for (bool Weak : {false, true}) {
+      SCOPED_TRACE(Opt);
+      SCOPED_TRACE(Weak);
+      const auto Input =
+          (Root / (Weak ? kObjCWeakImage : kObjCStrongImage)).string();
+      const auto Compile = [&](llvm::ArrayRef<llvm::StringRef> Flags) {
+        llvm::SmallVector<llvm::StringRef> Args{kCompiler,     kTargetFlag,
+                                                kTarget,       Opt,
+                                                kFramePointer, kObjCExceptions};
+        if (Weak)
+          Args.push_back(kObjCWeakClass);
+        Args.append(Flags.begin(), Flags.end());
+        return llvm::sys::ExecuteAndWait(kCompiler, Args);
+      };
+      ASSERT_EQ(Compile({kDylib, ProviderSource, kObjCFramework, kFoundation,
+                         kOutput, Provider}),
+                0);
+      ASSERT_EQ(Compile({kDylib, Source, Provider, kObjCFramework, kFoundation,
+                         kOutput, Input}),
+                0);
+      ASSERT_EQ(Compile({kCatchReplacement, kCompile, Source, kOutput, Object}),
+                0);
+      auto Original = Reader->load(Input);
+      ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+      const auto *Entry = Original->findSymbol(kCatchSymbol);
+      ASSERT_NE(Entry, nullptr);
+      const auto *Frame = Original->ExceptionMetadata.findFunction(Entry->Addr);
+      ASSERT_NE(Frame, nullptr);
+      const bool Dwarf = Frame->Dwarf.has_value();
+      va_t Slot = 0;
+      ASSERT_NO_FATAL_FAILURE(
+          checkLanguageLandingPads(*Original, Entry->Addr, Dwarf, false, Slot,
+                                   ExceptionPersonality::ObjCPersonalityV0));
+      const auto Bytes = llvm::MemoryBuffer::getFile(Object);
+      ASSERT_TRUE(bool(Bytes));
+      const SourcePatchMapping Map{kCatchMapping, Entry->Addr};
+      auto Patch = installMachOObjectPatch((*Bytes)->getBuffer(), *Original,
+                                           {Map}, {}, Output, {});
+      ASSERT_TRUE(bool(Patch)) << llvm::toString(Patch.takeError());
+      ASSERT_EQ(Patch->PatchedFunctions.size(), 1u);
+      const auto Owner = Patch->PatchedFunctions.front().OwnerVA;
+      ASSERT_NE(Owner, Entry->Addr);
+      auto Published = Reader->load(Output);
+      ASSERT_TRUE(bool(Published)) << llvm::toString(Published.takeError());
+      va_t NewSlot = 0;
+      ASSERT_NO_FATAL_FAILURE(
+          checkLanguageLandingPads(*Published, Owner, Dwarf, false, NewSlot,
+                                   ExceptionPersonality::ObjCPersonalityV0));
+      EXPECT_EQ(NewSlot, Slot + Patch->OriginalSectionSlide);
+      if (std::getenv(kExecute)) {
+        ASSERT_EQ(Compile({DriverSource, Provider, kObjCFramework, kFoundation,
+                           kOutput, Driver}),
+                  0);
+        ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Input}), 0);
+        ASSERT_EQ(
+            llvm::sys::ExecuteAndWait(Driver, {Driver, Output, kPublished}), 0);
+        Paths += 2 * kExceptionInputs;
+      }
+      ASSERT_TRUE(std::filesystem::remove(Output));
+      const auto Reject = [&](llvm::StringRef Contents,
+                              const BinaryImage &Image, va_t Address) {
+        SourcePatchMapping Mapping{kCatchMapping, Address};
+        auto Rejected =
+            installMachOObjectPatch(Contents, Image, {Mapping}, {}, Output, {});
+        ASSERT_FALSE(bool(Rejected));
+        llvm::consumeError(Rejected.takeError());
+        EXPECT_FALSE(std::filesystem::exists(Output));
+      };
+      if (Weak) {
+        auto Strong = Reader->load((Root / kObjCStrongImage).string());
+        ASSERT_TRUE(bool(Strong)) << llvm::toString(Strong.takeError());
+        const auto *Other = Strong->findSymbol(kCatchSymbol);
+        ASSERT_NE(Other, nullptr);
+        ASSERT_NO_FATAL_FAILURE(
+            Reject((*Bytes)->getBuffer(), *Strong, Other->Addr));
+        ASSERT_EQ(Compile({kObjCDirectRef, kCompile, Source, kOutput, Object}),
+                  0);
+        auto Direct = llvm::MemoryBuffer::getFile(Object);
+        ASSERT_TRUE(bool(Direct));
+        ASSERT_NO_FATAL_FAILURE(
+            Reject((*Direct)->getBuffer(), *Original, Entry->Addr));
+      } else {
+        std::string Changed = (*Bytes)->getBuffer().str();
+        auto File = llvm::object::ObjectFile::createObjectFile(
+            llvm::MemoryBufferRef(Changed, {}));
+        ASSERT_TRUE(bool(File)) << llvm::toString(File.takeError());
+        bool Found = false;
+        for (const auto &Section : (*File)->sections()) {
+          auto Name = Section.getName();
+          ASSERT_TRUE(bool(Name)) << llvm::toString(Name.takeError());
+          if (*Name != kObjCFlagsSection)
+            continue;
+          auto Data = Section.getContents();
+          ASSERT_TRUE(bool(Data)) << llvm::toString(Data.takeError());
+          ASSERT_FALSE(Data->empty());
+          Changed[Data->data() - Changed.data()] ^= 1;
+          Found = true;
+        }
+        ASSERT_TRUE(Found);
+        ASSERT_NO_FATAL_FAILURE(Reject(Changed, *Original, Entry->Addr));
+      }
+    }
+  }
+  RecordProperty(kObjCPaths, Paths);
+#else
+  GTEST_SKIP() << kUnavailable;
+#endif
+}
+
 } // namespace

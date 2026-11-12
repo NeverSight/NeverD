@@ -635,7 +635,7 @@
   "limits": [
     "The system bridge walks an authenticated caller with known integer register locations. It does not resume exceptions or restore vector state.",
     "Unmodified Darwin stepping from the trampoline still traps on the signed control; the successful walk uses the NeverD handoff.",
-    "Opaque control flow and unproven register locations prevent implicit row recovery. See signed_cxx_landing_pads for the address-based Darwin C++ personality.",
+    "Opaque control flow and unproven register locations prevent implicit row recovery. The signed_cxx_landing_pads and objective_c_landing_pads records describe the tested Darwin personalities.",
     "Publication is qualified for the tested inputs, including the nine-function mixed variadic images at O0 and O2; arbitrary image publication is not established.",
     "The observed hosts do not qualify explicit PAuth_LR, PC-sensitive PACM or native CPTA-on."
   ],
@@ -1125,5 +1125,187 @@
     "nonzero_outgoing_argument_control": "Both Apple hosts and the isolated untouched arm64e program trap at BRK #0xc471 in libunwind::UnwindCursor::setReg. The ordinary arm64 controls resume with SP advanced by 16. Final replay separately counts normal C++ outcomes and reproduced system PAC traps.",
     "xcode_27_terminal_index": "The final compact lookup address extends one byte into an adjacent S_SYMBOL_STUBS section. The raw lookup endpoint is preserved and the decoded instruction extent ends at the text/stub boundary, including after the original sentinel becomes a no-unwind gap.",
     "original_got_control": "On the parent code, canonical typed catches at O0 and O2 required extra header space. A catch-all compiled from the same source installed with the default layout."
+  },
+  "objective_c_landing_pads": {
+    "source": "e3ba8f2917d3deb357533d1079240f5bfdb60aa3",
+    "pull_request": "https://github.com/NeverSight/NeverD/pull/2344",
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43294345635",
+    "llvm_fork": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+    "test_host_sha256": "1694605f8a9f2359de9317d05f46e5dd19c949da5005fba7febefba3b6028b89",
+    "runners": {
+      "macos-26": {
+        "hardware": "Apple M1 (Virtual)",
+        "os": [
+          "ProductName:\t\tmacOS",
+          "ProductVersion:\t\t26.7.2",
+          "BuildVersion:\t\t25G332"
+        ],
+        "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+        "passed": 33,
+        "native_objc_exception_paths": 32,
+        "native_cxx_exception_paths": 34,
+        "native_cxx_unwinder_pac_traps": 6,
+        "native_image_executions": 60,
+        "native_interrupted_frames": 10,
+        "native_system_caller_steps": 10,
+        "native_compact_calls": 3,
+        "mixed_variadic_O0_O2": [
+          {
+            "native_register_entries_compared": 9,
+            "native_register_input_comparisons": 27,
+            "installed_register_entries": 9
+          },
+          {
+            "native_register_entries_compared": 9,
+            "native_register_input_comparisons": 27,
+            "installed_register_entries": 9
+          }
+        ],
+        "explicit_pauth_lr": false,
+        "pc_sensitive_pacm": false,
+        "cpta": {
+          "status": "unavailable",
+          "observed_el0": false,
+          "x1_qualified": false,
+          "profiles": {
+            "arm64": "undefined-instruction",
+            "arm64e": "undefined-instruction",
+            "arm64e.x1": "slice-unavailable"
+          }
+        },
+        "qualification_sha256": "ddae14bfae3df5b80a709f442bee51dc0bb001f4c151b2f9236de41db1751adb",
+        "cpta_report_sha256": "f23cb9fc79879a1b4ae9e72c2c8dc5b6f43eebcb963647eae3215466a593b9a0",
+        "cursor_report_sha256": "23bf3ce14e62f09b20639727be447a7e2ddd54c77eb71e6c40370719465f363c"
+      },
+      "xcode-27": {
+        "hardware": "Apple M1 (Virtual)",
+        "os": [
+          "ProductName:\t\tmacOS",
+          "ProductVersion:\t\t27.0.1",
+          "BuildVersion:\t\t26A434"
+        ],
+        "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+        "passed": 33,
+        "native_objc_exception_paths": 32,
+        "native_cxx_exception_paths": 34,
+        "native_cxx_unwinder_pac_traps": 6,
+        "native_image_executions": 60,
+        "native_interrupted_frames": 10,
+        "native_system_caller_steps": 10,
+        "native_compact_calls": 3,
+        "mixed_variadic_O0_O2": [
+          {
+            "native_register_entries_compared": 9,
+            "native_register_input_comparisons": 27,
+            "installed_register_entries": 9
+          },
+          {
+            "native_register_entries_compared": 9,
+            "native_register_input_comparisons": 27,
+            "installed_register_entries": 9
+          }
+        ],
+        "explicit_pauth_lr": false,
+        "pc_sensitive_pacm": false,
+        "cpta": {
+          "status": "unavailable",
+          "observed_el0": false,
+          "x1_qualified": false,
+          "profiles": {
+            "arm64": "undefined-instruction",
+            "arm64e": "undefined-instruction",
+            "arm64e.x1": "did-not-start"
+          }
+        },
+        "qualification_sha256": "3b9e70f6a6fc77d2176460b00f6abcdf0b6505e1f799c09e024d47687912832c",
+        "cpta_report_sha256": "2f561453a2355109f6b7119cf4fdf0beb790f62cdb61f264d871784f36e4d87f",
+        "cursor_report_sha256": "ccf3e229251fa861f7e40e720688738a19a950aaa5c689833b4ade98f3330697"
+      }
+    },
+    "optimization_levels": [
+      "O0",
+      "O2"
+    ],
+    "catch_types": [
+      "NSException (Foundation definition)",
+      "NSString (image weak definition and dyld coalescing slot)"
+    ],
+    "entries": [
+      "original exported address",
+      "same exported address redirected to a body with a changed return value"
+    ],
+    "objc_paths": [
+      "normal return",
+      "matching typed catch",
+      "unmatched NSNumber propagates",
+      "new exception from the catch propagates"
+    ],
+    "cleanup_check": "All four paths require the finally counter to increase exactly once for each call.",
+    "installation_checks": [
+      "Signed return address recoverable before the guarded call and at its landing pad for original and published code",
+      "The published weak type uses the original sealed weak-lookup slot",
+      "Reject mismatched Objective-C image flags, a missing weak data fallback and a direct pointer to the discarded atom"
+    ],
+    "local_release": {
+      "full": {
+        "passed": 33,
+        "skipped": []
+      },
+      "recovery": {
+        "passed": 13,
+        "skipped": []
+      },
+      "installation": {
+        "passed": 40,
+        "skipped": []
+      },
+      "analysis": {
+        "passed": 81,
+        "skipped": [
+          "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+          "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections"
+        ]
+      },
+      "language": {
+        "passed": 315,
+        "skipped": []
+      },
+      "rewrite": {
+        "passed": 179,
+        "skipped": []
+      }
+    },
+    "conventional_arm64_objc_outcomes": 32,
+    "local_image_info_controls": {
+      "profiles": [
+        "O0 strong",
+        "O2 strong",
+        "O0 weak",
+        "O2 weak"
+      ],
+      "accepted_with_matching_flags": 4,
+      "rejected_with_different_flags": 4,
+      "rejected_when_both_versions_are_unknown": 4
+    },
+    "independent_compiler_images_republished": {
+      "cursor-macos-26/O0": "facc185a667b33cff110273afc0293f6aaeeb6f04c4e26c8dc61c49e201d9c7a",
+      "cursor-macos-26/O2": "7bc50a244009d4cecac5004e4f1ce0a71e7a8728f0fddcad458215a249a0c9ae",
+      "cursor-macos-26/dwarf": "d2b49dae9b115c2768fb63c3e2899742304a4234eaca6e02935b7f7bcc89e709",
+      "cursor-macos-26/args": "a1d5d5c539366aeca7c8efaee612c0576a338ffb92c058169e00a38654913146",
+      "cursor-xcode-27/O0": "880ea77185eca04c3aa5dfb641ae69ce2db6e15de833c22ba164dab267777dde",
+      "cursor-xcode-27/O2": "fe6c3db4c09ce73a42fafb83992427841ee9c166e5236d020039309cafd75714",
+      "cursor-xcode-27/dwarf": "88feb8244efa244bb92248142c0fefa22ec92ab4385e501bc5f47c8fe5953f45",
+      "cursor-xcode-27/args": "6f826a62803c00a9353ccb1093148b1a3a93ff87a1b20995f762511bfd563e5b"
+    },
+    "m4_max_cpta": {
+      "status": "unavailable",
+      "native_el0": false,
+      "x1": false,
+      "profiles": {
+        "arm64": "undefined-instruction",
+        "arm64e": "did-not-start",
+        "arm64e.x1": "slice-unavailable"
+      }
+    }
   }
 }

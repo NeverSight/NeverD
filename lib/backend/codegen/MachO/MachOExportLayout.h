@@ -29,6 +29,7 @@ writeMachOExportLayout(const MachOExportMap &Exports);
 // follows the real header rather than pretending to be ordinary code/data.
 llvm::Expected<std::vector<uint8_t>>
 machOExportIdentities(llvm::ArrayRef<uint8_t> Bytes, uint64_t HeaderVA,
-                      uint32_t FileType);
+                      uint32_t FileType,
+                      std::map<std::string, uint64_t> *WeakDefinitions);
 } // namespace neverd
 #endif

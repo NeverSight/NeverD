@@ -1215,6 +1215,31 @@ frames on each runner. The [verification record](evidence/arm64e-system-signal-a
 records the source revision, host digest, per-runner observations and local
 regressions.
 
+Darwin Objective-C uses an address-based LSDA for typed catches and
+`@finally` cleanup. The signing analysis follows those edges, uses the
+instruction's access width to identify overlapping stack saves, and stops at
+compiler-generated terminating traps. Apple's Objective-C runtime delegates
+selection of these landing pads to the C++ personality after running its
+alternative handlers. [Apple Objective-C exception runtime](https://github.com/apple-oss-distributions/objc4/blob/main/runtime/objc-exception.mm)
+
+An Objective-C replacement with the same image-info version and flags reuses
+the original runtime declaration. Foundation supplies the type descriptor for
+`NSException`. For an object that contributes its own weak fallback, such as a
+typed `NSString` catch, the publisher can use the existing sealed GOT slot
+with dyld's weak lookup ordinal. This requires an exported data fallback, a
+separate weak atom and indirect references through that slot. Conflicting
+image flags, additional live atoms in the same storage and direct references
+to a discarded fallback cause publication to fail.
+
+Each Apple M1 runner passed all 33 publication tests in the
+[Objective-C execution run](https://github.com/gmh5225/test_mac_intel/actions/runs/43294345635). On each runner, the original and redirected
+entries produced 32 expected results across both catch types at O0 and O2.
+The driver checked return values and the type and value of each propagated
+exception. It also verified one cleanup on every path. Both runners repeated
+ten system signal-frame crossings. The
+[verification record](evidence/arm64e-system-signal-and-implicit-unwind-2026-11-12.json)
+includes the compiler versions, test-host digest and hardware probe results.
+
 To repeat the interrupted-frame test on a Mac that can launch arm64e
 executables, build the test host against the tracked LLVM fork and require
 native execution:

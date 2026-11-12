@@ -20,6 +20,11 @@ UNWIND_PROOF_WORD(PopFP, 0xa8c17bfd)
 UNWIND_PROOF_WORD(Push, 0xa9bf7bf3)
 UNWIND_PROOF_WORD(Pop, 0xa8c17bf3)
 UNWIND_PROOF_WORD(PartialStore, 0xb9000be0)
+UNWIND_PROOF_WORD(ByteBelowLR, 0x39001fe0)  // strb w0, [sp, #7]
+UNWIND_PROOF_WORD(ByteInsideLR, 0x39003fe0) // strb w0, [sp, #15]
+UNWIND_PROOF_WORD(HalfAcrossLR, 0x780073e0) // sturh w0, [sp, #7]
+UNWIND_PROOF_WORD(CompilerTrap, 0xd4200020) // brk #1
+UNWIND_PROOF_WORD(DebugBreak, 0xd43e0000)   // brk #0xf000
 UNWIND_PROOF_WORD(IndexedStore, 0xf8216be0)
 UNWIND_PROOF_WORD(IfZero, 0xb4000040)
 UNWIND_PROOF_WORD(IfBitClear, 0xb6400040)

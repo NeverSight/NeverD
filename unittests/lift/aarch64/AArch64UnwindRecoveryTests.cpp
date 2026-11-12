@@ -280,6 +280,30 @@ TEST(AArch64ImplicitUnwind, LandingPadsJoinOnlySurvivingFrameSaves) {
   EXPECT_EQ(Live.at(3).Status, Status::Unknown);
 }
 
+TEST(AArch64ImplicitUnwind, NarrowStoresInvalidateOnlyOverlappingSaves) {
+  for (auto Word : {ByteBelowLR, ByteInsideLR, HalfAcrossLR}) {
+    Frame F{SignB, PushFP, Word, Call, Ret, Ret};
+    F.saveRow(2);
+    F.addHandler(3, 4, 5);
+    F.Function.Personality = ExceptionPersonality::ObjCPersonalityV0;
+    const auto Row = F.at(5);
+    if (Word == ByteBelowLR) {
+      ASSERT_TRUE(Row.State);
+      EXPECT_EQ(Row.State->Kind, Kind::SP);
+    } else {
+      EXPECT_EQ(Row.Status, Status::Unknown);
+    }
+  }
+}
+
+TEST(AArch64ImplicitUnwind, CompilerTrapEndsOnlyItsReachablePath) {
+  Frame F{SignB, CompilerTrap, Ret};
+  ASSERT_TRUE(F.at(1).State);
+  EXPECT_EQ(F.at(2).Status, Status::Unknown);
+  Frame Debug{SignB, DebugBreak, Ret};
+  EXPECT_EQ(Debug.at(1).Status, Status::Unsupported);
+}
+
 TEST(AArch64ImplicitUnwind, NonReturningCallsStillReachTheirLandingPads) {
   Frame F{SignB, PushFP, Skip, Ret, Call};
   F.saveRow(2);
