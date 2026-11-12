@@ -32,6 +32,8 @@ def main():
                  "baseline_inputs", "candidate_inputs", "baseline_toolchain",
                  "candidate_toolchain"):
         parser.add_argument("--" + name.replace("_", "-"), type=Path, required=True)
+    parser.add_argument("--compare-capstone", action="store_true",
+                        help="allow the decoder revision to be the varied build input")
     parser.add_argument("--base-commit", required=True)
     parser.add_argument("--samples", type=int, required=True)
     parser.add_argument("--repeats", type=int, required=True)
@@ -49,16 +51,18 @@ def main():
     toolchain_b = json.loads(args.candidate_toolchain.read_text())
     if not {"compiler", "llvm", "capstone", "build"} <= toolchain_a.keys():
         parser.error("toolchain manifests must identify compiler, LLVM, Capstone and build flags/allocator")
-    if toolchain_a != toolchain_b:
+    def comparable(toolchain):
+        return {k: v for k, v in toolchain.items() if k != "capstone" or not args.compare_capstone}
+    if "capstone" not in toolchain_b or comparable(toolchain_a) != comparable(toolchain_b):
         parser.error("toolchain/flags/allocator snapshots differ; rebuild a matching baseline")
     inputs = (args.baseline, args.candidate, args.code, args.firmware,
               args.baseline_inputs, args.candidate_inputs,
               args.baseline_toolchain, args.candidate_toolchain)
     with MIPSValidationArtifacts(args.output, "mips-paired", inputs) as artifacts:
-        run(args, artifacts, toolchain_a)
+        run(args, artifacts, toolchain_a, toolchain_b)
 
 
-def run(args, artifacts, toolchain_a):
+def run(args, artifacts, toolchain_a, toolchain_b):
     artifacts.write("samples.json", [])
     artifacts.write("summary.json", {"status": "running"})
     profile_text = Path(__file__).with_name("mips-bench.def").read_text()
@@ -156,6 +160,7 @@ def run(args, artifacts, toolchain_a):
               "samples_per_variant": args.samples, "repeats": args.repeats,
               "dependency_inputs_sha256": digest(args.baseline_inputs),
               "toolchain": toolchain_a,
+              "candidate_toolchain": toolchain_b,
               "toolchain_inputs_sha256": {"A": digest(args.baseline_toolchain),
                                           "B": digest(args.candidate_toolchain)},
               "firmware_sha256": digest(args.firmware),

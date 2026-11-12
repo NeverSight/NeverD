@@ -37,7 +37,7 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
   if (mips::isMSANativeVector(Id) || mips::isMSAControl(Id)) {
     if (!Img || !Img->MIPS || !Img->MIPS->HasMSA || Img->MIPS->ISARevision != 5)
       throw std::runtime_error(
-          "MSA native source requires an enabled MIPS32r5 MSA image");
+          "MSA native source requires an enabled r5 MSA image");
     const unsigned Selector =
         mips::isMSAControl(Id) ? Op.Inputs[1].ConstVal : 0;
     const auto Asm =

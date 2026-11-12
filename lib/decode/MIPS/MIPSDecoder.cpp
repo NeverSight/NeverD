@@ -7,6 +7,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
+#include "neverd/lift/MIPS/MIPSDSP64.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/lift/MIPS/MicroMIPS64Release6.h"
@@ -216,6 +217,17 @@ bool Decoder::decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr) {
       return decodeR6HardwareRegister(Bytes, Physical, Addr);
   }
   if (isMIPS64(TargetArch) && CurrentMode != InstructionMode::MicroMIPS) {
+    if (MIPS->hasClassicDSP64()) {
+      if (const auto Packed = mips::dsp64PackedForm(Physical)) {
+        if (!decodeMIPSEquivalent(Bytes, Packed->OperandTemplate, Addr))
+          return false;
+        InsnBuf->id = MIPS_INS_ENDING + 32 + (Physical & 0x7ff);
+        if (Text)
+          std::snprintf(InsnBuf->mnemonic, sizeof(InsnBuf->mnemonic), "%s",
+                        Packed->Mnemonic);
+        return true;
+      }
+    }
     if (!MIPS->isDSPIndexedDoubleword(Physical) ||
         !decodeMIPSEquivalent(Bytes, Physical & ~0x200u, Addr))
       return false;
@@ -289,8 +301,9 @@ bool Decoder::decodeMIPSEquivalent(const uint8_t *Bytes, uint32_t Classic,
         (MIPSISARevision == 6
              ? (isMIPS64(TargetArch) ? CS_MODE_MIPS64R6 | CS_MODE_MIPS_PTR64
                                      : CS_MODE_MIPS32R6)
+         : MIPSISARevision == 5
+             ? (isMIPS64(TargetArch) ? CS_MODE_MIPS64R5 : CS_MODE_MIPS32R5)
          : isMIPS64(TargetArch) ? CS_MODE_MIPS64R2
-         : MIPSISARevision == 5 ? CS_MODE_MIPS32R5
                                 : CS_MODE_MIPS32R2) |
         (Little ? CS_MODE_LITTLE_ENDIAN : CS_MODE_BIG_ENDIAN));
     if (cs_open(CS_ARCH_MIPS, Mode, &MicroASEHandle) != CS_ERR_OK)

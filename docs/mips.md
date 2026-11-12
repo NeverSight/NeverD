@@ -3,7 +3,7 @@
 The experimental MIPS analysis path targets linked ELF programs with classic
 MIPS32/o32 and MIPS64/n64 instructions in either byte order. The profiles below
 cover classic Release 2, classic Release 6 integer instructions, microMIPS32 and microMIPS64 integer profiles,
-MIPS16e32 and MIPS16e2, and Release 5/o32 MSA.
+MIPS16e32 and MIPS16e2, and Release 5/o32 and n64 MSA.
 The selected ELF profile determines register width, byte order, stack layout
 and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
 
@@ -270,8 +270,13 @@ doubleword load `LDX`. Both C views preserve DSPControl under the n64 ABI.
 An n64 source return requires the complete eight-byte incoming link, including
 when it is restored from a leaf stack slot. A four-byte spill suffices on o32.
 Standalone IR that writes the link and calls a direct target needs the image
-to establish the callee mode on either ABI. The older 64-bit packed formats removed in specification
-revision 2.40 (including `.OB`, `.QH` and `.PW`) are unimplemented.
+to establish the callee mode on either ABI. Classic n64 also lifts 81 packed GPR forms from the early DSP64 extension,
+including octal-byte, quad-halfword and paired-word arithmetic, shifts, compares,
+picks and packing. Revision 2.40 deprecated this extension. ELF advertises DSP
+without identifying its historical revision. Concrete use of these encodings
+therefore requires a processor implementing them. The legacy 128-bit
+accumulator instructions require additional coverage. In n64 DSPControl,
+POS has seven bits and CCOND has eight. RDDSP zero-extends selected bits.
 See the register model and revision history in the
 [MIPS64 DSP Module, revision 3.02](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00375-2B-MIPS64DSP-AFP-03.02.pdf).
 
@@ -704,8 +709,12 @@ with the number of free physical registers. Native floating-point helpers
 require WRP clear because their scratch register numbers differ from the
 original. The vector execution profile requires MSA enabled with CU1/FR
 configured. General partitioned vector execution, disabled-unit exception
-delivery, scalar FPU and MSA64 remain outside this profile. microMIPS32r5/o32
-reuses these vector semantics. The operation and alias rules follow the
+delivery and scalar FP call ABI recovery remain outside this profile.
+Classic and microMIPS64r5 use n64 hard double (FP ABI 1, CPR1 size 128).
+Both support the full-width memory base, COPY_S.D, COPY_U.W, INSERT.D, FILL.D
+and DLSA. COPY_U.D is reserved. The concrete evaluator uses I6400 for n64
+and P5600 for o32. Scalar Release 6 FPR transfers, conditional selects, bitwise
+moves and CLASS use the shared low FPR views. The operation and alias rules follow the
 [MIPS32 MSA manual, revision 1.12](https://docs.alexrp.com/mips/mips32_simd.pdf), sections ADDV, SUBV, CEQ, CLT/CLE, MIN/MAX,
 SLL/SRL/SRA, BCLR/BSET/BNEG, MULV/MADDV/MSUBV, MAX_A/MIN_A, ADD_A/ADDS_A, ADDS/SUBS, AVE/AVER,
 AND/OR/NOR/XOR, ADDVI/SUBVI, CEQI, CLTI/CLEI, MAXI/MINI,

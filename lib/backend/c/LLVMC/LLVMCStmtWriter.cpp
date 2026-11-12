@@ -4890,8 +4890,7 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
             ? llvm::mdconst::dyn_extract<llvm::ConstantInt>(MD->getOperand(1))
             : nullptr;
     if (!I || !K || I->getValue().uge(unsigned(Intrinsic::_Count)) ||
-        K->getValue().uge(32) || !isMIPS(Opts.TheArch) ||
-        isMIPS64(Opts.TheArch))
+        K->getValue().uge(32) || !isMIPS(Opts.TheArch))
       throw std::runtime_error("invalid native MSA assembly metadata");
     const auto Id = static_cast<Intrinsic>(I->getZExtValue());
     if (!mips::isMSAControl(Id) &&
