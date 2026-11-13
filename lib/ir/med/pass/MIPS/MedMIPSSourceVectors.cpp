@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ArchSupport.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/LowToMedError.h"
@@ -29,14 +30,39 @@
 
 namespace neverd {
 
+const SourceCallTypeHint *mipsFloatingCallSite(
+    const LowOp &Op, Arch Target,
+    const std::map<SourceCallOccurrenceKey, SourceCallTypeHint> *Sites) {
+  if (Sites && !Sites->empty())
+    if (const auto Key = sourceCallOccurrenceKey(Op))
+      if (const auto It = Sites->find(*Key); It != Sites->end()) {
+        const auto &H = It->second;
+        std::string Diagnostic;
+        if (H.CallKind != SourceCallTypeHint::Kind::Analyst ||
+            H.AnalystSite != Key || H.Signature.Architecture != Target ||
+            !H.Signature.MIPSScalars ||
+            H.AnalystFixedCount !=
+                (H.Signature.MIPSScalars->FixedCount
+                     ? int(*H.Signature.MIPSScalars->FixedCount)
+                     : -1) ||
+            !validateSourceABI(H.Signature, Diagnostic))
+          throw LowToMedConversionError("invalid MIPS call-site ABI");
+        return &H;
+      }
+  return nullptr;
+}
+
 void requireMIPSSourceVectors(
     const LowFunc &Function, Arch Target, const BinaryImage *Image,
-    const std::map<va_t, FloatingCallArguments> *Calls) {
+    const std::map<va_t, FloatingCallArguments> *Calls,
+    const std::map<SourceCallOccurrenceKey, SourceCallTypeHint> *Sites) {
   const auto IsVector = [](const NdVar &V) {
     return V.isReg() && mipsreg::isVector(V.Offset);
   };
   const auto SignatureOf =
       [&](const LowOp &Op) -> const FloatingCallArguments * {
+    if (const auto *Site = mipsFloatingCallSite(Op, Target, Sites))
+      return Site->Signature.MIPSScalars.get();
     if (Calls && (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
         Op.NumInputs && Op.Inputs[0].isConst())
       if (const auto Call = Calls->find(Op.Inputs[0].Offset);
@@ -131,7 +157,8 @@ void requireMIPSSourceVectors(
         continue;
       const auto R = Index(Op.Output);
       // n64 preserves F24–F31. o32 FP64 preserves F20,F22,...,F30.
-      if (Wide ? R >= 24 : (R >= 20 && (!FP64 || R % 2 == 0)))
+      if ((!Wide && !FP64 && R >= 20) ||
+          getTargetRegInfo(Target).isCallPreserved(mipsreg::w(R), 8))
         throw LowToMedConversionError(
             "MSA source saved FPR restoration is not qualified");
       const auto Whole =

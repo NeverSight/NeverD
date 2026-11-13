@@ -4299,7 +4299,7 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
     return true;
   }
 
-  if (x86FourSourceNativeName(Callee->getName().str())) {
+  if (x86FourSourceNativeName(Callee->getName())) {
     const auto *I = llvm::dyn_cast<llvm::CallInst>(&Call);
     if (!I)
       throw std::invalid_argument(X86FourSourceMalformed);
@@ -4314,7 +4314,7 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
                                    typeToCLLVM(Call.getType()));
     return true;
   }
-  if (x86CompactNativeName(Callee->getName().str())) {
+  if (x86CompactNativeName(Callee->getName())) {
     const auto *I = llvm::dyn_cast<llvm::CallInst>(&Call);
     if (!I)
       throw std::invalid_argument(X86CompactMalformed);

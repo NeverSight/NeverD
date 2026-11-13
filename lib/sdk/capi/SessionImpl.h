@@ -1284,12 +1284,13 @@ struct Session {
     // the other functions by the signatures this recovers too; recovery
     // recomputes each function's call information, so once per pipeline is
     // enough for such modules.
+    auto ImportNames = Img.getImportAddressNames();
     if (!BodyMask || !NativeMedFuncs) {
       std::map<va_t, std::string> FuncNames;
       for (const auto &MF : PipeResult.MedFuncs)
         if (!MF.Name.empty())
           FuncNames[MF.Entry] = MF.Name;
-      for (const auto &[Address, Name] : Img.getImportAddressNames())
+      for (const auto &[Address, Name] : ImportNames)
         FuncNames[Address] = Name;
       for (auto &[Address, Name] : pipeline_detail::debugFunctionNames(
                PipeResult, FuncNames, decompileDebug()))
@@ -1314,8 +1315,9 @@ struct Session {
       NativeCalleeDeclarations = std::move(Recovery.OmittedCalleeDeclarations);
     }
     std::vector<std::pair<va_t, std::string>> ImportMap;
-    for (const auto &[Addr, Name] : Img.getImportAddressNames())
-      ImportMap.emplace_back(Addr, Name);
+    ImportMap.reserve(ImportNames.size());
+    for (auto &[Addr, Name] : ImportNames)
+      ImportMap.emplace_back(Addr, std::move(Name));
     MedLLVMEmitter Emitter;
     Emitter.setPreserveUnknownSourceValues(true);
     Emitter.setSourceCalleeDeclarations(NativeCalleeDeclarations);

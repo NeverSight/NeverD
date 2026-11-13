@@ -14,6 +14,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/ir/FloatingCallArguments.h"
+#include "neverd/ir/SourceCallTypeHint.h"
 
 #include <map>
 
@@ -26,7 +27,14 @@ struct MedFunc;
 /// their incoming machine state or a clobbered callee-preserved FPR view.
 void requireMIPSSourceVectors(
     const LowFunc &Function, Arch Target, const BinaryImage *Image,
-    const std::map<va_t, FloatingCallArguments> *Calls = nullptr);
+    const std::map<va_t, FloatingCallArguments> *Calls = nullptr,
+    const std::map<SourceCallOccurrenceKey, SourceCallTypeHint> *Sites =
+        nullptr);
+
+/// Match the original instruction, sequence and direct/indirect target.
+const SourceCallTypeHint *mipsFloatingCallSite(
+    const LowOp &Op, Arch Target,
+    const std::map<SourceCallOccurrenceKey, SourceCallTypeHint> *Sites);
 
 /// A scalar source result observes only its ABI width. Canonicalize an
 /// unpredictable value only after proving every transported byte unobserved;

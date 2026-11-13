@@ -266,6 +266,8 @@ void scanImportThunks(BinaryImage &Img) {
     case Arch::MIPS32:
     case Arch::MIPS32EL:
     case Arch::MIPS64:
+    case Arch::MIPS64N32:
+    case Arch::MIPS64N32EL:
     case Arch::MIPS64EL:
       Added +=
           scanImportThunksMIPS(Img, Seg, TargetImports, Existing, Candidates);

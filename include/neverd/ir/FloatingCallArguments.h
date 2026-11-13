@@ -55,6 +55,8 @@ struct FloatingCallArguments {
   /// their existing ReturnElements and floating element convention.
   NdTypeKind ReturnKind = NdTypeKind::Float;
   bool SignedResult = false;
+  /// For a variadic occurrence Scalars includes all promoted actual arguments.
+  std::optional<unsigned> FixedCount;
   bool operator==(const FloatingCallArguments &) const = default;
 };
 
@@ -65,7 +67,8 @@ struct FloatingCallArguments {
 /// conventions need other adapters. The caller establishes the fixed C ABI.
 std::optional<FloatingCallArguments>
 floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
-                      llvm::ArrayRef<TypeRef> Parameters);
+                      llvm::ArrayRef<TypeRef> Parameters,
+                      std::optional<unsigned> FixedCount = std::nullopt);
 
 struct FloatingCallTypes {
   TypeRef Result;

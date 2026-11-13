@@ -1,0 +1,13 @@
+//===- MIPSTargets.def - MIPS target spellings and LLVM triples ----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+NEVERD_MIPS_TARGET(MIPS32, "mips", "mips-unknown-linux-gnu")
+NEVERD_MIPS_TARGET(MIPS32EL, "mipsel", "mipsel-unknown-linux-gnu")
+NEVERD_MIPS_TARGET(MIPS64, "mips64", "mips64-unknown-linux-gnuabi64")
+NEVERD_MIPS_TARGET(MIPS64EL, "mips64el", "mips64el-unknown-linux-gnuabi64")
+NEVERD_MIPS_TARGET(MIPS64N32, "mips64n32", "mips64-unknown-linux-gnuabin32")
+NEVERD_MIPS_TARGET(MIPS64N32EL, "mips64n32el", "mips64el-unknown-linux-gnuabin32")
+#undef NEVERD_MIPS_TARGET

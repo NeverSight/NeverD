@@ -334,19 +334,20 @@ enum class Arch : uint8_t {
   EVM,
   SBF,
   Unknown,
-  MIPS32,
-  MIPS32EL,
-  MIPS64,
-  MIPS64EL
+#define NEVERD_MIPS_TARGET(Name, Spelling, Triple) Name,
+#include "neverd/MIPSTargets.def"
 };
 
-constexpr bool isMIPS(Arch A) {
-  return A == Arch::MIPS32 || A == Arch::MIPS32EL || A == Arch::MIPS64 ||
-         A == Arch::MIPS64EL;
+constexpr bool isMIPSN32(Arch A) {
+  return A == Arch::MIPS64N32 || A == Arch::MIPS64N32EL;
 }
 
 constexpr bool isMIPS64(Arch A) {
-  return A == Arch::MIPS64 || A == Arch::MIPS64EL;
+  return A == Arch::MIPS64 || A == Arch::MIPS64EL || isMIPSN32(A);
+}
+
+constexpr bool isMIPS(Arch A) {
+  return A == Arch::MIPS32 || A == Arch::MIPS32EL || isMIPS64(A);
 }
 
 enum class InstructionMode : uint8_t {
@@ -402,14 +403,10 @@ inline const char *getArchName(Arch A) {
     return "x86";
   case Arch::ARM:
     return "arm";
-  case Arch::MIPS32:
-    return "mips";
-  case Arch::MIPS32EL:
-    return "mipsel";
-  case Arch::MIPS64:
-    return "mips64";
-  case Arch::MIPS64EL:
-    return "mips64el";
+#define NEVERD_MIPS_TARGET(Name, Spelling, Triple)                             \
+  case Arch::Name:                                                             \
+    return Spelling;
+#include "neverd/MIPSTargets.def"
   case Arch::EVM:
     return kEVMArchName.data();
   case Arch::SBF:

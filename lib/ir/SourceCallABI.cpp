@@ -8,6 +8,7 @@
 
 #include "neverd/ir/SourceCallABI.h"
 
+#include "neverd/ir/FloatingCallArguments.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceParameterPlacement.h"
@@ -37,7 +38,7 @@ bool scalar(const TypeRef &T) {
 std::optional<int64_t>
 neverd::sourceCallReturnAddressBias(const BinaryImage *Image, Arch Architecture,
                                     va_t Address) {
-  if (Architecture == Arch::AArch64)
+  if (Architecture == Arch::AArch64 || isMIPS(Architecture))
     return 0;
   if ((Architecture != Arch::X64 && Architecture != Arch::X86) || !Image)
     return {};
@@ -117,6 +118,37 @@ bool neverd::assignAnalystCallABI(SourceCallTypeHint &Hint, Arch Architecture,
            Signature.Parameters.size()))
     return refuse(Error, "A variadic call-site needs a nonempty fixed prefix "
                          "within its actual operands");
+  if (isMIPS(Architecture) && Format == BinaryFormat::ELF) {
+    std::vector<TypeRef> Types;
+    for (const auto &P : Signature.Parameters)
+      Types.push_back(P.Type);
+    const auto Fixed = Hint.AnalystFixedCount < 0
+                           ? std::nullopt
+                           : std::optional<unsigned>(Hint.AnalystFixedCount);
+    auto Scalars = floatingCallArguments(Architecture, Format,
+                                         Signature.ReturnType, Types, Fixed);
+    if (!Scalars)
+      return refuse(Error, "MIPS floating calls require complete scalar types "
+                           "and promoted variadic operands");
+    Signature.HasExplicitABI = true;
+    Signature.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+    Signature.Architecture = Architecture;
+    for (size_t I = 0; I < Types.size(); ++I) {
+      const auto &A = Scalars->Scalars[I];
+      Signature.Parameters[I].Location = {A.Kind, A.Register, A.StackOffset,
+                                          A.Bytes};
+    }
+    const auto &TRI = getTargetRegInfo(Architecture);
+    if (Scalars->ReturnKind == NdTypeKind::Float)
+      Signature.ReturnLocation = {SourceABICarrierKind::FloatingRegister,
+                                  TRI.FPReturnReg, 0, Scalars->ReturnBytes};
+    else if (Scalars->ReturnKind != NdTypeKind::Void)
+      Signature.ReturnLocation = {SourceABICarrierKind::IntegerRegister,
+                                  TRI.IntReturnReg, 0, Scalars->ReturnBytes};
+    Signature.MIPSScalars =
+        std::make_shared<const FloatingCallArguments>(std::move(*Scalars));
+    return validateSourceABI(Signature, Error);
+  }
   if (Architecture == Arch::AArch64 && Format == BinaryFormat::MachO) {
     Signature.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
     const bool Assigned =
@@ -267,7 +299,10 @@ bool neverd::sourceCallStackArgumentsDefined(
     return true;
   using Key = std::tuple<VnodeSpace, uint64_t, uint16_t>;
   auto key = [](const NdVar &V) { return Key{V.Space, V.Offset, V.Size}; };
-  const auto SP = NdVar::reg(getTargetRegInfo(Architecture).StackPointer, 8);
+  const auto &TRI = getTargetRegInfo(Architecture);
+  const auto SP =
+      NdVar::reg(TRI.StackPointer,
+                 isMIPS(Architecture) ? TRI.FullRegWidth : TRI.PointerSize);
   size_t Work = 0;
   for (const auto &Block : Function.Blocks) {
     std::map<Key, int64_t> Addresses{{key(SP), 0}};

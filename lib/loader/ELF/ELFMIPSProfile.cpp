@@ -42,9 +42,11 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
   if (Header.e_type != ET_EXEC && Header.e_type != ET_DYN)
     return profileError("only linked ET_EXEC/ET_DYN files are supported");
   const uint32_t Flags = Header.e_flags;
-  if (Flags & EF_MIPS_ABI2)
-    return profileError("n32 ABI is not supported");
-  if (ELFT::Is64Bits && (Flags & EF_MIPS_ARCH_ASE_M16))
+  const bool N32 = Flags & EF_MIPS_ABI2;
+  if (N32 && (ELFT::Is64Bits || (Flags & (EF_MIPS_ABI | EF_MIPS_32BITMODE))))
+    return profileError("n32 requires ELF32 with 64-bit registers and ABI2");
+  const bool Wide = ELFT::Is64Bits || N32;
+  if (Wide && (Flags & EF_MIPS_ARCH_ASE_M16))
     return profileError("MIPS16 64-bit encoding is not supported");
   if ((Flags & EF_MIPS_MICROMIPS) && (Flags & EF_MIPS_ARCH_ASE_M16))
     return profileError("conflicting microMIPS and MIPS16 capabilities");
@@ -53,23 +55,22 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
        EF_MIPS_MACH))
     return profileError("vendor/ASE profile is not supported");
   const uint32_t ISA = Flags & EF_MIPS_ARCH;
-  const bool R6 =
-      ISA == (ELFT::Is64Bits ? EF_MIPS_ARCH_64R6 : EF_MIPS_ARCH_32R6);
-  if (!R6 && ISA != (ELFT::Is64Bits ? EF_MIPS_ARCH_64R2 : EF_MIPS_ARCH_32R2))
+  const bool R6 = ISA == (Wide ? EF_MIPS_ARCH_64R6 : EF_MIPS_ARCH_32R6);
+  if (!R6 && ISA != (Wide ? EF_MIPS_ARCH_64R2 : EF_MIPS_ARCH_32R2))
     return profileError(
         "requires matching ELF class and MIPS32/MIPS64 r2 or r6");
-  if ((Flags & EF_MIPS_ABI) != (ELFT::Is64Bits ? 0u : EF_MIPS_ABI_O32) ||
+  if ((Flags & EF_MIPS_ABI) != (Wide ? 0u : EF_MIPS_ABI_O32) ||
       (Flags & EF_MIPS_32BITMODE))
-    return profileError("requires ELF32/o32 or ELF64/n64 ABI");
-  constexpr uint32_t KnownFlags = EF_MIPS_NOREORDER | EF_MIPS_PIC |
-                                  EF_MIPS_CPIC | EF_MIPS_ABI | EF_MIPS_FP64 |
-                                  EF_MIPS_NAN2008 | EF_MIPS_ARCH |
-                                  EF_MIPS_MICROMIPS | EF_MIPS_ARCH_ASE_M16;
+    return profileError("requires ELF32/o32, ELF32/n32 or ELF64/n64 ABI");
+  constexpr uint32_t KnownFlags =
+      EF_MIPS_NOREORDER | EF_MIPS_PIC | EF_MIPS_CPIC | EF_MIPS_ABI2 |
+      EF_MIPS_ABI | EF_MIPS_FP64 | EF_MIPS_NAN2008 | EF_MIPS_ARCH |
+      EF_MIPS_MICROMIPS | EF_MIPS_ARCH_ASE_M16;
   if (Flags & ~KnownFlags)
     return profileError("unrecognized ELF flags");
 
   MIPSImageMetadata Profile;
-  Profile.ABI = ELFT::Is64Bits ? MIPSABI::N64 : MIPSABI::O32;
+  Profile.ABI = N32 ? MIPSABI::N32 : Wide ? MIPSABI::N64 : MIPSABI::O32;
   Profile.ELFFlags = Flags;
   Profile.ISARevision = R6 ? 6 : 2;
   Profile.HasMicroMIPS = Flags & EF_MIPS_MICROMIPS;
@@ -227,7 +228,7 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
     if (Profile.HasMIPS16E2 && !Profile.HasMIPS16)
       return profileError("MIPS16e2 requires MIPS16 encoding capability");
     Profile.HasMT = ASE & llvm::Mips::AFL_ASE_MT;
-    if (Profile.HasMT && (!Profile.HasMIPS16E2 || ELFT::Is64Bits))
+    if (Profile.HasMT && (!Profile.HasMIPS16E2 || Wide))
       return profileError("MT currently requires MIPS16e2/o32");
     Profile.HasDSPR2 = ASE & llvm::Mips::AFL_ASE_DSPR2;
     Profile.HasDSP = Profile.HasDSPR2 || (ASE & llvm::Mips::AFL_ASE_DSP);
@@ -237,14 +238,14 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
       return profileError("unsupported Release 6 extension profile");
     if (Profile.HasMSA &&
         (Profile.HasMIPS16 || Profile.HasDSP || Bytes[3] != 5 ||
-         Bytes[5] != 3 || Bytes[7] != (ELFT::Is64Bits ? 1 : 6)))
+         Bytes[5] != 3 || Bytes[7] != (Wide ? 1 : 6)))
       return profileError(
           "MSA requires r5 with 128-bit CPR1 and o32 FP64 or n64 hard double");
-    if (Bytes[2] != (ELFT::Is64Bits ? 64 : 32) ||
+    if (Bytes[2] != (Wide ? 64 : 32) ||
         Bytes[3] != (R6               ? 6
                      : Profile.HasMSA ? 5
                                       : 2) ||
-        Bytes[4] != (ELFT::Is64Bits ? 2 : 1))
+        Bytes[4] != (Wide ? 2 : 1))
       return profileError("ABI flags conflict with the admitted GPR profile");
     if (Bytes[5] > (Profile.HasMSA ? 3 : 2) || Bytes[6] != 0 || Bytes[7] > 7 ||
         Read32(8) != 0 ||

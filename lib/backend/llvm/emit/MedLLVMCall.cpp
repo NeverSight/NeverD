@@ -99,7 +99,13 @@ bool floatingHeaderCall(const FunctionSym &Function, Arch Architecture,
 // as the actual MIPS ABI extension on the declaration and every call site.
 static llvm::AttributeList
 mipsFloatingCallAttributes(llvm::LLVMContext &C, llvm::AttributeList Attrs,
-                           const FloatingCallArguments &Signature) {
+                           const FloatingCallArguments &Signature, Arch A) {
+  if (Signature.ReturnKind == NdTypeKind::Int &&
+      Signature.ReturnBytes < getTargetRegInfo(A).FullRegWidth)
+    Attrs = Attrs.addRetAttribute(C, Signature.SignedResult ||
+                                             Signature.ReturnBytes == 4
+                                         ? llvm::Attribute::SExt
+                                         : llvm::Attribute::ZExt);
   if (Signature.SignedResult)
     Attrs = Attrs.addFnAttribute(C, LLVMSourceSignedResult);
   for (unsigned I = 0; I != Signature.Scalars.size(); ++I) {
@@ -643,7 +649,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     FatalCodePointerResolution = true;
     return;
   }
-  if (Op.ScalarCallSignature && Dbg && Img) {
+  if (Op.ScalarCallSignature && !Op.SourceCallHint && Dbg && Img) {
     const std::string Name = importCalleeName(*Img, CI->TargetAddr);
     if (!Name.empty())
       if (const auto Header = Dbg->resolvePrototype(Name);
@@ -1025,8 +1031,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     std::vector<llvm::Value *> Values;
     const auto Bindings = sourceABIParameters(Hint.Signature);
     std::vector<llvm::Value *> Carriers;
-    const auto Bits = [](llvm::Type *T) -> unsigned {
-      return T->isPointerTy() ? kSourceCallWordBytes * kSourceCallByteBits
+    const auto Bits = [&](llvm::Type *T) -> unsigned {
+      return T->isPointerTy() ? Mod->getDataLayout().getPointerSizeInBits()
                               : T->getPrimitiveSizeInBits().getFixedValue();
     };
     if (RetainResultStorage &&
@@ -1258,6 +1264,10 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Call->addParamAttr(I, Parameter.Type->IsSigned ? llvm::Attribute::SExt
                                                        : llvm::Attribute::ZExt);
     }
+    if (Hint.Signature.MIPSScalars)
+      Call->setAttributes(
+          mipsFloatingCallAttributes(*Ctx, Call->getAttributes(),
+                                     *Hint.Signature.MIPSScalars, TargetArch));
     if (Analyst && !MachineCall)
       Call->setMetadata(
           "neverd.source.analyst-call",
@@ -2082,10 +2092,10 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         FatalCodePointerResolution = true;
         return;
       }
-      Callee->setAttributes(
-          mipsFloatingCallAttributes(*Ctx, Callee->getAttributes(), Signature));
-      Call->setAttributes(
-          mipsFloatingCallAttributes(*Ctx, Call->getAttributes(), Signature));
+      Callee->setAttributes(mipsFloatingCallAttributes(
+          *Ctx, Callee->getAttributes(), Signature, TargetArch));
+      Call->setAttributes(mipsFloatingCallAttributes(
+          *Ctx, Call->getAttributes(), Signature, TargetArch));
     }
     // A direct arm64e tail transfer forwards the caller's LR. Mark direct
     // argument forwarding so instruction selection can preserve that jump.

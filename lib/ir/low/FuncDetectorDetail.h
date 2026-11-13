@@ -165,6 +165,8 @@ inline void scanSegmentCalls(const BinaryImage &Img, Decoder &Dec,
   case Arch::MIPS32:
   case Arch::MIPS32EL:
   case Arch::MIPS64:
+  case Arch::MIPS64N32:
+  case Arch::MIPS64N32EL:
   case Arch::MIPS64EL:
     scanSegmentCallsMIPS(Img, Dec, Seg, Start, End, Out, Control);
     return;

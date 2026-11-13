@@ -136,7 +136,7 @@ std::optional<X86CompactPlan> x86CompactCallPlan(Arch A,
   const auto *Asm = llvm::dyn_cast<llvm::InlineAsm>(Call.getCalledOperand());
   std::optional<X86CompactPlan> P;
   if (F)
-    P = x86CompactNativeName(F->getName().str());
+    P = x86CompactNativeName(F->getName());
   if (P) {
     const auto ID = llvm::Intrinsic::lookupIntrinsicID(F->getName());
     if (!ID || !F->isDeclaration() || F->getIntrinsicID() != ID ||
