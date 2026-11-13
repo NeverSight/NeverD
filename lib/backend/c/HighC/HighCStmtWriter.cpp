@@ -1640,8 +1640,13 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
     // The fail-closed form of an indirect branch whose targets were not
     // proven. There is no label to name; the failure stays at run time.
     if (Stmt.GotoTarget == InvalidVA) {
-      OS << "__builtin_trap(); /* unresolved indirect branch at 0x"
-         << llvm::utohexstr(Stmt.Addr) << " */\n";
+      if (Stmt.LeftImageAt != InvalidVA)
+        OS << "__builtin_trap(); /* 0x" << llvm::utohexstr(Stmt.Addr)
+           << " goes on at 0x" << llvm::utohexstr(Stmt.LeftImageAt)
+           << ", where the image maps no code */\n";
+      else
+        OS << "__builtin_trap(); /* unresolved indirect branch at 0x"
+           << llvm::utohexstr(Stmt.Addr) << " */\n";
       break;
     }
     // `__leave` ends a `__try` normally; a local unwind's goto ends it as a

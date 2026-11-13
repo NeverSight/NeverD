@@ -826,6 +826,24 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
       return InsertBB && !InsertBB->empty() && InsertBB->back().isTerminator();
     };
 
+    // A path that left the image has no block to go to (MedFunc::
+    // TruncatedPathAddresses).  Returning or falling through there invents
+    // control flow, as it does for an indirect branch without a proved
+    // target: the path ends in a trap.
+    auto LeavesImage = [&](const MedOp &Branch) {
+      return Branch.NumInputs >= 1 && Branch.Inputs[0].isConst() &&
+             Func.TruncatedPathAddresses.count(Branch.Inputs[0].ConstVal);
+    };
+    // The block runs off the mapped code.  A block without an extent of its
+    // own ends nowhere.
+    const bool RunsOff =
+        Blk.EndAddr != 0 && Func.TruncatedPathAddresses.count(Blk.EndAddr);
+    auto EmitLeftImage = [&](llvm::IRBuilder<> &At) {
+      At.CreateIntrinsic(llvm::Type::getVoidTy(*Ctx), llvm::Intrinsic::trap,
+                         {});
+      At.CreateUnreachable();
+    };
+
     for (size_t OI = 0; OI < Blk.Ops.size(); ++OI) {
       // Pointer resolution has already diagnosed this doomed module. Do not
       // keep allocating IR or running proofs for its remaining operations.
@@ -837,6 +855,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
           auto SuccIt = BBMap.find(Blk.Succs[0]);
           if (SuccIt != BBMap.end())
             Builder.CreateBr(SuccIt->second);
+        } else if (LeavesImage(Op)) {
+          EmitLeftImage(Builder);
         }
         break;
       }
@@ -898,6 +918,11 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
                   emitOp(Effect, EffectBuilder, Blk.Id, static_cast<int>(EI));
                   break;
                 }
+                // The selected half of a predicated branch out of the image.
+                if (Effect.Opcode == NdOp::BRANCH && LeavesImage(Effect)) {
+                  EmitLeftImage(EffectBuilder);
+                  break;
+                }
                 emitOp(Effect, EffectBuilder, Blk.Id, static_cast<int>(EI));
                 if (!EffectBB->empty() && EffectBB->back().isTerminator())
                   break;
@@ -935,6 +960,9 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
               FallthroughBB = ItFall->second;
             if (ItTaken != BBMap.end())
               TakenBB = ItTaken->second;
+          } else if (Blk.Succs.empty() && LeavesImage(Op) && RunsOff) {
+            // Neither edge stays in the image.
+            EmitLeftImage(Builder);
           } else if (Blk.Succs.size() == 1) {
             auto It0 = BBMap.find(Blk.Succs[0]);
             llvm::BasicBlock *ContBB =
@@ -960,6 +988,15 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
               emitOp(Blk.Ops[RetOpIdx], RetBuilder, Blk.Id, RetOpIdx);
             } else if (ContBB) {
               TakenBB = FallthroughBB = ContBB;
+              // The lone successor is the edge that stayed in the image.
+              const bool TakenLeaves = LeavesImage(Op);
+              if (TakenLeaves != RunsOff) {
+                auto *LeftBB = llvm::BasicBlock::Create(
+                    *Ctx, "left.image." + std::to_string(Blk.Id), CurFunc);
+                llvm::IRBuilder<> LeftBuilder(LeftBB);
+                EmitLeftImage(LeftBuilder);
+                (TakenLeaves ? TakenBB : FallthroughBB) = LeftBB;
+              }
             }
           }
           if (TakenBB && FallthroughBB) {
@@ -1023,6 +1060,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
       } else if (Blk.Succs.empty()) {
         if (Func.DoesNotReturn)
           Builder.CreateUnreachable();
+        else if (RunsOff)
+          EmitLeftImage(Builder);
         else
           EmitDefaultRet();
       } else {

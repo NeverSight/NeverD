@@ -313,6 +313,12 @@ struct VariadicVectorCallee {
   int NamedIntegerRegisters = -1;
 };
 
+/// Aim the jump statement \p Goto at the target of \p Med's direct branch
+/// \p Branch, or at no label where that address is one a path left the image
+/// for (MedFunc::TruncatedPathAddresses): it has no block, and the jump ends
+/// in a trap as an indirect branch without a proved target does.
+void aimDirectBranch(HighStmt &Goto, const MedFunc &Med, const MedOp &Branch);
+
 class MedToHighConverter {
 public:
   /// Reject native call contracts that HighC cannot express, before a batch

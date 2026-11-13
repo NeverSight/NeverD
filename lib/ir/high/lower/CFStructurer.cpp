@@ -793,6 +793,23 @@ void MedToHighConverter::structureControlFlow(HighFunc &Func,
         Func.Body.push_back(std::move(Transfer));
       }
     }
+    // A block that runs off the code the image maps has nowhere to go: its
+    // path ends in a trap, as a jump out of the image does.  A block without
+    // an extent of its own ends nowhere.
+    if (!Tree && CurBlock.EndAddr != 0 &&
+        Med.TruncatedPathAddresses.count(CurBlock.EndAddr) &&
+        (CurBlock.Ops.empty() ||
+         (CurBlock.Ops.back().Opcode != NdOp::BRANCH &&
+          CurBlock.Ops.back().Opcode != NdOp::INDIR_BR &&
+          CurBlock.Ops.back().Opcode != NdOp::RETURN))) {
+      HighStmt Left;
+      Left.Kind = StmtKind::Goto;
+      Left.Addr =
+          CurBlock.Ops.empty() ? CurBlock.StartAddr : CurBlock.Ops.back().Addr;
+      Left.GotoTarget = InvalidVA;
+      Left.LeftImageAt = CurBlock.EndAddr;
+      Func.Body.push_back(std::move(Left));
+    }
     const va_t Entry =
         CurBlock.StartAddr
             ? CurBlock.StartAddr

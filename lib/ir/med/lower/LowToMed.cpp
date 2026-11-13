@@ -1125,6 +1125,8 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
   Func.CxxContinuationEntries = Low.CxxContinuationEntries;
   Func.UnsafeIndirectBranchAddresses = Low.UnsafeIndirectBranchAddresses;
   Func.CompleteLiftCoverage = Low.hasCompleteLiftCoverage();
+  Func.TruncatedPathAddresses.insert(Low.TruncatedPathAddresses.begin(),
+                                     Low.TruncatedPathAddresses.end());
   Func.ExceptionMetadata = Low.ExceptionMetadata;
   Func.SEHTerminationFrameBytes = collectLowSEHTerminationFrames(Low, TheArch);
   Func.SEHHomedArguments = collectLowSEHHomedArguments(Low, TheArch);
