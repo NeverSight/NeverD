@@ -29,6 +29,7 @@
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Program.h"
@@ -920,6 +921,158 @@ TEST(AArch64LiftedImage,
 TEST(AArch64LiftedImage, SignedFrameCallsImportBeforeReadingOriginalGlobal) {
   verifyPublishedLeaves(kGlobalLeaves, kGlobalCaller, kSource, kFramedImport,
                         LeafCheck::FramedImport);
+}
+TEST(AArch64LiftedImage, PublishesMultiplyAccumulateAndVariableShift) {
+  verifyPublishedLeaves(kMultiplyLeaves, kMultiplyCaller);
+}
+
+TEST(AArch64LiftedImage, PublishesNewThreadLocalDefinitionsAndInitializers) {
+#if defined(__APPLE__) && defined(__aarch64__)
+  llvm::SmallString<128> Dir;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kTemporary, Dir));
+  const std::filesystem::path Root(Dir.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Source = (Root / kNewTLSFile).string(),
+             Base = (Root / kNewTLSImage).string();
+  const auto Input = (Root / kOriginal).string(),
+             Output = (Root / kOutput).string();
+  const auto Reference = (Root / kTLVProvider).string(),
+             Object = (Root / kTLVObject).string();
+  const auto DriverSource = (Root / kNewTLSDriverFile).string(),
+             Driver = (Root / kDriver).string();
+  std::ofstream(Source) << kNewTLSBody;
+  std::ofstream(Base) << kNewTLSBase;
+  std::ofstream(DriverSource) << kNewTLSDriver;
+  auto Reader = Loader::create(BinaryFormat::MachO);
+  unsigned Runs = 0;
+  for (const auto *Opt : {kUnoptimized, kOptimize}) {
+    for (bool OldTLS : {false, true}) {
+      SCOPED_TRACE(Opt);
+      SCOPED_TRACE(OldTLS);
+      const auto Compile = [&](llvm::ArrayRef<llvm::StringRef> Args) {
+        llvm::SmallVector<llvm::StringRef> Cmd{kTLSCxx, kTargetFlag, kTarget,
+                                               Opt};
+        if (OldTLS)
+          Cmd.push_back(kTLSWithOriginal);
+        Cmd.append(Args.begin(), Args.end());
+        return llvm::sys::ExecuteAndWait(kTLSCxx, Cmd);
+      };
+      ASSERT_EQ(Compile({kDylib, Base, kOut, Input}), 0);
+      ASSERT_EQ(Compile({kDylib, kTLSReference, Base, Source, kOut, Reference}),
+                0);
+      ASSERT_EQ(Compile({kTLVCompile, Source, kOut, Object}), 0);
+      ASSERT_EQ(Compile({DriverSource, kOut, Driver}), 0);
+      auto Original = Reader->load(Input);
+      ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+      const auto *Entry = Original->findSymbol(kTLVSymbol);
+      ASSERT_NE(Entry, nullptr);
+      const SourcePatchMapping Map{kTLVMapping, Entry->Addr};
+      auto Bytes = llvm::MemoryBuffer::getFile(Object);
+      ASSERT_TRUE(bool(Bytes));
+      auto Appended = Original->Raw;
+      auto Native = appendMachOObjectImage(Appended, (*Bytes)->getBuffer(), {});
+      ASSERT_TRUE(bool(Native)) << llvm::toString(Native.takeError());
+      auto AppendedImage = Reader->loadBuffer(llvm::MemoryBufferRef(
+          llvm::StringRef(reinterpret_cast<const char *>(Appended.data()),
+                          Appended.size()),
+          {}));
+      ASSERT_TRUE(bool(AppendedImage))
+          << llvm::toString(AppendedImage.takeError());
+      EXPECT_TRUE(llvm::any_of(AppendedImage->Exports, [](const auto &E) {
+        return E.Name == kPublishedTLVName;
+      }));
+      auto Patch = installMachOObjectPatch((*Bytes)->getBuffer(), *Original,
+                                           {Map}, {}, Output, {});
+      ASSERT_TRUE(bool(Patch)) << llvm::toString(Patch.takeError());
+      auto Installed = Reader->load(Output);
+      ASSERT_TRUE(bool(Installed)) << llvm::toString(Installed.takeError());
+      const Section *Template = nullptr;
+      for (const auto &S : Installed->Sections)
+        if ((S.Type & llvm::MachO::SECTION_TYPE) ==
+            llvm::MachO::S_THREAD_LOCAL_REGULAR) {
+          ASSERT_FALSE(Template);
+          Template = &S;
+        }
+      ASSERT_NE(Template, nullptr);
+      auto Export = llvm::find_if(Installed->Exports, [](const auto &E) {
+        return E.Name == kPublishedTLVName;
+      });
+      ASSERT_NE(Export, Installed->Exports.end());
+      const auto *ExportSection = Installed->getSectionFor(Export->Addr);
+      ASSERT_TRUE(ExportSection);
+      EXPECT_EQ(ExportSection->Type & llvm::MachO::SECTION_TYPE,
+                llvm::MachO::S_THREAD_LOCAL_VARIABLES);
+      unsigned Descriptors = 0;
+      for (const auto &S : Installed->Sections) {
+        if ((S.Type & llvm::MachO::SECTION_TYPE) !=
+            llvm::MachO::S_THREAD_LOCAL_VARIABLES)
+          continue;
+        for (uint64_t Off = 0; Off < S.Size;
+             Off += kTLVDescriptorWords * sizeof(uint64_t)) {
+          auto Recipe = Installed->MachOAuthenticatedPointers.find(S.VA + Off);
+          ASSERT_NE(Recipe, Installed->MachOAuthenticatedPointers.end());
+          EXPECT_EQ(Recipe->second.Symbol, kTLVResolverSymbol);
+          EXPECT_FALSE(Recipe->second.AddressDiversity);
+          EXPECT_EQ(Recipe->second.Key, 0u);
+          EXPECT_EQ(Recipe->second.Diversity, 0u);
+          const auto *Offset = Installed->readVA(
+              S.VA + Off + kTLVOffsetWord * sizeof(uint64_t), sizeof(uint64_t));
+          ASSERT_NE(Offset, nullptr);
+          EXPECT_LT(readLE<uint64_t>(Offset), Template->Size);
+          ++Descriptors;
+        }
+      }
+      EXPECT_GE(Descriptors, kTLVNewDescriptors + unsigned(OldTLS));
+      if (std::getenv(kExecute))
+        for (const auto &Image : {Reference, Output}) {
+          ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                        Driver, {Driver, Image, std::to_string(OldTLS)}),
+                    0);
+          ++Runs;
+        }
+      ASSERT_TRUE(std::filesystem::remove(Output));
+      // A new template must not hide ambiguity in the original export scope.
+      ASSERT_EQ(Compile({kDylib, kTLSConflict, Base, kOut, Input}), 0);
+      auto Conflict = Reader->load(Input);
+      ASSERT_TRUE(bool(Conflict)) << llvm::toString(Conflict.takeError());
+      const auto *ConflictEntry = Conflict->findSymbol(kTLVSymbol);
+      ASSERT_NE(ConflictEntry, nullptr);
+      SourcePatchMapping Collision{kTLVMapping, ConflictEntry->Addr};
+      auto Failed = installMachOObjectPatch((*Bytes)->getBuffer(), *Conflict,
+                                            {Collision}, {}, Output, {});
+      ASSERT_FALSE(bool(Failed));
+      llvm::consumeError(Failed.takeError());
+      EXPECT_FALSE(std::filesystem::exists(Output));
+      // dyld owns the initially zero key word. Reject a producer trying to
+      // preseed it and verify publication leaves no file behind.
+      std::string Changed = (*Bytes)->getBuffer().str();
+      auto File = llvm::object::ObjectFile::createObjectFile(
+          llvm::MemoryBufferRef(Changed, {}));
+      ASSERT_TRUE(bool(File)) << llvm::toString(File.takeError());
+      bool Mutated = false;
+      for (const auto &S : (*File)->sections()) {
+        auto Name = S.getName();
+        ASSERT_TRUE(bool(Name)) << llvm::toString(Name.takeError());
+        if (*Name != kTLSDescriptorSection)
+          continue;
+        auto Contents = S.getContents();
+        ASSERT_TRUE(bool(Contents)) << llvm::toString(Contents.takeError());
+        ASSERT_GE(Contents->size(), kTLVDescriptorWords * sizeof(uint64_t));
+        Changed[Contents->data() - Changed.data() + sizeof(uint64_t)] = 1;
+        Mutated = true;
+      }
+      ASSERT_TRUE(Mutated);
+      Failed =
+          installMachOObjectPatch(Changed, *Original, {Map}, {}, Output, {});
+      ASSERT_FALSE(bool(Failed));
+      llvm::consumeError(Failed.takeError());
+      EXPECT_FALSE(std::filesystem::exists(Output));
+    }
+  }
+  RecordProperty(kNewTLSProperty, Runs);
+#else
+  GTEST_SKIP() << kUnavailable;
+#endif
 }
 TEST(AArch64LiftedImage, PublishedThreadLocalAccessUsesTheBoundDescriptor) {
 #if defined(__APPLE__) && defined(__aarch64__)

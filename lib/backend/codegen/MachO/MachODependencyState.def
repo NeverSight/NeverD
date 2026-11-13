@@ -41,5 +41,9 @@ MACHO_DEPENDENCY_TEXT(kThreadedStorage,
 MACHO_DEPENDENCY_TEXT(kThreadedCopies,
                       "threaded bind names exceed copied-byte budget")
 
+MACHO_DEPENDENCY_TEXT(kTLSExport,
+                      "thread-local export conflicts with the existing trie")
+
 #undef MACHO_DEPENDENCY_VALUE
+
 #undef MACHO_DEPENDENCY_TEXT

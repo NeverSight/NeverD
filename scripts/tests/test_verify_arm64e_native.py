@@ -64,14 +64,15 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
 
     def test_cpta_requires_checked_results_from_the_actual_x1_slice(self):
         policy = native.POLICY["cpta_probe"]
-        checked = [row[3] for row in policy["vectors"]]
-        unchecked = [row[2] for row in policy["vectors"]]
+        checked = [row[3] for row in policy["vectors"] for _ in policy["instructions"]]
+        unchecked = [row[2] for row in policy["vectors"] for _ in policy["instructions"]]
         for results, writeback, status in (
             (checked, policy["writeback_checked"], native.POLICY["passed"]),
             (unchecked, policy["writeback_unchecked"], native.POLICY["unavailable"]),
             (checked, policy["writeback_unchecked"], native.POLICY["unavailable"]),
             (checked, "", native.POLICY["failed"]),
             (checked[:-1], policy["writeback_checked"], native.POLICY["failed"]),
+            (checked[:-1] + unchecked[-1:], policy["writeback_checked"], native.POLICY["failed"]),
             (unchecked[:-1] + checked[-1:], policy["writeback_checked"], native.POLICY["failed"]),
         ):
             def run(products, output, label, argv, timeout, env=None):

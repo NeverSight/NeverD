@@ -904,6 +904,12 @@ readMachODependencyState(llvm::ArrayRef<uint8_t> B,
 }
 llvm::Error preserveMachODependencyState(const MachODependencyState &Before,
                                          const MachODependencyState &After) {
+  return preserveMachODependencyState(Before, After, {});
+}
+llvm::Error
+preserveMachODependencyState(const MachODependencyState &Before,
+                             const MachODependencyState &After,
+                             const std::map<std::string, uint64_t> &AddedTLS) {
   if (Before.CPUType != After.CPUType || Before.CPUSubtype != After.CPUSubtype)
     return fail(kChangedCPUABI);
   for (const auto &[Key, Value] : Before.Slots) {
@@ -914,9 +920,35 @@ llvm::Error preserveMachODependencyState(const MachODependencyState &Before,
   auto Prefix = [](const auto &A, const auto &B) {
     return A.size() <= B.size() && std::equal(A.begin(), A.end(), B.begin());
   };
+  std::optional<Bytes> ExpectedExports;
+  if (!AddedTLS.empty()) {
+    // Exports holds length-prefixed canonical absolute-address tries. A TLS
+    // publication owns one trie and adds only the declared descriptor names.
+    llvm::ArrayRef<uint8_t> Trie(Before.Exports);
+    if (!Trie.empty()) {
+      if (Trie.size() < sizeof(uint64_t) ||
+          readLE<uint64_t>(Trie.data()) != Trie.size() - sizeof(uint64_t))
+        return fail(kTLSExport);
+      Trie = Trie.drop_front(sizeof(uint64_t));
+    }
+    auto Exports = readMachOExportLayout(Trie);
+    if (!Exports)
+      return Exports.takeError();
+    for (const auto &[Name, VA] : AddedTLS)
+      if (!Exports
+               ->emplace(
+                   Name,
+                   MachOExportLayout{EXPORT_SYMBOL_FLAGS_KIND_THREAD_LOCAL, VA})
+               .second)
+        return fail(kTLSExport);
+    auto Expected = writeMachOExportLayout(*Exports);
+    if (!Expected)
+      return Expected.takeError();
+    bytes(ExpectedExports.emplace(), *Expected);
+  }
   if (!Prefix(Before.Libraries, After.Libraries) ||
       !Prefix(Before.Indirect, After.Indirect) ||
-      Before.Exports != After.Exports)
+      (ExpectedExports ? *ExpectedExports : Before.Exports) != After.Exports)
     return fail("old library, indirect symbol or export identity changed");
   // Callback definitions may be inserted before the undefined partition.
   auto At = After.Symbols.begin();

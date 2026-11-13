@@ -1922,7 +1922,14 @@ PAuth_LR profiles; an unavailable explicit instruction is not counted.
 modifier changes signatures, rather than treating old-CPU PACM hint fallback
 as full PC-signing qualification. See the
 [native qualification record](arm64e-native-validation.md#instruction-address-signal-recipes-and-remembered-frames).
-These tests do not execute native signed exception unwinding.
+The same test host separately exercises signed language unwinding. With
+`NEVERD_ARM64E_ASYNC_NATIVE=1`, the signal cleanup cases compare the original
+and published code at O0 and O2, on the ordinary and alternate stacks. They
+check object identity, cleanup order and the restored signal mask. Set
+`NEVERD_ARM64E_LIFTED_NATIVE=1` to execute the TLS lifecycle and lifted
+arithmetic controls. The TLS cases compare against a compiler-linked dylib,
+including a pre-existing TLS template and thread-exit callbacks. See the
+[publication and signal-delivery checks](arm64e-native-validation.md#signal-delivery-language-cleanup-and-new-thread-local-storage).
 
 `NeverDArm64eUnwindRecoveryTests` runs without Apple hardware. It checks
 implicit signing at exact instruction boundaries, including conflicting

@@ -1052,22 +1052,30 @@ reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch A,
 llvm::Expected<uint64_t> reserveMachOPublishedUnwind(
     std::vector<uint8_t> &Binary, Arch A, uint64_t ExtraFrameBytes,
     MachOUnwindFunctionCounts Additional, bool AllowSlide,
-    std::optional<MachODependencyState> &SlidDependencies) {
+    std::optional<MachODependencyState> &SlidDependencies,
+    uint64_t AdditionalCommandBytes) {
   auto Reserved =
       reserveMachOSourceUnwind(Binary, A, ExtraFrameBytes, Additional);
-  if (Reserved)
-    return 0;
-  auto Error = Reserved.takeError();
-  if (!AllowSlide || !Error.isA<InsufficientText>())
-    return Error;
+  llvm::Error UnwindError = Reserved.takeError();
+  if (!UnwindError) {
+    if (!AdditionalCommandBytes)
+      return 0;
+    auto Space = reserveMachOHeaderStorage(Binary, A, AdditionalCommandBytes);
+    if (Space)
+      return 0;
+    UnwindError = Space.takeError();
+  }
+  if (!AllowSlide || (!UnwindError.isA<InsufficientText>() &&
+                      !UnwindError.isA<InsufficientMachOHeaderPrefix>()))
+    return UnwindError;
   auto Region = findMachOCompactUnwindRegion(Binary);
   if (!Region) {
-    llvm::consumeError(std::move(Error));
+    llvm::consumeError(std::move(UnwindError));
     return Region.takeError();
   }
   if (!*Region || (**Region).MachHeaderVA)
-    return Error;
-  llvm::consumeError(std::move(Error));
+    return UnwindError;
+  llvm::consumeError(std::move(UnwindError));
   const auto &R = **Region;
   auto Raw = macho_unwind::parseCompactUnwindRaw(
       llvm::ArrayRef(Binary).slice(R.SectionFileOff, R.SectionSize),
@@ -1079,9 +1087,10 @@ llvm::Expected<uint64_t> reserveMachOPublishedUnwind(
     return Compact.takeError();
   const auto H = parseMachOHeader(Binary.data(), Binary.size());
   const uint64_t HeaderEnd = uint64_t(H.HeaderSize) + H.SizeOfCmds;
-  uint64_t Bytes =
-      llvm::alignTo(HeaderEnd + kMetadataCommandReserve, alignof(uint64_t)) +
-      llvm::alignTo(*Compact, alignof(uint64_t));
+  uint64_t Bytes = llvm::alignTo(HeaderEnd + std::max(kMetadataCommandReserve,
+                                                      AdditionalCommandBytes),
+                                 alignof(uint64_t)) +
+                   llvm::alignTo(*Compact, alignof(uint64_t));
   auto EH = findMachOEHFrameRegion(Binary);
   if (EH) {
     // Check the original recipes before moving their code and language data.

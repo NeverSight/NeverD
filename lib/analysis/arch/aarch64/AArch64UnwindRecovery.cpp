@@ -621,6 +621,11 @@ bool implicitProfile(const BinaryImage &Image,
          !(Entry.NativeEncoding & macho_unwind::kIsNotFunctionStart);
 }
 
+bool hasDarwinCallSitePersonality(ExceptionPersonality Personality) {
+  return Personality == ExceptionPersonality::GxxPersonalityV0 ||
+         Personality == ExceptionPersonality::ObjCPersonalityV0;
+}
+
 // Darwin C++ and Objective-C personalities select a landing pad by its PC
 // range. Index only the owning frame's aligned, disjoint ranges. In
 // particular, the entry order of an SJLJ table does not describe PC ranges.
@@ -636,9 +641,7 @@ landingPads(const ExceptionFunction &Function, ExceptionAddressRange Range,
   if (!Function.Itanium && !DwarfLSDA && !CompactLSDA && !HasCompactLSDA)
     return std::vector<size_t>{};
   const auto &Info = Function.Itanium;
-  if (!Info ||
-      (Function.Personality != ExceptionPersonality::GxxPersonalityV0 &&
-       Function.Personality != ExceptionPersonality::ObjCPersonalityV0) ||
+  if (!Info || !hasDarwinCallSitePersonality(Function.Personality) ||
       !Info->IsCallSiteAddressForm || !Info->LSDAVA ||
       (!DwarfLSDA && !CompactLSDA) ||
       (DwarfLSDA && DwarfLSDA != Info->LSDAVA) ||
@@ -965,6 +968,60 @@ prepareDarwinArm64eSystemCaller(const AArch64RecoveredUnwindRow &Row,
   }
   }
   return Plan;
+}
+
+std::optional<NDDarwinArm64eExceptionSite>
+prepareDarwinArm64eExceptionSite(const BinaryImage &Image,
+                                 const ExceptionFunction &Function,
+                                 llvm::ArrayRef<AArch64RecoveredUnwindRow> Rows,
+                                 va_t PC, va_t LoadedFrameStart) {
+  const auto Range = Function.CodeRange;
+  constexpr auto Width = neverd::aarch64::kInsnSize;
+  if (!Image.isArm64e() || Rows.empty() || Rows.front().CodeOffset ||
+      !Range.contains(PC) || PC % Width || LoadedFrameStart % Width ||
+      Range.size() > UINTPTR_MAX - LoadedFrameStart)
+    return std::nullopt;
+  const auto &Row = aarch64UnwindRowAt(Rows, PC - Range.Begin);
+  auto Plan = prepareDarwinArm64eSystemCaller(Row, Range, LoadedFrameStart);
+  if (!Plan)
+    return std::nullopt;
+  const auto *Next = &Row + 1;
+  auto Begin = Range.Begin + Row.CodeOffset;
+  auto End = Next == Rows.end() ? Range.End : Range.Begin + Next->CodeOffset;
+  bool AtCall = false;
+  if (!Function.describesUnwindOnly()) {
+    if (Function.ParseStatus != ExceptionParseStatus::Complete ||
+        !Function.Itanium || !Function.Itanium->IsCallSiteAddressForm ||
+        !hasDarwinCallSitePersonality(Function.Personality))
+      return std::nullopt;
+    const auto &Sites = Function.Itanium->CallSites;
+    const auto Site = llvm::find_if(
+        Sites, [&](const auto &S) { return S.GuardedRange.contains(PC); });
+    if (Site == Sites.end() || !Range.contains(Site->GuardedRange))
+      return std::nullopt;
+    Begin = std::max(Begin, Site->GuardedRange.Begin);
+    End = std::min(End, Site->GuardedRange.End);
+    if (Site->LandingPadVA) {
+      // The personality looks up LR - 1. Only a real throwing call boundary
+      // has the compiler's promised live values for its landing pad.
+      const auto *Code = Image.readVA(PC, Width);
+      Decoder Decode;
+      DecodedInsn I{};
+      if (!Plan->Frame.SavedLR || End - PC < Width || !Code ||
+          !Range.contains(Site->LandingPadVA) || !Decode.init(Image) ||
+          Decode.decodeOne(Code, Width, PC, I) != int(Width) || !I.Raw ||
+          !cs_insn_group(Decode.getHandle(), I.Raw, CS_GRP_CALL))
+        return std::nullopt;
+      AtCall = true;
+      Begin = PC;
+      End = PC + Width;
+    }
+  }
+  if (!AtCall && !Plan->Vectors.Complete)
+    return std::nullopt;
+  return NDDarwinArm64eExceptionSite{LoadedFrameStart + (Begin - Range.Begin),
+                                     LoadedFrameStart + (End - Range.Begin),
+                                     AtCall};
 }
 
 AArch64AnalyzedUnwindSigning

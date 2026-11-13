@@ -109,6 +109,47 @@ static inline bool ndDarwinArm64eResumeSignalCaller(
   return true;
 }
 
+/// Schedule a caller-supplied, nonreturning language throw or rethrow thunk.
+/// Return normally from SA_SIGINFO after success. The thunk executes with the
+/// restored signal mask and stack, outside the handler. Its return address
+/// selects the original protected call in the system personality. Prepare Site
+/// and the matching row before the signal, while the image is still loaded.
+typedef void (*NDDarwinArm64eExceptionDelivery)(void *);
+static inline bool ndDarwinArm64eDeliverSignalException(
+    ucontext_t *Context, NDDarwinArm64eExceptionSite Site,
+    NDDarwinArm64eUnwindRow Row, const NDDarwinArm64eSavedGPR *Saved,
+    size_t Count, const NDDarwinArm64eVectorSaves *Vectors, uintptr_t Low,
+    uintptr_t High, bool HasPAuthLR, NDDarwinArm64eExceptionDelivery Deliver,
+    void *Payload) {
+  if (!Context || !Context->uc_mcontext ||
+      Context->uc_mcsize != sizeof(*Context->uc_mcontext) || !Deliver)
+    return false;
+  arm_thread_state64_t *State = &Context->uc_mcontext->__ss;
+  const uintptr_t PC = arm_thread_state64_get_pc(*State);
+  if (PC < Site.Begin || PC >= Site.End || PC % NDArm64eInstructionAlignment)
+    return false;
+  if (Site.AtProtectedCall) {
+    // The interrupted frame keeps its original signed return in its spill.
+    // The thunk can therefore use LR without destroying that frame's caller.
+    NDDarwinArm64eCursor Caller = ndDarwinArm64eSignalCursor(Context);
+    if (!Row.SavedLR || Site.Begin != PC ||
+        Site.End - PC != NDArm64eInstructionAlignment || Caller.SP < Low ||
+        Caller.SP > High || Caller.SP % NDArm64eStackAlignment ||
+        !ndDarwinArm64eStepFrameWithPAuthLR(&Caller, Row, Low, High,
+                                            HasPAuthLR))
+      return false;
+    void *Return = ptrauth_sign_unauthenticated(
+        (void *)Site.End, ptrauth_key_function_pointer, 0);
+    arm_thread_state64_set_lr_fptr(*State, Return);
+  } else if (!ndDarwinArm64eResumeSignalCaller(
+                 Context, Row, Saved, Count, Vectors, Low, High, HasPAuthLR)) {
+    return false;
+  }
+  State->__x[0] = (uintptr_t)Payload;
+  arm_thread_state64_set_pc_fptr(*State, (void *)Deliver);
+  return true;
+}
+
 /// Move the system stack walker from a Darwin signal trampoline to the
 /// authenticated caller of the interrupted frame. System must be the cursor
 /// at that trampoline and Context its genuine signal ucontext. Never copy the

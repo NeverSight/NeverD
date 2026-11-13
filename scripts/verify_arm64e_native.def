@@ -363,6 +363,8 @@
       "unknown architecture"
     ],
     "started": "running-addpt",
+    "instructions": ["ADDPT", "SUBPT", "MADDPT", "MSUBPT"],
+    "scalar_results_key": "scalar_instruction_results",
     "undefined_instruction": 132,
     "bad_cpu_type_errno": 86,
     "vectors": [

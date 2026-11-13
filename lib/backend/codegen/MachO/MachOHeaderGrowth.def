@@ -24,6 +24,8 @@ MACHO_HEADER_TEXT(
     kDyldPrefix, "dylib or bundle prefix growth requires checked dyld metadata")
 MACHO_HEADER_TEXT(kExportRange,
                   "export offset cannot follow the relocated header")
+MACHO_HEADER_TEXT(kInitializerOffset,
+                  "initializer offset does not name a relocatable function")
 MACHO_HEADER_TEXT(kPrefixRange,
                   "header mapping has no available aligned prefix")
 MACHO_HEADER_VALUE(unsigned, kOrdinaryTargetBits, 36)

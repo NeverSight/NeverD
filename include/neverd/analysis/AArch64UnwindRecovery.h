@@ -85,6 +85,15 @@ prepareDarwinArm64eSystemCaller(const AArch64RecoveredUnwindRow &Row,
                                 ExceptionAddressRange Range,
                                 va_t LoadedFrameStart);
 
+/// Bind the instruction and its recovery row to the language table and its
+/// actual load address. A forwarding range contains no cleanup. A protected
+/// call owns its landing pad and must keep its interrupted frame on the stack.
+std::optional<NDDarwinArm64eExceptionSite>
+prepareDarwinArm64eExceptionSite(const BinaryImage &Image,
+                                 const ExceptionFunction &Function,
+                                 llvm::ArrayRef<AArch64RecoveredUnwindRow> Rows,
+                                 va_t PC, va_t LoadedFrameStart);
+
 struct AArch64AnalyzedUnwindSigning {
   AArch64UnwindSigningQuery Metadata;
   std::optional<dwarf_eh::AArch64RAQueryResult> InstructionStateAtPC;

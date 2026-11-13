@@ -23,6 +23,34 @@ static uint64_t addChecked(uint64_t Base, uint64_t Offset) {
   return Result;
 }
 
+// The three other scalar forms must agree with ADDPT for these operands.
+// Negate modulo 2^64 and multiply by one so the arithmetic result and
+// pointer check have the same independent oracle for all four instructions.
+static void checkOtherScalarForms(uint64_t Base, uint64_t Offset) {
+  register uint64_t Address __asm__("x1") = Base;
+  register uint64_t Operand __asm__("x2") = 0 - Offset;
+  register uint64_t One __asm__("x3");
+  register uint64_t Result __asm__("x0");
+  __asm__ volatile(".long 0xda022020" // SUBPT X0, X1, X2
+                   : "=r"(Result)
+                   : "r"(Address), "r"(Operand));
+  printf("%016" PRIx64 "\n", Result);
+  Address = Base;
+  Operand = Offset;
+  One = 1;
+  __asm__ volatile(".long 0x9b630440" // MADDPT X0, X2, X3, X1
+                   : "=r"(Result)
+                   : "r"(Address), "r"(Operand), "r"(One));
+  printf("%016" PRIx64 "\n", Result);
+  Address = Base;
+  Operand = 0 - Offset;
+  One = 1;
+  __asm__ volatile(".long 0x9b638440" // MSUBPT X0, X2, X3, X1
+                   : "=r"(Result)
+                   : "r"(Address), "r"(Operand), "r"(One));
+  printf("%016" PRIx64 "\n", Result);
+}
+
 // Access a genuine byte, then observe the architectural writeback without
 // dereferencing the potentially poisoned result. Include an in-range offset
 // and a top-byte carry for both a structure load and a structure store.
@@ -77,6 +105,8 @@ int main(int Argc, char **Argv) {
     const uint64_t Base = strtoull(Argv[I], NULL, 16);
     const uint64_t Offset = strtoull(Argv[I + 1], NULL, 16);
     printf("%016" PRIx64 "\n", addChecked(Base, Offset));
+    fflush(stdout);
+    checkOtherScalarForms(Base, Offset);
   }
   return 0;
 }

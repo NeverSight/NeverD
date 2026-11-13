@@ -241,10 +241,15 @@ def probe_cpta(output):
                 if result.returncode == policy["undefined_instruction"] and len(lines) == 1:
                     profile["outcome"] = policy["isa_unavailable"]
                 elif result.returncode == 0:
-                    if lines[1:] == [row[3] for row in vectors]:
-                        profile["outcome"] = policy["checked"]
-                    elif lines[1:] == [row[2] for row in vectors]:
-                        profile["outcome"] = policy["unchecked"]
+                    instructions = policy["instructions"]
+                    if len(lines) == 1 + len(vectors) * len(instructions):
+                        by_instruction = {name: lines[index + 1::len(instructions)]
+                                          for index, name in enumerate(instructions)}
+                        profile[policy["scalar_results_key"]] = by_instruction
+                        if all(values == [row[3] for row in vectors] for values in by_instruction.values()):
+                            profile["outcome"] = policy["checked"]
+                        elif all(values == [row[2] for row in vectors] for values in by_instruction.values()):
+                            profile["outcome"] = policy["unchecked"]
                 if profile["outcome"] in (policy["checked"], policy["unchecked"], policy["isa_unavailable"]):
                     writeback = command(products, output, arch + policy["writeback_suffix"],
                                         [binary, policy["writeback_mode"]], POLICY["tool_timeout"])

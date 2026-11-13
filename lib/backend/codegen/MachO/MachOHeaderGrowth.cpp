@@ -219,6 +219,14 @@ llvm::Error compact(Bytes &B, Arch TargetArch, uint64_t Off, uint64_t Size,
 }
 } // namespace
 
+char InsufficientMachOHeaderPrefix::ID;
+void InsufficientMachOHeaderPrefix::log(llvm::raw_ostream &OS) const {
+  OS << kPrefixRange;
+}
+std::error_code InsufficientMachOHeaderPrefix::convertToErrorCode() const {
+  return llvm::errc::not_supported;
+}
+
 llvm::Expected<MachODependencyState> slideMachOZeroBaseDylib(Bytes &Binary,
                                                              uint64_t Slide) {
   namespace arm64e = macho_loader::arm64e;
@@ -391,11 +399,12 @@ llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
   if (!Executable && !Dyld)
     return fail(kDyldPrefix);
   if (Bad || Text == UINT64_MAX || LE == UINT64_MAX || OldBase % Page ||
-      OldBase < Shift ||
-      (Executable && (Zero == UINT64_MAX || OldBase - Shift < Page)) ||
+      (Executable && (Zero == UINT64_MAX || OldBase < Shift + Page)) ||
       (Zero != UINT64_MAX &&
        readMachOSegment(Binary.data() + Zero, true).VMSize != OldBase))
     return fail(kPrefixRange);
+  if (OldBase < Shift)
+    return llvm::make_error<InsufficientMachOHeaderPrefix>();
   std::vector<std::pair<uint64_t, uint64_t>> Code;
   for (const auto &R : Sections) {
     const auto &S =
@@ -539,6 +548,21 @@ llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
         if (Old.offset)
           Now->offset += Shift;
         if (!isVirtualSection(Old.flags & SECTION_TYPE) && Old.size) {
+          // dyld interprets each initializer as an offset from the Mach
+          // header. The functions stay at their VAs while the header moves.
+          if ((Old.flags & SECTION_TYPE) == S_INIT_FUNC_OFFSETS) {
+            if (Old.size % sizeof(uint32_t) || Old.addr % alignof(uint32_t) ||
+                (Original.InitProt & VM_PROT_WRITE))
+              return fail(kInitializerOffset);
+            for (uint64_t I = 0; I < Old.size; I += sizeof(uint32_t)) {
+              auto *Field = B.data() + Now->offset + I;
+              const auto Value = readLE<uint32_t>(Field);
+              if (Value > UINT32_MAX - Shift || Value > UINT64_MAX - OldBase ||
+                  !InCode(OldBase + Value))
+                return fail(kInitializerOffset);
+              writeLE<uint32_t>(Field, Value + Shift);
+            }
+          }
           if (auto E = headerReferences(B, Old, OldBase, End, Shift, A))
             return E;
           if (readMachOName(Old.sectname) == "__unwind_info")

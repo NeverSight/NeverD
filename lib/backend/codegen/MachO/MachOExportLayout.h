@@ -31,5 +31,10 @@ writeMachOExportLayout(const MachOExportMap &Exports);
 llvm::Expected<std::vector<uint8_t>>
 machOExportIdentities(llvm::ArrayRef<uint8_t> Bytes, uint64_t HeaderVA,
                       uint32_t FileType, MachOChainedFixups *Chained);
+/// Append strong TLV exports to the strictly decoded trie. Existing symbols
+/// keep their absolute identities. Input is the unsigned publication candidate.
+llvm::Error
+installMachOThreadLocalExports(std::vector<uint8_t> &Binary,
+                               const std::map<std::string, uint64_t> &New);
 } // namespace neverd
 #endif

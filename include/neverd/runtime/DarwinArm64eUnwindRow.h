@@ -56,4 +56,12 @@ typedef struct {
   ptrdiff_t HighOffsets[NDArm64ePreservedDCount];
 } NDDarwinArm64eVectorSaves;
 
+/// One predecoded range for delivering a language exception after sigreturn.
+/// A protected call keeps its own frame. A forwarding range restores its
+/// caller and uses the interrupted callee's real architectural return address.
+typedef struct {
+  uintptr_t Begin, End;
+  bool AtProtectedCall;
+} NDDarwinArm64eExceptionSite;
+
 #endif // NEVERD_RUNTIME_DARWINARM64EUNWINDROW_H
