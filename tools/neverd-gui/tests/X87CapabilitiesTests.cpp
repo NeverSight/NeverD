@@ -231,9 +231,16 @@ private slots:
     Reload->setFocus();
     QTest::keyClick(Reload, Qt::Key_Return);
     QTRY_COMPARE(H.Sent.size(), 2);
-    for (const auto *Button : Dialog.findChildren<QPushButton *>())
+    // No button is the default; Close, the way on from an inventory that is
+    // only read, wears the accent.
+    QStringList Accented;
+    for (const auto *Button : Dialog.findChildren<QPushButton *>()) {
       QVERIFY2(!Button->isDefault() && !Button->autoDefault(),
                qPrintable(Button->text()));
+      if (Button->property("mainAction").toBool())
+        Accented.append(Button->text());
+    }
+    QCOMPARE(Accented, QStringList{QStringLiteral("Close")});
   }
 
   void errorsAndRetiredResponsesNeverBecomeSupport() {

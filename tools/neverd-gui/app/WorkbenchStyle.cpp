@@ -363,10 +363,11 @@ DeviceBox fieldFace(const QWidget &field) {
   return face;
 }
 
-/// A push button's face: a dialog's default in the accent, any other in the
-/// button gray, each a shade darker under the pointer.  One that cannot act
-/// recedes to a faint plate (disabledFace); a default one keeps a faint
-/// accent instead, so the dialog's default action stays recognizable.  A
+/// A push button's face: a dialog's default in the accent, as is the main
+/// action of a window that has no default (showAsMainAction), any other in
+/// the button gray, each a shade darker under the pointer.  One that cannot
+/// act recedes to a faint plate (disabledFace); one in the accent keeps a
+/// faint accent instead, so the window's way forward stays recognizable.  A
 /// high contrast theme outlines a button under the pointer in place of the
 /// darker shade.
 DeviceBox pushButtonFace(const QPushButton &button) {
@@ -375,7 +376,8 @@ DeviceBox pushButtonFace(const QPushButton &button) {
   const bool hover = enabled && (option.state & QStyle::State_MouseOver);
   DeviceBox face;
   face.radius = ::neverd::limits::gui_config::kWorkbenchStyleControlRadius;
-  if (option.features & QStyleOptionButton::DefaultButton) {
+  if ((option.features & QStyleOptionButton::DefaultButton) ||
+      button.property("mainAction").toBool()) {
     if (!enabled) {
       face.fill = chrome("ButtonPrimaryDisabled");
       face.border = chrome("ButtonPrimaryDisabledBorder");

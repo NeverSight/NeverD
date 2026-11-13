@@ -4759,8 +4759,10 @@ void MainWindow::showShortcuts() {
   auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
   connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
   layout->addWidget(buttons);
-  // Close would otherwise be the default, and Return in the filter press it.
+  // Close would otherwise be the default, and Return in the filter press it;
+  // it keeps the accent, as the way on from a list that is only read.
   leaveWithoutDefaultButton(*dialog);
+  showAsMainAction(*buttons->button(QDialogButtonBox::Close));
   filter->setFocus();
   showModelessDialog(dialog, dialog->parentWidget());
 }

@@ -33,7 +33,8 @@ ComparisonValidationDialog::ComparisonValidationDialog(ComparisonSession &S,
     : QDialog(Parent), Session(S), Revision(S.revision()) {
   namespace Limits = ::neverd::limits::gui;
   setObjectName("comparisonValidationDialog");
-  // Check again was the default by Qt's choice of the first push button.
+  // Check again was the default by Qt's choice of the first push button; it
+  // is the window's one command and keeps the accent without the key.
   leaveWithoutDefaultButton(*this);
   setWindowTitle(tr("Validate scalar returns — NeverD"));
   setWindowIcon(icon("compare"));
@@ -67,6 +68,7 @@ ComparisonValidationDialog::ComparisonValidationDialog(ComparisonSession &S,
   Actions->addStretch();
   Run = new QPushButton(tr("Check again"), this);
   Run->setObjectName("validationRun");
+  showAsMainAction(*Run);
   Cancel = new QPushButton(tr("Cancel"), this);
   Cancel->setObjectName("validationCancel");
   Actions->addWidget(Run);

@@ -141,6 +141,8 @@ ComparisonReviewDialog::ComparisonReviewDialog(ComparisonSession &S,
   NewDraft->setObjectName("reviewNewDraft");
   Append = new QPushButton(tr("Append assessment"), Form);
   Append->setObjectName("reviewAppend");
+  // What the form is filled in for; faint until the draft can be appended.
+  showAsMainAction(*Append);
   Buttons->addWidget(NewDraft);
   Buttons->addStretch();
   Buttons->addWidget(Append);

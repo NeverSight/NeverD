@@ -179,6 +179,13 @@ private slots:
     QCOMPARE(Left(Tabs) - (Left(Versions) + Versions->width()),
              ::neverd::limits::gui::kPaneGutter);
     QCOMPARE(Left(Versions), Left(Add));
+    // Adding comparisons is what the window asks for first and the one
+    // command that wears the accent; none is the default.
+    for (const auto *Button : View.findChildren<QPushButton *>())
+      if (Button->window() == &View) {
+        QVERIFY2(!Button->isDefault(), qPrintable(Button->text()));
+        QCOMPARE(Button->property("mainAction").toBool(), Button == Add);
+      }
     for (int Page = 0; Page < Tabs->count(); ++Page) {
       Tabs->setCurrentIndex(Page);
       QCoreApplication::processEvents();

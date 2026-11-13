@@ -99,6 +99,7 @@ ComparisonImpactDialog::ComparisonImpactDialog(ComparisonSession &S,
   DepthLabel->setBuddy(Depth);
   Trace = new QPushButton(tr("Trace"), this);
   Trace->setObjectName("impactTrace");
+  showAsMainAction(*Trace);
   Cancel = new QPushButton(tr("Cancel"), this);
   Cancel->setObjectName("impactCancel");
   Options->addWidget(Side, 0, 0);

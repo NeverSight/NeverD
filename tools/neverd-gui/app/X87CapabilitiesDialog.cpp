@@ -135,8 +135,10 @@ X87CapabilitiesDialog::X87CapabilitiesDialog(QueryService &Service,
   Reload->setEnabled(false);
   connect(Reload, &QPushButton::clicked, this, &X87CapabilitiesDialog::refresh);
   connect(Buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
-  // An inventory to read: Return in its filter is no reason to fetch it again.
+  // An inventory to read: Return in its filter is no reason to fetch it
+  // again, and the one thing to do with it afterwards is close it.
   leaveWithoutDefaultButton(*this);
+  showAsMainAction(*Buttons->button(QDialogButtonBox::Close));
   Layout->addWidget(Buttons);
   Status->setText(tr("Waiting for the analysis worker."));
 }

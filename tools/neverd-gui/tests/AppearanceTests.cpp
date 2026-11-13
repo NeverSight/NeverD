@@ -10,6 +10,7 @@
 
 #include "ActionRegistry.h"
 #include "DevicePixels.h"
+#include "DialogReturnKey.h"
 #include "Docking.h"
 #include "FunctionEditDialog.h"
 #include "GnomeModalDialogs.h"
@@ -1326,6 +1327,80 @@ private slots:
                 ->subControlRect(QStyle::CC_GroupBox, &other,
                                  QStyle::SC_GroupBoxFrame, &titled)
                 .top() > 0);
+  }
+
+  void aMainActionWearsTheAccentOfADefault_data() {
+    QTest::addColumn<int>("mode");
+    QTest::addColumn<bool>("enabled");
+    QTest::addColumn<qreal>("scale");
+    for (const auto mode :
+         {Theme::Mode::Dark, Theme::Mode::Light, Theme::Mode::HighContrastDark,
+          Theme::Mode::HighContrastLight})
+      for (const bool enabled : {true, false})
+        for (const qreal scale : {1.0, 1.25})
+          QTest::newRow(qPrintable(QStringLiteral("%1-%2-%3x")
+                                       .arg(int(mode))
+                                       .arg(enabled ? "can-act" : "cannot-act")
+                                       .arg(scale)))
+              << int(mode) << enabled << scale;
+  }
+
+  void aMainActionWearsTheAccentOfADefault() {
+    // A window of tools has no default button, since Return in its filter
+    // must press nothing.  For a while its main action had no accent either:
+    // the plugin manager showed "Import plugin…" in the gray of every other
+    // command, and the user asked that no window be left in one color.  The
+    // main action wears what a dialog's default wears, to the pixel, and is
+    // not the default.
+    QFETCH(int, mode);
+    QFETCH(bool, enabled);
+    QFETCH(qreal, scale);
+    Theme &theme = Theme::instance();
+    const auto restore = qScopeGuard([&] { theme.setMode(Theme::Mode::Dark); });
+    theme.setMode(Theme::Mode(mode));
+    theme.apply();
+    const QColor surface = theme.chrome("Window");
+    QWidget window;
+    window.setAttribute(Qt::WA_StyledBackground);
+    window.setStyleSheet(QStringLiteral("QWidget#surface { background: %1; }")
+                             .arg(surface.name()));
+    window.setObjectName(QStringLiteral("surface"));
+    window.resize(400, 70);
+    auto *accept = new QPushButton(QStringLiteral("Import plugin…"), &window);
+    auto *main = new QPushButton(QStringLiteral("Import plugin…"), &window);
+    auto *plain = new QPushButton(QStringLiteral("Import plugin…"), &window);
+    accept->setDefault(true);
+    showAsMainAction(*main);
+    int left = 13;
+    for (QPushButton *button : {accept, main, plain}) {
+      button->setEnabled(enabled);
+      // Neither the pointer of a real screen nor the focus a window gives its
+      // first control may tell the three apart.
+      button->setFocusPolicy(Qt::NoFocus);
+      button->setAttribute(Qt::WA_TransparentForMouseEvents);
+      button->setGeometry(left, 17, 118, 32);
+      left += 128;
+    }
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QVERIFY(!main->isDefault());
+    QVERIFY(!main->autoDefault());
+    const auto drawn = [&](QPushButton *button) {
+      QImage image(button->size() * scale, QImage::Format_ARGB32_Premultiplied);
+      image.setDevicePixelRatio(scale);
+      image.fill(surface);
+      button->render(&image);
+      return image;
+    };
+    const QImage accepted = drawn(accept);
+    QCOMPARE(drawn(main), accepted);
+    // And the accent is something to see where a theme fills it; a high
+    // contrast theme outlines every button alike.
+    if (mode == int(Theme::Mode::Dark) || mode == int(Theme::Mode::Light))
+      QVERIFY(drawn(plain) != accepted);
+    // Marked once it is shown, a button takes the accent just the same.
+    showAsMainAction(*plain);
+    QCOMPARE(drawn(plain), accepted);
   }
 
   void aFlatGroupBoxFramesNothing_data() {

@@ -185,9 +185,11 @@ ConnectionsDialog::ConnectionsDialog(Session &session,
           &ConnectionsDialog::refresh);
   connect(&session_, &Session::stateChanged, this, &ConnectionsDialog::refresh);
   connect(this, &QDialog::finished, token_, &QLineEdit::clear);
-  // No step here comes next, least of all sharing the session: as the first
-  // push button it was the default, and Return in the server path pressed it.
+  // Sharing the session is not what Return is for: as the first push button
+  // it was the default, and Return in the server path pressed it.  The
+  // window's main action is the one its server row runs.
   leaveWithoutDefaultButton(*this);
+  showAsMainAction(*connect_);
   keepTranslated(*this, [this, sessionLabel] {
     setWindowTitle(tr("MCP connections"));
     sessionLabel->setText(tr("This NeverD session"));

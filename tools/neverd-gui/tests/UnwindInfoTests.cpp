@@ -168,9 +168,15 @@ private slots:
     QTest::qWait(50);
     QCOMPARE(H.requests().size(), 1);
     QVERIFY(Dialog.isVisible());
-    for (const auto *Button : Dialog.findChildren<QPushButton *>())
+    // No button is the default; Close wears the accent, not Refresh.
+    QStringList Accented;
+    for (const auto *Button : Dialog.findChildren<QPushButton *>()) {
       QVERIFY2(!Button->isDefault() && !Button->autoDefault(),
                qPrintable(Button->text()));
+      if (Button->property("mainAction").toBool())
+        Accented.append(Button->text());
+    }
+    QCOMPARE(Accented, QStringList{QStringLiteral("Close")});
   }
 
   void zeroQueryPCAndAbsentSourceRemainDistinct() {

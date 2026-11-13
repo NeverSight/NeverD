@@ -2875,10 +2875,11 @@ private slots:
   void toolWindowsLeaveReturnToTheirFields_data() {
     QTest::addColumn<int>("command");
     QTest::addColumn<QString>("name");
+    QTest::addColumn<QString>("main");
     QTest::newRow("shortcuts")
-        << int(ActionId::OptionsShortcuts) << "shortcutsDialog";
+        << int(ActionId::OptionsShortcuts) << "shortcutsDialog" << "Close";
     QTest::newRow("connections")
-        << int(ActionId::ViewConnections) << "connectionsDialog";
+        << int(ActionId::ViewConnections) << "connectionsDialog" << "Connect";
   }
 
   void toolWindowsLeaveReturnToTheirFields() {
@@ -2887,6 +2888,7 @@ private slots:
     // of MCP connections pressed "Enable sharing".
     QFETCH(int, command);
     QFETCH(QString, name);
+    QFETCH(QString, main);
     QTemporaryDir directory;
     Workbench bench;
     LoadDialogAcceptor loads;
@@ -2952,9 +2954,16 @@ private slots:
                      (tabs->mapTo(dialog, QPoint()).x() + tabs->width()),
                  ::neverd::limits::gui::kPaneGutter);
       }
-      for (const auto *button : dialog->findChildren<QPushButton *>())
+      // No button is the default.  One wears the accent all the same: the
+      // window's main action, so that no window is left in one color.
+      QStringList accented;
+      for (const auto *button : dialog->findChildren<QPushButton *>()) {
         QVERIFY2(!button->isDefault() && !button->autoDefault(),
                  qPrintable(button->text()));
+        if (button->property("mainAction").toBool())
+          accented.append(button->text());
+      }
+      QCOMPARE(accented, QStringList{main});
     });
     answer.start(10);
     bench.action(ActionId(command))->trigger();

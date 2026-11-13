@@ -58,6 +58,7 @@
 #include <QTranslator>
 #include <algorithm>
 #include <memory>
+#include <utility>
 
 using namespace neverd::gui;
 namespace {
@@ -187,9 +188,14 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(Functions->model()->rowCount() > 0, Timeout);
     Functions->setCurrentIndex(Functions->model()->index(0, 0));
     int Seen = 0;
-    for (const auto *Name :
-         {"comparisonChangesReview", "comparisonReviewHistory",
-          "comparisonValidateReturns", "comparisonImpactReview"}) {
+    // The command that opens each window, and the button in it that wears
+    // the accent: the form's accept, the window's one command, the one that
+    // Return in its field runs.  Change review names no main action.
+    for (const auto &[Name, Main] :
+         {std::pair{"comparisonChangesReview", ""},
+          std::pair{"comparisonReviewHistory", "reviewAppend"},
+          std::pair{"comparisonValidateReturns", "validationRun"},
+          std::pair{"comparisonImpactReview", "impactTrace"}}) {
       auto *Open = View.findChild<QPushButton *>(Name);
       QVERIFY2(Open, Name);
       QTRY_VERIFY2_WITH_TIMEOUT(Open->isEnabled(), Name, Timeout);
@@ -219,10 +225,18 @@ private slots:
       QTest::keyClick(From, Qt::Key_Return);
       QCoreApplication::processEvents();
       QVERIFY2(Clicks == 0, Name);
-      for (const auto *Button : Review->findChildren<QPushButton *>())
+      QStringList Accented;
+      for (const auto *Button : Review->findChildren<QPushButton *>()) {
         QVERIFY2(!Button->isDefault() && !Button->autoDefault(),
                  qPrintable(QStringLiteral("%1: %2").arg(QLatin1String(Name),
                                                          Button->text())));
+        if (Button->property("mainAction").toBool())
+          Accented.append(Button->objectName());
+      }
+      QVERIFY2(Accented ==
+                   (*Main ? QStringList{QLatin1String(Main)} : QStringList()),
+               qPrintable(QStringLiteral("%1: %2").arg(QLatin1String(Name),
+                                                       Accented.join(' '))));
       // A report of JSON reads in the code font, as the evidence of the
       // other review windows does.
       if (const auto *Report =
@@ -1579,12 +1593,32 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(Model->rowCount() >= Count - 1, Timeout);
     QVERIFY(Status->text().contains("hypotheses"));
     QVERIFY(!Pair->isEnabled());
+    // Pairing is what the chooser is opened for and wears the accent, faint
+    // until a candidate is chosen.  It follows Cancel, as every dialog's main
+    // action does, and is no default: Enter must not commit a mapping.
+    QVERIFY(Pair->property("mainAction").toBool());
+    QVERIFY(!Pair->isDefault() && !Pair->autoDefault());
+    for (const auto *Other : Picker->findChildren<QPushButton *>())
+      if (Other != Pair) {
+        QVERIFY2(!Other->isDefault() && !Other->autoDefault(),
+                 qPrintable(Other->text()));
+        QVERIFY2(Other->mapTo(Picker, QPoint()).x() <
+                     Pair->mapTo(Picker, QPoint()).x(),
+                 qPrintable(Other->text()));
+      }
     const int Last = Model->rowCount() - 1;
     Table->scrollTo(Model->index(Last, 1));
     QTRY_VERIFY_WITH_TIMEOUT(!Model->row(Last).isEmpty(), Timeout);
     const auto LastAddress = Model->row(Last)["address"].toString();
     Table->selectRow(Last);
     QTRY_VERIFY(Pair->isEnabled());
+    // With a candidate chosen and pairing able to act, Return on the row
+    // still commits nothing.
+    Table->setFocus();
+    QTest::keyClick(Table, Qt::Key_Return);
+    QCoreApplication::processEvents();
+    QVERIFY(Picker->isVisible());
+    QVERIFY(!Pair->isDefault());
     QVERIFY(Picker->findChild<QLabel *>("counterpartSelection")
                 ->text()
                 .contains(LastAddress));

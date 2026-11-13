@@ -391,9 +391,16 @@ raise SystemExit(run(handler))
     QTest::qWait(100);
     QVERIFY(!opened);
     QVERIFY(manager.isVisible());
-    for (const auto *button : manager.findChildren<QPushButton *>())
+    // No button is the default, and importing, which the manager's line of
+    // help asks for, is the one that wears the accent.
+    QStringList accented;
+    for (const auto *button : manager.findChildren<QPushButton *>()) {
       QVERIFY2(!button->isDefault() && !button->autoDefault(),
                qPrintable(button->text()));
+      if (button->property("mainAction").toBool())
+        accented.append(button->objectName());
+    }
+    QCOMPARE(accented, QStringList{QStringLiteral("pluginManagerImport")});
   }
 
   void managerProjectsTheSharedCatalog() {

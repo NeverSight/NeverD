@@ -7,6 +7,7 @@
 #include <QKeyEvent>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QStyle>
 #include <QToolButton>
 
 namespace neverd::gui {
@@ -84,6 +85,16 @@ private:
 } // namespace
 
 void leaveWithoutDefaultButton(QDialog &dialog) { new NoDefaultButton(dialog); }
+
+void showAsMainAction(QPushButton &button) {
+  button.setProperty("mainAction", true);
+  // The style sheet reads the property as it polishes the button.
+  if (button.testAttribute(Qt::WA_WState_Polished)) {
+    button.style()->unpolish(&button);
+    button.style()->polish(&button);
+  }
+  button.update();
+}
 
 QObject *acceptDialogsOnReturn(QApplication &app) {
   auto *filter = new DialogReturnKey(&app);

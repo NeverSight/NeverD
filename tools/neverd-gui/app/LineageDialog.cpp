@@ -293,8 +293,10 @@ LineageDialog::LineageDialog(const QString &Worker, QWidget *Parent)
   Bottom->addWidget(Progress);
   Root->addLayout(Bottom);
   // No button here is a default, but QDialog would press the default of a
-  // list this window has opened for Return in its filter.
+  // list this window has opened for Return in its filter.  Adding
+  // comparisons is what the window asks for first, in its own words.
   leaveWithoutDefaultButton(*this);
+  showAsMainAction(*Add);
   Filter.setSingleShot(true);
   Filter.setInterval(limits::kComparisonGraphDebounceMs);
   connect(Search, &QLineEdit::textChanged, &Filter,
