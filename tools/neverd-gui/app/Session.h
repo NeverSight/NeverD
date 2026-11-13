@@ -464,9 +464,12 @@ signals:
   void shownRevisionAsked();
   /// A rename no command waits ahead of has been enqueued to leave at once:
   /// \p address is called \p name once the worker takes it.  A view that
-  /// shows names of the address makes ready for what the answer brings while
-  /// the worker reads it.
+  /// shows names of the address may read as the rename leaves it while the
+  /// worker reads it (CodeText), and reads the worker's answer when it comes.
   void renaming(Address address, const QString &name);
+  /// The worker refused the rename renaming told of, or the rename came to
+  /// nothing some other way: nothing is called \p name for it.
+  void renameRefused(Address address, const QString &name);
   void revisionChanged();
   void generationChanged();
   /// An analysis replica's decompiles changed once, after it solved the

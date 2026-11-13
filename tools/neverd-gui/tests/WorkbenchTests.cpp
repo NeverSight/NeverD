@@ -44,6 +44,7 @@
 #include "PdbPromptDialog.h"
 #include "ProjectDatabase.h"
 #include "QuickStartDialog.h"
+#include "RenamedPages.h"
 #include "ResourceLimits.h"
 #include "Session.h"
 #include "SessionTestAccess.h"
@@ -8216,6 +8217,8 @@ private slots:
     QVERIFY(code->allText().contains(QStringLiteral("return function_22();")));
     QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
                              OpenTimeoutMs);
+    // What a view does that does not read ahead of the answer.
+    CodeTextTestAccess::setReadsAhead(*code, false);
     const auto renamed = [&](Address address, const QString &name) {
       const QString before = code->allText();
       const auto revision = bench.session.revision();
@@ -8284,6 +8287,7 @@ private slots:
             2 * ::neverd::limits::gui::kCodeViewLinesMadeReadyForRename);
     QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
                              OpenTimeoutMs);
+    CodeTextTestAccess::setReadsAhead(*code, false);
     const auto renamed = [&](Address address, const QString &name) {
       const auto revision = bench.session.revision();
       bench.session.rename(address, name);
@@ -8321,6 +8325,632 @@ private slots:
     QVERIFY(renamed(Base + 0x160, QStringLiteral("called_under_a_fold")));
     QVERIFY(code->readyLinesTaken() > taken);
     QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+  }
+
+  void aRenamesPagesReadAsTheWorkerWritesThem_data() {
+    QTest::addColumn<QString>("fixture");
+    QTest::addColumn<int>("named");
+    QTest::addColumn<QString>("name");
+    QTest::newRow("a call") << QStringLiteral("pseudocode-navigation.bin")
+                            << 0x160 << QStringLiteral("renamed_callee");
+    QTest::newRow("the definition")
+        << QStringLiteral("pseudocode-navigation.bin") << 0x140
+        << QStringLiteral("renamed_itself");
+    QTest::newRow("calls down two pages")
+        << QStringLiteral("code-calls.bin") << 0x160
+        << QStringLiteral("called_by_a_longer_name");
+    QTest::newRow("a shorter name")
+        << QStringLiteral("code-calls.bin") << 0x160 << QStringLiteral("fn");
+    QTest::newRow("a few calls") << QStringLiteral("code-calls.bin") << 0x150
+                                 << QStringLiteral("seldom");
+    QTest::newRow("a name beyond ASCII")
+        << QStringLiteral("code-calls.bin") << 0x160
+        << QString::fromUtf8("\xE5\x90\x8D\xE7\xA7\xB0_fn");
+  }
+
+  void aRenamesPagesReadAsTheWorkerWritesThem() {
+    // What a view reads ahead of a rename's answer is what the answer brings:
+    // the pages it holds, read as pagesRenamed reads them, are the pages the
+    // worker gives after the rename, field for field, but for the revision
+    // they are of and the name each has in the worker.
+    QFETCH(QString, fixture);
+    QFETCH(int, named);
+    QFETCH(QString, name);
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    auto *code = shownCode(bench, directory, fixture);
+    QVERIFY(code);
+    CodeTextTestAccess::setReadsAhead(*code, false);
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    const auto before = CodeTextTestAccess::pages(*code);
+    const auto read = pagesRenamed(before, Base + named, name);
+    QVERIFY(read.has_value());
+    QVERIFY(!read->data);
+    const auto revision = bench.session.revision();
+    bench.session.rename(Base + named, name);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.revision() != revision &&
+                                 code->complete() &&
+                                 !bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    const auto after = CodeTextTestAccess::pages(*code);
+    QCOMPARE(after.size(), read->pages.size());
+    QVERIFY(after != before);
+    QStringList differing;
+    for (qsizetype page = 0; page < after.size(); ++page) {
+      QStringList fields = after[page].keys();
+      for (const QString &field : read->pages[page].keys())
+        if (!fields.contains(field))
+          fields.append(field);
+      for (const QString &field : std::as_const(fields))
+        if (after[page].value(field) != read->pages[page].value(field))
+          differing.append(
+              QStringLiteral("%1 of page %2").arg(field).arg(page));
+    }
+    QStringList expected;
+    for (qsizetype page = 0; page < after.size(); ++page)
+      for (const char *field : {"etag", "revision"})
+        expected.append(QStringLiteral("%1 of page %2")
+                            .arg(QLatin1String(field))
+                            .arg(page));
+    differing.sort();
+    expected.sort();
+    QCOMPARE(differing, expected);
+  }
+
+  void aRenameShowsBeforeTheWorkerAnswers_data() {
+    QTest::addColumn<QString>("fixture");
+    QTest::addColumn<int>("named");
+    QTest::addColumn<QString>("was");
+    QTest::addColumn<QString>("call");
+    QTest::addColumn<bool>("onePage");
+    QTest::newRow("a call") << QStringLiteral("pseudocode-navigation.bin")
+                            << 0x160 << QStringLiteral("function_22")
+                            << QStringLiteral("  return %1();") << true;
+    // A text of two pages is read a page at a time where the answer does not
+    // carry its pages, as this worker's, which keeps no renders, does not:
+    // the view shows the first page while the second is on its way, as one
+    // that waited for the answer does.
+    QTest::newRow("a few calls on two pages")
+        << QStringLiteral("code-calls.bin") << 0x150
+        << QStringLiteral("function_21") << QStringLiteral("  v0 ^= %1(v0);")
+        << false;
+    QTest::newRow("calls down two pages")
+        << QStringLiteral("code-calls.bin") << 0x160
+        << QStringLiteral("function_22") << QStringLiteral("  v0 += %1(v0);")
+        << false;
+  }
+
+  void aRenameShowsBeforeTheWorkerAnswers() {
+    // A rename leaves for the worker, and the view that shows names of the
+    // address reads at once as its pages say the rename leaves it: its text
+    // and its pixels, before the call that renames returns.  The answer is
+    // read as any other and finds nothing to paint.  A name the worker
+    // refuses is taken back; a read asked for meanwhile waits for the answer;
+    // and a second rename behind one still with the worker is not read ahead.
+    QFETCH(QString, fixture);
+    QFETCH(int, named);
+    QFETCH(QString, was);
+    QFETCH(QString, call);
+    QFETCH(bool, onePage);
+    const Address renamed = Base + Address(named);
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    auto *code = shownCode(bench, directory, fixture);
+    QVERIFY(code);
+    if (code->hasPrelude() && code->preludeFolded())
+      code->setPreludeFolded(false);
+    code->verticalScrollBar()->setValue(0);
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    QCoreApplication::processEvents();
+    struct Paints : QObject {
+      int count = 0;
+      bool eventFilter(QObject *object, QEvent *event) override {
+        if (event->type() == QEvent::Paint)
+          ++count;
+        return QObject::eventFilter(object, event);
+      }
+    } paints;
+    code->viewport()->installEventFilter(&paints);
+    const auto settled = [&](const QString &revision) {
+      return QTest::qWaitFor(
+          [&] {
+            return bench.session.revision() != revision && code->complete() &&
+                   !code->aheadOfTheWorker() &&
+                   !bench.session.queries().hasPending();
+          },
+          OpenTimeoutMs);
+    };
+    // What an edit names by the cursor is the name the text spells there.
+    const auto targetAt = [&](const QString &name) {
+      code->setCursorLine(0);
+      if (!code->findText(name + QLatin1Char('('), true))
+        return QJsonObject();
+      return code->renameTarget().value_or(QJsonObject());
+    };
+    QCOMPARE(targetAt(was).value("name").toString(), was);
+    QCOMPARE(addressValue(targetAt(was).value("address")),
+             std::optional<Address>(renamed));
+    code->setCursorLine(0);
+    QCoreApplication::processEvents();
+    {
+      const auto reads = code->readsAhead();
+      const auto revision = bench.session.revision();
+      paints.count = 0;
+      bench.session.rename(renamed, QStringLiteral("shown_at_once"));
+      // Before anything else happens: the text, whole, and its pixels.
+      QVERIFY(code->aheadOfTheWorker());
+      QCOMPARE(code->readsAhead(), reads + 1);
+      QVERIFY(code->complete());
+      QVERIFY(code->allText().contains(
+          call.arg(QStringLiteral("shown_at_once")) + QLatin1Char('\n')));
+      QVERIFY(!code->allText().contains(was + QLatin1Char('(')));
+      QCOMPARE(paints.count, 1);
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+      const QString ahead = code->allText();
+      const auto pages = CodeTextTestAccess::pages(*code);
+      QVERIFY(settled(revision));
+      QCOMPARE(code->allText(), ahead);
+      // The worker's pages are those it read ahead, and none of its rows was
+      // painted again.
+      const auto taken = CodeTextTestAccess::pages(*code);
+      QCOMPARE(taken.size(), pages.size());
+      for (qsizetype page = 0; page < taken.size(); ++page)
+        QCOMPARE(taken[page].value("text"), pages[page].value("text"));
+      QCoreApplication::processEvents();
+      if (onePage)
+        QCOMPARE(paints.count, 1);
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+      const auto target = targetAt(QStringLiteral("shown_at_once"));
+      QCOMPARE(target.value("name").toString(),
+               QStringLiteral("shown_at_once"));
+      QCOMPARE(addressValue(target.value("address")),
+               std::optional<Address>(renamed));
+      QCOMPARE(target.value("kind").toString(), QStringLiteral("address"));
+    }
+    // A name another address has is none the worker gives a second time,
+    // which the view cannot know: it is taken back.
+    {
+      const auto revision = bench.session.revision();
+      bench.session.rename(Base + 16, QStringLiteral("has_the_name"));
+      QVERIFY(!code->aheadOfTheWorker());
+      QTRY_VERIFY_WITH_TIMEOUT(bench.session.revision() != revision &&
+                                   code->complete() &&
+                                   !bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+      const QString standing = code->allText();
+      const auto reads = code->readsAhead();
+      bench.session.rename(renamed, QStringLiteral("has_the_name"));
+      QVERIFY(code->aheadOfTheWorker());
+      QCOMPARE(code->readsAhead(), reads + 1);
+      QVERIFY(
+          code->allText().contains(call.arg(QStringLiteral("has_the_name"))));
+      QTRY_VERIFY_WITH_TIMEOUT(!code->aheadOfTheWorker() &&
+                                   !bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+      QVERIFY(code->complete());
+      QCOMPARE(code->allText(), standing);
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    }
+    // A read asked for while the text is ahead waits for the answer: one
+    // made before the worker took the rename would bring the old name back.
+    {
+      const auto revision = bench.session.revision();
+      bench.session.rename(renamed, QStringLiteral("read_meanwhile"));
+      QVERIFY(code->aheadOfTheWorker());
+      emit bench.session.sourceRefined();
+      QVERIFY(code->aheadOfTheWorker());
+      QVERIFY(code->complete());
+      QVERIFY(
+          code->allText().contains(call.arg(QStringLiteral("read_meanwhile"))));
+      QVERIFY(settled(revision));
+      QVERIFY(
+          code->allText().contains(call.arg(QStringLiteral("read_meanwhile"))));
+    }
+    // A name refused after such a read was asked for: taken back, and read.
+    {
+      const QString standing = code->allText();
+      bench.session.rename(renamed, QStringLiteral("has_the_name"));
+      QVERIFY(code->aheadOfTheWorker());
+      const auto version = code->documentVersion();
+      emit bench.session.sourceRefined();
+      QCOMPARE(code->documentVersion(), version);
+      QTRY_VERIFY_WITH_TIMEOUT(!code->aheadOfTheWorker() && code->complete() &&
+                                   !bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+      QCOMPARE(code->allText(), standing);
+      // Taken back, and then read as it was asked to be.
+      QCOMPARE(code->documentVersion(), version + 2);
+    }
+    // Of two renames one behind the other the first is read ahead, the
+    // second when its answer comes.
+    {
+      const auto reads = code->readsAhead();
+      const auto revision = bench.session.revision();
+      bench.session.rename(renamed, QStringLiteral("first_of_two"));
+      bench.session.rename(Base + 0x140, QStringLiteral("second_of_two"));
+      QCOMPARE(code->readsAhead(), reads + 1);
+      QVERIFY(
+          code->allText().contains(call.arg(QStringLiteral("first_of_two"))));
+      QVERIFY(!code->allText().contains(QStringLiteral("second_of_two")));
+      QVERIFY(settled(revision));
+      QTRY_VERIFY_WITH_TIMEOUT(
+          code->complete() &&
+              code->allText().contains(QStringLiteral("second_of_two(")) &&
+              !bench.session.queries().hasPending(),
+          OpenTimeoutMs);
+      QVERIFY(
+          code->allText().contains(call.arg(QStringLiteral("first_of_two"))));
+    }
+    // A name the text spells already is not read ahead: the word may link
+    // the address too once it is its name.  A name with a space is none, and
+    // neither is one of the engine's own.
+    for (const QString &name :
+         {QStringLiteral("return"), QStringLiteral("no name"),
+          QStringLiteral("sub_1234")}) {
+      const auto reads = code->readsAhead();
+      const QString standing = code->allText();
+      bench.session.rename(renamed, name);
+      QCOMPARE(code->readsAhead(), reads);
+      QVERIFY(!code->aheadOfTheWorker());
+      QCOMPARE(code->allText(), standing);
+      QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+    }
+    // Each row painted ahead stood as the pages then made it.
+    QCOMPARE(code->rowsShownTwice(), 0);
+  }
+
+  void whatOnlyTheWorkerKnowsOfARenameIsNotReadAhead() {
+    // Data's name is the engine's text's too, which the worker reads again
+    // for what else the name moves: the view waits for it, as it does for a
+    // rename that leaves behind comments still to be committed.
+    {
+      QTemporaryDir directory;
+      Workbench bench;
+      LoadDialogAcceptor loadDialogs;
+      auto *code =
+          shownCode(bench, directory, QStringLiteral("pseudocode-global.bin"));
+      QVERIFY(code);
+      if (code->hasPrelude() && code->preludeFolded())
+        code->setPreludeFolded(false);
+      QVERIFY(code->allText().contains(QStringLiteral("return global_value;")));
+      QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+      const auto reads = code->readsAhead();
+      const auto revision = bench.session.revision();
+      const QString standing = code->allText();
+      bench.session.rename(Base + 0x3000, QStringLiteral("named_data"));
+      QCOMPARE(code->readsAhead(), reads);
+      QVERIFY(!code->aheadOfTheWorker());
+      QCOMPARE(code->allText(), standing);
+      QTRY_VERIFY_WITH_TIMEOUT(bench.session.revision() != revision &&
+                                   code->complete() &&
+                                   !bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+      QTRY_VERIFY_WITH_TIMEOUT(
+          code->allText().contains(QStringLiteral("return named_data;")),
+          OpenTimeoutMs);
+    }
+    {
+      QTemporaryDir directory;
+      Workbench bench;
+      LoadDialogAcceptor loadDialogs;
+      auto *code = shownCode(bench, directory,
+                             QStringLiteral("pseudocode-navigation.bin"));
+      QVERIFY(code);
+      QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+      bench.session.setComment(Base + 16, QStringLiteral("still staged"));
+      QTRY_VERIFY(bench.session.dirty());
+      const auto reads = code->readsAhead();
+      const QString standing = code->allText();
+      bench.session.rename(Base + 0x160, QStringLiteral("behind_a_comment"));
+      QCOMPARE(code->readsAhead(), reads);
+      QCOMPARE(code->allText(), standing);
+      QTRY_VERIFY_WITH_TIMEOUT(code->complete() &&
+                                   code->allText().contains(QStringLiteral(
+                                       "return behind_a_comment();")) &&
+                                   !bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+    }
+  }
+
+  void aNameThatOpensACommentColorsWhatFollowsIt() {
+    // A name is what the user gives, and the worker takes one that opens a
+    // comment.  Read ahead, the lines after it are colored as the comment
+    // they then are, as they are when the answer has come; and a cursor on a
+    // bracket the name moves away from leaves no box where the bracket was.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    auto *code = shownCode(bench, directory, QStringLiteral("code-calls.bin"));
+    QVERIFY(code);
+    if (code->hasPrelude() && code->preludeFolded())
+      code->setPreludeFolded(false);
+    code->verticalScrollBar()->setValue(0);
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    QCoreApplication::processEvents();
+    struct Paints : QObject {
+      int count = 0;
+      bool eventFilter(QObject *object, QEvent *event) override {
+        if (event->type() == QEvent::Paint)
+          ++count;
+        return QObject::eventFilter(object, event);
+      }
+    } paints;
+    code->viewport()->installEventFilter(&paints);
+    const auto settled = [&](const QString &revision) {
+      return QTest::qWaitFor(
+          [&] {
+            return bench.session.revision() != revision && code->complete() &&
+                   !code->aheadOfTheWorker() &&
+                   !bench.session.queries().hasPending();
+          },
+          OpenTimeoutMs);
+    };
+    // The cursor on the bracket that follows a name of a line of the first
+    // page, which a longer name writes over.
+    const QStringList before = code->allText().split(QLatin1Char('\n'));
+    const int line = 14;
+    QVERIFY(before.value(line).contains(QStringLiteral("function_21(v0)")));
+    code->setCursorLine(line);
+    const int bracket =
+        int(before[line].indexOf(QStringLiteral("function_21("))) + 11;
+    for (int i = 0; i < bracket; ++i)
+      QTest::keyClick(code, Qt::Key_Right);
+    QCOMPARE(code->cursorColumn(), bracket);
+    QVERIFY(code->bracketPair().has_value());
+    QCoreApplication::processEvents();
+    {
+      paints.count = 0;
+      const auto revision = bench.session.revision();
+      bench.session.rename(Base + 0x150,
+                           QStringLiteral("a_name_that_reaches_far"));
+      QVERIFY(code->aheadOfTheWorker());
+      // One paint showed the row as it stands, the bracket's box gone.
+      QCOMPARE(paints.count, 1);
+      QVERIFY(!code->bracketPair().has_value());
+      QVERIFY(settled(revision));
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    }
+    {
+      const auto revision = bench.session.revision();
+      bench.session.rename(Base + 0x160, QStringLiteral("opens/*"));
+      QVERIFY(code->aheadOfTheWorker());
+      QVERIFY(code->allText().contains(QStringLiteral("  v0 += opens/*(v0);")));
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+      QVERIFY(settled(revision));
+      QVERIFY(code->allText().contains(QStringLiteral("  v0 += opens/*(v0);")));
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    }
+    // And one that closes it again.
+    {
+      const auto revision = bench.session.revision();
+      bench.session.rename(Base + 0x160, QStringLiteral("closes"));
+      QVERIFY(code->aheadOfTheWorker());
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+      QVERIFY(settled(revision));
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    }
+    // A cursor past the end of a line that grows shorter stands at its end
+    // in the row painted ahead already.
+    {
+      code->setCursorLine(3);
+      QTest::keyClick(code, Qt::Key_End);
+      const auto revision = bench.session.revision();
+      bench.session.rename(Base + 0x160, QStringLiteral("zq"));
+      QVERIFY(code->aheadOfTheWorker());
+      QVERIFY(settled(revision));
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+      QCOMPARE(code->rowsShownTwice(), 0);
+    }
+    // A block folded over its lines shows its header with a summary of
+    // them.  The header holds the name: it is no line of code to paint
+    // ahead, and the pages make it.
+    {
+      const QStringList lines = code->allText().split(QLatin1Char('\n'));
+      const int header = int(lines.indexOf(QStringLiteral("  if (zq(v0)) {")));
+      QVERIFY(header > 0 && header < 30);
+      code->setCursorLine(header);
+      const int count = code->lineCount();
+      QVERIFY(code->setCurrentBlockFolded(true));
+      QCOMPARE(code->lineCount(), count - 2);
+      QCoreApplication::processEvents();
+      const auto revision = bench.session.revision();
+      bench.session.rename(Base + 0x160, QStringLiteral("under_a_header"));
+      QVERIFY(code->aheadOfTheWorker());
+      QVERIFY(CodeTextTestAccess::shownLines(*code).value(header).startsWith(
+          QStringLiteral("  if (under_a_header(v0)) {")));
+      QVERIFY(settled(revision));
+      QCOMPARE(code->lineCount(), count - 2);
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    }
+    QCOMPARE(code->rowsShownTwice(), 0);
+  }
+
+  void aNameOfTheSourcesLanguageIsColoredAsTheNewNameIs_data() {
+    QTest::addColumn<QString>("fixture");
+    QTest::addColumn<QString>("call");
+    QTest::newRow("rust") << QStringLiteral("pseudocode-rust.bin")
+                          << QStringLiteral("        v0 = %1(1);");
+    QTest::newRow("go") << QStringLiteral("pseudocode-go.bin")
+                        << QStringLiteral("    v0 = %1(1)");
+  }
+
+  void aNameOfTheSourcesLanguageIsColoredAsTheNewNameIs() {
+    // A function the source names in its own language, `core::fmt::write`,
+    // is a name the text is colored by.  Its new name is one too: the rows
+    // painted ahead are colored by the names as the rename leaves them, as
+    // the pages then color them, and none is painted again.
+    QFETCH(QString, fixture);
+    QFETCH(QString, call);
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    auto *code = shownCode(bench, directory, fixture);
+    QVERIFY(code);
+    QVERIFY(code->allText().contains(
+        call.arg(QStringLiteral("core::fmt::write")) + QLatin1Char('\n')));
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    const auto colored = [&](const QString &name) {
+      const QStringList lines = code->allText().split(QLatin1Char('\n'));
+      const int line = int(lines.indexOf(call.arg(name)));
+      if (line < 0)
+        return false;
+      const auto named =
+          code->sourceNameAt(line, int(lines[line].indexOf(name)));
+      return named && named->first == name &&
+             named->second.address == std::optional<Address>(Base + 0x160);
+    };
+    QVERIFY(colored(QStringLiteral("core::fmt::write")));
+    for (const QString &name :
+         {QStringLiteral("named::by::the::user"), QStringLiteral("n"),
+          QStringLiteral("a_plain_name")}) {
+      // A name of one character the text holds is not read ahead.
+      const bool reads = name.size() > 1;
+      const auto ahead = code->readsAhead();
+      const auto revision = bench.session.revision();
+      bench.session.rename(Base + 0x160, name);
+      QCOMPARE(code->readsAhead(), ahead + (reads ? 1 : 0));
+      if (reads) {
+        QVERIFY(code->allText().contains(call.arg(name) + QLatin1Char('\n')));
+        QVERIFY(colored(name));
+      }
+      QTRY_VERIFY_WITH_TIMEOUT(bench.session.revision() != revision &&
+                                   code->complete() &&
+                                   !code->aheadOfTheWorker() &&
+                                   !bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+      QVERIFY(code->allText().contains(call.arg(name) + QLatin1Char('\n')));
+      QVERIFY(colored(name));
+      QCOMPARE(code->rowsShownTwice(), 0);
+    }
+  }
+
+  void aTextReadAheadEndsAsOneThatWaited() {
+    // Reading ahead changes when the rows are painted and nothing else: after
+    // the answer the view stands as one that waited for it, its text, its
+    // cursor and selection, where it is scrolled to and what it folds.
+    const auto states = [&](bool ahead) {
+      QList<QStringList> written;
+      QTemporaryDir directory;
+      Workbench bench;
+      LoadDialogAcceptor loadDialogs;
+      auto *code =
+          shownCode(bench, directory, QStringLiteral("code-calls.bin"));
+      if (!code)
+        return written;
+      CodeTextTestAccess::setReadsAhead(*code, ahead);
+      if (code->hasPrelude() && code->preludeFolded())
+        code->setPreludeFolded(false);
+      const auto write = [&] {
+        written.append(
+            {code->allText(), QString::number(code->cursorLine()),
+             QString::number(code->cursorColumn()), code->selectedText(),
+             QString::number(code->verticalScrollBar()->value()),
+             QString::number(code->horizontalScrollBar()->value()),
+             QString::number(code->lineCount()), code->status(),
+             QString::number(code->anyFolded()),
+             QString::number(CodeTextTestAccess::firstMiscolored(*code))});
+      };
+      const auto renamed = [&](Address address, const QString &name) {
+        const auto revision = bench.session.revision();
+        const auto reads = code->readsAhead();
+        bench.session.rename(address, name);
+        if (code->readsAhead() != reads + (ahead ? 1 : 0))
+          return false;
+        return QTest::qWaitFor(
+            [&] {
+              return bench.session.revision() != revision && code->complete() &&
+                     !code->aheadOfTheWorker() &&
+                     !bench.session.queries().hasPending();
+            },
+            OpenTimeoutMs);
+      };
+      // The cursor after both names of a line, some of the line selected.
+      code->setCursorLine(3);
+      QTest::keyClick(code, Qt::Key_End);
+      for (int i = 0; i < 9; ++i)
+        QTest::keyClick(code, Qt::Key_Left, Qt::ShiftModifier);
+      if (!renamed(Base + 0x160, QStringLiteral("a_name_longer_than_it_was")))
+        return written;
+      write();
+      // Scrolled down the first page, the cursor on a line of the second.
+      code->setCursorLine(290);
+      code->verticalScrollBar()->setValue(40);
+      if (!renamed(Base + 0x160, QStringLiteral("nm")))
+        return written;
+      write();
+      // With the library operation folded.
+      code->setFolded(true);
+      if (!code->anyFolded() ||
+          !renamed(Base + 0x150, QStringLiteral("under_a_fold")))
+        return written;
+      write();
+      // The function's own name, from the end of the text.
+      code->verticalScrollBar()->setValue(code->verticalScrollBar()->maximum());
+      if (!renamed(Base + 0x140, QStringLiteral("itself")))
+        return written;
+      write();
+      // After a local's new name, which changes names alone: the text is
+      // then read with its pages together and the cursor follows its word,
+      // which is not how a function's name is read, ahead or not.
+      code->setFolded(false);
+      QJsonObject local;
+      for (const auto &page : CodeTextTestAccess::pages(*code))
+        for (const auto &value : page.value("code_names").toArray())
+          if (const auto name = value.toObject();
+              local.isEmpty() && name.value("kind") == "local" &&
+              name.value("original") == "v0")
+            local = name;
+      if (local.isEmpty())
+        return written;
+      const auto revision = bench.session.revision();
+      bench.session.editCode({{"address", hexAddress(Base + 0x140)},
+                              {"representation", "source"},
+                              {"source_options", code->sourceOptions()},
+                              {"kind", "name"},
+                              {"original", local.value("original")},
+                              {"identity", local.value("identity")},
+                              {"name", "counted"}},
+                             bench.session.epoch());
+      if (!QTest::qWaitFor(
+              [&] {
+                return bench.session.revision() != revision &&
+                       code->complete() &&
+                       code->allText().contains(QStringLiteral("counted +=")) &&
+                       !bench.session.queries().hasPending();
+              },
+              OpenTimeoutMs) ||
+          !bench.session.queries().localNamesOnly())
+        return written;
+      code->setCursorLine(3);
+      QTest::keyClick(code, Qt::Key_End);
+      for (int i = 0; i < 4; ++i)
+        QTest::keyClick(code, Qt::Key_Left);
+      if (!renamed(Base + 0x160, QStringLiteral("after_a_local")))
+        return written;
+      write();
+      if (code->rowsShownTwice())
+        written.clear();
+      return written;
+    };
+    const auto waited = states(false);
+    QCOMPARE(waited.size(), 5);
+    const auto ahead = states(true);
+    QCOMPARE(ahead.size(), 5);
+    for (qsizetype at = 0; at < waited.size(); ++at)
+      QCOMPARE(ahead[at], waited[at]);
+    QVERIFY(waited[0][0].contains(
+        QStringLiteral("a_name_longer_than_it_was(v0); /*")));
+    QVERIFY(
+        waited[3][0].contains(QStringLiteral("int32_t itself(int32_t v0)")));
   }
 
   void anEditsTargetSaysHowTheTextSpellsIt() {

@@ -30,6 +30,7 @@ class QMenu;
 
 namespace neverd::gui {
 
+class PageBytes;
 class Session;
 
 /// The source choices every function's code opens with: whether source is
@@ -149,6 +150,15 @@ public:
   /// The lines a rename's answer brought that took the layout made ready for
   /// them while the rename was with the worker (makeReadyFor).
   quint64 readyLinesTaken() const { return readyLinesTaken_; }
+  /// The renames it read ahead of the worker's answer (readAheadOf).
+  quint64 readsAhead() const { return readsAhead_; }
+  /// It reads as a rename with the worker leaves it, which the worker has
+  /// not answered yet.
+  bool aheadOfTheWorker() const { return ahead_.has_value(); }
+  /// The renames read ahead whose rows were painted as their lines were
+  /// about to read and then again as the pages made them: none, where a line
+  /// is painted ahead as the text then holds it.
+  quint64 rowsShownTwice() const { return rowsShownTwice_; }
   /// All pages of this document arrived successfully. Error text and a
   /// cancelled or partially loaded document are not exportable source.
   bool complete() const { return complete_ && !loading_ && !interrupted_; }
@@ -305,8 +315,25 @@ protected:
   bool viewportEvent(QEvent *event) override;
 
 private:
+  /// What load does before it asks for the first page; the serial of the
+  /// read it begins.  Where the pages are \p here already and about to be
+  /// taken (takePages), no one is told of a load before they are: its status
+  /// and what it folds are said once, as it stands with them.
+  quint64 beginLoad(Address function, const QString &representation,
+                    std::optional<QJsonObject> options, bool here);
   void request(int offset, quint64 serial);
+  /// Takes a page of the text being read, at \p offset: the offset of the
+  /// page to take next, or none once the text is whole or cannot be.
+  std::optional<int> takePage(const QJsonObject &payload, int offset);
+  /// Takes \p pages, the whole text of the function it shows, as a read of
+  /// it again brings them, and paints the rows that changed: those rows.
+  QRegion takePages(const QVector<QJsonObject> &pages);
   void appendPage(const QJsonObject &payload, int offset);
+  /// Adds the source names of a page, \p payload, to those the text has: by
+  /// their spelling in the page's \p bytes, which the page names from
+  /// \p pageOffset.
+  void addSourceNames(const QJsonObject &payload, const PageBytes &bytes,
+                      qint64 pageOffset);
   /// Load the function's source without symbolic simplification, saying
   /// \p why in the status line when it arrives.
   void showOrdinary(const QString &why);
@@ -502,6 +529,8 @@ private:
   struct ReadyLine {
     int index = 0;
     StyledLine styled;
+    /// A comment is open where it ends, as its text was colored.
+    bool commentAfter = false;
   };
   /// Those lines, made while the worker reads the rename
   /// (Session::renaming).  The line the answer brings in the place of one
@@ -510,8 +539,37 @@ private:
   /// it is painted, as before.  Let go of once the text is whole again.
   QVector<ReadyLine> readyLines_;
   quint64 readyLinesTaken_ = 0;
-  /// Makes ready the lines \p address being called \p name will write.
-  void makeReadyFor(Address address, const QString &name);
+  /// Makes ready the lines of the viewport that \p address being called
+  /// \p name will write, the first \p most of them.
+  void makeReadyFor(Address address, const QString &name, int most);
+  /// The pages of the text it shows, as they were taken.
+  QVector<QJsonObject> pages_;
+  /// A rename with the worker that the text reads ahead of.
+  struct Ahead {
+    Address address = 0;
+    QString name;
+    /// The pages it showed before, which it shows again where the worker
+    /// refuses the name.
+    QVector<QJsonObject> before;
+    /// Someone asked for the text to be read again meanwhile, with these
+    /// options where they gave some: it is, once the worker has answered.
+    bool read = false;
+    std::optional<QJsonObject> options;
+  };
+  std::optional<Ahead> ahead_;
+  /// The pages being taken are all here (takePages): none is shown by itself
+  /// while the next is on its way.
+  bool pagesHere_ = false;
+  quint64 readsAhead_ = 0, rowsShownTwice_ = 0;
+  /// Reads ahead where the pages say what a rename makes of them; a test
+  /// turns it off to see the lines made ready alone.
+  bool showsAhead_ = true;
+  /// A rename has left for the worker (Session::renaming): the text reads as
+  /// the pages say the rename leaves it, where they do (pagesRenamed), and
+  /// its lines are made ready where they do not (makeReadyFor).
+  void readAheadOf(Address address, const QString &name);
+  /// The worker refused that rename (Session::renameRefused).
+  void takeBack(Address address, const QString &name);
   bool foldPreludeAfterLoad_ = true;
   bool foldDetailsAfterLoad_ = true;
   QSet<QString> blocksAfterLoad_;

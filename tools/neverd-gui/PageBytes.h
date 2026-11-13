@@ -30,6 +30,7 @@ public:
 
   /// The bytes of the page.
   qsizetype size() const { return bytes_.size(); }
+  QByteArrayView bytes() const { return bytes_; }
 
   /// The characters, in UTF-16 units, that QString::fromUtf8 reads from the
   /// first \p byte bytes of the page: where that byte stands in the text.

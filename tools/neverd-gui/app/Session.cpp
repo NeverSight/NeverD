@@ -1631,6 +1631,11 @@ void Session::rename(Address function, const QString &name,
   // A rename no command waits ahead of leaves as it is enqueued, and the
   // views hear of it while the worker reads it.
   const bool leaves = !queries_.hasCommands();
+  Failure refused;
+  if (leaves)
+    refused = [this, function, name](const QString &, const QString &) {
+      emit renameRefused(function, name.trimmed());
+    };
   command(
       QStringLiteral("rename"),
       {{"address", hexAddress(function)}, {"name", name.trimmed()}},
@@ -1643,7 +1648,7 @@ void Session::rename(Address function, const QString &name,
         if (then)
           then();
       },
-      {}, {}, leaves);
+      std::move(refused), {}, leaves);
   if (leaves)
     emit renaming(function, name.trimmed());
 }

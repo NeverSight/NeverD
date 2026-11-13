@@ -63,6 +63,23 @@ struct CodeTextTestAccess {
   /// Says that what the view shows changed, as the view's own code does
   /// after it changed something.
   static void changed(CodeText &view) { view.updateView(); }
+  /// Whether the view reads ahead of a rename's answer where its pages say
+  /// what the rename makes of them.  Without that it makes the lines ready
+  /// and shows nothing before the answer.
+  static void setReadsAhead(CodeText &view, bool ahead) {
+    view.showsAhead_ = ahead;
+  }
+  /// The lines as the view shows them: what its rows paint.
+  static QStringList shownLines(const CodeText &view) {
+    QStringList lines;
+    for (const auto &line : view.lines_)
+      lines.append(line.styled.text);
+    return lines;
+  }
+  /// The pages of the shown text, as the view took them.
+  static QVector<QJsonObject> pages(const CodeText &view) {
+    return view.pages_;
+  }
 };
 } // namespace neverd::gui
 
