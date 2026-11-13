@@ -983,10 +983,11 @@ TEST(AArch64LiftedImage, PublishedThreadLocalAccessUsesTheBoundDescriptor) {
       ASSERT_EQ(Compile({DriverSource, kOut, Driver}), 0);
       for (bool Installed : {false, true}) {
         ASSERT_EQ(llvm::sys::ExecuteAndWait(
-                      Driver, {Driver, Installed ? Output : Input,
-                               std::to_string(Installed ? 5 : 0)}),
+                      Driver,
+                      {Driver, Installed ? Output : Input,
+                       std::to_string(Installed ? kTLVChangedAdjustment : 0)}),
                   0);
-        Calls += 4;
+        Calls += kTLVAccessesPerProcess;
       }
     }
     ASSERT_TRUE(std::filesystem::remove(Output));

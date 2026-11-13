@@ -785,6 +785,8 @@ A64_LEAF_TEXT(kTLVBind, "_counter")
 A64_LEAF_TEXT(kTLVAssembly, "bad.S")
 A64_LEAF_TEXT(kTLVMissing, "-DBIND_OTHER")
 A64_LEAF_TEXT(kTLVCalls, "native_thread_local_accesses")
+A64_LEAF_VALUE(unsigned, kTLVChangedAdjustment, 5)
+A64_LEAF_VALUE(unsigned, kTLVAccessesPerProcess, 4)
 A64_LEAF_TEXT(kTLVProviderBody, "_Thread_local int counter = 13;")
 A64_LEAF_TEXT(kTLVBody, R"c(
 #ifndef ADJUSTMENT
