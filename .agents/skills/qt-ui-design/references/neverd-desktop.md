@@ -669,8 +669,12 @@ strings in eleven languages:
   last column ends at the last heading.
 - Jump to function is 720 pixels wide and cuts the last digit of its
   Length column.
-- Three of the Plugins menu's four entries have no icon, and the Pathfinder
-  dock shows two buttons that both read "Ins".
+- The Pathfinder dock shows two buttons that both read "Ins".
+- Sixteen commands of pop-up menus made in code show no icon: the code
+  view's three for interpreter recovery, the comparison source view's four
+  allowances, Edit function's two color choices, the lineage page's two
+  copies, Patch's restore and its waiting line, and the three of Quick
+  Start's recent-file menu.
 - The pseudocode view's context menu has 39 entries and is taller than a
   1080-pixel screen, where it scrolls.
 - The Windows menu lists the open panes in the order of a `QHash`
@@ -718,6 +722,37 @@ fractional DPI, as the next section describes. File labels must fit their
 outline, including longer labels such as MACH, NDDB, and WASM. Follow
 `IconSet.def` for asset provenance and palette conventions; do not copy a
 third-party icon set merely to imitate an IDE.
+
+Every menu command shows an icon. `Actions.def` gives the table's commands
+theirs and the appearance tests check them, so the gap opens where a window
+makes commands of its own: the Plugins menu showed one icon on four entries
+until the user asked for the other three. When a menu is built in code, give
+each command its icon there and test that menu's own entries the same way.
+
+Drawing a command's icon:
+
+- Start from what the menu is about and mark the difference, as the icons'
+  README says. Import process plugin is an arrow into the puzzle piece,
+  composed like `imports` and `file_load`.
+- Judge drafts on the dark menu first. The outline `#3B4250` nearly vanishes
+  on `#252526`, so an icon reads there through its fills. Carry every mark in
+  the tint, the accent or white, never in the outline alone.
+- Keep the subject whole. A puzzle piece shrunk under a corner badge lost its
+  right tab and read as a house. At full size, with the mark inside it, it
+  stayed a puzzle piece.
+- Choose the mark by what it could be mistaken for. Rows on the piece read as
+  a list of plugins, which is the manager, and three bars as a hamburger
+  menu. A play mark, as on `analyze`, says tasks that run.
+- Give a command that is no variation its own motif in the group's colors, so
+  the entries of one menu stay apart at a glance: the context menu settings
+  show a pointer opening a menu.
+- Compare drafts as Qt draws them: `QSvgRenderer` at 16 pixels on both menu
+  backgrounds, enlarged pixel for pixel, beside the icons they will sit with,
+  then at 24 and 32 pixels for 150% and 200%. The verdict is a capture of the
+  real menu.
+- A pane's tab keeps the icon it had. The Plugin tasks pane shows the plain
+  puzzle piece while the command that opens it shows the piece with the play
+  mark; the request was the menu.
 
 ## Crisp lines on the pixel grid
 
