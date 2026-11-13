@@ -1,0 +1,181 @@
+{
+  "source_revision": "821a82e240b891ab444ee0d6506ebfafbb11a51a",
+  "pull_request": "https://github.com/NeverSight/NeverD/pull/2345",
+  "build": {
+    "configuration": "Release",
+    "llvm_mode": "source fork",
+    "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+    "capstone_revision": "15ce0f6bd4b2497685ad5cca9a66aa721f462d53",
+    "unicorn_revision": "36bedffadac229fc4ef75baa905edab5800a205f",
+    "prebuilt_release": "r6",
+    "host_sha256": "67b886dbfa4f48b7355f9972739d8de636dc9d161fd7f8bd4d03f095a8f40161"
+  },
+  "unmodified_signal_controls": "https://github.com/gmh5225/test_mac_intel/actions/runs/43360062043",
+  "independent_vector_controls": "https://github.com/gmh5225/test_mac_intel/actions/runs/43361414557",
+  "published_image_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43366275284",
+  "results_per_host": {
+    "macos-26": {
+      "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "hardware": "Apple M1 (Virtual)",
+      "passed": 35,
+      "native_signal_caller_resumptions": 8,
+      "native_thread_local_accesses": 32,
+      "native_interrupted_frames": 10,
+      "native_system_caller_steps": 10,
+      "native_objc_exception_paths": 32,
+      "native_cxx_exception_paths": 34,
+      "native_cxx_unwinder_pac_traps": 6,
+      "baseline_image_executions": 60,
+      "native_explicit_pauth_lr": false,
+      "native_pc_sensitive_pacm": false,
+      "cpta": {
+        "status": "unavailable",
+        "x1_el0": false,
+        "x1_writeback": false,
+        "profiles": {
+          "arm64": {
+            "outcome": "undefined-instruction",
+            "sha256": "4931ada73895cd9a42a8edd8bc95d4c21cbf62c43cba2956a04d084dab30acfd",
+            "ordinary_memory_writeback": "unchecked"
+          },
+          "arm64e": {
+            "outcome": "undefined-instruction",
+            "sha256": "2baa4820e095987f8633da1d485d8a7ece6e8dfe70c1c609ab003e909d14dd46",
+            "ordinary_memory_writeback": "unchecked"
+          },
+          "arm64e.x1": {
+            "outcome": "slice-unavailable"
+          }
+        }
+      },
+      "qualification_sha256": "c956263de7e4ee085bc45e31fae32f8ece8a37386d32910c130e24af7c1e4baf",
+      "cpta_report_sha256": "cd9485bfeff9d1403c3ae023591544d788b13866c0ef51ba2c5306d0ea265cde"
+    },
+    "xcode-27": {
+      "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "hardware": "Apple M1 (Virtual)",
+      "passed": 35,
+      "native_signal_caller_resumptions": 8,
+      "native_thread_local_accesses": 32,
+      "native_interrupted_frames": 10,
+      "native_system_caller_steps": 10,
+      "native_objc_exception_paths": 32,
+      "native_cxx_exception_paths": 34,
+      "native_cxx_unwinder_pac_traps": 6,
+      "baseline_image_executions": 60,
+      "native_explicit_pauth_lr": false,
+      "native_pc_sensitive_pacm": false,
+      "cpta": {
+        "status": "unavailable",
+        "x1_el0": false,
+        "x1_writeback": false,
+        "profiles": {
+          "arm64": {
+            "outcome": "undefined-instruction",
+            "sha256": "eeba8eadba5ae957e457bccd413ac1358042f367baa6f8491297ab7fc67ba129",
+            "ordinary_memory_writeback": "unchecked"
+          },
+          "arm64e": {
+            "outcome": "undefined-instruction",
+            "sha256": "8238a22ba01e132030dc5e737faabe2fec116ada2d145bb83d9cb814448d9be9",
+            "ordinary_memory_writeback": "unchecked"
+          },
+          "arm64e.x1": {
+            "outcome": "did-not-start",
+            "sha256": "90a799502b27a91c3c577e787afba089721be96770ded3b34ea9e3f3b538427b",
+            "signed_entitlements": {
+              "com.apple.security.hardened-process": true,
+              "com.apple.security.hardened-process.checked-allocations": true,
+              "com.apple.security.hardened-process.checked-allocations.enforce-checked-pointer-arithmetic-overflow": true,
+              "com.apple.security.hardened-process.enhanced-security-version-string": "*"
+            },
+            "errno": 86
+          }
+        }
+      },
+      "qualification_sha256": "4ee4ee03a6be7cf78df1a9b16378c0d75fa7aacc21519a34f8df7dad79179c14",
+      "cpta_report_sha256": "b6944c97b5416d0774d17f9116f02e89676d159cfc949f5530b8515e1b775870"
+    }
+  },
+  "checked_registers": [
+    "resume PC, SP, FP, LR and saved integer registers",
+    "Q0 through Q31",
+    "FPCR and FPSR",
+    "signal mask and alternate-stack status"
+  ],
+  "signal_cases": [
+    "original and redirected arm64e entry",
+    "ordinary and alternate signal stacks",
+    "two signal masks",
+    "mixed 64-bit and 128-bit saves",
+    "rejected plans leave the complete context intact"
+  ],
+  "tls_cases": [
+    "sealed strong import and existing strong per-thread export",
+    "original and redirected entries at O0 and O2",
+    "four calls distributed over two threads for each entry",
+    "wrong relocation width, missing provider and ordinary data export refused"
+  ],
+  "local_results": {
+    "recovery": {
+      "total": 17,
+      "skipped": []
+    },
+    "publication": {
+      "total": 35,
+      "skipped": []
+    },
+    "analysis": {
+      "total": 83,
+      "skipped": [
+        "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+        "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections"
+      ]
+    },
+    "installation": {
+      "total": 40,
+      "skipped": []
+    },
+    "rewrite": {
+      "total": 224,
+      "skipped": []
+    },
+    "language": {
+      "total": 315,
+      "skipped": []
+    }
+  },
+  "driver_unit_tests": 24,
+  "local_cpta": {
+    "machine": "Apple M4 Max",
+    "status": "unavailable",
+    "profiles": {
+      "arm64": {
+        "outcome": "undefined-instruction",
+        "sha256": "130779832a40ee32d92b62208bfe737953b639fcf492c9a43bc2baed0e5435d0",
+        "cpu_subtype": 0,
+        "results": [],
+        "ordinary_memory_writeback": "unchecked"
+      },
+      "arm64e": {
+        "outcome": "did-not-start",
+        "sha256": "f1f1691bac343a434288927ee7f00787d11a38a7a018f56ad5b93f65cee5e832",
+        "cpu_subtype": 2147483650
+      },
+      "arm64e.x1": {
+        "outcome": "slice-unavailable"
+      }
+    },
+    "x1_el0_qualified": false,
+    "x1_writeback_qualified": false
+  },
+  "self_hosted_runner_counts": {
+    "repos/NeverSight/NeverD": 0,
+    "repos/gmh5225/test_mac_intel": 0
+  },
+  "limits": [
+    "Executable return through a Darwin signal frame follows the ordinary call ABI. Language personalities still own exception matching and cleanup. Volatile vector state is preserved at the interruption unless the caller lane has a proved save.",
+    "The tested TLS descriptor layouts reuse existing dyld registration. Publishing new TLS definitions and initializer registrations, and arbitrary whole images, still require qualification.",
+    "No available host demonstrated checked arm64e.x1 execution, explicit PAuth_LR or PC-sensitive PACM."
+  ]
+}

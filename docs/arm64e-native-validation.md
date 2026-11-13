@@ -1268,8 +1268,8 @@ executes post-indexed LD1 and ST1 on a mapped byte. It verifies the data and
 the updated base for an in-range offset and for a carry into the top byte.
 This ordinary-memory control also runs on older CPUs when ADDPT is undefined.
 A passing x1 run requires both explicit checked arithmetic and checked
-load/store writeback. [Arm LD1 operation](https://support.arm.com/documentation/111108/2026-03/SIMD-FP-Instructions/LD1--multiple-structures---Load-multiple-single-element-structures-to-one--two--three--or-four-registers-). Apple documents the required
-[Enhanced Security entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.hardened-process.checked-allocations.enforce-checked-pointer-arithmetic-overflow)
+load/store writeback. [Arm LD1 operation](https://support.arm.com/documentation/111108/2026-03/SIMD-FP-Instructions/LD1--multiple-structures---Load-multiple-single-element-structures-to-one--two--three--or-four-registers-).
+Apple documents the required [Enhanced Security entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.hardened-process.checked-allocations.enforce-checked-pointer-arithmetic-overflow)
 and [supported x1 devices](https://developer.apple.com/documentation/security/preparing-your-app-to-work-with-pointer-authentication).
 
 For an external thread-local variable, the arm64e object publisher resolves
@@ -1283,6 +1283,13 @@ descriptor address. Both paths reuse the original per-thread storage.
 Creating a new TLS definition or running a new TLS initializer requires
 additional dyld registration.
 
+Both Apple M1 runners passed all 35 publication cases in the
+[native signal and TLS run](https://github.com/gmh5225/test_mac_intel/actions/runs/43366275284). Each runner completed eight signal
+returns through original and redirected entries on both stack types. Across
+the two TLS layouts it performed 32 accesses at O0 and O2, checking both
+threads' independent values. The [verification record](evidence/arm64e-signal-resume-and-tlv-2026-11-13.json)
+includes the code and binary digests, exception results and CPTA observations.
+
 To repeat the interrupted-frame test on a Mac that can launch arm64e
 executables, build the test host against the tracked LLVM fork and require
 native execution:
@@ -1290,10 +1297,11 @@ native execution:
 ```bash
 python3 scripts/build.py build-release --target NeverDArm64eLiftedImageTests
 NEVERD_ARM64E_ASYNC_NATIVE=1 build-release/bin/NeverDArm64eLiftedImageTests \
-  --gtest_filter=AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions \
+  --gtest_filter='AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions:AArch64AsyncUnwind.SignalReturnResumesCallerWithRecoveredVectorLanes' \
   --gtest_output=xml:signal-results.xml
 ```
 
-The XML property `native_system_caller_steps` must be 10. Without the
+The XML properties `native_system_caller_steps` and
+`native_signal_caller_resumptions` must be 10 and 8 respectively. Without the
 environment variable the test can check publication and the recovered rows
 without performing those native steps.
