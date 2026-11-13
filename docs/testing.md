@@ -24079,10 +24079,12 @@ The runner compares original machine code with recompiled HighC and LLVMC at
 O0/O2 for o32, n32 and n64 in both byte orders, including float/double
 mixed entry arguments and nine-argument FP overflow. The SDK fixture obtains
 original call IDs and applies fixed or variadic declarations, including a
-promoted double on the stack after the last argument register. Indirect calls
+single-precision named argument followed by a promoted double, and a double
+on the stack after the last argument register. Indirect calls
 alternate between two runtime callback targets. Callee results include float,
 double, signed and unsigned narrow integers, v0/v1 integer pairs, pointers
-and void. Distinct high and low words and the FCSR inexact flag distinguish
+and void. The original caller consumes both halves of each n32/n64 return
+register. Distinct high and low words and the FCSR inexact flag distinguish
 the return carriers. The original assembly callers also execute recompiled
 signed-byte, unsigned-halfword and paired integer callees. A mixed
 call checks each narrow integer at the full width supplied to the callee. The runner

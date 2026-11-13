@@ -232,7 +232,8 @@ def expected_result(layout, bits, value, bias, pointer_bits, alternate=False):
         word = int(total) & (255 if layout != "unsigned-half" else 65535)
         return word - 256 if layout != "unsigned-half" and word >= 128 else word
     if layout in ("pair-result", "indirect-variadic-pair"):
-        return int(total) + (148 if alternate else 74)
+        upper_words = 5 + (int(total) >> 32) if bits == 64 else 0
+        return int(total) + (148 if alternate else 74) + upper_words
     if layout == "word-result":
         word = int(total)
         # The n64 caller adds the upper half of the returned machine word.
@@ -246,7 +247,7 @@ def expected_result(layout, bits, value, bias, pointer_bits, alternate=False):
         return 2 * total
     if layout == "variadic-stack":
         return 4 * total + 2 * 29
-    if layout in ("variadic", "indirect-variadic"):
+    if layout in ("variadic", "indirect-variadic", "variadic-promoted"):
         return 4 * total
     if layout == "after-integer":
         return 2 * (total + 7)
@@ -289,6 +290,7 @@ def run(args, artifacts):
                     "indirect",
                     "indirect-variadic",
                     "variadic-stack",
+                    "variadic-promoted",
                     "indirect-signed-byte",
                     "indirect-variadic-pair",
                     "prefix",
@@ -306,7 +308,13 @@ def run(args, artifacts):
                     indirect = layout.startswith("indirect")
                     pair_result = layout in ("pair-result", "indirect-variadic-pair")
                     signed_byte = layout in ("signed-byte", "indirect-signed-byte")
-                    if (variadic or indirect) and scalar_bytes != 8:
+                    if layout == "variadic-promoted" and scalar_bytes != 4:
+                        continue
+                    if (
+                        scalar_bytes == 4
+                        and (variadic or indirect)
+                        and layout not in ("indirect", "variadic-promoted")
+                    ):
                         continue
                     overflow = layout == "overflow"
                     after_integer = layout == "after-integer"
@@ -412,7 +420,24 @@ def run(args, artifacts):
                             bits, scalar_bytes, fmt, load, store
                         )
                     named_from_gprs = ""
-                    if variadic:
+                    if layout == "variadic-promoted":
+                        # The named float stays single; the unnamed float becomes a double.
+                        # Its o32 register pair starts at the next even argument position.
+                        setup = ["cvt.d.s $f4,$f12"]
+                        if bits == 64:
+                            setup += ["dmfc1 $5,$f4"]
+                            callee = "dmtc1 $5,$f2"
+                        else:
+                            low, high = (6, 7) if little else (7, 6)
+                            setup += [
+                                "mfc1 $4,$f12",
+                                f"mfc1 ${low},$f4",
+                                f"mfhc1 ${high},$f4",
+                                "mtc1 $zero,$f12",
+                            ]
+                            callee = f"mtc1 $4,$f12\nmtc1 ${low},$f2\nmthc1 ${high},$f2"
+                        callee += "\ncvt.s.d $f2,$f2\nadd.s $f0,$f12,$f2"
+                    elif variadic:
                         if bits == 64:
                             setup = ["dmfc1 $5,$f12"]
                             callee = "dmtc1 $5,$f2\nadd.d $f0,$f12,$f2"
@@ -477,10 +502,19 @@ def run(args, artifacts):
                             # Each limb affects the observable value with a different weight.
                             low, high = (2, 3) if little else (3, 2)
                             callee += f"\nor ${low},$2,$zero\naddiu ${high},$zero,37"
-                            after_call = (
-                                f"{d}sll $8,${high},1\n{d}addu $2,${low},$8\n"
-                                + after_call
-                            )
+                            if bits == 64:
+                                # Both 64-bit halves must survive the caller/return boundary.
+                                callee += f"\naddiu $8,$zero,5\ndsll32 $8,$8,0\nor ${high},${high},$8"
+                                after_call = (
+                                    f"dsra32 $9,${low},0\ndsrl32 $10,${high},0\n"
+                                    f"dsll $8,${high},1\ndaddu $2,${low},$8\n"
+                                    "daddu $2,$2,$9\ndaddu $2,$2,$10\n" + after_call
+                                )
+                            else:
+                                after_call = (
+                                    f"sll $8,${high},1\naddu $2,${low},$8\n"
+                                    + after_call
+                                )
                         if layout == "word-result" and pointer_bits == 64:
                             callee += (
                                 "\ndaddiu $8,$zero,3\ndsll32 $8,$8,0\ndaddu $2,$2,$8"
@@ -521,7 +555,7 @@ def run(args, artifacts):
                         if signed_byte:
                             alternate_callee = callee + "\naddiu $2,$2,1\nseb $2,$2"
                         if pair_result:
-                            alternate_callee = callee + f"\naddiu ${high},$zero,74"
+                            alternate_callee = callee + f"\n{d}addiu ${high},${high},37"
                         callee_text += (
                             prefix
                             + ".globl fp_other\n.ent fp_other\nfp_other:\n"
