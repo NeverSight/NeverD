@@ -138,10 +138,14 @@ ListingView::ListingView(Session &session, const AddressSpace &space,
     // Local pseudocode names do not change assembly. Adopt the new revision
     // only for settled rows; a pending semantic refresh must still complete.
     if (session_.queries().localNamesOnly() && !pendingJump_ &&
-        contentSerial_ == serial_ && generation_ == session_.generation())
+        contentSerial_ == serial_ && generation_ == session_.generation()) {
       revision_ = session_.revision();
-    else
+    } else {
+      // The lines in view go first: the edit's reply carried them, and they
+      // are taken while the worker reads the rest of what is held.
+      readVisible(serial_ + 1);
       refresh();
+    }
   };
   connect(&session_, &Session::shownRevisionChanged, this, [this, revised] {
     askedAhead_ = true;
@@ -150,6 +154,50 @@ ListingView::ListingView(Session &session, const AddressSpace &space,
   connect(&session_, &Session::revisionChanged, this, [this, revised] {
     if (!std::exchange(askedAhead_, false))
       revised();
+  });
+  // An edit carries the read of the lines in view, which the listing makes
+  // as the edit's revision is said, where that keeps no one waiting who
+  // matters more: the edit's reply waits for those lines, a fifth of a
+  // millisecond or two, and with it the pseudocode's page.  They go with the
+  // edit where the listing is the view the user works in (setWorkedIn: not
+  // its focus, which a command's dialog may still hold as the edit leaves),
+  // and
+  // where the edit renames a function the lines in view show, which
+  // pseudocode that links it shows before the reply.  Else the listing reads
+  // them itself behind the reply, ahead of the lines around them.
+  session_.queries().carryWithEdits(
+      this,
+      [this](const QString &operation, const QJsonObject &edit)
+          -> std::optional<QueryService::QuerySpec> {
+        // A name of a function's own variable changes no line of a listing.
+        if (operation == QLatin1String("code_edit") &&
+            edit.value("kind") == QLatin1String("name"))
+          return std::nullopt;
+        if (!workedIn_ && !(operation == QLatin1String("rename") &&
+                            showsFunction(addressValue(edit.value("address")))))
+          return std::nullopt;
+        const auto payload = visibleRead();
+        if (!payload)
+          return std::nullopt;
+        return QueryService::QuerySpec{QStringLiteral("listing"),
+                                       *payload,
+                                       QueryService::QuerySpec::Latest,
+                                       {},
+                                       QueryService::QuerySpec::Visible};
+      });
+  // What answers that read is taken before the others hear of the revision:
+  // at once where the listing is the view worked in, and where it is not,
+  // behind the pseudocode that has the change still to show, which its
+  // reader is looking at (Session::shownRevisionTaken).  Lines an edit
+  // carried are there then; lines the listing reads itself are not, and come
+  // in their turn.
+  connect(&session_, &Session::shownRevisionAsked, this, [this] {
+    if (workedIn_)
+      session_.deliverNow(this);
+  });
+  connect(&session_, &Session::shownRevisionTaken, this, [this] {
+    if (!workedIn_)
+      session_.deliverNow(this);
   });
   updateMetrics();
 }
@@ -360,6 +408,10 @@ void ListingView::accept(Fetch kind, const QJsonObject &payload, quint64 serial,
   };
   auto held = lines_.begin();
   bool sought = !replaces;
+  // The lines in view that were read ahead of this refresh, which it reads
+  // as they read.
+  const bool follows = kind == Fetch::Refresh && aheadOf_ == serial;
+  int stood = 0;
   std::deque<Line> fresh;
   for (const auto &value : rows) {
     QJsonObject row = value.toObject();
@@ -379,30 +431,19 @@ void ListingView::accept(Fetch kind, const QJsonObject &payload, quint64 serial,
         was = &*held++;
     }
     if (was && was->row == row) {
+      stood += follows && was->ahead;
       fresh.push_back(std::move(*was));
+      fresh.back().ahead = false;
       ++linesKept_;
       continue;
     }
-    Line line;
-    line.item = item;
-    line.itemSize = addressValue(row.value("item_size")).value_or(0);
-    line.address = addressValue(row.value("address")).value_or(line.item);
-    line.sub = sub;
-    line.cls = row.value("cls").toInt();
-    line.kind = row.value("kind").toString();
-    line.prefix = row.value("prefix").toString();
-    line.flow = row.value("flow").toString();
-    line.function = row.value("function").toString();
-    line.target = addressValue(row.value("target"));
-    line.functionAddress = addressValue(row.value("function_address"));
-    if (was && was->row.value("text") == row.value("text") &&
-        was->row.value("spans") == row.value("spans"))
-      line.styled = std::move(was->styled);
-    else
-      line.styled.setFromWorker(row.value("text").toString(),
-                                row.value("spans").toArray());
-    line.row = std::move(row);
-    fresh.push_back(std::move(line));
+    fresh.push_back(lineOf(std::move(row), item, sub, was));
+  }
+  if (follows)
+    linesReadOtherwise_ += quint64(std::max(0, linesAhead_ - stood));
+  if (replaces) {
+    aheadOf_ = 0;
+    linesAhead_ = 0;
   }
   const int anchor =
       std::clamp(payload.value("anchor").toInt(), 0, int(fresh.size()));
@@ -515,6 +556,123 @@ void ListingView::accept(Fetch kind, const QJsonObject &payload, quint64 serial,
   emit searchDocumentChanged();
   if (settledJump)
     emit jumpSettled();
+}
+
+ListingView::Line ListingView::lineOf(QJsonObject row, Address item, int sub,
+                                      Line *was) {
+  Line line;
+  line.item = item;
+  line.itemSize = addressValue(row.value("item_size")).value_or(0);
+  line.address = addressValue(row.value("address")).value_or(line.item);
+  line.sub = sub;
+  line.cls = row.value("cls").toInt();
+  line.kind = row.value("kind").toString();
+  line.prefix = row.value("prefix").toString();
+  line.flow = row.value("flow").toString();
+  line.function = row.value("function").toString();
+  line.target = addressValue(row.value("target"));
+  line.functionAddress = addressValue(row.value("function_address"));
+  if (was && was->row.value("text") == row.value("text") &&
+      was->row.value("spans") == row.value("spans"))
+    line.styled = std::move(was->styled);
+  else
+    line.styled.setFromWorker(row.value("text").toString(),
+                              row.value("spans").toArray());
+  line.row = std::move(row);
+  return line;
+}
+
+bool ListingView::showsFunction(std::optional<Address> function) const {
+  if (!function)
+    return false;
+  const int last = std::min(int(lines_.size()) - 1, top_ + visibleLines());
+  for (int at = std::max(0, top_); at <= last; ++at) {
+    const Line &line = lines_[at];
+    if (line.functionAddress == function ||
+        (line.target == function && line.flow == QLatin1String("call")))
+      return true;
+  }
+  return false;
+}
+
+std::optional<QJsonObject> ListingView::visibleRead() const {
+  if (!session_.loaded() || lines_.empty() || pendingJump_ || !isVisible() ||
+      top_ < 0 || top_ >= int(lines_.size()))
+    return std::nullopt;
+  const Line &top = lines_[top_];
+  QJsonObject payload{{"address", hexAddress(top.item)},
+                      {"sub", top.sub},
+                      {"before", 0},
+                      {"after", visibleLines() + 1}};
+  if (opcodeBytes_ > 0)
+    payload["opcode_bytes"] = opcodeBytes_;
+  return payload;
+}
+
+void ListingView::readVisible(quint64 refresh) {
+  const auto payload = visibleRead();
+  if (!payload)
+    return;
+  session_.read(
+      QStringLiteral("listing"), *payload, this,
+      [this, refresh, asked = payload->value("after").toInt()](
+          const QJsonObject &result) { acceptVisible(result, asked, refresh); },
+      // The lines that follow say what went wrong.
+      [](const QString &, const QString &) {},
+      QueryService::QuerySpec::Visible);
+}
+
+void ListingView::acceptVisible(const QJsonObject &payload, int asked,
+                                quint64 refresh) {
+  // The lines these go ahead of have landed, or another read took their
+  // place.
+  if (refresh != serial_ || contentSerial_ == serial_ || pendingJump_ ||
+      !session_.loaded())
+    return;
+  const auto rows = payload.value("lines").toArray();
+  const int count = int(rows.size());
+  // The rows are those of the lines in view, one for one, or they are left
+  // to the lines that follow: an edit that adds a line or takes one moves
+  // the others, and those are placed by the read that knows the cursor.
+  if (!count || payload.value("anchor").toInt() != 0 || top_ < 0 ||
+      top_ + count > int(lines_.size()))
+    return;
+  if (count < asked &&
+      (top_ + count != int(lines_.size()) || !payload.value("at_end").toBool()))
+    return;
+  for (int at = 0; at < count; ++at) {
+    const auto row = rows.at(at).toObject();
+    const Line &held = lines_[top_ + at];
+    if (addressValue(row.value("item")) != std::optional<Address>(held.item) ||
+        row.value("sub").toInt() != held.sub)
+      return;
+  }
+  int replaced = 0;
+  for (int at = 0; at < count; ++at) {
+    QJsonObject row = rows.at(at).toObject();
+    Line &held = lines_[top_ + at];
+    if (held.row == row)
+      continue;
+    held = lineOf(std::move(row), held.item, held.sub, &held);
+    held.ahead = true;
+    ++replaced;
+  }
+  ++visiblePagesTaken_;
+  if (!replaced)
+    return;
+  aheadOf_ = refresh;
+  linesAhead_ = replaced;
+  // The lines beyond the view are those of the revision before until the
+  // lines that follow land: the rows are not current meanwhile (rowsCurrent).
+  rebuildArrowEdges();
+  updateView();
+  if (contentReported_) {
+    rowsUpdated_ = {};
+    showChanges();
+    if (const QRegion painted = std::exchange(rowsUpdated_, {});
+        !painted.isEmpty())
+      viewport()->repaint(painted);
+  }
 }
 
 void ListingView::placeJump(int anchor, Address address) {

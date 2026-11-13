@@ -133,6 +133,16 @@ public:
   /// any other time.
   void sendAhead();
 
+  /// The read \p owner makes after every edit of what its view shows, beside
+  /// the source pages: \p read says it as an edit leaves, given the edit's
+  /// operation and payload, or says none.  The edit carries it (the worker's
+  /// "then"), and the read the owner then makes of the same takes the answer
+  /// without asking the worker: a listing has the lines it shows as the edit
+  /// left them one round trip sooner.  A null \p read ends it.
+  using Carried = std::function<std::optional<QuerySpec>(
+      const QString &operation, const QJsonObject &payload)>;
+  void carryWithEdits(QObject *owner, Carried read);
+
   /// Gives \p owner the answers its reads have already, now, in place of the
   /// turn each would take: for one that has just asked and is ready for its
   /// answer.  A read others wait for as well keeps its turn.  How many reads

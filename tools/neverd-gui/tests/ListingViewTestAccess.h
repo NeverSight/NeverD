@@ -36,6 +36,30 @@ struct ListingViewTestAccess {
   static quint64 requests(const ListingView &view) { return view.serial_; }
   /// Lines that kept what an earlier page had read for them.
   static quint64 linesKept(const ListingView &view) { return view.linesKept_; }
+  /// Reads of the lines in view that were taken ahead of a refresh.
+  static quint64 visiblePagesTaken(const ListingView &view) {
+    return view.visiblePagesTaken_;
+  }
+  /// Lines read ahead of a refresh that the refresh then read otherwise.
+  static quint64 linesReadOtherwise(const ListingView &view) {
+    return view.linesReadOtherwise_;
+  }
+  /// As a refresh asked for and not yet answered leaves the view: the lines
+  /// in view may be read ahead of it.
+  static void refreshAsked(ListingView &view) { ++view.serial_; }
+  /// What the view would ask for as the lines in view.
+  static std::optional<QJsonObject> visibleRead(const ListingView &view) {
+    return view.visibleRead();
+  }
+  /// Gives the view \p rows, of \p asked asked for, as the lines in view
+  /// read ahead of the refresh asked for last, or of the one asked for
+  /// \p refreshesSince before it.
+  static void acceptVisible(ListingView &view, const QJsonArray &rows,
+                            int asked, bool atEnd = false, int anchor = 0,
+                            int refreshesSince = 0) {
+    view.acceptVisible({{"lines", rows}, {"anchor", anchor}, {"at_end", atEnd}},
+                       asked, view.serial_ - quint64(refreshesSince));
+  }
   /// The line the first row of the viewport shows, and the cursor's.
   static int top(const ListingView &view) { return view.top_; }
   static int cursorRow(const ListingView &view) { return view.cursorLine_; }

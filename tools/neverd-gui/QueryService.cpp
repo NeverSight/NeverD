@@ -256,7 +256,16 @@ struct QueryService::State {
     qint64 bytes = 0;
     /// Given (give), and read by none yet.
     bool given = false;
+    /// An edit's reply carried it for the one read its view makes next, of
+    /// an operation whose answers are not kept otherwise (takeFollowed).
+    bool once = false;
   };
+  /// The views' own reads that edits carry (QueryService::carryWithEdits).
+  struct Carrier {
+    QPointer<QObject> owner;
+    Carried read;
+  };
+  QList<Carrier> carriers;
   quint64 keptReads = 0;
   using JobPtr = std::shared_ptr<Job>;
   struct Subscription {
@@ -323,16 +332,29 @@ struct QueryService::State {
   /// Keeps \p cleaned, of \p bytes, as the answer to reads under \p name,
   /// where the cache has room for one of its weight.
   void keepAnswer(const QByteArray &name, const QJsonObject &cleaned,
-                  qint64 bytes, bool given = false) {
+                  qint64 bytes, bool given = false, bool once = false) {
     const qint64 cost = bytes * 4 + name.size() + 256;
     if (cost <= cache.maxCost())
-      cache.insert(name, new Cached{cleaned, bytes, given}, int(cost));
+      cache.insert(name, new Cached{cleaned, bytes, given, once}, int(cost));
   }
 
-  /// \p cached answers a read: whether it is the first to take an answer this
-  /// dispatcher was given, which the caller then says (givenRead).
-  static bool takesGiven(Cached *cached) {
-    return std::exchange(cached->given, false);
+  /// The answer the cache holds to the read \p job, taken: one to a read
+  /// whose answers are kept while the context stands, or one an edit's reply
+  /// carried for the read its view makes next, which that read alone takes.
+  /// `given` then says whether it is the first to take an answer this
+  /// dispatcher was given, which the caller says (givenRead).  \p carried
+  /// takes the second kind alone.
+  std::optional<Cached> takeAnswer(const Job &job, bool carried = false) {
+    const auto name = key(job, true);
+    auto *cached = cache.object(name);
+    if (!cached ||
+        (!cached->once && (carried || !cacheable(job.spec.operation))))
+      return std::nullopt;
+    Cached answer = *cached;
+    cached->given = false;
+    if (answer.once)
+      cache.remove(name);
+    return answer;
   }
 
   void notify() {
@@ -420,8 +442,54 @@ struct QueryService::State {
           QJsonObject{{"operation", follow.spec.operation}, {"payload", wire}});
       job->follows.append(std::move(follow));
     }
+    // What a view shows beside those pages and reads again after any edit,
+    // as it stands now (carryWithEdits).
+    carriers.removeIf([](const Carrier &carrier) { return !carrier.owner; });
+    int carried = 0;
+    for (const auto &carrier : std::as_const(carriers)) {
+      if (carried >= ::neverd::limits::gui::kQueryServiceThenCarried)
+        break;
+      auto spec = carrier.read(job->spec.operation, job->spec.payload);
+      bool valid = true;
+      if (spec)
+        spec->payload = canonical(spec->payload, 0, valid).toObject();
+      if (!spec || !valid || !readable(spec->operation) ||
+          spec->policy != Spec::Latest)
+        continue;
+      Job read;
+      read.kind = Read;
+      read.spec = *spec;
+      Job::Follow follow;
+      follow.spec = *spec;
+      follow.keptKey = keptPageKey(read);
+      if (const auto *kept =
+              keepsPage(read) ? keptPages.object(follow.keptKey) : nullptr) {
+        follow.keptEtag = kept->etag;
+        follow.keptResponse = kept->response;
+        follow.keptBytes = kept->bytes;
+      }
+      auto wire = follow.spec.payload;
+      wire["if_none_match"] = follow.keptEtag;
+      if (pageDeltas && !follow.keptEtag.isEmpty())
+        wire["page_delta"] = true;
+      reads.append(
+          QJsonObject{{"operation", follow.spec.operation}, {"payload", wire}});
+      job->follows.append(std::move(follow));
+      ++carried;
+    }
     if (!reads.isEmpty())
       payload["then"] = reads;
+    // Looking at every page kept has made each the last one used, in the
+    // order they were looked at.  They are used in the order they were read:
+    // the page that goes when another is kept is the one read longest ago,
+    // not a page a view shows.
+    std::vector<std::pair<quint64, QByteArray>> read;
+    for (const auto &name : keptPages.keys())
+      if (const auto *kept = keptPages.object(name))
+        read.emplace_back(kept->read, name);
+    std::sort(read.begin(), read.end());
+    for (const auto &[at, name] : read)
+      (void)keptPages.object(name);
   }
 
   /// The page \p answer gives of \p follow's kept one, kept and cached as a
@@ -474,7 +542,11 @@ struct QueryService::State {
     keptPages.insert(follow.keptKey,
                      new KeptPage{payload.value("etag").toString(), cleaned,
                                   revision, ++keptReads, bytes});
-    keepAnswer(cacheKey(follow.spec), cleaned, bytes);
+    // The read its view makes next takes it: any read of it made while the
+    // context stands, or, where what it reads may change without a word (a
+    // listing's lines, as the index behind them grows), that one read.
+    keepAnswer(cacheKey(follow.spec), cleaned, bytes, false,
+               !cacheable(follow.spec.operation));
     emit q->followed(follow.spec.operation, follow.spec.payload,
                      follow.keptEtag, cleaned, bytes);
   }
@@ -660,14 +732,13 @@ struct QueryService::State {
     // A read the cache answers takes no turn behind the reads running or
     // queued: only an accepted command ahead of it could change its answer.
     if (created && kind == Read && job->spec.policy == Spec::Latest &&
-        cacheable(job->spec.operation) && !commandAhead(job->id))
-      if (auto *cached = cache.object(key(*job, true))) {
+        !commandAhead(job->id))
+      if (const auto cached = takeAnswer(*job)) {
         queue.removeAll(job->id);
         job->resultBytes = cached->bytes;
-        const bool given = takesGiven(cached);
         finish(job, cached->response);
         const QPointer<QueryService> guard(q);
-        if (given)
+        if (cached->given)
           emit q->givenRead();
         if (guard)
           notify();
@@ -750,25 +821,34 @@ struct QueryService::State {
 
   /// Answers the reads that wait which the cache answers, up to the first
   /// command that waits: a read no accepted command is ahead of takes no turn
-  /// behind the one being read.
+  /// behind the one being read.  Behind a command that waits and is no edit
+  /// (the project's files read again, a save), a read still takes the answer
+  /// an edit's reply carried for it (Cached::once): the worker made it for
+  /// that read as it took the edit, the command has changed nothing yet, and
+  /// it is cleared unread as the command leaves.  Behind an edit a read
+  /// waits its turn: that edit's own reply brings its answer.
   void answerWaiting() {
     if (!available || (active && active->kind == Command))
       return;
     const auto waiting = queue;
-    bool given = false;
+    bool given = false, behindCommand = false;
     for (const auto id : waiting) {
       const auto job = jobs.value(id);
       if (!job)
         continue;
-      if (job->kind == Command)
-        break;
-      if (job->kind != Read || job->epoch != epoch ||
-          job->spec.policy != Spec::Latest || !cacheable(job->spec.operation))
+      if (job->kind == Command) {
+        if (changesPages(job->spec.operation))
+          break;
+        behindCommand = true;
         continue;
-      if (auto *cached = cache.object(key(*job, true))) {
+      }
+      if (job->kind != Read || job->epoch != epoch ||
+          job->spec.policy != Spec::Latest)
+        continue;
+      if (const auto cached = takeAnswer(*job, behindCommand)) {
         queue.removeAll(id);
         job->resultBytes = cached->bytes;
-        given = takesGiven(cached) || given;
+        given = cached->given || given;
         finish(job, cached->response);
       }
     }
@@ -827,12 +907,11 @@ struct QueryService::State {
                      "Project revision changed; refresh before retrying."));
         continue;
       }
-      if (job->kind == Read && cacheable(job->spec.operation)) {
-        if (auto *cached = cache.object(key(*job, true))) {
+      if (job->kind == Read) {
+        if (const auto cached = takeAnswer(*job)) {
           job->resultBytes = cached->bytes;
-          const bool given = takesGiven(cached);
           finish(job, cached->response);
-          if (given) {
+          if (cached->given) {
             const QPointer<QueryService> guard(q);
             emit q->givenRead();
             if (!guard)
@@ -1398,6 +1477,13 @@ qsizetype QueryService::deliverNow(QObject *owner) {
   return state_->deliverNow(owner);
 }
 void QueryService::sendAhead() { state_->sendAhead(); }
+void QueryService::carryWithEdits(QObject *owner, Carried read) {
+  state_->carriers.removeIf([owner](const State::Carrier &carrier) {
+    return !carrier.owner || carrier.owner == owner;
+  });
+  if (owner && read)
+    state_->carriers.append({owner, std::move(read)});
+}
 std::optional<qsizetype> QueryService::give(const QuerySpec &spec,
                                             const QJsonObject &response,
                                             qint64 bytes) {

@@ -459,9 +459,14 @@ signals:
   /// content the change is about: they ask for it again before every other
   /// listener does its own work.  What they asked of the worker is sent, and
   /// shownRevisionAsked follows: they take what is there already (deliverNow)
-  /// while the worker reads the rest.
+  /// while the worker reads the rest.  The view the user works in takes its
+  /// own first, and with it a view that has the change still to show;
+  /// shownRevisionTaken follows for the others: a view no one works in, and
+  /// one that showed the change ahead of the answer and has nothing new for
+  /// a reader.
   void shownRevisionChanged();
   void shownRevisionAsked();
+  void shownRevisionTaken();
   /// A rename no command waits ahead of has been enqueued to leave at once:
   /// \p address is called \p name once the worker takes it.  A view that
   /// shows names of the address may read as the rename leaves it while the

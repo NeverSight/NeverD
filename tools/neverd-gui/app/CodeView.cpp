@@ -533,13 +533,14 @@ CodeText::CodeText(Session &session, QWidget *parent)
     // The answer a text that read ahead waited for: it is read as any other,
     // with what was asked of it meanwhile.
     const auto ahead = std::exchange(ahead_, std::nullopt);
+    shownAhead_ = ahead.has_value();
     if (!function_ || !isVisible())
       return;
     readAhead_ = true;
     load(*function_, representation_,
          ahead ? ahead->options : std::optional<QJsonObject>());
   });
-  connect(&session_, &Session::shownRevisionAsked, this, [this] {
+  const auto take = [this] {
     if (!readAhead_ || !loading_)
       return;
     // A page gives the next one's place: each is asked for as the one before
@@ -557,6 +558,17 @@ CodeText::CodeText(Session &session, QWidget *parent)
     showChanges();
     if (!rowsUpdated_.isEmpty())
       viewport()->repaint(std::exchange(rowsUpdated_, {}));
+  };
+  // A text that has the change still to show takes its page first.  One that
+  // showed it ahead of the answer has nothing new for its reader: it takes
+  // the answer behind the views that do (Session::shownRevisionTaken).
+  connect(&session_, &Session::shownRevisionAsked, this, [this, take] {
+    if (!shownAhead_)
+      take();
+  });
+  connect(&session_, &Session::shownRevisionTaken, this, [this, take] {
+    if (shownAhead_)
+      take();
   });
   // A rename with the worker writes the name in the places that link the
   // old one, which the pages say: the text reads so at once, and as the

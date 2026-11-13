@@ -7289,6 +7289,44 @@ the patch back: the lines are read again first, and the row is painted once more
 session has read which bytes are patched. `NeverDGuiPaintedRowsScaled` runs both at
 `QT_SCALE_FACTOR=1.25` with the others, and the tests that turn `PaintCheck` on check
 every paint of the listing as they check a code view's.
+An edit carries the read of the lines the listing shows, and the listing takes the
+answer ahead of the lines around them. `QueryServiceTests::anEditCarriesTheReadAViewSaysItMakesNext`
+has a view say that read: the edit carries it naming no page, then the page the first
+answer gave; the read made as the edit's revision is said takes the answer with nothing
+sent, a second read of the same lines asks the worker, a `later` answers none, and a view
+that shows nothing, is gone or says no read has the edit carry none.
+`aReadTakesTheAnswerCarriedForItThoughACommandWaits` has a command accepted while the edit
+is with the worker, as the project's files are read again a moment after an edit wrote
+them: the read takes the carried answer as the revision is said all the same, the command
+leaves next, and an answer no read took is gone once a command has left. Where the command
+that waits is another edit, the read waits for that edit's reply and takes its lines.
+`WorkbenchTests::anEditBringsTheLinesTheListingShows` renames a function the listing
+shows: as the revision is said the row reads its new name while the listing's rows are
+not yet current, one refresh follows, and the worker answered one read with the edit.
+It then comments a line three times: with the pseudocode the view worked in the edit
+carries nothing, so that the pseudocode's page waits for no line of the listing, and the
+listing reads its lines itself ahead of the refresh; with the listing worked in the edit
+carries them; and so it does where the comment is made through the listing's own dialog,
+which may still hold the focus as the edit leaves.
+`theViewWorkedInShowsAnEditBeforeTheOther` holds the two turns in which the views take
+what an edit's reply carried: the listing takes its lines in the first where it is the
+view worked in and in the second where it is not, and a pseudocode view that has the
+change still to show (a note, which nothing reads ahead) takes its page in the first.
+`editsInABurstLeaveTheListingAsTheLastSays` renames a function the listing shows twice,
+the second rename accepted while the first is with the worker: the listing ends with the
+last name and has read no line it took ahead otherwise.
+`theLinesInViewAreReadAheadWhereTheyStandForTheLinesHeld` gives the listing such lines by
+hand: they are taken where each stands at the place of the line it replaces, and left to
+the refresh where a line was added in view, the view scrolled since it asked, fewer lines
+came than were asked for short of the listing's end, they begin above the view, or the
+refresh has landed; and a refresh that reads a line taken ahead otherwise is counted,
+which the other tests hold at none. `anEditLeavesThePagesKeptInTheOrderTheyWereRead`
+keeps as many pages as a dispatcher keeps, the last a page a view shows, and has one more
+kept after an edit looked at them all: the page read longest ago goes, and no other.
+`NeverDWorkerListingPages` carries the lines a view shows with a rename, naming the page
+kept and naming none, and has more lines than a view shows, a read that may look for an
+owner, and the lines after an edit that leaves the listing its functions to read again
+left to the client.
 `NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
 session takes up what the replica keeps of a function's first look, a later session
 lists what asking the engine lists, a new name of a function or of data keeps the

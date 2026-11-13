@@ -1115,7 +1115,12 @@ that fails answers none, and a read that is neither a page's nor a listing's is 
 is not read ahead again once the reply is sent.  `metadata.following_reads` counts the
 reads answered so.  The workbench's owner dispatcher has each edit carry the
 reads of the pages read at the revision it leaves, at most two, and takes the answers
-as those views' next reads.  `metadata.named_view_renders` counts the
+as those views' next reads; and, where the listing is what the user works in or the
+edit renames a function its lines show, the read of the lines the listing shows, whose
+answer the listing takes as the edit's revision is said.  Elsewhere the listing reads
+those lines itself behind the reply, so that the pseudocode's page waits for none of
+them; either way they come ahead of the lines around them, which it reads behind the
+edit.  `metadata.named_view_renders` counts the
 documents the engine rendered a function for, rather than built from pages kept.  `metadata.view_store_name_reads` counts
 the times an owner's views read which store they are kept under, which an edit that
 keeps the stores for what it changed says as it takes it.  A declaration of types nothing

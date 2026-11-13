@@ -51,6 +51,8 @@ public:
     /// row says and no more, so a row that comes again as it was keeps the
     /// line read from it, with the layout its text has taken.
     QJsonObject row;
+    /// Read ahead of the refresh that is still to land (acceptVisible).
+    bool ahead = false;
   };
 
   ListingView(Session &session, const AddressSpace &space,
@@ -90,6 +92,14 @@ public:
   const Line *cursorLine() const;
   QRect cursorViewportRect() const;
   void setShowPrefixes(bool show);
+  /// Whether this is the view the user works in: the last analysis view to
+  /// take the keyboard, which the window that holds the views knows and says
+  /// (MainWindow).  A dialog a command asks with leaves it so, and the edit
+  /// such a command makes leaves as its dialog closes, when the listing may
+  /// not have the focus back.  An edit carries the lines in view of the
+  /// listing worked in.
+  void setWorkedIn(bool worked) { workedIn_ = worked; }
+  bool workedIn() const { return workedIn_; }
   void setOpcodeBytes(int count);
   int opcodeBytes() const { return opcodeBytes_; }
   /// Refetch the loaded window (names, comments or analysis changed).
@@ -154,6 +164,25 @@ private:
                std::optional<CursorPlace> cursor = {});
   void accept(Fetch kind, const QJsonObject &payload, quint64 serial,
               std::optional<CursorPlace> cursor, Address jumpAddress);
+  /// The line the row of a page says, at the place \p item and \p sub it
+  /// names.  \p was, the line held at that place if any, gives what its text
+  /// had laid out where the row's text and spans are its own.
+  static Line lineOf(QJsonObject row, Address item, int sub, Line *was);
+  /// The lines in view as a read of their own, from the first of them on:
+  /// what an edit carries for the listing (QueryService::carryWithEdits),
+  /// and what the listing asks for as the edit's revision is said.  None
+  /// while it shows nothing or a jump is on its way.
+  std::optional<QJsonObject> visibleRead() const;
+  /// Whether a line in view is of the function at \p function or calls it.
+  bool showsFunction(std::optional<Address> function) const;
+  /// Asks for the lines in view ahead of the refresh that is asked for next
+  /// (its serial is \p refresh).
+  void readVisible(quint64 refresh);
+  /// Takes the lines in view as an edit left them, \p asked of them asked
+  /// for, into the lines held where each stands at the place of the one it
+  /// replaces, and paints those that changed; else leaves them to the
+  /// refresh, which is still to land.
+  void acceptVisible(const QJsonObject &payload, int asked, quint64 refresh);
   void ensureLoaded();
   void placeJump(int anchor, Address address);
   void trim();
@@ -343,9 +372,16 @@ private:
   /// What showChanges had painted again since a page was taken, for the
   /// one that took it to paint at once.
   QRegion rowsUpdated_;
-  /// Lines that kept what an earlier page had read for them, for tests to
-  /// count.
-  quint64 linesKept_ = 0;
+  /// Lines that kept what an earlier page had read for them, and reads of
+  /// the lines in view taken ahead of a refresh, for tests to count.
+  quint64 linesKept_ = 0, visiblePagesTaken_ = 0;
+  /// The refresh the lines in view were last read ahead of, how many of them
+  /// that replaced, and those the refresh then read otherwise or not at all:
+  /// none, where the lines in view are read as the refresh reads them.
+  quint64 aheadOf_ = 0;
+  int linesAhead_ = 0;
+  quint64 linesReadOtherwise_ = 0;
+  bool workedIn_ = false;
   PaintCheck::Picture paintChecked_;
 };
 

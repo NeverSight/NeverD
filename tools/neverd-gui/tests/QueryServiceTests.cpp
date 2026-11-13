@@ -1,4 +1,5 @@
 #include "QueryService.h"
+#include "ResourceLimits.h"
 
 #include <QCoreApplication>
 #include <QJsonArray>
@@ -206,6 +207,341 @@ private slots:
         &h.owner, [](const QJsonObject &) {});
     QTRY_COMPARE(h.sent.size(), 3);
     QVERIFY(!h.sent.at(2).payload.contains("if_none_match"));
+  }
+
+  void anEditCarriesTheReadAViewSaysItMakesNext() {
+    // A view says the read of its own that it makes after any edit: the
+    // lines a listing shows.  The edit carries it.  The answer is taken by
+    // that read, made as the edit's revision is said, with nothing sent, and
+    // by that read alone: a listing's lines are kept by no cache, and a
+    // second read of them asks the worker.  The next edit names the page the
+    // answer gave and takes what changed of it.
+    Harness h;
+    establish(h);
+    h.service.setPageDeltas(true);
+    const Spec lines{
+        "listing",
+        {{"address", "0x10"}, {"sub", 0}, {"before", 0}, {"after", 3}},
+        Spec::Latest,
+        {},
+        Spec::Visible};
+    auto view = std::make_unique<QObject>();
+    QStringList said;
+    bool shows = true;
+    h.service.carryWithEdits(
+        view.get(),
+        [&](const QString &operation,
+            const QJsonObject &payload) -> std::optional<Spec> {
+          said.append(operation + QLatin1Char(' ') +
+                      payload.value("name").toString());
+          return shows ? std::optional<Spec>(lines) : std::nullopt;
+        });
+    // As the listing does when a revision is said: it asks, the session
+    // sends what waits, and the listing takes what is there already.
+    QList<QJsonObject> taken;
+    qsizetype sentAsTaken = -1;
+    const auto asks = QObject::connect(
+        &h.service, &QueryService::contextChanged, &h.owner, [&] {
+          h.service.subscribe(lines, &h.owner, [&](const QJsonObject &answer) {
+            taken.append(answer.value("payload").toObject());
+          });
+          h.service.sendAhead();
+          h.service.deliverNow(&h.owner);
+          sentAsTaken = h.sent.size();
+        });
+    const auto row = [](const char *text) {
+      return QJsonObject{{"text", QLatin1String(text)}};
+    };
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "one"}},
+                             &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 1);
+    QCOMPARE(said, QStringList{QStringLiteral("rename one")});
+    auto carried = h.sent[0].payload["then"].toArray();
+    QCOMPARE(carried.size(), 1);
+    // No page of these lines is kept yet: none is named, and no change of
+    // one is asked for.
+    auto named = lines.payload;
+    named["if_none_match"] = "";
+    QCOMPARE(carried[0].toObject()["operation"].toString(), "listing");
+    QCOMPARE(carried[0].toObject()["payload"].toObject(), named);
+    replyFollowed(
+        h, 0, "2",
+        QJsonArray{QJsonObject{
+            {"status", "ok"},
+            {"payload", QJsonObject{{"anchor", 0},
+                                    {"etag", "lines-1"},
+                                    {"lines", QJsonArray{row("a"), row("b"),
+                                                         row("c")}}}}}});
+    // Taken within the turn that said the revision, with nothing sent.
+    QCOMPARE(taken.size(), 1);
+    QCOMPARE(sentAsTaken, 1);
+    QCOMPARE(taken[0].value("lines"),
+             QJsonValue(QJsonArray{row("a"), row("b"), row("c")}));
+    QTRY_VERIFY(!h.service.hasPending());
+    QCOMPARE(h.sent.size(), 1);
+    // The same lines read again are read by the worker, the page kept named.
+    QObject::disconnect(asks);
+    h.service.subscribe(lines, &h.owner, [&](const QJsonObject &answer) {
+      taken.append(answer.value("payload").toObject());
+    });
+    QTRY_COMPARE(h.sent.size(), 2);
+    QCOMPARE(h.sent[1].operation, QStringLiteral("listing"));
+    QCOMPARE(h.sent[1].payload.value("if_none_match"), QJsonValue("lines-1"));
+    h.reply(1, {{"unchanged", true}, {"etag", "lines-1"}}, "2");
+    QTRY_COMPARE(taken.size(), 2);
+    QCOMPARE(taken[1].value("lines"), taken[0].value("lines"));
+    // The next edit names that page, and the read after it takes the page
+    // with what changed of it.
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "two"}},
+                             &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 3);
+    carried = h.sent[2].payload["then"].toArray();
+    QCOMPARE(carried.size(), 1);
+    named["if_none_match"] = "lines-1";
+    named["page_delta"] = true;
+    QCOMPARE(carried[0].toObject()["payload"].toObject(), named);
+    replyFollowed(
+        h, 2, "3",
+        QJsonArray{QJsonObject{
+            {"status", "ok"},
+            {"payload",
+             QJsonObject{
+                 {"base", "lines-1"},
+                 {"etag", "lines-2"},
+                 {"delta",
+                  only(QJsonArray{
+                      "items", "lines",
+                      QJsonArray{QJsonArray{"same", 1},
+                                 QJsonArray{"put", QJsonArray{row("B")}},
+                                 QJsonArray{"same", 1}}})}}}}});
+    QTRY_VERIFY(!h.service.hasPending());
+    h.service.subscribe(lines, &h.owner, [&](const QJsonObject &answer) {
+      taken.append(answer.value("payload").toObject());
+    });
+    QTRY_COMPARE(taken.size(), 3);
+    QCOMPARE(h.sent.size(), 3);
+    QCOMPARE(taken[2].value("etag"), QJsonValue("lines-2"));
+    QCOMPARE(taken[2].value("lines"),
+             QJsonValue(QJsonArray{row("a"), row("B"), row("c")}));
+    // What the worker leaves to the client ("later") answers no read.
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "three"}},
+                             &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 4);
+    QCOMPARE(h.sent[3].payload["then"].toArray().size(), 1);
+    replyFollowed(h, 3, "4", QJsonArray{QJsonObject{{"status", "later"}}});
+    QTRY_VERIFY(!h.service.hasPending());
+    h.service.subscribe(lines, &h.owner, [&](const QJsonObject &answer) {
+      taken.append(answer.value("payload").toObject());
+    });
+    QTRY_COMPARE(h.sent.size(), 5);
+    QCOMPARE(h.sent[4].payload.value("if_none_match"), QJsonValue("lines-2"));
+    h.reply(4, {{"unchanged", true}, {"etag", "lines-2"}}, "4");
+    QTRY_COMPARE(taken.size(), 4);
+    // A view that shows nothing has the edit carry none, and neither does a
+    // view that is gone or one that said so (a null read).
+    shows = false;
+    said.clear();
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "four"}},
+                             &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 6);
+    QCOMPARE(said, QStringList{QStringLiteral("rename four")});
+    QVERIFY(!h.sent[5].payload.contains("then"));
+    h.reply(5, {}, "5");
+    QTRY_VERIFY(!h.service.hasPending());
+    shows = true;
+    said.clear();
+    view.reset();
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "five"}},
+                             &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 7);
+    QVERIFY(said.isEmpty());
+    QVERIFY(!h.sent[6].payload.contains("then"));
+    h.reply(6, {}, "6");
+    QTRY_VERIFY(!h.service.hasPending());
+    QObject other;
+    h.service.carryWithEdits(
+        &other,
+        [&](const QString &, const QJsonObject &) -> std::optional<Spec> {
+          return lines;
+        });
+    h.service.carryWithEdits(&other, {});
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "six"}},
+                             &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 8);
+    QVERIFY(!h.sent[7].payload.contains("then"));
+    // An operation that changes no page carries nothing.
+    h.reply(7, {}, "7");
+    QTRY_VERIFY(!h.service.hasPending());
+    h.service.carryWithEdits(
+        &other,
+        [&](const QString &, const QJsonObject &) -> std::optional<Spec> {
+          return lines;
+        });
+    h.service.enqueueCommand("save", {}, &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 9);
+    QVERIFY(!h.sent[8].payload.contains("then"));
+  }
+
+  void aReadTakesTheAnswerCarriedForItThoughACommandWaits() {
+    // A command accepted while an edit is with the worker waits ahead of the
+    // reads the edit's revision has its views make: the project's files,
+    // written behind an edit, are read again by one a moment later.  A read
+    // the cache answers takes its turn behind such a command
+    // (commandFenceKeepsLaterReadsBehindTheEdit).  The read the edit's reply
+    // carried an answer for takes that answer as the revision is said, as
+    // it does with no command waiting: the worker made it for this read as
+    // it took the edit, and the command, once it leaves, clears it unread.
+    // Where the command that waits is an edit itself, the read waits.
+    Harness h;
+    establish(h);
+    const Spec lines{
+        "listing",
+        {{"address", "0x10"}, {"sub", 0}, {"before", 0}, {"after", 3}},
+        Spec::Latest,
+        {},
+        Spec::Visible};
+    QObject view;
+    h.service.carryWithEdits(
+        &view,
+        [&](const QString &, const QJsonObject &) -> std::optional<Spec> {
+          return lines;
+        });
+    QList<QJsonObject> taken;
+    qsizetype sentAsTaken = -1;
+    const auto asks = QObject::connect(
+        &h.service, &QueryService::contextChanged, &h.owner, [&] {
+          h.service.subscribe(lines, &h.owner, [&](const QJsonObject &answer) {
+            taken.append(answer.value("payload").toObject());
+          });
+          h.service.sendAhead();
+          h.service.deliverNow(&h.owner);
+          sentAsTaken = h.sent.size();
+        });
+    const auto row = [](const char *text) {
+      return QJsonObject{{"text", QLatin1String(text)}};
+    };
+    const auto carried = [&](const char *etag, const char *first) {
+      return QJsonArray{QJsonObject{
+          {"status", "ok"},
+          {"payload", QJsonObject{{"anchor", 0},
+                                  {"etag", QLatin1String(etag)},
+                                  {"lines", QJsonArray{row(first), row("b"),
+                                                       row("c")}}}}}};
+    };
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "one"}},
+                             &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 1);
+    QCOMPARE(h.sent[0].payload["then"].toArray().size(), 1);
+    // Accepted while the edit is read: it waits its turn.
+    h.service.enqueueCommand("project_sync", {}, &h.owner, {});
+    QCOMPARE(h.sent.size(), 1);
+    replyFollowed(h, 0, "2", carried("lines-1", "a"));
+    // Taken within the turn that said the revision, the command not yet sent.
+    QCOMPARE(taken.size(), 1);
+    QCOMPARE(sentAsTaken, 1);
+    QCOMPARE(taken[0].value("lines"),
+             QJsonValue(QJsonArray{row("a"), row("b"), row("c")}));
+    // The command leaves next, and nothing is asked of the worker for the
+    // lines.
+    QTRY_COMPARE(h.sent.size(), 2);
+    QCOMPARE(h.sent[1].operation, QStringLiteral("project_sync"));
+    h.reply(1, {{"changed", false}}, "2");
+    QTRY_VERIFY(!h.service.hasPending());
+    QCOMPARE(h.sent.size(), 2);
+    QCOMPARE(taken.size(), 1);
+    // Behind an edit that waits, the read waits its turn: that edit's own
+    // reply brings the lines it is to take, and both reads made, one as each
+    // revision was said, take those.
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "two"}},
+                             &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 3);
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "three"}},
+                             &h.owner, {});
+    QCOMPARE(h.sent.size(), 3);
+    replyFollowed(h, 2, "3", carried("lines-2", "A"));
+    QCOMPARE(taken.size(), 1);
+    QTRY_COMPARE(h.sent.size(), 4);
+    QCOMPARE(h.sent[3].operation, QStringLiteral("rename"));
+    QCOMPARE(h.sent[3].payload["then"].toArray().size(), 1);
+    replyFollowed(h, 3, "4", carried("lines-3", "Z"));
+    QCOMPARE(taken.size(), 3);
+    for (const int at : {1, 2})
+      QCOMPARE(taken[at].value("lines"),
+               QJsonValue(QJsonArray{row("Z"), row("b"), row("c")}));
+    QTRY_VERIFY(!h.service.hasPending());
+    QCOMPARE(h.sent.size(), 4);
+    // An answer no read took is gone with the command that leaves: lines
+    // read behind it are the worker's to say.
+    QObject::disconnect(asks);
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "four"}},
+                             &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 5);
+    replyFollowed(h, 4, "5", carried("lines-4", "A"));
+    QTRY_VERIFY(!h.service.hasPending());
+    h.service.enqueueCommand("project_sync", {}, &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 6);
+    h.service.subscribe(lines, &h.owner, [&](const QJsonObject &answer) {
+      taken.append(answer.value("payload").toObject());
+    });
+    h.reply(5, {{"changed", false}}, "5");
+    QTRY_COMPARE(h.sent.size(), 7);
+    QCOMPARE(h.sent[6].operation, QStringLiteral("listing"));
+    QCOMPARE(taken.size(), 3);
+  }
+
+  void anEditLeavesThePagesKeptInTheOrderTheyWereRead() {
+    // An edit looks at every page kept, for those its views show.  The page
+    // that goes when one more is kept is still the one read longest ago, not
+    // whichever the edit happened to look at first: a page a view shows is
+    // the last read, and stays.
+    Harness h;
+    establish(h);
+    const auto lines = [](int at) {
+      return Spec{"listing",
+                  {{"address", QStringLiteral("0x%1").arg(at, 0, 16)},
+                   {"before", 0},
+                   {"after", 2}},
+                  Spec::Latest,
+                  {},
+                  Spec::Visible};
+    };
+    const int kept = ::neverd::limits::gui::kQueryServiceKeptPages;
+    int sent = 0;
+    const auto keep = [&](const Spec &spec, const QString &tag) {
+      bool answered = false;
+      h.service.subscribe(spec, &h.owner,
+                          [&](const QJsonObject &) { answered = true; });
+      QTRY_COMPARE(h.sent.size(), sent + 1);
+      h.reply(sent++, {{"etag", tag}, {"lines", QJsonArray{}}},
+              h.service.revision());
+      QTRY_VERIFY(answered);
+    };
+    // As many pages as are kept, the last read a source page a view shows.
+    for (int at = 1; at < kept; ++at)
+      keep(lines(at), QStringLiteral("lines-%1").arg(at));
+    keep(text(), QStringLiteral("page"));
+    // An edit, which carries that page and looks at all of them.
+    h.service.enqueueCommand("rename", {{"address", "0x1"}, {"name", "n"}},
+                             &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), sent + 1);
+    QCOMPARE(h.sent[sent].payload["then"].toArray().size(), 1);
+    h.reply(sent++, {}, "2");
+    QTRY_VERIFY(!h.service.hasPending());
+    // One page more is kept: the first read goes, and no other.
+    keep(lines(kept), QStringLiteral("lines-more"));
+    const auto named = [&](const Spec &spec) {
+      h.service.subscribe(spec, &h.owner, [](const QJsonObject &) {});
+      if (!QTest::qWaitFor([&] { return h.sent.size() == sent + 1; }))
+        return QStringLiteral("not sent");
+      const auto tag = h.sent[sent].payload.value("if_none_match").toString();
+      h.reply(sent++, {{"unchanged", true}, {"etag", tag}},
+              h.service.revision());
+      return tag;
+    };
+    QCOMPARE(named(text()), QStringLiteral("page"));
+    QCOMPARE(named(lines(2)), QStringLiteral("lines-2"));
+    QCOMPARE(named(lines(kept - 1)), QStringLiteral("lines-%1").arg(kept - 1));
+    QCOMPARE(named(lines(1)), QString());
   }
 
   void aCachedReadTakesNoTurnBehindRunningReads() {

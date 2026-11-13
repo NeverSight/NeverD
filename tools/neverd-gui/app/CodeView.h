@@ -672,6 +672,9 @@ private:
   /// The rows showChanges had painted again since a page read ahead of a new
   /// revision began to be taken (Session::shownRevisionAsked).
   QRegion rowsUpdated_;
+  /// The text showed the change of the revision being said ahead of the
+  /// worker's answer (ahead_, as that revision began to be said).
+  bool shownAhead_ = false;
   /// The picture its paints add up to, kept where a test checks them.
   PaintCheck::Picture paintChecked_;
   friend struct CodeTextTestAccess;

@@ -214,11 +214,13 @@ Session::Session(QString workerPath, QObject *parent)
     if (sessionEpoch_ != queries_.sessionEpoch())
       sessionEpoch_ = queries_.sessionEpoch();
     // The views that show a reader the content ask for it again; what they
-    // ask of the worker goes at once; they take what is there already; and
-    // then everyone else hears of the revision.
+    // ask of the worker goes at once; they take what is there already, the
+    // view worked in and those with the change still to show before the
+    // others; and then everyone else hears of the revision.
     emit shownRevisionChanged();
     queries_.sendAhead();
     emit shownRevisionAsked();
+    emit shownRevisionTaken();
     emit revisionChanged();
     emit stateChanged();
   });

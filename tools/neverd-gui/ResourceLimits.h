@@ -154,6 +154,10 @@ inline constexpr int kAnalysisOwnerPageNames = 256;
 /// The pages read at the revision an edit leaves whose reads the edit carries
 /// to answer after it (QueryService, the worker's "then").
 inline constexpr int kQueryServiceThenReads = 2;
+/// The reads of their own that views have an edit carry beside those pages
+/// (QueryService::carryWithEdits): the lines the listing shows.  The worker
+/// answers four reads with a request.
+inline constexpr int kQueryServiceThenCarried = 1;
 /// The pages a code view takes at once where an edit's reply carried them, one
 /// asked for as the one before it is taken: those the reply carries, and one
 /// turn to find there is no more.
