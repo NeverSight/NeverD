@@ -1366,7 +1366,8 @@ llvm::Error MachOPatcher::appendReplacementImage(
   auto After = readMachODependencyState(Candidate);
   if (!After)
     return After.takeError();
-  if (auto Error = preserveMachODependencyState(*Before, *After))
+  if (auto Error = preserveMachODependencyState(*Before, *After, {},
+                                                AuthenticatedFixups))
     return Error;
   Binary.swap(Candidate);
   return llvm::Error::success();
@@ -1684,6 +1685,10 @@ uint64_t MachOPatcher::appendExecSegmentImpl(
       auto *Sections = reinterpret_cast<section_64 *>(G + 1);
       for (auto &S : llvm::MutableArrayRef(Sections, G->nsects)) {
         const auto Type = S.flags & SECTION_TYPE;
+        if (Runtime->UsesThreadResolver &&
+            (Type == S_THREAD_LOCAL_VARIABLES ||
+             Type == S_THREAD_LOCAL_INIT_FUNCTION_POINTERS))
+          S.flags = (S.flags & ~SECTION_TYPE) | S_REGULAR;
         if (Type == S_THREAD_LOCAL_REGULAR || Type == S_THREAD_LOCAL_ZEROFILL)
           S.flags = (S.flags & ~SECTION_TYPE) |
                     (Type == S_THREAD_LOCAL_REGULAR ? S_REGULAR : S_ZEROFILL);

@@ -9,10 +9,12 @@
 
 #include "MachODependencyState.h"
 
+#include "MachOArm64eABI.h"
 #include "MachOExportLayout.h"
 #include "MachOStrictLayout.h"
 
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/codegen/MachO/MachOAuthenticatedFixups.h"
 #include "neverd/backend/codegen/MachO/MachOLayoutGrowth.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
@@ -909,10 +911,48 @@ llvm::Error preserveMachODependencyState(const MachODependencyState &Before,
 llvm::Error
 preserveMachODependencyState(const MachODependencyState &Before,
                              const MachODependencyState &After,
-                             const std::map<std::string, uint64_t> &AddedTLS) {
+                             const std::map<std::string, uint64_t> &AddedTLS,
+                             llvm::ArrayRef<MachOAuthenticatedFixup> Fixups) {
   if (Before.CPUType != After.CPUType || Before.CPUSubtype != After.CPUSubtype)
     return fail(kChangedCPUABI);
+  std::set<uint64_t> Resolvers;
+  for (const auto &F : Fixups) {
+    if (!F.ReplacesTLVBootstrap)
+      continue;
+    const auto &R = F.Recipe;
+    if (!F.Authenticated || R.Key || R.Diversity || R.AddressDiversity ||
+        !R.Symbol.empty() || R.Target == InvalidVA ||
+        !Resolvers.insert(F.Address).second)
+      return fail(kThreadResolverChange);
+    const auto Old = Before.Slots.find({F.Address, kBindPhase});
+    const auto New = After.Slots.find({F.Address, kRebasePhase});
+    if (Old == Before.Slots.end() || Old->second.size() < sizeof(uint64_t) ||
+        New == After.Slots.end() ||
+        After.Slots.contains({F.Address, kBindPhase}))
+      return fail(kThreadResolverChange);
+    const auto Ordinal = readLE<uint64_t>(Old->second.data());
+    // The install owner checks the actual library install name. Verify both
+    // exact canonical rows as well, across each outer publication transaction.
+    if (!Ordinal || Ordinal > Before.Libraries.size())
+      return fail(kThreadResolverChange);
+    Bytes Bind, Rebase;
+    number(Bind, Ordinal);
+    text(Bind, macho_arm64e_abi::kTLVBootstrap);
+    number(Bind, 0); // addend
+    number(Bind, 0); // flags
+    number(Rebase, false);
+    number(Rebase, R.Target);
+    for (Bytes *Row : {&Bind, &Rebase}) {
+      number(*Row, 0); // IA key
+      number(*Row, 0); // discriminator
+      number(*Row, false);
+    }
+    if (Old->second != Bind || New->second != Rebase)
+      return fail(kThreadResolverChange);
+  }
   for (const auto &[Key, Value] : Before.Slots) {
+    if (Key.second == kBindPhase && Resolvers.contains(Key.first))
+      continue;
     auto I = After.Slots.find(Key);
     if (I == After.Slots.end() || I->second != Value)
       return fail("old exact-slot binding or rebase changed");

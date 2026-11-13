@@ -39,7 +39,7 @@ MACHO_OBJECT_TEXT(kUnsupportedRuntimeSection,
                   "unsupported runtime initialization, TLS or bitcode section")
 MACHO_OBJECT_TEXT(
     kThreadInitPointers,
-    "legacy TLS initializer pointers require a per-thread runtime registration")
+    "invalid thread-local initializer pointer or relocation")
 MACHO_OBJECT_TEXT(kPlacementOverflow, "native placement overflows")
 MACHO_OBJECT_TEXT(kNativeStorage,
                   "native authenticated object requires a linked arm64e image")
@@ -71,15 +71,22 @@ MACHO_OBJECT_TEXT(
 MACHO_OBJECT_TEXT(kInitializerOffsets, "__init_offsets")
 MACHO_OBJECT_TEXT(kTLVStorage,
                   "invalid native thread-local template or descriptor")
+MACHO_OBJECT_TEXT(kThreadResolver, "__nd_tlv_access")
+MACHO_OBJECT_TEXT(kThreadConfig, "__nd_tlv_config")
+MACHO_OBJECT_TEXT(kThreadAnchor, "__nd_tlv_anchor")
+MACHO_OBJECT_TEXT(kThreadGuard, "__nd_tlv_guard")
+MACHO_OBJECT_VALUE(unsigned, kThreadConfigWords, 5)
+MACHO_OBJECT_VALUE(unsigned, kThreadFieldCountOffset, 3 * sizeof(uint64_t))
+MACHO_OBJECT_VALUE(unsigned, kThreadCallbackCountOffset, 4 * sizeof(uint64_t))
+MACHO_OBJECT_VALUE(unsigned, kThreadFieldWords, 2)
+MACHO_OBJECT_VALUE(unsigned, kThreadKeyShift, 16)
 MACHO_OBJECT_TEXT(kTLVTemplatePrefix, "__nd_tls_prefix")
-MACHO_OBJECT_TEXT(kTLVProvider, "/usr/lib/libSystem.B.dylib")
 MACHO_OBJECT_TEXT(kTLVAtExit, "_tlv_atexit")
 MACHO_OBJECT_TEXT(kTLVAtExitThunk, "__nd_tlv_atexit")
 MACHO_OBJECT_VALUE(uint32_t, kBranchAuthZeroX16, 0xd61f0a1f)
 MACHO_OBJECT_TEXT(kDSOHandle, "__dso_handle")
 MACHO_OBJECT_VALUE(unsigned, kTLVOffsetField, 2 * sizeof(uint64_t))
 MACHO_OBJECT_TEXT(kTLVSymbolPrefix, "_")
-MACHO_OBJECT_TEXT(kTLVBootstrap, "__tlv_bootstrap")
 MACHO_OBJECT_VALUE(uint8_t, kDefaultFunctionPointerKey,
                    0) // IA, zero discriminator.
 MACHO_OBJECT_VALUE(unsigned, kTLVDescriptorBytes, 3 * sizeof(uint64_t))

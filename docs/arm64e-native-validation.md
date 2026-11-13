@@ -1312,7 +1312,11 @@ without performing those native steps.
 Resolve the unwind rows and call-site table while the image is loaded.
 `prepareDarwinArm64eExceptionSite` intersects the recovered row with the
 personality's guarded range. At a protected call, it requires a saved LR and
-an actual call instruction. A frame with no local action can forward to its
+an actual call instruction. The same rule covers a prefix in its guarded
+range and a call's own return edge that loops back to the call. Every
+instruction on that path must preserve the row, memory and the callee-saved
+registers. A stack reload must fit inside the recovered live frame.
+A frame with no local action can forward to its
 authenticated caller. The SA_SIGINFO handler passes this plan and a throw
 or rethrow callback to `ndDarwinArm64eDeliverSignalException`, then returns.
 The kernel restores the interrupted thread's signal mask and stack. The
@@ -1330,11 +1334,17 @@ descriptors. Strong exported definitions receive per-thread export-trie
 entries. Reading the C or C++ variable resolves the descriptor for the
 calling thread. Compiled first-use code and the authenticated libSystem
 terminator call supply C++ initialization and thread-exit destruction.
-Address-diversified pointers in copyable template storage require an
-instance-specific signing contract. An old template can contain an ordinary
-pointer or an address-independent authenticated function pointer. Copying its
-dyld recipe preserves the target and signing schema while the new slot gets
-its own chain successor. [Apple's dyld TLS implementation](https://github.com/apple-oss-distributions/dyld/blob/main/libdyld/ThreadLocalVariables.cpp)
+When the template contains an address-diverse pointer or the object supplies
+per-thread initializer pointers, the publisher registers a private descriptor
+with dyld. On first access the public descriptor obtains the calling thread's
+block, authenticates each nonnull pointer against its template address and
+signs it for the corresponding address in that block. The resolver uses
+the original IA, IB, DA or DB key and discriminator. It runs the original
+initializer sections before the added sections, traversing each in reverse
+entry order. Recursive TLS lookups from callbacks use the same initialized
+pointers. The resolver preserves Darwin's TLV argument and SIMD registers.
+[Apple dyld TLS allocation](https://github.com/apple-oss-distributions/dyld/blob/main/libdyld/ThreadLocalVariables.cpp)
+and [legacy initializer ordering](https://github.com/apple-oss-distributions/dyld/blob/dyld-852.2/src/threadLocalVariables.c).
 
 Image constructors have a different lifetime. The publisher resolves each
 native module-initializer relocation to a local function and emits a

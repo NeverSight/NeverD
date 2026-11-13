@@ -1006,5 +1006,170 @@ extern "C" __attribute__((noinline)) int adjust(int x) {
 }
 )cpp")
 
+A64_LEAF_TEXT(kPerThreadProperty, "native_thread_resolver_lifecycles")
+A64_LEAF_TEXT(kLegacyInitSection, "__thread_init")
+A64_LEAF_TEXT(kTraceSymbol, "_trace")
+A64_LEAF_TEXT(kPerThreadBase, R"cpp(
+extern "C" {
+__thread int trace;
+static int value = 37;
+static int old_function(int n) { return n + 2; }
+#ifdef ORIGINAL_TLS
+__thread int (*__ptrauth(0, 1, 0x172a) old_ia)(int) = old_function;
+__thread int *__ptrauth(2, 1, 0) old_da = &value;
+#endif
+__attribute__((noinline)) int record(int n) { return trace = trace * 10 + n; }
+int old_state() {
+#ifdef ORIGINAL_TLS
+  return old_ia(*old_da);
+#else
+  return 39;
+#endif
+}
+#ifdef NEVERD_TLS_REFERENCE
+void initialize_new();
+void reference_init() {
+  static __thread bool initialized;
+  if (initialized) return;
+  initialized = true;
+#ifdef ORIGINAL_TLS
+  old_ia = old_function;
+  old_da = &value;
+  record(2);
+  record(1);
+#endif
+  initialize_new();
+}
+#endif
+int trace_value() {
+#ifdef NEVERD_TLS_REFERENCE
+  reference_init();
+#endif
+  return trace;
+}
+#if defined(ORIGINAL_TLS) && !defined(NEVERD_TLS_REFERENCE)
+void old_first() { record(1); }
+void old_second() { record(old_state() == 39 ? 2 : 8); }
+asm(".section __DATA,__thread_init,thread_local_init_function_pointers\n"
+    ".p2align 3\n.quad _old_first\n.quad _old_second@AUTH(ia,0)\n.text");
+#endif
+#ifndef NEVERD_TLS_REFERENCE
+__attribute__((noinline)) int adjust(int n) { asm volatile("" : "+r"(n)); return n; }
+#endif
+}
+)cpp")
+A64_LEAF_TEXT(kPerThreadBody, R"cpp(
+extern "C" {
+int record(int);
+int trace_value();
+int old_state();
+static int value = 41;
+static int marker(int n) { return n + 1; }
+__thread int (*__ptrauth(1, 1, 0) new_ib)(int) = marker;
+__thread int *__ptrauth(3, 1, 0x2431) new_db = &value;
+static void first() {
+  asm volatile("movi v0.16b, #0\n movi v8.16b, #0\n movi v31.16b, #0"
+               ::: "v0", "v8", "v31");
+  record(3);
+}
+static void second() { record(new_ib(*new_db) == 42 ? 4 : 8); }
+#ifdef NEVERD_TLS_REFERENCE
+void reference_init();
+void initialize_new() {
+  new_ib = marker;
+  new_db = &value;
+  second();
+  first();
+}
+#else
+__attribute__((used)) void new_first() { first(); }
+__attribute__((used)) void new_second() { second(); }
+asm(".section __DATA,__thread_init,thread_local_init_function_pointers\n"
+    ".p2align 3\n.quad _new_first@AUTH(ia,0)\n"
+#ifndef INVALID_TLS_INIT
+    ".quad _new_second@AUTH(ia,0)\n"
+#else
+    ".quad _new_second@AUTH(da,0)\n"
+#endif
+    ".text");
+#endif
+__attribute__((noinline)) int adjust(int n) {
+#ifdef NEVERD_TLS_REFERENCE
+  reference_init();
+#endif
+  if (new_ib(*new_db) != 42 || old_state() != 39)
+    return -1;
+  return trace_value() + n;
+}
+}
+)cpp")
+A64_LEAF_TEXT(kInvalidTLSInit, "-DINVALID_TLS_INIT")
+A64_LEAF_TEXT(kPerThreadDriver, R"cpp(
+#include <cstdlib>
+#include <dlfcn.h>
+#include <pthread.h>
+extern "C" int check_descriptor(void *);
+asm(R"asm(
+.text
+.p2align 2
+_check_descriptor:
+  pacibsp
+  stp x29, x30, [sp, #-32]!
+  mov x29, sp
+  str q8, [sp, #16]
+  mov x1, #11
+  mov x8, #18
+  mov x15, #25
+  movi v0.16b, #21
+  movi v8.16b, #38
+  movi v31.16b, #61
+  ldr x16, [x0]
+  blraaz x16
+  cmp x1, #11
+  ccmp x8, #18, #0, eq
+  ccmp x15, #25, #0, eq
+  umov w9, v0.b[15]
+  ccmp w9, #21, #0, eq
+  umov w9, v8.b[15]
+  mov w10, #38
+  ccmp w9, w10, #0, eq
+  umov w9, v31.b[15]
+  mov w10, #61
+  ccmp w9, w10, #0, eq
+  cset w0, ne
+  ldr q8, [sp, #16]
+  ldp x29, x30, [sp], #32
+  retab
+)asm");
+static void *descriptor;
+static int (*adjust)(int), (*trace_value)();
+static int expected;
+static void *worker(void *mode) {
+  if (mode && check_descriptor(descriptor)) return (void *)3;
+  if (mode && trace_value() != expected) return (void *)1;
+  if (adjust(7) != expected + 7 || trace_value() != expected ||
+      adjust(3) != expected + 3) return (void *)2;
+  return nullptr;
+}
+int main(int argc, char **argv) {
+  if (argc != 3) return 1;
+  auto *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  adjust = (int (*)(int))dlsym(image, "adjust");
+  trace_value = (int (*)())dlsym(image, "trace_value");
+  expected = atoi(argv[2]) ? 2143 : 43;
+  descriptor = dlsym(image, "trace");
+  if (!adjust || !trace_value || !descriptor || worker((void *)1)) return 3;
+  pthread_t threads[2];
+  for (unsigned i = 0; i < 2; ++i)
+    if (pthread_create(&threads[i], nullptr, worker, i ? (void *)1 : nullptr)) return 4;
+  for (auto t : threads) {
+    void *result;
+    if (pthread_join(t, &result) || result) return 5;
+  }
+  return trace_value() != expected;
+}
+)cpp")
+
 #undef A64_LEAF_VALUE
 #undef A64_LEAF_TEXT

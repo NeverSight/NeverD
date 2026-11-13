@@ -1,0 +1,169 @@
+//===- MachOTLSRuntime.def - Darwin per-thread resolver assembly -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file Position-independent arm64e code assembled by the configured LLVM.
+//===----------------------------------------------------------------------===//
+
+MACHO_TLS_TEXT(kRuntimeName, "neverd.tlv.resolve")
+MACHO_TLS_TEXT(kResolverError, "cannot assemble the Darwin thread-local resolver")
+MACHO_TLS_TEXT(kResolverPrefix, R"asm(
+.text
+.arch armv8.3-a
+.p2align 2
+_neverd_tlv_resolve:
+  pacibsp
+  stp x29, x30, [sp, #-16]!
+  mov x29, sp
+  sub sp, sp, #672
+  str x0, [sp]
+  stp x1, x2, [sp, #16]
+  stp x3, x4, [sp, #32]
+  stp x5, x6, [sp, #48]
+  stp x7, x8, [sp, #64]
+  stp x9, x10, [sp, #80]
+  stp x11, x12, [sp, #96]
+  stp x13, x14, [sp, #112]
+  stp x15, xzr, [sp, #128]
+  stp q0, q1, [sp, #144]
+  stp q2, q3, [sp, #176]
+  stp q4, q5, [sp, #208]
+  stp q6, q7, [sp, #240]
+  stp q8, q9, [sp, #272]
+  stp q10, q11, [sp, #304]
+  stp q12, q13, [sp, #336]
+  stp q14, q15, [sp, #368]
+  stp q16, q17, [sp, #400]
+  stp q18, q19, [sp, #432]
+  stp q20, q21, [sp, #464]
+  stp q22, q23, [sp, #496]
+  stp q24, q25, [sp, #528]
+  stp q26, q27, [sp, #560]
+  stp q28, q29, [sp, #592]
+  stp q30, q31, [sp, #624]
+  adr x1, Lconfig
+  ldr x16, [x1]
+  add x1, x1, x16
+  ldr x0, [x1]             // dyld's private anchor descriptor
+  ldr x16, [x0]
+  blraaz x16                // obtain this thread's template at offset zero
+  str x0, [sp, #8]
+  adr x1, Lconfig
+  ldr x16, [x1]
+  add x1, x1, x16
+  ldr x2, [x1, #8]          // private per-thread guard
+  ldrb w3, [x0, x2]
+  cbnz w3, Lresult
+  mov w3, #1
+  strb w3, [x0, x2]         // recursive requests see the same instance
+)asm")
+MACHO_TLS_TEXT(kRepair, R"asm(
+  ldr x9, [x1, #24]         // number of signed fields
+  add x8, x1, #40           // first {offset, schema} pair
+  cbz x9, Linitializers
+Lfield:
+  ldp x2, x11, [x8], #16
+  add x3, x0, x2
+  ldr x4, [x3]
+  cbz x4, Lnext
+  ldr x5, [x1, #16]
+  add x5, x5, x2            // discriminator at the loader-fixed template word
+  mov x6, x3                // discriminator at this thread's word
+  lsr x10, x11, #16         // key occupies bits 16 and 17
+  and x11, x11, #0xffff
+  cbz x11, Lkey
+  bfi x5, x11, #48, #16
+  bfi x6, x11, #48, #16
+Lkey:
+  cbz x10, Lia
+  cmp x10, #1
+  b.eq Lib
+  cmp x10, #2
+  b.eq Lda
+Ldb:
+  autdb x4, x5
+  mov x7, x4
+  xpacd x7
+  cmp x4, x7
+  b.ne Linvalid
+  pacdb x4, x6
+  b Lstore
+Lda:
+  autda x4, x5
+  mov x7, x4
+  xpacd x7
+  cmp x4, x7
+  b.ne Linvalid
+  pacda x4, x6
+  b Lstore
+Lib:
+  autib x4, x5
+  mov x7, x4
+  xpaci x7
+  cmp x4, x7
+  b.ne Linvalid
+  pacib x4, x6
+  b Lstore
+Lia:
+  autia x4, x5
+  mov x7, x4
+  xpaci x7
+  cmp x4, x7
+  b.ne Linvalid
+  pacia x4, x6
+Lstore:
+  str x4, [x3]
+Lnext:
+  subs x9, x9, #1
+  b.ne Lfield
+Linitializers:
+  ldr x9, [x1, #32]
+  cbz x9, Lresult
+Lcall:
+  ldr x16, [x8], #8
+  sub x9, x9, #1
+  stp x8, x9, [x29, #-16]
+  blraaz x16
+  ldp x8, x9, [x29, #-16]
+  cbnz x9, Lcall
+)asm")
+MACHO_TLS_TEXT(kResult, R"asm(
+Lresult:
+  ldr x1, [sp]
+  ldr x2, [x1, #16]         // pseudo descriptor uses the public TLV offset field
+  ldr x0, [sp, #8]
+  add x0, x0, x2
+  ldp q0, q1, [sp, #144]
+  ldp q2, q3, [sp, #176]
+  ldp q4, q5, [sp, #208]
+  ldp q6, q7, [sp, #240]
+  ldp q8, q9, [sp, #272]
+  ldp q10, q11, [sp, #304]
+  ldp q12, q13, [sp, #336]
+  ldp q14, q15, [sp, #368]
+  ldp q16, q17, [sp, #400]
+  ldp q18, q19, [sp, #432]
+  ldp q20, q21, [sp, #464]
+  ldp q22, q23, [sp, #496]
+  ldp q24, q25, [sp, #528]
+  ldp q26, q27, [sp, #560]
+  ldp q28, q29, [sp, #592]
+  ldp q30, q31, [sp, #624]
+  ldp x1, x2, [sp, #16]
+  ldp x3, x4, [sp, #32]
+  ldp x5, x6, [sp, #48]
+  ldp x7, x8, [sp, #64]
+  ldp x9, x10, [sp, #80]
+  ldp x11, x12, [sp, #96]
+  ldp x13, x14, [sp, #112]
+  ldp x15, xzr, [sp, #128]
+  mov sp, x29
+  ldp x29, x30, [sp], #16
+  retab
+Linvalid:
+  brk #0xc470
+.p2align 3
+Lconfig:
+)asm")
+MACHO_TLS_TEXT(kConfigWord, ".quad 0\n")
