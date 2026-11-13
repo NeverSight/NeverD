@@ -66,7 +66,8 @@ def run(args, work, little, n32):
     assemble = [args.assembler, "-mips64r2", "-n32" if n32 else "-64", "-mmicromips", endian]
     emulation = f"elf{32 if n32 else 64}{'l' if little else 'b'}tsmip" + ("n32" if n32 else "")
     link = [args.linker, "-m", emulation, "-N", "-Ttext", "0x80010000" if n32 else "0xffffffff80010000"]
-    cc = [args.cc, "-march=mips64r2", "-mabi=n32" if n32 else "-mabi=64", "-msoft-float", "-mno-abicalls",
+    cc = [args.cc, "-march=mips64r2", "-mabi=n32" if n32 else "-mabi=64", "-msoft-float",
+          "-mno-abicalls", "-minterlink-compressed",
           "-fno-pic", "-ffreestanding", "-fno-strict-aliasing", "-Werror=attributes",
           "-G0", endian]
     fixture = Path(__file__).with_name("merge-store-word.S")

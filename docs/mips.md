@@ -356,8 +356,10 @@ addresses retain all 64 bits. The r2 scalar subset adds doubleword arithmetic,
 shifts, rotates, bit fields, byte shuffles, LD/SD, LWU, LDL/LDR and SDL/SDR.
 The micro doubleword merge transfers use a signed 12-bit displacement.
 For micro functions, HighC and LLVMC select GCC's `micromips` attribute or
-Clang's `micromips,nomips16` pair. Compilation stops if Clang reports no
-microMIPS attribute for the selected target. GCC's MIPS attributes are
+Clang's `micromips,nomips16` pair. GCC requires `-minterlink-compressed` for
+calls between compressed functions and classic helpers in the same output.
+Compilation stops if Clang reports no microMIPS attribute for the selected
+target. GCC's MIPS attributes are
 documented in the [GCC manual](https://gcc.gnu.org/onlinedocs/gcc/MIPS-Attributes.html).
 Both r2 widths also lift LWL/LWR and SWL/SWR with a signed 12-bit
 displacement. The source fixtures compare the returned word and surrounding
