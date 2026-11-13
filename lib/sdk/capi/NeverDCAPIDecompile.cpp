@@ -808,12 +808,23 @@ int neverd_prepare_function(neverd_session_t Sess, neverd_va_t FuncEntry) {
   return prepareFunction(Sess, FuncEntry, /*NeedHighIR=*/true);
 }
 
+// A client can inspect the ordinary C view before supplying a missing call
+// contract. If that run refused MedIR, request just the original LowIR again.
+static bool prepareOriginalCalls(neverd_session_t Sess, va_t Entry) {
+  auto &S = *toSession(Sess);
+  if (S.PipeRan && !S.PipeResult.Success && S.findLowFunc(Entry))
+    S.selectFunction(Entry);
+  return prepareFunction(Sess, Entry, Session::PipelineDepth::LowIR);
+}
+
 int neverd_prepare_function_view(neverd_session_t Sess, neverd_va_t FuncEntry,
                                  const char *Representation) {
   auto *S = toSession(Sess);
   if (!S)
     return 0;
   const llvm::StringRef Stage = Representation ? Representation : "";
+  if (Stage == "call_sites")
+    return prepareOriginalCalls(Sess, FuncEntry);
   if (Stage != "cfg" && Stage != "low" && Stage != "med" && Stage != "high" &&
       Stage != "llvm" && Stage != "llvmc" && Stage != "source" &&
       !sourceDialectFromKey(Stage)) {
@@ -2079,15 +2090,6 @@ llvm::json::Object llvmViewPage(const LLVMFunctionView &View, va_t Entry,
 }
 
 } // namespace
-
-// A client can inspect the ordinary C view before supplying a missing call
-// contract. If that run refused MedIR, request just the original LowIR again.
-static bool prepareOriginalCalls(neverd_session_t Sess, va_t Entry) {
-  auto &S = *toSession(Sess);
-  if (S.PipeRan && !S.PipeResult.Success && S.findLowFunc(Entry))
-    S.selectFunction(Entry);
-  return prepareFunction(Sess, Entry, Session::PipelineDepth::LowIR);
-}
 
 const char *neverd_ir_view_ex_json(neverd_session_t Sess, neverd_va_t FuncEntry,
                                    const char *Representation, size_t Offset,

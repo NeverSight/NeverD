@@ -1524,6 +1524,7 @@ Json Engine::originalCallSites(std::uint64_t address) {
   if (!view)
     throw Error("unsupported",
                 "The engine does not expose original call occurrences");
+  prepareFunction(address, "call_sites");
   auto sites = backendJson(view(session_, address, "call_sites", 0, 1));
   if (!sites.contains("source_calls") || !sites.contains("call_snapshot"))
     throw Error("unsupported", "Original call analysis is unavailable");
@@ -1605,6 +1606,11 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
                                    variableEdits, callTypes, stackFrame,
                                    staleVariableTypes)
           : options;
+  // The edited source can be the first valid source view of this function.
+  // Prepare its machine occurrences before the SDK applies the call contract.
+  const std::string_view prepareView = engineOptions.contains("call_types")
+                                           ? std::string_view("call_sites")
+                                           : std::string_view(representation);
   const auto optionText = engineOptions.dump();
   (void)listing().functionAliases();
   const auto cacheKey = [&] {
@@ -1812,7 +1818,7 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
   // Session still holds this function. Graph/IR requests prepare it normally.
   if (original.is_null() && !replay && !recovery) {
     ++namedViewRenders_;
-    prepareFunction(address, representation);
+    prepareFunction(address, prepareView);
   }
   // Whole-program VM preparation can analyze(), invalidating the listing and
   // advancing the revision. Rebuild aliases and stamp the prepared context;
@@ -1883,7 +1889,7 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
           if (keptOnly_)
             throw Error("not_kept", "A kept view reads a name since changed");
           replay = nullptr;
-          prepareFunction(address, representation);
+          prepareFunction(address, prepareView);
           text = engineViewPage(address, backendRepresentation, next,
                                 sourceView, engineOptions, optionText);
           page = parsedBackendText(text);
@@ -2508,7 +2514,7 @@ void Engine::prepareFunction(std::uint64_t address,
   // Kept renders do not answer this request.  A graph reads the function's
   // LowIR, which no summary changes.
   if (summariesDeferred_ && representation != "cfg" &&
-      renderFailedAddress_ != address) {
+      representation != "call_sites" && renderFailedAddress_ != address) {
     summariesDeferred_ = false;
     restartSummaries();
   }
@@ -6527,7 +6533,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
           representation != "llvmc")
         throw Error("unsupported",
                     "Call-site declarations require Pseudocode or LLVM C");
-      CodeEdits::validateChange(originalCallSites(address), p);
+      if (p.value("action", std::string()) != "clear")
+        CodeEdits::validateChange(originalCallSites(address), p);
     } else if (!associations && !frameEdit)
       CodeEdits::validateChange(document->value, p);
     // The names keep while the code keeps its locals (code_shape).
