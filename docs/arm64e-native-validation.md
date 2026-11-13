@@ -1368,3 +1368,11 @@ reported unchecked ordinary-memory writeback. Xcode 27 built and signed the
 x1 slice, and the M1 loader returned Darwin error 86 on launch.
 [Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43387041250)
 and [verification record](evidence/arm64e-signal-cleanup-and-new-tls-2026-11-13.json).
+
+The per-thread resolver and protected-call path tests ran in the 40-case
+Release suite on macOS 26.7.2 and 27.0.1. Each M1 runner executed 24 C++
+and 24 Objective-C signal deliveries and eight reference or published TLS
+lifecycles. Xcode 27 built and signed the x1 probe. Its loader rejected
+the slice on this hardware.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43462907219)
+and [per-host results](evidence/arm64e-tls-resolver-and-call-setup-2026-11-14.json).

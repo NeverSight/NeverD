@@ -39,9 +39,9 @@ UNWIND_PROOF_WORD(InsertLowB8, 0x4e051c28)
 UNWIND_PROOF_WORD(InsertHighS8, 0x6e142468)
 UNWIND_PROOF_WORD(X9AboveSP, 0x910023e9)
 UNWIND_PROOF_WORD(StoreD0LaneAtX9, 0x4d008520)
-UNWIND_PROOF_WORD(CompilerTrap, 0xd4200020) // brk #1
-UNWIND_PROOF_WORD(DebugBreak, 0xd43e0000)   // brk #0xf000
-UNWIND_PROOF_WORD(LoadInFrame, 0xf94003e0)   // ldr x0, [sp]
+UNWIND_PROOF_WORD(CompilerTrap, 0xd4200020)   // brk #1
+UNWIND_PROOF_WORD(DebugBreak, 0xd43e0000)     // brk #0xf000
+UNWIND_PROOF_WORD(LoadInFrame, 0xf94003e0)    // ldr x0, [sp]
 UNWIND_PROOF_WORD(LoadAboveFrame, 0xf9400be0) // ldr x0, [sp, #16]
 UNWIND_PROOF_WORD(IndexedStore, 0xf8216be0)
 UNWIND_PROOF_WORD(IfZero, 0xb4000040)

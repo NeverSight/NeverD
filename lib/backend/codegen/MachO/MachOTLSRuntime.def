@@ -1,4 +1,5 @@
-//===- MachOTLSRuntime.def - Darwin per-thread resolver assembly -*- C++ -*-===//
+//===- MachOTLSRuntime.def - Darwin per-thread resolver assembly -*- C++
+//-*-===//
 //
 // NeverD Decompiler
 //
@@ -7,7 +8,8 @@
 //===----------------------------------------------------------------------===//
 
 MACHO_TLS_TEXT(kRuntimeName, "neverd.tlv.resolve")
-MACHO_TLS_TEXT(kResolverError, "cannot assemble the Darwin thread-local resolver")
+MACHO_TLS_TEXT(kResolverError,
+               "cannot assemble the Darwin thread-local resolver")
 MACHO_TLS_TEXT(kResolverPrefix, R"asm(
 .text
 .arch armv8.3-a

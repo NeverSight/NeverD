@@ -17,7 +17,9 @@
 MACHO_DEPENDENCY_VALUE(unsigned, kOrdinaryChainStride, 4)
 MACHO_DEPENDENCY_VALUE(unsigned, kRebasePhase, 0)
 MACHO_DEPENDENCY_VALUE(unsigned, kBindPhase, 1)
-MACHO_DEPENDENCY_TEXT(kThreadResolverChange, "TLS resolver replacement differs from its bootstrap or target")
+MACHO_DEPENDENCY_TEXT(
+    kThreadResolverChange,
+    "TLS resolver replacement differs from its bootstrap or target")
 MACHO_DEPENDENCY_TEXT(kLinkeditSegment, "__LINKEDIT")
 MACHO_DEPENDENCY_TEXT(kInvalidArm64eWord, "invalid arm64e pointer word")
 MACHO_DEPENDENCY_TEXT(kInvalidArm64eImport, "invalid arm64e import ordinal")

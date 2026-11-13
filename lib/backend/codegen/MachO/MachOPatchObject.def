@@ -37,9 +37,8 @@ MACHO_OBJECT_TEXT(kModuleInitSection, "__mod_init_func")
 MACHO_OBJECT_TEXT(kModuleTermSection, "__mod_term_func")
 MACHO_OBJECT_TEXT(kUnsupportedRuntimeSection,
                   "unsupported runtime initialization, TLS or bitcode section")
-MACHO_OBJECT_TEXT(
-    kThreadInitPointers,
-    "invalid thread-local initializer pointer or relocation")
+MACHO_OBJECT_TEXT(kThreadInitPointers,
+                  "invalid thread-local initializer pointer or relocation")
 MACHO_OBJECT_TEXT(kPlacementOverflow, "native placement overflows")
 MACHO_OBJECT_TEXT(kNativeStorage,
                   "native authenticated object requires a linked arm64e image")
