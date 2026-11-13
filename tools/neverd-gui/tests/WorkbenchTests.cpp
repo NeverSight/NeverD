@@ -8323,6 +8323,60 @@ private slots:
     QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
   }
 
+  void anEditsTargetSaysHowTheTextSpellsIt() {
+    // What an edit names by the cursor is what the page links there with the
+    // name as the text spells it: the name a rename offers to change.  A
+    // function's is its image address, a local's what the engine calls it.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    auto *code = shownCode(bench, directory,
+                           QStringLiteral("pseudocode-navigation.bin"));
+    QVERIFY(code);
+    if (code->hasPrelude() && code->preludeFolded())
+      code->setPreludeFolded(false);
+    // The cursor inside the name, on the first line that spells it.
+    const auto targetAt = [&](const QString &name) {
+      const QStringList lines = code->allText().split(QLatin1Char('\n'));
+      for (int line = 0; line < lines.size(); ++line)
+        if (const int column = int(lines[line].indexOf(name)); column >= 0) {
+          code->setCursorLine(line);
+          for (int i = 0; i <= column; ++i)
+            QTest::keyClick(code, Qt::Key_Right);
+          return code->renameTarget().value_or(QJsonObject());
+        }
+      return QJsonObject();
+    };
+    const auto called = targetAt(QStringLiteral("function_22"));
+    QCOMPARE(called.value("name").toString(), QStringLiteral("function_22"));
+    QCOMPARE(called.value("kind").toString(), QStringLiteral("address"));
+    QCOMPARE(addressValue(called.value("address")),
+             std::optional<Address>(Base + 0x160));
+    QCOMPARE(called.value("original").toString(),
+             QStringLiteral("function_22"));
+    QVERIFY(called.contains("begin_byte") && called.contains("end_byte"));
+    const auto defined = targetAt(QStringLiteral("function_20"));
+    QCOMPARE(defined.value("name").toString(), QStringLiteral("function_20"));
+    QCOMPARE(addressValue(defined.value("address")),
+             std::optional<Address>(Base + 0x140));
+    // A name the user gave reads so in the target, under the name the engine
+    // has for it.
+    const auto revision = bench.session.revision();
+    bench.session.rename(Base + 0x160, QStringLiteral("named_by_the_user"));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        bench.session.revision() != revision && code->complete() &&
+            code->allText().contains(QStringLiteral("named_by_the_user(")) &&
+            !bench.session.queries().hasPending(),
+        OpenTimeoutMs);
+    const auto renamed = targetAt(QStringLiteral("named_by_the_user"));
+    QCOMPARE(renamed.value("name").toString(),
+             QStringLiteral("named_by_the_user"));
+    QCOMPARE(renamed.value("original").toString(),
+             QStringLiteral("function_22"));
+    QCOMPARE(addressValue(renamed.value("address")),
+             std::optional<Address>(Base + 0x160));
+  }
+
   void aChangePaintsTheRowsItReachesAndNoOther() {
     // The code view paints again the rows whose painting a change reaches,
     // and leaves the others as the window keeps them.  After each kind of

@@ -550,11 +550,17 @@ private:
   /// The source names of every page by their spelling, and those spellings
   /// by their first character, longest first.
   QHash<QString, SourceName> sourceNames_;
+  /// A name an edit can name, where the text spells it: what the page links
+  /// it by, as the page gave it, and its spelling.
   struct EditName {
     int begin, end;
     QJsonObject target;
+    QString name;
   };
   QVector<EditName> editNames_;
+  /// What an edit names \p name by: what the page links it by, and how the
+  /// text spells it.
+  static QJsonObject targetOf(const EditName &name);
   bool editMetadata_ = false;
   QHash<QChar, QVector<QString>> sourceNameIndex_;
   /// The length of a source name at \p position of \p text, or 0.

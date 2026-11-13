@@ -1043,8 +1043,8 @@ void CodeText::request(int offset, quint64 serial) {
                         : std::nullopt;
           if (matching)
             for (int i = 0; i < oldNames.size(); ++i)
-              if (highlight_ == oldNames[i].target.value("name").toString()) {
-                highlight_ = newNames[i].target.value("name").toString();
+              if (highlight_ == oldNames[i].name) {
+                highlight_ = newNames[i].name;
                 break;
               }
           verticalScrollBar()->setValue(
@@ -1264,12 +1264,10 @@ void CodeText::appendPage(const QJsonObject &payload, int offset) {
     const auto begin = name.value("begin_byte").toInteger(-1) - pageOffset;
     const auto end = name.value("end_byte").toInteger(-1) - pageOffset;
     if (begin >= 0 && end > begin && end <= bytes.size()) {
-      auto target = name;
-      target["name"] = bytes.spelled(begin, end - begin);
       const int first = bytes.charsBefore(begin);
       const int last = bytes.charsBefore(end);
-      editNames_.push_back(
-          {pageCharBase + first, pageCharBase + last, std::move(target)});
+      editNames_.push_back({pageCharBase + first, pageCharBase + last, name,
+                            bytes.spelled(begin, end - begin)});
     }
   }
   bool namesAdded = false;
@@ -2489,6 +2487,12 @@ QString CodeText::currentToken() const {
   return lines_[cursorLine_].styled.tokenAt(cursorColumn_, tokenDots());
 }
 
+QJsonObject CodeText::targetOf(const EditName &name) {
+  QJsonObject target = name.target;
+  target["name"] = name.name;
+  return target;
+}
+
 std::optional<QJsonObject> CodeText::renameTarget() const {
   if (!function_ || loading_ || interrupted_)
     return std::nullopt;
@@ -2499,7 +2503,7 @@ std::optional<QJsonObject> CodeText::renameTarget() const {
       library_.canFold() ? library_.originalPosition(display) : display;
   for (const auto &name : editNames_)
     if (position >= name.begin && position < name.end)
-      return name.target;
+      return targetOf(name);
   if (editMetadata_)
     return std::nullopt;
   const auto token = currentToken();
