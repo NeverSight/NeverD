@@ -363,9 +363,10 @@ bool neverd::sourceCallStackArgumentsDefined(
             Written.insert(*Offset + I);
       }
       std::optional<int64_t> Next;
-      if (Op.Output.Size == 8 && Op.NumInputs == 1 && Op.Opcode == NdOp::COPY)
+      if (Op.Output.Size == SP.Size && Op.NumInputs == 1 &&
+          Op.Opcode == NdOp::COPY)
         Next = address(Op.Inputs[0]);
-      if (Op.Output.Size == 8 && Op.NumInputs == 2 &&
+      if (Op.Output.Size == SP.Size && Op.NumInputs == 2 &&
           (Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
           Op.Inputs[1].isConst())
         if (const auto Base = address(Op.Inputs[0])) {

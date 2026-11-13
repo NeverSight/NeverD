@@ -143,6 +143,8 @@ public:
   /// call_tree).
   static bool findsCallPaths();
 
+  Json originalCallSites(std::uint64_t address);
+
 private:
   Json executeImpl(const std::string &operation, const Json &payload,
                    EncodedPayload *encoded);

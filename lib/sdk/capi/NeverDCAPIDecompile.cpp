@@ -1362,6 +1362,29 @@ const Session::FunctionSource &dialectSource(neverd_session_t Sess, va_t Entry,
   return Kept;
 }
 
+static void writeCallSites(llvm::json::OStream &J, const LowFunc *Low) {
+  J.attribute("call_snapshot", Low ? sourceCallSnapshot(*Low) : std::string());
+  J.attributeArray("source_calls", [&] {
+    if (!Low)
+      return;
+    size_t Count = 0;
+    for (const auto &Block : Low->Blocks)
+      for (const auto &Op : Block.Ops)
+        if (const auto Site = sourceCallOccurrenceKey(Op);
+            Site &&
+            ++Count <=
+                ::neverd::sdk::kNeverDCAPIDecompileWriteSourcePageCountLimit)
+          J.object([&] {
+            J.attribute("id", sourceCallId(*Site));
+            J.attribute("instruction", vaHex(Site->Instruction));
+            J.attribute("sequence", Site->Sequence);
+            J.attribute("indirect", Site->Opcode == NdOp::INDIR_CALL);
+            if (Site->StaticTarget)
+              J.attribute("target", vaHex(*Site->StaticTarget));
+          });
+  });
+}
+
 /// Writes the page of \p Entry's view \p Stage, from line \p Offset and of at
 /// most \p Limit lines, to \p OS: the JSON object llvm::json prints for it,
 /// keys in its order, written once the page is known rather than built as a
@@ -1579,28 +1602,7 @@ void writeSourcePage(llvm::raw_ostream &OS, neverd_session_t Sess, va_t Entry,
       J.attribute("dialect", sourceDialectKey(*Dialect));
     J.attribute("function_identity", std::move(Identity));
     J.attribute("variable_snapshot", Map.VariableSnapshot);
-    const auto *Low = toSession(Sess)->findLowFunc(Entry);
-    J.attribute("call_snapshot",
-                Low ? sourceCallSnapshot(*Low) : std::string());
-    J.attributeArray("source_calls", [&] {
-      if (!Low)
-        return;
-      size_t Count = 0;
-      for (const auto &Block : Low->Blocks)
-        for (const auto &Op : Block.Ops)
-          if (const auto Site = sourceCallOccurrenceKey(Op);
-              Site &&
-              ++Count <=
-                  ::neverd::sdk::kNeverDCAPIDecompileWriteSourcePageCountLimit)
-            J.object([&] {
-              J.attribute("id", sourceCallId(*Site));
-              J.attribute("instruction", vaHex(Site->Instruction));
-              J.attribute("sequence", Site->Sequence);
-              J.attribute("indirect", Site->Opcode == NdOp::INDIR_CALL);
-              if (Site->StaticTarget)
-                J.attribute("target", vaHex(*Site->StaticTarget));
-            });
-    });
+    writeCallSites(J, toSession(Sess)->findLowFunc(Entry));
     J.attributeArray("call_type_results", [&] {
       for (const auto &Status : toSession(Sess)->CurrentCallResults)
         J.object([&] {
@@ -2133,6 +2135,22 @@ const char *neverd_ir_view_json(neverd_session_t Sess, neverd_va_t FuncEntry,
     Result["address"] = vaHex(FuncEntry);
     Result["representation"] = Stage;
     Result["rows"] = llvm::json::Array();
+    // A missing prototype can itself prevent either C view from being built.
+    // Expose the original occurrence from LowIR so that it can be typed.
+    if (Stage == "call_sites") {
+      if (!prepareFunction(Sess, FuncEntry, Session::PipelineDepth::LowIR))
+        return nullptr;
+      const LowFunc *Low = S->findLowFunc(FuncEntry);
+      if (!Low) {
+        S->setError("original function operations are unavailable");
+        return nullptr;
+      }
+      std::string Text;
+      llvm::raw_string_ostream Stream(Text);
+      llvm::json::OStream JSON(Stream);
+      JSON.object([&] { writeCallSites(JSON, Low); });
+      return dupStr(Stream.str());
+    }
     if (Stage == "c" || Stage == "llvmc" || Stage == "source" ||
         sourceDialectFromKey(Stage)) {
       if (S->Img.Arch == Arch::EVM || S->Img.Arch == Arch::SBF) {
