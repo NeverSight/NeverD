@@ -16,6 +16,7 @@
 #include "../../pipeline/PipelineCallAbiDetail.h"
 #include "../../pipeline/PipelineFunctionNames.h"
 #include "../../pipeline/PipelineSourceInline.h"
+#include "../../pipeline/PipelineSourceOptimization.h"
 #include "../../pipeline/PipelineSourceStackAccesses.h"
 #include "../plugin/PluginManager.h"
 #include "FunctionAuditReason.h"
@@ -1272,12 +1273,12 @@ struct Session {
   /// Emit, verify and optimize native LLVM for the pipeline's functions,
   /// with bodies as \p BodyMask selects (MedLLVMEmitter::emit).  Sets the
   /// error and returns null when the emitter refuses or verification fails.
-  std::unique_ptr<llvm::Module>
-  emitNativeLlvm(bool NoOpt, const std::vector<char> *BodyMask,
-                 std::shared_ptr<LLVMSourceMap> &Sources,
-                 bool OriginalImageStorage = false,
-                 std::shared_ptr<SourceInlineHighPreparation> *PreparedHigh =
-                     nullptr) try {
+  std::unique_ptr<llvm::Module> emitNativeLlvm(
+      bool NoOpt, const std::vector<char> *BodyMask,
+      std::shared_ptr<LLVMSourceMap> &Sources,
+      bool OriginalImageStorage = false,
+      std::shared_ptr<SourceInlineHighPreparation> *PreparedHigh = nullptr,
+      bool OptimizeOwned = true) try {
     // HighIR decompile does not run recoverCallAbi. --func --llvm still emits
     // from that MedIR, so populate CallInfos here; otherwise MedLLVM emits
     // 0-arg calls for unwritten live-in rcx.  A body-masked module declares
@@ -1382,6 +1383,17 @@ struct Session {
       Pipeline::promoteScaffoldingAllocas(*Candidate);
       if (Sources)
         Sources->refreshExpressionOrigins();
+    } else if (!SpecializedSource && BodyMask && OriginalImageStorage &&
+               OptimizeOwned) {
+      if (tryOptimizeOwnedSourceModule(*Candidate, Sources.get(),
+                                       SourceOptions))
+        return Candidate;
+      // A failed transform may have changed any IR or tracking handle.
+      // Re-emit the original and use the rollback-capable fallback once.
+      Candidate.reset();
+      Sources.reset();
+      return emitNativeLlvm(NoOpt, BodyMask, Sources, OriginalImageStorage,
+                            PreparedHigh, /*OptimizeOwned=*/false);
     } else if (!SpecializedSource) {
       const OptimizationResult Optimization = Pipeline::optimizeOrPromoteModule(
           *Candidate, Sources.get(), SourceOptions);

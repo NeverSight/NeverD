@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "OptimizationGuards.h"
+#include "PipelineSourceOptimization.h"
 #include "SemanticConvergence.h"
 
 #include "neverd/Common.h"
@@ -365,6 +366,38 @@ void Pipeline::optimizeModule(llvm::Module &Mod, bool Conservative,
   (void)optimizeModule(Mod, Options);
 }
 
+static OptimizationResult
+runCheckedOptimization(llvm::Module &Mod,
+                       const Pipeline::OptimizationOptions &Options) {
+  auto Result = runOptimizationPipeline(Mod, Options);
+  {
+    llvm::raw_string_ostream Diagnostics(Result.Diagnostic);
+    if (llvm::verifyModule(Mod, &Diagnostics)) {
+      Result.Changed = false;
+      Result.Stop = OptimizationStopReason::VerificationFailed;
+      return Result;
+    }
+  }
+
+  auto CandidateContracts =
+      exception_rewrite::validateExceptionRewriteContracts(Mod);
+  if (!CandidateContracts) {
+    Result.Diagnostic = llvm::toString(CandidateContracts.takeError());
+    Result.Changed = false;
+    Result.Stop = OptimizationStopReason::VerificationFailed;
+    return Result;
+  }
+
+  if (Options.PostTransformVerifier && !Options.PostTransformVerifier(Mod)) {
+    Result.Changed = false;
+    Result.Stop = OptimizationStopReason::VerificationFailed;
+    Result.Diagnostic = "post-transform verification failed";
+    return Result;
+  }
+
+  return Result;
+}
+
 OptimizationResult
 Pipeline::optimizeModule(llvm::Module &Mod,
                          const OptimizationOptions &Options) {
@@ -404,32 +437,9 @@ Pipeline::optimizeModule(llvm::Module &Mod,
   }
   auto CandidateOptions = Options;
   CandidateOptions.SourceMap = CandidateSources ? &*CandidateSources : nullptr;
-  Result = runOptimizationPipeline(*Candidate, CandidateOptions);
-  {
-    llvm::raw_string_ostream Diagnostics(Result.Diagnostic);
-    if (llvm::verifyModule(*Candidate, &Diagnostics)) {
-      Result.Changed = false;
-      Result.Stop = OptimizationStopReason::VerificationFailed;
-      return Result;
-    }
-  }
-
-  auto CandidateContracts =
-      exception_rewrite::validateExceptionRewriteContracts(*Candidate);
-  if (!CandidateContracts) {
-    Result.Diagnostic = llvm::toString(CandidateContracts.takeError());
-    Result.Changed = false;
-    Result.Stop = OptimizationStopReason::VerificationFailed;
+  Result = runCheckedOptimization(*Candidate, CandidateOptions);
+  if (Result.Stop == OptimizationStopReason::VerificationFailed)
     return Result;
-  }
-
-  if (Options.PostTransformVerifier &&
-      !Options.PostTransformVerifier(*Candidate)) {
-    Result.Changed = false;
-    Result.Stop = OptimizationStopReason::VerificationFailed;
-    Result.Diagnostic = "post-transform verification failed";
-    return Result;
-  }
 
   // A pass manager's PreservedAnalyses is an invalidation contract, not an
   // exact change report.  Confirm the final candidate itself before replacing
@@ -448,10 +458,10 @@ Pipeline::optimizeModule(llvm::Module &Mod,
   return Result;
 }
 
-OptimizationResult
-Pipeline::optimizeOrPromoteModule(llvm::Module &Mod, LLVMSourceMap *Sources,
-                                  const SourceViewOptions &View) {
-  OptimizationOptions Options;
+static Pipeline::OptimizationOptions
+sourceOptimizationOptions(LLVMSourceMap *Sources,
+                          const SourceViewOptions &View) {
+  Pipeline::OptimizationOptions Options;
   Options.SourceMap = Sources;
   Options.EnableSemantic = View.Symbolic;
   Options.Semantic.EnableSynthesis = View.Symbolic;
@@ -462,7 +472,7 @@ Pipeline::optimizeOrPromoteModule(llvm::Module &Mod, LLVMSourceMap *Sources,
   switch (View.LLVM) {
   case SourceViewOptions::LLVMOptimization::Basic:
   case SourceViewOptions::LLVMOptimization::Custom:
-    Options.Strength = OptStrength::Source;
+    Options.Strength = Pipeline::OptStrength::Source;
     Options.SourcePasses =
         View.LLVM == SourceViewOptions::LLVMOptimization::Basic
             ? SourceViewOptions::BasicPasses
@@ -481,6 +491,27 @@ Pipeline::optimizeOrPromoteModule(llvm::Module &Mod, LLVMSourceMap *Sources,
     Options.LLVMLevel = llvm::OptimizationLevel::O3;
     break;
   }
+  return Options;
+}
+
+bool tryOptimizeOwnedSourceModule(llvm::Module &Mod, LLVMSourceMap *Sources,
+                                  const SourceViewOptions &View) {
+  auto Input = exception_rewrite::validateExceptionRewriteContracts(Mod);
+  if (!Input) {
+    llvm::consumeError(Input.takeError());
+    return false;
+  }
+  // No IR handles have escaped from this emission, so promotion and later
+  // passes can update the source map's tracking handles in place.
+  auto Result =
+      runCheckedOptimization(Mod, sourceOptimizationOptions(Sources, View));
+  return Result.Stop != OptimizationStopReason::VerificationFailed;
+}
+
+OptimizationResult
+Pipeline::optimizeOrPromoteModule(llvm::Module &Mod, LLVMSourceMap *Sources,
+                                  const SourceViewOptions &View) {
+  auto Options = sourceOptimizationOptions(Sources, View);
   OptimizationResult Result = optimizeModule(Mod, Options);
   if (Result.Stop == OptimizationStopReason::VerificationFailed) {
     // A source view can still print the verified input of a rejected
