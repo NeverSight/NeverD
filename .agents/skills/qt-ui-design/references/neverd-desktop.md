@@ -618,6 +618,12 @@ strings in eleven languages:
   dock shows two buttons that both read "Ins".
 - The pseudocode view's context menu has 39 entries and is taller than a
   1080-pixel screen, where it scrolls.
+- The Windows menu lists the open panes in the order of a `QHash`
+  (`MainWindow::docks_`), so the list, and the pane each of Alt+1 to Alt+9
+  reaches, changes with every launch. Which order it should keep is the
+  user's to say. Two captures of one build differ in that menu, in the
+  status bar's free disk space and in the times of recent files; count
+  those three as the noise floor of a comparison, and nothing else.
 
 ## Hierarchy and proportion
 
