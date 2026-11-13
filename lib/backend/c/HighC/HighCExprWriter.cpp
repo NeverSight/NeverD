@@ -6138,8 +6138,10 @@ std::string HighCWriter::unknownVarUse(const HighExpr &E,
     // The link register's full entry value is the return address, as the
     // LLVM route reads it: AArch64 x30 and ARM LR alike (x86 has none).
     if (E.Var.Kind == MedVar::Reg && TRI.isLinkRegister(E.Var.RegOff) &&
-        E.Var.Size == TRI.PointerSize)
-      return "(uintptr_t)__builtin_return_address(0)";
+        E.Var.Size == TRI.addressRegisterBytes())
+      return isMIPSN32(Opts.TheArch)
+                 ? "(int64_t)(intptr_t)__builtin_return_address(0)"
+                 : "(uintptr_t)__builtin_return_address(0)";
     // The platform register's entry value is the platform's state, which C
     // reads from the register itself.
     if (isPlatformRegisterEntry(E) && TRI.GetRegName) {
