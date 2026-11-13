@@ -1328,50 +1328,57 @@ private slots:
                 .top() > 0);
   }
 
+  void aFlatGroupBoxFramesNothing_data() {
+    QTest::addColumn<qreal>("scale");
+    for (const qreal scale : {1.0, 1.25, 2.0})
+      QTest::newRow(qPrintable(QStringLiteral("%1x").arg(scale))) << scale;
+  }
+
   void aFlatGroupBoxFramesNothing() {
     // Offline package review shows its registry fields only while their
     // group is checked; unchecked, the group drew a frame around nothing.  A
     // flat group keeps the rule beside its title and no sides.
+    QFETCH(qreal, scale);
     Theme::instance().setMode(Theme::Mode::Dark);
     Theme::instance().apply();
+    const QColor surface = Theme::instance().chrome("Window");
     const QColor line = Theme::instance().chrome("Border");
-    struct Sides {
-      int down = 0, across = 0;
-      QSize size;
-    };
-    const auto sides = [&line](bool flat) {
-      QGroupBox box(QStringLiteral("Include declarations"));
-      box.setCheckable(true);
-      box.setChecked(false);
-      box.setFlat(flat);
-      box.setAutoFillBackground(true);
-      box.resize(240, 64);
-      box.show();
-      QCoreApplication::processEvents();
-      const QImage image = box.grab().toImage();
-      // Device pixels of the frame's color down the left edge, and along
-      // the row that holds most of them.
-      Sides found;
-      found.size = image.size();
+    QGroupBox framed(QStringLiteral("Include declarations"));
+    QGroupBox flat(QStringLiteral("Include declarations"));
+    flat.setFlat(true);
+    // Device pixels of the frame's color down the left edge, and along the
+    // row that holds most of them, drawn at the scale asked for whatever
+    // the screen's own is.
+    int down[2] = {0, 0}, across[2] = {0, 0};
+    QSize size;
+    int index = 0;
+    for (QGroupBox *box : {&framed, &flat}) {
+      box->setCheckable(true);
+      box->setChecked(false);
+      box->resize(240, 64);
+      box->show();
+      QVERIFY(QTest::qWaitForWindowExposed(box));
+      QImage image(QSize(240, 64) * scale, QImage::Format_ARGB32_Premultiplied);
+      image.setDevicePixelRatio(scale);
+      image.fill(surface);
+      box->render(&image);
+      size = image.size();
       for (int y = 0; y < image.height(); ++y) {
-        found.down += image.pixelColor(0, y).rgb() == line.rgb();
+        down[index] += image.pixelColor(0, y).rgb() == line.rgb();
         int row = 0;
         for (int x = 0; x < image.width(); ++x)
           row += image.pixelColor(x, y).rgb() == line.rgb();
-        found.across = qMax(found.across, row);
+        across[index] = qMax(across[index], row);
       }
-      return found;
-    };
-    const Sides framed = sides(false), flat = sides(true);
+      ++index;
+    }
     // A frame's side runs down more than half the box; a rule ends where it
-    // began, as thick as one pixel of the layout at the screen's scale.
-    QVERIFY2(framed.down > framed.size.height() / 2,
-             qPrintable(QString::number(framed.down)));
-    QVERIFY2(flat.down <= qCeil(qApp->devicePixelRatio()),
-             qPrintable(QString::number(flat.down)));
+    // began, as thick as one pixel of the layout at this scale.
+    QVERIFY2(down[0] > size.height() / 2, qPrintable(QString::number(down[0])));
+    QVERIFY2(down[1] <= qCeil(scale), qPrintable(QString::number(down[1])));
     // The rule still runs across, broken only by the title.
-    QVERIFY2(flat.across > flat.size.width() / 4,
-             qPrintable(QString::number(flat.across)));
+    QVERIFY2(across[1] > size.width() / 4,
+             qPrintable(QString::number(across[1])));
   }
 
   void columnHeadingsStartWithTheirColumnsAndKeepTheirWeight() {
@@ -1402,11 +1409,20 @@ private slots:
                Qt::Alignment(Qt::AlignLeft | Qt::AlignVCenter));
       QVERIFY(!header->highlightSections());
     }
-    // Selecting a row leaves the headings as they were drawn.
-    const QImage before = table.horizontalHeader()->grab().toImage();
-    table.selectRow(0);
-    QCoreApplication::processEvents();
-    QCOMPARE(table.horizontalHeader()->grab().toImage(), before);
+    // A selected row leaves the headings as they are drawn without one.
+    // The pair of pictures is taken again if it differs: a native window
+    // can become active between the two, once, and headings that turn bold
+    // differ every time.
+    const auto drawnAlike = [&table] {
+      table.selectRow(0);
+      QCoreApplication::processEvents();
+      const QImage selected = table.horizontalHeader()->grab().toImage();
+      table.clearSelection();
+      table.setCurrentIndex(QModelIndex());
+      QCoreApplication::processEvents();
+      return table.horizontalHeader()->grab().toImage() == selected;
+    };
+    QTRY_VERIFY(drawnAlike());
   }
 
   void splitterHandlesKeepAHairlineInTheirRoom_data() {
