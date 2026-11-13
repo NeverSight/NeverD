@@ -562,11 +562,14 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
   // it once it is written.
   std::string Rest;
   llvm::raw_string_ostream RestOS(Rest);
+  UsesMicroMIPSAttribute = false;
   {
     RestoreOutput Restore{OS, &OS.stream()};
     OS.retarget(&RestOS);
     writeModuleBody(Mod);
   }
+  if (UsesMicroMIPSAttribute)
+    OS << mips::MicroModeCPrelude;
   std::string Records;
   {
     llvm::raw_string_ostream RecordsOS(Records);
@@ -952,7 +955,6 @@ void LLVMCWriter::recordSourceNames(const llvm::Module &Mod) {
 }
 
 void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
-  bool NeedsMicroMode = false;
   bool NeedsAArch64RawCall = false;
   bool NeedsAArch64ResultStorageCall = false;
   bool NeedsX86SystemRegisterDispatch = false;
@@ -1024,9 +1026,6 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
   for (auto &Fn : Mod) {
     // Declarations and aggregate definitions can survive selection of only
     // one body, including a function referenced only through its address.
-    if (isMIPS(Opts.TheArch) && !NeedsMicroMode)
-      NeedsMicroMode =
-          mips::instructionModeFromLLVM(Fn) == InstructionMode::MicroMIPS;
     NoteWideInteger(Fn.getReturnType());
     if (NeedsWideCarrierAlias)
       for (const auto &Arg : Fn.args())
@@ -1378,8 +1377,6 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
       Headers.insert(Hdr);
 
   IncludedHeaders.clear();
-  if (NeedsMicroMode)
-    OS << mips::MicroModeCPrelude;
   if (Opts.EmitIncludes) {
     // As NeverD read the headers: with _GNU_SOURCE, for the GNU C Library,
     // musl and bionic.
@@ -2761,6 +2758,12 @@ static uint64_t argumentSlotBytes(const llvm::Function &Fn,
   return Bytes;
 }
 
+const char *LLVMCWriter::mipsModeAttribute(const llvm::Function &Function) {
+  const auto Mode = mips::instructionModeFromLLVM(Function);
+  UsesMicroMIPSAttribute |= Mode == InstructionMode::MicroMIPS;
+  return mips::instructionModeCAttribute(Mode);
+}
+
 void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
   const c_library::ImportPops StdcallPops =
       Img ? c_library::stdcallImportPops(*Img) : c_library::ImportPops();
@@ -2860,7 +2863,7 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
           Opts.TheArch, Img ? Img : Opts.Image,
           Fn.hasFnAttribute(mips::DSPSourceMarker),
           Fn.hasFnAttribute(mips::NoMSAMarker));
-      OS << mips::instructionModeCAttribute(mips::instructionModeFromLLVM(Fn));
+      OS << mipsModeAttribute(Fn);
     }
     if (Fn.hasFnAttribute("neverd.x64_dispatch_frame"))
       OS << "__attribute__((ms_abi)) ";

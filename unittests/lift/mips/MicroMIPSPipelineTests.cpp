@@ -18,6 +18,7 @@
 #include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -28,6 +29,38 @@ using namespace neverd;
 namespace {
 
 class MicroMIPSPipeline : public ::testing::TestWithParam<Arch> {};
+
+TEST(MicroMIPSPipelineSource, LLVMCModePreludeFollowsEmittedSignatures) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("mixed", Context);
+  llvm::IRBuilder<> IR(Context);
+  auto *Type = llvm::FunctionType::get(IR.getInt32Ty(), false);
+  auto *Micro = llvm::Function::Create(Type, llvm::Function::ExternalLinkage,
+                                       "micro_target", Module);
+  Micro->addFnAttr("micromips");
+  IR.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Micro));
+  IR.CreateRet(IR.getInt32(7));
+  CEmitterOptions Options;
+  Options.TheArch = Arch::MIPS64;
+  Options.Format = BinaryFormat::ELF;
+  for (bool CallsMicro : {false, true}) {
+    auto *Classic =
+        llvm::Function::Create(Type, llvm::Function::ExternalLinkage,
+                               CallsMicro ? "calls_micro" : "leaf", Module);
+    IR.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Classic));
+    if (CallsMicro)
+      IR.CreateRet(IR.CreateCall(Micro));
+    else
+      IR.CreateRet(IR.getInt32(42));
+    std::string Text;
+    llvm::raw_string_ostream Out(Text);
+    ASSERT_TRUE(
+        LLVMCEmitter().emit(Module, Out, Options, nullptr, nullptr, Classic));
+    EXPECT_EQ(Text.find("#define NEVERD_MICROMIPS") != std::string::npos,
+              CallsMicro)
+        << Text;
+  }
+}
 
 void checkHalfwordAlignedALUSources(Arch Target, unsigned Revision) {
   mips_test::ELFBytes File(Target);

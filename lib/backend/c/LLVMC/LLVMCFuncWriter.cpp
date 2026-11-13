@@ -10459,8 +10459,7 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
           Opts.TheArch, Img ? Img : Opts.Image,
           Fn.hasFnAttribute(mips::DSPSourceMarker),
           Fn.hasFnAttribute(mips::NoMSAMarker));
-      SignatureOS << mips::instructionModeCAttribute(
-          mips::instructionModeFromLLVM(Fn));
+      SignatureOS << mipsModeAttribute(Fn);
     }
     SignatureOS << RetStr << " " << FName << "(";
 
