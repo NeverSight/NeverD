@@ -237,6 +237,22 @@ private slots:
       QVERIFY2(Accented == QStringList{QLatin1String(Main)},
                qPrintable(QStringLiteral("%1: %2").arg(QLatin1String(Name),
                                                        Accented.join(' '))));
+      // Analyst review's main action is on its form's page.  With the
+      // selected record in front the form is hidden, and saving the
+      // comparison takes the accent: no page is left without one.
+      if (auto *Pages = Review->findChild<QTabWidget *>("reviewTabs")) {
+        const auto Wearing = [Review] {
+          QStringList Names;
+          for (const auto *Button : Review->findChildren<QPushButton *>())
+            if (Button->property("mainAction").toBool())
+              Names.append(Button->objectName());
+          return Names;
+        };
+        Pages->setCurrentIndex(1);
+        QCOMPARE(Wearing(), QStringList{QStringLiteral("reviewSave")});
+        Pages->setCurrentIndex(0);
+        QCOMPARE(Wearing(), QStringList{QStringLiteral("reviewAppend")});
+      }
       // A report of JSON reads in the code font, as the evidence of the
       // other review windows does.
       if (const auto *Report =

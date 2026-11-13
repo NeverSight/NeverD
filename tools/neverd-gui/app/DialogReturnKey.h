@@ -39,7 +39,9 @@ void leaveWithoutDefaultButton(QDialog &dialog);
 /// A window shows the accent on one button at most, chosen where it is built
 /// and never left to the toolkit; no window with buttons goes without one
 /// unless nothing in it names its main action.  While the action cannot act
-/// the accent stays, faint.
-void showAsMainAction(QPushButton &button);
+/// the accent stays, faint.  \p on false takes the accent away again, for a
+/// window whose main action is on a page that can be hidden: the accent
+/// then goes to a command that still shows.
+void showAsMainAction(QPushButton &button, bool on = true);
 
 } // namespace neverd::gui

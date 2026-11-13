@@ -141,8 +141,6 @@ ComparisonReviewDialog::ComparisonReviewDialog(ComparisonSession &S,
   NewDraft->setObjectName("reviewNewDraft");
   Append = new QPushButton(tr("Append assessment"), Form);
   Append->setObjectName("reviewAppend");
-  // What the form is filled in for; faint until the draft can be appended.
-  showAsMainAction(*Append);
   Buttons->addWidget(NewDraft);
   Buttons->addStretch();
   Buttons->addWidget(Append);
@@ -165,6 +163,18 @@ ComparisonReviewDialog::ComparisonReviewDialog(ComparisonSession &S,
   Save->setObjectName("reviewSave");
   Footer->addWidget(Save);
   Root->addLayout(Footer);
+  // Appending is what the form is filled in for: the window's main action
+  // while the form shows, faint until the draft can be appended.  With the
+  // selected record in front the form is hidden, and saving the comparison,
+  // which the line beside it asks for, takes the accent: no page of the
+  // window is left without one.
+  const auto Accent = [this, Tabs, Form] {
+    const bool Filling = Tabs->currentWidget() == Form;
+    showAsMainAction(*Append, Filling);
+    showAsMainAction(*Save, !Filling);
+  };
+  connect(Tabs, &QTabWidget::currentChanged, this, Accent);
+  Accent();
   connect(Save, &QPushButton::clicked, this,
           &ComparisonReviewDialog::saveComparison);
   connect(Refresh, &QPushButton::clicked, this,
