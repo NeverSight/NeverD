@@ -547,15 +547,16 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
   // the source return value.  Keep the low and high SSA values separate until
   // this boundary; an unrelated earlier write to the high register is not a
   // substitute for the value reaching this RETURN.
+  const uint16_t WordBytes = TRI.integerReturnWordBytes();
   if (Func.ReturnType && Func.ReturnType->Kind == NdTypeKind::Int &&
-      Func.ReturnType->Size == 2 * TRI.PointerSize &&
-      (TRI.PointerSize == 4 ||
+      Func.ReturnType->Size == 2 * WordBytes &&
+      (WordBytes == 4 || isMIPS(TargetArch) ||
        (Med.MultiReturn.size() == 2 && !Med.MultiReturn[0].IsFP &&
         !Med.MultiReturn[1].IsFP &&
         Med.MultiReturn[0].RegOff == TRI.IntReturnReg &&
         Med.MultiReturn[1].RegOff == TRI.IntReturnReg2)) &&
       TRI.IntReturnReg2 != 0 && RetVal && RetVal->Type &&
-      RetVal->Type->Size == TRI.PointerSize) {
+      RetVal->Type->Size == WordBytes) {
     // A call after the high register's last write leaves what its callee
     // put there, which this function computed none of.
     ExprPtr High;
@@ -568,8 +569,7 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
         High = ValueFromDefinition(*RIt);
         break;
       }
-      if ((Clobbered =
-               !callKeepsRegister(*RIt, TRI.IntReturnReg2, TRI.PointerSize)))
+      if ((Clobbered = !callKeepsRegister(*RIt, TRI.IntReturnReg2, WordBytes)))
         break;
     }
     if (!High && !Clobbered)
@@ -584,8 +584,8 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
             High = ValueFromDefinition(*RIt);
             break;
           }
-          if ((Clobbered = !callKeepsRegister(*RIt, TRI.IntReturnReg2,
-                                              TRI.PointerSize)))
+          if ((Clobbered =
+                   !callKeepsRegister(*RIt, TRI.IntReturnReg2, WordBytes)))
             break;
         }
       }
@@ -603,9 +603,9 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
     if (High) {
       if (TRI.IntegerReturnPairHighFirst)
         std::swap(High, RetVal);
-      auto Pair = HighExpr::makeBinop(
-          NdOp::CONCAT, sourceBitSlice(High, 0, TRI.PointerSize),
-          sourceBitSlice(RetVal, 0, TRI.PointerSize));
+      auto Pair =
+          HighExpr::makeBinop(NdOp::CONCAT, sourceBitSlice(High, 0, WordBytes),
+                              sourceBitSlice(RetVal, 0, WordBytes));
       Pair->Type = Func.ReturnType;
       RetVal = std::move(Pair);
     } else {

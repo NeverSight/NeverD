@@ -39,7 +39,9 @@ const SourceCallTypeHint *mipsFloatingCallSite(
 /// A scalar source result observes only its ABI width. Canonicalize an
 /// unpredictable value only after proving every transported byte unobserved;
 /// live unpredictable bytes retain their diagnostic intrinsic.
-void discardUnobservedMIPSFPUpperBits(MedFunc &Function, Arch Target);
+void discardUnobservedMIPSFPUpperBits(
+    MedFunc &Function, Arch Target,
+    const std::map<va_t, FloatingCallArguments> &EntrySignatures);
 
 } // namespace neverd
 

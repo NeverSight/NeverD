@@ -336,19 +336,16 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     // in the integer return register here (V0/D0 are not the tracked var).
     uint64_t FloatRetOff = TRI.fpReturnModelReg();
     uint64_t IntRetOff = TRI.IntReturnReg;
-    // A 32-bit target returns a 64-bit integer in a register pair: the low
-    // half in IntReturnReg (EAX/R0) and the high half in IntReturnReg2
-    // (EDX/R1).  Combine both halves so the high 32 bits are not dropped.
-    bool WantWide64 = !WantFloat && RetTy->isIntegerTy(64) &&
-                      TRI.integerReturnWordBytes() == 4 &&
-                      TRI.IntReturnReg2 != 0;
+    const unsigned WordBytes = TRI.integerReturnWordBytes();
+    const bool WantPair = TRI.IntReturnReg2 &&
+                          (WordBytes == 4 || isMIPS(TargetArch)) &&
+                          RetTy->isIntegerTy(2 * WordBytes * 8);
     uint64_t HiRetOff = TRI.IntReturnReg2;
     const uint16_t IntegerReturnSize =
-        WantWide64             ? TRI.PointerSize
+        WantPair               ? WordBytes
         : RetTy->isPointerTy() ? TRI.PointerSize
-        : RetTy->isIntegerTy()
-            ? static_cast<uint16_t>((RetTy->getIntegerBitWidth() + 7) / 8)
-            : 0;
+        : RetTy->isIntegerTy() ? (RetTy->getIntegerBitWidth() + 7) / 8
+                               : 0;
     auto isAuthoritativeIntegerReturnView = [&](const MedVar &V) {
       if (WantFloat || V.RegOff != IntRetOff || IntegerReturnSize == 0)
         return false;
@@ -405,7 +402,7 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           if (isAuthoritativeIntegerReturnView(RIt->Output))
             RetVar = &RIt->Output;
         }
-        if (WantWide64 && RIt->Output.RegOff == HiRetOff) {
+        if (WantPair && RIt->Output.RegOff == HiRetOff) {
           // A SUBBYTES that extracts the high PointerSize bytes (e.g. ARM
           // `vmov rLo,rHi,dN` lowers the high register to SUBBYTES(d,4)) is a
           // genuine high half; only a sub-register narrowing at another
@@ -439,7 +436,7 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             RetVar = &Phi.Output;
         }
       }
-      if (WantWide64 && !HiVar) {
+      if (WantPair && !HiVar) {
         for (auto &Phi : Blk.Phis)
           if (Phi.Output.Kind == MedVar::Reg && Phi.Output.Size > 0 &&
               Phi.Output.RegOff == HiRetOff)
@@ -463,7 +460,7 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         const bool ReturnAddressRelation =
             ReturnOccurrence.Model ==
             ConstantProvenanceSummary::ValueModel::Address;
-        if (!WantFloat && !WantWide64 && RetTy->isIntegerTy() && RetVal &&
+        if (!WantFloat && !WantPair && RetTy->isIntegerTy() && RetVal &&
             RetVal->getType()->isIntegerTy() &&
             (!ReturnOccurrence.hasExplicitProvenance() ||
              ReturnAddressRelation))
@@ -472,24 +469,19 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             RetVal = Builder.CreatePtrToInt(Sym, RetTy);
       }
       // Splice the high half above the low half into the 64-bit result.
-      if (WantWide64 && RetVal && HiVar) {
+      if (WantPair && RetVal && HiVar) {
         rejectEscapingAddressFragment(*HiVar,
                                       "the high half of a return value");
-        auto *I64 = llvm::Type::getInt64Ty(*Ctx);
-        auto toI64 = [&](llvm::Value *V) -> llvm::Value * {
-          if (V->getType() == I64)
-            return V;
-          if (V->getType()->getIntegerBitWidth() > 64)
-            return Builder.CreateTrunc(V, I64);
-          return Builder.CreateZExt(V, I64);
+        auto ToLimb = [&](llvm::Value *V) {
+          return Builder.CreateZExt(
+              Builder.CreateZExtOrTrunc(V, sizeToType(WordBytes)), RetTy);
         };
-        llvm::Value *Lo = toI64(RetVal);
-        llvm::Value *Hi = toI64(GetReturnValue(*HiVar));
+        llvm::Value *Lo = ToLimb(RetVal);
+        llvm::Value *Hi = ToLimb(GetReturnValue(*HiVar));
         if (TRI.IntegerReturnPairHighFirst)
           std::swap(Lo, Hi);
-        RetVal = Builder.CreateOr(
-            Builder.CreateShl(Hi, llvm::ConstantInt::get(I64, 32)), Lo,
-            "ret64");
+        RetVal = Builder.CreateOr(Builder.CreateShl(Hi, WordBytes * 8), Lo,
+                                  WordBytes == 4 ? "ret64" : "ret128");
       }
       break;
     }

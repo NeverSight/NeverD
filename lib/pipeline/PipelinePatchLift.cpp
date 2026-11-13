@@ -334,7 +334,8 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     return true;
 
   for (auto &Function : Result.MedFuncs)
-    discardUnobservedMIPSFPUpperBits(Function, Img.Arch);
+    discardUnobservedMIPSFPUpperBits(Function, Img.Arch,
+                                     Result.CallEntryFloatingArguments.get());
 
   if (medStackProjection(Opts) == MedStackProjection::Source) {
     prepareRecoveredSourceStackAccesses(Img, Result, Result.LowFuncs);

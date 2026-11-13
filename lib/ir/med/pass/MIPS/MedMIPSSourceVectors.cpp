@@ -203,10 +203,28 @@ void requireMIPSSourceVectors(
           "MSA unreachable block has unbound vector inputs");
 }
 
-void discardUnobservedMIPSFPUpperBits(MedFunc &Function, Arch Target) {
-  if (!isMIPS(Target) || Function.SkippedSSA || !Function.ReturnType ||
-      Function.ReturnType->Kind != NdTypeKind::Float ||
-      Function.ReturnType->Size != 4 || !Function.MultiReturn.empty())
+void discardUnobservedMIPSFPUpperBits(
+    MedFunc &Function, Arch Target,
+    const std::map<va_t, FloatingCallArguments> &EntrySignatures) {
+  if (!isMIPS(Target) || Function.SkippedSSA)
+    return;
+  bool Declared = false;
+  if (const auto It = EntrySignatures.find(Function.Entry);
+      It != EntrySignatures.end() && !It->second.ReturnElements) {
+    // The declared scalar entry and its callers use the same classifier.
+    // Register-bundle inference must not turn a declared integer into a
+    // record, or a volatile scratch FPR into its return register.
+    if (auto Types = floatingCallTypes(Target, BinaryFormat::ELF, It->second)) {
+      Declared = true;
+      Function.ReturnType = Types->Result;
+      Function.MultiReturn.clear();
+      Function.ReturnsVectorRegister = false;
+    }
+  }
+  if (!Function.ReturnType || !Function.MultiReturn.empty())
+    return;
+  const bool Floating = Function.ReturnType->Kind == NdTypeKind::Float;
+  if (!Declared && (!Floating || Function.ReturnType->Size != 4))
     return;
   std::vector<MedOp *> Candidates;
   for (auto &Block : Function.Blocks)
@@ -273,8 +291,8 @@ void discardUnobservedMIPSFPUpperBits(MedFunc &Function, Arch Target) {
         continue;
       // Keep every potentially returned FPR definition conservative; the
       // ABI reads its low word even when RETURN still carries the GPR seed.
-      if (Value.Kind == MedVar::Reg && Value.RegOff == TRI.FPReturnReg &&
-          First < Function.ReturnType->Size)
+      if (Floating && Value.Kind == MedVar::Reg &&
+          Value.RegOff == TRI.FPReturnReg && First < Function.ReturnType->Size)
         return true;
       if (Value.Kind == MedVar::Reg &&
           TRI.isCallPreserved(Value.RegOff, Value.Size))
