@@ -4218,6 +4218,11 @@ multiplied into one factor must preserve the same observations. A 63-factor exec
 through CLI and GUI worker source paths. The 32-bit top-column regression
 requires the same 16-node reading at a 256-unit work limit and at the usual
 limit; Z3 verifies the short-budget result.
+Use `--family dynamic-lane --count 12` for 84 products with masks that depend
+on runtime inputs. Half the cases leave one more low bit observable, and
+28 also have a fixed low literal that must stay in the output. The
+native test checks the whole seven-bit input space and wider words with Z3.
+A 63-factor x64 fixture exercises both CLI and GUI worker source paths.
 For latency comparisons, retain per-run and pooled per-input P95, separate
 thread CPU from wall time, and include same-binary A/A controls. Pooling input
 medians can change the sample at the 95th percentile and reverse the apparent

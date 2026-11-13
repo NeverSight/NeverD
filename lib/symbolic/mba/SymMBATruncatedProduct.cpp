@@ -47,12 +47,36 @@ bool readTruncatedCoordinate(SymContext &Ctx, Factor &Row, unsigned Observed,
     return (Ctx.op(V) == SymOp::Mul || Ctx.op(V) == SymOp::And) &&
            Ctx.numOperands(V) >= 2 && Ctx.isConst(Ctx.operand(V, 0));
   };
+  // The neutral prefix depends on the consuming operator: zero for OR/XOR
+  // and all ones for AND. A complemented zero prefix is an all-ones prefix.
+  auto NeutralMask = [&](SymOp Op, SymRef Term) -> SymRef {
+    if (Op == SymOp::And) {
+      if (Ctx.op(Term) == SymOp::Or && Ctx.isConst(Ctx.operand(Term, 0)))
+        return Ctx.operand(Term, 0);
+      if (Ctx.op(Term) != SymOp::Not)
+        return {};
+      Term = Ctx.operand(Term, 0);
+    }
+    return Scaled(Term) ? Ctx.operand(Term, 0) : SymRef{};
+  };
   auto CanRead = [&] {
     const auto Op = Ctx.op(Word);
     if (HasScalar(Word) && (Op == SymOp::Add || Op == SymOp::Mul))
       return true;
-    if (Op == SymOp::And || Op == SymOp::Or || Op == SymOp::Xor)
-      return Ctx.isConst(Ctx.operand(Word, 0));
+    if (Op == SymOp::And || Op == SymOp::Or || Op == SymOp::Xor) {
+      auto Terms = Ctx.operands(Word);
+      if (Ctx.isConst(Terms.front()))
+        return true;
+      // Plain binary words are common coordinates. Inspect them directly
+      // before reserving work or storage for a reconstruction.
+      if (Terms.size() == 2)
+        return NeutralMask(Op, Terms[0]) || NeutralMask(Op, Terms[1]);
+      if (!Budget.canConsume(Terms.size()))
+        return false;
+      Budget.consume(Terms.size());
+      return llvm::any_of(Terms,
+                          [&](SymRef T) { return bool(NeutralMask(Op, T)); });
+    }
     if (Op != SymOp::Add)
       return false;
     auto Terms = Ctx.operands(Word);
@@ -92,26 +116,33 @@ bool readTruncatedCoordinate(SymContext &Ctx, Factor &Row, unsigned Observed,
       const unsigned Bits = Observed - B.countr_zero();
       if (!Budget.consume(2 + 2 * Words))
         return false;
-      if (Op != SymOp::Add) {
+      if (Op != SymOp::Add && Ctx.isConst(Ctx.operand(Word, 0))) {
         const auto K = Ctx.constValue(Ctx.operand(Word, 0));
         const bool Flip = Op == SymOp::Xor && K.countr_one() >= Bits;
         const bool Identity =
             Op == SymOp::And ? K.countr_one() >= Bits : K.countr_zero() >= Bits;
-        if (!Identity && !Flip)
-          break;
         const auto Tail = Ctx.operands(Word).drop_front();
-        if (Tail.size() > Storage / (2 * sizeof(SymRef)) ||
-            !Budget.consume(Tail.size()))
-          return false;
-        Storage -= Tail.size() * 2 * sizeof(SymRef);
-        if (Flip) {
-          A -= B;
-          B.negate();
+        if (Identity || Flip) {
+          if (Tail.size() > Storage / (2 * sizeof(SymRef)) ||
+              !Budget.consume(Tail.size()))
+            return false;
+          Storage -= Tail.size() * 2 * sizeof(SymRef);
+          if (Flip) {
+            A -= B;
+            B.negate();
+          }
+          Word = Op == SymOp::And  ? Ctx.mkAnd(Tail)
+                 : Op == SymOp::Or ? Ctx.mkOr(Tail)
+                                   : Ctx.mkXor(Tail);
+          continue;
         }
-        Word = Op == SymOp::And  ? Ctx.mkAnd(Tail)
-               : Op == SymOp::Or ? Ctx.mkOr(Tail)
-                                 : Ctx.mkXor(Tail);
-        continue;
+        // The literal changes a live bit. Keep it, but inspect the other
+        // operands for a neutral prefix before reserving a new operand list.
+        if (Tail.size() > 1 && !Budget.consume(Tail.size()))
+          return false;
+        if (llvm::none_of(Tail,
+                          [&](SymRef T) { return bool(NeutralMask(Op, T)); }))
+          break;
       }
       const auto Terms = Ctx.operands(Word);
       if (Terms.size() > Storage / (2 * sizeof(SymRef)) ||
@@ -120,18 +151,33 @@ bool readTruncatedCoordinate(SymContext &Ctx, Factor &Row, unsigned Observed,
       Storage -= Terms.size() * 2 * sizeof(SymRef);
       llvm::SmallVector<SymRef, 8> Live;
       for (auto Term : Terms) {
-        if (Ctx.isConst(Term)) {
+        if (Op == SymOp::Add && Ctx.isConst(Term)) {
           if (!Budget.consume(ReadWords * ReadWords))
             return false;
           A += B * Ctx.constValue(Term).trunc(Observed);
-        } else if (!Scaled(Term) ||
-                   Ctx.constValue(Ctx.operand(Term, 0)).countr_zero() < Bits) {
-          Live.push_back(Term);
+          continue;
         }
+        // Algebraic sums and OR/XOR discard a zero prefix. For AND, an OR
+        // mask can prove an all-ones prefix, as can a complemented zero mask.
+        const auto Mask = Op == SymOp::Add
+                              ? (Scaled(Term) ? Ctx.operand(Term, 0) : SymRef{})
+                              : NeutralMask(Op, Term);
+        if (Mask) {
+          const auto K = Ctx.constValue(Mask);
+          const auto NeutralBits = Op == SymOp::And && Ctx.op(Term) == SymOp::Or
+                                       ? K.countr_one()
+                                       : K.countr_zero();
+          if (NeutralBits >= Bits)
+            continue;
+        }
+        Live.push_back(Term);
       }
       if (Live.size() == Terms.size())
         break;
-      Word = Live.empty() ? Ctx.mkZero(Width) : Ctx.mkAdd(Live);
+      if (Live.empty())
+        Word = Op == SymOp::And ? Ctx.mkOnes(Width) : Ctx.mkZero(Width);
+      else
+        Word = Ctx.rebuild(Word, Live);
     } while (CanRead());
     Offset = Ctx.mkConst(A.sextOrTrunc(Width));
     Weight = Ctx.mkConst(B.sextOrTrunc(Width));
