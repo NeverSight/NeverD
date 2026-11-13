@@ -489,6 +489,14 @@ struct BinaryImage {
   /// Only a field disjoint from this complete set can be classified as an
   /// unrelocated numeric immediate; target-VA coincidence supplies no role.
   std::optional<std::set<va_t>> ObjectRelocationWriteBytes;
+  /// Relocation fields in the executable code of an ELF ET_REL object that
+  /// the loader left as the assembler wrote them, by mapped field VA, with the
+  /// relocation type: a type it does not model (a thread-local access, a MOVW
+  /// group), or a conditional branch whose field cannot reach its target.  An
+  /// instruction over such a field does not read as it will run, so CFG
+  /// lifting reports it as unsupported instead of lifting the unrelocated
+  /// bytes.
+  std::map<va_t, uint32_t> UnappliedCodeRelocations;
   /// Virtual addresses that a relocation resolves to inside a WRITABLE data
   /// segment (.data/.bss), filled by the loader as it applies relocations.  The
   /// writable counterpart of RelocDataAddrs: it proves a constant is a genuine
@@ -1169,6 +1177,13 @@ struct BinaryImage {
       return false;
     const auto Writer = ObjectRelocationWriteBytes->lower_bound(VA);
     return Writer == ObjectRelocationWriteBytes->end() || *Writer >= VA + Width;
+  }
+
+  /// Whether a relocation the loader left unapplied names a field that starts
+  /// in [VA, VA + Width) (UnappliedCodeRelocations).
+  bool hasUnappliedCodeRelocation(va_t VA, uint64_t Width) const {
+    const auto Field = UnappliedCodeRelocations.lower_bound(VA);
+    return Field != UnappliedCodeRelocations.end() && Field->first - VA < Width;
   }
 
   /// Verify the symbol owner retained for an i386 ELF R_386_GOTOFF field, or

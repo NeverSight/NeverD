@@ -72,6 +72,25 @@ bool hasObjectRelocationWriters(Arch Target) {
   return false;
 }
 
+/// Whether a record of \p Type asks for no change to the bytes it names: an
+/// empty record, or the ARMv4 `bx` marker, which only a linker told to
+/// rewrite those returns acts on.
+bool isObjectRelocationMarker(Arch Target, uint32_t Type) {
+  using namespace llvm::ELF;
+  switch (Target) {
+  case Arch::X86:
+    return Type == R_386_NONE;
+  case Arch::X64:
+    return Type == R_X86_64_NONE;
+  case Arch::AArch64:
+    return Type == R_AARCH64_NONE || Type == 0;
+  case Arch::ARM:
+    return Type == R_ARM_NONE || Type == R_ARM_V4BX;
+  default:
+    return false;
+  }
+}
+
 std::optional<va_t> addSignedOffsetBias(va_t Offset, int64_t Bias) {
   if (Bias >= 0) {
     const uint64_t Magnitude = static_cast<uint64_t>(Bias);
@@ -920,6 +939,19 @@ llvm::Error applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
           Img.CodeRefTargets.insert(TargetVA);
       };
 
+      // A record this loader leaves unapplied in executable code: the
+      // instruction keeps the assembler's placeholder, which CFG lifting must
+      // not read as its operand.
+      auto NoteUnapplied = [&] {
+        if (isObjectRelocationMarker(Img.Arch, RType))
+          return;
+        // The bytes a record changes can start past the place it names.
+        const auto Field = addSignedOffsetBias(
+            P, objectRelocationWriterFootprint(Img.Arch, RType).OffsetBias);
+        if (Field && Img.hasExecutableCodeOwnerAt(*Field))
+          Img.UnappliedCodeRelocations.emplace(*Field, RType);
+      };
+
       if constexpr (ELFT::Is64Bits) {
         if (RType == R_X86_64_PC32 || RType == R_X86_64_PLT32 ||
             RType == R_X86_64_GOTPCREL || RType == R_AARCH64_PREL32) {
@@ -986,6 +1018,25 @@ llvm::Error applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
           std::memcpy(&Insn, ApplySeg->Data.data() + RAddr, 4);
           Insn = branch::withA64BranchDisplacement(Insn, Disp);
           std::memcpy(ApplySeg->Data.data() + RAddr, &Insn, 4);
+        } else if (RType == R_AARCH64_CONDBR19 || RType == R_AARCH64_TSTBR14) {
+          // A conditional branch the assembler left to the linker: one to a
+          // global label, or to a part of the function in another section.
+          // The instruction must be of the record's kind and reach its
+          // target, as a linker requires.
+          if (RAddr + 4 > ApplySeg->Data.size())
+            continue;
+          uint32_t Insn;
+          std::memcpy(&Insn, ApplySeg->Data.data() + RAddr, 4);
+          const std::optional<uint32_t> Relocated =
+              branch::A64TestBranch.matches(Insn) ==
+                      (RType == R_AARCH64_TSTBR14)
+                  ? branch::withA64ConditionalBranchDisplacement(
+                        Insn, static_cast<int64_t>(S + RAddend - P))
+                  : std::nullopt;
+          if (Relocated)
+            std::memcpy(ApplySeg->Data.data() + RAddr, &*Relocated, 4);
+          else
+            NoteUnapplied();
         } else if (RType == R_AARCH64_ADR_PREL_PG_HI21) {
           if (RAddr + 4 > ApplySeg->Data.size())
             continue;
@@ -1046,6 +1097,8 @@ llvm::Error applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
           std::memcpy(&Insn, ApplySeg->Data.data() + RAddr, 4);
           Insn = (Insn & 0xFFC003FFu) | ((Imm12 & 0xFFF) << 10);
           std::memcpy(ApplySeg->Data.data() + RAddr, &Insn, 4);
+        } else {
+          NoteUnapplied();
         }
       } else {
         // ELF32 (i386 / ARM) use REL relocations: the addend lives in-place
@@ -1219,6 +1272,7 @@ llvm::Error applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
             break;
           }
           default:
+            NoteUnapplied();
             break;
           }
         } else if (RType == R_ARM_MOVW_ABS_NC || RType == R_ARM_MOVT_ABS) {
@@ -1439,6 +1493,8 @@ llvm::Error applyRelocations(const llvm::object::ELFFile<ELFT> &ELF,
               ((Value >> 1) & 0x07ffu));
           std::memcpy(ApplySeg->Data.data() + RAddr, &Hi, 2);
           std::memcpy(ApplySeg->Data.data() + RAddr + 2, &Lo, 2);
+        } else {
+          NoteUnapplied();
         }
       }
     }

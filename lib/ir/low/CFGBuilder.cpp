@@ -2722,6 +2722,12 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
         break;
       }
       const va_t Next = Cur + InsnSize;
+      // A relocation the loader left unapplied was to fill a field of this
+      // instruction, whose bytes are still the assembler's placeholder.
+      if (Img.hasUnappliedCodeRelocation(Cur, InsnSize)) {
+        UnsupportedInstructionAddresses.insert(Cur);
+        break;
+      }
 
       InsnRecord Rec;
       Rec.Addr = Cur;

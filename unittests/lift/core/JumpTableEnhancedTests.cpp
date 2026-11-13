@@ -3106,14 +3106,18 @@ TEST_F(JTE_X86_32, TLSDescWriterFootprintInvalidatesOnlyOverlappingGOTPCField) {
     return false;
   };
 
+  // The descriptor's word is the immediate of the add that forms the GOT
+  // base, and the loader applies no descriptor: the add is reported as it
+  // stands and the dispatch behind it is not reached.
   const neverd::LowFunc Ambiguous = Recover(*Overlap);
   EXPECT_TRUE(Ambiguous.JumpTables.empty());
-  EXPECT_TRUE(
-      HasOpcodeAt(Ambiguous, OverlapBranch->Addr, neverd::NdOp::INDIR_BR));
+  EXPECT_EQ(Image.UnappliedCodeRelocations.count(OverlapField->Addr), 1u);
+  EXPECT_TRUE(std::find(Ambiguous.UnsupportedInstructionAddresses.begin(),
+                        Ambiguous.UnsupportedInstructionAddresses.end(),
+                        OverlapField->Addr - 2) !=
+              Ambiguous.UnsupportedInstructionAddresses.end());
   EXPECT_FALSE(
       HasOpcodeAt(Ambiguous, OverlapBranch->Addr, neverd::NdOp::INDIR_CALL));
-  EXPECT_EQ(Ambiguous.UnsafeIndirectBranchAddresses.count(OverlapBranch->Addr),
-            1u);
   EXPECT_EQ(Ambiguous.EverPublishedJumpTableBranchAddresses.count(
                 OverlapBranch->Addr),
             0u);
