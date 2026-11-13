@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute fixed o32/n64 FP calls before and after HighC/LLVMC recompilation.
+"""Execute o32/n32/n64 FP calls before and after HighC/LLVMC recompilation.
 
 Uses owned assembly, explicit C prototypes, and the pinned Unicorn reference.
 Both byte orders, mixed entry parameters, FP overflow arguments and private
@@ -7,6 +7,9 @@ link spills are checked. All disposable binaries belong to the artifact owner.
 """
 
 import argparse
+import ctypes
+import json
+import os
 from pathlib import Path
 import re
 import struct
@@ -18,13 +21,85 @@ import roundtrip
 from mips_validation_artifacts import MIPSValidationArtifacts, digest
 
 
-def observe(path, bits, little, scalar_bytes, cases):
+class CallSiteViews:
+    """Use the same occurrence ID, snapshot and edit as the worker."""
+
+    def __init__(self, sdk):
+        lib = ctypes.CDLL(str(sdk.resolve()))
+        pointer = ctypes.c_void_p
+        string = ctypes.c_char_p
+        address = ctypes.c_uint64
+        size = ctypes.c_size_t
+
+        def api(name, result, *types):
+            fn = getattr(lib, name)
+            fn.restype, fn.argtypes = result, types
+            return fn
+
+        self.create = api("neverd_session_create", pointer)
+        self.destroy = api("neverd_session_destroy", None, pointer)
+        self.load = api("neverd_session_load", ctypes.c_int, pointer, string)
+        self.view = api(
+            "neverd_ir_view_json", pointer, pointer, address, string, size, size
+        )
+        self.edited = api(
+            "neverd_ir_view_ex_json",
+            pointer,
+            pointer,
+            address,
+            string,
+            size,
+            size,
+            string,
+        )
+        self.error = api("neverd_last_error", pointer, pointer)
+        self.release = api("neverd_free_string", None, pointer)
+
+    def take(self, raw):
+        try:
+            return ctypes.string_at(raw).decode()
+        finally:
+            self.release(raw)
+
+    def source(self, image, view, declaration, actual, indirect):
+        session = self.create()
+        try:
+            assert self.load(session, os.fsencode(image))
+
+            def read(raw):
+                if not raw:
+                    raise ValueError(self.take(self.error(session)))
+                return json.loads(self.take(raw))
+
+            original = read(self.view(session, 0x10000, b"call_sites", 0, 1))
+            (call,) = original["source_calls"]
+            assert call["indirect"] == indirect
+            edit = {
+                "id": call["id"],
+                "snapshot": original["call_snapshot"],
+                "declaration": declaration,
+                "variadic_types": actual,
+            }
+            options = json.dumps({"call_types": [edit]}).encode()
+            result = read(
+                self.edited(session, 0x10000, view.encode(), 0, 1024, options)
+            )
+            assert result["call_type_results"] == [
+                {"id": call["id"], "applied": True, "refusal": ""}
+            ], result["call_type_results"]
+            assert result["complete"]
+            return result["text"]
+        finally:
+            self.destroy(session)
+
+
+def observe(path, bits, little, scalar_bytes, cases, n32=False, callbacks=None):
     model = (
         mips.UC_CPU_MIPS64_I6400 if bits == 64 else mips.UC_CPU_MIPS32_MIPS32R6_GENERIC
     )
     uc, entry = roundtrip.emulator(path, bits, little, "kernel", cpu_model=model)
     result = []
-    for value, bias in cases:
+    for index, (value, bias) in enumerate(cases):
         for register in range(1, 32):
             uc.reg_write(getattr(mips, f"UC_MIPS_REG_{register}"), 0)
         for register in range(32):
@@ -44,7 +119,14 @@ def observe(path, bits, little, scalar_bytes, cases):
             getattr(mips, f"UC_MIPS_REG_{5 if bits == 64 or scalar_bytes == 4 else 6}"),
             bias & ((1 << bits) - 1),
         )
-        saved = range(24, 32) if bits == 64 else range(20, 32, 2)
+        if callbacks:
+            uc.reg_write(
+                getattr(
+                    mips, f"UC_MIPS_REG_{6 if bits == 64 or scalar_bytes == 4 else 7}"
+                ),
+                callbacks[index % len(callbacks)],
+            )
+        saved = range(24, 32) if bits == 64 and not n32 else range(20, 32, 2)
         for register in saved:
             uc.reg_write(
                 getattr(mips, f"UC_MIPS_REG_F{register}"), 0x3FF0000000000000 + register
@@ -137,19 +219,26 @@ def validate_narrow_llvm(ir):
         )
 
 
-def expected_result(layout, bits, value, bias):
+def expected_result(layout, bits, value, bias, pointer_bits):
     total = value + bias
+    if layout in ("signed-byte", "unsigned-half"):
+        word = int(total) & (255 if layout == "signed-byte" else 65535)
+        return word - 256 if layout == "signed-byte" and word >= 128 else word
+    if layout == "pair-result":
+        return int(total) + 74
     if layout == "word-result":
         word = int(total)
         # The n64 caller adds the upper half of the returned machine word.
-        return word + ((2 if word < 0 else 3) if bits == 64 else 0)
+        return word + ((2 if word < 0 else 3) if pointer_bits == 64 else 0)
     if layout == "pointer-result":
-        return (int(total) & 255) + (bits == 64)
+        return (int(total) & 255) + (pointer_bits == 64)
     if layout == "void-result":
         # The caller reads the inexact flag set by the callee's conversion.
         return 4 if total != int(total) else 0
     if layout == "narrow-arguments":
         return 2 * total
+    if layout in ("variadic", "indirect-variadic"):
+        return 4 * total
     if layout == "after-integer":
         return 2 * (total + 7)
     return 4 * total
@@ -157,6 +246,10 @@ def expected_result(layout, bits, value, bias):
 
 def run(args, artifacts):
     root = artifacts.work
+    sdk = args.sdk or args.neverd.parent / (
+        "libneverd.dylib" if os.uname().sysname == "Darwin" else "libneverd.so"
+    )
+    views = CallSiteViews(sdk)
     headers = root / "headers"
     headers.mkdir()
     (headers / "string.h").write_text(
@@ -172,24 +265,44 @@ def run(args, artifacts):
     ]
     report = {"complete": False, "neverd_sha256": digest(args.neverd), "builds": []}
     artifacts.write("results.json", report)
-    for bits in (32, 64):
+    for abi in ("32", "n32", "64"):
+        bits = 32 if abi == "32" else 64
+        pointer_bits = 64 if abi == "64" else 32
         for little in (False, True):
             target = ("mips64" if bits == 64 else "mips") + ("el" if little else "")
             cpu = f"mips{bits}r6"
-            emulation = f"elf{bits}{'l' if little else 'b'}tsmip"
+            emulation = f"elf{pointer_bits}{'l' if little else 'b'}tsmip" + (
+                "n32" if abi == "n32" else ""
+            )
             for scalar_bytes in (4, 8):
                 for layout in (
+                    "variadic",
+                    "indirect",
+                    "indirect-variadic",
                     "prefix",
                     "overflow",
                     "after-integer",
                     "narrow-arguments",
+                    "signed-byte",
+                    "unsigned-half",
+                    "pair-result",
                     "word-result",
                     "pointer-result",
                     "void-result",
                 ):
+                    variadic = layout in ("variadic", "indirect-variadic")
+                    indirect = layout in ("indirect", "indirect-variadic")
+                    if (variadic or indirect) and scalar_bytes != 8:
+                        continue
                     overflow = layout == "overflow"
                     after_integer = layout == "after-integer"
-                    directory = root / (target + f"-f{scalar_bytes * 8}" + "-" + layout)
+                    directory = root / (
+                        target
+                        + ("-n32" if abi == "n32" else "")
+                        + f"-f{scalar_bytes * 8}"
+                        + "-"
+                        + layout
+                    )
                     directory.mkdir()
                     log = directory / "command.log"
 
@@ -205,6 +318,11 @@ def run(args, artifacts):
                     )
                     declarations = directory / "declarations.h"
                     result_type = {
+                        "signed-byte": "signed char",
+                        "unsigned-half": "unsigned short",
+                        "pair-result": (
+                            "unsigned __int128" if bits == 64 else "unsigned long long"
+                        ),
                         "word-result": "long",
                         "pointer-result": "void *",
                         "void-result": "void",
@@ -220,8 +338,11 @@ def run(args, artifacts):
                         params = ", ".join(f"{c_type} a{i}" for i in range(count))
                         if layout == "pointer-result":
                             params += ", void *base"
+                    if variadic:
+                        params = f"{c_type} first, ..."
+                    callback_arg = ", void *callback" if indirect else ""
                     declarations.write_text(
-                        f"{c_type} kernel({c_type} value, int bias);\n"
+                        f"{c_type} kernel({c_type} value, int bias{callback_arg});\n"
                         f"{result_type} fp_callee({params});\n"
                     )
                     d = "d" if bits == 64 else ""
@@ -270,12 +391,47 @@ def run(args, artifacts):
                         setup, callee = narrow_arguments(
                             bits, scalar_bytes, fmt, load, store
                         )
+                    if variadic:
+                        if bits == 64:
+                            setup = ["dmfc1 $5,$f12"]
+                            callee = "dmtc1 $5,$f2\nadd.d $f0,$f12,$f2"
+                        else:
+                            low, high = (4, 5) if little else (5, 4)
+                            setup = [
+                                f"mfc1 ${low},$f12",
+                                f"mfhc1 ${high},$f12",
+                                f"or ${low + 2},${low},$zero",
+                                f"or ${high + 2},${high},$zero",
+                            ]
+                            callee = (
+                                f"mtc1 ${low},$f12\nmthc1 ${high},$f12\n"
+                                f"mtc1 ${low + 2},$f2\nmthc1 ${high + 2},$f2\nadd.d $f0,$f12,$f2"
+                            )
                     after_call = f"add.{fmt} $f0,$f0,$f0"
-                    if layout in ("word-result", "pointer-result", "void-result"):
+                    if layout in (
+                        "word-result",
+                        "pointer-result",
+                        "void-result",
+                        "signed-byte",
+                        "unsigned-half",
+                        "pair-result",
+                    ):
                         # A volatile f0 marker must never supply a GPR/void result.
                         callee = f"trunc.w.{fmt} $f2,$f12\nmfc1 $2,$f2\nmtc1 $zero,$f0"
                         after_call = f"mtc1 $2,$f0\ncvt.{fmt}.w $f0,$f0"
-                        if layout == "word-result" and bits == 64:
+                        if layout == "signed-byte":
+                            callee += "\nseb $2,$2"
+                        if layout == "unsigned-half":
+                            callee += "\nandi $2,$2,65535"
+                        if layout == "pair-result":
+                            # Each limb affects the observable value with a different weight.
+                            low, high = (2, 3) if little else (3, 2)
+                            callee += f"\nor ${low},$2,$zero\naddiu ${high},$zero,37"
+                            after_call = (
+                                f"{d}sll $8,${high},1\n{d}addu $2,${low},$8\n"
+                                + after_call
+                            )
+                        if layout == "word-result" and pointer_bits == 64:
                             callee += (
                                 "\ndaddiu $8,$zero,3\ndsll32 $8,$8,0\ndaddu $2,$2,$8"
                             )
@@ -287,14 +443,14 @@ def run(args, artifacts):
                             setup = [
                                 (
                                     f"dli ${arg},0x100600000"
-                                    if bits == 64
+                                    if pointer_bits == 64
                                     else f"lui ${arg},0x60"
                                 )
                             ]
                             callee += f"\nandi $2,$2,255\n{d}addu $2,$2,${arg}"
                             after_call = (
                                 "dsrl32 $8,$2,0\nandi $2,$2,255\naddu $2,$2,$8\n"
-                                if bits == 64
+                                if pointer_bits == 64
                                 else "andi $2,$2,255\n"
                             ) + after_call
                         elif layout == "void-result":
@@ -306,13 +462,24 @@ def run(args, artifacts):
                         + callee
                         + "\njr $ra\nnop\n.end fp_callee\n"
                     )
+                    callback_reg = 6 if bits == 64 or scalar_bytes == 4 else 7
+                    transfer = "jalrc $25" if indirect else "balc fp_callee"
+                    if indirect:
+                        # Snapshot the original target before o32 overwrites its argument word.
+                        setup.insert(0, f"or $25,${callback_reg},$zero")
+                        callee_text += (
+                            prefix
+                            + ".globl fp_other\n.ent fp_other\nfp_other:\n"
+                            + callee
+                            + f"\nneg.{fmt} $f0,$f0\njr $ra\nnop\n.end fp_other\n"
+                        )
                     caller = (
                         prefix
                         + ".globl kernel\n.ent kernel\nkernel:\n"
                         + f"{d}addiu $sp,$sp,-96\n{'sd' if bits == 64 else 'sw'} $ra,{slot}($sp)\n"
                         + f"mtc1 ${5 if bits == 64 or scalar_bytes == 4 else 6},$f2\ncvt.{fmt}.w $f2,$f2\nadd.{fmt} $f12,$f12,$f2\n"
                         + "\n".join(setup)
-                        + f"\nbalc fp_callee\n{after_call}\n"
+                        + f"\n{transfer}\n{after_call}\n"
                         + f"{'ld' if bits == 64 else 'lw'} $ra,{slot}($sp)\n{d}addiu $sp,$sp,96\njr $ra\nnop\n.end kernel\n"
                     )
                     assembly = directory / "original.s"
@@ -320,7 +487,7 @@ def run(args, artifacts):
                     obj, original = directory / "original.o", directory / "original.elf"
                     asm_flags = [
                         "-march=" + cpu,
-                        "-mabi=" + str(bits),
+                        "-mabi=" + abi,
                         "-mfp64",
                         "-mnan=2008",
                         "-EL" if little else "-EB",
@@ -340,13 +507,39 @@ def run(args, artifacts):
                             original,
                         ]
                     )
-                    wanted = observe(original, bits, little, scalar_bytes, cases)
-                    for (value, bias), (actual, _) in zip(cases, wanted, strict=True):
+
+                    def callbacks(path):
+                        if not indirect:
+                            return None
+                        with path.open("rb") as f:
+                            symbols = roundtrip.ELFFile(f).get_section_by_name(
+                                ".symtab"
+                            )
+                            return [
+                                symbols.get_symbol_by_name(name)[0]["st_value"]
+                                for name in ("fp_callee", "fp_other")
+                            ]
+
+                    wanted = observe(
+                        original,
+                        bits,
+                        little,
+                        scalar_bytes,
+                        cases,
+                        abi == "n32",
+                        callbacks(original),
+                    )
+                    for index, ((value, bias), (actual, _)) in enumerate(
+                        zip(cases, wanted, strict=True)
+                    ):
                         expected = struct.unpack(
                             "<Q" if scalar_bytes == 8 else "<I",
                             struct.pack(
                                 "<d" if scalar_bytes == 8 else "<f",
-                                expected_result(layout, bits, value, bias),
+                                (-1 if indirect and index % 2 else 1)
+                                * expected_result(
+                                    layout, bits, value, bias, pointer_bits
+                                ),
                             ),
                         )[0]
                         if actual != expected:
@@ -390,27 +583,41 @@ def run(args, artifacts):
                     )
                     for view in ("highc", "llvmc"):
                         source = directory / (view + ".c")
-                        command(
-                            [
-                                args.neverd,
-                                "decompile",
-                                original,
-                                "--func",
-                                "kernel",
-                                *(["--llvm"] if view == "llvmc" else []),
-                                "-o",
-                                source,
-                            ]
-                        )
+                        if indirect or variadic:
+                            source.write_text(
+                                views.source(
+                                    original,
+                                    "c" if view == "highc" else "llvmc",
+                                    f"{c_type} fp_callee({params});",
+                                    ["double"] if variadic else [],
+                                    indirect,
+                                )
+                            )
+                        else:
+                            command(
+                                [
+                                    args.neverd,
+                                    "decompile",
+                                    original,
+                                    "--func",
+                                    "kernel",
+                                    *(["--llvm"] if view == "llvmc" else []),
+                                    "-o",
+                                    source,
+                                ]
+                            )
                         artifacts.keep_source(source)
                         for opt in ("-O0", "-O2"):
                             rebuilt = directory / "rebuilt.elf"
                             command(
                                 [
                                     args.clang,
-                                    "--target=" + target + "-linux-gnu",
+                                    "--target="
+                                    + target
+                                    + "-linux-gnu"
+                                    + ("abin32" if abi == "n32" else ""),
                                     "-march=" + cpu,
-                                    "-mabi=" + str(bits),
+                                    "-mabi=" + abi,
                                     "-mfp64",
                                     "-mnan=2008",
                                     "-mno-abicalls",
@@ -444,7 +651,15 @@ def run(args, artifacts):
                                     rebuilt,
                                 ]
                             )
-                            actual = observe(rebuilt, bits, little, scalar_bytes, cases)
+                            actual = observe(
+                                rebuilt,
+                                bits,
+                                little,
+                                scalar_bytes,
+                                cases,
+                                abi == "n32",
+                                callbacks(rebuilt),
+                            )
                             if actual != wanted:
                                 index = next(
                                     i
@@ -482,6 +697,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("neverd", "assembler", "linker", "clang", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument(
+        "--sdk", type=Path, help="shared library built alongside the CLI"
+    )
     args = parser.parse_args()
     with MIPSValidationArtifacts(
         args.output,
