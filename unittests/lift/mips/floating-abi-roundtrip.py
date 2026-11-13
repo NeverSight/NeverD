@@ -71,6 +71,11 @@ class CallSiteViews:
                     raise ValueError(self.take(self.error(session)))
                 return json.loads(self.take(raw))
 
+            if indirect:
+                # An interactive client may have opened the untyped view first.
+                raw = self.view(session, 0x10000, view.encode(), 0, 1)
+                if raw:
+                    self.release(raw)
             original = read(self.view(session, 0x10000, b"call_sites", 0, 1))
             (call,) = original["source_calls"]
             assert call["indirect"] == indirect
@@ -219,13 +224,15 @@ def validate_narrow_llvm(ir):
         )
 
 
-def expected_result(layout, bits, value, bias, pointer_bits):
+def expected_result(layout, bits, value, bias, pointer_bits, alternate=False):
     total = value + bias
-    if layout in ("signed-byte", "unsigned-half"):
-        word = int(total) & (255 if layout == "signed-byte" else 65535)
-        return word - 256 if layout == "signed-byte" and word >= 128 else word
-    if layout == "pair-result":
-        return int(total) + 74
+    if layout in ("signed-byte", "unsigned-half", "indirect-signed-byte"):
+        if alternate:
+            total = int(total) + 1
+        word = int(total) & (255 if layout != "unsigned-half" else 65535)
+        return word - 256 if layout != "unsigned-half" and word >= 128 else word
+    if layout in ("pair-result", "indirect-variadic-pair"):
+        return int(total) + (148 if alternate else 74)
     if layout == "word-result":
         word = int(total)
         # The n64 caller adds the upper half of the returned machine word.
@@ -237,6 +244,8 @@ def expected_result(layout, bits, value, bias, pointer_bits):
         return 4 if total != int(total) else 0
     if layout == "narrow-arguments":
         return 2 * total
+    if layout == "variadic-stack":
+        return 4 * total + 2 * 29
     if layout in ("variadic", "indirect-variadic"):
         return 4 * total
     if layout == "after-integer":
@@ -279,6 +288,9 @@ def run(args, artifacts):
                     "variadic",
                     "indirect",
                     "indirect-variadic",
+                    "variadic-stack",
+                    "indirect-signed-byte",
+                    "indirect-variadic-pair",
                     "prefix",
                     "overflow",
                     "after-integer",
@@ -290,8 +302,10 @@ def run(args, artifacts):
                     "pointer-result",
                     "void-result",
                 ):
-                    variadic = layout in ("variadic", "indirect-variadic")
-                    indirect = layout in ("indirect", "indirect-variadic")
+                    variadic = "variadic" in layout
+                    indirect = layout.startswith("indirect")
+                    pair_result = layout in ("pair-result", "indirect-variadic-pair")
+                    signed_byte = layout in ("signed-byte", "indirect-signed-byte")
                     if (variadic or indirect) and scalar_bytes != 8:
                         continue
                     overflow = layout == "overflow"
@@ -327,6 +341,12 @@ def run(args, artifacts):
                         "pointer-result": "void *",
                         "void-result": "void",
                     }.get(layout, c_type)
+                    if signed_byte:
+                        result_type = "signed char"
+                    if pair_result:
+                        result_type = (
+                            "unsigned __int128" if bits == 64 else "unsigned long long"
+                        )
                     if layout == "narrow-arguments":
                         params = (
                             "signed char s8, unsigned char u8, short s16, "
@@ -407,23 +427,47 @@ def run(args, artifacts):
                                 f"mtc1 ${low},$f12\nmthc1 ${high},$f12\n"
                                 f"mtc1 ${low + 2},$f2\nmthc1 ${high + 2},$f2\nadd.d $f0,$f12,$f2"
                             )
+                    actual_types = ["double"] if variadic else []
+                    if layout == "variadic-stack":
+                        # Give the last unnamed double a distinct stack value after the GPR bank.
+                        # The callee adds its two register inputs and the overflow argument.
+                        if bits == 64:
+                            for reg in range(6, 12):
+                                setup.append(f"or ${reg},$5,$zero")
+                            offset = 0
+                            actual_types = ["double"] * 8
+                        else:
+                            offset = 16
+                            actual_types = ["double"] * 2
+                        setup += [
+                            "addiu $12,$zero,29",
+                            "mtc1 $12,$f4",
+                            "cvt.d.w $f4,$f4",
+                            f"sdc1 $f4,{offset}($sp)",
+                        ]
+                        callee += f"\nldc1 $f4,{offset}($sp)\nadd.d $f0,$f0,$f4"
                     after_call = f"add.{fmt} $f0,$f0,$f0"
-                    if layout in (
-                        "word-result",
-                        "pointer-result",
-                        "void-result",
-                        "signed-byte",
-                        "unsigned-half",
-                        "pair-result",
+                    if (
+                        pair_result
+                        or signed_byte
+                        or layout
+                        in (
+                            "word-result",
+                            "pointer-result",
+                            "void-result",
+                            "signed-byte",
+                            "unsigned-half",
+                            "pair-result",
+                        )
                     ):
                         # A volatile f0 marker must never supply a GPR/void result.
                         callee = f"trunc.w.{fmt} $f2,$f12\nmfc1 $2,$f2\nmtc1 $zero,$f0"
                         after_call = f"mtc1 $2,$f0\ncvt.{fmt}.w $f0,$f0"
-                        if layout == "signed-byte":
+                        if signed_byte:
                             callee += "\nseb $2,$2"
                         if layout == "unsigned-half":
                             callee += "\nandi $2,$2,65535"
-                        if layout == "pair-result":
+                        if pair_result:
                             # Each limb affects the observable value with a different weight.
                             low, high = (2, 3) if little else (3, 2)
                             callee += f"\nor ${low},$2,$zero\naddiu ${high},$zero,37"
@@ -467,11 +511,16 @@ def run(args, artifacts):
                     if indirect:
                         # Snapshot the original target before o32 overwrites its argument word.
                         setup.insert(0, f"or $25,${callback_reg},$zero")
+                        alternate_callee = callee + f"\nneg.{fmt} $f0,$f0"
+                        if signed_byte:
+                            alternate_callee = callee + "\naddiu $2,$2,1\nseb $2,$2"
+                        if pair_result:
+                            alternate_callee = callee + f"\naddiu ${high},$zero,74"
                         callee_text += (
                             prefix
                             + ".globl fp_other\n.ent fp_other\nfp_other:\n"
-                            + callee
-                            + f"\nneg.{fmt} $f0,$f0\njr $ra\nnop\n.end fp_other\n"
+                            + alternate_callee
+                            + "\njr $ra\nnop\n.end fp_other\n"
                         )
                     caller = (
                         prefix
@@ -536,15 +585,26 @@ def run(args, artifacts):
                             "<Q" if scalar_bytes == 8 else "<I",
                             struct.pack(
                                 "<d" if scalar_bytes == 8 else "<f",
-                                (-1 if indirect and index % 2 else 1)
+                                (
+                                    -1
+                                    if indirect
+                                    and not (signed_byte or pair_result)
+                                    and index % 2
+                                    else 1
+                                )
                                 * expected_result(
-                                    layout, bits, value, bias, pointer_bits
+                                    layout,
+                                    bits,
+                                    value,
+                                    bias,
+                                    pointer_bits,
+                                    bool(indirect and index % 2),
                                 ),
                             ),
                         )[0]
                         if actual != expected:
                             raise ValueError(
-                                "original ELF disagrees with independent arithmetic"
+                                f"original ELF disagrees with independent arithmetic: {directory.name} {value=} {bias=} {actual=} {expected=}"
                             )
                     command(
                         [
@@ -588,8 +648,8 @@ def run(args, artifacts):
                                 views.source(
                                     original,
                                     "c" if view == "highc" else "llvmc",
-                                    f"{c_type} fp_callee({params});",
-                                    ["double"] if variadic else [],
+                                    f"{result_type} fp_callee({params});",
+                                    actual_types,
                                     indirect,
                                 )
                             )
