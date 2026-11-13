@@ -2814,7 +2814,9 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
              "  return v7;\n"
              "}\n";
     // Lines that read the same and differ by their numbers alone, after one
-    // that reaches beyond a view; two of them map to one instruction.
+    // that reaches beyond a view; two of them map to one instruction.  Past
+    // the first screens of them, a block folds two lines away above a comment
+    // over lines that holds one more of them, and the text takes two pages.
     const bool repeats = session(s)->path.ends_with("code-repeats.bin");
     if (repeats) {
       full = "#include <stdint.h>\n"
@@ -2823,8 +2825,13 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
       for (int i = 0; i < 60; ++i)
         full += " beyond";
       full += "\n";
-      for (int i = 0; i < 200; ++i)
+      for (int i = 0; i < 300; ++i) {
+        if (i == 120)
+          full += "  if (v0) {\n    v0 += 2;\n    v0 += 3;\n  }\n";
+        if (i == 160)
+          full += "  /*\n  v0 += 1;\n  */\n";
         full += "  v0 += 1;\n";
+      }
       full += "  return v0;\n}\n";
     }
     // Brackets of the code, nested and across lines, beside brackets of a

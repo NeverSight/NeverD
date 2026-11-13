@@ -1,6 +1,7 @@
 #include "CodeView.h"
 
 #include "../Config.h"
+#include "../PageBytes.h"
 #include "../ResourceLimits.h"
 #include "DevicePixels.h"
 #include "HighlightLocks.h"
@@ -662,6 +663,9 @@ void CodeText::clear() {
   sourceBytes_ = renderedChars_ = renderedRows_ = widestLine_ = 0;
   interrupted_ = false;
   sourceRows_.clear();
+  rowLines_.clear();
+  pageRows_.clear();
+  pageRowsBefore_.clear();
   lineStarts_.clear();
   linesBefore_.clear();
   regions_ = {};
@@ -886,21 +890,29 @@ void CodeText::request(int offset, quint64 serial) {
         renderedOptions_ = sourceOptions_;
         loading_ = false;
         complete_ = true;
-        // Folding needs the whole function: regions span pages.
-        library_.reset(source_, sourceRows_,
-                       regionsValid_ ? foldRegions() : QJsonArray(),
-                       byteOffset_, false, CodeView::isSource(representation_));
-        if (foldAfterLoad_)
-          library_.setFolded(true);
-        if (foldPreludeAfterLoad_)
-          library_.setRegionFolded(PreludeRegion, true);
-        if (foldEpilogueAfterLoad_)
-          library_.setRegionFolded(EpilogueRegion, true);
-        if (foldDetailsAfterLoad_)
-          library_.setFoldedBlocks(library_.defaultDetailBlocks());
-        else if (!blocksAfterLoad_.isEmpty() &&
-                 library_.blockStructure() == blockStructureAfterLoad_)
-          library_.setFoldedBlocks(blocksAfterLoad_);
+        // The text shown before lent its rows to the pages that brought
+        // them again.
+        pageRowsBefore_.clear();
+        {
+          // Folding needs the whole function: regions span pages.  The
+          // function and what of it is folded are projected once.
+          const LibraryCodeView::Hold projection(library_);
+          library_.reset(source_, sourceRows_,
+                         regionsValid_ ? foldRegions() : QJsonArray(),
+                         byteOffset_, false,
+                         CodeView::isSource(representation_));
+          if (foldAfterLoad_)
+            library_.setFolded(true);
+          if (foldPreludeAfterLoad_)
+            library_.setRegionFolded(PreludeRegion, true);
+          if (foldEpilogueAfterLoad_)
+            library_.setRegionFolded(EpilogueRegion, true);
+          if (foldDetailsAfterLoad_)
+            library_.setFoldedBlocks(library_.defaultDetailBlocks());
+          else if (!blocksAfterLoad_.isEmpty() &&
+                   library_.blockStructure() == blockStructureAfterLoad_)
+            library_.setFoldedBlocks(blocksAfterLoad_);
+        }
         // Unfolded pages are already colored and mapped. Only a changed
         // projection requires rebuilding earlier lines.
         rebuildLines(!library_.anyFolded());
@@ -1104,6 +1116,9 @@ void CodeText::appendPage(const QJsonObject &payload, int offset) {
   if (offset == 0) {
     source_.clear();
     sourceRows_.clear();
+    rowLines_.clear();
+    // The rows it read lend themselves to the pages that bring them again.
+    pageRowsBefore_ = std::exchange(pageRows_, {});
     regions_ = payload.value("library_regions").toArray();
     regionsValid_ =
         payload.value("library_regions").isArray() && pageOffset >= 0;
@@ -1135,13 +1150,40 @@ void CodeText::appendPage(const QJsonObject &payload, int offset) {
   }
   const int pageCharBase = source_.size();
   source_ += text;
-  sourceBytes_ += text.toUtf8().size();
+  // A name's bytes are in the page that holds its line.
+  const PageBytes bytes(text);
+  sourceBytes_ += bytes.size();
   if (!text.isEmpty() && !text.endsWith(QLatin1Char('\n'))) {
     source_ += QLatin1Char('\n');
     ++sourceBytes_;
   }
-  for (const auto &row : payload.value("rows").toArray())
-    sourceRows_.append(row.toObject().toVariantMap());
+  {
+    const QJsonArray given = payload.value("rows").toArray();
+    PageRows rows;
+    if (const qsizetype page = pageRows_.size();
+        page < pageRowsBefore_.size() && pageRowsBefore_[page].given == given) {
+      rows = std::move(pageRowsBefore_[page]);
+      ++pageRowsKept_;
+    } else {
+      rows.given = given;
+      for (const auto &row : given) {
+        const QVariantMap read = row.toObject().toVariantMap();
+        SourceRow line;
+        line.line = read.value(QStringLiteral("line"), -1).toInt();
+        // The projection reads a row that names no line as the first one's.
+        line.projectedLine = read.value(QStringLiteral("line")).toInt();
+        for (const auto &address :
+             read.value(QStringLiteral("addresses")).toList())
+          if (const auto parsed = parseAddress(address.toString()))
+            line.addresses.append(*parsed);
+        rows.read.append(read);
+        rows.lines.append(std::move(line));
+      }
+    }
+    sourceRows_ += rows.read;
+    rowLines_ += rows.lines;
+    pageRows_.append(std::move(rows));
+  }
   for (const auto &value : payload.value("references").toArray()) {
     const auto reference = value.toObject();
     const auto line = reference.value("line").toInteger(-1);
@@ -1151,20 +1193,17 @@ void CodeText::appendPage(const QJsonObject &payload, int offset) {
         !name.isEmpty())
       references_[int(line)].append({name, *address});
   }
-  // A source name's bytes are in the page that holds its line.
-  const QByteArray bytes = text.toUtf8();
   for (const auto &value : payload.value("code_names").toArray()) {
     const auto name = value.toObject();
     const auto begin = name.value("begin_byte").toInteger(-1) - pageOffset;
     const auto end = name.value("end_byte").toInteger(-1) - pageOffset;
     if (begin >= 0 && end > begin && end <= bytes.size()) {
       auto target = name;
-      const auto spelling = QString::fromUtf8(bytes.mid(begin, end - begin));
-      target["name"] = spelling;
+      target["name"] = bytes.spelled(begin, end - begin);
+      const int first = bytes.charsBefore(begin);
+      const int last = bytes.charsBefore(end);
       editNames_.push_back(
-          {pageCharBase + int(QString::fromUtf8(bytes.left(begin)).size()),
-           pageCharBase + int(QString::fromUtf8(bytes.left(end)).size()),
-           std::move(target)});
+          {pageCharBase + first, pageCharBase + last, std::move(target)});
     }
   }
   bool namesAdded = false;
@@ -1174,7 +1213,7 @@ void CodeText::appendPage(const QJsonObject &payload, int offset) {
     const qint64 end = name.value("end_byte").toInteger(-1) - pageOffset;
     if (pageOffset < 0 || begin < 0 || end <= begin || end > bytes.size())
       continue;
-    const QString spelled = QString::fromUtf8(bytes.mid(begin, end - begin));
+    const QString spelled = bytes.spelled(begin, end - begin);
     if (spelled.isEmpty() || sourceNames_.contains(spelled))
       continue;
     sourceNames_.insert(spelled, {name.value("identifier").toString(),
@@ -1285,13 +1324,19 @@ QJsonArray CodeText::foldRegions() const {
 void CodeText::rebuildLines(bool append) {
   const bool folding = (!loading_ || refreshPages_) && library_.canFold();
   const QString display = folding ? library_.text() : source_;
-  const QVariantList &rows = folding ? library_.mappings() : sourceRows_;
   const int previousLine = cursorLine_;
   if (!append) {
     // The lines it showed lend the ones that read the same their layouts,
     // below: a fold, or a page read again, changes few.
-    if (linesBefore_.isEmpty())
+    if (linesBefore_.isEmpty()) {
       linesBefore_ = std::move(lines_);
+    } else {
+      // The lines of a first page, shown while the rest was on its way,
+      // give back the layouts they took: the whole text's lines take them.
+      const auto count = std::min(linesBefore_.size(), lines_.size());
+      for (qsizetype i = 0; i < count; ++i)
+        linesBefore_[i].styled.adoptLayout(lines_[i].styled);
+    }
     lines_.clear();
     lineStarts_.clear();
     inComment_ = false;
@@ -1299,6 +1344,13 @@ void CodeText::rebuildLines(bool append) {
   }
   int start = renderedChars_;
   const bool addressLabels = labelsNameAddresses();
+  // A line colored among no source names is colored by its text, its dialect
+  // and the comment open where it begins alone.  One that reads as the lent
+  // line in its place, which was colored so in this dialect with a comment
+  // open or not as here, takes that line's spans.
+  const qint8 coloring = sourceNames_.isEmpty()
+                             ? qint8(dialectOf(representation_, pageLanguage_))
+                             : Line::ColoredOtherwise;
   while (start < display.size()) {
     int end = int(display.indexOf(QLatin1Char('\n'), start));
     if (end < 0)
@@ -1313,22 +1365,44 @@ void CodeText::rebuildLines(bool append) {
         line.addresses = {label->second};
       }
     widestLine_ = std::max(widestLine_, int(line.styled.text.size()));
-    highlightLine(line, inComment_);
+    line.commentBefore = inComment_;
+    if (const Line *lent = coloring != Line::ColoredOtherwise &&
+                                   lines_.size() < linesBefore_.size()
+                               ? &std::as_const(linesBefore_)[lines_.size()]
+                               : nullptr;
+        lent && lent->coloredIn == coloring &&
+        lent->commentBefore == inComment_ &&
+        lent->styled.text == line.styled.text) {
+      line.styled.spans = lent->styled.spans;
+      inComment_ = lent->commentAfter;
+      ++spansKept_;
+    } else {
+      highlightLine(line, inComment_);
+    }
+    line.commentAfter = inComment_;
+    line.coloredIn = coloring;
     lines_.append(std::move(line));
     lineStarts_.append(start);
     start = end + 1;
   }
-  for (int i = renderedRows_; i < rows.size(); ++i) {
-    const auto row = rows[i].toMap();
-    const int index = row.value(QStringLiteral("line"), -1).toInt();
+  // A row's instructions go to the line that shows it: its own, or under
+  // folds the one the projection moves it to, which hides the rows of a
+  // folded block.  The rows the lines already took are those before
+  // renderedRows_ of the ones that show.
+  int shown = 0;
+  for (const SourceRow &row : std::as_const(rowLines_)) {
+    const int index =
+        folding ? library_.mappedLine(row.projectedLine) : row.line;
+    if (folding && index < 0)
+      continue;
+    if (shown++ < renderedRows_)
+      continue;
     if (index < 0 || index >= lines_.size() || lines_[index].label)
       continue;
-    for (const auto &address : row.value(QStringLiteral("addresses")).toList())
-      if (const auto parsed = parseAddress(address.toString()))
-        lines_[index].addresses.append(*parsed);
+    lines_[index].addresses += row.addresses;
   }
   renderedChars_ = display.size();
-  renderedRows_ = rows.size();
+  renderedRows_ = shown;
   for (int i = 0; i < lines_.size(); ++i) {
     lines_[i].sourceLine = folding ? library_.sourceLineAt(lineStarts_[i]) : i;
     lines_[i].block.clear();
@@ -1364,6 +1438,7 @@ void CodeText::rebuildLines(bool append) {
                   return a.start < b.start;
                 });
       line.styled.spans = spans;
+      line.coloredIn = Line::ColoredOtherwise;
     }
   // A line that reads as the one in its place did keeps the layout built for
   // that one; where lines came or went, as the one as far from the end.

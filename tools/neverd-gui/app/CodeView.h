@@ -68,6 +68,16 @@ public:
     bool blockFolded = false;
     /// The line defines a goto label, mapped to the block it labels.
     bool label = false;
+    /// Whether a comment was open where the line begins, and where it ends,
+    /// as highlightLine colored its text.
+    bool commentBefore = false, commentAfter = false;
+    /// The dialect highlightLine colored its text in while the text had no
+    /// source names, where the spans are still those: such a line is colored
+    /// by its text, that dialect and the comment open where it begins alone.
+    /// ColoredOtherwise for a line colored among source names, and for one
+    /// whose spans are a folded summary's or a message's.
+    static constexpr qint8 ColoredOtherwise = -1;
+    qint8 coloredIn = ColoredOtherwise;
   };
 
   CodeText(Session &session, QWidget *parent = nullptr);
@@ -130,6 +140,12 @@ public:
   /// The layouts its lines took from the lines they replaced, which read the
   /// same (rebuildLines).
   quint64 layoutsKept() const { return layoutsKept_; }
+  /// The pages it took whose rows were those of the page it showed there,
+  /// which it had read already.
+  quint64 pageRowsKept() const { return pageRowsKept_; }
+  /// The lines that took the spans of the line that read the same in their
+  /// place, colored as they are to be (rebuildLines).
+  quint64 spansKept() const { return spansKept_; }
   /// All pages of this document arrived successfully. Error text and a
   /// cancelled or partially loaded document are not exportable source.
   bool complete() const { return complete_ && !loading_ && !interrupted_; }
@@ -404,6 +420,27 @@ private:
   // folding projects them, copy and export use them unchanged.
   QString source_;
   QVariantList sourceRows_;
+  /// What a line takes of a source row: the line the row names, as a row
+  /// read by itself names it and as the folded projection reads it, and the
+  /// instructions it maps to.
+  struct SourceRow {
+    int line = -1, projectedLine = 0;
+    QVector<Address> addresses;
+  };
+  /// The rows of sourceRows_, in its order.
+  QVector<SourceRow> rowLines_;
+  /// A page's rows as the worker gave them and as they are read from that.
+  /// A page read again after an edit mostly brings the rows it brought, the
+  /// same array: they are read once.
+  struct PageRows {
+    QJsonArray given;
+    QVariantList read;
+    QVector<SourceRow> lines;
+  };
+  /// The pages' rows of the text being loaded or shown, and those of the
+  /// text shown before it, until the new one is whole.
+  QVector<PageRows> pageRows_, pageRowsBefore_;
+  quint64 pageRowsKept_ = 0;
   QJsonArray regions_;
   qint64 byteOffset_ = 0;
   qint64 sourceBytes_ = 0;
@@ -455,6 +492,7 @@ private:
   /// that read the same take (rebuildLines); let go of when it is whole.
   QList<Line> linesBefore_;
   quint64 layoutsKept_ = 0;
+  quint64 spansKept_ = 0;
   bool foldPreludeAfterLoad_ = true;
   bool foldDetailsAfterLoad_ = true;
   QSet<QString> blocksAfterLoad_;

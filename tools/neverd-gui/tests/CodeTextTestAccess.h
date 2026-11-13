@@ -24,6 +24,42 @@ struct CodeTextTestAccess {
   static void highlightUnsaid(CodeText &view, const QString &word) {
     view.highlight_ = word;
   }
+  /// The first line whose spans are not what coloring the text afresh gives
+  /// it, from the first line on with the comments its lines open and close,
+  /// or -1: a line that took the spans of the one that read the same in its
+  /// place is colored as one read afresh.  A line that shows a fold's
+  /// summary is passed over where it says that its spans are not its text's
+  /// alone.  For a text whose source names all came before its first line
+  /// was colored.
+  static int firstMiscolored(const CodeText &view) {
+    bool comment = false;
+    for (int at = 0; at < view.lines_.size(); ++at) {
+      const auto &line = view.lines_[at];
+      CodeText::Line again;
+      again.styled.text = line.styled.text;
+      view.highlightLine(again, comment);
+      if (line.folded && line.coloredIn == CodeText::Line::ColoredOtherwise)
+        continue;
+      if (again.styled.spans != line.styled.spans)
+        return at;
+    }
+    return -1;
+  }
+  /// Colors the lines of the shown text again, as a fold does or a page read
+  /// again, the text having \p sourceName for its one source name, or none,
+  /// and \p language for the language its page names.
+  static void colorAgain(CodeText &view, const QString &sourceName,
+                         const QString &language) {
+    view.sourceNames_.clear();
+    view.sourceNameIndex_.clear();
+    if (!sourceName.isEmpty()) {
+      view.sourceNames_.insert(sourceName,
+                               {sourceName, sourceName, Address(0x1000)});
+      view.sourceNameIndex_[sourceName.at(0)].append(sourceName);
+    }
+    view.pageLanguage_ = language;
+    view.rebuildLines(false);
+  }
   /// Says that what the view shows changed, as the view's own code does
   /// after it changed something.
   static void changed(CodeText &view) { view.updateView(); }

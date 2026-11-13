@@ -7889,6 +7889,8 @@ private slots:
     // rows alone are.
     const bool pictures = windowShows(code->viewport());
     const auto layouts = code->layoutsKept();
+    const auto rowsKept = code->pageRowsKept();
+    const auto spansKept = code->spansKept();
     for (int turn = 0; turn < 4; ++turn)
       QCoreApplication::processEvents();
     code->viewport()->installEventFilter(&painted);
@@ -7911,6 +7913,12 @@ private slots:
     QCOMPARE(bench.session.analysisPagesTaken(), taken + 1);
     // The lines the edit left as they read took the layouts built for them.
     QVERIFY(code->layoutsKept() > layouts);
+    // A note is a row's: the page brought other rows, which were read.
+    QCOMPARE(code->pageRowsKept(), rowsKept);
+    // They were colored as the lines that read the same in their places, and
+    // the line with the note by its own text: each as one read afresh.
+    QCOMPARE(code->spansKept(), spansKept + code->lineCount() - 1);
+    QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
     // Each asks once: the word that follows, to everyone, reads nothing again.
     QTRY_VERIFY_WITH_TIMEOUT(ListingViewTestAccess::settled(*listing) &&
                                  !bench.session.queries().hasPending(),
@@ -7963,6 +7971,10 @@ private slots:
                              OpenTimeoutMs);
     QVERIFY(code->documentVersion() != version ||
             code->allText().contains(QStringLiteral("known at once")));
+    // The page read again brought the rows it had brought: they were not
+    // read a second time.
+    QVERIFY(code->pageRowsKept() > rowsKept);
+    QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
     // The two notes, and the word said by itself.
     QCOMPARE(heard, 3);
   }
@@ -8089,6 +8101,8 @@ private slots:
     rows.change(QStringLiteral("a line up"), 6, [&] { keys(Qt::Key_Up, 1); });
     QVERIFY2(rows.wrong.isEmpty(),
              qPrintable(rows.wrong.join(QStringLiteral("; "))));
+    // Through the folds each line is colored as one read afresh.
+    QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
     // Each of those paints was also compared with the view painted afresh,
     // where the screen's scale is whole (PaintCheck, cleanup).
     if (viewport->devicePixelRatioF() == 1)
@@ -8184,6 +8198,95 @@ private slots:
                 [&] { across->setValue(0); });
     QVERIFY2(rows.wrong.isEmpty(),
              qPrintable(rows.wrong.join(QStringLiteral("; "))));
+  }
+
+  void aTextOfTwoPagesReadAgainKeepsWhatItsLinesTook() {
+    // A text of two pages with nothing folded shows its first page's lines
+    // while the second is on its way.  Read again, each line takes a row's
+    // instructions once, and is colored as one read afresh: through a comment
+    // over lines, and where a fold moves a line of the comment to the place
+    // of a line of code that reads the same.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    auto *code =
+        shownCode(bench, directory, QStringLiteral("code-repeats.bin"));
+    QVERIFY(code);
+    QVERIFY(code->lineCount() > 300);
+    QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    if (code->hasPrelude() && code->preludeFolded())
+      code->setPreludeFolded(false);
+    QVERIFY(!code->anyFolded());
+    const auto readAgain = [&] {
+      const auto spans = code->spansKept();
+      emit bench.session.revisionChanged();
+      QTRY_VERIFY_WITH_TIMEOUT(code->complete() &&
+                                   !bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+      // Every line read as it did: none was colored from its text again.
+      QCOMPARE(code->spansKept(), spans + code->lineCount());
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    };
+    readAgain();
+    // The second page's lines came after the first page's had their rows.
+    code->revealAddress(Base + 0x140 + 6);
+    QCOMPARE(code->currentAddresses(), QVector<Address>{Base + 0x140 + 6});
+    code->revealAddress(Base + 0x140 + 2);
+    QCOMPARE(code->currentAddresses(), QVector<Address>{Base + 0x140 + 2});
+    // A block folded two lines away above the comment: the line the comment
+    // holds comes to where a line of code read the same.
+    code->setCursorLine(0);
+    QVERIFY(code->findText(QStringLiteral("if (v0) {"), true));
+    const int lines = code->lineCount();
+    QVERIFY(code->setCurrentBlockFolded(true));
+    QCOMPARE(code->lineCount(), lines - 2);
+    QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    // Read again with the block folded.  The lines shown have layouts,
+    // which the first page's lines take while the second is on its way and
+    // give back to the lines of the whole text, folded: each is taken twice.
+    code->verticalScrollBar()->setValue(0);
+    QVERIFY(!code->viewport()->grab().isNull());
+    const int shown =
+        std::min(code->lineCount(), code->viewport()->height() /
+                                        code->cursorViewportRect().height());
+    QVERIFY(shown > 10);
+    const auto layouts = code->layoutsKept();
+    emit bench.session.revisionChanged();
+    QTRY_VERIFY_WITH_TIMEOUT(code->complete() &&
+                                 !bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    QCOMPARE(code->lineCount(), lines - 2);
+    QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    QVERIFY2(code->layoutsKept() - layouts >= quint64(2 * shown),
+             qPrintable(QStringLiteral("%1 of %2")
+                            .arg(code->layoutsKept() - layouts)
+                            .arg(2 * shown)));
+    // And opened again.
+    QVERIFY(code->setCurrentBlockFolded(false));
+    QCOMPARE(code->lineCount(), lines);
+    QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    readAgain();
+    code->revealAddress(Base + 0x140 + 2);
+    QCOMPARE(code->currentAddresses(), QVector<Address>{Base + 0x140 + 2});
+    // A source name colors the lines that spell it, and a language the words
+    // it reads as its own: a line colored among source names, or in another
+    // language, lends its spans to none that is not colored so, and takes
+    // none.  Colored again as they are, all take theirs.
+    const auto colorAgain = [&](const QString &name, const QString &language,
+                                bool taken) {
+      const auto spans = code->spansKept();
+      CodeTextTestAccess::colorAgain(*code, name, language);
+      QCOMPARE(code->lineCount(), lines);
+      QCOMPARE(code->spansKept(), spans + (taken ? lines : 0));
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    };
+    colorAgain(QStringLiteral("v0"), QStringLiteral("c"), false);
+    colorAgain(QStringLiteral("v0"), QStringLiteral("c"), false);
+    colorAgain({}, QStringLiteral("c"), false);
+    colorAgain({}, QStringLiteral("c"), true);
+    colorAgain({}, QStringLiteral("rust"), false);
+    colorAgain({}, QStringLiteral("rust"), true);
+    colorAgain({}, QStringLiteral("c"), false);
   }
 
   void aPageAReplicaGaveReadsFromTheReplicaAfterANote() {
