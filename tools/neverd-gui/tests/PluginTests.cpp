@@ -1598,6 +1598,30 @@ raise SystemExit(run(handler))
     QSettings().remove("guiPlugins/menu-beta");
   }
 
+  void menuCommandsOfItsOwnShowDistinctIcons() {
+    // The Plugins menu makes its own commands outside the action table, whose
+    // commands the appearance tests cover.  Each shows an icon where the
+    // platform's default would hide menu icons, and no two show the same.
+    // The macOS platform enables this after QApplication is constructed.
+    QCoreApplication::setAttribute(Qt::AA_DontShowIconsInMenus, true);
+    Theme::instance().apply();
+    Session session(QStringLiteral(TEST_WORKER));
+    ActionRegistry registry;
+    AnalysisPlugins pane(session, registry);
+    QList<QImage> shown;
+    for (auto *action : pane.menu()->actions()) {
+      // Installed plugins follow the separator; a plugin may give no icon.
+      if (action->isSeparator())
+        break;
+      const auto image = action->icon().pixmap(16, 16).toImage();
+      QVERIFY2(!image.isNull(), qPrintable(action->text()));
+      QVERIFY2(action->isIconVisibleInMenu(), qPrintable(action->text()));
+      QVERIFY2(!shown.contains(image), qPrintable(action->text()));
+      shown.append(image);
+    }
+    QVERIFY(shown.size() >= 4);
+  }
+
   void customIconsAndManifestTypes() {
     QTemporaryDir directory;
     const auto path = prepare(directory.filePath("plugin"), false);

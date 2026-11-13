@@ -360,12 +360,17 @@ void AnalysisPlugins::rebuildActions() {
   registered_.clear();
   menu_->clear();
   menu_->addAction(actions_.action(ActionId::OptionsPlugins));
-  auto *import = menu_->addAction(tr("Import process plugin…"));
+  // The menu's own commands are made here, outside the action table that
+  // gives every other command its icon.
+  auto *import = menu_->addAction(icon(QStringLiteral("extensions_import")),
+                                  tr("Import process plugin…"));
   connect(import, &QAction::triggered, this, &AnalysisPlugins::importPlugin);
-  auto *tasks = menu_->addAction(tr("Plugin tasks and results"));
+  auto *tasks = menu_->addAction(icon(QStringLiteral("extensions_tasks")),
+                                 tr("Plugin tasks and results"));
   tasks->setObjectName(QStringLiteral("pluginShowTasks"));
   connect(tasks, &QAction::triggered, this, &AnalysisPlugins::showRequested);
-  auto *settings = menu_->addAction(tr("Context menu settings…"));
+  auto *settings = menu_->addAction(icon(QStringLiteral("extensions_menus")),
+                                    tr("Context menu settings…"));
   settings->setObjectName(QStringLiteral("configurePluginMenus"));
   connect(settings, &QAction::triggered, this,
           &AnalysisPlugins::configureMenus);
