@@ -1263,8 +1263,12 @@ includes the compiler versions, test-host digest and hardware probe results.
 The native CPTA probe signs the x1 slice with the Enhanced Security and
 checked-pointer entitlements, verifies the signature and reads back the
 embedded plist before launch. Its report records the final binary digest,
-the signed entitlement values and the ADDPT observations. Native qualification
-requires all checked results in that x1 process. Apple documents the required
+the signed entitlement values and the ADDPT observations. A second invocation
+executes post-indexed LD1 and ST1 on a mapped byte. It verifies the data and
+the updated base for an in-range offset and for a carry into the top byte.
+This ordinary-memory control also runs on older CPUs when ADDPT is undefined.
+A passing x1 run requires both explicit checked arithmetic and checked
+load/store writeback. [Arm LD1 operation](https://support.arm.com/documentation/111108/2026-03/SIMD-FP-Instructions/LD1--multiple-structures---Load-multiple-single-element-structures-to-one--two--three--or-four-registers-). Apple documents the required
 [Enhanced Security entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.hardened-process.checked-allocations.enforce-checked-pointer-arithmetic-overflow)
 and [supported x1 devices](https://developer.apple.com/documentation/security/preparing-your-app-to-work-with-pointer-authentication).
 

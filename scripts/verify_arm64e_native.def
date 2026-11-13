@@ -319,6 +319,12 @@
     "source": "scripts/arm64e_native_cpta.def",
     "mode": "probe-cpta",
     "observed_key": "native_el0_cpta_observed",
+    "writeback_mode": "writeback",
+    "writeback_suffix": "-writeback",
+    "writeback_key": "ordinary_memory_writeback",
+    "writeback_qualified_key": "x1_el0_checked_writeback_qualified",
+    "writeback_checked": "checked-writeback",
+    "writeback_unchecked": "unchecked-writeback",
     "qualified_key": "x1_el0_cpta_qualified",
     "profiles": {
       "arm64": 0,

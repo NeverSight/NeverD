@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from xml.parsers.expat import ExpatError
 import platform
 import plistlib
 import re
@@ -14,6 +13,7 @@ import struct
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
+from xml.parsers.expat import ExpatError
 
 from arm64e_artifacts import OwnedProducts
 
@@ -191,7 +191,7 @@ def probe_cpta(output):
     source = ROOT / policy["source"]
     report = {**provenance(), "platform": platform.platform(), "profiles": {},
               "status": POLICY["failed"], policy["observed_key"]: False,
-              policy["qualified_key"]: False}
+              policy["qualified_key"]: False, policy["writeback_qualified_key"]: False}
     report["source_sha256"][policy["source"]] = digest(source)
     try:
         if platform.system() != POLICY["host_os"] or platform.machine() not in POLICY["host_arches"]:
@@ -245,10 +245,22 @@ def probe_cpta(output):
                         profile["outcome"] = policy["checked"]
                     elif lines[1:] == [row[2] for row in vectors]:
                         profile["outcome"] = policy["unchecked"]
+                if profile["outcome"] in (policy["checked"], policy["unchecked"], policy["isa_unavailable"]):
+                    writeback = command(products, output, arch + policy["writeback_suffix"],
+                                        [binary, policy["writeback_mode"]], POLICY["tool_timeout"])
+                    state = policy["unexpected"]
+                    if writeback.returncode == 0:
+                        state = {policy["writeback_checked"]: policy["checked"],
+                                 policy["writeback_unchecked"]: policy["unchecked"]}.get(
+                                     writeback.stdout.strip(), policy["unexpected"])
+                    profile[policy["writeback_key"]] = state
             outcomes = {name: profile["outcome"] for name, profile in report["profiles"].items()}
             report[policy["observed_key"]] = policy["checked"] in outcomes.values()
-            report[policy["qualified_key"]] = outcomes[policy["x1"]] == policy["checked"]
-            if policy["unexpected"] in outcomes.values():
+            writebacks = {arch: p.get(policy["writeback_key"]) for arch, p in report["profiles"].items()}
+            report[policy["writeback_qualified_key"]] = writebacks[policy["x1"]] == policy["checked"]
+            report[policy["qualified_key"]] = (outcomes[policy["x1"]] == policy["checked"] and
+                                                report[policy["writeback_qualified_key"]])
+            if policy["unexpected"] in outcomes.values() or policy["unexpected"] in writebacks.values():
                 report["status"] = POLICY["failed"]
             else:
                 report["status"] = POLICY["passed"] if report[policy["qualified_key"]] else POLICY["unavailable"]
