@@ -1123,35 +1123,36 @@ TEST(SymMBAResidue, DynamicMasksRetainTheLastObservedBit) {
         auto Result = simplifyMBADeep(Ctx, Input, Opts);
         EXPECT_LT(Result.Work, Opts.MaxWork);
         EXPECT_LT(Result.SizeAfter, Result.SizeBefore / 2);
-        if (Width == 7) {
-          SymEvalPlan Eval(Ctx, Result.Expr);
-          for (unsigned A = 0; A < 128; ++A)
-            for (unsigned B = 0; B < 128; ++B) {
-              unsigned Expected = 6;
-              for (unsigned I = 0; I < 13; ++I) {
-                const auto Mask = Live && I == 5 ? 8u : ((2 * I + 1) << 4) | 16;
-                const auto Term = B + 2 * I + 1, High = Term & Mask, V = A ^ B;
-                const auto Word = I % 4 == 0   ? (V | (Fixed ? 1u : 0u)) | High
-                                  : I % 4 == 1 ? (V ^ (Fixed ? 1u : 0u)) ^ High
-                                  : I % 4 == 2
-                                      ? (V & ~(Fixed ? 1u : 0u)) & ~High
-                                      : V & (Term | 15);
-                Expected *= (2 * I + 1) * (1 + 4 * Word);
-              }
-              ASSERT_EQ(
-                  Eval.eval({llvm::APInt(Width, A), llvm::APInt(Width, B)}),
-                  llvm::APInt(Width, Expected));
+        SymEvalPlan Eval(Ctx, Result.Expr);
+        // Only four input bits reach a coefficient times four modulo 64.
+        // Exhaust the full seven-bit words, then all 256 live input pairs
+        // at each larger width using full-width result values.
+        const unsigned Count = Width == 7 ? 128 : 16;
+        for (unsigned A = 0; A < Count; ++A)
+          for (unsigned B = 0; B < Count; ++B) {
+            unsigned Expected = 3;
+            for (unsigned I = 0; I < 13; ++I) {
+              const auto Mask = Live && I == 5 ? 8u : ((2 * I + 1) << 4) | 16;
+              const auto Term = B + 2 * I + 1, High = Term & Mask, V = A ^ B;
+              const auto Word = I % 4 == 0   ? (V | (Fixed ? 1u : 0u)) | High
+                                : I % 4 == 1 ? (V ^ (Fixed ? 1u : 0u)) ^ High
+                                : I % 4 == 2 ? (V & ~(Fixed ? 1u : 0u)) & ~High
+                                             : V & (Term | 15);
+              Expected *= (2 * I + 1) * (1 + 4 * Word);
             }
-        } else if (solver::proofBackendAvailable(solver::ProofBackend::Z3)) {
-          solver::SymSynthVerifier Verify({}, solver::ProofBackend::Z3, 5000);
-          // The outer shift selects the low six product bits. Concatenating
-          // them with zeros gives a full-width oracle without encoding
-          // thirteen irrelevant wide multiplications in Z3.
+            ASSERT_EQ(Eval.eval({llvm::APInt(Width, A), llvm::APInt(Width, B)}),
+                      llvm::APInt(Width, Expected, false, true).shl(Width - 6));
+          }
+        if (Width != 7 &&
+            solver::proofBackendAvailable(solver::ProofBackend::Z3)) {
+          // Preserve the ordinary factor coordinate in the proof and
+          // truncate each multiplication to its six observable bits.
           llvm::SmallVector<SymRef, 16> LowFactors{Ctx.mkConst(6, 3)};
           for (auto F : llvm::ArrayRef(Factors).drop_front())
             LowFactors.push_back(Ctx.mkExtract(F, 0, 6));
           const auto Expected =
               Ctx.mkConcat(Ctx.mkMul(LowFactors), Ctx.mkZero(Width - 6));
+          solver::SymSynthVerifier Verify({}, solver::ProofBackend::Z3, 30000);
           EXPECT_EQ(Verify(Ctx, Expected, Result.Expr),
                     SynthVerification::Equivalent);
         }
