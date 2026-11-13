@@ -24083,7 +24083,8 @@ promoted double on the stack after the last argument register. Indirect calls
 alternate between two runtime callback targets. Callee results include float,
 double, signed and unsigned narrow integers, v0/v1 integer pairs, pointers
 and void. Distinct high and low words and the FCSR inexact flag distinguish
-the return carriers. A mixed
+the return carriers. The original assembly callers also execute recompiled
+signed-byte, unsigned-halfword and paired integer callees. A mixed
 call checks each narrow integer at the full width supplied to the callee. The runner
 also checks SP, return target and ABI-preserved FPRs. `NeverDMIPSPipelineTests`
 rejects escaped frame pointers, callee-owned link spills and reads of volatile
