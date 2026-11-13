@@ -2603,6 +2603,20 @@ block addresses, and an optimizer may give two labels one. The proof-based
 recoveries run first and are unchanged; a dispatch by value claims no table
 storage, no index and no relocation suppression.
 
+A direct branch, or the end of a block, can reach an address where the image
+maps no code: data, bytes the file does not hold, the end of a section.
+`CFGBuilder` records the address in `LowFunc::TruncatedPathAddresses` and
+lifts the function all the same (`hasCompleteInstructionLift`); the proofs
+that need every path refuse it (`hasCompleteLiftCoverage`). The edge has no
+block. `MedFunc::TruncatedPathAddresses` carries the addresses on, and each
+backend ends such a path in a trap: the LLVM emitter in place of the branch,
+the taken or the other arm of a conditional one, or a block's missing
+terminator, and HighIR as a jump without a label (`aimDirectBranch`,
+`HighStmt::LeftImageAt`), which HighC prints as `__builtin_trap()` with the
+address the path went on at. Returning a zero there, or letting a conditional branch always take the
+arm that stayed, would invent control flow, as it would for an indirect
+branch without a proved target.
+
 MedIR invariant and copy propagation share `canPropagateConstantToOperand`.
 A computed indirect-call target stays an SSA value even when its producer is
 constant: the legacy literal `INDIR_CALL` operand denotes pointer storage.
@@ -4921,6 +4935,18 @@ pass the first argument in the result register, so the bare `ret` beside the
 tail call of `if (b) return g(b); return a;` returns `a`. Whether the
 function returns a value at all stays with the return contracts
 (`settleReturnContracts`).
+An inferred integer result is as wide as the widest value some return path
+is seen to leave (`inferReturnType`). The write in the return's own block,
+the writes that reach a return without one from the blocks before it, and the
+arms of a merge each count for what they leave: a zero-extension its source,
+a constant below 2^32 the four bytes a zero-extended write leaves, an address
+a pointer's bytes however small it is in this image, a sub-register write its
+own low bytes and what the register held under them, any other write all it
+writes. That includes a call's result, since no callee's integer width
+reaches the pass. A pointer one path returns is then not cut to
+the 32 bits a sibling path's `xor eax, eax` writes, whichever block comes
+first. This evidence only widens the type the first write chose, and a value
+the function did not write is none.
 An absent ordinary RETURN does not establish a void result. The shared
 no-return proof must also close exceptional paths; an external catch funclet
 can still supply the parent's value when its source body is attached later.
