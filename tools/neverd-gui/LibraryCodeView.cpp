@@ -467,6 +467,10 @@ void LibraryCodeView::setFolded(bool folded) {
 }
 
 void LibraryCodeView::rebuild() {
+  if (holds_ > 0) {
+    held_ = true;
+    return;
+  }
   struct Fold {
     Span span;
     QString id, summary;
@@ -515,28 +519,41 @@ void LibraryCodeView::rebuild() {
     if (text_[i] == '\n')
       displayLines_.push_back(i + 1);
   mappings_.clear();
-  for (const auto &entry : originalMappings_) {
-    auto row = entry.toMap();
-    const int line = row["line"].toInt();
-    if (line < 0 || line >= sourceLines_.size())
-      continue;
-    const auto next = std::upper_bound(segments_.cbegin(), segments_.cend(),
-                                       sourceLines_[line],
-                                       [](int at, const Segment &segment) {
-                                         return at < segment.sourceBegin;
-                                       });
-    // A hidden statement's address is not evidence for its visible branch
-    // header. Explicit navigation expands the original row before selecting
-    // it; library-operation summaries retain their existing mapping behavior.
-    if (next != segments_.cbegin() && (next - 1)->block)
-      continue;
-    const int at = displayPosition(sourceLines_[line]);
-    row["line"] =
-        std::upper_bound(displayLines_.begin(), displayLines_.end(), at) -
-        displayLines_.begin() - 1;
-    mappings_.push_back(row);
-  }
+  mappingsBuilt_ = false;
   emit changed();
+}
+
+int LibraryCodeView::mappedLine(int sourceLine) const {
+  if (sourceLine < 0 || sourceLine >= sourceLines_.size())
+    return -1;
+  const auto next = std::upper_bound(
+      segments_.cbegin(), segments_.cend(), sourceLines_[sourceLine],
+      [](int at, const Segment &segment) { return at < segment.sourceBegin; });
+  // A hidden statement's address is not evidence for its visible branch
+  // header. Explicit navigation expands the original row before selecting
+  // it; library-operation summaries retain their existing mapping behavior.
+  if (next != segments_.cbegin() && (next - 1)->block)
+    return -1;
+  const int at = displayPosition(sourceLines_[sourceLine]);
+  return int(std::upper_bound(displayLines_.begin(), displayLines_.end(), at) -
+             displayLines_.begin()) -
+         1;
+}
+
+QVariantList LibraryCodeView::mappings() const {
+  if (!mappingsBuilt_) {
+    mappings_.clear();
+    for (const auto &entry : originalMappings_) {
+      auto row = entry.toMap();
+      const int line = mappedLine(row["line"].toInt());
+      if (line < 0)
+        continue;
+      row["line"] = qsizetype(line);
+      mappings_.push_back(row);
+    }
+    mappingsBuilt_ = true;
+  }
+  return mappings_;
 }
 
 int LibraryCodeView::displayPosition(int position) const {

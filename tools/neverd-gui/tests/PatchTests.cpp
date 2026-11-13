@@ -19,6 +19,7 @@
 #include "ListingView.h"
 #include "MainWindow.h"
 #include "OutputWindow.h"
+#include "PaintCheck.h"
 #include "PatchEditor.h"
 #include "PatchMenu.h"
 #include "RewriteFunctionDialog.h"
@@ -268,10 +269,21 @@ QString currentBytes(Session &session, Address address, qsizetype size) {
 class PatchTests : public QObject {
   Q_OBJECT
   QTemporaryDir settings_;
+  quint64 stalePaints_ = 0;
 
 private slots:
+  void init() { stalePaints_ = PaintCheck::stalePaints(); }
+
+  void cleanup() {
+    // No view kept a row that another state of it had painted.
+    QCOMPARE(PaintCheck::stalePaints(), stalePaints_);
+  }
+
   void initTestCase() {
     QVERIFY(settings_.isValid());
+    // The views that repaint rows of themselves are compared, at each paint,
+    // with all of themselves painted afresh.
+    PaintCheck::setEnabled(true);
     QCoreApplication::setOrganizationName(QStringLiteral("NeverDTests"));
     QCoreApplication::setApplicationName(QStringLiteral("PatchTests"));
     QSettings::setDefaultFormat(QSettings::IniFormat);

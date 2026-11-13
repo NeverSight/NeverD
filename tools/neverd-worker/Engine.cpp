@@ -4228,7 +4228,7 @@ Json Engine::listingReply(ListingPage page, const std::string &known,
                            return listed.etag == known;
                          });
   const auto sameLine = [](const auto &a, const auto &b) {
-    return a->text() == b->text();
+    return a == b || a->text() == b->text();
   };
   const auto answer = [&](JsonWriter &&out) -> Json {
     auto text = std::make_shared<const EncodedJson>(std::move(out));
@@ -4267,8 +4267,30 @@ Json Engine::listingReply(ListingPage page, const std::string &known,
       ++suffix;
     const auto removed = old.size() - prefix - suffix;
     const auto added = lines.size() - prefix - suffix;
+    // Where as many lines came as went between the two ends, each stands for
+    // the one in its place: a name read anew changes a line here and a line
+    // there, and the stretches between them that read the same are not sent.
+    struct Stretch {
+      bool same;
+      std::size_t from, count;
+    };
+    std::vector<Stretch> stretches;
+    std::size_t sent = added;
+    if (removed == added) {
+      sent = 0;
+      for (std::size_t at = prefix, end = prefix + added; at < end;) {
+        const bool same = sameLine(old[at], lines[at]);
+        std::size_t next = at + 1;
+        while (next < end && sameLine(old[next], lines[next]) == same)
+          ++next;
+        stretches.push_back({same, at, next - at});
+        if (!same)
+          sent += next - at;
+        at = next;
+      }
+    }
     // Past half of the page sent again, the page goes whole.
-    if (added * 2 <= lines.size()) {
+    if (sent * 2 <= lines.size()) {
       delta.emplace();
       auto &out = *delta;
       out.beginObject();
@@ -4316,13 +4338,21 @@ Json Engine::listingReply(ListingPage page, const std::string &known,
         };
         if (prefix)
           run("same", prefix);
-        const auto put = std::min(removed, added);
-        if (put)
-          values("put", prefix, put);
-        if (removed > put)
-          run("skip", removed - put);
-        if (added > put)
-          values("new", prefix + put, added - put);
+        if (removed == added) {
+          for (const auto &stretch : stretches)
+            if (stretch.same)
+              run("same", stretch.count);
+            else
+              values("put", stretch.from, stretch.count);
+        } else {
+          const auto put = std::min(removed, added);
+          if (put)
+            values("put", prefix, put);
+          if (removed > put)
+            run("skip", removed - put);
+          if (added > put)
+            values("new", prefix + put, added - put);
+        }
         if (suffix)
           run("same", suffix);
         out.endArray();

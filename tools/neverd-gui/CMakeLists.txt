@@ -378,6 +378,16 @@ if(BUILD_TESTING)
     # bounded operation deadlines; this limit only ends a hung run.
     set_tests_properties(NeverDGuiController PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 1800)
+    # A view that repaints the rows a change reaches relies on a row keeping
+    # to itself where the display's scale is no whole number and its edges
+    # round: the same tests at such a scale.
+    add_test(NAME NeverDGuiPaintedRowsScaled COMMAND neverd-gui-tests
+      aChangePaintsTheRowsItReachesAndNoOther
+      aBracketsPartnerIsPaintedAgainInItsOwnRow
+      aRowIsPaintedAgainForItsNumberItsMarkOrItsPlaceAlone
+      theViewsThatShowAnEditGoAheadOfTheOthersAtItsRevision)
+    set_tests_properties(NeverDGuiPaintedRowsScaled PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1.25" TIMEOUT 180)
     qt_add_executable(neverd-gui-patch-tests tests/PatchTests.cpp)
     target_link_libraries(neverd-gui-patch-tests PRIVATE neverd_gui_app Qt6::Test)
     target_compile_definitions(neverd-gui-patch-tests PRIVATE

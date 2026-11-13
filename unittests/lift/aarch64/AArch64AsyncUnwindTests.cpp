@@ -601,6 +601,116 @@ TEST(AArch64AsyncUnwind, CompilerCatchAndCleanupRecoverTheSavedSignedLR) {
 #endif
 }
 
+TEST(AArch64AsyncUnwind, SignalReturnResumesCallerWithRecoveredVectorLanes) {
+#if defined(__APPLE__) && defined(__aarch64__)
+  llvm::SmallString<128> Dir;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kDirectory, Dir));
+  const std::filesystem::path Root(Dir.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Source = (Root / kFrameSource).string();
+  const auto Wrapper = (Root / kWrapperSource).string();
+  const auto DriverSource = (Root / kDriverSource).string();
+  const auto Driver = (Root / kDriver).string();
+  const auto Input = (Root / kOriginal).string();
+  const auto Object = (Root / kObject).string();
+  const auto Output = (Root / kPublished).string();
+  std::ofstream(Source) << kResumeBody;
+  std::ofstream(Wrapper) << kResumeWrapper;
+  std::ofstream(DriverSource) << kResumeDriver;
+  const auto *Override = std::getenv(kHeaderRoot);
+  const auto Include =
+      Override
+          ? std::string(Override)
+          : (std::filesystem::path(__FILE__).parent_path() / kSourceIncludes)
+                .lexically_normal()
+                .string();
+  ASSERT_EQ(
+      llvm::sys::ExecuteAndWait(kCompiler, {kCompiler, kTargetFlag, kTarget,
+                                            kDylib, Source, kOutput, Input}),
+      0);
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                kCompiler, {kCompiler, kTargetFlag, kTarget, kResumeChanged,
+                            kCompile, Source, kOutput, Object}),
+            0);
+  ASSERT_EQ(
+      llvm::sys::ExecuteAndWait(
+          kCompiler, {kCompiler, kTargetFlag, kTarget, kOptimize, kIncludeFlag,
+                      Include, kAllWarnings, kExtraWarnings, kErrorWarnings,
+                      DriverSource, Wrapper, kOutput, Driver}),
+      0);
+  auto Reader = Loader::create(BinaryFormat::MachO);
+  auto Original = Reader->load(Input);
+  ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+  const auto *Symbol = Original->findSymbol(kResumeSymbol);
+  ASSERT_NE(Symbol, nullptr);
+  const SourcePatchMapping Map{kResumeMapping, Symbol->Addr};
+  const auto Bytes = llvm::MemoryBuffer::getFile(Object);
+  ASSERT_TRUE(bool(Bytes));
+  auto Patch = installMachOObjectPatch((*Bytes)->getBuffer(), *Original, {Map},
+                                       {}, Output, {});
+  ASSERT_TRUE(bool(Patch)) << llvm::toString(Patch.takeError());
+  ASSERT_EQ(Patch->PatchedFunctions.size(), 1u);
+  auto Published = Reader->load(Output);
+  ASSERT_TRUE(bool(Published)) << llvm::toString(Published.takeError());
+
+  unsigned Count = 0;
+  for (bool Installed : {false, true}) {
+    SCOPED_TRACE(Installed);
+    const BinaryImage &Image = Installed ? *Published : *Original;
+    const auto Entry =
+        Installed ? Patch->PatchedFunctions.front().OwnerVA : Symbol->Addr;
+    const auto *Frame = Image.ExceptionMetadata.findFunction(Entry);
+    ASSERT_NE(Frame, nullptr);
+    auto Rows = recoverDarwinAArch64Unwind(Image, *Frame);
+    ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+    const auto Rules = (Root / kOriginalRules).string();
+    bool Found = false;
+    for (const auto &[Index, Row] : llvm::enumerate(*Rows)) {
+      const auto Plan =
+          prepareDarwinArm64eSystemCaller(Row, Frame->CodeRange, Entry);
+      if (!Plan || !Plan->Vectors.Complete ||
+          Plan->Vectors.LowMask != (1u << NDArm64ePreservedDCount) - 1)
+        continue;
+      ASSERT_FALSE(Found);
+      Found = true;
+      ASSERT_EQ(Plan->Vectors.HighMask,
+                (1u << (NDArm64ePreservedDCount / 2)) - 1);
+      ASSERT_EQ(Plan->Frame.Signing, NDArm64eSignedIBWithCFA);
+      ASSERT_FALSE(Plan->Frame.CFAFromFP || Plan->Frame.SavedFP);
+      ASSERT_TRUE(Plan->Frame.SavedLR);
+      ASSERT_EQ(Plan->Frame.CFAOffset, kResumeDepth);
+      ASSERT_EQ(Plan->Count, 1u);
+      ASSERT_EQ(Plan->Saved[0].Register, NDArm64eFirstPreservedGPR);
+      std::ofstream Out(Rules);
+      const auto End = Index + 1 < Rows->size() ? (*Rows)[Index + 1].CodeOffset
+                                                : Frame->CodeRange.size();
+      Out << Row.CodeOffset << ' ' << End << ' ' << Plan->Frame.CFAOffset << ' '
+          << Plan->Frame.LROffset << ' ' << Plan->Saved[0].CFAOffset << ' '
+          << Plan->Vectors.LowMask << ' ' << Plan->Vectors.HighMask << '\n';
+      for (unsigned D = 0; D < NDArm64ePreservedDCount; ++D)
+        Out << Plan->Vectors.LowOffsets[D] << ' '
+            << Plan->Vectors.HighOffsets[D] << '\n';
+      Out.close();
+      ASSERT_TRUE(Out);
+    }
+    ASSERT_TRUE(Found);
+    if (std::getenv(kExecute)) {
+      const auto *Public = Image.findSymbol(kResumeSymbol);
+      ASSERT_NE(Public, nullptr);
+      ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                    Driver, {Driver, Installed ? Output : Input,
+                             std::to_string(Entry - Public->Addr),
+                             std::to_string(Installed ? 2 : 1), Rules}),
+                0);
+      Count += kResumeProfiles;
+    }
+  }
+  RecordProperty(kResumeCount, Count);
+#else
+  GTEST_SKIP() << kUnavailable;
+#endif
+}
+
 TEST(AArch64AsyncUnwind, InstructionAddressRecipesUseTheActualSigningPC) {
 #if defined(__APPLE__) && defined(__aarch64__)
   llvm::SmallString<128> Dir;

@@ -12,6 +12,7 @@
 #include "neverd/decode/Decoder.h"
 
 #include "DecoderDetail.h"
+#include "X86ScanAdapter.h"
 
 #include "neverd/ArchSupport.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -328,8 +329,12 @@ Decoder::decodePhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
   const uint8_t *Code = Bytes;
   size_t Remaining = Len;
   uint64_t PC = Addr;
-  if (cs_disasm_iter(Handle, &Code, &Remaining, &PC, InsnBuf))
+  if (Text && X86) {
+    if (X86_disasmIter(Handle, &Code, &Remaining, &PC, InsnBuf))
+      return true;
+  } else if (cs_disasm_iter(Handle, &Code, &Remaining, &PC, InsnBuf)) {
     return true;
+  }
   return !VectorPool && decodeArchitectureFallback(Bytes, Len, Addr);
 }
 
@@ -382,7 +387,7 @@ int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
     return 0;
 
   if (X86)
-    fixupX86DecodeMetadata(InsnBuf);
+    fixupX86MpxDetail(InsnBuf);
   Out.Addr = InsnBuf->address;
   Out.Size = static_cast<uint16_t>(InsnBuf->size);
   Out.Id = InsnBuf->id;
@@ -453,7 +458,7 @@ void Decoder::fixupDecodedInsn(cs_insn *I) const {
   if (!I)
     return;
   if (X86) {
-    fixupX86DecodeMetadata(I);
+    fixupX86MpxDetail(I);
     X86Lifter::fixupDecodedInsn(I);
   } else if (AArch64)
     AArch64Lifter::fixupDecodedInsn(I);
