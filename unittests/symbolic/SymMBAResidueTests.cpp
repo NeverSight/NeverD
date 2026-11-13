@@ -1160,6 +1160,72 @@ TEST(SymMBAResidue, DynamicMasksRetainTheLastObservedBit) {
   }
 }
 
+TEST(SymMBAResidue, CombinesPartialWordsOnlyAcrossUnobservableBits) {
+  for (unsigned Width : {7u, 16u, 65u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto Axis =
+        Ctx.mkXor(Ctx.mkAdd(X, Ctx.mkConst(llvm::APInt(Width, -3, true))),
+                  Ctx.mkMul(X, Y));
+    const auto Scale = Ctx.mkConst(llvm::APInt(Width, 3).shl(Width - 6));
+    for (bool Live : {false, true}) {
+      SCOPED_TRACE(Live);
+      llvm::SmallVector<SymRef, 16> Factors{Scale};
+      for (unsigned I = 0; I < 13; ++I) {
+        // The coefficient reads four low bits. The middle sign extension
+        // in the neighbor changes bit three for some inputs.
+        const unsigned Bits = Live && I == 6 ? 3 : 4 + I % 2;
+        const auto Low = Ctx.mkExtract(Axis, 0, Bits);
+        SymRef Word;
+        switch (I % 3) {
+        case 0:
+          Word = Ctx.mkSExt(Low, Width);
+          break;
+        case 1:
+          Word = Ctx.mkZExt(Low, Width);
+          break;
+        default:
+          Word = Ctx.mkConcat(Ctx.mkExtract(Y, Bits, Width - Bits), Low);
+        }
+        Factors.push_back(Ctx.mkAdd(Ctx.mkConst(Width, 2 * I + 1),
+                                    Ctx.mkMul(Ctx.mkConst(Width, 4), Word)));
+      }
+      const auto Input = Ctx.mkMul(Factors);
+      MBAOptions Opts;
+      Opts.MaxWork = 65536;
+      const auto R = simplifyMBADeep(Ctx, Input, Opts);
+      ASSERT_LT(R.SizeAfter, 60u);
+      ASSERT_LT(R.Work, Opts.MaxWork);
+      SymEvalPlan Result(Ctx, R.Expr);
+      if (Width == 7) {
+        bool SawLiveBit = false;
+        for (unsigned A = 0; A < 128; ++A)
+          for (unsigned B = 0; B < 128; ++B) {
+            unsigned V = (A - 3) ^ (A * B);
+            unsigned Clean = 6, Expected = 6;
+            for (unsigned I = 0; I < 13; ++I) {
+              const unsigned Part = Live && I == 6 ? ((V & 7) ^ 4) - 4 : V;
+              Expected *= 2 * I + 1 + 4 * Part;
+              Clean *= 2 * I + 1 + 4 * V;
+            }
+            SawLiveBit |= ((Expected ^ Clean) & 127) != 0;
+            ASSERT_EQ(Result.eval({llvm::APInt(7, A), llvm::APInt(7, B)}),
+                      llvm::APInt(7, Expected, false, true));
+          }
+        EXPECT_EQ(SawLiveBit, Live);
+      } else if (solver::proofBackendAvailable(solver::ProofBackend::Z3)) {
+        solver::SymSynthVerifier Verify({}, solver::ProofBackend::Z3, 10000);
+        EXPECT_EQ(Verify(Ctx, Input, R.Expr), SynthVerification::Equivalent);
+      }
+      detail::WorkBudget Short(128);
+      size_t Storage = 256;
+      EXPECT_EQ(detail::foldProductResidues(Ctx, Input, Short, Storage), Input);
+      EXPECT_LE(Short.used(), 128u);
+    }
+  }
+}
+
 TEST(SymMBAResidue, StreamsTopColumnAndRetainsLowerCofactors) {
   if (!solver::proofBackendAvailable(solver::ProofBackend::Z3))
     GTEST_SKIP() << "Z3 unavailable";

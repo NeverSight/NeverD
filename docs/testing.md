@@ -4230,6 +4230,14 @@ on runtime inputs. Half the cases leave one more low bit observable, and
 28 also have a fixed low literal that must stay in the output. The
 native test checks the whole seven-bit input space and wider words with Z3.
 A 63-factor x64 fixture exercises both CLI and GUI worker source paths.
+Use `--family spliced-word --count 12` for 96 products of 41 to 181 factors
+at 17 through 513 bits. They mix sign extension, zero extension and two-
+or three-piece concatenation. In half the products a replacement high lane
+reaches one observable bit. A 97-factor x64 fixture uses partial-register
+writes and both extensions through the CLI and GUI worker source paths.
+The LLVM pass also checks sign extension lowered to an exact right shift,
+signed and unsigned factor bounds, and neighboring shifts or coefficients
+that can produce poison.
 For latency comparisons, retain per-run and pooled per-input P95, separate
 thread CPU from wall time, and include same-binary A/A controls. Pooling input
 medians can change the sample at the 95th percentile and reverse the apparent
