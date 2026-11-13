@@ -1347,3 +1347,14 @@ words and register operands match the source. LLVM instruction simplification
 removes the generic oversized-shift check when the lifted AArch64 count mask
 proves it redundant. The native control covers wraparound products and shift
 counts at and above the register width.
+
+Both M1 runners passed all 39 cases using the Release host built from
+`3b6fc93c6c800290c3ff02a98f15f287cd589ee4`. Each executed 16 C++ signal
+deliveries and 16 Objective-C deliveries with typed catches, cleanup and
+rethrow. Each ran eight compiler-linked or published TLS lifecycle controls,
+including image initialization, independent threads and thread-exit callbacks.
+The arithmetic image ran once before and once after publication. Both runners
+reported unchecked ordinary-memory writeback. Xcode 27 built and signed the
+x1 slice, and the M1 loader returned Darwin error 86 on launch.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43387041250)
+and [verification record](evidence/arm64e-signal-cleanup-and-new-tls-2026-11-13.json).
