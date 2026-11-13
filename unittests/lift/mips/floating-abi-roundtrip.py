@@ -648,108 +648,135 @@ def run(args, artifacts):
                     command(
                         [args.assembler, *asm_flags, callee_source, "-o", callee_obj]
                     )
-                    for view in ("highc", "llvmc"):
-                        source = directory / (view + ".c")
-                        if indirect or variadic:
-                            source.write_text(
-                                views.source(
-                                    original,
-                                    "c" if view == "highc" else "llvmc",
-                                    f"{result_type} fp_callee({params});",
-                                    actual_types,
-                                    indirect,
+                    functions = [("kernel", callee_obj)]
+                    if layout in ("signed-byte", "unsigned-half", "pair-result"):
+                        # Execute decompiled callees through the original assembly caller.
+                        # Its unequal limb weights detect swapped or missing return registers.
+                        caller_source, caller_obj = (
+                            directory / "caller.s",
+                            directory / "caller.o",
+                        )
+                        caller_source.write_text(caller)
+                        command(
+                            [
+                                args.assembler,
+                                *asm_flags,
+                                caller_source,
+                                "-o",
+                                caller_obj,
+                            ]
+                        )
+                        functions.append(("fp_callee", caller_obj))
+                    for function, assembly_obj in functions:
+                        for view in ("highc", "llvmc"):
+                            source = directory / (
+                                ("" if function == "kernel" else "callee-")
+                                + view
+                                + ".c"
+                            )
+                            if function == "kernel" and (indirect or variadic):
+                                source.write_text(
+                                    views.source(
+                                        original,
+                                        "c" if view == "highc" else "llvmc",
+                                        f"{result_type} fp_callee({params});",
+                                        actual_types,
+                                        indirect,
+                                    )
                                 )
-                            )
-                        else:
-                            command(
-                                [
-                                    args.neverd,
-                                    "decompile",
-                                    original,
-                                    "--func",
-                                    "kernel",
-                                    *(["--llvm"] if view == "llvmc" else []),
-                                    "-o",
-                                    source,
-                                ]
-                            )
-                        artifacts.keep_source(source)
-                        for opt in ("-O0", "-O2"):
-                            rebuilt = directory / "rebuilt.elf"
-                            command(
-                                [
-                                    args.clang,
-                                    "--target="
-                                    + target
-                                    + "-linux-gnu"
-                                    + ("abin32" if abi == "n32" else ""),
-                                    "-march=" + cpu,
-                                    "-mabi=" + abi,
-                                    "-mfp64",
-                                    "-mnan=2008",
-                                    "-mno-abicalls",
-                                    "-fno-pic",
-                                    "-G0",
-                                    "-ffreestanding",
-                                    "-nostdinc",
-                                    "-isystem",
-                                    resource + "/include",
-                                    "-I",
-                                    headers,
-                                    opt,
-                                    "-c",
-                                    source,
-                                    "-o",
-                                    obj,
-                                ]
-                            )
-                            command(
-                                [
-                                    args.linker,
-                                    "-m",
-                                    emulation,
-                                    "-Ttext",
-                                    "0x30000",
-                                    "-e",
-                                    "kernel",
-                                    obj,
-                                    callee_obj,
-                                    "-o",
+                            else:
+                                command(
+                                    [
+                                        args.neverd,
+                                        "decompile",
+                                        original,
+                                        "--func",
+                                        function,
+                                        *(["--llvm"] if view == "llvmc" else []),
+                                        "-o",
+                                        source,
+                                    ]
+                                )
+                            artifacts.keep_source(source)
+                            for opt in ("-O0", "-O2"):
+                                rebuilt = directory / "rebuilt.elf"
+                                command(
+                                    [
+                                        args.clang,
+                                        "--target="
+                                        + target
+                                        + "-linux-gnu"
+                                        + ("abin32" if abi == "n32" else ""),
+                                        "-march=" + cpu,
+                                        "-mabi=" + abi,
+                                        "-mfp64",
+                                        "-mnan=2008",
+                                        "-mno-abicalls",
+                                        "-fno-pic",
+                                        "-G0",
+                                        "-ffreestanding",
+                                        "-nostdinc",
+                                        "-isystem",
+                                        resource + "/include",
+                                        "-I",
+                                        headers,
+                                        opt,
+                                        "-c",
+                                        source,
+                                        "-o",
+                                        obj,
+                                    ]
+                                )
+                                command(
+                                    [
+                                        args.linker,
+                                        "-m",
+                                        emulation,
+                                        "-Ttext",
+                                        "0x30000",
+                                        "-e",
+                                        "kernel",
+                                        obj,
+                                        assembly_obj,
+                                        "-o",
+                                        rebuilt,
+                                    ]
+                                )
+                                actual = observe(
                                     rebuilt,
-                                ]
-                            )
-                            actual = observe(
-                                rebuilt,
-                                bits,
-                                little,
-                                scalar_bytes,
-                                cases,
-                                abi == "n32",
-                                callbacks(rebuilt),
-                            )
-                            if actual != wanted:
-                                index = next(
-                                    i
-                                    for i, pair in enumerate(zip(actual, wanted))
-                                    if pair[0] != pair[1]
+                                    bits,
+                                    little,
+                                    scalar_bytes,
+                                    cases,
+                                    abi == "n32",
+                                    callbacks(rebuilt),
                                 )
-                                raise ValueError(
-                                    f"{directory.name} {view} {opt} {cases[index]}: {actual[index]} != {wanted[index]}"
+                                if actual != wanted:
+                                    index = next(
+                                        i
+                                        for i, pair in enumerate(zip(actual, wanted))
+                                        if pair[0] != pair[1]
+                                    )
+                                    raise ValueError(
+                                        f"{directory.name} {view} {opt} {cases[index]}: {actual[index]} != {wanted[index]}"
+                                    )
+                                report["builds"].append(
+                                    {
+                                        "profile": directory.name,
+                                        "function": function,
+                                        "view": view,
+                                        "opt": opt,
+                                        "cases": len(cases),
+                                        "source_sha256": digest(source),
+                                        "original_sha256": digest(original),
+                                        "elf_sha256": digest(rebuilt),
+                                    }
                                 )
-                            report["builds"].append(
-                                {
-                                    "profile": directory.name,
-                                    "view": view,
-                                    "opt": opt,
-                                    "cases": len(cases),
-                                    "source_sha256": digest(source),
-                                    "original_sha256": digest(original),
-                                    "elf_sha256": digest(rebuilt),
-                                }
-                            )
-                            artifacts.write("results.json", report)
-                            artifacts.discard(obj, rebuilt)
-                        artifacts.discard(source)
+                                artifacts.write("results.json", report)
+                                artifacts.discard(obj, rebuilt)
+                            artifacts.discard(source)
+                    if len(functions) == 2:
+                        artifacts.discard(caller_obj, caller_source)
                     artifacts.discard(
                         original, assembly, callee_source, callee_obj, declarations, log
                     )
