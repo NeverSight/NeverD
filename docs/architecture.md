@@ -2576,6 +2576,33 @@ the resulting selector plan. Skipped SSA, cycles or exhausted projection work
 cannot publish that numeric plan; effects and memory observations are never
 replayed to create it.
 
+An indirect jump can keep its branch identity and still have no proved target:
+its table proof was lost, its evidence ran out, or it reads labels of its own
+function through an exact GOTOFF field behind a base nothing proves. Such a
+jump is no tail call, since a label is no entry, and it used to trap on every
+value. `CFGBuilder::dispatchUnprovedBranchesByValue` gives it a dispatch by
+value instead. Its candidates are the labels of the function that
+relocation-proven pointers outside the code hold, which are roots of the
+function already. A jump that reads its table through an exact field takes only
+the labels of that table's run, which ends where another field of the code
+names an address. An edge is kept only where every callee-saved register the
+label's code reads before writing has been written on every path to the jump:
+a table has words its index never selects, and following one must not turn a
+register the caller keeps into an input of the function. Jumps are decided in
+the order control reaches them and the result is checked once more as a whole.
+`LowFunc::ValueDispatches` holds the result beside the recovered tables,
+because it recovers none; MedIR lists it with them, marked
+`JumpTable::ValueDispatch`, with the labels' original addresses as case keys
+and the value the jump takes as the selector. Both C routes and the LLVM
+emitter print a switch on that value whose default arm is the trap, so a value
+that names no kept label fails as loudly as before. The comparison needs every
+label as a number. HighC prints the image's words as numbers already. The LLVM
+mirror of a relocated slot that holds such a label keeps the label's original
+address as a plain integer for the same reason: LLVM defines no comparison of
+block addresses, and an optimizer may give two labels one. The proof-based
+recoveries run first and are unchanged; a dispatch by value claims no table
+storage, no index and no relocation suppression.
+
 MedIR invariant and copy propagation share `canPropagateConstantToOperand`.
 A computed indirect-call target stays an SSA value even when its producer is
 constant: the legacy literal `INDIR_CALL` operand denotes pointer storage.
@@ -18584,7 +18611,7 @@ If the same cache already holds a completed empty-projection proof for the ident
 
 For constant-only projections, `InterpreterSpecialization` reuses a completed empty-projection proof under the identical predicate and tuple limit, then reconstructs the literal tuple. Constants do not establish reachability. Observers still validate every original address and extent, including cache hits; rejected observations and incomplete enumeration never supply a completed proof.
 
-ELF object parsing, native relocation writers and loader provenance share one field-width table. AArch64 `PREL64` consumes eight bytes and preserves signed `S + A - P`, including full-width implicit REL addends. Bounds, overlapping writers and signed overflow fail before publication.
+ELF object parsing, native relocation writers and loader provenance share one field-width table. AArch64 `PREL64` consumes eight bytes and preserves signed `S + A - P`, including full-width implicit REL addends. Bounds, overlapping writers and signed overflow fail before publication. The object loader applies AArch64 `CONDBR19` and `TSTBR14`, which the assembler leaves on a conditional branch to a global label or to another section, when the instruction is of the relocation's kind and reaches its target. A relocation it does not apply to executable code is recorded in `BinaryImage::UnappliedCodeRelocations`: a type it does not model, such as a thread-local offset or a MOVW group, or a branch out of reach. The instruction over such a field still holds the assembler's placeholder, so `CFGBuilder` reports it as unsupported instead of lifting it; empty records and the ARMv4 `bx` marker ask for no change and are not recorded.
 
 DarwinFiles extends its sole authorizer with typed Query, ModeSearch and ModeChange purposes. DarwinModes.cpp owns the three mode routes; DarwinServices only forwards raw events. The shared walker and statusMetadata owner select current complete directory/target records before effective-credential security actions. Initial regular objects retain independent provider/time grants in Contents. One commit changes only permissions/ctime after all checks; invalidated metadata, object/name identity, byte/namespace grants, accounting, xattrs and VM leases retain their owners. Process JSON imports a strict declaration through the same admission owner. Empty/absent declarations differ; both immutable query closures remain closed before mode preflight. This operation-specific ordinary environment excludes native file/directory leases and unmodeled pre-setattr lifecycle, and does not open general DAC or vnode authorization.
 
