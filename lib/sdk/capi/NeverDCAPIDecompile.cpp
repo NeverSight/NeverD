@@ -2080,6 +2080,15 @@ llvm::json::Object llvmViewPage(const LLVMFunctionView &View, va_t Entry,
 
 } // namespace
 
+// A client can inspect the ordinary C view before supplying a missing call
+// contract. If that run refused MedIR, request just the original LowIR again.
+static bool prepareOriginalCalls(neverd_session_t Sess, va_t Entry) {
+  auto &S = *toSession(Sess);
+  if (S.PipeRan && !S.PipeResult.Success && S.findLowFunc(Entry))
+    S.selectFunction(Entry);
+  return prepareFunction(Sess, Entry, Session::PipelineDepth::LowIR);
+}
+
 const char *neverd_ir_view_ex_json(neverd_session_t Sess, neverd_va_t FuncEntry,
                                    const char *Representation, size_t Offset,
                                    size_t Limit, const char *OptionsJSON) {
@@ -2097,7 +2106,10 @@ const char *neverd_ir_view_ex_json(neverd_session_t Sess, neverd_va_t FuncEntry,
       throw std::invalid_argument("invalid source view or paging bounds");
     const auto Options =
         readSourceOptions(OptionsJSON ? OptionsJSON : "{}", Stage);
-    if (!prepareFunction(Sess, FuncEntry, /*NeedHighIR=*/Stage != "llvmc"))
+    const bool OriginalMIPSCalls =
+        isMIPS(S->Img.Arch) && !Options.CallTypes.empty();
+    if (!(OriginalMIPSCalls ? prepareOriginalCalls(Sess, FuncEntry)
+                            : prepareFunction(Sess, FuncEntry, Stage != "llvmc")))
       return nullptr;
     if (S->PipeResult.EVM || S->PipeResult.SBF)
       throw std::invalid_argument("source transformations require native code");
@@ -2138,7 +2150,7 @@ const char *neverd_ir_view_json(neverd_session_t Sess, neverd_va_t FuncEntry,
     // A missing prototype can itself prevent either C view from being built.
     // Expose the original occurrence from LowIR so that it can be typed.
     if (Stage == "call_sites") {
-      if (!prepareFunction(Sess, FuncEntry, Session::PipelineDepth::LowIR))
+      if (!prepareOriginalCalls(Sess, FuncEntry))
         return nullptr;
       const LowFunc *Low = S->findLowFunc(FuncEntry);
       if (!Low) {

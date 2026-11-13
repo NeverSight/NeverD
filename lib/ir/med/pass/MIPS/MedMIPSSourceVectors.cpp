@@ -34,7 +34,7 @@ const SourceCallTypeHint *mipsFloatingCallSite(
     const LowOp &Op, Arch Target,
     const std::map<SourceCallOccurrenceKey, SourceCallTypeHint> *Sites) {
   if (Sites && !Sites->empty())
-    if (const auto Key = sourceCallOccurrenceKey(Op))
+    if (const auto Key = sourceCallOccurrenceKey(Op, Target))
       if (const auto It = Sites->find(*Key); It != Sites->end()) {
         const auto &H = It->second;
         std::string Diagnostic;
