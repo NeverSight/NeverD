@@ -14,6 +14,7 @@
 #include "../ResourceLimits.h"
 #include "ActionRegistry.h"
 #include "FlowLayout.h"
+#include "GuiPluginUiHost.h"
 #include "Icons.h"
 #include "KeepTranslated.h"
 #include "PluginServices.h"
@@ -119,10 +120,12 @@ protected:
 } // namespace
 
 AnalysisPlugins::AnalysisPlugins(Session &session, ActionRegistry &actions,
-                                 QWidget *parent)
+                                 QWidget *parent,
+                                 const QString &bundledAgentManifest,
+                                 GuiPluginUiHost *nativeUi)
     : QWidget(parent), session_(session), actions_(actions),
       services_(session.pluginServices()), jobs_(services_.jobs()),
-      menu_(new QMenu(this)) {
+      nativeUi_(nativeUi), menu_(new QMenu(this)) {
   setObjectName(QStringLiteral("analysisPlugins"));
   menu_->setObjectName(QStringLiteral("processPluginsMenu"));
   auto *layout = new QVBoxLayout(this);
@@ -290,7 +293,7 @@ AnalysisPlugins::AnalysisPlugins(Session &session, ActionRegistry &actions,
   timer->setInterval(kRefreshIntervalMs);
   connect(timer, &QTimer::timeout, this, &AnalysisPlugins::refreshJobs);
   timer->start();
-  restorePlugins();
+  services_.restorePlugins(bundledAgentManifest);
   rebuildActions();
   refreshContext();
   refreshJobs();
@@ -320,8 +323,6 @@ void AnalysisPlugins::uninstallPlugin(const QString &id) {
   services_.uninstallPlugin(id);
 }
 
-void AnalysisPlugins::restorePlugins() { services_.restorePlugins(); }
-
 void AnalysisPlugins::setSelectionProvider(
     std::function<QJsonObject()> provider) {
   services_.setSelectionProvider(std::move(provider));
@@ -343,14 +344,14 @@ void AnalysisPlugins::updateActions() {
 }
 void AnalysisPlugins::importPlugin() {
   const auto path = QFileDialog::getOpenFileName(
-      this, tr("Import process plugin"), {}, tr("Plugin manifests (*.json)"));
+      this, tr("Import plugin"), {}, tr("Plugin manifests (*.json)"));
   if (path.isEmpty())
     return;
   QString error;
   if (!installPlugin(path, error))
     emit message(error, 2);
   else
-    emit message(tr("Process plugin imported: %1").arg(path), 0);
+    emit message(tr("Plugin imported: %1").arg(path), 0);
 }
 void AnalysisPlugins::rebuildActions() {
   for (auto *action : registered_) {
@@ -360,7 +361,7 @@ void AnalysisPlugins::rebuildActions() {
   registered_.clear();
   menu_->clear();
   menu_->addAction(actions_.action(ActionId::OptionsPlugins));
-  auto *import = menu_->addAction(tr("Import process plugin…"));
+  auto *import = menu_->addAction(tr("Import plugin…"));
   connect(import, &QAction::triggered, this, &AnalysisPlugins::importPlugin);
   auto *tasks = menu_->addAction(tr("Plugin tasks and results"));
   tasks->setObjectName(QStringLiteral("pluginShowTasks"));
@@ -378,6 +379,10 @@ void AnalysisPlugins::rebuildActions() {
               return order ? order < 0 : left.id < right.id;
             });
   for (const auto &plugin : plugins) {
+    const auto nativeActions =
+        nativeUi_ ? nativeUi_->menuActions(plugin.id) : QList<QAction *>();
+    if (plugin.actions.isEmpty() && nativeActions.isEmpty())
+      continue;
     auto displayName = plugin.name;
     if (std::count_if(plugins.begin(), plugins.end(), [&](const auto &other) {
           return other.name == plugin.name;
@@ -385,6 +390,7 @@ void AnalysisPlugins::rebuildActions() {
       displayName += QStringLiteral(" (%1)").arg(plugin.id);
     auto *submenu = menu_->addMenu(displayName);
     submenu->setIcon(presentationIcon(plugin.icon, plugin.path));
+    submenu->addActions(nativeActions);
     for (const auto &value : plugin.actions) {
       const auto definition = value.toObject();
       auto *action = new QAction(definition.value("title").toString(), this);

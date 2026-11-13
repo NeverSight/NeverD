@@ -10379,14 +10379,6 @@ Your previous graph is still available.</source>
         <translation>将代码导入映像</translation>
     </message>
     <message>
-        <source>Import process plugin</source>
-        <translation>导入进程插件</translation>
-    </message>
-    <message>
-        <source>Import process plugin…</source>
-        <translation>导入进程插件…</translation>
-    </message>
-    <message>
         <source>Log for %1</source>
         <translation>%1 的日志</translation>
     </message>
@@ -10447,10 +10439,6 @@ Your previous graph is still available.</source>
         <translation>位置</translation>
     </message>
     <message>
-        <source>Process plugin imported: %1</source>
-        <translation>已导入进程插件：%1</translation>
-    </message>
-    <message>
         <source>Progress</source>
         <translation>进度</translation>
     </message>
@@ -10493,6 +10481,18 @@ Your previous graph is still available.</source>
     <message>
         <source>This action registration is no longer active.</source>
         <translation>此动作的注册项已不再活动。</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>导入插件</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>导入插件…</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>已导入插件：%1</translation>
     </message>
 </context>
 <context>
@@ -10558,16 +10558,8 @@ Your previous graph is still available.</source>
         <translation>ID: %1</translation>
     </message>
     <message>
-        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
-        <translation>导入进程插件清单以添加命令。仅运行命令时才会启动提供程序。</translation>
-    </message>
-    <message>
         <source>Import plugin…</source>
         <translation>导入插件…</translation>
-    </message>
-    <message>
-        <source>Import process plugin</source>
-        <translation>导入进程插件</translation>
     </message>
     <message>
         <source>Inactive</source>
@@ -10580,10 +10572,6 @@ Your previous graph is still available.</source>
     <message>
         <source>Installation removed; active work is stopping.</source>
         <translation>已移除安装记录，正在停止运行中的任务。</translation>
-    </message>
-    <message>
-        <source>Installed process plugins</source>
-        <translation>已安装的进程插件</translation>
     </message>
     <message>
         <source>Manifest: %1</source>
@@ -10650,10 +10638,6 @@ Your previous graph is still available.</source>
         <translation>正在停止</translation>
     </message>
     <message>
-        <source>Type: External process</source>
-        <translation>类型：外部进程</translation>
-    </message>
-    <message>
         <source>Unavailable</source>
         <translation>不可用</translation>
     </message>
@@ -10676,6 +10660,42 @@ Your previous graph is still available.</source>
     <message>
         <source>Yes</source>
         <translation>是</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>导入插件</translation>
+    </message>
+    <message>
+        <source>External process</source>
+        <translation>外部进程</translation>
+    </message>
+    <message>
+        <source>Import a plugin manifest to add workbench commands or views.</source>
+        <translation>导入插件清单以添加工作台命令或视图。</translation>
+    </message>
+    <message>
+        <source>Installed plugins</source>
+        <translation>已安装插件</translation>
+    </message>
+    <message>
+        <source>Native GUI</source>
+        <translation>原生 GUI</translation>
+    </message>
+    <message>
+        <source>Source: Bundled with NeverD</source>
+        <translation>来源：随 NeverD 提供</translation>
+    </message>
+    <message>
+        <source>This plugin ships with NeverD. Use Disable to turn it off.</source>
+        <translation>此插件随 NeverD 提供。可使用“禁用”将其关闭。</translation>
+    </message>
+    <message>
+        <source>Type: %1</source>
+        <translation>类型：%1</translation>
+    </message>
+    <message>
+        <source>Unknown</source>
+        <translation>未知</translation>
     </message>
 </context>
 <context>
@@ -10854,6 +10874,48 @@ Your previous graph is still available.</source>
     <message>
         <source>Close Tab</source>
         <translation>关闭标签页</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost</name>
+    <message>
+        <source>The GUI module failed during activation.</source>
+        <translation>GUI 模块在激活过程中失败。</translation>
+    </message>
+    <message>
+        <source>The GUI module failed to activate.</source>
+        <translation>GUI 模块激活失败。</translation>
+    </message>
+    <message>
+        <source>The GUI module is missing or outside the package: %1</source>
+        <translation>GUI 模块缺失或位于插件包之外：%1</translation>
+    </message>
+    <message>
+        <source>The module does not provide the required GUI interface.</source>
+        <translation>该模块未提供所需的 GUI 接口。</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost::Binding</name>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin menu action: %1</source>
+        <translation>插件菜单动作无效、重复或不可用：%1</translation>
+    </message>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin view: %1</source>
+        <translation>插件视图无效、重复或不可用：%1</translation>
+    </message>
+    <message>
+        <source>The analysis session has changed.</source>
+        <translation>分析会话已更改。</translation>
+    </message>
+    <message>
+        <source>The menu action factory must use the supplied parent.</source>
+        <translation>菜单动作工厂必须使用提供的父对象。</translation>
+    </message>
+    <message>
+        <source>The view factory must create a workbench child widget.</source>
+        <translation>视图工厂必须创建工作台的子控件。</translation>
     </message>
 </context>
 </TS>

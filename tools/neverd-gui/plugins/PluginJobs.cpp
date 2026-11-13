@@ -137,6 +137,12 @@ PluginJobs::PluginJobs(QString outputRoot, QObject *parent)
       },
       [this](const auto &id) {
         emit componentBound(QString::fromStdString(id));
+      },
+      [this](auto scope, const auto &manifest, auto &error) {
+        if (activateGui_)
+          return activateGui_(scope, manifest, error);
+        error = {"gui_unavailable", "No workbench UI host is available"};
+        return false;
       });
   poll_.setInterval(kRuntimePollMilliseconds);
   connect(&poll_, &QTimer::timeout, this, [this] {
@@ -238,6 +244,8 @@ void PluginJobs::setContext(QJsonObject context) {
     retireOwner(previous);
   } else if (!same)
     capabilities_->setContext(projectOwner_, native(context_));
+  if (!same)
+    emit contextChanged(context_);
   emit jobsChanged();
 }
 QString PluginJobs::start(const QString &pluginId, const QString &actionId,

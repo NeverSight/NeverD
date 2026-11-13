@@ -38,6 +38,8 @@ struct Manifest {
   std::vector<std::string> Arguments, Queries;
   std::vector<CapabilityRequirement> Services, Events;
   Json Actions;
+  // Native GUI packages are discovered here but loaded only by the GUI host.
+  std::filesystem::path GuiLibrary;
 };
 
 std::optional<Manifest> loadManifest(const std::filesystem::path &Path,

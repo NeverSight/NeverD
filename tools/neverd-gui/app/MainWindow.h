@@ -56,6 +56,7 @@ class NavigationBand;
 class MicrosoftSymbols;
 class OutputWindow;
 class Session;
+class GuiPluginUiHost;
 class TitleBar;
 class WindowFrame;
 
@@ -66,7 +67,8 @@ class MainWindow final : public KDDockWidgets::QtWidgets::MainWindow {
   Q_OBJECT
 public:
   MainWindow(Session &session, McpConnectionManager &mcp,
-             GuiSessionBroker &broker);
+             GuiSessionBroker &broker,
+             const QString &bundledAgentManifest = {});
   ~MainWindow() override;
 
   void openFile(const QString &path);
@@ -414,6 +416,7 @@ private:
   HexView *hex_ = nullptr;
   OutputWindow *output_ = nullptr;
   AnalysisPlugins *plugins_ = nullptr;
+  GuiPluginUiHost *pluginUi_ = nullptr;
   MicrosoftSymbols *microsoftSymbols_ = nullptr;
   /// A file to open once the worker has started, asking for its debug
   /// information then.

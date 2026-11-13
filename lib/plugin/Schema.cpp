@@ -9,6 +9,8 @@
 
 #include "neverd/plugin/Schema.h"
 
+#include "Text.h"
+
 #include "neverd/plugin/Config.h"
 
 #include <algorithm>
@@ -41,14 +43,21 @@ bool value(const Json &S, const Json &V, std::string &Error,
     if ((S.contains("minimum") && V < S["minimum"]) ||
         (S.contains("maximum") && V > S["maximum"]))
       return fail(Error, Path, "number is outside bounds");
+  } else if (V.is_string() && S.contains("maxLength")) {
+    if (detail::codePoints(V.get_ref<const std::string &>()) >
+        S["maxLength"].get<size_t>())
+      return fail(Error, Path, "string exceeds maxLength");
   } else if (V.is_object()) {
     const auto &Properties = S.at("properties");
     for (const auto &Key : S.value("required", Json::array()))
       if (!V.contains(Key.get<std::string>()))
         return fail(Error, Path, "missing " + Key.get<std::string>());
     for (auto I = V.begin(); I != V.end(); ++I) {
-      if (!Properties.contains(I.key()))
+      if (!Properties.contains(I.key())) {
+        if (S.at("additionalProperties") == true)
+          continue;
         return fail(Error, Path, "unknown property " + I.key());
+      }
       if (!value(Properties[I.key()], I.value(), Error, Path + "." + I.key()))
         return false;
     }
@@ -70,11 +79,13 @@ bool schema(const Json &S, std::string &Error, const std::string &Path) {
                                     "number", "boolean", "null"};
   if (!Types.contains(Type))
     return fail(Error, Path, "unsupported type " + Type);
-  std::set<std::string> Keys{"type", "description", "enum"};
+  std::set<std::string> Keys{"type", "description", "enum", "default"};
   if (Type == "object")
     Keys.insert({"properties", "required", "additionalProperties"});
   if (Type == "array")
     Keys.insert({"items", "maxItems"});
+  if (Type == "string")
+    Keys.insert("maxLength");
   if (Type == "number" || Type == "integer")
     Keys.insert({"minimum", "maximum"});
   for (auto I = S.begin(); I != S.end(); ++I)
@@ -82,12 +93,18 @@ bool schema(const Json &S, std::string &Error, const std::string &Path) {
       return fail(Error, Path, "unsupported keyword " + I.key());
   if (S.contains("description") && !S["description"].is_string())
     return fail(Error, Path, "description must be text");
+  if (S.contains("maxLength") &&
+      (!S["maxLength"].is_number_integer() || S["maxLength"] < 0 ||
+       S["maxLength"] > limits::kMaxTextCharacters))
+    return fail(Error, Path,
+                "maxLength must be a supported nonnegative length");
   if (Type == "object") {
     if (!S.contains("properties") || !S["properties"].is_object() ||
         !S.contains("additionalProperties") ||
-        S["additionalProperties"] != false)
+        !S["additionalProperties"].is_boolean())
       return fail(Error, Path,
-                  "object requires properties and additionalProperties:false");
+                  "object requires properties and an explicit "
+                  "additionalProperties policy");
     for (auto I = S["properties"].begin(); I != S["properties"].end(); ++I)
       if (!schema(I.value(), Error, Path + "." + I.key()))
         return false;
@@ -122,6 +139,8 @@ bool schema(const Json &S, std::string &Error, const std::string &Path) {
       if (!value(S, Item, Error, Path))
         return false;
   }
+  if (S.contains("default") && !value(S, S["default"], Error, Path))
+    return false;
   return true;
 }
 } // namespace
@@ -141,8 +160,22 @@ Json parameterSchema(const Json &Fields) {
     const auto Type = Field.at("type").get<std::string>();
     Json S{{"type", Type == "choice" ? "string" : Type},
            {"default", Field.at("default")}};
+    S["description"] = Field.value("title", Id);
+    if (Type == "string") {
+      S["maxLength"] =
+          Field.value("maxLength", limits::kMaxParameterCharacters);
+      if (!Field.contains("maxLength"))
+        S["description"] = S["description"].get<std::string>() +
+                           "; legacy limit: " +
+                           std::to_string(limits::kMaxParameterCharacters) +
+                           " UTF-16 code units; no NUL characters";
+    }
     if (Type == "choice")
       S["enum"] = Field.at("choices");
+    if (Type == "object") {
+      S["properties"] = Json::object();
+      S["additionalProperties"] = true;
+    }
     if (Type == "integer") {
       S["minimum"] = Field.value("minimum", 0);
       S["maximum"] = Field.value("maximum", limits::kDefaultParameterMaximum);

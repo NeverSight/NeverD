@@ -1,0 +1,1048 @@
+//===- AgentController.cpp - Agent desktop application state
+//---------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Persist user actions with project identities and keep file hashing off the
+/// UI thread. Model actions are implemented in AgentModelController.cpp.
+//===----------------------------------------------------------------------===//
+
+#include "AgentController.h"
+
+#include "Config.h"
+#include "platform/AppPaths.h"
+#include "project/MemoryStore.h"
+
+#include <QCoreApplication>
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QFutureWatcher>
+#include <QJsonArray>
+#include <QProcess>
+#include <QStandardPaths>
+#include <QStringDecoder>
+#include <QUrl>
+#include <QUuid>
+#include <QtConcurrentRun>
+#include <utility>
+
+namespace neverd::agent {
+namespace {
+QVariantMap objectView(const AnalysisObject &object) {
+  return {{"id", object.Id},
+          {"name", object.Name},
+          {"path", object.Path},
+          {"sha256", object.Sha256},
+          {"exists", QFileInfo(object.Path).isFile()}};
+}
+
+QVariantMap projectView(const Project &project) {
+  QVariantList objects;
+  for (const auto &object : project.Objects)
+    objects.append(objectView(object));
+  return {{"id", project.Id},
+          {"name", project.Name},
+          {"directory", project.Directory},
+          {"objects", objects}};
+}
+} // namespace
+
+AgentController::AgentController(QString directory, QObject *parent)
+    : QObject(parent), DataDirectory(std::move(directory)) {
+  connect(this, &AgentController::conversationChanged, this,
+          &AgentController::messagesChanged);
+  StreamTimer.setSingleShot(true);
+  StreamTimer.setInterval(model_limits::kStreamUiUpdateMs);
+  connect(&StreamTimer, &QTimer::timeout, this,
+          &AgentController::messagesChanged);
+  RunSaveTimer.setInterval(model_limits::kRunAutosaveMs);
+  connect(&RunSaveTimer, &QTimer::timeout, this, [this] {
+    const auto dirty = DirtyRuns;
+    for (const auto &id : dirty) {
+      const auto *project = findProject(id);
+      QString error;
+      const auto value =
+          id == ActiveId ? Conversation : Conversations.value(id);
+      if (project && !ProjectStore::saveConversation(*project, value, error)) {
+        if (auto *runtime = Runtimes.value(id))
+          runtime->cancel();
+        emit operationError(error);
+      } else
+        DirtyRuns.remove(id);
+    }
+    if (DirtyRuns.isEmpty())
+      RunSaveTimer.stop();
+  });
+  DraftTimer.setSingleShot(true);
+  DraftTimer.setInterval(kDraftSaveDelayMs);
+  connect(&DraftTimer, &QTimer::timeout, this, [this] {
+    QString error;
+    if (!flush(error))
+      emit operationError(error);
+  });
+  MemoryTimer.setSingleShot(true);
+  MemoryTimer.setInterval(kMemoryIdleDelayMs);
+  connect(&MemoryTimer, &QTimer::timeout, this, &AgentController::drainMemory);
+  connect(this, &AgentController::credentialChanged, this, [this] {
+    if (!credentialBusy())
+      scheduleMemory();
+  });
+  connect(&Learner, &MemoryLearner::finished, this,
+          [this](const QString &, int added, const QString &error) {
+            MemoryStatus = added < 0 ? tr("记忆整理已暂停，待处理记录保留")
+                           : error.isEmpty()
+                               ? tr("记忆整理完成 · 新增 %1 条").arg(added)
+                               : tr("记忆整理未完成：%1").arg(error);
+            refreshMemory();
+            emit memoryChanged();
+            scheduleMemory();
+          });
+}
+
+bool AgentController::loadConfiguration(QJsonObject &config, QString &error) {
+  const QString path = QDir(DataDirectory).filePath("config.json");
+  if (!ProjectStore::readJson(path, config, error, true))
+    return false;
+  if (QFileInfo::exists(path)) {
+    if (config.value("version").toInt(-1) != kStorageVersion ||
+        !config.value("projects").isArray() ||
+        !config.value("sharing").isBool() ||
+        !config.value("lightTheme").isBool() ||
+        !config.value("guiPath").isString()) {
+      error = QStringLiteral("全局配置无效，请检查：%1").arg(path);
+      return false;
+    }
+    Sharing = config.value("sharing").toBool();
+    for (const auto *field : {"useMemory", "generateMemory"})
+      if (config.contains(field) && !config[field].isBool()) {
+        error = "Invalid long-term memory preference.";
+        return false;
+      }
+    UseMemory = config["useMemory"].toBool(true);
+    GenerateMemory = config["generateMemory"].toBool(true);
+    if (config.contains("autoAddAnalysisObjects") &&
+        !config["autoAddAnalysisObjects"].isBool()) {
+      error = tr("无效的分析对象添加权限设置。");
+      return false;
+    }
+    AutoAddAnalysisObjects = config["autoAddAnalysisObjects"].toBool();
+    LightTheme = config.value("lightTheme").toBool();
+    GuiPath = config.value("guiPath").toString();
+    McpPath = config.value("mcpPath").toString();
+    if (config.contains("model")) {
+      const auto profile =
+          ModelProfile::fromJson(config["model"].toObject(), error);
+      if (!profile)
+        return false;
+      Profile = *profile;
+    }
+  }
+  return true;
+}
+
+bool AgentController::initialize(QString &error) {
+  QJsonObject config;
+  if (!loadConfiguration(config, error))
+    return false;
+  if (!config.isEmpty()) {
+    for (const auto &entry : config.value("projects").toArray()) {
+      if (!entry.isString() || entry.toString().isEmpty()) {
+        error = QStringLiteral("全局配置包含无效项目路径：%1")
+                    .arg(QDir(DataDirectory).filePath("config.json"));
+        return false;
+      }
+      if (!KnownDirectories.contains(entry.toString()))
+        KnownDirectories.append(entry.toString());
+    }
+    QStringList unavailable;
+    for (const auto &directory : KnownDirectories) {
+      QString issue;
+      auto project = ProjectStore::open(directory, issue);
+      if (!project || !bindProject(*project, issue))
+        unavailable.append(issue);
+    }
+    if (!unavailable.isEmpty()) {
+      const QString message = unavailable.join('\n');
+      QTimer::singleShot(0, this,
+                         [this, message] { emit operationError(message); });
+    }
+  }
+  const QString wanted = config.value("activeProjectId").toString();
+  if (findProject(wanted))
+    selectProject(wanted);
+  else if (!Projects.isEmpty())
+    selectProject(Projects.front().Id);
+  if (!writeCatalog(error))
+    return false;
+  emit settingsChanged();
+  emit workspaceChanged();
+  reloadCredential();
+  return true;
+}
+
+Project *AgentController::findProject(const QString &id) {
+  for (auto &project : Projects)
+    if (project.Id == id)
+      return &project;
+  return nullptr;
+}
+
+const Project *AgentController::findProject(const QString &id) const {
+  for (const auto &project : Projects)
+    if (project.Id == id)
+      return &project;
+  return nullptr;
+}
+
+const AnalysisObject *AgentController::findObject(const Project &project,
+                                                  const QString &id) const {
+  for (const auto &object : project.Objects)
+    if (object.Id == id)
+      return &object;
+  return nullptr;
+}
+
+bool AgentController::bindProject(Project project, QString &error) {
+  if (const auto *existing = findProject(project.Id)) {
+    if (QFileInfo(existing->Directory) != QFileInfo(project.Directory)) {
+      error = QStringLiteral("两个目录使用相同项目 ID：%1\n%2")
+                  .arg(existing->Directory, project.Directory);
+      return false;
+    }
+    return true;
+  }
+  QJsonObject conversation;
+  if (!ProjectStore::readConversation(project, conversation, error))
+    return false;
+  auto lock = std::make_unique<QLockFile>(
+      QDir(ProjectStore::stateDirectory(project)).filePath("editor.lock"));
+  if (!lock->tryLock()) {
+    error = QStringLiteral("项目已在其他 Agent 窗口中打开，或目录无法写入：%1")
+                .arg(project.Directory);
+    return false;
+  }
+  auto messages = conversation["messages"].toArray();
+  bool interrupted = false;
+  for (qsizetype i = 0; i < messages.size(); ++i) {
+    auto message = messages[i].toObject();
+    if (message["status"] == "running" || message["status"] == "pending") {
+      message["status"] = "interrupted";
+      messages[i] = message;
+      interrupted = true;
+    }
+  }
+  if (!conversation["pendingInputs"].toArray().isEmpty()) {
+    conversation["queuePaused"] = true;
+    interrupted = true;
+  }
+  if (interrupted) {
+    conversation["messages"] = messages;
+    if (!ProjectStore::saveConversation(project, conversation, error))
+      return false;
+  }
+  GoalState goal;
+  if (!GoalState::load(project, goal, error) || !loadSideChats(project, error))
+    return false;
+  Goals.insert(project.Id, goal);
+  ProjectLocks.push_back(std::move(lock));
+  Conversations.insert(project.Id, conversation);
+  Projects.append(std::move(project));
+  scheduleMemory();
+  return true;
+}
+
+QVariantList AgentController::projects() const {
+  QVariantList values;
+  for (const auto &project : Projects)
+    values.append(projectView(project));
+  return values;
+}
+
+QVariantMap AgentController::activeProject() const {
+  const auto *project = findProject(ActiveId);
+  return project ? projectView(*project) : QVariantMap{};
+}
+
+QVariantMap AgentController::selectedObject() const {
+  const auto *project = findProject(ActiveId);
+  const auto *object =
+      project ? findObject(*project, SelectedObjectId) : nullptr;
+  return object ? objectView(*object) : QVariantMap{};
+}
+
+QVariantList AgentController::messages() const {
+  return Conversation.value("messages").toArray().toVariantList();
+}
+
+bool AgentController::flush(QString &error) {
+  DraftTimer.stop();
+  for (auto *chat : std::as_const(SideChats))
+    if (!chat->flush(error))
+      return false;
+  if (!DraftDirty)
+    return true;
+  const auto *project = findProject(ActiveId);
+  if (project && !ProjectStore::saveConversation(*project, Conversation, error))
+    return false;
+  DraftDirty = false;
+  return true;
+}
+
+ShutdownStatus AgentController::prepareShutdown() {
+  MemoryTimer.stop();
+  Learner.cancel();
+  if (credentialBusy()) {
+    emit notice(tr("正在访问系统凭据库，请完成或取消系统解锁提示后关闭。"));
+    return ShutdownStatus::Pending;
+  }
+  if (!WritingProjects.isEmpty()) {
+    emit notice(tr("正在保存 ND 变更，请等待完成回执后关闭。"));
+    return ShutdownStatus::Pending;
+  }
+  if (busy()) {
+    emit notice(QStringLiteral("正在完成文件登记，请稍后关闭。"));
+    return ShutdownStatus::Pending;
+  }
+  bool hasRuns = false;
+  for (const auto &project : Projects)
+    pauseProjectGoal(project.Id);
+  for (auto *chat : std::as_const(SideChats)) {
+    if (chat->running()) {
+      hasRuns = true;
+      chat->cancel();
+    }
+    QString error;
+    if (!chat->flush(error)) {
+      emit operationError(error);
+      return ShutdownStatus::Failed;
+    }
+  }
+  for (auto *runtime : std::as_const(Runtimes)) {
+    if (runtime->running()) {
+      hasRuns = true;
+      runtime->cancel();
+    }
+  }
+  if (hasRuns) {
+    emit notice(QStringLiteral("正在停止分析并保存记录，请稍后关闭。"));
+    return ShutdownStatus::Pending;
+  }
+  QString error;
+  if (!flush(error)) {
+    emit operationError(error);
+    return ShutdownStatus::Failed;
+  }
+  return ShutdownStatus::Ready;
+}
+
+bool AgentController::prepareClose() {
+  return prepareShutdown() == ShutdownStatus::Ready;
+}
+
+bool AgentController::saveSettings(QString &error) {
+  if (!WorkbenchAttachment.isEmpty())
+    return true; // The workbench reads the desktop model settings as a client.
+  return ProjectStore::writeJson(
+      QDir(DataDirectory).filePath("config.json"),
+      {{"version", kStorageVersion},
+       {"projects", QJsonArray::fromStringList(KnownDirectories)},
+       {"activeProjectId", ActiveId},
+       {"sharing", Sharing},
+       {"useMemory", UseMemory},
+       {"generateMemory", GenerateMemory},
+       {"lightTheme", LightTheme},
+       {"autoAddAnalysisObjects", AutoAddAnalysisObjects},
+       {"guiPath", GuiPath},
+       {"mcpPath", McpPath},
+       {"model", Profile.toJson()}},
+      error);
+}
+
+bool AgentController::writeCatalog(QString &error) {
+  QJsonArray entries;
+  if (Sharing) {
+    for (const auto &project : Projects)
+      for (const auto &object : project.Objects)
+        entries.append(QJsonObject{{"projectId", project.Id},
+                                   {"projectDirectory", project.Directory},
+                                   {"objectId", object.Id},
+                                   {"sha256", object.Sha256}});
+  }
+  return ProjectStore::writeJson(
+      QDir(DataDirectory).filePath("catalog.json"),
+      {{"version", kStorageVersion}, {"objects", entries}}, error);
+}
+
+bool AgentController::createProject(const QString &name,
+                                    const QString &directory) {
+  QString error;
+  auto project = ProjectStore::create(localPath(directory), name, error);
+  if (!project) {
+    emit operationError(error);
+    return false;
+  }
+  return openProject(project->Directory);
+}
+
+bool AgentController::openProject(const QString &directory) {
+  QString error;
+  auto project = ProjectStore::open(localPath(directory), error);
+  if (!project || !bindProject(*project, error)) {
+    emit operationError(error);
+    return false;
+  }
+  if (!KnownDirectories.contains(project->Directory))
+    KnownDirectories.append(project->Directory);
+  if (!selectProject(project->Id))
+    return false;
+  if (!writeCatalog(error))
+    emit operationError(error);
+  emit workspaceChanged();
+  return true;
+}
+
+bool AgentController::selectProject(const QString &id) {
+  if (id == ActiveId)
+    return true;
+  const auto *project = findProject(id);
+  if (!project)
+    return false;
+  QString error;
+  QJsonObject conversation;
+  if (!flush(error) ||
+      !ProjectStore::readConversation(*project, conversation, error)) {
+    emit operationError(error);
+    return false;
+  }
+  ActiveId = id;
+  Evidence = {};
+  emit evidenceChanged();
+  emit reviewChanged();
+  emit sideChatsChanged();
+  emit sideChatChanged();
+  emit goalChanged();
+  SelectedObjectId.clear();
+  Conversation =
+      Conversations.contains(id) ? Conversations.value(id) : conversation;
+  ExpandedDirectories.clear();
+  closePreview();
+  refreshFiles();
+  readMemoryViews();
+  if (!saveSettings(error))
+    emit operationError(error);
+  emit workspaceChanged();
+  emit conversationChanged();
+  emit objectChanged();
+  emit runChanged();
+  return true;
+}
+
+void AgentController::selectObject(const QString &id) {
+  const auto *project = findProject(ActiveId);
+  if (!project || (!id.isEmpty() && !findObject(*project, id)))
+    return;
+  SelectedObjectId = id;
+  readMemoryViews();
+  emit objectChanged();
+}
+
+void AgentController::addObject(const QString &path) {
+  const auto *project = findProject(ActiveId);
+  if (!project)
+    return;
+  const QString projectId = project->Id;
+  fingerprintObject(path, [this, projectId](const FingerprintResult &result) {
+    auto *target = findProject(projectId);
+    QString error;
+    if (!target || !ProjectStore::addObject(*target, result, error)) {
+      emit operationError(target ? error : tr("目标项目已关闭。"));
+      return;
+    }
+    if (ActiveId == projectId)
+      selectObject(target->Objects.back().Id);
+    objectAdded(*target);
+    emit notice(tr("已添加 %1 · 文件指纹已保存，尚未启动分析。")
+                    .arg(QFileInfo(result.Path).fileName()));
+  });
+}
+
+void AgentController::fingerprintObject(
+    const QString &path, std::function<void(FingerprintResult)> ready) {
+  auto *watcher = new QFutureWatcher<FingerprintResult>(this);
+  ++PendingImports;
+  emit busyChanged();
+  connect(watcher, &QFutureWatcher<FingerprintResult>::finished, this,
+          [this, watcher, ready = std::move(ready)] {
+            auto result = watcher->result();
+            watcher->deleteLater();
+            --PendingImports;
+            emit busyChanged();
+            ready(std::move(result));
+          });
+  watcher->setFuture(
+      QtConcurrent::run([path] { return ProjectStore::fingerprint(path); }));
+}
+
+void AgentController::objectAdded(const Project &project) {
+  for (const auto &id : SideChatIds.value(project.Id))
+    SideChats.value(project.Id + '/' + id)->updateProject(project);
+  QString error;
+  if (!writeCatalog(error))
+    emit operationError(error);
+  emit workspaceChanged();
+}
+
+RequestObjectImport
+AgentController::objectImportFor(const QString &projectId,
+                                 const QString &sideChatId) {
+  if (!WorkbenchAttachment.isEmpty())
+    return {};
+  return [this, projectId,
+          sideChatId](const QString &sourceId, const QString &path,
+                      const QString &reason, ObjectImportCall call,
+                      ObjectImported imported) {
+    requestObjectImport(projectId, sideChatId, sourceId, path, reason,
+                        std::move(call), std::move(imported));
+  };
+}
+
+void AgentController::requestObjectImport(
+    const QString &projectId, const QString &sideChatId,
+    const QString &sourceId, const QString &path, const QString &reason,
+    ObjectImportCall call, ObjectImported imported) {
+  const auto *project = findProject(projectId);
+  const auto *source = project ? findObject(*project, sourceId) : nullptr;
+  const auto fail = [&](const QString &message) {
+    call->fail({"object_import", message.toStdString()});
+  };
+  if (!project || (!sourceId.isEmpty() && !source)) {
+    fail(tr("目标项目或依赖来源已不可用。"));
+    return;
+  }
+  if (path.trimmed().isEmpty() || reason.trimmed().isEmpty()) {
+    fail(tr("请提供依赖文件路径和添加理由。"));
+    return;
+  }
+  const auto base =
+      source ? QFileInfo(source->Path).absolutePath() : project->Directory;
+  const auto inputPath = localPath(path.trimmed());
+  const QFileInfo file(QDir(base).absoluteFilePath(inputPath));
+  auto canonical = file.canonicalFilePath();
+  if (canonical.isEmpty() && !QDir::isAbsolutePath(inputPath) &&
+      file.fileName() == inputPath) {
+    // PE import names often use different casing than filenames on Unix.
+    QString match;
+    for (const auto &candidate : QDir(base).entryInfoList(QDir::Files))
+      if (candidate.fileName().compare(inputPath, Qt::CaseInsensitive) == 0) {
+        if (!match.isEmpty()) {
+          fail(tr("发现多个同名依赖，请指定完整路径。"));
+          return;
+        }
+        match = candidate.canonicalFilePath();
+      }
+    canonical = match;
+  }
+  if (canonical.isEmpty() || !QFileInfo(canonical).isFile()) {
+    fail(tr("找不到依赖文件：%1。请提供已有文件的完整路径。")
+             .arg(QDir::toNativeSeparators(file.absoluteFilePath())));
+    return;
+  }
+  const auto state =
+      QFileInfo(ProjectStore::stateDirectory(*project)).canonicalFilePath();
+  const auto relative = QDir(state).relativeFilePath(canonical);
+  if (!state.isEmpty() && !QDir::isAbsolutePath(relative) && relative != ".." &&
+      !relative.startsWith("../")) {
+    fail(tr("Agent 项目状态文件不能作为分析对象。"));
+    return;
+  }
+
+  ObjectImport request{QUuid::createUuid().toString(QUuid::WithoutBraces),
+                       projectId,
+                       sideChatId,
+                       source ? source->Name : QString{},
+                       canonical,
+                       reason.trimmed(),
+                       call,
+                       std::move(imported)};
+  for (const auto &entry : project->Objects)
+    if (QFileInfo(entry.Path) == QFileInfo(canonical)) {
+      finishObjectImport(request, entry, "already_registered");
+      return;
+    }
+  if (AutoAddAnalysisObjects) {
+    importRequestedObject(std::move(request), true);
+    return;
+  }
+  if (!InteractiveObjectApprovals) {
+    fail(tr("此会话无法显示审批。请在桌面 Agent 中提交，或先手动登记该对象。"));
+    return;
+  }
+  const auto id = request.Id;
+  ObjectApprovals.append(std::move(request));
+  call->onCancel([guard = QPointer<AgentController>(this), id, call] {
+    if (guard && guard->ObjectApprovals.removeIf(
+                     [&](const auto &request) { return request.Id == id; }))
+      emit guard->analysisObjectApprovalsChanged();
+    call->fail({"cancelled", "Analysis object request cancelled."}, true);
+  });
+  emit analysisObjectApprovalsChanged();
+}
+
+QVariantList AgentController::analysisObjectApprovals() const {
+  QVariantList result;
+  for (const auto &request : ObjectApprovals) {
+    const auto *project = findProject(request.ProjectId);
+    result.append(QVariantMap{
+        {"id", request.Id},
+        {"projectId", request.ProjectId},
+        {"sideChatId", request.SideChatId},
+        {"project", project ? project->Name : request.ProjectId},
+        {"projectPath",
+         project ? QDir::toNativeSeparators(project->Directory) : QString{}},
+        {"source", request.SourceName},
+        {"path", QDir::toNativeSeparators(request.Path)},
+        {"reason", request.Reason}});
+  }
+  return result;
+}
+
+bool AgentController::resolveAnalysisObjectApproval(const QString &id,
+                                                    bool allow) {
+  for (qsizetype i = 0; i < ObjectApprovals.size(); ++i) {
+    if (ObjectApprovals[i].Id != id)
+      continue;
+    auto request = ObjectApprovals.takeAt(i);
+    emit analysisObjectApprovalsChanged();
+    if (allow)
+      importRequestedObject(std::move(request), false);
+    else
+      request.Call->fail({"denied", "The user declined to add this analysis "
+                                    "object. Continue with existing objects."});
+    return true;
+  }
+  return false;
+}
+
+void AgentController::importRequestedObject(ObjectImport request,
+                                            bool automatic) {
+  const auto path = request.Path;
+  request.Call->onCancel([call = request.Call] {
+    call->fail({"cancelled", "Analysis object request cancelled."}, true);
+  });
+  if (plugin::terminal(request.Call->snapshot().Phase))
+    return;
+  fingerprintObject(path, [this, request = std::move(request),
+                           automatic](const FingerprintResult &result) {
+    if (plugin::terminal(request.Call->snapshot().Phase))
+      return;
+    if (automatic && !AutoAddAnalysisObjects) {
+      request.Call->fail({"approval_required", "Automatic object addition "
+                                               "was disabled. Request approval "
+                                               "before trying again."});
+      return;
+    }
+    if (QFileInfo(request.Path).canonicalFilePath() != request.Path) {
+      request.Call->fail({"object_import", "The approved file path changed. "
+                                           "Request the current path again."});
+      return;
+    }
+    auto *target = findProject(request.ProjectId);
+    if (!target) {
+      request.Call->fail(
+          {"object_import", "Target project is no longer open."});
+      return;
+    }
+    for (const auto &entry : target->Objects)
+      if (QFileInfo(entry.Path) == QFileInfo(request.Path)) {
+        finishObjectImport(request, entry, "already_registered");
+        return;
+      }
+    QString error;
+    if (!ProjectStore::addObject(*target, result, error)) {
+      request.Call->fail({"object_import", error.toStdString()});
+      return;
+    }
+    const auto added = target->Objects.back();
+    objectAdded(*target);
+    emit notice(tr("Agent 已添加分析对象 %1").arg(added.Name));
+    finishObjectImport(request, added, automatic ? "automatic" : "approved");
+  });
+}
+
+void AgentController::finishObjectImport(const ObjectImport &request,
+                                         const AnalysisObject &object,
+                                         const char *decision) {
+  request.Imported(object);
+  NphTools::succeed(request.Call, {{"objectId", object.Id},
+                                   {"name", object.Name},
+                                   {"sha256", object.Sha256},
+                                   {"decision", decision}});
+}
+
+void AgentController::relocateObject(const QString &projectId,
+                                     const QString &objectId,
+                                     const QString &path) {
+  const auto *project = findProject(projectId);
+  if (!project || !findObject(*project, objectId))
+    return;
+  if (WritingProjects.contains(projectId) || projectHasAnalysis(projectId)) {
+    emit operationError(tr("请先完成或停止该项目的分析，再重新定位文件。"));
+    return;
+  }
+  auto *watcher = new QFutureWatcher<FingerprintResult>(this);
+  ++PendingImports;
+  emit busyChanged();
+  connect(
+      watcher, &QFutureWatcher<FingerprintResult>::finished, this,
+      [this, watcher, projectId, objectId] {
+        const auto result = watcher->result();
+        watcher->deleteLater();
+        --PendingImports;
+        emit busyChanged();
+        auto *target = findProject(projectId);
+        if (!target)
+          return;
+        if (WritingProjects.contains(projectId) ||
+            projectHasAnalysis(projectId)) {
+          emit operationError(
+              tr("项目已开始分析，未更改文件绑定；请停止后重试。"));
+          return;
+        }
+        QString error;
+        if (!ProjectStore::relocateObject(*target, objectId, result, error)) {
+          emit operationError(error);
+          return;
+        }
+        if (auto *runtime = Runtimes.value(projectId))
+          runtime->retireEngines();
+        for (const auto &chatId : SideChatIds.value(projectId)) {
+          auto *chat = SideChats.value(projectId + '/' + chatId);
+          chat->retireEngines();
+          chat->updateProject(*target);
+        }
+        for (const auto &key : Inspectors.keys())
+          if (key.startsWith(projectId + '/'))
+            delete Inspectors.take(key);
+        if (!writeCatalog(error))
+          emit operationError(error);
+        emit workspaceChanged();
+        emit objectChanged();
+        emit notice(tr("文件已重新定位，原对象记忆与对话已保留。"));
+      });
+  watcher->setFuture(
+      QtConcurrent::run([path] { return ProjectStore::fingerprint(path); }));
+}
+
+void AgentController::setDraft(const QString &text) {
+  if (ActiveId.isEmpty() || draft() == text)
+    return;
+  Conversation["draft"] = text;
+  Conversations[ActiveId] = Conversation;
+  DraftDirty = true;
+  DraftTimer.start();
+}
+
+bool AgentController::saveRequest(const QString &objectId) {
+  const auto *project = findProject(ActiveId);
+  if (!project || draft().trimmed().isEmpty() ||
+      (!objectId.isEmpty() && !findObject(*project, objectId)))
+    return false;
+  auto next = Conversation;
+  auto messages = next.value("messages").toArray();
+  messages.append(
+      QJsonObject{{"id", QUuid::createUuid().toString(QUuid::WithoutBraces)},
+                  {"role", "user"},
+                  {"text", draft().trimmed()},
+                  {"objectId", objectId},
+                  {"createdAt",
+                   QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
+                  {"status", "saved"}});
+  next["messages"] = messages;
+  next["draft"] = "";
+  QString error;
+  if (!ProjectStore::saveConversation(*project, next, error)) {
+    emit operationError(error);
+    return false;
+  }
+  Conversation = next;
+  Conversations[ActiveId] = next;
+  DraftDirty = false;
+  DraftTimer.stop();
+  emit conversationChanged();
+  emit notice(QStringLiteral("需求已保存。"));
+  return true;
+}
+
+void AgentController::collectFiles(const QString &path, int depth) {
+  const auto entries = QDir(path).entryInfoList(
+      QDir::AllEntries | QDir::NoDotAndDotDot, QDir::DirsFirst | QDir::Name);
+  for (const auto &entry : entries) {
+    if (entry.fileName() == ".nd-agent")
+      continue;
+    const bool directory = entry.isDir() && !entry.isSymLink();
+    const QString absolute = entry.absoluteFilePath();
+    Files.append(
+        QVariantMap{{"name", entry.fileName()},
+                    {"path", absolute},
+                    {"directory", directory},
+                    {"depth", depth},
+                    {"expanded", ExpandedDirectories.contains(absolute)}});
+    if (directory && ExpandedDirectories.contains(absolute))
+      collectFiles(absolute, depth + 1);
+  }
+}
+
+void AgentController::refreshFiles() {
+  Files.clear();
+  if (const auto *project = findProject(ActiveId))
+    collectFiles(project->Directory, 0);
+  emit filesChanged();
+}
+
+void AgentController::toggleDirectory(const QString &path) {
+  if (ExpandedDirectories.contains(path))
+    ExpandedDirectories.remove(path);
+  else
+    ExpandedDirectories.insert(path);
+  refreshFiles();
+}
+
+void AgentController::openTextLink(const QString &link) {
+  const QUrl url(link);
+  if (url.scheme() == "nd-evidence") {
+    openEvidence(url.host());
+    return;
+  }
+  if (url.scheme() == "https" || url.scheme() == "http") {
+    emit desktopUrlRequested(url.toString(), tr("无法打开链接。"));
+    return;
+  }
+  const auto *project = findProject(ActiveId);
+  if (!project)
+    return;
+  QString path;
+  if (url.isLocalFile())
+    path = url.toLocalFile();
+  else if (url.isRelative())
+    path = url.path();
+  else if (link.size() > 2 && link[1] == ':' && link[0].isLetter())
+    path = link;
+  else {
+    emit operationError(QStringLiteral("该链接类型不支持在对话中打开。"));
+    return;
+  }
+  const QString root = QFileInfo(project->Directory).canonicalFilePath();
+  const QString target =
+      QFileInfo(QDir(root).absoluteFilePath(path)).canonicalFilePath();
+#ifdef Q_OS_WIN
+  constexpr auto caseSensitivity = Qt::CaseInsensitive;
+#else
+  constexpr auto caseSensitivity = Qt::CaseSensitive;
+#endif
+  if (target.isEmpty() || !target.startsWith(root + '/', caseSensitivity)) {
+    emit operationError(
+        QStringLiteral("文件链接须指向当前项目内已有的文本文件。"));
+    return;
+  }
+  previewFile(target);
+}
+void AgentController::previewFile(const QString &path) {
+  QFile file(path);
+  if (!file.open(QIODevice::ReadOnly)) {
+    emit operationError(
+        QStringLiteral("无法打开文件：%1").arg(file.errorString()));
+    return;
+  }
+  if (file.size() > kMaxPreviewBytes) {
+    emit operationError(QStringLiteral("此版支持预览 %1 KiB 以内的文本文件。")
+                            .arg(kMaxPreviewBytes / 1024));
+    return;
+  }
+  const QByteArray bytes = file.readAll();
+  QStringDecoder decoder(QStringDecoder::Utf8);
+  const QString text = decoder(bytes);
+  if (bytes.contains('\0') || decoder.hasError()) {
+    emit operationError(
+        QStringLiteral("该文件不是 UTF-8 文本，请在对应应用中打开。"));
+    return;
+  }
+  PreviewTitle = QFileInfo(path).fileName();
+  PreviewPath = QFileInfo(path).absoluteFilePath();
+  PreviewText = text;
+  emit previewChanged();
+}
+
+void AgentController::closePreview() {
+  PreviewTitle.clear();
+  PreviewPath.clear();
+  PreviewText.clear();
+  emit previewChanged();
+}
+
+void AgentController::showProjectFolder() {
+  const auto *project = findProject(ActiveId);
+  if (project)
+    emit desktopUrlRequested(QUrl::fromLocalFile(project->Directory).toString(),
+                             tr("无法打开项目文件夹。"));
+}
+
+bool AgentController::updateSettings(bool sharing, bool lightTheme,
+                                     const QString &guiPath) {
+  return updateWorkspaceSettings(sharing, lightTheme, guiPath,
+                                 AutoAddAnalysisObjects);
+}
+
+bool AgentController::updateWorkspaceSettings(bool sharing, bool lightTheme,
+                                              const QString &guiPath,
+                                              bool autoAddObjects) {
+  const bool oldSharing = Sharing;
+  const bool oldLight = LightTheme;
+  const bool oldAutoAdd = AutoAddAnalysisObjects;
+  const QString oldPath = GuiPath;
+  Sharing = sharing;
+  LightTheme = lightTheme;
+  AutoAddAnalysisObjects = autoAddObjects;
+  GuiPath = guiPath.trimmed();
+  QString error;
+  if (!saveSettings(error)) {
+    Sharing = oldSharing;
+    LightTheme = oldLight;
+    AutoAddAnalysisObjects = oldAutoAdd;
+    GuiPath = oldPath;
+    emit operationError(error);
+    return false;
+  }
+  if (!writeCatalog(error))
+    emit operationError(error);
+  readMemoryViews();
+  emit settingsChanged();
+  emit objectChanged();
+  return true;
+}
+
+void AgentController::openInGui(const QString &objectId) {
+  const auto *project = findProject(ActiveId);
+  const auto *object = project ? findObject(*project, objectId) : nullptr;
+  if (!object)
+    return;
+  const QString program = findDesktopExecutable(GuiPath);
+  if (program.isEmpty()) {
+    emit operationError(QStringLiteral(
+        "未找到 ND GUI。请在设置中选择 neverd-gui 可执行文件。"));
+    return;
+  }
+  if (!QFileInfo(object->Path).isFile()) {
+    emit operationError(
+        QStringLiteral("原始文件已移动或不存在：%1").arg(object->Path));
+    return;
+  }
+  QProcess process;
+  process.setProgram(program);
+  process.setArguments({"--", object->Path});
+  process.setWorkingDirectory(QFileInfo(program).absolutePath());
+  if (!process.startDetached())
+    emit operationError(
+        QStringLiteral("启动 ND GUI 失败：%1").arg(process.errorString()));
+  else
+    emit notice(QStringLiteral("已启动 ND GUI：%1").arg(object->Name));
+}
+
+void AgentController::readMemoryViews() {
+  Memory.clear();
+  SharedMemory.clear();
+  ProjectMemory.clear();
+  const auto *project = findProject(ActiveId);
+  const auto *object =
+      project ? findObject(*project, SelectedObjectId) : nullptr;
+  if (!project)
+    return;
+  QString error;
+  QJsonArray records;
+  if (!MemoryStore::read(*project, {}, records, error, true)) {
+    emit operationError(error);
+    return;
+  }
+  ProjectMemory = records.toVariantList();
+  if (!object)
+    return;
+  if (!ProjectStore::readMemory(*project, *object, records, error)) {
+    emit operationError(error);
+    return;
+  }
+  Memory = records.toVariantList();
+  if (!Sharing)
+    return;
+  // Read source projects, never trust a cached index as the memory contents.
+  QSet<QString> seen;
+  for (const auto &entry : records)
+    seen.insert(entry.toObject().value("id").toString());
+  for (const auto &other : Projects) {
+    if (other.Id == project->Id)
+      continue;
+    for (const auto &candidate : other.Objects) {
+      if (candidate.Sha256 != object->Sha256)
+        continue;
+      QJsonArray shared;
+      if (!MemoryStore::read(other, candidate.Id, shared, error)) {
+        emit operationError(error);
+        continue;
+      }
+      for (const auto &entry : shared) {
+        const auto record = entry.toObject();
+        const QString id = record.value("id").toString();
+        if (seen.contains(id))
+          continue;
+        auto view = record.toVariantMap();
+        view["sourceProject"] = other.Name;
+        SharedMemory.append(view);
+        seen.insert(id);
+      }
+    }
+  }
+}
+
+void AgentController::refreshMemory() {
+  readMemoryViews();
+  emit objectChanged();
+}
+
+bool AgentController::addMemory(const QString &objectId, const QString &text) {
+  const auto *project = findProject(ActiveId);
+  const auto *object = project ? findObject(*project, objectId) : nullptr;
+  if (!project || (!objectId.isEmpty() && !object))
+    return false;
+  QString error;
+  if (!MemoryStore::append(*project, objectId, text, error)) {
+    emit operationError(error);
+    return false;
+  }
+  refreshMemory();
+  emit notice(QStringLiteral("记忆已保存到当前项目。"));
+  return true;
+}
+
+bool AgentController::transferMemory(const QString &projectId,
+                                     const QString &objectId,
+                                     const QString &path, bool importing) {
+  const auto *project = findProject(projectId);
+  const auto *object = project ? findObject(*project, objectId) : nullptr;
+  if (!object)
+    return false;
+  QString error;
+  const bool success =
+      importing ? ProjectStore::importMemory(*project, *object, path, error)
+                : ProjectStore::exportMemory(*project, *object, path, error);
+  if (!success) {
+    emit operationError(error);
+    return false;
+  }
+  refreshMemory();
+  emit notice(importing ? QStringLiteral("记忆已导入，重复记录已合并。")
+                        : QStringLiteral("记忆已导出。"));
+  return true;
+}
+} // namespace neverd::agent

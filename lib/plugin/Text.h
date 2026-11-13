@@ -15,6 +15,12 @@
 #include <string_view>
 
 namespace neverd::plugin::detail {
+inline size_t codePoints(std::string_view Text) {
+  size_t Count = 0;
+  for (unsigned char C : Text)
+    Count += (C & 0xc0) != 0x80;
+  return Count;
+}
 inline size_t textUnits(std::string_view Text) {
   size_t Units = 0;
   for (unsigned char C : Text)

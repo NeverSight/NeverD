@@ -89,6 +89,7 @@ jobs:
             -DNEVERD_ENGINE_LIBRARY="$GITHUB_WORKSPACE/build-fixture/bin/${{ matrix.library }}" \
             -DNEVERD_ENGINE_IMPLIB="$GITHUB_WORKSPACE/build-fixture/bin/neverd_fixture.lib" \
             -DNEVERD_GUI_CI_DIAGNOSTICS=${{ runner.os != 'Linux' && 'ON' || 'OFF' }} \
+            -DNEVERD_BUILD_AGENT=OFF \
             -DNEVERD_WORKER_REAL_ENGINE_TESTS=OFF
           python scripts/build.py build-gui --parallel 3
           cp "build-fixture/bin/${{ matrix.library }}" build-gui/bin/

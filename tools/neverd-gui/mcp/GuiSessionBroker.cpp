@@ -13,6 +13,7 @@
 #include <QRegularExpression>
 #include <QSet>
 #include <QTimer>
+#include <QUuid>
 #include <QtEndian>
 
 namespace {
@@ -24,7 +25,10 @@ const QSet<QString> ReadOperations{
     "call_paths", "call_tree", "search",  "resolve"};
 } // namespace
 
-GuiSessionBroker::GuiSessionBroker(QObject *parent) : QObject(parent) {
+GuiSessionBroker::GuiSessionBroker(QObject *parent)
+    : QObject(parent),
+      requestPrefix_("mcp-" + QUuid::createUuid().toString(QUuid::Id128) +
+                     '-') {
   setStatus(QT_TR_NOOP("Session sharing disabled"));
   connect(&server_, &QLocalServer::newConnection, this,
           &GuiSessionBroker::acceptClients);
@@ -288,7 +292,7 @@ void GuiSessionBroker::handle(QLocalSocket *socket,
       error(socket, id, "invalid_request", "Duplicate request id");
       return;
     }
-  const auto brokerId = "mcp-" + QString::number(++serial_);
+  const auto brokerId = requestPrefix_ + QString::number(++serial_);
   routes_.insert(brokerId, {socket, id, QDateTime::currentMSecsSinceEpoch()});
   ++clients_[socket].pending;
   emit queryRequested(brokerId, operation, payload, revision);

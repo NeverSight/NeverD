@@ -12,6 +12,7 @@
 #include "app/LinkOpener.h"
 #include "app/ListingView.h"
 #include "app/MainWindow.h"
+#include "app/PluginServices.h"
 #include "app/Session.h"
 #include "app/SettingsKeys.h"
 #include "app/StartupMetrics.h"
@@ -43,6 +44,17 @@
 using namespace neverd::gui;
 
 namespace {
+QString bundledAgentManifest() {
+#ifdef NEVERD_GUI_BUNDLES_AGENT
+  const QDir ProgramDirectory(QCoreApplication::applicationDirPath());
+  if (ProgramDirectory == QDir(QStringLiteral(NEVERD_GUI_BUILD_DIR)))
+    return QStringLiteral(NEVERD_BUNDLED_AGENT_BUILD_DIR "/plugin.json");
+  return QDir::cleanPath(ProgramDirectory.absoluteFilePath(
+      QStringLiteral(NEVERD_BUNDLED_AGENT_PACKAGE_DIR "/plugin.json")));
+#endif
+  return {};
+}
+
 // The second version: the first remembered windows that GNOME maximized
 // because they opened at nearly the size of the screen.
 constexpr char GeometryKey[] = "ui/geometry2";
@@ -346,7 +358,8 @@ int main(int argc, char **argv) {
   if (startupMetrics)
     startupMetrics->record("services_created_ms");
 
-  MainWindow window(session, mcp, broker);
+  const auto agentManifest = bundledAgentManifest();
+  MainWindow window(session, mcp, broker, agentManifest);
   for (const auto &path : parser.values(QStringLiteral("process-plugin"))) {
     QString error;
     if (!window.analysisPlugins()->installPlugin(
@@ -438,16 +451,23 @@ int main(int argc, char **argv) {
         parser.isSet(QStringLiteral("capture"))
             ? parser.value(QStringLiteral("capture-delay")).toInt() + 1000
             : SmokeDelayMs,
-        &app, [&window] {
+        &app, [&window, &session, &agentManifest] {
           auto *functions =
               window.findChild<QWidget *>(QStringLiteral("functionsList"));
           if (!functions || !functions->isVisible() ||
               functions->width() <= 0 || functions->height() <= 0) {
             qCritical("The default function window is not visible.");
             QCoreApplication::exit(3);
-          } else {
-            QCoreApplication::quit();
+            return;
           }
+          if (!agentManifest.isEmpty() &&
+              !session.pluginServices().jobs().catalog().component(
+                  "neverd.agent-ui")) {
+            qCritical("The bundled NeverD Agent plugin did not activate.");
+            QCoreApplication::exit(4);
+            return;
+          }
+          QCoreApplication::quit();
         });
   return app.exec();
 }

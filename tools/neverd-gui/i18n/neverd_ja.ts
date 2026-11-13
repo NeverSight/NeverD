@@ -10379,14 +10379,6 @@ Your previous graph is still available.</source>
         <translation>イメージにコードをインポート</translation>
     </message>
     <message>
-        <source>Import process plugin</source>
-        <translation>プロセスプラグインをインポート</translation>
-    </message>
-    <message>
-        <source>Import process plugin…</source>
-        <translation>プロセスプラグインをインポート…</translation>
-    </message>
-    <message>
         <source>Log for %1</source>
         <translation>%1 のログ</translation>
     </message>
@@ -10447,10 +10439,6 @@ Your previous graph is still available.</source>
         <translation>位置</translation>
     </message>
     <message>
-        <source>Process plugin imported: %1</source>
-        <translation>プロセスプラグインをインポートしました: %1</translation>
-    </message>
-    <message>
         <source>Progress</source>
         <translation>進捗</translation>
     </message>
@@ -10493,6 +10481,18 @@ Your previous graph is still available.</source>
     <message>
         <source>This action registration is no longer active.</source>
         <translation>このアクションの登録は無効になりました。</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>プラグインをインポート</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>プラグインをインポート…</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>プラグインをインポートしました：%1</translation>
     </message>
 </context>
 <context>
@@ -10558,16 +10558,8 @@ Your previous graph is still available.</source>
         <translation>ID: %1</translation>
     </message>
     <message>
-        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
-        <translation>プロセスプラグインのマニフェストをインポートしてコマンドを追加します。プロバイダーはコマンド実行時にのみ起動します。</translation>
-    </message>
-    <message>
         <source>Import plugin…</source>
         <translation>プラグインをインポート…</translation>
-    </message>
-    <message>
-        <source>Import process plugin</source>
-        <translation>プロセスプラグインをインポート</translation>
     </message>
     <message>
         <source>Inactive</source>
@@ -10580,10 +10572,6 @@ Your previous graph is still available.</source>
     <message>
         <source>Installation removed; active work is stopping.</source>
         <translation>インストール記録を削除しました。実行中の処理を停止しています。</translation>
-    </message>
-    <message>
-        <source>Installed process plugins</source>
-        <translation>インストール済みプロセスプラグイン</translation>
     </message>
     <message>
         <source>Manifest: %1</source>
@@ -10650,10 +10638,6 @@ Your previous graph is still available.</source>
         <translation>停止中</translation>
     </message>
     <message>
-        <source>Type: External process</source>
-        <translation>種類: 外部プロセス</translation>
-    </message>
-    <message>
         <source>Unavailable</source>
         <translation>使用不可</translation>
     </message>
@@ -10676,6 +10660,42 @@ Your previous graph is still available.</source>
     <message>
         <source>Yes</source>
         <translation>はい</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>プラグインをインポート</translation>
+    </message>
+    <message>
+        <source>External process</source>
+        <translation>外部プロセス</translation>
+    </message>
+    <message>
+        <source>Import a plugin manifest to add workbench commands or views.</source>
+        <translation>プラグインマニフェストをインポートしてワークベンチにコマンドやビューを追加します。</translation>
+    </message>
+    <message>
+        <source>Installed plugins</source>
+        <translation>インストール済みプラグイン</translation>
+    </message>
+    <message>
+        <source>Native GUI</source>
+        <translation>ネイティブ GUI</translation>
+    </message>
+    <message>
+        <source>Source: Bundled with NeverD</source>
+        <translation>提供元：NeverD に同梱</translation>
+    </message>
+    <message>
+        <source>This plugin ships with NeverD. Use Disable to turn it off.</source>
+        <translation>このプラグインは NeverD に同梱されています。「無効化」で停止できます。</translation>
+    </message>
+    <message>
+        <source>Type: %1</source>
+        <translation>種類：%1</translation>
+    </message>
+    <message>
+        <source>Unknown</source>
+        <translation>不明</translation>
     </message>
 </context>
 <context>
@@ -10854,6 +10874,48 @@ Your previous graph is still available.</source>
     <message>
         <source>Close Tab</source>
         <translation>タブを閉じる</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost</name>
+    <message>
+        <source>The GUI module failed during activation.</source>
+        <translation>GUI モジュールの有効化中にエラーが発生しました。</translation>
+    </message>
+    <message>
+        <source>The GUI module failed to activate.</source>
+        <translation>GUI モジュールを有効化できませんでした。</translation>
+    </message>
+    <message>
+        <source>The GUI module is missing or outside the package: %1</source>
+        <translation>GUI モジュールが見つからないか、パッケージの外にあります：%1</translation>
+    </message>
+    <message>
+        <source>The module does not provide the required GUI interface.</source>
+        <translation>必要な GUI インターフェースがモジュールにありません。</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost::Binding</name>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin menu action: %1</source>
+        <translation>プラグインのメニュー操作が無効、重複、または利用不可です：%1</translation>
+    </message>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin view: %1</source>
+        <translation>プラグインビューが無効、重複、または利用不可です：%1</translation>
+    </message>
+    <message>
+        <source>The analysis session has changed.</source>
+        <translation>解析セッションが変更されました。</translation>
+    </message>
+    <message>
+        <source>The menu action factory must use the supplied parent.</source>
+        <translation>メニュー操作のファクトリは指定された親を使用する必要があります。</translation>
+    </message>
+    <message>
+        <source>The view factory must create a workbench child widget.</source>
+        <translation>ビューのファクトリはワークベンチの子ウィジェットを作成する必要があります。</translation>
     </message>
 </context>
 </TS>

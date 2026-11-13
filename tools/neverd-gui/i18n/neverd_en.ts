@@ -10415,14 +10415,6 @@ Your previous graph is still available.</translation>
         <translation>Import code into image</translation>
     </message>
     <message>
-        <source>Import process plugin</source>
-        <translation>Import process plugin</translation>
-    </message>
-    <message>
-        <source>Import process plugin…</source>
-        <translation>Import process plugin…</translation>
-    </message>
-    <message>
         <source>Log for %1</source>
         <translation>Log for %1</translation>
     </message>
@@ -10483,10 +10475,6 @@ Your previous graph is still available.</translation>
         <translation>Position</translation>
     </message>
     <message>
-        <source>Process plugin imported: %1</source>
-        <translation>Process plugin imported: %1</translation>
-    </message>
-    <message>
         <source>Progress</source>
         <translation>Progress</translation>
     </message>
@@ -10529,6 +10517,18 @@ Your previous graph is still available.</translation>
     <message>
         <source>This action registration is no longer active.</source>
         <translation>This action registration is no longer active.</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>Import plugin</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>Import plugin…</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>Plugin imported: %1</translation>
     </message>
 </context>
 <context>
@@ -10594,16 +10594,8 @@ Your previous graph is still available.</translation>
         <translation>ID: %1</translation>
     </message>
     <message>
-        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
-        <translation>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</translation>
-    </message>
-    <message>
         <source>Import plugin…</source>
         <translation>Import plugin…</translation>
-    </message>
-    <message>
-        <source>Import process plugin</source>
-        <translation>Import process plugin</translation>
     </message>
     <message>
         <source>Inactive</source>
@@ -10616,10 +10608,6 @@ Your previous graph is still available.</translation>
     <message>
         <source>Installation removed; active work is stopping.</source>
         <translation>Installation removed; active work is stopping.</translation>
-    </message>
-    <message>
-        <source>Installed process plugins</source>
-        <translation>Installed process plugins</translation>
     </message>
     <message>
         <source>Manifest: %1</source>
@@ -10686,10 +10674,6 @@ Your previous graph is still available.</translation>
         <translation>Stopping</translation>
     </message>
     <message>
-        <source>Type: External process</source>
-        <translation>Type: External process</translation>
-    </message>
-    <message>
         <source>Unavailable</source>
         <translation>Unavailable</translation>
     </message>
@@ -10712,6 +10696,42 @@ Your previous graph is still available.</translation>
     <message>
         <source>Yes</source>
         <translation>Yes</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>Import plugin</translation>
+    </message>
+    <message>
+        <source>External process</source>
+        <translation>External process</translation>
+    </message>
+    <message>
+        <source>Import a plugin manifest to add workbench commands or views.</source>
+        <translation>Import a plugin manifest to add workbench commands or views.</translation>
+    </message>
+    <message>
+        <source>Installed plugins</source>
+        <translation>Installed plugins</translation>
+    </message>
+    <message>
+        <source>Native GUI</source>
+        <translation>Native GUI</translation>
+    </message>
+    <message>
+        <source>Source: Bundled with NeverD</source>
+        <translation>Source: Bundled with NeverD</translation>
+    </message>
+    <message>
+        <source>This plugin ships with NeverD. Use Disable to turn it off.</source>
+        <translation>This plugin ships with NeverD. Use Disable to turn it off.</translation>
+    </message>
+    <message>
+        <source>Type: %1</source>
+        <translation>Type: %1</translation>
+    </message>
+    <message>
+        <source>Unknown</source>
+        <translation>Unknown</translation>
     </message>
 </context>
 <context>
@@ -10890,6 +10910,48 @@ Your previous graph is still available.</translation>
     <message>
         <source>Close Tab</source>
         <translation>Close Tab</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost</name>
+    <message>
+        <source>The GUI module failed during activation.</source>
+        <translation>The GUI module failed during activation.</translation>
+    </message>
+    <message>
+        <source>The GUI module failed to activate.</source>
+        <translation>The GUI module failed to activate.</translation>
+    </message>
+    <message>
+        <source>The GUI module is missing or outside the package: %1</source>
+        <translation>The GUI module is missing or outside the package: %1</translation>
+    </message>
+    <message>
+        <source>The module does not provide the required GUI interface.</source>
+        <translation>The module does not provide the required GUI interface.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost::Binding</name>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin menu action: %1</source>
+        <translation>Invalid, duplicate or unavailable plugin menu action: %1</translation>
+    </message>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin view: %1</source>
+        <translation>Invalid, duplicate or unavailable plugin view: %1</translation>
+    </message>
+    <message>
+        <source>The analysis session has changed.</source>
+        <translation>The analysis session has changed.</translation>
+    </message>
+    <message>
+        <source>The menu action factory must use the supplied parent.</source>
+        <translation>The menu action factory must use the supplied parent.</translation>
+    </message>
+    <message>
+        <source>The view factory must create a workbench child widget.</source>
+        <translation>The view factory must create a workbench child widget.</translation>
     </message>
 </context>
 </TS>

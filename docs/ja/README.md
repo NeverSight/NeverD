@@ -1,6 +1,6 @@
 **Languages**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 064a675b88d7887beb6eb1c62907468231caafde8b4f397b3f3ad6cb75e9c8bd -->
+<!-- i18n-source: 18b62c3b19d3e711366b54814bdb5d890bb3b16e26c208238f5e2e54b299469f -->
 
 [← NeverD プロジェクト](project.md)
 
@@ -27,6 +27,7 @@
 | [MIPS 解析（英語）](../mips.md) | MIPS32/64 ELF プロファイル、遅延スロット、整数 ABI、検証、TP-Link ファームウェアの例 |
 | [テスト](testing.md) | テストスイート、生成 fixture、Unicorn ラウンドトリップ、増分コマンド |
 | [デスクトップワークベンチ (英語)](../gui.md) | 従来の逆アセンブラ風レイアウト、独立ワーカー、プロジェクトデータベース、多言語対応、MCP 接続 |
+| [NeverD Agent](../../tools/neverd-agent/README.md) | プロジェクト会話、モデルプロトコル、解析の委任、移植可能なメモリと GUI チャットプラグイン |
 | [解析イメージのセクション（英語）](../analysis-sections.md) | C ABI、ワーカー、CLI、ワークベンチによるコードとデータの追加、ネイティブ表示とプロジェクトへの保存 |
 | [ライブラリ認識（英語）](../library-recognition.md) | 証拠に基づく STL、ATL/MFC、COM、libc の識別、プロファイル、元に戻せる C コードの折りたたみ |
 | [デスクトップ検証記録 (英語)](../gui-qualification.md) | GUI の実測証拠、パッケージの境界、残るプラットフォーム検証 |

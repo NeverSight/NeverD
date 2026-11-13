@@ -1,6 +1,6 @@
 **Lingue**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 064a675b88d7887beb6eb1c62907468231caafde8b4f397b3f3ad6cb75e9c8bd -->
+<!-- i18n-source: 18b62c3b19d3e711366b54814bdb5d890bb3b16e26c208238f5e2e54b299469f -->
 
 [← Progetto NeverD](project.md)
 
@@ -27,6 +27,7 @@ Le guide inglesi sono direttamente in `docs/`. Le traduzioni sono raggruppate in
 | [Analisi MIPS (inglese)](../mips.md) | Profili ELF MIPS32/64, delay slot, ABI intero, validazione ed esempio firmware TP-Link |
 | [Test](testing.md) | Suite, fixture generate, roundtrip Unicorn e comandi incrementali |
 | [Ambiente desktop (inglese)](../gui.md) | Disposizione da disassemblatore classico, worker separato, database di progetto, localizzazione e connessioni MCP |
+| [NeverD Agent](../../tools/neverd-agent/README.md) | Conversazioni di progetto, protocolli dei modelli, analisi delegata, memoria portabile e plugin di chat GUI |
 | [Sezioni dell’immagine di analisi (inglese)](../analysis-sections.md) | Aggiunta di codice e dati materializzati tramite ABI C, worker, CLI e ambiente di lavoro; viste native e persistenza del progetto |
 | [Riconoscimento delle librerie (inglese)](../library-recognition.md) | Identità STL, ATL/MFC, COM e libc con evidenze, profili e compressione reversibile del codice C |
 | [Validazione del desktop (inglese)](../gui-qualification.md) | Misure GUI, limiti del packaging e validazione delle piattaforme ancora necessaria |

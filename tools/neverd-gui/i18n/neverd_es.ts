@@ -10415,14 +10415,6 @@ Su grafo anterior sigue disponible.</translation>
         <translation>Importar código a la imagen</translation>
     </message>
     <message>
-        <source>Import process plugin</source>
-        <translation>Importar plugin de proceso</translation>
-    </message>
-    <message>
-        <source>Import process plugin…</source>
-        <translation>Importar plugin de proceso…</translation>
-    </message>
-    <message>
         <source>Log for %1</source>
         <translation>Registro de %1</translation>
     </message>
@@ -10483,10 +10475,6 @@ Su grafo anterior sigue disponible.</translation>
         <translation>Posición</translation>
     </message>
     <message>
-        <source>Process plugin imported: %1</source>
-        <translation>Plugin de proceso importado: %1</translation>
-    </message>
-    <message>
         <source>Progress</source>
         <translation>Progreso</translation>
     </message>
@@ -10529,6 +10517,18 @@ Su grafo anterior sigue disponible.</translation>
     <message>
         <source>This action registration is no longer active.</source>
         <translation>El registro de esta acción ya no está activo.</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>Importar plugin</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>Importar plugin…</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>Plugin importado: %1</translation>
     </message>
 </context>
 <context>
@@ -10594,16 +10594,8 @@ Su grafo anterior sigue disponible.</translation>
         <translation>ID: %1</translation>
     </message>
     <message>
-        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
-        <translation>Importe un manifiesto de plugin de proceso para añadir comandos. Los proveedores solo se inician al ejecutar un comando.</translation>
-    </message>
-    <message>
         <source>Import plugin…</source>
         <translation>Importar plugin…</translation>
-    </message>
-    <message>
-        <source>Import process plugin</source>
-        <translation>Importar plugin de proceso</translation>
     </message>
     <message>
         <source>Inactive</source>
@@ -10616,10 +10608,6 @@ Su grafo anterior sigue disponible.</translation>
     <message>
         <source>Installation removed; active work is stopping.</source>
         <translation>Instalación eliminada; se están deteniendo las tareas activas.</translation>
-    </message>
-    <message>
-        <source>Installed process plugins</source>
-        <translation>Plugins de proceso instalados</translation>
     </message>
     <message>
         <source>Manifest: %1</source>
@@ -10686,10 +10674,6 @@ Su grafo anterior sigue disponible.</translation>
         <translation>Deteniendo</translation>
     </message>
     <message>
-        <source>Type: External process</source>
-        <translation>Tipo: proceso externo</translation>
-    </message>
-    <message>
         <source>Unavailable</source>
         <translation>No disponible</translation>
     </message>
@@ -10712,6 +10696,42 @@ Su grafo anterior sigue disponible.</translation>
     <message>
         <source>Yes</source>
         <translation>Sí</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>Importar plugin</translation>
+    </message>
+    <message>
+        <source>External process</source>
+        <translation>Proceso externo</translation>
+    </message>
+    <message>
+        <source>Import a plugin manifest to add workbench commands or views.</source>
+        <translation>Importe un manifiesto de plugin para añadir comandos o vistas al entorno de trabajo.</translation>
+    </message>
+    <message>
+        <source>Installed plugins</source>
+        <translation>Plugins instalados</translation>
+    </message>
+    <message>
+        <source>Native GUI</source>
+        <translation>Interfaz gráfica nativa</translation>
+    </message>
+    <message>
+        <source>Source: Bundled with NeverD</source>
+        <translation>Origen: incluido con NeverD</translation>
+    </message>
+    <message>
+        <source>This plugin ships with NeverD. Use Disable to turn it off.</source>
+        <translation>Este plugin se incluye con NeverD. Utilice Desactivar para deshabilitarlo.</translation>
+    </message>
+    <message>
+        <source>Type: %1</source>
+        <translation>Tipo: %1</translation>
+    </message>
+    <message>
+        <source>Unknown</source>
+        <translation>Desconocido</translation>
     </message>
 </context>
 <context>
@@ -10890,6 +10910,48 @@ Su grafo anterior sigue disponible.</translation>
     <message>
         <source>Close Tab</source>
         <translation>Cerrar pestaña</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost</name>
+    <message>
+        <source>The GUI module failed during activation.</source>
+        <translation>El módulo de interfaz falló durante la activación.</translation>
+    </message>
+    <message>
+        <source>The GUI module failed to activate.</source>
+        <translation>No se pudo activar el módulo de interfaz.</translation>
+    </message>
+    <message>
+        <source>The GUI module is missing or outside the package: %1</source>
+        <translation>El módulo de interfaz falta o está fuera del paquete: %1</translation>
+    </message>
+    <message>
+        <source>The module does not provide the required GUI interface.</source>
+        <translation>El módulo no proporciona la interfaz gráfica requerida.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost::Binding</name>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin menu action: %1</source>
+        <translation>Acción de menú del plugin no válida, duplicada o no disponible: %1</translation>
+    </message>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin view: %1</source>
+        <translation>Vista del plugin no válida, duplicada o no disponible: %1</translation>
+    </message>
+    <message>
+        <source>The analysis session has changed.</source>
+        <translation>La sesión de análisis ha cambiado.</translation>
+    </message>
+    <message>
+        <source>The menu action factory must use the supplied parent.</source>
+        <translation>La fábrica de acciones de menú debe utilizar el objeto padre proporcionado.</translation>
+    </message>
+    <message>
+        <source>The view factory must create a workbench child widget.</source>
+        <translation>La fábrica de vistas debe crear un widget hijo del entorno de trabajo.</translation>
     </message>
 </context>
 </TS>

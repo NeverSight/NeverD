@@ -1,0 +1,12 @@
+{
+  "schema": "neverd.plugin-package.v2",
+  "id": "neverd.agent-ui",
+  "name": "NeverD Agent",
+  "version": "0.1.5",
+  "components": [{
+    "id": "floating-chat",
+    "kind": "gui-native",
+    "interface": "neverd.gui-ui.v1",
+    "entry": {"library": "$<TARGET_FILE_NAME:neverd-agent-ui>"}
+  }]
+}

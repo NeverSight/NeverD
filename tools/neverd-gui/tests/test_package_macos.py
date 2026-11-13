@@ -1,5 +1,6 @@
 """Pure-file tests; importing the helper does not run packaging commands."""
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -138,6 +139,28 @@ class SqlDriverDeploymentTests(unittest.TestCase):
                     PACKAGE.validate_and_prune_sql_drivers(bundle)
                 self.assertTrue(marker.is_dir())
                 self.assertFalse((bundle / "Contents/PlugIns/sqldrivers").exists())
+
+
+class AgentBundleInputsTests(unittest.TestCase):
+    def test_build_option_selects_the_bundled_agent(self):
+        with tempfile.TemporaryDirectory() as root:
+            build = Path(root) / "build"
+            bundle = Path(root) / "NeverD.app"
+            cache = build / "CMakeCache.txt"
+            manifest = build / "agent-ui/plugin.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(json.dumps({"components": [
+                {"entry": {"library": "libneverd-agent-ui.so"}}
+            ]}), encoding="utf-8")
+            cache.write_text("NEVERD_BUILD_AGENT:BOOL=OFF\n", encoding="utf-8")
+            self.assertEqual(PACKAGE.agent_inputs(build, bundle), [])
+            cache.write_text("NEVERD_BUILD_AGENT:BOOL=ON\n", encoding="utf-8")
+            inputs = PACKAGE.agent_inputs(build, bundle)
+            self.assertEqual([path.relative_to(bundle).as_posix() for _, _, path in inputs], [
+                "Contents/MacOS/neverd-agent-cli",
+                "Contents/PlugIns/neverd-agent-ui/plugin.json",
+                "Contents/PlugIns/neverd-agent-ui/libneverd-agent-ui.so",
+            ])
 
 
 class HypervisorSigningTests(unittest.TestCase):

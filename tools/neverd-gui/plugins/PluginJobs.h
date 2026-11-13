@@ -56,6 +56,10 @@ public:
   std::optional<PluginJob> job(const QString &id) const;
   void setContext(QJsonObject context);
   QJsonObject context() const { return context_; }
+  void setGuiActivator(neverd::plugin::PluginCatalog::ActivateGui activate) {
+    activateGui_ = std::move(activate);
+  }
+  void drainClosures() { control_->drain(); }
   QString
   start(const QString &plugin, const QString &action,
         const QJsonObject &parameters, QString &error,
@@ -88,6 +92,7 @@ signals:
   void installationRecordChanged(const QString &id);
   void pluginsChanged();
   void componentBound(const QString &id);
+  void contextChanged(const QJsonObject &context);
   void jobsChanged();
   void logMessage(const QString &task, const QString &message, int level);
   void queryRequested(const QString &task, const QString &id,
@@ -110,6 +115,7 @@ private:
   std::unique_ptr<neverd::plugin::HostServices> capabilities_;
   std::unique_ptr<neverd::plugin::ProcessActions> processes_;
   std::unique_ptr<neverd::plugin::PluginCatalog> catalog_;
+  neverd::plugin::PluginCatalog::ActivateGui activateGui_;
   neverd::plugin::Owner projectOwner_;
   QHash<QString, std::shared_ptr<neverd::plugin::ActionCall>> calls_;
   QHash<QString, QHash<QString, std::function<void(neverd::plugin::Json)>>>

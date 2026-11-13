@@ -31,6 +31,20 @@ Create a manifest with an explicit executable/argument list, declare actions
 and queries, and import it through **Plugins → Import process plugin…**.
 Other languages can implement the same framed protocol directly.
 
+String parameter declarations can include `maxLength` (0–262144 Unicode code
+points). The host validates the default and each invocation against that bound,
+and publishes it in tool input schemas. Omitting it preserves the v1 limit of
+4096 UTF-16 code units. Parameter titles also become schema descriptions. Use an
+explicit larger bound for report text or other multiline inputs; do not assume
+that a model consumer knows hidden host limits.
+
+Programmatic NPH actions can additionally declare `type: "object"` with an
+object default for service-owned structured payloads. Process-plugin v1
+manifests keep scalar form fields and reject this type. Result schemas support
+explicit `additionalProperties: true` for heterogeneous payloads; closed
+schemas retain rejection of unknown fields. `maxLength` and validated `default`
+annotations are supported by the shared schema validator.
+
 `Task` exposes captured `context`, validated `parameters`, `action`, `id`,
 `output_dir`, `progress`, `log`, `query` and `artifact`. `run` implements the
 handshake, one invocation, one result and error reporting. Do not print to

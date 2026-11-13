@@ -1,6 +1,6 @@
 **语言**: [English](../README.md) | [简体中文](README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](../de/README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 064a675b88d7887beb6eb1c62907468231caafde8b4f397b3f3ad6cb75e9c8bd -->
+<!-- i18n-source: 18b62c3b19d3e711366b54814bdb5d890bb3b16e26c208238f5e2e54b299469f -->
 
 [← NeverD 项目](project.md)
 
@@ -27,6 +27,7 @@
 | [MIPS 分析（英文）](../mips.md) | MIPS32/64 ELF 配置、延迟槽、整数 ABI、验证与 TP-Link 固件示例 |
 | [测试](testing.md) | 测试套件、生成 fixture、Unicorn 往返与增量命令 |
 | [桌面工作台 (英文)](../gui.md) | 经典反汇编器布局、独立工作进程、项目数据库、本地化和 MCP 连接 |
+| [NeverD Agent](../../tools/neverd-agent/README.md) | 项目对话、模型协议、委派分析、可移植记忆与 GUI 聊天插件 |
 | [分析镜像节区（英文）](../analysis-sections.md) | 通过 C ABI、工作进程、CLI 和工作台添加已物化的代码与数据；原生视图和项目持久化 |
 | [库识别（英文）](../library-recognition.md) | 基于证据的 STL、ATL/MFC、COM 和 libc 身份、配置与可恢复的 C 源码折叠 |
 | [桌面验收记录 (英文)](../gui-qualification.md) | 已测量的 GUI 证据、打包边界及尚未完成的平台验收 |

@@ -32,6 +32,7 @@ struct InstallationSnapshot {
   std::vector<Diagnostic> CleanupErrors;
   std::optional<OwnerSnapshot> Component;
   bool Installed = true;
+  bool Bundled = false;
 };
 
 struct ProcessActionContribution {
@@ -46,8 +47,8 @@ struct CatalogChange {
 };
 
 /// Consumers persist records and render snapshots; activation, retirement and
-/// exact action bindings have one owner here. This catalog manages v1 process
-/// plugins and does not load native modules or install package files.
+/// exact bindings have one owner here. GUI modules are activated by an adapter;
+/// the catalog itself neither loads libraries nor installs package files.
 class PluginCatalog {
   struct Impl;
   std::shared_ptr<Impl> State;
@@ -55,18 +56,24 @@ class PluginCatalog {
 public:
   using Changed = std::function<void(const CatalogChange &)>;
   using Bound = std::function<void(const std::string &)>;
+  using ActivateGui =
+      std::function<bool(Owner, const Manifest &, Diagnostic &)>;
   /// Additional projections register against the same staged action tokens.
   using Contributions = std::function<bool(
       Owner, const std::map<std::string, Registration> &, Diagnostic &)>;
   PluginCatalog(PluginHost &Host, ProcessActions &Processes, Owner Project,
-                Changed Notify = {}, Bound Activated = {});
+                Changed Notify = {}, Bound Activated = {},
+                ActivateGui Gui = {});
   ~PluginCatalog();
   PluginCatalog(const PluginCatalog &) = delete;
   PluginCatalog &operator=(const PluginCatalog &) = delete;
   /// Replaces an empty catalog from saved intent. Missing manifests remain
   /// visible with diagnostics. Invalid record sets change no registration.
+  /// Bundled records come from the host distribution. They have unique IDs and
+  /// do not consume slots reserved for user installations.
   bool restore(const std::vector<InstallationRecord> &Records,
-               Diagnostic &Error);
+               Diagnostic &Error,
+               const std::vector<InstallationRecord> &Bundled = {});
   bool install(const std::filesystem::path &Path, Diagnostic &Error,
                std::vector<ProcessActionContribution> Actions = {},
                Contributions Register = {});
@@ -80,6 +87,7 @@ public:
   /// Rebind enabled declarations to a new project owner without rereading
   /// files.
   void setProject(Owner Project);
+  /// User installations that can be written to the persistent catalog.
   std::vector<InstallationRecord> records() const;
   std::vector<InstallationSnapshot> snapshots() const;
   std::optional<InstallationSnapshot> snapshot(const std::string &Id) const;

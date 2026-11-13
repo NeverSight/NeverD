@@ -1,5 +1,21 @@
 # Desktop distribution
 
+GUI, Agent and their analysis helpers belong to one installed desktop product.
+The GUI's standalone build and the repository build with GUI enabled include
+Agent by default. The `neverd-desktop` target builds GUI, Agent when enabled,
+worker, MCP, the plugin-host CLI and the engine CLI when available. One install puts
+the Windows/Linux executables together in `<prefix>/bin`, sharing the selected
+Qt runtime and plugins. Agent stays a separate executable and does not link the
+GUI or analysis engine.
+
+Agent-enabled installs include `bin/neverd-agent-cli`, which serves both the
+standalone Agent window and the native chat plugin. On Windows and Linux the
+plugin module and `plugin.json` are in `bin/plugins/neverd-agent-ui/`. The
+workbench resolves `plugins/` beside its executable. On macOS the package is in the
+workbench bundle's `Contents/PlugIns/neverd-agent-ui/`. The workbench registers
+and enables the bundled package on first use. The plugin manager can disable
+it and retains that preference when the installation moves or is upgraded.
+
 NeverD embeds zlib and its core acceleration libraries. The CLI, worker and MCP
 server share `libneverd`; Qt libraries and required plugins ship dynamically
 beside the desktop application. A prebuilt Qt library can depend on its own
@@ -27,13 +43,26 @@ cmake -S tools/neverd-gui -B build-gui -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/path/to/Qt/kit \
   -DNEVERD_ENGINE_LIBRARY=/path/to/core/bin/libneverd.so \
   -DNEVERD_DESKTOP_CLI=/path/to/core/bin/neverd
-python3 scripts/build.py build-gui --target neverd-gui neverd-worker neverd-mcp
+python3 scripts/build.py build-gui --target neverd-desktop --parallel 4
 cmake --install build-gui --prefix "$PWD/build-gui/dist/NeverD"
 ```
 
 Use the platform's engine/CLI filenames on Windows. Multi-config generators
 also require `--config Release` for both build and installation. Build the
 engine with `NEVERD_ENABLE_PYTHON_PLUGINS=OFF` for a package without Python.
+For a Python-enabled Windows engine, set `NEVERD_DESKTOP_PYTHON_RUNTIME` to
+the extracted official CPython embeddable distribution matching that engine's
+Python version and architecture. Installation includes its DLLs, standard-library
+archive, native extension modules, path configuration and license; the runtime
+audit also checks the extension modules. The embedded runtime does not replace
+the separately configured interpreter for process plugins. An unresolved Python
+runtime dependency stops packaging. MSVC builds install the selected compiler's
+redistributable libraries; the Python archive's bundled older VC runtime does
+not overwrite them.
+Agent additionally needs Qt Quick, QuickControls2 and its platform credential
+dependencies listed in the [Agent build guide](../neverd-agent/README.md#build-and-run).
+Pass `NEVERD_BUILD_AGENT=OFF` for a workbench-only desktop product;
+the enabled component set determines the install and runtime audit.
 
 Linux deployment requires `patchelf`. Libraries and plugins receive paths
 relative to the installed package. Original absolute paths and build-relative
@@ -88,10 +117,16 @@ the platform's signing and release qualification process.
 
 ## macOS development bundle
 
+A joint CMake install with Agent enabled places `neverd-agent.app` and
+`neverd-gui.app` under the same prefix, with helpers in `bin` and the chat
+plugin inside the workbench bundle. The helper below produces the separate
+`NeverD.app` bundle. For an Agent-enabled build it includes the chat plugin and
+Agent CLI in the bundle. Place the separately deployed `neverd-agent.app`
+beside `NeverD.app` to open model settings from the chat panel. Each application
+has its own bundle-local Qt deployment and requires native qualification.
+
 Build the GUI and worker in the same configuration as the selected engine, then
 run the packaging helper on macOS. The output path must not already exist.
-The helper reads the GUI from CMake's `bin/neverd-gui.app` bundle when present;
-older builds with a plain `bin/neverd-gui` executable remain supported.
 
 ```sh
 python3 tools/neverd-gui/package_macos.py \

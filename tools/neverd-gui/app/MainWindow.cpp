@@ -20,6 +20,7 @@
 #include "FunctionEditDialog.h"
 #include "GnomeWindowEdges.h"
 #include "GraphView.h"
+#include "GuiPluginUiHost.h"
 #include "HexView.h"
 #include "HighlightLocks.h"
 #include "Icons.h"
@@ -39,6 +40,7 @@
 #include "PathfinderView.h"
 #include "PdbPromptDialog.h"
 #include "PluginManagerDialog.h"
+#include "PluginServices.h"
 #include "ProjectDatabase.h"
 #include "QuickStartDialog.h"
 #include "Resolve.h"
@@ -354,7 +356,8 @@ protected:
 } // namespace
 
 MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
-                       GuiSessionBroker &broker)
+                       GuiSessionBroker &broker,
+                       const QString &bundledAgentManifest)
     : KDDockWidgets::QtWidgets::MainWindow(QStringLiteral("NeverDMainWindow")),
       session_(session), mcp_(mcp), broker_(broker), actions_(this) {
   instance_ = this;
@@ -367,8 +370,28 @@ MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
   qApp->installEventFilter(this);
   buildMenusAndToolbars();
   buildDocks();
-  plugins_ = new AnalysisPlugins(session_, actions_);
-  plugins_->setSelectionProvider([this] {
+  pluginUi_ = new GuiPluginUiHost(
+      *this, session_,
+      [this] {
+        const auto *center = centralWidget();
+        return center ? QRect(center->mapTo(this, QPoint{}), center->size())
+                      : contentsRect();
+      },
+      [this](const QString &address) {
+        if (const auto parsed = parseAddress(address))
+          navigate(*parsed);
+      });
+  plugins_ = new AnalysisPlugins(session_, actions_, nullptr,
+                                 bundledAgentManifest, pluginUi_);
+  plugins_->setSelectionProvider([this, last = QJsonObject{},
+                                  epoch = quint64{}]() mutable {
+    if (epoch != session_.epoch()) {
+      epoch = session_.epoch();
+      last = {};
+    }
+    if (pluginUi_ && pluginUi_->contains(commandFocusWidget()) &&
+        !last.isEmpty())
+      return last;
     QJsonObject selection;
     auto address = currentAddress();
     auto function = currentFunction();
@@ -397,6 +420,7 @@ MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
     selection.insert(
         "selection_text",
         text.left(::neverd::limits::gui::plugin::kMaxSelectionCharacters));
+    last = selection;
     return selection;
   });
   auto *pluginDock =
@@ -446,7 +470,15 @@ MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
   connect(&focusSequenceTimer_, &QTimer::timeout, this,
           &MainWindow::resetFocusSequence);
   connect(qApp, &QApplication::focusChanged, this,
-          [this] { resetFocusSequence(); });
+          [this](QWidget *previous, QWidget *current) {
+            resetFocusSequence();
+            if (!previous || !pluginUi_ || pluginUi_->contains(previous) ||
+                !pluginUi_->contains(current))
+              return;
+            QScopedValueRollback<QPointer<QWidget>> focus(contextMenuFocus_,
+                                                          previous);
+            session_.pluginServices().refreshContext();
+          });
   // Other programs find this window and open links in it, as in IDA 9.4.
   instances_.setInfo([this] { return instanceInfo(); });
   const auto comeToFront = [this] {
@@ -652,6 +684,7 @@ MainWindow::~MainWindow() {
   // notifications refresh that context: it must not reach a view being
   // destroyed.
   plugins_->setSelectionProvider({});
+  delete std::exchange(pluginUi_, nullptr);
   qApp->removeEventFilter(this);
   // The startup greeting has no widget parent: it is the application's only
   // visible window until a start is chosen.

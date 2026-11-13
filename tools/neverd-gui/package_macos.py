@@ -273,6 +273,28 @@ def copy_notices(bundle: Path, source: Path, origins: set[Path], qt_version: str
 ENGINE_HOSTS = ("neverd-worker", "neverd-mcp")
 
 
+def agent_inputs(build: Path, bundle: Path) -> list[tuple[str, Path, Path]]:
+    """Resolve the Agent artifacts from an enabled desktop build."""
+    cache = build / "CMakeCache.txt"
+    if not cache.is_file() or not re.search(
+            r"^NEVERD_BUILD_AGENT:BOOL=(?:ON|TRUE|1)$",
+            cache.read_text(encoding="utf-8"), flags=re.MULTILINE | re.IGNORECASE):
+        return []
+    package = build / "agent-ui"
+    manifest = package / "plugin.json"
+    declaration = json.loads(manifest.read_text(encoding="utf-8"))
+    library = declaration["components"][0]["entry"]["library"]
+    if not library or Path(library).name != library or library in (".", ".."):
+        raise RuntimeError("Invalid bundled Agent module filename")
+    directory = bundle / "Contents/PlugIns/neverd-agent-ui"
+    return [
+        ("neverd-agent-cli", build / "bin/neverd-agent-cli",
+         bundle / "Contents/MacOS/neverd-agent-cli"),
+        ("Agent plugin manifest", manifest, directory / manifest.name),
+        ("Agent GUI module", package / library, directory / library),
+    ]
+
+
 def sign_bundle(bundle: Path, entitlements: Path) -> None:
     """Sign leaves, retain the engine hosts' HVF entitlement, then audit it."""
     hosts = [bundle / "Contents/MacOS" / name for name in ENGINE_HOSTS]
@@ -306,6 +328,7 @@ def main() -> None:
         parser.error("--output must be a new .app path")
     source = Path(__file__).resolve().parent
     macos, frameworks, resources = (bundle / "Contents" / name for name in ("MacOS", "Frameworks", "Resources"))
+    agent = agent_inputs(args.build_dir, bundle)
     for directory in (macos, frameworks, resources):
         directory.mkdir(parents=True)
     executables = {name: args.build_dir / "bin" / name
@@ -315,7 +338,9 @@ def main() -> None:
         executables["neverd-gui"] = gui_bundle_binary
     inputs = [(name, origin, macos / name) for name, origin in executables.items()]
     inputs.append(("libneverd.dylib", args.engine, frameworks / "libneverd.dylib"))
+    inputs.extend(agent)
     for name, origin, copied in inputs:
+        copied.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(origin, copied)
     build_inputs = [{"name": name, "source": str(origin.resolve()),
                      "sha256": hashlib.sha256(copied.read_bytes()).hexdigest()}
@@ -346,8 +371,11 @@ def main() -> None:
     repair_dependencies(bundle, args.qt_dir, origins)
     # Qt 6.8 does not support -no-codesign. Any deployment-time signatures
     # are regenerated after dependency repairs by the signing steps below.
+    executables = [macos / host for host in ENGINE_HOSTS]
+    if agent:
+        executables.append(macos / "neverd-agent-cli")
     run(args.qt_dir / "bin/macdeployqt", bundle,
-        *("-executable=" + str(macos / host) for host in ENGINE_HOSTS), "-libpath=" + str(args.qt_dir / "lib"),
+        *("-executable=" + str(executable) for executable in executables), "-libpath=" + str(args.qt_dir / "lib"),
         "-libpath=" + str(frameworks))
     validate_and_prune_sql_drivers(bundle)
     repair_dependencies(bundle, args.qt_dir, origins)
