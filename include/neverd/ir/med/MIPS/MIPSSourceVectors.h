@@ -20,6 +20,7 @@
 
 namespace neverd {
 struct BinaryImage;
+class DebugContext;
 struct LowFunc;
 struct MedFunc;
 
@@ -41,7 +42,8 @@ const SourceCallTypeHint *mipsFloatingCallSite(
 /// live unpredictable bytes retain their diagnostic intrinsic.
 void discardUnobservedMIPSFPUpperBits(
     MedFunc &Function, Arch Target,
-    const std::map<va_t, FloatingCallArguments> &EntrySignatures);
+    const std::map<va_t, FloatingCallArguments> &EntrySignatures,
+    const DebugContext *Debug);
 
 } // namespace neverd
 

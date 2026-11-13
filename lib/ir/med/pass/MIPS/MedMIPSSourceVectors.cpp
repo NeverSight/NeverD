@@ -17,6 +17,7 @@
 #include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/med/MIPS/MIPSSourceVectors.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/libc/LibCFloatingArguments.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/BinaryImage.h"
 
@@ -205,22 +206,29 @@ void requireMIPSSourceVectors(
 
 void discardUnobservedMIPSFPUpperBits(
     MedFunc &Function, Arch Target,
-    const std::map<va_t, FloatingCallArguments> &EntrySignatures) {
+    const std::map<va_t, FloatingCallArguments> &EntrySignatures,
+    const DebugContext *Debug) {
   if (!isMIPS(Target) || Function.SkippedSSA)
     return;
+  // A selected leaf need not occur in the outgoing call inventory. Resolve
+  // its exact declaration even when it has no caller in this pipeline run.
+  const auto Known = EntrySignatures.find(Function.Entry);
+  std::optional<FloatingCallArguments> Local;
+  if (Known == EntrySignatures.end() && Debug)
+    if (const auto Symbol = Debug->resolveFunction(Function.Entry);
+        Symbol && Symbol->Addr == Function.Entry)
+      Local = libc::floatingCallArguments(*Symbol, Target, BinaryFormat::ELF);
+  const auto *Signature = Known != EntrySignatures.end() ? &Known->second
+                          : Local                        ? &*Local
+                                                         : nullptr;
   bool Declared = false;
-  if (const auto It = EntrySignatures.find(Function.Entry);
-      It != EntrySignatures.end() && !It->second.ReturnElements) {
-    // The declared scalar entry and its callers use the same classifier.
-    // Register-bundle inference must not turn a declared integer into a
-    // record, or a volatile scratch FPR into its return register.
-    if (auto Types = floatingCallTypes(Target, BinaryFormat::ELF, It->second)) {
+  if (Signature && !Signature->ReturnElements)
+    if (auto Types = floatingCallTypes(Target, BinaryFormat::ELF, *Signature)) {
       Declared = true;
       Function.ReturnType = Types->Result;
       Function.MultiReturn.clear();
       Function.ReturnsVectorRegister = false;
     }
-  }
   if (!Function.ReturnType || !Function.MultiReturn.empty())
     return;
   const bool Floating = Function.ReturnType->Kind == NdTypeKind::Float;

@@ -264,8 +264,8 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
       Found->second = nullptr;
   }
   for (auto &Function : Result.MedFuncs) {
-    discardUnobservedMIPSFPUpperBits(Function, Img.Arch,
-                                     Result.CallEntryFloatingArguments.get());
+    discardUnobservedMIPSFPUpperBits(
+        Function, Img.Arch, Result.CallEntryFloatingArguments.get(), Dbg);
     Function.FrameBytes.clear();
     if (const auto Original = OriginalFunctions.find(Function.Entry);
         !Function.AnalystStackFrame && Original != OriginalFunctions.end() &&
