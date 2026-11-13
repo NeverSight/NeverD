@@ -538,6 +538,27 @@ void setClipboard(const QString &text) {
 }
 } // namespace
 
+/// Whether \p code shows a text the worker gave and waits for none.  A view
+/// that shows a function's new name ahead of the worker's answer is not
+/// loading yet, and reads its pages again once the answer is there: what a
+/// test does to the text meanwhile, it would do to a text about to be read
+/// again.
+bool settled(const CodeText *code) {
+  return !code->loading() && !code->aheadOfTheWorker();
+}
+
+/// Waits for the commands that wait or run to be done.  A rename is read
+/// ahead where none waits ahead of it (Session::rename), and a third of a
+/// second after any edit one does, of the session's own: the project's
+/// files, which the worker wrote behind the edit, are read again.  A test
+/// that holds a rename to be read ahead makes it once that command, where it
+/// has come, is done; nothing runs between this and the rename it stands
+/// before.
+bool noCommandWaits(Session &session) {
+  return QTest::qWaitFor([&] { return !session.queries().hasCommands(); },
+                         OpenTimeoutMs);
+}
+
 /// What the window keeps of \p widget: the pixels of its backing store, which
 /// a paint of part of the widget leaves as they were elsewhere.  None where
 /// the store keeps no image.
@@ -1343,7 +1364,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount() > 3);
+    QTRY_VERIFY(settled(code) && code->lineCount() > 3);
     code->setPreludeFolded(false);
     QVERIFY(activateTestWindow(bench.window.get()));
     code->setFocus();
@@ -1355,7 +1376,7 @@ private slots:
     auto *mode = bench.action(ActionId::ViewFocusMode);
     QTest::keyClick(code->window()->windowHandle(), Qt::Key_Q);
     QCOMPARE(hex.size(), 1); // No delay waiting to distinguish a Q sequence.
-    QTRY_VERIFY(!code->loading() &&
+    QTRY_VERIFY(settled(code) &&
                 code->allText().contains(QStringLiteral("v0 + 0x18; /* 8 */")));
     QCOMPARE(code->window(), bench.window.get());
     code->setCursorLine(1);
@@ -1838,7 +1859,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount());
+    QTRY_VERIFY(settled(code) && code->lineCount());
     code->setFocus();
     QTRY_VERIFY(code->hasFocus());
     shown = false;
@@ -3931,7 +3952,7 @@ private slots:
     view->setRepresentation(representation);
     QCOMPARE(view->representation(), representation);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount() == 19);
+    QTRY_VERIFY(settled(code) && code->lineCount() == 19);
     const QString original = code->allText();
     QVERIFY(activateTestWindow(bench.window.get()));
     code->setFocus();
@@ -4016,7 +4037,7 @@ private slots:
     code->setCursorLine(3);
     QVERIFY(code->setCurrentBlockFolded(true));
     code->load(Base + 0x140, representation);
-    QTRY_VERIFY(!code->loading() && code->lineCount() == 16);
+    QTRY_VERIFY(settled(code) && code->lineCount() == 16);
     code->selectAddress(Base + 0x142);
     QCOMPARE(code->lineCount(), 19);
     QCOMPARE(code->currentAddress(), std::optional<Address>(Base + 0x142));
@@ -4076,7 +4097,7 @@ private slots:
     view->setRepresentation(representation);
     QCOMPARE(view->representation(), representation);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->allText().contains("return v7 + v7"));
+    QTRY_VERIFY(settled(code) && code->allText().contains("return v7 + v7"));
     if (floating) {
       auto *dock = bench.dockFor(view);
       QVERIFY(dock);
@@ -4103,7 +4124,7 @@ private slots:
       edit["kind"] = "name";
       edit["name"] = "counter";
       bench.session.editCode(edit, bench.session.epoch());
-      QTRY_VERIFY(!code->loading() &&
+      QTRY_VERIFY(settled(code) &&
                   code->allText().contains("return counter + counter"));
     }
     const auto name =
@@ -4463,7 +4484,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->allText().contains("v7 = 0"));
+    QTRY_VERIFY(settled(code) && code->allText().contains("v7 = 0"));
     QVERIFY(code->findText(QStringLiteral("v7 = 0"), true));
     bench.window->activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
@@ -4636,7 +4657,7 @@ private slots:
       return;
     }
     QTRY_COMPARE(code->function(), std::optional<Address>(Base + 0x160));
-    QTRY_VERIFY(!code->loading() && !mapped.isEmpty());
+    QTRY_VERIFY(settled(code) && !mapped.isEmpty());
     QCOMPARE(origin->representation(), representation);
     QVERIFY(origin->locked());
     QTRY_VERIFY(code->hasFocus());
@@ -4722,7 +4743,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("low"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading());
+    QTRY_VERIFY(settled(code));
     bench.window->activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
     const QFontMetricsF metrics(Theme::instance().codeFont());
@@ -4915,7 +4936,7 @@ private slots:
       QVERIFY(codeView);
       codeView->setRepresentation(representation);
       auto *code = codeView->text();
-      QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 3,
+      QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() > 3,
                                OpenTimeoutMs);
       if (view == QLatin1String("llvmc"))
         QVERIFY(code->preludeFolded());
@@ -5538,7 +5559,7 @@ private slots:
     auto *view = bench.codeView(representation);
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount() > 2);
+    QTRY_VERIFY(settled(code) && code->lineCount() > 2);
     code->setPreludeFolded(false);
     bool queryRow = false;
     if (native) {
@@ -5656,7 +5677,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount() > 3);
+    QTRY_VERIFY(settled(code) && code->lineCount() > 3);
     code->setPreludeFolded(false);
     bench.window->activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
@@ -5882,7 +5903,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount() > 3);
+    QTRY_VERIFY(settled(code) && code->lineCount() > 3);
     code->setPreludeFolded(false);
     code->setCursorLine(1);
     bench.window->activateWindow();
@@ -5979,7 +6000,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount() > 3);
+    QTRY_VERIFY(settled(code) && code->lineCount() > 3);
     code->setPreludeFolded(false);
     bench.window->activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
@@ -6002,7 +6023,7 @@ private slots:
     QVERIFY(!bench.action(ActionId::EditOperandOffset)->isEnabled());
     bench.action(ActionId::EditOperandDecimal)->trigger();
     QTRY_VERIFY_WITH_TIMEOUT(
-        !code->loading() &&
+        settled(code) &&
             code->allText().contains(QStringLiteral("v0 + 0x18; /* 8 */")),
         OpenTimeoutMs);
     QStringList offered;
@@ -6024,18 +6045,18 @@ private slots:
                                    QStringLiteral("&Binary\t0b11000"),
                                    QStringLiteral("&Character\t'\\030'")}));
     QTRY_VERIFY_WITH_TIMEOUT(
-        !code->loading() &&
+        settled(code) &&
             code->allText().contains(QStringLiteral("v0 + 030; /* 8 */")),
         OpenTimeoutMs);
     bench.action(ActionId::EditOperandNumber)->trigger();
     QTRY_VERIFY_WITH_TIMEOUT(
-        !code->loading() &&
+        settled(code) &&
             code->allText().contains(QStringLiteral("v0 + 24; /* 8 */")),
         OpenTimeoutMs);
     QTRY_VERIFY(bench.session.canUndo());
     bench.session.undo();
     QTRY_VERIFY_WITH_TIMEOUT(
-        !code->loading() &&
+        settled(code) &&
             code->allText().contains(QStringLiteral("v0 + 030; /* 8 */")),
         OpenTimeoutMs);
 
@@ -6048,7 +6069,7 @@ private slots:
     QVERIFY(code->allText().contains(QStringLiteral("v1 & 0xFFFFFFFF;")));
     bench.action(ActionId::EditOperandDecimal)->trigger();
     QTRY_VERIFY_WITH_TIMEOUT(
-        !code->loading() &&
+        settled(code) &&
             code->allText().contains(QStringLiteral("v1 & 4294967295U;")),
         OpenTimeoutMs);
     QVERIFY(code->allText().contains(QStringLiteral("v0 + 030; /* 8 */")));
@@ -6089,7 +6110,7 @@ private slots:
               pressed = true;
               QTest::keyClick(code, Qt::Key_A, Qt::ControlModifier);
             });
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 600,
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() > 600,
                              OpenTimeoutMs);
     QVERIFY(pressed);
     QCOMPARE(code->selectedText(), code->allText());
@@ -6179,7 +6200,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount() > 6);
+    QTRY_VERIFY(settled(code) && code->lineCount() > 6);
     bench.window->activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
     code->setFocus();
@@ -6267,7 +6288,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount() == 8);
+    QTRY_VERIFY(settled(code) && code->lineCount() == 8);
     QVERIFY(code->allText().contains(QStringLiteral("gap0[54]")));
     QVERIFY(activateTestWindow(bench.window.get()));
     code->setFocus();
@@ -6331,13 +6352,13 @@ private slots:
     QCOMPARE(code->function(), std::optional<Address>(function));
     // A refresh preserves an expanded layout as well as a collapsed one.
     code->load(function, QStringLiteral("source"));
-    QTRY_VERIFY(!code->loading() && code->lineCount() == 12);
+    QTRY_VERIFY(settled(code) && code->lineCount() == 12);
     code->setCursorLine(0);
     QVERIFY(code->findText(record, true));
     QVERIFY(code->setCurrentBlockFolded(true));
     QCOMPARE(code->lineCount(), 8);
     code->load(function, QStringLiteral("source"));
-    QTRY_VERIFY(!code->loading() && code->lineCount() == 8);
+    QTRY_VERIFY(settled(code) && code->lineCount() == 8);
     code->setCursorLine(0);
     QVERIFY(code->findText(QStringLiteral("gap0"), true));
     QCOMPARE(code->lineCount(), 12);
@@ -6360,7 +6381,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 600,
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() > 600,
                              OpenTimeoutMs);
     bench.window->activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
@@ -6374,7 +6395,7 @@ private slots:
     QVERIFY(top > 256);
     bench.action(ActionId::EditOperandDecimal)->trigger();
     QTRY_VERIFY_WITH_TIMEOUT(
-        !code->loading() &&
+        settled(code) &&
             code->allText().contains(QStringLiteral("return v0 + 0x18;")),
         OpenTimeoutMs);
     QCOMPARE(code->cursorLine(), line);
@@ -6517,7 +6538,7 @@ private slots:
     CodeView *view = nullptr;
     QTRY_VERIFY((view = bench.codeView(QStringLiteral("source"))));
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading());
+    QTRY_VERIFY(settled(code));
     QCOMPARE(code->function(), std::optional<Address>(function));
     QCOMPARE(code->currentAddress(), std::optional<Address>(function + 9));
     QCOMPARE(code->commentTarget()->value("line").toInt(), 550);
@@ -6553,7 +6574,7 @@ private slots:
     assembly->focusContent();
     QTRY_VERIFY(assembly->listing()->hasFocus());
     QTest::keyClick(assembly->listing(), Qt::Key_Tab);
-    QTRY_VERIFY(!code->loading() && code->function() == other);
+    QTRY_VERIFY(settled(code) && code->function() == other);
     QCOMPARE(code->currentAddress(), std::optional<Address>(other + 9));
     QCOMPARE(code->commentTarget()->value("line").toInt(), 550);
     QTRY_VERIFY(code->hasFocus());
@@ -6639,7 +6660,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading());
+    QTRY_VERIFY(settled(code));
     // Simulate a note saved while an older engine could not map this line.
     bench.session.editCode({{"address", hexAddress(function)},
                             {"representation", "source"},
@@ -6648,7 +6669,7 @@ private slots:
                             {"anchor", "  int32_t v1 = v0 + function_22();"},
                             {"text", "old source note"}},
                            bench.session.epoch());
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() &&
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) &&
                                  code->allText().contains("old source note"),
                              OpenTimeoutMs);
     code->setPreludeFolded(false);
@@ -6723,7 +6744,7 @@ private slots:
     }
     auto *code = view->text();
     QTRY_VERIFY_WITH_TIMEOUT(
-        !code->loading() &&
+        settled(code) &&
             code->allText().contains(native ? "value" : "int32_t v1"),
         NativeOpenTimeoutMs);
     for (auto *button : view->findChildren<QToolButton *>())
@@ -6776,7 +6797,7 @@ private slots:
         qPrintable(code->status() + '\n' + diagnostics.join('\n') + '\n' +
                    code->allText()),
         NativeOpenTimeoutMs);
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading(), OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code), OpenTimeoutMs);
     if (!native)
       QVERIFY(code->allText().contains("\"v0 v1 function_22\""));
     QCOMPARE(assembly->currentFunction(), std::optional<Address>(elsewhere));
@@ -6786,7 +6807,7 @@ private slots:
              QStringLiteral("renamed_callee")));
     QTRY_VERIFY_WITH_TIMEOUT(code->allText().contains("renamed_callee("),
                              NativeOpenTimeoutMs);
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading(), OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code), OpenTimeoutMs);
     if (!native)
       QVERIFY(code->allText().contains("\"v0 v1 function_22\""));
     QVERIFY(edit(native ? QStringLiteral("return (") : QStringLiteral("v1 ="),
@@ -8041,7 +8062,7 @@ private slots:
                              OpenTimeoutMs);
     auto *view = bench.codeView(QStringLiteral("source"));
     auto *code = view->text();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 2,
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() > 2,
                              OpenTimeoutMs);
     auto *listing = assembly->listing();
     QTRY_VERIFY(ListingViewTestAccess::settled(*listing));
@@ -8131,7 +8152,7 @@ private slots:
     bench.session.setComment(Base + 32, QStringLiteral("known at once"));
     QTRY_VERIFY_WITH_TIMEOUT(
         code->allText().contains(QStringLiteral("known at once")) &&
-            !code->loading() && !bench.session.queries().hasPending() &&
+            settled(code) && !bench.session.queries().hasPending() &&
             ListingViewTestAccess::settled(*listing),
         OpenTimeoutMs);
     for (int turn = 0; turn < 4; ++turn)
@@ -8157,9 +8178,8 @@ private slots:
     // A revision said by itself is read as before.
     const auto version = code->documentVersion();
     emit bench.session.revisionChanged();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() &&
-                                 !bench.session.queries().hasPending(),
-                             OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        settled(code) && !bench.session.queries().hasPending(), OpenTimeoutMs);
     QVERIFY(code->documentVersion() != version ||
             code->allText().contains(QStringLiteral("known at once")));
     // The page read again brought the rows it had brought: they were not
@@ -8477,6 +8497,7 @@ private slots:
     code->setCursorLine(0);
     QCoreApplication::processEvents();
     {
+      QVERIFY(noCommandWaits(bench.session));
       const auto reads = code->readsAhead();
       const auto revision = bench.session.revision();
       paints.count = 0;
@@ -8522,6 +8543,7 @@ private slots:
                                    !bench.session.queries().hasPending(),
                                OpenTimeoutMs);
       const QString standing = code->allText();
+      QVERIFY(noCommandWaits(bench.session));
       const auto reads = code->readsAhead();
       bench.session.rename(renamed, QStringLiteral("has_the_name"));
       QVERIFY(code->aheadOfTheWorker());
@@ -8538,6 +8560,7 @@ private slots:
     // A read asked for while the text is ahead waits for the answer: one
     // made before the worker took the rename would bring the old name back.
     {
+      QVERIFY(noCommandWaits(bench.session));
       const auto revision = bench.session.revision();
       bench.session.rename(renamed, QStringLiteral("read_meanwhile"));
       QVERIFY(code->aheadOfTheWorker());
@@ -8552,6 +8575,7 @@ private slots:
     }
     // A name refused after such a read was asked for: taken back, and read.
     {
+      QVERIFY(noCommandWaits(bench.session));
       const QString standing = code->allText();
       bench.session.rename(renamed, QStringLiteral("has_the_name"));
       QVERIFY(code->aheadOfTheWorker());
@@ -8568,6 +8592,7 @@ private slots:
     // Of two renames one behind the other the first is read ahead, the
     // second when its answer comes.
     {
+      QVERIFY(noCommandWaits(bench.session));
       const auto reads = code->readsAhead();
       const auto revision = bench.session.revision();
       bench.session.rename(renamed, QStringLiteral("first_of_two"));
@@ -8707,6 +8732,7 @@ private slots:
     QVERIFY(code->bracketPair().has_value());
     QCoreApplication::processEvents();
     {
+      QVERIFY(noCommandWaits(bench.session));
       paints.count = 0;
       const auto revision = bench.session.revision();
       bench.session.rename(Base + 0x150,
@@ -8719,6 +8745,7 @@ private slots:
       QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
     }
     {
+      QVERIFY(noCommandWaits(bench.session));
       const auto revision = bench.session.revision();
       bench.session.rename(Base + 0x160, QStringLiteral("opens/*"));
       QVERIFY(code->aheadOfTheWorker());
@@ -8730,6 +8757,7 @@ private slots:
     }
     // And one that closes it again.
     {
+      QVERIFY(noCommandWaits(bench.session));
       const auto revision = bench.session.revision();
       bench.session.rename(Base + 0x160, QStringLiteral("closes"));
       QVERIFY(code->aheadOfTheWorker());
@@ -8742,6 +8770,7 @@ private slots:
     {
       code->setCursorLine(3);
       QTest::keyClick(code, Qt::Key_End);
+      QVERIFY(noCommandWaits(bench.session));
       const auto revision = bench.session.revision();
       bench.session.rename(Base + 0x160, QStringLiteral("zq"));
       QVERIFY(code->aheadOfTheWorker());
@@ -8761,6 +8790,7 @@ private slots:
       QVERIFY(code->setCurrentBlockFolded(true));
       QCOMPARE(code->lineCount(), count - 2);
       QCoreApplication::processEvents();
+      QVERIFY(noCommandWaits(bench.session));
       const auto revision = bench.session.revision();
       bench.session.rename(Base + 0x160, QStringLiteral("under_a_header"));
       QVERIFY(code->aheadOfTheWorker());
@@ -8814,6 +8844,7 @@ private slots:
           QStringLiteral("a_plain_name")}) {
       // A name of one character the text holds is not read ahead.
       const bool reads = name.size() > 1;
+      QVERIFY(noCommandWaits(bench.session));
       const auto ahead = code->readsAhead();
       const auto revision = bench.session.revision();
       bench.session.rename(Base + 0x160, name);
@@ -8860,6 +8891,8 @@ private slots:
              QString::number(CodeTextTestAccess::firstMiscolored(*code))});
       };
       const auto renamed = [&](Address address, const QString &name) {
+        if (!noCommandWaits(bench.session))
+          return false;
         const auto revision = bench.session.revision();
         const auto reads = code->readsAhead();
         bench.session.rename(address, name);
@@ -10435,7 +10468,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount() > 1);
+    QTRY_VERIFY(settled(code) && code->lineCount() > 1);
     for (auto *button : view->findChildren<QToolButton *>())
       if (button->toolTip().startsWith(QStringLiteral("Keep this function")))
         button->setChecked(true);
@@ -10498,7 +10531,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount() > 1);
+    QTRY_VERIFY(settled(code) && code->lineCount() > 1);
     for (auto *button : view->findChildren<QToolButton *>())
       if (button->toolTip().startsWith(QStringLiteral("Keep this function")))
         button->setChecked(true);
@@ -10658,7 +10691,7 @@ private slots:
     QVERIFY(view);
     view->setRepresentation(representation);
     auto *code = view->text();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 1,
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() > 1,
                              OpenTimeoutMs);
     QCOMPARE(code->function(), std::optional<Address>(caller));
     if (locked) {
@@ -10710,7 +10743,7 @@ private slots:
                QStringLiteral("_ZN3BarC1Ev"));
     QTRY_COMPARE_WITH_TIMEOUT(code->function(), std::optional<Address>(callee),
                               OpenTimeoutMs);
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading(), OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code), OpenTimeoutMs);
     QCOMPARE(view->representation(), representation);
     QVERIFY(code->isVisible());
     QTRY_VERIFY(code->hasFocus());
@@ -10725,7 +10758,7 @@ private slots:
     bench.action(ActionId::JumpBack)->trigger();
     QTRY_COMPARE_WITH_TIMEOUT(code->function(), std::optional<Address>(caller),
                               OpenTimeoutMs);
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading(), OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code), OpenTimeoutMs);
     QVERIFY(code->isVisible());
     QTRY_VERIFY(code->hasFocus());
     QCOMPARE(view->representation(), representation);
@@ -10739,7 +10772,7 @@ private slots:
     bench.action(ActionId::JumpForward)->trigger();
     QTRY_COMPARE_WITH_TIMEOUT(code->function(), std::optional<Address>(callee),
                               OpenTimeoutMs);
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading(), OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code), OpenTimeoutMs);
     QVERIFY(code->isVisible());
     QTRY_VERIFY(code->hasFocus());
     // Forward returns to where the callee was left.
@@ -10802,7 +10835,7 @@ private slots:
     QVERIFY(view);
     view->setRepresentation(representation);
     auto *code = view->text();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 0,
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() > 0,
                              OpenTimeoutMs);
     if (locked) {
       for (auto *button : view->findChildren<QToolButton *>())
@@ -10840,7 +10873,7 @@ private slots:
                            point);
       QVERIFY(code->isVisible());
       QTRY_COMPARE_WITH_TIMEOUT(code->function(), target, OpenTimeoutMs);
-      QTRY_VERIFY_WITH_TIMEOUT(!code->loading(), OpenTimeoutMs);
+      QTRY_VERIFY_WITH_TIMEOUT(settled(code), OpenTimeoutMs);
       QVERIFY(code->lineCount() > 0);
       QCOMPARE(view->representation(), representation);
       QCOMPARE(view->locked(), locked);
@@ -10850,10 +10883,10 @@ private slots:
       bench.action(ActionId::JumpBack)->trigger();
       QTRY_COMPARE_WITH_TIMEOUT(
           code->function(), std::optional<Address>(previous), OpenTimeoutMs);
-      QTRY_VERIFY(!code->loading() && code->hasFocus());
+      QTRY_VERIFY(settled(code) && code->hasFocus());
       bench.action(ActionId::JumpForward)->trigger();
       QTRY_COMPARE_WITH_TIMEOUT(code->function(), target, OpenTimeoutMs);
-      QTRY_VERIFY(!code->loading() && code->hasFocus());
+      QTRY_VERIFY(settled(code) && code->hasFocus());
       previous = *target;
     }
     if (native) {
@@ -11058,7 +11091,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 1,
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() > 1,
                              OpenTimeoutMs);
     QCOMPARE(code->language(), QStringLiteral("rust"));
     QCOMPARE(view->chosenLanguage(), QStringLiteral("Rust"));
@@ -11098,7 +11131,7 @@ private slots:
     bench.window->disassembly()->focusContent();
     bench.action(ActionId::JumpPseudocode)->trigger();
     QTRY_VERIFY_WITH_TIMEOUT(
-        !code->loading() &&
+        settled(code) &&
             code->status().contains(QStringLiteral("fixture refuses")),
         OpenTimeoutMs);
     QCOMPARE(code->language(), QStringLiteral("c"));
@@ -11109,7 +11142,7 @@ private slots:
     bench.window->disassembly()->navigate(Base + 0x140);
     bench.window->disassembly()->focusContent();
     bench.action(ActionId::JumpPseudocode)->trigger();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() &&
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) &&
                                  code->language() == QLatin1String("rust"),
                              OpenTimeoutMs);
     // Pseudocode reads the Rust; C beside it reads every function as C.
@@ -11120,9 +11153,8 @@ private slots:
         QStringLiteral("llvm")};
     QCOMPARE(representationsOf(view), pseudocodeAndC);
     view->setRepresentation(QStringLiteral("c"));
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() &&
-                                 code->language() == QLatin1String("c"),
-                             OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        settled(code) && code->language() == QLatin1String("c"), OpenTimeoutMs);
     QCOMPARE(view->chosenLanguage(), QString());
     QTRY_COMPARE(bench.dockTitle(QStringLiteral("pseudocode-a")),
                  QStringLiteral("C-A"));
@@ -11130,7 +11162,7 @@ private slots:
     view->setRepresentation(QStringLiteral("go"));
     QCOMPARE(view->representation(), QStringLiteral("c"));
     view->setRepresentation(QStringLiteral("source"));
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() &&
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) &&
                                  code->language() == QLatin1String("rust"),
                              OpenTimeoutMs);
     QTRY_COMPARE(bench.dockTitle(QStringLiteral("pseudocode-a")),
@@ -11155,7 +11187,7 @@ private slots:
     view->setRepresentation(QStringLiteral("llvm"));
     auto *code = view->text();
     QTRY_VERIFY_WITH_TIMEOUT(
-        !code->loading() && code->representation() == QLatin1String("llvm") &&
+        settled(code) && code->representation() == QLatin1String("llvm") &&
             code->hasPrelude(),
         OpenTimeoutMs);
     // The function shows alone: its declarations fold before it, its
@@ -11330,7 +11362,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() &&
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) &&
                                  code->language() == QLatin1String("go"),
                              OpenTimeoutMs);
     QCOMPARE(representationsOf(view),
@@ -13468,9 +13500,8 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() &&
-                                 code->allText().contains("void* arg0"),
-                             OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        settled(code) && code->allText().contains("void* arg0"), OpenTimeoutMs);
     const auto onParameter = [&](const QString &name, int position) {
       code->setCursorLine(0);
       if (!code->findText(name, true))
@@ -15476,7 +15507,7 @@ private slots:
     QVERIFY(view);
     view->setRepresentation(QStringLiteral("source"));
     auto *code = view->text();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 1,
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() > 1,
                              OpenTimeoutMs);
     bench.window->activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
@@ -15492,7 +15523,7 @@ private slots:
     QTest::mouseDClick(code->viewport(), Qt::LeftButton, Qt::NoModifier, point);
     QTRY_COMPARE_WITH_TIMEOUT(code->function(), std::optional<Address>(callee),
                               OpenTimeoutMs);
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading(), OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code), OpenTimeoutMs);
     QTRY_VERIFY(code->hasFocus());
     QCOMPARE(disassembly->stops(false).front(), caller);
     QMenu *back = nullptr;
@@ -15515,7 +15546,7 @@ private slots:
     QCOMPARE(place, QStringLiteral("function_20:2") + address);
     // Shown as LLVM C, the code would not return to that line.
     view->setRepresentation(QStringLiteral("llvmc"));
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 1,
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() > 1,
                              OpenTimeoutMs);
     code->setFocus();
     QTRY_VERIFY(code->hasFocus());
@@ -15524,7 +15555,7 @@ private slots:
     // Shown as C again, it would; with the disassembly in focus, the code
     // does not go back along.
     view->setRepresentation(QStringLiteral("source"));
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 1,
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() > 1,
                              OpenTimeoutMs);
     code->setFocus();
     QTRY_VERIFY(code->hasFocus());
@@ -17144,7 +17175,7 @@ private slots:
     QCOMPARE(bench.dockTitle(QStringLiteral("ir-a")),
              QStringLiteral("Pseudocode-A"));
     auto *code = pseudocode->text();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() == 702,
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() == 702,
                              OpenTimeoutMs);
     QVERIFY(code->allText().startsWith(QStringLiteral("#include <stdint.h>")));
     QCOMPARE(code->foldableCount(), 0);
