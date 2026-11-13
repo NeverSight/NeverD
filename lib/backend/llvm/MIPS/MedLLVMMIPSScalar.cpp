@@ -252,9 +252,11 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
   auto *Offset =
       B.CreateZExtOrTrunc(B.CreateAnd(First, AddressMask), B.getInt32Ty());
   const bool Forward = Load.Left != Little;
-  auto *Count =
-      Forward ? B.CreateSub(C(Load.Bytes), Offset) : B.CreateAdd(Offset, C(1));
-  auto *DestinationByte = Load.Left ? B.CreateSub(C(Load.Bytes), Count) : C(0);
+  // In the forward direction the last lane is the complement of the offset
+  // within the aligned word. In the other direction it is the offset itself.
+  auto *LaneMask = C(Load.Bytes - 1);
+  auto *Last = Forward ? B.CreateXor(Offset, LaneMask) : Offset;
+  auto *DestinationByte = Load.Left ? B.CreateXor(Last, LaneMask) : C(0);
   llvm::Value *Memory = nullptr;
   if (VA) {
     const auto Access = mips::mergeAccess(Load, *VA, Little);
@@ -297,8 +299,8 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
   if (Result)
     Result->addIncoming(Initial, Entry);
   auto *Pointer = B.CreateGEP(B.getInt8Ty(), Memory, Index);
-  auto *Lane = Little ? static_cast<llvm::Value *>(Index)
-                      : B.CreateSub(B.CreateSub(Count, C(1)), Index);
+  auto *Lane =
+      Little ? static_cast<llvm::Value *>(Index) : B.CreateSub(Last, Index);
   auto *Shift = B.CreateZExtOrTrunc(
       B.CreateShl(B.CreateAdd(DestinationByte, Lane), C(3)), ValueTy);
   llvm::Value *Next = nullptr;
@@ -318,7 +320,7 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
   }
   auto *NextIndex = B.CreateAdd(Index, C(1));
   auto *Backedge = B.GetInsertBlock();
-  B.CreateCondBr(B.CreateICmpULT(NextIndex, Count), Loop, Done);
+  B.CreateCondBr(B.CreateICmpEQ(Index, Last), Done, Loop);
   Index->addIncoming(NextIndex, Backedge);
   if (Result)
     Result->addIncoming(Next, Backedge);
