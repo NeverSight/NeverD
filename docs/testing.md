@@ -23728,6 +23728,10 @@ For n64, the runner also checks isolated `SDL`, isolated `SDR` and a paired
 store followed by a paired reload. It compares the returned 64 bits and all
 16 bytes around the destination against an independent byte-array splice at
 each of the eight alignments, in both byte orders.
+For physical microMIPS64, run `micro64-merge-store-roundtrip.py` from the same
+directory with `--neverd`, `--cc` (MIPS64 GNU C), `--assembler`, `--linker` and
+`--simulator` (GNU sim for `mipsisa64r2-mti-elf`). It checks the function tags
+in the rebuilt objects and executes both C backends at `-O0` and `-O2`.
 An invalid-memory branch-likely slot is tested both annulled and executed.
 Bitfield and shuffle kernels cover all 13 classic SPECIAL3 forms and full-width
 fields with independent bit/lane expectations. MIPS64 invalid word inputs are
