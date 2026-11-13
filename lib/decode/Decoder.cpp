@@ -382,7 +382,7 @@ int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
     return 0;
 
   if (X86)
-    fixupX86DecodeMetadata(InsnBuf);
+    fixupX86MpxDetail(InsnBuf);
   Out.Addr = InsnBuf->address;
   Out.Size = static_cast<uint16_t>(InsnBuf->size);
   Out.Id = InsnBuf->id;
@@ -453,7 +453,7 @@ void Decoder::fixupDecodedInsn(cs_insn *I) const {
   if (!I)
     return;
   if (X86) {
-    fixupX86DecodeMetadata(I);
+    fixupX86MpxDetail(I);
     X86Lifter::fixupDecodedInsn(I);
   } else if (AArch64)
     AArch64Lifter::fixupDecodedInsn(I);
