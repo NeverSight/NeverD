@@ -590,6 +590,7 @@ QString ChooserModel::display(const QJsonObject &row,
   switch (column.format) {
   case Format::Text:
   case Format::Name:
+  case Format::Letter:
     if (value.isDouble())
       return QString::number(value.toDouble(), 'f', 0);
     return value.toString();

@@ -13,6 +13,7 @@
 #include "ComparisonSession.h"
 #include "DialogReturnKey.h"
 #include "Icons.h"
+#include "Theme.h"
 
 #include "neverd/analysis/Limits.h"
 
@@ -106,6 +107,9 @@ ComparisonValidationDialog::ComparisonValidationDialog(ComparisonSession &S,
   Report = new QPlainTextEdit(Tabs);
   Report->setObjectName("validationReport");
   Report->setReadOnly(true);
+  // The report is JSON; it reads in the code font as the other windows'
+  // evidence does.
+  Report->setFont(Theme::instance().codeFont());
   Tabs->addTab(Evidence, tr("Result and assumptions"));
   Tabs->addTab(Report, tr("Full report"));
   Root->addWidget(Tabs, 1);

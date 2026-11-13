@@ -223,6 +223,12 @@ private slots:
         QVERIFY2(!Button->isDefault() && !Button->autoDefault(),
                  qPrintable(QStringLiteral("%1: %2").arg(QLatin1String(Name),
                                                          Button->text())));
+      // A report of JSON reads in the code font, as the evidence of the
+      // other review windows does.
+      if (const auto *Report =
+              Review->findChild<QPlainTextEdit *>("validationReport"))
+        QCOMPARE(Report->font().family(),
+                 Theme::instance().codeFont().family());
       QTRY_VERIFY2_WITH_TIMEOUT(!Session.busy(), Name, Timeout);
       Review->close();
       ++Seen;

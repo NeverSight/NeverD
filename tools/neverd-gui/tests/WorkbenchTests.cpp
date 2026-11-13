@@ -2780,6 +2780,45 @@ private slots:
     QTRY_VERIFY(inspected);
   }
 
+  void aReferencesTypeLeavesTheAddressItsRoom() {
+    // A cross reference's type is one letter, yet its column started as
+    // wide as a line of text, and the address after it, which takes what
+    // room is left, ended in an ellipsis.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loads;
+    bench.window->openFile(writeFixture(directory, "byte-export.bin"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *assembly = bench.window->disassembly();
+    assembly->navigate(Base + 0x140);
+    QTRY_COMPARE(assembly->currentAddress(),
+                 std::optional<Address>(Base + 0x140));
+    QVERIFY(activateTestWindow(assembly->window()));
+    assembly->focusContent();
+    bench.action(ActionId::JumpXrefsTo)->trigger();
+    QPointer<QDialog> dialog;
+    QTRY_VERIFY_WITH_TIMEOUT(
+        (dialog = visibleDialog(QStringLiteral("referencesDialog"))) != nullptr,
+        OpenTimeoutMs);
+    const auto close = qScopeGuard([&dialog] {
+      if (dialog)
+        dialog->reject();
+    });
+    auto *view = dialog->findChild<ChooserView *>();
+    QVERIFY(view);
+    const QHeaderView *header = view->table()->header();
+    QCOMPARE(header->count(), 4);
+    // Direction, Type, Address, Location.
+    QVERIFY2(header->sectionSize(1) <= header->sectionSize(0),
+             qPrintable(QStringLiteral("type %1, direction %2")
+                            .arg(header->sectionSize(1))
+                            .arg(header->sectionSize(0))));
+    QVERIFY2(header->sectionSize(3) > header->sectionSize(1),
+             qPrintable(QStringLiteral("location %1, type %2")
+                            .arg(header->sectionSize(3))
+                            .arg(header->sectionSize(1))));
+  }
+
   void theEncodingsLabelStandsBesideTheFirstEncoding() {
     // One field held every encoding's box, and the form centered its label
     // on that field's first lines: seven pixels below the box it names.
@@ -13152,6 +13191,7 @@ private slots:
     // Ins offers the libraries that lay out as the program's and join none
     // of its types now, the kernel's left out among them.
     QStringList offered;
+    int headingsWidth = -1, listWidth = 0;
     QTimer chooser;
     connect(&chooser, &QTimer::timeout, this, [&] {
       auto *dialog = visibleDialog(QStringLiteral("addTypeLibraryDialog"));
@@ -13167,6 +13207,12 @@ private slots:
         if (offered.back() == QLatin1String("uefi-x64"))
           choices->setCurrentItem(choices->topLevelItem(row));
       }
+      // The list's columns fill it: at the tree's own width hint the last
+      // heading was cut and a scroll bar crossed the list, and a last
+      // column that ends before the list does leaves a selected row short
+      // of its edge.
+      headingsWidth = choices->header()->length();
+      listWidth = choices->viewport()->width();
       dialog->accept();
     });
     chooser.start(10);
@@ -13177,6 +13223,7 @@ private slots:
     view->addLibrary();
     QTRY_VERIFY(!offered.isEmpty());
     chooser.stop();
+    QCOMPARE(headingsWidth, listWidth);
     QTRY_COMPARE(offered, (QStringList{QStringLiteral("windows-kernel-x64"),
                                        QStringLiteral("uefi-x64")}));
     QTRY_COMPARE_WITH_TIMEOUT(names(),
