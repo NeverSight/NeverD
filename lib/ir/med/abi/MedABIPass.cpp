@@ -515,7 +515,7 @@ sourceCallStackPointers(const MedFunc &Func, Arch Architecture,
           !Op.Dead) {
         if (!LocalStack)
           InheritedCalls[I].push_back(&Op);
-        else if (LocalStack->Size == TRI.PointerSize)
+        else if (LocalStack->Size == TRI.addressRegisterBytes())
           Result.emplace(&Op, *LocalStack);
       }
       // A local definition owns subsequent calls independently of incoming
@@ -584,7 +584,7 @@ sourceCallStackPointers(const MedFunc &Func, Arch Architecture,
     if (!Charge(InheritedCalls[B].size()))
       return {};
     if (Entries[B].State == Basis::Exact &&
-        Entries[B].Value.Size == TRI.PointerSize) {
+        Entries[B].Value.Size == TRI.addressRegisterBytes()) {
       BlockEntries.emplace(Func.Blocks[B].Id, Entries[B].Value);
       for (const MedOp *Call : InheritedCalls[B])
         Result.emplace(Call, Entries[B].Value);
@@ -619,7 +619,10 @@ std::optional<FloatingCallArguments>
 boundFloatingCallArguments(const MedOp &Op, Arch A, BinaryFormat F) {
   const auto &Registers = getTargetRegInfo(A);
   if ((Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL) ||
-      !Op.ScalarCallSignature || Op.SourceCallHint ||
+      !Op.ScalarCallSignature ||
+      (Op.SourceCallHint && (!Op.SourceCallHint->Signature.MIPSScalars ||
+                             *Op.SourceCallHint->Signature.MIPSScalars !=
+                                 *Op.ScalarCallSignature)) ||
       Op.CalleeVariadicFrom >= 0 ||
       Op.NumInputs != Op.ScalarCallSignature->Scalars.size() + 1)
     return std::nullopt;
@@ -634,9 +637,11 @@ boundFloatingCallArguments(const MedOp &Op, Arch A, BinaryFormat F) {
     if (!isMIPS(A) || Op.CalleeFloatReturnBytes ||
         (Signature.ReturnKind == NdTypeKind::Void
              ? Op.Output.Size != 0
-             : Op.Output.Kind != MedVar::Reg ||
-                   Op.Output.RegOff != Registers.IntReturnReg ||
-                   Op.Output.Size != Signature.ReturnBytes))
+             : Op.Output.Size != Signature.ReturnBytes ||
+                   (Signature.ReturnBytes != Registers.FullRegWidth
+                        ? Op.Output.Kind != MedVar::Temp
+                        : Op.Output.Kind != MedVar::Reg ||
+                              Op.Output.RegOff != Registers.IntReturnReg)))
       return std::nullopt;
   } else if ((A != Arch::X86 && !isMIPS(A) && Signature.Scalars.empty()) ||
              Op.CalleeFloatReturnBytes != Signature.ReturnBytes ||
@@ -659,7 +664,9 @@ recoveredFloatingCallArguments(const MedOp &Op, const MedCallInfo &Call, Arch A,
                                BinaryFormat F) {
   if (Op.ScalarCallSignature) {
     const auto Bound = boundFloatingCallArguments(Op, A, F);
-    if (!Bound || Call.VarArgFixedCount >= 0 ||
+    if (!Bound ||
+        Call.VarArgFixedCount !=
+            (Bound->FixedCount ? int(*Bound->FixedCount) : -1) ||
         Call.Args.size() != Bound->Scalars.size() ||
         Call.ArgReadBytes.size() != Call.Args.size())
       return std::nullopt;
@@ -710,7 +717,7 @@ bool promoteFloatCallResult(MedFunc &Func, MedBlock &Blk, size_t OI,
   // reads, so accept either half or both; the temp must have no other reader,
   // or the split is a real wide result.
   size_t SyntheticWideHalves = 0;
-  if (TRI.PointerSize == 4 && TRI.IntReturnReg2 != 0 &&
+  if (TRI.integerReturnWordBytes() == 4 && TRI.IntReturnReg2 != 0 &&
       ExistingOutput.Kind == MedVar::Temp &&
       ExistingOutput.Size == 2 * TRI.PointerSize) {
     auto isHalf = [&](const MedOp &Half, uint64_t RegOff, uint64_t Offset) {
@@ -1144,6 +1151,9 @@ void recoverCallAbi(
             Op.NumInputs ==
                 Count + 1 + unsigned(sourceCallRetainsResultStorage(Hint))) {
           CI.SourceCallHint = Op.SourceCallHint;
+          if (Hint.Signature.MIPSScalars)
+            for (const auto &P : Hint.Signature.MIPSScalars->Scalars)
+              CI.ArgReadBytes.push_back(P.Bytes);
           if (Hint.CallKind == SourceCallTypeHint::Kind::Analyst)
             CI.VarArgFixedCount = Hint.AnalystFixedCount;
           CI.TargetAddr = Hint.TargetAddress;

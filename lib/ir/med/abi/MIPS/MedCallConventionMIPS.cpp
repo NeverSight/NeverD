@@ -19,41 +19,17 @@
 
 namespace neverd {
 
-extern const CallArgumentConvention MIPSO32CallArguments;
-extern const CallArgumentConvention MIPSELO32CallArguments;
-extern const CallArgumentConvention MIPSN64CallArguments;
-extern const CallArgumentConvention MIPSELN64CallArguments;
-
-const CallArgumentConvention MIPSO32CallArguments = {
-    .TheArch = Arch::MIPS32,
-    .ImportArgumentsFromPrototype = true,
-    .PositionalArgumentSlots = true,
-    .PairAlignedWideArguments = true,
-    .IntegerParametersUseFullRegisters = true,
-    .ArgumentsFromCallSetup = true,
-};
-const CallArgumentConvention MIPSELO32CallArguments = {
-    .TheArch = Arch::MIPS32EL,
-    .ImportArgumentsFromPrototype = true,
-    .PositionalArgumentSlots = true,
-    .PairAlignedWideArguments = true,
-    .IntegerParametersUseFullRegisters = true,
-    .ArgumentsFromCallSetup = true,
-};
-const CallArgumentConvention MIPSN64CallArguments = {
-    .TheArch = Arch::MIPS64,
-    .ImportArgumentsFromPrototype = true,
-    .PositionalArgumentSlots = true,
-    .IntegerParametersUseFullRegisters = true,
-    .ArgumentsFromCallSetup = true,
-};
-const CallArgumentConvention MIPSELN64CallArguments = {
-    .TheArch = Arch::MIPS64EL,
-    .ImportArgumentsFromPrototype = true,
-    .PositionalArgumentSlots = true,
-    .IntegerParametersUseFullRegisters = true,
-    .ArgumentsFromCallSetup = true,
-};
+#define NEVERD_MIPS_TARGET(Name, Spelling, Triple)                             \
+  extern const CallArgumentConvention Name##CallArguments;                     \
+  const CallArgumentConvention Name##CallArguments = {                         \
+      .TheArch = Arch::Name,                                                   \
+      .ImportArgumentsFromPrototype = true,                                    \
+      .PositionalArgumentSlots = true,                                         \
+      .PairAlignedWideArguments = !isMIPS64(Arch::Name),                       \
+      .IntegerParametersUseFullRegisters = true,                               \
+      .ArgumentsFromCallSetup = true,                                          \
+  };
+#include "neverd/MIPSTargets.def"
 
 // o32's leading f12/f14 parameters consume integer word positions. Keep
 // those logical arguments before the remaining integer carriers, and remove

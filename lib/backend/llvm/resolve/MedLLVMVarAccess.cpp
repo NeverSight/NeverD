@@ -1532,7 +1532,7 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
   if (V.Kind == MedVar::Reg && V.SSAVer == 0) {
     const auto &TRI = getTargetRegInfo(TargetArch);
     if (TRI.isLinkRegister(V.RegOff) && TRI.PointerSize > 0 &&
-        V.Size == TRI.PointerSize) {
+        V.Size == TRI.addressRegisterBytes()) {
       // `llvm.returnaddress` returns `llvm_anyptr_ty` (overloaded on the result
       // pointer type, matching upstream LLVM), so the concrete `ptr` must be
       // supplied as the overload type — `@llvm.returnaddress.p0(i32 0)`.
@@ -1541,7 +1541,9 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
           llvm::Intrinsic::returnaddress, {PtrTy},
           {llvm::ConstantInt::get(llvm::Type::getInt32Ty(*Ctx), 0)});
       llvm_value_provenance::markSemanticProducer(*RA);
-      return Builder.CreatePtrToInt(RA, sizeToType(V.Size), "retaddr");
+      auto *Address =
+          Builder.CreatePtrToInt(RA, sizeToType(TRI.PointerSize), "retaddr");
+      return Builder.CreateSExtOrTrunc(Address, sizeToType(V.Size));
     }
   }
 

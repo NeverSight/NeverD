@@ -8,6 +8,9 @@
 
 #include "neverd/ir/SourceCallABI.h"
 
+#include "MIPS/SourceScalarResult.h"
+
+#include "neverd/ir/FloatingCallArguments.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceParameterPlacement.h"
@@ -37,7 +40,7 @@ bool scalar(const TypeRef &T) {
 std::optional<int64_t>
 neverd::sourceCallReturnAddressBias(const BinaryImage *Image, Arch Architecture,
                                     va_t Address) {
-  if (Architecture == Arch::AArch64)
+  if (Architecture == Arch::AArch64 || isMIPS(Architecture))
     return 0;
   if ((Architecture != Arch::X64 && Architecture != Arch::X86) || !Image)
     return {};
@@ -117,6 +120,33 @@ bool neverd::assignAnalystCallABI(SourceCallTypeHint &Hint, Arch Architecture,
            Signature.Parameters.size()))
     return refuse(Error, "A variadic call-site needs a nonempty fixed prefix "
                          "within its actual operands");
+  if (isMIPS(Architecture) && Format == BinaryFormat::ELF) {
+    std::vector<TypeRef> Types;
+    for (const auto &P : Signature.Parameters)
+      Types.push_back(P.Type);
+    const auto Fixed = Hint.AnalystFixedCount < 0
+                           ? std::nullopt
+                           : std::optional<unsigned>(Hint.AnalystFixedCount);
+    auto Scalars = floatingCallArguments(Architecture, Format,
+                                         Signature.ReturnType, Types, Fixed);
+    if (!Scalars)
+      return refuse(Error, "MIPS floating calls require complete scalar types "
+                           "and promoted variadic operands");
+    Signature.HasExplicitABI = true;
+    Signature.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+    Signature.Architecture = Architecture;
+    for (size_t I = 0; I < Types.size(); ++I) {
+      const auto &A = Scalars->Scalars[I];
+      Signature.Parameters[I].Location = {A.Kind, A.Register, A.StackOffset,
+                                          A.Bytes};
+    }
+    mips::placeScalarResult(getTargetRegInfo(Architecture), *Scalars,
+                            Signature.ReturnLocation,
+                            Signature.ReturnComponents);
+    Signature.MIPSScalars =
+        std::make_shared<const FloatingCallArguments>(std::move(*Scalars));
+    return validateSourceABI(Signature, Error);
+  }
   if (Architecture == Arch::AArch64 && Format == BinaryFormat::MachO) {
     Signature.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
     const bool Assigned =
@@ -267,7 +297,8 @@ bool neverd::sourceCallStackArgumentsDefined(
     return true;
   using Key = std::tuple<VnodeSpace, uint64_t, uint16_t>;
   auto key = [](const NdVar &V) { return Key{V.Space, V.Offset, V.Size}; };
-  const auto SP = NdVar::reg(getTargetRegInfo(Architecture).StackPointer, 8);
+  const auto &TRI = getTargetRegInfo(Architecture);
+  const auto SP = NdVar::reg(TRI.StackPointer, TRI.addressRegisterBytes());
   size_t Work = 0;
   for (const auto &Block : Function.Blocks) {
     std::map<Key, int64_t> Addresses{{key(SP), 0}};
@@ -316,8 +347,10 @@ bool neverd::sourceCallStackArgumentsDefined(
           Addresses[key(SP)] = *CurrentSP;
       }
       if (Op.Opcode == NdOp::STORE) {
-        const auto Offset =
-            Op.NumInputs == 2 ? address(Op.Inputs[0]) : std::nullopt;
+        const auto Offset = Op.NumInputs == 2 && (!isMIPSN32(Architecture) ||
+                                                  Op.Inputs[0].Size == SP.Size)
+                                ? address(Op.Inputs[0])
+                                : std::nullopt;
         if (!Offset || !Op.Inputs[1].Size ||
             Op.Inputs[1].Size > limits::ir::kSourceCallStackWriteBytes ||
             Op.MemoryOrdering != NdMemoryOrdering::None ||
@@ -328,9 +361,21 @@ bool neverd::sourceCallStackArgumentsDefined(
             Written.insert(*Offset + I);
       }
       std::optional<int64_t> Next;
-      if (Op.Output.Size == 8 && Op.NumInputs == 1 && Op.Opcode == NdOp::COPY)
+      const bool N32Word = isMIPSN32(Architecture) && Op.Output.isTemp() &&
+                           Op.Output.Size == TRI.PointerSize;
+      if (Op.Output.Size == SP.Size && Op.NumInputs == 1 &&
+          ((Op.Opcode == NdOp::COPY && Op.Inputs[0].Size == SP.Size) ||
+           (isMIPSN32(Architecture) && Op.Opcode == NdOp::INT_SEXT &&
+            Op.Inputs[0].isTemp() && Op.Inputs[0].Size == TRI.PointerSize)))
         Next = address(Op.Inputs[0]);
-      if (Op.Output.Size == 8 && Op.NumInputs == 2 &&
+      if (N32Word && Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
+          Op.Inputs[0].Size == SP.Size && Op.Inputs[1].isConst() &&
+          Op.Inputs[1].Offset == 0)
+        Next = address(Op.Inputs[0]);
+      // A n32 word temporary names only the low word until SEXT restores the
+      // canonical address. Only a full machine address can authorize a store.
+      if ((Op.Output.Size == SP.Size || N32Word) && Op.NumInputs == 2 &&
+          Op.Inputs[0].Size == Op.Output.Size &&
           (Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
           Op.Inputs[1].isConst())
         if (const auto Base = address(Op.Inputs[0])) {

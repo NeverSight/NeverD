@@ -6596,13 +6596,16 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     uint64_t FrameBaseOffset = checkedStackAdd(LowerSize, EntryResidue);
     uint64_t StorageSize = checkedStackAdd(FrameBaseOffset, UpperSize);
     collectFrameRecordMembers(Func, FrameBaseOffset, StorageSize);
+    const std::string FrameBaseInit =
+        isMIPSN32(Opts.TheArch)
+            ? "const int64_t frame_base = (int64_t)(intptr_t)"
+            : "const uintptr_t frame_base = (uintptr_t)";
     emitIndent(1);
     if (FrameRecordMembers.empty()) {
       OS << "_Alignas(" << kSyntheticStackAlignment << ") uint8_t "
          << kFrameStorageName << "[" << StorageSize << "];\n";
-      FrameBaseDeclaration = "const uintptr_t frame_base = (uintptr_t)(" +
-                             kFrameStorageName.str() + " + " +
-                             std::to_string(FrameBaseOffset) + ")";
+      FrameBaseDeclaration = FrameBaseInit + "(" + kFrameStorageName.str() +
+                             " + " + std::to_string(FrameBaseOffset) + ")";
     } else {
       // The members at their byte offsets, the gaps named by offset as IDA
       // names a structure's gaps. The tag is the function's own: the C++,
@@ -6631,10 +6634,9 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
       Gap(StorageSize);
       emitIndent(1);
       OS << "} " << kFrameStorageName << ";\n";
-      FrameBaseDeclaration =
-          "const uintptr_t frame_base = (uintptr_t)((uint8_t *)&" +
-          kFrameStorageName.str() + " + " + std::to_string(FrameBaseOffset) +
-          ")";
+      FrameBaseDeclaration = FrameBaseInit + "((uint8_t *)&" +
+                             kFrameStorageName.str() + " + " +
+                             std::to_string(FrameBaseOffset) + ")";
     }
     // The rebuilt storage has the host's pointer width, which a 64-bit
     // target's source is compiled with: frame arithmetic is uint64_t already.

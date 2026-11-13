@@ -16,6 +16,7 @@
 #include "../../pipeline/PipelineCallAbiDetail.h"
 #include "../../pipeline/PipelineFunctionNames.h"
 #include "../../pipeline/PipelineSourceInline.h"
+#include "../../pipeline/PipelineSourceOptimization.h"
 #include "../../pipeline/PipelineSourceStackAccesses.h"
 #include "../plugin/PluginManager.h"
 #include "FunctionAuditReason.h"
@@ -1272,24 +1273,25 @@ struct Session {
   /// Emit, verify and optimize native LLVM for the pipeline's functions,
   /// with bodies as \p BodyMask selects (MedLLVMEmitter::emit).  Sets the
   /// error and returns null when the emitter refuses or verification fails.
-  std::unique_ptr<llvm::Module>
-  emitNativeLlvm(bool NoOpt, const std::vector<char> *BodyMask,
-                 std::shared_ptr<LLVMSourceMap> &Sources,
-                 bool OriginalImageStorage = false,
-                 std::shared_ptr<SourceInlineHighPreparation> *PreparedHigh =
-                     nullptr) try {
+  std::unique_ptr<llvm::Module> emitNativeLlvm(
+      bool NoOpt, const std::vector<char> *BodyMask,
+      std::shared_ptr<LLVMSourceMap> &Sources,
+      bool OriginalImageStorage = false,
+      std::shared_ptr<SourceInlineHighPreparation> *PreparedHigh = nullptr,
+      bool OptimizeOwned = true, bool NeedSourceMap = true) try {
     // HighIR decompile does not run recoverCallAbi. --func --llvm still emits
     // from that MedIR, so populate CallInfos here; otherwise MedLLVM emits
     // 0-arg calls for unwritten live-in rcx.  A body-masked module declares
     // the other functions by the signatures this recovers too; recovery
     // recomputes each function's call information, so once per pipeline is
     // enough for such modules.
+    auto ImportNames = Img.getImportAddressNames();
     if (!BodyMask || !NativeMedFuncs) {
       std::map<va_t, std::string> FuncNames;
       for (const auto &MF : PipeResult.MedFuncs)
         if (!MF.Name.empty())
           FuncNames[MF.Entry] = MF.Name;
-      for (const auto &[Address, Name] : Img.getImportAddressNames())
+      for (const auto &[Address, Name] : ImportNames)
         FuncNames[Address] = Name;
       for (auto &[Address, Name] : pipeline_detail::debugFunctionNames(
                PipeResult, FuncNames, decompileDebug()))
@@ -1314,8 +1316,9 @@ struct Session {
       NativeCalleeDeclarations = std::move(Recovery.OmittedCalleeDeclarations);
     }
     std::vector<std::pair<va_t, std::string>> ImportMap;
-    for (const auto &[Addr, Name] : Img.getImportAddressNames())
-      ImportMap.emplace_back(Addr, Name);
+    ImportMap.reserve(ImportNames.size());
+    for (auto &[Addr, Name] : ImportNames)
+      ImportMap.emplace_back(Addr, std::move(Name));
     MedLLVMEmitter Emitter;
     Emitter.setPreserveUnknownSourceValues(true);
     Emitter.setSourceCalleeDeclarations(NativeCalleeDeclarations);
@@ -1327,9 +1330,9 @@ struct Session {
     Emitter.setDebugContext(decompileDebug());
     Emitter.setPrototypeArgumentCallees(
         &PipeResult.CallPrototypeArguments.get());
-    // Native source views need surviving instruction observations even when
-    // this function contains no recognized library operation.
-    Sources = std::make_shared<LLVMSourceMap>();
+    // Mapped views retain instruction observations, including when there is
+    // no library recognition. Plain text has no consumer of these handles.
+    Sources = NeedSourceMap ? std::make_shared<LLVMSourceMap>() : nullptr;
     Emitter.setSourceMap(Sources.get());
     auto Candidate = Emitter.emit(*NativeMedFuncs, *LLVMCtx, "neverd_output",
                                   Img.Arch, ImportMap, &Img, Img.abiFormat(),
@@ -1380,6 +1383,18 @@ struct Session {
       Pipeline::promoteScaffoldingAllocas(*Candidate);
       if (Sources)
         Sources->refreshExpressionOrigins();
+    } else if (!SpecializedSource && BodyMask && OriginalImageStorage &&
+               OptimizeOwned) {
+      if (tryOptimizeOwnedSourceModule(*Candidate, Sources.get(),
+                                       SourceOptions))
+        return Candidate;
+      // A failed transform may have changed any IR or tracking handle.
+      // Re-emit the original and use the rollback-capable fallback once.
+      Candidate.reset();
+      Sources.reset();
+      return emitNativeLlvm(NoOpt, BodyMask, Sources, OriginalImageStorage,
+                            PreparedHigh, /*OptimizeOwned=*/false,
+                            NeedSourceMap);
     } else if (!SpecializedSource) {
       const OptimizationResult Optimization = Pipeline::optimizeOrPromoteModule(
           *Candidate, Sources.get(), SourceOptions);
@@ -1411,7 +1426,8 @@ struct Session {
   /// other function declared.  Kept for the functions shown last.
   const FunctionLlvmModule *
   ensureFunctionLlvmModule(va_t Entry, bool NoOpt,
-                           bool OriginalImageStorage = false) {
+                           bool OriginalImageStorage = false,
+                           bool NeedSourceMap = true) {
     if (PipeRan && PipelineFeatureGeneration != SigDB.featureGeneration())
       clearPipeline();
     SourceViewOptions NativeOptions = SourceOptions;
@@ -1421,7 +1437,7 @@ struct Session {
          ++It)
       if (It->Entry == Entry && It->NoOpt == NoOpt &&
           It->OriginalImageStorage == OriginalImageStorage &&
-          It->Options == NativeOptions) {
+          (!NeedSourceMap || It->Sources) && It->Options == NativeOptions) {
         FunctionLlvmModules.splice(FunctionLlvmModules.begin(),
                                    FunctionLlvmModules, It);
         return &FunctionLlvmModules.front();
@@ -1447,7 +1463,8 @@ struct Session {
     Built.OriginalImageStorage = OriginalImageStorage;
     Built.Options = std::move(NativeOptions);
     Built.Module = emitNativeLlvm(NoOpt, &Mask, Built.Sources,
-                                  OriginalImageStorage, &Built.PreparedHigh);
+                                  OriginalImageStorage, &Built.PreparedHigh,
+                                  /*OptimizeOwned=*/true, NeedSourceMap);
     if (!Built.Module)
       return nullptr;
     FunctionLlvmModules.push_front(std::move(Built));

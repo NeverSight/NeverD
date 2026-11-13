@@ -380,7 +380,8 @@ TEST(SourceParameterPlacement, I386PassesEverythingOnTheStack) {
 
 TEST(SourceParameterPlacement,
      MIPSHardFloatUsesSharedPositionsAndAlignedPairs) {
-  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL,
+                 Arch::MIPS64N32, Arch::MIPS64N32EL}) {
     const bool Wide = isMIPS64(A), Little = archLittleEndian(A);
     const auto Prefix =
         place(A, ELF, floatType(8), {floatType(4), floatType(8), intType(4)});
@@ -432,11 +433,40 @@ TEST(SourceParameterPlacement,
   }
 }
 
+TEST(SourceParameterPlacement,
+     MIPSVariadicFloatingCallsKeepTheirNamedBoundary) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                 Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    const auto &TRI = getTargetRegInfo(A);
+    const bool Wide = isMIPS64(A);
+    const auto FP = floatType(8);
+    const std::vector<TypeRef> Actual{FP, FP, intType(4)};
+    for (const uint16_t Bytes : {1u, 2u, 4u, 8u, 2u * TRI.FullRegWidth}) {
+      const auto Bound =
+          floatingCallArguments(A, ELF, intType(Bytes), Actual, 1);
+      ASSERT_TRUE(Bound);
+      ASSERT_TRUE(floatingCallTypes(A, ELF, *Bound));
+      EXPECT_EQ(Bound->Scalars[0].Register,
+                Wide ? mipsreg::w(12) : mipsreg::r(4));
+      EXPECT_EQ(Bound->Scalars[1].Register, mipsreg::r(Wide ? 5 : 6));
+      EXPECT_EQ(Bound->Scalars[2].Kind,
+                Wide ? IntegerReg : SourceABICarrierKind::Stack);
+    }
+    EXPECT_EQ(TRI.PointerSize, Wide && !isMIPSN32(A) ? 8 : 4);
+    EXPECT_EQ(TRI.integerArgumentLayout(ELF).SlotBytes, Wide ? 8 : 4);
+    EXPECT_FALSE(floatingCallArguments(A, ELF, FP, {FP, floatType(4)}, 1));
+    EXPECT_FALSE(floatingCallArguments(A, ELF, FP, {FP, intType(2)}, 1));
+    EXPECT_FALSE(floatingCallArguments(A, ELF, FP, Actual, 4));
+  }
+}
+
 TEST(SourceParameterPlacement, MIPSSavedFPRsPreserveOnlyTheScalarView) {
-  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL,
+                 Arch::MIPS64N32, Arch::MIPS64N32EL}) {
     const auto &TRI = getTargetRegInfo(A);
     for (unsigned R = 0; R < 32; ++R) {
-      const bool Saved = isMIPS64(A) ? R >= 24 : R >= 20 && R % 2 == 0;
+      const bool Saved =
+          isMIPS64(A) && !isMIPSN32(A) ? R >= 24 : R >= 20 && R % 2 == 0;
       EXPECT_EQ(TRI.isCallPreserved(mipsreg::w(R), 8, ELF), Saved);
       EXPECT_FALSE(TRI.isCallPreserved(mipsreg::w(R), 16, ELF));
       EXPECT_EQ(TRI.callPreservedPrefixSize(mipsreg::w(R), 16, ELF),

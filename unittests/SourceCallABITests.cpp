@@ -53,6 +53,43 @@ TEST(SourceCallABI, PlacesFixedScalarArgumentsByPlatform) {
       Windows.Signature.Parameters[1].Location.RegisterOffset,
       getTargetRegInfo(Arch::X64).floatingParamRegs(BinaryFormat::COFF)[1]);
 }
+TEST(SourceCallABI, MIPSCallContractsRejectChangedCarriersAndVariadicTypes) {
+  const auto Double = NdType::makeFloat(8);
+  for (auto A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                 Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    const auto &TRI = getTargetRegInfo(A);
+    auto H = contract({Double, Double}, 1);
+    H.Signature.ReturnType = NdType::makeInt(2 * TRI.FullRegWidth, false);
+    std::string Error;
+    ASSERT_TRUE(assignAnalystCallABI(H, A, BinaryFormat::ELF, Error)) << Error;
+    ASSERT_TRUE(H.Signature.MIPSScalars);
+    EXPECT_EQ(H.Signature.ReturnLocation.Kind, SourceABICarrierKind::None);
+    ASSERT_EQ(H.Signature.ReturnComponents.size(), 2u);
+    for (size_t I = 0; I < 2; ++I) {
+      const auto &Part = H.Signature.ReturnComponents[I];
+      EXPECT_EQ(Part.Kind, SourceABICarrierKind::IntegerRegister);
+      EXPECT_EQ(Part.RegisterOffset, TRI.IntReturnRegs[I]);
+      EXPECT_EQ(Part.ValueBytes, TRI.FullRegWidth);
+    }
+    auto Swapped = H.Signature;
+    std::swap(Swapped.ReturnComponents[0], Swapped.ReturnComponents[1]);
+    EXPECT_FALSE(validateSourceABI(Swapped, Error));
+    EXPECT_EQ(H.Signature.Parameters[0].Location.Kind,
+              isMIPS64(A) ? SourceABICarrierKind::FloatingRegister
+                          : SourceABICarrierKind::IntegerRegister);
+    EXPECT_EQ(H.Signature.Parameters[1].Location.Kind,
+              SourceABICarrierKind::IntegerRegister);
+    auto Altered = H.Signature;
+    Altered.ReturnLocation.ValueBytes = TRI.FullRegWidth;
+    EXPECT_FALSE(validateSourceABI(Altered, Error));
+    Altered = H.Signature;
+    ++Altered.Parameters[1].Location.RegisterOffset;
+    EXPECT_FALSE(validateSourceABI(Altered, Error));
+    H.Signature.Parameters[1].Type = NdType::makeFloat(4);
+    EXPECT_FALSE(assignAnalystCallABI(H, A, BinaryFormat::ELF, Error));
+  }
+}
+
 TEST(SourceCallABI, DarwinWidePrototypeKeepsBothWordsAndOddRegisters) {
   const auto &TRI = getTargetRegInfo(Arch::AArch64);
   for (bool Signed : {false, true})

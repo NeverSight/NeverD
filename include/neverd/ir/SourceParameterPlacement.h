@@ -67,8 +67,8 @@ aapcs64FloatingAggregate(const TypeRef &Type);
 /// including the named prefix, uses the integer bank and then stack slots.
 std::optional<SourceParameterPlacement>
 placeSourceParameters(Arch A, BinaryFormat F, const TypeRef &ReturnType,
-                      llvm::ArrayRef<TypeRef> ParamTypes,
-                      bool Variadic = false);
+                      llvm::ArrayRef<TypeRef> ParamTypes, bool Variadic = false,
+                      std::optional<unsigned> FixedCount = std::nullopt);
 
 /// The placement of the parameters \p ParamTypes of an i386 function whose
 /// debug information says where they enter it, \p Entries

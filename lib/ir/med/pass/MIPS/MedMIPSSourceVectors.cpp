@@ -10,12 +10,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ArchSupport.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/med/MIPS/MIPSSourceVectors.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/libc/LibCFloatingArguments.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/BinaryImage.h"
 
@@ -29,14 +31,46 @@
 
 namespace neverd {
 
+const SourceCallTypeHint *mipsFloatingCallSite(
+    const LowOp &Op, Arch Target,
+    const std::map<SourceCallOccurrenceKey, SourceCallTypeHint> *Sites) {
+  if (Sites && !Sites->empty())
+    if (const auto Key = sourceCallOccurrenceKey(Op, Target))
+      if (const auto It = Sites->find(*Key); It != Sites->end()) {
+        const auto &H = It->second;
+        std::string Diagnostic;
+        if (H.CallKind != SourceCallTypeHint::Kind::Analyst ||
+            H.AnalystSite != Key || H.Signature.Architecture != Target ||
+            !H.Signature.MIPSScalars ||
+            H.AnalystFixedCount !=
+                (H.Signature.MIPSScalars->FixedCount
+                     ? int(*H.Signature.MIPSScalars->FixedCount)
+                     : -1) ||
+            !validateSourceABI(H.Signature, Diagnostic))
+          throw LowToMedConversionError("invalid MIPS call-site ABI");
+        return &H;
+      }
+  return nullptr;
+}
+
+static bool hasScalarFP64ABI(const BinaryImage &Image, Arch Target) {
+  return Image.MIPS &&
+         ((Image.MIPS->HasMSA && Image.MIPS->ISARevision == 5) ||
+          Image.MIPS->ISARevision == 6) &&
+         Image.MIPS->FPABI == (isMIPS64(Target) ? 1 : 6);
+}
+
 void requireMIPSSourceVectors(
     const LowFunc &Function, Arch Target, const BinaryImage *Image,
-    const std::map<va_t, FloatingCallArguments> *Calls) {
+    const std::map<va_t, FloatingCallArguments> *Calls,
+    const std::map<SourceCallOccurrenceKey, SourceCallTypeHint> *Sites) {
   const auto IsVector = [](const NdVar &V) {
     return V.isReg() && mipsreg::isVector(V.Offset);
   };
   const auto SignatureOf =
       [&](const LowOp &Op) -> const FloatingCallArguments * {
+    if (const auto *Site = mipsFloatingCallSite(Op, Target, Sites))
+      return Site->Signature.MIPSScalars.get();
     if (Calls && (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
         Op.NumInputs && Op.Inputs[0].isConst())
       if (const auto Call = Calls->find(Op.Inputs[0].Offset);
@@ -56,11 +90,7 @@ void requireMIPSSourceVectors(
   if (!isMIPS(Target))
     throw LowToMedConversionError(
         "MIPS FP/vector source requires a MIPS target");
-  const bool Wide = isMIPS64(Target);
-  const bool FP64 = Image && Image->MIPS &&
-                    ((Image->MIPS->HasMSA && Image->MIPS->ISARevision == 5) ||
-                     Image->MIPS->ISARevision == 6) &&
-                    Image->MIPS->FPABI == (Wide ? 1 : 6);
+  const bool FP64 = Image && hasScalarFP64ABI(*Image, Target);
   if (Image && !FP64)
     throw LowToMedConversionError(
         "MIPS FP/vector source requires explicit FP64 profile");
@@ -131,7 +161,8 @@ void requireMIPSSourceVectors(
         continue;
       const auto R = Index(Op.Output);
       // n64 preserves F24–F31. o32 FP64 preserves F20,F22,...,F30.
-      if (Wide ? R >= 24 : (R >= 20 && (!FP64 || R % 2 == 0)))
+      if ((!isMIPS64(Target) && !FP64 && R >= 20) ||
+          getTargetRegInfo(Target).isCallPreserved(mipsreg::w(R), 8))
         throw LowToMedConversionError(
             "MSA source saved FPR restoration is not qualified");
       const auto Whole =
@@ -176,10 +207,39 @@ void requireMIPSSourceVectors(
           "MSA unreachable block has unbound vector inputs");
 }
 
-void discardUnobservedMIPSFPUpperBits(MedFunc &Function, Arch Target) {
-  if (!isMIPS(Target) || Function.SkippedSSA || !Function.ReturnType ||
-      Function.ReturnType->Kind != NdTypeKind::Float ||
-      Function.ReturnType->Size != 4 || !Function.MultiReturn.empty())
+void discardUnobservedMIPSFPUpperBits(
+    MedFunc &Function, const BinaryImage &Image,
+    const std::map<va_t, FloatingCallArguments> &EntrySignatures,
+    const DebugContext *Debug) {
+  const Arch Target = Image.Arch;
+  if (!isMIPS(Target) || Function.SkippedSSA ||
+      !hasScalarFP64ABI(Image, Target))
+    return;
+  // A selected leaf need not occur in the outgoing call inventory. Resolve
+  // its exact declaration even when it has no caller in this pipeline run.
+  const auto Known = EntrySignatures.find(Function.Entry);
+  std::optional<FloatingCallArguments> Local;
+  if (Known == EntrySignatures.end() && Debug)
+    if (const auto Symbol = Debug->resolveFunction(Function.Entry);
+        Symbol && Symbol->Addr == Function.Entry)
+      Local = libc::floatingCallArguments(*Symbol, Target, BinaryFormat::ELF);
+  const auto *Signature = Known != EntrySignatures.end() ? &Known->second
+                          : Local                        ? &*Local
+                                                         : nullptr;
+  bool Declared = false;
+  if (Signature && !Signature->ReturnElements)
+    if (auto Types = floatingCallTypes(Target, BinaryFormat::ELF, *Signature)) {
+      Declared = true;
+      Function.ReturnType = Types->Result;
+      Function.HasDeclaredMIPSIntegerResult =
+          Types->Result->Kind == NdTypeKind::Int;
+      Function.MultiReturn.clear();
+      Function.ReturnsVectorRegister = false;
+    }
+  if (!Function.ReturnType || !Function.MultiReturn.empty())
+    return;
+  const bool Floating = Function.ReturnType->Kind == NdTypeKind::Float;
+  if (!Declared && (!Floating || Function.ReturnType->Size != 4))
     return;
   std::vector<MedOp *> Candidates;
   for (auto &Block : Function.Blocks)
@@ -246,8 +306,8 @@ void discardUnobservedMIPSFPUpperBits(MedFunc &Function, Arch Target) {
         continue;
       // Keep every potentially returned FPR definition conservative; the
       // ABI reads its low word even when RETURN still carries the GPR seed.
-      if (Value.Kind == MedVar::Reg && Value.RegOff == TRI.FPReturnReg &&
-          First < Function.ReturnType->Size)
+      if (Floating && Value.Kind == MedVar::Reg &&
+          Value.RegOff == TRI.FPReturnReg && First < Function.ReturnType->Size)
         return true;
       if (Value.Kind == MedVar::Reg &&
           TRI.isCallPreserved(Value.RegOff, Value.Size))

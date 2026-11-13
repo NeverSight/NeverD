@@ -24086,7 +24086,7 @@ source fixtures execute zero/mid/full immediate counts on both byte orders.
 
 ### MIPS decode/lift and firmware performance
 
-Fixed hard-float call execution uses owned assembly and explicit declarations:
+The hard-float call tests assemble original callers and callees and bind explicit declarations.
 
 ```sh
 PYTHONPATH=third_party/unicorn/bindings/python LIBUNICORN_PATH=/path/to/unicorn-build \
@@ -24097,10 +24097,17 @@ PYTHONPATH=third_party/unicorn/bindings/python LIBUNICORN_PATH=/path/to/unicorn-
 ```
 
 The runner compares original machine code with recompiled HighC and LLVMC at
-O0/O2 for o32/n64, both byte orders, float/double mixed entry arguments and
-nine-argument FP overflow. Callee results include float, double, a machine
-word, a pointer and void. Negative and wide inputs, the high half of an n64
-result, and the FCSR inexact flag distinguish the return carriers. A mixed
+O0/O2 for o32, n32 and n64 in both byte orders, including float/double
+mixed entry arguments and nine-argument FP overflow. The SDK fixture obtains
+original call IDs and applies fixed or variadic declarations, including a
+single-precision named argument followed by a promoted double, and a double
+on the stack after the last argument register. Indirect calls
+alternate between two runtime callback targets. Callee results include float,
+double, signed and unsigned narrow integers, v0/v1 integer pairs, pointers
+and void. The original caller consumes both halves of each n32/n64 return
+register. Distinct high and low words and the FCSR inexact flag distinguish
+the return carriers. The original assembly callers also execute recompiled
+signed-byte, unsigned-halfword and paired integer callees. A mixed
 call checks each narrow integer at the full width supplied to the callee. The runner
 also checks SP, return target and ABI-preserved FPRs. `NeverDMIPSPipelineTests`
 rejects escaped frame pointers, callee-owned link spills and reads of volatile

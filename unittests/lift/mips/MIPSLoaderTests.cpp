@@ -60,6 +60,34 @@ TEST_P(MIPSLoader, MapsLinkedImageAndReadsTargetOrderPointers) {
             File.Little ? (File.Is64 ? 0x10 : 0x50) : 0x80);
 }
 
+TEST(MIPSN32Loader, IdentifiesELF32With64BitGPRsInBothByteOrders) {
+  for (const bool Little : {false, true}) {
+    ELFBytes File(Little ? Arch::MIPS32EL : Arch::MIPS32);
+    File.abiFlags();
+    File.put(36, 0xa0000020, 4); // MIPS64r6, ABI2, ELFCLASS32.
+    File.Bytes[0xe2] = 64;
+    File.Bytes[0xe3] = 6;
+    File.Bytes[0xe4] = File.Bytes[0xe5] = 2;
+    File.Bytes[0xe7] = 1;
+    ELFLoader Loader;
+    std::vector<LoadCandidate> Rows;
+    ELFLoader::identify(File.buffer(), Rows);
+    ASSERT_EQ(Rows.size(), 1u);
+    ASSERT_TRUE(Rows[0].Loadable) << Rows[0].Reason;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    const Arch A = Little ? Arch::MIPS64N32EL : Arch::MIPS64N32;
+    EXPECT_EQ(Rows[0].TheArch, A);
+    EXPECT_EQ(Image->Arch, A);
+    EXPECT_EQ(Image->getPointerSize(), 4u);
+    EXPECT_EQ(Image->MIPS->ABI, MIPSABI::N32);
+    File.Bytes[0xe4] = 1;
+    auto Invalid = Loader.loadBuffer(File.buffer());
+    ASSERT_FALSE(bool(Invalid));
+    llvm::consumeError(Invalid.takeError());
+  }
+}
+
 TEST_P(MIPSLoader, ProgramABIFlagsAgreeWithHeader) {
   ELFBytes File(GetParam());
   File.abiFlags();

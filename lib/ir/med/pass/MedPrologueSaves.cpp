@@ -1344,7 +1344,7 @@ bool isUnknownSourceInput(const MedFunc &Func, const TargetRegInfo &TRI,
   if (V.Kind == MedVar::Flag)
     return true;
   if (V.Kind != MedVar::Reg || TRI.isStackPointer(V.RegOff) ||
-      (TRI.isLinkRegister(V.RegOff) && V.Size == TRI.PointerSize) ||
+      (TRI.isLinkRegister(V.RegOff) && V.Size == TRI.addressRegisterBytes()) ||
       TRI.isPlatformRegister(V.RegOff, Format) ||
       isX87ControlWord(Architecture, V))
     return false;

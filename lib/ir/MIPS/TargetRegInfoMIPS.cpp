@@ -11,6 +11,7 @@
 
 #include "../TargetRegInfoDetail.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
 #include <array>
@@ -49,9 +50,11 @@ constexpr auto VectorViews = [] {
 
 const TargetRegInfo &getMIPSRegInfo(Arch Target) {
   static const auto Tables = [] {
-    std::array<TargetRegInfo, 4> Result;
-    constexpr Arch Targets[] = {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64,
-                                Arch::MIPS64EL};
+    constexpr Arch Targets[] = {
+#define NEVERD_MIPS_TARGET(Name, Spelling, Triple) Arch::Name,
+#include "neverd/MIPSTargets.def"
+    };
+    std::array<TargetRegInfo, std::size(Targets)> Result;
     for (unsigned I = 0; I < Result.size(); ++I) {
       TargetRegInfo &Info = Result[I];
       const bool Wide = isMIPS64(Targets[I]);
@@ -60,7 +63,8 @@ const TargetRegInfo &getMIPSRegInfo(Arch Target) {
       Info.FramePointer = mipsreg::FP;
       Info.LinkRegister = mipsreg::RA;
       Info.ProgramCounter = mipsreg::PC;
-      Info.PointerSize = Info.FullRegWidth = Wide ? 8 : 4;
+      Info.FullRegWidth = Wide ? 8 : 4;
+      Info.PointerSize = isMIPSN32(Targets[I]) ? 4 : Info.FullRegWidth;
       Info.MinInsnAlign = 4;
       Info.VecRegBase = mipsreg::VectorBase;
       Info.VecRegStride = Info.VecRegWidth = mipsreg::VectorBytes;
@@ -75,8 +79,7 @@ const TargetRegInfo &getMIPSRegInfo(Arch Target) {
       Info.FPABIRegWidth = 8;
       Info.IntReturnReg = mipsreg::V0;
       Info.IntReturnReg2 = mipsreg::V1;
-      Info.IntegerReturnPairHighFirst =
-          Targets[I] == Arch::MIPS32 || Targets[I] == Arch::MIPS64;
+      Info.IntegerReturnPairHighFirst = !archLittleEndian(Targets[I]);
       Info.IntReturnRegs = ReturnRegisters;
       Info.CalleeSaveRegs =
           Wide ? llvm::ArrayRef(N64Saved) : llvm::ArrayRef(O32Saved);
@@ -94,6 +97,10 @@ const TargetRegInfo &getMIPSRegInfo(Arch Target) {
     return Tables[2];
   case Arch::MIPS64EL:
     return Tables[3];
+  case Arch::MIPS64N32:
+    return Tables[4];
+  case Arch::MIPS64N32EL:
+    return Tables[5];
   default:
     llvm_unreachable("MIPS table requested for another architecture");
   }

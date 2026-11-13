@@ -133,10 +133,10 @@ public:
                    const MedCallReturnRanges *CallReturns = nullptr,
                    const BinaryImage *RangeImage = nullptr)
       : Func(Func), TRI(getTargetRegInfo(Architecture)),
-        Architecture(Architecture), Format(Format), Entry(Entry),
-        FollowJoins(FollowJoins), OnlySeededRoots(OnlySeededRoots),
-        Definitions(definitionCapacity(Func)), CallReturns(CallReturns),
-        RangeImage(RangeImage) {
+        AddressBytes(TRI.addressRegisterBytes()), Architecture(Architecture),
+        Format(Format), Entry(Entry), FollowJoins(FollowJoins),
+        OnlySeededRoots(OnlySeededRoots), Definitions(definitionCapacity(Func)),
+        CallReturns(CallReturns), RangeImage(RangeImage) {
     for (const MedBlock &Block : Func.Blocks) {
       for (const PhiNode &Phi : Block.Phis) {
         auto &Definition = Definitions[key(Phi.Output)];
@@ -161,7 +161,7 @@ public:
       const auto Found = Definitions.find(key(Seed.Definition->Output));
       if (Found == Definitions.end() || Found->second.Ambiguous ||
           Found->second.Op != Seed.Definition || Seed.Definition->Dead ||
-          Seed.Definition->Output.Size != TRI.PointerSize ||
+          Seed.Definition->Output.Size != AddressBytes ||
           !fitsPointerOffset(Seed.Offset))
         continue;
       auto &Definition = Found->second;
@@ -180,7 +180,7 @@ public:
           Seed.Definition ? Seed.Definition->Output : Seed.Join->Output;
       const auto Found = Definitions.find(key(Output));
       if (Found == Definitions.end() || Found->second.Ambiguous ||
-          Output.Size != TRI.PointerSize ||
+          Output.Size != AddressBytes ||
           (Seed.Definition &&
            (Found->second.Op != Seed.Definition || Seed.Definition->Dead)) ||
           (Seed.Join && Found->second.Join != Seed.Join))
@@ -199,7 +199,7 @@ public:
                                            unsigned Depth = 0) {
     if (Depth == 0)
       Steps = 0;
-    const auto Mask = alignmentMask(Op, TRI.PointerSize);
+    const auto Mask = alignmentMask(Op, AddressBytes);
     if (!Mask || Mask->Alignment >
                      guaranteedEntryStackAlignment(Architecture, Format, Entry))
       return std::nullopt;
@@ -219,7 +219,7 @@ public:
 
   bool realignmentRoot(const MedOp &Op,
                        const std::set<const MedOp *> &EarlierEntryOps) {
-    const auto Mask = alignmentMask(Op, TRI.PointerSize);
+    const auto Mask = alignmentMask(Op, AddressBytes);
     if (!Mask || Op.Output.Kind != MedVar::Reg ||
         Op.Output.TheArch != Architecture ||
         Op.Output.RegOff != TRI.StackPointer ||
@@ -294,7 +294,7 @@ public:
     while (!Work.empty()) {
       const MedVar Current = Work.back();
       Work.pop_back();
-      if (++Steps > kMaxProofSteps || Current.Size != TRI.PointerSize ||
+      if (++Steps > kMaxProofSteps || Current.Size != AddressBytes ||
           (Current.Kind != MedVar::Reg && Current.Kind != MedVar::Temp))
         return std::nullopt;
       const Key K = key(Current);
@@ -370,7 +370,7 @@ public:
         continue;
       }
       // Clearing low bits only lowers the address.
-      if (const auto Mask = alignmentMask(*Op, TRI.PointerSize)) {
+      if (const auto Mask = alignmentMask(*Op, AddressBytes)) {
         Follow(Op->Inputs[Mask->BaseIndex], 0);
         continue;
       }
@@ -380,7 +380,7 @@ public:
       const bool Subtract = Op->Opcode == NdOp::INT_SUB;
       const unsigned BaseIndex = !Subtract && Op->Inputs[0].isConst() ? 1 : 0;
       const MedVar &Delta = Op->Inputs[1 - BaseIndex];
-      if (Delta.Size != TRI.PointerSize)
+      if (Delta.Size != AddressBytes)
         return std::nullopt;
       const auto Displacement = scalarRange(Delta, 1);
       if (Steps > kMaxProofSteps || Displacement.getUnsignedMax().isNegative())
@@ -475,10 +475,42 @@ private:
     return Op;
   }
 
+  // The n32 ABI passes a sign-extended 32-bit stack pointer in a 64-bit
+  // register. Compilers adjust it with ADDIU, whose result is a sign-extended
+  // word. Recover the full input for that exact sequence. An arbitrary low
+  // slice or a zero extension does not prove a machine stack address.
+  const MedVar *n32WordAdjustment(const MedOp &Op, int64_t &Delta) {
+    if (!isMIPSN32(Architecture) || Op.Opcode != NdOp::INT_SEXT ||
+        Op.NumInputs != 1 || Op.Output.Size != AddressBytes ||
+        Op.Inputs[0].Size != TRI.PointerSize)
+      return nullptr;
+    const auto Add = scalarDefinition(Op.Inputs[0]);
+    if (!Add || !*Add || (*Add)->Opcode != NdOp::INT_ADD ||
+        (*Add)->NumInputs != 2 ||
+        (AllowedDefinitions && !AllowedDefinitions->count(*Add)))
+      return nullptr;
+    const unsigned I = (*Add)->Inputs[0].isConst() ? 0 : 1;
+    const MedVar &Immediate = (*Add)->Inputs[I];
+    const MedVar &Word = (*Add)->Inputs[1 - I];
+    if (Word.Size != TRI.PointerSize || Immediate.Size != TRI.PointerSize ||
+        !stableScalarConstant(Immediate))
+      return nullptr;
+    const auto Slice = scalarDefinition(Word);
+    if (!Slice || !*Slice || (*Slice)->Opcode != NdOp::SUBBYTES ||
+        (*Slice)->NumInputs != 2 || (*Slice)->Inputs[0].Size != AddressBytes ||
+        !stableScalarConstant((*Slice)->Inputs[1]) ||
+        (*Slice)->Inputs[1].ConstVal != 0 ||
+        (AllowedDefinitions && !AllowedDefinitions->count(*Slice)))
+      return nullptr;
+    Steps += 2;
+    Delta = static_cast<int32_t>(Immediate.ConstVal);
+    return &(*Slice)->Inputs[0];
+  }
+
   const MedVar *nativeAddressRoundTrip(const MedOp &Op) {
-    if (!FollowJoins || TRI.PointerSize != 4 || Op.Dead ||
+    if (!FollowJoins || AddressBytes != 4 || Op.Dead ||
         Op.Opcode != NdOp::SUBBYTES || Op.NumInputs != 2 ||
-        Op.Output.Size != TRI.PointerSize ||
+        Op.Output.Size != AddressBytes ||
         Op.Inputs[0].Size != sizeof(uint64_t) ||
         !stableScalarConstant(Op.Inputs[1]) || Op.Inputs[1].ConstVal != 0 ||
         Op.MemoryOrdering != NdMemoryOrdering::None ||
@@ -488,8 +520,7 @@ private:
     const auto Carrier = scalarDefinition(Op.Inputs[0]);
     if (!Carrier || !*Carrier || (*Carrier)->Opcode != NdOp::INT_ZEXT ||
         (*Carrier)->NumInputs != 1 ||
-        (*Carrier)->Inputs[0].Size != TRI.PointerSize ||
-        ++Steps > kMaxProofSteps)
+        (*Carrier)->Inputs[0].Size != AddressBytes || ++Steps > kMaxProofSteps)
       return nullptr;
     // LEA returns the low native pointer from a zero-extended address
     // container. Charge the skipped extension and use this same relation in
@@ -591,7 +622,7 @@ private:
                                          uint64_t Alignment, unsigned Depth) {
     if (++Steps > kMaxProofSteps ||
         Depth > limits::ir::kMedStackAlignmentResolveDepthLimit ||
-        Value.Size != TRI.PointerSize || Value.TheArch != Architecture ||
+        Value.Size != AddressBytes || Value.TheArch != Architecture ||
         (Value.Kind != MedVar::Reg && Value.Kind != MedVar::Temp))
       return std::nullopt;
     const auto Found = Definitions.find(key(Value));
@@ -629,8 +660,8 @@ private:
     if (Op->Opcode == NdOp::COPY && Op->NumInputs == 1)
       return resolveResidue(Op->Inputs[0], Alignment, Depth + 1);
     if ((Op->Opcode != NdOp::INT_ADD && Op->Opcode != NdOp::INT_SUB) ||
-        Op->NumInputs != 2 || Op->Inputs[0].Size != TRI.PointerSize ||
-        Op->Inputs[1].Size != TRI.PointerSize)
+        Op->NumInputs != 2 || Op->Inputs[0].Size != AddressBytes ||
+        Op->Inputs[1].Size != AddressBytes)
       return std::nullopt;
     const bool Subtract = Op->Opcode == NdOp::INT_SUB;
     for (unsigned I = 0; I != (Subtract ? 1u : 2u); ++I) {
@@ -777,7 +808,7 @@ private:
                                                     unsigned Depth) {
     if (++Steps > kMaxProofSteps ||
         Depth > limits::ir::kMedStackAlignmentResolveDepthLimit ||
-        Value.Size != TRI.PointerSize ||
+        Value.Size != AddressBytes ||
         (Value.Kind != MedVar::Reg && Value.Kind != MedVar::Temp))
       return std::nullopt;
     const auto Found = Definitions.find(key(Value));
@@ -846,7 +877,7 @@ private:
     const unsigned BaseIndex = !Subtract && Op->Inputs[0].isConst() ? 1 : 0;
     const auto Base = resolveRange(Op->Inputs[BaseIndex], Depth + 1);
     const MedVar &Delta = Op->Inputs[1 - BaseIndex];
-    if (!Base || Delta.Size != TRI.PointerSize)
+    if (!Base || Delta.Size != AddressBytes)
       return std::nullopt;
     const auto Displacement = scalarRange(Delta, Depth + 1);
     if (Steps > kMaxProofSteps || Displacement.getUnsignedMax().isNegative())
@@ -950,7 +981,7 @@ private:
       Deepest = std::max(Deepest, AtDepth);
       if (++Steps > kMaxProofSteps ||
           AtDepth > limits::ir::kMedStackAlignmentResolveDepthLimit ||
-          Value.Size != TRI.PointerSize ||
+          Value.Size != AddressBytes ||
           (Value.Kind != MedVar::Reg && Value.Kind != MedVar::Temp))
         return false;
       const Key K = key(Value);
@@ -1118,12 +1149,12 @@ private:
       const MedVar &Value = *Current;
       Deepest = std::max(Deepest, Depth);
       const bool WideAddress =
-          FollowJoins && TRI.PointerSize == 4 && Value.Size == sizeof(uint64_t);
+          FollowJoins && AddressBytes == 4 && Value.Size == sizeof(uint64_t);
       // Keep the per-query work limit even when shared inputs reuse a proof.
       if (++Steps > kMaxProofSteps)
         return std::nullopt;
       if (Depth > ::neverd::limits::ir::kMedStackAlignmentResolveDepthLimit ||
-          (Value.Size != TRI.PointerSize && !WideAddress) ||
+          (Value.Size != AddressBytes && !WideAddress) ||
           (Value.Kind != MedVar::Reg && Value.Kind != MedVar::Temp) ||
           (AllowedDefinitions && Value.TheArch != Architecture))
         return std::nullopt;
@@ -1165,7 +1196,7 @@ private:
         if (!Op || Definition->ActiveContext == Context ||
             !sameOccurrence(Op->Output, Value) ||
             Op->Opcode != NdOp::INT_ZEXT || Op->NumInputs != 1 ||
-            Op->Inputs[0].Size != TRI.PointerSize ||
+            Op->Inputs[0].Size != AddressBytes ||
             Op->MemoryOrdering != NdMemoryOrdering::None ||
             Op->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
             !Op->IntrinsicOutputs.empty())
@@ -1214,6 +1245,13 @@ private:
             Links.emplace_back(0, false);
             Current = &Op.Inputs[0];
             continue;
+          } else if (Op.Opcode == NdOp::INT_SEXT && isMIPSN32(Architecture)) {
+            int64_t Delta;
+            if (const MedVar *Base = n32WordAdjustment(Op, Delta)) {
+              Links.emplace_back(Delta, false);
+              Current = Base;
+              continue;
+            }
           } else if (const MedVar *Native = nativeAddressRoundTrip(Op)) {
             Result = resolve(*Native, Depth + 2);
           } else if ((Op.Opcode == NdOp::INT_ADD ||
@@ -1229,8 +1267,8 @@ private:
             // same value under either extension. Do not guess the extension
             // of a negative narrow carrier or admit a wider/truncated
             // displacement.
-            if (Signed && (Delta.Size == TRI.PointerSize ||
-                           (Delta.Size < TRI.PointerSize && *Signed >= 0))) {
+            if (Signed && (Delta.Size == AddressBytes ||
+                           (Delta.Size < AddressBytes && *Signed >= 0))) {
               Links.emplace_back(*Signed, Op.Opcode == NdOp::INT_SUB);
               Current = &Base;
               continue;
@@ -1249,6 +1287,7 @@ private:
 
   const MedFunc &Func;
   const TargetRegInfo &TRI;
+  const uint16_t AddressBytes;
   Arch Architecture;
   BinaryFormat Format;
   StackEntryKind Entry;
@@ -1610,7 +1649,7 @@ void simplifyProvenStackAlignment(MedFunc &Func, Arch Architecture,
           Op.NumInputs = 1;
         } else {
           Op.Opcode = NdOp::INT_SUB;
-          Op.Inputs[1] = MedVar::makeConst(Aligned->Remainder, TRI.PointerSize,
+          Op.Inputs[1] = MedVar::makeConst(Aligned->Remainder, Base.Size,
                                            ConstantAddressProvenance::Scalar);
           Op.NumInputs = 2;
         }

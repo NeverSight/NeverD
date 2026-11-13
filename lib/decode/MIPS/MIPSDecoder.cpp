@@ -337,8 +337,10 @@ bool Decoder::decodeMIPSEquivalent(const uint8_t *Bytes, uint32_t Classic,
   if (Micro && !MicroASEHandle) {
     const auto Mode = static_cast<cs_mode>(
         (MIPSISARevision == 6
-             ? (isMIPS64(TargetArch) ? CS_MODE_MIPS64R6 | CS_MODE_MIPS_PTR64
-                                     : CS_MODE_MIPS32R6)
+             ? (isMIPS64(TargetArch)
+                    ? CS_MODE_MIPS64R6 |
+                          (isMIPSN32(TargetArch) ? 0 : CS_MODE_MIPS_PTR64)
+                    : CS_MODE_MIPS32R6)
          : MIPSISARevision == 5
              ? (isMIPS64(TargetArch) ? CS_MODE_MIPS64R5 : CS_MODE_MIPS32R5)
          : isMIPS64(TargetArch) ? CS_MODE_MIPS64R2

@@ -368,6 +368,7 @@ enum class CallingConv : uint8_t {
   Unknown,
   MIPS_O32,
   MIPS_N64,
+  MIPS_N32,
 };
 
 struct MedBlock {
@@ -608,6 +609,9 @@ struct MedFunc {
   int64_t FrameHeadroom = 0;
 
   TypeRef ReturnType;
+  /// The MIPS scalar entry declaration supplies the integer return width and
+  /// signedness. An inferred ReturnType cannot select ABI extension attributes.
+  bool HasDeclaredMIPSIntegerResult = false;
 
   /// Source projection only; never an authenticated semantic return contract.
   std::optional<SourceFunctionTypeHint> SourceTypeHint;

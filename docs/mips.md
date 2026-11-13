@@ -1,7 +1,7 @@
 # MIPS analysis
 
 The experimental MIPS analysis path targets linked ELF programs with classic
-MIPS32/o32 and MIPS64/n64 instructions in either byte order. The profiles below
+MIPS32/o32 and MIPS64/n32 or n64 instructions in either byte order. The profiles below
 cover classic Release 2, classic and microMIPS Release 6 integer and FR=1 floating-point instructions, microMIPS32 and microMIPS64 integer profiles,
 MIPS16e32 and MIPS16e2, and Release 5/o32 and n64 MSA.
 The selected ELF profile determines register width, byte order, stack layout
@@ -69,7 +69,9 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   shared by the ISA's permitted implementations.
 
 - o32 uses `$a0`–`$a3`, a 16-byte caller argument area and aligned register pairs
-  for 64-bit integers. n64 uses registers 4–11 and eight-byte argument slots.
+  for 64-bit integers. n32 and n64 use registers 4–11 and eight-byte argument slots.
+  n32 selects ELF32 with ABI2 and a 64-bit ISA. Its pointers and C `long`
+  occupy four bytes, while its general registers and saved link occupy eight.
   Big-endian integer pairs put their high word first, and narrow stack scalars
   are right justified. Single-carrier results use `$v0`; o32 64-bit results
   use `$v0/$v1` in target word order. These placement rules are tested
@@ -118,11 +120,11 @@ Reading only a low byte or halfword does not prove that incoming upper bits
 have the extension a narrow C parameter would require. Declared source types
 remain a separate contract.
 
-The n32 ABI, historical MIPS I–V profiles,
+Historical MIPS I–V profiles,
 pre-Release 6 scalar floating point, MSA/DSP forms beyond the slices below, privileged instructions and reservations outside the MIPS16e2 and classic Release 6 LowIR coverage below,
 doubleword merge stores (`SDL`/`SDR`), pre-R6 doubleword division and trapping arithmetic are not admitted by
 the current lifter. Unsupported instructions, missing slots and transfers in a
-delay slot produce errors, not replacement NOPs. Floating/aggregate source ABI
+delay slot produce errors, not replacement NOPs. General aggregate source ABI
 classification, arbitrary PIC/gp recovery, raw-input target selection and
 native code rewriting are not claimed. Unicorn is a test reference, not a
 NeverD MIPS guest execution backend.
@@ -1108,23 +1110,28 @@ An unavailable implementation or unpredictable control write stops evaluation.
 HighC and LLVMC retain native COP1 operations through volatile assembly,
 including ambient FCSR and enabled exceptions. Their source qualification
 requires initialized FPR bytes on every incoming path and an explicit FR=1 ELF
-profile. Scalar float/double entry parameters and results use the o32 FP64 or
-n64 hard-float convention. o32's leading f12/f14 arguments consume aligned
-integer word positions; n64 shares argument positions between a0–a7 and
+profile. Scalar float/double parameters and results follow o32 FP64 or
+n32/n64 hard float. The o32 fixed FP prefix uses f12/f14 and consumes aligned
+integer word positions. N32 and n64 share argument positions between a0–a7 and
 f12–f19. Floating overflow values start at the lowest addressed bytes of their
-stack slots in either byte order. Integer right justification is unchanged.
+stack slots in either byte order.
 
-Complete fixed declarations bind mixed integer, pointer and floating operands
-before SSA, including o32 register pairs and stack overflow. Direct imported
-and explicitly declared exported calls can return a float or double in f0, a
-machine-word integer or pointer in v0, or no value. Only a floating result
-defines f0 after the call. LLVM declarations and call sites retain the signed
-or unsigned extension of 8- and 16-bit parameters. Both signed and unsigned
-32-bit parameters use sign extension in n64 argument registers. Narrow and paired integer results for a floating
-call, unknown prototypes, indirect target recovery, variadic floating calls,
-aggregate results and general saved-FPR restoration still need additional
-proofs. The register model preserves only the low eight bytes of o32's even
-F20–F30 or n64's F24–F31, not the overlaid 128-bit MSA register.
+Complete declarations bind integer, pointer and floating operands before SSA.
+For a variadic call, supply the prototype and the promoted types of the
+unnamed arguments at its original call occurrence. O32 passes even named
+floating arguments of a variadic call in the integer argument slots. N32 and
+n64 retain FPRs for named FP arguments and use integer slots for unnamed
+arguments. An indirect call keeps the runtime target operand.
+
+A floating result uses f0. Integer results use v0, or v0/v1 in target word
+order for an o32 64-bit result or an n32/n64 128-bit result. Narrow integers
+retain their declared signedness. Both signed and unsigned 32-bit results are
+sign-extended in n32/n64 registers. A pointer uses its ABI width, and a void
+call defines no result carrier. The ABI preserves the low eight bytes of even
+F20–F30 on o32 and n32, or F24–F31 on n64. Unqualified FP profiles, unknown
+call types, aggregate results and general saved-FPR restoration require
+additional evidence. The register assignments follow the
+[SGI n32/n64 calling convention](https://techpubs.jurassic.nl/library/manuals/2000/007-2816-005/sgi_html/ch02.html).
 
 A nonleaf's saved link is accepted only when exact reaching stores preserve
 the original RA and mode, its slot lies outside the callee's complete outgoing

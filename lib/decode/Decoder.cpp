@@ -139,6 +139,8 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
   case Arch::MIPS32:
   case Arch::MIPS32EL:
   case Arch::MIPS64:
+  case Arch::MIPS64N32:
+  case Arch::MIPS64N32EL:
   case Arch::MIPS64EL:
     if ((Mode != InstructionMode::Default &&
          Mode != InstructionMode::MIPSClassic && !isMIPSCompressedMode(Mode)) ||
@@ -156,7 +158,9 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
              ? (isMIPS64(TheArch) ? CS_MODE_MIPS64R5 : CS_MODE_MIPS32R5)
          : isMIPS64(TheArch) ? CS_MODE_MIPS64R2
                              : CS_MODE_MIPS32R2) |
-        (Revision == 6 && isMIPS64(TheArch) ? CS_MODE_MIPS_PTR64 : 0) |
+        (Revision == 6 && isMIPS64(TheArch) && !isMIPSN32(TheArch)
+             ? CS_MODE_MIPS_PTR64
+             : 0) |
         (Mode == InstructionMode::MicroMIPS ? CS_MODE_MICRO : 0) |
         (Mode == InstructionMode::MIPS16 ? CS_MODE_MIPS16 : 0) |
         (archLittleEndian(TheArch) ? CS_MODE_LITTLE_ENDIAN

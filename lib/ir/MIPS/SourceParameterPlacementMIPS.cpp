@@ -1,10 +1,10 @@
-//===- SourceParameterPlacementMIPS.cpp - o32/n64 scalar carriers -------===//
+//===- SourceParameterPlacementMIPS.cpp - MIPS scalar carriers -------===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// MIPS o32 FP64 and n64 scalar hard-float parameter locations.
+/// MIPS o32 FP64, n32 and n64 scalar hard-float parameter locations.
 /// ELF source admission authenticates the FP profile; records are not
 /// classified.
 //===----------------------------------------------------------------------===//
@@ -19,21 +19,21 @@
 using namespace neverd;
 using namespace neverd::source_placement;
 
-std::optional<SourceParameterPlacement>
-source_placement::placeMIPS(const TargetRegInfo &TRI, BinaryFormat F,
-                            const TypeRef &ReturnType,
-                            llvm::ArrayRef<TypeRef> ParamTypes) {
+std::optional<SourceParameterPlacement> source_placement::placeMIPS(
+    const TargetRegInfo &TRI, BinaryFormat F, const TypeRef &ReturnType,
+    llvm::ArrayRef<TypeRef> ParamTypes, std::optional<unsigned> FixedCount) {
   if (F != BinaryFormat::ELF || !ReturnType ||
       (ReturnType->Kind != NdTypeKind::Void &&
        ((!isIntegerScalar(ReturnType) && !isFloatingScalar(ReturnType)) ||
-        ReturnType->Size > 8)))
+        ReturnType->Size >
+            (ReturnType->Kind == NdTypeKind::Int ? 2 * TRI.FullRegWidth : 8))))
     return std::nullopt;
   const auto Layout = TRI.integerArgumentLayout(F);
   const bool Little = archLittleEndian(TRI.TheArch);
   const unsigned Slot = Layout.SlotBytes;
   unsigned Next = 0;
   unsigned FloatingPrefix = 0;
-  bool LeadingFloating = true;
+  bool LeadingFloating = !FixedCount;
   SourceParameterPlacement Result;
   for (const TypeRef &Type : ParamTypes) {
     const bool Floating = isFloatingScalar(Type);
@@ -48,13 +48,14 @@ source_placement::placeMIPS(const TargetRegInfo &TRI, BinaryFormat F,
     if (Slot == 4 && Type->Size == 8)
       Next = (Next + 1) & ~1u;
     const unsigned Count = (Type->Size + Slot - 1) / Slot;
+    const bool Named = !FixedCount || Result.Parameters.size() < *FixedCount;
     auto &Pieces = Result.Parameters.emplace_back();
-    // n64 shares eight argument positions between a0-a7 and f12-f19.
+    // n32 and n64 share eight argument positions between a0-a7 and f12-f19.
     // o32 uses f12/f14 only for the first two leading FP arguments; their
     // word positions still consume the integer argument area.
     const bool InFPR =
         Floating &&
-        (Slot == 8 ? Next < 8 : LeadingFloating && FloatingPrefix < 2);
+        (Slot == 8 ? Named && Next < 8 : LeadingFloating && FloatingPrefix < 2);
     LeadingFloating &= Floating;
     if (InFPR) {
       const unsigned Register =

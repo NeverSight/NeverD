@@ -124,7 +124,7 @@ std::optional<va_t> resolveCallTargetVA(const MedFunc &MF,
 void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result,
                          MedStackProjection StackProjection) {
   const auto &TRI = getTargetRegInfo(Img.Arch);
-  if (TRI.PointerSize == 4 && TRI.IntReturnReg2 != 0) {
+  if (TRI.integerReturnWordBytes() == 4 && TRI.IntReturnReg2 != 0) {
     std::set<va_t> WideRetCallees;
     bool HasIndirectWideRet = false;
     for (const auto &MF : Result.MedFuncs)

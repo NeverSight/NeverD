@@ -3551,10 +3551,9 @@ bool LLVMCWriter::isResultParamValue(const llvm::Value *V) const {
 unsigned LLVMCWriter::printedCallArgLimit(const llvm::CallBase &Call,
                                           llvm::StringRef CalleeName) const {
   const unsigned Have = Call.arg_size();
-  // Inline assembly has an exact input contract, not an inferred C call ABI.
-  // A trailing input loaded from a cross-block snapshot is still required;
-  // dropping its producers leaves the assembly using an uninitialized local.
-  if (Call.isInlineAsm())
+  // Both render every operand. Even a trailing load used only by a variadic
+  // occurrence must stay live when its target's declaration has fewer inputs.
+  if (Call.isInlineAsm() || Call.getMetadata("neverd.source.analyst-call"))
     return Have;
   const MsvcCallee *Msvc = msvcCallee(CalleeName, Opts.Format);
   auto Clamp = [&](size_t Limit) {
@@ -10416,7 +10415,10 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
     }
     auto *FuncTy = Fn.getFunctionType();
     std::string RetStr =
-        InferredVoid ? "void" : typeToCLLVM(FuncTy->getReturnType());
+        InferredVoid
+            ? "void"
+            : sourceScalarType(FuncTy->getReturnType(),
+                               Fn.hasFnAttribute(LLVMSourceSignedResult));
     if (std::string Ty = IndirectReturnTypeStr(); !Ty.empty())
       RetStr = std::move(Ty);
     else if (!InferredVoid && DefinitionTypes.Result.Type) {

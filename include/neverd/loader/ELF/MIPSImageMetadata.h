@@ -22,7 +22,7 @@
 
 namespace neverd {
 
-enum class MIPSABI : uint8_t { O32, N64 };
+enum class MIPSABI : uint8_t { O32, N64, N32 };
 
 struct MIPSCodeRegion {
   uint64_t Start, End;

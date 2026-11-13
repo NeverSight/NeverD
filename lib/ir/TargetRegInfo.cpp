@@ -287,6 +287,8 @@ const TargetRegInfo &getTargetRegInfo(Arch TheArch) {
   case Arch::MIPS32:
   case Arch::MIPS32EL:
   case Arch::MIPS64:
+  case Arch::MIPS64N32:
+  case Arch::MIPS64N32EL:
   case Arch::MIPS64EL:
     return getMIPSRegInfo(TheArch);
   default:
@@ -320,8 +322,9 @@ bool TargetRegInfo::isCallPreserved(uint64_t RegOff, uint16_t Size) const {
 
   if (isMIPS(TheArch) && isVectorReg(RegOff)) {
     const unsigned Index = (RegOff - VecRegBase) / VecRegStride;
-    return Size <= 8 &&
-           (isMIPS64(TheArch) ? Index >= 24 : Index >= 20 && Index % 2 == 0);
+    return Size <= 8 && (isMIPS64(TheArch) && !isMIPSN32(TheArch)
+                             ? Index >= 24
+                             : Index >= 20 && Index % 2 == 0);
   }
 
   // AAPCS64 requires callees to preserve only the low 64 bits of v8-v15.
@@ -448,7 +451,7 @@ IntegerArgumentLayout TargetRegInfo::integerArgumentLayout(bool IsWin64) const {
   const bool Win64 = TheArch == Arch::X64 && IsWin64 && !Win64ParamRegs.empty();
   IntegerArgumentLayout Layout;
   Layout.Registers = Win64 ? Win64ParamRegs : IntParamRegs;
-  Layout.SlotBytes = PointerSize;
+  Layout.SlotBytes = isMIPS(TheArch) ? FullRegWidth : PointerSize;
   Layout.CallStackBase = Win64 ? int64_t(Layout.Registers.size()) * PointerSize
                                : CallStackArgumentBase;
   Layout.EntryStackBase =

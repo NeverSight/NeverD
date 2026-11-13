@@ -16399,8 +16399,17 @@ for the 12-cell backend grid. See the [testing guide](testing.md) for commands.
 
 ### Experimental MIPS ELF analysis
 
-MIPS32r2/o32 and MIPS64r2/n64 have separate big- and little-endian target
-identities. Linked ELF admission is owned by `ELFMIPSProfile`; dynamic GOT and
+MIPS32/o32, MIPS64/n32 and MIPS64/n64 have separate big- and
+little-endian target identities. The n32 loader requires a linked ELF32
+image marked ABI2 with a 64-bit ISA and matching register evidence.
+Its pointers and C longs occupy four bytes. Its argument slots and GPRs
+occupy eight. Scalar hard-float calls use f12–f19 for named n32/n64
+arguments and integer carriers for unnamed promoted arguments. An o32
+variadic declaration uses integer carriers for its entire argument list.
+A call-site declaration binds each argument to its original LowIR
+occurrence and preserves a runtime indirect target. Narrow integer returns
+extend into v0 and double-word integer returns use v0/v1 in target byte order.
+[SGI n32 and n64 subprogram interface](https://techpubs.jurassic.nl/library/manuals/2000/007-2816-005/sgi_html/ch02.html). Linked ELF admission is owned by `ELFMIPSProfile`; dynamic GOT and
 PLT interpretation belongs to the ELF loader. `lib/lift/MIPS` owns integer
 semantics. A `DecodedExecutionUnit` captures a delayed transfer and its slot,
 while normal disassembly consumes one physical instruction. Classic instructions
