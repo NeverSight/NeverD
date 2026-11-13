@@ -125,20 +125,36 @@ TEST(AArch64ImplicitUnwind, VectorSavesFollowLaneWidthAndPartialOverwrites) {
   }
 }
 
-TEST(AArch64ImplicitUnwind, StructureLoadsInvalidateOnlyWrittenVectorLanes) {
-  for (const auto Load : {LoadV7V8, LoadHighD8, LoadLowD8}) {
-    Frame F{SignB, Load, Nop, AuthB, Ret};
+TEST(AArch64ImplicitUnwind, LaneAndTupleWritesPreserveOnlyUnmodifiedHalves) {
+  for (const auto &Write : {LoadV7V8, LoadHighD8, LoadHighD8SP, LoadLowD8,
+                            InsertHighD8, InsertLowB8, InsertHighS8}) {
+    Frame F{SignB, Write, Nop, AuthB, Ret};
     auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
     ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
     const auto &Row = aarch64UnwindRowAt(*Rows, 2 * sizeof(uint32_t));
     const auto Plan =
         prepareDarwinArm64eSystemCaller(Row, F.Function.CodeRange, 0);
     ASSERT_TRUE(Plan);
-    EXPECT_EQ(Plan->Vectors.Complete, Load == LoadHighD8);
+    EXPECT_EQ(Plan->Vectors.Complete,
+              Write == LoadHighD8 || Write == LoadHighD8SP ||
+                  Write == InsertHighD8 || Write == InsertHighS8);
     EXPECT_EQ(Row.Registers[kFirstHighSlot].Location ==
                   AArch64UnwindRegister::SameValue,
-              Load == LoadLowD8);
+              Write == LoadLowD8 || Write == InsertLowB8);
   }
+}
+
+TEST(AArch64ImplicitUnwind, StructureStoresKeepNonoverlappingSpills) {
+  Frame F{SignB,           PushQ8Q9, ClearQ8, FillQ9, X9AboveSP,
+          StoreD0LaneAtX9, PopQ8Q9,  AuthB,   Ret};
+  auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+  ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+  const auto &Row = aarch64UnwindRowAt(*Rows, 6 * sizeof(uint32_t));
+  auto Plan = prepareDarwinArm64eSystemCaller(Row, F.Function.CodeRange, 0);
+  ASSERT_TRUE(Plan);
+  EXPECT_TRUE(Plan->Vectors.Complete);
+  EXPECT_EQ(Plan->Vectors.LowMask, 3u);
+  EXPECT_EQ(Plan->Vectors.HighMask, 2u);
 }
 
 TEST(AArch64ImplicitUnwind, DwarfVectorRulesSurviveRestoreState) {

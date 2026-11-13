@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <bitset>
+#include <climits>
 #include <deque>
 #include <map>
 #include <utility>
@@ -352,6 +353,18 @@ void memory(State &S, const State &Before, const DecodedInsn &I) {
       S.Registers[H] = Op.laneLoad() && !Upper ? Before.Registers[H] : Value{};
     }
   }
+  const auto DiscardOverlapping = [&](int64_t Address, unsigned Size) {
+    for (auto It = S.Stack.begin(); It != S.Stack.end();) {
+      const bool Overlaps =
+          It->first <= Address
+              ? uint64_t(Address) - uint64_t(It->first) < kRegisterBytes
+              : uint64_t(It->first) - uint64_t(Address) < Size;
+      if (Overlaps)
+        It = S.Stack.erase(It);
+      else
+        ++It;
+    }
+  };
   const auto Ops = llvm::ArrayRef(D.operands, D.op_count);
   for (const auto &[Index, Op] : llvm::enumerate(Ops)) {
     if (Op.type != AARCH64_OP_MEM)
@@ -363,6 +376,8 @@ void memory(State &S, const State &Before, const DecodedInsn &I) {
                              ? add(Before.Registers[*Base].StackOffset,
                                    D.post_index ? 0 : Op.mem.disp)
                              : std::nullopt;
+    if (!I.Raw->detail->writeback && WritebackOp && WritebackOp->isStructure())
+      S.Registers[*Base] = Before.Registers[*Base];
     if (I.Raw->detail->writeback) {
       S.Registers[*Base] = {};
       if (D.post_index && Index + 1 < Ops.size()) {
@@ -387,10 +402,13 @@ void memory(State &S, const State &Before, const DecodedInsn &I) {
     }
     // Structure accesses interleave elements or update individual lanes.
     // They cannot be treated as flat D/Q saves at successive offsets.
-    const bool Structure = WritebackOp && WritebackOp->isStructure();
-    if (Structure || llvm::any_of(Ops.take_front(Index), [](const auto &O) {
-          return O.type != AARCH64_OP_REG;
-        })) {
+    if (WritebackOp && WritebackOp->isStructure()) {
+      if (Store)
+        DiscardOverlapping(*Address, WritebackOp->totalAccessBytes());
+      continue;
+    }
+    if (llvm::any_of(Ops.take_front(Index),
+                     [](const auto &O) { return O.type != AARCH64_OP_REG; })) {
       if (Store)
         S.Stack.clear();
       continue;
@@ -400,18 +418,8 @@ void memory(State &S, const State &Before, const DecodedInsn &I) {
       const auto Slot = add(Address, N * Bytes);
       if (!Slot)
         continue;
-      if (Store) {
-        for (auto It = S.Stack.begin(); It != S.Stack.end();) {
-          const bool Overlaps =
-              It->first <= *Slot
-                  ? uint64_t(*Slot) - uint64_t(It->first) < kRegisterBytes
-                  : uint64_t(It->first) - uint64_t(*Slot) < Bytes;
-          if (Overlaps)
-            It = S.Stack.erase(It);
-          else
-            ++It;
-        }
-      }
+      if (Store)
+        DiscardOverlapping(*Slot, Bytes);
       const auto Transfer = [&](unsigned R, int64_t Offset) {
         if (Store) {
           if (Before.Registers[R] != Value{})
@@ -469,6 +477,25 @@ bool transfer(State &S, const State &Before, Decoder &Decode,
       S.Registers[*D] = {};
       S.Registers[*D + NDArm64ePreservedDCount] = {};
     }
+  }
+  // INS replaces one element. Capstone names the entire destination Q
+  // register in its write set even when the other 64-bit half survives.
+  if (I.Id == AARCH64_INS_INS && !Ops.empty()) {
+    const auto &Dest = Ops.front();
+    if (Dest.type == AARCH64_OP_REG && Dest.vector_index >= 0)
+      if (const auto D = preservedDSlot(Dest.reg)) {
+        const unsigned Bits = Dest.vas;
+        if (Bits >= AARCH64LAYOUT_VL_B && Bits <= AARCH64LAYOUT_VL_D &&
+            llvm::isPowerOf2_32(Bits)) {
+          const unsigned Offset = unsigned(Dest.vector_index) * Bits;
+          if (Offset < kAddressMemoryVectorBytes * CHAR_BIT) {
+            const unsigned Other = Offset < kRegisterBytes * CHAR_BIT
+                                       ? *D + NDArm64ePreservedDCount
+                                       : *D;
+            S.Registers[Other] = Before.Registers[Other];
+          }
+        }
+      }
   }
   S.PACM = false;
   const uint32_t Word = readLE<uint32_t>(I.Raw->bytes);
