@@ -4,6 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/pipeline/PipelineSourceOptimization.h"
+
 #include "gtest/gtest.h"
 
 #include "neverd/backend/ExceptionRewriteContract.h"
@@ -12,6 +14,7 @@
 #include "neverd/backend/codegen/BinaryRewriter.h"
 #include "neverd/backend/codegen/ELF/ELFExceptionPatch.h"
 #include "neverd/backend/codegen/MachO/MachOExceptionPatch.h"
+#include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/loader/ExceptionInfo.h"
@@ -769,6 +772,25 @@ TEST(ELFExceptionRewriteContract,
   expectRejected(installELFEHFrame(Binary, std::nullopt, Compiled, *Module));
 }
 
+TEST(ExceptionRewriteContract, OwnedSourceOptimizationKeepsTheFunctionMap) {
+  llvm::LLVMContext Context;
+  auto Module = makeVoidModule(Context);
+  auto *F = Module->getFunction("f");
+  llvm::IRBuilder<> Builder(F->getEntryBlock().getTerminator());
+  Builder.CreateAlloca(Builder.getInt32Ty(), nullptr, "unused");
+  auto Reference = makeVoidModule(Context);
+  LLVMSourceMap Sources;
+  Sources.Functions[kFunctionVA] = F;
+  ASSERT_TRUE(tryOptimizeOwnedSourceModule(*Module, &Sources, {}));
+  EXPECT_EQ(Sources.Functions.at(kFunctionVA), F);
+  EXPECT_EQ(Module->getFunction("f"), F);
+  ASSERT_FALSE(llvm::verifyModule(*Module));
+  // Both paths run the same passes, including attributes on a void function.
+  auto ReferenceResult = Pipeline::optimizeOrPromoteModule(*Reference);
+  ASSERT_NE(ReferenceResult.Stop, OptimizationStopReason::VerificationFailed);
+  EXPECT_EQ(moduleIR(*Module), moduleIR(*Reference));
+}
+
 TEST(ExceptionRewriteContract,
      COutputRetainsVerifiedModulesWithIncompleteNativeLowering) {
   struct Case {
@@ -783,6 +805,8 @@ TEST(ExceptionRewriteContract,
         makeUnloweredExceptionModule(Context, Current.Format, Current.Status);
     ASSERT_NE(Module, nullptr);
     ASSERT_FALSE(llvm::verifyModule(*Module));
+
+    EXPECT_FALSE(tryOptimizeOwnedSourceModule(*Module, nullptr, {}));
 
     const OptimizationResult Result =
         Pipeline::optimizeOrPromoteModule(*Module);
