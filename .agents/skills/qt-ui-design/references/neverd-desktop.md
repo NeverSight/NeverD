@@ -670,11 +670,12 @@ strings in eleven languages:
 - Jump to function is 720 pixels wide and cuts the last digit of its
   Length column.
 - The Pathfinder dock shows two buttons that both read "Ins".
-- Sixteen commands of pop-up menus made in code show no icon: the code
-  view's three for interpreter recovery, the comparison source view's four
-  allowances, Edit function's two color choices, the lineage page's two
+- At least sixteen commands of pop-up menus made in code show no icon: the
+  code view's three for interpreter recovery, the comparison source view's
+  four allowances, Edit function's two color choices, the lineage page's two
   copies, Patch's restore and its waiting line, and the three of Quick
-  Start's recent-file menu.
+  Start's recent-file menu. A search for `addAction(tr(` found these; other
+  ways of adding a command were not searched.
 - The pseudocode view's context menu has 39 entries and is taller than a
   1080-pixel screen, where it scrolls.
 - The Windows menu lists the open panes in the order of a `QHash`
