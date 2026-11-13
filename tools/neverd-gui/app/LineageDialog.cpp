@@ -64,13 +64,6 @@ QPushButton *button(const QString &Text, const char *Name, QWidget *Parent) {
   B->setAutoDefault(false);
   return B;
 }
-/// A row for one command at its own width, at the start of the row.
-QHBoxLayout *ownWidth(QPushButton *Button) {
-  auto *Row = new QHBoxLayout;
-  Row->addWidget(Button);
-  Row->addStretch();
-  return Row;
-}
 LineagePageView *page(LineageSession &Session, const QStringList &Titles,
                       const QStringList &Keys, const char *Name,
                       QWidget *Parent) {
@@ -140,10 +133,10 @@ LineageDialog::LineageDialog(const QString &Worker, QWidget *Parent)
   Versions = page(Session, {tr("Label"), tr("Branch"), tr("Functions")},
                   {"label", "branch", "functions"}, "lineageVersions", Left);
   LeftLayout->addWidget(Versions, 1);
-  // A command keeps its own width under the list it acts on; stretched
-  // across the pane it read as a band.
+  // The command under a list spans it, as the list's foot: at its own width
+  // it left the pane looking empty, and the user asked for this back.
   Rename = button(tr("Edit &label / branch…"), "lineageMetadata", Left);
-  LeftLayout->addLayout(ownWidth(Rename));
+  LeftLayout->addWidget(Rename);
   Tabs = new QTabWidget(Split);
   Tabs->setObjectName("lineageTabs");
   auto *FunctionPane = new QWidget(Tabs);
@@ -163,7 +156,7 @@ LineageDialog::LineageDialog(const QString &Worker, QWidget *Parent)
       FunctionPane);
   FL->addWidget(Functions, 1);
   Trace = button(tr("&Trace selected function"), "lineageTrace", FunctionPane);
-  FL->addLayout(ownWidth(Trace));
+  FL->addWidget(Trace);
   Tabs->addTab(FunctionPane, tr("Functions"));
   auto *TracePane = new QWidget(Tabs);
   auto *TL = new QVBoxLayout(TracePane);
@@ -254,7 +247,7 @@ LineageDialog::LineageDialog(const QString &Worker, QWidget *Parent)
   CL->addWidget(Conflicts, 1);
   Members = button(tr("Inspect conflict &members…"), "lineageConflictMembers",
                    ConflictPane);
-  CL->addLayout(ownWidth(Members));
+  CL->addWidget(Members);
   Tabs->addTab(ConflictPane, tr("Conflicts"));
   auto *ReviewPane = new QWidget(Tabs);
   auto *RL = new QVBoxLayout(ReviewPane);

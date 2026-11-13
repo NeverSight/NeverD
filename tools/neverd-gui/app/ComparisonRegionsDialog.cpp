@@ -150,6 +150,13 @@ ComparisonRegionsDialog::ComparisonRegionsDialog(ComparisonSession &S,
        {std::pair{tr("Inspect primary function"), "primary"},
         {tr("Inspect secondary function"), "secondary"}}) {
     auto *Button = new QPushButton(Name, AnchorPane);
+    const bool Primary = QLatin1String(Side) == QLatin1String("primary");
+    Button->setObjectName(Primary ? "regionInspectPrimary"
+                                  : "regionInspectSecondary");
+    // Opening the chosen hypothesis in the primary input is the window's
+    // main action, as OK is a chooser's.
+    if (Primary)
+      showAsMainAction(*Button);
     Navigation->addWidget(Button);
     connect(Button, &QPushButton::clicked, this, [this, Side] {
       const auto Address = anchorFunction(Side);

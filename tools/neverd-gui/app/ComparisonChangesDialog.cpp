@@ -135,6 +135,9 @@ ComparisonChangesDialog::ComparisonChangesDialog(ComparisonSession &S,
   SliceSide->addItem(tr("Secondary input"), "secondary");
   Inspect = new QPushButton(tr("Inspect function"), this);
   Inspect->setObjectName("changesInspect");
+  // What a reviewer does with the chosen change, as OK does with a chooser's
+  // row: the window's main action.
+  showAsMainAction(*Inspect);
   Calls = new QPushButton(tr("Call paths…"), this);
   Calls->setObjectName("changesCalls");
   Backward = new QPushButton(tr("Trace inputs"), this);

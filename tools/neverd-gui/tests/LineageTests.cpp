@@ -52,6 +52,7 @@
 #include <QToolButton>
 #include <QTranslator>
 #include <QVBoxLayout>
+#include <tuple>
 
 using namespace neverd::gui;
 namespace {
@@ -141,11 +142,11 @@ private slots:
     }
   }
   void panesStandApartAndReturnStaysInTheWindow() {
-    // The pages' tabs stood on the line between the panes, the snapshot list
-    // was set in from the commands above it, and four commands stretched
-    // across their panes.  The window has no default button, but QDialog
-    // presses the default of any window open inside it: with a member list
-    // open, Return in the function filter pressed that list's button.
+    // The pages' tabs stood on the line between the panes, and the snapshot
+    // list was set in from the commands above it.  The window has no default
+    // button, but QDialog presses the default of any window open inside it:
+    // with a member list open, Return in the function filter pressed that
+    // list's button.
     LineageDialog View(TEST_LINEAGE_WORKER);
     View.setAttribute(Qt::WA_DeleteOnClose, false);
     View.resize(1180, 780);
@@ -186,27 +187,42 @@ private slots:
         QVERIFY2(!Button->isDefault(), qPrintable(Button->text()));
         QCOMPARE(Button->property("mainAction").toBool(), Button == Add);
       }
-    for (int Page = 0; Page < Tabs->count(); ++Page) {
-      Tabs->setCurrentIndex(Page);
+    // The command at the foot of a list spans the list, and the releases'
+    // four commands fill its width in two columns.  An audit once gave them
+    // their own widths; the panes then looked empty, and the user asked for
+    // this layout back.
+    const auto Spans = [&View](const char *Command, const char *List) {
+      const auto *Button = View.findChild<QPushButton *>(Command);
+      const auto *Above = View.findChild<QWidget *>(List);
+      return Button && Above && Button->isVisible() &&
+             Button->mapTo(&View, QPoint()).x() ==
+                 Above->mapTo(&View, QPoint()).x() &&
+             Button->width() == Above->width();
+    };
+    QVERIFY(Spans("lineageMetadata", "lineageVersions"));
+    for (const auto &[Title, Command, List] :
+         {std::tuple{"Functions", "lineageTrace", "lineageFunctions"},
+          std::tuple{"Conflicts", "lineageConflictMembers",
+                     "lineageConflicts"}}) {
+      for (int Page = 0; Page < Tabs->count(); ++Page)
+        if (Tabs->tabText(Page) == QLatin1String(Title))
+          Tabs->setCurrentIndex(Page);
       QCoreApplication::processEvents();
-      // No command is wider than the widest label beside it: alone it
-      // keeps its own width, and a block of commands shares a column's.
-      for (const auto *Button : View.findChildren<QPushButton *>()) {
-        if (!Button->isVisible() || Button->window() != &View)
-          continue;
-        int Widest = 0;
-        for (const auto *Beside :
-             Button->parentWidget()->findChildren<QPushButton *>(
-                 Qt::FindDirectChildrenOnly))
-          if (Beside->isVisible())
-            Widest = qMax(Widest, Beside->sizeHint().width());
-        QVERIFY2(Button->width() <= Widest,
-                 qPrintable(QStringLiteral("%1: %2 > %3")
-                                .arg(Button->text())
-                                .arg(Button->width())
-                                .arg(Widest)));
-      }
+      QVERIFY2(Spans(Command, List), Command);
     }
+    for (int Page = 0; Page < Tabs->count(); ++Page)
+      if (Tabs->tabText(Page) == QLatin1String("Releases"))
+        Tabs->setCurrentIndex(Page);
+    QCoreApplication::processEvents();
+    const auto *Releases = View.findChild<QWidget *>("lineageReleases");
+    const auto *First = View.findChild<QPushButton *>("lineageReleaseAdd");
+    const auto *Second = View.findChild<QPushButton *>("lineageReleaseEdit");
+    QVERIFY(Releases && First && Second && First->isVisible());
+    QCOMPARE(First->mapTo(&View, QPoint()).x(),
+             Releases->mapTo(&View, QPoint()).x());
+    QCOMPARE(Second->mapTo(&View, QPoint()).x() + Second->width(),
+             Releases->mapTo(&View, QPoint()).x() + Releases->width());
+    QVERIFY(qAbs(First->width() - Second->width()) <= 1);
   }
 
   void referenceUncertaintySurvivesLineageTrace_data() {

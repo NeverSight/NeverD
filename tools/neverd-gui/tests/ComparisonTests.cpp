@@ -189,10 +189,11 @@ private slots:
     Functions->setCurrentIndex(Functions->model()->index(0, 0));
     int Seen = 0;
     // The command that opens each window, and the button in it that wears
-    // the accent: the form's accept, the window's one command, the one that
-    // Return in its field runs.  Change review names no main action.
+    // the accent: what is done with the chosen change, the form's accept,
+    // the window's one command, the one that Return in its field runs.  No
+    // window is left without one.
     for (const auto &[Name, Main] :
-         {std::pair{"comparisonChangesReview", ""},
+         {std::pair{"comparisonChangesReview", "changesInspect"},
           std::pair{"comparisonReviewHistory", "reviewAppend"},
           std::pair{"comparisonValidateReturns", "validationRun"},
           std::pair{"comparisonImpactReview", "impactTrace"}}) {
@@ -233,8 +234,7 @@ private slots:
         if (Button->property("mainAction").toBool())
           Accented.append(Button->objectName());
       }
-      QVERIFY2(Accented ==
-                   (*Main ? QStringList{QLatin1String(Main)} : QStringList()),
+      QVERIFY2(Accented == QStringList{QLatin1String(Main)},
                qPrintable(QStringLiteral("%1: %2").arg(QLatin1String(Name),
                                                        Accented.join(' '))));
       // A report of JSON reads in the code font, as the evidence of the
@@ -272,6 +272,14 @@ private slots:
           (Beside < 0 || At(Table).y() < Beside))
         Beside = At(Table).y();
     QCOMPARE(At(Under).y(), Beside);
+    // Tracing an operation's inputs, which the window's own line asks for,
+    // wears the accent; no button is the default.
+    for (const auto *Button : Flow->findChildren<QPushButton *>()) {
+      QVERIFY2(!Button->isDefault() && !Button->autoDefault(),
+               qPrintable(Button->text()));
+      QCOMPARE(Button->property("mainAction").toBool(),
+               Button->objectName() == QLatin1String("flowBackward"));
+    }
     Flow->close();
   }
 
@@ -293,6 +301,7 @@ private slots:
     // one.  The commands on a pair wait for a comparison.
     for (const auto *Button : View.findChildren<QPushButton *>()) {
       QCOMPARE(Button->isDefault(), Button == Start);
+      QCOMPARE(Button->property("mainAction").toBool(), Button == Start);
       QVERIFY2(!Button->autoDefault(), qPrintable(Button->text()));
     }
     QVERIFY(!Commands->isVisible());
@@ -334,7 +343,10 @@ private slots:
     QCOMPARE(Failures.size(), 2);
     QVERIFY(Commands->isVisible());
     // With a comparison to review, Return in its filter starts no other.
+    // Compare gives up the key and keeps the accent: it is still the
+    // window's main action, and no window is left without one.
     QVERIFY(!Start->isDefault());
+    QVERIFY(Start->property("mainAction").toBool());
     const auto Revision = Session.revision();
     auto *Search = View.findChild<QLineEdit *>("comparisonSearch");
     Search->setFocus();
@@ -2521,6 +2533,13 @@ private slots:
     auto *Dialog =
         View.findChild<ComparisonRegionsDialog *>("comparisonRegions");
     QVERIFY(Dialog);
+    // Opening the chosen hypothesis in the primary input wears the accent;
+    // no button is the default.
+    for (const auto *Button : Dialog->findChildren<QPushButton *>()) {
+      QVERIFY2(!Button->isDefault(), qPrintable(Button->text()));
+      QCOMPARE(Button->property("mainAction").toBool(),
+               Button->objectName() == QLatin1String("regionInspectPrimary"));
+    }
     auto *Instructions = Dialog->findChild<QTableView *>("regionInstructions");
     QTRY_COMPARE_WITH_TIMEOUT(Instructions->model()->rowCount(), 7, Timeout);
     QVERIFY(Dialog->findChild<QLabel *>("regionSummary")

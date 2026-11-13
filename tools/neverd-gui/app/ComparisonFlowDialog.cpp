@@ -13,6 +13,7 @@
 #include "../ResourceLimits.h"
 #include "ComparisonModel.h"
 #include "ComparisonSession.h"
+#include "DialogReturnKey.h"
 #include "Icons.h"
 
 #include "neverd/diff/Limits.h"
@@ -164,6 +165,9 @@ ComparisonFlowDialog::ComparisonFlowDialog(ComparisonSession &S,
   // Enter activates the selected evidence row, without also tracing a slice.
   for (auto *Button : {Backward, Forward, ArgumentAccesses, Cancel, Inspect})
     Button->setAutoDefault(false);
+  // Tracing is what the window's own line asks for once an operation is
+  // chosen, inputs first: its main action, faint until then.
+  showAsMainAction(*Backward);
   BottomLayout->addWidget(Inspect, 0, Qt::AlignLeft);
   Split->setStretchFactor(0, 1);
   Split->setStretchFactor(1, 3);

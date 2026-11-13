@@ -21,6 +21,7 @@
 #include "ComparisonReviewDialog.h"
 #include "ComparisonSourceView.h"
 #include "ComparisonValidationDialog.h"
+#include "DialogReturnKey.h"
 #include "FlowLayout.h"
 #include "Icons.h"
 #include "ModelessDialog.h"
@@ -321,10 +322,13 @@ ComparisonDialog::ComparisonDialog(const QString &Worker,
   SettingsButton->setText(tr("Settings"));
   SettingsButton->setCheckable(true);
   // Until a comparison exists, Compare is the dialog's default action: it
-  // takes the accent, and Return starts it (update).  It stands with Cancel,
-  // apart from the commands on a comparison and from Settings, and the row
-  // wraps by those groups where the window is narrow.
+  // takes the accent, and Return starts it (update).  Afterwards it gives up
+  // the key and keeps the accent, as the window's main action: no window is
+  // left without one.  It stands with Cancel, apart from the commands on a
+  // comparison and from Settings, and the row wraps by those groups where
+  // the window is narrow.
   Start->setDefault(true);
+  showAsMainAction(*Start);
   Actions->addWidget(group(this, {Start, Cancel}));
   Actions->addWidget(group(this, {Reopen, Save, Regions, DataFlow}));
   Actions->addWidget(SettingsButton);
