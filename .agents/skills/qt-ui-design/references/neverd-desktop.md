@@ -399,11 +399,13 @@ what lies behind it, composited over each system's own surface (fetched
   icons the commands read as labels. Revisit it once the commands have icons;
   the icon set has `check`, `link`, `refresh` and `pathfinder`, and none for
   unmatching a pair.
-- Let the accent say what comes next. In Binary comparison it sits on Compare
-  until a comparison exists, faintly while Compare cannot act yet, and on
-  nothing afterwards. That window is the one exception to "every window
-  shows one accent" (Auditing every window, below): it is full of color once
-  a comparison shows, and Compare would only run the same comparison again.
+- Let the accent say what the window is for. In Binary comparison it sits on
+  Compare, faintly while Compare cannot act yet. Until a comparison exists
+  Compare is also the default and Return starts it; afterwards it gives up
+  the key, so Return in the filter starts nothing, and keeps the accent. For
+  some hours it lost the accent too once a comparison showed; the user's
+  rule that every window keeps one (Auditing every window, below) put it
+  back.
 - Look along every seam. Two shapes of one gray that meet read as one shape:
   the splitter's band and the combo box beside it were both `#3C3C3C`. Leave
   a layout's spacing between a control and any dividing line, and put the
@@ -508,23 +510,30 @@ the plugin manager's own line of help names the import. So:
 | Analyst review | Append assessment | The form's accept; faint until the draft is complete |
 | Choose counterpart | Pair functions | The chooser's accept; faint until a row is chosen |
 | x87 support, Unwind information, Shortcuts | Close | They only show things, as About does under its OK |
+| Binary comparison | Compare | The window's own action; default until a comparison exists, the accent throughout |
+| Change review | Inspect function | What is done with the chosen change, as OK with a chooser's row |
+| Region hypotheses | Inspect primary function | What is done with the chosen hypothesis |
+| Dependency evidence | Trace inputs | Its line of help asks for it ("then trace its inputs or uses"); faint until an operation is chosen |
+| Offline package review | Preview file… | The step every review starts with |
 
-- Left without an accent, for the user to choose from renders: Change
-  review, Region hypotheses and Dependency evidence (activating a row runs
-  none of their buttons, and nothing in them names one) and Offline package
-  review (its steps follow one another, so a fixed accent would be wrong
-  half the time and one that moves needs a design of its own).
+- Five of these were first left without an accent, four of them shown to the
+  user as renders of candidates to choose from. The answer, the same
+  evening: "你改的很多地方，组建内的蓝色按钮怎么没了？至少留1个阿，而且要留
+  关键的" (in many of the places you changed, where has the blue button
+  gone? keep at least one, and keep the key one). Every window keeps one;
+  choosing it is the designer's work, not a question to hand back.
 - The capture probe writes `main` beside `default` in each window's widget
-  tree; the query is "every window with push buttons has exactly one of the
-  two, or stands on the list above".
-- Kept as chosen: Compare until a comparison exists, Compile to new binary
-  in Rewrite function, Copy in Export data, Next in Find in view, Trace's
-  own Return in the address of Call paths, and the accept buttons of
-  questions.
+  tree; the query is "every window with push buttons has exactly one button
+  that is either". What stands outside it: the main window, whose panes are
+  not windows, and Analyst review while its second tab hides the form whose
+  accept is the main action.
+- Kept as chosen: Compile to new binary in Rewrite function, Copy in Export
+  data, Next in Find in view, Trace's own Return in the address of Call
+  paths, and the accept buttons of questions.
 - `neverd_gui_web` is a library the workbench links, so Offline package
   review cannot include the workbench's helper. It turns `autoDefault` off
   on its own buttons, which is enough for a window that opens only modal
-  children.
+  children, and sets the `mainAction` property itself.
 
 One thing drawn two ways:
 
@@ -546,13 +555,18 @@ One thing drawn two ways:
 
 Commands and forms:
 
-- A lone `QPushButton` added to a vertical layout takes the layout's width.
-  "Trace selected function" was 835 pixels wide and "Assess selected
-  evidence" 1058. Put it in a row with a stretch after it. The version
-  graph's four release commands keep two rows of two, in columns as wide as
-  their labels beside a stretch column: a `FlowLayout` inside a tab page
-  reports one row as its minimum height, so at the window's minimum size its
-  second row fell below the window in German and Russian.
+- A command at the foot of a list spans the list. A lone `QPushButton` added
+  to a vertical layout takes the layout's width: "Trace selected function"
+  was 835 pixels wide, "Assess selected evidence" 1058, and the version
+  graph's four release commands filled two columns. The audit cut them down
+  to their labels, and the user, reading the before and after: "这个你搞的
+  按钮太小，就显得很空阿。不是吗，之前那个设计没问题的" (the buttons you
+  made so small leave it looking empty; the earlier design was fine). They
+  are back at the width of their panes, in the version graph and in Offline
+  package review alike, and `LineageTests` holds the version graph's.
+- A `FlowLayout` inside a tab page reports one row as its minimum height, so
+  at the window's minimum size a second row falls below the window in German
+  and Russian. The release commands stay in a grid.
 - Check a window's own layout tests before removing a margin. The version
   graph's snapshot pane had a 6-pixel margin on both sides, which set its
   list in from the commands above; the margin was there because Qt places
