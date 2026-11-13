@@ -6,7 +6,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from xml.parsers.expat import ExpatError
 import platform
+import plistlib
 import re
 import struct
 import subprocess
@@ -157,6 +159,33 @@ def probe_signal_cursor(output):
         save(output / POLICY["report_name"], report)
 
 
+def sign_cpta_slice(products, output, binary, policy):
+    entitlements = output / policy["entitlements_file"]
+    products.append(entitlements)
+    entitlements.write_bytes(plistlib.dumps(policy["entitlements"]))
+    signed = command(products, output, policy["sign_label"],
+                     [v.format(plist=entitlements, binary=binary) for v in policy["sign_command"]],
+                     POLICY["tool_timeout"])
+    if signed.returncode:
+        return None
+    verified = command(products, output, policy["x1"] + POLICY["signature_suffix"],
+                       [*POLICY["signature_command"], binary], POLICY["tool_timeout"])
+    if verified.returncode:
+        return None
+    embedded = command(products, output, policy["read_label"],
+                       [v.format(binary=binary) for v in policy["read_command"]], POLICY["tool_timeout"])
+    if embedded.returncode:
+        return None
+    try:
+        actual = plistlib.loads(embedded.stdout.encode())
+    except (ValueError, plistlib.InvalidFileException, ExpatError):
+        return None
+    # Compare the plist types too. Python treats booleans as integers when comparing dictionaries.
+    if plistlib.dumps(actual) == entitlements.read_bytes():
+        return actual
+    return None
+
+
 def probe_cpta(output):
     policy = POLICY["cpta_probe"]
     source = ROOT / policy["source"]
@@ -182,6 +211,11 @@ def probe_cpta(output):
                             any(t in built.stderr.lower() for t in policy["unsupported_compiler"])):
                         profile["outcome"] = policy["slice_unavailable"]
                     continue
+                if arch == policy["x1"]:
+                    signed = sign_cpta_slice(products, output, binary, policy)
+                    if signed is None:
+                        continue
+                    profile[policy["entitlements_key"]] = signed
                 raw = binary.read_bytes()
                 magic, cpu, actual = struct.unpack_from(POLICY["header_format"], raw)
                 profile.update(sha256=digest(binary), cpu_subtype=actual)

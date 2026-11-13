@@ -1,6 +1,7 @@
 """Reject false native qualification from skipped or mismatched evidence."""
 
 import json
+import plistlib
 from pathlib import Path
 import subprocess
 import struct
@@ -75,6 +76,8 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                     Path(argv[-1]).write_bytes(struct.pack(
                         native.POLICY["header_format"], native.POLICY["macho_magic"],
                         native.POLICY["cpu_type"], policy["profiles"][arch]))
+                if label == policy["read_label"]:
+                    return subprocess.CompletedProcess(argv, 0, plistlib.dumps(policy["entitlements"]).decode(), "")
                 values = results if label == policy["x1"] else checked
                 lines = [policy["started"], *values]
                 return subprocess.CompletedProcess(argv, 0, "\n".join(lines), "")
@@ -89,6 +92,18 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                 self.assertEqual(report[policy["qualified_key"]], status == native.POLICY["passed"])
                 self.assertFalse(list(Path(temporary).glob("*" + native.POLICY["binary_suffix"])))
 
+    def test_cpta_requires_the_signed_entitlements_to_round_trip(self):
+        policy = native.POLICY["cpta_probe"]
+        wrong = {k: int(v) if v is True else v for k, v in policy["entitlements"].items()}
+        for contents in (plistlib.dumps({}).decode(), plistlib.dumps(wrong).decode(), ""):
+            with self.subTest(contents=contents), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with native.OwnedProducts(root, False) as products, mock.patch.object(
+                    native, "command", return_value=subprocess.CompletedProcess([], 0, contents, "")
+                ):
+                    self.assertIsNone(native.sign_cpta_slice(products, root, root / policy["x1"], policy))
+                self.assertFalse((root / policy["entitlements_file"]).exists())
+
     def test_cpta_records_unsupported_isa_and_loader_without_qualification(self):
         policy = native.POLICY["cpta_probe"]
 
@@ -99,6 +114,10 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                     native.POLICY["header_format"], native.POLICY["macho_magic"],
                     native.POLICY["cpu_type"], policy["profiles"][arch]))
                 return subprocess.CompletedProcess(argv, 0, "", "")
+            if label in (policy["sign_label"], policy["x1"] + native.POLICY["signature_suffix"]):
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            if label == policy["read_label"]:
+                return subprocess.CompletedProcess(argv, 0, plistlib.dumps(policy["entitlements"]).decode(), "")
             if label == policy["x1"]:
                 raise OSError(policy["bad_cpu_type_errno"], "")
             return subprocess.CompletedProcess(argv, policy["undefined_instruction"],

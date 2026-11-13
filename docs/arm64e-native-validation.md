@@ -1260,6 +1260,14 @@ ten system signal-frame crossings. The
 [verification record](evidence/arm64e-system-signal-and-implicit-unwind-2026-11-12.json)
 includes the compiler versions, test-host digest and hardware probe results.
 
+The native CPTA probe signs the x1 slice with the Enhanced Security and
+checked-pointer entitlements, verifies the signature and reads back the
+embedded plist before launch. Its report records the final binary digest,
+the signed entitlement values and the ADDPT observations. Native qualification
+requires all checked results in that x1 process. Apple documents the required
+[Enhanced Security entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.hardened-process.checked-allocations.enforce-checked-pointer-arithmetic-overflow)
+and [supported x1 devices](https://developer.apple.com/documentation/security/preparing-your-app-to-work-with-pointer-authentication).
+
 For an external thread-local variable, the arm64e object publisher resolves
 TLVP page relocations to the original strong import's sealed descriptor
 slot. The compiler's authenticated descriptor call still selects storage for
