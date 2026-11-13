@@ -162,15 +162,25 @@ TEST(AArch64ImplicitUnwind, DwarfVectorRulesSurviveRestoreState) {
   constexpr unsigned V8 = kDwarfV0 + NDArm64eFirstPreservedD;
   constexpr int Depth = 4 * kRegisterBytes;
   const auto PC = [](unsigned Index) { return Index * sizeof(uint32_t); };
+  const auto Advance = [&](unsigned From, unsigned To) {
+    return CFIInstruction{.Kind = CFIOpKind::AdvanceLoc,
+                          .CodeOffset = PC(From),
+                          .Offset = int64_t(PC(To - From))};
+  };
   F.Function.Dwarf->Instructions = {
+      Advance(0, 2),
       {.Kind = CFIOpKind::DefCFAOffset, .CodeOffset = PC(2), .Offset = Depth},
       {.Kind = CFIOpKind::Offset,
        .CodeOffset = PC(2),
        .Register = V8,
        .Offset = -Depth},
+      Advance(2, 3),
       {.Kind = CFIOpKind::RememberState, .CodeOffset = PC(3)},
+      Advance(3, 4),
       {.Kind = CFIOpKind::Undefined, .CodeOffset = PC(4), .Register = V8},
+      Advance(4, 5),
       {.Kind = CFIOpKind::RestoreState, .CodeOffset = PC(5)},
+      Advance(5, 7),
       {.Kind = CFIOpKind::Restore, .CodeOffset = PC(7), .Register = V8}};
   auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
   ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
