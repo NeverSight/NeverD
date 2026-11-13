@@ -747,8 +747,7 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
   auto *FuncTy = llvm::FunctionType::get(RetType, ParamTypes, Func.IsVariadic);
   auto *LLVMFunc = llvm::Function::Create(
       FuncTy, llvm::GlobalValue::ExternalLinkage, EmittedName, Mod);
-  if (isMIPS(TargetArch) && Func.ReturnType &&
-      Func.ReturnType->Kind == NdTypeKind::Int &&
+  if (Func.HasDeclaredMIPSIntegerResult &&
       RetType->isIntegerTy(Func.ReturnType->Size * 8))
     LLVMFunc->setAttributes(mips::integerResultAttributes(
         *Ctx, LLVMFunc->getAttributes(), Func.ReturnType->Size,

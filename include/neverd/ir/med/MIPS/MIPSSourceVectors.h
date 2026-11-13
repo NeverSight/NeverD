@@ -41,7 +41,7 @@ const SourceCallTypeHint *mipsFloatingCallSite(
 /// unpredictable value only after proving every transported byte unobserved;
 /// live unpredictable bytes retain their diagnostic intrinsic.
 void discardUnobservedMIPSFPUpperBits(
-    MedFunc &Function, Arch Target,
+    MedFunc &Function, const BinaryImage &Image,
     const std::map<va_t, FloatingCallArguments> &EntrySignatures,
     const DebugContext *Debug);
 

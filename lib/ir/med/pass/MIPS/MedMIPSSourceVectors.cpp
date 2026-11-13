@@ -53,6 +53,13 @@ const SourceCallTypeHint *mipsFloatingCallSite(
   return nullptr;
 }
 
+static bool hasScalarFP64ABI(const BinaryImage &Image, Arch Target) {
+  return Image.MIPS &&
+         ((Image.MIPS->HasMSA && Image.MIPS->ISARevision == 5) ||
+          Image.MIPS->ISARevision == 6) &&
+         Image.MIPS->FPABI == (isMIPS64(Target) ? 1 : 6);
+}
+
 void requireMIPSSourceVectors(
     const LowFunc &Function, Arch Target, const BinaryImage *Image,
     const std::map<va_t, FloatingCallArguments> *Calls,
@@ -83,11 +90,7 @@ void requireMIPSSourceVectors(
   if (!isMIPS(Target))
     throw LowToMedConversionError(
         "MIPS FP/vector source requires a MIPS target");
-  const bool Wide = isMIPS64(Target);
-  const bool FP64 = Image && Image->MIPS &&
-                    ((Image->MIPS->HasMSA && Image->MIPS->ISARevision == 5) ||
-                     Image->MIPS->ISARevision == 6) &&
-                    Image->MIPS->FPABI == (Wide ? 1 : 6);
+  const bool FP64 = Image && hasScalarFP64ABI(*Image, Target);
   if (Image && !FP64)
     throw LowToMedConversionError(
         "MIPS FP/vector source requires explicit FP64 profile");
@@ -158,7 +161,7 @@ void requireMIPSSourceVectors(
         continue;
       const auto R = Index(Op.Output);
       // n64 preserves F24–F31. o32 FP64 preserves F20,F22,...,F30.
-      if ((!Wide && !FP64 && R >= 20) ||
+      if ((!isMIPS64(Target) && !FP64 && R >= 20) ||
           getTargetRegInfo(Target).isCallPreserved(mipsreg::w(R), 8))
         throw LowToMedConversionError(
             "MSA source saved FPR restoration is not qualified");
@@ -205,10 +208,12 @@ void requireMIPSSourceVectors(
 }
 
 void discardUnobservedMIPSFPUpperBits(
-    MedFunc &Function, Arch Target,
+    MedFunc &Function, const BinaryImage &Image,
     const std::map<va_t, FloatingCallArguments> &EntrySignatures,
     const DebugContext *Debug) {
-  if (!isMIPS(Target) || Function.SkippedSSA)
+  const Arch Target = Image.Arch;
+  if (!isMIPS(Target) || Function.SkippedSSA ||
+      !hasScalarFP64ABI(Image, Target))
     return;
   // A selected leaf need not occur in the outgoing call inventory. Resolve
   // its exact declaration even when it has no caller in this pipeline run.
@@ -226,6 +231,8 @@ void discardUnobservedMIPSFPUpperBits(
     if (auto Types = floatingCallTypes(Target, BinaryFormat::ELF, *Signature)) {
       Declared = true;
       Function.ReturnType = Types->Result;
+      Function.HasDeclaredMIPSIntegerResult =
+          Types->Result->Kind == NdTypeKind::Int;
       Function.MultiReturn.clear();
       Function.ReturnsVectorRegister = false;
     }
