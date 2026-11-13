@@ -63,7 +63,17 @@ TEST(SourceCallABI, MIPSCallContractsRejectChangedCarriersAndVariadicTypes) {
     std::string Error;
     ASSERT_TRUE(assignAnalystCallABI(H, A, BinaryFormat::ELF, Error)) << Error;
     ASSERT_TRUE(H.Signature.MIPSScalars);
-    EXPECT_EQ(H.Signature.ReturnLocation.ValueBytes, 2 * TRI.FullRegWidth);
+    EXPECT_EQ(H.Signature.ReturnLocation.Kind, SourceABICarrierKind::None);
+    ASSERT_EQ(H.Signature.ReturnComponents.size(), 2u);
+    for (size_t I = 0; I < 2; ++I) {
+      const auto &Part = H.Signature.ReturnComponents[I];
+      EXPECT_EQ(Part.Kind, SourceABICarrierKind::IntegerRegister);
+      EXPECT_EQ(Part.RegisterOffset, TRI.IntReturnRegs[I]);
+      EXPECT_EQ(Part.ValueBytes, TRI.FullRegWidth);
+    }
+    auto Swapped = H.Signature;
+    std::swap(Swapped.ReturnComponents[0], Swapped.ReturnComponents[1]);
+    EXPECT_FALSE(validateSourceABI(Swapped, Error));
     EXPECT_EQ(H.Signature.Parameters[0].Location.Kind,
               isMIPS64(A) ? SourceABICarrierKind::FloatingRegister
                           : SourceABICarrierKind::IntegerRegister);

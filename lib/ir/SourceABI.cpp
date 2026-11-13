@@ -8,6 +8,8 @@
 
 #include "neverd/ir/SourceABI.h"
 
+#include "MIPS/SourceScalarResult.h"
+
 #include "neverd/Limits.h"
 #include "neverd/ir/FloatingCallArguments.h"
 #include "neverd/ir/Limits.h"
@@ -670,8 +672,7 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
     if (!isMIPS(Hint.Architecture) || !Hint.HasExplicitABI ||
         Hint.Origin != SourceFunctionTypeHint::OriginKind::ExplicitSource ||
         Hint.Convention != SourceFunctionTypeHint::ConventionKind::C ||
-        Hint.Parameters.size() != S.Scalars.size() ||
-        !Hint.ReturnComponents.empty())
+        Hint.Parameters.size() != S.Scalars.size())
       return fail(Diagnostic, "Invalid MIPS scalar call ABI");
     std::vector<TypeRef> Types;
     for (const auto &P : Hint.Parameters) {
@@ -686,16 +687,13 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
     const auto Expected =
         floatingCallArguments(Hint.Architecture, BinaryFormat::ELF,
                               Hint.ReturnType, Types, S.FixedCount);
-    const auto &TRI = getTargetRegInfo(Hint.Architecture);
     SourceABIValueLocation Return;
-    if (S.ReturnKind == NdTypeKind::Float)
-      Return = {SourceABICarrierKind::FloatingRegister, TRI.FPReturnReg, 0,
-                S.ReturnBytes};
-    else if (S.ReturnKind != NdTypeKind::Void)
-      Return = {SourceABICarrierKind::IntegerRegister, TRI.IntReturnReg, 0,
-                S.ReturnBytes};
+    std::vector<SourceABIValueLocation> Pieces;
+    mips::placeScalarResult(getTargetRegInfo(Hint.Architecture), S, Return,
+                            Pieces);
     return (Expected && *Expected == S &&
-            sameLocation(Return, Hint.ReturnLocation)) ||
+            sameLocation(Return, Hint.ReturnLocation) &&
+            std::ranges::equal(Pieces, Hint.ReturnComponents, sameLocation)) ||
            fail(Diagnostic,
                 "MIPS scalar types disagree with their ABI carriers");
   }

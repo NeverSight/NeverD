@@ -8,6 +8,8 @@
 
 #include "neverd/ir/SourceCallABI.h"
 
+#include "MIPS/SourceScalarResult.h"
+
 #include "neverd/ir/FloatingCallArguments.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceABI.h"
@@ -138,13 +140,9 @@ bool neverd::assignAnalystCallABI(SourceCallTypeHint &Hint, Arch Architecture,
       Signature.Parameters[I].Location = {A.Kind, A.Register, A.StackOffset,
                                           A.Bytes};
     }
-    const auto &TRI = getTargetRegInfo(Architecture);
-    if (Scalars->ReturnKind == NdTypeKind::Float)
-      Signature.ReturnLocation = {SourceABICarrierKind::FloatingRegister,
-                                  TRI.FPReturnReg, 0, Scalars->ReturnBytes};
-    else if (Scalars->ReturnKind != NdTypeKind::Void)
-      Signature.ReturnLocation = {SourceABICarrierKind::IntegerRegister,
-                                  TRI.IntReturnReg, 0, Scalars->ReturnBytes};
+    mips::placeScalarResult(getTargetRegInfo(Architecture), *Scalars,
+                            Signature.ReturnLocation,
+                            Signature.ReturnComponents);
     Signature.MIPSScalars =
         std::make_shared<const FloatingCallArguments>(std::move(*Scalars));
     return validateSourceABI(Signature, Error);
