@@ -21,6 +21,9 @@ symbol when one no longer matches.
   phases and serial wall time, and its `ab.py` runs paired comparisons.
 - `NEVERD_NATIVE_PHASES=1` prints each pipeline stage's elapsed time
   (`lib/pipeline/Pipeline.cpp:136`).
+- `tools/neverd-bench/decoder-comparison`: a standalone harness that times
+  Capstone, Zydis, XED and iced through their public APIs and snapshots their
+  decoded fields. `methodology.md` § 10 says when to run it.
 - The opt-in benchmark targets are listed in `SKILL.md` § Measuring.
 
 ## Libraries

@@ -177,9 +177,11 @@ A/B with identical output.
 
 - **Interval-shaped address data.** Evaluate `llvm::IntervalMap` (no uses
   yet). Entry: interval lookups or coalescing appear in a profile.
-- **Build.** ThinLTO and PGO are unevaluated. Entry: a whole-request A/B on
-  Linux, macOS and Windows that also reports build time and binary size. Keep
-  the generic ISA baseline; runtime dispatch covers SIMD.
+- **Build.** Profile-guided builds are an opt-in
+  (`cmake/NeverDProfileGuided.cmake`). ThinLTO was measured on Linux only and
+  left out (§ Rejected). Entry for another look: a whole-request A/B on macOS
+  and Windows that also reports build time and binary size. Keep the generic
+  ISA baseline; runtime dispatch covers SIMD.
 - **JSON.** Transport keeps the nlohmann DOM, and simdjson On-Demand is unused.
   Decompile runs did not show JSON. Entry: JSON parsing or DOM copying is
   significant in a worker or MCP request profile.
@@ -201,3 +203,23 @@ A/B with identical output.
 - Software prefetch, retained caches or per-query allocation in sorted search.
 - SSE2-SSE4 SIMD for sorted search.
 - The variable-tail search prototype: it regressed random queries.
+
+Measured on whole requests between 2026-11-04 and 2026-11-10, with identical
+output, and left out. Each needs a new reason before it is tried again:
+
+- **ThinLTO with lld, `-fno-semantic-interposition` and
+  `-Bsymbolic-functions` on top of a profile-guided build** (Linux): 3% more
+  CPU and no gain in the median pseudocode request.
+- **A jemalloc worker.** One round cut the first-visit total by 15% to 27%
+  and left the median flat. After library records were shared per session
+  (`4b28263e42`) it was level with mimalloc.
+- **Huge pages for the engine's text.** No median gain in a four-round A/B.
+- **Warming call-signature probes ahead of requests.** Probe misses fell from
+  52.7 to 39.7 per request; the first-visit time did not move.
+- **A lower cap on the synthesis search's retained behaviours.** The present
+  cap was the fastest of five settings. With no retention CPU rose 4% to 6%,
+  and a smaller cap regrows the array (`9edc47b6bb`, `88d388842c`).
+- **Keeping the worker thread spinning between spaced edits.** No round-trip
+  gain, because the client's own wake-ups dominate, and 2 ms stalls under load
+  when the spinner took a core the client needed. A mimalloc purge delay made
+  no difference to the same case.
