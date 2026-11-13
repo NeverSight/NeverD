@@ -10976,6 +10976,17 @@ no value to name for it. A call that leaves more registers without one keeps
 its list, as do i386, variadic calls and a call recovery lists no arguments
 for, which takes the block scan's.
 
+Where the register scan recovers the arguments (System V x86-64), a jump to
+an import that no summary, source binding, declaration or C library table
+describes passes on the function's leading register parameters that still hold
+their incoming value there (`forwardedParameterCount`). The jump hands the
+import the registers as they are, MedIR's call recovery passes them, and LLVM C
+prints them; HighC printed `outside()` for `cmp rdi, 6; jl outside`, which
+built against the unprototyped declaration and passed nothing. The marker is
+the jump's own provenance (`MedOp::IsTailCall`), not a call a return follows,
+which sets what it passes. A position ends the list once its register holds
+anything else: a value an earlier call left, a join, a write on the way.
+
 An AAPCS64 register save area also spills q0-q7, which carry only the floating
 and vector arguments a caller passes. Where the function's va_arg reads none of
 them, MedIR drops those spills (`unreadAAPCS64VectorSpills`,
