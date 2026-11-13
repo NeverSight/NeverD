@@ -1089,6 +1089,76 @@ TEST(SymMBAResidue, ProvesLivePrefixAndNeighborAtFullWidth) {
   }
 }
 
+TEST(SymMBAResidue, DynamicMasksRetainTheLastObservedBit) {
+  for (unsigned Width : {7u, 16u, 65u, 257u}) {
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto U = Ctx.mkXor(X, Y);
+    const auto Scale = llvm::APInt(Width, 3).shl(Width - 6);
+    for (bool Fixed : {false, true})
+      for (bool Live : {false, true}) {
+        llvm::SmallVector<SymRef, 16> Factors{Ctx.mkConst(Scale)};
+        // The coefficient is four times an odd number. Only the low
+        // four bits of each word can reach the six observed result bits.
+        for (unsigned I = 0; I < 13; ++I) {
+          const unsigned Mask = Live && I == 5 ? 8 : ((2 * I + 1) << 4) | 16;
+          const auto Term = Ctx.mkAdd(Y, Ctx.mkConst(Width, 2 * I + 1));
+          const auto High = Ctx.mkAnd(Term, Ctx.mkConst(Width, Mask));
+          // A live literal on the same n-ary operation must also survive.
+          const auto One = Ctx.mkConst(Width, 1);
+          const auto Word =
+              I % 4 == 0   ? Ctx.mkOr(Fixed ? Ctx.mkOr(U, One) : U, High)
+              : I % 4 == 1 ? Ctx.mkXor(Fixed ? Ctx.mkXor(U, One) : U, High)
+              : I % 4 == 2
+                  ? Ctx.mkAnd(Fixed ? Ctx.mkAnd(U, Ctx.mkNot(One)) : U,
+                              Ctx.mkNot(High))
+                  : Ctx.mkAnd(U, Ctx.mkOr(Term, Ctx.mkConst(Width, 15)));
+          Factors.push_back(
+              Ctx.mkAdd(Ctx.mkConst(Width, 2 * I + 1),
+                        Ctx.mkMul(Ctx.mkConst(Width, 4 * (2 * I + 1)), Word)));
+        }
+        auto Input = Ctx.mkMul(Factors);
+        MBAOptions Opts;
+        Opts.MaxWork = 65536;
+        auto Result = simplifyMBADeep(Ctx, Input, Opts);
+        EXPECT_LT(Result.Work, Opts.MaxWork);
+        EXPECT_LT(Result.SizeAfter, Result.SizeBefore / 2);
+        if (Width == 7) {
+          SymEvalPlan Eval(Ctx, Result.Expr);
+          for (unsigned A = 0; A < 128; ++A)
+            for (unsigned B = 0; B < 128; ++B) {
+              unsigned Expected = 6;
+              for (unsigned I = 0; I < 13; ++I) {
+                const auto Mask = Live && I == 5 ? 8u : ((2 * I + 1) << 4) | 16;
+                const auto Term = B + 2 * I + 1, High = Term & Mask, V = A ^ B;
+                const auto Word = I % 4 == 0   ? (V | (Fixed ? 1u : 0u)) | High
+                                  : I % 4 == 1 ? (V ^ (Fixed ? 1u : 0u)) ^ High
+                                  : I % 4 == 2
+                                      ? (V & ~(Fixed ? 1u : 0u)) & ~High
+                                      : V & (Term | 15);
+                Expected *= (2 * I + 1) * (1 + 4 * Word);
+              }
+              ASSERT_EQ(
+                  Eval.eval({llvm::APInt(Width, A), llvm::APInt(Width, B)}),
+                  llvm::APInt(Width, Expected));
+            }
+        } else if (solver::proofBackendAvailable(solver::ProofBackend::Z3)) {
+          solver::SymSynthVerifier Verify({}, solver::ProofBackend::Z3, 5000);
+          // The outer shift selects the low six product bits. Concatenating
+          // them with zeros gives a full-width oracle without encoding
+          // thirteen irrelevant wide multiplications in Z3.
+          llvm::SmallVector<SymRef, 16> LowFactors{Ctx.mkConst(6, 3)};
+          for (auto F : llvm::ArrayRef(Factors).drop_front())
+            LowFactors.push_back(Ctx.mkExtract(F, 0, 6));
+          const auto Expected =
+              Ctx.mkConcat(Ctx.mkMul(LowFactors), Ctx.mkZero(Width - 6));
+          EXPECT_EQ(Verify(Ctx, Expected, Result.Expr),
+                    SynthVerification::Equivalent);
+        }
+      }
+  }
+}
+
 TEST(SymMBAResidue, StreamsTopColumnAndRetainsLowerCofactors) {
   if (!solver::proofBackendAvailable(solver::ProofBackend::Z3))
     GTEST_SKIP() << "Z3 unavailable";
