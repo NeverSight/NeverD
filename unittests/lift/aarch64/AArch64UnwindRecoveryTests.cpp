@@ -84,6 +84,74 @@ struct Frame {
   }
 };
 
+TEST(AArch64ImplicitUnwind, VectorSavesFollowLaneWidthAndPartialOverwrites) {
+  for (bool Quad : {false, true}) {
+    Frame F{SignB,
+            Quad ? PushQ8Q9 : PushD8D9,
+            ClearQ8,
+            FillQ9,
+            ByteInUpperLane,
+            ByteBelowLR,
+            Quad ? PopQ8Q9 : PopD8D9,
+            AuthB,
+            Ret};
+    auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+    ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+    const auto PlanAt = [&](unsigned Index) {
+      return prepareDarwinArm64eSystemCaller(
+          aarch64UnwindRowAt(*Rows, Index * sizeof(uint32_t)),
+          F.Function.CodeRange, 0);
+    };
+    const auto At = PlanAt(4);
+    ASSERT_TRUE(At);
+    EXPECT_TRUE(At->Vectors.Complete);
+    EXPECT_EQ(At->Vectors.LowMask, 3u);
+    EXPECT_EQ(At->Vectors.HighMask, Quad ? 3u : 0u);
+    const int Width = kRegisterBytes * (Quad ? 2 : 1);
+    EXPECT_EQ(At->Vectors.LowOffsets[0], -2 * Width);
+    EXPECT_EQ(At->Vectors.LowOffsets[1], -Width);
+    if (Quad)
+      EXPECT_EQ(At->Vectors.HighOffsets[0], -2 * Width + int(kRegisterBytes));
+    const auto Partial = PlanAt(5);
+    ASSERT_TRUE(Partial);
+    EXPECT_EQ(Partial->Vectors.Complete, Quad);
+    EXPECT_EQ(Partial->Vectors.HighMask, Quad ? 2u : 0u);
+    const auto Overwritten = PlanAt(6);
+    ASSERT_TRUE(Overwritten);
+    EXPECT_FALSE(Overwritten->Vectors.Complete);
+    const auto Restored = PlanAt(7);
+    ASSERT_TRUE(Restored);
+    EXPECT_FALSE(Restored->Vectors.Complete);
+  }
+}
+
+TEST(AArch64ImplicitUnwind, DwarfVectorRulesSurviveRestoreState) {
+  Frame F{SignB, PushQ8Q9, ClearQ8, Nop, Nop, Nop, PopQ8Q9, AuthB, Ret};
+  constexpr unsigned V8 = kDwarfV0 + NDArm64eFirstPreservedD;
+  constexpr int Depth = 4 * kRegisterBytes;
+  const auto PC = [](unsigned Index) { return Index * sizeof(uint32_t); };
+  F.Function.Dwarf->Instructions = {
+      {.Kind = CFIOpKind::DefCFAOffset, .CodeOffset = PC(2), .Offset = Depth},
+      {.Kind = CFIOpKind::Offset,
+       .CodeOffset = PC(2),
+       .Register = V8,
+       .Offset = -Depth},
+      {.Kind = CFIOpKind::RememberState, .CodeOffset = PC(3)},
+      {.Kind = CFIOpKind::Undefined, .CodeOffset = PC(4), .Register = V8},
+      {.Kind = CFIOpKind::RestoreState, .CodeOffset = PC(5)},
+      {.Kind = CFIOpKind::Restore, .CodeOffset = PC(7), .Register = V8}};
+  auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+  ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+  for (unsigned Index : {3u, 4u, 5u, 7u}) {
+    auto Plan = prepareDarwinArm64eSystemCaller(
+        aarch64UnwindRowAt(*Rows, PC(Index)), F.Function.CodeRange, 0);
+    ASSERT_TRUE(Plan);
+    EXPECT_EQ(Plan->Vectors.Complete, Index != 4);
+    EXPECT_EQ(Plan->Vectors.LowMask, Index == 3 || Index == 5 ? 1u : 0u);
+    EXPECT_EQ(Plan->Vectors.HighMask, Index == 7 ? 0u : 1u);
+  }
+}
+
 TEST(AArch64ImplicitUnwind,
      JoinsRequireAgreementAndUnreachableRowsStayUnknown) {
   for (const auto Branch : {IfZero, IfBitClear}) {

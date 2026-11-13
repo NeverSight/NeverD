@@ -18,6 +18,12 @@ NEVERD_UNWIND_VALUE(unsigned, kVolatileEnd, 19)
 NEVERD_UNWIND_VALUE(unsigned, kPACMAuthModifier, 16)
 NEVERD_UNWIND_VALUE(unsigned, kHintDestination, 17)
 NEVERD_UNWIND_VALUE(unsigned, kRegisterBytes, 8)
+NEVERD_UNWIND_VALUE(unsigned, kFirstDSlot, kSP + 1)
+NEVERD_UNWIND_VALUE(unsigned, kFirstHighSlot,
+                    kFirstDSlot + NDArm64ePreservedDCount)
+NEVERD_UNWIND_VALUE(unsigned, kFrameRegisters,
+                    kFirstHighSlot + NDArm64ePreservedDCount)
+NEVERD_UNWIND_VALUE(unsigned, kDwarfV0, 64)
 NEVERD_UNWIND_VALUE(size_t, kMaxInstructions, 1u << 12)
 NEVERD_UNWIND_VALUE(size_t, kMaxTransitions, 1u << 16)
 NEVERD_UNWIND_VALUE(size_t, kMaxStackCells, 64)
