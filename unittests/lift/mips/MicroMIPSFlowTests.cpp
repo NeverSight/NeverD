@@ -181,6 +181,81 @@ TEST(MicroMIPS64, FullWidthTargetsRegistersAndScalarMemory) {
   }
 }
 
+TEST(MicroMIPS64, DoublewordMergeStoresKeepPhysicalBytesAndSignedDisplacement) {
+  // GNU as -mips64r2, including the two signed 12-bit displacement limits.
+  constexpr struct {
+    uint16_t Half;
+    uint32_t Classic;
+    unsigned Id;
+    int Disp;
+  } Cases[] = {{0xc800, 0xb085f800, MIPS_INS_SDL, -2048},
+               {0xcfff, 0xb085ffff, MIPS_INS_SDL, -1},
+               {0xd006, 0xb4850006, MIPS_INS_SDR, 6},
+               {0xd7ff, 0xb48507ff, MIPS_INS_SDR, 2047}};
+  for (const auto Target :
+       {Arch::MIPS64, Arch::MIPS64EL, Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    const auto Order = archLittleEndian(Target) ? llvm::endianness::little
+                                                : llvm::endianness::big;
+    Decoder Micro, Classic;
+    ASSERT_TRUE(Micro.init(Target, InstructionMode::MicroMIPS));
+    ASSERT_TRUE(Classic.init(Target));
+    for (const auto &Case : Cases) {
+      uint8_t Bytes[4], Reference[4];
+      llvm::support::endian::write16(Bytes, 0x60a4, Order);
+      llvm::support::endian::write16(Bytes + 2, Case.Half, Order);
+      llvm::support::endian::write32(Reference, Case.Classic, Order);
+      DecodedInsn Insn{};
+      ASSERT_EQ(Micro.decodeOne(Bytes, 4, 0x1000, Insn), 4);
+      ASSERT_EQ(Insn.Id, Case.Id);
+      EXPECT_TRUE(std::equal(Bytes, Bytes + 4, Insn.Raw->bytes));
+      ASSERT_NE(Insn.Raw->detail, nullptr);
+      const auto &Detail = Insn.Raw->detail->mips;
+      ASSERT_EQ(Detail.op_count, 2u);
+      EXPECT_EQ(Detail.operands[0].reg, MIPS_REG_A1);
+      EXPECT_EQ(Detail.operands[1].mem.base, MIPS_REG_A0);
+      EXPECT_EQ(Detail.operands[1].mem.disp, Case.Disp);
+      std::vector<LowOp> Ops, ReferenceOps;
+      ASSERT_EQ(Micro.decodeOneForLift(Bytes, 4, 0x1000, Insn), 4);
+      Micro.liftToLow(Insn, Ops);
+      ASSERT_EQ(Classic.decodeOneForLift(Reference, 4, 0x1000, Insn), 4);
+      Classic.liftToLow(Insn, ReferenceOps);
+      ASSERT_FALSE(Ops.empty());
+      EXPECT_EQ(Ops, ReferenceOps);
+    }
+  }
+}
+
+TEST(MicroMIPS64, DoublewordMergeStoresAreRestrictedToPreR6WideGPRs) {
+  for (const auto Target :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    const auto Order = archLittleEndian(Target) ? llvm::endianness::little
+                                                : llvm::endianness::big;
+    for (unsigned Revision : {2u, 6u}) {
+      if (Revision == 2 && isMIPS64(Target))
+        continue;
+      for (auto Mode :
+           {InstructionMode::MicroMIPS, InstructionMode::MIPSClassic}) {
+        MIPSLifter Lifter(Target, Mode, Revision);
+        for (bool Left : {false, true}) {
+          cs_insn Insn{};
+          Insn.size = 4;
+          if (Mode == InstructionMode::MicroMIPS) {
+            llvm::support::endian::write16(Insn.bytes, 0x60a4, Order);
+            llvm::support::endian::write16(Insn.bytes + 2,
+                                           Left ? 0xcfff : 0xd006, Order);
+          } else {
+            llvm::support::endian::write32(
+                Insn.bytes, Left ? 0xb085ffff : 0xb4850006, Order);
+          }
+          std::vector<LowOp> Ops;
+          EXPECT_THROW(Lifter.lift(Insn, Ops), UnliftedInstruction);
+          EXPECT_TRUE(Ops.empty());
+        }
+      }
+    }
+  }
+}
+
 class MicroMIPSFlow : public ::testing::TestWithParam<Arch> {};
 
 TEST_P(MicroMIPSFlow, BranchUsesHalfwordDisplacementAndRealSlotSpan) {

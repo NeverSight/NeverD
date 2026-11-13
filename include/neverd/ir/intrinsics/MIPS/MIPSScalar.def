@@ -37,6 +37,8 @@ NEVERD_MIPS_SCALAR_INTRINSIC(MIPSDivUnsignedWord, 16010,
                              "neverd_mips_div_unsigned_word")
 NEVERD_MIPS_MERGE_STORE(MIPSSwl, 16011, 0x2a, 4, true, "neverd_mips_swl")
 NEVERD_MIPS_MERGE_STORE(MIPSSwr, 16012, 0x2e, 4, false, "neverd_mips_swr")
+NEVERD_MIPS_MERGE_STORE(MIPSSdl, 16050, 0x2c, 8, true, "neverd_mips_sdl")
+NEVERD_MIPS_MERGE_STORE(MIPSSdr, 16051, 0x2d, 8, false, "neverd_mips_sdr")
 
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSExecutionHazardBarrier, 16013,
                              "neverd_mips_ehb")

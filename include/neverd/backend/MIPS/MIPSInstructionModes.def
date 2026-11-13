@@ -8,8 +8,23 @@
 MIPS_SOURCE_MODE(MIPS16, "mips16", "nomicromips",
                  "__attribute__((mips16,nomicromips)) ")
 MIPS_SOURCE_MODE(MicroMIPS, "micromips", "nomips16",
-                 "__attribute__((micromips,nomips16)) ")
+                 "NEVERD_MICROMIPS ")
 MIPS_SOURCE_MODE(MIPSClassic, "nomicromips", "nomips16",
                  "__attribute__((nomicromips,nomips16)) ")
 
 #undef MIPS_SOURCE_MODE
+
+#ifdef MIPS_SOURCE_TEXT
+// GCC selects the encoding with a single positive attribute. Clang needs to
+// disable MIPS16 explicitly when the translation unit defaults to that mode.
+MIPS_SOURCE_TEXT(MicroModeCPrelude,
+                 "#if defined(__clang__)\n"
+                 "#if !__has_attribute(micromips)\n"
+                 "#error \"this compiler cannot emit microMIPS for the selected target\"\n"
+                 "#endif\n"
+                 "#define NEVERD_MICROMIPS __attribute__((micromips,nomips16))\n"
+                 "#else\n"
+                 "#define NEVERD_MICROMIPS __attribute__((micromips))\n"
+                 "#endif\n\n")
+#undef MIPS_SOURCE_TEXT
+#endif

@@ -23724,6 +23724,10 @@ readonly/writable globals, image pointers, MUL, both word-merge orders,
 doubleword merges and a merge read in an indirect call's slot. Uninitialized
 merge destinations cover both orders, all offsets, fixed and seeded random
 machine values, independent expected bytes and fault order at both page edges.
+For n64, the runner also checks isolated `SDL`, isolated `SDR` and a paired
+store followed by a paired reload. It compares the returned 64 bits and all
+16 bytes around the destination against an independent byte-array splice at
+each of the eight alignments, in both byte orders.
 An invalid-memory branch-likely slot is tested both annulled and executed.
 Bitfield and shuffle kernels cover all 13 classic SPECIAL3 forms and full-width
 fields with independent bit/lane expectations. MIPS64 invalid word inputs are

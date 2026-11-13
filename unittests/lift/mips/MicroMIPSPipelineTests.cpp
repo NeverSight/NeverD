@@ -12,6 +12,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/ELFLoader.h"
@@ -64,24 +65,29 @@ void checkHalfwordAlignedALUSources(Arch Target, unsigned Revision) {
     ASSERT_EQ(Result.MedFuncs.size(), 1u);
     EXPECT_EQ(Result.MedFuncs.front().Params.size(), 1u);
     EXPECT_EQ(Result.MedIRVerifierFailures, 0u);
+    CEmitterOptions Emit;
+    Emit.TheArch = Target;
+    Emit.Format = BinaryFormat::ELF;
+    Emit.Image = &*Image;
+    std::string Text;
+    llvm::raw_string_ostream Output(Text);
     if (LLVM) {
       ASSERT_TRUE(Result.LlvmModule);
       EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
       const auto *Body = Result.LlvmModule->getFunction("micro_increment");
       ASSERT_NE(Body, nullptr);
       EXPECT_TRUE(Body->hasFnAttribute("micromips"));
+      ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Output, Emit));
     } else {
-      CEmitterOptions Emit;
-      Emit.TheArch = Target;
-      Emit.Format = BinaryFormat::ELF;
-      Emit.Image = &*Image;
-      std::string Text;
-      llvm::raw_string_ostream Output(Text);
       ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Output, Emit));
-      EXPECT_NE(Text.find("__attribute__((micromips,nomips16))"),
-                std::string::npos)
-          << Text;
     }
+    EXPECT_NE(Text.find("__attribute__((micromips,nomips16))"),
+              std::string::npos)
+        << Text;
+    EXPECT_NE(Text.find("__attribute__((micromips))"), std::string::npos);
+    const auto PreludeEnd = Text.find("#endif\n\n");
+    ASSERT_NE(PreludeEnd, std::string::npos);
+    EXPECT_NE(Text.find("NEVERD_MICROMIPS ", PreludeEnd), std::string::npos);
   }
 }
 

@@ -57,6 +57,9 @@ FUNCTIONS = ["mips_add", "mips_likely", "mips_load", "mips_store", "mips_stack",
 
 FUNCTIONS += ["mips_div_lo", "mips_div_hi", "mips_divu_lo", "mips_divu_hi", "mips_div_dead"]
 FUNCTIONS += ["mips_store_byte", "mips_store_half"]
+DOUBLEWORD_STORES = ("mips_merge_store_left_double", "mips_merge_store_right_double",
+                     "mips_merge_store_double")
+FUNCTIONS += list(DOUBLEWORD_STORES)
 FUNCTIONS += list(FIELDS) + list(SHUFFLES) + ["mips_word_likely", "mips_word_zero"]
 
 
@@ -309,6 +312,8 @@ def run(args, artifacts):
         command([*link, "-e", "mips_add", obj, "-o", original],
                 output / f"{profile}-link.log")
         for function in args.function or (MICRO_FUNCTIONS if micro else FUNCTIONS):
+            if bits < 64 and function in DOUBLEWORD_STORES:
+                continue
             if function in FIELDS or function in SHUFFLES:
                 if (FIELDS.get(function) or SHUFFLES[function])[0] > bits:
                     continue
@@ -371,6 +376,19 @@ def run(args, artifacts):
                 results.append(value)
             if results[0] != results[1]:
                 raise RuntimeError(f"{stem.name} inputs={inputs}: original={results[0]} generated={results[1]}")
+            if function in DOUBLEWORD_STORES:
+                offset = inputs[0] - DATA
+                value = inputs[1] & ((1 << 64) - 1)
+                encoded = value.to_bytes(8, "little" if little else "big")
+                memory = bytearray(data)
+                if function == "mips_merge_store_double":
+                    memory[offset:offset + 8] = encoded
+                elif (function == "mips_merge_store_left_double") != little:
+                    memory[offset:8] = encoded[:8 - offset]
+                else:
+                    memory[:offset + 1] = encoded[7 - offset:]
+                if results[0] != (value, memory.hex()):
+                    raise RuntimeError(f"{stem.name} inputs={inputs}: unexpected partial store or return")
             expected = independent_result(function, inputs)
             if expected is not None and results[0][0] != expected & ((1 << bits) - 1):
                 raise RuntimeError(f"{stem.name}: result disagrees with independent field/lane expectation")

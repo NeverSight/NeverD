@@ -952,6 +952,7 @@ void LLVMCWriter::recordSourceNames(const llvm::Module &Mod) {
 }
 
 void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
+  bool NeedsMicroMode = false;
   bool NeedsAArch64RawCall = false;
   bool NeedsAArch64ResultStorageCall = false;
   bool NeedsX86SystemRegisterDispatch = false;
@@ -1023,6 +1024,9 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
   for (auto &Fn : Mod) {
     // Declarations and aggregate definitions can survive selection of only
     // one body, including a function referenced only through its address.
+    if (isMIPS(Opts.TheArch) && !NeedsMicroMode)
+      NeedsMicroMode =
+          mips::instructionModeFromLLVM(Fn) == InstructionMode::MicroMIPS;
     NoteWideInteger(Fn.getReturnType());
     if (NeedsWideCarrierAlias)
       for (const auto &Arg : Fn.args())
@@ -1374,6 +1378,8 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
       Headers.insert(Hdr);
 
   IncludedHeaders.clear();
+  if (NeedsMicroMode)
+    OS << mips::MicroModeCPrelude;
   if (Opts.EmitIncludes) {
     // As NeverD read the headers: with _GNU_SOURCE, for the GNU C Library,
     // musl and bionic.
