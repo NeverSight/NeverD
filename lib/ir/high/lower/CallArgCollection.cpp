@@ -348,6 +348,47 @@ void collectFullBankStackArgs(const CallArgScan &Scan,
 
 } // namespace call_args_detail
 
+int MedToHighConverter::forwardedParameterCount(
+    size_t CallIdx, const std::vector<MedOp> &Ops,
+    llvm::ArrayRef<uint64_t> ParamRegs) const {
+  if (!Image || !CurMed || CurMed->SkippedSSA || CallIdx >= Ops.size())
+    return 0;
+  const CallArgumentConvention *Convention =
+      callArgumentConvention(TargetArch, Image->abiFormat());
+  if (Convention && Convention->ArgumentsFromCallSetup)
+    return 0;
+  // A jump, by its own provenance: a call a return follows sets what it
+  // passes.
+  const MedOp &Call = Ops[CallIdx];
+  if (Call.Opcode != NdOp::CALL || !Call.IsTailCall || Call.NumInputs < 1 ||
+      !Call.Inputs[0].isConst() || Call.CalleeRegisterArgs >= 0 ||
+      Call.SourceCallHint || Call.IntegerCallSignature ||
+      Call.ScalarCallSignature)
+    return 0;
+  // No summary, binding or declaration says what the callee reads, and the
+  // C library's tables do not know its name.
+  const va_t Target = Call.Inputs[0].ConstVal;
+  if (PrototypeArgumentCallees && PrototypeArgumentCallees->count(Target))
+    return 0;
+  const std::string Import = importCalleeName(*Image, Target);
+  if (Import.empty())
+    return 0;
+  const std::string Name =
+      cNameOfStatedName(Import, Image->Format, Image->Arch).str();
+  if (libc::libcPrototype(Name, Image->abiFormat()) ||
+      libc::isKnownFunction(Name))
+    return 0;
+  int Count = 0;
+  while (Count < static_cast<int>(ParamRegs.size()) &&
+         llvm::any_of(
+             CurMed->Params,
+             [&](const MedVar &Parameter) {
+               return Parameter.RegOff == ParamRegs[Count];
+             }))
+    ++Count;
+  return Count;
+}
+
 unsigned MedToHighConverter::importFixedArgCount(size_t CallIdx,
                                                  const std::vector<MedOp> &Ops,
                                                  va_t ResolvedSlot) const {
@@ -904,6 +945,31 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
           std::max(FillLast, std::min(static_cast<int>(Fixed),
                                       static_cast<int>(ParamRegs.size())) -
                                  1);
+    // A jump to an import nothing describes hands it the registers as they
+    // are.  The leading register parameters of this function that still hold
+    // their incoming value there are passed on, in order from the first, as
+    // MedIR's call recovery passes them (MedABIPass) and LLVM C prints them.
+    // A call that returns sets what it passes; a convention whose arguments
+    // come from that recovery, or that fills unwritten positions by its own
+    // rule, keeps them.
+    const int Forwarded =
+        Fixed || (Policy && Policy->FillUnwrittenParams)
+            ? 0
+            : forwardedParameterCount(CallIdx, Ops, ParamRegs);
+    FillLast = std::max(FillLast, std::min(Forwarded, MaxArgs) - 1);
+    // Whether \p Value is what the register at \p RegOff held when this
+    // function was entered: its parameter, or the copy of it the entry makes.
+    auto HoldsIncoming = [&](const MedVar &Value, uint64_t RegOff) {
+      if (Value.Kind == MedVar::Param)
+        return Value.RegOff == RegOff;
+      if (Value.Kind != MedVar::Reg || Value.RegOff != RegOff ||
+          PhiOutputVars.count(varKey(Value)))
+        return false;
+      const MedOp *Def = uniqueMedDefinition(Value);
+      return Def ? Def->Opcode == NdOp::COPY && Def->NumInputs >= 1 &&
+                       Def->Inputs[0] == Def->Output
+                 : Value.SSAVer == 0;
+    };
     for (int K = 0; K <= FillLast && K < static_cast<int>(ParamRegs.size());
          ++K) {
       if (Found[K])
@@ -911,14 +977,23 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
       // An import's fixed argument may be a parameter this function only
       // passes on, which its entry holds no copy of (`open(path, 0)` with
       // RDI untouched).
+      const bool PassedOn = K > MaxRegArg && K < Forwarded;
       MedVar LiveIn;
       if (!ReachingAtCall(ParamRegs[K], LiveIn,
-                          /*ParameterAtEntry=*/K < static_cast<int>(Fixed)))
+                          /*ParameterAtEntry=*/K < static_cast<int>(Fixed) ||
+                              K < Forwarded)) {
+        // Past what the block sets, the first register without one value on
+        // every path ends what is passed on.
+        if (PassedOn)
+          break;
         continue;
+      }
       // The arguments end before such a join, and past the fixed ones an
-      // import reads, before what earlier calls left.
+      // import reads, before what earlier calls left.  A parameter passed on
+      // is one only while nothing else has been in its register.
       if (EntryJoin(LiveIn) ||
-          (K >= static_cast<int>(Fixed) && LeftByCall(LiveIn, ParamRegs[K]))) {
+          (K >= static_cast<int>(Fixed) && LeftByCall(LiveIn, ParamRegs[K])) ||
+          (PassedOn && !HoldsIncoming(LiveIn, ParamRegs[K]))) {
         std::fill(Found.begin() + K, Found.end(), nullptr);
         break;
       }
