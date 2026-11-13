@@ -1,10 +1,10 @@
-//===- SourceParameterPlacementMIPS.cpp - o32/n64 scalar carriers -------===//
+//===- SourceParameterPlacementMIPS.cpp - MIPS scalar carriers -------===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// MIPS o32 FP64 and n64 scalar hard-float parameter locations.
+/// MIPS o32 FP64, n32 and n64 scalar hard-float parameter locations.
 /// ELF source admission authenticates the FP profile; records are not
 /// classified.
 //===----------------------------------------------------------------------===//
@@ -50,7 +50,7 @@ std::optional<SourceParameterPlacement> source_placement::placeMIPS(
     const unsigned Count = (Type->Size + Slot - 1) / Slot;
     const bool Named = !FixedCount || Result.Parameters.size() < *FixedCount;
     auto &Pieces = Result.Parameters.emplace_back();
-    // n64 shares eight argument positions between a0-a7 and f12-f19.
+    // n32 and n64 share eight argument positions between a0-a7 and f12-f19.
     // o32 uses f12/f14 only for the first two leading FP arguments; their
     // word positions still consume the integer argument area.
     const bool InFPR =

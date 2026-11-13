@@ -1693,7 +1693,7 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
         Save.addInput(MOp.Output);
         MB.Ops.push_back(std::move(Save));
       }
-      if (isMIPS(TheArch) && MOp.ScalarCallSignature &&
+      if (isMIPS(TheArch) && MOp.ScalarCallSignature && MOp.Output.Size &&
           MOp.Output.Kind == MedVar::Temp) {
         const auto &Signature = *MOp.ScalarCallSignature;
         const uint16_t Word = ConventionRegs.FullRegWidth;
