@@ -21,7 +21,8 @@
 //               -> exercises the cross-block foldRegConstant base recovery.
 //   * guardpeel - peel triggered by a statically-false first-iteration branch.
 //   * mod10   - `switch(u%10)` (non-power-of-two, magic-division index) in a
-//               peeled loop -> confirms the mask clamp leaves modulo tables alone.
+//               peeled loop -> confirms the mask clamp leaves modulo tables
+//               alone.
 //
 // Integer-only, single integer return, bounded, no 64-bit divide; all four
 // targets at -O2, native vs lifted.
@@ -29,6 +30,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64OptStress40RT : public SemanticRoundTripFixture,
                          public ::testing::WithParamInterface<RoundTripTC> {};
@@ -163,12 +165,30 @@ static std::vector<RoundTripTC> makeOptStress40TC(const char *prefix, const char
 }
 // clang-format on
 
-static const std::vector<RoundTripTC> kX64 = makeOptStress40TC("x64o40", "long");
+static const std::vector<RoundTripTC> kX64 =
+    makeOptStress40TC("x64o40", "long");
 static const std::vector<RoundTripTC> kX86 = makeOptStress40TC("x86o40", "int");
-static const std::vector<RoundTripTC> kA64 = makeOptStress40TC("a64o40", "long");
+static const std::vector<RoundTripTC> kA64 =
+    makeOptStress40TC("a64o40", "long");
 static const std::vector<RoundTripTC> kARM = makeOptStress40TC("armo40", "int");
 
-INSTANTIATE_TEST_SUITE_P(OptStress40, X64OptStress40RT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress40, X86OptStress40RT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress40, A64OptStress40RT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress40, ARM32OptStress40RT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress40, X64OptStress40RT,
+                         ::testing::ValuesIn(kX64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress40, X86OptStress40RT,
+                         ::testing::ValuesIn(kX86), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress40, A64OptStress40RT,
+                         ::testing::ValuesIn(kA64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress40, ARM32OptStress40RT,
+                         ::testing::ValuesIn(kARM), rtTCName);
+
+// Two i386 switches whose tables no proof bounds (a peeled first iteration, ten
+// dispatches over two adjacent tables) reach their cases by the value each
+// jump takes: the C of both source routes is checked by execution.
+INSTANTIATE_TEST_SUITE_P(OptStress40HighC, X86OptStress40RT,
+                         ::testing::ValuesIn(onHighC(kX86,
+                                                     {"_peel8", "_twosw"})),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress40LLVMC, X86OptStress40RT,
+                         ::testing::ValuesIn(onLLVMC(kX86,
+                                                     {"_peel8", "_twosw"})),
+                         rtTCName);

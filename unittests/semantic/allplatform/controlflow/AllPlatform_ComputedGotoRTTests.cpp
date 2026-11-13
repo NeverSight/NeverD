@@ -257,6 +257,14 @@ static const std::vector<RoundTripTC> kX64FrameReject =
     makeCGotoFrameRejectTC("x64cgr", "long");
 INSTANTIATE_TEST_SUITE_P(CGotoFrameReject, X64CGotoRT,
                          ::testing::ValuesIn(kX64FrameReject), rtTCName);
+// No table is recovered, and the arm that fills the frame copy still runs:
+// the jump goes to the label its value names, on both source routes.
+INSTANTIATE_TEST_SUITE_P(CGotoFrameRejectHighC, X64CGotoRT,
+                         ::testing::ValuesIn(onHighC(kX64FrameReject)),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(CGotoFrameRejectLLVMC, X64CGotoRT,
+                         ::testing::ValuesIn(onLLVMC(kX64FrameReject)),
+                         rtTCName);
 
 #ifndef NEVERD_COMPUTED_GOTO_STRUCTURAL_ONLY
 static const std::vector<RoundTripTC> kX64 = makeCGotoTC("x64cg", "long", 2);
@@ -336,6 +344,17 @@ INSTANTIATE_TEST_SUITE_P(CGotoO0LLVMC, X86CGotoRT,
                          ::testing::ValuesIn(onLLVMC(kX86O0)), rtTCName);
 INSTANTIATE_TEST_SUITE_P(CGotoO0LLVMC, ARM32CGotoRT,
                          ::testing::ValuesIn(onLLVMC(kARMO0)), rtTCName);
+// AArch64 reads the frame copy of a local label array through a register
+// offset load no table proof follows.  The jump goes to the label its value
+// names, on both source routes.
+INSTANTIATE_TEST_SUITE_P(CGotoO0HighC, A64CGotoRT,
+                         ::testing::ValuesIn(onHighC(kA64O0,
+                                                     {"_loc4", "_loc8"})),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(CGotoO0LLVMC, A64CGotoRT,
+                         ::testing::ValuesIn(onLLVMC(kA64O0,
+                                                     {"_loc4", "_loc8"})),
+                         rtTCName);
 #else
 // The standalone CI target is intentionally limited to the eight local-table
 // cases that carry the structural switch assertion.  The monolithic semantic
