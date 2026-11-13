@@ -563,8 +563,11 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
           llvm::Type::getInt8Ty(*Ctx), FrameAlloca,
           llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), FrameBaseOffset),
           "frame_end");
-      FrameBaseInt = FrameB.CreatePtrToInt(
-          FrameEnd, llvm::Type::getInt64Ty(*Ctx), kRspInitValue);
+      auto *AddressType =
+          isMIPSN32(TargetArch) ? FrameB.getInt32Ty() : FrameB.getInt64Ty();
+      FrameBaseInt = FrameB.CreateSExtOrTrunc(
+          FrameB.CreatePtrToInt(FrameEnd, AddressType, kRspInitValue),
+          FrameB.getInt64Ty(), kRspInitValue);
 
       // Spill the variadic overflow stack parameters (the trailing parameters)
       // into the headroom at entry_sp + base + i*slot, so the unchanged va_arg
