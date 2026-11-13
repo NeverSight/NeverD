@@ -349,8 +349,10 @@ bool neverd::sourceCallStackArgumentsDefined(
           Addresses[key(SP)] = *CurrentSP;
       }
       if (Op.Opcode == NdOp::STORE) {
-        const auto Offset =
-            Op.NumInputs == 2 ? address(Op.Inputs[0]) : std::nullopt;
+        const auto Offset = Op.NumInputs == 2 && (!isMIPSN32(Architecture) ||
+                                                  Op.Inputs[0].Size == SP.Size)
+                                ? address(Op.Inputs[0])
+                                : std::nullopt;
         if (!Offset || !Op.Inputs[1].Size ||
             Op.Inputs[1].Size > limits::ir::kSourceCallStackWriteBytes ||
             Op.MemoryOrdering != NdMemoryOrdering::None ||
@@ -361,10 +363,21 @@ bool neverd::sourceCallStackArgumentsDefined(
             Written.insert(*Offset + I);
       }
       std::optional<int64_t> Next;
+      const bool N32Word = isMIPSN32(Architecture) && Op.Output.isTemp() &&
+                           Op.Output.Size == TRI.PointerSize;
       if (Op.Output.Size == SP.Size && Op.NumInputs == 1 &&
-          Op.Opcode == NdOp::COPY)
+          ((Op.Opcode == NdOp::COPY && Op.Inputs[0].Size == SP.Size) ||
+           (isMIPSN32(Architecture) && Op.Opcode == NdOp::INT_SEXT &&
+            Op.Inputs[0].isTemp() && Op.Inputs[0].Size == TRI.PointerSize)))
         Next = address(Op.Inputs[0]);
-      if (Op.Output.Size == SP.Size && Op.NumInputs == 2 &&
+      if (N32Word && Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
+          Op.Inputs[0].Size == SP.Size && Op.Inputs[1].isConst() &&
+          Op.Inputs[1].Offset == 0)
+        Next = address(Op.Inputs[0]);
+      // A n32 word temporary names only the low word until SEXT restores the
+      // canonical address. Only a full machine address can authorize a store.
+      if ((Op.Output.Size == SP.Size || N32Word) && Op.NumInputs == 2 &&
+          Op.Inputs[0].Size == Op.Output.Size &&
           (Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
           Op.Inputs[1].isConst())
         if (const auto Base = address(Op.Inputs[0])) {
