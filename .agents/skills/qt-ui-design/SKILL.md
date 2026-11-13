@@ -8,7 +8,7 @@ metadata:
   version: "1.5"
   qt-version: "6.x"
   category: conceptual
-  changelog: "Added auditing every window: inventory from the code, measured widget trees, a baseline, and what the numbers usually find"
+  changelog: "Added auditing every window: inventory from the code, measured widget trees, a baseline, what the numbers usually find, and keeping the fixes and their checks true on other platforms"
 ---
 # Qt UI Design
 
@@ -303,6 +303,14 @@ A polished main screen says little about the rest. Defects collect in the window
 - For anything that changes behavior, write the test first and watch it fail on the old code with the harm in the failure (the request sent twice, the chooser that opened, the setting that flipped), not only a property that differs.
 - A layout that looks arbitrary may be holding something up: a margin that keeps a control inside a right-to-left pane, a grid that keeps two rows of commands inside the narrowest window. Run the window's own tests, at its minimum size and in the longest and the right-to-left languages, before and after; when one fails, find what the old layout was protecting and keep that.
 - Land what applies a rule the user has already confirmed. Show without landing, as renders, what needs a new judgment: commands renamed or removed, new colors, a size that would move every window.
+
+**Keep it true on the other platforms.**
+- A fix proven on one desktop is a claim about one desktop. Change shared code, not a platform's branch, and ask of each change what differs elsewhere: the interface font and its size, the display scale, which keys press a focused button, native dialogs in place of the toolkit's own, window frames that take room inside the client area.
+- A size measured before a window shows is an estimate on another platform. Let the window correct itself once it shows (grow to what its layout needs) instead of trusting the number.
+- Write each check so it holds on a native screen at 150% and 200%: draw into an image at a scale the check names, count device pixels in proportion to that scale, and never compare two pictures taken on either side of the moment a real window becomes active.
+- A check that expects no dialog to open must not hang where the dialog would be a native one; make the toolkit use its own for the length of the check.
+- A check that presses a key in a window waits until that window is the active one. A window is visible, and the modal one, before it is active; until then the key belongs to the window behind it and can run that window's shortcut instead. Such a check passes on a quiet machine and fails on a busy one.
+- Run the whole suite, not the one new test by name, before saying it passes, and get the other platforms' verdict from their own machines before the change reaches the shared branch.
 ---
 
 ## 2. Accessibility (WCAG 2.2)

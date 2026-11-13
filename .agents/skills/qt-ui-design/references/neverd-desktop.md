@@ -536,6 +536,61 @@ Commands and forms:
   font makes it longer than the dialog ("…after default p" in Set call
   type); a test at the offscreen font cannot see that, so assert that the
   long line wraps.
+- A list column starts as wide as its format (`ChooserFormats.def`), and the
+  last column takes what room is left. Cross references gave the type of a
+  reference, one letter, the 24 digits of `Text`, and the address after it
+  ended in an ellipsis; the type takes `Letter`, 3 digits.
+- A `QTreeWidget` in a dialog hints 256 pixels whatever its columns. Add a
+  Type Library opened narrower than its three headings, with a scroll bar
+  across the list; it sets the tree's minimum width from the header's
+  length. A last section that stretches never shrinks below the size it had
+  when it began to stretch, which is Qt's default of 100 pixels for a tree's
+  header, so the list turns the stretch off, sizes every column to its
+  contents, takes its minimum width, and turns the stretch on again. Leaving
+  the stretch off instead ends the last column, and a selected row's
+  highlight, a scroll bar's width before the list's edge: check that the
+  header's length equals the viewport's width, not that it is at most that.
+- A report of JSON reads in the code font (`Theme::codeFont`), as evidence
+  panes do; Validate scalar returns printed it in the interface font.
+
+### Keeping the fixes true on Windows and macOS
+
+The user's condition for the audit: what works here must not break there.
+
+- `gui.yml` runs the appearance suite on real windows on both, at 100% and
+  again with `QT_SCALE_FACTOR=1.5`, before the offscreen `ctest`. A check
+  that counts pixels in `grab()` sees the screen's scale: render into a
+  `QImage` whose device pixel ratio the test sets, as
+  `splitterHandlesKeepAHairlineInTheirRoom` does.
+- Do not compare a widget's picture before and after an event on a real
+  window; activation can fall between the two. Take both once it has
+  settled (the heading check selects a row, then clears the selection).
+- `QFileDialog::getOpenFileName` is native on both. A test that expects no
+  chooser sets `Qt::AA_DontUseNativeDialogs` for its length, so a regression
+  fails there instead of holding the run until it times out.
+- A test that presses a key in a dialog opened over the workbench waits for
+  `dialog->isActiveWindow()`, not for `activeModalWidget()` or `isVisible()`.
+  Return in a code view is "Jump to operand" (`Actions.def`), and a key sent
+  before the dialog is active is taken by that shortcut: the stack
+  correction test failed 2 runs in 25 on one busy processor and none in 40
+  once it waited. Run a new test a few dozen times pinned to a processor
+  that a spinning process shares (`taskset`) before trusting it to a hosted
+  runner.
+- Qt appoints a dialog's default in platform-independent code, but the keys
+  that press a focused button come from the platform theme: GNOME's includes
+  Return, Windows' and macOS' do not. `leaveWithoutDefaultButton()` presses
+  the focused button itself, so all three behave alike.
+- Change stack pointer measures its height before it shows and measures
+  again once shown, growing if a platform's frame or font left its wrapped
+  text less room.
+- The suites that need a real engine (comparison, lineage, source types,
+  web review) are not built by `gui.yml` on any platform. Link them by hand
+  against a qualified bundle's worker before changing their windows, and
+  say in the report that only Linux ran them.
+- Before a change reaches `dev`, push it to a throwaway `ci/` branch and run
+  `gui.yml` on that ref; runs on `dev` are cancelled by the next push.
+  Compare each platform's failures with the last run before the change,
+  per job, and count a cancelled job as no verdict.
 
 ### Seen and left alone
 
@@ -557,6 +612,12 @@ strings in eleven languages:
 - Unwind information shows two empty panes for an image without DWARF.
 - Region hypotheses' two tables start 6 pixels apart, and Type Libraries'
   last column ends at the last heading.
+- Jump to function is 720 pixels wide and cuts the last digit of its
+  Length column.
+- Three of the Plugins menu's four entries have no icon, and the Pathfinder
+  dock shows two buttons that both read "Ins".
+- The pseudocode view's context menu has 39 entries and is taller than a
+  1080-pixel screen, where it scrolls.
 
 ## Hierarchy and proportion
 

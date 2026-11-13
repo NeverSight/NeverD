@@ -24,7 +24,8 @@ Visual Studio Code's control states; the profile's "Control states" and
 "Judging a look" sections hold NeverD's values and the user's verdicts.
 Section 1.8 and the every-window, default-at-open and one-drawing items come
 from the audit of every NeverD window on the same day; the profile's
-"Auditing every window" section holds what it found and what it left. The
+"Auditing every window" section holds what it found, what it left, and what
+keeps its fixes and their checks true on Windows and macOS. The
 upstream copyright, license, and general guidance are retained. This
 file records installation provenance and those local additions. The local
 `references/macos-qt.md` guide records Cocoa menu defaults, precision input,
