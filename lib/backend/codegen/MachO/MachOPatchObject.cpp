@@ -24,6 +24,7 @@
 #include "neverd/loader/MachO/MachORelocations.h"
 #include "neverd/object/MachOLayout.h"
 #include "neverd/support/DwarfEH.h"
+#include "neverd/support/ISAEncoding.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -117,6 +118,16 @@ MachOUnwindFunctionCounts unwindFunctionCounts(const NativeMachO &Object) {
   return {Object.Symbols.size(), LSDAs};
 }
 
+bool isTLVLoad(unsigned Type) {
+  return Type == ARM64_RELOC_TLVP_LOAD_PAGE21 ||
+         Type == ARM64_RELOC_TLVP_LOAD_PAGEOFF12;
+}
+
+bool isGOTLoad(unsigned Type) {
+  return Type == ARM64_RELOC_GOT_LOAD_PAGE21 ||
+         Type == ARM64_RELOC_GOT_LOAD_PAGEOFF12 || isTLVLoad(Type);
+}
+
 bool isCompactPersonality(const NativeMachO &Object, const Relocation &R) {
   const unsigned Ptr = Object.Image.PointerWidth;
   return Object.CompactSection == R.Section &&
@@ -135,9 +146,7 @@ prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
     Declared.insert(D.Symbol);
   const auto UsesGOT = [&](const Relocation &R) {
     return isCompactPersonality(Object, R) ||
-           R.Type == ARM64_RELOC_POINTER_TO_GOT ||
-           R.Type == ARM64_RELOC_GOT_LOAD_PAGE21 ||
-           R.Type == ARM64_RELOC_GOT_LOAD_PAGEOFF12;
+           R.Type == ARM64_RELOC_POINTER_TO_GOT || isGOTLoad(R.Type);
   };
   if (Object.WeakData.empty() && llvm::none_of(Object.Relocations, UsesGOT))
     return llvm::Error::success();
@@ -236,6 +245,23 @@ prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
     if (!R.External || R.Scattered || R.SubtractVA || R.SubtractSymbol ||
         !Object.Symbols.contains(R.SymbolIndex))
       return fail(kGOTRelocation);
+    if (isTLVLoad(R.Type)) {
+      // A TLVP reference loads the dyld descriptor; the descriptor's own
+      // authenticated resolver chooses the instance for the calling thread.
+      const auto &Symbol = Object.Symbols.at(R.SymbolIndex);
+      const auto Slot = Ordinary.find(Symbol.Name);
+      if (Symbol.Section || Slot == Ordinary.end() ||
+          Declared.contains(Symbol.Name) || R.InstructionAddend ||
+          R.Width != sizeof(uint32_t) ||
+          Object.Image.Sections[R.Section].Kind != Kind::Code)
+        return fail(kTLVDescriptor);
+      const auto &B = Original.DyldBindSlots.at(Slot->second);
+      if (!B.LibraryOrdinal || *B.LibraryOrdinal <= 0 || B.WeakImport)
+        return fail(kTLVDescriptor);
+      Object.GOT.try_emplace(std::pair{R.SymbolIndex, false},
+                             NativeMachO::GOTSlot{std::nullopt, Slot->second});
+      continue;
+    }
     const auto Key = std::pair{R.SymbolIndex, Personality};
     if (Object.GOT.contains(Key))
       continue;
@@ -1135,14 +1161,13 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
                           return X.second == R.Section;
                         })->first;
     const uint64_t OldP = Object.OldSectionVAs.at(Number) + R.Offset;
-    const bool GOT =
-        R.External &&
-        (Object.Imports.contains(R.SymbolIndex) ||
-         Object.GOT.contains({R.SymbolIndex, false})) &&
-        ((A == Arch::X64 &&
-          (R.Type == X86_64_RELOC_GOT || R.Type == X86_64_RELOC_GOT_LOAD)) ||
-         (A == Arch::AArch64 && (R.Type == ARM64_RELOC_GOT_LOAD_PAGE21 ||
-                                 R.Type == ARM64_RELOC_GOT_LOAD_PAGEOFF12)));
+    const bool GOT = R.External &&
+                     (Object.Imports.contains(R.SymbolIndex) ||
+                      Object.GOT.contains({R.SymbolIndex, false})) &&
+                     ((A == Arch::X64 && (R.Type == X86_64_RELOC_GOT ||
+                                          R.Type == X86_64_RELOC_GOT_LOAD)) ||
+                      (A == Arch::AArch64 && isGOTLoad(R.Type) &&
+                       (!isTLVLoad(R.Type) || Original.isArm64e())));
     llvm::Expected<uint64_t> Target =
         GOT           ? llvm::Expected<uint64_t>(
                             Object.GOT.contains({R.SymbolIndex, false})
@@ -1269,8 +1294,16 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
                 R.Type == ARM64_RELOC_PAGEOFF12 || GOT) &&
                R.Width == 4) {
       const uint32_t Old = Raw;
+      if (isTLVLoad(R.Type)) {
+        const bool Page = R.Type == ARM64_RELOC_TLVP_LOAD_PAGE21;
+        const auto RegisterFields = Page ? aarch64::kRdMask : kTLVLoadRegisters;
+        const auto Op = Page ? aarch64::kADRP_Op : kTLVDescriptorLoad;
+        if ((Old & ~RegisterFields) != Op)
+          return fail(kTLVInstruction);
+      }
       if (R.Type == ARM64_RELOC_PAGE21 ||
-          R.Type == ARM64_RELOC_GOT_LOAD_PAGE21) {
+          R.Type == ARM64_RELOC_GOT_LOAD_PAGE21 ||
+          R.Type == ARM64_RELOC_TLVP_LOAD_PAGE21) {
         if (!R.PCRel || (Old & 0x9f000000) != 0x90000000 || !R.External)
           return fail("PAGE21 requires a symbolic ADRP");
         V += llvm::APInt(

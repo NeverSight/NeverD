@@ -774,5 +774,63 @@ int main(int argc, char **argv) {
 }
 )c")
 
+A64_LEAF_TEXT(kTLVProviderSource, "provider.c")
+A64_LEAF_TEXT(kTLVProvider, "provider.dylib")
+A64_LEAF_TEXT(kTLVObject, "access.o")
+A64_LEAF_TEXT(kTLVCompile, "-c")
+A64_LEAF_TEXT(kTLVReplacement, "-DADJUSTMENT=5")
+A64_LEAF_TEXT(kTLVMapping, "adjust")
+A64_LEAF_TEXT(kTLVSymbol, "_adjust")
+A64_LEAF_TEXT(kTLVBind, "_counter")
+A64_LEAF_TEXT(kTLVAssembly, "bad.S")
+A64_LEAF_TEXT(kTLVMissing, "-DBIND_OTHER")
+A64_LEAF_TEXT(kTLVCalls, "native_thread_local_accesses")
+A64_LEAF_TEXT(kTLVProviderBody, "_Thread_local int counter = 13;")
+A64_LEAF_TEXT(kTLVBody, R"c(
+#ifndef ADJUSTMENT
+#define ADJUSTMENT 0
+#endif
+#ifdef BIND_OTHER
+#define counter other_counter
+#endif
+extern _Thread_local int counter;
+int adjust(int x) { return counter += x + ADJUSTMENT; }
+)c")
+A64_LEAF_TEXT(kTLVBadRelocation, R"asm(
+.text
+.globl _adjust
+_adjust:
+  adrp x0, _counter@TLVPPAGE
+  ldr w0, [x0, _counter@TLVPPAGEOFF]
+  ret
+.subsections_via_symbols
+)asm")
+A64_LEAF_TEXT(kTLVDriver, R"c(
+#include <dlfcn.h>
+#include <pthread.h>
+#include <stdlib.h>
+static int (*adjust)(int);
+static int delta;
+static void *work(void *unused) {
+  (void)unused;
+  if (adjust(3) != 16 + delta || adjust(4) != 20 + 2*delta)
+    return (void *)1;
+  return 0;
+}
+int main(int argc,char **argv) {
+  if (argc != 3) return 1;
+  void *image = dlopen(argv[1],RTLD_NOW|RTLD_LOCAL);
+  if (!image) return 2;
+  adjust = (int (*)(int))dlsym(image,"adjust");
+  delta = atoi(argv[2]);
+  if (!adjust || adjust(2) != 15 + delta) return 3;
+  pthread_t thread;
+  void *error;
+  if (pthread_create(&thread,0,work,0) || pthread_join(thread,&error) || error) return 4;
+  if (adjust(1) != 16 + 2*delta) return 5;
+  return dlclose(image);
+}
+)c")
+
 #undef A64_LEAF_VALUE
 #undef A64_LEAF_TEXT

@@ -47,6 +47,13 @@ MACHO_OBJECT_VALUE(bool, kPersonalityAddressDiversity, true)
 MACHO_OBJECT_TEXT(kNativeGOT, "__nd_got")
 MACHO_OBJECT_TEXT(kGOTRelocation,
                   "invalid native GOT or personality relocation")
+MACHO_OBJECT_TEXT(kTLVDescriptor,
+                  "thread-local access requires an existing strong descriptor "
+                  "import in a sealed GOT slot")
+MACHO_OBJECT_TEXT(kTLVInstruction, "thread-local descriptor reference requires "
+                                   "an unadjusted ADRP or pointer-sized LDR")
+MACHO_OBJECT_VALUE(uint32_t, kTLVLoadRegisters, 0x3ff)
+MACHO_OBJECT_VALUE(uint32_t, kTLVDescriptorLoad, 0xf9400000)
 MACHO_OBJECT_TEXT(kGOTRange, "native GOT displacement overflows")
 MACHO_OBJECT_TEXT(kOrdinaryStorage,
                   "ordinary pointer lacks writable native pointer storage")
