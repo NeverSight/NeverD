@@ -45,6 +45,8 @@ struct NativeMemorySnapshot {
   /// Nonempty only when an opted-in diagnostic snapshot could not read RAM.
   /// Bytes is then empty; the process's original stop remains unchanged.
   std::string Diagnostic;
+  /// False when a register read or offset calculation yielded no address.
+  bool AddressResolved = true;
 };
 
 /// Resolve a read from the stopped register state at each observation. Register
@@ -258,6 +260,9 @@ struct AndroidNativeOptions {
   /// duplicate names and mutable values. No host environment is inherited.
   /// This does not expose a writable environ global or environment mutators.
   std::optional<uint64_t> EnvironmentVector;
+  /// Read from current-thread pointers at the final stop, after fixed reads.
+  /// Uses stopped RAM backing and reports errors per range.
+  std::vector<NativeRegisterMemoryRead> ReadRegisterMemory;
 };
 
 /// Model-owned identity and placement, not a public pthread_internal_t layout.
