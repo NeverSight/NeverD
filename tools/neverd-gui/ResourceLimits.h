@@ -158,6 +158,11 @@ inline constexpr int kQueryServiceThenReads = 2;
 /// asked for as the one before it is taken: those the reply carries, and one
 /// turn to find there is no more.
 inline constexpr int kCodeViewPagesTakenAtOnce = kQueryServiceThenReads + 1;
+/// The lines of its viewport a code view lays out while a rename that will
+/// write them is with the worker.  A layout built cold takes a good part of
+/// the answer's way back, so the few a call site or a definition shows are
+/// made ready and the rest are laid out as they are painted.
+inline constexpr int kCodeViewLinesMadeReadyForRename = 4;
 /// A completed function's display-name refresh can batch existing text. Keep
 /// the interactive first load small, and retry it if a batch exceeds bytes.
 inline constexpr int kCodeViewNameRefreshPageLines =

@@ -1302,6 +1302,56 @@ private slots:
     QVERIFY(!h.service.hasCommands());
   }
 
+  void aCommandThatLeavesIsSentAsItIsEnqueued() {
+    // A command takes the turn after the one that enqueues it, with whatever
+    // else that turn enqueued.  One that leaves is with the worker when the
+    // call returns, ahead of those who hear that a command waits; behind a
+    // request the worker has, or a job that waits, it keeps its place.
+    Harness h;
+    h.service.resetReadContext("project-one", "1");
+    QStringList heard;
+    QObject::connect(&h.service, &QueryService::pendingChanged, &h.owner,
+                     [&] { heard.append(QString::number(h.sent.size())); });
+    QVERIFY(h.service.enqueueCommand("save", {}, &h.owner,
+                                     [](const QJsonObject &) {}));
+    QCOMPARE(h.sent.size(), 0);
+    QCOMPARE(heard, QStringList{QStringLiteral("0")});
+    QTRY_COMPARE(h.sent.size(), 1);
+    h.reply(0, {}, "1");
+    QTRY_VERIFY(!h.service.hasPending());
+    heard.clear();
+    QVERIFY(h.service.enqueueCommand(
+        "rename", {{"address", "0x1000"}, {"name", "leaves"}}, &h.owner,
+        [](const QJsonObject &) {}, {}, true));
+    // Sent before anyone heard of it.
+    QCOMPARE(h.sent.size(), 2);
+    QCOMPARE(h.sent[1].operation, QStringLiteral("rename"));
+    QCOMPARE(heard.value(0), QStringLiteral("2"));
+    // One that leaves behind it waits for the worker, in its turn.
+    QVERIFY(h.service.enqueueCommand(
+        "rename", {{"address", "0x2000"}, {"name", "waits"}}, &h.owner,
+        [](const QJsonObject &) {}, {}, true));
+    QCOMPARE(h.sent.size(), 2);
+    h.reply(1, {}, "2");
+    QTRY_COMPARE(h.sent.size(), 3);
+    QCOMPARE(h.sent[2].payload["name"].toString(), QStringLiteral("waits"));
+    QCOMPARE(h.sent[2].expectedRevision, QStringLiteral("2"));
+    h.reply(2, {}, "3");
+    QTRY_VERIFY(!h.service.hasPending());
+    // Behind a read that waits it does not pass the read.
+    h.service.subscribe(text(), &h.owner, [](const QJsonObject &) {});
+    QVERIFY(h.service.enqueueCommand(
+        "rename", {{"address", "0x3000"}, {"name", "behind"}}, &h.owner,
+        [](const QJsonObject &) {}, {}, true));
+    QCOMPARE(h.sent.size(), 4);
+    QCOMPARE(h.sent[3].operation, text().operation);
+    h.reply(3, {{"text", "read"}}, "3");
+    QTRY_COMPARE(h.sent.size(), 5);
+    QCOMPARE(h.sent[4].payload["name"].toString(), QStringLiteral("behind"));
+    h.reply(4, {}, "4");
+    QTRY_VERIFY(!h.service.hasPending());
+  }
+
   void analysisCompletionFollowsAllSubscribersAndDoesNotRepeat() {
     Harness h;
     establish(h);

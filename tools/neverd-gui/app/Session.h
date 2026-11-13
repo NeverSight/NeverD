@@ -462,6 +462,11 @@ signals:
   /// while the worker reads the rest.
   void shownRevisionChanged();
   void shownRevisionAsked();
+  /// A rename no command waits ahead of has been enqueued to leave at once:
+  /// \p address is called \p name once the worker takes it.  A view that
+  /// shows names of the address makes ready for what the answer brings while
+  /// the worker reads it.
+  void renaming(Address address, const QString &name);
   void revisionChanged();
   void generationChanged();
   /// An analysis replica's decompiles changed once, after it solved the
@@ -503,7 +508,7 @@ private:
   using Callback = std::function<void(const QJsonObject &payload)>;
   void command(const QString &operation, const QJsonObject &payload,
                Callback done, Failure failed = {},
-               QString expectedRevision = {});
+               QString expectedRevision = {}, bool leaves = false);
   void receive(const QJsonObject &message);
   void applyBackgroundSnapshot(const QJsonObject &snapshot);
   void startWorker();

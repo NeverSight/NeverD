@@ -474,7 +474,8 @@ QString Session::heldMessage(const QString &path, const QString &reason) {
 }
 
 void Session::command(const QString &operation, const QJsonObject &payload,
-                      Callback done, Failure failed, QString expectedRevision) {
+                      Callback done, Failure failed, QString expectedRevision,
+                      bool leaves) {
   // Only edits and their saving make the project dirty while in flight; an
   // open, reload or analysis does not.
   const bool edit = isEdit(operation);
@@ -535,7 +536,7 @@ void Session::command(const QString &operation, const QJsonObject &payload,
         }
         emit stateChanged();
       },
-      std::move(expectedRevision));
+      std::move(expectedRevision), leaves);
 }
 
 void Session::resetState() {
@@ -1627,17 +1628,24 @@ void Session::rename(Address function, const QString &name,
   // commit them first so the rename never discards or blocks on them.
   if (commentsStaged())
     commitComments();
-  command(QStringLiteral("rename"),
-          {{"address", hexAddress(function)}, {"name", name.trimmed()}},
-          [this, function, name, then = std::move(then)](const QJsonObject &) {
-            refreshHistory();
-            emit renamed(function, name.trimmed());
-            emit message(tr("Renamed %1 to %2")
-                             .arg(displayAddress(function), name.trimmed()),
-                         0);
-            if (then)
-              then();
-          });
+  // A rename no command waits ahead of leaves as it is enqueued, and the
+  // views hear of it while the worker reads it.
+  const bool leaves = !queries_.hasCommands();
+  command(
+      QStringLiteral("rename"),
+      {{"address", hexAddress(function)}, {"name", name.trimmed()}},
+      [this, function, name, then = std::move(then)](const QJsonObject &) {
+        refreshHistory();
+        emit renamed(function, name.trimmed());
+        emit message(tr("Renamed %1 to %2")
+                         .arg(displayAddress(function), name.trimmed()),
+                     0);
+        if (then)
+          then();
+      },
+      {}, {}, leaves);
+  if (leaves)
+    emit renaming(function, name.trimmed());
 }
 
 void Session::prepareCodeName(const QJsonObject &edit, quint64 epoch) {

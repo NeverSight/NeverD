@@ -8199,6 +8199,130 @@ private slots:
     return QTest::qWaitFor([&] { return code->hasFocus(); }) ? code : nullptr;
   }
 
+  void theLinesARenameWritesAreLaidOutWhileTheWorkerReadsIt() {
+    // A rename's answer brings a caller's text with the new name on the lines
+    // that linked the old one.  The view lays those lines out as the rename
+    // leaves, while the worker reads it, and shows nothing of them; the line
+    // the answer brings takes the layout where it reads as the view read the
+    // rename to write it.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    auto *code = shownCode(bench, directory,
+                           QStringLiteral("pseudocode-navigation.bin"));
+    QVERIFY(code);
+    if (code->hasPrelude() && code->preludeFolded())
+      code->setPreludeFolded(false);
+    QVERIFY(code->allText().contains(QStringLiteral("return function_22();")));
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    const auto renamed = [&](Address address, const QString &name) {
+      const QString before = code->allText();
+      const auto revision = bench.session.revision();
+      bench.session.rename(address, name);
+      // The worker has the say: the text reads as it did until it answers.
+      if (code->allText() != before)
+        return false;
+      return QTest::qWaitFor(
+          [&] {
+            return bench.session.revision() != revision && code->complete() &&
+                   !bench.session.queries().hasPending();
+          },
+          OpenTimeoutMs);
+    };
+    auto taken = code->readyLinesTaken();
+    QVERIFY(renamed(Base + 0x160, QStringLiteral("made_ready")));
+    QVERIFY(code->allText().contains(QStringLiteral("return made_ready();")));
+    QCOMPARE(code->readyLinesTaken(), taken + 1);
+    QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    // The function's own name, on the line of its definition.
+    taken = code->readyLinesTaken();
+    QVERIFY(renamed(Base + 0x140, QStringLiteral("the_caller")));
+    QVERIFY(code->allText().contains(QStringLiteral("the_caller(void)")));
+    QCOMPARE(code->readyLinesTaken(), taken + 1);
+    // A name of something the text links nowhere makes no line ready.
+    taken = code->readyLinesTaken();
+    QVERIFY(renamed(Base + 16, QStringLiteral("named_elsewhere")));
+    QCOMPARE(code->readyLinesTaken(), taken);
+    // A name the worker refuses leaves the text as it was, and the lines made
+    // ready for it are no one's: the next rename's are taken as before.
+    const QString standing = code->allText();
+    bench.session.rename(Base + 0x160, QStringLiteral("not a name"));
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    QCOMPARE(code->allText(), standing);
+    QCOMPARE(code->readyLinesTaken(), taken);
+    QVERIFY(renamed(Base + 0x160, QStringLiteral("named_after_all")));
+    QVERIFY(
+        code->allText().contains(QStringLiteral("return named_after_all();")));
+    QCOMPARE(code->readyLinesTaken(), taken + 1);
+    // A line the viewport does not show is laid out when it is painted.
+    code->verticalScrollBar()->setValue(code->verticalScrollBar()->maximum());
+    if (code->verticalScrollBar()->value() > 0) {
+      taken = code->readyLinesTaken();
+      QVERIFY(renamed(Base + 0x140, QStringLiteral("out_of_view")));
+      QCOMPARE(code->readyLinesTaken(), taken);
+    }
+  }
+
+  void theFirstLinesOfManyARenameWritesAreMadeReady() {
+    // Where many lines of the viewport link the name, the first few are laid
+    // out ahead and the rest as they are painted.  One of the few holds the
+    // name twice with characters beyond ASCII between: it reads as the worker
+    // writes it, or the line the answer brings would not take its layout.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    auto *code = shownCode(bench, directory, QStringLiteral("code-calls.bin"));
+    QVERIFY(code);
+    if (code->hasPrelude() && code->preludeFolded())
+      code->setPreludeFolded(false);
+    QVERIFY(!code->anyFolded());
+    QVERIFY(code->lineCount() > 300);
+    code->verticalScrollBar()->setValue(0);
+    QVERIFY(code->viewport()->height() / QFontMetrics(code->font()).height() >
+            2 * ::neverd::limits::gui::kCodeViewLinesMadeReadyForRename);
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    const auto renamed = [&](Address address, const QString &name) {
+      const auto revision = bench.session.revision();
+      bench.session.rename(address, name);
+      return QTest::qWaitFor(
+          [&] {
+            return bench.session.revision() != revision && code->complete() &&
+                   !bench.session.queries().hasPending();
+          },
+          OpenTimeoutMs);
+    };
+    auto taken = code->readyLinesTaken();
+    QVERIFY(renamed(Base + 0x160, QStringLiteral("called_often")));
+    QCOMPARE(code->readyLinesTaken(),
+             taken + ::neverd::limits::gui::kCodeViewLinesMadeReadyForRename);
+    const QStringList lines = code->allText().split(QLatin1Char('\n'));
+    QCOMPARE(lines.value(3),
+             QString::fromUtf8("  v0 += called_often(v0); /* \xE5\x90\x8D"
+                               "\xE7\xA7\xB0 */ v0 -= called_often(v0);"));
+    // The comment and the string spell the name the function had.
+    QVERIFY(lines.value(2).contains(QStringLiteral("function_22")));
+    QVERIFY(lines.value(4).contains(QStringLiteral("\"function_22\"")));
+    QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    // Lines below the viewport are not made ready, and those under a fold's
+    // summary are not either.
+    code->verticalScrollBar()->setValue(0);
+    taken = code->readyLinesTaken();
+    QVERIFY(renamed(Base + 0x150, QStringLiteral("called_seldom")));
+    QVERIFY(code->allText().contains(QStringLiteral("called_seldom(v0)")));
+    QCOMPARE(code->readyLinesTaken(), taken + 1);
+    code->verticalScrollBar()->setValue(code->verticalScrollBar()->maximum());
+    QVERIFY(code->verticalScrollBar()->value() > 20);
+    code->setFolded(true);
+    QVERIFY(code->anyFolded());
+    taken = code->readyLinesTaken();
+    QVERIFY(renamed(Base + 0x160, QStringLiteral("called_under_a_fold")));
+    QVERIFY(code->readyLinesTaken() > taken);
+    QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+  }
+
   void aChangePaintsTheRowsItReachesAndNoOther() {
     // The code view paints again the rows whose painting a change reaches,
     // and leaves the others as the window keeps them.  After each kind of

@@ -146,6 +146,9 @@ public:
   /// The lines that took the spans of the line that read the same in their
   /// place, colored as they are to be (rebuildLines).
   quint64 spansKept() const { return spansKept_; }
+  /// The lines a rename's answer brought that took the layout made ready for
+  /// them while the rename was with the worker (makeReadyFor).
+  quint64 readyLinesTaken() const { return readyLinesTaken_; }
   /// All pages of this document arrived successfully. Error text and a
   /// cancelled or partially loaded document are not exportable source.
   bool complete() const { return complete_ && !loading_ && !interrupted_; }
@@ -493,6 +496,22 @@ private:
   QList<Line> linesBefore_;
   quint64 layoutsKept_ = 0;
   quint64 spansKept_ = 0;
+  /// A line of the viewport as a rename on its way will write it, if the
+  /// worker takes the rename as the view reads it: its text with the new name
+  /// in each place the old one is linked, colored and laid out.
+  struct ReadyLine {
+    int index = 0;
+    StyledLine styled;
+  };
+  /// Those lines, made while the worker reads the rename
+  /// (Session::renaming).  The line the answer brings in the place of one
+  /// takes its layout where it reads the same under the same spans, which is
+  /// then the layout it would build (rebuildLines); any other is laid out as
+  /// it is painted, as before.  Let go of once the text is whole again.
+  QVector<ReadyLine> readyLines_;
+  quint64 readyLinesTaken_ = 0;
+  /// Makes ready the lines \p address being called \p name will write.
+  void makeReadyFor(Address address, const QString &name);
   bool foldPreludeAfterLoad_ = true;
   bool foldDetailsAfterLoad_ = true;
   QSet<QString> blocksAfterLoad_;

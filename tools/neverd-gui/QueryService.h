@@ -69,9 +69,14 @@ public:
   // requests cannot be interleaved with another read or command.
   SubscriptionId graphViewport(QJsonObject payload, QObject *owner,
                                Completion complete);
+  /// \p leaves sends the command as it is enqueued, where nothing is with the
+  /// worker or waits ahead of it, in place of the turn that would: for one
+  /// whose views make ready for its answer while the worker reads it, ahead
+  /// of those who hear that a command waits.
   SubscriptionId enqueueCommand(QString operation, QJsonObject payload,
                                 QObject *owner, Completion complete,
-                                QString expectedRevision = {});
+                                QString expectedRevision = {},
+                                bool leaves = false);
   void unsubscribe(SubscriptionId id);
   void unsubscribeOwner(QObject *owner);
   /// Detach every read except those owned by \p keep (commands always run).

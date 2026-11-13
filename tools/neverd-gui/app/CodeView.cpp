@@ -553,6 +553,9 @@ CodeText::CodeText(Session &session, QWidget *parent)
     if (!rowsUpdated_.isEmpty())
       viewport()->repaint(std::exchange(rowsUpdated_, {}));
   });
+  // A rename with the worker writes the name on the lines that link the
+  // old one: those the viewport shows are laid out while the worker reads it.
+  connect(&session_, &Session::renaming, this, &CodeText::makeReadyFor);
   // A new default reaches the shown function too, whatever this window
   // chose for it; a hidden window takes it when it shows again.
   connect(&SourceDefaults::instance(), &SourceDefaults::changed, this, [this] {
@@ -668,6 +671,7 @@ void CodeText::clear() {
   pageRowsBefore_.clear();
   lineStarts_.clear();
   linesBefore_.clear();
+  readyLines_.clear();
   regions_ = {};
   regionsValid_ = false;
   prelude_ = {};
@@ -745,6 +749,7 @@ void CodeText::load(Address function, const QString &representation,
   if (!same) {
     renderedOptions_ = {};
     lines_.clear();
+    readyLines_.clear();
     ++linesStamp_;
     widestLine_ = 0;
     cursorLine_ = cursorColumn_ = 0;
@@ -801,6 +806,67 @@ void CodeText::showOrdinary(const QString &why) {
   load(*function_, representation_, options);
   // Pages arrive from the event loop, after this.
   statusNote_ = why;
+}
+
+void CodeText::makeReadyFor(Address address, const QString &name) {
+  readyLines_.clear();
+  if (!isVisible() || !complete() || !editMetadata_ || lines_.isEmpty())
+    return;
+  const bool folding = library_.canFold();
+  const int first = verticalScrollBar()->value();
+  const int last = std::min(int(lines_.size()) - 1, first + visibleLines());
+  // The places the viewport's lines link the address's name, in the text's
+  // order.
+  struct Place {
+    int line, column, length;
+  };
+  QVector<Place> places;
+  for (const EditName &edit : std::as_const(editNames_)) {
+    if (edit.target.value("kind").toString() != QLatin1String("address") ||
+        addressValue(edit.target.value("address")) != address)
+      continue;
+    const int at =
+        folding ? library_.projectedPosition(edit.begin) : edit.begin;
+    const int line =
+        int(std::upper_bound(lineStarts_.cbegin(), lineStarts_.cend(), at) -
+            lineStarts_.cbegin()) -
+        1;
+    if (line < first || line > last)
+      continue;
+    const int column = at - lineStarts_[line];
+    const int length = edit.end - edit.begin;
+    const QString &shown = lines_[line].styled.text;
+    // The line shows the name where the source has it, not a fold's summary
+    // over it.
+    if (lines_[line].folded || column + length > shown.size() ||
+        QStringView(shown).mid(column, length) !=
+            QStringView(source_).mid(edit.begin, length))
+      continue;
+    places.append({line, column, length});
+  }
+  const QFont font = Theme::instance().codeFont();
+  for (qsizetype from = 0;
+       from < places.size() &&
+       readyLines_.size() <
+           ::neverd::limits::gui::kCodeViewLinesMadeReadyForRename;) {
+    qsizetype to = from + 1;
+    while (to < places.size() && places[to].line == places[from].line)
+      ++to;
+    const int index = places[from].line;
+    // The last place first: each leaves the columns before it where they are.
+    Line made;
+    made.styled.text = lines_[index].styled.text;
+    for (qsizetype place = to; place-- > from;)
+      made.styled.text.replace(places[place].column, places[place].length,
+                               name);
+    from = to;
+    if (made.styled.text == lines_[index].styled.text)
+      continue;
+    bool inComment = lines_[index].commentBefore;
+    highlightLine(made, inComment);
+    made.styled.layout(font, styleStamp_, codeColor);
+    readyLines_.append({index, std::move(made.styled)});
+  }
 }
 
 void CodeText::request(int offset, quint64 serial) {
@@ -1454,6 +1520,13 @@ void CodeText::rebuildLines(bool append) {
       linesBefore_.clear();
     }
   }
+  // A line a rename wrote takes the layout made ready for it, where it reads
+  // as the rename was read to write it.
+  for (ReadyLine &ready : readyLines_)
+    if (ready.index < lines_.size())
+      readyLinesTaken_ += lines_[ready.index].styled.adoptLayout(ready.styled);
+  if (!loading_ || refreshPages_)
+    readyLines_.clear();
   const int lastSourceLine =
       lines_.isEmpty() ? 1 : lines_.back().sourceLine + 1;
   gutterChars_ = std::max(3, int(QString::number(lastSourceLine).size()));

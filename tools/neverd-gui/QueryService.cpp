@@ -583,7 +583,8 @@ struct QueryService::State {
     return 0;
   }
 
-  Id add(Spec spec, Kind kind, QObject *owner, Completion complete) {
+  Id add(Spec spec, Kind kind, QObject *owner, Completion complete,
+         bool leaves = false) {
     if (!owner || owner->thread() != q->thread())
       return reject(owner, std::move(complete), spec.operation,
                     "invalid_request",
@@ -672,7 +673,11 @@ struct QueryService::State {
           notify();
         return id;
       }
-    schedulePump();
+    // What leaves at once does so ahead of those who hear that it waits.
+    if (leaves)
+      pump();
+    else
+      schedulePump();
     notify();
     return id;
   }
@@ -1287,14 +1292,14 @@ QueryService::SubscriptionId QueryService::graphViewport(QJsonObject payload,
 QueryService::SubscriptionId
 QueryService::enqueueCommand(QString operation, QJsonObject payload,
                              QObject *owner, Completion complete,
-                             QString expectedRevision) {
+                             QString expectedRevision, bool leaves) {
   QuerySpec spec{std::move(operation), std::move(payload)};
   if (!expectedRevision.isEmpty()) {
     spec.policy = QuerySpec::Exact;
     spec.expectedRevision = std::move(expectedRevision);
   }
   return state_->add(std::move(spec), State::Command, owner,
-                     std::move(complete));
+                     std::move(complete), leaves);
 }
 void QueryService::unsubscribe(SubscriptionId id) {
   state_->detach(id);
