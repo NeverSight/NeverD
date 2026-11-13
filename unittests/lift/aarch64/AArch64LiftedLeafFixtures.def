@@ -693,6 +693,37 @@ _leaf_difference:
 .subsections_via_symbols
 )asm")
 
+A64_LEAF_TEXT(kMultiplyLeaves, R"c(
+#include <stdint.h>
+uint64_t leaf_sum(uint64_t a, uint64_t b, uint64_t c) { return a * b + c; }
+uint64_t leaf_difference(uint64_t a, uint64_t b, uint64_t c) {
+  return (c - a * b) >> (a & 63);
+}
+)c")
+A64_LEAF_TEXT(kMultiplyCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  typedef uint64_t (*operation)(uint64_t, uint64_t, uint64_t);
+  operation sum = (operation)dlsym(image, "leaf_sum"),
+            difference = (operation)dlsym(image, "leaf_difference");
+  uint64_t values[] = {0, 1, 17, 63, 64, UINT64_MAX};
+  if (!sum || !difference)
+    return 3;
+  for (unsigned i = 0; i < sizeof(values) / sizeof(*values); ++i) {
+    uint64_t a = values[i], b = values[5 - i], c = UINT64_MAX - i;
+    if (sum(a, b, c) != a * b + c ||
+        difference(a, b, c) != ((c - a * b) >> (a & 63)))
+      return 4;
+  }
+  return dlclose(image);
+}
+)c")
 A64_LEAF_TEXT(kMemoryLeaves, R"c(
 #include <stdint.h>
 uint64_t leaf_sum(const uint64_t *p) { return p[1]; }
@@ -839,6 +870,141 @@ int main(int argc,char **argv) {
   return dlclose(image);
 }
 )c")
+
+A64_LEAF_TEXT(kNewTLSFile, "tls.cpp")
+A64_LEAF_TEXT(kNewTLSImage, "base.cpp")
+A64_LEAF_TEXT(kNewTLSDriverFile, "tls-driver.cpp")
+A64_LEAF_TEXT(kTLSCxx, "/usr/bin/clang++")
+A64_LEAF_TEXT(kTLSWithOriginal, "-DORIGINAL_TLS")
+A64_LEAF_TEXT(kTLSConflict, "-DTLS_CONFLICT")
+A64_LEAF_TEXT(kTLSDescriptorSection, "__thread_vars")
+A64_LEAF_TEXT(kPublishedTLVName, "_initialized")
+A64_LEAF_TEXT(kTLVResolverSymbol, "__tlv_bootstrap")
+A64_LEAF_VALUE(unsigned, kTLVDescriptorWords, 3)
+A64_LEAF_VALUE(unsigned, kTLVOffsetWord, 2)
+A64_LEAF_VALUE(unsigned, kTLVNewDescriptors, 6)
+A64_LEAF_TEXT(kTLSReference, "-DNEVERD_TLS_REFERENCE")
+A64_LEAF_TEXT(kNewTLSProperty, "native_new_tls_lifecycles")
+A64_LEAF_TEXT(kNewTLSDriver, R"cpp(
+#include <cstdint>
+#include <cstdlib>
+#include <dlfcn.h>
+#include <pthread.h>
+static int (*adjust)(int), (*oldValue)(int), (*counts)();
+static void *image;
+static bool oldTLS;
+static void *worker(void *) {
+  struct descriptor {
+    void *(*resolve)(descriptor *);
+    uintptr_t key, offset;
+  };
+  auto *tls = static_cast<descriptor *>(dlsym(image, "initialized"));
+  auto *value = tls ? static_cast<int *>(tls->resolve(tls)) : nullptr;
+  if (!value || *value != 17 || oldValue(1) != (oldTLS ? 32 : 1) ||
+      adjust(2) != 2119 || adjust(3) != 5122 || *value != 22 ||
+      oldValue(1) != (oldTLS ? 33 : 1))
+    return (void *)1;
+  return nullptr;
+}
+int main(int argc, char **argv) {
+  if (argc != 3)
+    return 1;
+  auto img = image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!img)
+    return 2;
+  adjust = (int (*)(int))dlsym(img, "adjust");
+  oldValue = (int (*)(int))dlsym(img, "previous");
+  counts = (int (*)())dlsym(img, "counts");
+  oldTLS = atoi(argv[2]);
+  auto loaded = (int (*)())dlsym(img, "module_state");
+  if (!adjust || !oldValue || !counts || counts() != 0 || !loaded ||
+      loaded() != 12)
+    return 3;
+  if (adjust(1) != 1118 || counts() != 10)
+    return 4;
+  for (int i = 1; i <= 2; ++i) {
+    pthread_t thread;
+    void *result;
+    if (pthread_create(&thread, nullptr, worker, nullptr) ||
+        pthread_join(thread, &result) || result || counts() != (i + 1) * 10 + i)
+      return 5;
+  }
+  if (adjust(1) != 2119 || oldValue(1) != (oldTLS ? 32 : 1))
+    return 6;
+  return 0;
+}
+)cpp")
+A64_LEAF_TEXT(kNewTLSBase, R"cpp(
+#include <atomic>
+#ifdef TLS_CONFLICT
+extern "C" {
+__thread int initialized = 9;
+}
+#endif
+static std::atomic<int> constructed, destroyed;
+static int loaded;
+extern "C" int module_state() { return loaded; }
+extern "C" void module_event(int n) { loaded = loaded * 10 + n; }
+__attribute__((constructor)) static void base_load() { module_event(1); }
+extern "C" int counts() { return constructed.load() * 10 + destroyed.load(); }
+extern "C" int construct() {
+  ++constructed;
+  return 100;
+}
+extern "C" void destroy(void *) noexcept { ++destroyed; }
+#ifdef ORIGINAL_TLS
+static int old_anchor = 43;
+static int old_marker() { return 71; }
+extern "C" {
+__thread int *old_pointer = &old_anchor;
+__thread int (*old_callback)() = old_marker;
+}
+#endif
+extern "C" int previous(int x) {
+#ifdef ORIGINAL_TLS
+  if (*old_pointer != 43 || old_callback() != 71)
+    return -1;
+  static thread_local int old = 31;
+  return old += x;
+#else
+  return x;
+#endif
+}
+#ifndef NEVERD_TLS_REFERENCE
+extern "C" __attribute__((noinline)) int adjust(int x) {
+  asm volatile("" : "+r"(x));
+  return x;
+}
+#endif
+)cpp")
+A64_LEAF_TEXT(kNewTLSBody, R"cpp(
+extern "C" int construct();
+extern "C" void destroy(void *) noexcept;
+extern "C" void module_event(int);
+__attribute__((constructor)) static void new_load() { module_event(2); }
+static int anchor = 43;
+static int marker() { return 71; }
+extern "C" {
+__thread int initialized = 17;
+__thread int *new_pointer = &anchor;
+__thread int (*new_callback)() = marker;
+}
+namespace {
+struct Item {
+  int value = construct();
+  ~Item() { destroy(this); }
+};
+static thread_local int zero;
+static thread_local Item item;
+} // namespace
+extern "C" __attribute__((noinline)) int adjust(int x) {
+  if (*new_pointer != 43 || new_callback() != 71)
+    return -1;
+  initialized += x;
+  zero += x;
+  return zero * 1000 + item.value + initialized;
+}
+)cpp")
 
 #undef A64_LEAF_VALUE
 #undef A64_LEAF_TEXT

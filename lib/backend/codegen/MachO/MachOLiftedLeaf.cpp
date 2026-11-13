@@ -35,6 +35,7 @@
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Transforms/Scalar/DCE.h"
+#include "llvm/Transforms/Scalar/InstSimplifyPass.h"
 #include "llvm/Transforms/Scalar/SROA.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
@@ -597,7 +598,11 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
       continue;
     }
     if (Source.size() != Emitted.size())
-      return refuse(kLeafCoverage);
+      return llvm::createStringError(llvm::errc::not_supported,
+                                     llvm::formatv(kBodyExtent, Mapping.Symbol,
+                                                   Source.size(),
+                                                   Emitted.size())
+                                         .str());
     const bool Indexed = (Native & ~macho_unwind::kDwarfSectionOffsetMask) ==
                          macho_unwind::kARM64ModeDwarf;
     const auto SourceEncoding = Frame->Compact->NativeEncoding;
@@ -912,6 +917,9 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
     llvm::FunctionPassManager Cleanup;
     Cleanup.addPass(llvm::DCEPass());
     Cleanup.addPass(llvm::SROAPass(llvm::SROAOptions::PreserveCFG));
+    // AArch64 masks variable shift counts in LowIR. Drop the generic IR
+    // overflow guard when its predicate is provably constant after SROA.
+    Cleanup.addPass(llvm::InstSimplifyPass());
     Cleanup.addPass(llvm::DCEPass());
     for (auto &F : *Candidate)
       if (!F.isDeclaration())

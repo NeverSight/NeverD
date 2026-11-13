@@ -711,6 +711,139 @@ TEST(AArch64AsyncUnwind, SignalReturnResumesCallerWithRecoveredVectorLanes) {
 #endif
 }
 
+static void verifySignalLanguageCleanup(bool ObjectiveC) {
+#if defined(__APPLE__) && defined(__aarch64__)
+  llvm::SmallString<128> Dir;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kDirectory, Dir));
+  const std::filesystem::path Root(Dir.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Source =
+      (Root / (ObjectiveC ? kSignalObjCSource : kSignalScopeSource)).string();
+  const auto DriverSource =
+      (Root / (ObjectiveC ? kSignalObjCDriver : kSignalScopeDriverFile))
+          .string();
+  const auto Driver = (Root / kDriver).string();
+  const auto Input = (Root / kOriginal).string();
+  const auto Object = (Root / kObject).string();
+  const auto Output = (Root / kPublished).string();
+  const auto Rules = (Root / kOriginalRules).string();
+  std::ofstream(Source) << (ObjectiveC ? kSignalObjCBody : kSignalScopeBody);
+  std::ofstream(DriverSource) << kSignalScopeDriver;
+  const auto *Override = std::getenv(kHeaderRoot);
+  const auto Include =
+      Override
+          ? std::string(Override)
+          : (std::filesystem::path(__FILE__).parent_path() / kSourceIncludes)
+                .lexically_normal()
+                .string();
+  llvm::SmallVector<llvm::StringRef> DriverArgs{
+      kCxxCompiler, kTargetFlag, kTarget,      kCXXStandard,   kOptimize,
+      kIncludeFlag, Include,     kAllWarnings, kExtraWarnings, kErrorWarnings,
+      DriverSource, kOutput,     Driver};
+  if (ObjectiveC)
+    DriverArgs.append({kObjCExceptions, kObjCFramework, kFoundation});
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(kCxxCompiler, DriverArgs), 0);
+  auto Reader = Loader::create(BinaryFormat::MachO);
+  unsigned Delivered = 0;
+  for (const auto *Opt : {kNoOptimize, kOptimize}) {
+    SCOPED_TRACE(Opt);
+    const auto Compile = [&](llvm::ArrayRef<llvm::StringRef> Args) {
+      const auto *Compiler = ObjectiveC ? kCompiler : kCxxCompiler;
+      llvm::SmallVector<llvm::StringRef> Command{
+          Compiler, kTargetFlag,
+          kTarget,  kFramePointer,
+          Opt,      ObjectiveC ? kObjCExceptions : kCXXStandard};
+      Command.append(Args.begin(), Args.end());
+      if (ObjectiveC && llvm::is_contained(Args, kDylib))
+        Command.append({kObjCFramework, kFoundation});
+      return llvm::sys::ExecuteAndWait(Compiler, Command);
+    };
+    ASSERT_EQ(Compile({kDylib, Source, kOutput, Input}), 0);
+    ASSERT_EQ(Compile({kCompile, kResumeChanged, Source, kOutput, Object}), 0);
+    auto Original = Reader->load(Input);
+    ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+    auto Bytes = llvm::MemoryBuffer::getFile(Object);
+    ASSERT_TRUE(bool(Bytes));
+    const auto *Scope = Original->findSymbol(kSignalScopeSymbol);
+    const auto *Tick = Original->findSymbol(kSignalTickSymbol);
+    ASSERT_TRUE(Scope && Tick);
+    const SourcePatchMapping Maps[] = {{kSignalScopeMapping, Scope->Addr},
+                                       {kSignalTickMapping, Tick->Addr}};
+    auto Patch = installMachOObjectPatch((*Bytes)->getBuffer(), *Original, Maps,
+                                         {}, Output, {});
+    ASSERT_TRUE(bool(Patch)) << llvm::toString(Patch.takeError());
+    auto Published = Reader->load(Output);
+    ASSERT_TRUE(bool(Published)) << llvm::toString(Published.takeError());
+    for (bool Installed : {false, true}) {
+      const auto &Image = Installed ? *Published : *Original;
+      for (bool Protected : {false, true}) {
+        SCOPED_TRACE(Installed);
+        SCOPED_TRACE(Protected);
+        const auto &Map = Maps[Protected ? 0 : 1];
+        const auto *Public = Image.findSymbol(Protected ? kSignalScopeSymbol
+                                                        : kSignalTickSymbol);
+        ASSERT_NE(Public, nullptr);
+        const auto Owner =
+            Installed ? Patch->PatchedFunctions[Protected ? 0 : 1].OwnerVA
+                      : Map.OriginalVA;
+        const auto *Frame = Image.ExceptionMetadata.findFunction(Owner);
+        ASSERT_NE(Frame, nullptr);
+        auto Rows = recoverDarwinAArch64Unwind(Image, *Frame);
+        ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+        std::optional<NDDarwinArm64eExceptionSite> Site;
+        std::optional<AArch64SystemCallerPlan> Plan;
+        for (auto PC = Owner; PC < Frame->CodeRange.End;
+             PC += NDArm64eInstructionAlignment) {
+          auto Candidate =
+              prepareDarwinArm64eExceptionSite(Image, *Frame, *Rows, PC, 0);
+          if (!Candidate || Candidate->AtProtectedCall != Protected)
+            continue;
+          Site = Candidate;
+          Plan = prepareDarwinArm64eSystemCaller(
+              aarch64UnwindRowAt(*Rows, PC - Owner), Frame->CodeRange, 0);
+          break;
+        }
+        ASSERT_TRUE(Site && Plan);
+        std::ofstream Out(Rules, std::ios::binary);
+        const auto Write = [&](const auto &Value) {
+          Out.write(reinterpret_cast<const char *>(&Value), sizeof(Value));
+        };
+        Write(*Site);
+        Write(Plan->Frame);
+        Write(Plan->Vectors);
+        Write(Plan->Count);
+        for (size_t I = 0; I < Plan->Count; ++I)
+          Write(Plan->Saved[I]);
+        Out.close();
+        ASSERT_TRUE(Out);
+        if (std::getenv(kExecute))
+          for (bool Alternate : {false, true}) {
+            ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                          Driver, {Driver, Installed ? Output : Input, Rules,
+                                   std::to_string(Owner - Public->Addr),
+                                   std::to_string(Alternate),
+                                   std::to_string(Installed ? 3 : 1)}),
+                      0);
+            ++Delivered;
+          }
+      }
+    }
+    ASSERT_TRUE(std::filesystem::remove(Output));
+  }
+  ::testing::Test::RecordProperty(
+      ObjectiveC ? kSignalObjCExceptions : kSignalExceptions, Delivered);
+#else
+  GTEST_SKIP() << kUnavailable;
+#endif
+}
+
+TEST(AArch64AsyncUnwind, SignalExceptionRunsInterruptedAndOuterCleanups) {
+  verifySignalLanguageCleanup(false);
+}
+TEST(AArch64AsyncUnwind, SignalExceptionRunsInterruptedAndOuterObjCCleanups) {
+  verifySignalLanguageCleanup(true);
+}
+
 TEST(AArch64AsyncUnwind, InstructionAddressRecipesUseTheActualSigningPC) {
 #if defined(__APPLE__) && defined(__aarch64__)
   llvm::SmallString<128> Dir;

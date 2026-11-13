@@ -30,6 +30,8 @@ MACHO_LEAF_TEXT(kLeafCode, "arm64e generated instructions do not reproduce the "
                            "original position-independent leaf")
 MACHO_LEAF_TEXT(kLeafFrame, "arm64e lifted leaf requires a matching native "
                             "frame record and unwind encoding")
+MACHO_LEAF_TEXT(kBodyExtent,
+                "arm64e entry {0} has {1} source bytes and {2} emitted bytes")
 MACHO_LEAF_TEXT(kGeneratedCoverage,
                 "arm64e object has {0} unwind ranges for {1} entries and {2} "
                 "code bytes for {3} original bytes")
@@ -91,6 +93,15 @@ MACHO_LEAF_INSTRUCTION(AARCH64_INS_MOV)
 MACHO_LEAF_INSTRUCTION(AARCH64_INS_MOVZ)
 MACHO_LEAF_INSTRUCTION(AARCH64_INS_MOVN)
 MACHO_LEAF_INSTRUCTION(AARCH64_INS_MOVK)
+// Register-only integer arithmetic has no PC-relative operand. The publisher
+// compares the full instruction word, including the width and shift kind.
+MACHO_LEAF_INSTRUCTION(AARCH64_INS_MUL)
+MACHO_LEAF_INSTRUCTION(AARCH64_INS_MADD)
+MACHO_LEAF_INSTRUCTION(AARCH64_INS_MSUB)
+MACHO_LEAF_INSTRUCTION(AARCH64_INS_LSL)
+MACHO_LEAF_INSTRUCTION(AARCH64_INS_LSR)
+MACHO_LEAF_INSTRUCTION(AARCH64_INS_ASR)
+MACHO_LEAF_INSTRUCTION(AARCH64_INS_ROR)
 MACHO_LEAF_INSTRUCTION(AARCH64_INS_FADD)
 MACHO_LEAF_INSTRUCTION(AARCH64_INS_FSUB)
 

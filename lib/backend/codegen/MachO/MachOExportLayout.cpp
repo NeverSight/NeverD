@@ -12,6 +12,7 @@
 #include "MachODependencyState.h"
 
 #include "neverd/backend/Limits.h"
+#include "neverd/loader/MachO/MachOArm64e.h"
 
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/LEB128.h"
@@ -229,4 +230,90 @@ machOExportIdentities(llvm::ArrayRef<uint8_t> B, uint64_t HeaderVA,
   }
   return writeMachOExportLayout(*Exports);
 }
+llvm::Error
+installMachOThreadLocalExports(std::vector<uint8_t> &Binary,
+                               const std::map<std::string, uint64_t> &New) {
+  if (New.empty())
+    return llvm::Error::success();
+  MachOChainedFixups Chains;
+  auto Before = readMachODependencyState(Binary, &Chains);
+  if (!Before)
+    return Before.takeError();
+  std::optional<size_t> Command;
+  bool Legacy = false, Invalid = false;
+  uint32_t Offset = 0, Size = 0;
+  forEachMachOLoadCommand(
+      Binary.data(), Binary.size(),
+      [&](const uint8_t *P, uint32_t ID, uint32_t, bool) {
+        if (ID == LC_CODE_SIGNATURE) {
+          Invalid = true;
+          return;
+        }
+        if (ID == LC_DYLD_EXPORTS_TRIE) {
+          const auto *C = reinterpret_cast<const linkedit_data_command *>(P);
+          Offset = C->dataoff;
+          Size = C->datasize;
+        } else if (ID == LC_DYLD_INFO_ONLY || ID == LC_DYLD_INFO) {
+          const auto *C = reinterpret_cast<const dyld_info_command *>(P);
+          if (!C->export_size)
+            return;
+          Legacy = true;
+          Offset = C->export_off;
+          Size = C->export_size;
+        } else {
+          return;
+        }
+        Invalid |= Command.has_value();
+        Command = P - Binary.data();
+      });
+  if (Invalid || !Command || !rangeInBounds(Offset, Size, Binary.size()))
+    return fail();
+  auto Exports =
+      readMachOExportLayout(llvm::ArrayRef(Binary).slice(Offset, Size));
+  if (!Exports)
+    return Exports.takeError();
+  for (const auto &[Name, VA] : New)
+    if (VA < Chains.HeaderVA ||
+        !Exports
+             ->emplace(Name,
+                       MachOExportLayout{EXPORT_SYMBOL_FLAGS_KIND_THREAD_LOCAL,
+                                         VA - Chains.HeaderVA})
+             .second)
+      return fail();
+  auto Trie = writeMachOExportLayout(*Exports);
+  if (!Trie)
+    return Trie.takeError();
+  auto End = llvm::alignTo(Binary.size(), sizeof(uint64_t));
+  if (End > UINT32_MAX || Trie->size() > UINT32_MAX - End)
+    return fail();
+  auto Candidate = Binary;
+  Candidate.resize(End);
+  Candidate.insert(Candidate.end(), Trie->begin(), Trie->end());
+  auto *P = Candidate.data() + *Command;
+  if (Legacy) {
+    auto *C = reinterpret_cast<dyld_info_command *>(P);
+    C->export_off = End;
+    C->export_size = Trie->size();
+  } else {
+    auto *C = reinterpret_cast<linkedit_data_command *>(P);
+    C->dataoff = End;
+    C->datasize = Trie->size();
+  }
+  auto *G =
+      Candidate.data() + Chains.Segments[Chains.LinkeditIndex].CommandOffset;
+  auto Segment = readMachOSegment(G, true);
+  Segment.FileSize = Candidate.size() - Segment.FileOff;
+  Segment.VMSize = std::max(
+      Segment.VMSize,
+      llvm::alignTo(Segment.FileSize, macho_loader::arm64e::kLargePageBytes));
+  writeMachOSegment(G, true, Segment);
+  auto After = readMachODependencyState(Candidate);
+  if (!After)
+    return After.takeError();
+  if (auto E = preserveMachODependencyState(*Before, *After, New))
+    return E;
+  Binary.swap(Candidate);
+  return llvm::Error::success();
+}
+
 } // namespace neverd

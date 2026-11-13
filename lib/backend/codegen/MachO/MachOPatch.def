@@ -23,4 +23,8 @@ MACHO_PATCH_TEXT(
     kExternalRelroStorage,
     "external read-only data requires reserved zero-filled section storage")
 
+MACHO_PATCH_TEXT(kInitializerOffsets, "__init_offsets")
+MACHO_PATCH_TEXT(kThreadVariables, "__thread_vars")
+MACHO_PATCH_TEXT(kThreadTemplate, "__thread_data")
+
 #undef MACHO_PATCH_TEXT

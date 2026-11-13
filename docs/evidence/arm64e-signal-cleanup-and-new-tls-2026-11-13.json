@@ -1,0 +1,144 @@
+{
+  "source_revision": "3b6fc93c6c800290c3ff02a98f15f287cd589ee4",
+  "pull_request": "https://github.com/NeverSight/NeverD/pull/2348",
+  "captured_signal_and_tls_controls": "https://github.com/gmh5225/test_mac_intel/actions/runs/43383841900",
+  "original_signal_controls": "https://github.com/gmh5225/test_mac_intel/actions/runs/43378948842",
+  "published_image_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43387041250",
+  "build": {
+    "configuration": "Release",
+    "llvm_mode": "source fork",
+    "prebuilt_release": "r6",
+    "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+    "capstone_revision": "6703e144275793a419ad663511e34b5dab3d52d8",
+    "unicorn_revision": "36bedffadac229fc4ef75baa905edab5800a205f",
+    "host_sha256": "1f54eb847a889ed2aa805b3e0fb09fa36dbb298b9e44001b94d6d0a107dbf09d",
+    "archive_sha256": "035e740743dd57fe20b4635f516ca8cce0b7c33686b16bc2fb7448e803501fec"
+  },
+  "native_probe_python_tests_passed": 24,
+  "results_per_host": {
+    "macos-26": {
+      "hardware": "Apple M1 (Virtual)",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "passed": 39,
+      "native_interrupted_frames": 10,
+      "native_authenticated_parent_frames": 10,
+      "native_sigtramp_context_handoffs": 10,
+      "native_system_caller_steps": 10,
+      "native_compact_calls": 3,
+      "native_cxx_exception_paths": 34,
+      "native_cxx_unwinder_pac_traps": 6,
+      "native_signal_caller_resumptions": 8,
+      "native_signal_language_cleanups": 16,
+      "native_objc_signal_cleanups": 16,
+      "native_cursor_pacm_profiles": 4,
+      "native_cursor_explicit_profiles": 0,
+      "native_objc_exception_paths": 32,
+      "native_register_entries_compared": 9,
+      "native_register_input_comparisons": 27,
+      "native_exit_status": 1,
+      "native_new_tls_lifecycles": 8,
+      "native_thread_local_accesses": 32,
+      "image_executions": 62,
+      "native_cpta": {
+        "status": "unavailable",
+        "native_el0_cpta_observed": false,
+        "x1_el0_cpta_qualified": false,
+        "x1_el0_checked_writeback_qualified": false,
+        "profiles": {
+          "arm64": {
+            "outcome": "undefined-instruction",
+            "sha256": "61ee4ce24e923e16ed8fae952c45890c0a1c5687c5dac5d7cda828889c492c0a",
+            "cpu_subtype": 0,
+            "results": [],
+            "ordinary_memory_writeback": "unchecked"
+          },
+          "arm64e": {
+            "outcome": "undefined-instruction",
+            "sha256": "33cbc4e7d028fe7f0b9521f026fddb0e9e214ae2b65c23d4d63f79832a507346",
+            "cpu_subtype": 2164260866,
+            "results": [],
+            "ordinary_memory_writeback": "unchecked"
+          },
+          "arm64e.x1": {
+            "outcome": "slice-unavailable"
+          }
+        }
+      },
+      "qualification_sha256": "00f51a6e59d8c51b77972edc632e602c06b0e1931e68bc792a7d74313883f27e",
+      "cpta_report_sha256": "83f0be05cd96ada25e9d023d7eb2d34d743a886220e57d349f4d6d51deecc445"
+    },
+    "xcode-27": {
+      "hardware": "Apple M1 (Virtual)",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "passed": 39,
+      "native_interrupted_frames": 10,
+      "native_authenticated_parent_frames": 10,
+      "native_sigtramp_context_handoffs": 10,
+      "native_system_caller_steps": 10,
+      "native_compact_calls": 3,
+      "native_cxx_exception_paths": 34,
+      "native_cxx_unwinder_pac_traps": 6,
+      "native_signal_caller_resumptions": 8,
+      "native_signal_language_cleanups": 16,
+      "native_objc_signal_cleanups": 16,
+      "native_cursor_pacm_profiles": 4,
+      "native_cursor_explicit_profiles": 0,
+      "native_objc_exception_paths": 32,
+      "native_register_entries_compared": 9,
+      "native_register_input_comparisons": 27,
+      "native_exit_status": 1,
+      "native_new_tls_lifecycles": 8,
+      "native_thread_local_accesses": 32,
+      "image_executions": 62,
+      "native_cpta": {
+        "status": "unavailable",
+        "native_el0_cpta_observed": false,
+        "x1_el0_cpta_qualified": false,
+        "x1_el0_checked_writeback_qualified": false,
+        "profiles": {
+          "arm64": {
+            "outcome": "undefined-instruction",
+            "sha256": "352c4e085f577250ddcd2dd6115e4ced847298854eba0029c69551bac0310455",
+            "cpu_subtype": 0,
+            "results": [],
+            "ordinary_memory_writeback": "unchecked"
+          },
+          "arm64e": {
+            "outcome": "undefined-instruction",
+            "sha256": "3499bee71456d43fff499bf099842d07743abfe6764528ff08842c52330638df",
+            "cpu_subtype": 2164260866,
+            "results": [],
+            "ordinary_memory_writeback": "unchecked"
+          },
+          "arm64e.x1": {
+            "outcome": "did-not-start",
+            "signed_entitlements": {
+              "com.apple.security.hardened-process": true,
+              "com.apple.security.hardened-process.checked-allocations": true,
+              "com.apple.security.hardened-process.checked-allocations.enforce-checked-pointer-arithmetic-overflow": true,
+              "com.apple.security.hardened-process.enhanced-security-version-string": "*"
+            },
+            "sha256": "eb2128e9c9f9cc3b046273addae00bf6b7114077216d7ea3d2b06f6520734411",
+            "cpu_subtype": 2147483660,
+            "errno": 86
+          }
+        }
+      },
+      "qualification_sha256": "16e43c5035e7ca240ac7a1664c4594411a4f300d2f0b64bc14eacd779f100f1f",
+      "cpta_report_sha256": "00e460c92ef86e947367bcbffaf11f6a8a0bbfd790e3badfd592b27b429e5c42"
+    }
+  },
+  "coverage": [
+    "Darwin SA_SIGINFO delivery, normal sigreturn, original and redirected frames, ordinary and alternate stacks, O0 and O2.",
+    "C++ catches and RAII, Objective-C typed catches and finally, identity through handler-local unwind and rethrow, signal mask restoration.",
+    "External TLV bootstrap and terminator, new zero and initialized TLS, ordinary and PAC function pointers in both input templates, strong TLV exports, compiler guards, repeated use and thread exit in two worker threads.",
+    "Original and new module constructors, native object append and patch, compact-only and indexed DWARF storage.",
+    "Source and published register-only multiply-add, multiply-subtract and variable right shift, with oversized counts and wraparound operands."
+  ],
+  "remaining": [
+    "A checked x1 hardware run of the signed explicit arithmetic and ordinary memory writeback probes.",
+    "Unmanaged language unwinding through an arbitrary interrupted instruction and landing pads without a proven compiler call boundary.",
+    "TLS pointers requiring address-diverse signing on each thread instance and legacy per-thread initializer arrays.",
+    "General whole-image publication for code, ABI and unwind profiles beyond the verified classes."
+  ]
+}

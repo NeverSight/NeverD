@@ -1263,7 +1263,9 @@ includes the compiler versions, test-host digest and hardware probe results.
 The native CPTA probe signs the x1 slice with the Enhanced Security and
 checked-pointer entitlements, verifies the signature and reads back the
 embedded plist before launch. Its report records the final binary digest,
-the signed entitlement values and the ADDPT observations. A second invocation
+the signed entitlement values and the scalar ADDPT, SUBPT, MADDPT and MSUBPT
+results. Equivalent signed offsets and unit products exercise tag carry, borrow
+and already-poisoned pointers across all four forms. A second invocation
 executes post-indexed LD1 and ST1 on a mapped byte. It verifies the data and
 the updated base for an in-range offset and for a carry into the top byte.
 This ordinary-memory control also runs on older CPUs when ADDPT is undefined.
@@ -1280,8 +1282,7 @@ ordinary ADRP and pointer-sized LDR forms. For a strong per-thread export
 in the original image, the publisher checks the descriptor's section and
 authenticated bootstrap, then relaxes the load to an ADD at the relocated
 descriptor address. Both paths reuse the original per-thread storage.
-Creating a new TLS definition or running a new TLS initializer requires
-additional dyld registration.
+The native object path below also registers storage contributed by a replacement.
 
 Both Apple M1 runners passed all 35 publication cases in the
 [native signal and TLS run](https://github.com/gmh5225/test_mac_intel/actions/runs/43366275284). Each runner completed eight signal
@@ -1305,3 +1306,55 @@ The XML properties `native_system_caller_steps` and
 `native_signal_caller_resumptions` must be 10 and 8 respectively. Without the
 environment variable the test can check publication and the recovered rows
 without performing those native steps.
+
+### Signal delivery, language cleanup and new thread-local storage
+
+Resolve the unwind rows and call-site table while the image is loaded.
+`prepareDarwinArm64eExceptionSite` intersects the recovered row with the
+personality's guarded range. At a protected call, it requires a saved LR and
+an actual call instruction. A frame with no local action can forward to its
+authenticated caller. The SA_SIGINFO handler passes this plan and a throw
+or rethrow callback to `ndDarwinArm64eDeliverSignalException`, then returns.
+The kernel restores the interrupted thread's signal mask and stack. The
+callback runs there, with the original call's return address, so the system
+personality selects the landing pad and executes cleanup. A protected
+instruction other than a call needs separate evidence for the live values
+expected by its landing pad. An ordinary unmanaged throw out of a handler
+still depends on the system unwinder's signal-trampoline support.
+
+For TLS contributed by a native object, the publisher emits dyld descriptor
+and template sections, an authenticated bootstrap bind, and offsets for
+initialized data, zero-fill and compiler guards. The original template forms
+the prefix of the combined template, preserving references from existing
+descriptors. Strong exported definitions receive per-thread export-trie
+entries. Reading the C or C++ variable resolves the descriptor for the
+calling thread. Compiled first-use code and the authenticated libSystem
+terminator call supply C++ initialization and thread-exit destruction.
+Address-diversified pointers in copyable template storage require an
+instance-specific signing contract. An old template can contain an ordinary
+pointer or an address-independent authenticated function pointer. Copying its
+dyld recipe preserves the target and signing schema while the new slot gets
+its own chain successor. [Apple's dyld TLS implementation](https://github.com/apple-oss-distributions/dyld/blob/main/libdyld/ThreadLocalVariables.cpp)
+
+Image constructors have a different lifetime. The publisher resolves each
+native module-initializer relocation to a local function and emits a
+read-only array of 32-bit offsets from the Mach header for dyld. Existing
+image constructors retain their order. [Apple's initializer reader](https://github.com/apple-oss-distributions/dyld/blob/main/common/MachOAnalyzer.cpp)
+
+For register-only integer leaves the publisher also accepts multiply,
+multiply-add, multiply-subtract and scalar shifts whose emitted instruction
+words and register operands match the source. LLVM instruction simplification
+removes the generic oversized-shift check when the lifted AArch64 count mask
+proves it redundant. The native control covers wraparound products and shift
+counts at and above the register width.
+
+Both M1 runners passed all 39 cases using the Release host built from
+`3b6fc93c6c800290c3ff02a98f15f287cd589ee4`. Each executed 16 C++ signal
+deliveries and 16 Objective-C deliveries with typed catches, cleanup and
+rethrow. Each ran eight compiler-linked or published TLS lifecycle controls,
+including image initialization, independent threads and thread-exit callbacks.
+The arithmetic image ran once before and once after publication. Both runners
+reported unchecked ordinary-memory writeback. Xcode 27 built and signed the
+x1 slice, and the M1 loader returned Darwin error 86 on launch.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43387041250)
+and [verification record](evidence/arm64e-signal-cleanup-and-new-tls-2026-11-13.json).

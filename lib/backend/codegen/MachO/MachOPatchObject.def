@@ -31,6 +31,16 @@ MACHO_OBJECT_TEXT(kDataConstSegment, "__DATA_CONST")
 MACHO_OBJECT_TEXT(kAuthConstSegment, "__AUTH_CONST")
 MACHO_OBJECT_TEXT(kConstSection, "__const")
 MACHO_OBJECT_TEXT(kNativeImage, "native-object-image")
+MACHO_OBJECT_TEXT(kThreadSectionPrefix, "__thread")
+MACHO_OBJECT_TEXT(kBitcodeSegment, "__LLVM")
+MACHO_OBJECT_TEXT(kModuleInitSection, "__mod_init_func")
+MACHO_OBJECT_TEXT(kModuleTermSection, "__mod_term_func")
+MACHO_OBJECT_TEXT(kUnsupportedRuntimeSection,
+                  "unsupported runtime initialization, TLS or bitcode section")
+MACHO_OBJECT_TEXT(
+    kThreadInitPointers,
+    "legacy TLS initializer pointers require a per-thread runtime registration")
+MACHO_OBJECT_TEXT(kPlacementOverflow, "native placement overflows")
 MACHO_OBJECT_TEXT(kNativeStorage,
                   "native authenticated object requires a linked arm64e image")
 MACHO_OBJECT_TEXT(kNativePlacement,
@@ -50,9 +60,28 @@ MACHO_OBJECT_TEXT(kGOTRelocation,
 MACHO_OBJECT_TEXT(kTLVDescriptor,
                   "thread-local access requires a strong descriptor export "
                   "or a sealed descriptor import")
+// RX, RELRO and RW segments; two TLS spans plus the distinct initializer span.
+MACHO_OBJECT_VALUE(unsigned, kRuntimeSegmentCount, 3)
+MACHO_OBJECT_VALUE(unsigned, kTLVSectionCount, 2)
+MACHO_OBJECT_TEXT(kFunctionAlias,
+                  "aliased native function entries have no shared unwind range")
+MACHO_OBJECT_TEXT(
+    kInitializerStorage,
+    "initializer requires one local function relocation per pointer")
+MACHO_OBJECT_TEXT(kInitializerOffsets, "__init_offsets")
+MACHO_OBJECT_TEXT(kTLVStorage,
+                  "invalid native thread-local template or descriptor")
+MACHO_OBJECT_TEXT(kTLVTemplatePrefix, "__nd_tls_prefix")
+MACHO_OBJECT_TEXT(kTLVProvider, "/usr/lib/libSystem.B.dylib")
+MACHO_OBJECT_TEXT(kTLVAtExit, "_tlv_atexit")
+MACHO_OBJECT_TEXT(kTLVAtExitThunk, "__nd_tlv_atexit")
+MACHO_OBJECT_VALUE(uint32_t, kBranchAuthZeroX16, 0xd61f0a1f)
+MACHO_OBJECT_TEXT(kDSOHandle, "__dso_handle")
+MACHO_OBJECT_VALUE(unsigned, kTLVOffsetField, 2 * sizeof(uint64_t))
 MACHO_OBJECT_TEXT(kTLVSymbolPrefix, "_")
 MACHO_OBJECT_TEXT(kTLVBootstrap, "__tlv_bootstrap")
-MACHO_OBJECT_VALUE(uint8_t, kTLVResolverKey, 0) // IA, zero discriminator.
+MACHO_OBJECT_VALUE(uint8_t, kDefaultFunctionPointerKey,
+                   0) // IA, zero discriminator.
 MACHO_OBJECT_VALUE(unsigned, kTLVDescriptorBytes, 3 * sizeof(uint64_t))
 MACHO_OBJECT_VALUE(uint32_t, kTLVDescriptorAddress, 0x91000000)
 MACHO_OBJECT_TEXT(kTLVInstruction, "thread-local descriptor reference requires "
