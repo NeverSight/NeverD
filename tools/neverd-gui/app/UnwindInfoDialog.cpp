@@ -9,6 +9,7 @@
 
 #include "UnwindInfoDialog.h"
 
+#include "DialogReturnKey.h"
 #include "Icons.h"
 #include "QueryService.h"
 #include "UnwindInfoWords.h"
@@ -117,6 +118,9 @@ UnwindInfoDialog::UnwindInfoDialog(QueryService &Service, Address PC,
   Buttons->addButton(Reload, QDialogButtonBox::ActionRole);
   connect(Buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
   connect(Reload, &QPushButton::clicked, this, &UnwindInfoDialog::refresh);
+  // A report to read: Return fetches nothing again, and Close is the way on.
+  leaveWithoutDefaultButton(*this);
+  showAsMainAction(*Buttons->button(QDialogButtonBox::Close));
   Layout->addWidget(Buttons);
   connect(&Service, &QueryService::contextChanged, this,
           &UnwindInfoDialog::contextChanged);

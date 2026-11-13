@@ -10,6 +10,7 @@
 #include "PluginManagerDialog.h"
 
 #include "../ResourceLimits.h"
+#include "DialogReturnKey.h"
 #include "FlowLayout.h"
 #include "Icons.h"
 #include "PluginServices.h"
@@ -116,6 +117,10 @@ PluginManagerDialog::PluginManagerDialog(PluginServices &Services,
   auto *Close = new QDialogButtonBox(QDialogButtonBox::Close, this);
   connect(Close, &QDialogButtonBox::rejected, this, &QDialog::reject);
   Layout->addWidget(Close);
+  // Return in the filter would otherwise open the import chooser.  Importing
+  // is still what the window is for, as its own line of help says.
+  leaveWithoutDefaultButton(*this);
+  showAsMainAction(*Import);
 
   connect(Import, &QPushButton::clicked, this, [this] {
     const auto Path = QFileDialog::getOpenFileName(

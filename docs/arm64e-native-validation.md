@@ -1105,8 +1105,28 @@ matching kernel `ucontext_t` and mapped stack bounds. It verifies the return
 signature, restores SP, FP and X19–X28, and positions that same system cursor
 at the caller. Invalid or duplicate saves fail before changing the cursor.
 Discard the cursor on a system API failure or if the return PC selects a
-different function's unwind record. This is a stack-walking interface; it
-does not provide exception resumption or restore SIMD state.
+different function's unwind record.
+
+For an ordinary call return through the live Darwin signal trampoline, pass
+the same prepared frame, integer saves and `Plan.Vectors` to
+`ndDarwinArm64eResumeSignalCaller`. After success the handler supplies the
+call's result, if required, and returns normally. XNU consumes its original
+signal frame, restores the signal mask and alternate-stack state, and resumes
+at the authenticated call fallthrough. This operation returns from the
+interrupted call directly. A language exception that must run cleanups still
+requires its personality and landing pad. See the
+[XNU signal return implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/dev/arm/unix_signal.c)
+and [thread-state pointer accessors](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/mach/arm/_structs.h).
+
+The resume plan requires all eight ABI-preserved D8–D15 lanes. Recovery
+tracks both halves of a Q spill, the low half of a D spill and overlapping
+writes at instruction boundaries. A DWARF SIMD register column supplies its
+low 64 bits. Upper halves with a proven save are restored from it. Other
+upper halves and volatile vectors retain their interrupted bits, as do FPCR
+and FPSR. An incomplete low lane, an out-of-bounds saved lane or a rejected
+return signature leaves the signal context untouched. The register contracts
+are specified in [AAPCS64](https://github.com/ARM-software/abi-aa/blob/main/aapcs64/aapcs64.rst)
+and [AADWARF64](https://github.com/ARM-software/abi-aa/blob/main/aadwarf64/aadwarf64.rst).
 
 The public frame query exposes a separate `instruction_state_at_pc` where
 applicable. It leaves `dwarf_state_at_pc` and `compact_recipe` unchanged. The
@@ -1240,6 +1260,36 @@ ten system signal-frame crossings. The
 [verification record](evidence/arm64e-system-signal-and-implicit-unwind-2026-11-12.json)
 includes the compiler versions, test-host digest and hardware probe results.
 
+The native CPTA probe signs the x1 slice with the Enhanced Security and
+checked-pointer entitlements, verifies the signature and reads back the
+embedded plist before launch. Its report records the final binary digest,
+the signed entitlement values and the ADDPT observations. A second invocation
+executes post-indexed LD1 and ST1 on a mapped byte. It verifies the data and
+the updated base for an in-range offset and for a carry into the top byte.
+This ordinary-memory control also runs on older CPUs when ADDPT is undefined.
+A passing x1 run requires both explicit checked arithmetic and checked
+load/store writeback. [Arm LD1 operation](https://support.arm.com/documentation/111108/2026-03/SIMD-FP-Instructions/LD1--multiple-structures---Load-multiple-single-element-structures-to-one--two--three--or-four-registers-).
+Apple documents the required [Enhanced Security entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.hardened-process.checked-allocations.enforce-checked-pointer-arithmetic-overflow)
+and [supported x1 devices](https://developer.apple.com/documentation/security/preparing-your-app-to-work-with-pointer-authentication).
+
+For an external thread-local variable, the arm64e object publisher resolves
+TLVP page relocations to the original strong import's sealed descriptor
+slot. The compiler's authenticated descriptor call still selects storage for
+the current thread. This path requires an existing provider and accepts the
+ordinary ADRP and pointer-sized LDR forms. For a strong per-thread export
+in the original image, the publisher checks the descriptor's section and
+authenticated bootstrap, then relaxes the load to an ADD at the relocated
+descriptor address. Both paths reuse the original per-thread storage.
+Creating a new TLS definition or running a new TLS initializer requires
+additional dyld registration.
+
+Both Apple M1 runners passed all 35 publication cases in the
+[native signal and TLS run](https://github.com/gmh5225/test_mac_intel/actions/runs/43366275284). Each runner completed eight signal
+returns through original and redirected entries on both stack types. Across
+the two TLS layouts it performed 32 accesses at O0 and O2, checking both
+threads' independent values. The [verification record](evidence/arm64e-signal-resume-and-tlv-2026-11-13.json)
+includes the code and binary digests, exception results and CPTA observations.
+
 To repeat the interrupted-frame test on a Mac that can launch arm64e
 executables, build the test host against the tracked LLVM fork and require
 native execution:
@@ -1247,10 +1297,11 @@ native execution:
 ```bash
 python3 scripts/build.py build-release --target NeverDArm64eLiftedImageTests
 NEVERD_ARM64E_ASYNC_NATIVE=1 build-release/bin/NeverDArm64eLiftedImageTests \
-  --gtest_filter=AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions \
+  --gtest_filter='AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions:AArch64AsyncUnwind.SignalReturnResumesCallerWithRecoveredVectorLanes' \
   --gtest_output=xml:signal-results.xml
 ```
 
-The XML property `native_system_caller_steps` must be 10. Without the
+The XML properties `native_system_caller_steps` and
+`native_signal_caller_resumptions` must be 10 and 8 respectively. Without the
 environment variable the test can check publication and the recovered rows
 without performing those native steps.

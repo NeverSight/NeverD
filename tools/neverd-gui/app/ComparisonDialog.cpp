@@ -690,7 +690,7 @@ ComparisonDialog::ComparisonDialog(const QString &Worker,
                                        QAbstractItemView::PositionAtCenter);
             InstructionTable->setFocus();
           });
-  Split->setHandleWidth(limits::kComparisonPaneGutter);
+  Split->setHandleWidth(limits::kPaneGutter);
   Split->setChildrenCollapsible(false);
   Split->setStretchFactor(0, 1);
   Split->setStretchFactor(1, 2);

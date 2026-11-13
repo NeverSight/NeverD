@@ -1243,6 +1243,47 @@ def residue_view_corpus(width, count):
     return rows
 
 
+def dynamic_lane_corpus(width, count):
+    """Nonconstant masks whose lowest set bit may just reach the result."""
+    axes = ("(x^y)", "((x+y)^(z&w))", "((x&z)^(y|w))")
+    observed = min(width, max(6, width * 2 // 3))
+    scale = 3 << (width - observed)
+    rows = []
+    for case in range(count):
+        # Every run of twelve cases contains eight freely varying masks and
+        # four with a fixed low literal that must survive on the same word.
+        fixed = case % 12 >= 8
+        index = case - 8 if fixed else case
+        rng = random.Random((61417 + width * 337 + index * 591) if fixed else
+                            (0x73D91 + width * 239 + index * 387))
+        degree = ((31, 53, 79, 101) if fixed else (19, 37, 73, 113))[index % 4]
+        shift = max(1, observed // (3 + index % (2 if fixed else 3)))
+        factors = []
+        for i in range(degree):
+            word = axes[(i + index) % (1 + index % 3)]
+            zeros = shift + i % 2
+            live = index % (4 if fixed else 8) >= (2 if fixed else 4)
+            lane = max(0, observed - zeros - int(live and i == degree // 2))
+            high = (rng.getrandbits(width - lane) | 1) << lane
+            if fixed:
+                op = ("^", "|", "&")[(i + index) % 3]
+                literal = 5 if op == "^" else 9 if op == "|" else ((1 << width) - 1) ^ 2
+                hidden = f"((z+{2 * i + 1})&{high})"
+                if op == "&":
+                    hidden = "~" + hidden
+                view = f"(({literal}{op}{word}){op}{hidden})"
+                offset = rng.randrange(-29, 30) | 1
+            else:
+                hidden = f"(({rng.randrange(1, 200, 2)}+w*y)&{high})"
+                view = (f"({word}^{hidden})", f"({word}|{hidden})",
+                        f"({word}&~{hidden})", f"(({word}^({high}*z))|{hidden})")[(i + index) % 4]
+                offset = rng.randrange(-35, 36) | 1
+            weight = (rng.randrange(-27, 28) | 1) << zeros
+            factors.append(f"({offset}+({weight})*{view})")
+        rows.append(f"({scale}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(z^w)")
+    return rows
+
+
 def affine_product_corpus(width, count):
     """Repeated words hidden under up to three affine coordinate changes."""
     axes = ("(x^y)", "((x&z)^(y|w))", "((x+y)^(z&w))")
@@ -1493,7 +1534,7 @@ def main():
                  "residue-power", "residue-quotient", "residue-subgroup",
                  "sparse-linear-mixed-degree", "upper-perturbation", "masked-perturbation",
                  "mixed-perturbation", "truncated-product", "integer-product", "affine-product",
-                 "residue-view"),
+                 "residue-view", "dynamic-lane"),
         default="complement",
     )
     args = parser.parse_args()
@@ -1515,6 +1556,7 @@ def main():
             "integer-product": (8, 16, 31, 64, 97, 193, 257),
             "mixed-perturbation": (8, 16, 32, 64, 65, 129, 257),
             "residue-view": (9, 16, 32, 65, 97, 257, 513),
+            "dynamic-lane": (9, 16, 32, 65, 97, 257, 513),
             "affine-product": (8, 9, 16, 32, 65, 97, 257, 513),
             "upper-perturbation": (8, 16, 32, 64, 65, 97, 129, 257),
             "masked-perturbation": (9, 24, 63, 127, 256),
@@ -1553,6 +1595,7 @@ def main():
                 "mixed-perturbation": mixed_perturbation_corpus,
                 "affine-product": affine_product_corpus,
                 "residue-view": residue_view_corpus,
+                "dynamic-lane": dynamic_lane_corpus,
                 "truncated-product": truncated_product_corpus,
                 "integer-product": integer_product_corpus,
             }[args.family]

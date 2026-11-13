@@ -10,6 +10,7 @@
 #include "../Config.h"
 #include "AddressSpace.h"
 #include "ChooserView.h"
+#include "CodeTextTestAccess.h"
 #include "CodeView.h"
 #include "DeclareTypesDialog.h"
 #include "DeepLink.h"
@@ -37,6 +38,7 @@
 #include "NativeWindowStates.h"
 #include "NavigationBand.h"
 #include "OutputWindow.h"
+#include "PaintCheck.h"
 #include "PatchEditor.h"
 #include "PathfinderView.h"
 #include "PdbPromptDialog.h"
@@ -60,6 +62,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QBackingStore>
 #include <QCheckBox>
 #include <QClipboard>
 #include <QComboBox>
@@ -97,11 +100,13 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QPaintEvent>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QPushButton>
+#include <QRegion>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QScopeGuard>
@@ -532,9 +537,129 @@ void setClipboard(const QString &text) {
 }
 } // namespace
 
+/// What the window keeps of \p widget: the pixels of its backing store, which
+/// a paint of part of the widget leaves as they were elsewhere.  None where
+/// the store keeps no image.
+QImage windowPixels(QWidget *widget) {
+  QBackingStore *store = widget->backingStore();
+  QPaintDevice *device = store ? store->paintDevice() : nullptr;
+  if (!device || device->devType() != QInternal::Image)
+    return {};
+  const QImage &kept = *static_cast<const QImage *>(device);
+  const qreal scale = kept.devicePixelRatio();
+  // The widget's sides round to the nearest pixel edge, as Qt rounds the
+  // area a widget may paint.
+  const QPointF corner =
+      QPointF(widget->mapTo(widget->window(), QPoint(0, 0))) * scale;
+  const QPointF beyond =
+      corner + QPointF(widget->width(), widget->height()) * scale;
+  const QRect area(QPoint(qRound(corner.x()), qRound(corner.y())),
+                   QPoint(qRound(beyond.x()) - 1, qRound(beyond.y()) - 1));
+  return kept.rect().contains(area) ? kept.copy(area) : QImage();
+}
+
+/// Whether the window keeps a picture of \p widget that can be looked at:
+/// painted whole, it is the widget's own picture of itself where the screen's
+/// scale is a whole number.
+bool windowShows(QWidget *widget) {
+  widget->update();
+  for (int turn = 0; turn < 4; ++turn)
+    QCoreApplication::processEvents();
+  const QImage shown = windowPixels(widget);
+  if (shown.isNull())
+    return false;
+  const qreal scale = widget->devicePixelRatioF();
+  return scale != std::round(scale) || shown == widget->grab().toImage();
+}
+
+/// The parts of a widget its paint events covered.
+class PaintedParts final : public QObject {
+public:
+  QRegion region;
+  bool eventFilter(QObject *, QEvent *event) override {
+    if (event->type() == QEvent::Paint)
+      region += static_cast<QPaintEvent *>(event)->region();
+    return false;
+  }
+  qint64 area() const {
+    qint64 sum = 0;
+    for (const QRect &part : region)
+      sum += qint64(part.width()) * part.height();
+    return sum;
+  }
+};
+
+/// Changes to a view that paints again only the rows a change reaches.
+/// After each, what the window keeps of the view must be what painting all
+/// of the view gives, and a change said to reach few rows must paint few.
+class RowsOfAView {
+public:
+  /// For a change that reaches every row, and for one that reaches the rows
+  /// it happens to.
+  static constexpr int Every = -1, Some = -2;
+
+  RowsOfAView(QWidget *viewport, int rowHeight)
+      : viewport_(viewport), rowHeight_(rowHeight) {
+    viewport_->installEventFilter(&painted_);
+    settle();
+  }
+  /// Whether the window keeps a picture of the view that can be looked at.
+  bool pictures() const { return windowShows(viewport_); }
+  static void settle() {
+    for (int turn = 0; turn < 4; ++turn)
+      QCoreApplication::processEvents();
+  }
+  /// \p rows: the most rows \p act may have painted, or Every, or Some.
+  /// Returns how many rows' worth of the view it painted, rounded up.
+  int change(const QString &what, int rows, const std::function<void()> &act) {
+    settle();
+    painted_.region = {};
+    act();
+    settle();
+    const qint64 area = painted_.area();
+    const qint64 whole = qint64(viewport_->width()) * viewport_->height();
+    const QImage kept = windowPixels(viewport_);
+    viewport_->update();
+    settle();
+    const QImage afresh = windowPixels(viewport_);
+    if (kept.isNull() || kept != afresh) {
+      wrong.append(what + QStringLiteral(": the window kept a row as it was "
+                                         "painted before"));
+      if (const auto captures =
+              qEnvironmentVariable("NEVERD_GUI_TEST_CAPTURES");
+          !captures.isEmpty()) {
+        kept.save(captures + QStringLiteral("/rows-kept.png"));
+        afresh.save(captures + QStringLiteral("/rows-afresh.png"));
+      }
+    }
+    if (rows >= 0 && area > qint64(rows) * rowHeight_ * viewport_->width())
+      wrong.append(
+          what + QStringLiteral(": painted %1 of %2 pixels, more than %3 rows")
+                     .arg(area)
+                     .arg(whole)
+                     .arg(rows));
+    if (rows == Every && area < whole)
+      wrong.append(
+          what +
+          QStringLiteral(": painted %1 of %2 pixels").arg(area).arg(whole));
+    if (rows != Every && rows != Some && area >= whole)
+      wrong.append(what + QStringLiteral(": painted every row"));
+    const qint64 row = qint64(rowHeight_) * viewport_->width();
+    return int((area + row - 1) / row);
+  }
+  /// What went wrong, one entry a change.
+  QStringList wrong;
+
+private:
+  QWidget *viewport_;
+  int rowHeight_;
+  PaintedParts painted_;
+};
+
 class WorkbenchTests : public QObject {
   Q_OBJECT
   QTemporaryDir settingsDirectory_;
+  quint64 stalePaints_ = 0;
 
 public:
   static void initMain() { WindowFrame::prepareNativeWindows(); }
@@ -2652,6 +2777,196 @@ private slots:
     });
     answer.start(10);
     bench.action(ActionId::OptionsShortcuts)->trigger();
+    QTRY_VERIFY(inspected);
+  }
+
+  void aReferencesTypeLeavesTheAddressItsRoom() {
+    // A cross reference's type is one letter, yet its column started as
+    // wide as a line of text, and the address after it, which takes what
+    // room is left, ended in an ellipsis.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loads;
+    bench.window->openFile(writeFixture(directory, "byte-export.bin"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *assembly = bench.window->disassembly();
+    assembly->navigate(Base + 0x140);
+    QTRY_COMPARE(assembly->currentAddress(),
+                 std::optional<Address>(Base + 0x140));
+    QVERIFY(activateTestWindow(assembly->window()));
+    assembly->focusContent();
+    bench.action(ActionId::JumpXrefsTo)->trigger();
+    QPointer<QDialog> dialog;
+    QTRY_VERIFY_WITH_TIMEOUT(
+        (dialog = visibleDialog(QStringLiteral("referencesDialog"))) != nullptr,
+        OpenTimeoutMs);
+    const auto close = qScopeGuard([&dialog] {
+      if (dialog)
+        dialog->reject();
+    });
+    auto *view = dialog->findChild<ChooserView *>();
+    QVERIFY(view);
+    const QHeaderView *header = view->table()->header();
+    QCOMPARE(header->count(), 4);
+    // Direction, Type, Address, Location.
+    QVERIFY2(header->sectionSize(1) <= header->sectionSize(0),
+             qPrintable(QStringLiteral("type %1, direction %2")
+                            .arg(header->sectionSize(1))
+                            .arg(header->sectionSize(0))));
+    QVERIFY2(header->sectionSize(3) > header->sectionSize(1),
+             qPrintable(QStringLiteral("location %1, type %2")
+                            .arg(header->sectionSize(3))
+                            .arg(header->sectionSize(1))));
+  }
+
+  void theEncodingsLabelStandsBesideTheFirstEncoding() {
+    // One field held every encoding's box, and the form centered its label
+    // on that field's first lines: seven pixels below the box it names.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loads;
+    bench.window->openFile(writeFixture(directory, "byte-export.bin"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    bool inspected = false;
+    QTimer answer;
+    connect(&answer, &QTimer::timeout, this, [&] {
+      auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+      if (!dialog)
+        return;
+      const QLabel *label = nullptr;
+      for (const auto *candidate : dialog->findChildren<QLabel *>())
+        if (candidate->text() == QLatin1String("Encodings:"))
+          label = candidate;
+      if (!label)
+        return;
+      answer.stop();
+      const auto close = qScopeGuard([dialog] { dialog->reject(); });
+      inspected = true;
+      // The encodings' boxes: the dialog also holds one for code pages,
+      // which it shows only where the engine reads any.
+      QList<QCheckBox *> boxes;
+      for (auto *box : dialog->findChildren<QCheckBox *>())
+        if (box->isVisible() &&
+            box->text() != QLatin1String("Detect common code pages"))
+          boxes.append(box);
+      QVERIFY(boxes.size() >= 2);
+      const QCheckBox *first = boxes.first();
+      for (const auto *box : boxes)
+        if (box->mapTo(dialog, QPoint()).y() <
+            first->mapTo(dialog, QPoint()).y())
+          first = box;
+      const auto middle = [dialog](const QWidget *widget) {
+        return widget->mapTo(dialog, widget->rect().center()).y();
+      };
+      QVERIFY2(qAbs(middle(label) - middle(first)) <= 1,
+               qPrintable(QStringLiteral("%1 beside %2")
+                              .arg(middle(label))
+                              .arg(middle(first))));
+      // The boxes still start on one edge.
+      for (const auto *box : boxes)
+        QCOMPARE(box->mapTo(dialog, QPoint()).x(),
+                 first->mapTo(dialog, QPoint()).x());
+    });
+    answer.start(10);
+    bench.action(ActionId::OptionsStrings)->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(inspected, OpenTimeoutMs);
+  }
+
+  void toolWindowsLeaveReturnToTheirFields_data() {
+    QTest::addColumn<int>("command");
+    QTest::addColumn<QString>("name");
+    QTest::addColumn<QString>("main");
+    QTest::newRow("shortcuts")
+        << int(ActionId::OptionsShortcuts) << "shortcutsDialog" << "Close";
+    QTest::newRow("connections")
+        << int(ActionId::ViewConnections) << "connectionsDialog" << "Connect";
+  }
+
+  void toolWindowsLeaveReturnToTheirFields() {
+    // Each took its first push button for a default by Qt's choice: Return
+    // in the shortcut filter closed the list, and Return in the server path
+    // of MCP connections pressed "Enable sharing".
+    QFETCH(int, command);
+    QFETCH(QString, name);
+    QFETCH(QString, main);
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loads;
+    bench.window->openFile(writeFixture(directory, "byte-export.bin"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    bool inspected = false;
+    QTimer answer;
+    connect(&answer, &QTimer::timeout, this, [&] {
+      QPointer<QDialog> dialog = visibleDialog();
+      // Until the window is the active one a key belongs to the workbench
+      // behind it, where Return is a code view's "Jump to operand".
+      if (!dialog || dialog->objectName() != name || !dialog->isActiveWindow())
+        return;
+      answer.stop();
+      const auto close = qScopeGuard([dialog] {
+        if (dialog)
+          dialog->reject();
+      });
+      inspected = true;
+      const auto texts = [dialog] {
+        QStringList all;
+        for (const auto *button : dialog->findChildren<QPushButton *>())
+          all.append(button->text());
+        return all;
+      };
+      const QStringList before = texts();
+      const auto fields = dialog->findChildren<QLineEdit *>();
+      QVERIFY(!fields.isEmpty());
+      for (QLineEdit *field : fields) {
+        if (!field->isVisible() || !field->isEnabled())
+          continue;
+        field->setFocus();
+        QTest::keyClick(field, Qt::Key_Return);
+        QVERIFY(dialog && dialog->isVisible());
+        // "Enable sharing" would read "Disable sharing" once pressed.
+        QCOMPARE(texts(), before);
+      }
+      if (name == QLatin1String("connectionsDialog")) {
+        // Return in a field of the server row connects, as its button does:
+        // arguments that are no list are refused where both can be seen.
+        QLineEdit *arguments = nullptr;
+        for (QLineEdit *field : fields)
+          if (field->text() == QLatin1String("[]"))
+            arguments = field;
+        QVERIFY(arguments);
+        arguments->setText(QStringLiteral("{"));
+        arguments->setFocus();
+        QTest::keyClick(arguments, Qt::Key_Return);
+        bool refused = false;
+        for (const auto *label : dialog->findChildren<QLabel *>())
+          refused = refused || label->text().contains("JSON array");
+        QVERIFY(refused);
+        QCOMPARE(texts(), before);
+        // The catalog's tabs end and the result's title begins a gutter
+        // apart; on the hairline alone the title read as a fourth tab.
+        const auto *tabs = dialog->findChild<QTabBar *>();
+        const QLabel *title = nullptr;
+        for (const auto *label : dialog->findChildren<QLabel *>())
+          if (label->text() == QLatin1String("Result"))
+            title = label;
+        QVERIFY(tabs && title);
+        QCOMPARE(title->mapTo(dialog, QPoint()).x() -
+                     (tabs->mapTo(dialog, QPoint()).x() + tabs->width()),
+                 ::neverd::limits::gui::kPaneGutter);
+      }
+      // No button is the default.  One wears the accent all the same: the
+      // window's main action, so that no window is left in one color.
+      QStringList accented;
+      for (const auto *button : dialog->findChildren<QPushButton *>()) {
+        QVERIFY2(!button->isDefault() && !button->autoDefault(),
+                 qPrintable(button->text()));
+        if (button->property("mainAction").toBool())
+          accented.append(button->text());
+      }
+      QCOMPARE(accented, QStringList{main});
+    });
+    answer.start(10);
+    bench.action(ActionId(command))->trigger();
     QTRY_VERIFY(inspected);
   }
 
@@ -7739,11 +8054,14 @@ private slots:
     quint64 asked = 0;
     bool loading = true;
     int heard = 0;
+    PaintedParts painted;
+    qint64 paintedWhenHeard = 0;
     connect(&bench.session, &Session::revisionChanged, &reader, [&] {
       ++heard;
       shown = code->allText();
       loading = code->loading();
       asked = ListingViewTestAccess::requests(*listing);
+      paintedWhenHeard = painted.area();
     });
     // And when the views take what is there: the listing has asked by then,
     // so that the worker reads its rows meanwhile.
@@ -7756,9 +8074,27 @@ private slots:
     // Painted, so that its lines have layouts to lend.
     QVERIFY(QTest::qWaitForWindowExposed(bench.window.get()));
     QVERIFY(!code->viewport()->grab().isNull());
+    // Whether what the window keeps of the view can be looked at; where it
+    // cannot, the checks of its pixels are left out, as the tests of the
+    // rows alone are.
+    const bool pictures = windowShows(code->viewport());
     const auto layouts = code->layoutsKept();
+    const auto rowsKept = code->pageRowsKept();
+    const auto spansKept = code->spansKept();
+    for (int turn = 0; turn < 4; ++turn)
+      QCoreApplication::processEvents();
+    code->viewport()->installEventFilter(&painted);
+    const auto checks = PaintCheck::checks();
     bench.session.setComment(Base + 32, QStringLiteral("shown at once"));
     QTRY_VERIFY_WITH_TIMEOUT(heard == 1, OpenTimeoutMs);
+    // The page was painted as the edit's reply was taken in, before the
+    // others heard of the revision: the line the note is on and no other,
+    // the rest being as the window keeps them.
+    QVERIFY(paintedWhenHeard > 0);
+    QVERIFY2(paintedWhenHeard <= qint64(code->viewport()->width()) *
+                                     code->cursorViewportRect().height(),
+             qPrintable(QString::number(paintedWhenHeard)));
+    code->viewport()->removeEventFilter(&painted);
     QVERIFY2(shown.contains(QStringLiteral("shown at once")),
              qPrintable(shown));
     QVERIFY(!loading);
@@ -7767,12 +8103,46 @@ private slots:
     QCOMPARE(bench.session.analysisPagesTaken(), taken + 1);
     // The lines the edit left as they read took the layouts built for them.
     QVERIFY(code->layoutsKept() > layouts);
+    // A note is a row's: the page brought other rows, which were read.
+    QCOMPARE(code->pageRowsKept(), rowsKept);
+    // They were colored as the lines that read the same in their places, and
+    // the line with the note by its own text: each as one read afresh.
+    QCOMPARE(code->spansKept(), spansKept + code->lineCount() - 1);
+    QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
     // Each asks once: the word that follows, to everyone, reads nothing again.
     QTRY_VERIFY_WITH_TIMEOUT(ListingViewTestAccess::settled(*listing) &&
                                  !bench.session.queries().hasPending(),
                              OpenTimeoutMs);
     QCOMPARE(ListingViewTestAccess::requests(*listing), requests + 1);
     QVERIFY(code->allText().contains(QStringLiteral("shown at once")));
+    // What the window keeps of the view is the view painted whole.
+    if (code->viewport()->devicePixelRatioF() == 1)
+      QVERIFY(PaintCheck::checks() > checks);
+    const QImage keptByWindow = windowPixels(code->viewport());
+    code->viewport()->update();
+    for (int turn = 0; turn < 4; ++turn)
+      QCoreApplication::processEvents();
+    if (pictures)
+      QCOMPARE(keptByWindow, windowPixels(code->viewport()));
+    // A note as long as the one it replaces leaves every word of the line
+    // where it was and colored as it was: the line is painted again for its
+    // text alone.
+    bench.session.setComment(Base + 32, QStringLiteral("known at once"));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        code->allText().contains(QStringLiteral("known at once")) &&
+            !code->loading() && !bench.session.queries().hasPending() &&
+            ListingViewTestAccess::settled(*listing),
+        OpenTimeoutMs);
+    for (int turn = 0; turn < 4; ++turn)
+      QCoreApplication::processEvents();
+    const QImage noted = windowPixels(code->viewport());
+    code->viewport()->update();
+    for (int turn = 0; turn < 4; ++turn)
+      QCoreApplication::processEvents();
+    if (pictures) {
+      QVERIFY(noted != keptByWindow);
+      QCOMPARE(noted, windowPixels(code->viewport()));
+    }
     // The lines that read as they did kept their layouts through the page
     // read again: what they draw is what layouts built afresh draw, which a
     // change of style has every line build.
@@ -7790,8 +8160,323 @@ private slots:
                                  !bench.session.queries().hasPending(),
                              OpenTimeoutMs);
     QVERIFY(code->documentVersion() != version ||
-            code->allText().contains(QStringLiteral("shown at once")));
-    QCOMPARE(heard, 2);
+            code->allText().contains(QStringLiteral("known at once")));
+    // The page read again brought the rows it had brought: they were not
+    // read a second time.
+    QVERIFY(code->pageRowsKept() > rowsKept);
+    QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    // The two notes, and the word said by itself.
+    QCOMPARE(heard, 3);
+  }
+
+  /// The pseudocode of \p fixture's function, shown, complete and focused.
+  CodeText *shownCode(Workbench &bench, QTemporaryDir &directory,
+                      const QString &fixture) {
+    bench.window->openFile(writeFixture(directory, fixture));
+    if (!QTest::qWaitFor([&] { return bench.session.loaded(); }, OpenTimeoutMs))
+      return nullptr;
+    auto *assembly = bench.window->disassembly();
+    assembly->navigate(Base + 0x140);
+    if (!QTest::qWaitFor(
+            [&] {
+              return assembly->currentFunction() ==
+                     std::optional<Address>(Base + 0x140);
+            },
+            OpenTimeoutMs))
+      return nullptr;
+    bench.action(ActionId::ViewPseudocode)->trigger();
+    if (!QTest::qWaitFor(
+            [&] { return bench.codeView(QStringLiteral("source")) != nullptr; },
+            OpenTimeoutMs))
+      return nullptr;
+    auto *view = bench.codeView(QStringLiteral("source"));
+    auto *code = view->text();
+    if (!QTest::qWaitFor([&] { return code->complete(); }, OpenTimeoutMs) ||
+        !activateTestWindow(view->window()) ||
+        !QTest::qWaitForWindowExposed(view->window()))
+      return nullptr;
+    code->setFocus();
+    return QTest::qWaitFor([&] { return code->hasFocus(); }) ? code : nullptr;
+  }
+
+  void aChangePaintsTheRowsItReachesAndNoOther() {
+    // The code view paints again the rows whose painting a change reaches,
+    // and leaves the others as the window keeps them.  After each kind of
+    // change, what the window keeps of the view is what painting all of the
+    // view gives; and the changes that reach few rows paint few.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    auto *code =
+        shownCode(bench, directory, QStringLiteral("local-references.bin"));
+    QVERIFY(code);
+    auto *assembly = bench.window->disassembly();
+    auto *viewport = code->viewport();
+    const int rowHeight = code->cursorViewportRect().height();
+    QVERIFY(rowHeight > 0);
+    QVERIFY(viewport->height() > 20 * rowHeight);
+    RowsOfAView rows(viewport, rowHeight);
+    if (!rows.pictures())
+      QSKIP("The window keeps no picture that can be looked at");
+    const int Every = RowsOfAView::Every, Some = RowsOfAView::Some;
+    const auto keys = [&](Qt::Key key, int count,
+                          Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+      for (int at = 0; at < count; ++at)
+        QTest::keyClick(code, key, modifiers);
+    };
+    // The cursor's line, and the one it leaves.
+    rows.change(QStringLiteral("a line down"), 6,
+                [&] { keys(Qt::Key_Down, 1); });
+    rows.change(QStringLiteral("a selection in a line"), 6,
+                [&] { keys(Qt::Key_Right, 4, Qt::ShiftModifier); });
+    rows.change(QStringLiteral("a selection over lines"), 6,
+                [&] { keys(Qt::Key_Down, 2, Qt::ShiftModifier); });
+    rows.change(QStringLiteral("no selection"), 8,
+                [&] { keys(Qt::Key_Left, 1); });
+    // A word under the cursor is highlighted wherever it stands.
+    rows.change(QStringLiteral("a found text"), 12, [&] {
+      code->setCursorLine(0);
+      QVERIFY(code->findText(QStringLiteral("v7 = 0"), true));
+    });
+    rows.change(QStringLiteral("a word under the cursor"), 12,
+                [&] { keys(Qt::Key_Right, 1); });
+    QCOMPARE(code->cursorWord(), QStringLiteral("v7"));
+    // A locked word keeps its color in the rows that spell it.
+    auto &locks = bench.session.highlightLocks();
+    rows.change(QStringLiteral("a locked word"), 4,
+                [&] { locks.toggle(QStringLiteral("v70")); });
+    rows.change(QStringLiteral("no locked word"), 4,
+                [&] { locks.toggle(QStringLiteral("v70")); });
+    // A search marks its matches in place of the other highlights.
+    rows.change(QStringLiteral("a search"), Some, [&] {
+      code->setSearchHighlight({QStringLiteral("e"), Qt::CaseInsensitive});
+    });
+    rows.change(QStringLiteral("no search"), Some,
+                [&] { code->setSearchHighlight({}); });
+    // A fold takes rows away, and gives them back.
+    if (code->hasPrelude()) {
+      const bool folded = code->preludeFolded();
+      rows.change(QStringLiteral("the prelude folded or opened"), Every,
+                  [&] { code->setPreludeFolded(!folded); });
+      rows.change(QStringLiteral("the prelude as it was"), Every,
+                  [&] { code->setPreludeFolded(folded); });
+    }
+    // The text cursor shows with the focus.
+    rows.change(QStringLiteral("the focus leaves"), 1, [&] {
+      assembly->focusContent();
+      QTRY_VERIFY(!code->hasFocus());
+    });
+    rows.change(QStringLiteral("the focus comes back"), 1, [&] {
+      code->setFocus();
+      QTRY_VERIFY(code->hasFocus());
+    });
+    // A change no code of the view's makes, and so none says: the view finds
+    // it as it paints anything, and paints the rows it reaches next.
+    rows.change(QStringLiteral("a highlight no one spoke of"), 12, [&] {
+      CodeTextTestAccess::highlightUnsaid(*code, QStringLiteral("v70"));
+      viewport->update(QRect(0, viewport->height() - 1, 1, 1));
+    });
+    // Every row shows another line as the text scrolls, and every row is
+    // colored anew by another style.
+    rows.change(QStringLiteral("three lines scrolled"), Every, [&] {
+      code->verticalScrollBar()->setValue(code->verticalScrollBar()->value() +
+                                          3);
+    });
+    rows.change(QStringLiteral("another style"), Every,
+                [&] { emit Theme::instance().changed(); });
+    rows.change(QStringLiteral("all selected"), Every,
+                [&] { code->selectAll(); });
+    rows.change(QStringLiteral("none selected"), Every,
+                [&] { keys(Qt::Key_Up, 1); });
+    rows.change(QStringLiteral("a line up"), 6, [&] { keys(Qt::Key_Up, 1); });
+    QVERIFY2(rows.wrong.isEmpty(),
+             qPrintable(rows.wrong.join(QStringLiteral("; "))));
+    // Through the folds each line is colored as one read afresh.
+    QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    // Each of those paints was also compared with the view painted afresh,
+    // where the screen's scale is whole (PaintCheck, cleanup).
+    if (viewport->devicePixelRatioF() == 1)
+      QVERIFY(PaintCheck::checks() > 0);
+  }
+
+  void aBracketsPartnerIsPaintedAgainInItsOwnRow() {
+    // The bracket under the cursor and its partner stand boxed: the
+    // partner's row, lines away, is painted again for its box alone.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    auto *code =
+        shownCode(bench, directory, QStringLiteral("code-brackets.bin"));
+    QVERIFY(code);
+    RowsOfAView rows(code->viewport(), code->cursorViewportRect().height());
+    if (!rows.pictures())
+      QSKIP("The window keeps no picture that can be looked at");
+    // After the brace that opens the block, where no bracket is.
+    code->setCursorLine(0);
+    QVERIFY(code->findText(QStringLiteral("if (v0) {"), true));
+    QTest::keyClick(code, Qt::Key_End);
+    RowsOfAView::settle();
+    QVERIFY(!code->bracketPair());
+    const int line = code->cursorLine();
+    rows.change(QStringLiteral("onto a brace"), 2,
+                [&] { QTest::keyClick(code, Qt::Key_Left); });
+    const auto pair = code->bracketPair();
+    QVERIFY(pair);
+    QCOMPARE(pair->line, line);
+    QCOMPARE(pair->partnerLine, line + 2);
+    rows.change(QStringLiteral("off the brace"), 2,
+                [&] { QTest::keyClick(code, Qt::Key_Right); });
+    QVERIFY(!code->bracketPair());
+    QVERIFY2(rows.wrong.isEmpty(),
+             qPrintable(rows.wrong.join(QStringLiteral("; "))));
+  }
+
+  void aRowIsPaintedAgainForItsNumberItsMarkOrItsPlaceAlone() {
+    // Lines that read the same.  Scrolled by one, each row shows the same
+    // text under another number; a row an instruction's other row marks is
+    // tinted without a letter of it changing; and scrolled sideways, every
+    // row keeps all but where its text begins.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    auto *code =
+        shownCode(bench, directory, QStringLiteral("code-repeats.bin"));
+    QVERIFY(code);
+    auto *viewport = code->viewport();
+    const int rowHeight = code->cursorViewportRect().height();
+    RowsOfAView rows(viewport, rowHeight);
+    if (!rows.pictures())
+      QSKIP("The window keeps no picture that can be looked at");
+    const int Every = RowsOfAView::Every;
+    const QStringList lines = code->allText().split(QLatin1Char('\n'));
+    QCOMPARE(lines.value(12), lines.value(13));
+    // Two rows map to one instruction: the cursor goes to the first, and
+    // the other is marked.  Another instruction's row takes the cursor and
+    // the mark goes: the row that was marked changes in nothing else.
+    rows.change(QStringLiteral("a marked row"), 4,
+                [&] { code->revealAddress(Base + 0x140 + 2); });
+    const int first = code->cursorLine();
+    rows.change(QStringLiteral("no marked row"), 4,
+                [&] { code->revealAddress(Base + 0x140 + 6); });
+    QCOMPARE(code->cursorLine(), first - 1);
+    auto *down = code->verticalScrollBar();
+    QVERIFY(down->maximum() > 20);
+    // The cursor's line, the one row that is not as the others, out of sight.
+    rows.change(QStringLiteral("to rows that read the same"), Every,
+                [&] { down->setValue(10); });
+    // Scrolled by a line, each row shows the text it showed under the number
+    // after its own, and is painted again for the number alone.
+    const QImage before = windowPixels(viewport);
+    rows.change(QStringLiteral("one line scrolled"), Every,
+                [&] { down->setValue(11); });
+    QVERIFY(windowPixels(viewport) != before);
+    // So it is where a page read again puts the view back on its line
+    // without a word from the scroll bar.
+    rows.change(QStringLiteral("another line at the top"), Every, [&] {
+      const QSignalBlocker quiet(down);
+      down->setValue(12);
+      CodeTextTestAccess::changed(*code);
+    });
+    // The first lines again, one of which reaches beyond the view.
+    rows.change(QStringLiteral("back to the top"), Every,
+                [&] { down->setValue(0); });
+    auto *across = code->horizontalScrollBar();
+    QVERIFY(across->maximum() > 40);
+    rows.change(QStringLiteral("scrolled sideways"), Every,
+                [&] { across->setValue(40); });
+    rows.change(QStringLiteral("scrolled back"), Every,
+                [&] { across->setValue(0); });
+    QVERIFY2(rows.wrong.isEmpty(),
+             qPrintable(rows.wrong.join(QStringLiteral("; "))));
+  }
+
+  void aTextOfTwoPagesReadAgainKeepsWhatItsLinesTook() {
+    // A text of two pages with nothing folded shows its first page's lines
+    // while the second is on its way.  Read again, each line takes a row's
+    // instructions once, and is colored as one read afresh: through a comment
+    // over lines, and where a fold moves a line of the comment to the place
+    // of a line of code that reads the same.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    auto *code =
+        shownCode(bench, directory, QStringLiteral("code-repeats.bin"));
+    QVERIFY(code);
+    QVERIFY(code->lineCount() > 300);
+    QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    if (code->hasPrelude() && code->preludeFolded())
+      code->setPreludeFolded(false);
+    QVERIFY(!code->anyFolded());
+    const auto readAgain = [&] {
+      const auto spans = code->spansKept();
+      emit bench.session.revisionChanged();
+      QTRY_VERIFY_WITH_TIMEOUT(code->complete() &&
+                                   !bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+      // Every line read as it did: none was colored from its text again.
+      QCOMPARE(code->spansKept(), spans + code->lineCount());
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    };
+    readAgain();
+    // The second page's lines came after the first page's had their rows.
+    code->revealAddress(Base + 0x140 + 6);
+    QCOMPARE(code->currentAddresses(), QVector<Address>{Base + 0x140 + 6});
+    code->revealAddress(Base + 0x140 + 2);
+    QCOMPARE(code->currentAddresses(), QVector<Address>{Base + 0x140 + 2});
+    // A block folded two lines away above the comment: the line the comment
+    // holds comes to where a line of code read the same.
+    code->setCursorLine(0);
+    QVERIFY(code->findText(QStringLiteral("if (v0) {"), true));
+    const int lines = code->lineCount();
+    QVERIFY(code->setCurrentBlockFolded(true));
+    QCOMPARE(code->lineCount(), lines - 2);
+    QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    // Read again with the block folded.  The lines shown have layouts,
+    // which the first page's lines take while the second is on its way and
+    // give back to the lines of the whole text, folded: each is taken twice.
+    code->verticalScrollBar()->setValue(0);
+    QVERIFY(!code->viewport()->grab().isNull());
+    const int shown =
+        std::min(code->lineCount(), code->viewport()->height() /
+                                        code->cursorViewportRect().height());
+    QVERIFY(shown > 10);
+    const auto layouts = code->layoutsKept();
+    emit bench.session.revisionChanged();
+    QTRY_VERIFY_WITH_TIMEOUT(code->complete() &&
+                                 !bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    QCOMPARE(code->lineCount(), lines - 2);
+    QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    QVERIFY2(code->layoutsKept() - layouts >= quint64(2 * shown),
+             qPrintable(QStringLiteral("%1 of %2")
+                            .arg(code->layoutsKept() - layouts)
+                            .arg(2 * shown)));
+    // And opened again.
+    QVERIFY(code->setCurrentBlockFolded(false));
+    QCOMPARE(code->lineCount(), lines);
+    QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    readAgain();
+    code->revealAddress(Base + 0x140 + 2);
+    QCOMPARE(code->currentAddresses(), QVector<Address>{Base + 0x140 + 2});
+    // A source name colors the lines that spell it, and a language the words
+    // it reads as its own: a line colored among source names, or in another
+    // language, lends its spans to none that is not colored so, and takes
+    // none.  Colored again as they are, all take theirs.
+    const auto colorAgain = [&](const QString &name, const QString &language,
+                                bool taken) {
+      const auto spans = code->spansKept();
+      CodeTextTestAccess::colorAgain(*code, name, language);
+      QCOMPARE(code->lineCount(), lines);
+      QCOMPARE(code->spansKept(), spans + (taken ? lines : 0));
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    };
+    colorAgain(QStringLiteral("v0"), QStringLiteral("c"), false);
+    colorAgain(QStringLiteral("v0"), QStringLiteral("c"), false);
+    colorAgain({}, QStringLiteral("c"), false);
+    colorAgain({}, QStringLiteral("c"), true);
+    colorAgain({}, QStringLiteral("rust"), false);
+    colorAgain({}, QStringLiteral("rust"), true);
+    colorAgain({}, QStringLiteral("c"), false);
   }
 
   void aPageAReplicaGaveReadsFromTheReplicaAfterANote() {
@@ -11549,8 +12234,27 @@ private slots:
     QVERIFY(bench.session.dirty());
   }
 
+  void init() { stalePaints_ = PaintCheck::stalePaints(); }
+
+  void cleanup() {
+    // No view kept a row that another state of it had painted.
+    if (PaintCheck::stalePaints() != stalePaints_)
+      if (const auto captures =
+              qEnvironmentVariable("NEVERD_GUI_TEST_CAPTURES");
+          !captures.isEmpty()) {
+        const QString stem =
+            captures + '/' + QLatin1String(QTest::currentTestFunction());
+        PaintCheck::lastKept().save(stem + QStringLiteral("-kept.png"));
+        PaintCheck::lastAfresh().save(stem + QStringLiteral("-afresh.png"));
+      }
+    QCOMPARE(PaintCheck::stalePaints(), stalePaints_);
+  }
+
   void initTestCase() {
     QVERIFY(settingsDirectory_.isValid());
+    // The views that repaint rows of themselves are compared, at each paint,
+    // with all of themselves painted afresh.
+    PaintCheck::setEnabled(true);
     QCoreApplication::setOrganizationName(QStringLiteral("NeverDTests"));
     QCoreApplication::setApplicationName(QStringLiteral("WorkbenchTests"));
     QSettings::setDefaultFormat(QSettings::IniFormat);
@@ -12496,6 +13200,7 @@ private slots:
     // Ins offers the libraries that lay out as the program's and join none
     // of its types now, the kernel's left out among them.
     QStringList offered;
+    int headingsWidth = -1, listWidth = 0;
     QTimer chooser;
     connect(&chooser, &QTimer::timeout, this, [&] {
       auto *dialog = visibleDialog(QStringLiteral("addTypeLibraryDialog"));
@@ -12511,6 +13216,12 @@ private slots:
         if (offered.back() == QLatin1String("uefi-x64"))
           choices->setCurrentItem(choices->topLevelItem(row));
       }
+      // The list's columns fill it: at the tree's own width hint the last
+      // heading was cut and a scroll bar crossed the list, and a last
+      // column that ends before the list does leaves a selected row short
+      // of its edge.
+      headingsWidth = choices->header()->length();
+      listWidth = choices->viewport()->width();
       dialog->accept();
     });
     chooser.start(10);
@@ -12521,6 +13232,7 @@ private slots:
     view->addLibrary();
     QTRY_VERIFY(!offered.isEmpty());
     chooser.stop();
+    QCOMPARE(headingsWidth, listWidth);
     QTRY_COMPARE(offered, (QStringList{QStringLiteral("windows-kernel-x64"),
                                        QStringLiteral("uefi-x64")}));
     QTRY_COMPARE_WITH_TIMEOUT(names(),

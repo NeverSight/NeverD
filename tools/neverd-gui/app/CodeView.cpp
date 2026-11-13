@@ -1,6 +1,7 @@
 #include "CodeView.h"
 
 #include "../Config.h"
+#include "../PageBytes.h"
 #include "../ResourceLimits.h"
 #include "DevicePixels.h"
 #include "HighlightLocks.h"
@@ -27,6 +28,7 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenu>
+#include <QPaintEvent>
 #include <QPainter>
 #include <QRegularExpression>
 #include <QScopedValueRollback>
@@ -498,10 +500,10 @@ CodeText::CodeText(Session &session, QWidget *parent)
   connect(&Theme::instance(), &Theme::changed, this, [this] {
     ++styleStamp_;
     updateMetrics();
-    viewport()->update();
+    updateView();
   });
-  connect(&session_.highlightLocks(), &HighlightLocks::changed, viewport(),
-          qOverload<>(&QWidget::update));
+  connect(&session_.highlightLocks(), &HighlightLocks::changed, this,
+          &CodeText::updateView);
   // Scrolling moves another name under the mouse.
   for (auto *bar : {verticalScrollBar(), horizontalScrollBar()})
     connect(bar, &QScrollBar::valueChanged, this, [this] {
@@ -537,13 +539,19 @@ CodeText::CodeText(Session &session, QWidget *parent)
       return;
     // A page gives the next one's place: each is asked for as the one before
     // it is taken.
+    rowsUpdated_ = {};
     for (int pages = 0;
          pages < ::neverd::limits::gui::kCodeViewPagesTakenAtOnce && loading_ &&
          session_.deliverNow(this) > 0;
          ++pages) {
     }
-    if (!loading_)
-      viewport()->repaint();
+    // Shown now, the rows the page changed and no other: the rest read as
+    // they did.
+    if (loading_)
+      return;
+    showChanges();
+    if (!rowsUpdated_.isEmpty())
+      viewport()->repaint(std::exchange(rowsUpdated_, {}));
   });
   // A new default reaches the shown function too, whatever this window
   // chose for it; a hidden window takes it when it shows again.
@@ -619,11 +627,12 @@ void CodeText::resizeEvent(QResizeEvent *event) {
   QAbstractScrollArea::resizeEvent(event);
   updateRange();
   updateMouseCursor(viewport()->mapFromGlobal(QCursor::pos()));
+  updateView();
 }
 
 void CodeText::scrollContentsBy(int, int) {
   updateMouseCursor(viewport()->mapFromGlobal(QCursor::pos()));
-  viewport()->update();
+  updateView();
 }
 
 void CodeText::cancel() {
@@ -654,6 +663,9 @@ void CodeText::clear() {
   sourceBytes_ = renderedChars_ = renderedRows_ = widestLine_ = 0;
   interrupted_ = false;
   sourceRows_.clear();
+  rowLines_.clear();
+  pageRows_.clear();
+  pageRowsBefore_.clear();
   lineStarts_.clear();
   linesBefore_.clear();
   regions_ = {};
@@ -683,7 +695,7 @@ void CodeText::clear() {
   sourceNameIndex_.clear();
   unread_ = 0;
   updateRange();
-  viewport()->update();
+  updateView();
   if (!pageLanguage_.isEmpty()) {
     pageLanguage_.clear();
     emit languageChanged();
@@ -878,21 +890,29 @@ void CodeText::request(int offset, quint64 serial) {
         renderedOptions_ = sourceOptions_;
         loading_ = false;
         complete_ = true;
-        // Folding needs the whole function: regions span pages.
-        library_.reset(source_, sourceRows_,
-                       regionsValid_ ? foldRegions() : QJsonArray(),
-                       byteOffset_, false, CodeView::isSource(representation_));
-        if (foldAfterLoad_)
-          library_.setFolded(true);
-        if (foldPreludeAfterLoad_)
-          library_.setRegionFolded(PreludeRegion, true);
-        if (foldEpilogueAfterLoad_)
-          library_.setRegionFolded(EpilogueRegion, true);
-        if (foldDetailsAfterLoad_)
-          library_.setFoldedBlocks(library_.defaultDetailBlocks());
-        else if (!blocksAfterLoad_.isEmpty() &&
-                 library_.blockStructure() == blockStructureAfterLoad_)
-          library_.setFoldedBlocks(blocksAfterLoad_);
+        // The text shown before lent its rows to the pages that brought
+        // them again.
+        pageRowsBefore_.clear();
+        {
+          // Folding needs the whole function: regions span pages.  The
+          // function and what of it is folded are projected once.
+          const LibraryCodeView::Hold projection(library_);
+          library_.reset(source_, sourceRows_,
+                         regionsValid_ ? foldRegions() : QJsonArray(),
+                         byteOffset_, false,
+                         CodeView::isSource(representation_));
+          if (foldAfterLoad_)
+            library_.setFolded(true);
+          if (foldPreludeAfterLoad_)
+            library_.setRegionFolded(PreludeRegion, true);
+          if (foldEpilogueAfterLoad_)
+            library_.setRegionFolded(EpilogueRegion, true);
+          if (foldDetailsAfterLoad_)
+            library_.setFoldedBlocks(library_.defaultDetailBlocks());
+          else if (!blocksAfterLoad_.isEmpty() &&
+                   library_.blockStructure() == blockStructureAfterLoad_)
+            library_.setFoldedBlocks(blocksAfterLoad_);
+        }
         // Unfolded pages are already colored and mapped. Only a changed
         // projection requires rebuilding earlier lines.
         rebuildLines(!library_.anyFolded());
@@ -1022,7 +1042,7 @@ void CodeText::request(int offset, quint64 serial) {
           status_ += (status_.isEmpty() ? QString() : QStringLiteral(" · ")) +
                      std::exchange(statusNote_, {});
         updateRange();
-        viewport()->update();
+        updateView();
         if (const auto address = std::exchange(pendingAddress_, {}))
           selectAddress(*address);
         if (selectAllAfterLoad_)
@@ -1080,7 +1100,7 @@ void CodeText::request(int offset, quint64 serial) {
         widestLine_ = message.size();
         status_ = message;
         updateRange();
-        viewport()->update();
+        updateView();
         emit statusChanged();
       });
 }
@@ -1096,6 +1116,9 @@ void CodeText::appendPage(const QJsonObject &payload, int offset) {
   if (offset == 0) {
     source_.clear();
     sourceRows_.clear();
+    rowLines_.clear();
+    // The rows it read lend themselves to the pages that bring them again.
+    pageRowsBefore_ = std::exchange(pageRows_, {});
     regions_ = payload.value("library_regions").toArray();
     regionsValid_ =
         payload.value("library_regions").isArray() && pageOffset >= 0;
@@ -1127,13 +1150,40 @@ void CodeText::appendPage(const QJsonObject &payload, int offset) {
   }
   const int pageCharBase = source_.size();
   source_ += text;
-  sourceBytes_ += text.toUtf8().size();
+  // A name's bytes are in the page that holds its line.
+  const PageBytes bytes(text);
+  sourceBytes_ += bytes.size();
   if (!text.isEmpty() && !text.endsWith(QLatin1Char('\n'))) {
     source_ += QLatin1Char('\n');
     ++sourceBytes_;
   }
-  for (const auto &row : payload.value("rows").toArray())
-    sourceRows_.append(row.toObject().toVariantMap());
+  {
+    const QJsonArray given = payload.value("rows").toArray();
+    PageRows rows;
+    if (const qsizetype page = pageRows_.size();
+        page < pageRowsBefore_.size() && pageRowsBefore_[page].given == given) {
+      rows = std::move(pageRowsBefore_[page]);
+      ++pageRowsKept_;
+    } else {
+      rows.given = given;
+      for (const auto &row : given) {
+        const QVariantMap read = row.toObject().toVariantMap();
+        SourceRow line;
+        line.line = read.value(QStringLiteral("line"), -1).toInt();
+        // The projection reads a row that names no line as the first one's.
+        line.projectedLine = read.value(QStringLiteral("line")).toInt();
+        for (const auto &address :
+             read.value(QStringLiteral("addresses")).toList())
+          if (const auto parsed = parseAddress(address.toString()))
+            line.addresses.append(*parsed);
+        rows.read.append(read);
+        rows.lines.append(std::move(line));
+      }
+    }
+    sourceRows_ += rows.read;
+    rowLines_ += rows.lines;
+    pageRows_.append(std::move(rows));
+  }
   for (const auto &value : payload.value("references").toArray()) {
     const auto reference = value.toObject();
     const auto line = reference.value("line").toInteger(-1);
@@ -1143,20 +1193,17 @@ void CodeText::appendPage(const QJsonObject &payload, int offset) {
         !name.isEmpty())
       references_[int(line)].append({name, *address});
   }
-  // A source name's bytes are in the page that holds its line.
-  const QByteArray bytes = text.toUtf8();
   for (const auto &value : payload.value("code_names").toArray()) {
     const auto name = value.toObject();
     const auto begin = name.value("begin_byte").toInteger(-1) - pageOffset;
     const auto end = name.value("end_byte").toInteger(-1) - pageOffset;
     if (begin >= 0 && end > begin && end <= bytes.size()) {
       auto target = name;
-      const auto spelling = QString::fromUtf8(bytes.mid(begin, end - begin));
-      target["name"] = spelling;
+      target["name"] = bytes.spelled(begin, end - begin);
+      const int first = bytes.charsBefore(begin);
+      const int last = bytes.charsBefore(end);
       editNames_.push_back(
-          {pageCharBase + int(QString::fromUtf8(bytes.left(begin)).size()),
-           pageCharBase + int(QString::fromUtf8(bytes.left(end)).size()),
-           std::move(target)});
+          {pageCharBase + first, pageCharBase + last, std::move(target)});
     }
   }
   bool namesAdded = false;
@@ -1166,7 +1213,7 @@ void CodeText::appendPage(const QJsonObject &payload, int offset) {
     const qint64 end = name.value("end_byte").toInteger(-1) - pageOffset;
     if (pageOffset < 0 || begin < 0 || end <= begin || end > bytes.size())
       continue;
-    const QString spelled = QString::fromUtf8(bytes.mid(begin, end - begin));
+    const QString spelled = bytes.spelled(begin, end - begin);
     if (spelled.isEmpty() || sourceNames_.contains(spelled))
       continue;
     sourceNames_.insert(spelled, {name.value("identifier").toString(),
@@ -1277,13 +1324,19 @@ QJsonArray CodeText::foldRegions() const {
 void CodeText::rebuildLines(bool append) {
   const bool folding = (!loading_ || refreshPages_) && library_.canFold();
   const QString display = folding ? library_.text() : source_;
-  const QVariantList &rows = folding ? library_.mappings() : sourceRows_;
   const int previousLine = cursorLine_;
   if (!append) {
     // The lines it showed lend the ones that read the same their layouts,
     // below: a fold, or a page read again, changes few.
-    if (linesBefore_.isEmpty())
+    if (linesBefore_.isEmpty()) {
       linesBefore_ = std::move(lines_);
+    } else {
+      // The lines of a first page, shown while the rest was on its way,
+      // give back the layouts they took: the whole text's lines take them.
+      const auto count = std::min(linesBefore_.size(), lines_.size());
+      for (qsizetype i = 0; i < count; ++i)
+        linesBefore_[i].styled.adoptLayout(lines_[i].styled);
+    }
     lines_.clear();
     lineStarts_.clear();
     inComment_ = false;
@@ -1291,6 +1344,13 @@ void CodeText::rebuildLines(bool append) {
   }
   int start = renderedChars_;
   const bool addressLabels = labelsNameAddresses();
+  // A line colored among no source names is colored by its text, its dialect
+  // and the comment open where it begins alone.  One that reads as the lent
+  // line in its place, which was colored so in this dialect with a comment
+  // open or not as here, takes that line's spans.
+  const qint8 coloring = sourceNames_.isEmpty()
+                             ? qint8(dialectOf(representation_, pageLanguage_))
+                             : Line::ColoredOtherwise;
   while (start < display.size()) {
     int end = int(display.indexOf(QLatin1Char('\n'), start));
     if (end < 0)
@@ -1305,22 +1365,44 @@ void CodeText::rebuildLines(bool append) {
         line.addresses = {label->second};
       }
     widestLine_ = std::max(widestLine_, int(line.styled.text.size()));
-    highlightLine(line, inComment_);
+    line.commentBefore = inComment_;
+    if (const Line *lent = coloring != Line::ColoredOtherwise &&
+                                   lines_.size() < linesBefore_.size()
+                               ? &std::as_const(linesBefore_)[lines_.size()]
+                               : nullptr;
+        lent && lent->coloredIn == coloring &&
+        lent->commentBefore == inComment_ &&
+        lent->styled.text == line.styled.text) {
+      line.styled.spans = lent->styled.spans;
+      inComment_ = lent->commentAfter;
+      ++spansKept_;
+    } else {
+      highlightLine(line, inComment_);
+    }
+    line.commentAfter = inComment_;
+    line.coloredIn = coloring;
     lines_.append(std::move(line));
     lineStarts_.append(start);
     start = end + 1;
   }
-  for (int i = renderedRows_; i < rows.size(); ++i) {
-    const auto row = rows[i].toMap();
-    const int index = row.value(QStringLiteral("line"), -1).toInt();
+  // A row's instructions go to the line that shows it: its own, or under
+  // folds the one the projection moves it to, which hides the rows of a
+  // folded block.  The rows the lines already took are those before
+  // renderedRows_ of the ones that show.
+  int shown = 0;
+  for (const SourceRow &row : std::as_const(rowLines_)) {
+    const int index =
+        folding ? library_.mappedLine(row.projectedLine) : row.line;
+    if (folding && index < 0)
+      continue;
+    if (shown++ < renderedRows_)
+      continue;
     if (index < 0 || index >= lines_.size() || lines_[index].label)
       continue;
-    for (const auto &address : row.value(QStringLiteral("addresses")).toList())
-      if (const auto parsed = parseAddress(address.toString()))
-        lines_[index].addresses.append(*parsed);
+    lines_[index].addresses += row.addresses;
   }
   renderedChars_ = display.size();
-  renderedRows_ = rows.size();
+  renderedRows_ = shown;
   for (int i = 0; i < lines_.size(); ++i) {
     lines_[i].sourceLine = folding ? library_.sourceLineAt(lineStarts_[i]) : i;
     lines_[i].block.clear();
@@ -1356,6 +1438,7 @@ void CodeText::rebuildLines(bool append) {
                   return a.start < b.start;
                 });
       line.styled.spans = spans;
+      line.coloredIn = Line::ColoredOtherwise;
     }
   // A line that reads as the one in its place did keeps the layout built for
   // that one; where lines came or went, as the one as far from the end.
@@ -1379,7 +1462,7 @@ void CodeText::rebuildLines(bool append) {
   ++linesStamp_;
   updateRange();
   updateMouseCursor(viewport()->mapFromGlobal(QCursor::pos()));
-  viewport()->update();
+  updateView();
 }
 
 int CodeText::displayPosition(int line, int column) const {
@@ -1460,7 +1543,7 @@ void CodeText::setRegionFolded(const QString &id, bool folded) {
   }
   selectedAddress_.reset();
   marked_.clear();
-  viewport()->update();
+  updateView();
   emit foldingChanged();
 }
 
@@ -1497,6 +1580,10 @@ bool CodeText::event(QEvent *event) {
     dragScroll_.stop();
     selecting_ = false;
   }
+  // The text cursor shows with the focus alone.  The viewport is opaque, and
+  // no update of the area around it paints it.
+  if (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut)
+    updateView();
   if (event->type() == QEvent::ToolTip) {
     auto *help = static_cast<QHelpEvent *>(event);
     const QPoint local = viewport()->mapFrom(this, help->pos());
@@ -1864,8 +1951,173 @@ int CodeText::columnAt(int line, int x) const {
   return layout.lineCount() ? layout.lineAt(0).xToCursor(x - textLeft()) : 0;
 }
 
-void CodeText::paintEvent(QPaintEvent *) {
-  QPainter painter(viewport());
+struct CodeText::RowsContext {
+  /// The line the first row shows.
+  int first = 0;
+  bool selected = false, focus = false;
+  std::pair<int, int> selectionFirst, selectionLast;
+  TokenDots dots = TokenDots::Join;
+  std::optional<BracketPair> brackets;
+};
+
+CodeText::RowFrame CodeText::rowFrame() const {
+  return {viewport()->width(), viewport()->height(), lineHeight_, textLeft(),
+          gutterChars_,        charWidth_,           styleStamp_};
+}
+
+CodeText::RowsContext CodeText::rowsContext() const {
+  RowsContext context;
+  context.first = verticalScrollBar()->value();
+  const auto cursor = std::pair{cursorLine_, cursorColumn_};
+  context.selectionFirst = anchor_ ? std::min(*anchor_, cursor) : cursor;
+  context.selectionLast = anchor_ ? std::max(*anchor_, cursor) : cursor;
+  context.selected = anchor_ && context.selectionFirst != context.selectionLast;
+  context.focus = hasFocus();
+  context.dots = tokenDots();
+  context.brackets = bracketPair();
+  return context;
+}
+
+CodeText::Row CodeText::rowAt(int index, const RowsContext &context) const {
+  Row row;
+  if (index < 0 || index >= lines_.size())
+    return row;
+  const Line &line = lines_[index];
+  row.number = line.sourceLine + 1;
+  row.text = line.styled.text;
+  row.spans = line.styled.spans;
+  row.current = index == cursorLine_;
+  row.tinted = !row.current && (marked_.contains(index) || line.folded);
+  row.block = !line.block.isEmpty();
+  row.blockFolded = row.block && line.blockFolded;
+  if (!SearchHighlight.Text.isEmpty()) {
+    for (const int at : SearchHighlight.matches(line.styled.text))
+      row.fills.append({at, at + int(SearchHighlight.Text.size()),
+                        ColorRole::ListingHighlight});
+  } else {
+    // Locked words keep their colors under the cursor's highlight.
+    const auto mark = [&](const QString &word, ColorRole role) {
+      for (const auto &[first, last] :
+           highlightRanges(line.styled, word, std::nullopt, context.dots))
+        row.fills.append({first, last, role});
+    };
+    const auto &locks = session_.highlightLocks();
+    for (int slot = 0; slot < HighlightLocks::Colors; ++slot)
+      if (const QString word = locks.word(slot); !word.isEmpty())
+        mark(word, highlightLockRole(slot));
+    if (!highlight_.isEmpty())
+      mark(highlight_, ColorRole::ListingHighlight);
+  }
+  // The bracket under the cursor and its partner stand boxed.
+  if (context.brackets)
+    for (const auto &[at, column] :
+         {std::pair{context.brackets->line, context.brackets->column},
+          std::pair{context.brackets->partnerLine,
+                    context.brackets->partnerColumn}})
+      if (at == index)
+        row.brackets.append(column);
+  if (context.selected && index >= context.selectionFirst.first &&
+      index <= context.selectionLast.first) {
+    row.selectionStart = index == context.selectionFirst.first
+                             ? context.selectionFirst.second
+                             : 0;
+    const int end = index == context.selectionLast.first
+                        ? context.selectionLast.second
+                        : int(line.styled.text.size());
+    row.selectionLength = std::max(0, end - row.selectionStart);
+  }
+  if (row.current && context.focus)
+    row.caret = cursorColumn_;
+  return row;
+}
+
+void CodeText::paintRow(QPainter &painter, const RowFrame &frame,
+                        const Row &line, int y, QTextLayout &layout) {
+  const auto &theme = Theme::instance();
+  const QRect row(0, y, frame.width, frame.lineHeight);
+  if (line.current) {
+    painter.fillRect(row, theme.color(ColorRole::ListingCurrentLine));
+    // A high contrast theme outlines the line instead.
+    paintDeviceBox(
+        painter, row,
+        DeviceBox{QColor(), theme.color(ColorRole::ListingCurrentLineBorder)});
+  } else if (line.tinted)
+    painter.fillRect(row, theme.color(ColorRole::CodeFold));
+  const int gutterRight = ::neverd::limits::gui_config::kCodeViewMargin +
+                          int((frame.gutterChars + 2) * frame.charWidth);
+  painter.save();
+  // Within what is being painted: where no clip was set this is the text's
+  // own area, as it was.
+  painter.setClipRect(QRect(gutterRight, y,
+                            std::max(0, frame.width - gutterRight),
+                            frame.lineHeight),
+                      Qt::IntersectClip);
+  if (layout.lineCount()) {
+    const QTextLine textLine = layout.lineAt(0);
+    for (const RowFill &fill : line.fills) {
+      const qreal x0 = textLine.cursorToX(fill.first);
+      const qreal x1 = textLine.cursorToX(fill.last);
+      paintHighlight(painter,
+                     QRectF(frame.left + x0, y, x1 - x0, frame.lineHeight),
+                     fill.role);
+    }
+    for (const int column : line.brackets) {
+      const QRectF box(frame.left + textLine.cursorToX(column), y,
+                       textLine.cursorToX(column + 1) -
+                           textLine.cursorToX(column),
+                       frame.lineHeight);
+      painter.fillRect(box, theme.color(ColorRole::CodeBracketMatch));
+      painter.setPen(theme.color(ColorRole::CodeBracketMatchBorder));
+      painter.drawRect(box.adjusted(0.5, 0.5, -0.5, -0.5));
+    }
+  }
+  QList<QTextLayout::FormatRange> selection;
+  if (line.selectionLength >= 0) {
+    QTextLayout::FormatRange range;
+    range.start = line.selectionStart;
+    range.length = line.selectionLength;
+    range.format.setBackground(theme.color(ColorRole::ListingSelection));
+    // A high contrast theme's selection takes a text color of its own.
+    if (const QColor text = theme.color(ColorRole::ListingSelectionText);
+        text.alpha() > 0)
+      range.format.setForeground(text);
+    selection.append(range);
+  }
+  layout.draw(&painter, QPointF(frame.left, y), selection);
+  if (line.caret >= 0 && layout.lineCount()) {
+    const qreal x = frame.left + layout.lineAt(0).cursorToX(line.caret);
+    painter.fillRect(QRectF(x, y + 1, 2, frame.lineHeight - 2),
+                     theme.color(ColorRole::ListingCursor));
+  }
+  painter.restore();
+  painter.setPen(theme.color(ColorRole::CodeLineNumber));
+  painter.drawText(
+      QRect(::neverd::limits::gui_config::kCodeViewMargin, y,
+            int(frame.gutterChars * frame.charWidth), frame.lineHeight),
+      Qt::AlignRight | Qt::AlignVCenter, QString::number(line.number));
+  if (line.block) {
+    const qreal x = ::neverd::limits::gui_config::kCodeViewMargin +
+                    (frame.gutterChars + 1.25) * frame.charWidth;
+    const qreal middle = y + frame.lineHeight / 2.0;
+    const qreal radius =
+        std::min(frame.charWidth * 0.35, frame.lineHeight * 0.22);
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(theme.color(ColorRole::CodeLineNumber), 1.3));
+    if (line.blockFolded)
+      painter.drawPolyline(QPolygonF{{x - radius / 2, middle - radius},
+                                     {x + radius / 2, middle},
+                                     {x - radius / 2, middle + radius}});
+    else
+      painter.drawPolyline(QPolygonF{{x - radius, middle - radius / 2},
+                                     {x, middle + radius / 2},
+                                     {x + radius, middle - radius / 2}});
+    painter.restore();
+  }
+}
+
+void CodeText::paintRows(QPainter &painter, const QRegion &region, bool told,
+                         QVector<Row> *painted) const {
   const auto &theme = Theme::instance();
   const QRect area = viewport()->rect();
   painter.fillRect(area, theme.color(ColorRole::CodeBackground));
@@ -1873,120 +2125,118 @@ void CodeText::paintEvent(QPaintEvent *) {
     return;
   const QFont font = theme.codeFont();
   painter.setFont(font);
-  const int first = verticalScrollBar()->value();
-  const int last = std::min(int(lines_.size()) - 1, first + visibleLines());
-  const int left = textLeft();
-  const auto cursor = std::pair{cursorLine_, cursorColumn_};
-  const auto selectionFirst = anchor_ ? std::min(*anchor_, cursor) : cursor;
-  const auto selectionLast = anchor_ ? std::max(*anchor_, cursor) : cursor;
-  const TokenDots dots = tokenDots();
-  const auto brackets = bracketPair();
-  for (int i = first; i <= last; ++i) {
-    const int y = (i - first) * lineHeight_;
-    const QRect row(0, y, area.width(), lineHeight_);
-    if (i == cursorLine_) {
-      painter.fillRect(row, theme.color(ColorRole::ListingCurrentLine));
-      // A high contrast theme outlines the line instead.
-      paintDeviceBox(
-          painter, row,
-          DeviceBox{QColor(),
-                    theme.color(ColorRole::ListingCurrentLineBorder)});
-    } else if (marked_.contains(i) || lines_[i].folded)
-      painter.fillRect(row, theme.color(ColorRole::CodeFold));
-    const int gutterRight = ::neverd::limits::gui_config::kCodeViewMargin +
-                            int((gutterChars_ + 2) * charWidth_);
-    painter.save();
-    painter.setClipRect(QRect(
-        gutterRight, y, std::max(0, area.width() - gutterRight), lineHeight_));
-    auto &layout = lines_[i].styled.layout(font, styleStamp_, codeColor);
-    if (layout.lineCount()) {
-      const QTextLine textLine = layout.lineAt(0);
-      const auto fill = [&](int first, int last, ColorRole role) {
-        const qreal x0 = textLine.cursorToX(first);
-        const qreal x1 = textLine.cursorToX(last);
-        paintHighlight(painter, QRectF(left + x0, y, x1 - x0, lineHeight_),
-                       role);
-      };
-      if (!SearchHighlight.Text.isEmpty()) {
-        for (const int at : SearchHighlight.matches(lines_[i].styled.text))
-          fill(at, at + int(SearchHighlight.Text.size()),
-               ColorRole::ListingHighlight);
-      } else {
-        // Locked words keep their colors under the cursor's highlight.
-        const auto mark = [&](const QString &word, ColorRole role) {
-          for (const auto &[first, last] :
-               highlightRanges(lines_[i].styled, word, std::nullopt, dots))
-            fill(first, last, role);
-        };
-        const auto &locks = session_.highlightLocks();
-        for (int slot = 0; slot < HighlightLocks::Colors; ++slot)
-          if (const QString word = locks.word(slot); !word.isEmpty())
-            mark(word, highlightLockRole(slot));
-        if (!highlight_.isEmpty())
-          mark(highlight_, ColorRole::ListingHighlight);
-      }
-      // The bracket under the cursor and its partner stand boxed.
-      if (brackets)
-        for (const auto &[line, column] :
-             {std::pair{brackets->line, brackets->column},
-              std::pair{brackets->partnerLine, brackets->partnerColumn}})
-          if (line == i) {
-            const QRectF box(left + textLine.cursorToX(column), y,
-                             textLine.cursorToX(column + 1) -
-                                 textLine.cursorToX(column),
-                             lineHeight_);
-            painter.fillRect(box, theme.color(ColorRole::CodeBracketMatch));
-            painter.setPen(theme.color(ColorRole::CodeBracketMatchBorder));
-            painter.drawRect(box.adjusted(0.5, 0.5, -0.5, -0.5));
-          }
-    }
-    QList<QTextLayout::FormatRange> selection;
-    if (anchor_ && selectionFirst != selectionLast &&
-        i >= selectionFirst.first && i <= selectionLast.first) {
-      QTextLayout::FormatRange range;
-      range.start = i == selectionFirst.first ? selectionFirst.second : 0;
-      const int end = i == selectionLast.first
-                          ? selectionLast.second
-                          : int(lines_[i].styled.text.size());
-      range.length = std::max(0, end - range.start);
-      range.format.setBackground(theme.color(ColorRole::ListingSelection));
-      // A high contrast theme's selection takes a text color of its own.
-      if (const QColor text = theme.color(ColorRole::ListingSelectionText);
-          text.alpha() > 0)
-        range.format.setForeground(text);
-      selection.append(range);
-    }
-    layout.draw(&painter, QPointF(left, y), selection);
-    if (i == cursorLine_ && hasFocus() && layout.lineCount()) {
-      const qreal x = left + layout.lineAt(0).cursorToX(cursorColumn_);
-      painter.fillRect(QRectF(x, y + 1, 2, lineHeight_ - 2),
-                       theme.color(ColorRole::ListingCursor));
-    }
-    painter.restore();
-    painter.setPen(theme.color(ColorRole::CodeLineNumber));
-    painter.drawText(QRect(::neverd::limits::gui_config::kCodeViewMargin, y,
-                           int(gutterChars_ * charWidth_), lineHeight_),
-                     Qt::AlignRight | Qt::AlignVCenter,
-                     QString::number(lines_[i].sourceLine + 1));
-    if (!lines_[i].block.isEmpty()) {
-      const qreal x = ::neverd::limits::gui_config::kCodeViewMargin +
-                      (gutterChars_ + 1.25) * charWidth_;
-      const qreal middle = y + lineHeight_ / 2.0;
-      const qreal radius = std::min(charWidth_ * 0.35, lineHeight_ * 0.22);
-      painter.save();
-      painter.setRenderHint(QPainter::Antialiasing);
-      painter.setPen(QPen(theme.color(ColorRole::CodeLineNumber), 1.3));
-      if (lines_[i].blockFolded)
-        painter.drawPolyline(QPolygonF{{x - radius / 2, middle - radius},
-                                       {x + radius / 2, middle},
-                                       {x - radius / 2, middle + radius}});
-      else
-        painter.drawPolyline(QPolygonF{{x - radius, middle - radius / 2},
-                                       {x, middle + radius / 2},
-                                       {x + radius, middle - radius / 2}});
-      painter.restore();
+  const RowFrame frame = rowFrame();
+  const RowsContext context = rowsContext();
+  const int last =
+      std::min(int(lines_.size()) - 1, context.first + visibleLines());
+  for (int i = context.first; i <= last; ++i) {
+    const int at = i - context.first;
+    const int y = at * lineHeight_;
+    // A row keeps to itself at any scale: the edges of what it fills, of
+    // what clips its text and of what a paint event may paint round alike.
+    if (!region.intersects(QRect(0, y, area.width(), lineHeight_)))
+      continue;
+    QTextLayout &layout = lines_[i].styled.layout(font, styleStamp_, codeColor);
+    if (told && at < knownRows_.size() && knownRows_[at].number > 0) {
+      paintRow(painter, frame, knownRows_[at], y, layout);
+    } else if (painted && at < painted->size()) {
+      Row &row = (*painted)[at];
+      row = rowAt(i, context);
+      paintRow(painter, frame, row, y, layout);
+    } else {
+      paintRow(painter, frame, rowAt(i, context), y, layout);
     }
   }
+}
+
+void CodeText::paintEvent(QPaintEvent *event) {
+  QPainter painter(viewport());
+  // What showChanges has just told the viewport its rows show is what there
+  // is to paint, while no one has said a change since: its rows are painted
+  // from that.  Any other paint looks at the view itself, and for a change
+  // no one spoke of, which is painted next.
+  const bool told = std::exchange(rowsTold_, false) && !viewChanged_ &&
+                    rowFrame() == knownFrame_;
+  if (told) {
+    paintRows(painter, event->region(), true);
+  } else {
+    QVector<Row> painted(knownRows_.size());
+    for (Row &row : painted)
+      row.number = UnknownRow;
+    paintRows(painter, event->region(), false, &painted);
+    if (!viewChanged_ && !rowsKnown(painted))
+      updateView();
+  }
+  if (PaintCheck::enabled())
+    PaintCheck::painted(
+        *viewport(), painter, event->region(), !viewChanged_, paintChecked_,
+        [this, told](QPainter &again, const QRegion &region, bool afresh) {
+          paintRows(again, region, told && !afresh);
+        });
+}
+
+void CodeText::updateView() {
+  rowsTold_ = false;
+  if (std::exchange(viewChanged_, true))
+    return;
+  QMetaObject::invokeMethod(this, &CodeText::showChanges, Qt::QueuedConnection);
+}
+
+bool CodeText::rowsKnown(const QVector<Row> &painted) const {
+  const RowFrame frame = rowFrame();
+  if (!(frame == knownFrame_))
+    return false;
+  const RowsContext context = rowsContext();
+  for (qsizetype at = 0; at < knownRows_.size(); ++at) {
+    const bool seen = at < painted.size() && painted[at].number != UnknownRow;
+    if (!((seen ? painted[at] : rowAt(context.first + int(at), context)) ==
+          knownRows_[at]))
+      return false;
+  }
+  return true;
+}
+
+void CodeText::showChanges() {
+  if (!std::exchange(viewChanged_, false))
+    return;
+  const RowFrame frame = rowFrame();
+  const int rows =
+      frame.lineHeight > 0
+          ? (frame.height + frame.lineHeight - 1) / frame.lineHeight
+          : 0;
+  // Another frame moves or resizes every row.
+  const bool all = !(frame == knownFrame_) || knownRows_.size() != rows;
+  knownFrame_ = frame;
+  knownRows_.resize(rows);
+  const RowsContext context = rowsContext();
+  // The rows that changed, as the runs of them that lie one under another.
+  QRegion changed;
+  int run = -1;
+  const auto close = [&](int end) {
+    if (run >= 0)
+      changed += QRect(0, run * frame.lineHeight, frame.width,
+                       (end - run) * frame.lineHeight);
+    run = -1;
+  };
+  for (int at = 0; at < rows; ++at) {
+    Row row = rowAt(context.first + at, context);
+    if (!all && row == knownRows_[at]) {
+      close(at);
+      continue;
+    }
+    knownRows_[at] = std::move(row);
+    if (run < 0)
+      run = at;
+  }
+  close(rows);
+  if (all) {
+    viewport()->update();
+    rowsUpdated_ = viewport()->rect();
+  } else if (!changed.isEmpty()) {
+    viewport()->update(changed);
+    rowsUpdated_ += changed;
+  }
+  rowsTold_ = all || !changed.isEmpty();
 }
 
 void CodeText::moveCursor(int line, int column, bool extend) {
@@ -2014,7 +2264,7 @@ void CodeText::moveCursor(int line, int column, bool extend) {
     if (const auto address = currentAddress())
       emit locationChanged(*address);
   }
-  viewport()->update();
+  updateView();
   emit cursorChanged();
 }
 
@@ -2070,7 +2320,7 @@ void CodeText::selectAddress(Address address) {
     selectedAddress_ = address;
   }
   marked_ = rows;
-  viewport()->update();
+  updateView();
   emit addressSelected(address, !marked_.isEmpty());
 }
 
@@ -2089,7 +2339,7 @@ void CodeText::revealAddress(Address address) {
   if (!rows.isEmpty())
     selectedAddress_ = address;
   marked_ = rows;
-  viewport()->update();
+  updateView();
 }
 
 CodeText::SourcePlace CodeText::currentPlace() const {
@@ -2271,7 +2521,7 @@ bool CodeText::selectLocalReference(const QJsonObject &target,
       across->setValue(across->value() +
                        int(std::ceil(right - viewport()->width())));
   }
-  viewport()->update();
+  updateView();
   return true;
 }
 
@@ -2545,7 +2795,7 @@ QString CodeText::searchSeed() const {
 
 void CodeText::setSearchHighlight(const ViewSearchQuery &query) {
   SearchHighlight = query;
-  viewport()->update();
+  updateView();
 }
 
 bool CodeText::selectSearchRange(int begin, int length) {
@@ -2694,7 +2944,7 @@ void CodeText::selectAll() {
   anchor_ = std::pair{0, 0};
   cursorLine_ = int(lines_.size()) - 1;
   cursorColumn_ = int(lines_.back().styled.text.size());
-  viewport()->update();
+  updateView();
 }
 
 void CodeText::dragTo(const QPoint &position) {
@@ -2710,7 +2960,7 @@ void CodeText::dragTo(const QPoint &position) {
     anchor_ = std::pair{cursorLine_, cursorColumn_};
   cursorLine_ = line;
   cursorColumn_ = columnAt(line, position.x());
-  viewport()->update();
+  updateView();
 }
 
 void CodeText::mousePressEvent(QMouseEvent *event) {
@@ -2750,7 +3000,7 @@ void CodeText::mousePressEvent(QMouseEvent *event) {
     dragPoint_ = event->position().toPoint();
   }
   updateMouseCursor(event->position().toPoint());
-  viewport()->update();
+  updateView();
 }
 
 void CodeText::mouseMoveEvent(QMouseEvent *event) {

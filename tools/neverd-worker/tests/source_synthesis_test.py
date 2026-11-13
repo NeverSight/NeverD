@@ -314,7 +314,7 @@ def carry_product_elf(degree, product=True, needed=7, high_bits=None, additive=F
 
 
 def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
-                          observed=32):
+                          observed=32, dynamic_masks=False):
     scale = 1 << (32 - observed)
     code = bytearray.fromhex("b8") + struct.pack("<I", scale)
     factors = []
@@ -327,15 +327,26 @@ def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
         offset = 2 * i + 1
         code += bytes.fromhex("89f9" + op)
         if observed < 32:
-            # Each literal changes only bits discarded by the outer scale
-            # and this factor's coefficient. Keep the full operation in C.
+            # The mask changes only bits discarded by the outer scale and
+            # this factor's coefficient. Keep the full operation in C.
             low = (1 << (observed - shift)) - 1
             high = (0x9e3779b9 * (i + 1)) & ~low & 0xffffffff
-            opcode, symbol, mask = (("81e1", "&", low | high),
-                                    ("81c9", "|", high),
-                                    ("81f1", "^", high))[i % 3]
-            code += bytes.fromhex(opcode) + struct.pack("<I", mask)
-            value = f"({value}{symbol}{mask}U)"
+            if dynamic_masks:
+                # r8d = (z + 2*i + 1) & high. Its low bits vanish even
+                # though the high bits depend on a third runtime input.
+                code += bytes.fromhex("4189d0 4181c0") + struct.pack("<I", 2 * i + 1)
+                code += bytes.fromhex("4181e0") + struct.pack("<I", high)
+                hidden = f"((z+{2 * i + 1}U)&{high}U)"
+                operation, symbol = (("41f7d0 4421c1", "&~"), ("4409c1", "|"),
+                                     ("4431c1", "^"))[i % 3]
+                code += bytes.fromhex(operation)
+                value = f"({value}{symbol}{hidden})"
+            else:
+                opcode, symbol, mask = (("81e1", "&", low | high),
+                                        ("81c9", "|", high),
+                                        ("81f1", "^", high))[i % 3]
+                code += bytes.fromhex(opcode) + struct.pack("<I", mask)
+                value = f"({value}{symbol}{mask}U)"
         for layer in range(affine_depth):
             inner_weight = (-3 if layer % 2 else 5) & 0xffffffff
             inner_offset = 3 + i + layer
@@ -481,7 +492,7 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
-        elif kind.startswith(("truncated-perturbation-", "affine-perturbation-", "view-perturbation-")):
+        elif kind.startswith(("truncated-perturbation-", "affine-perturbation-", "view-perturbation-", "dynamic-perturbation-")):
             code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
             assert code.count("*") <= 12, text
         elif kind.startswith(("power-group-", "high-perturbation-", "mixed-perturbation-")):
@@ -543,7 +554,7 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
                 function_name(enhanced)
                 enhanced_shape(enhanced)
                 if representation == "source":
-                    if kind.startswith(("residue-", "multiple-residual-", "carry-product-", "carry-cofactor-", "power-group-", "high-perturbation-", "mixed-perturbation-", "truncated-perturbation-", "affine-perturbation-", "view-perturbation-")) or kind in ("affine-residue-neighbor", "prefix-residue-neighbor", "coarse-residue-neighbor", "distributed-residue-neighbor"):
+                    if kind.startswith(("residue-", "multiple-residual-", "carry-product-", "carry-cofactor-", "power-group-", "high-perturbation-", "mixed-perturbation-", "truncated-perturbation-", "affine-perturbation-", "view-perturbation-", "dynamic-perturbation-")) or kind in ("affine-residue-neighbor", "prefix-residue-neighbor", "coarse-residue-neighbor", "distributed-residue-neighbor"):
                         code = re.sub(r"/\*.*?\*/|//[^\n]*", "", ordinary,
                                       flags=re.S)
                         assert "*" in code, ordinary
@@ -653,6 +664,8 @@ if __name__ == "__main__":
             ("mixed-perturbation-49", *high_perturbation_elf(49, (0, 19, 48))),
             ("truncated-perturbation-63", *high_perturbation_elf(63, shift_base=7)),
             ("affine-perturbation-63", *high_perturbation_elf(63, shift_base=7, affine_depth=2)),
+            ("dynamic-perturbation-63", *high_perturbation_elf(
+                63, shift_base=6, affine_depth=1, observed=23, dynamic_masks=True)),
             ("view-perturbation-63", *high_perturbation_elf(63, shift_base=6, affine_depth=1, observed=23)),
             ("power-group-16", *residue_power_elf(16, 4)),
             ("power-group-64", *residue_power_elf(64, 6)),

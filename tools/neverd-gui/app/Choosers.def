@@ -123,7 +123,7 @@ NEVERD_CHOOSER(CrossReferences, "xrefs",
 NEVERD_CHOOSER_COLUMN(CrossReferences, "direction",
                       QT_TRANSLATE_NOOP("Choosers", "Direction"), Direction, "")
 NEVERD_CHOOSER_COLUMN(CrossReferences, "type",
-                      QT_TRANSLATE_NOOP("Choosers", "Type"), Text, "")
+                      QT_TRANSLATE_NOOP("Choosers", "Type"), Letter, "")
 NEVERD_CHOOSER_COLUMN(CrossReferences, "text",
                       QT_TRANSLATE_NOOP("Choosers", "Address"), Name, "")
 NEVERD_CHOOSER_COLUMN(CrossReferences, "address",

@@ -15,7 +15,6 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QFileDialog>
-#include <QFontInfo>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHeaderView>
@@ -68,9 +67,6 @@ PackageReviewDialog::PackageReviewDialog(const QString &WorkerPath,
   setAttribute(Qt::WA_DeleteOnClose);
   resize(1100, 780);
   setMinimumSize(640, 480);
-  auto Font = font();
-  Font.setPointSizeF(qMax(12.0, QFontInfo(Font).pointSizeF()));
-  setFont(Font);
   auto *Layout = new QVBoxLayout(this);
   Coverage =
       new QLabel(tr("Evidence coverage is partial. Analyst dispositions are "
@@ -118,8 +114,9 @@ PackageReviewDialog::PackageReviewDialog(const QString &WorkerPath,
   for (const auto *Format : {"tgz", "tar", "zip"})
     Container->addItem(QString::fromLatin1(Format),
                        QString::fromLatin1(Format));
+  // The list takes the row's room and the command its own width.
   auto *ArchiveRow = new QHBoxLayout;
-  ArchiveRow->addWidget(Container);
+  ArchiveRow->addWidget(Container, 1);
   Extract = new QPushButton(tr("Inspect archive"), this);
   Extract->setObjectName(QStringLiteral("packageExtract"));
   ArchiveRow->addWidget(Extract);
@@ -150,6 +147,9 @@ PackageReviewDialog::PackageReviewDialog(const QString &WorkerPath,
   Registry->setObjectName(QStringLiteral("packageRegistry"));
   Registry->setCheckable(true);
   Registry->setChecked(false);
+  // A rule beside the title, no frame: unchecked, the box shows no fields
+  // for a frame to hold.
+  Registry->setFlat(true);
   auto *RegistryOuter = new QVBoxLayout(Registry);
   auto *RegistryFields = new QWidget(Registry);
   RegistryOuter->addWidget(RegistryFields);
@@ -170,7 +170,10 @@ PackageReviewDialog::PackageReviewDialog(const QString &WorkerPath,
   Layout->addWidget(Registry);
   Analyze = new QPushButton(tr("Assess selected evidence"), this);
   Analyze->setObjectName(QStringLiteral("packageAssess"));
-  Layout->addWidget(Analyze);
+  auto *AssessRow = new QHBoxLayout;
+  AssessRow->addWidget(Analyze);
+  AssessRow->addStretch();
+  Layout->addLayout(AssessRow);
   connect(Analyze, &QPushButton::clicked, this, [this] {
     if (!discardUnsaved())
       return;
@@ -276,6 +279,11 @@ PackageReviewDialog::PackageReviewDialog(const QString &WorkerPath,
           &PackageReviewDialog::fillMembers);
   connect(&Session, &PackageSession::assessmentReady, this,
           &PackageReviewDialog::showAssessment);
+  // A file and a directory are two ways in, and neither is the step that
+  // comes next.  Left to Qt, "Preview file…" was the default as the first
+  // push button, and Return in the filter opened its chooser.
+  for (auto *Button : findChildren<QPushButton *>())
+    Button->setAutoDefault(false);
   updateState();
 }
 

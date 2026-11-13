@@ -82,10 +82,11 @@ inline constexpr int kComparisonMinimumWidth = 760;
 /// far apart.
 inline constexpr int kComparisonCommandSpacing = 2;
 inline constexpr int kComparisonCommandGroupSpacing = 12;
-/// The room between the inventory and a function's details: the hairline that
-/// parts them with a layout's spacing on either side, so the controls of
-/// neither pane touch it.
-inline constexpr int kComparisonPaneGutter = 13;
+/// The room between two panes that hold controls, as Binary comparison's
+/// inventory and details, the version graph's snapshots and pages, and MCP
+/// connections' catalog and result: the hairline that parts them with a
+/// layout's spacing on either side, so the controls of neither pane touch it.
+inline constexpr int kPaneGutter = 13;
 /// Keep source code readable below the comparison and paging controls.
 inline constexpr int kComparisonMinimumHeight = 640;
 /// Digest display prefix; full identities remain in row evidence and tooltips.

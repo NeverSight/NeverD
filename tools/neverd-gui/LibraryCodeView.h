@@ -5,6 +5,7 @@
 #include <QSet>
 #include <QVariantList>
 #include <QVector>
+#include <utility>
 
 // A reversible projection of one loaded source page. UTF-8 byte offsets are
 // validated before conversion to Qt's UTF-16 coordinates. The worker's original
@@ -25,7 +26,29 @@ public:
              const QJsonArray &regions, qint64 byteOffset = 0,
              bool keepFolded = false, bool sourceBlocks = false);
   QString text() const { return text_; }
-  QVariantList mappings() const { return mappings_; }
+  /// The rows' mappings as the projection shows them: each on the display
+  /// line its source line moved to, without the rows a folded block hides.
+  /// Read from the projection when first asked for.
+  QVariantList mappings() const;
+  /// The display line the mappings of source row \p sourceLine show on; -1
+  /// for a row that is not of the text or that a folded block hides.
+  int mappedLine(int sourceLine) const;
+  /// Holds the projection as it is through several changes to the source
+  /// or to what is folded, and builds it once as the last hold lets go.  The
+  /// projection, its text, lines and mappings, is not to be read meanwhile.
+  class Hold {
+  public:
+    explicit Hold(LibraryCodeView &view) : view_(view) { ++view_.holds_; }
+    ~Hold() {
+      if (--view_.holds_ == 0 && std::exchange(view_.held_, false))
+        view_.rebuild();
+    }
+    Hold(const Hold &) = delete;
+    Hold &operator=(const Hold &) = delete;
+
+  private:
+    LibraryCodeView &view_;
+  };
   QVariantList regions() const;
   int foldableCount() const;
   /// Some region, library operation or not, shows as its summary.
@@ -101,7 +124,13 @@ private:
   QString original_, text_;
   QString blockStructure_;
   QVector<int> sourceLines_, displayLines_;
-  QVariantList originalMappings_, mappings_;
+  QVariantList originalMappings_;
+  /// The projected mappings, once someone asked for them.
+  mutable QVariantList mappings_;
+  mutable bool mappingsBuilt_ = false;
+  /// Holds open, and whether a build was asked for under them.
+  int holds_ = 0;
+  bool held_ = false;
   QVector<Region> regions_;
   QVector<Segment> segments_;
   QSet<QString> folded_;

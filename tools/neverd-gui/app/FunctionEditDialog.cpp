@@ -27,6 +27,7 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QVBoxLayout>
+#include <utility>
 
 namespace neverd::gui {
 namespace {
@@ -135,6 +136,20 @@ FunctionEditDialog::FunctionEditDialog(const QJsonObject &attributes,
   sizes->addRow(tr("&Purged bytes"), purgedField);
   sizes->addRow(tr("Frame pointer &delta"), shownField(this, {}, frameWhy));
 
+  // Two forms, each with a label column of its own width, started the frame
+  // sizes' fields to the right of the name's: both take the wider column.
+  int labelWidth = 0;
+  QList<QWidget *> labels;
+  for (const QFormLayout *form : {fields, sizes})
+    for (int row = 0; row < form->rowCount(); ++row)
+      if (const QLayoutItem *item = form->itemAt(row, QFormLayout::LabelRole);
+          item && item->widget()) {
+        labels.append(item->widget());
+        labelWidth = qMax(labelWidth, item->widget()->sizeHint().width());
+      }
+  for (QWidget *label : std::as_const(labels))
+    label->setMinimumWidth(labelWidth);
+
   auto *left = new QVBoxLayout;
   left->setSpacing(::neverd::limits::gui_config::kFunctionEditDialogRowSpacing *
                    2);
@@ -145,6 +160,8 @@ FunctionEditDialog::FunctionEditDialog(const QJsonObject &attributes,
   // What the user states, and the flags IDA keeps of a frame NeverD
   // recovers instead.
   auto *flags = new QGroupBox(this);
+  // No title, so no room for one above the frame (theme.qss).
+  flags->setProperty("untitled", true);
   auto *flagRows = new QVBoxLayout(flags);
   flagRows->setSpacing(
       ::neverd::limits::gui_config::kFunctionEditDialogRowSpacing);

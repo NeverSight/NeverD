@@ -2722,6 +2722,7 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
       session(s)->path.ends_with("code-folding.bin") ||
       session(s)->path.ends_with("code-folding-cpp.bin") ||
       session(s)->path.ends_with("code-brackets.bin") ||
+      session(s)->path.ends_with("code-repeats.bin") ||
       session(s)->path.ends_with("local-references.bin") ||
       session(s)->path.ends_with("local-references-cpp.bin") ||
       session(s)->path.ends_with("tab-sync-paged.bin")) {
@@ -2812,6 +2813,27 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
              "  }\n"
              "  return v7;\n"
              "}\n";
+    // Lines that read the same and differ by their numbers alone, after one
+    // that reaches beyond a view; two of them map to one instruction.  Past
+    // the first screens of them, a block folds two lines away above a comment
+    // over lines that holds one more of them, and the text takes two pages.
+    const bool repeats = session(s)->path.ends_with("code-repeats.bin");
+    if (repeats) {
+      full = "#include <stdint.h>\n"
+             "int32_t function_20(int32_t v0) {\n"
+             "  //";
+      for (int i = 0; i < 60; ++i)
+        full += " beyond";
+      full += "\n";
+      for (int i = 0; i < 300; ++i) {
+        if (i == 120)
+          full += "  if (v0) {\n    v0 += 2;\n    v0 += 3;\n  }\n";
+        if (i == 160)
+          full += "  /*\n  v0 += 1;\n  */\n";
+        full += "  v0 += 1;\n";
+      }
+      full += "  return v0;\n}\n";
+    }
     // Brackets of the code, nested and across lines, beside brackets of a
     // string and a comment.
     if (session(s)->path.ends_with("code-brackets.bin"))
@@ -2854,7 +2876,7 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
           (labels && i >= 3 && i <= 6) || (frame && i >= 8 && i <= 10) ||
           (session(s)->path.ends_with("code-edits-mapped.bin") && i == 2) ||
           (numbers && (i == 2 || i == 3)) || (codeFolding && i == 5) ||
-          (paged && i == 550);
+          (paged && i == 550) || (repeats && (i == 3 || i == 4 || i == 6));
       rows.push_back(
           {{"line", i},
            {"object_id", "source:" + std::to_string(i)},

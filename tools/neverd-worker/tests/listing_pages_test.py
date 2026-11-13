@@ -105,6 +105,25 @@ def run(executable):
                                                  page_delta=True))
             assert "lines" in unknown and unknown["etag"] != "no-such-page", unknown
             assert without_name(unknown) == without_name(again), (unknown, again)
+            # Two names a stretch apart, read at once: the lines between them
+            # stand, and only the lines that changed are sent.
+            base = unknown
+            ok(client, "rename", {"address": hex(GLOBAL + 2), "name": "listing_pages_near"})
+            ok(client, "rename", {"address": hex(GLOBAL + 12), "name": "listing_pages_far"})
+            apart = ok(client, "listing", dict(window, if_none_match=base["etag"],
+                                               page_delta=True))
+            assert apart["base"] == base["etag"] and "lines" not in apart, apart
+            whole = ok(client, "listing", dict(window, if_none_match=""))
+            assert without_name(applied(base, apart)) == without_name(whole), (apart, whole)
+            assert len(whole["lines"]) == len(base["lines"]), (base, whole)
+            differing = sum(a != b for a, b in zip(base["lines"], whole["lines"]))
+            runs = [run for operation in apart["delta"] if operation[0] == "items"
+                    for run in operation[2]]
+            sent = sum(len(run[1]) for run in runs if run[0] in ("put", "new"))
+            assert 2 <= differing == sent, (differing, sent, apart)
+            assert [run[0] for run in runs].count("put") >= 2, runs
+            assert any(run[0] == "same" and 0 < i < len(runs) - 1
+                       for i, run in enumerate(runs)), runs
         finally:
             client.close()
 

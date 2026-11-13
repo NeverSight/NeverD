@@ -89,6 +89,9 @@ LineageReleaseView::LineageReleaseView(LineageSession &S, QWidget *Owner)
                    "parent_count", "child_count"},
                   "lineageReleases", Upper);
   UL->addWidget(Releases, 1);
+  // Two rows of two, which a narrow window still has the height for, in
+  // columns as wide as their commands: a third column takes the room that
+  // stretched the four across the page.
   auto *Actions = new QGridLayout;
   Add = button(tr("&Add release…"), "lineageReleaseAdd", Upper);
   Edit = button(tr("&Edit release…"), "lineageReleaseEdit", Upper);
@@ -99,6 +102,7 @@ LineageReleaseView::LineageReleaseView(LineageSession &S, QWidget *Owner)
     Actions->addWidget(B, Position / 2, Position % 2);
     ++Position;
   }
+  Actions->setColumnStretch(2, 1);
   UL->addLayout(Actions);
   Relations->addTab(Upper, tr("Timeline"));
   auto *ParentPane = new QWidget(Relations);

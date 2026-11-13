@@ -4218,6 +4218,11 @@ multiplied into one factor must preserve the same observations. A 63-factor exec
 through CLI and GUI worker source paths. The 32-bit top-column regression
 requires the same 16-node reading at a 256-unit work limit and at the usual
 limit; Z3 verifies the short-budget result.
+Use `--family dynamic-lane --count 12` for 84 products with masks that depend
+on runtime inputs. Half the cases leave one more low bit observable, and
+28 also have a fixed low literal that must stay in the output. The
+native test checks the whole seven-bit input space and wider words with Z3.
+A 63-factor x64 fixture exercises both CLI and GUI worker source paths.
 For latency comparisons, retain per-run and pooled per-input P95, separate
 thread CPU from wall time, and include same-binary A/A controls. Pooling input
 medians can change the sample at the 95th percentile and reverse the apparent
@@ -7230,6 +7235,22 @@ comment's carried read as a whole read gets it without reading that page again b
 reply, leaves a page of no document it holds to the client (`later`), answers unchanged a
 page an edit reaches none of, refuses a read that is no page's alone, and answers none for
 a refused edit or for more than four.
+A code view paints again the rows a change reaches and leaves the others as its
+window keeps them. `WorkbenchTests::aChangePaintsTheRowsItReachesAndNoOther`,
+`aBracketsPartnerIsPaintedAgainInItsOwnRow` and
+`aRowIsPaintedAgainForItsNumberItsMarkOrItsPlaceAlone` change what a view shows in
+each way it changes (the cursor's line, a selection, a highlighted, locked or searched
+word, a bracket's partner lines away, a fold, the focus, a row another row of its
+instruction marks, a line's number, a scroll either way, another style, and a
+highlight no code of the view's sets) and compare, after each, what the window's
+backing store keeps of the view with the view painted whole; a change that reaches
+few rows may paint few. `theViewsThatShowAnEditGoAheadOfTheOthersAtItsRevision` holds
+an edit's page to the line the edit reaches, painted before the others hear of the
+revision. `NeverDGuiPaintedRowsScaled` runs the four at `QT_SCALE_FACTOR=1.25`, where
+the edges of a row round. `NeverDGuiController`, `NeverDGuiPatchKeys` and
+`NeverDGuiSourceVariableTypes` turn `PaintCheck` on: every paint of a code view is
+painted again into a picture of what its paints add up to, which is compared with the
+view painted afresh, and a test after which the two differ fails.
 `NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
 session takes up what the replica keeps of a function's first look, a later session
 lists what asking the engine lists, a new name of a function or of data keeps the

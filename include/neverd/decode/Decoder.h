@@ -402,14 +402,6 @@ private:
   /// ignored 67H in long mode. Shared by full and lightweight decoding.
   void fixupX86MpxDetail(cs_insn *I) const;
 
-  /// Both full and lightweight decodes use the same x86 metadata profile.
-  void fixupX86DecodeMetadata(cs_insn *I) const;
-
-  /// Correct a known long-mode disp32 width misreport only when the complete
-  /// encoded field agrees with the decoded displacement and memory operands.
-  /// Shared by full and lightweight decodes with operand detail enabled.
-  void fixupX86DisplacementDetail(cs_insn *I) const;
-
   /// Correct capstone decode-id quirks on \p I, dispatching to the active
   /// architecture lifter's fixup.
   void fixupDecodedInsn(cs_insn *I) const;

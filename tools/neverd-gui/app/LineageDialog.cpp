@@ -11,6 +11,7 @@
 #include "LineageDialog.h"
 
 #include "../ResourceLimits.h"
+#include "DialogReturnKey.h"
 #include "ElidedLabel.h"
 #include "FlowLayout.h"
 #include "Icons.h"
@@ -62,6 +63,13 @@ QPushButton *button(const QString &Text, const char *Name, QWidget *Parent) {
   B->setObjectName(Name);
   B->setAutoDefault(false);
   return B;
+}
+/// A row for one command at its own width, at the start of the row.
+QHBoxLayout *ownWidth(QPushButton *Button) {
+  auto *Row = new QHBoxLayout;
+  Row->addWidget(Button);
+  Row->addStretch();
+  return Row;
 }
 LineagePageView *page(LineageSession &Session, const QStringList &Titles,
                       const QStringList &Keys, const char *Name,
@@ -117,18 +125,25 @@ LineageDialog::LineageDialog(const QString &Worker, QWidget *Parent)
   Root->addWidget(Scope);
   auto *Split = new QSplitter(this);
   Split->setChildrenCollapsible(false);
+  // The gutter keeps both panes' controls off the line between them; a
+  // margin of the pane's own set its list in from the commands above it,
+  // and the hairline alone had the pages' tabs standing on it.
+  Split->setHandleWidth(limits::kPaneGutter);
+  // Qt's right-to-left splitter geometry can place its first pane one pixel
+  // beyond its own edge, which then cuts a control that reaches the pane's.
+  Split->setContentsMargins(0, 0, 1, 0);
   Root->addWidget(Split, 1);
   auto *Left = new QWidget(Split);
   auto *LeftLayout = new QVBoxLayout(Left);
-  // Keep control frames inside the pane, including the outer edge that Qt's
-  // right-to-left splitter geometry can place one pixel beyond its viewport.
-  LeftLayout->setContentsMargins(Root->spacing(), 0, Root->spacing(), 0);
+  LeftLayout->setContentsMargins(0, 0, 0, 0);
   LeftLayout->addWidget(label(tr("Analyzed snapshots"), Left));
   Versions = page(Session, {tr("Label"), tr("Branch"), tr("Functions")},
                   {"label", "branch", "functions"}, "lineageVersions", Left);
   LeftLayout->addWidget(Versions, 1);
+  // A command keeps its own width under the list it acts on; stretched
+  // across the pane it read as a band.
   Rename = button(tr("Edit &label / branch…"), "lineageMetadata", Left);
-  LeftLayout->addWidget(Rename);
+  LeftLayout->addLayout(ownWidth(Rename));
   Tabs = new QTabWidget(Split);
   Tabs->setObjectName("lineageTabs");
   auto *FunctionPane = new QWidget(Tabs);
@@ -148,7 +163,7 @@ LineageDialog::LineageDialog(const QString &Worker, QWidget *Parent)
       FunctionPane);
   FL->addWidget(Functions, 1);
   Trace = button(tr("&Trace selected function"), "lineageTrace", FunctionPane);
-  FL->addWidget(Trace);
+  FL->addLayout(ownWidth(Trace));
   Tabs->addTab(FunctionPane, tr("Functions"));
   auto *TracePane = new QWidget(Tabs);
   auto *TL = new QVBoxLayout(TracePane);
@@ -239,7 +254,7 @@ LineageDialog::LineageDialog(const QString &Worker, QWidget *Parent)
   CL->addWidget(Conflicts, 1);
   Members = button(tr("Inspect conflict &members…"), "lineageConflictMembers",
                    ConflictPane);
-  CL->addWidget(Members);
+  CL->addLayout(ownWidth(Members));
   Tabs->addTab(ConflictPane, tr("Conflicts"));
   auto *ReviewPane = new QWidget(Tabs);
   auto *RL = new QVBoxLayout(ReviewPane);
@@ -277,6 +292,11 @@ LineageDialog::LineageDialog(const QString &Worker, QWidget *Parent)
   Bottom->addWidget(Status, 1);
   Bottom->addWidget(Progress);
   Root->addLayout(Bottom);
+  // No button here is a default, but QDialog would press the default of a
+  // list this window has opened for Return in its filter.  Adding
+  // comparisons is what the window asks for first, in its own words.
+  leaveWithoutDefaultButton(*this);
+  showAsMainAction(*Add);
   Filter.setSingleShot(true);
   Filter.setInterval(limits::kComparisonGraphDebounceMs);
   connect(Search, &QLineEdit::textChanged, &Filter,

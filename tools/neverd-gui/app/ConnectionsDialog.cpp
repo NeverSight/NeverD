@@ -1,5 +1,7 @@
 #include "ConnectionsDialog.h"
 
+#include "../ResourceLimits.h"
+#include "DialogReturnKey.h"
 #include "Icons.h"
 #include "KeepTranslated.h"
 #include "ModelessDialog.h"
@@ -106,9 +108,16 @@ ConnectionsDialog::ConnectionsDialog(Session &session,
           &ConnectionsDialog::refresh);
   connect(connect_, &QPushButton::clicked, this,
           &ConnectionsDialog::connectOrDisconnect);
+  // Return in a field of the server row connects; the fields take no typing
+  // once a server is connected.
+  for (QLineEdit *field : {endpoint_, arguments_, token_, caFile_})
+    connect(field, &QLineEdit::returnPressed, connect_, &QPushButton::click);
 
   // Catalog and result.
+  // The result's title stood on the edge of the catalog's last tab and read
+  // as a fourth; a gutter parts the panes.
   auto *splitter = new QSplitter(this);
+  splitter->setHandleWidth(::neverd::limits::gui::kPaneGutter);
   auto *left = new QWidget(splitter);
   auto *leftLayout = new QVBoxLayout(left);
   leftLayout->setContentsMargins(0, 0, 0, 0);
@@ -176,6 +185,11 @@ ConnectionsDialog::ConnectionsDialog(Session &session,
           &ConnectionsDialog::refresh);
   connect(&session_, &Session::stateChanged, this, &ConnectionsDialog::refresh);
   connect(this, &QDialog::finished, token_, &QLineEdit::clear);
+  // Sharing the session is not what Return is for: as the first push button
+  // it was the default, and Return in the server path pressed it.  The
+  // window's main action is the one its server row runs.
+  leaveWithoutDefaultButton(*this);
+  showAsMainAction(*connect_);
   keepTranslated(*this, [this, sessionLabel] {
     setWindowTitle(tr("MCP connections"));
     sessionLabel->setText(tr("This NeverD session"));

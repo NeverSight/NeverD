@@ -1,0 +1,287 @@
+//===- AArch64SignalResumeFixtures.def - Darwin sigreturn inputs ------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+ASYNC_FRAME_TEXT(kResumeMapping, "resume_frame")
+ASYNC_FRAME_TEXT(kResumeSymbol, "_resume_frame")
+ASYNC_FRAME_TEXT(kResumeChanged, "-DNEVERD_RESUME_PUBLISHED")
+ASYNC_FRAME_TEXT(kResumeCount, "native_signal_caller_resumptions")
+ASYNC_FRAME_VALUE(unsigned, kResumeProfiles, 4)
+ASYNC_FRAME_VALUE(unsigned, kResumeDepth, 112)
+ASYNC_FRAME_TEXT(kResumeBody, R"asm(
+.text
+.globl _resume_frame
+.p2align 2
+_resume_frame:
+.cfi_startproc
+.cfi_escape 0x2e, 0
+  pacibsp
+  stp x19, x30, [sp, #-112]!
+.cfi_def_cfa_offset 112
+.cfi_offset x19, -112
+.cfi_offset x30, -104
+  stp q8, q9, [sp, #16]
+  stp q10, q11, [sp, #48]
+  stp d12, d13, [sp, #80]
+  stp d14, d15, [sp, #96]
+  mov x19, #0
+  movi v8.16b, #0x28
+  movi v9.16b, #0x29
+  movi v10.16b, #0x2a
+  movi v11.16b, #0x2b
+  movi v12.16b, #0x2c
+  movi v13.16b, #0x2d
+  movi v14.16b, #0x2e
+  movi v15.16b, #0x2f
+#ifdef NEVERD_RESUME_PUBLISHED
+  mov w9, #2
+#else
+  mov w9, #1
+#endif
+  stlr w9, [x0]
+1:ldar w10, [x0]
+  cbnz w10, 1b
+  ldp q8, q9, [sp, #16]
+  ldp q10, q11, [sp, #48]
+  ldp d12, d13, [sp, #80]
+  ldp d14, d15, [sp, #96]
+  ldp x19, x30, [sp], #112
+.cfi_restore x19
+.cfi_restore x30
+.cfi_def_cfa_offset 0
+  mov w0,#0
+  retab
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+
+ASYNC_FRAME_TEXT(kResumeWrapper, R"asm(
+.text
+.globl _invoke_resume
+.p2align 2
+_invoke_resume:
+.cfi_startproc
+  pacibsp
+  stp x29,x30,[sp,#-128]!
+.cfi_def_cfa_offset 128
+.cfi_offset x29,-128
+.cfi_offset x30,-120
+  mov x29,sp
+  stp x19,x20,[sp,#16]
+  str x21,[sp,#32]
+  stp d8,d9,[sp,#48]
+  stp d10,d11,[sp,#64]
+  stp d12,d13,[sp,#80]
+  stp d14,d15,[sp,#96]
+  mov x16,x0
+  mov x0,x1
+  mov x20,x3
+  mov x21,sp
+  mov x19,#0x5319
+  ldp q0,q1,[x2]
+  ldp q2,q3,[x2,#32]
+  ldp q4,q5,[x2,#64]
+  ldp q6,q7,[x2,#96]
+  ldp q8,q9,[x2,#128]
+  ldp q10,q11,[x2,#160]
+  ldp q12,q13,[x2,#192]
+  ldp q14,q15,[x2,#224]
+  ldp q16,q17,[x2,#256]
+  ldp q18,q19,[x2,#288]
+  ldp q20,q21,[x2,#320]
+  ldp q22,q23,[x2,#352]
+  ldp q24,q25,[x2,#384]
+  ldp q26,q27,[x2,#416]
+  ldp q28,q29,[x2,#448]
+  ldp q30,q31,[x2,#480]
+  blraaz x16
+Lresume_return:
+  cmp sp,x21
+  b.ne Lbad_resume
+  cmp x29,x21
+  b.ne Lbad_resume
+  mov x11,#0x5319
+  cmp x19,x11
+  b.ne Lbad_resume
+  adr x11,Lresume_return
+  cmp x30,x11
+  b.ne Lbad_resume
+  stp q0,q1,[x20]
+  stp q2,q3,[x20,#32]
+  stp q4,q5,[x20,#64]
+  stp q6,q7,[x20,#96]
+  stp q8,q9,[x20,#128]
+  stp q10,q11,[x20,#160]
+  stp q12,q13,[x20,#192]
+  stp q14,q15,[x20,#224]
+  stp q16,q17,[x20,#256]
+  stp q18,q19,[x20,#288]
+  stp q20,q21,[x20,#320]
+  stp q22,q23,[x20,#352]
+  stp q24,q25,[x20,#384]
+  stp q26,q27,[x20,#416]
+  stp q28,q29,[x20,#448]
+  stp q30,q31,[x20,#480]
+  mrs x9,fpcr
+  mrs x10,fpsr
+  add x11,x20,#512
+  stp w9,w10,[x11]
+  b Lfinish_resume
+Lbad_resume:
+  mov x0,#0
+Lfinish_resume:
+  ldp d8,d9,[sp,#48]
+  ldp d10,d11,[sp,#64]
+  ldp d12,d13,[sp,#80]
+  ldp d14,d15,[sp,#96]
+  ldp x19,x20,[sp,#16]
+  ldr x21,[sp,#32]
+  ldp x29,x30,[sp],#128
+  retab
+.cfi_endproc
+)asm")
+
+ASYNC_FRAME_TEXT(kResumeDriver, R"c(
+#include "neverd/runtime/DarwinArm64eSystemUnwind.h"
+#include <dlfcn.h>
+#include <inttypes.h>
+#include <pthread.h>
+#include <sched.h>
+#include <signal.h>
+#include <stdatomic.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+enum { vector_count = 32, profile_count = 4, returned = 73 };
+struct vectors {
+  __uint128_t v[vector_count];
+  uint32_t fpcr, fpsr;
+};
+struct plan {
+  uintptr_t begin, end;
+  NDDarwinArm64eUnwindRow row;
+  NDDarwinArm64eSavedGPR x19;
+  NDDarwinArm64eVectorSaves vectors;
+};
+typedef void (*frame)(atomic_int *);
+extern int invoke_resume(frame, atomic_int *, const struct vectors *,
+                         struct vectors *);
+static struct plan plan;
+static struct vectors input, observed;
+static atomic_int ready;
+static pthread_t worker;
+static uintptr_t low, high, alternate_start, alternate_end;
+static volatile sig_atomic_t profile, handled;
+static uint32_t saved_fpcr, saved_fpsr;
+static unsigned tag;
+
+static int read_plan(const char *name, uintptr_t owner) {
+  FILE *f = fopen(name, "r");
+  if (!f) return 0;
+  unsigned l = 0, h = 0;
+  int ok = fscanf(f, "%" SCNuPTR " %" SCNuPTR " %td %td %td %u %u",
+                  &plan.begin, &plan.end, &plan.row.CFAOffset,
+                  &plan.row.LROffset, &plan.x19.CFAOffset, &l, &h) == 7;
+  plan.row.Signing = NDArm64eSignedIBWithCFA;
+  plan.row.SavedLR = true;
+  plan.x19.Register = NDArm64eFirstPreservedGPR;
+  plan.vectors.Complete = true;
+  plan.vectors.LowMask = l;
+  plan.vectors.HighMask = h;
+  for (unsigned d=0; d<NDArm64ePreservedDCount && ok; ++d)
+    ok = fscanf(f, "%td %td", &plan.vectors.LowOffsets[d],
+                &plan.vectors.HighOffsets[d]) == 2;
+  plan.begin += owner;
+  plan.end += owner;
+  return !fclose(f) && ok;
+}
+
+static void observe(int signo, siginfo_t *info, void *data) {
+  (void)info;
+  ucontext_t *uc = data;
+  arm_thread_state64_t *ss = &uc->uc_mcontext->__ss;
+  uintptr_t pc = arm_thread_state64_get_pc(*ss), here = (uintptr_t)&data;
+  if (signo != SIGUSR1 || atomic_load_explicit(&ready,memory_order_acquire) != (int)tag ||
+      pc < plan.begin || pc >= plan.end ||
+      (here >= alternate_start && here < alternate_end) != (profile >= 2))
+    _exit(10);
+  struct __darwin_mcontext64 before = *uc->uc_mcontext;
+  NDDarwinArm64eVectorSaves bad = plan.vectors;
+  bad.HighOffsets[3] = PTRDIFF_MAX;
+  if (ndDarwinArm64eResumeSignalCaller(uc,plan.row,&plan.x19,1,&bad,low,high,false) ||
+      memcmp(&before, uc->uc_mcontext,sizeof(before))) _exit(11);
+  bad = plan.vectors;
+  bad.Complete = false;
+  if (ndDarwinArm64eResumeSignalCaller(uc,plan.row,&plan.x19,1,&bad,low,high,false) ||
+      memcmp(&before, uc->uc_mcontext,sizeof(before))) _exit(12);
+  NDDarwinArm64eUnwindRow wrong = plan.row;
+  wrong.Signing = NDArm64eSigningUnknown;
+  if (ndDarwinArm64eResumeSignalCaller(uc,wrong,&plan.x19,1,&plan.vectors,low,high,false) ||
+      memcmp(&before, uc->uc_mcontext,sizeof(before))) _exit(13);
+  saved_fpcr = before.__ns.__fpcr;
+  saved_fpsr = before.__ns.__fpsr;
+  if (!ndDarwinArm64eResumeSignalCaller(uc,plan.row,&plan.x19,1,&plan.vectors,
+                                        low,high,false)) _exit(14);
+  ss->__x[0] = returned + profile;
+  handled = 1;
+}
+static void *deliver(void *unused) {
+  (void)unused;
+  while (!atomic_load_explicit(&ready,memory_order_acquire)) sched_yield();
+  if (pthread_kill(worker,SIGUSR1)) _exit(15);
+  return 0;
+}
+
+int main(int argc, char **argv) {
+  if (argc != 5) return 1;
+  alarm(30);
+  void *image = dlopen(argv[1], RTLD_NOW|RTLD_LOCAL);
+  if (!image) return 2;
+  frame run = (frame)dlsym(image,"resume_frame");
+  tag = (unsigned)strtoul(argv[3],0,10);
+  if (!run || !read_plan(argv[4],(uintptr_t)ptrauth_strip(run,ptrauth_key_function_pointer) +
+                                 strtoull(argv[2],0,10))) return 3;
+  worker = pthread_self();
+  high = (uintptr_t)pthread_get_stackaddr_np(worker);
+  low = high - pthread_get_stacksize_np(worker);
+  stack_t alt = {.ss_size = SIGSTKSZ};
+  alt.ss_sp = malloc(alt.ss_size);
+  if (!alt.ss_sp || sigaltstack(&alt,0)) return 4;
+  alternate_start = (uintptr_t)alt.ss_sp;
+  alternate_end = alternate_start + alt.ss_size;
+  struct sigaction action = {.sa_sigaction=observe};
+  sigemptyset(&action.sa_mask);
+  sigset_t beforemask, aftermask;
+  if (pthread_sigmask(SIG_SETMASK, 0, &beforemask)) return 5;
+  for (profile = 0; profile < profile_count; ++profile) {
+    if (profile & 1) sigaddset(&beforemask,SIGUSR2);
+    else sigdelset(&beforemask,SIGUSR2);
+    if (pthread_sigmask(SIG_SETMASK,&beforemask,0)) return 5;
+    action.sa_flags = SA_SIGINFO | (profile >= 2 ? SA_ONSTACK : 0);
+    if (sigaction(SIGUSR1,&action,0)) return 6;
+    for (unsigned r=0; r<vector_count; ++r)
+      input.v[r] = ((__uint128_t)(0xd1d2e3e481828384ULL + r + profile) << 64) |
+                   (0xa9bacbdc01020304ULL + r + profile);
+    atomic_store(&ready,0);
+    handled = 0;
+    pthread_t monitor;
+    if (pthread_create(&monitor,0,deliver,0)) return 7;
+    int result = invoke_resume(run,&ready,&input,&observed);
+    if (pthread_join(monitor,0) || !handled || result != returned + profile ||
+        pthread_sigmask(SIG_SETMASK,0,&aftermask) || beforemask != aftermask ||
+        sigaltstack(0,&alt) || (alt.ss_flags & SS_ONSTACK)) return 8;
+    for (unsigned r=0; r<vector_count; ++r) {
+      __uint128_t expected = input.v[r];
+      if (r >= 12 && r <= 15)
+        expected = ((__uint128_t)((0x20 + r) * UINT64_C(0x0101010101010101)) << 64) |
+                   (uint64_t)expected;
+      if (observed.v[r] != expected) return 16 + r;
+    }
+    if (saved_fpcr != observed.fpcr || saved_fpsr != observed.fpsr) return 9;
+  }
+  return dlclose(image);
+}
+)c")

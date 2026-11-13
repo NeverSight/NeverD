@@ -345,7 +345,9 @@ the diagnostic identifies the one-based attempt and the zero-based index in
 `connections` to append or correct. Each consumed exact result or counted
 failure advances the attempt number. Only exact results advance the index.
 When counted failures end the sequence, the diagnostic gives the number of
-failures consumed and the pending attempt number. A pending `connect` retains
+failures consumed and the pending attempt number. Both diagnostics include
+`peer_hex` with the complete IPv4 or IPv6 sockaddr requested by the guest,
+in the same byte order as a `connections` entry. A pending `connect` retains
 no result until a matching outcome is supplied in the input.
 Execution instruction, event and time budgets still bound each
 run. JSON and typed input use the shared validator; decimal strings follow the

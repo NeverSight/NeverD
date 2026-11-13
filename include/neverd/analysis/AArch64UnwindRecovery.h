@@ -41,7 +41,9 @@ struct AArch64RecoveredUnwindRow {
   uint64_t CodeOffset = 0;
   std::optional<unsigned> CFARegister;
   int64_t CFAOffset = 0;
-  std::array<AArch64UnwindRegister, aarch64_unwind::kRegisters> Registers;
+  // GPR columns and the low and high lanes of V8-V15 at kFirstDSlot
+  // and kFirstHighSlot. Unavailable upper lanes are caller-clobbered.
+  std::array<AArch64UnwindRegister, aarch64_unwind::kFrameRegisters> Registers;
   dwarf_eh::AArch64RAQueryResult Signing;
 };
 
@@ -71,11 +73,13 @@ struct AArch64SystemCallerPlan {
   NDDarwinArm64eUnwindRow Frame{};
   std::array<NDDarwinArm64eSavedGPR, NDArm64ePreservedGPRCount> Saved{};
   size_t Count = 0;
+  NDDarwinArm64eVectorSaves Vectors{};
 };
 
 /// Bind a recovered row to its loaded frame address outside a signal handler.
 /// Unknown signing, unrepresentable registers and out-of-frame signing PCs
-/// cannot initialize a native cursor.
+/// cannot initialize a native cursor. Vectors.Complete additionally reports
+/// whether the ordinary Darwin call ABI can resume execution.
 std::optional<AArch64SystemCallerPlan>
 prepareDarwinArm64eSystemCaller(const AArch64RecoveredUnwindRow &Row,
                                 ExceptionAddressRange Range,

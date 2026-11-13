@@ -28,4 +28,6 @@ NEVERD_CHOOSER_FORMAT(FlagRead, 3)
 NEVERD_CHOOSER_FORMAT(FlagWrite, 3)
 NEVERD_CHOOSER_FORMAT(FlagExecute, 3)
 NEVERD_CHOOSER_FORMAT(Direction, 6)
+// One letter that names a kind, as a cross reference's type.
+NEVERD_CHOOSER_FORMAT(Letter, 3)
 #undef NEVERD_CHOOSER_FORMAT

@@ -21,6 +21,8 @@
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
+#include <bitset>
+#include <climits>
 #include <deque>
 #include <map>
 #include <utility>
@@ -67,6 +69,15 @@ std::optional<unsigned> reg(unsigned R) {
   return std::nullopt;
 }
 
+// Capstone reports writes through the smallest view selected by the opcode.
+std::optional<unsigned> preservedDSlot(unsigned R) {
+  for (unsigned First : {AARCH64_REG_B8, AARCH64_REG_H8, AARCH64_REG_S8,
+                         AARCH64_REG_D8, AARCH64_REG_Q8, AARCH64_REG_Z8})
+    if (R >= First && R - First < NDArm64ePreservedDCount)
+      return kFirstDSlot + R - First;
+  return std::nullopt;
+}
+
 bool wide(unsigned R) {
   return R == AARCH64_REG_FP || R == AARCH64_REG_LR || R == AARCH64_REG_SP ||
          R == AARCH64_REG_XZR || (R >= AARCH64_REG_X0 && R <= AARCH64_REG_X28);
@@ -81,7 +92,7 @@ struct Value {
 };
 
 struct State {
-  std::array<Value, kRegisters + 1> Registers;
+  std::array<Value, kFrameRegisters> Registers;
   std::map<int64_t, Value> Stack;
   std::optional<bool> PACM = false;
 };
@@ -104,7 +115,7 @@ bool intersect(Value &A, const Value &B) {
 
 bool merge(State &A, const State &B) {
   bool Changed = intersect(A.PACM, B.PACM);
-  for (unsigned R = 0; R <= kSP; ++R)
+  for (unsigned R = 0; R < kFrameRegisters; ++R)
     Changed |= intersect(A.Registers[R], B.Registers[R]);
   for (auto I = A.Stack.begin(); I != A.Stack.end();) {
     const auto Other = B.Stack.find(I->first);
@@ -132,7 +143,8 @@ struct FrameRow {
   uint32_t OutgoingArgsSize = 0;
   std::optional<unsigned> CFARegister;
   int64_t CFAOffset = 0;
-  std::array<AArch64UnwindRegister, kRegisters> Registers;
+  std::array<AArch64UnwindRegister, kFrameRegisters> Registers;
+  std::bitset<NDArm64ePreservedDCount> DeclaredD;
 };
 
 llvm::Expected<std::map<uint64_t, FrameRow>> frameRows(const DwarfCIE &CIE,
@@ -163,19 +175,28 @@ llvm::Expected<std::map<uint64_t, FrameRow>> frameRows(const DwarfCIE &CIE,
       case CFIOpKind::Offset:
       case CFIOpKind::Restore:
       case CFIOpKind::SameValue:
-      case CFIOpKind::Undefined:
-        if (I.Register >= kRegisters)
-          break; // This stack walker consumes integer register locations only.
+      case CFIOpKind::Undefined: {
+        auto R = I.Register;
+        if (R >= kRegisters) {
+          constexpr unsigned First = kDwarfV0 + NDArm64eFirstPreservedD;
+          if (R < First || R - First >= NDArm64ePreservedDCount)
+            break;
+          const unsigned D = R - First;
+          Row.DeclaredD[D] =
+              I.Kind != CFIOpKind::Restore || Initial.DeclaredD[D];
+          R = kFirstDSlot + D;
+        }
         if (I.Kind == CFIOpKind::Offset)
-          Row.Registers[I.Register] = {AArch64UnwindRegister::AtCFA, I.Offset};
+          Row.Registers[R] = {AArch64UnwindRegister::AtCFA, I.Offset};
         else if (I.Kind == CFIOpKind::Restore)
-          Row.Registers[I.Register] = Initial.Registers[I.Register];
+          Row.Registers[R] = Initial.Registers[R];
         else
-          Row.Registers[I.Register] = {I.Kind == CFIOpKind::SameValue
-                                           ? AArch64UnwindRegister::SameValue
-                                           : AArch64UnwindRegister::Undefined,
-                                       0};
+          Row.Registers[R] = {I.Kind == CFIOpKind::SameValue
+                                  ? AArch64UnwindRegister::SameValue
+                                  : AArch64UnwindRegister::Undefined,
+                              0};
         break;
+      }
       case CFIOpKind::RememberState:
         if (Remembered.size() >= Limit)
           return fail(kBudget, AArch64RAQueryStatus::ResourceLimit);
@@ -317,6 +338,33 @@ void memory(State &S, const State &Before, const DecodedInsn &I) {
   const bool Load =
       AddressOp ? AddressOp->isLoad() : WritebackOp && WritebackOp->isLoad();
   const bool Store = Bytes && !Load;
+  if (WritebackOp && WritebackOp->isStructure() && Load) {
+    // Some decoders expose a whole tuple as one written register. Apply the
+    // architecture's register list, including wrapped lists and lane inserts.
+    const auto Op = WritebackOp->structure();
+    for (unsigned I = 0; I < Op.vectors(); ++I) {
+      const auto V = (Op.destination() + I) & kAddressMemoryRegisterMask;
+      const auto D = preservedDSlot(AARCH64_REG_Q0 + V);
+      if (!D)
+        continue;
+      const bool Upper = Op.Lane * Op.ElementBytes >= kRegisterBytes;
+      S.Registers[*D] = Op.laneLoad() && Upper ? Before.Registers[*D] : Value{};
+      const unsigned H = *D + NDArm64ePreservedDCount;
+      S.Registers[H] = Op.laneLoad() && !Upper ? Before.Registers[H] : Value{};
+    }
+  }
+  const auto DiscardOverlapping = [&](int64_t Address, unsigned Size) {
+    for (auto It = S.Stack.begin(); It != S.Stack.end();) {
+      const bool Overlaps =
+          It->first <= Address
+              ? uint64_t(Address) - uint64_t(It->first) < kRegisterBytes
+              : uint64_t(It->first) - uint64_t(Address) < Size;
+      if (Overlaps)
+        It = S.Stack.erase(It);
+      else
+        ++It;
+    }
+  };
   const auto Ops = llvm::ArrayRef(D.operands, D.op_count);
   for (const auto &[Index, Op] : llvm::enumerate(Ops)) {
     if (Op.type != AARCH64_OP_MEM)
@@ -328,6 +376,8 @@ void memory(State &S, const State &Before, const DecodedInsn &I) {
                              ? add(Before.Registers[*Base].StackOffset,
                                    D.post_index ? 0 : Op.mem.disp)
                              : std::nullopt;
+    if (!I.Raw->detail->writeback && WritebackOp && WritebackOp->isStructure())
+      S.Registers[*Base] = Before.Registers[*Base];
     if (I.Raw->detail->writeback) {
       S.Registers[*Base] = {};
       if (D.post_index && Index + 1 < Ops.size()) {
@@ -350,40 +400,44 @@ void memory(State &S, const State &Before, const DecodedInsn &I) {
         S.Stack.clear();
       continue;
     }
-    if (llvm::any_of(Ops.take_front(Index), [](const auto &O) {
-          return O.type != AARCH64_OP_REG ||
-                 (!wide(O.reg) && O.reg != AARCH64_REG_WZR &&
-                  (O.reg < AARCH64_REG_W0 || O.reg > AARCH64_REG_W30));
-        })) {
+    // Structure accesses interleave elements or update individual lanes.
+    // They cannot be treated as flat D/Q saves at successive offsets.
+    if (WritebackOp && WritebackOp->isStructure()) {
+      if (Store)
+        DiscardOverlapping(*Address, WritebackOp->totalAccessBytes());
+      continue;
+    }
+    if (llvm::any_of(Ops.take_front(Index),
+                     [](const auto &O) { return O.type != AARCH64_OP_REG; })) {
       if (Store)
         S.Stack.clear();
       continue;
     }
     for (size_t N = 0; N < Index; ++N) {
-      if (Ops[N].type != AARCH64_OP_REG)
-        continue;
-      const auto R = reg(Ops[N].reg);
-      const bool Wide = wide(Ops[N].reg) && Bytes == kRegisterBytes;
+      const unsigned Reg = Ops[N].reg;
       const auto Slot = add(Address, N * Bytes);
       if (!Slot)
         continue;
-      if (Store) {
-        for (auto It = S.Stack.begin(); It != S.Stack.end();) {
-          const bool Overlaps =
-              It->first <= *Slot
-                  ? uint64_t(*Slot) - uint64_t(It->first) < kRegisterBytes
-                  : uint64_t(It->first) - uint64_t(*Slot) < Bytes;
-          if (Overlaps)
-            It = S.Stack.erase(It);
-          else
-            ++It;
+      if (Store)
+        DiscardOverlapping(*Slot, Bytes);
+      const auto Transfer = [&](unsigned R, int64_t Offset) {
+        if (Store) {
+          if (Before.Registers[R] != Value{})
+            S.Stack[Offset] = Before.Registers[R];
+        } else {
+          const auto It = Before.Stack.find(Offset);
+          if (It != Before.Stack.end())
+            S.Registers[R] = It->second;
         }
-        if (Wide && R && Before.Registers[*R] != Value{})
-          S.Stack[*Slot] = Before.Registers[*R];
-      } else if (Wide && R) {
-        const auto It = Before.Stack.find(*Slot);
-        if (It != Before.Stack.end())
-          S.Registers[*R] = It->second;
+      };
+      if (const auto R = reg(Reg); R && wide(Reg) && Bytes == kRegisterBytes) {
+        Transfer(*R, *Slot);
+      } else if (const auto D = preservedDSlot(Reg);
+                 D && Bytes >= kRegisterBytes) {
+        Transfer(*D, *Slot);
+        if (Bytes == 2 * kRegisterBytes)
+          if (const auto High = add(Slot, kRegisterBytes))
+            Transfer(*D + NDArm64ePreservedDCount, *High);
       }
     }
   }
@@ -400,6 +454,8 @@ void clobberCallState(State &S) {
   for (unsigned R = 0; R < kVolatileEnd; ++R)
     S.Registers[R] = {};
   S.Registers[kLR] = {};
+  for (unsigned R = kFirstHighSlot; R < kFrameRegisters; ++R)
+    S.Registers[R] = {};
   S.PACM = false;
   // A callee owns the stack below its incoming SP, including its red zone.
   discardInactiveStack(S);
@@ -414,9 +470,33 @@ bool transfer(State &S, const State &Before, Decoder &Decode,
   if (cs_regs_access(Decode.getHandle(), I.Raw, Reads, &NumReads, Writes,
                      &NumWrites) != CS_ERR_OK)
     return false;
-  for (const auto R : llvm::ArrayRef(Writes, NumWrites))
+  for (const auto R : llvm::ArrayRef(Writes, NumWrites)) {
     if (const auto Number = reg(R))
       S.Registers[*Number] = {};
+    else if (const auto D = preservedDSlot(R)) {
+      S.Registers[*D] = {};
+      S.Registers[*D + NDArm64ePreservedDCount] = {};
+    }
+  }
+  // INS replaces one element. Capstone names the entire destination Q
+  // register in its write set even when the other 64-bit half survives.
+  if (I.Id == AARCH64_INS_INS && !Ops.empty()) {
+    const auto &Dest = Ops.front();
+    if (Dest.type == AARCH64_OP_REG && Dest.vector_index >= 0)
+      if (const auto D = preservedDSlot(Dest.reg)) {
+        const unsigned Bits = Dest.vas;
+        if (Bits >= AARCH64LAYOUT_VL_B && Bits <= AARCH64LAYOUT_VL_D &&
+            llvm::isPowerOf2_32(Bits)) {
+          const unsigned Offset = unsigned(Dest.vector_index) * Bits;
+          if (Offset < kAddressMemoryVectorBytes * CHAR_BIT) {
+            const unsigned Other = Offset < kRegisterBytes * CHAR_BIT
+                                       ? *D + NDArm64ePreservedDCount
+                                       : *D;
+            S.Registers[Other] = Before.Registers[Other];
+          }
+        }
+      }
+  }
   S.PACM = false;
   const uint32_t Word = readLE<uint32_t>(I.Raw->bytes);
   if (Word == kAArch64PACMEncoding) {
@@ -471,20 +551,25 @@ bool transfer(State &S, const State &Before, Decoder &Decode,
 // Use its register columns when the declared CFA is the incoming SP. Otherwise
 // reconstruct an interrupt row from carriers that agree on every path.
 FrameRow instructionFrameRow(const State &S, const FrameRow *Declared) {
-  if (Declared && add(S.Registers[*Declared->CFARegister].StackOffset,
-                      Declared->CFAOffset) == 0)
-    return *Declared;
-  FrameRow Row;
+  const bool UseCFI =
+      Declared && add(S.Registers[*Declared->CFARegister].StackOffset,
+                      Declared->CFAOffset) == 0;
+  FrameRow Row = UseCFI ? *Declared : FrameRow{};
   const auto SP = S.Registers[kSP].StackOffset;
-  for (unsigned Base : {kSP, kFP}) {
-    const auto Offset = S.Registers[Base].StackOffset;
-    if (Offset && *Offset != INT64_MIN) {
-      Row.CFARegister = Base;
-      Row.CFAOffset = -*Offset;
-      break;
+  if (!UseCFI) {
+    for (unsigned Base : {kSP, kFP}) {
+      const auto Offset = S.Registers[Base].StackOffset;
+      if (Offset && *Offset != INT64_MIN) {
+        Row.CFARegister = Base;
+        Row.CFAOffset = -*Offset;
+        break;
+      }
     }
   }
-  for (unsigned R = 0; R < kRegisters; ++R) {
+  for (unsigned R = UseCFI ? kFirstDSlot : 0; R < kFrameRegisters; ++R) {
+    if (R == kSP ||
+        (UseCFI && R < kFirstHighSlot && Declared->DeclaredD[R - kFirstDSlot]))
+      continue;
     if (Declared &&
         Declared->Registers[R].Location == AArch64UnwindRegister::Undefined) {
       Row.Registers[R] = Declared->Registers[R];
@@ -635,6 +720,8 @@ recoverImplicitFrame(const BinaryImage &Image,
   Entry.Registers[kSP].StackOffset = 0;
   Entry.Registers[kLR].Return = AArch64ReturnAddressState{};
   for (unsigned R = NDArm64eFirstPreservedGPR; R <= kFP; ++R)
+    Entry.Registers[R].IncomingRegister = R;
+  for (unsigned R = kFirstDSlot; R < kFrameRegisters; ++R)
     Entry.Registers[R].IncomingRegister = R;
   States[0] = std::move(Entry);
   std::deque<size_t> Work = {0};
@@ -832,6 +919,24 @@ prepareDarwinArm64eSystemCaller(const AArch64RecoveredUnwindRow &Row,
       Frame.FPOffset = Rule.Offset;
     } else {
       Plan.Saved[Plan.Count++] = {R, static_cast<ptrdiff_t>(Rule.Offset)};
+    }
+  }
+  auto &Vectors = Plan.Vectors;
+  Vectors.Complete = true;
+  for (unsigned D = 0; D < NDArm64ePreservedDCount; ++D) {
+    const auto &Low = Row.Registers[kFirstDSlot + D];
+    const auto &High = Row.Registers[kFirstHighSlot + D];
+    if (Low.Location == AArch64UnwindRegister::AtCFA &&
+        std::in_range<ptrdiff_t>(Low.Offset)) {
+      Vectors.LowMask |= 1u << D;
+      Vectors.LowOffsets[D] = Low.Offset;
+    } else if (Low.Location != AArch64UnwindRegister::SameValue) {
+      Vectors.Complete = false;
+    }
+    if (High.Location == AArch64UnwindRegister::AtCFA &&
+        std::in_range<ptrdiff_t>(High.Offset)) {
+      Vectors.HighMask |= 1u << D;
+      Vectors.HighOffsets[D] = High.Offset;
     }
   }
   const auto &State = *Row.Signing.State;

@@ -13,6 +13,7 @@
 
 #include "neverd/emulation/Limits.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/FormatVariadic.h"
 
@@ -329,8 +330,10 @@ LinuxFiles::network(ServiceKind Kind, const ProcessServiceEvent &Event,
         const auto Reason =
             llvm::formatv(
                 "TCP connection failure contract exhausted after {0} "
-                "supplied failures (attempt {1} has no supplied result)",
-                TCPConnectFailuresConsumed, AttemptNumber)
+                "supplied failures (attempt {1} has no supplied result), "
+                "peer_hex={2}",
+                TCPConnectFailuresConsumed, AttemptNumber,
+                llvm::toHex(Peer, true))
                 .str();
         return unsupported(Result, Reason.c_str());
       }
@@ -339,10 +342,11 @@ LinuxFiles::network(ServiceKind Kind, const ProcessServiceEvent &Event,
     if (MissingResult || Network->Connections[NextConnection].Peer != Peer) {
       const auto Reason =
           llvm::formatv("TCP peer has no matching offline connection attempt "
-                        "(attempt {0}, connection index {1} {2})",
+                        "(attempt {0}, connection index {1} {2}), peer_hex={3}",
                         AttemptNumber, NextConnection,
                         MissingResult ? "has no supplied result"
-                                      : "has a different peer")
+                                      : "has a different peer",
+                        llvm::toHex(Peer, true))
               .str();
       return unsupported(Result, Reason.c_str());
     }

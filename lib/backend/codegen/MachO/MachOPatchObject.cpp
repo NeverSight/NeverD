@@ -24,6 +24,7 @@
 #include "neverd/loader/MachO/MachORelocations.h"
 #include "neverd/object/MachOLayout.h"
 #include "neverd/support/DwarfEH.h"
+#include "neverd/support/ISAEncoding.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -94,6 +95,11 @@ struct NativeMachO {
     uint64_t Address = 0;
   };
   std::map<std::pair<unsigned, bool>, GOTSlot> GOT;
+  struct TLVReference {
+    va_t Address;
+    bool Direct;
+  };
+  std::map<unsigned, TLVReference> TLV;
   // Section index to the sole public weak definition that owns its storage.
   std::map<size_t, unsigned> WeakData;
 };
@@ -117,6 +123,16 @@ MachOUnwindFunctionCounts unwindFunctionCounts(const NativeMachO &Object) {
   return {Object.Symbols.size(), LSDAs};
 }
 
+bool isTLVLoad(unsigned Type) {
+  return Type == ARM64_RELOC_TLVP_LOAD_PAGE21 ||
+         Type == ARM64_RELOC_TLVP_LOAD_PAGEOFF12;
+}
+
+bool isGOTLoad(unsigned Type) {
+  return Type == ARM64_RELOC_GOT_LOAD_PAGE21 ||
+         Type == ARM64_RELOC_GOT_LOAD_PAGEOFF12;
+}
+
 bool isCompactPersonality(const NativeMachO &Object, const Relocation &R) {
   const unsigned Ptr = Object.Image.PointerWidth;
   return Object.CompactSection == R.Section &&
@@ -135,9 +151,8 @@ prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
     Declared.insert(D.Symbol);
   const auto UsesGOT = [&](const Relocation &R) {
     return isCompactPersonality(Object, R) ||
-           R.Type == ARM64_RELOC_POINTER_TO_GOT ||
-           R.Type == ARM64_RELOC_GOT_LOAD_PAGE21 ||
-           R.Type == ARM64_RELOC_GOT_LOAD_PAGEOFF12;
+           R.Type == ARM64_RELOC_POINTER_TO_GOT || isGOTLoad(R.Type) ||
+           isTLVLoad(R.Type);
   };
   if (Object.WeakData.empty() && llvm::none_of(Object.Relocations, UsesGOT))
     return llvm::Error::success();
@@ -236,6 +251,50 @@ prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
     if (!R.External || R.Scattered || R.SubtractVA || R.SubtractSymbol ||
         !Object.Symbols.contains(R.SymbolIndex))
       return fail(kGOTRelocation);
+    if (isTLVLoad(R.Type)) {
+      // A TLVP reference loads the dyld descriptor; the descriptor's own
+      // authenticated resolver chooses the instance for the calling thread.
+      const auto &Symbol = Object.Symbols.at(R.SymbolIndex);
+      if (Symbol.Section || Declared.contains(Symbol.Name) ||
+          R.InstructionAddend || R.Width != sizeof(uint32_t) ||
+          Object.Image.Sections[R.Section].Kind != Kind::Code)
+        return fail(kTLVDescriptor);
+      if (Object.TLV.contains(R.SymbolIndex))
+        continue;
+      const std::string Name = kTLVSymbolPrefix + Symbol.Name;
+      const auto Export = Chains.ThreadLocalDefinitions.find(Name);
+      if (Export != Chains.ThreadLocalDefinitions.end()) {
+        const auto Address = Export->second;
+        const auto *Sec = Original.getSectionFor(Address);
+        const auto Resolver = Original.MachOAuthenticatedPointers.find(Address);
+        if (Providers.contains(Name) || !Sec ||
+            (Sec->Type & SECTION_TYPE) != S_THREAD_LOCAL_VARIABLES ||
+            (Address - Sec->VA) % kTLVDescriptorBytes ||
+            !rangeInBounds(Address - Sec->VA, kTLVDescriptorBytes,
+                           Sec->FileSz) ||
+            Resolver == Original.MachOAuthenticatedPointers.end())
+          return fail(kTLVDescriptor);
+        const auto &P = Resolver->second;
+        if (P.Symbol != kTLVBootstrap || P.Key != kTLVResolverKey || P.Addend ||
+            P.AddressDiversity || P.Diversity || P.WeakImport ||
+            !P.LibraryOrdinal || *P.LibraryOrdinal <= 0 ||
+            !MatchesProvider(P.Symbol, P))
+          return fail(kTLVDescriptor);
+        Object.TLV.emplace(R.SymbolIndex,
+                           NativeMachO::TLVReference{Address, true});
+      } else {
+        const auto Slot = Ordinary.find(Symbol.Name);
+        if (Slot == Ordinary.end())
+          return fail(kTLVDescriptor);
+        const auto &B = Original.DyldBindSlots.at(Slot->second);
+        if (B.Name != Name || !B.LibraryOrdinal || *B.LibraryOrdinal <= 0 ||
+            B.WeakImport)
+          return fail(kTLVDescriptor);
+        Object.TLV.emplace(R.SymbolIndex,
+                           NativeMachO::TLVReference{Slot->second, false});
+      }
+      continue;
+    }
     const auto Key = std::pair{R.SymbolIndex, Personality};
     if (Object.GOT.contains(Key))
       continue;
@@ -1135,16 +1194,18 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
                           return X.second == R.Section;
                         })->first;
     const uint64_t OldP = Object.OldSectionVAs.at(Number) + R.Offset;
-    const bool GOT =
-        R.External &&
-        (Object.Imports.contains(R.SymbolIndex) ||
-         Object.GOT.contains({R.SymbolIndex, false})) &&
-        ((A == Arch::X64 &&
-          (R.Type == X86_64_RELOC_GOT || R.Type == X86_64_RELOC_GOT_LOAD)) ||
-         (A == Arch::AArch64 && (R.Type == ARM64_RELOC_GOT_LOAD_PAGE21 ||
-                                 R.Type == ARM64_RELOC_GOT_LOAD_PAGEOFF12)));
+    const auto TLV = A == Arch::AArch64 && isTLVLoad(R.Type)
+                         ? Object.TLV.find(R.SymbolIndex)
+                         : Object.TLV.end();
+    const bool GOT = R.External &&
+                     (Object.Imports.contains(R.SymbolIndex) ||
+                      Object.GOT.contains({R.SymbolIndex, false})) &&
+                     ((A == Arch::X64 && (R.Type == X86_64_RELOC_GOT ||
+                                          R.Type == X86_64_RELOC_GOT_LOAD)) ||
+                      (A == Arch::AArch64 && isGOTLoad(R.Type)));
     llvm::Expected<uint64_t> Target =
-        GOT           ? llvm::Expected<uint64_t>(
+        TLV != Object.TLV.end() ? llvm::Expected<uint64_t>(TLV->second.Address)
+        : GOT         ? llvm::Expected<uint64_t>(
                             Object.GOT.contains({R.SymbolIndex, false})
                                 ? Object.GOT.at({R.SymbolIndex, false}).Address
                                 : Object.Imports.at(R.SymbolIndex).SlotVA)
@@ -1266,11 +1327,27 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
       }
     } else if (A == Arch::AArch64 &&
                (R.Type == ARM64_RELOC_PAGE21 ||
-                R.Type == ARM64_RELOC_PAGEOFF12 || GOT) &&
+                R.Type == ARM64_RELOC_PAGEOFF12 || GOT ||
+                TLV != Object.TLV.end()) &&
                R.Width == 4) {
-      const uint32_t Old = Raw;
+      uint32_t Old = Raw;
+      if (isTLVLoad(R.Type)) {
+        const bool Page = R.Type == ARM64_RELOC_TLVP_LOAD_PAGE21;
+        const auto RegisterFields = Page ? aarch64::kRdMask : kTLVLoadRegisters;
+        const auto Op = Page ? aarch64::kADRP_Op : kTLVDescriptorLoad;
+        if (TLV == Object.TLV.end() || (Old & ~RegisterFields) != Op)
+          return fail(kTLVInstruction);
+        // dyld owns the local descriptor. Relax its indirect load to the
+        // address calculation that the Darwin linker uses for this export.
+        if (!Page && TLV->second.Direct) {
+          if ((Old & aarch64::kRdMask) == aarch64::kRdMask)
+            return fail(kTLVInstruction);
+          Old = kTLVDescriptorAddress | (Old & RegisterFields);
+        }
+      }
       if (R.Type == ARM64_RELOC_PAGE21 ||
-          R.Type == ARM64_RELOC_GOT_LOAD_PAGE21) {
+          R.Type == ARM64_RELOC_GOT_LOAD_PAGE21 ||
+          R.Type == ARM64_RELOC_TLVP_LOAD_PAGE21) {
         if (!R.PCRel || (Old & 0x9f000000) != 0x90000000 || !R.External)
           return fail("PAGE21 requires a symbolic ADRP");
         V += llvm::APInt(

@@ -9,6 +9,7 @@
 #include "CodeView.h"
 #include "ComparisonDialog.h"
 #include "ConnectionsDialog.h"
+#include "DialogReturnKey.h"
 #include "DisassemblyView.h"
 #include "Docking.h"
 #include "DwarfPromptDialog.h"
@@ -212,6 +213,35 @@ protected:
 };
 
 /// Browse references while keeping the originating analysis pane usable.
+/// The buttons of a dialog that states one correction: Reset, then Cancel and
+/// Apply.
+struct CorrectionButtons {
+  QDialogButtonBox *box;
+  QPushButton *apply;
+  QPushButton *reset;
+};
+
+/// Apply is the step that comes next: it follows Cancel, as every dialog's
+/// primary action does, and takes Return while it can act.  Reset discards
+/// what the user stated, so it stands apart and never takes the key.  Left
+/// to Qt, Reset was the default as the first push button, and Apply, with a
+/// role of its own, stood before Cancel.
+CorrectionButtons correctionButtons(QDialog &dialog) {
+  auto *box =
+      new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel |
+                               QDialogButtonBox::Reset,
+                           &dialog);
+  auto *apply = box->button(QDialogButtonBox::Apply);
+  auto *reset = box->button(QDialogButtonBox::Reset);
+  box->removeButton(apply);
+  box->addButton(apply, QDialogButtonBox::AcceptRole);
+  apply->setDefault(true);
+  reset->setAutoDefault(false);
+  QObject::connect(apply, &QPushButton::clicked, &dialog, &QDialog::accept);
+  QObject::connect(box, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  return {box, apply, reset};
+}
+
 class ReferencesDialog final : public QDialog {
 public:
   ReferencesDialog(Session &session, const AddressSpace &space,
@@ -4416,9 +4446,6 @@ void MainWindow::stringOptionsDialog(const QJsonArray &encodings,
   QDialog dialog(owner);
   dialog.setWindowTitle(tr("String literals"));
   auto *form = new QFormLayout(&dialog);
-  auto *choices = new QWidget(&dialog);
-  auto *column = new QVBoxLayout(choices);
-  column->setContentsMargins(0, 0, 0, 0);
   QStringList chosen;
   for (const auto &name : current.value("encodings").toArray())
     chosen.append(name.toString());
@@ -4442,13 +4469,18 @@ void MainWindow::stringOptionsDialog(const QJsonArray &encodings,
       continue;
     }
     // Plain ASCII has no listing spelling of its own.
+    // Each encoding is a row of the form, the first beside the label: one
+    // field holding them all had the label centered on its first lines, below
+    // the box it names.
     auto *box = new QCheckBox(
-        spelling.isEmpty() ? QStringLiteral("ASCII") : spelling, choices);
+        spelling.isEmpty() ? QStringLiteral("ASCII") : spelling, &dialog);
     box->setChecked(chosen.contains(name));
-    column->addWidget(box);
+    if (boxes.isEmpty())
+      form->addRow(tr("Encodings:"), box);
+    else
+      form->setWidget(form->rowCount(), QFormLayout::FieldRole, box);
     boxes.append({name, box});
   }
-  form->addRow(tr("Encodings:"), choices);
   auto *detect = new QCheckBox(tr("Detect common code pages"), &dialog);
   detect->setChecked(
       !common.isEmpty() &&
@@ -4727,6 +4759,10 @@ void MainWindow::showShortcuts() {
   auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
   connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
   layout->addWidget(buttons);
+  // Close would otherwise be the default, and Return in the filter press it;
+  // it keeps the accent, as the way on from a list that is only read.
+  leaveWithoutDefaultButton(*dialog);
+  showAsMainAction(*buttons->button(QDialogButtonBox::Close));
   filter->setFocus();
   showModelessDialog(dialog, dialog->parentWidget());
 }
@@ -5515,22 +5551,33 @@ void MainWindow::editStackFrame(int mode) {
           }
           layout->addWidget(table);
         }
-        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Apply |
-                                                 QDialogButtonBox::Cancel |
-                                                 QDialogButtonBox::Reset,
-                                             &dialog);
+        const auto buttons = correctionButtons(dialog);
+        buttons.apply->setObjectName("stackFrameApply");
+        buttons.reset->setObjectName("stackFrameReset");
         bool reset = false;
-        buttons->button(QDialogButtonBox::Apply)->setEnabled(stale.isEmpty());
-        connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
-                &dialog, &QDialog::accept);
-        connect(buttons, &QDialogButtonBox::rejected, &dialog,
-                &QDialog::reject);
-        connect(buttons->button(QDialogButtonBox::Reset), &QPushButton::clicked,
-                &dialog, [&] {
-                  reset = true;
-                  dialog.accept();
-                });
-        layout->addWidget(buttons);
+        buttons.apply->setEnabled(stale.isEmpty());
+        connect(buttons.reset, &QPushButton::clicked, &dialog, [&] {
+          reset = true;
+          dialog.accept();
+        });
+        if (!table) {
+          // A few lines stand as tall as they need and stay at the top; in
+          // the height the table takes they drifted apart.
+          layout->addStretch(1);
+          layout->addWidget(buttons.box);
+          const auto fit = [&dialog, layout] {
+            const int needed = layout->totalHeightForWidth(dialog.width());
+            if (dialog.height() < needed)
+              dialog.resize(dialog.width(), needed);
+          };
+          dialog.resize(dialog.width(),
+                        layout->totalHeightForWidth(dialog.width()));
+          // Again once it shows: a platform's frame or font may give the
+          // wrapped text less room than was measured before.
+          QTimer::singleShot(0, &dialog, fit);
+        } else {
+          layout->addWidget(buttons.box);
+        }
         if (dialog.exec() != QDialog::Accepted || session_.epoch() != epoch ||
             session_.revision() != revision || currentFunction() != function)
           return;
@@ -5665,10 +5712,13 @@ void MainWindow::editCallType(bool resetAll) {
         declaration->setPlainText(
             stated.value("declaration").toString("int64_t call(void);"));
         layout->addWidget(declaration);
-        layout->addWidget(new QLabel(
+        // Longer than the dialog is wide: unwrapped, it ended at "default p".
+        auto *actualsLabel = new QLabel(
             tr("Actual variadic argument types for this call, one per line "
                "(use int or double after default promotions):"),
-            &dialog));
+            &dialog);
+        actualsLabel->setWordWrap(true);
+        layout->addWidget(actualsLabel);
         auto *actuals = new QPlainTextEdit(&dialog);
         actuals->setObjectName("callTypeActuals");
         QStringList types;
@@ -5676,25 +5726,15 @@ void MainWindow::editCallType(bool resetAll) {
           types.append(type.toString());
         actuals->setPlainText(types.join('\n'));
         layout->addWidget(actuals);
-        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Apply |
-                                                 QDialogButtonBox::Cancel |
-                                                 QDialogButtonBox::Reset,
-                                             &dialog);
-        buttons->button(QDialogButtonBox::Apply)
-            ->setObjectName("callTypeApply");
-        buttons->button(QDialogButtonBox::Reset)
-            ->setObjectName("callTypeReset");
+        const auto buttons = correctionButtons(dialog);
+        buttons.apply->setObjectName("callTypeApply");
+        buttons.reset->setObjectName("callTypeReset");
         bool reset = false;
-        connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
-                &dialog, &QDialog::accept);
-        connect(buttons, &QDialogButtonBox::rejected, &dialog,
-                &QDialog::reject);
-        connect(buttons->button(QDialogButtonBox::Reset), &QPushButton::clicked,
-                &dialog, [&] {
-                  reset = true;
-                  dialog.accept();
-                });
-        layout->addWidget(buttons);
+        connect(buttons.reset, &QPushButton::clicked, &dialog, [&] {
+          reset = true;
+          dialog.accept();
+        });
+        layout->addWidget(buttons.box);
         if (dialog.exec() != QDialog::Accepted || !view ||
             session_.epoch() != epoch || session_.revision() != revision ||
             view->text()->function() != function ||

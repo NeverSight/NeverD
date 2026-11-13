@@ -210,6 +210,39 @@ private slots:
     QTest::keyClick(&Dialog, Qt::Key_Escape);
     QVERIFY(!Dialog.isVisible());
   }
+  void returnInTheFilterDoesNotReload() {
+    // Reload was the dialog's default by Qt's choice of its first push
+    // button, so Return in the filter fetched the inventory again.
+    Harness H;
+    X87CapabilitiesDialog Dialog(H.Queries);
+    Dialog.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&Dialog));
+    Dialog.setProviderAvailable(true, true);
+    QTRY_COMPARE(H.Sent.size(), 1);
+    H.reply(0);
+    auto *Search = Dialog.findChild<QLineEdit *>("x87Filter");
+    Search->setFocus();
+    QTest::keyClick(Search, Qt::Key_Return);
+    QTest::qWait(50);
+    QCOMPARE(H.Sent.size(), 1);
+    QVERIFY(Dialog.isVisible());
+    // The button itself still takes the key.
+    auto *Reload = Dialog.findChild<QPushButton *>("x87Reload");
+    Reload->setFocus();
+    QTest::keyClick(Reload, Qt::Key_Return);
+    QTRY_COMPARE(H.Sent.size(), 2);
+    // No button is the default; Close, the way on from an inventory that is
+    // only read, wears the accent.
+    QStringList Accented;
+    for (const auto *Button : Dialog.findChildren<QPushButton *>()) {
+      QVERIFY2(!Button->isDefault() && !Button->autoDefault(),
+               qPrintable(Button->text()));
+      if (Button->property("mainAction").toBool())
+        Accented.append(Button->text());
+    }
+    QCOMPARE(Accented, QStringList{QStringLiteral("Close")});
+  }
+
   void errorsAndRetiredResponsesNeverBecomeSupport() {
     Harness H;
     X87CapabilitiesDialog Dialog(H.Queries);

@@ -2,7 +2,9 @@
 
 #include "Address.h"
 #include "LibraryCodeView.h"
+#include "PaintCheck.h"
 #include "StyledText.h"
+#include "Theme.h"
 #include "ViewSearch.h"
 #include "WheelInput.h"
 
@@ -12,7 +14,9 @@
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QRegion>
 #include <QTimer>
+#include <QVarLengthArray>
 #include <QVector>
 #include <QWidget>
 #include <optional>
@@ -20,6 +24,7 @@
 
 class QComboBox;
 class QLabel;
+class QPainter;
 class QToolButton;
 class QMenu;
 
@@ -63,6 +68,16 @@ public:
     bool blockFolded = false;
     /// The line defines a goto label, mapped to the block it labels.
     bool label = false;
+    /// Whether a comment was open where the line begins, and where it ends,
+    /// as highlightLine colored its text.
+    bool commentBefore = false, commentAfter = false;
+    /// The dialect highlightLine colored its text in while the text had no
+    /// source names, where the spans are still those: such a line is colored
+    /// by its text, that dialect and the comment open where it begins alone.
+    /// ColoredOtherwise for a line colored among source names, and for one
+    /// whose spans are a folded summary's or a message's.
+    static constexpr qint8 ColoredOtherwise = -1;
+    qint8 coloredIn = ColoredOtherwise;
   };
 
   CodeText(Session &session, QWidget *parent = nullptr);
@@ -125,6 +140,12 @@ public:
   /// The layouts its lines took from the lines they replaced, which read the
   /// same (rebuildLines).
   quint64 layoutsKept() const { return layoutsKept_; }
+  /// The pages it took whose rows were those of the page it showed there,
+  /// which it had read already.
+  quint64 pageRowsKept() const { return pageRowsKept_; }
+  /// The lines that took the spans of the line that read the same in their
+  /// place, colored as they are to be (rebuildLines).
+  quint64 spansKept() const { return spansKept_; }
   /// All pages of this document arrived successfully. Error text and a
   /// cancelled or partially loaded document are not exportable source.
   bool complete() const { return complete_ && !loading_ && !interrupted_; }
@@ -315,6 +336,76 @@ private:
   void highlightLine(Line &line, bool &inComment) const;
   void updateMetrics();
   void updateRange();
+  /// What every row of the viewport is painted with, beside the theme.
+  struct RowFrame {
+    int width = 0, height = 0, lineHeight = 0, left = 0, gutterChars = 0;
+    qreal charWidth = 0;
+    quint64 style = 0;
+    bool operator==(const RowFrame &) const = default;
+  };
+  /// A fill under a row's text, from one column to another.
+  struct RowFill {
+    int first = 0, last = 0;
+    ColorRole role = ColorRole::ListingHighlight;
+    bool operator==(const RowFill &) const = default;
+  };
+  /// All that one row of the viewport is painted from, beside its frame and
+  /// the theme.  paintRow is given this and nothing of the view, so that two
+  /// rows which compare equal paint the same pixels: a row is painted again
+  /// only where this changed (showChanges).  What a row paints from belongs
+  /// here, or its row is left as it was painted.
+  struct Row {
+    /// The number in the margin, one more than the line's own; 0 for a row
+    /// below the text, which shows the background alone, and UnknownRow for
+    /// one of which nothing is known.
+    int number = 0;
+    QString text;
+    QVector<StyledSpan> spans;
+    /// The cursor's line; else, a marked or a folded one.
+    bool current = false, tinted = false;
+    /// The line heads a block, which is folded or open.
+    bool block = false, blockFolded = false;
+    /// The fills under the text, in the order they are painted.
+    QVarLengthArray<RowFill, 4> fills;
+    /// The columns boxed as a pair of brackets.
+    QVarLengthArray<int, 2> brackets;
+    /// The selected columns; a length below zero where none are.
+    int selectionStart = 0, selectionLength = -1;
+    /// The column the text cursor is drawn at, or -1.
+    int caret = -1;
+    bool operator==(const Row &) const = default;
+  };
+  /// What the rows of one paint share of the view's state.
+  struct RowsContext;
+  RowFrame rowFrame() const;
+  RowsContext rowsContext() const;
+  /// What the line \p index is painted from; a row below the text for none.
+  Row rowAt(int index, const RowsContext &context) const;
+  /// Paints a line over its row's background, which starts at \p y, with
+  /// the layout of its text.
+  static void paintRow(QPainter &painter, const RowFrame &frame, const Row &row,
+                       int y, QTextLayout &layout);
+  /// Paints the rows \p region touches over their background: each from what
+  /// the viewport was last told it shows where \p told, else from what the
+  /// view holds now, \p painted then taking what each row it painted was
+  /// painted from, by the row's place in the viewport.
+  void paintRows(QPainter &painter, const QRegion &region, bool told,
+                 QVector<Row> *painted = nullptr) const;
+  /// The number of a row of which nothing is known.
+  static constexpr int UnknownRow = -1;
+  /// Says that what the view shows changed: every such change ends here, as
+  /// it ended in an update of the whole viewport.  What changed is looked for
+  /// once the one who says so is done (showChanges), so that it may change
+  /// more after saying it, as it might before an update painted.
+  void updateView();
+  /// Has the viewport paint the rows whose painting changed since it was last
+  /// told what they show, and no other.
+  void showChanges();
+  /// Whether every row is painted from what the viewport was last told: not
+  /// so after a change that no one said (updateView), which the view looks
+  /// for as it paints.  \p painted holds what the rows just painted were
+  /// painted from, the others being unknown.
+  bool rowsKnown(const QVector<Row> &painted) const;
   int visibleLines() const;
   int lineAt(int y) const;
   int columnAt(int line, int x) const;
@@ -329,6 +420,27 @@ private:
   // folding projects them, copy and export use them unchanged.
   QString source_;
   QVariantList sourceRows_;
+  /// What a line takes of a source row: the line the row names, as a row
+  /// read by itself names it and as the folded projection reads it, and the
+  /// instructions it maps to.
+  struct SourceRow {
+    int line = -1, projectedLine = 0;
+    QVector<Address> addresses;
+  };
+  /// The rows of sourceRows_, in its order.
+  QVector<SourceRow> rowLines_;
+  /// A page's rows as the worker gave them and as they are read from that.
+  /// A page read again after an edit mostly brings the rows it brought, the
+  /// same array: they are read once.
+  struct PageRows {
+    QJsonArray given;
+    QVariantList read;
+    QVector<SourceRow> lines;
+  };
+  /// The pages' rows of the text being loaded or shown, and those of the
+  /// text shown before it, until the new one is whole.
+  QVector<PageRows> pageRows_, pageRowsBefore_;
+  quint64 pageRowsKept_ = 0;
   QJsonArray regions_;
   qint64 byteOffset_ = 0;
   qint64 sourceBytes_ = 0;
@@ -380,6 +492,7 @@ private:
   /// that read the same take (rebuildLines); let go of when it is whole.
   QList<Line> linesBefore_;
   quint64 layoutsKept_ = 0;
+  quint64 spansKept_ = 0;
   bool foldPreludeAfterLoad_ = true;
   bool foldDetailsAfterLoad_ = true;
   QSet<QString> blocksAfterLoad_;
@@ -460,6 +573,22 @@ private:
   qreal charWidth_ = 8;
   int lineHeight_ = 16, ascent_ = 12, gutterChars_ = 4;
   quint64 styleStamp_ = 1;
+  /// What showChanges last told the viewport its rows show.  The window keeps
+  /// those pixels, or a paint of the rows that changed is on its way.
+  RowFrame knownFrame_;
+  QVector<Row> knownRows_;
+  /// updateView was called and showChanges is still to look.
+  bool viewChanged_ = false;
+  /// showChanges has asked for rows that no paint has painted yet: until
+  /// someone says another change, what it told the viewport is what there is
+  /// to paint.
+  bool rowsTold_ = false;
+  /// The rows showChanges had painted again since a page read ahead of a new
+  /// revision began to be taken (Session::shownRevisionAsked).
+  QRegion rowsUpdated_;
+  /// The picture its paints add up to, kept where a test checks them.
+  PaintCheck::Picture paintChecked_;
+  friend struct CodeTextTestAccess;
 };
 
 /// A pseudocode or IR window: the representation selector over a CodeText.

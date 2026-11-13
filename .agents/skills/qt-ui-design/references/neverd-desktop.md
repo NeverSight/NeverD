@@ -290,7 +290,9 @@ rules below do, not from taste.
   open child window included, and a button without `autoDefault` passes the
   key up to it. Binary comparison presses the button that holds focus,
   compares from an input field only where the inputs differ from the
-  comparison shown, and otherwise swallows the key.
+  comparison shown, and otherwise swallows the key. A window with no
+  default at all calls `leaveWithoutDefaultButton()`, which does the same
+  for it ("Auditing every window" lists the windows that needed it).
 - A spin box's arrow dims where its range ends. Qt marks that arrow `:off`,
   from `stepEnabled`, not `:disabled`.
 - Make hover visible. `ToolBarHover` sat within two levels of the dark
@@ -399,7 +401,9 @@ what lies behind it, composited over each system's own surface (fetched
   unmatching a pair.
 - Let the accent say what comes next. In Binary comparison it sits on Compare
   until a comparison exists, faintly while Compare cannot act yet, and on
-  nothing afterwards.
+  nothing afterwards. That window is the one exception to "every window
+  shows one accent" (Auditing every window, below): it is full of color once
+  a comparison shows, and Compare would only run the same comparison again.
 - Look along every seam. Two shapes of one gray that meet read as one shape:
   the splitter's band and the combo box beside it were both `#3C3C3C`. Leave
   a layout's spacing between a control and any dividing line, and put the
@@ -410,6 +414,257 @@ what lies behind it, composited over each system's own surface (fetched
   and a row that fits offscreen wraps for them. Set the application font's
   point size in the throwaway driver; `QT_FONT_DPI` scales everything, not
   the font.
+
+## Auditing every window
+
+On 2026-11-12, after the rounds on Binary comparison, the user asked for the
+rest: look at every other window, one by one, and fix what does not look
+right. `SKILL.md` section 1.8 holds the method. This is what it found in
+NeverD, where each rule now lives, and what was left alone.
+
+### How the windows were captured
+
+- The interface font is the bundled Noto Sans at the size of the desktop's
+  system font (`Theme::apply` reads `QFontDatabase::systemFont`); the
+  desktop's own family never shows. The user's desktop reports 11 points, the
+  offscreen platform 9, and the code font is the user's saved choice. A
+  capture at the offscreen size is roomier than what the user sees, and a
+  font set after startup leaves the main window's lists at the old size.
+- A throwaway probe took the place of `tests/WidgetsProbe.cpp` at link time
+  (no tracked file changes) in a copy of the delivered bundle, so the real
+  worker analysed a real program. It opened the main window, every dock,
+  every code view, every menu and context menu and each command's window;
+  walked each window's tabs; pressed each button that ends in an ellipsis
+  and each dock's insert and edit buttons to reach the windows behind them;
+  ran a comparison to reach its review windows; repeated the commands from a
+  pseudocode line that calls; and built the load questions from the facts
+  their tests use. 187 captures a theme, each with its widget tree.
+- The executable defined `QFontDatabase::systemFont` itself to report the
+  desktop's size, so every widget was built at it. With the caret steady and
+  input paths fixed, two runs of an untouched build differed only in the
+  status bar's text, Quick start's time and the Windows menu.
+- Not reached: Stack variables (the sample has no function with an exact
+  stack access; it shares its builder with Change stack pointer), the list
+  of a local's occurrences, and what only a plugin or a second instance
+  shows.
+
+### What it found, and where the rule lives
+
+A default nobody chose, in fourteen windows. Qt had made each one's first
+push button the default; a fifteenth pressed a child window's:
+
+| Window | Default by Qt's choice | What Return did |
+|---|---|---|
+| MCP connections | Enable sharing | From the server path, shared the session |
+| Plugin manager | Import plugin… | From the filter, opened the import chooser |
+| Shortcuts | Close | From the filter, closed the list |
+| x87 support | Reload | From the filter, fetched the inventory again |
+| Unwind information | Refresh | Fetched the report again |
+| Offline package review | Preview file… | From the finding filter, opened a file chooser |
+| Change stack pointer, Stack variables, Set call type | Reset | From the offset field, discarded the corrections |
+| Change review, Analyst review, Validate scalar returns | Refresh review, Refresh history, Check again | From a row, ran the review again |
+| Call paths, Region hypotheses | Trace, Inspect primary function | Took the key from the lists |
+| Version comparison graph | None of its own | Pressed the default of a list it had opened |
+
+- A window of tools calls `leaveWithoutDefaultButton()` (`DialogReturnKey.h`):
+  none of its push buttons takes the default as it shows or as the focus
+  moves, Return presses the button that holds the focus and otherwise stays
+  with the control it was typed in, and the dialog swallows what is left.
+  A field that should act on Return connects its own `returnPressed`, as the
+  server row of MCP connections connects.
+- A dialog that states one correction builds its buttons with
+  `correctionButtons()` in `MainWindow.cpp`: Apply takes the accept role, so
+  it follows Cancel and takes Return while it can act; Reset never takes the
+  key. In `QDialogButtonBox`'s GNOME layout a button of the Apply role stands
+  before Cancel. Removing the standard button and adding it again with the
+  accept role keeps its translated text.
+
+The accent stays. The first round of this audit took the default from
+those windows and, with it, their only colored button: the plugin manager
+showed "Import plugin…" in the gray of every other command. The user, the
+same day: "我建议是，不要任何窗口内，只有一个颜色，你给那个导入上个蓝色不行吗？
+还是？多思考思考，到底哪种更好" (no window should be left in one color; can
+the import not be blue? think about which is better). Every other dialog of
+the application has exactly one accent button, About's OK included, and
+the plugin manager's own line of help names the import. So:
+
+- `showAsMainAction(button)` (`DialogReturnKey.h`) sets the `mainAction`
+  property, which `pushButtonFace` in `WorkbenchStyle.cpp` and the
+  `QPushButton[mainAction="true"]` rules of `theme.qss` draw exactly as a
+  default button, enabled and faint. The button is not the default, so
+  Return presses it from no other control and no parent window can.
+  `AppearanceTests::aMainActionWearsTheAccentOfADefault` compares the two
+  to the pixel in the four themes. The dark high contrast theme outlines a
+  default and a plain button alike, as Visual Studio Code's does.
+- Which button, and the evidence for it:
+
+| Window | Main action | Why this one |
+|---|---|---|
+| Plugin manager | Import plugin… | Its line of help asks for it |
+| Version comparison graph | Add comparisons… | Its line of help asks for it |
+| MCP connections | Connect | Return in the server row runs it |
+| Call paths | Trace | Return in the address runs it |
+| Validate scalar returns | Check again | The window's one command |
+| Analyst review | Append assessment | The form's accept; faint until the draft is complete |
+| Choose counterpart | Pair functions | The chooser's accept; faint until a row is chosen |
+| x87 support, Unwind information, Shortcuts | Close | They only show things, as About does under its OK |
+
+- Left without an accent, for the user to choose from renders: Change
+  review, Region hypotheses and Dependency evidence (activating a row runs
+  none of their buttons, and nothing in them names one) and Offline package
+  review (its steps follow one another, so a fixed accent would be wrong
+  half the time and one that moves needs a design of its own).
+- The capture probe writes `main` beside `default` in each window's widget
+  tree; the query is "every window with push buttons has exactly one of the
+  two, or stands on the list above".
+- Kept as chosen: Compare until a comparison exists, Compile to new binary
+  in Rewrite function, Copy in Export data, Next in Find in view, Trace's
+  own Return in the address of Call paths, and the accept buttons of
+  questions.
+- `neverd_gui_web` is a library the workbench links, so Offline package
+  review cannot include the workbench's helper. It turns `autoDefault` off
+  on its own buttons, which is enough for a window that opens only modal
+  children.
+
+One thing drawn two ways:
+
+- Column headings. `QTableView` centers its headings and, through
+  `highlightSections`, draws them bold while a cell of their column is
+  selected; `QTreeView` keeps them left and plain. x87 support's headings
+  turned bold with its first row, and Binary comparison, the version graph
+  and Offline package review stood centered headings beside lists that
+  start theirs at the left. `WorkbenchStyle::polish` now gives every
+  horizontal header the left alignment and no highlighting. A model that
+  returns an alignment for a heading still decides it.
+- The interface font. Offline package review set at least 12 points;
+  `docs/gui.md` states that every window takes the desktop's size.
+- Panes of controls. MCP connections ("History" and "Result" read as two
+  tabs), the version comparison graph (its pages' tabs stood on the line)
+  and Dependency evidence (the operations' title against the side's list)
+  take `kPaneGutter`, the measure Binary comparison's gutter became, and put
+  their first rows level.
+
+Commands and forms:
+
+- A lone `QPushButton` added to a vertical layout takes the layout's width.
+  "Trace selected function" was 835 pixels wide and "Assess selected
+  evidence" 1058. Put it in a row with a stretch after it. The version
+  graph's four release commands keep two rows of two, in columns as wide as
+  their labels beside a stretch column: a `FlowLayout` inside a tab page
+  reports one row as its minimum height, so at the window's minimum size its
+  second row fell below the window in German and Russian.
+- Check a window's own layout tests before removing a margin. The version
+  graph's snapshot pane had a 6-pixel margin on both sides, which set its
+  list in from the commands above; the margin was there because Qt places
+  the first pane of a right-to-left splitter one pixel beyond the splitter's
+  edge, which cuts a control at the pane's. One pixel of the splitter's own
+  right margin now does that, and `LineageTests::localizedWorkspace` holds
+  it in Arabic at 760 pixels.
+- Two `QFormLayout`s in one column size two label columns: Edit function's
+  frame sizes started 17 pixels right of its name. Give every label of both
+  the wider width.
+- `QFormLayout` centers a label on the first lines of a tall field. String
+  literals held every encoding's box in one field, and "Encodings:" stood 7
+  pixels below "ASCII". Make each box a row.
+- A `QGroupBox` keeps the title's room above its frame, 8 pixels, also
+  without a title; Edit function's box of flags started that far below the
+  first field. It sets the `untitled` property, which `theme.qss` reads. A
+  style sheet cannot select `[title=""]`: it treats an empty string property
+  as absent.
+- A checkable group that shows its fields only while checked is flat, which
+  `WorkbenchStyle` draws as the rule beside the title and no sides.
+- A label that does not wrap is cut at the dialog's edge once the desktop's
+  font makes it longer than the dialog ("…after default p" in Set call
+  type); a test at the offscreen font cannot see that, so assert that the
+  long line wraps.
+- A list column starts as wide as its format (`ChooserFormats.def`), and the
+  last column takes what room is left. Cross references gave the type of a
+  reference, one letter, the 24 digits of `Text`, and the address after it
+  ended in an ellipsis; the type takes `Letter`, 3 digits.
+- A `QTreeWidget` in a dialog hints 256 pixels whatever its columns. Add a
+  Type Library opened narrower than its three headings, with a scroll bar
+  across the list; it sets the tree's minimum width from the header's
+  length. A last section that stretches never shrinks below the size it had
+  when it began to stretch, which is Qt's default of 100 pixels for a tree's
+  header, so the list turns the stretch off, sizes every column to its
+  contents, takes its minimum width, and turns the stretch on again. Leaving
+  the stretch off instead ends the last column, and a selected row's
+  highlight, a scroll bar's width before the list's edge: check that the
+  header's length equals the viewport's width, not that it is at most that.
+- A report of JSON reads in the code font (`Theme::codeFont`), as evidence
+  panes do; Validate scalar returns printed it in the interface font.
+
+### Keeping the fixes true on Windows and macOS
+
+The user's condition for the audit: what works here must not break there.
+
+- `gui.yml` runs the appearance suite on real windows on both, at 100% and
+  again with `QT_SCALE_FACTOR=1.5`, before the offscreen `ctest`. A check
+  that counts pixels in `grab()` sees the screen's scale: render into a
+  `QImage` whose device pixel ratio the test sets, as
+  `splitterHandlesKeepAHairlineInTheirRoom` does.
+- Do not compare a widget's picture before and after an event on a real
+  window; activation can fall between the two. Take both once it has
+  settled (the heading check selects a row, then clears the selection).
+- `QFileDialog::getOpenFileName` is native on both. A test that expects no
+  chooser sets `Qt::AA_DontUseNativeDialogs` for its length, so a regression
+  fails there instead of holding the run until it times out.
+- A test that presses a key in a dialog opened over the workbench waits for
+  `dialog->isActiveWindow()`, not for `activeModalWidget()` or `isVisible()`.
+  Return in a code view is "Jump to operand" (`Actions.def`), and a key sent
+  before the dialog is active is taken by that shortcut: the stack
+  correction test failed 2 runs in 25 on one busy processor and none in 40
+  once it waited. Run a new test a few dozen times pinned to a processor
+  that a spinning process shares (`taskset`) before trusting it to a hosted
+  runner.
+- Qt appoints a dialog's default in platform-independent code, but the keys
+  that press a focused button come from the platform theme: GNOME's includes
+  Return, Windows' and macOS' do not. `leaveWithoutDefaultButton()` presses
+  the focused button itself, so all three behave alike.
+- Change stack pointer measures its height before it shows and measures
+  again once shown, growing if a platform's frame or font left its wrapped
+  text less room.
+- The suites that need a real engine (comparison, lineage, source types,
+  web review) are not built by `gui.yml` on any platform. Link them by hand
+  against a qualified bundle's worker before changing their windows, and
+  say in the report that only Linux ran them.
+- Before a change reaches `dev`, push it to a throwaway `ci/` branch and run
+  `gui.yml` on that ref; runs on `dev` are cancelled by the next push.
+  Compare each platform's failures with the last run before the change,
+  per job, and count a cancelled job as no verdict.
+
+### Seen and left alone
+
+Each of these needs the user's word, a change to every window, or new
+strings in eleven languages:
+
+- Single-line controls differ in height by type at 11 points: line edit 30,
+  combo box and button 31, spin box 33 pixels. One height would move every
+  window in every theme.
+- The cross-references list runs to its dialog's edges while the jump lists
+  are inset by the dialog's margin. Its code says the list is meant to.
+- Form labels end in a colon in some dialogs and not in others, and the
+  comparison's review windows carry "— NeverD" in their titles where other
+  windows do not.
+- The File menu grows as wide as its longest recent path and carries its
+  shortcuts away from their commands.
+- "1 bytes" in the structure offset picker.
+- x87 support's rows are 30 pixels high and the tree lists' 22.
+- Unwind information shows two empty panes for an image without DWARF.
+- Region hypotheses' two tables start 6 pixels apart, and Type Libraries'
+  last column ends at the last heading.
+- Jump to function is 720 pixels wide and cuts the last digit of its
+  Length column.
+- Three of the Plugins menu's four entries have no icon, and the Pathfinder
+  dock shows two buttons that both read "Ins".
+- The pseudocode view's context menu has 39 entries and is taller than a
+  1080-pixel screen, where it scrolls.
+- The Windows menu lists the open panes in the order of a `QHash`
+  (`MainWindow::docks_`), so the list, and the pane each of Alt+1 to Alt+9
+  reaches, changes with every launch. Which order it should keep is the
+  user's to say. Two captures of one build differ in that menu, in the
+  status bar's free disk space and in the times of recent files; count
+  those three as the noise floor of a comparison, and nothing else.
 
 ## Hierarchy and proportion
 
@@ -547,7 +802,7 @@ field looked sharp. Chrome boxes and hairlines do not have to look like this.
   `WorkbenchStyle` draws a handle's hairline along the middle of its room,
   under a dock separator's bar while the pointer is over it, so a wider
   handle is a gutter: a layout's spacing on either side of the line
-  (`kComparisonPaneGutter`). Across such a gutter, put what the panes show
+  (`kPaneGutter`). Across such a gutter, put what the panes show
   first on one row (the details' title on the inventory's filters' row), so
   the rows below start level.
 - Verify at 125%, 150% and 175% with
@@ -697,6 +952,17 @@ diff does not establish the appearance of a Qt widget.
     from a stack-allocated object. To show the build before a change from
     the same build directory, link the driver with objects compiled from the
     old sources ahead of the archive.
+11. To see every window, link a probe in place of `tests/WidgetsProbe.cpp`
+    that walks the commands, docks, menus and the buttons that open further
+    windows, and saves each window's picture and widget tree ("Auditing
+    every window"). Run it in a copy of a qualified bundle, on a private copy
+    of a real program, with private `XDG_*` directories; it reaches the
+    probe through `--analysis-test`. Have the executable report the
+    desktop's font size from the start, keep a frozen copy of the build and
+    its sources so the baseline can be captured again after the probe gains
+    a part, and compare before with after per window: first the widget
+    trees, then the pixels. Never start two runs at once on one input
+    directory, and stop a run by its process id.
 
 When reporting an audit, connect each finding to its consequence and proposed
 change: for example, a timestamp beside the filename hides a build suffix, so

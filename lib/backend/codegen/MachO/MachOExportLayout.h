@@ -15,6 +15,7 @@
 
 #include <map>
 namespace neverd {
+struct MachOChainedFixups;
 struct MachOExportLayout {
   uint64_t Flags = 0, Address = 0, Resolver = 0, Ordinal = 0;
   std::string ImportName;
@@ -29,7 +30,6 @@ writeMachOExportLayout(const MachOExportMap &Exports);
 // follows the real header rather than pretending to be ordinary code/data.
 llvm::Expected<std::vector<uint8_t>>
 machOExportIdentities(llvm::ArrayRef<uint8_t> Bytes, uint64_t HeaderVA,
-                      uint32_t FileType,
-                      std::map<std::string, uint64_t> *WeakDefinitions);
+                      uint32_t FileType, MachOChainedFixups *Chained);
 } // namespace neverd
 #endif

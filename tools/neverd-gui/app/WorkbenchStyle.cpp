@@ -363,10 +363,11 @@ DeviceBox fieldFace(const QWidget &field) {
   return face;
 }
 
-/// A push button's face: a dialog's default in the accent, any other in the
-/// button gray, each a shade darker under the pointer.  One that cannot act
-/// recedes to a faint plate (disabledFace); a default one keeps a faint
-/// accent instead, so the dialog's default action stays recognizable.  A
+/// A push button's face: a dialog's default in the accent, as is the main
+/// action of a window that has no default (showAsMainAction), any other in
+/// the button gray, each a shade darker under the pointer.  One that cannot
+/// act recedes to a faint plate (disabledFace); one in the accent keeps a
+/// faint accent instead, so the window's way forward stays recognizable.  A
 /// high contrast theme outlines a button under the pointer in place of the
 /// darker shade.
 DeviceBox pushButtonFace(const QPushButton &button) {
@@ -375,7 +376,8 @@ DeviceBox pushButtonFace(const QPushButton &button) {
   const bool hover = enabled && (option.state & QStyle::State_MouseOver);
   DeviceBox face;
   face.radius = ::neverd::limits::gui_config::kWorkbenchStyleControlRadius;
-  if (option.features & QStyleOptionButton::DefaultButton) {
+  if ((option.features & QStyleOptionButton::DefaultButton) ||
+      button.property("mainAction").toBool()) {
     if (!enabled) {
       face.fill = chrome("ButtonPrimaryDisabled");
       face.border = chrome("ButtonPrimaryDisabledBorder");
@@ -606,11 +608,18 @@ void WorkbenchStyle::drawPrimitive(PrimitiveElement element,
     case PE_IndicatorItemViewItemCheck:
       paintIndicator(element, *option, *painter);
       return;
-    case PE_FrameGroupBox:
-      paintDeviceBox(*painter, option->rect,
-                     DeviceBox{QColor(), chrome("Border"), 1, DeviceBox().edges,
-                               config::kWorkbenchStyleGroupBoxRadius});
+    case PE_FrameGroupBox: {
+      // A flat box is a rule beside its title: it frames nothing, as a box
+      // that shows its fields only while checked would around none of them.
+      const auto *frame = qstyleoption_cast<const QStyleOptionFrame *>(option);
+      const bool flat = frame && (frame->features & QStyleOptionFrame::Flat);
+      paintDeviceBox(
+          *painter, option->rect,
+          DeviceBox{QColor(), chrome("Border"), 1,
+                    flat ? Qt::Edges(Qt::TopEdge) : DeviceBox().edges,
+                    flat ? 0.0 : config::kWorkbenchStyleGroupBoxRadius});
       return;
+    }
     case PE_PanelMenu:
     case PE_FrameMenu:
       // A menu fills first and frames last, over its items.
@@ -1115,10 +1124,18 @@ void WorkbenchStyle::polish(QWidget *widget) {
   // table starts as wide as its heading, in every language.
   if (auto *header = qobject_cast<QHeaderView *>(widget)) {
     header->setTextElideMode(Qt::ElideRight);
-    if (header->orientation() == Qt::Horizontal &&
-        !header->property(FittedHeadings).toBool()) {
-      header->setProperty(FittedHeadings, true);
-      new HeadingFitter(header);
+    if (header->orientation() == Qt::Horizontal) {
+      // A heading starts where its column's text does and keeps its weight.
+      // Qt centers a table's headings and draws them bold while a cell of
+      // their column is selected, where a tree's stay left and plain, so one
+      // window's lists read two ways.  A model that aligns a heading itself
+      // still does.
+      header->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+      header->setHighlightSections(false);
+      if (!header->property(FittedHeadings).toBool()) {
+        header->setProperty(FittedHeadings, true);
+        new HeadingFitter(header);
+      }
     }
   }
   // Qt's own file dialog lists folders and files with the icon theme's

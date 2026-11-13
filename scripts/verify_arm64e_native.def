@@ -319,6 +319,12 @@
     "source": "scripts/arm64e_native_cpta.def",
     "mode": "probe-cpta",
     "observed_key": "native_el0_cpta_observed",
+    "writeback_mode": "writeback",
+    "writeback_suffix": "-writeback",
+    "writeback_key": "ordinary_memory_writeback",
+    "writeback_qualified_key": "x1_el0_checked_writeback_qualified",
+    "writeback_checked": "checked-writeback",
+    "writeback_unchecked": "unchecked-writeback",
     "qualified_key": "x1_el0_cpta_qualified",
     "profiles": {
       "arm64": 0,
@@ -337,6 +343,18 @@
       "-o",
       "{binary}"
     ],
+    "entitlements": {
+      "com.apple.security.hardened-process": true,
+      "com.apple.security.hardened-process.enhanced-security-version-string": "*",
+      "com.apple.security.hardened-process.checked-allocations": true,
+      "com.apple.security.hardened-process.checked-allocations.enforce-checked-pointer-arithmetic-overflow": true
+    },
+    "entitlements_file": "x1-cpta-entitlements.plist",
+    "entitlements_key": "signed_entitlements",
+    "sign_label": "x1-sign",
+    "read_label": "x1-read-entitlements",
+    "sign_command": ["/usr/bin/codesign", "--force", "--sign", "-", "--entitlements", "{plist}", "--generate-entitlement-der", "{binary}"],
+    "read_command": ["/usr/bin/codesign", "-d", "--entitlements", "-", "--xml", "{binary}"],
     "unsupported_compiler": [
       "invalid arch name",
       "unknown target triple",
