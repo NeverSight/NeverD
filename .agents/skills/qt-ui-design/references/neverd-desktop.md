@@ -401,7 +401,9 @@ what lies behind it, composited over each system's own surface (fetched
   unmatching a pair.
 - Let the accent say what comes next. In Binary comparison it sits on Compare
   until a comparison exists, faintly while Compare cannot act yet, and on
-  nothing afterwards.
+  nothing afterwards. That window is the one exception to "every window
+  shows one accent" (Auditing every window, below): it is full of color once
+  a comparison shows, and Compare would only run the same comparison again.
 - Look along every seam. Two shapes of one gray that meet read as one shape:
   the splitter's band and the combo box beside it were both `#3C3C3C`. Leave
   a layout's spacing between a control and any dividing line, and put the
@@ -476,6 +478,45 @@ push button the default; a fifteenth pressed a child window's:
   key. In `QDialogButtonBox`'s GNOME layout a button of the Apply role stands
   before Cancel. Removing the standard button and adding it again with the
   accept role keeps its translated text.
+
+The accent stays. The first round of this audit took the default from
+those windows and, with it, their only colored button: the plugin manager
+showed "Import plugin…" in the gray of every other command. The user, the
+same day: "我建议是，不要任何窗口内，只有一个颜色，你给那个导入上个蓝色不行吗？
+还是？多思考思考，到底哪种更好" (no window should be left in one color; can
+the import not be blue? think about which is better). Every other dialog of
+the application has exactly one accent button, About's OK included, and
+the plugin manager's own line of help names the import. So:
+
+- `showAsMainAction(button)` (`DialogReturnKey.h`) sets the `mainAction`
+  property, which `pushButtonFace` in `WorkbenchStyle.cpp` and the
+  `QPushButton[mainAction="true"]` rules of `theme.qss` draw exactly as a
+  default button, enabled and faint. The button is not the default, so
+  Return presses it from no other control and no parent window can.
+  `AppearanceTests::aMainActionWearsTheAccentOfADefault` compares the two
+  to the pixel in the four themes. The dark high contrast theme outlines a
+  default and a plain button alike, as Visual Studio Code's does.
+- Which button, and the evidence for it:
+
+| Window | Main action | Why this one |
+|---|---|---|
+| Plugin manager | Import plugin… | Its line of help asks for it |
+| Version comparison graph | Add comparisons… | Its line of help asks for it |
+| MCP connections | Connect | Return in the server row runs it |
+| Call paths | Trace | Return in the address runs it |
+| Validate scalar returns | Check again | The window's one command |
+| Analyst review | Append assessment | The form's accept; faint until the draft is complete |
+| Choose counterpart | Pair functions | The chooser's accept; faint until a row is chosen |
+| x87 support, Unwind information, Shortcuts | Close | They only show things, as About does under its OK |
+
+- Left without an accent, for the user to choose from renders: Change
+  review, Region hypotheses and Dependency evidence (activating a row runs
+  none of their buttons, and nothing in them names one) and Offline package
+  review (its steps follow one another, so a fixed accent would be wrong
+  half the time and one that moves needs a design of its own).
+- The capture probe writes `main` beside `default` in each window's widget
+  tree; the query is "every window with push buttons has exactly one of the
+  two, or stands on the list above".
 - Kept as chosen: Compare until a comparison exists, Compile to new binary
   in Rewrite function, Copy in Export data, Next in Find in view, Trace's
   own Return in the address of Call paths, and the accept buttons of
