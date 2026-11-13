@@ -1376,3 +1376,9 @@ lifecycles. Xcode 27 built and signed the x1 probe. Its loader rejected
 the slice on this hardware.
 [Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43462907219)
 and [per-host results](evidence/arm64e-tls-resolver-and-call-setup-2026-11-14.json).
+
+Register-only lifted leaves can also publish integer REV, RBIT and CLZ.
+The object producer uses LLVM's bit-provenance matcher to recognize the
+lifter's shifts and masks. The publication check still compares the emitted
+instruction words and their operands. The byte-reversal and trailing-zero
+fixture compares both entries with independent loops, including a zero input.

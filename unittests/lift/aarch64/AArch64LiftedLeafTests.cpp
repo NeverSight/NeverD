@@ -923,6 +923,9 @@ TEST(AArch64LiftedImage, SignedFrameCallsImportBeforeReadingOriginalGlobal) {
   verifyPublishedLeaves(kGlobalLeaves, kGlobalCaller, kSource, kFramedImport,
                         LeafCheck::FramedImport);
 }
+TEST(AArch64LiftedImage, PublishesByteReversalAndTrailingZeroCount) {
+  verifyPublishedLeaves(kBitLeaves, kBitCaller);
+}
 TEST(AArch64LiftedImage, PublishesMultiplyAccumulateAndVariableShift) {
   verifyPublishedLeaves(kMultiplyLeaves, kMultiplyCaller);
 }

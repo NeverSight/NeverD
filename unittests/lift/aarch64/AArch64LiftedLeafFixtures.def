@@ -693,6 +693,39 @@ _leaf_difference:
 .subsections_via_symbols
 )asm")
 
+A64_LEAF_TEXT(kBitLeaves, R"c(
+#include <stdint.h>
+uint64_t leaf_sum(uint64_t value) {
+  return __builtin_bswap64(value);
+}
+unsigned leaf_difference(uint32_t value) {
+  return __builtin_clzg(__builtin_bitreverse32(value), 32);
+}
+)c")
+A64_LEAF_TEXT(kBitCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  uint64_t (*reverse)(uint64_t) = (uint64_t (*)(uint64_t))dlsym(image, "leaf_sum");
+  unsigned (*trailing)(uint32_t) = (unsigned (*)(uint32_t))dlsym(image, "leaf_difference");
+  if (!reverse || !trailing) return 3;
+  const uint64_t inputs[] = {0, 1, UINT64_C(0x0102030405060708),
+                             UINT64_C(0x80000000), UINT64_MAX};
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(*inputs); ++i) {
+    uint64_t answer = 0;
+    for (unsigned b = 0; b < 8; ++b)
+      answer = (answer << 8) | ((inputs[i] >> (8 * b)) & 255);
+    uint32_t low = inputs[i];
+    unsigned n = 0;
+    while (n < 32 && ((low >> n) & 1) == 0) ++n;
+    if (reverse(inputs[i]) != answer || trailing(low) != n) return 4;
+  }
+  return dlclose(image);
+}
+)c")
 A64_LEAF_TEXT(kMultiplyLeaves, R"c(
 #include <stdint.h>
 uint64_t leaf_sum(uint64_t a, uint64_t b, uint64_t c) { return a * b + c; }
