@@ -748,6 +748,36 @@ TEST(SymSimplifyGuard, MaskedMultiplyPreservesPoisonAndBoundedAdmission) {
     }
 }
 
+TEST(SymSimplifyGuard, ScaledNarrowSignedWordsRequireProvenFlags) {
+  for (unsigned Mode = 0; Mode < 7; ++Mode) {
+    SCOPED_TRACE(Mode);
+    llvm::LLVMContext C;
+    llvm::Module M("narrow_signed_product", C);
+    auto *Ty = llvm::Type::getInt8Ty(C);
+    auto *F = llvm::Function::Create(llvm::FunctionType::get(Ty, {Ty}, false),
+                                     llvm::Function::ExternalLinkage, "f", &M);
+    llvm::IRBuilder<> B(llvm::BasicBlock::Create(C, "entry", F));
+    auto make = [&] {
+      auto *Left =
+          B.CreateShl(F->getArg(0), B.getInt8(4), "", false, Mode == 4);
+      auto *Part = B.CreateAShr(Left, B.getInt8(Mode == 1 ? 5 : 4), "", true);
+      auto *Product =
+          B.CreateMul(Part, B.getInt8(Mode == 2 ? 17 : 8), "", Mode == 5, true);
+      return B.CreateAdd(Product, B.getInt8(Mode == 3 ? 76 : 3), "", Mode == 6,
+                         true);
+    };
+    auto *Root = B.CreateXor(make(), make());
+    B.CreateRet(Root);
+    // At i8 the signed nibble is [-8, 7]. Each rejected variant has an
+    // input violating exactness, the left shift, or a no-wrap condition.
+    auto Result = SymSimplifyPass::constantValueOf(Root);
+    EXPECT_EQ(Result.has_value(), Mode == 0) << printFunction(*F);
+    if (Result)
+      EXPECT_TRUE(Result->isZero());
+    EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+  }
+}
+
 TEST(SymSimplifyGuard, MaskedDisjointOrMatchesExhaustiveByteDomains) {
   llvm::LLVMContext C;
   llvm::Module M("masked_or_domains", C);

@@ -90,22 +90,57 @@ bool safeWidenedShift(const llvm::Instruction &I) {
   return Amount->getValue().ule(ResultWidth - SourceWidth);
 }
 
-struct MaskedAddBounds {
+// (X << K) ashr K sign-extends the low W-K bits. The left shift also
+// proves that all bits discarded by an exact right shift are zero.
+// The translator validates the left shift and its own flags independently.
+unsigned shiftedSignedWidth(const llvm::Instruction &I) {
+  if (I.getOpcode() != llvm::Instruction::AShr || !I.getType()->isIntegerTy())
+    return 0;
+  const auto *Left = llvm::dyn_cast<llvm::BinaryOperator>(I.getOperand(0));
+  const auto *K = llvm::dyn_cast<llvm::ConstantInt>(I.getOperand(1));
+  const unsigned Width = I.getType()->getIntegerBitWidth();
+  if (!Left || Left->getOpcode() != llvm::Instruction::Shl || !K ||
+      Left->getOperand(1) != K || K->getValue().uge(Width))
+    return 0;
+  return Width - K->getZExtValue();
+}
+
+struct MaskedArithmeticBounds {
   llvm::APInt UnsignedMax, SignedMin, SignedMax;
 
-  explicit MaskedAddBounds(unsigned Width)
+  explicit MaskedArithmeticBounds(unsigned Width)
       : UnsignedMax(llvm::APInt::getAllOnes(Width)),
         SignedMin(llvm::APInt::getSignedMinValue(Width)),
         SignedMax(llvm::APInt::getSignedMaxValue(Width)) {}
 };
 
+// The interval extrema of a signed product occur at its four corners.
+bool signedProductBounds(const MaskedArithmeticBounds &Left,
+                         const MaskedArithmeticBounds &Right, llvm::APInt &Min,
+                         llvm::APInt &Max) {
+  Min = llvm::APInt::getSignedMaxValue(Left.SignedMin.getBitWidth());
+  Max = ~Min;
+  for (const auto *L : {&Left.SignedMin, &Left.SignedMax})
+    for (const auto *R : {&Right.SignedMin, &Right.SignedMax}) {
+      bool Overflow;
+      auto Product = L->smul_ov(*R, Overflow);
+      if (Overflow)
+        return false;
+      if (Product.slt(Min))
+        Min = Product;
+      if (Product.sgt(Max))
+        Max = std::move(Product);
+    }
+  return true;
+}
+
 // Compute bounds from values alone, never from nowrap flags, range metadata,
 // assumptions or the instruction being justified. Unknown operations keep the
 // full domain. The small depth/node/width limits bound admission work.
-MaskedAddBounds maskedAddBounds(const llvm::Value *V, unsigned Depth,
+MaskedArithmeticBounds maskedArithmeticBounds(const llvm::Value *V, unsigned Depth,
                                 unsigned &Remaining) {
   const unsigned Width = V->getType()->getIntegerBitWidth();
-  MaskedAddBounds Result(Width);
+  MaskedArithmeticBounds Result(Width);
   if (!Remaining || !Depth)
     return Result;
   --Remaining;
@@ -128,11 +163,28 @@ MaskedAddBounds maskedAddBounds(const llvm::Value *V, unsigned Depth,
       }
     }
   }
-  if (I->getOpcode() != llvm::Instruction::Add)
+  if (const unsigned Bits = shiftedSignedWidth(*I)) {
+    Result.SignedMin = llvm::APInt::getSignedMinValue(Bits).sextOrTrunc(Width);
+    Result.SignedMax = llvm::APInt::getSignedMaxValue(Bits).sextOrTrunc(Width);
     return Result;
-  auto Left = maskedAddBounds(I->getOperand(0), Depth - 1, Remaining);
-  auto Right = maskedAddBounds(I->getOperand(1), Depth - 1, Remaining);
+  }
+  const bool Product = I->getOpcode() == llvm::Instruction::Mul;
+  if (!Product && I->getOpcode() != llvm::Instruction::Add)
+    return Result;
+  auto Left = maskedArithmeticBounds(I->getOperand(0), Depth - 1, Remaining);
+  auto Right = maskedArithmeticBounds(I->getOperand(1), Depth - 1, Remaining);
   bool Overflow;
+  if (Product) {
+    auto UMax = Left.UnsignedMax.umul_ov(Right.UnsignedMax, Overflow);
+    if (!Overflow)
+      Result.UnsignedMax = std::move(UMax);
+    llvm::APInt Min, Max;
+    if (signedProductBounds(Left, Right, Min, Max)) {
+      Result.SignedMin = std::move(Min);
+      Result.SignedMax = std::move(Max);
+    }
+    return Result;
+  }
   auto UMax = Left.UnsignedMax.uadd_ov(Right.UnsignedMax, Overflow);
   if (!Overflow)
     Result.UnsignedMax = std::move(UMax);
@@ -160,8 +212,8 @@ bool safeMaskedArithmetic(const llvm::Instruction &I) {
       kSymSimplifyTranslatorSafeMaskedArithmeticRemaining;
   const unsigned Depth =
       ::neverd::limits::pass::kSymSimplifyTranslatorSafeMaskedArithmeticDepth;
-  auto Left = maskedAddBounds(I.getOperand(0), Depth, Remaining);
-  auto Right = maskedAddBounds(I.getOperand(1), Depth, Remaining);
+  auto Left = maskedArithmeticBounds(I.getOperand(0), Depth, Remaining);
+  auto Right = maskedArithmeticBounds(I.getOperand(1), Depth, Remaining);
   bool Overflow;
   if (I.hasNoUnsignedWrap()) {
     if (Product)
@@ -173,15 +225,8 @@ bool safeMaskedArithmetic(const llvm::Instruction &I) {
   }
   if (I.hasNoSignedWrap()) {
     if (Product) {
-      // Signed multiplication reaches its extrema at interval corners.
-      // Check all four: two negative endpoints can overflow positively.
-      for (const auto *L : {&Left.SignedMin, &Left.SignedMax})
-        for (const auto *R : {&Right.SignedMin, &Right.SignedMax}) {
-          (void)L->smul_ov(*R, Overflow);
-          if (Overflow)
-            return false;
-        }
-      return true;
+      llvm::APInt Min, Max;
+      return signedProductBounds(Left, Right, Min, Max);
     }
     (void)Left.SignedMin.sadd_ov(Right.SignedMin, Overflow);
     if (Overflow)
@@ -270,7 +315,8 @@ bool hasCompatibleSemantics(const llvm::Instruction &I) {
   const bool SafeArithmetic = safeMaskedArithmetic(I);
   const bool SafeOr = safeMaskedOr(I);
   if ((I.hasPoisonGeneratingFlags() && !SafeArithmetic && !SafeOr &&
-       !splitWordAssembly(I) && !safeWidenedShift(I)) ||
+       !splitWordAssembly(I) && !safeWidenedShift(I) &&
+       !shiftedSignedWidth(I)) ||
       I.hasPoisonGeneratingAttributes() || I.hasPoisonGeneratingMetadata())
     return false;
 
@@ -299,8 +345,9 @@ bool hasCompatibleSemantics(const llvm::Instruction &I) {
     return (!HasNoWrap() || safeWidenedShift(I)) && HasInRangeConstantShift();
   case OpTag::LShr:
   case OpTag::AShr:
-    return !llvm::cast<llvm::PossiblyExactOperator>(I).isExact() &&
-           HasInRangeConstantShift();
+    return HasInRangeConstantShift() &&
+           (!llvm::cast<llvm::PossiblyExactOperator>(I).isExact() ||
+            shiftedSignedWidth(I));
   case OpTag::UDiv:
   case OpTag::SDiv:
   case OpTag::URem:
@@ -481,6 +528,11 @@ sym::SymRef Translator::build(const llvm::Instruction &I) {
   case OpTag::LShr:
     return Ctx.mkLShr(M(A), M(B));
   case OpTag::AShr:
+    if (const unsigned Bits = shiftedSignedWidth(I)) {
+      const auto Source = M(llvm::cast<llvm::Instruction>(A)->getOperand(0));
+      if (Source)
+        return Ctx.mkSExt(Ctx.mkExtract(Source, 0, Bits), Width);
+    }
     return Ctx.mkAShr(M(A), M(B));
   case OpTag::UDiv:
     return Ctx.mkUDiv(M(A), M(B));
