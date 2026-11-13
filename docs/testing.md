@@ -23731,7 +23731,8 @@ each of the eight alignments, in both byte orders.
 For physical microMIPS64, run `micro64-merge-store-roundtrip.py` from the same
 directory with `--neverd`, `--cc` (MIPS64 GNU C), `--assembler`, `--linker` and
 `--simulator` (GNU sim for `mipsisa64r2-mti-elf`). It checks the function tags
-in the rebuilt objects and executes both C backends at `-O0` and `-O2`.
+in the rebuilt objects and executes both C backends at `-O0` and `-O2` for
+n32 and n64.
 An invalid-memory branch-likely slot is tested both annulled and executed.
 Bitfield and shuffle kernels cover all 13 classic SPECIAL3 forms and full-width
 fields with independent bit/lane expectations. MIPS64 invalid word inputs are

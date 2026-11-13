@@ -13,12 +13,14 @@ FUNCTIONS = ("mips_merge_store_left_double", "mips_merge_store_right_double",
 SUCCESS = 211
 
 
-def check_micro_functions(path, names):
+def check_micro_functions(path, names, n32):
     with path.open("rb") as stream:
         elf = ELFFile(stream)
         symbols = elf.get_section_by_name(".symtab")
-        if elf.elfclass != 64 or not elf["e_flags"] & 0x02000000:
-            raise ValueError(f"{path.name} has no n64 microMIPS image")
+        flags = elf["e_flags"]
+        if (elf.elfclass != (32 if n32 else 64) or bool(flags & 0x20) != n32
+                or not flags & 0x02000000):
+            raise ValueError(f"{path.name} has unexpected MIPS ABI or encoding")
         for name in names:
             matches = symbols.get_symbol_by_name(name)
             if not matches or not matches[0]["st_other"]["local"] & 4:
@@ -58,13 +60,13 @@ def harness(little):
     return "\n".join(text + data) + "\n", case
 
 
-def run(args, work, little):
+def run(args, work, little, n32):
     order = "little" if little else "big"
     endian = "-EL" if little else "-EB"
-    assemble = [args.assembler, "-mips64r2", "-64", "-mmicromips", endian]
-    link = [args.linker, "-m", f"elf64{'l' if little else 'b'}tsmip", "-N",
-            "-Ttext", "0xffffffff80010000"]
-    cc = [args.cc, "-march=mips64r2", "-mabi=64", "-msoft-float", "-mno-abicalls",
+    assemble = [args.assembler, "-mips64r2", "-n32" if n32 else "-64", "-mmicromips", endian]
+    emulation = f"elf{32 if n32 else 64}{'l' if little else 'b'}tsmip" + ("n32" if n32 else "")
+    link = [args.linker, "-m", emulation, "-N", "-Ttext", "0x80010000" if n32 else "0xffffffff80010000"]
+    cc = [args.cc, "-march=mips64r2", "-mabi=n32" if n32 else "-mabi=64", "-msoft-float", "-mno-abicalls",
           "-fno-pic", "-ffreestanding", "-fno-strict-aliasing", "-Werror=attributes",
           "-G0", endian]
     fixture = Path(__file__).with_name("merge-store-word.S")
@@ -74,7 +76,7 @@ def run(args, work, little):
     (work / "forms.s").write_bytes(b".text\n.set noreorder\n.set micromips\n.set insn32\n" + source)
     subprocess.run([*assemble, "-o", "forms.o", "forms.s"], cwd=work, check=True)
     subprocess.run([*link, "-e", FUNCTIONS[0], "-o", "forms.elf", "forms.o"], cwd=work, check=True)
-    check_micro_functions(work / "forms.elf", FUNCTIONS)
+    check_micro_functions(work / "forms.elf", FUNCTIONS, n32)
     driver, count = harness(little)
     (work / "driver.s").write_text(driver)
     subprocess.run([*assemble, "-o", "driver.o", "driver.s"], cwd=work, check=True)
@@ -82,12 +84,12 @@ def run(args, work, little):
     def execute(objects, label):
         subprocess.run([*link, "-e", "_start", "-o", "run.elf", "driver.o", *objects],
                        cwd=work, check=True)
-        check_micro_functions(work / "run.elf", ("_start", *FUNCTIONS))
+        check_micro_functions(work / "run.elf", ("_start", *FUNCTIONS), n32)
         result = subprocess.run([args.simulator, "--endian", order, "run.elf"], cwd=work,
                                 timeout=30)
         if result.returncode != SUCCESS:
-            raise ValueError(f"{order} {label}: simulator exit {result.returncode}")
-        print(f"{order} {label}: {count} cases passed", flush=True)
+            raise ValueError(f"{emulation} {label}: simulator exit {result.returncode}")
+        print(f"{emulation} {label}: {count} cases passed", flush=True)
 
     execute(["forms.o"], "original")
     (work / "string.h").write_text("#include <stddef.h>\n"
@@ -102,7 +104,7 @@ def run(args, work, little):
             for name in FUNCTIONS:
                 subprocess.run([*cc, "-I.", opt, "-c", f"{name}.c", "-o", f"{name}.o"],
                                cwd=work, check=True)
-                check_micro_functions(work / f"{name}.o", (name,))
+                check_micro_functions(work / f"{name}.o", (name,), n32)
             execute([f"{name}.o" for name in FUNCTIONS], f"{backend} {opt}")
 
 
@@ -112,5 +114,6 @@ if __name__ == "__main__":
         parser.add_argument("--" + flag, type=lambda s: Path(s).absolute(), required=True)
     args = parser.parse_args()
     for little in (False, True):
-        with tempfile.TemporaryDirectory(prefix="neverd-micro64-stores-") as directory:
-            run(args, Path(directory), little)
+        for n32 in (False, True):
+            with tempfile.TemporaryDirectory(prefix="neverd-micro64-stores-") as directory:
+                run(args, Path(directory), little, n32)
