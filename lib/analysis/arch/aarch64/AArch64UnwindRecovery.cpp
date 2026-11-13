@@ -337,6 +337,21 @@ void memory(State &S, const State &Before, const DecodedInsn &I) {
   const bool Load =
       AddressOp ? AddressOp->isLoad() : WritebackOp && WritebackOp->isLoad();
   const bool Store = Bytes && !Load;
+  if (WritebackOp && WritebackOp->isStructure() && Load) {
+    // Some decoders expose a whole tuple as one written register. Apply the
+    // architecture's register list, including wrapped lists and lane inserts.
+    const auto Op = WritebackOp->structure();
+    for (unsigned I = 0; I < Op.vectors(); ++I) {
+      const auto V = (Op.destination() + I) & kAddressMemoryRegisterMask;
+      const auto D = preservedDSlot(AARCH64_REG_Q0 + V);
+      if (!D)
+        continue;
+      const bool Upper = Op.Lane * Op.ElementBytes >= kRegisterBytes;
+      S.Registers[*D] = Op.laneLoad() && Upper ? Before.Registers[*D] : Value{};
+      const unsigned H = *D + NDArm64ePreservedDCount;
+      S.Registers[H] = Op.laneLoad() && !Upper ? Before.Registers[H] : Value{};
+    }
+  }
   const auto Ops = llvm::ArrayRef(D.operands, D.op_count);
   for (const auto &[Index, Op] : llvm::enumerate(Ops)) {
     if (Op.type != AARCH64_OP_MEM)
@@ -514,7 +529,7 @@ FrameRow instructionFrameRow(const State &S, const FrameRow *Declared) {
                       Declared->CFAOffset) == 0;
   FrameRow Row = UseCFI ? *Declared : FrameRow{};
   const auto SP = S.Registers[kSP].StackOffset;
-  if (!UseCFI)
+  if (!UseCFI) {
     for (unsigned Base : {kSP, kFP}) {
       const auto Offset = S.Registers[Base].StackOffset;
       if (Offset && *Offset != INT64_MIN) {
@@ -523,6 +538,7 @@ FrameRow instructionFrameRow(const State &S, const FrameRow *Declared) {
         break;
       }
     }
+  }
   for (unsigned R = UseCFI ? kFirstDSlot : 0; R < kFrameRegisters; ++R) {
     if (R == kSP ||
         (UseCFI && R < kFirstHighSlot && Declared->DeclaredD[R - kFirstDSlot]))

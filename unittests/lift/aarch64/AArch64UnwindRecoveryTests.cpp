@@ -125,6 +125,22 @@ TEST(AArch64ImplicitUnwind, VectorSavesFollowLaneWidthAndPartialOverwrites) {
   }
 }
 
+TEST(AArch64ImplicitUnwind, StructureLoadsInvalidateOnlyWrittenVectorLanes) {
+  for (const auto Load : {LoadV7V8, LoadHighD8, LoadLowD8}) {
+    Frame F{SignB, Load, Nop, AuthB, Ret};
+    auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+    ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+    const auto &Row = aarch64UnwindRowAt(*Rows, 2 * sizeof(uint32_t));
+    const auto Plan =
+        prepareDarwinArm64eSystemCaller(Row, F.Function.CodeRange, 0);
+    ASSERT_TRUE(Plan);
+    EXPECT_EQ(Plan->Vectors.Complete, Load == LoadHighD8);
+    EXPECT_EQ(Row.Registers[kFirstHighSlot].Location ==
+                  AArch64UnwindRegister::SameValue,
+              Load == LoadLowD8);
+  }
+}
+
 TEST(AArch64ImplicitUnwind, DwarfVectorRulesSurviveRestoreState) {
   Frame F{SignB, PushQ8Q9, ClearQ8, Nop, Nop, Nop, PopQ8Q9, AuthB, Ret};
   constexpr unsigned V8 = kDwarfV0 + NDArm64eFirstPreservedD;
