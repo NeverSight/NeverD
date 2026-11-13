@@ -1061,6 +1061,11 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   GlobalDataCache.clear();
   ModuleJumpTableStorageRanges.clear();
   ModuleSuppressibleJumpTableRelocationSlots.clear();
+  ModuleValueDispatchLabels.clear();
+  for (const MedFunc &Func : Funcs)
+    for (const JumpTable &JT : Func.JumpTables)
+      if (JT.ValueDispatch)
+        ModuleValueDispatchLabels.insert(JT.Targets.begin(), JT.Targets.end());
   for (const MedFunc &Func : Funcs)
     for (const JumpTable &JT : Func.JumpTables) {
       ModuleJumpTableStorageRanges.insert(ModuleJumpTableStorageRanges.end(),

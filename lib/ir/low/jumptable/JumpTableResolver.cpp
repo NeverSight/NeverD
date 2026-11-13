@@ -1466,6 +1466,26 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     IndexDomainEvidenceIncompleteBranches.insert(Rec.Addr);
     IncompleteBranchAlreadyInserted = true;
   };
+  // A jump that reads labels of its own function through an exact GOTOFF
+  // field is a dispatch among them, whatever the proofs below conclude about
+  // its GOT base.  Keep that identity before they run: a definitive loss of
+  // the base or of the target role would otherwise leave the jump to
+  // tail-call conversion, which calls into the middle of this function.  The
+  // bookkeeping account pays, as for the markers above, so that a proof
+  // budget of zero keeps the identity too.
+  if (Img.Arch == Arch::X86 && Img.isELF() && Img.getPointerSize() == 4) {
+    const size_t IdentityLookupWork =
+        orderedLookupWork(ValidatedPhysicalJumpTableBranches.size());
+    if (!consumeIncompleteBranchMarkerEvidence(IdentityLookupWork))
+      return {};
+    if (!ValidatedPhysicalJumpTableBranches.count(Rec.Addr) &&
+        jumpReadsOwnLabelsThroughI386GOTOFF(Rec)) {
+      if (!consumeIncompleteBranchMarkerEvidence(IdentityLookupWork +
+                                                 NodeAndCleanupWork))
+        return {};
+      ValidatedPhysicalJumpTableBranches.insert(Rec.Addr);
+    }
+  }
   // Reserve the nested i386 allowance from the candidate/stage aggregate
   // before the query can traverse the graph or publish cache/set state.  The
   // dedicated value-match cap covers both exact proposal bookkeeping and the

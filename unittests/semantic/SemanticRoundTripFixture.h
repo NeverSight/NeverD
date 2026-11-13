@@ -198,7 +198,21 @@ protected:
         while ((SwitchAt = IR.find("switch i", SwitchAt)) !=
                    std::string_view::npos &&
                SwitchAt < BodyEnd) {
-          ++Count;
+          // A dispatch by value compares the jump's target with the labels
+          // it may reach and recovers no table: the emitter marks its switch
+          // after the case list, and it does not count.
+          const size_t Close = IR.find(']', SwitchAt);
+          const size_t CloseEnd = Close == std::string_view::npos
+                                      ? std::string_view::npos
+                                      : IR.find('\n', Close);
+          const bool ByValue =
+              Close != std::string_view::npos && Close < BodyEnd &&
+              IR.substr(Close, CloseEnd == std::string_view::npos
+                                   ? std::string_view::npos
+                                   : CloseEnd - Close)
+                      .find("!neverd.value-dispatch") != std::string_view::npos;
+          if (!ByValue)
+            ++Count;
           SwitchAt += std::string_view("switch i").size();
         }
         return Count;

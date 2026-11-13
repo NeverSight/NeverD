@@ -1245,6 +1245,11 @@ private:
     /// All-path finite scalar target set, independent of memory-table proofs.
     bool ComputedScalarTargets = false;
     bool RejectedComputedTargets = false;
+    /// JumpTableTargets are the labels of this function whose addresses the
+    /// image holds, which the jump reaches by comparing its target with each
+    /// (dispatchUnprovedBranchesByValue).  No proof bounds the target: any
+    /// other value traps.
+    bool ValueDispatch = false;
 
     /// x87 stack-top (TOP) at this instruction's entry/exit in lift (worklist)
     /// order, and whether it absolute-resets TOP (FNINIT/FNCLEX). fixupFpuStack
@@ -1438,6 +1443,11 @@ private:
   /// incoming SP/link words restored on all paths; incomplete frame evidence
   /// retains the branch. Rebuild blocks only when a conversion was accepted.
   void convertIndirectTailCalls(LowFunc &Func);
+  /// Give each indirect jump that kept its branch identity without a proved
+  /// target the address-taken labels of this function as successors, to be
+  /// selected by the value it jumps to.  Such a jump trapped on every value;
+  /// it now traps on every value that is none of those labels.
+  void dispatchUnprovedBranchesByValue(const BinaryImage &Img, LowFunc &Func);
 
   /// Make the block beginning at Func.Entry block 0 and remap every CFG edge
   /// through the same stable permutation.  Block byte ranges are still built
@@ -2285,6 +2295,15 @@ private:
   /// relocation field, owner, and LowIR occurrence.  A numerically equal
   /// scalar or generic R_386_32 field is not interchangeable with this proof.
   bool isExactI386GOTOFFInput(const LowOp &Add, int ConstantSide) const;
+  /// Whether the jump \p Rec computes its target, within its own block, from
+  /// a word that a LOAD reads through an exact R_386_GOTOFF field out of
+  /// code-pointer slots holding labels inside the current function.  Such a
+  /// jump is a dispatch among those labels and no function-pointer tail call,
+  /// whether or not the GOT base its LOAD and its target add is ever proved.
+  /// The answer is where those slots start; it names no targets and proves no
+  /// base.
+  std::optional<va_t>
+  jumpReadsOwnLabelsThroughI386GOTOFF(const InsnRecord &Rec) const;
   /// Prove that the selected input of \p Use must reach an authenticated
   /// I386ELFGOTBaseZero scalar-model output on every CFG path.  The table base
   /// participates in the candidate-local proof-root/cache identity.
@@ -3011,6 +3030,14 @@ private:
   /// tail-call evidence: retain their original opaque indirect-branch identity
   /// and publish the address as unsafe.
   mutable std::set<va_t> StackTableEvidenceIncompleteBranches;
+  /// Indirect jumps that read a frame copy of this function's labels, with
+  /// where the relocated slots it was copied from start
+  /// (resolveStackMaterializedTableSource found the copy).  The proof that
+  /// every path makes the copy can still fail, and no table is recovered
+  /// then; the jump is no tail call for that, since a label is no entry, and
+  /// dispatchUnprovedBranchesByValue sends it to the label its value names.
+  /// An observation is never withdrawn: it claims no target.
+  mutable std::map<va_t, va_t> FrameLabelTableSources;
   /// Branches whose final runtime-index proof was incomplete.  A physical
   /// table shape plus an unfinished mask/domain certificate is not evidence
   /// for either a switch or a function-pointer tail call, so retain the source
@@ -3023,8 +3050,11 @@ private:
   std::set<va_t> ShapeClaimedBranches;
   /// Indirect jumps whose exact physical LOAD/address roles and local table
   /// destinations prove dispatch identity even when selector-domain recovery
-  /// is definitively rejected.  This certificate preserves branch semantics;
-  /// it never authorizes targets or relocation suppression.
+  /// is definitively rejected, and i386 ELF jumps that read labels of their
+  /// own function through an exact GOTOFF field
+  /// (jumpReadsOwnLabelsThroughI386GOTOFF), whose roles need no proof to say
+  /// as much.  This certificate preserves branch semantics; it never
+  /// authorizes targets or relocation suppression.
   std::set<va_t> ValidatedPhysicalJumpTableBranches;
   /// Cross-generation identity of the exact ambiguous MayDepend query.  It
   /// deliberately excludes LowIR variables and proof-root sets: both are

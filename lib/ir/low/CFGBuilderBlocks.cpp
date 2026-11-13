@@ -240,6 +240,7 @@ void CFGBuilder::prepareRelativeRelocationRootSourceCache() {
 void CFGBuilder::rebuildBlocks(LowFunc &Func) {
   Func.Blocks.clear();
   Func.JumpTables.clear();
+  Func.ValueDispatches.clear();
 
   // A boundary can name an address recursive descent never decoded: the end of
   // a guarded range an exception table declared, or the fall-through of a

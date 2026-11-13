@@ -882,7 +882,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
                   return nullptr;
                 const MedOp &Effect = Blk.Ops[EI];
                 if (Effect.Opcode == NdOp::INDIR_BR) {
-                  if (!emitJumpTableSwitch(Blk, Effect, BBMap, EffectBuilder)) {
+                  if (!emitValueDispatch(Blk, Effect, BBMap, EffectBuilder) &&
+                      !emitJumpTableSwitch(Blk, Effect, BBMap, EffectBuilder)) {
                     // A guest virtual address cannot be used as an LLVM
                     // blockaddress.  When recovery did not prove its finite
                     // destination set, fail loudly on the selected path; the
@@ -975,7 +976,8 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
         break;
       }
       if (Op.Opcode == NdOp::INDIR_BR) {
-        if (!emitJumpTableSwitch(Blk, Op, BBMap, Builder) &&
+        if (!emitValueDispatch(Blk, Op, BBMap, Builder) &&
+            !emitJumpTableSwitch(Blk, Op, BBMap, Builder) &&
             !emitAnalysisDispatch(Blk, Op, BBMap, Builder)) {
           // Every INDIR_BR that survives tail-call conversion must have a
           // proved finite destination set.  This includes the selected half of

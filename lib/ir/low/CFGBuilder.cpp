@@ -1371,6 +1371,7 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   EverPublishedJumpTableBranches.clear();
   LostValidatedJumpTableBranches.clear();
   StackTableEvidenceIncompleteBranches.clear();
+  FrameLabelTableSources.clear();
   IndexDomainEvidenceIncompleteBranches.clear();
   ShapeClaimedBranches.clear();
   ValidatedPhysicalJumpTableBranches.clear();
@@ -1670,6 +1671,7 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   if (ScalarTailCalls)
     rebuildBlocks(Func);
   convertIndirectTailCalls(Func);
+  dispatchUnprovedBranchesByValue(Img, Func);
   closeRegistrationCxxContinuations(Img, Dec, Func);
 
   std::set<va_t> ReachableInsnAddrs;
@@ -2281,6 +2283,11 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   PublishFailures(UnsupportedInstructionAddresses,
                   Func.UnsupportedInstructionAddresses);
   PublishFailures(TruncatedPathAddresses, Func.TruncatedPathAddresses);
+  // A dispatch by value proves no target: its jump stays among the unproved
+  // ones, which every reader of that set treats with the same care as before.
+  auto hasNoProvedTarget = [](const InsnRecord &Rec) {
+    return Rec.JumpTableTargets.empty() || Rec.ValueDispatch;
+  };
   for (const auto &[Addr, Rec] : Insns)
     if ((Rec.RejectedScalarBranch || Rec.RejectedComputedTargets) &&
         ReachableInsnAddrs.count(Addr))
@@ -2296,13 +2303,13 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
     for (size_t I = 0; I < GuardedGroupIdentity->MemberCount; ++I) {
       const va_t Addr = GuardedGroupIdentity->Members[I];
       if (auto It = Insns.find(Addr);
-          It != Insns.end() && It->second.JumpTableTargets.empty())
+          It != Insns.end() && hasNoProvedTarget(It->second))
         Func.UnsafeIndirectBranchAddresses.insert(Addr);
     }
   if (PreservePotentialJumpTableBranches)
     for (va_t Addr : PotentialJumpTableBranches) {
       auto It = Insns.find(Addr);
-      if (It != Insns.end() && It->second.JumpTableTargets.empty())
+      if (It != Insns.end() && hasNoProvedTarget(It->second))
         Func.UnsafeIndirectBranchAddresses.insert(Addr);
     }
   Func.EverPublishedJumpTableBranchAddresses.insert(
@@ -2314,17 +2321,21 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   for (va_t Addr : StackTableEvidenceIncompleteBranches)
     if (Insns.count(Addr))
       Func.UnsafeIndirectBranchAddresses.insert(Addr);
+  for (const auto &[Addr, Source] : FrameLabelTableSources)
+    if (auto It = Insns.find(Addr);
+        It != Insns.end() && hasNoProvedTarget(It->second))
+      Func.UnsafeIndirectBranchAddresses.insert(Addr);
   for (va_t Addr : IndexDomainEvidenceIncompleteBranches)
     if (Insns.count(Addr))
       Func.UnsafeIndirectBranchAddresses.insert(Addr);
   if (IncompleteBranchMarkerEvidenceIncomplete)
     for (const auto &[Addr, Rec] : Insns)
       if (Rec.IsBranch && Rec.IsIndirect && !Rec.IsCall && !Rec.IsRet &&
-          !Rec.IsCond && Rec.JumpTableTargets.empty())
+          !Rec.IsCond && hasNoProvedTarget(Rec))
         Func.UnsafeIndirectBranchAddresses.insert(Addr);
   for (va_t Addr : ValidatedPhysicalJumpTableBranches)
     if (auto It = Insns.find(Addr);
-        It != Insns.end() && It->second.JumpTableTargets.empty())
+        It != Insns.end() && hasNoProvedTarget(It->second))
       Func.UnsafeIndirectBranchAddresses.insert(Addr);
   for (va_t Addr : AmbiguousI386GOTPCBranches)
     if (Insns.count(Addr))

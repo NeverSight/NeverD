@@ -934,6 +934,11 @@ llvm::Constant *MedLLVMEmitter::buildCodePtrSegmentGlobal(
       // Writable slots keep their storage, while their initial value uses the
       // same exact symbol/addend identity as an immutable direct GOT load.
       FieldVal = resolveDataSymbolAddress(Binding->second);
+    } else if (K.Kind == PtrSlotKind::Code &&
+               ModuleValueDispatchLabels.count(K.TargetVA)) {
+      // A label a value dispatch reaches: the slot keeps the address the
+      // label had in the image, which is the number that dispatch compares.
+      FieldVal = llvm::ConstantInt::get(PtrIntTy, K.TargetVA);
     } else if (K.Kind == PtrSlotKind::Code) {
       mips::requireNumericCodePointerSource(Img, K.TargetVA);
       llvm::Constant *Target = resolveImageFunctionAddress(K.TargetVA);

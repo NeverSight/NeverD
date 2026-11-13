@@ -36,11 +36,13 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <initializer_list>
 #include <optional>
 #include <set>
 
@@ -55,6 +57,59 @@ static std::string llvmFunctionBody(const std::string &IR,
   std::string::size_type End = IR.find("\n}", Begin);
   return End == std::string::npos ? IR.substr(Begin)
                                   : IR.substr(Begin, End + 2 - Begin);
+}
+
+/// How many switches of the LLVM text \p Body recover a table.  A dispatch by
+/// value compares the jump's target with the labels it may reach and traps on
+/// any other value; the emitter marks its switch after the case list.
+static size_t recoveredSwitchCount(const std::string &Body) {
+  size_t Count = 0;
+  for (std::string::size_type At = Body.find("switch i");
+       At != std::string::npos; At = Body.find("switch i", At + 1)) {
+    const std::string::size_type Close = Body.find(']', At);
+    const std::string::size_type End =
+        Close == std::string::npos ? Close : Body.find('\n', Close);
+    if (Close == std::string::npos ||
+        Body.substr(Close, End == std::string::npos ? End : End - Close)
+                .find("!neverd.value-dispatch") == std::string::npos)
+      ++Count;
+  }
+  return Count;
+}
+
+/// The same for the HighIR text \p Body, where a dispatch by value has the
+/// jump to no address as its default.
+static size_t recoveredHighSwitchCount(const std::string &Body) {
+  static constexpr char Default[] = "default:";
+  static constexpr char NoAddress[] = "goto 0xFFFFFFFFFFFFFFFF;";
+  size_t Count = 0;
+  for (std::string::size_type At = Body.find("switch");
+       At != std::string::npos;) {
+    const std::string::size_type Next = Body.find("switch", At + 1);
+    const std::string Text =
+        Body.substr(At, Next == std::string::npos ? Next : Next - At);
+    std::string::size_type Arm = Text.find(Default);
+    if (Arm != std::string::npos)
+      Arm = Text.find_first_not_of(" \t\r\n", Arm + sizeof(Default) - 1);
+    if (Arm == std::string::npos ||
+        Text.compare(Arm, sizeof(NoAddress) - 1, NoAddress) != 0)
+      ++Count;
+    At = Next;
+  }
+  return Count;
+}
+
+/// Whether no table proved a successor of \p Block: it has none, or the jump
+/// that ends it is a dispatch by value.
+static bool hasNoProvedSuccessor(const neverd::LowFunc &Low,
+                                 const neverd::LowBlock &Block) {
+  if (Block.Succs.empty())
+    return true;
+  return !Block.Ops.empty() &&
+         std::any_of(Low.ValueDispatches.begin(), Low.ValueDispatches.end(),
+                     [&](const neverd::JumpTable &Dispatch) {
+                       return Dispatch.InsnAddr == Block.Ops.back().Addr;
+                     });
 }
 
 struct DirectPipelineRun {
@@ -1706,11 +1761,14 @@ TEST_F(JTE_X86_32, GOTOFFSwitchRequiresExactCallPopAndDataFieldOccurrences) {
   const neverd::LowFunc Unauthenticated = Recover(*Negative);
   EXPECT_TRUE(Unauthenticated.JumpTables.empty())
       << "a numerically equal absolute seed is not an exact GOTPC producer";
-  EXPECT_TRUE(lowFunctionHasOpcode(Unauthenticated, neverd::NdOp::INDIR_CALL));
-  EXPECT_FALSE(lowFunctionHasOpcode(Unauthenticated, neverd::NdOp::INDIR_BR))
-      << "missing model provenance alone must not be mistaken for a scoped "
-         "multiply-owned-field tombstone";
-  EXPECT_TRUE(Unauthenticated.UnsafeIndirectBranchAddresses.empty());
+  // The jump still reads labels of its own function through the exact
+  // field.  A call through the table could reach none of them, so it stays a
+  // branch no proof gives a target, and goes to the label its value names.
+  EXPECT_FALSE(lowFunctionHasOpcode(Unauthenticated, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(lowFunctionHasOpcode(Unauthenticated, neverd::NdOp::INDIR_BR));
+  EXPECT_EQ(Unauthenticated.UnsafeIndirectBranchAddresses.size(), 1u);
+  ASSERT_EQ(Unauthenticated.ValueDispatches.size(), 1u);
+  EXPECT_FALSE(Unauthenticated.ValueDispatches.front().Targets.empty());
 
   std::vector<neverd::va_t> MatchingFields;
   for (const auto &[FieldVA, Field] : Image.DataAddressRelocOperands)
@@ -3045,9 +3103,11 @@ TEST_F(JTE_X86_32, GOTOFFPrivateSpillRejectsMemoryWritingStringIntrinsic) {
   EXPECT_FALSE(Builder.i386GOTOFFGraphQueryBudgetExhaustedForTesting());
   EXPECT_TRUE(Low.EverPublishedJumpTableBranchAddresses.empty());
   EXPECT_TRUE(Low.JumpTables.empty());
-  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
-  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
-  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  // The jump reads labels of its own function, which no call could reach: it
+  // stays a branch without a proved target.
+  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.size(), 1u);
 }
 
 TEST_F(JTE_X86_32, TLSDescWriterFootprintInvalidatesOnlyOverlappingGOTPCField) {
@@ -3436,6 +3496,136 @@ TEST_F(JTE_X86_32,
       LookupExhaustedHasOpcodeAt(Branch->Addr, neverd::NdOp::INDIR_CALL));
   EXPECT_EQ(LookupExhausted.UnsafeIndirectBranchAddresses.count(Branch->Addr),
             1u);
+}
+
+static fs::path i386GOTOFFUnprovedBaseObj() {
+  return fs::path(TEST_OBJ_DIR) / "test_i386_gotoff_unproved_base.o";
+}
+
+/// The labels the four-byte words \p Slots of the table at \p Table hold, in
+/// address order.
+static std::vector<neverd::va_t>
+labelsHeldAt(const neverd::BinaryImage &Image, neverd::va_t Table,
+             std::initializer_list<unsigned> Slots) {
+  std::vector<neverd::va_t> Labels;
+  for (unsigned Slot : Slots) {
+    uint32_t Word = 0;
+    if (const uint8_t *Bytes = Image.readVA(Table + Slot * 4, sizeof(Word)))
+      std::memcpy(&Word, Bytes, sizeof(Word));
+    Labels.push_back(Word);
+  }
+  std::sort(Labels.begin(), Labels.end());
+  return Labels;
+}
+
+// A dispatch over this function's own `case@GOTOFF` words keeps its indirect
+// branch when the GOT base proof is lost for good, and a function-pointer table
+// read the same way still tail calls.
+TEST_F(JTE_X86_32, UnprovedI386GOTOFFDispatchOverOwnLabelsIsNoTailCall) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTOFFUnprovedBaseObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_i386_gotoff_spilled_base");
+  const neverd::Symbol *Branch =
+      Image.findSymbol("jt_i386_gotoff_spilled_base_branch");
+  const neverd::Symbol *Callback =
+      Image.findSymbol("jt_i386_gotoff_callback_tail");
+  const neverd::Symbol *CallbackBranch =
+      Image.findSymbol("jt_i386_gotoff_callback_tail_branch");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Branch, nullptr);
+  ASSERT_NE(Callback, nullptr);
+  ASSERT_NE(CallbackBranch, nullptr);
+
+  auto HasOpcodeAt = [](const neverd::LowFunc &Low, neverd::va_t Addr,
+                        neverd::NdOp Opcode) {
+    for (const neverd::LowBlock &Block : Low.Blocks)
+      for (const neverd::LowOp &Op : Block.Ops)
+        if (Op.Addr == Addr && Op.Opcode == Opcode)
+          return true;
+    return false;
+  };
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(neverd::Arch::X86));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Switch =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  // The store through an unbounded index can write the spilled GOT base, so
+  // no table is recovered ...
+  EXPECT_TRUE(Switch.JumpTables.empty());
+  // ... and the jump among this function's labels is not called through: it
+  // goes to the label its value names.
+  EXPECT_TRUE(HasOpcodeAt(Switch, Branch->Addr, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(HasOpcodeAt(Switch, Branch->Addr, neverd::NdOp::INDIR_CALL));
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_i386_gotoff_spilled_table");
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Switch.ValueDispatches.size(), 1u);
+  const neverd::JumpTable &Dispatch = Switch.ValueDispatches.front();
+  EXPECT_TRUE(Dispatch.ValueDispatch);
+  EXPECT_TRUE(Dispatch.MutatedUnsafe);
+  EXPECT_FALSE(Dispatch.HasBaseAddr);
+  EXPECT_EQ(Dispatch.InsnAddr, Branch->Addr);
+  EXPECT_EQ(Dispatch.Targets, labelsHeldAt(Image, Table->Addr, {0, 1, 2, 3}));
+  ASSERT_EQ(Dispatch.CaseLabels.size(), Dispatch.Targets.size());
+  for (size_t Case = 0; Case < Dispatch.Targets.size(); ++Case)
+    EXPECT_EQ(static_cast<neverd::va_t>(Dispatch.CaseLabels[Case]),
+              Dispatch.Targets[Case]);
+
+  const neverd::LowFunc Tail =
+      Builder.build(Image, Decoder, Callback->Addr, Callback->Name);
+  EXPECT_TRUE(
+      HasOpcodeAt(Tail, CallbackBranch->Addr, neverd::NdOp::INDIR_CALL));
+  EXPECT_FALSE(HasOpcodeAt(Tail, CallbackBranch->Addr, neverd::NdOp::INDIR_BR));
+  EXPECT_TRUE(Tail.UnsafeIndirectBranchAddresses.empty());
+  EXPECT_TRUE(Tail.ValueDispatches.empty());
+}
+
+// Every label is a candidate of a dispatch by value, but a jump reads one
+// table and cannot continue where the code reads a register its caller keeps
+// and no path to the jump has written.
+TEST_F(JTE_X86_32, ADispatchByValueKeepsTheLabelsItsJumpCanTake) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTOFFUnprovedBaseObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_i386_gotoff_two_tables");
+  const neverd::Symbol *First =
+      Image.findSymbol("jt_i386_gotoff_two_tables_first");
+  const neverd::Symbol *Second =
+      Image.findSymbol("jt_i386_gotoff_two_tables_second");
+  const neverd::Symbol *FirstTable =
+      Image.findSymbol("jt_i386_gotoff_two_tables_first_table");
+  const neverd::Symbol *SecondTable =
+      Image.findSymbol("jt_i386_gotoff_two_tables_second_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(First, nullptr);
+  ASSERT_NE(Second, nullptr);
+  ASSERT_NE(FirstTable, nullptr);
+  ASSERT_NE(SecondTable, nullptr);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(neverd::Arch::X86));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  EXPECT_TRUE(Low.JumpTables.empty());
+  ASSERT_EQ(Low.ValueDispatches.size(), 2u);
+  for (const neverd::JumpTable &Dispatch : Low.ValueDispatches) {
+    ASSERT_TRUE(Dispatch.InsnAddr == First->Addr ||
+                Dispatch.InsnAddr == Second->Addr);
+    if (Dispatch.InsnAddr == First->Addr)
+      // The word between names the top of the loop, which adds %ebx.
+      EXPECT_EQ(Dispatch.Targets,
+                labelsHeldAt(Image, FirstTable->Addr, {0, 2}));
+    else
+      EXPECT_EQ(Dispatch.Targets,
+                labelsHeldAt(Image, SecondTable->Addr, {0, 1}));
+  }
 }
 
 TEST_F(JTE_X86_32, I386GOTPCReplayRetiresOnlyTheExactQueryKey) {
@@ -3944,8 +4134,12 @@ TEST_F(JTE_X86_32, StageAbortKeepsAnUnreachedTableShapeOpaque) {
     return false;
   };
 
+  // A completed stage rejects the second dispatch as a table.  Its jump
+  // reads labels of its own function all the same and is no call through
+  // them.
   const neverd::LowFunc Completed = Build(/*AbortAfterFirst=*/false);
-  EXPECT_TRUE(HasOpcodeAt(Completed, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(HasOpcodeAt(Completed, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(HasOpcodeAt(Completed, neverd::NdOp::INDIR_CALL));
 
   const neverd::LowFunc Aborted = Build(/*AbortAfterFirst=*/true);
   EXPECT_TRUE(HasOpcodeAt(Aborted, neverd::NdOp::INDIR_BR));
@@ -5724,8 +5918,18 @@ expectIndirectDispatchHasNoStaticSuccessors(const std::string &Body) {
   const std::string::size_type HeaderEnd = Body.find('\n', Block + 1);
   ASSERT_NE(HeaderEnd, std::string::npos) << Body;
   const std::string Header = Body.substr(Block, HeaderEnd - Block);
-  EXPECT_NE(Header.find("succs=[]"), std::string::npos) << Header << '\n'
-                                                        << Body;
+  if (Header.find("succs=[]") != std::string::npos)
+    return;
+  // Successors no table proved: the dump lists the jump as a dispatch by
+  // value, which goes to the label its target names and traps on any other.
+  const std::string::size_type Address = Body.rfind("[0x", Indirect);
+  ASSERT_NE(Address, std::string::npos) << Body;
+  const std::string::size_type AddressEnd = Body.find('.', Address);
+  ASSERT_NE(AddressEnd, std::string::npos) << Body;
+  const std::string ByValue =
+      "dispatch-by-value: " +
+      Body.substr(Address + 1, AddressEnd - Address - 1) + " ";
+  EXPECT_NE(Body.find(ByValue), std::string::npos) << Header << '\n' << Body;
 }
 
 #define JUMP_TABLE_ENTRY_OBSERVATION_TEXT(Name, Text)                          \
@@ -6839,7 +7043,7 @@ TEST_F(JTE_X86_64, FreshBuilderRetainsPreviouslyPublishedOpaqueBranchIdentity) {
   const std::string Body = llvmFunctionBody(IR, Function->Name);
   ASSERT_FALSE(Body.empty()) << IR;
   EXPECT_NE(Body.find("llvm.trap"), std::string::npos) << Body;
-  EXPECT_EQ(Body.find("switch i"), std::string::npos) << Body;
+  EXPECT_EQ(recoveredSwitchCount(Body), 0u) << Body;
 
   DirectPipelineRun PipelineRun = runPipelineWithEvidenceBudget(Image, 256);
   ASSERT_TRUE(PipelineRun.Result.Success) << PipelineRun.Result.Error;
@@ -6856,7 +7060,7 @@ TEST_F(JTE_X86_64, FreshBuilderRetainsPreviouslyPublishedOpaqueBranchIdentity) {
       llvmFunctionBody(PipelineRun.LLVMIR, Function->Name);
   ASSERT_FALSE(PipelineBody.empty()) << PipelineRun.LLVMIR;
   EXPECT_NE(PipelineBody.find("llvm.trap"), std::string::npos) << PipelineBody;
-  EXPECT_EQ(PipelineBody.find("switch i"), std::string::npos) << PipelineBody;
+  EXPECT_EQ(recoveredSwitchCount(PipelineBody), 0u) << PipelineBody;
 }
 
 TEST_F(JTE_X86_64, IndexIdentityRejectsAtomicFrameOverwrite) {
@@ -7343,14 +7547,14 @@ TEST_F(JTE_X86_64, ModuloBoundRejectsIndependentQuotientRoot) {
   const std::string LLVMBody =
       llvmFunctionBody(LLVM.out, "jt_modulo_independent_quotient");
   ASSERT_FALSE(LLVMBody.empty()) << LLVM.out;
-  EXPECT_EQ(LLVMBody.find("switch i"), std::string::npos) << LLVMBody;
+  EXPECT_EQ(recoveredSwitchCount(LLVMBody), 0u) << LLVMBody;
 
   auto High = liftToHighIR(moduloDomainObj());
   ASSERT_EQ(High.exitCode, 0) << High.err;
   const std::string HighBody =
       lowFunctionBody(High.out, "jt_modulo_independent_quotient");
   ASSERT_FALSE(HighBody.empty()) << High.out;
-  EXPECT_EQ(HighBody.find("switch"), std::string::npos) << HighBody;
+  EXPECT_EQ(recoveredHighSwitchCount(HighBody), 0u) << HighBody;
 }
 
 TEST_F(JTE_X86_64, ModuloRejectedSizedMixedSelfEntryTableStaysOpaque) {
@@ -7726,14 +7930,14 @@ TEST_F(JTE_X86_64, ModuloBoundKeepsIndependentLinearRootsDistinct) {
   const std::string LLVMBody =
       llvmFunctionBody(LLVM.out, "jt_modulo_mixed_roots");
   ASSERT_FALSE(LLVMBody.empty()) << LLVM.out;
-  EXPECT_EQ(LLVMBody.find("switch i"), std::string::npos) << LLVMBody;
+  EXPECT_EQ(recoveredSwitchCount(LLVMBody), 0u) << LLVMBody;
 
   auto High = liftToHighIR(moduloDomainObj());
   ASSERT_EQ(High.exitCode, 0) << High.err;
   const std::string HighBody =
       lowFunctionBody(High.out, "jt_modulo_mixed_roots");
   ASSERT_FALSE(HighBody.empty()) << High.out;
-  EXPECT_EQ(HighBody.find("switch"), std::string::npos) << HighBody;
+  EXPECT_EQ(recoveredHighSwitchCount(HighBody), 0u) << HighBody;
 }
 
 TEST_F(JTE_X86_64, ModuloBoundRejectsSignedRemainderAsUnsignedDomain) {
@@ -7777,14 +7981,14 @@ TEST_F(JTE_X86_64, ModuloBoundRejectsWrongUnsignedDivisionMagic) {
   const std::string LLVMBody =
       llvmFunctionBody(LLVM.out, "jt_modulo_wrong_magic");
   ASSERT_FALSE(LLVMBody.empty()) << LLVM.out;
-  EXPECT_EQ(LLVMBody.find("switch i"), std::string::npos) << LLVMBody;
+  EXPECT_EQ(recoveredSwitchCount(LLVMBody), 0u) << LLVMBody;
 
   auto High = liftToHighIR(moduloDomainObj());
   ASSERT_EQ(High.exitCode, 0) << High.err;
   const std::string HighBody =
       lowFunctionBody(High.out, "jt_modulo_wrong_magic");
   ASSERT_FALSE(HighBody.empty()) << High.out;
-  EXPECT_EQ(HighBody.find("switch"), std::string::npos) << HighBody;
+  EXPECT_EQ(recoveredHighSwitchCount(HighBody), 0u) << HighBody;
 }
 
 TEST_F(JTE_X86_64, ModuloBoundRejectsWrongUnsignedDivisionPostShift) {
@@ -7800,14 +8004,14 @@ TEST_F(JTE_X86_64, ModuloBoundRejectsWrongUnsignedDivisionPostShift) {
   const std::string LLVMBody =
       llvmFunctionBody(LLVM.out, "jt_modulo_wrong_postshift");
   ASSERT_FALSE(LLVMBody.empty()) << LLVM.out;
-  EXPECT_EQ(LLVMBody.find("switch i"), std::string::npos) << LLVMBody;
+  EXPECT_EQ(recoveredSwitchCount(LLVMBody), 0u) << LLVMBody;
 
   auto High = liftToHighIR(moduloDomainObj());
   ASSERT_EQ(High.exitCode, 0) << High.err;
   const std::string HighBody =
       lowFunctionBody(High.out, "jt_modulo_wrong_postshift");
   ASSERT_FALSE(HighBody.empty()) << High.out;
-  EXPECT_EQ(HighBody.find("switch"), std::string::npos) << HighBody;
+  EXPECT_EQ(recoveredHighSwitchCount(HighBody), 0u) << HighBody;
 }
 
 TEST_F(JTE_X86_64, ModuloBoundAcceptsExactFactorizedSixBackMultiply) {
@@ -7997,7 +8201,7 @@ TEST_F(JTE_X86_64, ModuloBoundRejectsInexactFactorizedSixRecipes) {
   for (const char *Name : Names) {
     const std::string Body = llvmFunctionBody(LLVM.out, Name);
     ASSERT_FALSE(Body.empty()) << Name << '\n' << LLVM.out;
-    EXPECT_EQ(Body.find("switch i"), std::string::npos) << Body;
+    EXPECT_EQ(recoveredSwitchCount(Body), 0u) << Body;
   }
 
   auto High = liftToHighIR(moduloDomainObj());
@@ -8005,7 +8209,7 @@ TEST_F(JTE_X86_64, ModuloBoundRejectsInexactFactorizedSixRecipes) {
   for (const char *Name : Names) {
     const std::string Body = lowFunctionBody(High.out, Name);
     ASSERT_FALSE(Body.empty()) << Name << '\n' << High.out;
-    EXPECT_EQ(Body.find("switch"), std::string::npos) << Body;
+    EXPECT_EQ(recoveredHighSwitchCount(Body), 0u) << Body;
   }
 }
 
@@ -8048,7 +8252,7 @@ TEST_F(JTE_X86_64, ModuloBoundRejectsInexactConstantShiftRecipes) {
   for (const char *Name : Names) {
     const std::string Body = llvmFunctionBody(LLVM.out, Name);
     ASSERT_FALSE(Body.empty()) << Name << '\n' << LLVM.out;
-    EXPECT_EQ(Body.find("switch i"), std::string::npos) << Body;
+    EXPECT_EQ(recoveredSwitchCount(Body), 0u) << Body;
   }
 }
 
@@ -8107,7 +8311,7 @@ TEST_F(JTE_X86_64,
        }) {
     const std::string Body = llvmFunctionBody(LLVM.out, Name);
     ASSERT_FALSE(Body.empty()) << Name << "\n" << LLVM.out;
-    EXPECT_EQ(Body.find("switch i"), std::string::npos) << Name << "\n" << Body;
+    EXPECT_EQ(recoveredSwitchCount(Body), 0u) << Name << "\n" << Body;
   }
 }
 
@@ -8521,14 +8725,14 @@ TEST_F(JTE_X86_64, GuardDomainReplaysAfterForeignRootIsRestored) {
   const std::string LLVMBody =
       llvmFunctionBody(LLVM.out, "jt_guard_domain_replays_after_root_restore");
   ASSERT_FALSE(LLVMBody.empty()) << LLVM.out;
-  EXPECT_EQ(LLVMBody.find("switch i"), std::string::npos) << LLVMBody;
+  EXPECT_EQ(recoveredSwitchCount(LLVMBody), 0u) << LLVMBody;
 
   auto High = liftToHighIR(moduloDomainObj());
   ASSERT_EQ(High.exitCode, 0) << High.err;
   const std::string HighBody =
       lowFunctionBody(High.out, "jt_guard_domain_replays_after_root_restore");
   ASSERT_FALSE(HighBody.empty()) << High.out;
-  EXPECT_EQ(HighBody.find("switch"), std::string::npos) << HighBody;
+  EXPECT_EQ(recoveredHighSwitchCount(HighBody), 0u) << HighBody;
 }
 
 TEST_F(JTE_X86_64,
@@ -8545,14 +8749,14 @@ TEST_F(JTE_X86_64,
   const std::string LLVMBody =
       llvmFunctionBody(LLVM.out, "jt_raw_absolute_capacity");
   ASSERT_FALSE(LLVMBody.empty()) << LLVM.out;
-  EXPECT_EQ(LLVMBody.find("switch i"), std::string::npos) << LLVMBody;
+  EXPECT_EQ(recoveredSwitchCount(LLVMBody), 0u) << LLVMBody;
 
   auto High = liftToHighIR(moduloDomainObj());
   ASSERT_EQ(High.exitCode, 0) << High.err;
   const std::string HighBody =
       lowFunctionBody(High.out, "jt_raw_absolute_capacity");
   ASSERT_FALSE(HighBody.empty()) << High.out;
-  EXPECT_EQ(HighBody.find("switch"), std::string::npos) << HighBody;
+  EXPECT_EQ(recoveredHighSwitchCount(HighBody), 0u) << HighBody;
 }
 
 TEST_F(JTE_X86_64,
@@ -8969,7 +9173,7 @@ TEST_F(JTE_X86_64, MaskFixedPointRejectsSelfBootstrappedCaseMasks) {
   ASSERT_TRUE(SawMask7)
       << "the case-local x&7 producer must be present in LowIR";
   ASSERT_NE(Dispatch, nullptr);
-  EXPECT_TRUE(Dispatch->Succs.empty());
+  EXPECT_TRUE(hasNoProvedSuccessor(Low, *Dispatch));
   EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(DispatchAddr), 1u);
   EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
   EXPECT_TRUE(Low.JumpTables.empty());
@@ -9023,7 +9227,7 @@ TEST_F(JTE_X86_64, MaskFixedPointRejectsLateOutOfDomainSelector) {
   ASSERT_TRUE(SawLiteral15)
       << "case seven must expose the late out-of-domain selector";
   ASSERT_NE(Dispatch, nullptr);
-  EXPECT_TRUE(Dispatch->Succs.empty());
+  EXPECT_TRUE(hasNoProvedSuccessor(Low, *Dispatch));
   EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(DispatchAddr), 1u);
   EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
   EXPECT_TRUE(Low.JumpTables.empty());
@@ -9077,7 +9281,7 @@ TEST_F(JTE_X86_64, MaskFixedPointReplaysCompleteEntryDomain) {
   ASSERT_TRUE(SawLiteral15)
       << "case seven must expose the post-edge out-of-domain selector";
   ASSERT_NE(Dispatch, nullptr);
-  EXPECT_TRUE(Dispatch->Succs.empty());
+  EXPECT_TRUE(hasNoProvedSuccessor(Low, *Dispatch));
   EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(DispatchAddr), 1u);
   EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
   EXPECT_TRUE(Low.JumpTables.empty());
@@ -13080,7 +13284,7 @@ TEST_F(JTE_X86_64, MaskKnownOneFixedPointRejectsSelfBootstrappedProducer) {
       << "case two must contain the complete (x|1)&7; -1 producer";
 
   ASSERT_NE(Dispatch, nullptr);
-  EXPECT_TRUE(Dispatch->Succs.empty());
+  EXPECT_TRUE(hasNoProvedSuccessor(Low, *Dispatch));
   EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(DispatchAddr), 1u);
   EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
   EXPECT_TRUE(Low.JumpTables.empty())

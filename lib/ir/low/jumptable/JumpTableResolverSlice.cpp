@@ -4015,6 +4015,121 @@ bool CFGBuilder::isExactI386GOTOFFInput(const LowOp &Add,
   return Exact != nullptr;
 }
 
+std::optional<va_t>
+CFGBuilder::jumpReadsOwnLabelsThroughI386GOTOFF(const InsnRecord &Rec) const {
+  if (!CurrentImg || CurrentImg->Arch != Arch::X86 || !CurrentImg->isELF() ||
+      CurrentImg->getPointerSize() != 4 || !AuthoritativeCurrentFuncRange)
+    return std::nullopt;
+  const BinaryImage &Img = *CurrentImg;
+  constexpr uint16_t PointerSize = 4;
+
+  // The end of the jump's own block, up to the jump: every execution of the
+  // jump runs these operations in order, so a definition found among them is
+  // the one the jump uses.  A definition before the window is not looked for.
+  auto Leader = BlockStarts.upper_bound(Rec.Addr);
+  if (Leader == BlockStarts.begin())
+    return std::nullopt;
+  --Leader;
+  std::vector<const InsnRecord *> Window;
+  size_t OpCount = 0;
+  for (auto It = Insns.upper_bound(Rec.Addr);
+       It != Insns.begin() && std::prev(It)->first >= *Leader;) {
+    --It;
+    const size_t InsnOps = It->second.Ops.size();
+    if (OpCount + InsnOps > static_cast<size_t>(limits::kMaxPathEmulationOps))
+      break;
+    if (It->second.IsInstructionGuard ||
+        !consumeIncompleteBranchMarkerEvidence(InsnOps + 1))
+      return std::nullopt;
+    Window.push_back(&It->second);
+    OpCount += InsnOps;
+  }
+  std::vector<LowOp> Ops;
+  Ops.reserve(OpCount);
+  for (auto Insn = Window.rbegin(); Insn != Window.rend(); ++Insn)
+    Ops.insert(Ops.end(), (*Insn)->Ops.begin(), (*Insn)->Ops.end());
+  if (Ops.empty() || Ops.back().Opcode != NdOp::INDIR_BR ||
+      Ops.back().NumInputs < 1)
+    return std::nullopt;
+
+  // Whether the code-pointer slots at Table start with labels inside this
+  // function.  A word that names another function's entry, or this one's, is
+  // a callable address and proves nothing here.
+  auto HoldsOwnLabels = [&](va_t Table) {
+    for (uint32_t Slot = 0; Slot < limits::kMinJumpTableEntries; ++Slot) {
+      if (Table > InvalidVA - uint64_t{Slot} * PointerSize)
+        return false;
+      const va_t SlotVA = Table + uint64_t{Slot} * PointerSize;
+      const uint8_t *Bytes = Img.CodePtrRelocSlots.count(SlotVA)
+                                 ? Img.readVA(SlotVA, PointerSize)
+                                 : nullptr;
+      if (!Bytes)
+        return false;
+      const va_t Target = normalizeCodeAddress(
+          readPtr(Bytes, /*Is64=*/false, archLittleEndian(Img.Arch)), Img.Arch,
+          Img.Mode);
+      if (Target <= AuthoritativeCurrentFuncRange->first ||
+          Target >= AuthoritativeCurrentFuncRange->second ||
+          Img.hasFunctionSymbolAt(Target, ExecutableCodeOwners) ||
+          !isOwnedInteriorTarget(Img, Target))
+        return false;
+    }
+    return true;
+  };
+
+  // Follow the jump's target back through copies and the add of the GOT base
+  // to the LOAD that read it.  Only a definition of the whole value counts.
+  struct Pending {
+    int From;
+    NdVar Value;
+    int Depth;
+  };
+  llvm::SmallVector<Pending, 4> Worklist{
+      {static_cast<int>(Ops.size()) - 2, Ops.back().Inputs[0], 0}};
+  while (!Worklist.empty()) {
+    const Pending Current = Worklist.pop_back_val();
+    if (Current.Depth >= limits::kMaxQuasiCopyDepth ||
+        (!Current.Value.isReg() && !Current.Value.isTemp()))
+      continue;
+    const int DefIdx = reachingDefIdx(Ops, Current.From, Current.Value);
+    if (DefIdx < 0 || Ops[DefIdx].Output.Size != Current.Value.Size)
+      continue;
+    const LowOp &Def = Ops[DefIdx];
+    if (Def.Opcode == NdOp::COPY && Def.NumInputs >= 1) {
+      Worklist.push_back({DefIdx - 1, Def.Inputs[0], Current.Depth + 1});
+      continue;
+    }
+    if (Def.Opcode == NdOp::INT_ADD && Def.NumInputs >= 2) {
+      Worklist.push_back({DefIdx - 1, Def.Inputs[0], Current.Depth + 1});
+      Worklist.push_back({DefIdx - 1, Def.Inputs[1], Current.Depth + 1});
+      continue;
+    }
+    if (Def.Opcode != NdOp::LOAD || Def.NumInputs < 1 ||
+        Def.Output.Size != PointerSize)
+      continue;
+    const NdVar &Address = Def.NumInputs >= 2 ? Def.Inputs[1] : Def.Inputs[0];
+    if (!Address.isReg() && !Address.isTemp())
+      continue;
+    const int AddIdx =
+        jumpTableAddressDef(Ops, DefIdx - 1, Address, PointerSize);
+    if (AddIdx < 0 || Ops[AddIdx].Opcode != NdOp::INT_ADD ||
+        Ops[AddIdx].NumInputs < 2)
+      continue;
+    for (int Side = 0; Side < 2; ++Side) {
+      // Only a field one relocation names is asked about: the multiply
+      // relocated ones keep their own bookkeeping in isExactI386GOTOFFInput.
+      const NdVar &Displacement = Ops[AddIdx].Inputs[Side];
+      if (Displacement.isConst() && Displacement.Size == PointerSize &&
+          Displacement.Provenance == ConstantAddressProvenance::DataAddress &&
+          Displacement.AddressOwnerVA != InvalidVA &&
+          isExactI386GOTOFFInput(Ops[AddIdx], Side) &&
+          HoldsOwnLabels(static_cast<va_t>(Displacement.Offset)))
+        return static_cast<va_t>(Displacement.Offset);
+    }
+  }
+  return std::nullopt;
+}
+
 bool CFGBuilder::exactI386ModelZeroReaches(const LowOp &Use, int BaseSide,
                                            va_t TableBase) const {
   // Reaching a relocation-authenticated model is a complete-CFG proof even

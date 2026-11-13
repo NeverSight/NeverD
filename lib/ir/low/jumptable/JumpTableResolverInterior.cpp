@@ -320,6 +320,230 @@ void CFGBuilder::exploreAddressTakenRoots(const BinaryImage &Img,
   }
 }
 
+void CFGBuilder::dispatchUnprovedBranchesByValue(const BinaryImage &Img,
+                                                 LowFunc &Func) {
+  if (!CurrentFuncRange)
+    return;
+  // The labels a jump of this function can name: the blocks whose addresses
+  // relocation-proven pointers outside the code hold.  They are roots of this
+  // function already, entered with its frame.
+  std::vector<va_t> Labels;
+  for (const auto &[Target, Sources] : RelocationCFGRootSources)
+    if (!Sources.empty() && OrdinaryCFGRoots.count(Target) &&
+        Insns.count(Target) && isOwnedInteriorTarget(Img, Target))
+      Labels.push_back(Target);
+  if (Labels.empty() ||
+      Labels.size() > static_cast<size_t>(limits::kMaxJumpTableEntries))
+    return;
+  std::vector<va_t> Jumps;
+  for (const auto &[Addr, Rec] : Insns)
+    if (Rec.IsBranch && Rec.IsIndirect && !Rec.IsCall && !Rec.IsRet &&
+        !Rec.IsCond && Rec.JumpTableTargets.empty() && !Rec.ScalarBranchInput)
+      Jumps.push_back(Addr);
+  if (Jumps.empty())
+    return;
+
+  // Every label is a candidate of every jump, which says more than any one
+  // jump can do: a table has entries its index never selects, and another
+  // jump's table is not this one's.  An edge the program cannot take must not
+  // make the function read what it never wrote, or a register its caller
+  // keeps would become one of its inputs.  So an edge is kept only where
+  // every such register the label's code reads first has been written on
+  // every path to the jump.  A jump to a label left out traps, as every jump
+  // of this kind did before.
+  const auto &TRI = getTargetRegInfo(Img.Arch);
+  const llvm::ArrayRef<uint64_t> Kept = TRI.CalleeSaveRegs;
+  if (Kept.size() > 64)
+    return;
+  const uint16_t Pointer = TRI.PointerSize;
+  // A write of four bytes or more to a 64-bit register sets all of it.
+  const uint16_t WholeWrite = Pointer == 8 ? 4 : Pointer;
+  auto Bits = [&](const NdVar &Value, bool Whole) {
+    uint64_t Mask = 0;
+    if (!Value.isReg() || Value.Size == 0)
+      return Mask;
+    for (size_t I = 0; I < Kept.size(); ++I) {
+      const uint64_t Base = Kept[I];
+      if (Whole ? Value.Offset == Base && Value.Size >= WholeWrite
+                : Value.Offset < Base + Pointer &&
+                      Base < Value.Offset + Value.Size)
+        Mask |= uint64_t{1} << I;
+    }
+    return Mask;
+  };
+  const size_t Count = Func.Blocks.size();
+  std::map<va_t, size_t> BlockAt;
+  std::vector<uint64_t> Reads(Count, 0), Writes(Count, 0);
+  for (size_t B = 0; B < Count; ++B) {
+    const LowBlock &Block = Func.Blocks[B];
+    BlockAt.emplace(Block.StartAddr, B);
+    for (const LowOp &Op : Block.Ops) {
+      for (unsigned I = 0; I < Op.NumInputs; ++I)
+        Reads[B] |= Bits(Op.Inputs[I], false) & ~Writes[B];
+      Writes[B] |= Bits(Op.Output, true);
+    }
+  }
+  std::vector<size_t> LabelBlocks;
+  for (va_t Label : Labels) {
+    const auto At = BlockAt.find(Label);
+    if (At == BlockAt.end())
+      return;
+    LabelBlocks.push_back(At->second);
+  }
+  std::vector<size_t> JumpBlocks;
+  for (va_t Jump : Jumps) {
+    size_t Found = Count;
+    for (size_t B = 0; B < Count && Found == Count; ++B)
+      if (!Func.Blocks[B].Ops.empty() && Func.Blocks[B].Ops.back().Addr == Jump)
+        Found = B;
+    if (Found == Count)
+      return;
+    JumpBlocks.push_back(Found);
+  }
+  size_t Entry = Count;
+  if (const auto At = BlockAt.find(Func.Entry); At != BlockAt.end())
+    Entry = At->second;
+  if (Entry == Count)
+    return;
+
+  // A jump whose table is known can take only what that table holds: the
+  // label slots from where it starts to the next address another field of
+  // the code names, which starts another table.  The table is the one an
+  // exact field names, or the one a frame copy the jump reads was made from.
+  std::vector<std::vector<bool>> Allowed(
+      Jumps.size(), std::vector<bool>(Labels.size(), true));
+  std::optional<std::set<va_t>> Anchors;
+  for (size_t J = 0; J < Jumps.size(); ++J) {
+    std::optional<va_t> Table =
+        jumpReadsOwnLabelsThroughI386GOTOFF(Insns.at(Jumps[J]));
+    if (!Table)
+      if (const auto Copied = FrameLabelTableSources.find(Jumps[J]);
+          Copied != FrameLabelTableSources.end())
+        Table = Copied->second;
+    if (!Table)
+      continue;
+    if (!Anchors) {
+      Anchors.emplace();
+      for (const auto &[Field, Operand] : Img.DataAddressRelocOperands)
+        Anchors->insert(Operand.TargetVA);
+    }
+    std::set<va_t> Held;
+    for (va_t Slot = *Table;
+         Held.size() <= static_cast<size_t>(limits::kMaxJumpTableEntries) &&
+         Img.CodePtrRelocSlots.count(Slot) &&
+         (Slot == *Table || !Anchors->count(Slot)) &&
+         Slot <= InvalidVA - Pointer;
+         Slot += Pointer) {
+      const auto Target = normalizedRelocatedCodeTarget(Img, Slot);
+      if (!Target)
+        break;
+      Held.insert(*Target);
+    }
+    for (size_t L = 0; L < Labels.size(); ++L)
+      Allowed[J][L] = Held.count(Labels[L]) != 0;
+  }
+
+  // Edges[J][L]: jump J reaches label L.
+  std::vector<std::vector<bool>> Edges(Jumps.size(),
+                                       std::vector<bool>(Labels.size(), false));
+  std::vector<bool> Reached, Decided(Jumps.size(), false);
+  std::vector<uint64_t> Written, Needed;
+  auto Successors = [&](size_t B, auto Visit) {
+    for (int S : Func.Blocks[B].Succs)
+      if (S >= 0 && static_cast<size_t>(S) < Count)
+        Visit(static_cast<size_t>(S));
+    for (size_t J = 0; J < Jumps.size(); ++J)
+      if (JumpBlocks[J] == B)
+        for (size_t L = 0; L < Labels.size(); ++L)
+          if (Edges[J][L])
+            Visit(LabelBlocks[L]);
+  };
+  // Written[B]: the registers every path from the entry has written when B
+  // ends.  Needed[B]: those some path from B's start reads before a write.
+  auto Solve = [&] {
+    Reached.assign(Count, false);
+    Written.assign(Count, ~uint64_t{0});
+    std::vector<uint64_t> AtStart(Count, ~uint64_t{0});
+    std::vector<size_t> Work{Entry};
+    Reached[Entry] = true;
+    AtStart[Entry] = 0;
+    Written[Entry] = Writes[Entry];
+    while (!Work.empty()) {
+      const size_t B = Work.back();
+      Work.pop_back();
+      Successors(B, [&](size_t S) {
+        const uint64_t Meet = AtStart[S] & Written[B];
+        if (Reached[S] && Meet == AtStart[S])
+          return;
+        Reached[S] = true;
+        AtStart[S] = Meet;
+        Written[S] = Meet | Writes[S];
+        Work.push_back(S);
+      });
+    }
+    Needed.assign(Count, 0);
+    for (bool Changed = true; Changed;) {
+      Changed = false;
+      for (size_t B = Count; B-- > 0;) {
+        uint64_t After = 0;
+        Successors(B, [&](size_t S) { After |= Needed[S]; });
+        const uint64_t Now = Reads[B] | (After & ~Writes[B]);
+        if (Now != Needed[B]) {
+          Needed[B] = Now;
+          Changed = true;
+        }
+      }
+    }
+  };
+  // Decide the jumps in the order control reaches them, each with the edges
+  // decided before it.
+  for (bool Progress = true; Progress;) {
+    Progress = false;
+    Solve();
+    for (size_t J = 0; J < Jumps.size(); ++J) {
+      if (Decided[J] || !Reached[JumpBlocks[J]])
+        continue;
+      for (size_t L = 0; L < Labels.size(); ++L)
+        Edges[J][L] = Allowed[J][L] &&
+                      (Needed[LabelBlocks[L]] & ~Written[JumpBlocks[J]]) == 0;
+      Decided[J] = true;
+      Progress = true;
+      break;
+    }
+  }
+  // An edge decided early can fail once later ones exist: drop it.  Each
+  // removal only makes the remaining ones easier to keep.
+  for (bool Removed = true; Removed;) {
+    Removed = false;
+    Solve();
+    for (size_t J = 0; J < Jumps.size(); ++J)
+      for (size_t L = 0; L < Labels.size(); ++L)
+        if (Edges[J][L] &&
+            (!Reached[JumpBlocks[J]] ||
+             (Needed[LabelBlocks[L]] & ~Written[JumpBlocks[J]]) != 0)) {
+          Edges[J][L] = false;
+          Removed = true;
+        }
+  }
+
+  bool Changed = false;
+  for (size_t J = 0; J < Jumps.size(); ++J) {
+    std::vector<va_t> Targets;
+    for (size_t L = 0; L < Labels.size(); ++L)
+      if (Edges[J][L])
+        Targets.push_back(Labels[L]);
+    if (Targets.empty())
+      continue;
+    InsnRecord &Rec = Insns.at(Jumps[J]);
+    Rec.JumpTableTargets = std::move(Targets);
+    Rec.ValueDispatch = true;
+    ResolvedTableInfo.erase(Jumps[J]);
+    Changed = true;
+  }
+  if (Changed)
+    rebuildBlocks(Func);
+}
+
 bool CFGBuilder::resolveRelocatedInteriorBranch(const BinaryImage &Img,
                                                 InsnRecord &Rec) {
   if (!CurrentFuncRange || !Rec.IsBranch || !Rec.IsIndirect || Rec.IsCall ||
