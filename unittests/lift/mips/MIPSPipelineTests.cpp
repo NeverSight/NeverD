@@ -20,6 +20,7 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MIPS/MIPSSourceAccumulators.h"
+#include "neverd/ir/med/MIPS/MIPSSourceVectors.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/ELFLoader.h"
@@ -41,6 +42,39 @@ using namespace neverd;
 namespace {
 
 class MIPSPipeline : public ::testing::TestWithParam<Arch> {};
+
+TEST(MIPSFloatingResult, IntegerExtensionRequiresAnEntryDeclarationAndFP64) {
+  for (const auto Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                            Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(getArchName(Target));
+    BinaryImage Image;
+    Image.Arch = Target;
+    Image.MIPS.emplace();
+    Image.MIPS->ISARevision = 6;
+    const auto Signature =
+        floatingCallArguments(Target, BinaryFormat::ELF,
+                              NdType::makeInt(1, true), {NdType::makeFloat(8)});
+    ASSERT_TRUE(Signature);
+    MedFunc Function;
+    Function.Entry = 0x10000;
+    const auto Inferred = NdType::makeInt(4, true);
+    Function.ReturnType = Inferred;
+    const std::map<va_t, FloatingCallArguments> Declared{
+        {Function.Entry, *Signature}};
+    discardUnobservedMIPSFPUpperBits(Function, Image, Declared, nullptr);
+    EXPECT_FALSE(Function.HasDeclaredMIPSIntegerResult);
+    EXPECT_EQ(Function.ReturnType, Inferred);
+    Image.MIPS->FPABI = isMIPS64(Target) ? 1 : 6;
+    discardUnobservedMIPSFPUpperBits(Function, Image, {}, nullptr);
+    EXPECT_FALSE(Function.HasDeclaredMIPSIntegerResult);
+    EXPECT_EQ(Function.ReturnType, Inferred);
+    discardUnobservedMIPSFPUpperBits(Function, Image, Declared, nullptr);
+    EXPECT_TRUE(Function.HasDeclaredMIPSIntegerResult);
+    ASSERT_TRUE(Function.ReturnType);
+    EXPECT_EQ(Function.ReturnType->Size, 1u);
+    EXPECT_TRUE(Function.ReturnType->IsSigned);
+  }
+}
 
 TEST_P(MIPSPipeline, MixedFloatingEntryKeepsSourceParameterOrder) {
   mips_test::ELFBytes File(GetParam());

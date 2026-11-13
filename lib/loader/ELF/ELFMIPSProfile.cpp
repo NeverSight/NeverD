@@ -239,8 +239,8 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
     if (Profile.HasMSA &&
         (Profile.HasMIPS16 || Profile.HasDSP || Bytes[3] != 5 ||
          Bytes[5] != 3 || Bytes[7] != (Wide ? 1 : 6)))
-      return profileError(
-          "MSA requires r5 with 128-bit CPR1 and o32 FP64 or n64 hard double");
+      return profileError("MSA requires r5 with 128-bit CPR1 and o32 FP64 or "
+                          "n32/n64 hard double");
     if (Bytes[2] != (Wide ? 64 : 32) ||
         Bytes[3] != (R6               ? 6
                      : Profile.HasMSA ? 5
