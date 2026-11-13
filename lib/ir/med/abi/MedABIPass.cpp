@@ -719,7 +719,7 @@ bool promoteFloatCallResult(MedFunc &Func, MedBlock &Blk, size_t OI,
   // reads, so accept either half or both; the temp must have no other reader,
   // or the split is a real wide result.
   size_t SyntheticWideHalves = 0;
-  if (TRI.PointerSize == 4 && TRI.IntReturnReg2 != 0 &&
+  if (TRI.integerReturnWordBytes() == 4 && TRI.IntReturnReg2 != 0 &&
       ExistingOutput.Kind == MedVar::Temp &&
       ExistingOutput.Size == 2 * TRI.PointerSize) {
     auto isHalf = [&](const MedOp &Half, uint64_t RegOff, uint64_t Offset) {

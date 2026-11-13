@@ -1715,9 +1715,9 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
             Part.Output = ndVarToMedVar(
                 NdVar::reg(ConventionRegs.IntReturnRegs[I], Word));
             Part.addInput(MOp.Output);
-            Part.addInput(MedVar::makeConst(
-                (ConventionRegs.IntegerReturnPairHighFirst ? 1 - I : I) * Word,
-                4, ConstantAddressProvenance::Scalar));
+            Part.addInput(
+                MedVar::makeConst(ConventionRegs.integerReturnWordOffset(I), 4,
+                                  ConstantAddressProvenance::Scalar));
             MB.Ops.push_back(std::move(Part));
           }
         }

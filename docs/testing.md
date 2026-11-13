@@ -24076,9 +24076,11 @@ PYTHONPATH=third_party/unicorn/bindings/python LIBUNICORN_PATH=/path/to/unicorn-
 ```
 
 The runner compares original machine code with recompiled HighC and LLVMC at
-O0/O2 for o32/n64, both byte orders, float/double mixed entry arguments and
-nine-argument FP overflow. Callee results include float, double, a machine
-word, a pointer and void. Negative and wide inputs, the high half of an n64
+O0/O2 for o32, n32 and n64 in both byte orders, including float/double
+mixed entry arguments and nine-argument FP overflow. The SDK fixture obtains
+original call IDs and applies fixed or variadic declarations, then alternates
+between two runtime callback targets. Callee results include float, double,
+signed and unsigned narrow integers, v0/v1 integer pairs, pointers and void. Negative and wide inputs, the high half of an n64
 result, and the FCSR inexact flag distinguish the return carriers. A mixed
 call checks each narrow integer at the full width supplied to the callee. The runner
 also checks SP, return target and ABI-preserved FPRs. `NeverDMIPSPipelineTests`

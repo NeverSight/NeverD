@@ -460,8 +460,12 @@ struct TargetRegInfo {
   /// word (MIPS big endian). Scalar results still use IntReturnReg.
   bool IntegerReturnPairHighFirst = false;
 
+  unsigned integerReturnWordBytes() const {
+    return isMIPS(TheArch) ? FullRegWidth : PointerSize;
+  }
   unsigned integerReturnWordOffset(unsigned Lane) const {
-    return (IntegerReturnPairHighFirst ? 1 - Lane : Lane) * PointerSize;
+    return (IntegerReturnPairHighFirst ? 1 - Lane : Lane) *
+           integerReturnWordBytes();
   }
 };
 

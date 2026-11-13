@@ -340,7 +340,8 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     // half in IntReturnReg (EAX/R0) and the high half in IntReturnReg2
     // (EDX/R1).  Combine both halves so the high 32 bits are not dropped.
     bool WantWide64 = !WantFloat && RetTy->isIntegerTy(64) &&
-                      TRI.PointerSize == 4 && TRI.IntReturnReg2 != 0;
+                      TRI.integerReturnWordBytes() == 4 &&
+                      TRI.IntReturnReg2 != 0;
     uint64_t HiRetOff = TRI.IntReturnReg2;
     const uint16_t IntegerReturnSize =
         WantWide64             ? TRI.PointerSize
