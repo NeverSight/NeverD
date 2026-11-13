@@ -1116,7 +1116,8 @@ static const char *decompileLlvmC(neverd_session_t Sess, neverd_va_t FuncEntry,
     return Cached;
 
   const auto *Native = S->ensureFunctionLlvmModule(
-      FuncEntry, NoOpt != 0, /*OriginalImageStorage=*/true);
+      FuncEntry, NoOpt != 0, /*OriginalImageStorage=*/true,
+      /*NeedSourceMap=*/SourceMap != nullptr);
   if (!Native)
     return dupStr(std::string());
   llvm::Function *LF = S->findNativeLlvmFunction(*Native->Module, FuncEntry);
