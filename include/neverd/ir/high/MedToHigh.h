@@ -22,6 +22,7 @@
 #include "neverd/ir/med/MedDispatchSlots.h"
 #include "neverd/ir/med/MedIR.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -522,6 +523,14 @@ private:
   /// loaded from \p ResolvedSlot.
   unsigned importFixedArgCount(size_t CallIdx, const std::vector<MedOp> &Ops,
                                va_t ResolvedSlot) const;
+
+  /// How many leading register parameters of the function being converted
+  /// call \p CallIdx of \p Ops may pass on, positions of \p ParamRegs from
+  /// the first: every one it has where the call is a jump to an import that
+  /// no summary, source binding, declaration or C library table describes,
+  /// under a convention whose arguments the register scan recovers; else 0.
+  int forwardedParameterCount(size_t CallIdx, const std::vector<MedOp> &Ops,
+                              llvm::ArrayRef<uint64_t> ParamRegs) const;
 
   /// \p ResolvedSlot is the import slot an indirect call was resolved to
   /// through the register it calls, else 0.

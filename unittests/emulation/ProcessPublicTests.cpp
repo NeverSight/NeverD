@@ -2449,12 +2449,17 @@ TEST_F(ProcessPublic, AndroidMemoryAtStopKeepsOutcomesAcrossSDKAndCLI) {
     llvm::json::Value Baseline = nullptr;
     for (bool Observe : {false, true}) {
       llvm::json::Array Reads;
+      llvm::json::Array RegisterReads;
       if (Observe) {
         Reads.push_back(llvm::json::Object{{"address", "0x23000000"},
                                            {"size", 16},
                                            {"require_mapped_at_entry", false}});
         Reads.push_back(
             llvm::json::Object{{"address", "0x21000000"}, {"size", 16}});
+        RegisterReads.push_back(llvm::json::Object{
+            {"register", "sp"}, {"offset", INT64_MIN}, {"size", 1}});
+        RegisterReads.push_back(llvm::json::Object{
+            {"register", "sp"}, {"offset", -8}, {"size", 8}});
       }
       const auto Request = jsonText(llvm::json::Object{
           {"backend", "unicorn"},
@@ -2468,7 +2473,8 @@ TEST_F(ProcessPublic, AndroidMemoryAtStopKeepsOutcomesAcrossSDKAndCLI) {
                {"observe_memory_at_stop", Observe},
                {"memory", llvm::json::Array{llvm::json::Object{
                               {"address", "0x21000000"}, {"size", 4096}}}},
-               {"read_memory", std::move(Reads)}}}});
+               {"read_memory", std::move(Reads)},
+               {"read_register_memory", std::move(RegisterReads)}}}});
       auto Text = takeString(neverd_emulate_process_json(
           Session, Path.c_str(), AndroidNativeAArch64, Request.c_str()));
       ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
@@ -2487,13 +2493,22 @@ TEST_F(ProcessPublic, AndroidMemoryAtStopKeepsOutcomesAcrossSDKAndCLI) {
       }
       auto *Android = Report.getAsObject()->getObject(field::Android);
       auto *Memory = Android->getArray(field::Memory);
-      ASSERT_EQ(Memory->size(), 2u);
+      ASSERT_EQ(Memory->size(), 4u);
       const auto *Missing = (*Memory)[0].getAsObject();
       EXPECT_EQ(Missing->getString(field::Bytes), "");
       ASSERT_TRUE(Missing->getString(field::Diagnostic));
       EXPECT_FALSE(Missing->getString(field::Diagnostic)->empty());
       EXPECT_EQ((*Memory)[1].getAsObject()->getString(field::Bytes),
                 "00000000000000000000000000000000");
+      const auto *Overflow = (*Memory)[2].getAsObject();
+      ASSERT_NE(Overflow->get(field::Address), nullptr);
+      EXPECT_TRUE(Overflow->get(field::Address)->getAsNull());
+      EXPECT_EQ(Overflow->getString(field::Bytes), "");
+      EXPECT_TRUE(Overflow->getString(field::Diagnostic));
+      const auto *Stack = (*Memory)[3].getAsObject();
+      ASSERT_TRUE(Stack->getString(field::Bytes));
+      EXPECT_EQ(Stack->getString(field::Bytes)->size(), 16u);
+      EXPECT_FALSE(Stack->get(field::Diagnostic));
       *Memory = llvm::json::Array();
       EXPECT_EQ(Report, Baseline);
     }
