@@ -23,6 +23,7 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 
 #include "../../AArch64ImmediateMemoryBase.h"
+#include "../MIPS/LLVMIntegerResult.h"
 
 #include "neverd/Common.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
@@ -746,6 +747,12 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
   auto *FuncTy = llvm::FunctionType::get(RetType, ParamTypes, Func.IsVariadic);
   auto *LLVMFunc = llvm::Function::Create(
       FuncTy, llvm::GlobalValue::ExternalLinkage, EmittedName, Mod);
+  if (isMIPS(TargetArch) && Func.ReturnType &&
+      Func.ReturnType->Kind == NdTypeKind::Int &&
+      RetType->isIntegerTy(Func.ReturnType->Size * 8))
+    LLVMFunc->setAttributes(mips::integerResultAttributes(
+        *Ctx, LLVMFunc->getAttributes(), Func.ReturnType->Size,
+        Func.ReturnType->IsSigned, TargetArch));
   if (mips::imagePreservesDSPControl(Img))
     mips::applyDSPSourceAttributes(*LLVMFunc);
   if (mips::sourceAvoidsMSA(TargetArch, Img))

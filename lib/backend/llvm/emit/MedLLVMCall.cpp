@@ -10,6 +10,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../MIPS/LLVMIntegerResult.h"
+
 #include "neverd/ArchSupport.h"
 #include "neverd/Common.h"
 #include "neverd/backend/LLVMSourceUnknownValue.h"
@@ -100,14 +102,9 @@ bool floatingHeaderCall(const FunctionSym &Function, Arch Architecture,
 static llvm::AttributeList
 mipsFloatingCallAttributes(llvm::LLVMContext &C, llvm::AttributeList Attrs,
                            const FloatingCallArguments &Signature, Arch A) {
-  if (Signature.ReturnKind == NdTypeKind::Int &&
-      Signature.ReturnBytes < getTargetRegInfo(A).FullRegWidth)
-    Attrs = Attrs.addRetAttribute(C, Signature.SignedResult ||
-                                             Signature.ReturnBytes == 4
-                                         ? llvm::Attribute::SExt
-                                         : llvm::Attribute::ZExt);
-  if (Signature.SignedResult)
-    Attrs = Attrs.addFnAttribute(C, LLVMSourceSignedResult);
+  if (Signature.ReturnKind == NdTypeKind::Int)
+    Attrs = mips::integerResultAttributes(C, Attrs, Signature.ReturnBytes,
+                                          Signature.SignedResult, A);
   for (unsigned I = 0; I != Signature.Scalars.size(); ++I) {
     const auto &P = Signature.Scalars[I];
     if (P.Floating || P.Pointer)

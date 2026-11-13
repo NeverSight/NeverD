@@ -10415,7 +10415,10 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
     }
     auto *FuncTy = Fn.getFunctionType();
     std::string RetStr =
-        InferredVoid ? "void" : typeToCLLVM(FuncTy->getReturnType());
+        InferredVoid
+            ? "void"
+            : sourceScalarType(FuncTy->getReturnType(),
+                               Fn.hasFnAttribute(LLVMSourceSignedResult));
     if (std::string Ty = IndirectReturnTypeStr(); !Ty.empty())
       RetStr = std::move(Ty);
     else if (!InferredVoid && DefinitionTypes.Result.Type) {
