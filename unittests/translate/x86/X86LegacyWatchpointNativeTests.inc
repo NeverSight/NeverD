@@ -56,8 +56,15 @@ TEST_P(X86LegacyDebugNativeTest, OriginalDataWatchpointRangesAndShadows) {
 TEST_P(X86LegacyDebugNativeTest, OriginalIntegerExtensionReadWatchpoints) {
   if (!neverd::test::supportsX86KVMPrefault(KVM))
     GTEST_SKIP() << "Data-watchpoint oracle requires KVM pre-fault memory";
-  if (!__builtin_cpu_supports("popcnt") || !__builtin_cpu_supports("lzcnt") ||
-      !__builtin_cpu_supports("bmi") || !__builtin_cpu_supports("adx"))
+  // Clang 18 rejects "lzcnt" and "adx" as __builtin_cpu_supports names, so
+  // those two come from CPUID: 80000001H ECX bit 5 and 7.0 EBX bit 19.
+  unsigned A = 0, B = 0, C = 0, D = 0;
+  const bool HasLZCNT =
+      __get_cpuid(0x80000001u, &A, &B, &C, &D) && (C & (1u << 5));
+  const bool HasADX =
+      __get_cpuid_count(7, 0, &A, &B, &C, &D) && (B & (1u << 19));
+  if (!__builtin_cpu_supports("popcnt") || !HasLZCNT ||
+      !__builtin_cpu_supports("bmi") || !HasADX)
     GTEST_SKIP() << "Original integer oracle requires POPCNT/LZCNT/BMI1/ADX";
   for (bool Code32 : {false, true})
     for (bool Stack32 : {false, true})
