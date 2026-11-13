@@ -784,6 +784,8 @@ A64_LEAF_TEXT(kTLVSymbol, "_adjust")
 A64_LEAF_TEXT(kTLVBind, "_counter")
 A64_LEAF_TEXT(kTLVAssembly, "bad.S")
 A64_LEAF_TEXT(kTLVMissing, "-DBIND_OTHER")
+A64_LEAF_TEXT(kTLVOrdinaryFlag, "-DORDINARY")
+A64_LEAF_TEXT(kTLVOrdinaryData, "int counter = 13;\n")
 A64_LEAF_TEXT(kTLVCalls, "native_thread_local_accesses")
 A64_LEAF_VALUE(unsigned, kTLVChangedAdjustment, 5)
 A64_LEAF_VALUE(unsigned, kTLVAccessesPerProcess, 4)
@@ -795,7 +797,11 @@ A64_LEAF_TEXT(kTLVBody, R"c(
 #ifdef BIND_OTHER
 #define counter other_counter
 #endif
+#ifdef ORDINARY
+extern int counter;
+#else
 extern _Thread_local int counter;
+#endif
 int adjust(int x) { return counter += x + ADJUSTMENT; }
 )c")
 A64_LEAF_TEXT(kTLVBadRelocation, R"asm(

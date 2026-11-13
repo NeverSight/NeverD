@@ -48,8 +48,13 @@ MACHO_OBJECT_TEXT(kNativeGOT, "__nd_got")
 MACHO_OBJECT_TEXT(kGOTRelocation,
                   "invalid native GOT or personality relocation")
 MACHO_OBJECT_TEXT(kTLVDescriptor,
-                  "thread-local access requires an existing strong descriptor "
-                  "import in a sealed GOT slot")
+                  "thread-local access requires a strong descriptor export "
+                  "or a sealed descriptor import")
+MACHO_OBJECT_TEXT(kTLVSymbolPrefix, "_")
+MACHO_OBJECT_TEXT(kTLVBootstrap, "__tlv_bootstrap")
+MACHO_OBJECT_VALUE(uint8_t, kTLVResolverKey, 0) // IA, zero discriminator.
+MACHO_OBJECT_VALUE(unsigned, kTLVDescriptorBytes, 3 * sizeof(uint64_t))
+MACHO_OBJECT_VALUE(uint32_t, kTLVDescriptorAddress, 0x91000000)
 MACHO_OBJECT_TEXT(kTLVInstruction, "thread-local descriptor reference requires "
                                    "an unadjusted ADRP or pointer-sized LDR")
 MACHO_OBJECT_VALUE(uint32_t, kTLVLoadRegisters, 0x3ff)

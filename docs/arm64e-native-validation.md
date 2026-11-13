@@ -1276,8 +1276,12 @@ For an external thread-local variable, the arm64e object publisher resolves
 TLVP page relocations to the original strong import's sealed descriptor
 slot. The compiler's authenticated descriptor call still selects storage for
 the current thread. This path requires an existing provider and accepts the
-ordinary ADRP and pointer-sized LDR forms. Creating a new TLS definition or
-running a new TLS initializer requires additional dyld registration.
+ordinary ADRP and pointer-sized LDR forms. For a strong per-thread export
+in the original image, the publisher checks the descriptor's section and
+authenticated bootstrap, then relaxes the load to an ADD at the relocated
+descriptor address. Both paths reuse the original per-thread storage.
+Creating a new TLS definition or running a new TLS initializer requires
+additional dyld registration.
 
 To repeat the interrupted-frame test on a Mac that can launch arm64e
 executables, build the test host against the tracked LLVM fork and require

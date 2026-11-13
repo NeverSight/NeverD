@@ -951,55 +951,99 @@ TEST(AArch64LiftedImage, PublishedThreadLocalAccessUsesTheBoundDescriptor) {
       return llvm::sys::ExecuteAndWait(kCompiler, Args);
     };
     ASSERT_EQ(Compile({kDylib, ProviderSource, kOut, Provider}), 0);
-    ASSERT_EQ(Compile({kDylib, Source, Provider, kOut, Input}), 0);
-    auto Original = Reader->load(Input);
-    ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
-    const auto *Entry = Original->findSymbol(kTLVSymbol);
-    ASSERT_NE(Entry, nullptr);
-    const SourcePatchMapping Map{kTLVMapping, Entry->Addr};
-    const auto Install = [&]() -> llvm::Expected<PatchResult> {
-      auto Bytes = llvm::MemoryBuffer::getFile(Object);
-      if (!Bytes)
-        return llvm::errorCodeToError(Bytes.getError());
-      return installMachOObjectPatch((*Bytes)->getBuffer(), *Original, {Map},
-                                     {}, Output, {});
-    };
-    ASSERT_EQ(Compile({kTLVReplacement, kTLVCompile, Source, kOut, Object}), 0);
-    auto Patch = Install();
-    ASSERT_TRUE(bool(Patch)) << llvm::toString(Patch.takeError());
-    ASSERT_EQ(Patch->PatchedFunctions.size(), 1u);
-    auto Published = Reader->load(Output);
-    ASSERT_TRUE(bool(Published)) << llvm::toString(Published.takeError());
-    const auto Slot = llvm::find_if(Original->DyldBindSlots, [](const auto &B) {
-      return B.second.Name == kTLVBind;
-    });
-    ASSERT_NE(Slot, Original->DyldBindSlots.end());
-    const auto New = Published->DyldBindSlots.find(Slot->first +
-                                                   Patch->OriginalSectionSlide);
-    ASSERT_NE(New, Published->DyldBindSlots.end());
-    EXPECT_EQ(New->second.Name, Slot->second.Name);
-    EXPECT_EQ(New->second.LibraryOrdinal, Slot->second.LibraryOrdinal);
-    if (std::getenv(kExecute)) {
-      ASSERT_EQ(Compile({DriverSource, kOut, Driver}), 0);
-      for (bool Installed : {false, true}) {
-        ASSERT_EQ(llvm::sys::ExecuteAndWait(
-                      Driver,
-                      {Driver, Installed ? Output : Input,
-                       std::to_string(Installed ? kTLVChangedAdjustment : 0)}),
-                  0);
-        Calls += kTLVAccessesPerProcess;
+    for (bool Local : {false, true}) {
+      SCOPED_TRACE(Local);
+      ASSERT_EQ(Compile({kDylib, Source, Local ? ProviderSource : Provider,
+                         kOut, Input}),
+                0);
+      auto Original = Reader->load(Input);
+      ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+      const auto *Entry = Original->findSymbol(kTLVSymbol);
+      ASSERT_NE(Entry, nullptr);
+      SourcePatchMapping Map{kTLVMapping, Entry->Addr};
+      const auto Install = [&]() -> llvm::Expected<PatchResult> {
+        auto Bytes = llvm::MemoryBuffer::getFile(Object);
+        if (!Bytes)
+          return llvm::errorCodeToError(Bytes.getError());
+        return installMachOObjectPatch((*Bytes)->getBuffer(), *Original, {Map},
+                                       {}, Output, {});
+      };
+      ASSERT_EQ(Compile({kTLVReplacement, kTLVCompile, Source, kOut, Object}),
+                0);
+      auto Patch = Install();
+      ASSERT_TRUE(bool(Patch)) << llvm::toString(Patch.takeError());
+      ASSERT_EQ(Patch->PatchedFunctions.size(), 1u);
+      auto Published = Reader->load(Output);
+      ASSERT_TRUE(bool(Published)) << llvm::toString(Published.takeError());
+      if (Local) {
+        const auto *Descriptor = Original->findSymbol(kTLVBind);
+        ASSERT_NE(Descriptor, nullptr);
+        const auto *Relocated = Published->findSymbol(kTLVBind);
+        ASSERT_NE(Relocated, nullptr);
+        EXPECT_EQ(Relocated->Addr,
+                  Descriptor->Addr + Patch->OriginalSectionSlide);
+        const auto Before =
+            Original->MachOAuthenticatedPointers.find(Descriptor->Addr);
+        const auto After =
+            Published->MachOAuthenticatedPointers.find(Relocated->Addr);
+        ASSERT_NE(Before, Original->MachOAuthenticatedPointers.end());
+        ASSERT_NE(After, Published->MachOAuthenticatedPointers.end());
+        EXPECT_EQ(After->second.Symbol, Before->second.Symbol);
+        EXPECT_EQ(After->second.LibraryOrdinal, Before->second.LibraryOrdinal);
+        EXPECT_EQ(After->second.Key, Before->second.Key);
+      } else {
+        const auto Slot =
+            llvm::find_if(Original->DyldBindSlots, [](const auto &B) {
+              return B.second.Name == kTLVBind;
+            });
+        ASSERT_NE(Slot, Original->DyldBindSlots.end());
+        const auto New = Published->DyldBindSlots.find(
+            Slot->first + Patch->OriginalSectionSlide);
+        ASSERT_NE(New, Published->DyldBindSlots.end());
+        EXPECT_EQ(New->second.Name, Slot->second.Name);
+        EXPECT_EQ(New->second.LibraryOrdinal, Slot->second.LibraryOrdinal);
       }
-    }
-    ASSERT_TRUE(std::filesystem::remove(Output));
-    for (auto Flags :
-         {std::vector<llvm::StringRef>{kTLVMissing, kTLVCompile, Source, kOut,
-                                       Object},
-          std::vector<llvm::StringRef>{kTLVCompile, Bad, kOut, Object}}) {
-      ASSERT_EQ(Compile(Flags), 0);
-      auto Refused = Install();
-      ASSERT_FALSE(bool(Refused));
-      llvm::consumeError(Refused.takeError());
-      EXPECT_FALSE(std::filesystem::exists(Output));
+      if (std::getenv(kExecute)) {
+        ASSERT_EQ(Compile({DriverSource, kOut, Driver}), 0);
+        for (bool Installed : {false, true}) {
+          ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                        Driver, {Driver, Installed ? Output : Input,
+                                 std::to_string(
+                                     Installed ? kTLVChangedAdjustment : 0)}),
+                    0);
+          Calls += kTLVAccessesPerProcess;
+        }
+      }
+      ASSERT_TRUE(std::filesystem::remove(Output));
+      for (auto Flags :
+           {std::vector<llvm::StringRef>{kTLVMissing, kTLVCompile, Source, kOut,
+                                         Object},
+            std::vector<llvm::StringRef>{kTLVCompile, Bad, kOut, Object}}) {
+        ASSERT_EQ(Compile(Flags), 0);
+        auto Refused = Install();
+        ASSERT_FALSE(bool(Refused));
+        llvm::consumeError(Refused.takeError());
+        EXPECT_FALSE(std::filesystem::exists(Output));
+      }
+      if (Local) {
+        std::ofstream(ProviderSource) << kTLVOrdinaryData;
+        ASSERT_EQ(Compile({kDylib, kTLVOrdinaryFlag, Source, ProviderSource,
+                           kOut, Input}),
+                  0);
+        std::ofstream(ProviderSource) << kTLVProviderBody;
+        Original = Reader->load(Input);
+        ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+        const auto *OtherEntry = Original->findSymbol(kTLVSymbol);
+        ASSERT_NE(OtherEntry, nullptr);
+        ASSERT_TRUE(Original->findSymbol(kTLVBind));
+        Map.OriginalVA = OtherEntry->Addr;
+        ASSERT_EQ(Compile({kTLVReplacement, kTLVCompile, Source, kOut, Object}),
+                  0);
+        auto Refused = Install();
+        ASSERT_FALSE(bool(Refused));
+        llvm::consumeError(Refused.takeError());
+        EXPECT_FALSE(std::filesystem::exists(Output));
+      }
     }
   }
   RecordProperty(kTLVCalls, Calls);
