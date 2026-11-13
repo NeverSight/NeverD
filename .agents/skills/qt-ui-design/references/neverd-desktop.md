@@ -285,7 +285,8 @@ rules below do, not from taste.
   and Return in its filter pressed it. Turn `autoDefault` off for a tool
   window's buttons, as Lineage does, and set the default yourself: Compare
   until a comparison exists and none after, when Return in the filter would
-  start another. Such a window must then answer Return itself. `QDialog`
+  start another (Compare keeps the accent all the same; see Auditing every
+  window). Such a window must then answer Return itself. `QDialog`
   presses the first default button among all its descendants, those of an
   open child window included, and a button without `autoDefault` passes the
   key up to it. Binary comparison presses the button that holds focus,
@@ -507,7 +508,7 @@ the plugin manager's own line of help names the import. So:
 | MCP connections | Connect | Return in the server row runs it |
 | Call paths | Trace | Return in the address runs it |
 | Validate scalar returns | Check again | The window's one command |
-| Analyst review | Append assessment | The form's accept; faint until the draft is complete |
+| Analyst review | Append assessment; Save comparison… while the selected record's page hides the form | The form's accept, faint until the draft is complete; the window's own line of help asks for the save |
 | Choose counterpart | Pair functions | The chooser's accept; faint until a row is chosen |
 | x87 support, Unwind information, Shortcuts | Close | They only show things, as About does under its OK |
 | Binary comparison | Compare | The window's own action; default until a comparison exists, the accent throughout |
@@ -525,8 +526,7 @@ the plugin manager's own line of help names the import. So:
 - The capture probe writes `main` beside `default` in each window's widget
   tree; the query is "every window with push buttons has exactly one button
   that is either". What stands outside it: the main window, whose panes are
-  not windows, and Analyst review while its second tab hides the form whose
-  accept is the main action.
+  not windows.
 - Kept as chosen: Compile to new binary in Rewrite function, Copy in Export
   data, Next in Find in view, Trace's own Return in the address of Call
   paths, and the accept buttons of questions.
