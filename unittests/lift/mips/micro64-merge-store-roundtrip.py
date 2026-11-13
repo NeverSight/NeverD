@@ -63,7 +63,8 @@ def harness(little):
 def run(args, work, little, n32):
     order = "little" if little else "big"
     endian = "-EL" if little else "-EB"
-    assemble = [args.assembler, "-mips64r2", "-n32" if n32 else "-64", "-mmicromips", endian]
+    assemble = [args.assembler, "-mips64r2", "-n32" if n32 else "-64",
+                "-msoft-float", "-mmicromips", endian]
     emulation = f"elf{32 if n32 else 64}{'l' if little else 'b'}tsmip" + ("n32" if n32 else "")
     link = [args.linker, "-m", emulation, "-N", "-Ttext", "0x80010000" if n32 else "0xffffffff80010000"]
     cc = [args.cc, "-march=mips64r2", "-mabi=n32" if n32 else "-mabi=64", "-msoft-float",
@@ -101,6 +102,8 @@ def run(args, work, little, n32):
             subprocess.run([args.neverd, "decompile", "--func", name,
                             *(["--llvm"] if backend == "llvmc" else []),
                             "-o", f"{name}.c", "forms.elf"], cwd=work, check=True)
+            if "volatile uint8_t" not in (work / f"{name}.c").read_text():
+                raise ValueError(f"{backend} lost volatile byte stores in {name}")
         for opt in ("-O0", "-O2"):
             for name in FUNCTIONS:
                 subprocess.run([*cc, "-I.", opt, "-c", f"{name}.c", "-o", f"{name}.o"],

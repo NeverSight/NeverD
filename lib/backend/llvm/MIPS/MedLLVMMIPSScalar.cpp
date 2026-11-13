@@ -246,14 +246,14 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
   auto *ValueTy = sizeToType(Load.Bytes);
   auto *OutputTy = Store ? ValueTy : sizeToType(Op.Output.Size);
   auto *Old = Coerce(getVar(Op.Inputs[2], B), OutputTy);
-  const auto C = [&](uint64_t V) {
-    return llvm::ConstantInt::get(AddressTy, V);
-  };
-  auto *Offset = B.CreateAnd(First, C(Load.Bytes - 1));
+  // A lane fits in a native word on every MIPS profile, including n32.
+  const auto C = [&](unsigned V) { return B.getInt32(V); };
+  auto *AddressMask = llvm::ConstantInt::get(AddressTy, Load.Bytes - 1);
+  auto *Offset =
+      B.CreateZExtOrTrunc(B.CreateAnd(First, AddressMask), B.getInt32Ty());
   const bool Forward = Load.Left != Little;
   auto *Count =
       Forward ? B.CreateSub(C(Load.Bytes), Offset) : B.CreateAdd(Offset, C(1));
-  auto *Base = Forward ? First : B.CreateSub(First, Offset);
   auto *DestinationByte = Load.Left ? B.CreateSub(C(Load.Bytes), Count) : C(0);
   llvm::Value *Memory = nullptr;
   if (VA) {
@@ -271,7 +271,8 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
     if (!Memory && Img && Img->getSegmentFor(Access.First))
       throw std::runtime_error(kMIPSMergeImageAddress);
     if (!Memory)
-      Memory = getMemoryPtr(Base, B.getInt8Ty(), B);
+      Memory = getMemoryPtr(llvm::ConstantInt::get(AddressTy, Access.First),
+                            B.getInt8Ty(), B);
   } else {
     if (Img && !usesOriginalImageStorage() &&
         (tryResolveWritableData(AddressValue, 1, B) ||
@@ -290,7 +291,7 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
   auto *Done = llvm::BasicBlock::Create(*Ctx, "mips.merge.done", Function);
   B.CreateBr(Loop);
   B.SetInsertPoint(Loop);
-  auto *Index = B.CreatePHI(AddressTy, 2, "mips.merge.index");
+  auto *Index = B.CreatePHI(B.getInt32Ty(), 2, "mips.merge.index");
   auto *Result = Store ? nullptr : B.CreatePHI(ValueTy, 2, "mips.merge.value");
   Index->addIncoming(C(0), Entry);
   if (Result)

@@ -1926,9 +1926,9 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
     return;
   }
   if (const auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst);
-      SI && SI->isAtomic() && SI->getPointerAddressSpace() == 0) {
-    // An atomic store keeps its order, as an atomic load does: C writes the
-    // value through the same address with the builtin of that order.
+      SI && SI->getPointerAddressSpace() == 0 &&
+      (SI->isAtomic() || (SI->isVolatile() &&
+                          SI->getValueOperand()->getType()->isIntegerTy(8)))) {
     const llvm::Value *Address = SI->getPointerOperand();
     std::string AddressText;
     if (std::string Image = imageDataCName(Address); !Image.empty())
@@ -1937,6 +1937,13 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
       AddressText = "&" + getName(Slot);
     else
       AddressText = valueStr(Address);
+    if (!SI->isAtomic()) {
+      // Merge stores can target device memory. Keep each byte observable.
+      emitIndent(Indent);
+      OS << "*(volatile uint8_t*)(" << AddressText
+         << ") = " << valueStr(SI->getValueOperand()) << ";\n";
+      return;
+    }
     const char *Ordering = "__ATOMIC_RELAXED";
     if (SI->getOrdering() == llvm::AtomicOrdering::Release)
       Ordering = "__ATOMIC_RELEASE";
