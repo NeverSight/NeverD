@@ -871,9 +871,7 @@ readMachODependencyState(llvm::ArrayRef<uint8_t> B,
     auto V = R.payload(D.export_off, D.export_size);
     if (!V)
       return V.takeError();
-    auto Facts = machOExportIdentities(*V, R.HeaderVA, R.H.FileType,
-                                       R.Chained ? &R.Chained->WeakDefinitions
-                                                 : nullptr);
+    auto Facts = machOExportIdentities(*V, R.HeaderVA, R.H.FileType, R.Chained);
     if (!Facts)
       return Facts.takeError();
     // An empty export stream and an absent export command describe the same
@@ -886,9 +884,7 @@ readMachODependencyState(llvm::ArrayRef<uint8_t> B,
     auto V = R.payload(R.Export->dataoff, R.Export->datasize);
     if (!V)
       return V.takeError();
-    auto Facts = machOExportIdentities(*V, R.HeaderVA, R.H.FileType,
-                                       R.Chained ? &R.Chained->WeakDefinitions
-                                                 : nullptr);
+    auto Facts = machOExportIdentities(*V, R.HeaderVA, R.H.FileType, R.Chained);
     if (!Facts)
       return Facts.takeError();
     if (!Facts->empty())

@@ -7,11 +7,13 @@ import json
 import os
 from pathlib import Path
 import platform
+import plistlib
 import re
 import struct
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
+from xml.parsers.expat import ExpatError
 
 from arm64e_artifacts import OwnedProducts
 
@@ -157,12 +159,39 @@ def probe_signal_cursor(output):
         save(output / POLICY["report_name"], report)
 
 
+def sign_cpta_slice(products, output, binary, policy):
+    entitlements = output / policy["entitlements_file"]
+    products.append(entitlements)
+    entitlements.write_bytes(plistlib.dumps(policy["entitlements"]))
+    signed = command(products, output, policy["sign_label"],
+                     [v.format(plist=entitlements, binary=binary) for v in policy["sign_command"]],
+                     POLICY["tool_timeout"])
+    if signed.returncode:
+        return None
+    verified = command(products, output, policy["x1"] + POLICY["signature_suffix"],
+                       [*POLICY["signature_command"], binary], POLICY["tool_timeout"])
+    if verified.returncode:
+        return None
+    embedded = command(products, output, policy["read_label"],
+                       [v.format(binary=binary) for v in policy["read_command"]], POLICY["tool_timeout"])
+    if embedded.returncode:
+        return None
+    try:
+        actual = plistlib.loads(embedded.stdout.encode())
+    except (ValueError, plistlib.InvalidFileException, ExpatError):
+        return None
+    # Compare the plist types too. Python treats booleans as integers when comparing dictionaries.
+    if plistlib.dumps(actual) == entitlements.read_bytes():
+        return actual
+    return None
+
+
 def probe_cpta(output):
     policy = POLICY["cpta_probe"]
     source = ROOT / policy["source"]
     report = {**provenance(), "platform": platform.platform(), "profiles": {},
               "status": POLICY["failed"], policy["observed_key"]: False,
-              policy["qualified_key"]: False}
+              policy["qualified_key"]: False, policy["writeback_qualified_key"]: False}
     report["source_sha256"][policy["source"]] = digest(source)
     try:
         if platform.system() != POLICY["host_os"] or platform.machine() not in POLICY["host_arches"]:
@@ -182,6 +211,11 @@ def probe_cpta(output):
                             any(t in built.stderr.lower() for t in policy["unsupported_compiler"])):
                         profile["outcome"] = policy["slice_unavailable"]
                     continue
+                if arch == policy["x1"]:
+                    signed = sign_cpta_slice(products, output, binary, policy)
+                    if signed is None:
+                        continue
+                    profile[policy["entitlements_key"]] = signed
                 raw = binary.read_bytes()
                 magic, cpu, actual = struct.unpack_from(POLICY["header_format"], raw)
                 profile.update(sha256=digest(binary), cpu_subtype=actual)
@@ -211,10 +245,22 @@ def probe_cpta(output):
                         profile["outcome"] = policy["checked"]
                     elif lines[1:] == [row[2] for row in vectors]:
                         profile["outcome"] = policy["unchecked"]
+                if profile["outcome"] in (policy["checked"], policy["unchecked"], policy["isa_unavailable"]):
+                    writeback = command(products, output, arch + policy["writeback_suffix"],
+                                        [binary, policy["writeback_mode"]], POLICY["tool_timeout"])
+                    state = policy["unexpected"]
+                    if writeback.returncode == 0:
+                        state = {policy["writeback_checked"]: policy["checked"],
+                                 policy["writeback_unchecked"]: policy["unchecked"]}.get(
+                                     writeback.stdout.strip(), policy["unexpected"])
+                    profile[policy["writeback_key"]] = state
             outcomes = {name: profile["outcome"] for name, profile in report["profiles"].items()}
             report[policy["observed_key"]] = policy["checked"] in outcomes.values()
-            report[policy["qualified_key"]] = outcomes[policy["x1"]] == policy["checked"]
-            if policy["unexpected"] in outcomes.values():
+            writebacks = {arch: p.get(policy["writeback_key"]) for arch, p in report["profiles"].items()}
+            report[policy["writeback_qualified_key"]] = writebacks[policy["x1"]] == policy["checked"]
+            report[policy["qualified_key"]] = (outcomes[policy["x1"]] == policy["checked"] and
+                                                report[policy["writeback_qualified_key"]])
+            if policy["unexpected"] in outcomes.values() or policy["unexpected"] in writebacks.values():
                 report["status"] = POLICY["failed"]
             else:
                 report["status"] = POLICY["passed"] if report[policy["qualified_key"]] else POLICY["unavailable"]

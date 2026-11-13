@@ -47,4 +47,13 @@ typedef struct {
   ptrdiff_t CFAOffset;
 } NDDarwinArm64eSavedGPR;
 
+/// D8-D15 hold the ABI-preserved low halves of V8-V15. A proven Q save
+/// also supplies its upper half. Offsets are relative to the caller's CFA.
+typedef struct {
+  bool Complete;
+  unsigned LowMask, HighMask;
+  ptrdiff_t LowOffsets[NDArm64ePreservedDCount];
+  ptrdiff_t HighOffsets[NDArm64ePreservedDCount];
+} NDDarwinArm64eVectorSaves;
+
 #endif // NEVERD_RUNTIME_DARWINARM64EUNWINDROW_H

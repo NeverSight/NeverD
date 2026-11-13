@@ -752,5 +752,7 @@ int main(int argc, char **argv) {
 }
 )c")
 
+#include "AArch64SignalResumeFixtures.def"
+
 #undef ASYNC_FRAME_TEXT
 #undef ASYNC_FRAME_VALUE

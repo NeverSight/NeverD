@@ -1,6 +1,7 @@
 """Reject false native qualification from skipped or mismatched evidence."""
 
 import json
+import plistlib
 from pathlib import Path
 import subprocess
 import struct
@@ -65,16 +66,24 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
         policy = native.POLICY["cpta_probe"]
         checked = [row[3] for row in policy["vectors"]]
         unchecked = [row[2] for row in policy["vectors"]]
-        for results, status in ((checked, native.POLICY["passed"]),
-                                (unchecked, native.POLICY["unavailable"]),
-                                (checked[:-1], native.POLICY["failed"]),
-                                (unchecked[:-1] + checked[-1:], native.POLICY["failed"])):
+        for results, writeback, status in (
+            (checked, policy["writeback_checked"], native.POLICY["passed"]),
+            (unchecked, policy["writeback_unchecked"], native.POLICY["unavailable"]),
+            (checked, policy["writeback_unchecked"], native.POLICY["unavailable"]),
+            (checked, "", native.POLICY["failed"]),
+            (checked[:-1], policy["writeback_checked"], native.POLICY["failed"]),
+            (unchecked[:-1] + checked[-1:], policy["writeback_checked"], native.POLICY["failed"]),
+        ):
             def run(products, output, label, argv, timeout, env=None):
                 if label.endswith(native.POLICY["compile_suffix"]):
                     arch = label.removesuffix(native.POLICY["compile_suffix"])
                     Path(argv[-1]).write_bytes(struct.pack(
                         native.POLICY["header_format"], native.POLICY["macho_magic"],
                         native.POLICY["cpu_type"], policy["profiles"][arch]))
+                if label == policy["read_label"]:
+                    return subprocess.CompletedProcess(argv, 0, plistlib.dumps(policy["entitlements"]).decode(), "")
+                if label.endswith(policy["writeback_suffix"]):
+                    return subprocess.CompletedProcess(argv, 0, writeback, "")
                 values = results if label == policy["x1"] else checked
                 lines = [policy["started"], *values]
                 return subprocess.CompletedProcess(argv, 0, "\n".join(lines), "")
@@ -87,7 +96,21 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                 self.assertEqual(report["status"], status)
                 self.assertTrue(report[policy["observed_key"]])
                 self.assertEqual(report[policy["qualified_key"]], status == native.POLICY["passed"])
+                self.assertEqual(report[policy["writeback_qualified_key"]],
+                                 results in (checked, unchecked) and writeback == policy["writeback_checked"])
                 self.assertFalse(list(Path(temporary).glob("*" + native.POLICY["binary_suffix"])))
+
+    def test_cpta_requires_the_signed_entitlements_to_round_trip(self):
+        policy = native.POLICY["cpta_probe"]
+        wrong = {k: int(v) if v is True else v for k, v in policy["entitlements"].items()}
+        for contents in (plistlib.dumps({}).decode(), plistlib.dumps(wrong).decode(), ""):
+            with self.subTest(contents=contents), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with native.OwnedProducts(root, False) as products, mock.patch.object(
+                    native, "command", return_value=subprocess.CompletedProcess([], 0, contents, "")
+                ):
+                    self.assertIsNone(native.sign_cpta_slice(products, root, root / policy["x1"], policy))
+                self.assertFalse((root / policy["entitlements_file"]).exists())
 
     def test_cpta_records_unsupported_isa_and_loader_without_qualification(self):
         policy = native.POLICY["cpta_probe"]
@@ -99,6 +122,12 @@ class Arm64eNativeQualificationTests(unittest.TestCase):
                     native.POLICY["header_format"], native.POLICY["macho_magic"],
                     native.POLICY["cpu_type"], policy["profiles"][arch]))
                 return subprocess.CompletedProcess(argv, 0, "", "")
+            if label in (policy["sign_label"], policy["x1"] + native.POLICY["signature_suffix"]):
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            if label == policy["read_label"]:
+                return subprocess.CompletedProcess(argv, 0, plistlib.dumps(policy["entitlements"]).decode(), "")
+            if label.endswith(policy["writeback_suffix"]):
+                return subprocess.CompletedProcess(argv, 0, policy["writeback_unchecked"], "")
             if label == policy["x1"]:
                 raise OSError(policy["bad_cpu_type_errno"], "")
             return subprocess.CompletedProcess(argv, policy["undefined_instruction"],
