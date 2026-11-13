@@ -69,6 +69,8 @@ struct CodeTextTestAccess {
   static void setReadsAhead(CodeText &view, bool ahead) {
     view.showsAhead_ = ahead;
   }
+  /// The pixels the view has asked its viewport to paint, all told.
+  static quint64 pixelsAsked(const CodeText &view) { return view.pixelsAsked_; }
   /// The lines as the view shows them: what its rows paint.
   static QStringList shownLines(const CodeText &view) {
     QStringList lines;

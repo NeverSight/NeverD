@@ -620,9 +620,13 @@ public:
   /// it happens to.
   static constexpr int Every = -1, Some = -2;
 
-  RowsOfAView(QWidget *viewport, int rowHeight)
-      : viewport_(viewport), rowHeight_(rowHeight) {
-    viewport_->installEventFilter(&painted_);
+  /// \p asked says how many pixels the view has asked its viewport to
+  /// paint, all told: a change is held to what the view asks for.  What the
+  /// window paints is more where the dock that holds the view lays itself
+  /// out again, as it does while the workbench settles after a file opened,
+  /// and that is no doing of the view's.
+  RowsOfAView(QWidget *viewport, int rowHeight, std::function<quint64()> asked)
+      : viewport_(viewport), rowHeight_(rowHeight), asked_(std::move(asked)) {
     settle();
   }
   /// Whether the window keeps a picture of the view that can be looked at.
@@ -635,10 +639,10 @@ public:
   /// Returns how many rows' worth of the view it painted, rounded up.
   int change(const QString &what, int rows, const std::function<void()> &act) {
     settle();
-    painted_.region = {};
+    const quint64 before = asked_();
     act();
     settle();
-    const qint64 area = painted_.area();
+    const qint64 area = qint64(asked_() - before);
     const qint64 whole = qint64(viewport_->width()) * viewport_->height();
     const QImage kept = windowPixels(viewport_);
     viewport_->update();
@@ -675,7 +679,7 @@ public:
 private:
   QWidget *viewport_;
   int rowHeight_;
-  PaintedParts painted_;
+  std::function<quint64()> asked_;
 };
 
 class WorkbenchTests : public QObject {
@@ -9056,7 +9060,8 @@ private slots:
     const int rowHeight = code->cursorViewportRect().height();
     QVERIFY(rowHeight > 0);
     QVERIFY(viewport->height() > 20 * rowHeight);
-    RowsOfAView rows(viewport, rowHeight);
+    RowsOfAView rows(viewport, rowHeight,
+                     [&] { return CodeTextTestAccess::pixelsAsked(*code); });
     if (!rows.pictures())
       QSKIP("The window keeps no picture that can be looked at");
     const int Every = RowsOfAView::Every, Some = RowsOfAView::Some;
@@ -9149,7 +9154,8 @@ private slots:
     auto *code =
         shownCode(bench, directory, QStringLiteral("code-brackets.bin"));
     QVERIFY(code);
-    RowsOfAView rows(code->viewport(), code->cursorViewportRect().height());
+    RowsOfAView rows(code->viewport(), code->cursorViewportRect().height(),
+                     [&] { return CodeTextTestAccess::pixelsAsked(*code); });
     if (!rows.pictures())
       QSKIP("The window keeps no picture that can be looked at");
     // After the brace that opens the block, where no bracket is.
@@ -9185,7 +9191,8 @@ private slots:
     QVERIFY(code);
     auto *viewport = code->viewport();
     const int rowHeight = code->cursorViewportRect().height();
-    RowsOfAView rows(viewport, rowHeight);
+    RowsOfAView rows(viewport, rowHeight,
+                     [&] { return CodeTextTestAccess::pixelsAsked(*code); });
     if (!rows.pictures())
       QSKIP("The window keeps no picture that can be looked at");
     const int Every = RowsOfAView::Every;
@@ -15766,9 +15773,12 @@ private slots:
     for (int pass = 0; pass < 3; ++pass) {
       const int previous = paints;
       listing->refresh();
-      QTRY_VERIFY_WITH_TIMEOUT(ListingViewTestAccess::settled(*listing) &&
-                                   paints > previous,
+      QTRY_VERIFY_WITH_TIMEOUT(ListingViewTestAccess::settled(*listing),
                                OpenTimeoutMs);
+      // Lines that come again as they were are not painted again: what the
+      // window keeps is looked at as a paint of all of it finds the view.
+      listing->viewport()->update();
+      QTRY_VERIFY_WITH_TIMEOUT(paints > previous, OpenTimeoutMs);
       QCOMPARE(listing->currentItem(), std::optional<Address>(address));
       QCOMPARE(listing->topItem(), top);
       QVERIFY(keptContext);
@@ -15792,6 +15802,423 @@ private slots:
     QCOMPARE(listing->currentItem(), std::optional<Address>(Base + 0x1500));
     QCOMPARE(ListingViewTestAccess::edges(*listing),
              ListingViewTestAccess::expectedEdges(*listing));
+  }
+
+  void aChangeToTheListingPaintsTheRowsItReachesAndNoOther() {
+    // The listing paints again the rows whose painting a change reaches, and
+    // the arrows' gutter where an arrow changed, and leaves the rest as the
+    // window keeps it.  After each kind of change, what the window keeps of
+    // the view is what painting all of the view gives; and the changes that
+    // reach few rows paint few.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    // Narrow enough for the lines to scroll sideways.
+    bench.window->resize(1000, 900);
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("fixture.bin")));
+    auto *assembly = bench.window->disassembly();
+    auto *listing = assembly->listing();
+    // Nothing of the workbench is on its way: a list that lands in another
+    // dock may have the docks lay themselves out again.
+    QTRY_VERIFY_WITH_TIMEOUT(
+        bench.session.loaded() && bench.session.indexReady() &&
+            !bench.session.busy() && ListingViewTestAccess::settled(*listing) &&
+            !bench.session.queries().hasPending(),
+        OpenTimeoutMs);
+    using Access = ListingViewTestAccess;
+    auto *viewport = listing->viewport();
+    const int rowHeight = Access::lineHeight(*listing);
+    QVERIFY(rowHeight > 0);
+    // The steps look at the page's first twenty-six lines.  How many lines a
+    // view shows is the font's to say and the screen's scale's, so the window
+    // grows until it shows them, with two to spare for a scroll bar that
+    // comes with the page.
+    const int Looked = 26;
+    for (int turn = 0;
+         turn < 4 && viewport->height() < (Looked + 2) * rowHeight; ++turn) {
+      bench.window->resize(bench.window->width(), bench.window->height() +
+                                                      (Looked + 2) * rowHeight -
+                                                      viewport->height());
+      RowsOfAView::settle();
+    }
+    QTRY_VERIFY(Access::settled(*listing));
+    const int Instructions = 200;
+    // Lines of the listing's kinds: a jump down to a line in view, one up to
+    // a line in view, and one to a line that is not loaded; names with the
+    // places they lead to; text beyond ASCII.
+    const auto line = [](Address address, int sub, const char *kind,
+                         const QString &text, const QJsonArray &spans = {},
+                         const char *flow = "",
+                         std::optional<Address> target = {}) {
+      QJsonObject value{
+          {"item", hexAddress(address)},
+          {"sub", sub},
+          {"kind", QLatin1String(kind)},
+          {"flow", QLatin1String(flow)},
+          {"prefix",
+           QStringLiteral(".text:%1").arg(address, 16, 16, QLatin1Char('0'))},
+          {"cls", 1},
+          {"function", QStringLiteral("start")},
+          {"function_address", hexAddress(0x1000)},
+          {"item_size", "0x4"},
+          {"text", text},
+          {"spans", spans}};
+      if (target)
+        value["target"] = hexAddress(*target);
+      return value;
+    };
+    // What the page's rows say.  One page differs from the one before it in
+    // one of these.
+    struct Said {
+      QString callee = QStringLiteral("callee");
+      QString function = QStringLiteral("start");
+      int calleeRole = 3;
+      QString calleePlace = QStringLiteral("0x2000");
+      int callClass = 1;
+      QString callPrefix;
+      const char *jumpFlow = "jump";
+    };
+    const auto page = [&](const Said &said) {
+      QJsonArray rows;
+      rows.append(line(0x1000, 0, "header", QStringLiteral("start proc near")));
+      for (int at = 0; at < Instructions; ++at) {
+        const Address address = 0x1004 + 4 * Address(at);
+        QJsonObject row;
+        if (at == 3) {
+          row = line(
+              address, 0, "insn", QStringLiteral("jmp     loc_1028"),
+              QJsonArray{QJsonArray{0, 3, 2}, QJsonArray{8, 8, 3, "0x1028"}},
+              said.jumpFlow, 0x1028);
+        } else if (at == 10) {
+          row =
+              line(address, 0, "insn", QStringLiteral("call    ") + said.callee,
+                   QJsonArray{QJsonArray{0, 4, 2},
+                              QJsonArray{8, int(said.callee.toUtf8().size()),
+                                         said.calleeRole, said.calleePlace}},
+                   "call", 0x2000);
+          row["cls"] = said.callClass;
+          if (!said.callPrefix.isEmpty())
+            row["prefix"] = said.callPrefix;
+        } else if (at == 14) {
+          row = line(
+              address, 0, "insn", QStringLiteral("jnz     loc_1010"),
+              QJsonArray{QJsonArray{0, 3, 2}, QJsonArray{8, 8, 3, "0x1010"}},
+              "cjump", 0x1010);
+        } else if (at == 20) {
+          row = line(
+              address, 0, "insn", QStringLiteral("jmp     loc_9000"),
+              QJsonArray{QJsonArray{0, 3, 2}, QJsonArray{8, 8, 3, "0x9000"}},
+              "jump", 0x9000);
+        } else if (at == 24) {
+          row = line(address, 0, "insn",
+                     QStringLiteral("mov     eax, ebx ; 注释 eax"),
+                     QJsonArray{QJsonArray{0, 3, 2}, QJsonArray{8, 3, 4},
+                                QJsonArray{13, 3, 4}});
+        } else {
+          row = line(address, 0, "insn",
+                     QStringLiteral("mov     eax, %1").arg(at),
+                     QJsonArray{QJsonArray{0, 3, 2}, QJsonArray{8, 3, 4}});
+        }
+        row["function"] = said.function;
+        rows.append(row);
+      }
+      return rows;
+    };
+    Said said;
+    Access::acceptRows(*listing, page(said), Access::Page::Replace);
+    listing->setFocus();
+    QTRY_VERIFY(listing->hasFocus());
+    const int inView = viewport->height() / rowHeight;
+    QVERIFY2(inView >= Looked,
+             qPrintable(QStringLiteral("%1 lines of %2 in a view of %3, in a "
+                                       "window of %4")
+                            .arg(inView)
+                            .arg(rowHeight)
+                            .arg(viewport->height())
+                            .arg(bench.window->height())));
+    RowsOfAView rows(viewport, rowHeight,
+                     [&] { return Access::pixelsAsked(*listing); });
+    if (!rows.pictures())
+      QSKIP("The window keeps no picture that can be looked at");
+    const int Every = RowsOfAView::Every, Some = RowsOfAView::Some;
+    const auto keys = [&](Qt::Key key, int count,
+                          Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+      for (int at = 0; at < count; ++at)
+        QTest::keyClick(listing, key, modifiers);
+    };
+    // The cursor's line and the one it leaves.  The word under the cursor is
+    // marked wherever it stands (`mov`, in most rows), so the cursor goes
+    // down a column that holds no word.
+    rows.change(QStringLiteral("to an instruction, between its words"), Some,
+                [&] {
+                  keys(Qt::Key_Home, 1);
+                  keys(Qt::Key_Right, 5);
+                  keys(Qt::Key_Down, 1);
+                });
+    QVERIFY(Access::highlight(*listing).isEmpty());
+    rows.change(QStringLiteral("a line down"), 2,
+                [&] { keys(Qt::Key_Down, 1); });
+    rows.change(QStringLiteral("a column on"), 1,
+                [&] { keys(Qt::Key_Right, 1); });
+    rows.change(QStringLiteral("a column back"), 1,
+                [&] { keys(Qt::Key_Left, 1); });
+    // A line an arrow leaves: the arrow is drawn as the current one, which
+    // the gutter says, and the two rows of the cursor.
+    while (Access::cursorRow(*listing) < 3)
+      keys(Qt::Key_Down, 1);
+    RowsOfAView::settle();
+    // What all of the gutter comes to, in rows, at the most.
+    const int gutterRows = 8;
+    rows.change(QStringLiteral("onto a line with an arrow"), 2 + gutterRows,
+                [&] { keys(Qt::Key_Down, 1); });
+    rows.change(QStringLiteral("off the line with an arrow"), 2 + gutterRows,
+                [&] { keys(Qt::Key_Down, 1); });
+    rows.change(QStringLiteral("a selection in a line"), 1,
+                [&] { keys(Qt::Key_Right, 1, Qt::ShiftModifier); });
+    rows.change(QStringLiteral("a selection over lines"), 3,
+                [&] { keys(Qt::Key_Down, 2, Qt::ShiftModifier); });
+    rows.change(QStringLiteral("no selection"), 4,
+                [&] { keys(Qt::Key_Left, 1); });
+    // A locked word keeps its color in the rows that spell it.
+    auto &locks = bench.session.highlightLocks();
+    rows.change(QStringLiteral("a locked word"), 2,
+                [&] { locks.toggle(QStringLiteral("loc_1028")); });
+    rows.change(QStringLiteral("no locked word"), 2,
+                [&] { locks.toggle(QStringLiteral("loc_1028")); });
+    // A search marks its matches in place of the other highlights, in the
+    // address prefixes too.
+    rows.change(QStringLiteral("a search"), Some, [&] {
+      listing->setSearchHighlight({QStringLiteral("10"), Qt::CaseInsensitive});
+    });
+    rows.change(QStringLiteral("no search"), Some,
+                [&] { listing->setSearchHighlight({}); });
+    // The text cursor shows with the focus.
+    rows.change(QStringLiteral("the focus leaves"), 1, [&] {
+      listing->clearFocus();
+      QTRY_VERIFY(!listing->hasFocus());
+    });
+    // Without it, the cursor's line is the one row that says where it is,
+    // and a text another view finds is selected with no cursor drawn: from
+    // one column to another, to a column further on, from a column before.
+    rows.change(QStringLiteral("a line down, out of focus"), 2,
+                [&] { QTest::keyClick(listing, Qt::Key_Down); });
+    QVERIFY(!listing->hasFocus());
+    const int found =
+        int(listing->searchText().indexOf(QStringLiteral("eax, 12")));
+    QVERIFY(found > 0);
+    rows.change(QStringLiteral("a found text"), Some,
+                [&] { QVERIFY(listing->selectSearchRange(found, 3)); });
+    QCOMPARE(listing->selectedText(), QStringLiteral("eax"));
+    rows.change(QStringLiteral("a longer found text"), 1,
+                [&] { QVERIFY(listing->selectSearchRange(found, 4)); });
+    rows.change(QStringLiteral("a text found a column before"), 1,
+                [&] { QVERIFY(listing->selectSearchRange(found - 1, 5)); });
+    QCOMPARE(listing->selectedText(), QStringLiteral(" eax,"));
+    rows.change(QStringLiteral("the focus comes back"), Some, [&] {
+      listing->setFocus();
+      QTRY_VERIFY(listing->hasFocus());
+      keys(Qt::Key_Left, 1);
+      keys(Qt::Key_Home, 1);
+      keys(Qt::Key_Right, 5);
+    });
+    QVERIFY(Access::highlight(*listing).isEmpty());
+    // A page read again that brings the lines it brought: nothing is painted,
+    // and every line read from it stands.
+    const auto again = [&] {
+      Access::acceptRowsAtCursor(*listing, page(said));
+    };
+    auto kept = Access::linesKept(*listing);
+    QCOMPARE(rows.change(QStringLiteral("the page again"), 0, again), 0);
+    QCOMPARE(Access::linesKept(*listing) - kept, quint64(Instructions + 1));
+    // One whose row calls another name is painted in that row: as it lands,
+    // within the call that takes it.
+    kept = Access::linesKept(*listing);
+    said.callee = QStringLiteral("renamed");
+    {
+      RowsOfAView::settle();
+      const auto told = Access::pixelsAsked(*listing);
+      PaintedParts atOnce;
+      viewport->installEventFilter(&atOnce);
+      again();
+      viewport->removeEventFilter(&atOnce);
+      const qint64 row = qint64(rowHeight) * viewport->width();
+      QVERIFY(atOnce.area() > 0);
+      QCOMPARE((qint64(Access::pixelsAsked(*listing) - told) + row - 1) / row,
+               qint64(1));
+    }
+    QCOMPARE(Access::linesKept(*listing) - kept, quint64(Instructions));
+    QVERIFY(listing->searchText().contains(QStringLiteral("call    renamed")));
+    // A name as long, which the same spans color: the text alone differs.
+    said.callee = QStringLiteral("renamer");
+    QCOMPARE(rows.change(QStringLiteral("a name as long"), 1, again), 1);
+    QVERIFY(listing->searchText().contains(QStringLiteral("call    renamer")));
+    // The name in another color, and the name leading elsewhere: the spans
+    // alone differ, and what the text had laid out is not kept for them.
+    said.calleeRole = 5;
+    QCOMPARE(rows.change(QStringLiteral("a name in another color"), 1, again),
+             1);
+    said.calleePlace = QStringLiteral("0x3000");
+    rows.change(QStringLiteral("a name that leads elsewhere"), 1, again);
+    while (Access::cursorRow(*listing) != 11)
+      keys(Access::cursorRow(*listing) < 11 ? Qt::Key_Down : Qt::Key_Up, 1);
+    keys(Qt::Key_End, 1);
+    QCOMPARE(listing->operandTarget(), std::optional<Address>(0x3000));
+    keys(Qt::Key_Home, 1);
+    keys(Qt::Key_Right, 5);
+    RowsOfAView::settle();
+    // Its address in another class's color.
+    said.callClass = 2;
+    QCOMPARE(
+        rows.change(QStringLiteral("an address of another class"), 1, again),
+        1);
+    // Rows that say another function without showing it: none is painted,
+    // and what their text had laid out stands.  The header's row says the
+    // function it always said, and is kept whole.
+    kept = Access::linesKept(*listing);
+    said.function = QStringLiteral("begin");
+    QCOMPARE(rows.change(QStringLiteral("another function's name"), 0, again),
+             0);
+    QCOMPARE(Access::linesKept(*listing) - kept, quint64(1));
+    QCOMPARE(listing->currentFunctionName(), QStringLiteral("begin"));
+    // A jump that became a conditional one in a row that reads as it did:
+    // the gutter draws its arrow anew, and no row is painted.
+    said.jumpFlow = "cjump";
+    {
+      const int painted = rows.change(
+          QStringLiteral("a jump that became conditional"), gutterRows, again);
+      QVERIFY(painted > 0);
+    }
+    // A longer address before one line moves where every line begins.
+    said.callPrefix = QStringLiteral(".text:000000000000102C:and:more");
+    rows.change(QStringLiteral("a longer address"), Every, again);
+    said.callPrefix.clear();
+    rows.change(QStringLiteral("the addresses as they were"), Every, again);
+    // Changes no code of the view's makes, and so none says: the view finds
+    // them as it paints anything, and paints what they reach next.
+    const QRect corner(viewport->width() - 1, viewport->height() - 1, 1, 1);
+    rows.change(QStringLiteral("a highlight no one spoke of"), 3, [&] {
+      Access::highlightUnsaid(*listing, QStringLiteral("loc_9000"));
+      viewport->update(corner);
+    });
+    {
+      const int painted = rows.change(
+          QStringLiteral("an arrow no one spoke of"), gutterRows + 1, [&] {
+            Access::arrowUnsaid(*listing, 7, 9);
+            viewport->update(corner);
+          });
+      QVERIFY(painted > 0);
+    }
+    // Every row shows another line as the listing scrolls, begins elsewhere
+    // as it scrolls sideways or drops its prefixes, and is colored anew by
+    // another style.
+    rows.change(QStringLiteral("three lines scrolled"), Every,
+                [&] { Access::scroll(*listing, 3); });
+    QCOMPARE(Access::top(*listing), 3);
+    auto *across = listing->horizontalScrollBar();
+    QVERIFY(across->maximum() > 20);
+    rows.change(QStringLiteral("scrolled sideways"), Every,
+                [&] { across->setValue(20); });
+    rows.change(QStringLiteral("scrolled back"), Every,
+                [&] { across->setValue(0); });
+    rows.change(QStringLiteral("no prefixes"), Every,
+                [&] { listing->setShowPrefixes(false); });
+    rows.change(QStringLiteral("prefixes"), Every,
+                [&] { listing->setShowPrefixes(true); });
+    rows.change(QStringLiteral("another style"), Every,
+                [&] { emit Theme::instance().changed(); });
+    // One arrow, from a line in view to a line two views below.  Scrolled by
+    // a line, where it leaves moves and where it lands, beyond the view,
+    // does not; a view further down, where it lands moves and where it left,
+    // above the view, does not; and on its line, it is drawn as the cursor's
+    // without another arrow changing place with it.
+    QJsonArray lone;
+    for (int at = 0; at < 4 * inView; ++at)
+      lone.append(at == 5 ? line(0x4000 + 4 * Address(at), 0, "insn",
+                                 QStringLiteral("jmp     below"),
+                                 QJsonArray{QJsonValue(QJsonArray{0, 3, 2})},
+                                 "jump", 0x4000 + 4 * Address(5 + 2 * inView))
+                          : line(0x4000 + 4 * Address(at), 0, "insn",
+                                 QStringLiteral("mov     eax, ebx")));
+    Access::acceptRows(*listing, lone, Access::Page::Replace);
+    RowsOfAView::settle();
+    QCOMPARE(Access::edges(*listing),
+             QJsonArray{QJsonValue(QJsonArray{5, 5 + 2 * inView, false})});
+    rows.change(QStringLiteral("where the one arrow leaves"), Every,
+                [&] { Access::scroll(*listing, 1); });
+    Access::scroll(*listing, 4 + inView);
+    RowsOfAView::settle();
+    QCOMPARE(Access::top(*listing), 5 + inView);
+    rows.change(QStringLiteral("where the one arrow lands"), Every,
+                [&] { Access::scroll(*listing, 1); });
+    Access::scroll(*listing, -(6 + inView));
+    listing->setFocus();
+    keys(Qt::Key_Home, 1);
+    keys(Qt::Key_Right, 5);
+    keys(Qt::Key_Down, 4);
+    RowsOfAView::settle();
+    QCOMPARE(Access::top(*listing), 0);
+    QCOMPARE(Access::cursorRow(*listing), 4);
+    QVERIFY(Access::highlight(*listing).isEmpty());
+    {
+      const int painted =
+          rows.change(QStringLiteral("onto the one arrow's line"),
+                      2 + gutterRows, [&] { keys(Qt::Key_Down, 1); });
+      QVERIFY(painted > 2);
+    }
+    QVERIFY2(rows.wrong.isEmpty(),
+             qPrintable(rows.wrong.join(QStringLiteral("; "))));
+    // Each of those paints was also compared with the view painted afresh,
+    // where the screen's scale is whole (PaintCheck, cleanup).
+    if (viewport->devicePixelRatioF() == 1)
+      QVERIFY(PaintCheck::checks() > 0);
+  }
+
+  void aPatchedItemsRowIsPaintedOnceItsPatchIsKnown() {
+    // The listing reads its lines again at a patch's revision, and learns
+    // which bytes are patched from a read of the session's that lands after
+    // them: the row of the patched item is painted again for that alone, and
+    // once more when the patch is taken back.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("fixture.bin")));
+    auto *listing = bench.window->disassembly()->listing();
+    const auto quiet = [&] {
+      return ListingViewTestAccess::settled(*listing) &&
+             !bench.session.queries().hasPending();
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded() &&
+                                 bench.session.indexReady() &&
+                                 !bench.session.busy() && quiet(),
+                             OpenTimeoutMs);
+    const auto item = listing->currentItem();
+    QVERIFY(item);
+    RowsOfAView rows(
+        listing->viewport(), ListingViewTestAccess::lineHeight(*listing),
+        [&] { return ListingViewTestAccess::pixelsAsked(*listing); });
+    if (!rows.pictures())
+      QSKIP("The window keeps no picture that can be looked at");
+    rows.change(QStringLiteral("a patch"), RowsOfAView::Some, [&] {
+      bool done = false;
+      bench.session.editBytePatch(
+          "patch_apply",
+          {{"address", hexAddress(*item)}, {"kind", "bytes"}, {"bytes", "2a"}},
+          bench.session.epoch(), [&] { done = true; });
+      QTRY_VERIFY_WITH_TIMEOUT(
+          done && bench.session.hasBytePatch(*item) && quiet(), OpenTimeoutMs);
+    });
+    rows.change(QStringLiteral("the patch taken back"), RowsOfAView::Some, [&] {
+      bool done = false;
+      bench.session.editBytePatch("patch_revert",
+                                  {{"address", hexAddress(*item)}},
+                                  bench.session.epoch(), [&] { done = true; });
+      QTRY_VERIFY_WITH_TIMEOUT(
+          done && !bench.session.hasBytePatches() && quiet(), OpenTimeoutMs);
+    });
+    QVERIFY2(rows.wrong.isEmpty(),
+             qPrintable(rows.wrong.join(QStringLiteral("; "))));
   }
 
   void listingArrowEndpointsFollowLoadedRows() {

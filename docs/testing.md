@@ -7259,13 +7259,36 @@ word, a bracket's partner lines away, a fold, the focus, a row another row of it
 instruction marks, a line's number, a scroll either way, another style, and a
 highlight no code of the view's sets) and compare, after each, what the window's
 backing store keeps of the view with the view painted whole; a change that reaches
-few rows may paint few. `theViewsThatShowAnEditGoAheadOfTheOthersAtItsRevision` holds
+few rows may paint few. What it paints is counted as what the view asks its viewport to
+paint: a window paints more for reasons of its own, as when the dock that holds the view
+lays itself out again. `theViewsThatShowAnEditGoAheadOfTheOthersAtItsRevision` holds
 an edit's page to the line the edit reaches, painted before the others hear of the
 revision. `NeverDGuiPaintedRowsScaled` runs the four at `QT_SCALE_FACTOR=1.25`, where
 the edges of a row round. `NeverDGuiController`, `NeverDGuiPatchKeys` and
 `NeverDGuiSourceVariableTypes` turn `PaintCheck` on: every paint of a code view is
 painted again into a picture of what its paints add up to, which is compared with the
 view painted afresh, and a test after which the two differ fails.
+The listing paints the same way: the rows a change reaches, and the gutter of branch
+arrows where an arrow changed. `WorkbenchTests::aChangeToTheListingPaintsTheRowsItReachesAndNoOther`
+moves the cursor by lines and columns, onto and off a line an arrow leaves, with the focus
+and without it, selects by key and as another view's search does, locks and searches
+words, scrolls both ways, drops the address prefixes and changes the style, comparing
+after each what the window keeps of the listing with the listing painted whole. It reads
+the listing's page again as it was, which paints nothing and keeps every line read from
+it, and then with one thing changed at a time: a row under another name, painted within
+the call that takes the page; a name as long, where the text alone differs; a name in
+another color or leading elsewhere, where the spans alone do and what the text had laid
+out is not kept; an address of another class; rows that say another function without
+showing it, of which none is painted; a jump turned conditional in a row that reads as it
+did, which the gutter alone paints; and a longer address prefix, which moves every row.
+A highlight and an arrow that no code of the view's set are found as it paints anything.
+A page with one arrow then moves where the arrow leaves, where it lands and whether it
+is the cursor's, each without the others.
+`aPatchedItemsRowIsPaintedOnceItsPatchIsKnown` patches a byte the listing shows and takes
+the patch back: the lines are read again first, and the row is painted once more when the
+session has read which bytes are patched. `NeverDGuiPaintedRowsScaled` runs both at
+`QT_SCALE_FACTOR=1.25` with the others, and the tests that turn `PaintCheck` on check
+every paint of the listing as they check a code view's.
 `NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
 session takes up what the replica keeps of a function's first look, a later session
 lists what asking the engine lists, a new name of a function or of data keeps the

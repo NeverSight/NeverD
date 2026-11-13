@@ -666,6 +666,9 @@ private:
   /// someone says another change, what it told the viewport is what there is
   /// to paint.
   bool rowsTold_ = false;
+  /// The pixels showChanges has asked the viewport to paint, all told
+  /// (ListingView::pixelsAsked_).
+  quint64 pixelsAsked_ = 0;
   /// The rows showChanges had painted again since a page read ahead of a new
   /// revision began to be taken (Session::shownRevisionAsked).
   QRegion rowsUpdated_;

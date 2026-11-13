@@ -2426,9 +2426,13 @@ void CodeText::showChanges() {
   if (all) {
     viewport()->update();
     rowsUpdated_ = viewport()->rect();
+    pixelsAsked_ +=
+        quint64(viewport()->width()) * quint64(viewport()->height());
   } else if (!changed.isEmpty()) {
     viewport()->update(changed);
     rowsUpdated_ += changed;
+    for (const QRect &rect : changed)
+      pixelsAsked_ += quint64(rect.width()) * quint64(rect.height());
   }
   rowsTold_ = all || !changed.isEmpty();
 }
