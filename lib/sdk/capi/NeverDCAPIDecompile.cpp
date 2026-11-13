@@ -2111,8 +2111,9 @@ const char *neverd_ir_view_ex_json(neverd_session_t Sess, neverd_va_t FuncEntry,
         readSourceOptions(OptionsJSON ? OptionsJSON : "{}", Stage);
     const bool OriginalMIPSCalls =
         isMIPS(S->Img.Arch) && !Options.CallTypes.empty();
-    if (!(OriginalMIPSCalls ? prepareOriginalCalls(Sess, FuncEntry)
-                            : prepareFunction(Sess, FuncEntry, Stage != "llvmc")))
+    if (!(OriginalMIPSCalls
+              ? prepareOriginalCalls(Sess, FuncEntry)
+              : prepareFunction(Sess, FuncEntry, Stage != "llvmc")))
       return nullptr;
     if (S->PipeResult.EVM || S->PipeResult.SBF)
       throw std::invalid_argument("source transformations require native code");

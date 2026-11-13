@@ -5,7 +5,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../../lib/pipeline/PipelineSourceOptimization.h"
-
 #include "gtest/gtest.h"
 
 #include "neverd/backend/ExceptionRewriteContract.h"
