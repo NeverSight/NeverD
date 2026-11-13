@@ -16373,7 +16373,10 @@ tentative definition.
 `BinaryImage::ObjectExternFunctionEntries`. CFG recovery uses that provenance
 for direct external tail calls in relocatable objects without admitting the
 extern storage as executable code. An IAT address or function symbol alone
-does not grant this exception.
+does not grant this exception. A conditional branch there is the same tail
+call on its taken path, modelled as a `CALL` and `RETURN` at the callee's
+identity. That stub is in the instruction set of the branch: an AArch32
+callee with no bytes states none of its own.
 
 <a id="support-and-test-depth"></a>
 

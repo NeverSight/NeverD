@@ -193,6 +193,112 @@ plain_value:
   EXPECT_TRUE(build(Image, *Plain).UnsupportedInstructionAddresses.empty());
 }
 
+// A function the object does not define has an address and no bytes.  A
+// conditional jump to it is a tail call on the taken path: exploring the
+// address found no code and dropped the edge, and the lifted function took
+// the other path whatever the comparison said.  AArch32 has no bytes to read
+// the callee's instruction set from either; the edge is in the branch's.
+TEST_F(ELFObjectBranchRelocationTest,
+       AConditionalJumpToAnUndefinedFunctionIsATailCall) {
+  struct Form {
+    const char *Name;
+    const char *Triple;
+    const char *Source;
+  };
+  const Form Forms[] = {
+      {"x86-64", "x86_64-linux-gnu", R"(
+        .text
+        .globl  to_extern
+        .type   to_extern, @function
+to_extern:
+        cmpq    $6, %rdi
+        jl      elsewhere
+        leaq    1(%rsi), %rax
+        ret
+        .size   to_extern, .-to_extern
+)"},
+      {"i386", "i386-linux-gnu", R"(
+        .text
+        .globl  to_extern
+        .type   to_extern, @function
+to_extern:
+        cmpl    $6, 4(%esp)
+        jl      elsewhere
+        movl    8(%esp), %eax
+        incl    %eax
+        ret
+        .size   to_extern, .-to_extern
+)"},
+      {"AArch64", "aarch64-linux-gnu", R"(
+        .text
+        .p2align 2
+        .globl  to_extern
+        .type   to_extern, %function
+to_extern:
+        cmp     x0, #6
+        b.lt    elsewhere
+        add     x0, x1, #1
+        ret
+        .size   to_extern, .-to_extern
+)"},
+      {"A32", "armv7-linux-gnueabihf", R"(
+        .text
+        .arm
+        .globl  to_extern
+        .type   to_extern, %function
+to_extern:
+        cmp     r0, #6
+        blt     elsewhere
+        add     r0, r1, #1
+        bx      lr
+        .size   to_extern, .-to_extern
+)"},
+      {"T32", "armv7-linux-gnueabihf", R"(
+        .text
+        .thumb
+        .globl  to_extern
+        .type   to_extern, %function
+        .thumb_func
+to_extern:
+        cmp     r0, #6
+        blt     elsewhere
+        adds    r0, r1, #1
+        bx      lr
+        .size   to_extern, .-to_extern
+)"},
+  };
+  for (const Form &F : Forms) {
+    SCOPED_TRACE(F.Name);
+    auto ImageOrErr = loadAssembly(F.Source, F.Triple);
+    ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+        << llvm::toString(ImageOrErr.takeError());
+    const BinaryImage &Image = *ImageOrErr;
+    const Symbol *Function = Image.findSymbol("to_extern");
+    ASSERT_NE(Function, nullptr);
+    ASSERT_EQ(Image.ObjectExternFunctionEntries.size(), 1u);
+    const va_t Elsewhere = *Image.ObjectExternFunctionEntries.begin();
+
+    const LowFunc Low = build(Image, *Function);
+    EXPECT_TRUE(Low.hasCompleteLiftCoverage());
+    const LowBlock *Branch = nullptr;
+    const LowBlock *Call = nullptr;
+    for (const LowBlock &Block : Low.Blocks)
+      for (const LowOp &Op : Block.Ops) {
+        if (Op.Opcode == NdOp::COND_BR)
+          Branch = &Block;
+        if (Op.Opcode == NdOp::CALL && Op.NumInputs >= 1 &&
+            Op.Inputs[0].isConst() && Op.Inputs[0].Offset == Elsewhere)
+          Call = &Block;
+      }
+    ASSERT_NE(Branch, nullptr);
+    ASSERT_NE(Call, nullptr) << "the taken path calls nothing";
+    EXPECT_EQ(Branch->Succs.size(), 2u);
+    EXPECT_TRUE(Branch->hasSucc(Call->Id));
+    ASSERT_FALSE(Call->Ops.empty());
+    EXPECT_EQ(Call->Ops.back().Opcode, NdOp::RETURN);
+  }
+}
+
 // The ARMv4 `bx` marker asks for nothing unless the linker is told to
 // rewrite those returns.
 TEST_F(ELFObjectBranchRelocationTest, AMarkerRelocationChangesNothing) {

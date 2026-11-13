@@ -2654,11 +2654,19 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       // Fallthrough or a queued edge into another function's entry belongs to
       // that function.  Following it here fuses callees into a multi-hundred-
       // thousand-op CFG and leaves the real PDB symbol as an empty HighC stub.
-      if (Cur != CurrentFuncEntry && isKnownFunctionEntry(Cur) &&
-          !isCurrentExceptionalEntry(Cur) && !isCurrentOwnedFragment(Cur) &&
-          (!SourceBranch ||
-           !isBackwardSharedEpilogue(Img, CurrentFuncEntry, *SourceBranch, Cur,
-                                     KnownFuncEntries))) {
+      // A relocatable object's undefined function has an identity and no
+      // bytes: an edge to it can only be a tail call, as isTailCallTarget
+      // says of an unconditional branch there, and exploring it would find no
+      // code and drop the edge.
+      const bool ExternEntry =
+          Img.IsRelocatable && Img.ObjectExternFunctionEntries.count(Cur);
+      if (Cur != CurrentFuncEntry &&
+          (ExternEntry ||
+           (isKnownFunctionEntry(Cur) && !isCurrentExceptionalEntry(Cur) &&
+            !isCurrentOwnedFragment(Cur) &&
+            (!SourceBranch ||
+             !isBackwardSharedEpilogue(Img, CurrentFuncEntry, *SourceBranch,
+                                       Cur, KnownFuncEntries))))) {
         // Reaching it is a tail call, whether by a conditional branch or by
         // falling through (see the stubs after this walk).  A disposable
         // proof snapshot keeps its decode-only accounting.
@@ -3034,7 +3042,12 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
   for (const auto &[Entry, IncomingMode] : TailCallEntries) {
     if (Insns.count(Entry))
       continue;
-    const auto Mode = Img.instructionModeAt(Entry, IncomingMode);
+    // An undefined function has no bytes whose mode the image could state.
+    // Its stub is the edge, in the mode of the branch that takes it.
+    const bool NoBytes = IncomingMode && Img.IsRelocatable &&
+                         Img.ObjectExternFunctionEntries.count(Entry);
+    const auto Mode =
+        NoBytes ? IncomingMode : Img.instructionModeAt(Entry, IncomingMode);
     if (!Mode) {
       DecodeFailureAddresses.insert(Entry);
       continue;
