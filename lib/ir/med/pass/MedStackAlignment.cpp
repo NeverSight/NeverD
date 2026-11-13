@@ -475,6 +475,38 @@ private:
     return Op;
   }
 
+  // The n32 ABI passes a sign-extended 32-bit stack pointer in a 64-bit
+  // register. Compilers adjust it with ADDIU, whose result is a sign-extended
+  // word. Recover the full input for that exact sequence. An arbitrary low
+  // slice or a zero extension does not prove a machine stack address.
+  const MedVar *n32WordAdjustment(const MedOp &Op, int64_t &Delta) {
+    if (!isMIPSN32(Architecture) || Op.Opcode != NdOp::INT_SEXT ||
+        Op.NumInputs != 1 || Op.Output.Size != AddressBytes ||
+        Op.Inputs[0].Size != TRI.PointerSize)
+      return nullptr;
+    const auto Add = scalarDefinition(Op.Inputs[0]);
+    if (!Add || !*Add || (*Add)->Opcode != NdOp::INT_ADD ||
+        (*Add)->NumInputs != 2 ||
+        (AllowedDefinitions && !AllowedDefinitions->count(*Add)))
+      return nullptr;
+    const unsigned I = (*Add)->Inputs[0].isConst() ? 0 : 1;
+    const MedVar &Immediate = (*Add)->Inputs[I];
+    const MedVar &Word = (*Add)->Inputs[1 - I];
+    if (Word.Size != TRI.PointerSize || Immediate.Size != TRI.PointerSize ||
+        !stableScalarConstant(Immediate))
+      return nullptr;
+    const auto Slice = scalarDefinition(Word);
+    if (!Slice || !*Slice || (*Slice)->Opcode != NdOp::SUBBYTES ||
+        (*Slice)->NumInputs != 2 || (*Slice)->Inputs[0].Size != AddressBytes ||
+        !stableScalarConstant((*Slice)->Inputs[1]) ||
+        (*Slice)->Inputs[1].ConstVal != 0 ||
+        (AllowedDefinitions && !AllowedDefinitions->count(*Slice)))
+      return nullptr;
+    Steps += 2;
+    Delta = static_cast<int32_t>(Immediate.ConstVal);
+    return &(*Slice)->Inputs[0];
+  }
+
   const MedVar *nativeAddressRoundTrip(const MedOp &Op) {
     if (!FollowJoins || AddressBytes != 4 || Op.Dead ||
         Op.Opcode != NdOp::SUBBYTES || Op.NumInputs != 2 ||
@@ -1213,6 +1245,13 @@ private:
             Links.emplace_back(0, false);
             Current = &Op.Inputs[0];
             continue;
+          } else if (Op.Opcode == NdOp::INT_SEXT && isMIPSN32(Architecture)) {
+            int64_t Delta;
+            if (const MedVar *Base = n32WordAdjustment(Op, Delta)) {
+              Links.emplace_back(Delta, false);
+              Current = Base;
+              continue;
+            }
           } else if (const MedVar *Native = nativeAddressRoundTrip(Op)) {
             Result = resolve(*Native, Depth + 2);
           } else if ((Op.Opcode == NdOp::INT_ADD ||

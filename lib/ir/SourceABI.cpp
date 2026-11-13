@@ -655,7 +655,8 @@ TypeRef sourceABICallResultType(const SourceFunctionTypeHint &Hint) {
   std::string Error;
   if (!validateSourceABI(Hint, Error))
     return nullptr;
-  if (Hint.ReturnType->Kind == NdTypeKind::Void ||
+  if ((Hint.MIPSScalars && Hint.ReturnType->Kind == NdTypeKind::Float) ||
+      Hint.ReturnType->Kind == NdTypeKind::Void ||
       Hint.ReturnType->Kind == NdTypeKind::Struct)
     return Hint.ReturnType;
   return NdType::makeInt(Hint.ReturnType->Size, false);

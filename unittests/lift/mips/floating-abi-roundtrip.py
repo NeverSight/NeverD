@@ -411,6 +411,7 @@ def run(args, artifacts):
                         setup, callee = narrow_arguments(
                             bits, scalar_bytes, fmt, load, store
                         )
+                    named_from_gprs = ""
                     if variadic:
                         if bits == 64:
                             setup = ["dmfc1 $5,$f12"]
@@ -422,10 +423,13 @@ def run(args, artifacts):
                                 f"mfhc1 ${high},$f12",
                                 f"or ${low + 2},${low},$zero",
                                 f"or ${high + 2},${high},$zero",
+                                "mtc1 $zero,$f12",
+                                "mthc1 $zero,$f12",
                             ]
+                            named_from_gprs = f"mtc1 ${low},$f12\nmthc1 ${high},$f12\n"
                             callee = (
-                                f"mtc1 ${low},$f12\nmthc1 ${high},$f12\n"
-                                f"mtc1 ${low + 2},$f2\nmthc1 ${high + 2},$f2\nadd.d $f0,$f12,$f2"
+                                named_from_gprs
+                                + f"mtc1 ${low + 2},$f2\nmthc1 ${high + 2},$f2\nadd.d $f0,$f12,$f2"
                             )
                     actual_types = ["double"] if variadic else []
                     if layout == "variadic-stack":
@@ -461,7 +465,9 @@ def run(args, artifacts):
                         )
                     ):
                         # A volatile f0 marker must never supply a GPR/void result.
-                        callee = f"trunc.w.{fmt} $f2,$f12\nmfc1 $2,$f2\nmtc1 $zero,$f0"
+                        callee = named_from_gprs + (
+                            f"trunc.w.{fmt} $f2,$f12\nmfc1 $2,$f2\nmtc1 $zero,$f0"
+                        )
                         after_call = f"mtc1 $2,$f0\ncvt.{fmt}.w $f0,$f0"
                         if signed_byte:
                             callee += "\nseb $2,$2"
@@ -522,14 +528,15 @@ def run(args, artifacts):
                             + alternate_callee
                             + "\njr $ra\nnop\n.end fp_other\n"
                         )
+                    sp_op = "addiu" if pointer_bits == 32 else "daddiu"
                     caller = (
                         prefix
                         + ".globl kernel\n.ent kernel\nkernel:\n"
-                        + f"{d}addiu $sp,$sp,-96\n{'sd' if bits == 64 else 'sw'} $ra,{slot}($sp)\n"
+                        + f"{sp_op} $sp,$sp,-96\n{'sd' if bits == 64 else 'sw'} $ra,{slot}($sp)\n"
                         + f"mtc1 ${5 if bits == 64 or scalar_bytes == 4 else 6},$f2\ncvt.{fmt}.w $f2,$f2\nadd.{fmt} $f12,$f12,$f2\n"
                         + "\n".join(setup)
                         + f"\n{transfer}\n{after_call}\n"
-                        + f"{'ld' if bits == 64 else 'lw'} $ra,{slot}($sp)\n{d}addiu $sp,$sp,96\njr $ra\nnop\n.end kernel\n"
+                        + f"{'ld' if bits == 64 else 'lw'} $ra,{slot}($sp)\n{sp_op} $sp,$sp,96\njr $ra\nnop\n.end kernel\n"
                     )
                     assembly = directory / "original.s"
                     assembly.write_text(caller + callee_text)
