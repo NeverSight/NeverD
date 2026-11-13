@@ -124,6 +124,55 @@ def run(executable):
             assert [run[0] for run in runs].count("put") >= 2, runs
             assert any(run[0] == "same" and 0 < i < len(runs) - 1
                        for i, run in enumerate(runs)), runs
+            # An edit carries the read of the lines a client shows ("then"):
+            # its reply answers that read as one made right after the edit is
+            # answered, the page it names taking what changed of it, and a read
+            # that names none getting the lines whole.  More lines than a view
+            # shows, and a read that may look for an address's owner, are left
+            # to the client ("later").
+            shown = {"address": hex(GLOBAL), "before": 0, "after": 12}
+            kept = ok(client, "listing", dict(shown, if_none_match=""))
+            followed = ok(client, "metadata")["following_reads"]
+            carried = client.call("rename", {
+                "address": hex(GLOBAL), "name": "listing_pages_carried",
+                "then": [{"operation": "listing",
+                          "payload": dict(shown, if_none_match=kept["etag"], page_delta=True)},
+                         {"operation": "listing", "payload": dict(shown, if_none_match="")},
+                         {"operation": "listing",
+                          "payload": {"address": hex(GLOBAL), "before": 200, "after": 200,
+                                      "if_none_match": ""}},
+                         {"operation": "listing",
+                          "payload": dict(shown, if_none_match="",
+                                          recover_address=hex(GLOBAL))}]})
+            assert carried["status"] == "ok", carried
+            answers = carried["then"]
+            assert [a["status"] for a in answers] == ["ok", "ok", "later", "later"], answers
+            assert ok(client, "metadata")["following_reads"] == followed + 2
+            changed = answers[0]["payload"]
+            assert changed["base"] == kept["etag"] and "lines" not in changed, changed
+            whole = ok(client, "listing", dict(shown, if_none_match=""))
+            assert without_name(applied(kept, changed)) == without_name(whole), (changed, whole)
+            assert without_name(answers[1]["payload"]) == without_name(whole), (answers[1], whole)
+            assert any("listing_pages_carried" in json.dumps(line) for line in whole["lines"]), whole
+            # The page the reply gave is the one the worker holds: the same
+            # lines read again stand under its name.
+            again = ok(client, "listing", dict(shown, if_none_match=changed["etag"]))
+            assert again == {"etag": changed["etag"], "unchanged": True}, again
+            # A read that is no page's and no listing's is refused alone.
+            refused = client.call("rename", {
+                "address": hex(GLOBAL), "name": "listing_pages_refused_read",
+                "then": [{"operation": "names", "payload": {}}]})
+            assert refused["status"] == "ok", refused
+            assert refused["then"][0]["status"] == "error", refused
+            assert refused["then"][0]["error"]["code"] == "invalid_request", refused
+            # An edit that leaves the listing its functions to read again has
+            # the lines left to the client: its reply waits for the lines alone,
+            # never for the listing to be built.
+            made = client.call("function_create", {
+                "address": hex(ENTRY),
+                "then": [{"operation": "listing", "payload": dict(shown, if_none_match="")}]})
+            assert made["status"] == "ok", made
+            assert made["then"] == [{"status": "later"}], made
         finally:
             client.close()
 

@@ -4235,6 +4235,29 @@ std::optional<Engine::Reply> Engine::followingRead(const Json &p) {
   return reply;
 }
 
+std::optional<Engine::Reply> Engine::followingListing(const Json &p) {
+  if (!p.is_object() || p.contains("recover_address") ||
+      p.contains("complete_anchor_item"))
+    return std::nullopt;
+  // Where the request left the listing something to read again (names it
+  // could not take in place, a function made or deleted), and while the
+  // index behind its lines is being built, which leaves what it decoded to
+  // be decoded again, the read is the client's own: the request's reply
+  // waits for the lines alone, read from what the listing holds.
+  if (!listing_ || !listing_->standing() || listing_->indexing())
+    return std::nullopt;
+  const auto before =
+      sizeField(p, "before", 0, ::neverd::limits::worker::kListingMaxPageLines);
+  const auto after = sizeField(
+      p, "after", ::neverd::limits::worker::kListingPageAfterSizeFieldDefault,
+      ::neverd::limits::worker::kListingMaxPageLines);
+  if (before + after > ::neverd::limits::worker::kMainThenListingLines)
+    return std::nullopt;
+  Reply reply;
+  reply.value = executeImpl("listing", p, nullptr);
+  return reply;
+}
+
 Json Engine::listingReply(ListingPage page, const std::string &known,
                           bool deltas, EncodedPayload *encoded) {
   const auto kept =
