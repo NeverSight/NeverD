@@ -35,6 +35,7 @@
 
 #include <algorithm>
 #include <deque>
+#include <functional>
 #include <limits>
 #include <map>
 #include <optional>
@@ -709,13 +710,20 @@ static uint16_t parameterRegisterPrefix(const MedFunc &Func, const MedVar &V) {
   return Prefix;
 }
 
-/// The defined low bytes of an x86 sub-register write merged into its wide
-/// register, `Wide = (Old & ~LowMask) | Narrow` with Narrow zero above the
-/// low bytes the mask clears: the low bytes come from Narrow and the rest
-/// from Old.  nullopt for any other definition.
-static std::optional<uint16_t> definedMergedLowBytes(
-    const std::map<std::pair<int, int>, const MedOp *> &Defs, const MedOp &D,
-    uint16_t Size, llvm::function_ref<uint16_t(const MedVar &)> DefinedBytes) {
+/// An x86 sub-register write merged into its wide register,
+/// `Wide = (Old & ~LowMask) | Narrow` with Narrow zero above the low bytes
+/// the mask clears: \c Low bytes come from Narrow and the rest from Old.
+struct MergedLowWrite {
+  uint16_t Low = 0;
+  MedVar Old;
+  MedVar Narrow;
+};
+
+/// \p D of \p Size bytes as such a write, or nullopt for any other
+/// definition.
+static std::optional<MergedLowWrite>
+mergedLowWrite(const std::map<std::pair<int, int>, const MedOp *> &Defs,
+               const MedOp &D, uint16_t Size) {
   if (D.Opcode != NdOp::INT_OR || D.NumInputs != 2 || Size == 0 || Size > 8)
     return std::nullopt;
   const uint64_t SizeMask =
@@ -739,24 +747,37 @@ static std::optional<uint16_t> definedMergedLowBytes(
     if (Low == 0)
       continue;
     // Narrow must not reach above those bytes.
-    uint16_t NarrowDefined;
     if (Narrow.isConst()) {
       if (Narrow.ConstVal & SizeMask & ~Cleared)
         continue;
-      NarrowDefined = Low;
     } else {
       auto ExtIt = Defs.find({Narrow.Id, Narrow.SSAVer});
       if (ExtIt == Defs.end() || ExtIt->second->Opcode != NdOp::INT_ZEXT ||
           ExtIt->second->NumInputs != 1 || ExtIt->second->Inputs[0].Size > Low)
         continue;
-      NarrowDefined = std::min(DefinedBytes(Narrow), Low);
     }
-    if (NarrowDefined < Low)
-      return NarrowDefined;
-    const uint16_t OldDefined = DefinedBytes(And.Inputs[0]);
-    return OldDefined > Low ? std::min(OldDefined, Size) : Low;
+    return MergedLowWrite{Low, And.Inputs[0], Narrow};
   }
   return std::nullopt;
+}
+
+/// The defined low bytes of an x86 sub-register write merged into its wide
+/// register: the low bytes come from Narrow and the rest from Old.  nullopt
+/// for any other definition.
+static std::optional<uint16_t> definedMergedLowBytes(
+    const std::map<std::pair<int, int>, const MedOp *> &Defs, const MedOp &D,
+    uint16_t Size, llvm::function_ref<uint16_t(const MedVar &)> DefinedBytes) {
+  const std::optional<MergedLowWrite> Merge = mergedLowWrite(Defs, D, Size);
+  if (!Merge)
+    return std::nullopt;
+  const uint16_t NarrowDefined =
+      Merge->Narrow.isConst()
+          ? Merge->Low
+          : std::min(DefinedBytes(Merge->Narrow), Merge->Low);
+  if (NarrowDefined < Merge->Low)
+    return NarrowDefined;
+  const uint16_t OldDefined = DefinedBytes(Merge->Old);
+  return OldDefined > Merge->Low ? std::min(OldDefined, Size) : Merge->Low;
 }
 
 /// Scalar bytes declared by a call that actually writes the FP return bank.
@@ -1156,6 +1177,12 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
   uint16_t BestFloatElem = 0;
   const MedOp *BestInt = nullptr;
   uint16_t BestIntPhiWidth = 0;
+  // The widest result some return path is seen to leave in the integer
+  // return register.  It only widens the type chosen below: a 64-bit value
+  // one path returns is not truncated by a sibling path's zero-extended
+  // 32-bit write, whichever block comes first and wherever on its path the
+  // value was written.
+  uint16_t WidestReturnedBytes = 0;
 
   // The value \p V is a view of: through copies, extensions and the low
   // slice of a wider register.
@@ -1318,6 +1345,155 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
     }
     return false;
   };
+  // Whether \p Op of \p Block writes the integer result.  A SUBBYTES is
+  // usually a narrower view of the register, which writes nothing.  One that
+  // fills the whole register is a write: a division's quotient comes out of
+  // its double-width result that way.
+  auto WritesIntegerResult = [&](const MedBlock &Block, const MedOp &Op) {
+    return Op.Output.Kind == MedVar::Reg && Op.Output.Size != 0 &&
+           Op.Output.RegOff == TRI.IntReturnReg &&
+           (Op.Opcode != NdOp::SUBBYTES || Op.Output.Size == TRI.PointerSize) &&
+           !(FilterRestore &&
+             isReturnRegRestore(Defs, Block, Op, TRI, HasComputedStackWrite));
+  };
+  // What \p Op keeps of the register whose low bytes it writes, as an x86
+  // sub-register write does: the bytes written and the value the rest is
+  // kept from.  The new bytes are merged under a mask, or joined to the
+  // register's upper bytes.
+  auto KeptAbove =
+      [&](const MedOp &Op) -> std::optional<std::pair<uint16_t, MedVar>> {
+    if (const auto Merge = mergedLowWrite(Defs, Op, Op.Output.Size))
+      return std::pair{Merge->Low, Merge->Old};
+    if (Op.Opcode != NdOp::CONCAT || Op.NumInputs != 2 ||
+        Op.Inputs[0].isConst())
+      return std::nullopt;
+    const auto High = Defs.find({Op.Inputs[0].Id, Op.Inputs[0].SSAVer});
+    if (High == Defs.end() || High->second->Opcode != NdOp::SUBBYTES ||
+        High->second->NumInputs != 2 || !High->second->Inputs[1].isConst() ||
+        High->second->Inputs[1].ConstVal != Op.Inputs[1].Size ||
+        High->second->Inputs[0].Size != Op.Output.Size)
+      return std::nullopt;
+    return std::pair{Op.Inputs[1].Size, High->second->Inputs[0]};
+  };
+  // The bytes of the result a write of the integer return register is seen
+  // to leave.  A zero-extension leaves its source's, which is how a 64-bit
+  // target writes any narrower result, and a constant those a zero-extended
+  // 32-bit write could not have left; an address leaves a pointer's either
+  // way.  A sub-register write leaves its own and what the register held; a
+  // merge what its arms leave.  A value this function did not write shows
+  // nothing.  Any other write leaves all it writes.
+  std::set<std::pair<int, int>> MergesSeen;
+  std::function<uint16_t(const MedVar &, int)> HeldBytes;
+  // An address is all of a pointer, however few bytes hold it in this image:
+  // the pointer's bytes where \p Value is one, as a constant or the copy of
+  // one a 32-bit move makes.
+  auto AddressBytes = [&](const MedVar &Value) -> uint16_t {
+    const MedVar *Constant = &Value;
+    if (!Value.isConst()) {
+      const auto Def = Defs.find({Value.Id, Value.SSAVer});
+      if (Def == Defs.end() || Def->second->Opcode != NdOp::COPY ||
+          Def->second->NumInputs != 1)
+        return 0;
+      Constant = &Def->second->Inputs[0];
+    }
+    return Constant->isConst() && isAddressProvenance(Constant->Provenance)
+               ? TRI.PointerSize
+               : uint16_t{0};
+  };
+  auto WrittenBytes = [&](const MedOp &Write, int Depth = 0) -> uint16_t {
+    uint16_t Bytes = 0;
+    const MedOp *Op = &Write;
+    for (;; ++Depth) {
+      // The register takes a merged value through a temporary.
+      if (Op->Opcode == NdOp::COPY && Op->NumInputs == 1 &&
+          Op->Inputs[0].Kind == MedVar::Temp &&
+          Op->Inputs[0].Size == Op->Output.Size)
+        if (const auto Value =
+                Defs.find({Op->Inputs[0].Id, Op->Inputs[0].SSAVer});
+            Value != Defs.end())
+          Op = Value->second;
+      if (Op->Opcode == NdOp::INT_ZEXT && Op->NumInputs >= 1)
+        return std::max(
+            {Bytes, Op->Inputs[0].Size, AddressBytes(Op->Inputs[0])});
+      if (Op->Opcode == NdOp::COPY && Op->NumInputs == 1 &&
+          Op->Inputs[0].isConst())
+        return std::max(Bytes, HeldBytes(Op->Inputs[0], Depth));
+      const auto Kept = KeptAbove(*Op);
+      if (!Kept)
+        return std::max(Bytes, Op->Output.Size);
+      Bytes = std::max(Bytes, Kept->first);
+      // No further back: what was found stands.
+      if (Depth >=
+          ::neverd::limits::ir::kMedTypePassIntRetEffWidthRecDepthLimit)
+        return Bytes;
+      const auto Old = Kept->second.isConst()
+                           ? Defs.end()
+                           : Defs.find({Kept->second.Id, Kept->second.SSAVer});
+      if (Old == Defs.end())
+        return std::max(Bytes, HeldBytes(Kept->second, Depth + 1));
+      Op = Old->second;
+    }
+  };
+  HeldBytes = [&](const MedVar &Value, int Depth) -> uint16_t {
+    constexpr uint16_t ZeroExtendedBytes = 4;
+    if (Value.isConst())
+      return std::max(AddressBytes(Value),
+                      Value.Size > ZeroExtendedBytes &&
+                              Value.ConstVal >> (ZeroExtendedBytes * 8) == 0
+                          ? ZeroExtendedBytes
+                          : Value.Size);
+    if (const auto Def = Defs.find({Value.Id, Value.SSAVer}); Def != Defs.end())
+      return WrittenBytes(*Def->second, Depth);
+    const auto Merge = PhiDefs.find({Value.Id, Value.SSAVer});
+    if (Merge == PhiDefs.end() ||
+        !MergesSeen.insert({Value.Id, Value.SSAVer}).second)
+      return 0;
+    uint16_t Bytes = 0;
+    for (const auto &Arm : Merge->second->Args)
+      Bytes = std::max(Bytes, HeldBytes(Arm.second, Depth));
+    return Bytes;
+  };
+  // The widest of the writes that reach the end of \p Return from the blocks
+  // before it, each path followed back to its last write or merge of the
+  // register.  A path with neither proves nothing of the result.
+  auto ReachingWrittenBytes = [&](const MedBlock &Return) {
+    uint16_t Bytes = 0;
+    std::set<const MedBlock *> Seen{&Return};
+    std::vector<const MedBlock *> Pending;
+    auto Enter = [&](const MedBlock &Block) {
+      for (int Pred : Block.Preds)
+        if (Pred >= 0 && Pred < static_cast<int>(Func.Blocks.size()) &&
+            Seen.insert(&Func.Blocks[Pred]).second)
+          Pending.push_back(&Func.Blocks[Pred]);
+    };
+    Enter(Return);
+    for (int Searched = 0;
+         !Pending.empty() &&
+         Searched < ::neverd::limits::ir::kMaxReturnRegisterWriteSearchBlocks;
+         ++Searched) {
+      const MedBlock &Block = *Pending.back();
+      Pending.pop_back();
+      const auto Write = std::find_if(
+          Block.Ops.rbegin(), Block.Ops.rend(),
+          [&](const MedOp &Op) { return WritesIntegerResult(Block, Op); });
+      if (Write != Block.Ops.rend()) {
+        Bytes = std::max(Bytes, WrittenBytes(*Write));
+        continue;
+      }
+      bool Merged = false;
+      for (const auto &Phi : Block.Phis)
+        if (Phi.Output.Kind == MedVar::Reg &&
+            Phi.Output.RegOff == TRI.IntReturnReg) {
+          Merged = true;
+          Bytes = std::max(Bytes, HeldBytes(Phi.Output, 0));
+        }
+      // What an unwinder leaves in the register is no result of this
+      // function's.
+      if (!Merged && Block.ExceptionalPreds.empty())
+        Enter(Block);
+    }
+    return Bytes;
+  };
   for (const auto &Blk : Func.Blocks) {
     for (auto Rit = Blk.Ops.rbegin(); Rit != Blk.Ops.rend(); ++Rit) {
       if (Rit->Opcode != NdOp::RETURN)
@@ -1370,14 +1546,7 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
         if (Rit2->Output.Kind != MedVar::Reg || Rit2->Output.Size == 0)
           continue;
 
-        // A SUBBYTES is usually a narrower view of the register, which writes
-        // nothing. One that fills the whole register is a write: a division's
-        // quotient comes out of its double-width result that way.
-        if (Rit2->Output.RegOff == TRI.IntReturnReg &&
-            (Rit2->Opcode != NdOp::SUBBYTES ||
-             Rit2->Output.Size == TRI.PointerSize) &&
-            !(FilterRestore && isReturnRegRestore(Defs, *ScanBlk, *Rit2, TRI,
-                                                  HasComputedStackWrite))) {
+        if (WritesIntegerResult(*ScanBlk, *Rit2)) {
           if (IntDist < 0)
             IntDist = OpDist;
           if (ScanBlk != &Blk) {
@@ -1505,20 +1674,32 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
                  (!BestInt || WidestInt->Output.Size > BestInt->Output.Size)) {
         BestInt = WidestInt;
       }
+      // What this path leaves, in its own block or one before it.
+      if (!UseFloat)
+        if (const MedOp *Write = WidestInt ? WidestInt : EarlierInt)
+          WidestReturnedBytes =
+              std::max(WidestReturnedBytes, WrittenBytes(*Write));
 
       // No in-block integer-return write: the result may arrive through a
       // return-register PHI at a merged epilogue.  Type it by the widest
       // effective width of the PHI arguments so an i64 result returned via the
       // merge is not truncated by a sibling narrow `return 0` path.
       if (!UseFloat && IntDist < 0) {
+        bool Merged = false;
         for (const auto &Phi : Blk.Phis)
           if (Phi.Output.Kind == MedVar::Reg &&
-              Phi.Output.RegOff == TRI.IntReturnReg)
+              Phi.Output.RegOff == TRI.IntReturnReg) {
+            Merged = true;
             for (const auto &A : Phi.Args) {
               uint16_t W = intRetEffWidth(Defs, PhiDefs, A.second, 0);
               if (W > BestIntPhiWidth)
                 BestIntPhiWidth = W;
             }
+          }
+        // Neither: the register is as the blocks before this one left it.
+        if (!Merged)
+          WidestReturnedBytes =
+              std::max(WidestReturnedBytes, ReachingWrittenBytes(Blk));
       }
     }
   }
@@ -1539,6 +1720,10 @@ inferReturnType(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
   }
   if (BestIntPhiWidth > IntSize)
     IntSize = BestIntPhiWidth;
+  // Only a result some write already types is widened: where no return shows
+  // a write, all of the register is the result below.
+  if (IntSize && WidestReturnedBytes > IntSize)
+    IntSize = WidestReturnedBytes;
   // A path that defines only the low bytes of the result over an undefined
   // entry value (`mov al, 1; ret`) bounds it: the declared type is no wider
   // than what every path defines, as a compiler returning `bool` guarantees.
