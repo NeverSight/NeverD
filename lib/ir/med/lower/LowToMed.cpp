@@ -381,8 +381,7 @@ MedVar LowToMedConverter::loadCallStackArgument(MedBlock &Block,
   MedOp Address;
   Address.Opcode = NdOp::INT_ADD;
   Address.Addr = Call.Addr;
-  const uint16_t SPBytes =
-      isMIPSN32(TargetArch) ? TRI.FullRegWidth : TRI.PointerSize;
+  const uint16_t SPBytes = TRI.addressRegisterBytes();
   Address.Output = Temporary(SPBytes);
   Address.addInput(ndVarToMedVar(NdVar::reg(TRI.StackPointer, SPBytes)));
   Address.addInput(MedVar::makeConst(EntryOffset - Bias, SPBytes,

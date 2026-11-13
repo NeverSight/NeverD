@@ -515,8 +515,7 @@ sourceCallStackPointers(const MedFunc &Func, Arch Architecture,
           !Op.Dead) {
         if (!LocalStack)
           InheritedCalls[I].push_back(&Op);
-        else if (LocalStack->Size ==
-                 (isMIPSN32(Architecture) ? TRI.FullRegWidth : TRI.PointerSize))
+        else if (LocalStack->Size == TRI.addressRegisterBytes())
           Result.emplace(&Op, *LocalStack);
       }
       // A local definition owns subsequent calls independently of incoming
@@ -585,8 +584,7 @@ sourceCallStackPointers(const MedFunc &Func, Arch Architecture,
     if (!Charge(InheritedCalls[B].size()))
       return {};
     if (Entries[B].State == Basis::Exact &&
-        Entries[B].Value.Size ==
-            (isMIPSN32(Architecture) ? TRI.FullRegWidth : TRI.PointerSize)) {
+        Entries[B].Value.Size == TRI.addressRegisterBytes()) {
       BlockEntries.emplace(Func.Blocks[B].Id, Entries[B].Value);
       for (const MedOp *Call : InheritedCalls[B])
         Result.emplace(Call, Entries[B].Value);

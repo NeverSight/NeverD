@@ -300,9 +300,7 @@ bool neverd::sourceCallStackArgumentsDefined(
   using Key = std::tuple<VnodeSpace, uint64_t, uint16_t>;
   auto key = [](const NdVar &V) { return Key{V.Space, V.Offset, V.Size}; };
   const auto &TRI = getTargetRegInfo(Architecture);
-  const auto SP =
-      NdVar::reg(TRI.StackPointer,
-                 isMIPS(Architecture) ? TRI.FullRegWidth : TRI.PointerSize);
+  const auto SP = NdVar::reg(TRI.StackPointer, TRI.addressRegisterBytes());
   size_t Work = 0;
   for (const auto &Block : Function.Blocks) {
     std::map<Key, int64_t> Addresses{{key(SP), 0}};

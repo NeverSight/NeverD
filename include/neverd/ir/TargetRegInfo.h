@@ -105,6 +105,12 @@ struct TargetRegInfo {
   uint16_t PointerSize = 8;
   uint16_t FullRegWidth = 8;
 
+  /// Machine width of SP and indirect control transfers. N32 carries a
+  /// four-byte C pointer in an eight-byte MIPS address register.
+  uint16_t addressRegisterBytes() const {
+    return isMIPSN32(TheArch) ? FullRegWidth : PointerSize;
+  }
+
   llvm::ArrayRef<uint64_t> IntParamRegs;
   llvm::ArrayRef<uint64_t> Win64ParamRegs;
   llvm::ArrayRef<uint64_t> FPParamRegs;

@@ -22,7 +22,7 @@ sourceCallOccurrenceKey(const LowOp &Operation, Arch Architecture) {
   // N32 transfers the complete 64-bit jump register, including its high
   // bits, even though the source-level function pointer occupies four bytes.
   const auto &TRI = getTargetRegInfo(Architecture);
-  const auto Width = isMIPS(Architecture) ? TRI.FullRegWidth : TRI.PointerSize;
+  const auto Width = TRI.addressRegisterBytes();
   if (Operation.Inputs[0].Size != Width)
     return std::nullopt;
   return sourceCallOccurrenceKey(Operation);
