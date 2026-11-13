@@ -1786,6 +1786,9 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
   // private type, so provide only the incomplete name needed for pointer
   // declarations and casts in a standalone translation unit.
   bool NeedsBlockObject = false;
+  const bool HasMicroModes = isMIPS(Opts.TheArch) && Opts.Image &&
+                             hasCompressedMIPSCode(Opts.Image->Mode);
+  bool NeedsMicroMode = false;
   bool NeedsBool = false;
   bool HasFloatingArithmetic = false;
   bool NeedsAArch64RawCall = false;
@@ -1838,6 +1841,9 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
       CheckExpr(Operand);
   };
   for (const auto &Function : Funcs) {
+    if (HasMicroModes && !NeedsMicroMode)
+      NeedsMicroMode = Opts.Image->instructionModeAt(Function.Entry) ==
+                       InstructionMode::MicroMIPS;
     CheckType(Function.ReturnType);
     for (const auto &Parameter : Function.Params)
       CheckType(Parameter.Type);
@@ -1860,6 +1866,8 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
   };
   if (HasFloatingArithmetic)
     c_float::writeContractionPolicy(OS);
+  if (NeedsMicroMode)
+    OS << mips::MicroModeCPrelude;
   if (Opts.TheArch == Arch::AArch64 && NeedsAArch64RawCall)
     OS << kAArch64PAuthCRawCallHeader;
   if (NeedsAArch64ResultStorageCall)

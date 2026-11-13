@@ -36,6 +36,12 @@ inline std::optional<uint32_t> micro64Word(uint32_t Word) {
     case 5:
       Op = 27;
       break; // LDR
+    case 12:
+      Op = 44;
+      break; // SDL
+    case 13:
+      Op = 45;
+      break; // SDR
     case 14:
       Op = 39;
       break; // LWU

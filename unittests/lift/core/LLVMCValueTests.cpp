@@ -343,6 +343,37 @@ int main(void) {
     compileAndRun(Source, Level, {}, true);
 }
 
+TEST(LLVMCValues, RepeatedVolatileByteStoresStayObservable) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("volatile_bytes", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<> B(Context);
+  auto *F = llvm::Function::Create(
+      llvm::FunctionType::get(B.getVoidTy(), {B.getPtrTy()}, false),
+      llvm::GlobalValue::ExternalLinkage, "write_byte", Module);
+  B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", F));
+  for (unsigned Value : {0x12, 0xfe})
+    B.CreateStore(B.getInt8(Value), F->getArg(0), true);
+  B.CreateRetVoid();
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  neverd::CEmitterOptions Options;
+  Options.TheArch = neverd::Arch::X64;
+  std::string Source;
+  llvm::raw_string_ostream Stream(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Stream, Options));
+  EXPECT_EQ(llvm::StringRef(Source).count("*(volatile uint8_t*)"), 2u)
+      << Source;
+  Source += R"(
+int main(void) {
+  uint8_t bytes[] = {1, 2, 3};
+  write_byte(bytes + 1);
+  return bytes[0] != 1 || bytes[1] != 0xfe || bytes[2] != 3;
+}
+)";
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    compileAndRun(Source, Level, {}, true);
+}
+
 TEST(LLVMCValues, PrefetchRejectsChangedAssemblyContracts) {
   for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
     SCOPED_TRACE(Mutation);

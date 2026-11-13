@@ -382,6 +382,7 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
   if (const auto Store = mergeStore(Id))
     return S.Inputs == 3 && !S.OutputBytes && S.SecondBytes == Store->Bytes &&
            (S.FirstBytes == 4 || S.FirstBytes == 8) &&
+           S.FirstBytes >= Store->Bytes &&
            (S.Target == Arch::Unknown ||
             S.FirstBytes == (isMIPS64(S.Target) ? 8 : 4));
   if (!S.OutputWritable || (S.OutputBytes != 4 && S.OutputBytes != 8))

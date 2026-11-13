@@ -20,6 +20,8 @@ bool MIPSLifter::liftMemory(State &S, uint32_t Word,
                             std::optional<NdVar> BaseOverride) const {
   const unsigned Opcode = Word >> 26;
   if (const auto Store = mips::mergeStoreOpcode(Opcode)) {
+    if (Store->Bytes > S.Width)
+      return false;
     const NdVar Address = S.binary(
         NdOp::INT_ADD, BaseOverride ? *BaseOverride : S.read((Word >> 21) & 31),
         NdVar::cst(uint64_t(int64_t(int16_t(Word))), S.Width));

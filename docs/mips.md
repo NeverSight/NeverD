@@ -48,8 +48,9 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   when direct image data is rebound. Indexed merge reads into rebuilt image
   storage still require an explicit address contract.
 - `SWL`/`SWR` share a partial-store contract across classic, microMIPS and
-  MIPS16e2 encodings. Only selected bytes are written; no neighboring read or whole-word
-  read/modify/write is introduced. The emulator validates the full write span
+  MIPS16e2 encodings. Pre-R6 classic MIPS64 and microMIPS64 also lift
+  `SDL`/`SDR`. Each instruction writes its selected bytes in target byte
+  order and preserves the surrounding bytes. The emulator validates the full write span
   and observed source bytes before committing. Source image stores require a
   bounded writable backing and preserve guest alignment separately from its
   relocated host address. Source helpers use explicit classic MIPS mode when
@@ -122,7 +123,7 @@ remain a separate contract.
 
 Historical MIPS I–V profiles,
 pre-Release 6 scalar floating point, MSA/DSP forms beyond the slices below, privileged instructions and reservations outside the MIPS16e2 and classic Release 6 LowIR coverage below,
-doubleword merge stores (`SDL`/`SDR`), pre-R6 doubleword division and trapping arithmetic are not admitted by
+pre-R6 doubleword division and trapping arithmetic are not admitted by
 the current lifter. Unsupported instructions, missing slots and transfers in a
 delay slot produce errors, not replacement NOPs. General aggregate source ABI
 classification, arbitrary PIC/gp recovery, raw-input target selection and
@@ -352,8 +353,15 @@ The microMIPS operation and slot rules were checked against
 and the pinned [GNU simulator definitions](https://gnu.googlesource.com/binutils-gdb/+/d01e823438c7dc264d6885fbbfeace4d8955dcb7/sim/mips/micromips.igen).
 On n64, tagged callable addresses, computed jumps, link registers and memory
 addresses retain all 64 bits. The r2 scalar subset adds doubleword arithmetic,
-shifts, rotates, bit fields, byte shuffles, LD/SD, LWU and the LDL/LDR merge
-loads. Both r2 widths also lift LWL/LWR and SWL/SWR with a signed 12-bit
+shifts, rotates, bit fields, byte shuffles, LD/SD, LWU, LDL/LDR and SDL/SDR.
+The micro doubleword merge transfers use a signed 12-bit displacement.
+For micro functions, HighC and LLVMC select GCC's `micromips` attribute or
+Clang's `micromips,nomips16` pair. GCC requires `-minterlink-compressed` for
+calls between compressed functions and classic helpers in the same output.
+Compilation stops if Clang reports no microMIPS attribute for the selected
+target. GCC's MIPS attributes are
+documented in the [GCC manual](https://gcc.gnu.org/onlinedocs/gcc/MIPS-Attributes.html).
+Both r2 widths also lift LWL/LWR and SWL/SWR with a signed 12-bit
 displacement. The source fixtures compare the returned word and surrounding
 bytes for aligned and unaligned pairs. Word DSP and DSPR2 instructions use
 the same revision 3.02 accumulator rules as classic n64. GNU as encodes the
