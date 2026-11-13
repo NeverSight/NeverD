@@ -408,15 +408,19 @@ TEST_P(LinuxNetwork, TCPConnectFailuresPreserveAdmissionAndBoundedOwnership) {
   std::vector<uint8_t> IPv6(28, 0);
   IPv6[0] = 10;
   IPv6[23] = 1;
+  IPv6[24] = 7; // Preserve the scope ID as part of the guest sockaddr.
   llvm::cantFail(cpu().write(Base + 64, IPv6));
   FD = call(ServiceKind::Socket, 10, 1, 6).value();
   EXPECT_EQ(call(ServiceKind::Connect, FD, Base + 64, 28), uint64_t(-101));
   EXPECT_EQ(call(ServiceKind::Close, FD), 0u);
-  FD = open();
-  EXPECT_FALSE(call(ServiceKind::Connect, FD, Base, 16));
+  FD = call(ServiceKind::Socket, 10, 1, 6).value();
+  EXPECT_FALSE(call(ServiceKind::Connect, FD, Base + 64, 28));
   EXPECT_NE(Report.Diagnostic.find("failure contract exhausted"),
             std::string::npos);
   EXPECT_NE(Report.Diagnostic.find("after 2 supplied failures"),
+            std::string::npos);
+  EXPECT_NE(Report.Diagnostic.find("peer_hex=0a00000000000000"
+                                   "0000000000000000000000000000000107000000"),
             std::string::npos);
 }
 
@@ -438,7 +442,8 @@ TEST_P(LinuxNetwork, TCPConnectFailuresResumeAtTheNextExactPeer) {
   auto FD = open();
   EXPECT_FALSE(call(ServiceKind::Connect, FD, Base + 32, 16));
   EXPECT_NE(Report.Diagnostic.find(
-                "attempt 1, connection index 0 has a different peer"),
+                "attempt 1, connection index 0 has a different peer), "
+                "peer_hex=0200232a7f0000010000000000000000"),
             std::string::npos);
   ASSERT_EQ(call(ServiceKind::Connect, FD, Base, 16), 0u);
   ASSERT_EQ(call(ServiceKind::Close, FD), 0u);
@@ -454,7 +459,8 @@ TEST_P(LinuxNetwork, TCPConnectFailuresResumeAtTheNextExactPeer) {
   FD = open();
   EXPECT_FALSE(call(ServiceKind::Connect, FD, Base, 16));
   EXPECT_NE(Report.Diagnostic.find(
-                "attempt 4, connection index 1 has a different peer"),
+                "attempt 4, connection index 1 has a different peer), "
+                "peer_hex=020023297f0000010000000000000000"),
             std::string::npos);
   ASSERT_EQ(call(ServiceKind::Connect, FD, Base + 32, 16), 0u);
   EXPECT_EQ(call(ServiceKind::Read, FD, Base + 64, 2), 2u);
@@ -465,7 +471,8 @@ TEST_P(LinuxNetwork, TCPConnectFailuresResumeAtTheNextExactPeer) {
   ASSERT_EQ(call(ServiceKind::Close, FD), 0u);
   EXPECT_FALSE(call(ServiceKind::Connect, open(), Base + 32, 16));
   EXPECT_NE(Report.Diagnostic.find(
-                "attempt 5, connection index 2 has no supplied result"),
+                "attempt 5, connection index 2 has no supplied result), "
+                "peer_hex=0200232a7f0000010000000000000000"),
             std::string::npos);
 }
 

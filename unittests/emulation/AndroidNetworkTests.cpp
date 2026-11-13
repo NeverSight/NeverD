@@ -151,8 +151,11 @@ TEST_P(AndroidNetwork, TCPConnectFailuresShareRawNamedDynamicAndVariadicCalls) {
                                             : "closed before reuse"),
                 std::string::npos);
       if (Mode == 1)
-        EXPECT_NE(R.Diagnostic.find("after 4 supplied failures"),
-                  std::string::npos);
+        EXPECT_NE(
+            R.Diagnostic.find("after 4 supplied failures "
+                              "(attempt 6 has no supplied result), "
+                              "peer_hex=0200232b7f0000010000000000000000"),
+            std::string::npos);
       ASSERT_FALSE(R.NativeCalls.empty());
       EXPECT_EQ(R.NativeCalls.back().Name, "connect");
       EXPECT_FALSE(R.NativeCalls.back().Result);
