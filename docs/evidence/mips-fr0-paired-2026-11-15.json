@@ -53,6 +53,28 @@
       "recompiled_executions": 48,
       "receipt_sha256": "91c003a5cbfde0b94e97c8c355e341301651a3f07d069486ba9636659f7a9c21",
       "sdk_sha256": "839ef2f9d9206027fd535a8e8b715b4d30d4c5e91963a92ff6b447f605545da3"
+    },
+    "ps-integrated": {
+      "complete": true,
+      "builds": 472,
+      "recompiled_executions": 23128,
+      "receipt_sha256": "ee1df60dd70aa930ce95c1a54c7e00153d2753a11bd6f12b24e4180e1f48134c",
+      "sdk_sha256": "7079f1d709551995ceb2618fd2dd7871687db02e6b33a1f770521b81840b7073"
+    },
+    "fr0-integrated": {
+      "complete": true,
+      "builds": 32,
+      "recompiled_executions": 640,
+      "receipt_sha256": "3806190057bf840fba8774f1ec139b6fcb5dec866850c100c41a65db22d8f624",
+      "sdk_sha256": "7079f1d709551995ceb2618fd2dd7871687db02e6b33a1f770521b81840b7073"
+    },
+    "ubus-integrated": {
+      "complete": true,
+      "builds": 4,
+      "recompiled_executions": 48,
+      "receipt_sha256": "91c003a5cbfde0b94e97c8c355e341301651a3f07d069486ba9636659f7a9c21",
+      "sdk_sha256": "7079f1d709551995ceb2618fd2dd7871687db02e6b33a1f770521b81840b7073",
+      "original_cases": 12
     }
   },
   "owner_tests": {
@@ -61,7 +83,8 @@
       "registered_cases": 8,
       "exercised_o32_cases": 4,
       "note": "The two FR0 pipeline tests return early for the two n64 parameterizations; FR0 admission is o32 only."
-    }
+    },
+    "integrated_mips_and_shared_fp_parameter_abi": 1107
   },
   "limits": [
     "FR=0 requires explicit o32 hard-double and 32-bit CPR1 ELF evidence; FR=1 PS requires an admitted classic pre-R6 profile.",
@@ -70,5 +93,12 @@
     "Legacy DSP64 rounded/saturating DEXTR and signed DMADD/DMSUB remain unqualified: available DSP revision 3.02 omits old instruction semantics and the older execution model contains unresolved arithmetic discrepancies.",
     "Historical MIPS I-V version admission, load delays and HI/LO hazards remain unimplemented. Pre-R6 microMIPS floating point remains outside this profile.",
     "Raw timing samples, dependency manifests and output identity hashes are local; this receipt contains no timing claims."
-  ]
+  ],
+  "integrated_build": {
+    "source_commit": "5bb148277d74c78d674f0fc17e1ca48aadc9fa28",
+    "dev_base": "a352ad07ac9aab3a4257b0600a6ce7c2c001c228",
+    "capstone_commit": "729680277dd762704ea3270291b7a75318f51583",
+    "sdk_sha256": "7079f1d709551995ceb2618fd2dd7871687db02e6b33a1f770521b81840b7073",
+    "benchmark_identical_to_measured_candidate": true
+  }
 }
