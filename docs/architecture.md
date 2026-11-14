@@ -6267,7 +6267,12 @@ coefficient precision. Completed polynomial groups remain factored beside
 independent scaled variables or XOR words; a shared direct factor or an AND
 partition still admits the nested reconstruction search.
 A product can also group different views of a word when their live low bits
-agree. A mask or addend that changes only higher bits drops out; a mask
+agree. An interior window starting at bit `i` has the same low bits as a
+right rotation by `i`. Constant rotations compose modulo the word width
+even when the window wraps. A variable rotation stays in the source word.
+The LLVM translator carries same-word funnel shifts as rotates in both
+directions and emits them with their modulo-width count.
+A mask or addend that changes only higher bits drops out; a mask
 that changes even one live bit stays. If every weight has at least `s` low
 zeros, the degree-`k` coefficient is a multiple of `2^(k*s)`. Its quotient
 needs only `P-k*s` bits at precision `P`. When all nonconstant terms of a
@@ -6278,7 +6283,9 @@ Equal or opposite weights can share a factor. After removing a common power
 of two, an odd weight is invertible at the remaining width, which lets long
 literal coefficients share one scale. The simplifier compares expression
 costs before accepting either form. When the top bit multiplies a Boolean
-correction beside an unscaled sum, the parity of the sum can be absorbed into
+correction beside a literal, concatenation can store the correction's low
+bit above the literal's lower bits. The cost comparison uses the full printed
+expression. Beside an unscaled sum, the parity of the sum can be absorbed into
 its coefficient if the remaining Boolean word becomes cheaper. A surviving
 sum can also replace a binary AND and OR of the same two words with their
 sum while preserving its other terms.

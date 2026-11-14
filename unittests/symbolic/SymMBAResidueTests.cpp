@@ -363,7 +363,7 @@ TEST(SymMBAResidue, PreservesCompactReadingsOfTheLastTwoBits) {
     const char *Source;
   };
   const Example Cases[] = {
-      {32, 16,
+      {32, 15,
        "(768*(8+(819200)*(y|z))*(14+(507904)*((x&z)*(y|w)))*(6+(188416)*(x^y))"
        "*(12+(950272)*(x+(w^y)))*(1+(278528)*(x+(w^y)))*(5+(57344)*((x&z)*(y|w"
        ")))*(9+(90112)*(x^y))*(1+(-16384)*(z&w))*(3+(81920)*(x+(w^y)))*(1+(-50"
@@ -398,6 +398,11 @@ TEST(SymMBAResidue, PreservesCompactReadingsOfTheLastTwoBits) {
       Opt.MaxWork = 256;
       const auto Compact = simplifyMBADeep(Limited, Parsed.Root, Opt);
       EXPECT_LE(Compact.SizeAfter, Example.Cost);
+      SymContext Printed;
+      const auto Again =
+          parseSymExpr(Printed, Limited.toString(Compact.Expr), Example.Width);
+      ASSERT_TRUE(Again);
+      EXPECT_EQ(Printed.readabilityCost(Again.Root), Compact.SizeAfter);
       if (solver::proofBackendAvailable(solver::ProofBackend::Z3)) {
         solver::SymSynthVerifier Verify({}, solver::ProofBackend::Z3, 5000);
         EXPECT_EQ(Verify(Limited, Parsed.Root, Compact.Expr),
@@ -416,6 +421,21 @@ TEST(SymMBAResidue, PreservesCompactReadingsOfTheLastTwoBits) {
       EXPECT_EQ(Before.evalU64(Values), After.evalU64(Values));
     }
   }
+}
+
+TEST(SymMBAResidue, PackedBooleanChainsRoundTrip) {
+  SymContext Ctx;
+  // The projected XOR of three terms has a two-term prefix which can fold
+  // again at word width. Keep its printed reading stable on reconstruction.
+  const auto P = parseSymExpr(
+      Ctx,
+      "concat(extract(((((((x>>2)&(y&x))&(y&x))&(x|z))|(y*3))&(y&x))"
+      "^(x^~z),0,1),33#31)",
+      32);
+  ASSERT_TRUE(P);
+  const auto Again = parseSymExpr(Ctx, Ctx.toString(P.Root), 32);
+  ASSERT_TRUE(Again);
+  EXPECT_EQ(Again.Root, P.Root);
 }
 
 TEST(SymMBAResidue, ProvesHighPerturbationsAtFullWidth) {
@@ -1222,6 +1242,65 @@ TEST(SymMBAResidue, CombinesPartialWordsOnlyAcrossUnobservableBits) {
       size_t Storage = 256;
       EXPECT_EQ(detail::foldProductResidues(Ctx, Input, Short, Storage), Input);
       EXPECT_LE(Short.used(), 128u);
+    }
+  }
+}
+
+TEST(SymMBAResidue, RotatedWindowsKeepTheirLastObservableBit) {
+  for (unsigned Width : {7u, 65u, 257u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto Sum = Ctx.mkXor(X, Y);
+    const auto Axis = Width == 65 ? Ctx.mkRor(Sum, Y) : Sum;
+    // On wide words this count has set bits beyond a host integer.
+    const auto Back = Ctx.mkConst(llvm::APInt::getSignMask(Width) + 3);
+    const auto Scale = Ctx.mkConst(llvm::APInt(Width, 3).shl(Width - 6));
+    for (bool Live : {false, true}) {
+      SCOPED_TRACE(Live);
+      llvm::SmallVector<SymRef, 16> Factors{Scale};
+      for (unsigned I = 0; I < 17; ++I) {
+        const unsigned Size = Live && I == 8 ? 3 : 4 + I % 2;
+        const unsigned Start = 1 + I % (Width - Size);
+        // All windows start at bit Width-2 of Axis and wrap across bit 0.
+        const auto Rotated = Ctx.mkRol(Axis, Ctx.mkConst(Width, Start + 2));
+        const auto Source =
+            I % 3 == 0 ? Rotated : Ctx.mkRol(Ctx.mkRor(Rotated, Back), Back);
+        const auto Field = Ctx.mkExtract(Source, Start, Size);
+        const auto Word =
+            I % 3 == 0 ? Ctx.mkSExt(Field, Width)
+            : I % 3 == 1
+                ? Ctx.mkZExt(Field, Width)
+                : Ctx.mkConcat(Ctx.mkExtract(Y, Size, Width - Size), Field);
+        Factors.push_back(Ctx.mkAdd(Ctx.mkConst(Width, 2 * I + 1),
+                                    Ctx.mkMul(Ctx.mkConst(Width, 4), Word)));
+      }
+      const auto Input = Ctx.mkMul(Factors);
+      MBAOptions Opt;
+      Opt.MaxWork = 65536;
+      const auto R = simplifyMBADeep(Ctx, Input, Opt);
+      ASSERT_LT(R.SizeAfter, R.SizeBefore / 3);
+      ASSERT_LT(R.Work, Opt.MaxWork);
+      if (Width == 7) {
+        SymEvalPlan Before(Ctx, Input), After(Ctx, R.Expr);
+        bool SawLiveBit = false;
+        for (unsigned A = 0; A < 128; ++A)
+          for (unsigned B = 0; B < 128; ++B) {
+            const unsigned AB = A ^ B;
+            const unsigned V = ((AB << 2) | (AB >> 5)) & 127;
+            unsigned Clean = 6;
+            for (unsigned I = 0; I < 17; ++I)
+              Clean *= 2 * I + 1 + 4 * V;
+            const std::array<uint64_t, 2> Args{A, B};
+            const auto Expected = Before.evalU64(Args);
+            SawLiveBit |= (Clean & 127) != Expected;
+            ASSERT_EQ(After.evalU64(Args), Expected);
+          }
+        EXPECT_EQ(SawLiveBit, Live);
+      } else if (solver::proofBackendAvailable(solver::ProofBackend::Z3)) {
+        solver::SymSynthVerifier Verify({}, solver::ProofBackend::Z3, 10000);
+        EXPECT_EQ(Verify(Ctx, Input, R.Expr), SynthVerification::Equivalent);
+      }
     }
   }
 }

@@ -93,9 +93,33 @@ SymRef widenCoordinate(SymContext &Ctx, SymRef Low, unsigned Width,
       Storage -= Count * sizeof(SymRef);
       Budget.consume(Count * (2 + Words));
       Wide = Ctx.rebuild(V, Args);
-    } else if (Op == SymOp::Extract && Ctx.node(V).Aux == 0 &&
-               Ctx.width(Ctx.operand(V, 0)) == Width) {
-      Wide = Ctx.operand(V, 0);
+    } else if (Op == SymOp::Extract && Ctx.width(Ctx.operand(V, 0)) == Width) {
+      // Rotating the word right by the extraction offset puts this window
+      // in its low bits, including windows crossing a prior rotation seam.
+      // Compose constant counts modulo the source width; a variable count
+      // remains part of the source word.
+      auto Source = Ctx.operand(V, 0);
+      uint64_t Offset = Ctx.node(V).Aux;
+      while (Ctx.op(Source) == SymOp::Rol || Ctx.op(Source) == SymOp::Ror) {
+        const auto Count = Ctx.operand(Source, 1);
+        if (!Ctx.isConst(Count))
+          break;
+        if (!Budget.consume(1 + llvm::APInt::getNumWords(Ctx.width(Count))))
+          return {};
+        const uint64_t Shift = Ctx.constValue(Count).urem(Width);
+        Offset =
+            (Offset + (Ctx.op(Source) == SymOp::Ror ? Shift : Width - Shift)) %
+            Width;
+        Source = Ctx.operand(Source, 0);
+      }
+      Wide = Source;
+      if (Offset) {
+        const size_t Extra = sizeof(SymNode) + 2 * sizeof(SymRef);
+        if (Storage < Extra || !Budget.consume(2 + Words))
+          return {};
+        Storage -= Extra;
+        Wide = Ctx.mkRor(Source, Ctx.mkConst(Width, Offset));
+      }
     } else if (Ctx.isConst(V)) {
       Wide = Ctx.mkConst(Ctx.constValue(V).sext(Width));
     } else {
