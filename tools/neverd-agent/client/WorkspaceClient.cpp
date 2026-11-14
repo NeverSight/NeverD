@@ -145,6 +145,17 @@ QJsonValue WorkspaceClient::request(const QString &name, const QJsonArray &args,
                                     const QString &sideId) {
   if (!Ready || (name == "setDraft" && args.at(0) == State.value("draft")))
     return {};
+  // Typing in the main conversation sends the draft without waiting: the
+  // CLI saves it later on its own timer and sends no echo back, so a
+  // keystroke never waits on a busy CLI. The cached value answers the
+  // window meanwhile; the late reply's id no longer matches and is ignored.
+  // A side chat echoes its draft, so it keeps the ordered round trip.
+  if (name == "setDraft" && sideId.isEmpty()) {
+    State["draft"] = args.at(0);
+    if (!Process.send(wire::invoke(++RequestId, name, args)))
+      fail(tr("Could not send a request to NeverD Agent CLI."));
+    return {};
+  }
   // Read the reply and update the cache now. QML notifications are deferred
   // until the calling action returns, so handlers can issue their own requests.
   ReplyReceived = false;
