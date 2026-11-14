@@ -1091,8 +1091,8 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
       llvm::DCEPass().run(F, Analyses);
     }
   }
-  auto Object =
-      Codegen().compile(*Candidate, Image.Arch, Image.Format, *Triple);
+  auto Object = Codegen().compile(*Candidate, Image.Arch, Image.Format, *Triple,
+                                  ObjectConsumer::FinalImageInstaller);
   if (!Object.Success)
     return refuse(kLeafCode);
   return installMachOLiftedObject(

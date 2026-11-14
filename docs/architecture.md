@@ -15519,9 +15519,13 @@ not relax the arm64e native-rebuild restriction.
 Verified whole native bodies can publish canonical PAuth_LR FP recipes through
 the LLVM fork's MC compact producer. The signing CFI is placed immediately
 after the original PACIBSPPC; the final image must preserve the compact word,
-the signing offset and each instruction's function-relative position. Classic
-frameless saved-pair bodies use their complete compact stack size and normalized
-slots, including PAC prefixes and multi-stage stack allocation.
+the signing offset and each instruction's function-relative position. Ordinary
+compact mode cannot authorize PC-signed return words. LLVM keeps nonzero
+signing offsets in DWARF for regular object emission, since Apple linking can
+discard that raw compact payload; the final-image writer and explicitly marked
+native object installer consume it directly. Classic frameless saved-pair
+bodies use their complete compact stack size and normalized slots, including
+PAC prefixes and multi-stage stack allocation.
 
 Instruction-derived unwind recovery can cover several functions under one
 classic compact record. Known metadata entries and nonguessed typed symbols

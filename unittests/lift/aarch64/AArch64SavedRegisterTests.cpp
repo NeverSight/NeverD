@@ -15,6 +15,8 @@
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
 #include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/Loader.h"
+#include "neverd/loader/MachO/CompactUnwind.h"
+#include "neverd/object/SectionNames.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/ISAEncoding.h"
@@ -55,6 +57,40 @@ struct CompactPairCase {
 #define SAVED_TEXT(Name, Text) constexpr char Name[] = Text;
 #define SAVED_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #include "AArch64CompactRegisterFixtures.def"
+
+#if defined(__APPLE__) && defined(__aarch64__)
+// This is a final-image format fixture, not a test of Apple's selection of
+// compact object records. Xcode 27 rewrites the nonzero-offset input record
+// into ordinary FP mode. Install the independently specified fixture word in
+// its single validated encoding slot in an unsigned structural test image.
+void writeCompactFixture(const std::string &Path, const BinaryImage &Image,
+                         uint32_t Encoding) {
+  const auto *Section = Image.getSectionByName(section_names::macho::Unwind);
+  const auto *Symbol = Image.findSymbol(kSumSymbol);
+  ASSERT_TRUE(Section && Symbol);
+  auto Raw = macho_unwind::parseCompactUnwindRaw(
+      llvm::ArrayRef(Image.Raw).slice(Section->FileOff, Section->Size));
+  ASSERT_TRUE(bool(Raw)) << llvm::toString(Raw.takeError());
+  ASSERT_EQ(Raw->Pages.size(), 1u);
+  const auto &Page = Raw->Pages.front();
+  ASSERT_EQ(Page.Kind, macho_unwind::kSecondLevelCompressed);
+  ASSERT_EQ(Page.CompressedEntries.size(), 1u);
+  const auto &Entry = Page.CompressedEntries.front();
+  ASSERT_EQ(Entry.FunctionOffset + Image.Base, Symbol->Addr);
+  const auto Index = Entry.EncodingIndex;
+  const size_t Offset =
+      Index < Raw->CommonEncodings.size()
+          ? Raw->Header.CommonEncodingsSectionOffset + Index * sizeof(uint32_t)
+          : Page.SectionOffset + Page.EncodingsPageOffset +
+                (Index - Raw->CommonEncodings.size()) * sizeof(uint32_t);
+  auto Bytes = Image.Raw;
+  writeLE<uint32_t>(Bytes.data() + Section->FileOff + Offset, Encoding);
+  std::ofstream File(Path, std::ios::binary | std::ios::trunc);
+  File.write(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+  File.close();
+  ASSERT_TRUE(File);
+}
+#endif
 
 void verifySavedRegisters(
     bool Quad, bool Signal, std::optional<unsigned> CompactPairs = std::nullopt,
@@ -133,21 +169,61 @@ void verifySavedRegisters(
   Compile.append({kIncludeFlag, Include, kWarnings, kExtraWarnings,
                   kErrorWarnings, Caller, Wrapper, kOutputFlag, Driver});
   ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, Compile), 0);
+  if (SigningOffset)
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                  kFixtureCodesign,
+                  {kFixtureCodesign, kFixtureRemoveSignature, Input}),
+              0);
 
   auto Reader = Loader::create(BinaryFormat::MachO);
   auto Image = Reader->load(Input);
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
-  const auto Snapshot = Image->Raw;
   if (SigningOffset) {
+    const auto *OriginalSymbol = Image->findSymbol(kSumSymbol);
+    ASSERT_NE(OriginalSymbol, nullptr);
+    const auto *OriginalFrame =
+        Image->ExceptionMetadata.findFunction(OriginalSymbol->Addr);
+    ASSERT_TRUE(OriginalFrame && OriginalFrame->Compact);
+    testing::Test::RecordProperty(kLinkerCompactWord,
+                                  OriginalFrame->Compact->NativeEncoding);
+    // A classic FP recipe must not authorize copying PC-signed return words.
+    ASSERT_NO_FATAL_FAILURE(
+        writeCompactFixture(Input, *Image, kCompactFrameMode | *CompactPairs));
+    auto Contradictory = Reader->load(Input);
+    ASSERT_TRUE(bool(Contradictory))
+        << llvm::toString(Contradictory.takeError());
+    llvm::LLVMContext BadContext;
+    PipelineOptions BadOptions;
+    BadOptions.PatchMode = true;
+    BadOptions.EmitDumpOutput = false;
+    auto Bad = Pipeline().run(*Contradictory, BadContext, BadOptions);
+    if (Bad.Success) {
+      ASSERT_TRUE(Bad.LlvmModule);
+      MachOPatcher BadPatcher;
+      BadPatcher.setImageContext(&*Contradictory);
+      EXPECT_FALSE(
+          BadPatcher
+              .patch(Input, Rejected, *Bad.LlvmModule, Contradictory->Arch)
+              .Success);
+    } else {
+      EXPECT_FALSE(Bad.Error.empty());
+    }
+    EXPECT_FALSE(std::filesystem::exists(Rejected));
+    const auto Encoding = kCompactPAuthLRMode | *CompactPairs |
+                          (*SigningOffset / aarch64::kInsnSize)
+                              << kPAuthLRShift;
+    ASSERT_NO_FATAL_FAILURE(
+        writeCompactFixture(Input, *Contradictory, Encoding));
+    Image = Reader->load(Input);
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
     const auto *Symbol = Image->findSymbol(kSumSymbol);
     ASSERT_NE(Symbol, nullptr);
     const auto *Frame = Image->ExceptionMetadata.findFunction(Symbol->Addr);
     ASSERT_TRUE(Frame && Frame->Compact);
     ASSERT_EQ(Frame->CodeRange.Begin, Symbol->Addr);
-    ASSERT_EQ(Frame->Compact->NativeEncoding,
-              kCompactPAuthLRMode | *CompactPairs |
-                  (*SigningOffset / aarch64::kInsnSize) << kPAuthLRShift);
+    ASSERT_EQ(Frame->Compact->NativeEncoding, Encoding);
   }
+  const auto Snapshot = Image->Raw;
   if (Coalesced) {
     const auto *First = Image->findSymbol(kSumSymbol);
     const auto *Second = Image->findSymbol(kDifferenceSymbol);

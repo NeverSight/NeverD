@@ -559,6 +559,12 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
       Fallthrough();
     if (!SIMDData && !independent(I))
       return std::nullopt;
+    // Classic compact mode has no signing-PC field. Copying these words with
+    // that recipe would publish a frame the system unwinder cannot describe.
+    if (!Indexed && !PAuthLR &&
+        (I.Id == AARCH64_INS_PACIBSPPC || I.Id == AARCH64_INS_AUTIBSPPC ||
+         I.Id == AARCH64_INS_RETABSPPC))
+      return std::nullopt;
     // Frameless variadic entries can load directly at or above incoming SP
     // without materializing va_list. Count the pre-indexed address, not the
     // post-indexed writeback displacement.
