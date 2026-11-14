@@ -40,6 +40,9 @@ struct MachORuntimeSections {
     uint64_t VA = 0, Size = 0, Alignment = 1;
   };
   Span Descriptors, Template, InitializerOffsets;
+  /// Only the private anchor is registered with dyld. Public descriptor
+  /// addresses keep their variable offsets and dispatch through the resolver.
+  bool UsesThreadResolver = false;
 };
 
 class MachOPatcher : public BinaryPatcher {

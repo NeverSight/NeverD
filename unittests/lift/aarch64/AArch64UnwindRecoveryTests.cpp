@@ -451,6 +451,34 @@ TEST(AArch64ImplicitUnwind, LandingPadsPopOnlyTheirOutgoingArgumentArea) {
   EXPECT_EQ(F.at(5).Status, Status::Unknown);
 }
 
+TEST(AArch64ImplicitUnwind, DeliversOnlyAcrossProvenCallSetup) {
+  for (auto Setup :
+       {Nop, LoadInFrame, LoadAboveFrame, PartialStore, SaveInX19}) {
+    SCOPED_TRACE(Setup);
+    Frame F{SignB, PushFP, Setup, Call, PopFP, Ret, PopFP, Ret};
+    F.saveRow(2);
+    F.addHandler(2, 4, 6);
+    auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+    ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+    const auto PC = 2 * sizeof(uint32_t);
+    auto Site =
+        prepareDarwinArm64eExceptionSite(F.Image, F.Function, *Rows, PC, 0);
+    if (Setup == Nop || Setup == LoadInFrame) {
+      ASSERT_TRUE(Site);
+      EXPECT_TRUE(Site->AtProtectedCall);
+      EXPECT_EQ(Site->ProtectedReturn, 4 * sizeof(uint32_t));
+    } else {
+      EXPECT_FALSE(Site);
+    }
+    // Entry into a protected range may also mark a new object's lifetime.
+    // A following call alone cannot establish an action for an earlier PC.
+    F.Function.Itanium->CallSites.front().GuardedRange.Begin +=
+        sizeof(uint32_t);
+    EXPECT_FALSE(
+        prepareDarwinArm64eExceptionSite(F.Image, F.Function, *Rows, PC, 0));
+  }
+}
+
 TEST(AArch64ImplicitUnwind, RequiresAnOwnedAddressBasedCxxLandingPadTable) {
   Frame F{SignB, PushFP, Call, Ret, Ret};
   F.saveRow(2);

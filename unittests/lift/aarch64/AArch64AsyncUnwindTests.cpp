@@ -776,7 +776,11 @@ static void verifySignalLanguageCleanup(bool ObjectiveC) {
     ASSERT_TRUE(bool(Published)) << llvm::toString(Published.takeError());
     for (bool Installed : {false, true}) {
       const auto &Image = Installed ? *Published : *Original;
-      for (bool Protected : {false, true}) {
+      enum class InterruptedSite { Leaf, Call, Prefix };
+      for (auto Mode : {InterruptedSite::Leaf, InterruptedSite::Call,
+                        InterruptedSite::Prefix}) {
+        const bool Protected = Mode != InterruptedSite::Leaf;
+        SCOPED_TRACE(static_cast<unsigned>(Mode));
         SCOPED_TRACE(Installed);
         SCOPED_TRACE(Protected);
         const auto &Map = Maps[Protected ? 0 : 1];
@@ -796,7 +800,9 @@ static void verifySignalLanguageCleanup(bool ObjectiveC) {
              PC += NDArm64eInstructionAlignment) {
           auto Candidate =
               prepareDarwinArm64eExceptionSite(Image, *Frame, *Rows, PC, 0);
-          if (!Candidate || Candidate->AtProtectedCall != Protected)
+          if (!Candidate || Candidate->AtProtectedCall != Protected ||
+              bool(Candidate->ProtectedReturn) !=
+                  (Mode == InterruptedSite::Prefix))
             continue;
           Site = Candidate;
           Plan = prepareDarwinArm64eSystemCaller(

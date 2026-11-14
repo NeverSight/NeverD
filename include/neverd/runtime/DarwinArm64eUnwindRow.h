@@ -62,6 +62,9 @@ typedef struct {
 typedef struct {
   uintptr_t Begin, End;
   bool AtProtectedCall;
+  /// Zero for the protected instruction itself or a forwarding range. A
+  /// transparent prefix names the actual protected call's return address.
+  uintptr_t ProtectedReturn;
 } NDDarwinArm64eExceptionSite;
 
 #endif // NEVERD_RUNTIME_DARWINARM64EUNWINDROW_H

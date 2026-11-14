@@ -132,14 +132,17 @@ static inline bool ndDarwinArm64eDeliverSignalException(
     // The interrupted frame keeps its original signed return in its spill.
     // The thunk can therefore use LR without destroying that frame's caller.
     NDDarwinArm64eCursor Caller = ndDarwinArm64eSignalCursor(Context);
-    if (!Row.SavedLR || Site.Begin != PC ||
+    if ((Site.ProtectedReturn &&
+         Site.ProtectedReturn % NDArm64eInstructionAlignment) ||
+        !Row.SavedLR || Site.Begin != PC ||
         Site.End - PC != NDArm64eInstructionAlignment || Caller.SP < Low ||
         Caller.SP > High || Caller.SP % NDArm64eStackAlignment ||
         !ndDarwinArm64eStepFrameWithPAuthLR(&Caller, Row, Low, High,
                                             HasPAuthLR))
       return false;
     void *Return = ptrauth_sign_unauthenticated(
-        (void *)Site.End, ptrauth_key_function_pointer, 0);
+        (void *)(Site.ProtectedReturn ? Site.ProtectedReturn : Site.End),
+        ptrauth_key_function_pointer, 0);
     arm_thread_state64_set_lr_fptr(*State, Return);
   } else if (!ndDarwinArm64eResumeSignalCaller(
                  Context, Row, Saved, Count, Vectors, Low, High, HasPAuthLR)) {
