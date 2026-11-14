@@ -36,7 +36,7 @@ states").
 | Role | Dark+ | Light+ | Used for |
 | --- | --- | --- | --- |
 | `Window` | `#252526` | `#F3F3F3` | Dialogs and panes; the status bar and headings take the same value |
-| `Base` | `#1E1E1E` | `#FFFFFF` | Lists and code views |
+| `Base` | `#1E1E1E` | `#FFFFFF` | Lists and read-only text; code views and listings fill with the same value from `CodeBackground` and `ListingBackground` in `ThemeColors.def` |
 | `TitleBar`, `MenuBar`, `ToolBar` | `#2D2D2D` | `#F3F3F3` | The one band above the windows |
 | `Separator`, `Border` | `#3C3C3C` | `#E5E5E5` | Hairlines between regions; the edge of a push button |
 | `Text`, `SecondaryText`, `DisabledText` | `#CCCCCC`, `#9D9D9D`, `#6E6E6E` | `#3B3B3B`, `#717171`, `#A0A0A0` | Text that acts, text that describes, text that cannot act |
@@ -128,19 +128,21 @@ In logical pixels, which Qt scales for the screen.
   icon shows what its commands share; a tall menu scrolls in one column
   ("Icon family", "Workbench chrome").
 - Icons: original SVGs on a 16-pixel grid, outlined in `#3B4250` with white
-  highlights and, for each group of commands, an accent and its tint: files
-  and transformations `#D9902F`, navigation `#2F7FD9`, search `#C2662D`,
-  views `#7A55C8`, lists and windows `#2E9E8F`, edit `#4F9A3A`, analysis
-  `#C8455A`, settings `#4E5FD6`. `IconSet.def` records every icon and color. A
-  command that varies another keeps its icon and marks the difference; judge
-  a draft on the dark menu first ("Icon family").
+  highlights and an accent for each group of commands, most of them with a
+  lighter tint for body areas: files and transformations `#D9902F`,
+  navigation `#2F7FD9`, search `#C2662D`, views `#7A55C8`, lists and windows
+  `#2E9E8F`, edit `#4F9A3A`, analysis `#C8455A` (no tint), settings
+  `#4E5FD6`; the library function icon takes `#1FA7C9`. `IconSet.def`
+  records every icon and color. A command that varies another keeps its icon
+  and marks the difference; judge a draft on the dark menu first ("Icon
+  family").
 - Crisp lines: straight strokes on whole pixels at 100%, and chrome lines on
   whole device pixels from 125% to 200% (`DevicePixels`,
   `scripts/check_gui_icons.py`; "Crisp lines on the pixel grid").
 - Windows: NeverD's own frame and title bar on every desktop, with a dialog's
   title in the middle; a useful first size and a minimum taken from the
-  content, never a fixed size ("Workbench chrome", "Resizing is part of the
-  design").
+  content, and a fixed size only where the task needs fixed geometry
+  ("Workbench chrome", "Resizing is part of the design").
 - Languages: eleven of them, Arabic right to left, switched while the
   workbench runs. Mirror geometry placed by hand, and set every text again
   when the language changes ("Languages and direction").
