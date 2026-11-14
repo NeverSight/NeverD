@@ -24078,9 +24078,12 @@ counts, full-width and HI-only fields, and the signed -64 shift. Both groups
 include negative LO values and use the corrected pinned Unicorn helper.
 `MIPSDSP64.*` separately tests all encoded counts, positions, banks, overlaps
 and unpredictable results with APInt expectations. The fork's
-`test_mips64_dsp_extract` exercises all register counts and all positions on
-AC0 with independent bit-at-a-time expectations in both byte orders. These
-native checks do not qualify nonzero-bank transfers or hardware execution.
+`test_mips64_dsp_extract` exercises all register counts and all positions in
+all four banks with independent bit-at-a-time expectations in both byte
+orders. It also checks DSP-disabled MFHI/MFLO with discarded results on o32
+and n64. The `mips64bank*` source profiles preserve full-width AC1–AC3
+transfers, extraction and accumulator shifts through both C views. These
+native checks do not qualify hardware execution.
 
 Run `micro-dsp-simulator.py` with `--assembler`, `--linker`, `--bench` and
 `--simulator` to execute the physical microMIPS DSP and DSPR2 instructions.
