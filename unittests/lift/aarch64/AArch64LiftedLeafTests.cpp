@@ -110,6 +110,8 @@ enum class LeafCheck {
   StackArgument,
   RestoringLoad,
   ScratchResult,
+  KilledScratchResult,
+  NativeAddressing,
   FrameScratchResult,
   ErrorResult,
   Global,
@@ -166,6 +168,16 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   symbolizeImageAbsolutePointers(Module, *Image);
   ASSERT_TRUE(Module.getModuleFlag(kArm64eAnalysisModuleFlag));
 
+  if (Check == LeafCheck::KilledScratchResult) {
+    for (const auto *Name : {kSum, kDifference}) {
+      auto *Entry = Module.getFunction(Name);
+      ASSERT_NE(Entry, nullptr);
+      EXPECT_FALSE(Entry->hasFnAttribute(llvm::Attribute::Naked));
+    }
+    testing::Test::RecordProperty(kNativeImages, 0);
+    return;
+  }
+
   MachOPatcher Patcher;
   Patcher.setImageContext(&*Image);
   auto Partial = llvm::CloneModule(Module);
@@ -182,7 +194,8 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   auto *Wrong = Result->isIntegerTy()
                     ? llvm::ConstantInt::get(Result, kTamperedResult)
                     : llvm::ConstantFP::get(Result, kTamperedResult);
-  if (Check == LeafCheck::ScratchResult || ScratchFrame) {
+  if (Check == LeafCheck::ScratchResult || ScratchFrame ||
+      Check == LeafCheck::NativeAddressing) {
     ASSERT_FALSE(Sum->isVarArg());
     ASSERT_TRUE(Sum->hasFnAttribute(llvm::Attribute::Naked));
     auto *End = Sum->getEntryBlock().getTerminator();
@@ -201,15 +214,19 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     // can be installed. Even an unused, decodable instruction outside the
     // native producer's vocabulary must leave no partial module.
     const auto Unqualified = (Root / kUnknownStackInput).string();
-    auto UnknownCompile = Compile;
-    UnknownCompile.back() = Unqualified;
-    UnknownCompile.insert(UnknownCompile.begin() + 1, kUnknownStackOperation);
-    ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, UnknownCompile), 0);
-    auto UnknownImage = Reader->load(Unqualified);
-    ASSERT_TRUE(bool(UnknownImage)) << llvm::toString(UnknownImage.takeError());
-    auto Refused = Pipeline().run(*UnknownImage, Context, Options);
-    EXPECT_FALSE(Refused.Success);
-    EXPECT_FALSE(Refused.LlvmModule);
+    for (const auto *Unsupported :
+         {kUnknownStackOperation, kUnknownVectorOperation}) {
+      auto UnknownCompile = Compile;
+      UnknownCompile.back() = Unqualified;
+      UnknownCompile.insert(UnknownCompile.begin() + 1, Unsupported);
+      ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, UnknownCompile), 0);
+      auto UnknownImage = Reader->load(Unqualified);
+      ASSERT_TRUE(bool(UnknownImage))
+          << llvm::toString(UnknownImage.takeError());
+      auto Refused = Pipeline().run(*UnknownImage, Context, Options);
+      EXPECT_FALSE(Refused.Success);
+      EXPECT_FALSE(Refused.LlvmModule);
+    }
 
     auto ChangedBit = llvm::CloneModule(Module);
     auto *Entry = ChangedBit->getFunction(kDifference);
@@ -801,6 +818,16 @@ TEST(AArch64DarwinEntry, DirectCallerConsumesTailForwardedX8AndX9Results) {
                         kScratchTailEntries);
 }
 
+TEST(AArch64DarwinEntry, DirectCallResultsSurviveForwardAndBackwardBranches) {
+  verifyPublishedLeaves(kScratchResultSource, kCaller, kAssemblyName,
+                        kScratchBranches, LeafCheck::ScratchResult);
+}
+
+TEST(AArch64DarwinEntry, BranchWritesKillBothScratchResultsBeforeUse) {
+  verifyPublishedLeaves(kScratchResultSource, kCaller, kAssemblyName,
+                        kScratchKilled, LeafCheck::KilledScratchResult);
+}
+
 TEST(AArch64DarwinEntry, MultipleEpiloguesKeepFramePointerAndRememberedRows) {
   verifyPublishedLeaves(kScratchResultSource, kCaller, kAssemblyName,
                         kScratchFrame, LeafCheck::FrameScratchResult);
@@ -936,6 +963,43 @@ TEST(AArch64LiftedImage, PublishesWordDivisionAtExceptionalInputs) {
 }
 TEST(AArch64LiftedImage, PublishesConditionalReadsAndWrites) {
   verifyPublishedLeaves(kConditionalLeaves, kConditionalCaller);
+}
+TEST(AArch64LiftedImage, PublishesLoopsWithPostIndexedMemory) {
+  verifyPublishedLeaves(kLoopLeaves, kLoopCaller, kSource, {},
+                        LeafCheck::NativeAddressing);
+}
+TEST(AArch64LiftedImage, PublishesScaledAndSignedRegisterOffsets) {
+  verifyPublishedLeaves(kIndexedLeaves, kIndexedCaller, kSource, {},
+                        LeafCheck::NativeAddressing);
+}
+TEST(AArch64LiftedImage, PublishesSIMD128SingleAndPairWritebackLoops) {
+  verifyPublishedLeaves(kVectorCopyLeaves, kVectorCopyCaller, kAssemblyName, {},
+                        LeafCheck::NativeAddressing);
+}
+TEST(AArch64LiftedImage, PublishesSIMDByteWritebackLoops) {
+  verifyPublishedLeaves(kVectorCopyLeaves, kVectorCopyCaller, kAssemblyName,
+                        kVectorByteMemory, LeafCheck::NativeAddressing);
+}
+TEST(AArch64LiftedImage, PublishesSIMDHalfWritebackLoops) {
+  verifyPublishedLeaves(kVectorCopyLeaves, kVectorCopyCaller, kAssemblyName,
+                        kVectorHalfMemory, LeafCheck::NativeAddressing);
+}
+TEST(AArch64LiftedImage, PublishesSIMDWordAndPairWritebackLoops) {
+  verifyPublishedLeaves(kVectorCopyLeaves, kVectorCopyCaller, kAssemblyName,
+                        kVectorWordMemory, LeafCheck::NativeAddressing);
+}
+TEST(AArch64LiftedImage, PublishesSIMDDoubleAndPairWritebackLoops) {
+  verifyPublishedLeaves(kVectorCopyLeaves, kVectorCopyCaller, kAssemblyName,
+                        kVectorDoubleMemory, LeafCheck::NativeAddressing);
+}
+TEST(AArch64LiftedImage, PublishesPostIndexedScalarAndPairMemory) {
+  verifyPublishedLeaves(kScalarWritebackLeaves, kScalarWritebackCaller,
+                        kAssemblyName, {}, LeafCheck::NativeAddressing);
+}
+TEST(AArch64LiftedImage, PublishesPreIndexedScalarAndPairMemory) {
+  verifyPublishedLeaves(kScalarWritebackLeaves, kScalarWritebackCaller,
+                        kAssemblyName, kPreIndexedMemory,
+                        LeafCheck::NativeAddressing);
 }
 TEST(AArch64LiftedImage, PublishesSignAndZeroExtendingLoads) {
   verifyPublishedLeaves(kNarrowLeaves, kNarrowCaller);
