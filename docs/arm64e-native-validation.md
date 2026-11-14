@@ -1411,8 +1411,7 @@ the same audited native register-body producer as physical stack cursors.
 The producer retains each original memory instruction and its base update,
 including the runtime checked-pointer behavior. This covers signed and
 unsigned GPR loads, scalar and SIMD stores, signed word pairs, and B/H/S/D/Q
-memory registers. Unsupported vector arithmetic arrangements still refuse
-native-body construction. Publication continues to verify the relocated
+memory registers. Publication continues to verify the relocated
 instruction words, control-transfer targets and unwind rows.
 
 Direct-call X8/X9 result discovery follows the function's control-flow edges.
@@ -1437,3 +1436,26 @@ per-thread resolver lifecycles. The Windows frontend controls also passed.
 Both hosts still reported native CPTA-on unavailable.
 [Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43581342838)
 and [per-host verification record](evidence/arm64e-memory-and-register-publication-2026-11-14.json).
+
+### Fixed-width SIMD data in published images
+
+The complete native register-body producer also admits audited scalar FP and
+Advanced SIMD data-processing instructions. It identifies their
+[A64 encoding class](https://support.arm.com/documentation/ddi0602/2023-12/Index-by-Encoding),
+which has no PC-relative operands, and supplies the original instruction word
+to LLVM MC. This preserves vector arrangements, lane operands, modified
+immediates, table-register lists and floating-point controls. Functions must
+still pass the existing semantic audit and complete-body/unwind checks.
+Memory and control transfers retain their separate relocation rules; SVE/SME
+instructions do not enter this encoding class.
+
+Publication regressions exercise all integer ADD/SUB lane widths in 64/128-bit
+registers, vector arguments and results, logical operations, permutations,
+table lookups, lane insertion/extraction and modified immediates. Independent
+scalar drivers also check widening/narrowing, multiplication, shifts,
+reductions, comparisons and saturation, including FPSR.QC. The fused float and
+double lane controls compare every result and exception flag under all four
+rounding modes. A mixed SIMD/physical-SP case retains signed LR, remembered
+CFI states and multiple epilogues. Changing an encoded SIMD destination is
+rejected before publication. This extends the admitted image contract; it
+does not qualify arbitrary image layouts or native CPTA-on.

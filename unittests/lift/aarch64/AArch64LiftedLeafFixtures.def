@@ -69,6 +69,9 @@ A64_LEAF_TEXT(kDifference, "leaf_difference")
 A64_LEAF_VALUE(unsigned, kCount, 2)
 A64_LEAF_VALUE(unsigned, kHighBranchBit, 40)
 A64_LEAF_VALUE(unsigned, kTamperedResult, 19)
+A64_LEAF_TEXT(kSIMDEncodedWord, ".inst ")
+A64_LEAF_VALUE(uint32_t, kSIMDDestinationBit, 1)
+A64_LEAF_VALUE(unsigned, kSharedDispatchAuthenticatedSites, 1)
 A64_LEAF_TEXT(kHostTarget, "arm64-apple-macosx15.0")
 A64_LEAF_TEXT(kLiftedIR, "lifted.ll")
 A64_LEAF_TEXT(kLiftedC, "lifted.c")
@@ -97,6 +100,8 @@ A64_LEAF_TEXT(kUnknownStackOperation, "-DNEVERD_TEST_UNSUPPORTED_STACK_BODY")
 A64_LEAF_TEXT(kUnknownVectorOperation, "-DNEVERD_TEST_UNSUPPORTED_VECTOR_BODY")
 A64_LEAF_TEXT(kUnknownStackInput, "unsupported-stack.dylib")
 A64_LEAF_TEXT(kScratchFrame, "#define NEVERD_TEST_SCRATCH_FRAME 1\n")
+A64_LEAF_TEXT(kScratchFrameSIMD, "#define NEVERD_TEST_SCRATCH_FRAME 1\n"
+                                 "#define NEVERD_TEST_FIXED_VECTOR_BODY 1\n")
 A64_LEAF_VALUE(unsigned, kScratchTailEntries, 3)
 A64_LEAF_TEXT(kScratchResultSource, R"asm(
 .text
@@ -140,7 +145,11 @@ _leaf_difference:
   rbit x12, x0
 #endif
 #ifdef NEVERD_TEST_UNSUPPORTED_VECTOR_BODY
-  add v12.16b, v0.16b, v1.16b
+  .arch_extension sve
+  add z16.b, z0.b, z1.b
+#endif
+#ifdef NEVERD_TEST_FIXED_VECTOR_BODY
+  add v16.16b, v0.16b, v1.16b
 #endif
   mov x10,#1
   str x8,[sp,x10,lsl #3]
