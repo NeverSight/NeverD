@@ -1057,8 +1057,16 @@ the workbench.
   side as its mark alone, and offer dock, reset and hide in its context menu,
   with a menu action and a shortcut that keep working while it is hidden.
 - Keep the window's one accent while the entry's panel is open: the entry
-  shows as a pressed toggle in the button gray, and the panel's Send keeps
-  the accent.
+  is a checkable button, checked exactly while the panel shows, drawn as a
+  pressed toggle in the button gray, and the panel's Send keeps the accent.
+  The high contrast themes fill buttons with the window, so there the
+  button gray matched the closed accent button (Dark High Contrast: both
+  black, outlined alike); there the pressed toggle takes
+  `ToolButtonChecked`, the workbench's checked tool button fill.
+- Let a floating entry button take focus by Tab only (`Qt::TabFocus`). A
+  click that moved focus onto it made the panel record the button as the
+  view to return to, so Escape left the keyboard on the button instead of
+  the listing being read.
 - Keep floating views off the command line along the foot of the workbench,
   under either bottom corner: mirrored, the command field does not reach the
   right edge, so test the row's width, not its right edge.

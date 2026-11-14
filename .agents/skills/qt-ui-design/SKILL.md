@@ -5,10 +5,10 @@ description: >-
 license: LicenseRef-Qt-Commercial OR BSD-3-Clause
 metadata:
   author: qt-ai-skills
-  version: "1.7"
+  version: "1.8"
   qt-version: "6.x"
   category: conceptual
-  changelog: "Added the NeverD profile's rules for plugin views and the Agent: the floating entry point, movable panels, code fonts and the Qt Quick window's themes and directions"
+  changelog: "Plugin views and the Agent: the pressed toggle's high contrast fill and Tab-only focus for a floating entry button"
 ---
 # Qt UI Design
 
