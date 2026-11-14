@@ -57,11 +57,16 @@
   },
   "owner_tests": {
     "mips_and_shared_fp_parameter_abi": 1107,
-    "fr0_pipeline_after_diamond_fixture_expansion": 8
+    "fr0_pipeline_after_diamond_fixture_expansion": {
+      "registered_cases": 8,
+      "exercised_o32_cases": 4,
+      "note": "The two FR0 pipeline tests return early for the two n64 parameterizations; FR0 admission is o32 only."
+    }
   },
   "limits": [
     "FR=0 requires explicit o32 hard-double and 32-bit CPR1 ELF evidence; FR=1 PS requires an admitted classic pre-R6 profile.",
     "Original-byte PS execution uses MIPS64R2_GENERIC, including comparisons against MIPS32 LowIR. This is reference FPU qualification, not MIPS32 native PS CPU or hardware qualification.",
+    "Native paired-single source profiles use n64 integer argument/result carriers; a PS vector calling convention is not qualified.",
     "Legacy DSP64 rounded/saturating DEXTR and signed DMADD/DMSUB remain unqualified: available DSP revision 3.02 omits old instruction semantics and the older execution model contains unresolved arithmetic discrepancies.",
     "Historical MIPS I-V version admission, load delays and HI/LO hazards remain unimplemented. Pre-R6 microMIPS floating point remains outside this profile.",
     "Raw timing samples, dependency manifests and output identity hashes are local; this receipt contains no timing claims."

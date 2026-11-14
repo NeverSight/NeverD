@@ -1166,6 +1166,8 @@ PLL/PLU/PUL/PUU and ALNV.PS preserve their specified bit patterns. ALNV
 requires a low-three-bit offset of zero or four for a defined result; other
 offsets produce explicit unknown bits. Decoder adapters retain the original
 bytes and fill Capstone's missing PS forms using the shared catalogs.
+Native PS source round trips currently use n64 integer argument/result carriers.
+Native MIPS32 PS execution and PS vector calling conventions are not qualified.
 
 `MIPSLegacyFloat.def` extends the common scalar operation catalog with legacy
 ABS/NEG, the 16 S/D predicates and COP1X MADD/MSUB/NMADD/NMSUB. Together with

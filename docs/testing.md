@@ -24300,7 +24300,8 @@ source paths, ISA revisions and byte orders participate in the check.
 `profile-roundtrip.py` accepts `mips32r2fp_*` and `mips64r2fp_*` selections for
 82 scalar pre-R6 source profiles. The `mips64ps_*` selections add 59 PS
 profiles, including all predicates at FCC0/FCC6, sign exceptions, ternary
-arithmetic, moves, packing and ALNV offsets. Examples are `mips32r2fp_abs`, `mips64r2fp_madd`,
+arithmetic, moves, packing and ALNV offsets. They use n64 integer carriers
+and do not establish a PS vector call ABI. Examples are `mips32r2fp_abs`, `mips64r2fp_madd`,
 `mips32r2fp_cc7`, `mips64r2fp_branch` and `mips64r2fp_memory_suxc1`.
 Use its existing GNU assembler/linker, NeverD, Clang and output arguments;
 repeat `--profile` to select more than one. The runner assembles explicit
