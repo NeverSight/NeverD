@@ -56,6 +56,19 @@ most time. Each step is an instruction, its reason and the case it comes from.
   of a GUI process, read `CLOCK_THREAD_CPUTIME_ID` around the call in a
   throwaway test slot.
 
+- **A rest between samples must sleep.** A GUI probe rested 1.5 s between edits
+  in an event loop while a handler it had left connected asked a loop that had
+  ended to quit at every turn, and `QEventLoop::quit()` wakes the dispatcher
+  whatever the loop's state: the GUI thread spun through each rest. The
+  workbench was measured hot against a tool that really idled, 0.5 ms where the
+  slept path takes 1 to 3, and each run wrote 650 MB of marks until the disk
+  was full. After changing how a probe waits, look at the size of one trace
+  and at the marks of its loop before reading a number.
+- **Read the instrument's output before its figures.** QtTest stops printing
+  after 2000 messages (`-maxwarnings 0` lifts it): diagnostics added for a
+  failure late in a suite were never printed. Put what a failing step saw
+  into the failure's own text.
+
 ## 3. Rank by what the request waits for
 
 - Record both shares of a hotspot, CPU and serial wall (`SKILL.md` § Measuring).
@@ -148,6 +161,17 @@ most time. Each step is an instruction, its reason and the case it comes from.
   was retyped. The fair figure is the time to a correct view.
 - **Report where you lose.** The statistic that still loses is the next item
   of work.
+- **Start both where a user starts.** The other tool repainted nothing after a
+  scripted rename and both views after its own Rename command, so its figure
+  is taken from the moment its dialog is accepted. The workbench is then
+  measured the same way: focus on the view, the cursor on the name, the key,
+  the dialog filled and accepted, the clock started there. A call of the
+  session's API after 1.5 s asleep is another regime, two to five times
+  slower, with no counterpart in the other tool; report it apart.
+- **Say what the figures were taken on.** Offscreen, a dialog does not always
+  take the window's activation and give it back; under a window system it
+  does, around every dialog, in both tools. A margin smaller than the repaint
+  that follows activation is not yet a margin there.
 - Decoders follow `tools/neverd-bench/decoder-comparison/README.md`: public
   APIs only, one build configuration for every library, modes that do
   different amounts of work kept apart, and acceptance differences left
@@ -169,6 +193,34 @@ most time. Each step is an instruction, its reason and the case it comes from.
   the pages its views show saves their round trips (`1a7897e82b`); renders kept
   through edits that cannot reach them answer a reopen without work
   (`9523b03d49`).
+- **What is carried is paid for by whoever waits for the reply.** The lines a
+  listing shows cost the edit's reply 0.2 ms warm and about 1.2 ms after a
+  rest, and the pseudocode's page waits with it. Carry them where the listing
+  is the view worked in, or where the other view already shows the result;
+  elsewhere let the listing read them behind the reply.
+- **Ask which view is worked in, not which has the focus.** An edit made
+  through a dialog leaves as the dialog closes, and whether the view has the
+  focus back by then differed from run to run. The window already knows the
+  last analysis view used; the rule reads that.
+- **Give the answer to the view its reader looks at first.** With one turn for
+  every view, a listing took its carried lines ahead of a pseudocode view that
+  still had the change to show: 11.5 ms where it had taken 7.6. Two turns,
+  the view worked in and the views with something new first, brought it to
+  9.4.
+- **A synchronous repaint pays for the whole window.** `QWidget::repaint` of
+  one row syncs every dirty widget of the top-level. After a dialog closed,
+  the row's 9 k pixels came with 598 k of title bar and functions list, 3 to
+  10 ms in half the samples. Time the repaint, and list what else it painted,
+  before blaming the code in front of it.
+- **Hold a view to what it asks to paint.** A test that counted paint events
+  failed when the dock that holds the view updated all it holds. Count at the
+  one place where the view asks its viewport to paint, and keep the comparison
+  of the window's pixels with the view painted afresh.
+- **Look for the session's own commands between an edit and its views.** The
+  worker writes the project's files behind an edit, the file watcher answers
+  300 ms later with a command, and a command that waits keeps cached answers
+  from the reads behind it and a rename from being read ahead. Tests with
+  several edits in a row met it one run in four.
 
 ## 9. Land it so it stays
 
