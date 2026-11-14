@@ -8,6 +8,7 @@
 #define NEVERD_PLUGINS_AGENT_UI_CHATTRANSCRIPT_H
 
 #include <QCoreApplication>
+#include <QFont>
 #include <QList>
 #include <QScrollArea>
 #include <functional>
@@ -28,9 +29,10 @@ class ChatTranscript final : public QScrollArea {
 public:
   using OpenLink = std::function<void(const QUrl &)>;
   using RequestExecution = std::function<void(const QString &)>;
+  using CodeFont = std::function<QFont()>;
 
   ChatTranscript(OpenLink openLink, RequestExecution requestExecution,
-                 QWidget *parent);
+                 CodeFont codeFont, QWidget *parent);
   void replaceTail(qsizetype first, const QJsonArray &entries);
   void updateExecution(const QString &runId, qsizetype first,
                        const QJsonArray &records);
@@ -46,6 +48,7 @@ private:
 
   OpenLink Navigate;
   RequestExecution RequestLog;
+  CodeFont Code;
   QVBoxLayout *Messages = nullptr;
   QList<Bubble *> Bubbles;
   bool FollowingTail = true;

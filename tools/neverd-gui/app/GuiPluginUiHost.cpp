@@ -247,6 +247,7 @@ public:
     return Theme::instance().chrome(role);
   }
   QString language() const override { return currentLanguage(); }
+  QFont codeFont() const override { return Theme::instance().codeFont(); }
 
   bool navigate(const QString &address, const QJsonObject &binding) override {
     if (!Active || !sameProject(captureContext(), binding) ||

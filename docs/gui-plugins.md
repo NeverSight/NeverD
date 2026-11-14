@@ -86,6 +86,9 @@ component requires the workbench.
   current light, dark or high contrast theme. Standard Qt controls need
   nothing: the workbench style already draws them. Read the roles again on
   `QEvent::ApplicationPaletteChange`, which a theme change sends.
+- `codeFont` returns the workbench's code font. Show code, addresses and
+  identifiers in it: the workbench sets its own fallback fonts for digits and
+  punctuation, so a generic monospace family can mix fonts within a line.
 - `language` returns the workbench's interface language (`en`, `zh-CN`,
   `ar`, ...). A component that ships its own Qt catalogs loads the one for
   that language and loads it again on `QEvent::LanguageChange`, which every

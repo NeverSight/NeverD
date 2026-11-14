@@ -27,6 +27,7 @@
 #include <QCursor>
 #include <QEvent>
 #include <QFocusEvent>
+#include <QFontDatabase>
 #include <QFrame>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -911,6 +912,11 @@ private:
         [this](const QString &runId) {
           if (Ready)
             invoke("execution", {runId});
+        },
+        [this] {
+          return Appearance
+                     ? Appearance->codeFont()
+                     : QFontDatabase::systemFont(QFontDatabase::FixedFont);
         },
         panel);
     body->addWidget(History, 1);

@@ -14,7 +14,9 @@
 #include <QLabel>
 #include <QLocale>
 #include <QScrollBar>
+#include <QTextBlock>
 #include <QTextBrowser>
+#include <QTextCursor>
 #include <QTextDocument>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -32,6 +34,38 @@ const QTextDocument::MarkdownFeatures MessageMarkdown =
     QTextDocument::MarkdownFeatures(QTextDocument::MarkdownDialectGitHub) |
     QTextDocument::MarkdownNoHTML;
 constexpr int VisibleExecutionRows = 5;
+
+/// Code in \p document, fenced or inline, in \p code: the generic monospace
+/// family Markdown asks for can leave digits and punctuation to the
+/// workbench's fallback fonts and break a line's spacing. Fenced lines wrap.
+void showCodeIn(QTextDocument &document, const QFont &code) {
+  QTextCharFormat format;
+  format.setFontFamilies(code.families().isEmpty() ? QStringList{code.family()}
+                                                   : code.families());
+  format.setFontFixedPitch(true);
+  for (auto block = document.begin(); block.isValid(); block = block.next()) {
+    const bool fenced =
+        block.blockFormat().hasProperty(QTextFormat::BlockCodeFence);
+    if (fenced) {
+      // Long code wraps in the narrow conversation instead of scrolling
+      // the whole message sideways.
+      auto lines = block.blockFormat();
+      lines.setNonBreakableLines(false);
+      QTextCursor(block).setBlockFormat(lines);
+    }
+    for (auto it = block.begin(); !it.atEnd(); ++it) {
+      const auto fragment = it.fragment();
+      if (!fragment.isValid() ||
+          (!fenced && !fragment.charFormat().fontFixedPitch()))
+        continue;
+      QTextCursor cursor(&document);
+      cursor.setPosition(fragment.position());
+      cursor.setPosition(fragment.position() + fragment.length(),
+                         QTextCursor::KeepAnchor);
+      cursor.mergeCharFormat(format);
+    }
+  }
+}
 
 class MessageText final : public QTextBrowser {
 public:
@@ -258,8 +292,8 @@ private:
 
 class ChatTranscript::Bubble final : public QFrame {
 public:
-  Bubble(bool user, const OpenLink &openLink, QWidget *parent)
-      : QFrame(parent), User(user) {
+  Bubble(bool user, const OpenLink &openLink, CodeFont code, QWidget *parent)
+      : QFrame(parent), User(user), Code(std::move(code)) {
     setObjectName(User ? "NeverDAgentUserMessage" : "NeverDAgentReply");
     setAttribute(Qt::WA_StyledBackground);
     // Never taller than its text: a message that unwraps gives back the
@@ -323,6 +357,8 @@ public:
       return;
     Displayed = text;
     Body->document()->setMarkdown(Displayed, MessageMarkdown);
+    if (Code)
+      showCodeIn(*Body->document(), Code());
   }
 
   void fitWidth(int width) {
@@ -347,14 +383,15 @@ private:
   QLabel *Speaker = nullptr;
   MessageText *Body = nullptr;
   ExecutionLog *Log = nullptr;
+  CodeFont Code;
   QString Source, Displayed, RunId;
   bool Running = false;
 };
 
 ChatTranscript::ChatTranscript(OpenLink openLink, RequestExecution request,
-                               QWidget *parent)
+                               CodeFont codeFont, QWidget *parent)
     : QScrollArea(parent), Navigate(std::move(openLink)),
-      RequestLog(std::move(request)) {
+      RequestLog(std::move(request)), Code(std::move(codeFont)) {
   setObjectName("NeverDAgentTranscript");
   setAccessibleName(tr("Conversation"));
   setFrameShape(NoFrame);
@@ -423,7 +460,7 @@ void ChatTranscript::replaceTail(qsizetype first, const QJsonArray &entries) {
       bubble = nullptr;
     }
     if (!bubble) {
-      bubble = new Bubble(user, Navigate, widget());
+      bubble = new Bubble(user, Navigate, Code, widget());
       if (index == Bubbles.size())
         Bubbles.append(bubble);
       else

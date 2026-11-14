@@ -8,6 +8,7 @@
 #define NEVERD_PLUGINSDK_GUI_GUIPLUGINUI_H
 
 #include <QColor>
+#include <QFont>
 #include <QJsonObject>
 #include <QString>
 #include <QtPlugin>
@@ -82,6 +83,10 @@ public:
   virtual QColor themeColor(const QString &role) const = 0;
   /// The workbench's interface language: "en", "zh-CN", "ar", ...
   virtual QString language() const = 0;
+  /// The workbench's code font, in which a view shows code, addresses and
+  /// identifiers; it covers the digits and punctuation the workbench gives
+  /// its own fallback fonts.
+  virtual QFont codeFont() const = 0;
 
 protected:
   ~AppearanceContext() = default;
