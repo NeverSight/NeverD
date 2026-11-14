@@ -305,6 +305,7 @@ static atomic_int Ready;
 struct Plan {
   uintptr_t Begin, End;
   NDDarwinArm64eUnwindRow Frame;
+  size_t Count;
   NDDarwinArm64eSavedGPR Saved[GPRCount];
   NDDarwinArm64eVectorSaves Vectors;
 };
@@ -316,18 +317,19 @@ static volatile sig_atomic_t Handled;
 
 static int readPlan(FILE *File, Entry Run, struct Plan *Plan) {
   intptr_t Delta;
-  unsigned LowMask, HighMask;
-  if (fscanf(File, "%" SCNdPTR " %" SCNuPTR " %" SCNuPTR " %td %td %td %u %u",
-             &Delta, &Plan->Begin, &Plan->End, &Plan->Frame.CFAOffset,
-             &Plan->Frame.FPOffset, &Plan->Frame.LROffset, &LowMask,
-             &HighMask) != 8)
+  unsigned FromFP, LowMask, HighMask;
+  if (fscanf(File, "%" SCNdPTR " %" SCNuPTR " %" SCNuPTR " %u %td %td %td %zu %u %u",
+             &Delta, &Plan->Begin, &Plan->End, &FromFP, &Plan->Frame.CFAOffset,
+             &Plan->Frame.FPOffset, &Plan->Frame.LROffset, &Plan->Count,
+             &LowMask, &HighMask) != 10 || Plan->Count > GPRCount)
     return 0;
-  Plan->Frame.CFAFromFP = Plan->Frame.SavedFP = Plan->Frame.SavedLR = true;
+  Plan->Frame.CFAFromFP = FromFP;
+  Plan->Frame.SavedFP = Plan->Frame.SavedLR = true;
   Plan->Frame.Signing = NDArm64eSignedIBWithCFA;
   Plan->Vectors.Complete = true;
   Plan->Vectors.LowMask = LowMask;
   Plan->Vectors.HighMask = HighMask;
-  for (unsigned I = 0; I < GPRCount; ++I)
+  for (unsigned I = 0; I < Plan->Count; ++I)
     if (fscanf(File, "%u %td", &Plan->Saved[I].Register,
                &Plan->Saved[I].CFAOffset) != 2)
       return 0;
@@ -349,7 +351,7 @@ static void observe(int Signal, siginfo_t *Info, void *Data) {
   uintptr_t PC = arm_thread_state64_get_pc(Context->uc_mcontext->__ss);
   if (Signal != SIGUSR1 || PC < Plan->Begin || PC >= Plan->End ||
       !ndDarwinArm64eResumeSignalCaller(
-          Context, Plan->Frame, Plan->Saved, GPRCount, &Plan->Vectors,
+          Context, Plan->Frame, Plan->Saved, Plan->Count, &Plan->Vectors,
           Low, High, false))
     _exit(10);
   Context->uc_mcontext->__ss.__x[0] = Returned;
@@ -372,16 +374,25 @@ int main(int Argc, char **Argv) {
   void *Image = dlopen(Argv[1], RTLD_NOW | RTLD_LOCAL);
   if (!Image)
     return 2;
-  Entry Runs[] = {(Entry)dlsym(Image, "leaf_sum"),
-                  (Entry)dlsym(Image, "leaf_difference")};
-  if (!Runs[0] || !Runs[1])
-    return 3;
+  Entry Runs[] = {(Entry)dlsym(Image, "leaf_sum")
+#ifndef TEST_COMPACT_PAIRS
+                  , (Entry)dlsym(Image, "leaf_difference")
+#endif
+  };
+  enum { FunctionCount = sizeof(Runs) / sizeof(Runs[0]) };
+  for (unsigned I = 0; I < FunctionCount; ++I)
+    if (!Runs[I])
+      return 3;
   unsigned Rounds = NormalRounds;
 #ifdef TEST_SIGNAL
   alarm(30);
   FILE *File = fopen(Argv[2], "r");
-  if (!File || !readPlan(File, Runs[0], &Plans[0]) ||
-      !readPlan(File, Runs[1], &Plans[1]) || fclose(File))
+  if (!File)
+    return 4;
+  for (unsigned I = 0; I < FunctionCount; ++I)
+    if (!readPlan(File, Runs[I], &Plans[I]))
+      return 4;
+  if (fclose(File))
     return 4;
   Worker = pthread_self();
   High = (uintptr_t)pthread_get_stackaddr_np(Worker);
@@ -399,7 +410,7 @@ int main(int Argc, char **Argv) {
                  UINT64_C(0x0102030405060708) * (I + Round);
     uint64_t A = Round ? UINT64_MAX - Round : 0;
     uint64_t B = Round & 1 ? A : -A;
-    for (unsigned I = 0; I < 2; ++I) {
+    for (unsigned I = 0; I < FunctionCount; ++I) {
       uint64_t Expected = I ? A - B : A + B;
 #ifdef TEST_SIGNAL
       Current = I;
@@ -421,7 +432,11 @@ int main(int Argc, char **Argv) {
       for (unsigned Word = 0; Word < Words; ++Word) {
         uint64_t ExpectedWord = Input[Word];
 #ifndef TEST_QUAD
-        if (Word >= GPRCount && (Word - GPRCount) % 2) {
+        if (Word >= GPRCount && (Word - GPRCount) % 2
+#ifdef TEST_COMPACT_PAIRS
+            && (TEST_COMPACT_PAIRS & (0x100u << ((Word - GPRCount) / 4)))
+#endif
+        ) {
           // D reloads clear the upper lane. A signal return preserves the
           // interrupted upper lane when the function has no Q save for it.
 #ifdef TEST_SIGNAL

@@ -32,7 +32,8 @@ bool needsMachONativeStackIndex(const MedFunc &Function);
 
 /// Lower audited patch-mode entries that use Darwin variadic cursors, indexed
 /// SP accesses, ordinary indexed/writeback memory, scalar FP/NEON data
-/// operations or X8/X9 results consumed by an image-local direct caller,
+/// operations, compact FP saved frames or X8/X9 results consumed by an
+/// image-local direct caller,
 /// including across local control-flow edges.
 /// Keep physical operands, control flow and unwind rows in one native body.
 /// Return an error if any declaration withheld for a physical SP access

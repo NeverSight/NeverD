@@ -399,7 +399,8 @@ void emitSwiftErrorForwarder(llvm::Function &Entry) {
 
 // Darwin's ordinary calling convention restores X21 in the epilogue. A leaf
 // with an observable X21 write needs the target's writable error carrier.
-llvm::Error bindLeafErrorResults(llvm::Module &Module) {
+llvm::Error bindLeafErrorResults(llvm::Module &Module,
+                                 const llvm::DenseSet<va_t> &NativeEntries) {
   auto &Context = Module.getContext();
   auto *Register = llvm::MetadataAsValue::get(
       Context, llvm::MDNode::get(Context, llvm::MDString::get(
@@ -428,6 +429,16 @@ llvm::Error bindLeafErrorResults(llvm::Module &Module) {
   for (size_t I = 0; I < Writers.size(); ++I)
     for (auto &Use : Writers[I]->uses()) {
       auto *Call = llvm::dyn_cast<llvm::CallInst>(Use.getUser());
+      // An already verified native body passes X21 physically. Rebind its
+      // symbolic callee, but do not rewrite the caller's LLVM prototype.
+      if (Call && Call->isInlineAsm() && Call->isArgOperand(&Use) &&
+          !Call->hasOperandBundles()) {
+        auto Source = rewrite_source::getOriginalVA(*Call->getFunction());
+        if (!Source)
+          return Source.takeError();
+        if (*Source && NativeEntries.contains(**Source))
+          continue;
+      }
       if (!Call || !Call->isCallee(&Use) || Call->hasOperandBundles())
         return refuse(kErrorResultABI);
       Writers.insert(Call->getFunction());
@@ -1035,7 +1046,7 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
   for (const auto &Flag : Flags)
     if (Flag.Key->getString() != kArm64eAnalysisModuleFlag)
       Candidate->addModuleFlag(Flag.Behavior, Flag.Key->getString(), Flag.Val);
-  if (auto Error = bindLeafErrorResults(*Candidate))
+  if (auto Error = bindLeafErrorResults(*Candidate, *RegisterEntries))
     return Error;
   auto &Context = Candidate->getContext();
   auto *Version = llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(

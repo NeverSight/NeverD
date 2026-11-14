@@ -1,0 +1,180 @@
+//===- AArch64CompactRegisterFixtures.def - Compact frame inputs -------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Uses the SAVED_TEXT and SAVED_VALUE macros of the saved-register fixtures.
+// Pair rows independently specify the compact format's nine register bits.
+//===----------------------------------------------------------------------===//
+
+#ifndef SAVED_TEXT
+#define SAVED_TEXT(Name, Text)
+#endif
+#ifndef SAVED_VALUE
+#define SAVED_VALUE(Type, Name, Value)
+#endif
+
+SAVED_TEXT(kCompactFlag, "-DTEST_COMPACT_PAIRS=")
+SAVED_TEXT(kExtraStackFlag, "-DTEST_EXTRA_STACK")
+SAVED_TEXT(kCFISpill, ".cfi_offset ")
+SAVED_TEXT(kCFISeparator, ", ")
+SAVED_VALUE(unsigned, kCompactFrameMode, 0x04000000)
+SAVED_VALUE(unsigned, kCompactAllPairs, 0x00000f1f)
+SAVED_VALUE(unsigned, kCompactSparsePairs, 0x00000515)
+SAVED_VALUE(unsigned, kCompactPairRegisters, 2)
+SAVED_VALUE(int, kCompactFrameDepth, 176)
+SAVED_VALUE(int, kCompactExtraDepth, 32)
+SAVED_VALUE(int, kCompactFirstSpill, -24)
+SAVED_VALUE(auto, kCompactPairCases,
+            (std::array<CompactPairCase, 9>{{
+                {0x001, 19, false},
+                {0x002, 21, false},
+                {0x004, 23, false},
+                {0x008, 25, false},
+                {0x010, 27, false},
+                {0x100, 8, true},
+                {0x200, 10, true},
+                {0x400, 12, true},
+                {0x800, 14, true},
+            }}))
+
+// The frame pointer anchors the unwind recipe independently of a further
+// stack reservation. No DWARF-only operation forces a fallback from compact.
+SAVED_TEXT(kCompactBody, R"asm(
+.text
+.globl _leaf_sum
+.p2align 2
+_leaf_sum:
+.cfi_startproc
+  pacibsp
+  sub sp, sp, #176
+  stp x29, x30, [sp, #160]
+  add x29, sp, #160
+.cfi_def_cfa x29, 16
+.cfi_offset x30, -8
+.cfi_offset x29, -16
+.set used, 0
+.macro save bit, first, second
+.if TEST_COMPACT_PAIRS & \bit
+  stp \second, \first, [sp, #144-used]
+.cfi_offset \first, -24-used
+.cfi_offset \second, -32-used
+.set used, used+16
+.endif
+.endm
+save 1, x19, x20
+save 2, x21, x22
+save 4, x23, x24
+save 8, x25, x26
+save 16, x27, x28
+save 256, d8, d9
+save 512, d10, d11
+save 1024, d12, d13
+save 2048, d14, d15
+  // Force caller recovery to use the signed stack copy, not the live LR.
+  mov x30, #30
+#ifdef TEST_EXTRA_STACK
+  sub sp, sp, #32
+#endif
+.if TEST_COMPACT_PAIRS & 1
+  mov x19, #19
+  mov x20, #20
+.endif
+.if TEST_COMPACT_PAIRS & 2
+  mov x21, #21
+  mov x22, #22
+.endif
+.if TEST_COMPACT_PAIRS & 4
+  mov x23, #23
+  mov x24, #24
+.endif
+.if TEST_COMPACT_PAIRS & 8
+  mov x25, #25
+  mov x26, #26
+.endif
+.if TEST_COMPACT_PAIRS & 16
+  mov x27, #27
+  mov x28, #28
+.endif
+.if TEST_COMPACT_PAIRS & 256
+  movi v8.16b, #8
+  movi v9.16b, #9
+.endif
+.if TEST_COMPACT_PAIRS & 512
+  movi v10.16b, #10
+  movi v11.16b, #11
+.endif
+.if TEST_COMPACT_PAIRS & 1024
+  movi v12.16b, #12
+  movi v13.16b, #13
+.endif
+.if TEST_COMPACT_PAIRS & 2048
+  movi v14.16b, #14
+  movi v15.16b, #15
+.endif
+  add x0, x0, x1
+  mov x17, x0
+#ifdef TEST_SIGNAL
+  mov w9, #1
+  str w9, [x2]
+Lwait:
+  ldr w9, [x2]
+  cbnz w9, Lwait
+#endif
+.macro restore
+#ifdef TEST_EXTRA_STACK
+  add sp, sp, #32
+#endif
+.set used, 0
+.if TEST_COMPACT_PAIRS & 1
+  ldp x20, x19, [sp, #144-used]
+.set used, used+16
+.endif
+.if TEST_COMPACT_PAIRS & 2
+  ldp x22, x21, [sp, #144-used]
+.set used, used+16
+.endif
+.if TEST_COMPACT_PAIRS & 4
+  ldp x24, x23, [sp, #144-used]
+.set used, used+16
+.endif
+.if TEST_COMPACT_PAIRS & 8
+  ldp x26, x25, [sp, #144-used]
+.set used, used+16
+.endif
+.if TEST_COMPACT_PAIRS & 16
+  ldp x28, x27, [sp, #144-used]
+.set used, used+16
+.endif
+.if TEST_COMPACT_PAIRS & 256
+  ldp d9, d8, [sp, #144-used]
+.set used, used+16
+.endif
+.if TEST_COMPACT_PAIRS & 512
+  ldp d11, d10, [sp, #144-used]
+.set used, used+16
+.endif
+.if TEST_COMPACT_PAIRS & 1024
+  ldp d13, d12, [sp, #144-used]
+.set used, used+16
+.endif
+.if TEST_COMPACT_PAIRS & 2048
+  ldp d15, d14, [sp, #144-used]
+.set used, used+16
+.endif
+  ldp x29, x30, [sp, #160]
+  add sp, sp, #176
+.endm
+  cbz x0, Lzero
+  restore
+  autibsp
+  ret
+Lzero:
+  restore
+  retab
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+
+#undef SAVED_TEXT
+#undef SAVED_VALUE
