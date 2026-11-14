@@ -242,6 +242,7 @@ TEST(CMemoryCopy, HighCExecutesCopiesAtTheirOriginalEvaluationPoint) {
               std::to_string(Bytes) + ") && dst[i] != 0xa5) return 11;\n}\n";
   }
   const std::string Harness = R"(
+#include <string.h>
 static unsigned address_calls, value_calls;
 static unsigned char effect_byte;
 uint64_t next_address(void) { ++address_calls; return (uintptr_t)&effect_byte; }

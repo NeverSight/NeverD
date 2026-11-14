@@ -1475,6 +1475,7 @@ TEST(HighCSourceCalls,
     Functions.push_back(std::move(F));
   }
   const std::string Check = R"(
+#include <string.h>
 int main(void) {
   _Alignas(16) unsigned char bytes[32];
   uint64_t (*stores[])(uint64_t, uint64_t) = {raw_store_0, raw_store_1, raw_store_2};
@@ -4544,7 +4545,8 @@ TEST(HighCSourceCalls, PartialIntegerCarriersPreserveWideValuesAndShiftBounds) {
       Function.Body.insert(Function.Body.begin(), Store);
       Functions.push_back(std::move(Function));
     }
-    compileAndRun(emit(Functions) + "\n#define BYTES " + std::to_string(Bytes) +
+    compileAndRun(emit(Functions) + "\n#include <string.h>\n#define BYTES " +
+                  std::to_string(Bytes) +
                   R"(
 int main(void) {
     unsigned char input[BYTES], output[BYTES + 2];

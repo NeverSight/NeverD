@@ -1306,6 +1306,12 @@ public:
   /// narrower than its storage on a little-endian target, none when only
   /// the byte-order-aware helper reads it.
   std::optional<unsigned> inlineMemoryBytes(llvm::StringRef Type) const;
+  /// Whether plain accesses of the C memory type \p Type go through its load
+  /// and store helpers, which copy with memcpy: when no access copies it
+  /// inline (inlineMemoryBytes).
+  bool accessesThroughHelpers(llvm::StringRef Type) const {
+    return !inlineMemoryBytes(Type);
+  }
   /// An x87 extended value: what `long double` holds.
   static bool isX87Value(const HighExpr &E);
   /// The x87 helper \p E prints through, if any.

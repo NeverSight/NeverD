@@ -258,6 +258,7 @@ TEST(CImageObjects, DeclaredObjectsHoldTheImageBytes) {
   // The C compiles without integer and pointer confusion, and each object
   // holds what the image does.
   const std::string Check = Source + R"(
+#include <string.h>
 int main(void) {
   static const unsigned char GbkBytes[12] = {0xD6, 0xD0, 0xCE, 0xC4,
                                              0xD7, 0xD6, 0xB7, 0xFB};
@@ -997,7 +998,8 @@ TEST(CImageObjects, AdvancingCursorsKeepTheWholeMutableImageObject) {
             emitWithImage({cursorWalk(Backward, WriteOnly), Address}, Img);
         EXPECT_NE(Source.find("[56] = {"), NotFound) << Source;
         const std::string Harness =
-            Source + "\n#define WRITE_ONLY " + (WriteOnly ? "1" : "0") + R"(
+            Source + "\n#include <string.h>\n#define WRITE_ONLY " +
+            (WriteOnly ? "1" : "0") + R"(
 int main(void) {
   unsigned char expected[56];
   memset(expected, 0xa5, sizeof expected);
