@@ -41,8 +41,10 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
   if (ScalarFP || mips::isMSANativeVector(Id) || mips::isMSAControl(Id)) {
     if (!Img || !Img->MIPS ||
         (ScalarFP ? ((Img->MIPS->ISARevision != 6 &&
-                      !Img->MIPS->hasScalarFP64ABI(isMIPS64(TargetArch))) ||
-                     !mips::scalarFPAvailable(Id, Img->MIPS->ISARevision))
+                      !Img->MIPS->hasScalarFPABI(isMIPS64(TargetArch))) ||
+                     !mips::scalarFPAvailable(
+                         Id, Img->MIPS->ISARevision,
+                         Img->MIPS->hasScalarFP32ABI(isMIPS64(TargetArch))))
                   : (!Img->MIPS->HasMSA || Img->MIPS->ISARevision != 5)))
       throw std::runtime_error(
           "native MIPS FP source requires a matching scalar or MSA profile");
@@ -52,10 +54,12 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
             : 0;
     const auto Asm =
         ScalarFP
-            ? mips::scalarFPAssembly(Id, Selector,
-                                     mips::instructionModeFromLLVM(
-                                         *B.GetInsertBlock()->getParent()) ==
-                                         InstructionMode::MicroMIPS)
+            ? mips::scalarFPAssembly(
+                  Id, Selector,
+                  mips::instructionModeFromLLVM(
+                      *B.GetInsertBlock()->getParent()) ==
+                      InstructionMode::MicroMIPS,
+                  Img->MIPS->hasScalarFP32ABI(isMIPS64(TargetArch)))
             : mips::msaAssembly(Id, Selector, archLittleEndian(TargetArch));
     llvm::SmallVector<llvm::Value *, 4> Args;
     llvm::SmallVector<llvm::Type *, 4> Types;

@@ -59,6 +59,15 @@ struct MIPSImageMetadata {
 
   /// An explicit scalar hard-float ABI with 64-bit FPRs (FR=1).
   bool hasScalarFP64ABI(bool Wide) const { return FPABI == (Wide ? 1 : 6); }
+
+  /// The o32 hard-double ABI uses 32-bit FPRs, pairing even/odd registers
+  /// for doubles. FPXX does not establish the runtime FR mode.
+  bool hasScalarFP32ABI(bool Wide) const {
+    return !Wide && ISARevision != 6 && FPABI == 1;
+  }
+  bool hasScalarFPABI(bool Wide) const {
+    return hasScalarFP64ABI(Wide) || hasScalarFP32ABI(Wide);
+  }
 };
 
 } // namespace neverd

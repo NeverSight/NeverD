@@ -243,6 +243,10 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
                           "n32/n64 hard double");
     if (Bytes[7] == (Wide ? 1 : 6) && Bytes[5] != (Profile.HasMSA ? 3 : 2))
       return profileError("FP64 hard-float ABI requires matching CPR1 width");
+    if (!Wide && Bytes[7] == 1 &&
+        (R6 || Bytes[5] != 1 || (Flags & EF_MIPS_FP64)))
+      return profileError(
+          "FP32 hard-float ABI requires pre-R6 and 32-bit CPR1");
     if (Bytes[2] != (Wide ? 64 : 32) ||
         Bytes[3] != (R6               ? 6
                      : Profile.HasMSA ? 5

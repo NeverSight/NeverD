@@ -2,7 +2,8 @@
 
 The experimental MIPS analysis path targets linked ELF programs with classic
 MIPS32/o32 and MIPS64/n32 or n64 instructions in either byte order. The profiles below
-cover classic Release 2 integer and FR=1 scalar floating-point instructions,
+cover classic Release 2 integer, FR=0/FR=1 scalar floating-point and FR=1
+paired-single instructions,
 classic and microMIPS Release 6 integer and FR=1 floating-point instructions, microMIPS32 and microMIPS64 integer profiles,
 MIPS16e32 and MIPS16e2, and Release 5/o32 and n64 MSA.
 The selected ELF profile determines register width, byte order, stack layout
@@ -127,8 +128,8 @@ Reading only a low byte or halfword does not prove that incoming upper bits
 have the extension a narrow C parameter would require. Declared source types
 remain a separate contract.
 
-Coverage remains incomplete for historical MIPS I–V profiles, pre-Release 6
-FR=0 and paired-single floating point, trapping arithmetic and the MSA/DSP forms outside the
+Coverage remains incomplete for historical MIPS I–V profiles, pre-R6 microMIPS
+floating point, trapping arithmetic and the MSA/DSP forms outside the
 slices below. Privileged instructions and reservations are admitted by profile
 as described under MIPS16e2 and classic Release 6. Unsupported instructions, missing slots and transfers in a
 delay slot produce errors, not replacement NOPs. General aggregate source ABI
@@ -1140,21 +1141,42 @@ the ISA work belongs to [#97](https://github.com/NeverSight/NeverD/issues/97).
 
 ### Classic Release 2 scalar FPU
 
-The scalar FP owner also admits classic pre-R6 COP1/COP1X with explicit FR=1
-evidence: o32 FP64 (GNU FP ABI 6) or n32/n64 hard double (ABI 1). The loader
-requires matching 64-bit CPR1 evidence; an integer-only ELF without that
-evidence does not acquire floating semantics. Both GPR widths and byte orders
-share the same instruction rules. FR=0 register pairs, paired-single formats,
-historical MIPS I–V profiles and pre-R6 microMIPS floating point are not covered
-by this profile.
+The scalar FP owner admits classic pre-R6 COP1/COP1X with explicit register-mode
+evidence: o32 FP64 (GNU FP ABI 6) or n32/n64 hard double (ABI 1) establishes
+FR=1. o32 hard double (ABI 1) with 32-bit CPR1 evidence establishes FR=0.
+Conflicting CPR1 widths, EF_MIPS_FP64 with FR=0, and FR=0 under Release 6 are
+rejected. FPXX and integer-only images do not establish an FPR mode. Both GPR
+widths and byte orders share the instruction owner. Historical MIPS I–V
+profiles and pre-R6 microMIPS floating point remain outside this profile.
+
+FR=0 LowIR retains 32 independent physical FPR words. Doubles join the even
+register's low word with its odd partner's high word in either byte order;
+a single write preserves the partner. Double operations and memory accesses
+reject odd register operands, and long fixed-point, paired-single and
+LUXC1/SUXC1 encodings are refused. Source projection combines physical words
+into even-register ABI carriers before SSA. Unknown incoming scratch words
+remain explicit until the byte-use proof establishes that they are unobserved.
+Neither this projection nor parameter inference initializes machine registers.
+
+FR=1 paired-single supports ADD/SUB/MUL, ABS/NEG, all 16 paired comparisons,
+and COP1X MADD/MSUB/NMADD/NMSUB. Both lane exceptions are combined before
+writeback. Comparisons require an even condition selector; MOVF/T.PS selects
+the two lanes independently. MOV/MOVZ/MOVN, CVT.PS.S, CVT.S.PL/PU,
+PLL/PLU/PUL/PUU and ALNV.PS preserve their specified bit patterns. ALNV
+requires a low-three-bit offset of zero or four for a defined result; other
+offsets produce explicit unknown bits. Decoder adapters retain the original
+bytes and fill Capstone's missing PS forms using the shared catalogs.
+Native PS source round trips currently use n64 integer argument/result carriers.
+Native MIPS32 PS execution and PS vector calling conventions are not qualified.
 
 `MIPSLegacyFloat.def` extends the common scalar operation catalog with legacy
 ABS/NEG, the 16 S/D predicates and COP1X MADD/MSUB/NMADD/NMSUB. Together with
-the shared arithmetic and conversion forms there are 84 operations. Unlike
+the shared arithmetic and conversion forms there are 109 operations. Unlike
 R6 ABS/NEG, the legacy forms can raise Invalid. Comparisons write their selected
 FCC0–FCC7, preserve the other condition bits and retain FCSR exception effects.
 The bound scalar executor must match the ISA revision; the Unicorn adapter uses
-74Kf or MIPS64R2_GENERIC for these operations. A pending enabled exception
+MIPS64R2_GENERIC for these operations, including o32. This binding supplies an
+FPU, while LowIR owns GPR width and FR=0 pairing; 74Kf does not implement PS. A pending enabled exception
 commits FCSR and suppresses destination writeback. This is an explicit reference
 CPU policy, not an assertion that all implementations produce identical NaNs
 or reciprocal estimates.
@@ -1173,13 +1195,18 @@ alignment and initialized memory continue to apply.
 HighC and LLVMC preserve the arithmetic and control operations with native
 target assembly and reuse the scalar ABI and byte-provenance checks described
 below. No host floating-point evaluation substitutes for the target's FCSR.
-The pinned Unicorn includes [the legacy ABS/NEG exception fix](https://github.com/NeverSight/unicorn/pull/28).
+The pinned Unicorn includes [the scalar legacy ABS/NEG exception fix](https://github.com/NeverSight/unicorn/pull/28)
+and [the paired-single sign/exception fix](https://github.com/NeverSight/unicorn/pull/29).
 The independent sign tests distinguish pre-R6 arithmetic NaN behavior from R6
 bit operations, including enabled Invalid exceptions and preserved destinations.
 The rules follow [MIPS64 Volume II, revision 2.50](https://0x04.net/~mwk/doc/mips/MD00087-2B-MIPS64BIS-AFP-02.50.pdf).
 The [qualification receipt](evidence/mips-classic-fp-2026-11-14.json) records
 the bit/exception comparisons, both source projections and the o32/n32/n64
 fixed, variadic and indirect call roundtrips in both byte orders.
+The [FR=0 and paired-single receipt](evidence/mips-fr0-paired-2026-11-15.json)
+adds physical register-pair observations, PS lane/exception checks and FR=0
+source ABI roundtrips. It records the historical ISA and legacy DSP64 gaps
+separately from the qualified profiles.
 
 ### Release 6 scalar FPU
 

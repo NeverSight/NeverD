@@ -102,11 +102,13 @@ void writeMIPSScalarHelpers(
     if (mips::isScalarFPArithmetic(Id) || mips::isScalarFPControl(Id)) {
       if (!Image || !Image->MIPS ||
           (Image->MIPS->ISARevision != 6 &&
-           !Image->MIPS->hasScalarFP64ABI(Wide)) ||
-          !mips::scalarFPAvailable(Id, Image->MIPS->ISARevision))
+           !Image->MIPS->hasScalarFPABI(Wide)) ||
+          !mips::scalarFPAvailable(Id, Image->MIPS->ISARevision,
+                                   Image->MIPS->hasScalarFP32ABI(Wide)))
         throw std::runtime_error(
-            "native scalar FPU requires a matching FR=1 profile");
-      const auto Asm = mips::scalarFPAssembly(Id, Selector, false);
+            "native scalar FPU requires a matching FP profile");
+      const auto Asm = mips::scalarFPAssembly(
+          Id, Selector, false, Image->MIPS->hasScalarFP32ABI(Wide));
       OS << "static __attribute__((noinline)) "
          << mips::instructionModeCAttribute(InstructionMode::MIPSClassic);
       if (Asm.Read || Asm.Write) {

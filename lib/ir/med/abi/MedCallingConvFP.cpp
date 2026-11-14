@@ -660,8 +660,12 @@ void detectFPParams(
     }
     // A live-in read only as a scalar view (the argument a call passes
     // on) is a scalar of that view's width.
-    if (ScalarView)
-      return Width ? std::min<uint16_t>(Width, LiveIn.Size) : LiveIn.Size;
+    if (ScalarView) {
+      if (Width && Width < LiveIn.Size &&
+          !liveInBytesUsed(LiveIn, byteMask(LiveIn.Size) & ~byteMask(Width)))
+        return Width;
+      return LiveIn.Size;
+    }
     if (!Width || Width >= LiveIn.Size ||
         liveInBytesUsed(LiveIn, byteMask(LiveIn.Size) & ~byteMask(Width)))
       return 0;
