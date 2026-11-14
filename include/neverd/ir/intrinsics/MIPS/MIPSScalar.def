@@ -92,6 +92,9 @@ NEVERD_MIPS_SCALAR_INTRINSIC(MIPSWriteFPControl, 16499, "neverd_mips_ctc1")
 #define NEVERD_MIPS_R6_FLOAT(Name, Id, Key, Arity, In, Out, Text)              \
   NEVERD_MIPS_SCALAR_INTRINSIC(MIPSFP##Name, Id, "neverd_mips_fp_" #Name)
 #include "neverd/ir/intrinsics/MIPS/MIPSR6Float.def"
+#define NEVERD_MIPS_R6_FLOAT(Name, Id, Key, Arity, In, Out, Text)              \
+  NEVERD_MIPS_SCALAR_INTRINSIC(MIPSFP##Name, Id, "neverd_mips_fp_" #Name)
+#include "neverd/ir/intrinsics/MIPS/MIPSLegacyFloat.def"
 
 NEVERD_MIPS_SCALAR_TEXT(
     kAccumulatorHistoryUnknown,

@@ -2,7 +2,8 @@
 
 The experimental MIPS analysis path targets linked ELF programs with classic
 MIPS32/o32 and MIPS64/n32 or n64 instructions in either byte order. The profiles below
-cover classic Release 2, classic and microMIPS Release 6 integer and FR=1 floating-point instructions, microMIPS32 and microMIPS64 integer profiles,
+cover classic Release 2 integer and FR=1 scalar floating-point instructions,
+classic and microMIPS Release 6 integer and FR=1 floating-point instructions, microMIPS32 and microMIPS64 integer profiles,
 MIPS16e32 and MIPS16e2, and Release 5/o32 and n64 MSA.
 The selected ELF profile determines register width, byte order, stack layout
 and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
@@ -127,7 +128,7 @@ have the extension a narrow C parameter would require. Declared source types
 remain a separate contract.
 
 Coverage remains incomplete for historical MIPS I–V profiles, pre-Release 6
-scalar floating point, trapping arithmetic and the MSA/DSP forms outside the
+FR=0 and paired-single floating point, trapping arithmetic and the MSA/DSP forms outside the
 slices below. Privileged instructions and reservations are admitted by profile
 as described under MIPS16e2 and classic Release 6. Unsupported instructions, missing slots and transfers in a
 delay slot produce errors, not replacement NOPs. General aggregate source ABI
@@ -1136,6 +1137,43 @@ source, hashes, extraction boundary and selected analysis target. Firmware
 containers/mapping are tracked separately by [#1727](https://github.com/NeverSight/NeverD/issues/1727);
 the ISA work belongs to [#97](https://github.com/NeverSight/NeverD/issues/97).
 
+
+### Classic Release 2 scalar FPU
+
+The scalar FP owner also admits classic pre-R6 COP1/COP1X with explicit FR=1
+evidence: o32 FP64 (GNU FP ABI 6) or n32/n64 hard double (ABI 1). The loader
+requires matching 64-bit CPR1 evidence; an integer-only ELF without that
+evidence does not acquire floating semantics. Both GPR widths and byte orders
+share the same instruction rules. FR=0 register pairs, paired-single formats,
+historical MIPS I–V profiles and pre-R6 microMIPS floating point are not covered
+by this profile.
+
+`MIPSLegacyFloat.def` extends the common scalar operation catalog with legacy
+ABS/NEG, the 16 S/D predicates and COP1X MADD/MSUB/NMADD/NMSUB. Together with
+the shared arithmetic and conversion forms there are 84 operations. Unlike
+R6 ABS/NEG, the legacy forms can raise Invalid. Comparisons write their selected
+FCC0–FCC7, preserve the other condition bits and retain FCSR exception effects.
+The bound scalar executor must match the ISA revision; the Unicorn adapter uses
+74Kf or MIPS64R2_GENERIC for these operations. A pending enabled exception
+commits FCSR and suppresses destination writeback. This is an explicit reference
+CPU policy, not an assertion that all implementations produce identical NaNs
+or reciprocal estimates.
+
+Register/control transfers, MOV.S/D, MOVF/T in GPRs and FPRs, and MOVZ/N.S/D
+have explicit rules. An untaken FP move preserves the full destination;
+a taken word write leaves its high word unpredictable. BC1F/T and their likely
+forms snapshot the selected FCC before the slot, including a slot that writes
+FCCR. A false likely branch annuls that write.
+
+LWC1/LDC1/SWC1/SDC1 and LWXC1/LDXC1/SWXC1/SDXC1 check natural alignment before
+memory or register effects. LUXC1/SUXC1 instead clear the low three effective
+address bits, as specified for FR=1. The existing source-domain checks for
+alignment and initialized memory continue to apply.
+
+HighC and LLVMC preserve the arithmetic and control operations with native
+target assembly and reuse the scalar ABI and byte-provenance checks described
+below. No host floating-point evaluation substitutes for the target's FCSR.
+The rules follow [MIPS64 Volume II, revision 2.50](https://0x04.net/~mwk/doc/mips/MD00087-2B-MIPS64BIS-AFP-02.50.pdf).
 
 ### Release 6 scalar FPU
 

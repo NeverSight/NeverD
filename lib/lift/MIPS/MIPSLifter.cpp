@@ -41,7 +41,7 @@ bool MIPSLifter::hasDelaySlot(uint32_t Word) {
   }
   if (Opcode == 17) {
     const unsigned RS = (Word >> 21) & 31;
-    return RS == 11 || RS == 15 || RS >= 24;
+    return RS == 8 || RS == 11 || RS == 15 || RS >= 24;
   }
   return (Opcode >= 2 && Opcode <= 7) || (Opcode >= 20 && Opcode <= 23);
 }
@@ -60,7 +60,8 @@ MIPSLifter::encoding(const cs_insn &Instruction) const {
     return Encoding{(Word & ~63u) | 8u, 4};
 
   if (((Word >> 16) == 0x041c && !HasDSP) ||
-      (Word >> 26 == 17 && hasDelaySlot(Word) && !HasMSA))
+      (Word >> 26 == 17 && hasDelaySlot(Word) &&
+       (((Word >> 21) & 31) == 8 ? !HasScalarFP : !HasMSA)))
     return std::nullopt;
   if (Word >> 26 == 29) {
     if (Mode != InstructionMode::MIPSClassic)
@@ -528,6 +529,9 @@ bool MIPSLifter::liftNonControl(State &S, Encoding Code, va_t BasePC) const {
       liftMicroSequence(S, Code);
     return true;
   }
+  if (HasScalarFP && Mode != InstructionMode::MIPS16 &&
+      liftScalarFloat(S, Code.Word))
+    return true;
   return Code.PCRelative
              ? liftPCRelative(S, Code.Word, BasePC)
              : liftInteger(S, Code.Word) || liftMemory(S, Code.Word);
@@ -658,6 +662,15 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
                                 NdVar::cst(1, 4));
       Condition = S.binary(RS == 9 ? NdOp::INT_EQUAL : NdOp::INT_NOTEQUAL, Bit,
                            NdVar::cst(0, 4), 1);
+    } else if (Opcode == 17 && RS == 8) { // BC1F/T and likely variants
+      const auto Control = S.makeTemp(4);
+      S.emitIntrinsic(Intrinsic::MIPSReadFPControl, Control,
+                      {NdVar::cst(25, 1)});
+      const auto Bit =
+          S.binary(NdOp::INT_AND, Control, NdVar::cst(1u << (RT >> 2), 4));
+      Condition = S.binary(RT & 1 ? NdOp::INT_NOTEQUAL : NdOp::INT_EQUAL, Bit,
+                           NdVar::cst(0, 4), 1);
+      Likely = RT & 2;
     } else if (Opcode == 17) {
       const bool Whole = RS == 11 || RS == 15;
       const bool Nonzero = (RS & 4) != 0;

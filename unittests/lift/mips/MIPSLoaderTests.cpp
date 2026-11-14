@@ -99,6 +99,27 @@ TEST_P(MIPSLoader, ProgramABIFlagsAgreeWithHeader) {
   EXPECT_EQ(Image->MIPS->FPABI, 3);
 }
 
+TEST_P(MIPSLoader, ScalarFP64ABIRequiresMatchingCPR1Evidence) {
+  for (unsigned Size = 0; Size < 4; ++Size) {
+    ELFBytes File(GetParam());
+    File.abiFlags();
+    File.Bytes[0xe5] = Size;
+    File.Bytes[0xe7] = File.Is64 ? 1 : 6;
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_EQ(bool(Image), Size == 2);
+    if (Image)
+      EXPECT_TRUE(Image->MIPS->hasScalarFP64ABI(File.Is64));
+    else
+      EXPECT_NE(llvm::toString(Image.takeError()).find("CPR1 width"),
+                std::string::npos);
+    std::vector<LoadCandidate> Candidates;
+    ELFLoader::identify(File.buffer(), Candidates);
+    ASSERT_EQ(Candidates.size(), 1u);
+    EXPECT_EQ(Candidates[0].Loadable, Size == 2);
+  }
+}
+
 TEST_P(MIPSLoader, RuntimeSymbolModesAreValidatedWithoutSectionHeaders) {
   for (uint8_t Mode : {uint8_t(0x80), uint8_t(0xf0)}) {
     ELFBytes File(GetParam());

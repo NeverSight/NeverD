@@ -24242,6 +24242,27 @@ FP state (including f0 after a declared non-floating call).
 operand counts. `NeverDLLVMCAllocaTests` executes floating/integer storage views
 against original LLVM, including negative zero and NaN payloads.
 
+`MIPSLegacyFP` in `NeverDMIPSIntegerTests` covers classic FR=1 pre-R6 arithmetic,
+conversions, sign operations, COP1X multiply-add and all 32 S/D predicates at
+every FCC selector. Literal machine encodings are independent of the lifter's
+operation catalog. The original 74Kf/MIPS64R2_GENERIC execution is compared
+with LowIR for result bits, FCSR and destination suppression, in both byte
+orders and GPR widths. Separate cases check conditional moves, a slot that
+changes the branch's condition, likely-slot annulment and ten memory forms at
+all eight low address offsets. The loader test rejects inconsistent FP ABI and
+CPR1 width evidence. These checks do not qualify FR=0, paired-single or
+historical ISA profiles.
+
+`profile-roundtrip.py` accepts `mips32r2fp_*` and `mips64r2fp_*` selections for
+82 pre-R6 source profiles. Examples are `mips32r2fp_abs`, `mips64r2fp_madd`,
+`mips32r2fp_cc7`, `mips64r2fp_branch` and `mips64r2fp_memory_suxc1`.
+Use its existing GNU assembler/linker, NeverD, Clang and output arguments;
+repeat `--profile` to select more than one. The runner assembles explicit
+`-mfp64` input, recompiles HighC/LLVMC at O0/O2 in both byte orders, and checks
+return bits, FCSR and output memory against the original target program.
+The optional Unicorn reference must be built from the pinned fork. Generated
+products are deleted on success or failure after results are recorded.
+
 The opt-in `neverd-mips-request-bench` target repeatedly decompiles one loaded
 SDK session and checks that every request produces identical source.
 Run `neverd-mips-request-bench IMAGE REPEATS OUTPUT [HEX_ENTRY] [--llvm]`.
@@ -24262,6 +24283,9 @@ Profiles are `mips`, `mipsel`, `mips64`, `mips64el`, `micromips`,
 profiles enable MIPS16e2 encoding. The DSP profiles select the named revision
 of the classic MIPS32 DSP ASE. MSA profiles select classic32 r5/o32 FP64 for the admitted integer,
 permutation, floating-point and control-transfer instructions.
+`mips32r2fp`, `mips32r2fpel`, `mips64r2fp` and `mips64r2fpel` select classic
+pre-R6 FR=1 profiles. Newly admitted instructions have no successful baseline
+lift; report their throughput separately from comparisons of unchanged work.
 Stages are `capstone`
 (direct physical decoding), `decode` (NeverD physical decoding) and `lift`
 (decoding plus LowIR, including delay slots). Both decode paths request the same

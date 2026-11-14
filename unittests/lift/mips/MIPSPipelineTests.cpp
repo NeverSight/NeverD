@@ -76,6 +76,62 @@ TEST(MIPSFloatingResult, IntegerExtensionRequiresAnEntryDeclarationAndFP64) {
   }
 }
 
+TEST_P(MIPSPipeline, ScalarFPBitReturnRetainsObservedUnknownUpperWords) {
+  for (unsigned Revision : {2u, 6u})
+    for (bool HighWord : {false, true}) {
+      SCOPED_TRACE(Revision);
+      SCOPED_TRACE(HighWord);
+      mips_test::ELFBytes File(GetParam());
+      File.abiFlags();
+      if (Revision == 6)
+        File.put(File.Is64 ? 48 : 36, File.Is64 ? 0xa0000000 : 0x90001000, 4);
+      File.Bytes[0xe3] = Revision;
+      File.Bytes[0xe5] = 2;
+      File.Bytes[0xe7] = File.Is64 ? 1 : 6;
+      // mtc1 a0,f0; mtc1 a1,f2; add.s f4,f0,f2; mfc1/mfhc1 v0,f4; jr; nop
+      const uint32_t Words[] = {0x44840000,
+                                0x44851000,
+                                0x46020100,
+                                HighWord ? 0x44622000u : 0x44022000u,
+                                Revision == 6 ? 0x03e00009u : 0x03e00008u,
+                                0};
+      for (unsigned I = 0; I < std::size(Words); ++I)
+        File.put(0x100 + I * 4, Words[I], 4);
+      ELFLoader Loader;
+      auto Image = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      auto Symbol = Symbol::makeFunc(Image->Entry, sizeof(Words));
+      Symbol.Name = "fp_bits";
+      Image->Symbols.push_back(std::move(Symbol));
+      for (bool LLVM : {false, true}) {
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.OnlyFunctionEntries = {Image->Entry};
+        Options.LiftMode = LLVM;
+        Options.EmitDumpOutput = false;
+        auto Result = Pipeline().run(*Image, Context, Options);
+        if (LLVM) {
+          EXPECT_EQ(Result.Success, !HighWord) << Result.Error;
+          if (Result.Success)
+            EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+        } else {
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          CEmitterOptions C;
+          C.TheArch = GetParam();
+          C.Format = BinaryFormat::ELF;
+          C.Image = &*Image;
+          std::string Text;
+          llvm::raw_string_ostream Output(Text);
+          if (HighWord)
+            EXPECT_THROW(HighCEmitter().emit(Result.HighFuncs, Output, C),
+                         std::runtime_error);
+          else
+            EXPECT_NO_THROW(HighCEmitter().emit(Result.HighFuncs, Output, C));
+        }
+      }
+    }
+}
+
 TEST_P(MIPSPipeline, MixedFloatingEntryKeepsSourceParameterOrder) {
   mips_test::ELFBytes File(GetParam());
   File.abiFlags();

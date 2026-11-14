@@ -16,6 +16,7 @@ struct FPNativeAssembly {
   std::string Text;
   std::string Constraints;
   unsigned Pointers = 0;
+  unsigned FPRegisters = 0;
   bool ClobbersAT = false;
   bool Read = false;
   bool Write = false;
@@ -46,8 +47,8 @@ struct FPNativeAssembly {
     OS << " : \"memory\"";
     if (ClobbersAT)
       OS << ", \"$1\"";
-    for (unsigned I = 1; I < Pointers; ++I)
-      OS << ", \"$f" << 2 * (I - 1) << "\"";
+    for (unsigned I = 0; I < FPRegisters; ++I)
+      OS << ", \"$f" << 2 * I << "\"";
     OS << ");";
     return S;
   }

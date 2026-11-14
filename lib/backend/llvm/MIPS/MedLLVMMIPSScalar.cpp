@@ -13,7 +13,7 @@
 #include "neverd/backend/MIPS/MIPSDSPSource.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/MIPS/MIPSMSASource.h"
-#include "neverd/backend/MIPS/MIPSR6FPSource.h"
+#include "neverd/backend/MIPS/MIPSScalarFPSource.h"
 #include "neverd/backend/llvm/LLVMSourceBody.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
@@ -36,23 +36,26 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
     throw std::runtime_error(mips::kAccumulatorHistoryUnknown);
   if (Id == Intrinsic::MIPSLwrUpper)
     throw std::runtime_error(mips::kPartialLwrRequiresWord);
-  const bool ScalarFP = mips::isR6FPArithmetic(Id) || mips::isR6FPControl(Id);
+  const bool ScalarFP =
+      mips::isScalarFPArithmetic(Id) || mips::isScalarFPControl(Id);
   if (ScalarFP || mips::isMSANativeVector(Id) || mips::isMSAControl(Id)) {
     if (!Img || !Img->MIPS ||
-        (ScalarFP ? Img->MIPS->ISARevision != 6
+        (ScalarFP ? ((Img->MIPS->ISARevision != 6 &&
+                      !Img->MIPS->hasScalarFP64ABI(isMIPS64(TargetArch))) ||
+                     !mips::scalarFPAvailable(Id, Img->MIPS->ISARevision))
                   : (!Img->MIPS->HasMSA || Img->MIPS->ISARevision != 5)))
       throw std::runtime_error(
-          "MSA native source requires an enabled r5 MSA image");
+          "native MIPS FP source requires a matching scalar or MSA profile");
     const unsigned Selector =
-        (mips::isMSAControl(Id) || mips::isR6FPControl(Id))
+        (mips::isMSAControl(Id) || mips::scalarFPHasSelector(Id))
             ? Op.Inputs[1].ConstVal
             : 0;
     const auto Asm =
         ScalarFP
-            ? mips::r6FPAssembly(Id, Selector,
-                                 mips::instructionModeFromLLVM(
-                                     *B.GetInsertBlock()->getParent()) ==
-                                     InstructionMode::MicroMIPS)
+            ? mips::scalarFPAssembly(Id, Selector,
+                                     mips::instructionModeFromLLVM(
+                                         *B.GetInsertBlock()->getParent()) ==
+                                         InstructionMode::MicroMIPS)
             : mips::msaAssembly(Id, Selector, archLittleEndian(TargetArch));
     llvm::SmallVector<llvm::Value *, 4> Args;
     llvm::SmallVector<llvm::Type *, 4> Types;
@@ -65,17 +68,19 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
     } else if (Asm.Pointers) {
       auto &Entry = B.GetInsertBlock()->getParent()->getEntryBlock();
       llvm::IRBuilder<> Frame(&Entry, Entry.getFirstInsertionPt());
+      const bool Compare =
+          ScalarFP && mips::scalarFPOperation(Id).writesCondition();
       for (unsigned I = 0; I < Asm.Pointers; ++I) {
-        const unsigned Bytes = ScalarFP
-                                   ? (I ? mips::r6FPOperation(Id).InputBytes
-                                        : mips::r6FPOperation(Id).OutputBytes)
-                                   : 16;
+        const unsigned Bytes =
+            ScalarFP ? (I || Compare ? mips::scalarFPOperation(Id).InputBytes
+                                     : mips::scalarFPOperation(Id).OutputBytes)
+                     : 16;
         auto *Slot = Frame.CreateAlloca(B.getIntNTy(8 * Bytes), nullptr,
                                         ScalarFP ? "mips.fp" : "msa.vec");
         Slot->setAlignment(llvm::Align(16));
         Args.push_back(Slot);
-        if (I)
-          B.CreateStore(getVar(Op.Inputs[I], B), Slot);
+        if (I || Compare)
+          B.CreateStore(getVar(Op.Inputs[I + (Compare ? 2 : 0)], B), Slot);
         else
           Result = Slot;
       }
@@ -94,7 +99,8 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
                    llvm::ConstantAsMetadata::get(B.getInt32(Selector))}));
     if (Result)
       return B.CreateLoad(
-          B.getIntNTy(ScalarFP ? mips::r6FPOperation(Id).OutputBytes * 8 : 128),
+          B.getIntNTy(ScalarFP ? mips::scalarFPOperation(Id).OutputBytes * 8
+                               : 128),
           Result);
     return Call;
   }

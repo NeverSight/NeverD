@@ -58,7 +58,7 @@ add_neverd_component_library(NeverDEmulationNative
 if(NEVERD_EMULATION_BACKEND_UNICORN)
   add_neverd_component_library(NeverDEmulationUnicorn
     backends/unicorn/P5600MSA.cpp
-    backends/unicorn/R6ScalarFP.cpp
+    backends/unicorn/ScalarFP.cpp
     backends/unicorn/UnicornBackend.cpp
     backends/unicorn/UnicornResourcePause.cpp
     backends/unicorn/UnicornMachine.cpp

@@ -67,7 +67,7 @@ def run(args, artifacts, toolchain_a, toolchain_b):
     artifacts.write("summary.json", {"status": "running"})
     profile_text = Path(__file__).with_name("mips-bench.def").read_text()
     profiles = args.profile or re.findall(
-        r"^NEVERD_MIPS_BENCH_PROFILE\((\w+), \w+, Default, 2, 0, 0, 0,\s*0\)",
+        r"^NEVERD_MIPS_BENCH_PROFILE\((\w+), \w+, Default, 2, 0, 0, 0,\s*0,\s*0\)",
         profile_text, re.M,
     )
     stages = re.findall(r'^NEVERD_MIPS_BENCH_STAGE\(\w+, "(\w+)"\)', profile_text, re.M)

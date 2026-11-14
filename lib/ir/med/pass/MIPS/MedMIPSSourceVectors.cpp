@@ -54,10 +54,7 @@ const SourceCallTypeHint *mipsFloatingCallSite(
 }
 
 static bool hasScalarFP64ABI(const BinaryImage &Image, Arch Target) {
-  return Image.MIPS &&
-         ((Image.MIPS->HasMSA && Image.MIPS->ISARevision == 5) ||
-          Image.MIPS->ISARevision == 6) &&
-         Image.MIPS->FPABI == (isMIPS64(Target) ? 1 : 6);
+  return Image.MIPS && Image.MIPS->hasScalarFP64ABI(isMIPS64(Target));
 }
 
 void requireMIPSSourceVectors(
@@ -239,7 +236,9 @@ void discardUnobservedMIPSFPUpperBits(
   if (!Function.ReturnType || !Function.MultiReturn.empty())
     return;
   const bool Floating = Function.ReturnType->Kind == NdTypeKind::Float;
-  if (!Declared && (!Floating || Function.ReturnType->Size != 4))
+  if (!Declared && !(Floating && Function.ReturnType->Size == 4) &&
+      !(Function.ReturnType->Kind == NdTypeKind::Int &&
+        !Function.ReturnsVectorRegister))
     return;
   std::vector<MedOp *> Candidates;
   for (auto &Block : Function.Blocks)
@@ -309,6 +308,15 @@ void discardUnobservedMIPSFPUpperBits(
       if (Floating && Value.Kind == MedVar::Reg &&
           Value.RegOff == TRI.FPReturnReg && First < Function.ReturnType->Size)
         return true;
+      // RETURN may still carry only its branch target here. Integer
+      // result registers are observable even without an explicit operand.
+      if (!Floating && Value.Kind == MedVar::Reg &&
+          ((Value.RegOff == TRI.IntReturnReg &&
+            First < Function.ReturnType->Size) ||
+           (Value.RegOff == TRI.IntReturnReg2 &&
+            Function.ReturnType->Size > TRI.FullRegWidth &&
+            First < Function.ReturnType->Size - TRI.FullRegWidth)))
+        return true;
       if (Value.Kind == MedVar::Reg &&
           TRI.isCallPreserved(Value.RegOff, Value.Size))
         return true;
@@ -328,6 +336,14 @@ void discardUnobservedMIPSFPUpperBits(
           return true;
         if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
             Op.Output.Size == Op.Inputs[0].Size) {
+          Work.push_back({Op.Output, First, Last});
+        } else if ((Op.Opcode == NdOp::INT_AND || Op.Opcode == NdOp::INT_OR ||
+                    Op.Opcode == NdOp::INT_XOR) &&
+                   Op.NumInputs == 2 && Op.Output.Size == Op.Inputs[0].Size &&
+                   Op.Output.Size == Op.Inputs[1].Size) {
+          // Bitwise transport cannot move an unknown high bit into a low
+          // returned byte. Conditional word writes use such masks to keep
+          // an untaken destination's upper bytes intact.
           Work.push_back({Op.Output, First, Last});
         } else if (Op.Opcode == NdOp::CONCAT && Op.NumInputs == 2 &&
                    Op.Output.Size == Op.Inputs[0].Size + Op.Inputs[1].Size) {

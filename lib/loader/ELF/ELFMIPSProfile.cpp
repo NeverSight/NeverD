@@ -241,6 +241,8 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
          Bytes[5] != 3 || Bytes[7] != (Wide ? 1 : 6)))
       return profileError("MSA requires r5 with 128-bit CPR1 and o32 FP64 or "
                           "n32/n64 hard double");
+    if (Bytes[7] == (Wide ? 1 : 6) && Bytes[5] != (Profile.HasMSA ? 3 : 2))
+      return profileError("FP64 hard-float ABI requires matching CPR1 width");
     if (Bytes[2] != (Wide ? 64 : 32) ||
         Bytes[3] != (R6               ? 6
                      : Profile.HasMSA ? 5

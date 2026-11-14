@@ -13,7 +13,7 @@
 #include "neverd/ir/low/MIPS/MIPSCachePlatform.h"
 #include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/low/MIPS/MIPSMSAExecution.h"
-#include "neverd/ir/low/MIPS/MIPSR6FPExecution.h"
+#include "neverd/ir/low/MIPS/MIPSScalarFPExecution.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
@@ -52,11 +52,11 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
   const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
   const bool Wide = isMIPS64(Img.Arch);
   const bool R6 = Img.MIPS && Img.MIPS->ISARevision == 6;
-  if (Wide && !R6 && !mips::isMSANativeVector(Id) && !mips::isMSAControl(Id))
-    return false;
-  if (mips::isR6FPControl(Id)) {
-    if (!R6 || !Context.ScalarFPU || !Context.FCSR ||
-        Context.FloatingPointException)
+  if (mips::isScalarFPControl(Id)) {
+    if (!Img.MIPS || (!R6 && !Img.MIPS->hasScalarFP64ABI(Wide)) ||
+        !Context.ScalarFPU ||
+        !Context.ScalarFPU->supportsRevision(Img.MIPS->ISARevision) ||
+        !Context.FCSR || Context.FloatingPointException)
       return false;
     const bool Write = Id == Intrinsic::MIPSWriteFPControl;
     if (Write && !knownOperandBytes(Op.Inputs[2], 0, 4))
@@ -74,29 +74,36 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
       writeOutput(Op.Output, *Result->Destination);
     return true;
   }
-  if (mips::isR6FPArithmetic(Id)) {
-    if (!R6 || !Context.ScalarFPU || !Context.FCSR ||
-        Context.FloatingPointException)
+  if (mips::isScalarFPArithmetic(Id)) {
+    if (!Img.MIPS || (!R6 && !Img.MIPS->hasScalarFP64ABI(Wide)) ||
+        !mips::scalarFPAvailable(Id, Img.MIPS->ISARevision) ||
+        !Context.ScalarFPU ||
+        !Context.ScalarFPU->supportsRevision(Img.MIPS->ISARevision) ||
+        !Context.FCSR || Context.FloatingPointException)
       return false;
     std::array<uint64_t, 3> Inputs;
-    const auto &F = mips::r6FPOperation(Id);
-    for (unsigned I = 0; I < F.Arity; ++I) {
+    const auto &F = mips::scalarFPOperation(Id);
+    const unsigned Count = F.Arity + unsigned(F.writesCondition());
+    for (unsigned I = 0; I < Count; ++I) {
       const auto &V = Op.Inputs[I + 1];
       if (!knownOperandBytes(V, 0, V.Size))
         return false;
       Inputs[I] = readOperand(V);
     }
     auto Result = Context.ScalarFPU->execute(
-        Id, *Context.FCSR, llvm::ArrayRef(Inputs).take_front(F.Arity));
+        Id, *Context.FCSR, llvm::ArrayRef(Inputs).take_front(Count));
     if (!Result)
       return false;
     Context.FCSR = Result->Control;
     Context.FloatingPointException = !Result->Destination;
     if (!Result->Destination)
       return false;
-    writeOutput(Op.Output, *Result->Destination);
+    if (!F.writesCondition())
+      writeOutput(Op.Output, *Result->Destination);
     return true;
   }
+  if (Wide && !R6 && !mips::isMSANativeVector(Id) && !mips::isMSAControl(Id))
+    return false;
   if (Id == Intrinsic::MIPSExecutionHazardBarrier) {
     Context.ExecutionHazardPending = false;
     return true;
@@ -405,7 +412,7 @@ bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
   const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
   if (mips::isSystemIntrinsic(Id) || mips::isCacheIntrinsic(Id) ||
       mips::isMSAControl(Id) || mips::isMSAFloat(Id) ||
-      mips::isR6FPArithmetic(Id) || mips::isR6FPControl(Id))
+      mips::isScalarFPArithmetic(Id) || mips::isScalarFPControl(Id))
     return false; // Explicit, single-step context required in either mode.
   if (mips::isMSADivision(Id)) {
     const auto &A = Op.Inputs[1], &B = Op.Inputs[2];
