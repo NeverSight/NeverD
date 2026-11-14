@@ -200,10 +200,14 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   else if (Result->isFloatingPointTy())
     Wrong = llvm::ConstantFP::get(Result, kTamperedResult);
   if (Check == LeafCheck::ScratchResult || ScratchFrame ||
-      Check == LeafCheck::NativeAddressing || Check == LeafCheck::NativeSIMD) {
+      Check == LeafCheck::NativeAddressing || Check == LeafCheck::NativeSIMD ||
+      Check == LeafCheck::FramedError) {
     ASSERT_FALSE(Sum->isVarArg());
     ASSERT_TRUE(Sum->hasFnAttribute(llvm::Attribute::Naked));
   }
+  if (Check == LeafCheck::FramedError)
+    ASSERT_FALSE(Module.getFunction(kDifference)
+                     ->hasFnAttribute(llvm::Attribute::Naked));
   if (Sum->hasFnAttribute(llvm::Attribute::Naked)) {
     auto *End = Sum->getEntryBlock().getTerminator();
     llvm::ReturnInst::Create(Context, Wrong, End->getIterator());
@@ -407,8 +411,24 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   if (Module.getFunction(kSum)->hasFnAttribute(kReturnSigningScopeAttribute)) {
     auto Unsigned = llvm::CloneModule(Module);
     auto *Entry = Unsigned->getFunction(kSum);
-    Entry->removeFnAttr(kReturnSigningScopeAttribute);
-    Entry->removeFnAttr(kReturnSigningKeyAttribute);
+    if (Entry->hasFnAttribute(llvm::Attribute::Naked)) {
+      // Native bodies own their PAC instruction; removing a prologue
+      // attribute alone does not remove their actual signing operation.
+      auto *Call = llvm::cast<llvm::CallInst>(&Entry->front().front());
+      auto *Assembly = llvm::cast<llvm::InlineAsm>(Call->getCalledOperand());
+      std::string Text = Assembly->getAsmString().str();
+      const auto At = Text.find(kNativeReturnSign);
+      ASSERT_NE(At, std::string::npos);
+      Text.replace(At, llvm::StringRef(kNativeReturnSign).size(),
+                   kMissingReturnSign);
+      Call->setCalledOperand(llvm::InlineAsm::get(
+          Assembly->getFunctionType(), Text, Assembly->getConstraintString(),
+          Assembly->hasSideEffects(), Assembly->isAlignStack(),
+          Assembly->getDialect(), Assembly->canThrow()));
+    } else {
+      Entry->removeFnAttr(kReturnSigningScopeAttribute);
+      Entry->removeFnAttr(kReturnSigningKeyAttribute);
+    }
     EXPECT_FALSE(
         Patcher.patch(Input, Rejected, *Unsigned, Image->Arch).Success);
     EXPECT_FALSE(std::filesystem::exists(Rejected));

@@ -513,6 +513,8 @@ A64_LEAF_TEXT(kErrorABI, R"c(
 #define ERROR __attribute__((swift_error_result))
 )c")
 A64_LEAF_TEXT(kClearError, "#define NEVERD_TEST_CLEAR_ERROR 1\n")
+A64_LEAF_TEXT(kNativeReturnSign, "pacibsp")
+A64_LEAF_TEXT(kMissingReturnSign, "nop")
 A64_LEAF_TEXT(kForwardError, "#define NEVERD_TEST_FORWARD_ERROR 1\n")
 A64_LEAF_TEXT(kTailErrorLeaves, R"asm(
 .text

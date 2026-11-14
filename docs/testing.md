@@ -1921,6 +1921,16 @@ full saved vectors. With `NEVERD_ARM64E_LIFTED_NATIVE=1`, their signal cases
 interrupt the published body and resume the authenticated caller from the
 recovered rows, checking every saved register after returning through the
 system signal frame.
+`AArch64CompactRegisters` exercises classic frame-pointer compact encodings:
+each of the nine saved GPR/D pairs, all pairs, sparse masks, a frame with no
+additional saved pair, and extra SP allocation below the established FP. The
+published image must retain the original compact word without a DWARF fallback;
+altering any declared spill is refused. Independent callers check original and
+published normal returns, both signed epilogues, preserved registers, and
+signal-driven caller resumption. Unselected vector upper lanes must remain
+unchanged. These fixtures each contain one function; they do not qualify
+instruction recovery across a coalesced multi-function compact range,
+frameless saved pairs, or PAuth_LR compact frames.
 `InstructionAddressRecipesUseTheActualSigningPC` compiles the public Darwin
 signal cursor and an independent SP/PC signing oracle as C11 and C++20 at
 O0/O2. Set `NEVERD_ARM64E_ASYNC_NATIVE=1` only in a qualified arm64e process

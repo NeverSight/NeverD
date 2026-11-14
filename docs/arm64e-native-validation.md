@@ -1490,9 +1490,9 @@ instructions, and resume through the system signal frame. The resumed caller
 checks every saved register. These checks do not imply that ordinary language
 unwind tables preserve caller-clobbered vector upper lanes.
 
-This closes the indexed-DWARF preserved-register publication restriction. It
-does not reconstruct compact saved-pair frames, qualify arbitrary image
-layouts or arbitrary non-call language cleanup, or supply native CPTA-on
+This closes the indexed-DWARF preserved-register publication restriction. That
+qualification did not reconstruct compact saved-pair frames, qualify arbitrary
+image layouts or arbitrary non-call language cleanup, or supply native CPTA-on
 evidence. The current GitHub [standard macOS ARM runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 list M1 processors, and [larger ARM runners](https://docs.github.com/en/actions/reference/runners/larger-runners)
 list M2. Neither test repository had a registered self-hosted runner during
@@ -1509,3 +1509,49 @@ cases; 42 native-gated ABI/format cases were skipped locally. Neither native
 host reported CPTA-on.
 [Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43610978871)
 and [per-host verification record](evidence/arm64e-saved-register-publication-2026-11-14.json).
+
+### Compact saved frames in published images
+
+The native register-body producer also reconstructs classic ARM64
+frame-pointer compact recipes from the loader's normalized saved-register
+slots. MC receives the canonical FP-based CFA, LR/FP record and descending
+GPR/D offsets; the final image must retain the original compact encoding and
+instruction words without introducing a DWARF fallback. The slot ordering
+follows Apple's [compact unwinder](https://github.com/apple-oss-distributions/libunwind/blob/main/libunwind/src/CompactUnwinder.hpp).
+These MC directives describe the compact recipe; exact-PC asynchronous
+recovery still analyzes the original or published instructions.
+
+When an ordinary lifted callee needs a Swift error-result prototype, verified
+native callers keep their physical X21 call boundary and symbolic target.
+Only LLVM callers receive rewritten prototypes and call operands. The existing
+signed Swift forwarding case checks this mixed boundary and still refuses a
+callee whose X21 write was removed.
+
+Nine cases cover all nine individual saved pairs, no additional pair, all
+pairs, sparse masks, an additional stack reservation below FP and two signed
+epilogues. The fixtures overwrite the live LR after saving it, so signal
+resumption must authenticate the saved stack copy. Independent callers check
+every preserved GPR and vector low lane. Saved D upper lanes are checked
+against the appropriate reload or interrupted value, and unsaved upper
+lanes must remain unchanged. Mutating any emitted saved-register offset
+refuses publication and creates no output.
+
+This qualification uses one function per compact fixture. Linkers can coalesce
+adjacent identical compact recipes into one range; recovering an individual
+function from that range still needs a proved function boundary. Frameless
+saved-pair layouts and PAuth_LR compact publication also remain separate gaps.
+These cases do not qualify arbitrary lifted images, arbitrary protected
+non-call language cleanup or native CPTA-on.
+
+Both M1 runners passed all 83 cases using the Release host built from
+`b54eed139a515af9042314863daf30ad193f78b7`. Each executed 164 original or
+published images; the added compact cases made 364 normal calls with complete
+register observations and 24 signed caller resumptions across signal frames
+per host. The mixed native/Swift call case, original authentication and
+exception controls, existing signal cleanup and TLS cases remained enabled.
+Windows frontend checks passed. Local checks passed 83 publication cases,
+18 unwind-recovery cases and 137 ABI/format cases; 42 native-gated ABI/format
+cases were skipped locally. Both native CPTA probes remained unavailable.
+The LLVM fork revision and r6 prebuilt pin were unchanged.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43617563664)
+and [per-host verification record](evidence/arm64e-compact-frame-publication-2026-11-15.json).

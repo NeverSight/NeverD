@@ -32,6 +32,7 @@
 #include "llvm/Support/SHA256.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -42,12 +43,42 @@
 
 namespace {
 using namespace neverd;
+struct CompactPairCase {
+  unsigned Mask;
+  unsigned First;
+  bool Vector;
+};
 #define SAVED_TEXT(Name, Text) constexpr char Name[] = Text;
 #define SAVED_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #include "AArch64SavedRegisterFixtures.def"
+#define SAVED_TEXT(Name, Text) constexpr char Name[] = Text;
+#define SAVED_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#include "AArch64CompactRegisterFixtures.def"
 
-void verifySavedRegisters(bool Quad, bool Signal) {
+void verifySavedRegisters(bool Quad, bool Signal,
+                          std::optional<unsigned> CompactPairs = std::nullopt,
+                          bool ExtraStack = false) {
 #if defined(__APPLE__) && defined(__aarch64__)
+  const bool Compact = CompactPairs.has_value();
+  const unsigned Functions = Compact ? 1 : kFunctions;
+  const char *Names[] = {kSum, kDifference};
+  const auto FunctionNames = llvm::ArrayRef(Names).take_front(Functions);
+  llvm::SmallVector<std::pair<unsigned, int>> CompactSpills;
+  unsigned VectorMask = Compact ? 0 : kVectorMask;
+  int SpillOffset = kCompactFirstSpill;
+  if (Compact)
+    for (const auto &Pair : kCompactPairCases) {
+      if (!(*CompactPairs & Pair.Mask))
+        continue;
+      for (unsigned I = 0; I < kCompactPairRegisters; ++I) {
+        CompactSpills.emplace_back(
+            Pair.First + I + (Pair.Vector ? aarch64_unwind::kDwarfV0 : 0),
+            SpillOffset);
+        SpillOffset -= sizeof(uint64_t);
+        if (Pair.Vector)
+          VectorMask |= 1u << (Pair.First + I - NDArm64eFirstPreservedD);
+      }
+    }
   llvm::SmallString<128> Directory;
   ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kDirectory, Directory));
   const std::filesystem::path Root(Directory.str().str());
@@ -60,7 +91,7 @@ void verifySavedRegisters(bool Quad, bool Signal) {
   const auto Output = (Root / kPublished).string();
   const auto Rejected = (Root / kRejected).string();
   const auto RulesPath = (Root / kRules).string();
-  std::ofstream(Source) << kBody;
+  std::ofstream(Source) << (Compact ? kCompactBody : kBody);
   std::ofstream(Wrapper) << kObserver;
   std::ofstream(Caller) << kDriverBody;
   llvm::SmallVector<llvm::StringRef> Common{kCompiler, kTargetFlag, kTarget,
@@ -69,6 +100,12 @@ void verifySavedRegisters(bool Quad, bool Signal) {
     Common.push_back(kQuadFlag);
   if (Signal)
     Common.push_back(kSignalFlag);
+  const auto CompactFlag =
+      std::string(kCompactFlag) + std::to_string(CompactPairs.value_or(0));
+  if (Compact)
+    Common.push_back(CompactFlag);
+  if (ExtraStack)
+    Common.push_back(kExtraStackFlag);
   auto Compile = Common;
   Compile.append({kDylib, kTight, Source, kOutputFlag, Input});
   ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, Compile), 0);
@@ -96,7 +133,7 @@ void verifySavedRegisters(bool Quad, bool Signal) {
   ASSERT_TRUE(Lifted.LlvmModule);
   auto &Module = *Lifted.LlvmModule;
   symbolizeImageAbsolutePointers(Module, *Image);
-  for (const auto *Name : {kSum, kDifference}) {
+  for (const auto *Name : FunctionNames) {
     const auto *Function = Module.getFunction(Name);
     ASSERT_NE(Function, nullptr);
     ASSERT_TRUE(Function->hasFnAttribute(llvm::Attribute::Naked));
@@ -105,9 +142,22 @@ void verifySavedRegisters(bool Quad, bool Signal) {
   MachOPatcher Patcher;
   Patcher.setImageContext(&*Image);
   // The matching instructions alone do not authorize changed unwind locations.
-  for (const auto &[Before, After] :
-       {std::pair{kCFIX19, kWrongCFIX19},
-        std::pair{Quad ? kCFIQ8 : kCFID8, Quad ? kWrongCFIQ8 : kWrongCFID8}}) {
+  llvm::SmallVector<std::pair<std::string, std::string>> Mutations;
+  if (Compact) {
+    auto Slots = CompactSpills;
+    Slots.emplace_back(aarch64_unwind::kFP, kFPOffset);
+    for (const auto &[Reg, Offset] : Slots) {
+      const auto Prefix =
+          std::string(kCFISpill) + std::to_string(Reg) + kCFISeparator;
+      Mutations.emplace_back(
+          Prefix + std::to_string(Offset),
+          Prefix + std::to_string(Offset + int(sizeof(uint64_t))));
+    }
+  } else {
+    Mutations = {{kCFIX19, kWrongCFIX19},
+                 {Quad ? kCFIQ8 : kCFID8, Quad ? kWrongCFIQ8 : kWrongCFID8}};
+  }
+  for (const auto &[Before, After] : Mutations) {
     auto Changed = llvm::CloneModule(Module);
     auto *Function = Changed->getFunction(kSum);
     auto *Call = llvm::dyn_cast<llvm::CallInst>(&Function->front().front());
@@ -128,16 +178,29 @@ void verifySavedRegisters(bool Quad, bool Signal) {
 
   auto Installed = Patcher.patch(Input, Output, Module, Image->Arch);
   ASSERT_TRUE(Installed.Success);
-  ASSERT_EQ(Installed.PatchedFunctions.size(), kFunctions);
+  ASSERT_EQ(Installed.PatchedFunctions.size(), Functions);
   auto Published = Reader->load(Output);
   ASSERT_TRUE(bool(Published)) << llvm::toString(Published.takeError());
   EXPECT_TRUE(Published->isArm64e());
+  EXPECT_NE(Published->Raw, Snapshot);
   for (const auto &Entry : Installed.PatchedFunctions) {
+    EXPECT_NE(Entry.OwnerVA, Entry.OriginalVA);
     const auto *Before =
         Image->ExceptionMetadata.findFunction(Entry.OriginalVA);
     const auto *After =
         Published->ExceptionMetadata.findFunction(Entry.OwnerVA);
-    ASSERT_TRUE(Before && Before->Dwarf && After && After->Dwarf);
+    ASSERT_TRUE(Before && After);
+    if (Compact) {
+      ASSERT_TRUE(Before->Compact && After->Compact);
+      EXPECT_FALSE(Before->Dwarf);
+      EXPECT_FALSE(After->Dwarf);
+      EXPECT_EQ(Before->Compact->NativeEncoding,
+                kCompactFrameMode | *CompactPairs);
+      EXPECT_EQ(After->Compact->NativeEncoding,
+                Before->Compact->NativeEncoding);
+      continue;
+    }
+    ASSERT_TRUE(Before->Dwarf && After->Dwarf);
     const auto *CIE =
         Published->ExceptionMetadata.findCIE(After->Dwarf->CIESectionOffset);
     ASSERT_TRUE(CIE && CIE->HasPointerAuth);
@@ -176,6 +239,8 @@ void verifySavedRegisters(bool Quad, bool Signal) {
     for (const auto &[Name, Symbol] :
          {std::pair{kSum, kSumSymbol},
           std::pair{kDifference, kDifferenceSymbol}}) {
+      if (Compact && Name == kDifference)
+        continue;
       const auto Entry =
           llvm::find_if(Installed.PatchedFunctions, [&](const auto &E) {
             return E.SourceFunction == Name;
@@ -205,31 +270,54 @@ void verifySavedRegisters(bool Quad, bool Signal) {
           prepareDarwinArm64eSystemCaller(Row, Frame->CodeRange, VA);
       ASSERT_TRUE(Plan);
       ASSERT_TRUE(Plan->Vectors.Complete);
-      EXPECT_EQ(Plan->Vectors.LowMask, kVectorMask);
+      EXPECT_EQ(Plan->Vectors.LowMask, VectorMask);
       EXPECT_EQ(Plan->Vectors.HighMask, Quad ? kVectorMask : 0u);
       EXPECT_EQ(Plan->Frame.Signing, NDArm64eSignedIBWithCFA);
-      EXPECT_TRUE(Plan->Frame.CFAFromFP && Plan->Frame.SavedFP &&
-                  Plan->Frame.SavedLR);
-      EXPECT_EQ(Plan->Frame.CFAOffset, kCFAOffset);
+      EXPECT_EQ(Plan->Frame.CFAFromFP, !Compact);
+      EXPECT_TRUE(Plan->Frame.SavedFP && Plan->Frame.SavedLR);
+      EXPECT_EQ(Plan->Frame.CFAOffset,
+                Compact
+                    ? kCompactFrameDepth + (ExtraStack ? kCompactExtraDepth : 0)
+                    : kCFAOffset);
       EXPECT_EQ(Plan->Frame.FPOffset, kFPOffset);
       EXPECT_EQ(Plan->Frame.LROffset, kLROffset);
-      ASSERT_EQ(Plan->Count, NDArm64ePreservedGPRCount);
+      const auto GPRCount =
+          Compact
+              ? llvm::count_if(CompactSpills,
+                               [](const auto &Spill) {
+                                 return Spill.first < aarch64_unwind::kDwarfV0;
+                               })
+              : NDArm64ePreservedGPRCount;
+      ASSERT_EQ(Plan->Count, GPRCount);
       Rules << int64_t(VA) - int64_t(Public->Addr) << ' ' << *Offset << ' '
-            << *Offset + 2 * aarch64::kInsnSize << ' ' << Plan->Frame.CFAOffset
-            << ' ' << Plan->Frame.FPOffset << ' ' << Plan->Frame.LROffset << ' '
+            << *Offset + 2 * aarch64::kInsnSize << ' ' << Plan->Frame.CFAFromFP
+            << ' ' << Plan->Frame.CFAOffset << ' ' << Plan->Frame.FPOffset
+            << ' ' << Plan->Frame.LROffset << ' ' << Plan->Count << ' '
             << Plan->Vectors.LowMask << ' ' << Plan->Vectors.HighMask << '\n';
       for (unsigned I = 0; I < Plan->Count; ++I) {
-        EXPECT_EQ(Plan->Saved[I].Register, NDArm64eFirstPreservedGPR + I);
+        EXPECT_EQ(Plan->Saved[I].Register, Compact
+                                               ? CompactSpills[I].first
+                                               : NDArm64eFirstPreservedGPR + I);
         EXPECT_EQ(Plan->Saved[I].CFAOffset,
-                  kFirstGPROffset - int(I / 2 * 2) * int(sizeof(uint64_t)) +
-                      int(I % 2) * int(sizeof(uint64_t)));
+                  Compact ? CompactSpills[I].second
+                          : kFirstGPROffset -
+                                int(I / 2 * 2) * int(sizeof(uint64_t)) +
+                                int(I % 2) * int(sizeof(uint64_t)));
         Rules << Plan->Saved[I].Register << ' ' << Plan->Saved[I].CFAOffset
               << '\n';
       }
       for (unsigned I = 0; I < NDArm64ePreservedDCount; ++I) {
         const int Width = (Quad ? 2 : 1) * sizeof(uint64_t);
-        const int Expected = (Quad ? kFirstQOffset : kFirstDOffset) -
-                             int(I / 2 * 2) * Width + int(I % 2) * Width;
+        int Expected = (Quad ? kFirstQOffset : kFirstDOffset) -
+                       int(I / 2 * 2) * Width + int(I % 2) * Width;
+        if (Compact) {
+          const auto Slot =
+              llvm::find_if(CompactSpills, [&](const auto &Spill) {
+                return Spill.first ==
+                       aarch64_unwind::kDwarfV0 + NDArm64eFirstPreservedD + I;
+              });
+          Expected = Slot == CompactSpills.end() ? 0 : Slot->second;
+        }
         EXPECT_EQ(Plan->Vectors.LowOffsets[I], Expected);
         if (Quad)
           EXPECT_EQ(Plan->Vectors.HighOffsets[I],
@@ -257,7 +345,7 @@ void verifySavedRegisters(bool Quad, bool Signal) {
       kPublishedHash, llvm::toHex(llvm::SHA256::hash(Published->Raw), true));
   testing::Test::RecordProperty(kNativeImages, Executions);
   testing::Test::RecordProperty(Signal ? kResumptions : kObservedCalls,
-                                Executions * kFunctions *
+                                Executions * Functions *
                                     (Signal ? kSignalRounds : kNormalRounds));
 #else
   GTEST_SKIP() << kUnavailable;
@@ -275,5 +363,42 @@ TEST(AArch64SavedRegisters, SignalResumesPublishedGPRAndDRegisters) {
 }
 TEST(AArch64SavedRegisters, SignalResumesPublishedGPRAndQRegisters) {
   verifySavedRegisters(true, true);
+}
+TEST(AArch64CompactRegisters, PublishesAllPreservedPairs) {
+  verifySavedRegisters(false, false, kCompactAllPairs);
+}
+TEST(AArch64CompactRegisters, PublishesSparsePreservedPairs) {
+  verifySavedRegisters(false, false, kCompactSparsePairs);
+}
+TEST(AArch64CompactRegisters, PublishesAllPairsWithAdditionalStack) {
+  verifySavedRegisters(false, false, kCompactAllPairs, true);
+}
+TEST(AArch64CompactRegisters, PublishesSparsePairsWithAdditionalStack) {
+  verifySavedRegisters(false, false, kCompactSparsePairs, true);
+}
+TEST(AArch64CompactRegisters, SignalResumesAllPreservedPairs) {
+  verifySavedRegisters(false, true, kCompactAllPairs);
+}
+TEST(AArch64CompactRegisters, SignalResumesSparsePreservedPairs) {
+  verifySavedRegisters(false, true, kCompactSparsePairs);
+}
+TEST(AArch64CompactRegisters, SignalResumesAllPairsWithAdditionalStack) {
+  verifySavedRegisters(false, true, kCompactAllPairs, true);
+}
+TEST(AArch64CompactRegisters, SignalResumesSparsePairsWithAdditionalStack) {
+  verifySavedRegisters(false, true, kCompactSparsePairs, true);
+}
+TEST(AArch64CompactRegisters, PublishesEachPairAndFrameOnly) {
+  verifySavedRegisters(false, false, 0);
+  for (const auto &Pair : kCompactPairCases) {
+    SCOPED_TRACE(Pair.Mask);
+    verifySavedRegisters(false, false, Pair.Mask);
+  }
+  const auto Executions = std::getenv(kExecute) ? 2 : 0;
+  testing::Test::RecordProperty(kNativeImages,
+                                Executions * (1 + kCompactPairCases.size()));
+  testing::Test::RecordProperty(kObservedCalls,
+                                Executions * (1 + kCompactPairCases.size()) *
+                                    kNormalRounds);
 }
 } // namespace

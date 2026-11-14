@@ -57,6 +57,7 @@ struct RegisterBody {
   bool HasMemoryWriteback = false;
   bool HasMemoryIndex = false;
   bool HasSIMDData = false;
+  bool HasCompactFrame = false;
   bool LoadsStackArgument = false;
   bool MaterializesCursor = false;
 };
@@ -348,6 +349,29 @@ bool emitFrameRow(const CFIInstruction &Row, llvm::raw_ostream &OS) {
   }
 }
 
+// MC recognizes the compact frame from a canonical CFA and descending slots.
+// Emit its recipe without inventing instruction-specific DWARF rows. The
+// linked-image verifier requires the original compact word and machine body.
+void emitCompactFrame(const CompactUnwindEntry &Compact,
+                      llvm::raw_ostream &OS) {
+  constexpr int SlotSize = sizeof(uint64_t);
+  constexpr int FrameSize = NDArm64eFrameRecordWords * SlotSize;
+  OS << kCFA << kDwarfFP << kSeparator << FrameSize << '\n';
+  // The compact encoder requires the return address before the frame pointer.
+  OS << kSpill << kDwarfLR << kSeparator << -SlotSize << '\n';
+  OS << kSpill << kDwarfFP << kSeparator << -FrameSize << '\n';
+  int Offset = -FrameSize;
+  for (const auto &Slot : Compact.SavedRegisterSlots) {
+    const unsigned Register =
+        Slot.Register +
+        (Slot.RegisterClass == UnwindRegisterClass::FloatingPoint
+             ? aarch64_unwind::kDwarfV0
+             : 0);
+    Offset -= SlotSize;
+    OS << kSpill << Register << kSeparator << Offset << '\n';
+  }
+}
+
 std::optional<RegisterBody> registerBody(Decoder &Decode,
                                          const BinaryImage &Image,
                                          const Entries &Functions,
@@ -374,6 +398,9 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
   const auto &Compact = *Frame->Compact;
   const bool Indexed = (Compact.NativeEncoding & macho_unwind::kModeMask) ==
                        macho_unwind::kARM64ModeDwarf;
+  const bool Framed =
+      (Compact.NativeEncoding & ~macho_unwind::kARM64RegisterPairsMask) ==
+      macho_unwind::kARM64ModeFrame;
   const DwarfCIE *CIE = nullptr;
   llvm::ArrayRef<CFIInstruction> Rows;
   if (Indexed) {
@@ -385,16 +412,20 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
     if (!CIE || CIE->ParseStatus != ExceptionParseStatus::Complete)
       return std::nullopt;
     Rows = Frame->Dwarf->Instructions;
-  } else if (Frame->Dwarf || (Compact.NativeEncoding &
-                              ~macho_unwind::kARM64FramelessStackSizeMask) !=
-                                 macho_unwind::kARM64ModeFrameless) {
+  } else if (Frame->Dwarf ||
+             (!Framed && (Compact.NativeEncoding &
+                          ~macho_unwind::kARM64FramelessStackSizeMask) !=
+                             macho_unwind::kARM64ModeFrameless)) {
     return std::nullopt;
   }
 
   RegisterBody Body;
+  Body.HasCompactFrame = Framed;
   llvm::raw_string_ostream OS(Body.Assembly);
   if (CIE && CIE->HasPointerAuth)
     OS << kBKeyFrame;
+  if (Framed)
+    emitCompactFrame(Compact, OS);
   const uint8_t *Code = Image.Raw.data() + Text->FileOff + Start - Text->VA;
   bool HasCall = false;
   for (size_t Offset = 0; Offset < End - Start; Offset += Word)
@@ -509,7 +540,8 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
     // Frameless variadic entries can load directly at or above incoming SP
     // without materializing va_list. Count the pre-indexed address, not the
     // post-indexed writeback displacement.
-    if (!Indexed && (I.Id == AARCH64_INS_LDR || I.Id == AARCH64_INS_LDP))
+    if (!Indexed && !Framed &&
+        (I.Id == AARCH64_INS_LDR || I.Id == AARCH64_INS_LDP))
       for (const auto &Op : Ops)
         if (Op.type == AARCH64_OP_MEM && Op.mem.base == AARCH64_REG_SP &&
             Op.mem.index == AARCH64_REG_INVALID &&
@@ -643,7 +675,8 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
   for (const auto &[F, Body] : Bodies) {
     // Keep physical addressing, vector lanes and FP status effects within
     // their complete native body, including runtime checked-pointer behavior.
-    if (Body.HasMemoryWriteback || Body.HasMemoryIndex || Body.HasSIMDData)
+    if (Body.HasMemoryWriteback || Body.HasMemoryIndex || Body.HasSIMDData ||
+        Body.HasCompactFrame)
       Select(F);
     if (HasVariadicCursor &&
         (F->isVarArg() || Body.MaterializesCursor || Body.LoadsStackArgument))
