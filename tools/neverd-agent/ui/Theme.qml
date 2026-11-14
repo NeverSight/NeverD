@@ -45,6 +45,9 @@ QtObject {
     readonly property color border: chrome("Separator")
     readonly property color borderStrong: chrome("FloatingWindowBorder")
     readonly property color inputBorder: chrome("InputBorder")
+    // High contrast outlines what the other themes fill.
+    readonly property color primaryBorder: chrome("ButtonPrimaryBorder")
+    readonly property color toolHoverBorder: chrome("ToolBarHoverBorder")
     readonly property color shadow: chrome("Shadow")
     readonly property color text: chrome("Text")
     readonly property color secondary: chrome("SecondaryText")

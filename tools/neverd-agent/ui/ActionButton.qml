@@ -65,7 +65,13 @@ ToolButton {
                                : control.hovered || control.down ? Theme.buttonHover : Theme.button)
              : control.checked ? Theme.toolChecked
              : control.down || control.hovered && control.enabled ? Theme.toolHover : "transparent"
-        border.width: control.visualFocus ? 1 : 0
-        border.color: Theme.focusBorder
+        // Keyboard focus rings any face; high contrast also outlines push
+        // and main faces, whose fills match the window there, and a tool
+        // face under the pointer, as the workbench does.
+        border.width: control.visualFocus || (Theme.highContrast && (control.push || control.checked
+                      || control.hovered || control.down)) ? 1 : 0
+        border.color: control.visualFocus ? Theme.focusBorder
+                    : control.primary ? Theme.primaryBorder
+                    : control.push ? Theme.inputBorder : Theme.toolHoverBorder
     }
 }
