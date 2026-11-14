@@ -1497,3 +1497,15 @@ evidence. The current GitHub [standard macOS ARM runners](https://docs.github.co
 list M1 processors, and [larger ARM runners](https://docs.github.com/en/actions/reference/runners/larger-runners)
 list M2. Neither test repository had a registered self-hosted runner during
 this qualification; hardware features remain subject to the native probe.
+
+Both M1 runners passed all 74 cases using the Release host built from
+`8223da42b74cd5a00df267cfc71a7dac8b9c607e`. Each executed 128 original or
+published images. The added cases made 104 normal calls with complete
+register observations and 24 authenticated caller resumptions across signal
+frames per host. All original signed exception, signal cleanup and TLS
+controls remained enabled, and the Windows frontend checks passed. Local
+checks passed 74 publication cases, 18 unwind-recovery cases and 137 ABI/format
+cases; 42 native-gated ABI/format cases were skipped locally. Neither native
+host reported CPTA-on.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43610978871)
+and [per-host verification record](evidence/arm64e-saved-register-publication-2026-11-14.json).
