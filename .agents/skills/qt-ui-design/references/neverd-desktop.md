@@ -1043,6 +1043,55 @@ in every language and compared every text of the main window across them.
 - Known limit: messages the analysis engine sends, such as why an operand has
   no structure offset, are English in every language.
 
+## Plugin views and the Agent
+
+NeverD Agent (a standalone Qt Quick window and an in-process workbench chat)
+was reviewed against the workbench on 2026-11-14 with real binaries and the
+real engine. These rules hold for it and for any view a plugin floats over
+the workbench.
+
+- Give a floating entry point the shape people already read as one: an
+  accent button with a mark and a short label ("Ask Agent"), at the
+  workbench's bottom-right corner, as Office places its Copilot button. A
+  48-pixel gray ball with a glyph was too quiet to find. Let it dock at the
+  side as its mark alone, and offer dock, reset and hide in its context menu,
+  with a menu action and a shortcut that keep working while it is hidden.
+- Keep the window's one accent while the entry's panel is open: the entry
+  shows as a pressed toggle in the button gray, and the panel's Send keeps
+  the accent.
+- Keep floating views off the command line along the foot of the workbench,
+  under either bottom corner: mirrored, the command field does not reach the
+  right edge, so test the row's width, not its right edge.
+- Make a floating panel a window a person places: it moves by its title (a
+  six-dot grip says so) and resizes by its edges, as VS Code moves its quick
+  input; it remembers its place as a distance from the corner it started in,
+  so it stays there when the workbench resizes, and a double click on the
+  title puts it back. It stays open until closed, without a hover preview or
+  a pin, and closing gives the keyboard back to the view that had it.
+- Explain a new entry once, beside it, in a small card with one button, as
+  Fluent teaches a new entry point; open a new conversation with a line on
+  what the view does and a few first questions as outlined rows.
+- Show code in a plugin view in the workbench's code font
+  (`AppearanceContext::codeFont`). Markdown asks for a generic monospace
+  family that the workbench process does not resolve, and the workbench's
+  own fallbacks for digits and punctuation then mixed two fonts in one code
+  line, which read as letter-spaced text. Wrap long code lines in a narrow
+  panel instead of scrolling the whole message sideways.
+- A Qt Quick window follows the same rules as the workbench's widgets:
+  colors from `ChromeColors.def` in all four columns, push and main faces
+  outlined in the high contrast themes (their fills equal the window there),
+  a modal dim that leaves the frame's shadow band alone, right-to-left by
+  `LayoutMirroring` set on the window's root item (dialogs and menus live in
+  the overlay, outside any content item), and glyphs that point along the
+  reading direction turned around in Arabic.
+- Size tabs and choosers to their text, and let a hint give way when it and
+  its neighbor do not both fit: German cut a fixed 56-pixel tab and a
+  150-pixel scope chooser. Keep line breaks out of the middle of a sentence
+  in a source string; English then broke a hint after "research,".
+- The Agent and its CLI read the workbench's language and theme from the
+  workbench's own settings, and read them again when the Agent window becomes
+  active, so a choice made in the workbench is the Agent's too.
+
 ## Resizing is part of the design
 
 Content-heavy dialogs should support ordinary desktop resizing unless the task

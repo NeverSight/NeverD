@@ -5,10 +5,10 @@ description: >-
 license: LicenseRef-Qt-Commercial OR BSD-3-Clause
 metadata:
   author: qt-ai-skills
-  version: "1.6"
+  version: "1.7"
   qt-version: "6.x"
   category: conceptual
-  changelog: "Added a one-page summary of NeverD's style to the desktop profile: color roles, type, sizes and the rules every window keeps"
+  changelog: "Added the NeverD profile's rules for plugin views and the Agent: the floating entry point, movable panels, code fonts and the Qt Quick window's themes and directions"
 ---
 # Qt UI Design
 
