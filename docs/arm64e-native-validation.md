@@ -1397,3 +1397,11 @@ the arm64e target while leaving function-pointer authentication off by default.
 Explicit flags enable C function-pointer signing in that version, but its
 Objective-C class and method metadata still lacks the authentication relocations
 exercised by the loader tests.
+
+The Release host passed all 46 cases on macOS 26.7.2 and 27.0.1. Each M1
+runner executed 74 original or published images and verified 24 C++ and 24
+Objective-C signal cleanups. The Windows runner independently compiled the
+signed C and Objective-C controls at O0 and O2. Both M1 runners reported
+that native checked writeback remained unavailable.
+[Native and Windows Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43545498327)
+and [per-host verification record](evidence/arm64e-scalar-publication-2026-11-14.json).
