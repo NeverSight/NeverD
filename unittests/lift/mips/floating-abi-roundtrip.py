@@ -21,6 +21,27 @@ import roundtrip
 from mips_validation_artifacts import MIPSValidationArtifacts, digest
 
 
+LAYOUTS = (
+    "variadic",
+    "indirect",
+    "indirect-variadic",
+    "variadic-stack",
+    "variadic-promoted",
+    "indirect-signed-byte",
+    "indirect-variadic-pair",
+    "prefix",
+    "overflow",
+    "after-integer",
+    "narrow-arguments",
+    "signed-byte",
+    "unsigned-half",
+    "pair-result",
+    "word-result",
+    "pointer-result",
+    "void-result",
+)
+
+
 class CallSiteViews:
     """Use the same occurrence ID, snapshot and edit as the worker."""
 
@@ -98,11 +119,15 @@ class CallSiteViews:
             self.destroy(session)
 
 
-def observe(path, bits, little, scalar_bytes, cases, n32=False, callbacks=None):
+def observe(path, bits, little, scalar_bytes, cases, n32=False, callbacks=None, revision=6):
     model = (
-        mips.UC_CPU_MIPS64_I6400 if bits == 64 else mips.UC_CPU_MIPS32_MIPS32R6_GENERIC
+        (mips.UC_CPU_MIPS64_I6400 if bits == 64 else mips.UC_CPU_MIPS32_MIPS32R6_GENERIC)
+        if revision == 6 else
+        (mips.UC_CPU_MIPS64_MIPS64R2_GENERIC if bits == 64 else mips.UC_CPU_MIPS32_74KF)
     )
     uc, entry = roundtrip.emulator(path, bits, little, "kernel", cpu_model=model)
+    uc.reg_write(mips.UC_MIPS_REG_CP0_STATUS,
+                 uc.reg_read(mips.UC_MIPS_REG_CP0_STATUS) | 0x24000000)
     result = []
     for index, (value, bias) in enumerate(cases):
         for register in range(1, 32):
@@ -273,37 +298,21 @@ def run(args, artifacts):
         for value in (-8.5, -0.0, 0.0, 1.25, 1048576.5)
         for bias in (-17, 0, 3, 1024)
     ]
-    report = {"complete": False, "neverd_sha256": digest(args.neverd), "builds": []}
+    report = {"complete": False, "revision": args.revision,
+              "neverd_sha256": digest(args.neverd), "builds": []}
     artifacts.write("results.json", report)
-    for abi in ("32", "n32", "64"):
+    for abi in args.abi or ("32", "n32", "64"):
         bits = 32 if abi == "32" else 64
         pointer_bits = 64 if abi == "64" else 32
         for little in (False, True):
             target = ("mips64" if bits == 64 else "mips") + ("el" if little else "")
-            cpu = f"mips{bits}r6"
+            cpu = f"mips{bits}r{args.revision}"
+            nan = "2008" if args.revision == 6 else "legacy"
             emulation = f"elf{pointer_bits}{'l' if little else 'b'}tsmip" + (
                 "n32" if abi == "n32" else ""
             )
             for scalar_bytes in (4, 8):
-                for layout in (
-                    "variadic",
-                    "indirect",
-                    "indirect-variadic",
-                    "variadic-stack",
-                    "variadic-promoted",
-                    "indirect-signed-byte",
-                    "indirect-variadic-pair",
-                    "prefix",
-                    "overflow",
-                    "after-integer",
-                    "narrow-arguments",
-                    "signed-byte",
-                    "unsigned-half",
-                    "pair-result",
-                    "word-result",
-                    "pointer-result",
-                    "void-result",
-                ):
+                for layout in args.layout or LAYOUTS:
                     variadic = "variadic" in layout
                     indirect = layout.startswith("indirect")
                     pair_result = layout in ("pair-result", "indirect-variadic-pair")
@@ -547,7 +556,11 @@ def run(args, artifacts):
                         + "\njr $ra\nnop\n.end fp_callee\n"
                     )
                     callback_reg = 6 if bits == 64 or scalar_bytes == 4 else 7
-                    transfer = "jalrc $25" if indirect else "balc fp_callee"
+                    transfer = (
+                        ("jalrc $25" if indirect else "balc fp_callee")
+                        if args.revision == 6 else
+                        ("jalr $25\nnop" if indirect else "jal fp_callee\nnop")
+                    )
                     if indirect:
                         # Snapshot the original target before o32 overwrites its argument word.
                         setup.insert(0, f"or $25,${callback_reg},$zero")
@@ -579,7 +592,7 @@ def run(args, artifacts):
                         "-march=" + cpu,
                         "-mabi=" + abi,
                         "-mfp64",
-                        "-mnan=2008",
+                        "-mnan=" + nan,
                         "-EL" if little else "-EB",
                     ]
                     command([args.assembler, *asm_flags, assembly, "-o", obj])
@@ -618,6 +631,7 @@ def run(args, artifacts):
                         cases,
                         abi == "n32",
                         callbacks(original),
+                        revision=args.revision,
                     )
                     for index, ((value, bias), (actual, _)) in enumerate(
                         zip(cases, wanted, strict=True)
@@ -744,7 +758,7 @@ def run(args, artifacts):
                                         "-march=" + cpu,
                                         "-mabi=" + abi,
                                         "-mfp64",
-                                        "-mnan=2008",
+                                        "-mnan=" + nan,
                                         "-mno-abicalls",
                                         "-fno-pic",
                                         "-G0",
@@ -784,6 +798,7 @@ def run(args, artifacts):
                                     cases,
                                     abi == "n32",
                                     callbacks(rebuilt),
+                                    revision=args.revision,
                                 )
                                 if actual != wanted:
                                     index = next(
@@ -828,6 +843,10 @@ def main():
     parser.add_argument(
         "--sdk", type=Path, help="shared library built alongside the CLI"
     )
+    parser.add_argument("--revision", type=int, choices=(2, 6), default=6,
+                        help="classic FR=1 ISA revision (default: 6)")
+    parser.add_argument("--abi", action="append", choices=("32", "n32", "64"))
+    parser.add_argument("--layout", action="append", choices=LAYOUTS)
     args = parser.parse_args()
     with MIPSValidationArtifacts(
         args.output,

@@ -17,6 +17,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/LowScalarConstant.h"
+#include "neverd/ir/low/SourceFrameAnalysis.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
@@ -339,7 +340,8 @@ bool neverd::sourceCallStackArgumentsDefined(
         return true;
       }
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-          Op.Opcode == NdOp::INTRINSIC) {
+          (Op.Opcode == NdOp::INTRINSIC &&
+           !isSourceFrameObservationGuard(Op))) {
         Written.clear();
         const auto CurrentSP = address(SP);
         Addresses.clear();
