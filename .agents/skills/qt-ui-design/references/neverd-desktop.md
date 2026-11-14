@@ -7,6 +7,180 @@ universal definition of good taste.
 Carry forward choices the user has accepted; change them when new evidence or
 an explicit request warrants it.
 
+## Style at a glance
+
+NeverD's style on one page, for building a window or judging one. Each line
+names where its value lives and the section below that gives the reasons and
+the user's verdicts. The code is the authority: colors are roles in
+`ChromeColors.def` (chrome) and `ThemeColors.def` (code views), shapes live in
+`theme.qss` and `WorkbenchStyle.cpp`, sizes in `Config.h` and
+`ResourceLimits.h`. Where a number here differs from them, they are right;
+correct this page in the change that moves one.
+
+The workbench keeps IDA's layout, window names, menus and shortcuts, in Visual
+Studio Code's Dark+ (the default) and Light+ colors and its two high contrast
+themes; the System theme follows the desktop's light or dark mode, and its
+high contrast setting on Windows and macOS. It is a calm, precise analysis
+tool: a few solid surfaces a step apart, parted by hairlines, with no
+gradients, halos or shadows inside the window. Color is kept for meaning: the
+duotone icons of toolbars and menus, a blue that marks state, and one blue
+button in each window. Asked for more polish, the user wanted this style
+unchanged, so refine within it ("Visual direction", "Workbench chrome").
+
+### Colors
+
+Roles in `ChromeColors.def`. The high contrast themes have columns of their
+own there and outline what these two themes fill ("Lists, fields, and
+states").
+
+| Role | Dark+ | Light+ | Used for |
+| --- | --- | --- | --- |
+| `Window` | `#252526` | `#F3F3F3` | Dialogs and panes; the status bar and headings take the same value |
+| `Base` | `#1E1E1E` | `#FFFFFF` | Lists and read-only text; code views and listings fill with the same value from `CodeBackground` and `ListingBackground` in `ThemeColors.def` |
+| `TitleBar`, `MenuBar`, `ToolBar` | `#2D2D2D` | `#F3F3F3` | The one band above the windows |
+| `Separator`, `Border` | `#3C3C3C` | `#E5E5E5` | Hairlines between regions; the edge of a push button |
+| `Text`, `SecondaryText`, `DisabledText` | `#CCCCCC`, `#9D9D9D`, `#6E6E6E` | `#3B3B3B`, `#717171`, `#A0A0A0` | Text that acts, text that describes, text that cannot act |
+| `Accent` | `#007ACC` | `#007ACC` | Progress and other marks of state; a selected tab's top line (`TabActiveBorder`) repeats it |
+| `Focus` | `#007FD4` | `#0090F1` | Keyboard focus frames and a focused field's outline |
+| `ListSelection`, `MenuSelection` | `#04395E` | `#0060C0` | Selected rows and highlighted menu items, under white text |
+| `ButtonPrimary`, hover `ButtonPrimaryHover` | `#0E639C`, `#1177BB` | `#007ACC`, `#0062A3` | The one main button of a window; a checked box (`CheckboxChecked`) has the same blue |
+| `Button`, hover `ButtonHover` | `#3A3D41`, `#45494E` | `#E7E7E7`, `#CCCCCC` | Every other push button |
+| `Input`, `InputBorder` | `#3C3C3C`, `#3C3C3C` | `#FFFFFF`, `#CECECE` | Fields |
+| `ControlDisabled`, `ButtonPrimaryDisabled` | The button gray at 40%; the main button at 40% | The button gray at 40% inside a 4% edge; the accent at 18% | Controls that cannot act ("Control states") |
+
+The accent, the main button, keyboard focus and selection are four roles;
+keep them apart. A new color is a new role with values for all four themes,
+read by the style sheet as `${Role}` and by paint code by its name, never as a
+literal.
+
+### Type
+
+- The interface is the bundled Noto Sans, with Noto Sans CJK, Noto Sans Arabic
+  and Noto Sans Symbols 2 behind it, at the platform's interface size
+  (`QFontDatabase::GeneralFont`). Code views, Output and the text typed in
+  fields use the bundled JetBrains Mono NL at that same reading size, or the
+  face the person chose; fields do not zoom with the code views (`Theme.cpp`,
+  `docs/gui.md`).
+- No window sets a font size of its own, and no font size is written into the
+  code: the desktop decides. Judge a layout at the desktop's size, not at a
+  headless platform's smaller default ("Judging a look", "Auditing every
+  window").
+- Quiet secondary text with color, not with a smaller size: `SecondaryText`,
+  and a view's status line from `makeStatusLine()` ("Workbench chrome").
+
+### Sizes
+
+In logical pixels, which Qt scales for the screen.
+
+| What | Size | Where |
+| --- | --- | --- |
+| Spacing | A 4-pixel scale. Dialogs that place their own lines take 16 around the content, 8 between groups and 4 between the lines of one group; other windows keep Qt's layout spacing | `kLoadQuestionDialogMargin` and its neighbors in `Config.h`; "Hierarchy and proportion" |
+| Between two panes of controls | 13, with a hairline in the middle | `kPaneGutter` in `ResourceLimits.h` |
+| Between panes that are surfaces | A 1-pixel line that the pointer grabs over 5 | `QSplitter::handle` in `theme.qss`; `kDockingSeparatorLineWidth`, `kDockingSeparatorGrabWidth` |
+| Binary comparison's command rows | 2 within a group, 12 between groups | `kComparisonCommandSpacing`, `kComparisonCommandGroupSpacing` |
+| Corners | 2 for fields and push buttons; 3 for tool buttons, check boxes, group frames and menu highlights; 6 for cards and the command center; none for docks and views | `kWorkbenchStyleControlRadius` and the other radii in `Config.h`; `kTitleBarCenterRadius` |
+| Push button | Padding 4 by 14; a dialog's buttons at least 75 wide, a row of equals without icons | `theme.qss` |
+| Field | Padding 3 by 4 | `theme.qss` |
+| Check box, radio button | A 14-pixel box, 6 from its label | `theme.qss` |
+| Keyboard focus frame | 1 pixel with corners of 2; 1 off a push button's face; 2 around a check box's box and label | `kWorkbenchStyleFocusFrameWidth` and its neighbors |
+| Title bar | 35 high; window controls 46 wide; the command center 22 high and 38% of the bar, between 120 and 600 | `kTitleBarHeight` and its neighbors |
+| Menu | Inset 4; items padded 8 before, 24 after, 4 above and below; a 16-pixel icon in an 18-pixel box 3 in; check mark 16; submenu chevron 10; separators 6 in from the sides; shortcut and chevron at 70% until highlighted | `kWorkbenchStyleMenuItemPaddingLeft` and its neighbors; `theme.qss` |
+| Tab | Padding 10 by 5 | `kWorkbenchStyleTabPadding` |
+| List | Items padded 1 above and below, none at the sides; headings padded 3 by 6; a quick filter 4 below its list | `theme.qss`; `kChooserViewFilterMargins` |
+| Scroll bar, status bar, progress | 12 wide without arrow buttons; at least 22 high; a bar 4 high in `Accent` | `theme.qss` |
+| Icons | 16, drawn on a 16-pixel grid; Quick Start's line glyphs 24 | `kWorkbenchStyleSmallIconSize`, `kQuickStartDialogGlyphSize` |
+| Qt's file and font dialogs | At least 860 by 540 and 600 by 460 | `kWorkbenchStyleFileDialogSize`, `kWorkbenchStyleFontDialogSize` |
+
+### Rules every window keeps
+
+- One accent: exactly one button in the accent, on the window's main action,
+  chosen from evidence. Its look (`showAsMainAction`) is decided apart from
+  the key (the default button and Return); a window of tools calls
+  `leaveWithoutDefaultButton()` ("Auditing every window", `SKILL.md` 1.7).
+- Quiet states: a control that cannot act is the same control turned down, a
+  faint plate under a dimmed label with nothing standing out more than about
+  1.25:1, and a main button keeps a faint accent. Commands that cannot apply
+  in the window's mode stay away as a group; single commands disable in place
+  ("Control states", "Judging a look").
+- Every state reads: hover shows on every enabled control and never on a
+  disabled one; keyboard focus draws a frame in `Focus` around the whole
+  control, and focus given by the pointer draws none; every control the style
+  sheet colors has a `:disabled` rule ("Control states").
+- Command rows: commands grouped by what they act on, in the order of use, at
+  their natural widths, wrapping a group whole; a command at the foot of a
+  list spans the list; text commands keep their faces ("Control states",
+  "Auditing every window", "Judging a look").
+- Seams: no control touches a divider or the next pane, panes of controls
+  part with the gutter, the first rows of neighboring panes share a line, and
+  two shapes of one gray never meet ("Judging a look", "Fractional display
+  scales").
+- Lists: headings start at the left, plain, at least as wide as their text,
+  and end in an ellipsis; a column starts as wide as its format; item text
+  never moves under the pointer ("Lists, fields, and states", "Control
+  states", "Auditing every window").
+- One drawing per thing: every window takes the application's font, a group
+  box frames something or is flat, a form's labels share one column, and a
+  line that can outgrow its window wraps ("Auditing every window").
+- Hierarchy: what the task needs first gets the line, as a file's name comes
+  before its folder and time, and branding stays below starting work
+  ("Hierarchy and proportion").
+- Menus: every command shows an icon, in menus built in code too; a submenu's
+  icon shows what its commands share; a tall menu scrolls in one column
+  ("Icon family", "Workbench chrome").
+- Icons: original SVGs on a 16-pixel grid, outlined in `#3B4250` with white
+  highlights and an accent for each group of commands, most of them with a
+  lighter tint for body areas: files and transformations `#D9902F`,
+  navigation `#2F7FD9`, search `#C2662D`, views `#7A55C8`, lists and windows
+  `#2E9E8F`, edit `#4F9A3A`, analysis `#C8455A` (no tint), settings
+  `#4E5FD6`; the library function icon takes `#1FA7C9`. `IconSet.def`
+  records every icon and color. A command that varies another keeps its icon
+  and marks the difference; judge a draft on the dark menu first ("Icon
+  family").
+- Crisp lines: straight strokes on whole pixels at 100%, and chrome lines on
+  whole device pixels from 125% to 200% (`DevicePixels`,
+  `scripts/check_gui_icons.py`; "Crisp lines on the pixel grid").
+- Windows: NeverD's own frame and title bar on every desktop, with a dialog's
+  title in the middle; a useful first size and a minimum taken from the
+  content, and a fixed size only where the task needs fixed geometry
+  ("Workbench chrome", "Resizing is part of the design").
+- Languages: eleven of them, Arabic right to left, switched while the
+  workbench runs. Mirror geometry placed by hand, and set every text again
+  when the language changes ("Languages and direction").
+- High contrast: outlines where the other themes fill, from border roles that
+  are transparent in Dark+ and Light+, and no `if (highContrast)` in paint
+  code ("Lists, fields, and states").
+
+### What the user has said
+
+- All-gray icons felt lifeless. The colored duotone toolbar icons were kept
+  over a single-accent recolor and an outline variant ("Visual direction",
+  "Workbench chrome").
+- An accent-filled padlock in every floating caption was too loud: a toggle
+  whose glyph shows its state takes no fill. A full-width accent status bar
+  read as decoration: the accent marks state, not chrome ("Workbench
+  chrome").
+- Disabled buttons as full gray blocks were "lifeless" (2026-11-09), and as
+  hollow outlines "有点难看" (a bit ugly, 2026-11-12); a faint plate, and
+  fewer commands waiting at once, settled it ("Judging a look").
+- "太左了" (too far left, 2026-11-12): a pane flush against the combo box
+  beside it. The gutter settled it ("Judging a look").
+- "不要任何窗口内，只有一个颜色" (no window in a single color) and
+  "至少留1个阿，而且要留关键的" (keep at least one, and the key one), both
+  2026-11-12, then "一点生机都没" (no life at all), 2026-11-13, about the
+  plugin manager in gray: every window keeps one accent ("Auditing every
+  window").
+- "按钮太小，就显得很空阿……之前那个设计没问题的" (buttons that small leave it
+  looking empty; the earlier design was fine), 2026-11-12: change only what
+  fails, and keep what worked ("Auditing every window").
+- "菜单那，PLUGIN的图标怎么只有1个" (in the menu, why only one icon for the
+  plugins), 2026-11-13: every menu command shows an icon ("Icon family").
+- "按照最舒服的来" (go with what is most comfortable): judge by comfort in the
+  real window, and trace the feeling to a number ("Judging a look").
+- Kept although a review may question them: the load dialog's centered OK
+  and Cancel and the Functions list's horizontal scroll bar ("Lists, fields,
+  and states"), and one comment command that shows only `;` in menus
+  ("Workbench chrome").
+
 ## Visual direction
 
 Aim for a calm, precise desktop analysis tool with clear, readable content.

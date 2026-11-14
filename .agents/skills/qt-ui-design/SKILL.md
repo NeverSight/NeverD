@@ -5,10 +5,10 @@ description: >-
 license: LicenseRef-Qt-Commercial OR BSD-3-Clause
 metadata:
   author: qt-ai-skills
-  version: "1.5"
+  version: "1.6"
   qt-version: "6.x"
   category: conceptual
-  changelog: "Added auditing every window: inventory from the code, measured widget trees, a baseline, what the numbers usually find, keeping the fixes and their checks true on other platforms, and one accent per window as a look apart from the Return key"
+  changelog: "Added a one-page summary of NeverD's style to the desktop profile: color roles, type, sizes, the rules every window keeps and the user's standing verdicts"
 ---
 # Qt UI Design
 
@@ -17,7 +17,10 @@ metadata:
 For NeverD screens, read [the NeverD desktop profile](references/neverd-desktop.md)
 before designing or auditing. It records the product's established visual
 direction, workbench chrome, content hierarchy, resizing behavior, and Qt
-rendering checks. Apply its desktop density and layout guidance in place of
+rendering checks. Start with its "Style at a glance" section, which gathers
+the color roles, type, sizes, the rules every window keeps and the user's
+standing verdicts on one page, each pointing to the section with its reasons.
+Apply its desktop density and layout guidance in place of
 the generic sizing defaults below; preserve accessibility requirements and the
 user's current instructions.
 For other products, use the general guidance without importing NeverD's palette
