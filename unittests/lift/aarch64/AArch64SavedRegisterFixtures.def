@@ -317,14 +317,16 @@ static volatile sig_atomic_t Handled;
 
 static int readPlan(FILE *File, Entry Run, struct Plan *Plan) {
   intptr_t Delta;
-  unsigned FromFP, LowMask, HighMask;
-  if (fscanf(File, "%" SCNdPTR " %" SCNuPTR " %" SCNuPTR " %u %td %td %td %zu %u %u",
-             &Delta, &Plan->Begin, &Plan->End, &FromFP, &Plan->Frame.CFAOffset,
+  unsigned FromFP, SavedFP, SavedLR, LowMask, HighMask;
+  if (fscanf(File, "%" SCNdPTR " %" SCNuPTR " %" SCNuPTR " %u %u %u %td %td %td %zu %u %u",
+             &Delta, &Plan->Begin, &Plan->End, &FromFP, &SavedFP, &SavedLR,
+             &Plan->Frame.CFAOffset,
              &Plan->Frame.FPOffset, &Plan->Frame.LROffset, &Plan->Count,
-             &LowMask, &HighMask) != 10 || Plan->Count > GPRCount)
+             &LowMask, &HighMask) != 12 || Plan->Count > GPRCount)
     return 0;
   Plan->Frame.CFAFromFP = FromFP;
-  Plan->Frame.SavedFP = Plan->Frame.SavedLR = true;
+  Plan->Frame.SavedFP = SavedFP;
+  Plan->Frame.SavedLR = SavedLR;
   Plan->Frame.Signing = NDArm64eSignedIBWithCFA;
   Plan->Vectors.Complete = true;
   Plan->Vectors.LowMask = LowMask;
@@ -375,7 +377,7 @@ int main(int Argc, char **Argv) {
   if (!Image)
     return 2;
   Entry Runs[] = {(Entry)dlsym(Image, "leaf_sum")
-#ifndef TEST_COMPACT_PAIRS
+#if !defined(TEST_COMPACT_PAIRS) || defined(TEST_COALESCED)
                   , (Entry)dlsym(Image, "leaf_difference")
 #endif
   };

@@ -105,7 +105,13 @@ bool independent(const DecodedInsn &I) {
            I.Raw->alias_id == AARCH64_INS_ALIAS_AUTIBSP;
   case AARCH64_INS_RETAB:
   case AARCH64_INS_RET:
+  case AARCH64_INS_PACIBSPPC:
     return D.op_count == 0;
+  case AARCH64_INS_AUTIBSPPC:
+  case AARCH64_INS_RETABSPPC:
+    // These displacements stay relative to the same instruction in the
+    // copied body. Final publication checks every emitted instruction word.
+    return D.op_count == 1 && D.operands[0].type == AARCH64_OP_IMM;
   default:
     return false;
   }
@@ -356,11 +362,16 @@ void emitCompactFrame(const CompactUnwindEntry &Compact,
                       llvm::raw_ostream &OS) {
   constexpr int SlotSize = sizeof(uint64_t);
   constexpr int FrameSize = NDArm64eFrameRecordWords * SlotSize;
-  OS << kCFA << kDwarfFP << kSeparator << FrameSize << '\n';
-  // The compact encoder requires the return address before the frame pointer.
-  OS << kSpill << kDwarfLR << kSeparator << -SlotSize << '\n';
-  OS << kSpill << kDwarfFP << kSeparator << -FrameSize << '\n';
-  int Offset = -FrameSize;
+  int Offset = 0;
+  if (Compact.Kind == CompactUnwindKind::FramePointer) {
+    OS << kCFA << kDwarfFP << kSeparator << FrameSize << '\n';
+    // The compact encoder requires the return address before the frame pointer.
+    OS << kSpill << kDwarfLR << kSeparator << -SlotSize << '\n';
+    OS << kSpill << kDwarfFP << kSeparator << -FrameSize << '\n';
+    Offset = -FrameSize;
+  } else if (Compact.StackSize) {
+    OS << kCFAOffset << Compact.StackSize << '\n';
+  }
   for (const auto &Slot : Compact.SavedRegisterSlots) {
     const unsigned Register =
         Slot.Register +
@@ -398,9 +409,17 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
   const auto &Compact = *Frame->Compact;
   const bool Indexed = (Compact.NativeEncoding & macho_unwind::kModeMask) ==
                        macho_unwind::kARM64ModeDwarf;
-  const bool Framed =
-      (Compact.NativeEncoding & ~macho_unwind::kARM64RegisterPairsMask) ==
-      macho_unwind::kARM64ModeFrame;
+  const bool PAuthLR =
+      (Compact.NativeEncoding & ~(macho_unwind::kARM64RegisterPairsMask |
+                                  macho_unwind::kARM64PAuthLROffsetMask)) ==
+      macho_unwind::kARM64ModeFramePAuthLR;
+  const bool Framed = PAuthLR || (Compact.NativeEncoding &
+                                  ~macho_unwind::kARM64RegisterPairsMask) ==
+                                     macho_unwind::kARM64ModeFrame;
+  if (PAuthLR &&
+      (Frame->CodeRange.Begin != Start || !Compact.ReturnAddressSigningOffset ||
+       *Compact.ReturnAddressSigningOffset >= End - Start))
+    return std::nullopt;
   const DwarfCIE *CIE = nullptr;
   llvm::ArrayRef<CFIInstruction> Rows;
   if (Indexed) {
@@ -414,17 +433,19 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
     Rows = Frame->Dwarf->Instructions;
   } else if (Frame->Dwarf ||
              (!Framed && (Compact.NativeEncoding &
-                          ~macho_unwind::kARM64FramelessStackSizeMask) !=
+                          ~(macho_unwind::kARM64FramelessStackSizeMask |
+                            macho_unwind::kARM64RegisterPairsMask)) !=
                              macho_unwind::kARM64ModeFrameless)) {
     return std::nullopt;
   }
 
   RegisterBody Body;
-  Body.HasCompactFrame = Framed;
+  Body.HasCompactFrame =
+      Framed || (!Indexed && !Compact.SavedRegisterSlots.empty());
   llvm::raw_string_ostream OS(Body.Assembly);
-  if (CIE && CIE->HasPointerAuth)
+  if (PAuthLR || (CIE && CIE->HasPointerAuth))
     OS << kBKeyFrame;
-  if (Framed)
+  if (!Indexed)
     emitCompactFrame(Compact, OS);
   const uint8_t *Code = Image.Raw.data() + Text->FileOff + Start - Text->VA;
   bool HasCall = false;
@@ -533,7 +554,8 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
       OS << kLocal << (Target - Start) / Word << '\n';
       continue;
     }
-    if (I.Id != AARCH64_INS_RET && I.Id != AARCH64_INS_RETAB)
+    if (I.Id != AARCH64_INS_RET && I.Id != AARCH64_INS_RETAB &&
+        I.Id != AARCH64_INS_RETABSPPC)
       Fallthrough();
     if (!SIMDData && !independent(I))
       return std::nullopt;
@@ -558,12 +580,12 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
         Ops[1].type == AARCH64_OP_REG && Ops[1].reg == AARCH64_REG_SP)
       Body.MaterializesCursor = true;
 
-    // This encoding class has no PC-relative operand. The whole function
-    // already passed the semantic audit. Retain its actual scalar FP/NEON
-    // word, including lanes, arrangements, register lists and FP controls,
-    // instead of reconstructing a second encoding from printed operands.
-    // The assembly and final linked words are both checked against the image.
-    if (SIMDData) {
+    // Retain scalar FP/NEON words, including lanes, arrangements, register
+    // lists and FP controls. PAuth_LR words retain their signing-PC distance
+    // because every instruction keeps its offset within the copied body.
+    // Both the assembly and final linked words are checked against the image.
+    if (SIMDData || I.Id == AARCH64_INS_PACIBSPPC ||
+        I.Id == AARCH64_INS_AUTIBSPPC || I.Id == AARCH64_INS_RETABSPPC) {
       OS << kInstructionWord << Encoding << '\n';
     } else if ((I.Id == AARCH64_INS_MOV || I.Id == AARCH64_INS_MOVZ) &&
                Ops.size() == 2 && Ops[0].type == AARCH64_OP_REG &&
@@ -586,14 +608,10 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
         return std::nullopt;
       OS << '\n';
     }
-    if (!Indexed && PC == Start && Compact.StackSize) {
-      if (I.Id != AARCH64_INS_SUB || Ops.size() != 3 ||
-          Ops[0].type != AARCH64_OP_REG || Ops[0].reg != AARCH64_REG_SP ||
-          Ops[1].type != AARCH64_OP_REG || Ops[1].reg != AARCH64_REG_SP ||
-          Ops[2].type != AARCH64_OP_IMM || Ops[2].shift.value ||
-          Ops[2].imm != Compact.StackSize)
+    if (PAuthLR && PC - Start == *Compact.ReturnAddressSigningOffset) {
+      if (I.Id != AARCH64_INS_PACIBSPPC)
         return std::nullopt;
-      OS << kCFAOffset << Compact.StackSize << '\n';
+      OS << kSignWithPC;
     }
   }
   if (!llvm::all_of(Rows,
