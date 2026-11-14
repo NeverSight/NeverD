@@ -342,7 +342,7 @@ Analysis revision %3 · %4</source>
     </message>
     <message>
         <source>Open in the NeverD workbench</source>
-        <translation>在 ND GUI 打开</translation>
+        <translation>在 NeverD 工作台打开</translation>
     </message>
     <message>
         <source>Partially saved</source>
@@ -605,7 +605,7 @@ Analysis revision %3 · %4</source>
     </message>
     <message>
         <source>Open in the NeverD workbench</source>
-        <translation>在 ND GUI 中打开</translation>
+        <translation>在 NeverD 工作台中打开</translation>
     </message>
     <message>
         <source>Relocate file…</source>
@@ -673,7 +673,7 @@ Analysis revision %3 · %4</source>
     </message>
     <message>
         <source>Select the NeverD workbench executable</source>
-        <translation>选择 ND GUI 程序</translation>
+        <translation>选择 NeverD 工作台程序</translation>
     </message>
     <message>
         <source>Import object memory</source>
@@ -773,7 +773,7 @@ Analysis revision %3 · %4</source>
     </message>
     <message>
         <source>NeverD workbench executable</source>
-        <translation>ND GUI 程序路径</translation>
+        <translation>NeverD 工作台程序路径</translation>
     </message>
     <message>
         <source>Leave empty to search the adjacent directory and PATH</source>
@@ -1034,15 +1034,15 @@ Analysis revision %3 · %4</source>
     </message>
     <message>
         <source>NeverD MCP server executable</source>
-        <translation>ND MCP 程序路径</translation>
+        <translation>NeverD MCP 程序路径</translation>
     </message>
     <message>
         <source>neverd-mcp, or leave empty to search the adjacent directory, the NeverD workbench directory and PATH</source>
-        <translation>neverd-mcp；留空查找相邻目录、ND GUI 目录或 PATH</translation>
+        <translation>neverd-mcp；留空查找相邻目录、NeverD 工作台目录或 PATH</translation>
     </message>
     <message>
         <source>Analysis uses NeverD tools. Each object runs in its own process, and files are opened read-only.</source>
-        <translation>分析使用 ND 工具。每个对象独立进程，文件只读。</translation>
+        <translation>分析使用 NeverD 工具。每个对象独立进程，文件只读。</translation>
     </message>
     <message>
         <source>Advanced run settings</source>
@@ -1235,7 +1235,7 @@ Analysis revision %3 · %4</source>
     </message>
     <message>
         <source>No NeverD evidence is attached to this step.</source>
-        <translation>此步骤未附 ND 证据</translation>
+        <translation>此步骤未附 NeverD 证据</translation>
     </message>
     <message>
         <source>Open questions</source>
@@ -1250,11 +1250,11 @@ Analysis revision %3 · %4</source>
     <name>ReviewView</name>
     <message>
         <source>Verifying and saving NeverD changes…</source>
-        <translation>正在核对并保存 ND 变更…</translation>
+        <translation>正在核对并保存 NeverD 变更…</translation>
     </message>
     <message>
         <source>Review each change and its evidence before applying it to the NeverD database. The original binary is not modified.</source>
-        <translation>先核对变更和证据，再应用到 ND 工程。原始二进制保持不变。</translation>
+        <translation>先核对变更和证据，再应用到 NeverD 数据库。原始二进制保持不变。</translation>
     </message>
     <message>
         <source>No change proposals yet.
@@ -1564,7 +1564,7 @@ Notes, scripts and reports appear here.</source>
     </message>
     <message>
         <source>Open in the NeverD workbench</source>
-        <translation>在 ND GUI 中打开</translation>
+        <translation>在 NeverD 工作台中打开</translation>
     </message>
     <message>
         <source>Add…</source>
@@ -1660,7 +1660,7 @@ Notes, scripts and reports appear here.</source>
     </message>
     <message>
         <source>Saving NeverD changes. Close again after the save is confirmed.</source>
-        <translation>正在保存 ND 变更，请等待完成回执后关闭。</translation>
+        <translation>正在保存 NeverD 变更，请等待完成回执后关闭。</translation>
     </message>
     <message>
         <source>Finishing file registration. Try closing again in a moment.</source>
@@ -1728,7 +1728,7 @@ Notes, scripts and reports appear here.</source>
     </message>
     <message>
         <source>The NeverD workbench was not found. Choose its executable in application settings.</source>
-        <translation>未找到 ND GUI。请在设置中选择 neverd-gui 可执行文件。</translation>
+        <translation>未找到 NeverD 工作台。请在设置中选择 neverd-gui 可执行文件。</translation>
     </message>
     <message>
         <source>The original file was moved or no longer exists: %1</source>
@@ -1736,11 +1736,11 @@ Notes, scripts and reports appear here.</source>
     </message>
     <message>
         <source>Could not start the NeverD workbench: %1</source>
-        <translation>启动 ND GUI 失败：%1</translation>
+        <translation>启动 NeverD 工作台失败：%1</translation>
     </message>
     <message>
         <source>Started the NeverD workbench for %1.</source>
-        <translation>已启动 ND GUI：%1</translation>
+        <translation>已启动 NeverD 工作台：%1</translation>
     </message>
     <message>
         <source>Memory saved to the current project.</source>
@@ -1760,7 +1760,7 @@ Notes, scripts and reports appear here.</source>
     </message>
     <message>
         <source>Set the NeverD MCP server executable in model settings first.</source>
-        <translation>请先在模型设置里配置 ND MCP 可执行文件。</translation>
+        <translation>请先在模型设置里配置 NeverD MCP 可执行文件。</translation>
     </message>
     <message>
         <source>Enter a goal and set a positive token budget and round limit.</source>
@@ -1840,7 +1840,7 @@ Notes, scripts and reports appear here.</source>
     </message>
     <message>
         <source>Could not find the matching neverd-worker. In settings, give the full path of the NeverD MCP server or workbench installation.</source>
-        <translation>未找到配套的 neverd-worker；请在设置中指定完整的 ND MCP 或 GUI 安装路径。</translation>
+        <translation>未找到配套的 neverd-worker；请在设置中指定完整的 NeverD MCP 或 GUI 安装路径。</translation>
     </message>
     <message>
         <source>Change undone and saved.</source>
@@ -1848,7 +1848,7 @@ Notes, scripts and reports appear here.</source>
     </message>
     <message>
         <source>NeverD already matches the proposal; nothing was changed.</source>
-        <translation>ND 当前值与提案一致，没有新增变更。</translation>
+        <translation>NeverD 当前值与提案一致，没有新增变更。</translation>
     </message>
     <message>
         <source>Change applied and saved.</source>
@@ -1856,7 +1856,7 @@ Notes, scripts and reports appear here.</source>
     </message>
     <message>
         <source>Saving NeverD changes. Send after the save finishes.</source>
-        <translation>正在保存 ND 变更，请完成后再发送。</translation>
+        <translation>正在保存 NeverD 变更，请完成后再发送。</translation>
     </message>
     <message>
         <source>Quoted from side chat &apos;%1&apos;:
@@ -2062,7 +2062,7 @@ Notes, scripts and reports appear here.</source>
     <name>neverd::agent::ChangeReview</name>
     <message>
         <source>(inferred by NeverD analysis)</source>
-        <translation>(由 ND 分析推断)</translation>
+        <translation>(由 NeverD 分析推断)</translation>
     </message>
     <message>
         <source>%1: not defined yet</source>
