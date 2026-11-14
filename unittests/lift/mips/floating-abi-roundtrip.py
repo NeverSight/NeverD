@@ -119,7 +119,7 @@ class CallSiteViews:
             self.destroy(session)
 
 
-def observe(path, bits, little, scalar_bytes, cases, n32=False, callbacks=None, revision=6):
+def observe(path, bits, little, scalar_bytes, cases, n32=False, callbacks=None, revision=6, fr=1):
     model = (
         (mips.UC_CPU_MIPS64_I6400 if bits == 64 else mips.UC_CPU_MIPS32_MIPS32R6_GENERIC)
         if revision == 6 else
@@ -127,7 +127,8 @@ def observe(path, bits, little, scalar_bytes, cases, n32=False, callbacks=None, 
     )
     uc, entry = roundtrip.emulator(path, bits, little, "kernel", cpu_model=model)
     uc.reg_write(mips.UC_MIPS_REG_CP0_STATUS,
-                 uc.reg_read(mips.UC_MIPS_REG_CP0_STATUS) | 0x24000000)
+                 (uc.reg_read(mips.UC_MIPS_REG_CP0_STATUS) & ~0x04000000) |
+                 (0x24000000 if fr else 0x20000000))
     result = []
     for index, (value, bias) in enumerate(cases):
         for register in range(1, 32):
@@ -138,13 +139,16 @@ def observe(path, bits, little, scalar_bytes, cases, n32=False, callbacks=None, 
         uc.reg_write(mips.UC_MIPS_REG_SP, roundtrip.STACK)
         uc.reg_write(mips.UC_MIPS_REG_RA, roundtrip.STOP)
         uc.reg_write(mips.UC_MIPS_REG_FCSR, 0)
+        value_bits = struct.unpack(
+            "<Q" if scalar_bytes == 8 else "<I",
+            struct.pack("<d" if scalar_bytes == 8 else "<f", value),
+        )[0]
         uc.reg_write(
             mips.UC_MIPS_REG_F12,
-            struct.unpack(
-                "<Q" if scalar_bytes == 8 else "<I",
-                struct.pack("<d" if scalar_bytes == 8 else "<f", value),
-            )[0],
+            value_bits if fr else value_bits & 0xffffffff,
         )
+        if not fr and scalar_bytes == 8:
+            uc.reg_write(mips.UC_MIPS_REG_F13, value_bits >> 32)
         uc.reg_write(
             getattr(mips, f"UC_MIPS_REG_{5 if bits == 64 or scalar_bytes == 4 else 6}"),
             bias & ((1 << bits) - 1),
@@ -156,10 +160,10 @@ def observe(path, bits, little, scalar_bytes, cases, n32=False, callbacks=None, 
                 ),
                 callbacks[index % len(callbacks)],
             )
-        saved = range(24, 32) if bits == 64 and not n32 else range(20, 32, 2)
+        saved = range(24, 32) if bits == 64 and not n32 else range(20, 32, 2 if fr else 1)
         for register in saved:
             uc.reg_write(
-                getattr(mips, f"UC_MIPS_REG_F{register}"), 0x3FF0000000000000 + register
+                getattr(mips, f"UC_MIPS_REG_F{register}"), (0x3FF0000000000000 if fr else 0x3f800000) + register
             )
         uc.emu_start(entry, roundtrip.STOP, count=10000)
         if uc.reg_read(mips.UC_MIPS_REG_PC) != roundtrip.STOP:
@@ -169,12 +173,14 @@ def observe(path, bits, little, scalar_bytes, cases, n32=False, callbacks=None, 
         for register in saved:
             if (
                 uc.reg_read(getattr(mips, f"UC_MIPS_REG_F{register}"))
-                != 0x3FF0000000000000 + register
+                != (0x3FF0000000000000 if fr else 0x3f800000) + register
             ):
                 raise ValueError("callee-saved FPR changed")
         result.append(
             (
-                uc.reg_read(mips.UC_MIPS_REG_F0) & ((1 << (scalar_bytes * 8)) - 1),
+                (uc.reg_read(mips.UC_MIPS_REG_F0) & ((1 << (scalar_bytes * 8 if fr else 32)) - 1))
+                | ((uc.reg_read(mips.UC_MIPS_REG_F1) & 0xffffffff) << 32
+                   if not fr and scalar_bytes == 8 else 0),
                 uc.reg_read(mips.UC_MIPS_REG_FCSR),
             )
         )
@@ -298,7 +304,7 @@ def run(args, artifacts):
         for value in (-8.5, -0.0, 0.0, 1.25, 1048576.5)
         for bias in (-17, 0, 3, 1024)
     ]
-    report = {"complete": False, "revision": args.revision,
+    report = {"complete": False, "revision": args.revision, "fr": args.fr,
               "neverd_sha256": digest(args.neverd), "builds": []}
     artifacts.write("results.json", report)
     for abi in args.abi or ("32", "n32", "64"):
@@ -591,7 +597,7 @@ def run(args, artifacts):
                     asm_flags = [
                         "-march=" + cpu,
                         "-mabi=" + abi,
-                        "-mfp64",
+                        "-mfp64" if args.fr else "-mfp32",
                         "-mnan=" + nan,
                         "-EL" if little else "-EB",
                     ]
@@ -631,7 +637,7 @@ def run(args, artifacts):
                         cases,
                         abi == "n32",
                         callbacks(original),
-                        revision=args.revision,
+                        revision=args.revision, fr=args.fr,
                     )
                     for index, ((value, bias), (actual, _)) in enumerate(
                         zip(cases, wanted, strict=True)
@@ -757,7 +763,7 @@ def run(args, artifacts):
                                         + ("abin32" if abi == "n32" else ""),
                                         "-march=" + cpu,
                                         "-mabi=" + abi,
-                                        "-mfp64",
+                                        "-mfp64" if args.fr else "-mfp32",
                                         "-mnan=" + nan,
                                         "-mno-abicalls",
                                         "-fno-pic",
@@ -798,7 +804,7 @@ def run(args, artifacts):
                                     cases,
                                     abi == "n32",
                                     callbacks(rebuilt),
-                                    revision=args.revision,
+                                    revision=args.revision, fr=args.fr,
                                 )
                                 if actual != wanted:
                                     index = next(
@@ -844,10 +850,15 @@ def main():
         "--sdk", type=Path, help="shared library built alongside the CLI"
     )
     parser.add_argument("--revision", type=int, choices=(2, 6), default=6,
-                        help="classic FR=1 ISA revision (default: 6)")
+                        help="classic ISA revision (default: 6)")
+    parser.add_argument("--fr", type=int, choices=(0, 1), default=1)
     parser.add_argument("--abi", action="append", choices=("32", "n32", "64"))
     parser.add_argument("--layout", action="append", choices=LAYOUTS)
     args = parser.parse_args()
+    if not args.fr:
+        if args.revision != 2 or (args.abi and args.abi != ["32"]):
+            parser.error("FR=0 requires --revision 2 and o32")
+        args.abi = ["32"]
     with MIPSValidationArtifacts(
         args.output,
         "mips-floating-abi-roundtrip",

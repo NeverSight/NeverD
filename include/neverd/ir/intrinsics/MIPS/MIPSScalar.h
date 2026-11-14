@@ -300,6 +300,7 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
     if (F.writesCondition())
       return !S.OutputBytes && S.Inputs == 4 && S.FirstBytes == 1 &&
              S.FirstConstant && *S.FirstConstant < 8 &&
+             (!F.isPairedSingle() || !(*S.FirstConstant & 1)) &&
              S.SecondBytes == F.InputBytes && S.ThirdBytes == F.InputBytes;
     return S.OutputWritable && S.OutputBytes == F.OutputBytes &&
            S.Inputs == F.Arity + 1 && S.FirstBytes == F.InputBytes &&

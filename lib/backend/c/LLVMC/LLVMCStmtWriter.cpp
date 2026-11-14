@@ -5016,7 +5016,9 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
         ScalarFP ? mips::scalarFPAssembly(
                        Id, K->getZExtValue(),
                        mips::instructionModeFromLLVM(*Call.getFunction()) ==
-                           InstructionMode::MicroMIPS)
+                           InstructionMode::MicroMIPS,
+                       Img && Img->MIPS &&
+                           Img->MIPS->hasScalarFP32ABI(isMIPS64(Opts.TheArch)))
                  : mips::msaAssembly(Id, K->getZExtValue(),
                                      archLittleEndian(Opts.TheArch));
     if (!IA->hasSideEffects() || IA->isAlignStack() || IA->canThrow() ||

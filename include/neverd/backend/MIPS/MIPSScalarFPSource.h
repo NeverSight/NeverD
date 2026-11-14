@@ -17,9 +17,12 @@
 
 namespace neverd::mips {
 inline FPNativeAssembly scalarFPAssembly(Intrinsic Id, unsigned Selector,
-                                         bool Micro) {
+                                         bool Micro,
+                                         bool PairedRegisters = false) {
   FPNativeAssembly A;
-  A.Text = ".set push\n.set fp=64\n";
+  A.Text =
+      PairedRegisters ? ".set push\n.set fp=32\n" : ".set push\n.set fp=64\n";
+  A.PairedRegisters = PairedRegisters;
   A.Read = Id == Intrinsic::MIPSReadFPControl;
   A.Write = Id == Intrinsic::MIPSWriteFPControl;
   if (A.Read || A.Write) {
@@ -33,7 +36,8 @@ inline FPNativeAssembly scalarFPAssembly(Intrinsic Id, unsigned Selector,
     const unsigned Output = !F.writesCondition();
     A.Pointers = F.Arity + Output;
     A.FPRegisters = F.Arity;
-    if (F.writesCondition() && Selector >= 8)
+    if (F.writesCondition() &&
+        (Selector >= 8 || (F.isPairedSingle() && (Selector & 1))))
       throw std::invalid_argument("invalid scalar FP condition selector");
     A.Constraints = "r";
     for (unsigned I = 0; I < F.Arity; ++I) {
@@ -82,8 +86,11 @@ inline FPNativeAssembly scalarFPAssembly(Intrinsic Id, unsigned Selector,
       A.Text +=
           std::string(F.OutputBytes == 8 ? "\nsdc1 " : "\nswc1 ") + "$f0,0(%0)";
     A.Constraints += ",~{memory}";
-    for (unsigned I = 0; I < F.Arity; ++I)
+    for (unsigned I = 0; I < F.Arity; ++I) {
       A.Constraints += ",~{$f" + std::to_string(2 * I) + "}";
+      if (PairedRegisters)
+        A.Constraints += ",~{$f" + std::to_string(2 * I + 1) + "}";
+    }
   }
   A.Text += "\n.set pop";
   return A;

@@ -33,7 +33,11 @@ public:
       uc_close(CPU);
   }
   llvm::Error initialize(Arch Target) {
-    const bool Wide = isMIPS64(Target), Little = archLittleEndian(Target);
+    // The executor owns an FPU, not the image's GPR file. Use the r2 generic
+    // 64-bit core for legacy COP1 so paired-single is available for o32 too;
+    // the 74Kf model lacks PS. LowIR owns FR=0 word pairing and ISA admission.
+    const bool Wide = !Release6 || isMIPS64(Target),
+               Little = archLittleEndian(Target);
     uc_err Error = uc_open(UC_ARCH_MIPS,
                            uc_mode((Wide ? UC_MODE_MIPS64 : UC_MODE_MIPS32) |
                                    (Little ? 0 : UC_MODE_BIG_ENDIAN)),
@@ -112,7 +116,8 @@ public:
       return std::nullopt;
     const bool Compare = mips::scalarFPOperation(Id).writesCondition();
     const unsigned CC = Compare ? Inputs[0] : 0;
-    if (Compare && CC >= 8)
+    if (Compare &&
+        (CC >= 8 || (mips::scalarFPOperation(Id).isPairedSingle() && (CC & 1))))
       return std::nullopt;
     Inputs = Inputs.drop_front(unsigned(Compare));
     for (unsigned I = 0; I < Inputs.size(); ++I)

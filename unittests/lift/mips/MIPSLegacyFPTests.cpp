@@ -1,4 +1,5 @@
-//===- MIPSLegacyFPTests.cpp - Pre-R6 FR=1 scalar floating point ----------===//
+//===- MIPSLegacyFPTests.cpp - Pre-R6 scalar and paired floating point
+//----------===//
 //
 // NeverD Decompiler
 //
@@ -46,10 +47,12 @@ protected:
                                    archLittleEndian(GetParam())
                                        ? llvm::endianness::little
                                        : llvm::endianness::big);
-    ASSERT_EQ(Decode.decodeUnitForLift(Bytes, 4, 0x10000, Unit), 4);
     Ops.clear();
+    ASSERT_EQ(Decode.decodeUnitForLift(Bytes, 4, 0x10000, Unit), 4);
     Decode.liftUnitToLow(Unit, Ops);
   }
+  void compareArithmetic(bool PairedRegisters);
+  void compareMemory(bool PairedRegisters);
   bool execute(NdOpEmulator &E, MIPSSystemContext &C) {
     for (const auto &Op : Ops) {
       if (!step(E, C, Op))
@@ -67,11 +70,20 @@ protected:
   }
 };
 
-TEST_P(MIPSLegacyFP, RequiresFR1AndRejectsRelease6Arithmetic) {
+class MIPSFR0 : public MIPSLegacyFP {
+  void SetUp() override {
+    MIPSLegacyFP::SetUp();
+    Image.MIPS->FPABI = 1;
+    ASSERT_TRUE(Decode.init(Image));
+  }
+};
+
+TEST_P(MIPSLegacyFP, RequiresExplicitFPProfileAndRejectsRelease6Arithmetic) {
   lift(0x46062080); // add.s f2,f4,f6
   ASSERT_FALSE(Ops.empty());
   Image.MIPS->FPABI.reset();
-  ASSERT_TRUE(Decode.init(Image)); // Reused decoder must discard FR=1 evidence.
+  ASSERT_TRUE(
+      Decode.init(Image)); // Reused decoder must discard FP profile evidence.
   EXPECT_THROW(lift(0x46062080), UnliftedInstruction);
   EXPECT_TRUE(Ops.empty());
   Image.MIPS->FPABI = isMIPS64(GetParam()) ? 1 : 6;
@@ -92,6 +104,59 @@ TEST_P(MIPSLegacyFP, RequiresFR1AndRejectsRelease6Arithmetic) {
     EXPECT_THROW(L.lift(Raw, Ops), UnliftedInstruction);
     EXPECT_TRUE(Ops.empty());
   }
+}
+
+TEST_P(MIPSFR0, RejectsOddDoubleRegistersAndFR1OnlyFormats) {
+  // Odd double inputs/destinations, long fixed point and paired-single.
+  for (uint32_t Word :
+       {0x46262880u, 0x46272080u, 0x462620c0u, 0x46262031u | 1u << 11,
+        0xd4830000u, 0xf4830000u, 0x44641800u, 0x44e41800u, 0x46a020a0u,
+        0x4c850085u, 0x4c85100du, 0x460020a5u, 0x46002088u, 0x46c62080u,
+        0x460620a6u, 0x4c4620a6u}) {
+    cs_insn Raw{};
+    Raw.address = 0x10000;
+    Raw.size = 4;
+    llvm::support::endian::write32(Raw.bytes, Word,
+                                   archLittleEndian(GetParam())
+                                       ? llvm::endianness::little
+                                       : llvm::endianness::big);
+    MIPSLifter L(GetParam());
+    L.setScalarFPEnabled(true, true);
+    Ops.clear();
+    EXPECT_THROW(L.lift(Raw, Ops), UnliftedInstruction) << std::hex << Word;
+    EXPECT_TRUE(Ops.empty());
+  }
+}
+
+TEST_P(MIPSFR0, WordTransfersAndOddSingleWritesAliasDoublePairs) {
+  NdOpEmulator E(Image);
+  E.setStrictMode(true);
+  E.setRegister(mipsreg::w(4), 0x12345678);
+  E.setRegister(mipsreg::w(5), 0xabcdef01);
+  E.setRegister(mipsreg::A0, 0x87654321);
+  E.setRegister(mipsreg::w(2), 0x11223344);
+  E.setRegister(mipsreg::w(3), 0x55667788);
+  MIPSSystemContext C;
+  lift(0x44842800); // mtc1 a0,f5 leaves f4 alone.
+  ASSERT_TRUE(execute(E, C));
+  EXPECT_EQ(E.getRegister(mipsreg::w(4)), 0x12345678u);
+  EXPECT_EQ(E.getRegister(mipsreg::w(5)), 0x87654321u);
+  lift(0x46202086); // mov.d f2,f4 reads both words.
+  ASSERT_TRUE(execute(E, C));
+  EXPECT_EQ(E.getRegister(mipsreg::w(2)), 0x12345678u);
+  EXPECT_EQ(E.getRegister(mipsreg::w(3)), 0x87654321u);
+  lift(0x44621000); // mfhc1 v0,f2 reads f3.
+  ASSERT_TRUE(execute(E, C));
+  EXPECT_EQ(E.getRegister(mipsreg::V0), 0x87654321u);
+  lift(0x44e41000); // mthc1 a0,f2 preserves f2 and writes f3.
+  E.setRegister(mipsreg::A0, 0xfedcba98);
+  ASSERT_TRUE(execute(E, C));
+  EXPECT_EQ(E.getRegister(mipsreg::w(2)), 0x12345678u);
+  EXPECT_EQ(E.getRegister(mipsreg::w(3)), 0xfedcba98u);
+  lift(0x460020c6); // mov.s f3,f4 changes only the high word of the pair.
+  ASSERT_TRUE(execute(E, C));
+  EXPECT_EQ(E.getRegister(mipsreg::w(2)), 0x12345678u);
+  EXPECT_EQ(E.getRegister(mipsreg::w(3)), 0x12345678u);
 }
 
 #ifdef NEVERD_MIPS_UNICORN_REFERENCE
@@ -193,7 +258,7 @@ TEST_P(MIPSLegacyFP, BranchSnapshotsConditionAndAnnulsLikelySlot) {
       }
 }
 
-TEST_P(MIPSLegacyFP, IndexedMemoryMatchesOriginalAlignmentAndByteOrder) {
+void MIPSLegacyFP::compareMemory(bool PairedRegisters) {
   struct Form {
     uint32_t Word;
     unsigned Bytes;
@@ -218,7 +283,8 @@ TEST_P(MIPSLegacyFP, IndexedMemoryMatchesOriginalAlignmentAndByteOrder) {
             UC_ERR_OK);
   uint64_t Status = 0;
   ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_CP0_STATUS, &Status), UC_ERR_OK);
-  Status |= 0x24000000;
+  Status =
+      (Status & ~0x04000000ull) | (PairedRegisters ? 0x20000000 : 0x24000000);
   ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_CP0_STATUS, &Status), UC_ERR_OK);
   ASSERT_EQ(uc_mem_map(Raw, 0x10000, 4096, UC_PROT_ALL), UC_ERR_OK);
   ASSERT_EQ(uc_mem_map(Raw, 0x20000, 4096, UC_PROT_ALL), UC_ERR_OK);
@@ -231,6 +297,8 @@ TEST_P(MIPSLegacyFP, IndexedMemoryMatchesOriginalAlignmentAndByteOrder) {
   Image.Segments.push_back(Data);
   for (unsigned I = 0; I < std::size(Forms); ++I) {
     const auto &F = Forms[I];
+    if (PairedRegisters && F.IgnoreLowBits)
+      continue; // LUXC1/SUXC1 require FR=1, checked by the refusal test.
     SCOPED_TRACE(I);
     lift(F.Word);
     uint8_t Code[4];
@@ -247,7 +315,11 @@ TEST_P(MIPSLegacyFP, IndexedMemoryMatchesOriginalAlignmentAndByteOrder) {
       ASSERT_EQ(uc_mem_write(Raw, 0x20000, Data.Data.data(), 16), UC_ERR_OK);
       ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_4, &Base), UC_ERR_OK);
       ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_5, &Index), UC_ERR_OK);
-      ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_F2, &Initial), UC_ERR_OK);
+      const uint64_t Low = PairedRegisters ? uint32_t(Initial) : Initial;
+      const uint64_t High = Initial >> 32;
+      ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_F2, &Low), UC_ERR_OK);
+      if (PairedRegisters)
+        ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_F3, &High), UC_ERR_OK);
       const auto Status = uc_emu_start(Raw, PC, PC + 4, 0, 1);
       const bool Valid = F.IgnoreLowBits || Offset % F.Bytes == 0;
       EXPECT_EQ(Status == UC_ERR_OK, Valid);
@@ -255,18 +327,26 @@ TEST_P(MIPSLegacyFP, IndexedMemoryMatchesOriginalAlignmentAndByteOrder) {
       E.setStrictMode(true);
       E.setRegister(mipsreg::A0, Base);
       E.setRegister(mipsreg::A1, Index);
-      E.setRegister(mipsreg::w(2), Initial);
+      E.setRegister(mipsreg::w(2), Low);
+      if (PairedRegisters)
+        E.setRegister(mipsreg::w(3), High);
       MIPSSystemContext C;
       EXPECT_EQ(execute(E, C), Valid);
       uint64_t Expected = 0;
       ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_F2, &Expected), UC_ERR_OK);
       LowOp Read;
       Read.Opcode = NdOp::COPY;
-      Read.Output = NdVar::reg(mipsreg::V1, Valid && !F.Store ? F.Bytes : 8);
+      Read.Output = NdVar::reg(mipsreg::V1, PairedRegisters     ? 4
+                                            : Valid && !F.Store ? F.Bytes
+                                                                : 8);
       Read.addInput(NdVar::reg(mipsreg::w(2), Read.Output.Size));
       ASSERT_TRUE(E.step(Read));
       EXPECT_EQ(E.getRegister(mipsreg::V1),
                 Read.Output.Size == 4 ? uint32_t(Expected) : Expected);
+      if (PairedRegisters) {
+        ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_F3, &Expected), UC_ERR_OK);
+        EXPECT_EQ(E.getRegister(mipsreg::w(3)), uint32_t(Expected));
+      }
       uint8_t Memory[16];
       ASSERT_EQ(uc_mem_read(Raw, 0x20000, Memory, 16), UC_ERR_OK);
       for (unsigned J = 0; J < 16; ++J) {
@@ -281,7 +361,15 @@ TEST_P(MIPSLegacyFP, IndexedMemoryMatchesOriginalAlignmentAndByteOrder) {
   }
 }
 
-TEST_P(MIPSLegacyFP, ArithmeticMatchesOriginalBitsFlagsAndExceptions) {
+TEST_P(MIPSLegacyFP, IndexedMemoryMatchesOriginalAlignmentAndByteOrder) {
+  compareMemory(false);
+}
+
+TEST_P(MIPSFR0, MemoryMatchesOriginalRegisterPairsAndFaults) {
+  compareMemory(true);
+}
+
+void MIPSLegacyFP::compareArithmetic(bool PairedRegisters) {
   struct Row {
     const char *Name;
     uint32_t Word;
@@ -303,31 +391,40 @@ TEST_P(MIPSLegacyFP, ArithmeticMatchesOriginalBitsFlagsAndExceptions) {
                                   0x7fefffff7f7fffff,
                                   UINT64_MAX,
                                   0x123456789abcdef0};
+  // The generic MIPS64r2 FPU implements PS; 74Kf does not. These arithmetic
+  // words have identical semantics on MIPS32r2 with PS and MIPS64r2. The
+  // surrounding LowIR still uses the selected image's GPR width and FR mode.
   auto FPU = emulation::createScalarFPExecutor(GetParam(), 2);
   ASSERT_TRUE(bool(FPU)) << llvm::toString(FPU.takeError());
   uc_engine *Raw = nullptr;
-  const bool Wide = isMIPS64(GetParam()), Little = archLittleEndian(GetParam());
+  const bool Little = archLittleEndian(GetParam());
   ASSERT_EQ(uc_open(UC_ARCH_MIPS,
-                    uc_mode((Wide ? UC_MODE_MIPS64 : UC_MODE_MIPS32) |
-                            (Little ? 0 : UC_MODE_BIG_ENDIAN)),
+                    uc_mode(UC_MODE_MIPS64 | (Little ? 0 : UC_MODE_BIG_ENDIAN)),
                     &Raw),
             UC_ERR_OK);
   std::unique_ptr<uc_engine, decltype(&uc_close)> CPU(Raw, uc_close);
-  ASSERT_EQ(uc_ctl_set_cpu_model(Raw, Wide ? int(UC_CPU_MIPS64_MIPS64R2_GENERIC)
-                                           : int(UC_CPU_MIPS32_74KF)),
+  ASSERT_EQ(uc_ctl_set_cpu_model(Raw, UC_CPU_MIPS64_MIPS64R2_GENERIC),
             UC_ERR_OK);
   uint64_t Status = 0;
   ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_CP0_STATUS, &Status), UC_ERR_OK);
-  Status |= 0x24000000;
+  Status =
+      (Status & ~0x04000000ull) | (PairedRegisters ? 0x20000000 : 0x24000000);
   ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_CP0_STATUS, &Status), UC_ERR_OK);
   ASSERT_EQ(uc_mem_map(Raw, 0x10000, 4096, UC_PROT_ALL), UC_ERR_OK);
   unsigned Index = 0;
-  for (const auto &R : Rows)
-    for (unsigned CC = 0; CC < (R.Bytes ? 1u : 8u); ++CC) {
+  for (const auto &R : Rows) {
+    const unsigned Op = R.Word >> 26, Fmt = R.Word >> 21 & 31, Fn = R.Word & 63;
+    if (PairedRegisters &&
+        ((Op == 17 && (Fmt == 22 || Fmt == 21 || (Fn >= 8 && Fn <= 11) ||
+                       Fn == 37 || Fn == 38)) ||
+         (Op == 19 && (Fn & 7) == 6)))
+      continue;
+    for (unsigned CC = 0; CC < (R.Bytes ? 1u : 8u);
+         CC += ((R.Word >> 21 & 31) == 22 ? 2 : 1)) {
       SCOPED_TRACE(R.Name);
       SCOPED_TRACE(CC);
       const uint32_t Word = R.Word | (CC << 8);
-      lift(Word);
+      ASSERT_NO_FATAL_FAILURE(lift(Word));
       EXPECT_STREQ(Unit.Head.Raw->mnemonic, R.Name);
       uint8_t Bytes[4];
       llvm::support::endian::write32(Bytes, Word,
@@ -350,10 +447,25 @@ TEST_P(MIPSLegacyFP, ArithmeticMatchesOriginalBitsFlagsAndExceptions) {
           C.FCSR = CSR;
           C.ScalarFPU = FPU->get();
           ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_FCSR, &CSR), UC_ERR_OK);
+          if (PairedRegisters)
+            for (unsigned I = 0; I < 32; ++I) {
+              const uint64_t Poison = 0x9e3779b9u * (I + 1);
+              E.setRegister(mipsreg::w(I), uint32_t(Poison));
+              ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_F0 + I, &Poison),
+                        UC_ERR_OK);
+            }
           for (unsigned I = 0; I < 3; ++I) {
-            E.setRegister(mipsreg::w(2 + 2 * I), Inputs[I]);
-            ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_F2 + 2 * I, &Inputs[I]),
+            const uint64_t Low =
+                PairedRegisters ? uint32_t(Inputs[I]) : Inputs[I];
+            E.setRegister(mipsreg::w(2 + 2 * I), Low);
+            ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_F2 + 2 * I, &Low),
                       UC_ERR_OK);
+            if (PairedRegisters) {
+              const uint64_t High = Inputs[I] >> 32;
+              E.setRegister(mipsreg::w(3 + 2 * I), High);
+              ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_F3 + 2 * I, &High),
+                        UC_ERR_OK);
+            }
           }
           const auto Result = uc_emu_start(Raw, PC, PC + 4, 0, 1);
           ASSERT_TRUE(Result == UC_ERR_OK || Result == UC_ERR_EXCEPTION);
@@ -363,7 +475,13 @@ TEST_P(MIPSLegacyFP, ArithmeticMatchesOriginalBitsFlagsAndExceptions) {
           EXPECT_EQ(execute(E, C), Result == UC_ERR_OK);
           EXPECT_EQ(C.FloatingPointException, Result == UC_ERR_EXCEPTION);
           EXPECT_EQ(C.FCSR, CSR);
-          if (Result == UC_ERR_EXCEPTION || R.Bytes == 8 || !R.Bytes)
+          if (PairedRegisters) {
+            for (unsigned I = 0; I < 32; ++I) {
+              ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_F0 + I, &Expected),
+                        UC_ERR_OK);
+              EXPECT_EQ(E.getRegister(mipsreg::w(I)), uint32_t(Expected)) << I;
+            }
+          } else if (Result == UC_ERR_EXCEPTION || R.Bytes == 8 || !R.Bytes)
             EXPECT_EQ(E.getRegister(mipsreg::w(2)), Expected);
           else {
             LowOp Read;
@@ -375,6 +493,122 @@ TEST_P(MIPSLegacyFP, ArithmeticMatchesOriginalBitsFlagsAndExceptions) {
           }
         }
     }
+  }
+}
+
+TEST_P(MIPSLegacyFP, ArithmeticMatchesOriginalBitsFlagsAndExceptions) {
+  compareArithmetic(false);
+}
+
+TEST_P(MIPSFR0, ArithmeticMatchesOriginalRegisterPairsFlagsAndExceptions) {
+  compareArithmetic(true);
+}
+
+TEST_P(MIPSFR0, ForgedLongAndPairedArithmeticCannotExecute) {
+  NdOpEmulator E(Image);
+  E.setStrictMode(true);
+  auto FPU = emulation::createScalarFPExecutor(GetParam(), 2);
+  ASSERT_TRUE(bool(FPU));
+  for (auto Id : {Intrinsic::MIPSFPADD_PS, Intrinsic::MIPSFPCVT_D_L,
+                  Intrinsic::MIPSFPROUND_L_D}) {
+    LowOp Op;
+    Op.Opcode = NdOp::INTRINSIC;
+    Op.Output = NdVar::reg(mipsreg::V0, 8);
+    Op.addInput(NdVar::cst(unsigned(Id), 4));
+    const auto &F = mips::scalarFPOperation(Id);
+    for (unsigned I = 0; I < F.Arity; ++I)
+      Op.addInput(NdVar::cst(0, F.InputBytes));
+    MIPSSystemContext C;
+    C.ScalarFPU = FPU->get();
+    C.FCSR = 0;
+    EXPECT_FALSE(E.stepMIPSSystem(Op, C));
+    EXPECT_EQ(C.FCSR, 0u);
+    EXPECT_FALSE(C.FloatingPointException);
+  }
+}
+
+TEST_P(MIPSLegacyFP, PairedSingleMovesRetainBitsAndSelectLanesIndependently) {
+  auto FPU = emulation::createScalarFPExecutor(GetParam(), 2);
+  ASSERT_TRUE(bool(FPU));
+  const uint64_t A = 0x7fc1234580000000, B = 0xffa5432101234567;
+  struct Form {
+    uint32_t Word;
+    uint64_t Result;
+    unsigned Bytes;
+  };
+  const Form Forms[] = {
+      {0x46c620ac, (A << 32) | uint32_t(B), 8},                // pll.ps
+      {0x46c620ad, (A << 32) | (B >> 32), 8},                  // plu.ps
+      {0x46c620ae, (A & 0xffffffff00000000) | uint32_t(B), 8}, // pul.ps
+      {0x46c620af, (A & 0xffffffff00000000) | (B >> 32), 8},   // puu.ps
+      {0x460620a6, (A << 32) | uint32_t(B), 8},                // cvt.ps.s
+      {0x46c020a0, A >> 32, 4},                                // cvt.s.pu
+      {0x46c020a8, uint32_t(A), 4},                            // cvt.s.pl
+      {0x46c02086, A, 8},                                      // mov.ps
+  };
+  for (const auto &F : Forms)
+    for (unsigned Destination : {2u, 4u, 6u}) {
+      SCOPED_TRACE(F.Word);
+      SCOPED_TRACE(Destination);
+      ASSERT_NO_FATAL_FAILURE(lift((F.Word & ~0x7c0u) | Destination << 6));
+      NdOpEmulator E(Image);
+      E.setStrictMode(true);
+      E.setRegister(mipsreg::w(4), A);
+      E.setRegister(mipsreg::w(6), B);
+      MIPSSystemContext C;
+      C.FCSR = 0xfe80307c;
+      ASSERT_TRUE(execute(E, C));
+      EXPECT_EQ(C.FCSR, 0xfe80307cu);
+      LowOp Read;
+      Read.Opcode = NdOp::COPY;
+      Read.Output = NdVar::reg(mipsreg::V0, F.Bytes);
+      Read.addInput(NdVar::reg(mipsreg::w(Destination), F.Bytes));
+      ASSERT_TRUE(E.step(Read));
+      EXPECT_EQ(E.getRegister(mipsreg::V0), F.Result);
+    }
+  for (unsigned CC = 0; CC < 8; CC += 2)
+    for (unsigned State = 0; State < 4; ++State)
+      for (unsigned True = 0; True < 2; ++True) {
+        ASSERT_NO_FATAL_FAILURE(
+            lift(0x46c02091 | (CC * 4 + True) << 16)); // movf/t.ps
+        NdOpEmulator E(Image);
+        E.setStrictMode(true);
+        E.setRegister(mipsreg::w(4), A);
+        E.setRegister(mipsreg::w(2), B);
+        MIPSSystemContext C;
+        C.ScalarFPU = FPU->get();
+        uint32_t CSR = 0x1004;
+        for (unsigned I = 0; I < 2; ++I)
+          if (State & (1u << I))
+            CSR |= 1u << (CC + I ? CC + I + 24 : 23);
+        C.FCSR = CSR;
+        ASSERT_TRUE(execute(E, C));
+        uint64_t Expected = 0;
+        for (unsigned I = 0; I < 2; ++I) {
+          const auto V = bool(State & (1u << I)) == bool(True) ? A : B;
+          Expected |= uint64_t(uint32_t(V >> (32 * I))) << (32 * I);
+        }
+        EXPECT_EQ(E.getRegister(mipsreg::w(2)), Expected);
+        EXPECT_EQ(C.FCSR, CSR);
+      }
+  for (unsigned Offset = 0; Offset < 16; ++Offset) {
+    ASSERT_NO_FATAL_FAILURE(lift(0x4c86209e)); // alnv.ps f2,f4,f6,a0
+    NdOpEmulator E(Image);
+    E.setStrictMode(true);
+    E.setRegister(mipsreg::A0, Offset);
+    E.setRegister(mipsreg::w(4), A);
+    E.setRegister(mipsreg::w(6), B);
+    MIPSSystemContext C;
+    ASSERT_TRUE(execute(E, C));
+    if (Offset & 3)
+      EXPECT_FALSE(E.getRegister(mipsreg::w(2)));
+    else {
+      const uint64_t Merged = archLittleEndian(GetParam())
+                                  ? (B << 32) | (A >> 32)
+                                  : (A << 32) | (B >> 32);
+      EXPECT_EQ(E.getRegister(mipsreg::w(2)), Offset & 4 ? Merged : A);
+    }
+  }
 }
 
 TEST_P(MIPSLegacyFP, LegacyNaNAndTrapCannotUseRelease6Executor) {
@@ -408,6 +642,8 @@ TEST_P(MIPSLegacyFP, LegacyNaNAndTrapCannotUseRelease6Executor) {
   EXPECT_EQ(uint32_t(*E.getRegister(mipsreg::V0)), *C.FCSR);
 }
 #endif
+INSTANTIATE_TEST_SUITE_P(ByteOrders, MIPSFR0,
+                         ::testing::Values(Arch::MIPS32, Arch::MIPS32EL));
 INSTANTIATE_TEST_SUITE_P(EndianAndWidth, MIPSLegacyFP,
                          ::testing::Values(Arch::MIPS32, Arch::MIPS32EL,
                                            Arch::MIPS64, Arch::MIPS64EL));

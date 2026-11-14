@@ -1,0 +1,69 @@
+{
+  "base_commit": "122cb0e7370c847e54fa748e57b042365a986d41",
+  "unicorn_commit": "a0bc496b8ca661be2d147b245aa200630ab31a8e",
+  "host": "macOS arm64, Release",
+  "semantic_scope": {
+    "classic_pre_r6_fr1_arithmetic_forms": 109,
+    "classic_o32_fr0_arithmetic_forms": 72,
+    "byte_orders": [
+      "big",
+      "little"
+    ],
+    "fr1_original_vs_lowir_observations": 292608,
+    "fr0_original_vs_lowir_observations": 113664,
+    "paired_sign_independent_cases": 968,
+    "paired_unsupported_cpu_controls": 968,
+    "scalar_sign_regression_cases": 640,
+    "fr0_memory_forms": 8,
+    "memory_low_address_offsets": 8
+  },
+  "roundtrips": {
+    "fr0-final": {
+      "complete": true,
+      "builds": 272,
+      "recompiled_executions": 5440,
+      "receipt_sha256": "1a6a7fa6fc03d97e895001a9974ee5492baef8153c3c104cea883d9689df29ae",
+      "sdk_sha256": "839ef2f9d9206027fd535a8e8b715b4d30d4c5e91963a92ff6b447f605545da3"
+    },
+    "fr1-r2-final": {
+      "complete": true,
+      "builds": 816,
+      "recompiled_executions": 16320,
+      "receipt_sha256": "2cad4b9bb5390460f09758e9c4681ede6e65a71cafdd2f1f87ca10066dd482a2",
+      "sdk_sha256": "839ef2f9d9206027fd535a8e8b715b4d30d4c5e91963a92ff6b447f605545da3"
+    },
+    "fr1-r6-final": {
+      "complete": true,
+      "builds": 816,
+      "recompiled_executions": 16320,
+      "receipt_sha256": "4671b5042ce0506415444274f0f7844b43c0837b6e5bfdda1f3eeba01ad280ca",
+      "sdk_sha256": "839ef2f9d9206027fd535a8e8b715b4d30d4c5e91963a92ff6b447f605545da3"
+    },
+    "ps-final": {
+      "complete": true,
+      "builds": 48,
+      "recompiled_executions": 2352,
+      "receipt_sha256": "d7942c5a6033e571c456f65cad841f1d5f64e2d8ad9286940f4030ea8c508eef",
+      "sdk_sha256": "839ef2f9d9206027fd535a8e8b715b4d30d4c5e91963a92ff6b447f605545da3"
+    },
+    "ubus-final": {
+      "complete": true,
+      "original_cases": 12,
+      "builds": 4,
+      "recompiled_executions": 48,
+      "receipt_sha256": "91c003a5cbfde0b94e97c8c355e341301651a3f07d069486ba9636659f7a9c21",
+      "sdk_sha256": "839ef2f9d9206027fd535a8e8b715b4d30d4c5e91963a92ff6b447f605545da3"
+    }
+  },
+  "owner_tests": {
+    "mips_and_shared_fp_parameter_abi": 1107,
+    "fr0_pipeline_after_diamond_fixture_expansion": 8
+  },
+  "limits": [
+    "FR=0 requires explicit o32 hard-double and 32-bit CPR1 ELF evidence; FR=1 PS requires an admitted classic pre-R6 profile.",
+    "Original-byte PS execution uses MIPS64R2_GENERIC, including comparisons against MIPS32 LowIR. This is reference FPU qualification, not MIPS32 native PS CPU or hardware qualification.",
+    "Legacy DSP64 rounded/saturating DEXTR and signed DMADD/DMSUB remain unqualified: available DSP revision 3.02 omits old instruction semantics and the older execution model contains unresolved arithmetic discrepancies.",
+    "Historical MIPS I-V version admission, load delays and HI/LO hazards remain unimplemented. Pre-R6 microMIPS floating point remains outside this profile.",
+    "Raw timing samples, dependency manifests and output identity hashes are local; this receipt contains no timing claims."
+  ]
+}
