@@ -15,6 +15,7 @@
 #include "neverd/lift/MIPS/MicroMIPSRelease6.h"
 #include "neverd/support/BinaryEncoding.h"
 
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
@@ -194,6 +195,74 @@ bool Decoder::decodeMicroMIPSRelease6(const uint8_t *Bytes, size_t Len,
   return true;
 }
 
+// Keep PS operand construction out of the common ASE decoder's register frame.
+LLVM_ATTRIBUTE_NOINLINE bool
+Decoder::decodeMIPSPairedSingle(const uint8_t *Bytes, uint32_t Physical,
+                                va_t Addr) {
+  // Missing PS forms reuse the scalar forms' operand roles. The catalog
+  // owns arithmetic admission; the public record keeps the physical bytes.
+  if (const auto Id = mips::scalarFPArithmetic(Physical, MIPSISARevision);
+      Id && mips::scalarFPOperation(*Id).isPairedSingle()) {
+    const auto Equivalent =
+        Physical >> 26 == 19 ? Physical & ~6u : Physical & ~(6u << 21);
+    if (!decodeMIPSEquivalent(Bytes, Equivalent, Addr))
+      return false;
+    InsnBuf->id = MIPS_INS_ENDING + 0x1000 + unsigned(*Id) -
+                  unsigned(Intrinsic::MIPSFPADD_S);
+    if (Text)
+      std::snprintf(InsnBuf->mnemonic, sizeof(InsnBuf->mnemonic), "%s",
+                    mips::scalarFPOperation(*Id).Mnemonic);
+    return true;
+  }
+  const unsigned Fn = Physical & 63, FT = Physical >> 16 & 31;
+  unsigned ID = 0;
+  uint32_t Equivalent = Physical & ~(6u << 21);
+  if (Physical >> 21 == 0x236) {
+    if (Fn == 6 && !FT)
+      ID = MIPSLifter::MovePairedSingleID;
+    else if (Fn == 17 && !(FT & 6))
+      ID = FT & 1 ? MIPSLifter::MoveTruePairedSingleID
+                  : MIPSLifter::MoveFalsePairedSingleID;
+    else if (Fn == 18 || Fn == 19)
+      ID = Fn == 18 ? MIPSLifter::MoveZeroPairedSingleID
+                    : MIPSLifter::MoveNonzeroPairedSingleID;
+  }
+  const bool Align = (Physical & 0xfc00003f) == 0x4c00001e;
+  if (Align) {
+    ID = MIPSLifter::AlignPairedSingleID;
+    Equivalent = (Physical & 0x001fffc0) | 0x46c00000; // ADD.PS operands
+  }
+  if (ID) {
+    if (!decodeMIPSEquivalent(Bytes, Equivalent, Addr))
+      return false;
+    InsnBuf->id = ID;
+    if (Text)
+      std::snprintf(InsnBuf->mnemonic, sizeof(InsnBuf->mnemonic), "%s",
+                    physicalMnemonic(Handle, ID));
+    if (Align) {
+      const unsigned RS = Physical >> 21 & 31;
+      if (Detail) {
+        auto &M = InsnBuf->detail->mips;
+        auto &Last = M.operands[M.op_count++];
+        Last = {};
+        Last.type = MIPS_OP_REG;
+        Last.reg = GPR[RS];
+        Last.access = CS_AC_READ;
+      }
+      if (Text) {
+        const auto Name = isMIPS64(TargetArch)
+                              ? getMIPS64RegName(mipsreg::r(RS), 8)
+                              : getMIPS32RegName(mipsreg::r(RS), 4);
+        const auto End = std::strlen(InsnBuf->op_str);
+        std::snprintf(InsnBuf->op_str + End, sizeof(InsnBuf->op_str) - End,
+                      ", $%s", Name);
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
 bool Decoder::decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr) {
   if (Len < 4)
     return false;
@@ -272,72 +341,10 @@ bool Decoder::decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr) {
       return true;
     }
   }
-  if (MIPSISARevision != 6 && !isMIPSCompressedMode(CurrentMode) &&
-      (Physical >> 26 == 17 || Physical >> 26 == 19)) {
-    // Missing PS forms reuse the scalar forms' operand roles. The catalog
-    // owns arithmetic admission; the public record keeps the physical bytes.
-    if (const auto Id = mips::scalarFPArithmetic(Physical, MIPSISARevision);
-        Id && mips::scalarFPOperation(*Id).isPairedSingle()) {
-      const auto Equivalent =
-          Physical >> 26 == 19 ? Physical & ~6u : Physical & ~(6u << 21);
-      if (!decodeMIPSEquivalent(Bytes, Equivalent, Addr))
-        return false;
-      InsnBuf->id = MIPS_INS_ENDING + 0x1000 + unsigned(*Id) -
-                    unsigned(Intrinsic::MIPSFPADD_S);
-      if (Text)
-        std::snprintf(InsnBuf->mnemonic, sizeof(InsnBuf->mnemonic), "%s",
-                      mips::scalarFPOperation(*Id).Mnemonic);
-      return true;
-    }
-    const unsigned Fn = Physical & 63, FT = Physical >> 16 & 31;
-    unsigned ID = 0;
-    uint32_t Equivalent = Physical & ~(6u << 21);
-    if (Physical >> 21 == 0x236) {
-      if (Fn == 6 && !FT)
-        ID = MIPSLifter::MovePairedSingleID;
-      else if (Fn == 17 && !(FT & 6))
-        ID = FT & 1 ? MIPSLifter::MoveTruePairedSingleID
-                    : MIPSLifter::MoveFalsePairedSingleID;
-      else if (Fn == 18 || Fn == 19)
-        ID = Fn == 18 ? MIPSLifter::MoveZeroPairedSingleID
-                      : MIPSLifter::MoveNonzeroPairedSingleID;
-    }
-    const bool Align = (Physical & 0xfc00003f) == 0x4c00001e;
-    if (Align) {
-      ID = MIPSLifter::AlignPairedSingleID;
-      Equivalent = (Physical & 0x001fffc0) | 0x46c00000; // ADD.PS operands
-    }
-    if (ID) {
-      if (!decodeMIPSEquivalent(Bytes, Equivalent, Addr))
-        return false;
-      InsnBuf->id = ID;
-      if (Text)
-        std::snprintf(InsnBuf->mnemonic, sizeof(InsnBuf->mnemonic), "%s",
-                      physicalMnemonic(Handle, ID));
-      if (Align) {
-        const unsigned RS = Physical >> 21 & 31;
-        if (Detail) {
-          auto &M = InsnBuf->detail->mips;
-          auto &Last = M.operands[M.op_count++];
-          Last = {};
-          Last.type = MIPS_OP_REG;
-          Last.reg = GPR[RS];
-          Last.access = CS_AC_READ;
-        }
-        if (Text) {
-          const auto Name = isMIPS64(TargetArch)
-                                ? getMIPS64RegName(mipsreg::r(RS), 8)
-                                : getMIPS32RegName(mipsreg::r(RS), 4);
-          const auto End = std::strlen(InsnBuf->op_str);
-          std::snprintf(InsnBuf->op_str + End, sizeof(InsnBuf->op_str) - End,
-                        ", $%s", Name);
-        }
-      }
-      return true;
-    }
-  }
   if (CurrentMode != InstructionMode::MicroMIPS)
-    return false;
+    return MIPSISARevision != 6 && CurrentMode != InstructionMode::MIPS16 &&
+           (Physical >> 26 == 17 || Physical >> 26 == 19) &&
+           decodeMIPSPairedSingle(Bytes, Physical, Addr);
   const uint32_t MicroPhysical =
       uint32_t(readTargetEndian<uint16_t>(Bytes, Little)) << 16 |
       readTargetEndian<uint16_t>(Bytes + 2, Little);
