@@ -46,6 +46,7 @@
 #include <QPointer>
 #include <QProcess>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSettings>
 #include <QShortcut>
 #include <QStyleHints>
@@ -150,7 +151,8 @@ QToolButton#NeverDAgentExecutionToggle {
 }
 QToolButton#NeverDAgentExecutionToggle:hover { background: %7; }
 QToolButton#NeverDAgentExecutionToggle:focus { border-color: %8; }
-QScrollArea#NeverDAgentTranscript, QWidget#NeverDAgentMessages {
+QScrollArea#NeverDAgentTranscript, QWidget#NeverDAgentMessages,
+QScrollArea#NeverDAgentWelcomeArea, QWidget#NeverDAgentWelcome {
   background: transparent; border: none;
 }
 QFrame#NeverDAgentUserMessage {
@@ -875,26 +877,35 @@ private:
     body->addWidget(ContextLabel);
     // An empty conversation says what the Agent does and offers first
     // questions, as VS Code's chat welcomes a new conversation.
-    Welcome = new QWidget(panel);
-    Welcome->setObjectName("NeverDAgentWelcome");
-    auto *welcome = new QVBoxLayout(Welcome);
+    // It scrolls in a small window rather than cut its lines.
+    auto *welcomeArea = new QScrollArea(panel);
+    welcomeArea->setObjectName("NeverDAgentWelcomeArea");
+    welcomeArea->setFrameShape(QFrame::NoFrame);
+    welcomeArea->setWidgetResizable(true);
+    welcomeArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    welcomeArea->viewport()->setAutoFillBackground(false);
+    Welcome = welcomeArea;
+    auto *welcomeContent = new QWidget(welcomeArea);
+    welcomeContent->setObjectName("NeverDAgentWelcome");
+    welcomeContent->setAutoFillBackground(false);
+    auto *welcome = new QVBoxLayout(welcomeContent);
     welcome->setContentsMargins(0, 12, 0, 0);
     welcome->setSpacing(8);
-    welcome->addWidget(new Mark(28, Appearance, Welcome));
-    WelcomeTitle = new QLabel(Welcome);
+    welcome->addWidget(new Mark(28, Appearance, welcomeContent));
+    WelcomeTitle = new QLabel(welcomeContent);
     auto titleFont = WelcomeTitle->font();
     titleFont.setBold(true);
     WelcomeTitle->setFont(titleFont);
     WelcomeTitle->setWordWrap(true);
     welcome->addWidget(WelcomeTitle);
-    WelcomeText = new QLabel(Welcome);
+    WelcomeText = new QLabel(welcomeContent);
     WelcomeText->setObjectName("NeverDAgentWelcomeText");
     WelcomeText->setWordWrap(true);
     WelcomeText->setTextFormat(Qt::PlainText);
     welcome->addWidget(WelcomeText);
     welcome->addSpacing(4);
     for (int index = 0; index < SuggestionCount; ++index) {
-      auto *suggestion = new SuggestionButton(Appearance, Welcome);
+      auto *suggestion = new SuggestionButton(Appearance, welcomeContent);
       connect(suggestion, &QAbstractButton::clicked, this, [this, suggestion] {
         Prompt->setPlainText(suggestion->text());
         sendOrStop();
@@ -903,6 +914,7 @@ private:
       Suggestions[index] = suggestion;
     }
     welcome->addStretch(1);
+    welcomeArea->setWidget(welcomeContent);
     body->addWidget(Welcome, 1);
     History = new ChatTranscript(
         [this](const QUrl &url) {
