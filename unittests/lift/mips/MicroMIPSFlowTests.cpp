@@ -300,6 +300,25 @@ TEST(MIPS64Divide, PhysicalEncodingsProduceFullWidthHIAndLO) {
       Lift(0x00001010, 0x00020d7c, MIPS_INS_MFHI, MFHI);
       Lift(0x00001812, 0x00031d7c, MIPS_INS_MFLO, MFLO);
       for (bool Signed : {false, true}) {
+        if (Micro) {
+          std::vector<LowOp> WordDiv;
+          Lift(Signed ? 0x0085001a : 0x0085001b,
+               Signed ? 0x00a4ab3c : 0x00a4bb3c,
+               Signed ? MIPS_INS_DIV : MIPS_INS_DIVU, WordDiv);
+          NdOpEmulator WordState(Image);
+          WordState.setStrictMode(true);
+          WordState.setRegister(mipsreg::A0, uint64_t(-10));
+          WordState.setRegister(mipsreg::A1, 3);
+          for (const auto &Op : WordDiv)
+            ASSERT_TRUE(WordState.step(Op));
+          EXPECT_EQ(WordState.getRegister(mipsreg::LO),
+                    Signed ? uint64_t(-3) : 0x55555552u);
+          EXPECT_EQ(WordState.getRegister(mipsreg::HI),
+                    Signed ? UINT64_MAX : 0u);
+          WordState.setRegister(mipsreg::A0, 0x100000000);
+          EXPECT_FALSE(llvm::all_of(
+              WordDiv, [&](const LowOp &Op) { return WordState.step(Op); }));
+        }
         std::vector<LowOp> Div;
         Lift(Signed ? 0x0085001e : 0x0085001f, Signed ? 0x58a4ab3c : 0x58a4bb3c,
              Signed ? MIPS_INS_DDIV : MIPS_INS_DDIVU, Div);

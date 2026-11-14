@@ -101,7 +101,7 @@ two-byte slots and unproved instruction modes remain excluded.
 Concrete LowIR transport and source parameter inference have separate validation
 boundaries; this source proof does not initialize absent machine registers.
 
-Classic `DIV`/`DIVU` and MIPS16 word division capture both operands and define
+Classic, microMIPS and MIPS16 word `DIV`/`DIVU` capture both operands and define
 HI/LO together. Signed division truncates toward zero; remainder follows the
 dividend's sign. MIN32/-1 produces the truncated word quotient and zero
 remainder. A zero divisor makes both LowIR results unknown, without inventing

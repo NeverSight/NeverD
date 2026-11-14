@@ -32,7 +32,8 @@ from mips_validation_artifacts import MIPSValidationArtifacts
 PROFILES = [("mips", 32, False), ("mipsel", 32, True),
             ("mips64", 64, False), ("mips64el", 64, True)]
 MICRO_FUNCTIONS = ["mips_add", "mips_load", "mips_store", "mips_stack", "mips_branch_capture",
-                   "mips_merge_word", "mips_merge_store_word"]
+                   "mips_merge_word", "mips_merge_store_word",
+                   "mips_div_lo", "mips_div_hi", "mips_divu_lo", "mips_divu_hi"]
 KERNEL_FORMS = Path(__file__).with_name("MIPSBitfieldKernels.def").read_text()
 FIELDS = {name: tuple(map(int, (width, insert, pos, size)))
           for name, width, insert, pos, size in re.findall(

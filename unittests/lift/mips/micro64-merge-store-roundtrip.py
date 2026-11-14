@@ -102,7 +102,7 @@ def run(args, work, little, n32):
           "-G0", endian]
     division = args.suite == "division"
     functions = DIVISIONS if division else STORES
-    fixture = Path(__file__).with_name("doubleword-division.S" if division else "merge-store-word.S")
+    fixture = Path(__file__).with_name("division.S" if division else "merge-store-word.S")
     (work / fixture.name).write_bytes(fixture.read_bytes())
     source = subprocess.check_output([*cc, "-DWIDE", "-E", "-P",
                                       "-x", "assembler-with-cpp", fixture.name], cwd=work)

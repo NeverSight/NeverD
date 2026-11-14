@@ -591,21 +591,8 @@ code_pointer:
 /* Real two-input encodings avoid assembler-inserted checks and traps. */
 .text
 .p2align 2
-.macro division name,encoding,result
-.globl \name
-.type \name,@function
-\name:
-  .word \encoding
-  jr $31
-  \result $2
-.size \name,.-\name
-.endm
-division mips_div_lo,0x0085001a,mflo
-division mips_div_hi,0x0085001a,mfhi
-division mips_divu_lo,0x0085001b,mflo
-division mips_divu_hi,0x0085001b,mfhi
+#include "division.S"
 #ifdef WIDE
-#include "doubleword-division.S"
 .globl mips_ddiv_dead
 .type mips_ddiv_dead,@function
 mips_ddiv_dead:
