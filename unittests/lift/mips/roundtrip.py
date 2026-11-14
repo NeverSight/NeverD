@@ -60,7 +60,8 @@ FUNCTIONS += ["mips_store_byte", "mips_store_half"]
 DOUBLEWORD_STORES = ("mips_merge_store_left_double", "mips_merge_store_right_double",
                      "mips_merge_store_double")
 DOUBLEWORD_DIVISIONS = ("mips_ddiv_lo", "mips_ddiv_hi", "mips_ddivu_lo", "mips_ddivu_hi")
-FUNCTIONS += list(DOUBLEWORD_STORES + DOUBLEWORD_DIVISIONS)
+DOUBLEWORD_KERNELS = DOUBLEWORD_STORES + DOUBLEWORD_DIVISIONS + ("mips_ddiv_dead",)
+FUNCTIONS += list(DOUBLEWORD_KERNELS)
 FUNCTIONS += list(FIELDS) + list(SHUFFLES) + ["mips_word_likely", "mips_word_zero"]
 
 
@@ -72,7 +73,7 @@ def word_value(value):
 def independent_result(function, inputs):
     if function in ("mips_store_byte", "mips_store_half"):
         return inputs[1] & (0xff if function.endswith("_byte") else 0xffff)
-    if function == "mips_div_dead":
+    if function in ("mips_div_dead", "mips_ddiv_dead"):
         return 7
     if function.startswith("mips_div") or function in DOUBLEWORD_DIVISIONS:
         wide = function in DOUBLEWORD_DIVISIONS
@@ -192,7 +193,7 @@ def cases(function, bits):
                 [0x100000002, 0x100000001], [-1, 1]] + [
                     [rng.randrange(-limit, limit), rng.randrange(-limit, limit) or 1]
                     for _ in range(24)]
-    if function == "mips_div_dead":
+    if function in ("mips_div_dead", "mips_ddiv_dead"):
         return [[0, 0], [7, 0], [-1, 0]]
     if function.startswith("mips_div"):
         return [[10, 3], [-10, 3], [10, -3], [-10, -3], [-2147483648, -1],
@@ -326,7 +327,7 @@ def run(args, artifacts):
         command([*link, "-e", "mips_add", obj, "-o", original],
                 output / f"{profile}-link.log")
         for function in args.function or (MICRO_FUNCTIONS if micro else FUNCTIONS):
-            if bits < 64 and function in DOUBLEWORD_STORES + DOUBLEWORD_DIVISIONS:
+            if bits < 64 and function in DOUBLEWORD_KERNELS:
                 continue
             if function in FIELDS or function in SHUFFLES:
                 if (FIELDS.get(function) or SHUFFLES[function])[0] > bits:
@@ -468,6 +469,18 @@ def run(args, artifacts):
                                            "original_executed": False})
                 else:
                     raise RuntimeError(f"{stem.name}: invalid word input was silently accepted")
+        if function in DOUBLEWORD_DIVISIONS:
+            # The original's zero result is unspecified. Generated sources
+            # enforce their nonzero divisor domain for a retained result.
+            uc, entry = emulator(rebuilt, bits, little, function,
+                                 original if backend == "llvmc" else None)
+            try:
+                invoke(uc, entry, bits, little, [7, 0])
+            except UcError as error:
+                if error.errno != UC_ERR_EXCEPTION:
+                    raise
+            else:
+                raise RuntimeError(f"{stem.name}: live division accepted a zero divisor")
         receipt = {"profile": profile, "encoding": args.encoding,
                 "function": function, "backend": backend,
                 "cases": observations,

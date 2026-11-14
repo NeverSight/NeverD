@@ -605,10 +605,14 @@ division mips_div_hi,0x0085001a,mfhi
 division mips_divu_lo,0x0085001b,mflo
 division mips_divu_hi,0x0085001b,mfhi
 #ifdef WIDE
-division mips_ddiv_lo,0x0085001e,mflo
-division mips_ddiv_hi,0x0085001e,mfhi
-division mips_ddivu_lo,0x0085001f,mflo
-division mips_ddivu_hi,0x0085001f,mfhi
+#include "doubleword-division.S"
+.globl mips_ddiv_dead
+.type mips_ddiv_dead,@function
+mips_ddiv_dead:
+  ddiv $0,$4,$5
+  jr $31
+  addiu $2,$0,7
+.size mips_ddiv_dead,.-mips_ddiv_dead
 #endif
 
 .globl mips_div_dead
