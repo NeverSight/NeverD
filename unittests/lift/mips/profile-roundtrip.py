@@ -31,6 +31,19 @@ DSP64_BOUNDARIES = {
 
 
 def kernels():
+    for bank in range(1, 4):
+        setup = f"mthi $4,$ac{bank}\nmtlo $5,$ac{bank}\n"
+        for form in ("hi", "lo", "extract", "position", "shift_hi", "shift_lo"):
+            if form in ("hi", "lo"):
+                operation = f"mf{form} $2,$ac{bank}"
+            elif form == "extract":
+                operation = f"ori $6,$0,1\ndextrv.l $2,$ac{bank},$6"
+            elif form == "position":
+                operation = ("ori $6,$0,95\nwrdsp $6,1\nori $6,$0,63\n"
+                             f"dextpv $2,$ac{bank},$6")
+            else:
+                operation = f"dshilo $ac{bank},-64\nmf{form[-2:]} $2,$ac{bank}"
+            yield f"mips64bank{bank}_{form}", "mips64r2", "dsp", setup + operation
     for name, (op, count, pos, half) in DSP64_BOUNDARIES.items():
         setup = f"mthi $4\nmtlo $5\ndaddiu $6,$0,{count}\n"
         if op.startswith("dextp"):
@@ -149,7 +162,7 @@ def inputs(name, bits):
         for a in (0, 1, -1, 0x11223344, 0x8000000000000001)
         for b in (0, 7, -1, 0xA5A533FF)
     ]
-    if name.startswith(("mips64extract_", "mips64boundary_")):
+    if name.startswith(("mips64extract_", "mips64boundary_", "mips64bank")):
         values = (0, 1, 0x123456789abcdef0, (1 << 63) - 1, 1 << 63, (1 << 64) - 1)
         return [(a, b) for a in values for b in values]
     if name.startswith("mips64acc_"):
@@ -435,6 +448,22 @@ def run(args, artifacts):
                 oracle = directory / "classic.elf"
                 assemble(oracle, False)
             wanted = observe(oracle, bits, little, feature, cases)
+            if name.startswith("mips64bank"):
+                form = name.split("_", 1)[1]
+                mask = (1 << 64) - 1
+                for i, ((a, b), actual) in enumerate(zip(cases, wanted, strict=True)):
+                    control = 0x01004005 if i % 2 else 0
+                    if form in ("hi", "lo"):
+                        value = a if form == "hi" else b
+                    elif form == "extract":
+                        value = (((a << 64) | b) >> 1) & mask
+                    elif form == "position":
+                        value = (((a << 64) | b) >> 32) & mask
+                        control = (control & ~0x407f) | 95
+                    else:
+                        value = b if form == "shift_hi" else 0
+                    if actual != (value, control):
+                        raise ValueError(f"{name}: original {actual}, independent {(value, control)}")
             if name in DSP64_BOUNDARIES:
                 op, count, pos, half = DSP64_BOUNDARIES[name]
                 mask = (1 << 64) - 1

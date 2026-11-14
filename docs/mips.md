@@ -271,8 +271,10 @@ MIPS64r2/n64 uses the word and packed DSP/DSPR2 operations from revision 3.02
 of the MIPS64 DSP specification. Arithmetic consumes the low word of each
 accumulator half and sign-extends each written half independently. The four
 banked register transfers copy the entire GPR-width half. The pinned Unicorn
-model truncates transfers to nonzero banks on n64, so the non-word test vectors
-for these four transfers use the specification directly. Indexed
+preserves the full width in all four banks, including non-word values in
+AC1–AC3. These transfers are checked by independent expectations and
+original/generated execution. Discarded MFHI/MFLO results still require
+DSP enablement when they address a nonzero bank. Indexed
 memory instructions use the full address registers, including the DSP-only
 doubleword load `LDX`. Both C views preserve DSPControl under the n64 ABI.
 An n64 source return requires the complete eight-byte incoming link, including
@@ -309,14 +311,14 @@ the original forms and both C views, including mixed-width extraction helpers.
 The pinned Unicorn fixes legacy DEXTR's signed-LO shift, DEXTP's undefined
 host shifts and the DSHILO -64 endpoint. Original-machine comparisons cover
 negative LO, zero and full-width fields, fields wholly in HI, and the -64
-shift through both C views. Its dedicated AC0 regression constructs expected
-bits independently for every register count and position in both byte orders.
-The native boundary checks do not qualify nonzero-bank transfers, hardware,
+shift through both C views. Its dedicated regression constructs expected
+bits independently for every register count and position in all four banks
+and both byte orders. The native boundary checks do not qualify hardware
 or the remaining rounded/saturating legacy DEXTR and signed DMADD/DMSUB
 semantics. In n64 DSPControl,
 POS has seven bits and CCOND has eight. RDDSP zero-extends selected bits.
 See the register model and revision history in the
-[MIPS64 DSP Module, revision 3.02](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00375-2B-MIPS64DSP-AFP-03.02.pdf).
+[MIPS64 DSP Module, revision 3.02](https://docs.alexrp.com/mips/mips64_dsp_v3_02.pdf).
 
 Classic AC0 partial writes preserve the pre-R6 unread-result restriction:
 MULT/MULTU/DIV/DIVU and their doubleword forms establish pending
@@ -647,11 +649,12 @@ moves and the immediate mask operations share the vector register bank.
 BZ/BNZ test their predicate before the delay slot. The element forms test
 for any zero or all nonzero lanes, while .V tests the whole register.
 
-MSA requires classic or microMIPS32 Release 5/o32 ELF in either byte
+The o32 MSA profile requires classic or microMIPS32 Release 5 ELF in either byte
 order, with `.MIPS.abiflags` explicitly declaring MSA, 128-bit CPR1 registers
 and FP64 ABI tag 6. A reused decoder consumes the current revision as well as
 feature evidence; architecture-only initialization remains Release 2 without
-MSA. Other revisions, MSA64 and DSP/MSA combinations are refused.
+MSA. The n64 profile is described below. Other revisions and DSP/MSA
+combinations are refused.
 
 `FILL.W`, `INSERT.W`, `COPY_S.W`, all four B/H/W/D formats of `ADDV` and
 `SUBV`, `CEQ`, `CLT_S`/`CLT_U`, `CLE_S`/`CLE_U`, `MIN_S`/`MIN_U`,

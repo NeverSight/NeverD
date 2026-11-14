@@ -647,8 +647,8 @@ TEST_P(MIPSDSPRegisterWidth, BankMovesAndWordAccumulationHaveDifferentWidths) {
   const uint64_t Low = Wide ? 0xfedcba9876543210ull : 0x76543210u;
   E.setRegister(mipsreg::A0, High);
   E.setRegister(mipsreg::A1, Low);
-  // MD00375 rev 3.02 specifies full-width bank transfers. The 64-bit
-  // Unicorn DSP model sign-extends those transfers for nonzero banks.
+  // MD00375 rev 3.02 specifies full-width bank transfers; word arithmetic
+  // instead sign-extends each half of the accumulator independently.
   for (auto Word : {0x00801011u, 0x00a01013u, 0x00401010u, 0x00401812u})
     ASSERT_TRUE(executeDSP(D, GetParam(), Word, E));
   EXPECT_EQ(E.getRegister(mipsreg::V0), High);
