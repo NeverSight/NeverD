@@ -24068,6 +24068,16 @@ and DSPR2, the final DSPControl bits. The selected micro MSA integer kernel
 recompiles to scalar microMIPS. Its original vector instructions are checked
 against the classic encoding and the P5600.
 
+The `mips64extract_*` selections cover classic DSP64 extraction, insertion,
+signed accumulator shifts and DMTHLIP in both byte orders. The `mixed`
+selection retains both word and doubleword extraction helpers in one function.
+Each original return and DSPControl value must match independent integer
+arithmetic before the two C outputs are compiled at O0/O2. These original-machine
+cases deliberately avoid the pinned reference's signed-LO and boundary-shift
+defects; `MIPSDSP64.*` separately tests all encoded counts, positions, banks,
+overlaps and unpredictable results with APInt expectations. A passing source
+comparison is not original-machine qualification of those excluded boundaries.
+
 Run `micro-dsp-simulator.py` with `--assembler`, `--linker`, `--bench` and
 `--simulator` to execute the physical microMIPS DSP and DSPR2 instructions.
 Use a GNU MIPS simulator built for `mipsisa32r2-unknown-elf`. It compares two
