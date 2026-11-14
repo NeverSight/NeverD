@@ -11,6 +11,7 @@
 #define NEVERD_LIB_BACKEND_CODEGEN_MACHO_DEPENDENCYSTATE_H
 #include "neverd/object/MachOLayout.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
 
 #include <array>
@@ -76,6 +77,7 @@ public:
 };
 
 struct MachOUnwindFunctionCounts;
+struct MachOAuthenticatedFixup;
 
 /// A source image's section addresses can move together when an explicitly
 /// published zero-base dylib needs a larger TEXT mapping. The returned slide
@@ -99,9 +101,9 @@ readMachODependencyState(llvm::ArrayRef<uint8_t> Bytes,
                          MachOChainedFixups *Chained = nullptr);
 llvm::Error preserveMachODependencyState(const MachODependencyState &Before,
                                          const MachODependencyState &After);
-llvm::Error
-preserveMachODependencyState(const MachODependencyState &Before,
-                             const MachODependencyState &After,
-                             const std::map<std::string, uint64_t> &AddedTLS);
+llvm::Error preserveMachODependencyState(
+    const MachODependencyState &Before, const MachODependencyState &After,
+    const std::map<std::string, uint64_t> &AddedTLS,
+    llvm::ArrayRef<MachOAuthenticatedFixup> Fixups = {});
 } // namespace neverd
 #endif

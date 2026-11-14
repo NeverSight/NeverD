@@ -16,6 +16,7 @@
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/support/ISAEncoding.h"
 
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/MathExtras.h"
@@ -856,7 +857,13 @@ recoverImplicitFrame(const BinaryImage &Image,
     } else if (Declared) {
       Rule = *Declared;
     }
-    if (!Result.empty() && Result.back().CFARegister == Rule.CFARegister &&
+    const auto SP =
+        States[I] ? States[I]->Registers[kSP].StackOffset : std::nullopt;
+    const auto FP =
+        States[I] ? States[I]->Registers[kFP].StackOffset : std::nullopt;
+    if (!Result.empty() && Result.back().StackOffset == SP &&
+        Result.back().FramePointerOffset == FP &&
+        Result.back().CFARegister == Rule.CFARegister &&
         Result.back().CFAOffset == Rule.CFAOffset &&
         Result.back().Registers == Rule.Registers &&
         Result.back().Signing.State == Signing)
@@ -867,9 +874,49 @@ recoverImplicitFrame(const BinaryImage &Image,
          Rule.CFAOffset,
          Rule.Registers,
          {Signing ? AArch64RAQueryStatus::Known : AArch64RAQueryStatus::Unknown,
-          Signing, Signing ? nullptr : kUnknown}});
+          Signing, Signing ? nullptr : kUnknown},
+         SP,
+         FP});
   }
   return Result;
+}
+
+// At a synchronous throwing call the personality can rely on preserved
+// registers and memory. A preceding straight-line setup or unconditional
+// branch can select that same landing pad if it leaves all of them intact.
+// Never cross a row boundary, a different action or an instruction with
+// memory side effects. A spill reload is restricted to this live stack frame.
+bool isTransparentCallSetup(const DecodedInsn &I,
+                            const AArch64RecoveredUnwindRow &Row) {
+  const auto &D = I.Raw->detail->aarch64;
+  if (I.Raw->alias_id == AARCH64_INS_ALIAS_NOP)
+    return true;
+  const bool Move =
+      I.Id == AARCH64_INS_MOV || I.Raw->alias_id == AARCH64_INS_ALIAS_MOV;
+  if (!Move && I.Id != AARCH64_INS_LDR && I.Id != AARCH64_INS_LDUR)
+    return false;
+  if (D.op_count != 2 || I.Raw->detail->writeback || D.post_index ||
+      D.operands[0].type != AARCH64_OP_REG)
+    return false;
+  const auto Target = reg(D.operands[0].reg);
+  if (!Target || *Target > kLastDarwinScratch)
+    return false;
+  const auto &Source = D.operands[1];
+  if (Move)
+    return Source.type == AARCH64_OP_IMM ||
+           (Source.type == AARCH64_OP_REG && reg(Source.reg));
+  if (!Row.StackOffset || Source.type != AARCH64_OP_MEM ||
+      Source.mem.index != AARCH64_REG_INVALID)
+    return false;
+  auto Base = Row.StackOffset;
+  if (Source.mem.base == AARCH64_REG_FP && Row.FramePointerOffset)
+    Base = Row.FramePointerOffset;
+  else if (Source.mem.base != AARCH64_REG_SP)
+    return false;
+  const auto Offset = add(Base, Source.mem.disp);
+  const int64_t Width =
+      wide(D.operands[0].reg) ? sizeof(uint64_t) : sizeof(uint32_t);
+  return Offset && *Offset >= *Row.StackOffset && *Offset <= -Width;
 }
 
 } // namespace
@@ -989,30 +1036,78 @@ prepareDarwinArm64eExceptionSite(const BinaryImage &Image,
   auto Begin = Range.Begin + Row.CodeOffset;
   auto End = Next == Rows.end() ? Range.End : Range.Begin + Next->CodeOffset;
   bool AtCall = false;
+  va_t Return = 0;
   if (!Function.describesUnwindOnly()) {
     if (Function.ParseStatus != ExceptionParseStatus::Complete ||
         !Function.Itanium || !Function.Itanium->IsCallSiteAddressForm ||
         !hasDarwinCallSitePersonality(Function.Personality))
       return std::nullopt;
     const auto &Sites = Function.Itanium->CallSites;
-    const auto Site = llvm::find_if(
-        Sites, [&](const auto &S) { return S.GuardedRange.contains(PC); });
-    if (Site == Sites.end() || !Range.contains(Site->GuardedRange))
+    const auto Lookup = [&](va_t At) {
+      return llvm::find_if(
+          Sites, [&](const auto &S) { return S.GuardedRange.contains(At); });
+    };
+    const auto Initial = Lookup(PC);
+    auto Protected = Sites.end();
+    auto At = PC;
+    Decoder Decode;
+    if (!Decode.init(Image))
       return std::nullopt;
-    Begin = std::max(Begin, Site->GuardedRange.Begin);
-    End = std::min(End, Site->GuardedRange.End);
-    if (Site->LandingPadVA) {
-      // The personality looks up LR - 1. Only a real throwing call boundary
-      // has the compiler's promised live values for its landing pad.
-      const auto *Code = Image.readVA(PC, Width);
-      Decoder Decode;
-      DecodedInsn I{};
-      if (!Plan->Frame.SavedLR || End - PC < Width || !Code ||
-          !Range.contains(Site->LandingPadVA) || !Decode.init(Image) ||
-          Decode.decodeOne(Code, Width, PC, I) != int(Width) || !I.Raw ||
-          !cs_insn_group(Decode.getHandle(), I.Raw, CS_GRP_CALL))
+    llvm::SmallDenseSet<va_t, 8> Visited;
+    for (;;) {
+      const auto Site = Lookup(At);
+      if (Site != Sites.end() && !Range.contains(Site->GuardedRange))
         return std::nullopt;
-      AtCall = true;
+      if (Site != Sites.end() && Site->LandingPadVA) {
+        if (!Plan->Frame.SavedLR || !Range.contains(Site->LandingPadVA) ||
+            (Protected != Sites.end() && Protected != Site))
+          return std::nullopt;
+        Protected = Site;
+      } else if (Protected != Sites.end()) {
+        break;
+      }
+      const auto *Code = Image.readVA(At, Width);
+      DecodedInsn I{};
+      if (!Code || Decode.decodeOne(Code, Width, At, I) != int(Width) ||
+          !I.Raw || !I.Raw->detail)
+        return std::nullopt;
+      if (cs_insn_group(Decode.getHandle(), I.Raw, CS_GRP_CALL)) {
+        // Outside a protected range the next call may belong to a newly
+        // entered lexical scope. Only its own return edge, looping directly
+        // back to it through transparent instructions, proves the same action.
+        if (Site != Sites.end() && Site->LandingPadVA &&
+            (Initial == Site || At + Width == PC) &&
+            Site->GuardedRange.End - At >= Width && End - At >= Width) {
+          AtCall = true;
+          Begin = PC;
+          End = PC + Width;
+          if (At != PC)
+            Return = LoadedFrameStart + (At - Range.Begin) + Width;
+        }
+        break;
+      }
+      if (!Plan->Frame.SavedLR || !Visited.insert(At).second ||
+          Visited.size() >= kMaxInstructions)
+        break;
+      va_t NextPC;
+      const auto &D = I.Raw->detail->aarch64;
+      if (I.Id == AARCH64_INS_B && D.op_count == 1 &&
+          D.operands[0].type == AARCH64_OP_IMM &&
+          (D.cc == AArch64CC_Invalid || D.cc == AArch64CC_AL))
+        NextPC = D.operands[0].imm;
+      else if (isTransparentCallSetup(I, Row))
+        NextPC = At + Width;
+      else
+        break;
+      if (NextPC < Begin || NextPC >= End || NextPC % Width)
+        break;
+      At = NextPC;
+    }
+    if (!AtCall) {
+      if (Initial == Sites.end() || Initial->LandingPadVA)
+        return std::nullopt;
+      // Only the queried instruction was considered for forwarding. An
+      // adjacent PC may have its own proved path to a protected call.
       Begin = PC;
       End = PC + Width;
     }
@@ -1021,7 +1116,7 @@ prepareDarwinArm64eExceptionSite(const BinaryImage &Image,
     return std::nullopt;
   return NDDarwinArm64eExceptionSite{LoadedFrameStart + (Begin - Range.Begin),
                                      LoadedFrameStart + (End - Range.Begin),
-                                     AtCall};
+                                     AtCall, Return};
 }
 
 AArch64AnalyzedUnwindSigning

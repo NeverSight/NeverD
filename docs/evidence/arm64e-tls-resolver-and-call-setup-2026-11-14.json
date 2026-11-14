@@ -1,0 +1,50 @@
+{
+  "source_revision": "079672a3cc7a284a4ca95a47ce74ce0f7203d108",
+  "pull_request": "https://github.com/NeverSight/NeverD/pull/2349",
+  "published_image_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43462907219",
+  "llvm_fork_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+  "host_sha256": "60ebac9b50739d535976ddb302f30838517b36d929490e78104a2d7b70ce9b96",
+  "results_per_host": {
+    "macos-26": {
+      "hardware": "Apple M1 (Virtual)",
+      "os": [
+        "ProductName:\t\tmacOS",
+        "ProductVersion:\t\t26.7.2",
+        "BuildVersion:\t\t25G332"
+      ],
+      "tests": 40,
+      "native_image_executions": 62,
+      "cxx_signal_deliveries": 24,
+      "objc_signal_deliveries": 24,
+      "new_tls_lifecycles": 8,
+      "x1_outcome": "slice-unavailable",
+      "native_cpta": false,
+      "native_checked_writeback": false
+    },
+    "xcode-27": {
+      "hardware": "Apple M1 (Virtual)",
+      "os": [
+        "ProductName:\t\tmacOS",
+        "ProductVersion:\t\t27.0.1",
+        "BuildVersion:\t\t26A434"
+      ],
+      "tests": 40,
+      "native_image_executions": 62,
+      "cxx_signal_deliveries": 24,
+      "objc_signal_deliveries": 24,
+      "new_tls_lifecycles": 8,
+      "x1_outcome": "did-not-start",
+      "native_cpta": false,
+      "native_checked_writeback": false
+    }
+  },
+  "scope": [
+    "Legacy initializer arrays, original and appended thread-local pointer templates, four PAC keys, zero and nonzero diversity, two workers and the initial thread.",
+    "A language exception delivered after sigreturn at a protected call, in a forwarding leaf or along a proved path to the same protected call."
+  ],
+  "remaining": [
+    "Hardware-checked x1 arithmetic and writeback on an eligible Apple device.",
+    "Unmanaged exception propagation from arbitrary interruption sites and across unsupported landing-pad state.",
+    "General publication of lifted images beyond the admitted function, ABI and relocation profiles."
+  ]
+}

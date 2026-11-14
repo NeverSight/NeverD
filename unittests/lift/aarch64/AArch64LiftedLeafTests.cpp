@@ -29,6 +29,7 @@
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/Object/MachO.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -922,6 +923,9 @@ TEST(AArch64LiftedImage, SignedFrameCallsImportBeforeReadingOriginalGlobal) {
   verifyPublishedLeaves(kGlobalLeaves, kGlobalCaller, kSource, kFramedImport,
                         LeafCheck::FramedImport);
 }
+TEST(AArch64LiftedImage, PublishesByteReversalAndTrailingZeroCount) {
+  verifyPublishedLeaves(kBitLeaves, kBitCaller);
+}
 TEST(AArch64LiftedImage, PublishesMultiplyAccumulateAndVariableShift) {
   verifyPublishedLeaves(kMultiplyLeaves, kMultiplyCaller);
 }
@@ -1074,6 +1078,140 @@ TEST(AArch64LiftedImage, PublishesNewThreadLocalDefinitionsAndInitializers) {
   GTEST_SKIP() << kUnavailable;
 #endif
 }
+TEST(AArch64LiftedImage, RunsLegacyThreadInitializersWithPerInstancePAC) {
+#if defined(__APPLE__) && defined(__aarch64__)
+  llvm::SmallString<128> Dir;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kTemporary, Dir));
+  const std::filesystem::path Root(Dir.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Source = (Root / kNewTLSFile).string(),
+             Base = (Root / kNewTLSImage).string(),
+             DriverSource = (Root / kNewTLSDriverFile).string(),
+             Driver = (Root / kDriver).string(),
+             Reference = (Root / kTLVProvider).string(),
+             Input = (Root / kOriginal).string(),
+             Output = (Root / kOutput).string(),
+             Object = (Root / kTLVObject).string();
+  std::ofstream(Source) << kPerThreadBody;
+  std::ofstream(Base) << kPerThreadBase;
+  std::ofstream(DriverSource) << kPerThreadDriver;
+  auto Reader = Loader::create(BinaryFormat::MachO);
+  unsigned Runs = 0;
+  for (const auto *Opt : {kUnoptimized, kOptimize}) {
+    for (bool Old : {false, true}) {
+      SCOPED_TRACE(Opt);
+      SCOPED_TRACE(Old);
+      const auto Compile = [&](llvm::ArrayRef<llvm::StringRef> Args) {
+        llvm::SmallVector<llvm::StringRef> Cmd{kTLSCxx, kTargetFlag, kTarget,
+                                               Opt};
+        if (Old)
+          Cmd.push_back(kTLSWithOriginal);
+        Cmd.append(Args.begin(), Args.end());
+        return llvm::sys::ExecuteAndWait(kTLSCxx, Cmd);
+      };
+      ASSERT_EQ(Compile({kDylib, Base, kOut, Input}), 0);
+      ASSERT_EQ(Compile({kDylib, kTLSReference, Base, Source, kOut, Reference}),
+                0);
+      ASSERT_EQ(Compile({DriverSource, kOut, Driver}), 0);
+      // Recent ld64 versions turn this obsolete section into S_REGULAR.
+      // Restore its historical type while retaining the real linked fixups.
+      if (Old) {
+        auto File = llvm::MemoryBuffer::getFile(Input);
+        ASSERT_TRUE(bool(File));
+        auto Obj = llvm::object::ObjectFile::createObjectFile(
+            (*File)->getMemBufferRef());
+        ASSERT_TRUE(bool(Obj)) << llvm::toString(Obj.takeError());
+        const auto &M = llvm::cast<llvm::object::MachOObjectFile>(**Obj);
+        std::optional<uint64_t> FlagsAt;
+        for (const auto &LC : M.load_commands()) {
+          if (LC.C.cmd != llvm::MachO::LC_SEGMENT_64)
+            continue;
+          const auto Segment = M.getSegment64LoadCommand(LC);
+          for (unsigned I = 0; I != Segment.nsects; ++I) {
+            const auto Sec = M.getSection64(LC, I);
+            if (llvm::StringRef(Sec.sectname, sizeof(Sec.sectname))
+                    .rtrim(char(0)) == kLegacyInitSection)
+              FlagsAt = LC.Ptr - (*File)->getBufferStart() + sizeof(Segment) +
+                        I * sizeof(Sec) +
+                        offsetof(llvm::MachO::section_64, flags);
+          }
+        }
+        ASSERT_TRUE(FlagsAt);
+        std::string Data = (*File)->getBuffer().str();
+        auto *Flags = reinterpret_cast<uint8_t *>(Data.data()) + *FlagsAt;
+        writeLE<uint32_t>(
+            Flags, (readLE<uint32_t>(Flags) & ~llvm::MachO::SECTION_TYPE) |
+                       llvm::MachO::S_THREAD_LOCAL_INIT_FUNCTION_POINTERS);
+        std::ofstream(Input, std::ios::binary).write(Data.data(), Data.size());
+        ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                      kCodesign, {kCodesign, kRemoveSignature, Input}),
+                  0);
+      }
+      auto Original = Reader->load(Input);
+      ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+      const auto *Entry = Original->findSymbol(kTLVSymbol);
+      ASSERT_TRUE(Entry);
+      const SourcePatchMapping Map{kTLVMapping, Entry->Addr};
+      ASSERT_EQ(Compile({kTLVCompile, Source, kOut, Object}), 0);
+      auto Bytes = llvm::MemoryBuffer::getFile(Object);
+      ASSERT_TRUE(bool(Bytes));
+      auto Patch = installMachOObjectPatch((*Bytes)->getBuffer(), *Original,
+                                           {Map}, {}, Output, {});
+      ASSERT_TRUE(bool(Patch)) << llvm::toString(Patch.takeError());
+      auto Published = Reader->load(Output);
+      ASSERT_TRUE(bool(Published)) << llvm::toString(Published.takeError());
+      unsigned Anchors = 0;
+      for (const auto &S : Published->Sections) {
+        auto Kind = S.Type & llvm::MachO::SECTION_TYPE;
+        EXPECT_NE(Kind, llvm::MachO::S_THREAD_LOCAL_INIT_FUNCTION_POINTERS);
+        if (Kind != llvm::MachO::S_THREAD_LOCAL_VARIABLES)
+          continue;
+        EXPECT_EQ(S.Size, kTLVDescriptorWords * sizeof(uint64_t));
+        auto Slot = Published->MachOAuthenticatedPointers.find(S.VA);
+        ASSERT_NE(Slot, Published->MachOAuthenticatedPointers.end());
+        EXPECT_EQ(Slot->second.Symbol, kTLVResolverSymbol);
+        ++Anchors;
+      }
+      EXPECT_EQ(Anchors, 1u);
+      auto Trace = llvm::find_if(Published->Exports, [](const auto &E) {
+        return E.Name == kTraceSymbol;
+      });
+      ASSERT_NE(Trace, Published->Exports.end());
+      auto Resolver = Published->MachOAuthenticatedPointers.find(Trace->Addr);
+      ASSERT_NE(Resolver, Published->MachOAuthenticatedPointers.end());
+      EXPECT_TRUE(Resolver->second.Symbol.empty());
+      EXPECT_TRUE(Published->isCodeAddress(Resolver->second.Target));
+      if (std::getenv(kExecute)) {
+        if (Old)
+          ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                        kCodesign, {kCodesign, kSign, kAdHocIdentity, Output}),
+                    0);
+        for (const auto &Image : {Reference, Output}) {
+          SCOPED_TRACE(Image);
+          ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                        Driver, {Driver, Image, std::to_string(Old)}),
+                    0);
+          ++Runs;
+        }
+      }
+      ASSERT_TRUE(std::filesystem::remove(Output));
+      ASSERT_EQ(Compile({kInvalidTLSInit, kTLVCompile, Source, kOut, Object}),
+                0);
+      Bytes = llvm::MemoryBuffer::getFile(Object);
+      ASSERT_TRUE(bool(Bytes));
+      auto Invalid = installMachOObjectPatch((*Bytes)->getBuffer(), *Original,
+                                             {Map}, {}, Output, {});
+      ASSERT_FALSE(bool(Invalid));
+      llvm::consumeError(Invalid.takeError());
+      EXPECT_FALSE(std::filesystem::exists(Output));
+    }
+  }
+  RecordProperty(kPerThreadProperty, Runs);
+#else
+  GTEST_SKIP() << kUnavailable;
+#endif
+}
+
 TEST(AArch64LiftedImage, PublishedThreadLocalAccessUsesTheBoundDescriptor) {
 #if defined(__APPLE__) && defined(__aarch64__)
   llvm::SmallString<128> Directory;

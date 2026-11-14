@@ -38,6 +38,7 @@
 #include "llvm/Transforms/Scalar/InstSimplifyPass.h"
 #include "llvm/Transforms/Scalar/SROA.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/Local.h"
 
 #include <tuple>
 
@@ -85,6 +86,20 @@ std::optional<unsigned> clearedRegister(uint32_t Word) {
       (Operation != kMoveWideZero && Operation != kMoveFromZero))
     return std::nullopt;
   return Rd;
+}
+
+// Match the lifter's shift-and-mask expansion by bit provenance. A partial
+// intermediate must stay intact until the complete permutation is examined.
+void canonicalizeRegisterReversals(llvm::Function &F) {
+  for (auto &Block : F) {
+    for (auto &I : llvm::reverse(Block)) {
+      if (I.use_empty() || I.getOpcode() != llvm::Instruction::Or)
+        continue;
+      llvm::SmallVector<llvm::Instruction *, 4> Inserted;
+      if (llvm::recognizeBSwapOrBitReverseIdiom(&I, true, true, Inserted))
+        I.replaceAllUsesWith(Inserted.back());
+    }
+  }
 }
 
 bool equivalentLeafWord(uint32_t Original, uint32_t Emitted) {
@@ -921,9 +936,13 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
     // overflow guard when its predicate is provably constant after SROA.
     Cleanup.addPass(llvm::InstSimplifyPass());
     Cleanup.addPass(llvm::DCEPass());
-    for (auto &F : *Candidate)
-      if (!F.isDeclaration())
-        Cleanup.run(F, Analyses);
+    for (auto &F : *Candidate) {
+      if (F.isDeclaration())
+        continue;
+      Cleanup.run(F, Analyses);
+      canonicalizeRegisterReversals(F);
+      llvm::DCEPass().run(F, Analyses);
+    }
   }
   auto Object =
       Codegen().compile(*Candidate, Image.Arch, Image.Format, *Triple);

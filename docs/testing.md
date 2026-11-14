@@ -1928,7 +1928,12 @@ and published code at O0 and O2, on the ordinary and alternate stacks. They
 check object identity, cleanup order and the restored signal mask. Set
 `NEVERD_ARM64E_LIFTED_NATIVE=1` to execute the TLS lifecycle and lifted
 arithmetic controls. The TLS cases compare against a compiler-linked dylib,
-including a pre-existing TLS template and thread-exit callbacks. See the
+including a pre-existing TLS template and thread-exit callbacks.
+`RunsLegacyThreadInitializersWithPerInstancePAC` compares a compiler-linked
+per-thread reference with the published dylib at O0 and O2. Three threads
+exercise old and new descriptors, recursive initializers, all four PAC keys
+and the TLV calling convention. The signal tests also interrupt a proved
+path back to a protected call on both ordinary and alternate stacks. See the
 [publication and signal-delivery checks](arm64e-native-validation.md#signal-delivery-language-cleanup-and-new-thread-local-storage).
 
 `NeverDArm64eUnwindRecoveryTests` runs without Apple hardware. It checks

@@ -473,6 +473,8 @@ int main(int argc, char **argv) {
       strtoull(argv[3], nullptr, 10);
   site.Begin += owner;
   site.End += owner;
+  if (site.ProtectedReturn)
+    site.ProtectedReturn += owner;
   alternate = atoi(argv[4]) != 0;
   int expected = atoi(argv[5]);
   target = pthread_self();

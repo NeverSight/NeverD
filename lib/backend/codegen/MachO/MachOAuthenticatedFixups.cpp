@@ -9,6 +9,7 @@
 
 #include "neverd/backend/codegen/MachO/MachOAuthenticatedFixups.h"
 
+#include "MachOArm64eABI.h"
 #include "MachODependencyState.h"
 
 #include "neverd/backend/codegen/BinaryRewriter.h"
@@ -442,6 +443,29 @@ static llvm::Error installFixups(std::vector<uint8_t> &Binary,
   llvm::sort(Requests, [](const auto *Left, const auto *Right) {
     return Left->Address < Right->Address;
   });
+  std::vector<MachOAuthenticatedFixup> Bootstrap;
+  for (const auto *F : Requests) {
+    if (!F->ReplacesTLVBootstrap)
+      continue;
+    const auto Lib =
+        llvm::find(Chains.Libraries, macho_arm64e_abi::kTLVProvider);
+    if (Lib == Chains.Libraries.end())
+      return fail(kRecipe);
+    MachOAuthenticatedPointer Old;
+    Old.Symbol = macho_arm64e_abi::kTLVBootstrap;
+    Old.Module = *Lib;
+    Old.LibraryOrdinal = Lib - Chains.Libraries.begin() + 1;
+    Bootstrap.push_back({F->Address, std::move(Old)});
+  }
+  if (!Bootstrap.empty())
+    if (auto Error = replay(Chains, Bootstrap))
+      return Error;
+  // Indices remain valid when new words are appended to a segment.
+  std::map<uint64_t, size_t> OldIndices;
+  if (!Bootstrap.empty())
+    for (const auto &Seg : Chains.Segments)
+      for (auto [I, Slot] : llvm::enumerate(Seg.Slots))
+        OldIndices.emplace(Seg.VMAddr + Slot.Offset, I);
   for (const auto *Fixup : Requests) {
     const auto Owner = segmentFor(Chains, Index, Fixup->Address);
     if (!Owner)
@@ -463,7 +487,10 @@ static llvm::Error installFixups(std::vector<uint8_t> &Binary,
       return Word.takeError();
     Segment.PointerFormat = PointerFormat;
     Segment.PageSize = Page;
-    Segment.Slots.push_back({Offset, *Word});
+    if (Fixup->ReplacesTLVBootstrap)
+      Segment.Slots[OldIndices.at(Fixup->Address)].Raw = *Word;
+    else
+      Segment.Slots.push_back({Offset, *Word});
   }
 
   auto Candidate = Binary;
@@ -702,7 +729,7 @@ static llvm::Error installFixups(std::vector<uint8_t> &Binary,
   auto After = readMachODependencyState(Candidate, &Installed);
   if (!After)
     return After.takeError();
-  if (auto Error = preserveMachODependencyState(*Before, *After))
+  if (auto Error = preserveMachODependencyState(*Before, *After, {}, Fixups))
     return Error;
   if (auto Error = replay(Installed, Fixups))
     return Error;
