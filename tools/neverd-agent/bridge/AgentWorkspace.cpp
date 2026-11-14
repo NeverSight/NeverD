@@ -10,6 +10,7 @@
 
 #include "client/AgentProtocol.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QVariant>
 #include <limits>
@@ -19,6 +20,10 @@
 
 namespace neverd::agent {
 namespace {
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(neverd::agent::AgentWorkspace)
+};
+
 template <typename T>
 std::optional<std::remove_cvref_t<T>> decodeArgument(const QJsonValue &value) {
   using Type = std::remove_cvref_t<T>;
@@ -82,12 +87,14 @@ bool initializeWorkspace(AgentController &controller, QLockFile &lock,
                          const QString &project, QString &error) {
   const auto directory = controller.dataDirectory();
   if (!QDir().mkpath(directory)) {
-    error = QObject::tr("无法创建应用数据目录：%1").arg(directory);
+    error = Text::tr("Cannot create the application data directory: %1")
+                .arg(directory);
     return false;
   }
   if (!lock.tryLock()) {
-    error =
-        QObject::tr("此数据目录已有 Agent 运行，或无法写入：%1").arg(directory);
+    error = Text::tr("Agent is already running with this data directory, or "
+                     "the directory cannot be written: %1")
+                .arg(directory);
     return false;
   }
   if (!controller.initialize(error))
@@ -101,7 +108,7 @@ bool initializeWorkspace(AgentController &controller, QLockFile &lock,
   const bool opened = controller.openProject(project);
   QObject::disconnect(connection);
   if (!opened && error.isEmpty())
-    error = QObject::tr("无法打开 Agent 项目：%1").arg(project);
+    error = Text::tr("Cannot open the Agent project: %1").arg(project);
   return opened;
 }
 

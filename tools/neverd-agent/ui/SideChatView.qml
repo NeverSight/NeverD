@@ -28,20 +28,20 @@ ColumnLayout {
             Layout.fillWidth: true
             textRole: "label"; valueRole: "id"
             model: view.backend.sideChats.map(item => ({id: item.id, label:
-                item.title + (view.chatsWaiting.some(request => request.sideChatId === item.id)
-                    ? qsTr(" · 待审批") : "")}))
+                view.chatsWaiting.some(request => request.sideChatId === item.id)
+                    ? qsTr("%1 · Waiting for approval").arg(item.title) : item.title}))
             onModelChanged: Qt.callLater(view.syncChooser)
             onActivated: view.backend.selectSideChat(currentValue)
-            Accessible.name: qsTr("侧边聊天历史")
+            Accessible.name: qsTr("Side chat history")
         }
-        ActionButton { glyph: "plus"; hint: qsTr("从当前主对话新建侧边聊天"); onClicked: view.backend.createSideChat() }
+        ActionButton { glyph: "plus"; hint: qsTr("New side chat from the main conversation"); onClicked: view.backend.createSideChat() }
     }
     ActionButton {
         Layout.fillWidth: true
         glyph: view.showInherited ? "chevron_down" : "chevron_right"
         text: view.chat && view.chat.inheritedMessages.length > 0
-              ? qsTr("已继承主对话 · %1 条消息").arg(view.chat.inheritedMessages.length)
-              : qsTr("主对话暂无历史 · 在这里独立展开")
+              ? qsTr("Inherited from the main conversation · Messages: %1").arg(view.chat.inheritedMessages.length)
+              : qsTr("No main conversation history · Starts independently here")
         enabled: view.chat && view.chat.inheritedMessages.length > 0
         font.pointSize: Theme.smallPointSize
         palette.buttonText: Theme.secondary
@@ -50,7 +50,7 @@ ColumnLayout {
         ThemedToolTip {
             visible: parent.hovered
             text: view.chat && view.chat.forkedAt
-                ? qsTr("继承于 %1。后续两边独立继续，侧边回答可引用回主对话。").arg(new Date(view.chat.forkedAt).toLocaleString(Qt.locale(), Locale.ShortFormat)) : ""
+                ? qsTr("Inherited on %1. Both conversations continue separately, and side answers can be quoted back into the main conversation.").arg(new Date(view.chat.forkedAt).toLocaleString(Qt.locale(), Locale.ShortFormat)) : ""
         }
     }
     ChatTranscript {
@@ -64,7 +64,7 @@ ColumnLayout {
         Label {
             anchors.centerIn: parent; width: parent.width - 24
             visible: (!view.chat || view.chat.messages.length === 0) && !view.showInherited
-            text: qsTr("带着主对话的上下文，\n在这里继续聊一个支线问题。")
+            text: qsTr("Explore a side question here, with the main conversation's context.")
             horizontalAlignment: Text.AlignHCenter
             color: Theme.secondary; wrapMode: Text.Wrap; lineHeight: 1.5
         }
@@ -102,7 +102,7 @@ ColumnLayout {
                     id: composer
                     objectName: "sideChatComposer"
                     enabled: view.chat !== null
-                    placeholderText: qsTr("另一个问题…")
+                    placeholderText: qsTr("Another question…")
                     placeholderTextColor: Theme.quiet; color: Theme.text
                     selectByMouse: true; wrapMode: TextEdit.Wrap; background: null
                     onTextChanged: {
@@ -114,31 +114,31 @@ ColumnLayout {
             }
                 RowLayout {
                     Layout.fillWidth: true
-                    ActionButton { glyph: "plus"; hint: qsTr("添加上下文"); onClicked: view.contextRequested() }
+                    ActionButton { glyph: "plus"; hint: qsTr("Add context…"); onClicked: view.contextRequested() }
                 Label {
-                    text: view.objectApproval ? qsTr("等待审批")
-                          : view.chat && view.chat.running ? qsTr("分析中…") : qsTr("侧边聊天")
+                    text: view.objectApproval ? qsTr("Waiting for approval")
+                          : view.chat && view.chat.running ? qsTr("Analyzing…") : qsTr("Side chat")
                     color: Theme.quiet; font.pointSize: Theme.smallPointSize
                 }
                 Item { Layout.fillWidth: true }
                 ContextMeter { usage: view.chat ? view.chat.contextUsage : ({}) }
-                ActionButton { visible: view.chat && view.chat.running; glyph: "stop"; hint: qsTr("停止并暂停队列"); onClicked: view.chat.cancel() }
+                ActionButton { visible: view.chat && view.chat.running; glyph: "stop"; hint: qsTr("Stop and pause the queue"); onClicked: view.chat.cancel() }
                 ActionButton {
                     glyph: view.chat && view.chat.running ? "clock" : "send"
                     hint: view.chat && view.chat.running
-                          ? qsTr("回车排到下一轮 · Shift+回车换行")
-                          : qsTr("回车发送 · Shift+回车换行")
+                          ? qsTr("Enter to queue for the next round · Shift+Enter for a new line")
+                          : qsTr("Enter to send · Shift+Enter for a new line")
                     enabled: composer.canSubmit
                     onClicked: composer.submitRequested()
                 }
                 ActionButton {
                     visible: view.chat && view.chat.running
-                    glyph: "chevron_down"; hint: qsTr("发送方式"); enabled: composer.text.trim().length > 0
+                    glyph: "chevron_down"; hint: qsTr("Send options"); enabled: composer.text.trim().length > 0
                     onClicked: sideSendMode.open()
                     ThemedMenu {
                         id: sideSendMode; y: -height - 8
-                        ThemedMenuItem { text: qsTr("补充当前任务"); onTriggered: view.backend.submitSideRequest("steer") }
-                        ThemedMenuItem { text: qsTr("排到下一轮"); onTriggered: view.backend.submitSideRequest("queue") }
+                        ThemedMenuItem { text: qsTr("Add to the current task"); onTriggered: view.backend.submitSideRequest("steer") }
+                        ThemedMenuItem { text: qsTr("Queue for the next round"); onTriggered: view.backend.submitSideRequest("queue") }
                     }
                 }
             }

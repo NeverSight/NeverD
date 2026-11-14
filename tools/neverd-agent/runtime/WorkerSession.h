@@ -1,5 +1,4 @@
-//===- WorkerSession.h - Revision-bound ND command client --------*- C++
-//-*-===//
+//===- WorkerSession.h - Revision-bound ND command client -------*- C++ -*-===//
 //
 // NeverD Decompiler
 //

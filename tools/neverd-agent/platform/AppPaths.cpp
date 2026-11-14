@@ -1,5 +1,4 @@
-//===- AppPaths.cpp - Portable Agent paths
-//---------------------------------===//
+//===- AppPaths.cpp - Portable Agent paths --------------------------------===//
 //
 // NeverD Decompiler
 //
@@ -21,6 +20,37 @@ namespace neverd::agent {
 QString localPath(const QString &pathOrUrl) {
   const QUrl url(pathOrUrl);
   return QDir::cleanPath(url.isLocalFile() ? url.toLocalFile() : pathOrUrl);
+}
+
+bool isRemotePath(const QString &path) {
+  const QString text = path.trimmed();
+  // Both separators: Windows reads "\\host", "//host", "\\/host" and
+  // "/\\host" alike.
+  const auto separator = [&text](int index) {
+    return text.size() > index && (text[index] == QLatin1Char('/') ||
+                                   text[index] == QLatin1Char('\\'));
+  };
+  if (separator(0) && separator(1))
+    return true;
+  const QUrl url(text);
+  return url.scheme().compare(QLatin1String("file"), Qt::CaseInsensitive) ==
+             0 &&
+         !url.host().isEmpty() &&
+         url.host().compare(QLatin1String("localhost"), Qt::CaseInsensitive) !=
+             0;
+}
+
+bool isContainedRelativePath(const QString &relative) {
+  QString path = relative.trimmed();
+  path.replace(QLatin1Char('\\'), QLatin1Char('/'));
+  if (path.isEmpty() || isRemotePath(relative) ||
+      path.startsWith(QLatin1Char('/')) || QDir::isAbsolutePath(path) ||
+      (path.size() >= 2 && path[1] == QLatin1Char(':')))
+    return false;
+  for (const auto &step : path.split(QLatin1Char('/')))
+    if (step == QLatin1String(".."))
+      return false;
+  return true;
 }
 
 QString agentHome(const QString &overridePath) {

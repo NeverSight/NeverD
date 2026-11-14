@@ -1,5 +1,4 @@
-//===- ModelTests.cpp - Model protocol and execution contracts
-//-------------===//
+//===- ModelTests.cpp - Model protocol and execution contracts ------------===//
 //
 // NeverD Decompiler
 //
@@ -11,6 +10,7 @@
 #include "app/AgentController.h"
 #include "models/Credentials.h"
 #include "models/ProviderCodec.h"
+#include "platform/Translation.h"
 #include "runtime/AgentLoop.h"
 #include "runtime/ResearchRuntime.h"
 
@@ -511,6 +511,10 @@ private slots:
     QVERIFY(done[0][2].toBool());
   }
   void persistentGoalContinuesAndCompletes() {
+    // Goal rounds have no user message to follow, so their English
+    // instructions name the interface language for the reply.
+    installTranslations("ja");
+    const auto restoreLanguage = qScopeGuard([] { installTranslations("en"); });
     Server server;
     QTemporaryDir directory;
     AgentController controller(directory.filePath("global"));
@@ -550,6 +554,9 @@ private slots:
                                            : "First step done")));
     }
     QTRY_COMPARE(controller.goal()["status"].toString(), "completed");
+    for (const int request : {0, 2})
+      QVERIFY(server.Requests[request]["instructions"].toString().contains(
+          "Japanese"));
     QCOMPARE(controller.goal()["rounds"].toInt(), 2);
     QCOMPARE(controller.goal()["usedTokens"].toLongLong(), 76);
     QCOMPARE(controller.goal()["pendingTokens"].toLongLong(), 0);

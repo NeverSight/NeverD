@@ -14,13 +14,16 @@ ToolButton {
     function number(value) { return Number(value || 0).toLocaleString(Qt.locale(), 'f', 0) }
     function compactNumber(value) {
         const v = Number(value || 0)
-        return v >= 1e6 ? (v / 1e6).toFixed(2) + "M" : v >= 1e3 ? (v / 1e3).toFixed(1) + "k" : String(v)
+        // Thousands and millions of tokens, with the language's own marks.
+        return v >= 1e6 ? qsTr("%1M").arg(Number(v / 1e6).toLocaleString(Qt.locale(), "f", 2))
+             : v >= 1e3 ? qsTr("%1k").arg(Number(v / 1e3).toLocaleString(Qt.locale(), "f", 1))
+             : Number(v).toLocaleString(Qt.locale(), "f", 0)
     }
     implicitWidth: 32
     implicitHeight: 32
     hoverEnabled: true
     padding: 5
-    text: usage.compacting ? qsTr("正在压缩上下文") : known ? qsTr("当前上下文 %1 tokens，距压缩还剩 %2").arg(number(usage.tokens)).arg(number(remaining)) : qsTr("上下文 · 待统计")
+    text: usage.compacting ? qsTr("Compacting context") : known ? qsTr("Context: %1 tokens, %2 left before compaction").arg(number(usage.tokens)).arg(number(remaining)) : qsTr("Context · Not measured yet")
     Accessible.name: text
     font.pointSize: Theme.smallPointSize
     palette.buttonText: Theme.secondary
@@ -70,7 +73,7 @@ ToolButton {
             HoverHandler { id: popupHover; onHoveredChanged: { if (!hovered) closeTimer.restart() } }
             RowLayout {
                 Layout.fillWidth: true
-                Label { text: meter.usage.compacting ? qsTr("正在压缩") : qsTr("上下文"); color: Theme.secondary; font.pointSize: Theme.smallPointSize; Layout.fillWidth: true }
+                Label { text: meter.usage.compacting ? qsTr("Compacting") : qsTr("Context"); color: Theme.secondary; font.pointSize: Theme.smallPointSize; Layout.fillWidth: true }
                 Label { visible: meter.known; text: Math.round(meter.fraction * 100) + "%"; color: meter.fraction >= 1 ? Theme.error : Theme.text; font.pointSize: Theme.smallPointSize; font.weight: Font.Medium }
             }
             Rectangle {
@@ -80,13 +83,13 @@ ToolButton {
             }
             Label {
                 Layout.fillWidth: true
-                text: meter.known ? qsTr("%1 / %2 tokens").arg(meter.compactNumber(meter.usage.tokens)).arg(meter.compactNumber(meter.usage.trigger)) + (meter.usage.estimated ? qsTr(" · 估算") : "") : qsTr("首次请求后统计")
+                text: meter.known ? (meter.usage.estimated ? qsTr("%1 / %2 tokens · Estimated") : qsTr("%1 / %2 tokens")).arg(meter.compactNumber(meter.usage.tokens)).arg(meter.compactNumber(meter.usage.trigger)) : qsTr("Measured after the first request")
                 color: Theme.secondary; font.pointSize: Theme.smallPointSize
             }
             Label {
                 visible: (meter.usage.compactions || 0) > 0
                 Layout.fillWidth: true
-                text: qsTr("已压缩 %1 次").arg(meter.usage.compactions || 0)
+                text: qsTr("Compactions: %1").arg(meter.usage.compactions || 0)
                 color: Theme.quiet; font.pointSize: Theme.smallPointSize
             }
         }

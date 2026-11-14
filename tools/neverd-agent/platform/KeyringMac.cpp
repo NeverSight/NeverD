@@ -9,11 +9,16 @@
 
 #include "Keyring.h"
 
+#include <QCoreApplication>
 #include <QScopeGuard>
 #include <Security/Security.h>
 
 namespace neverd::agent::keyring {
 namespace {
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(neverd::agent::KeyringMac)
+};
+
 CFMutableDictionaryRef query(const QString &id) {
   auto result = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
                                           &kCFTypeDictionaryKeyCallBacks,
@@ -32,10 +37,10 @@ CFMutableDictionaryRef query(const QString &id) {
 bool checked(OSStatus status, QString &error) {
   if (status == errSecSuccess)
     return true;
-  error =
-      QStringLiteral("无法访问 macOS 钥匙串（错误 %1）。请解锁登录钥匙串并允许 "
-                     "NeverD Agent 访问，或重新填写 API Key。")
-          .arg(status);
+  error = Text::tr("Cannot access the macOS keychain (error %1). Unlock the "
+                   "login keychain and allow NeverD Agent access, or enter the "
+                   "API key again.")
+              .arg(status);
   return false;
 }
 } // namespace

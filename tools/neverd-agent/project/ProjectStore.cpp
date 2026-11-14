@@ -1,5 +1,4 @@
-//===- ProjectStore.cpp - Agent project persistence
-//------------------------===//
+//===- ProjectStore.cpp - Agent project persistence -----------------------===//
 //
 // NeverD Decompiler
 //
@@ -17,6 +16,7 @@
 #include "MemoryStore.h"
 #include "platform/AppPaths.h"
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
@@ -33,6 +33,10 @@
 
 namespace neverd::agent {
 namespace {
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(neverd::agent::ProjectStore)
+};
+
 QString newId() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
 
 bool foreignAbsolutePath(const QString &path) {
@@ -82,11 +86,11 @@ bool ProjectStore::readJson(const QString &path, QJsonObject &value,
     return true;
   QFile file(path);
   if (!file.open(QIODevice::ReadOnly)) {
-    error = QStringLiteral("无法读取 %1：%2").arg(path, file.errorString());
+    error = Text::tr("Cannot read %1: %2").arg(path, file.errorString());
     return false;
   }
   if (file.size() > kMaxStateBytes) {
-    error = QStringLiteral("状态文件超过 %1 字节：%2")
+    error = Text::tr("State file exceeds %1 bytes: %2")
                 .arg(kMaxStateBytes)
                 .arg(path);
     return false;
@@ -94,7 +98,7 @@ bool ProjectStore::readJson(const QString &path, QJsonObject &value,
   QJsonParseError parse;
   const auto document = QJsonDocument::fromJson(file.readAll(), &parse);
   if (parse.error != QJsonParseError::NoError || !document.isObject()) {
-    error = QStringLiteral("无效的 JSON 状态文件 %1：%2")
+    error = Text::tr("Invalid JSON state file %1: %2")
                 .arg(path, parse.errorString());
     return false;
   }
@@ -106,19 +110,20 @@ bool ProjectStore::writeJson(const QString &path, const QJsonObject &value,
                              QString &error) {
   const QByteArray bytes = QJsonDocument(value).toJson(QJsonDocument::Indented);
   if (bytes.size() > kMaxStateBytes) {
-    error = QStringLiteral("状态超过 %1 字节，未覆盖已有文件。")
+    error = Text::tr("State exceeds %1 bytes; the existing file was not "
+                     "overwritten.")
                 .arg(kMaxStateBytes);
     return false;
   }
   if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
-    error =
-        QStringLiteral("无法创建目录：%1").arg(QFileInfo(path).absolutePath());
+    error = Text::tr("Cannot create directory: %1")
+                .arg(QFileInfo(path).absolutePath());
     return false;
   }
   QSaveFile file(path);
   if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() ||
       !file.commit()) {
-    error = QStringLiteral("无法保存 %1：%2").arg(path, file.errorString());
+    error = Text::tr("Cannot save %1: %2").arg(path, file.errorString());
     return false;
   }
   return true;
@@ -128,14 +133,15 @@ std::optional<Project> ProjectStore::create(const QString &directory,
                                             const QString &name,
                                             QString &error) {
   if (name.trimmed().isEmpty() || directory.trimmed().isEmpty()) {
-    error = QStringLiteral("请填写项目名称并选择项目文件夹。");
+    error = Text::tr("Enter a project name and choose a project folder.");
     return std::nullopt;
   }
   const QString root = QFileInfo(localPath(directory)).absoluteFilePath();
   Project project{newId(), name.trimmed(), root, {}};
   const QString state = stateDirectory(project);
   if (QFileInfo::exists(state)) {
-    error = QStringLiteral("该文件夹已有 .nd-agent，请使用“打开项目”。");
+    error = Text::tr(
+        "This folder already contains .nd-agent. Use Open project instead.");
     return std::nullopt;
   }
   if (!save(project, error))
@@ -159,7 +165,7 @@ std::optional<Project> ProjectStore::open(const QString &directory,
       !validId(value.value("id")) ||
       value.value("name").toString().trimmed().isEmpty() ||
       !value.value("objects").isArray()) {
-    error = QStringLiteral("项目格式或版本无效：%1").arg(root);
+    error = Text::tr("Invalid project format or version: %1").arg(root);
     return std::nullopt;
   }
   Project project{
@@ -171,7 +177,9 @@ std::optional<Project> ProjectStore::open(const QString &directory,
         item.value("name").toString().trimmed().isEmpty() ||
         item.value("path").toString().trimmed().isEmpty() ||
         ids.contains(item.value("id").toString())) {
-      error = QStringLiteral("项目包含无效或重复的分析对象：%1").arg(root);
+      error = Text::tr("The project contains invalid or duplicate analysis "
+                       "objects: %1")
+                  .arg(root);
       return std::nullopt;
     }
     ids.insert(item.value("id").toString());
@@ -212,16 +220,22 @@ FingerprintResult ProjectStore::fingerprint(const QString &path) {
   QFile file(absolute);
   const QFileInfo before(absolute);
   if (!before.isFile() || !file.open(QIODevice::ReadOnly))
-    return {absolute, {}, QStringLiteral("无法读取分析对象：%1").arg(absolute)};
+    return {absolute,
+            {},
+            Text::tr("Cannot read the analysis object: %1").arg(absolute)};
   QCryptographicHash hash(QCryptographicHash::Sha256);
   if (!hash.addData(&file))
-    return {absolute, {}, QStringLiteral("读取文件指纹失败：%1").arg(absolute)};
+    return {
+        absolute,
+        {},
+        Text::tr("Could not compute the file fingerprint: %1").arg(absolute)};
   const QFileInfo after(absolute);
   if (before.size() != after.size() ||
       before.lastModified() != after.lastModified())
     return {absolute,
             {},
-            QStringLiteral("文件在读取过程中发生变化，请重新添加：%1")
+            Text::tr("The file changed while it was being read. Add it "
+                     "again: %1")
                 .arg(absolute)};
   return {absolute, QString::fromLatin1(hash.result().toHex()), {}};
 }
@@ -234,7 +248,7 @@ bool ProjectStore::addObject(Project &project, const FingerprintResult &input,
   }
   for (const auto &object : project.Objects) {
     if (QFileInfo(object.Path) == QFileInfo(input.Path)) {
-      error = QStringLiteral("该文件已在此项目中。");
+      error = Text::tr("This file is already in the project.");
       return false;
     }
   }
@@ -262,14 +276,16 @@ bool ProjectStore::relocateObject(Project &project, const QString &objectId,
     if (object.Id != objectId)
       continue;
     if (object.Sha256 != input.Sha256) {
-      error = QStringLiteral(
-          "所选文件的 SHA-256 与原对象不一致；请把不同版本添加为新对象。");
+      error =
+          Text::tr("The selected file's SHA-256 does not match the original "
+                   "object. Add a different version as a new object.");
       return false;
     }
     for (const auto &other : next.Objects)
       if (other.Id != objectId &&
           QFileInfo(other.Path) == QFileInfo(input.Path)) {
-        error = QStringLiteral("该文件已绑定到此项目的另一个对象。");
+        error = Text::tr(
+            "This file is already bound to another object in this project.");
         return false;
       }
     object.Path = input.Path;
@@ -278,7 +294,7 @@ bool ProjectStore::relocateObject(Project &project, const QString &objectId,
     project = std::move(next);
     return true;
   }
-  error = QStringLiteral("分析对象已不存在。");
+  error = Text::tr("The analysis object no longer exists.");
   return false;
 }
 
@@ -311,7 +327,7 @@ bool ProjectStore::readConversation(const Project &project, QJsonObject &value,
       (value.contains("forkedAt") &&
        !QDateTime::fromString(value["forkedAt"].toString(), Qt::ISODateWithMs)
             .isValid())) {
-    error = QStringLiteral("项目对话格式无效：%1").arg(path);
+    error = Text::tr("Invalid project conversation format: %1").arg(path);
     return false;
   }
   if (!value.contains("context"))
@@ -356,7 +372,9 @@ bool ProjectStore::readConversation(const Project &project, QJsonObject &value,
         !QDateTime::fromString(message.value("createdAt").toString(),
                                Qt::ISODateWithMs)
              .isValid()) {
-      error = QStringLiteral("项目含有无效的对话记录：%1").arg(path);
+      error =
+          Text::tr("The project contains an invalid conversation record: %1")
+              .arg(path);
       return false;
     }
   }

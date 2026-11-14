@@ -13,8 +13,15 @@ ColumnLayout {
     readonly property var analysts: trace.active && trace.backend
         ? trace.backend.progress.filter(entry => entry.runId === trace.runId && entry.depth > 0) : []
     spacing: 6
-    function refresh() { if (expanded && runId && backend) records = backend.execution(runId) }
-    onExpandedChanged: refresh()
+    // Opened, the record asks to be shown whole, once it has its rows.
+    signal opened()
+    property bool revealPending: false
+    function refresh() {
+        if (!expanded || !runId || !backend) return
+        records = backend.execution(runId)
+        if (revealPending) { revealPending = false; Qt.callLater(trace.opened) }
+    }
+    onExpandedChanged: { revealPending = expanded; refresh() }
     onActiveChanged: refresh()
     Timer { interval: 600; repeat: true; running: trace.expanded && trace.active; onTriggered: trace.refresh() }
     Repeater {
@@ -30,17 +37,17 @@ ColumnLayout {
             }
             Label {
                 Layout.fillWidth: true
-                text: modelData.state === "queued" ? qsTr("等待中")
-                    : modelData.state === "succeeded" ? qsTr("已有结论")
-                    : modelData.state === "failed" ? qsTr("未完成，可查看详情")
-                    : modelData.state === "cancelled" ? qsTr("已停止")
-                    : modelData.activity === "nd_query" ? qsTr("正在查询 ND")
-                    : modelData.activity || qsTr("准备分析")
+                text: modelData.state === "queued" ? qsTr("Queued")
+                    : modelData.state === "succeeded" ? qsTr("Concluded")
+                    : modelData.state === "failed" ? qsTr("Not completed; see details")
+                    : modelData.state === "cancelled" ? qsTr("Stopped")
+                    : modelData.activity === "nd_query" ? qsTr("Querying NeverD")
+                    : modelData.activity || qsTr("Preparing analysis")
                 color: modelData.state === "failed" ? Theme.error : Theme.secondary
                 elide: Text.ElideRight; font.pointSize: Theme.smallPointSize
             }
             Label {
-                text: modelData.steps ? qsTr("%1 步").arg(modelData.steps) : ""
+                text: modelData.steps ? qsTr("Steps: %1").arg(modelData.steps) : ""
                 color: Theme.quiet; font.pointSize: Theme.smallPointSize
             }
         }
@@ -48,7 +55,8 @@ ColumnLayout {
     ActionButton {
         Layout.fillWidth: true
         glyph: trace.expanded ? "chevron_down" : "chevron_right"
-        text: (trace.active ? qsTr("执行中 · 查看工具与对象进度") : qsTr("执行记录")) + (trace.records.length ? qsTr(" · %1 项").arg(trace.records.length) : "")
+        text: trace.records.length ? (trace.active ? qsTr("Running · Show tool and object progress · %1") : qsTr("Execution · %1")).arg(trace.records.length)
+              : trace.active ? qsTr("Running · Show tool and object progress") : qsTr("Execution")
         palette.buttonText: Theme.secondary; hoverEnabled: true
         font.pointSize: Theme.smallPointSize
         background: Rectangle { color: parent.hovered ? Theme.toolHover : "transparent"; radius: Theme.toolRadius }
@@ -72,11 +80,11 @@ ColumnLayout {
                         color: Theme.text; font.pointSize: Theme.smallPointSize
                     }
                     Label {
-                        text: ({running: qsTr("进行中"), succeeded: qsTr("完成"), failed: qsTr("失败"), cancelled: qsTr("已停止"), skipped: qsTr("已跳过")}[row.modelData.state] || "") + (row.modelData.elapsedMs ? " · " + (row.modelData.elapsedMs / 1000).toFixed(1) + "s" : "")
+                        text: ({running: qsTr("Running"), succeeded: qsTr("Done"), failed: qsTr("Failed"), cancelled: qsTr("Stopped"), skipped: qsTr("Skipped")}[row.modelData.state] || "") + (row.modelData.elapsedMs ? " · " + qsTr("%1 s").arg(Number(row.modelData.elapsedMs / 1000).toLocaleString(Qt.locale(), "f", 1)) : "")
                         color: row.modelData.state === "failed" ? Theme.error : Theme.quiet; font.pointSize: Theme.smallPointSize
                     }
-                    ActionButton { text: row.detail ? qsTr("收起") : qsTr("详情"); implicitHeight: 24; onClicked: row.detail = !row.detail }
-                    ActionButton { visible: !!row.modelData.evidenceId; text: qsTr("证据"); implicitHeight: 24; onClicked: trace.backend.openEvidence(row.modelData.evidenceId) }
+                    ActionButton { quiet: true; text: row.detail ? qsTr("Hide details") : qsTr("Details"); implicitHeight: 24; onClicked: row.detail = !row.detail }
+                    ActionButton { visible: !!row.modelData.evidenceId; quiet: true; text: qsTr("Evidence"); implicitHeight: 24; onClicked: trace.backend.openEvidence(row.modelData.evidenceId) }
                 }
                 Loader {
                     Layout.fillWidth: true; Layout.preferredHeight: active ? 180 : 0
@@ -93,6 +101,6 @@ ColumnLayout {
                 }
             }
         }
-        Label { visible: trace.records.length === 0; text: qsTr("本轮尚无工具调用。"); color: Theme.quiet; font.pointSize: Theme.smallPointSize }
+        Label { visible: trace.records.length === 0; text: qsTr("No tool calls in this round yet."); color: Theme.quiet; font.pointSize: Theme.smallPointSize }
     }
 }

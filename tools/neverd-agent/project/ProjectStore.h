@@ -1,5 +1,4 @@
-//===- ProjectStore.h - Agent project persistence ----------------*- C++
-//-*-===//
+//===- ProjectStore.h - Agent project persistence ---------------*- C++ -*-===//
 //
 // NeverD Decompiler
 //

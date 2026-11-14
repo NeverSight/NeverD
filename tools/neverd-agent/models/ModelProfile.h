@@ -1,5 +1,4 @@
-//===- ModelProfile.h - Model endpoint and run policy ------------*- C++
-//-*-===//
+//===- ModelProfile.h - Model endpoint and run policy -----------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
@@ -41,6 +40,12 @@ struct ModelProfile {
   int compactionOutputTokens() const;
   QJsonObject toJson() const;
   bool validate(QString &error, bool requireModel = true) const;
+  /// Whether an API key may travel to this profile's server: over HTTPS, or
+  /// over plain HTTP only to this computer.
+  bool carriesKeysSafely() const;
+  /// Whether \p first and \p second address the same server (scheme, host
+  /// and port), to which a saved API key belongs.
+  static bool sameServer(const QString &first, const QString &second);
   static std::optional<ModelProfile> fromJson(const QJsonObject &value,
                                               QString &error);
 };

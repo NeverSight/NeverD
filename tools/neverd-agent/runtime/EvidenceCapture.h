@@ -1,5 +1,4 @@
-//===- EvidenceCapture.h - Materialize ND snapshot pages ----------*- C++
-//-*-===//
+//===- EvidenceCapture.h - Materialize ND snapshot pages --------*- C++ -*-===//
 //
 // NeverD Decompiler
 //

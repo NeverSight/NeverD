@@ -26,7 +26,8 @@ bool AgentController::startGoal(const QString &objective, qint64 tokenBudget,
   if (!project || running())
     return false;
   if (objective.trimmed().isEmpty() || tokenBudget <= 0 || roundLimit <= 0) {
-    emit operationError(tr("请填写目标，并设置正数的 token 预算与轮次上限。"));
+    emit operationError(tr("Enter a goal and set a positive token budget and "
+                           "round limit."));
     return false;
   }
   const auto old = Goals.value(ActiveId);
@@ -62,7 +63,8 @@ bool AgentController::updateGoal(const QString &objective, qint64 tokenBudget,
   if (!project || next.Id.isEmpty() || running() || next.Status == "active")
     return false;
   if (objective.trimmed().isEmpty() || tokenBudget <= 0 || roundLimit <= 0) {
-    emit operationError(tr("目标、token 预算和轮次上限无效。"));
+    emit operationError(
+        tr("The goal, token budget or round limit is invalid."));
     return false;
   }
   next.Objective = objective.trimmed();
@@ -86,11 +88,13 @@ bool AgentController::resumeGoal() {
       goal.Status == "completed")
     return false;
   if (goal.UsedTokens >= goal.TokenBudget || goal.Rounds >= goal.RoundLimit) {
-    emit operationError(tr("已达到目标预算或轮次上限，请先调整目标设置。"));
+    emit operationError(tr("The goal has reached its budget or round limit. "
+                           "Adjust the goal settings first."));
     return false;
   }
   auto budget = std::make_shared<RunBudget>();
   budget->TokenLimit = goal.TokenBudget;
+  budget->Goal = true;
   budget->Tokens = goal.UsedTokens;
   budget->Estimated = goal.Estimated;
   GoalBudgets[ActiveId] = budget;
@@ -125,8 +129,11 @@ bool AgentController::runGoalRound(const QString &projectId) {
   }
   const auto prompt =
       goal.Rounds == 0 ? goal.Objective
-                       : tr("继续推进目标：%1\n上轮结果：%2\n下一步：%"
-                            "3\n按已有证据继续，避免重复工作。")
+                       : QStringLiteral("Continue working toward the goal: "
+                                        "%1\nResult of the previous round: "
+                                        "%2\nNext step: %3\nContinue from the "
+                                        "existing evidence and avoid repeating "
+                                        "work.")
                              .arg(goal.Objective, goal.Summary, goal.NextStep);
   if (!beginRequest(projectId, prompt, {}, true)) {
     goal.Status = "failed";

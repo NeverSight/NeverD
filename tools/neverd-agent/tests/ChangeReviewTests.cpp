@@ -1,5 +1,4 @@
-//===- ChangeReviewTests.cpp - Real ND apply/save/undo contracts
-//------------===//
+//===- ChangeReviewTests.cpp - Real ND apply/save/undo contracts ----------===//
 //
 // NeverD Decompiler
 //

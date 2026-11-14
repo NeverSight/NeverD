@@ -1,5 +1,4 @@
-//===- WindowFrameTests.cpp - Native Agent frame checks
-//---------------------===//
+//===- WindowFrameTests.cpp - Native Agent frame checks -------------------===//
 //
 // NeverD Decompiler
 //

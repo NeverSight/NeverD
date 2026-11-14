@@ -38,12 +38,14 @@ void AgentController::inspectObject(const QString &objectId,
                                       {"xrefs", "list_xrefs"},
                                       {"cfg", "read_cfg"}};
   if (!tools.contains(representation) || query.trimmed().isEmpty()) {
-    emit operationError(tr("请选择分析对象并填写函数名或地址。"));
+    emit operationError(
+        tr("Choose an analysis object and enter a function name or address."));
     return;
   }
   const auto executable = resolveMcp();
   if (executable.isEmpty()) {
-    emit operationError(tr("请先在模型设置里配置 ND MCP 可执行文件。"));
+    emit operationError(
+        tr("Set the NeverD MCP server executable in model settings first."));
     return;
   }
   const Project owner = *project;

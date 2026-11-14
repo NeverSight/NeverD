@@ -230,7 +230,8 @@ bool AgentController::submitSideRequest(const QString &mode) {
   if (!project || !chat)
     return false;
   if (WritingProjects.contains(ActiveId)) {
-    emit operationError(tr("正在保存 ND 变更，请完成后再发送。"));
+    emit operationError(
+        tr("Saving NeverD changes. Send after the save finishes."));
     return false;
   }
   chat->WorkerPath = resolveWorker();
@@ -259,9 +260,9 @@ void AgentController::quoteSideAnswer(const QString &messageId) {
   if (text.isEmpty())
     return;
   text.replace('\n', "\n> ");
-  text = tr("引用侧边聊天「%1」：\n\n> ").arg(chat->title()) + text;
+  text = tr("Quoted from side chat '%1':\n\n> %2").arg(chat->title(), text);
   setDraft(draft().isEmpty() ? text : draft() + "\n\n" + text);
   closePreview();
-  emit notice(tr("已引用到主对话草稿。"));
+  emit notice(tr("Quoted in the main conversation draft."));
 }
 } // namespace neverd::agent

@@ -20,7 +20,9 @@ public:
   explicit AgentProcess(QObject *parent = nullptr);
   ~AgentProcess() override;
 
-  bool start(const QString &directory, QString &error);
+  /// Start the CLI with \p directory as its data directory (the default
+  /// when empty), writing its messages in interface \p language.
+  bool start(const QString &directory, const QString &language, QString &error);
   bool active() const;
   bool send(const QJsonObject &message);
   bool waitForOutput(int milliseconds);

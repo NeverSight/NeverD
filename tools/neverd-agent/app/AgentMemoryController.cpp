@@ -1,5 +1,4 @@
-//===- AgentMemoryController.cpp - Memory preferences and idle scheduling
-//---===//
+//===- AgentMemoryController.cpp - Memory preferences and idle scheduling -===//
 //
 // NeverD Decompiler
 //
@@ -23,7 +22,8 @@ bool AgentController::updateMemorySettings(bool use, bool generate) {
   if (!generate) {
     MemoryTimer.stop();
     Learner.cancel();
-    MemoryStatus = tr("自动整理已关闭，已保存的记忆保留");
+    MemoryStatus =
+        tr("Automatic organization is off. Saved memories are kept.");
   } else
     scheduleMemory();
   emit settingsChanged();
@@ -67,9 +67,11 @@ void AgentController::queueMemory(const QString &projectId,
     return;
   QString error;
   if (!MemoryLearner::enqueue(*project, source, CachedKey, error))
-    MemoryStatus = tr("无法保存待整理记忆：%1").arg(error);
+    MemoryStatus =
+        tr("Cannot save memory for later organization: %1").arg(error);
   else
-    MemoryStatus = tr("分析记录已保存，空闲后整理记忆");
+    MemoryStatus = tr("Analysis record saved. Memory will be organized when "
+                      "idle.");
   emit memoryChanged();
   scheduleMemory();
 }
@@ -83,7 +85,7 @@ void AgentController::scheduleMemory() {
 }
 void AgentController::organizeMemory(bool retryFailures) {
   if (!GenerateMemory) {
-    emit notice(tr("请先启用自动整理记忆。"));
+    emit notice(tr("Turn on automatic memory organization first."));
     return;
   }
   const auto *project = findProject(ActiveId);
@@ -117,11 +119,12 @@ void AgentController::drainMemory() {
     if (source.isEmpty())
       continue;
     if (!Learner.start(project, source, Profile, key, error)) {
-      MemoryStatus = tr("记忆整理未开始：%1").arg(error);
+      MemoryStatus = tr("Memory organization did not start: %1").arg(error);
       emit memoryChanged();
       return;
     }
-    MemoryStatus = tr("正在后台整理 %1 的记忆").arg(project.Name);
+    MemoryStatus =
+        tr("Organizing memory for %1 in the background").arg(project.Name);
     emit memoryChanged();
     return;
   }

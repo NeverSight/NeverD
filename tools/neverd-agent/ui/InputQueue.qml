@@ -14,8 +14,8 @@ ColumnLayout {
     spacing: 4
     RowLayout {
         Layout.fillWidth: true
-        Label { text: qsTr("待发送 %1 条").arg(queue.inputs.length) + (queue.paused ? qsTr(" · 已暂停") : ""); color: Theme.secondary; font.pointSize: Theme.smallPointSize; Layout.fillWidth: true }
-        ActionButton { visible: !queue.active; text: qsTr("继续队列"); implicitHeight: 26; onClicked: queue.resumeRequested() }
+        Label { text: (queue.paused ? qsTr("Queued: %1 · Paused") : qsTr("Queued: %1")).arg(queue.inputs.length); color: Theme.secondary; font.pointSize: Theme.smallPointSize; Layout.fillWidth: true }
+        ActionButton { visible: !queue.active; text: qsTr("Resume queue"); implicitHeight: 26; onClicked: queue.resumeRequested() }
     }
     ListView {
         Layout.fillWidth: true
@@ -26,7 +26,7 @@ ColumnLayout {
             required property var modelData
             width: ListView.view.width; height: 32; spacing: 8
             Label { text: modelData.text; elide: Text.ElideRight; color: Theme.secondary; Layout.fillWidth: true; font.pointSize: Theme.smallPointSize }
-            ActionButton { glyph: "close_small"; hint: qsTr("移出队列"); implicitHeight: 24; onClicked: queue.discardRequested(modelData.id) }
+            ActionButton { glyph: "close_small"; hint: qsTr("Remove from queue"); implicitHeight: 24; onClicked: queue.discardRequested(modelData.id) }
         }
     }
 }

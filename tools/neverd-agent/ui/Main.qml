@@ -61,8 +61,10 @@ ApplicationWindow {
         const found = sideViews.findIndex(v => v.key === key)
         if (found >= 0) sideIndex = found
         else {
+            // The panel names a view from its kind when it shows it, so the
+            // name follows the interface language.
             sideViews = sideViews.concat([{key: key, kind: kind, objectId: objectId || "",
-                title: kind === "review" ? qsTr("变更审阅") : kind === "research" ? qsTr("研究记录") : kind === "evidence" ? qsTr("函数证据") : kind === "chat" ? qsTr("侧边聊天") : kind === "files" ? qsTr("项目文件") : (backend.selectedObject.name || "") + (kind === "progress" ? qsTr(" · 进度") : qsTr(" · 记忆"))}])
+                objectName: backend.selectedObject.name || ""}])
             sideIndex = sideViews.length - 1
         }
         sideOpen = true
@@ -72,7 +74,6 @@ ApplicationWindow {
         sharingCheck.checked = backend.sharing
         useMemoryCheck.checked = backend.useMemory
         generateMemoryCheck.checked = backend.generateMemory
-        themePicker.currentIndex = backend.lightTheme ? 1 : 0
         objectApprovalMode.currentIndex = backend.autoAddAnalysisObjects ? 1 : 0
         guiField.text = backend.guiPath
         settingsDialog.open()
@@ -105,7 +106,6 @@ ApplicationWindow {
         Theme.backdrop = workspaceBackdrop
         Theme.basePointSize = appFont.pointSize > 0 ? appFont.pointSize : 10
         Theme.baseFont = appFont
-        Theme.light = backend.lightTheme
         lastProject = backend.activeId
         if (startupError) {
             failureText.text = startupError
@@ -187,7 +187,7 @@ ApplicationWindow {
                 anchors.centerIn: parent
                 width: Math.min(parent.width * 0.35, 420)
                 horizontalAlignment: Text.AlignHCenter
-                text: backend.activeProject.name || qsTr("研究工作区")
+                text: backend.activeProject.name || qsTr("Research workspace")
                 color: window.active ? Theme.titleText : Theme.titleInactiveText
                 font.pointSize: Theme.smallPointSize
                 elide: Text.ElideRight
@@ -197,12 +197,12 @@ ApplicationWindow {
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 spacing: 0
-                ActionButton { glyph: "options"; hint: qsTr("设置"); onClicked: window.showSettings(); implicitHeight: 28 }
+                ActionButton { glyph: "options"; hint: qsTr("Settings…"); onClicked: window.showSettings(); implicitHeight: 28 }
                 ActionButton {
                     glyph: "comment"
                     readonly property bool waiting: backend.analysisObjectApprovals.some(request =>
                         request.projectId === backend.activeId && !!request.sideChatId)
-                    hint: waiting ? qsTr("侧边聊天 · 有待审批请求") : qsTr("侧边聊天")
+                    hint: waiting ? qsTr("Side chat · Approval request pending") : qsTr("Side chat")
                     enabled: backend.activeId.length > 0; implicitHeight: 28
                     onClicked: window.openSide("chat", "")
                     Rectangle {
@@ -215,7 +215,7 @@ ApplicationWindow {
                 ActionButton {
                     id: panelToggle
                     glyph: "subviews"
-                    hint: qsTr("显示或隐藏右侧面板 · %1").arg(backend.shortcutText("Ctrl+B"))
+                    hint: qsTr("Show or hide the sidebar · %1").arg(backend.shortcutText("Ctrl+B"))
                     checked: window.sideOpen
                     enabled: backend.activeId.length > 0
                     implicitHeight: 28
@@ -275,7 +275,7 @@ ApplicationWindow {
                 anchors.fill: parent
                 anchors.leftMargin: 8
                 anchors.rightMargin: 8
-                text: backend.busy ? qsTr("正在读取文件指纹…") : window.noticeText || qsTr("本地工作区")
+                text: backend.busy ? qsTr("Reading file fingerprints…") : window.noticeText || qsTr("Local workspace")
                 color: Theme.statusBarText
                 verticalAlignment: Text.AlignVCenter
                 elide: Text.ElideRight
@@ -296,7 +296,7 @@ ApplicationWindow {
         views: window.sideViews
         onContextRequested: window.showContextPicker(true)
         currentView: window.sideIndex
-        onCurrentViewChanged: window.sideIndex = currentView
+        onViewSelected: index => window.sideIndex = index
         onCloseRequested: window.sideOpen = false
         onNewViewRequested: origin => window.popupAt(viewMenu, origin)
         onEditMemoryRequested: (objectId, id, text) => {
@@ -323,9 +323,9 @@ ApplicationWindow {
     ThemedMenu {
         id: contextMenu
         width: 230
-        ThemedMenuItem { text: qsTr("在 ND GUI 中打开"); visible: window.menuObject.length > 0; onTriggered: backend.openInGui(window.menuObject) }
+        ThemedMenuItem { text: qsTr("Open in the NeverD workbench"); visible: window.menuObject.length > 0; onTriggered: backend.openInGui(window.menuObject) }
         ThemedMenuItem {
-            text: qsTr("重新定位文件…")
+            text: qsTr("Relocate file…")
             visible: window.menuObject.length > 0
             enabled: !backend.busy && !backend.reviewBusy
             onTriggered: {
@@ -334,37 +334,37 @@ ApplicationWindow {
                 relocateFileDialog.open()
             }
         }
-        ThemedMenuItem { text: qsTr("在侧栏显示分析进度"); visible: window.menuObject.length > 0; onTriggered: window.openSide("progress", window.menuObject) }
-        ThemedMenuItem { text: qsTr("查看对象记忆"); visible: window.menuObject.length > 0; onTriggered: window.openSide("memory", window.menuObject) }
-        ThemedMenuItem { text: qsTr("在侧栏显示项目文件"); visible: !window.menuObject; onTriggered: window.openSide("files", "") }
-        ThemedMenuItem { text: qsTr("打开侧边聊天"); onTriggered: window.openSide("chat", "") }
-        ThemedMenuItem { text: qsTr("添加分析对象…"); visible: !window.menuObject; onTriggered: objectFileDialog.open() }
+        ThemedMenuItem { text: qsTr("Show analysis progress in the sidebar"); visible: window.menuObject.length > 0; onTriggered: window.openSide("progress", window.menuObject) }
+        ThemedMenuItem { text: qsTr("View object memory"); visible: window.menuObject.length > 0; onTriggered: window.openSide("memory", window.menuObject) }
+        ThemedMenuItem { text: qsTr("Show project files in the sidebar"); visible: !window.menuObject; onTriggered: window.openSide("files", "") }
+        ThemedMenuItem { text: qsTr("Open side chat"); onTriggered: window.openSide("chat", "") }
+        ThemedMenuItem { text: qsTr("Add analysis object…"); visible: !window.menuObject; onTriggered: objectFileDialog.open() }
     }
     ThemedMenu {
         id: viewMenu
         width: 200
-        ThemedMenuItem { text: qsTr("项目文件"); onTriggered: window.openSide("files", "") }
-        ThemedMenuItem { text: qsTr("侧边聊天"); onTriggered: window.openSide("chat", "") }
-        ThemedMenuItem { text: qsTr("分析进度"); onTriggered: window.openSide("progress", backend.selectedObjectId) }
-        ThemedMenuItem { text: qsTr("研究记录"); onTriggered: window.openSide("research", "") }
-        ThemedMenuItem { text: qsTr("函数证据"); onTriggered: window.openSide("evidence", backend.selectedObjectId) }
-        ThemedMenuItem { text: qsTr("变更审阅"); onTriggered: window.openSide("review", "") }
-        ThemedMenuItem { text: qsTr("对象记忆"); onTriggered: window.openSide("memory", backend.selectedObjectId) }
+        ThemedMenuItem { text: qsTr("Project files"); onTriggered: window.openSide("files", "") }
+        ThemedMenuItem { text: qsTr("Side chat"); onTriggered: window.openSide("chat", "") }
+        ThemedMenuItem { text: qsTr("Analysis progress"); onTriggered: window.openSide("progress", backend.selectedObjectId) }
+        ThemedMenuItem { text: qsTr("Research log"); onTriggered: window.openSide("research", "") }
+        ThemedMenuItem { text: qsTr("Function evidence"); onTriggered: window.openSide("evidence", backend.selectedObjectId) }
+        ThemedMenuItem { text: qsTr("Change review"); onTriggered: window.openSide("review", "") }
+        ThemedMenuItem { text: qsTr("Object memory"); onTriggered: window.openSide("memory", backend.selectedObjectId) }
     }
 
     FolderDialog {
         id: openProjectDialog
-        title: qsTr("选择已有项目的文件夹")
+        title: qsTr("Select an existing project folder")
         onAccepted: backend.openProject(selectedFolder.toString())
     }
     FolderDialog {
         id: createFolderDialog
-        title: qsTr("选择项目工作目录")
+        title: qsTr("Select the project's working directory")
         onAccepted: projectFolder.text = backend.pathFromUrl(selectedFolder.toString())
     }
     FileDialog {
         id: objectFileDialog
-        title: qsTr("添加分析对象")
+        title: qsTr("Add analysis object")
         fileMode: FileDialog.OpenFiles
         onAccepted: { for (const file of selectedFiles) backend.addObject(file.toString()) }
     }
@@ -372,13 +372,13 @@ ApplicationWindow {
         id: relocateFileDialog
         property string projectId
         property string objectId
-        title: qsTr("选择原分析对象的文件 · 将校验 SHA-256")
+        title: qsTr("Select the analysis object's file · SHA-256 will be verified")
         fileMode: FileDialog.OpenFile
         onAccepted: backend.relocateObject(projectId, objectId, selectedFile.toString())
     }
     FileDialog {
         id: guiFileDialog
-        title: qsTr("选择 ND GUI 程序")
+        title: qsTr("Select the NeverD workbench executable")
         onAccepted: guiField.text = backend.pathFromUrl(selectedFile.toString())
     }
     FileDialog {
@@ -386,9 +386,9 @@ ApplicationWindow {
         property bool importing: true
         property string projectId
         property string objectId
-        title: importing ? qsTr("导入对象记忆") : qsTr("导出对象记忆")
+        title: importing ? qsTr("Import object memory") : qsTr("Export object memory")
         fileMode: importing ? FileDialog.OpenFile : FileDialog.SaveFile
-        nameFilters: [qsTr("对象记忆 (*.ndmemory.json)"), qsTr("JSON 文件 (*.json)")]
+        nameFilters: [qsTr("Object memory (*.ndmemory.json)"), qsTr("JSON files (*.json)")]
         defaultSuffix: "ndmemory.json"
         onAccepted: backend.transferMemory(projectId, objectId, selectedFile.toString(), importing)
     }
@@ -400,6 +400,7 @@ ApplicationWindow {
         modal: true
         padding: 18
         closePolicy: Popup.CloseOnEscape
+        Overlay.modal: ModalDim {}
         background: Surface { glass: true; radius: Theme.radius; color: Theme.background }
         header: Label {
             text: parent.title
@@ -412,19 +413,19 @@ ApplicationWindow {
     }
     Sheet {
         id: createDialog
-        title: qsTr("新建项目")
+        title: qsTr("New project")
         contentItem: ColumnLayout {
             spacing: 12
-            Label { text: qsTr("项目名称"); color: Theme.secondary }
-            Field { id: projectName; placeholderText: qsTr("例如：Windows API 研究"); Layout.fillWidth: true }
-            Label { text: qsTr("项目文件夹"); color: Theme.secondary }
+            Label { text: qsTr("Project name"); color: Theme.secondary }
+            Field { id: projectName; placeholderText: qsTr("e.g. Windows API research"); Layout.fillWidth: true }
+            Label { text: qsTr("Project folder"); color: Theme.secondary }
             RowLayout {
                 Layout.fillWidth: true
-                Field { id: projectFolder; placeholderText: qsTr("用于保存笔记、报告与项目记忆"); Layout.fillWidth: true }
-                ActionButton { glyph: "open"; text: qsTr("选择"); onClicked: createFolderDialog.open() }
+                Field { id: projectFolder; placeholderText: qsTr("Holds notes, reports and project memory"); Layout.fillWidth: true }
+                ActionButton { glyph: "open"; text: qsTr("Browse…"); onClicked: createFolderDialog.open() }
             }
             Label {
-                text: qsTr("会在此目录创建 .nd-agent，保存当前项目的独立上下文。分析对象可以位于其他目录。")
+                text: qsTr("A .nd-agent folder is created in this directory to hold this project's own context. Analysis objects can be in other directories.")
                 color: Theme.secondary
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
@@ -432,9 +433,9 @@ ApplicationWindow {
             RowLayout {
                 Layout.topMargin: 10
                 Item { Layout.fillWidth: true }
-                ActionButton { text: qsTr("取消"); onClicked: createDialog.close() }
+                ActionButton { text: qsTr("Cancel"); onClicked: createDialog.close() }
                 ActionButton {
-                    text: qsTr("创建项目")
+                    text: qsTr("Create project")
                     primary: true
                     enabled: projectName.text.trim().length > 0 && projectFolder.text.trim().length > 0
                     onClicked: {
@@ -450,73 +451,75 @@ ApplicationWindow {
     }
     Sheet {
         id: settingsDialog
-        title: qsTr("应用设置")
+        title: qsTr("Application settings")
         contentItem: ColumnLayout {
             spacing: 14
             ActionButton {
-                text: qsTr("模型与分析设置…")
+                text: qsTr("Model and analysis settings…")
                 glyph: "options"
                 Layout.fillWidth: true
                 onClicked: { settingsDialog.close(); modelSettingsDialog.open() }
             }
-            RowLayout {
-                Label { text: qsTr("外观"); color: Theme.secondary; font.pointSize: Theme.smallPointSize; Layout.fillWidth: true }
-                ChoiceField { id: themePicker; model: [qsTr("黑灰"), qsTr("浅色")]; Layout.preferredWidth: 180 }
+            Label {
+                text: qsTr("Language and theme follow the NeverD workbench: Options ▸ Language and Options ▸ Colors.")
+                color: Theme.secondary
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
             }
             RowLayout {
                 Layout.fillWidth: true
-                Label { text: qsTr("AI 添加分析对象"); color: Theme.secondary; Layout.fillWidth: true }
+                Label { text: qsTr("Analysis objects added by AI"); color: Theme.secondary; Layout.fillWidth: true }
                 ChoiceField {
                     id: objectApprovalMode
-                    model: [qsTr("逐次审批"), qsTr("自动允许")]
+                    model: [qsTr("Require approval each time"), qsTr("Allow automatically")]
                     Layout.preferredWidth: 180
-                    Accessible.name: qsTr("AI 添加分析对象")
+                    Accessible.name: qsTr("Analysis objects added by AI")
                 }
             }
             CheckField {
                 id: useMemoryCheck
-                text: qsTr("分析时召回已有记忆")
+                text: qsTr("Recall saved memory during analysis")
 
             }
             CheckField {
                 id: generateMemoryCheck
-                text: qsTr("空闲时自动整理长期记忆")
+                text: qsTr("Organize long-term memory automatically when idle")
 
             }
             Label {
-                text: qsTr("整理使用当前模型，会产生额外 API 用量。只处理已完成的本轮交流与证据引用，新分析开始时暂停。关闭召回不删除已有记忆。")
+                text: qsTr("Organizing uses the current model and incurs additional API usage. It processes only completed exchanges and their evidence references, and pauses when a new analysis starts. Turning off recall does not delete saved memory.")
                 color: Theme.secondary
                 wrapMode: Text.Wrap; font.pointSize: Theme.smallPointSize
                 Layout.fillWidth: true
             }
             CheckField {
                 id: sharingCheck
-                text: qsTr("全局共享分析对象记忆")
+                text: qsTr("Share analysis object memory across projects")
 
             }
             Label {
-                text: qsTr("按文件指纹读取其他已登记项目中的对象记忆。项目对话保持独立，来源记忆只读。")
+                text: qsTr("Reads object memory from other registered projects by file fingerprint. Project conversations stay separate, and memory from other projects is read-only.")
                 color: Theme.secondary
                 wrapMode: Text.Wrap; font.pointSize: Theme.smallPointSize
                 Layout.fillWidth: true
             }
-            Label { text: qsTr("ND GUI 程序路径"); color: Theme.secondary; font.pointSize: Theme.smallPointSize }
+            Label { text: qsTr("NeverD workbench executable"); color: Theme.secondary; font.pointSize: Theme.smallPointSize }
             RowLayout {
                 Layout.fillWidth: true
-                Field { id: guiField; placeholderText: qsTr("留空时查找相邻目录或 PATH"); Layout.fillWidth: true }
-                ActionButton { glyph: "open"; hint: qsTr("选择程序"); onClicked: guiFileDialog.open() }
+                Field { id: guiField; placeholderText: qsTr("Leave empty to search the adjacent directory and PATH"); Layout.fillWidth: true }
+                ActionButton { glyph: "open"; hint: qsTr("Choose executable…"); onClicked: guiFileDialog.open() }
             }
-            Label { text: qsTr("全局数据目录"); color: Theme.secondary; font.pointSize: Theme.smallPointSize }
+            Label { text: qsTr("Global data directory"); color: Theme.secondary; font.pointSize: Theme.smallPointSize }
             Label { text: backend.dataDirectory; color: Theme.secondary; wrapMode: Text.WrapAnywhere; font.pointSize: Theme.smallPointSize; Layout.fillWidth: true }
             RowLayout {
                 Layout.topMargin: 8
                 Item { Layout.fillWidth: true }
-                ActionButton { text: qsTr("取消"); onClicked: settingsDialog.close() }
+                ActionButton { text: qsTr("Cancel"); onClicked: settingsDialog.close() }
                 ActionButton {
-                    text: qsTr("保存设置")
+                    text: qsTr("Save settings")
                     primary: true
                     onClicked: {
-                        if (backend.updateWorkspaceSettings(sharingCheck.checked, themePicker.currentIndex === 1,
+                        if (backend.updateWorkspaceSettings(sharingCheck.checked, backend.lightTheme,
                                                             guiField.text, objectApprovalMode.currentIndex === 1) &&
                             backend.updateMemorySettings(useMemoryCheck.checked, generateMemoryCheck.checked))
                             settingsDialog.close()
@@ -529,10 +532,10 @@ ApplicationWindow {
     GoalEditor { id: goalEditor; backend: controller; parent: Overlay.overlay }
     Sheet {
         id: memoryDialog
-        title: window.memoryRecordId ? qsTr("编辑并确认记忆") : window.memoryObject ? qsTr("添加对象记忆") : qsTr("添加项目记忆")
+        title: window.memoryRecordId ? qsTr("Edit and confirm memory") : window.memoryObject ? qsTr("Add object memory") : qsTr("Add project memory")
         contentItem: ColumnLayout {
             spacing: 12
-            Label { text: qsTr("记录已确认的事实及其证据来源。"); color: Theme.secondary; Layout.fillWidth: true }
+            Label { text: qsTr("Record a confirmed fact and its evidence source."); color: Theme.secondary; Layout.fillWidth: true }
             ScrollView {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 220
@@ -540,7 +543,7 @@ ApplicationWindow {
                     id: memoryText
                     color: Theme.text
                     placeholderTextColor: Theme.quiet
-                    placeholderText: qsTr("例如：关键函数、调用关系、地址与验证方式…")
+                    placeholderText: qsTr("e.g. key functions, call relationships, addresses and how they were verified…")
                     selectByMouse: true
                     wrapMode: TextEdit.Wrap
                     background: Rectangle { color: Theme.raised; radius: Theme.controlRadius; border.width: 1; border.color: memoryText.activeFocus ? Theme.focusBorder : Theme.inputBorder }
@@ -548,9 +551,9 @@ ApplicationWindow {
             }
             RowLayout {
                 Item { Layout.fillWidth: true }
-                ActionButton { text: qsTr("取消"); onClicked: memoryDialog.close() }
+                ActionButton { text: qsTr("Cancel"); onClicked: memoryDialog.close() }
                 ActionButton {
-                    text: qsTr("保存记忆"); primary: true; enabled: memoryText.text.trim().length > 0
+                    text: qsTr("Save memory"); primary: true; enabled: memoryText.text.trim().length > 0
                     onClicked: {
                         const ok = window.memoryRecordId ? backend.editMemory(window.memoryObject, window.memoryRecordId, memoryText.text) : backend.addMemory(window.memoryObject, memoryText.text)
                         if (ok) memoryDialog.close()
@@ -561,13 +564,13 @@ ApplicationWindow {
     }
     Sheet {
         id: failureDialog
-        title: qsTr("操作未完成")
+        title: qsTr("Operation not completed")
         closePolicy: startupError ? Popup.NoAutoClose : Popup.CloseOnEscape
         contentItem: ColumnLayout {
             spacing: 16
             Label { id: failureText; color: Theme.text; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true }
             ActionButton {
-                text: startupError ? qsTr("退出") : qsTr("知道了")
+                text: startupError ? qsTr("Quit") : qsTr("OK")
                 primary: true
                 Layout.alignment: Qt.AlignRight
                 onClicked: startupError ? Qt.quit() : failureDialog.close()
@@ -581,7 +584,6 @@ ApplicationWindow {
         function onSideChatOpened() { window.openSide("chat", "") }
         function onNotice(message) { window.noticeText = message }
         function onOperationError(message) { failureText.text = message; failureDialog.open() }
-        function onSettingsChanged() { Theme.light = backend.lightTheme }
         function onWorkspaceChanged() {
             if (window.lastProject !== backend.activeId) {
                 window.lastProject = backend.activeId

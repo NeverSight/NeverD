@@ -54,7 +54,7 @@ void AgentController::attachSelection(const QString &text, const QString &title,
   if (!findProject(ActiveId) || text.trimmed().isEmpty())
     return;
   appendContext({{"kind", "selection"},
-                 {"title", title.isEmpty() ? tr("选中文字") : title},
+                 {"title", title.isEmpty() ? tr("Selected text") : title},
                  {"text", text}},
                 side);
 }
@@ -74,7 +74,8 @@ void AgentController::attachEvidence(const QString &id, bool side) {
   reference["text"] =
       "Read this captured evidence with read_evidence when needed.";
   if (appendContext(reference, side))
-    emit notice(tr("已添加证据引用；发送时保留该快照的身份。"));
+    emit notice(tr("Evidence reference added. Sending keeps the identity of "
+                   "this snapshot."));
 }
 void AgentController::attachPreview(bool side) {
   const auto *project = findProject(ActiveId);
@@ -109,7 +110,9 @@ void AgentController::removeContext(int index, bool side) {
 void AgentController::createSideChatFromSelection(const QString &text) {
   if (text.trimmed().isEmpty() || !createSideChat())
     return;
-  sideChat()->setDraft(tr("请结合主对话，解释这段内容：\n\n") + text);
+  sideChat()->setDraft(
+      tr("Explain this passage in the context of the main conversation:\n\n%1")
+          .arg(text));
   emit sideChatOpened();
 }
 } // namespace neverd::agent

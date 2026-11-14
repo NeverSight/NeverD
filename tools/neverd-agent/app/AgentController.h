@@ -1,5 +1,4 @@
-//===- AgentController.h - Agent desktop application state --------*- C++
-//-*-===//
+//===- AgentController.h - Agent desktop application state ------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
@@ -220,6 +219,8 @@ private:
   bool bindProject(Project project, QString &error);
   bool saveSettings(QString &error);
   bool readModelKey(QString &key, QString &error) const;
+  bool keyMayTravel(const ModelProfile &candidate, const QString &key,
+                    bool clearKey, QString &error) const;
   bool commitModelSettings(const ModelProfile &profile, const QString &mcpPath,
                            const QString &newKey);
   void removeCredential(const QString &id);

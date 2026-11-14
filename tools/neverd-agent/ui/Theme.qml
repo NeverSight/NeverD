@@ -2,15 +2,18 @@ pragma Singleton
 import QtQuick
 
 // The workbench's look: color roles from ChromeColors.def (Visual Studio Code
-// Dark+ and Light+), its corners and type, so Agent reads as part of NeverD.
-// A color here names a role of that table, never a literal of its own.
+// Dark+ and Light+ and the high contrast themes), its corners and type, so
+// Agent reads as part of NeverD. A color here names a role of that table,
+// never a literal of its own. The theme is the workbench's own choice.
 QtObject {
     id: theme
-    property bool light: false
+    readonly property int mode: appearance.themeMode
+    readonly property bool light: appearance.light
+    readonly property bool highContrast: appearance.highContrast
     property Item backdrop: null
     property real basePointSize: 10.5
     property font baseFont: Qt.application.font
-    function chrome(name) { return windowFrame.chromeColor(name, light) }
+    function chrome(name) { return appearance.chromeColor(name, mode) }
     // Controls grow with the desktop's interface font: a line of text and
     // the workbench's 4-pixel padding above and below it, at least 28.
     readonly property FontMetrics baseMetrics: FontMetrics { font: theme.baseFont }
@@ -90,11 +93,14 @@ QtObject {
     readonly property color closeText: chrome("WindowCloseText")
     readonly property color windowEdge: chrome("WindowEdge")
     readonly property color windowShadow: chrome("WindowShadow")
-    readonly property color error: windowFrame.themeColor("ListingError", light)
+    readonly property color error: appearance.themeColor("ListingError", mode)
     // One reading size, the desktop's: secondary text is quieted by color.
     readonly property real smallPointSize: basePointSize
     readonly property real bodyPointSize: basePointSize
     readonly property real titlePointSize: basePointSize
     readonly property real radius: 6
+    // Behind a modal dialog, as Qt's Basic style dims, a little lighter in
+    // the light themes.
+    readonly property color dim: Qt.rgba(0, 0, 0, light ? 0.3 : 0.5)
     readonly property real workspaceRadius: 0
 }

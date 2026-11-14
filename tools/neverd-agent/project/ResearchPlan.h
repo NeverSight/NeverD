@@ -1,5 +1,4 @@
-//===- ResearchPlan.h - Conversation research steps ----------------*- C++
-//-*-===//
+//===- ResearchPlan.h - Conversation research steps -------------*- C++ -*-===//
 //
 // NeverD Decompiler
 //

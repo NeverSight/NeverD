@@ -35,7 +35,7 @@ Surface {
             Icon { name: "file_load"; color: Theme.secondary; Layout.preferredWidth: 16; Layout.preferredHeight: 16 }
             Label {
                 id: title
-                text: qsTr("允许添加分析对象？")
+                text: qsTr("Allow adding this analysis object?")
                 color: Theme.text; font.weight: Font.DemiBold
                 Layout.fillWidth: true
             }
@@ -56,7 +56,7 @@ Surface {
                 textFormat: TextEdit.PlainText; readOnly: true; selectByMouse: true
                 wrapMode: TextEdit.WrapAnywhere
                 color: Theme.text; font.family: "JetBrains Mono NL"; font.pointSize: Theme.smallPointSize
-                Accessible.name: qsTr("要添加的文件路径")
+                Accessible.name: qsTr("Path of the file to add")
             }
         }
 
@@ -73,7 +73,7 @@ Surface {
                 Label {
                     Layout.fillWidth: true
                     text: card.request ? (card.request.source
-                        ? qsTr("%1 · 来自 %2").arg(card.request.project).arg(card.request.source)
+                        ? qsTr("%1 · From %2").arg(card.request.project).arg(card.request.source)
                         : card.request.project) : ""
                     textFormat: Text.PlainText; wrapMode: Text.WrapAnywhere
                     color: Theme.secondary; font.pointSize: Theme.smallPointSize
@@ -95,14 +95,14 @@ Surface {
             columnSpacing: Theme.spaceSmall; rowSpacing: 4
             Item { visible: !card.narrow; Layout.fillWidth: true }
             ApprovalButton {
-                text: qsTr("拒绝")
+                text: qsTr("Decline")
                 objectName: "denyAnalysisObject"
                 allow: false
                 Layout.fillWidth: card.narrow
                 onDecision: allow => card.choose(allow)
             }
             ApprovalButton {
-                text: qsTr("允许一次")
+                text: qsTr("Allow once")
                 objectName: "approveAnalysisObject"
                 allow: true
                 Layout.fillWidth: card.narrow

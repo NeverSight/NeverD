@@ -1,5 +1,4 @@
-//===- ExecutionTrace.h - Public execution record ----------------*- C++
-//-*-===//
+//===- ExecutionTrace.h - Public execution record ---------------*- C++ -*-===//
 //
 // NeverD Decompiler
 //

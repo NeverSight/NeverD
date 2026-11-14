@@ -50,7 +50,8 @@ AgentProcess::AgentProcess(QObject *parent) : QObject(parent) {
 
 AgentProcess::~AgentProcess() { close(); }
 
-bool AgentProcess::start(const QString &directory, QString &error) {
+bool AgentProcess::start(const QString &directory, const QString &language,
+                         QString &error) {
   if (active())
     return false;
   const auto program = findAgentCliExecutable();
@@ -63,6 +64,8 @@ bool AgentProcess::start(const QString &directory, QString &error) {
   QStringList arguments{"serve", "--stdio"};
   if (!directory.isEmpty())
     arguments.append({"--data-dir", directory});
+  if (!language.isEmpty())
+    arguments.append({"--language", language});
   Process.start(program, arguments);
   return true;
 }

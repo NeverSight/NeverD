@@ -12,21 +12,21 @@ ColumnLayout {
 
     Label {
         Layout.fillWidth: true
-        text: view.backend.memoryStatus || qsTr("任务结束后在空闲时整理记忆；下次按问题召回。")
+        text: view.backend.memoryStatus || qsTr("After a task ends, memory is organized while idle and recalled for related questions later.")
         color: Theme.secondary
         wrapMode: Text.Wrap
     }
     RowLayout {
         Layout.fillWidth: true
         Label {
-            text: (view.backend.useMemory ? qsTr("召回已开启") : qsTr("召回已关闭")) + " · " +
-                (view.backend.generateMemory ? qsTr("自动整理已开启") : qsTr("自动整理已关闭"))
+            text: (view.backend.useMemory ? qsTr("Recall on") : qsTr("Recall off")) + " · " +
+                (view.backend.generateMemory ? qsTr("Auto-organize on") : qsTr("Auto-organize off"))
             color: Theme.secondary
             Layout.fillWidth: true
             wrapMode: Text.Wrap
         }
         ActionButton {
-            glyph: "refresh"; hint: qsTr("立即整理待处理记录；失败项重新尝试")
+            glyph: "refresh"; hint: qsTr("Organize pending records now and retry failed ones")
             enabled: view.backend.generateMemory && !view.backend.memoryWorking
             onClicked: view.backend.organizeMemory()
         }
@@ -40,9 +40,9 @@ ColumnLayout {
         spacing: 8
         Label {
             Layout.fillWidth: true
-            text: (entry.record.title || qsTr("手动记忆")) +
-                (entry.record.state === "needs_review" ? qsTr(" · 冲突待确认") :
-                 entry.record.state === "superseded" ? qsTr(" · 已被替代") : "")
+            text: (entry.record.state === "needs_review" ? qsTr("%1 · Conflict needs confirmation") :
+                 entry.record.state === "superseded" ? qsTr("%1 · Superseded") :
+                 "%1").arg(entry.record.title || qsTr("Manual memory"))
             color: entry.record.state === "needs_review" ? Theme.error : Theme.text
             font.weight: Font.Medium
             wrapMode: Text.Wrap
@@ -58,22 +58,22 @@ ColumnLayout {
             Layout.fillWidth: true
             Label {
                 text: entry.record.automatic ?
-                    ({preference: qsTr("用户偏好"), procedure: qsTr("研究方法"), finding: qsTr("历史发现 · 需核验"), hypothesis: qsTr("推测")}[entry.record.category] || qsTr("自动提炼")) : qsTr("手动记录")
+                    ({preference: qsTr("User preference"), procedure: qsTr("Research method"), finding: qsTr("Past finding · Needs verification"), hypothesis: qsTr("Hypothesis")}[entry.record.category] || qsTr("Extracted automatically")) : qsTr("Added manually")
                 color: Theme.secondary; Layout.fillWidth: true
                 wrapMode: Text.Wrap
             }
             ActionButton {
-                glyph: "comment"; hint: qsTr("编辑 / 确认此版本")
+                glyph: "comment"; hint: qsTr("Edit or confirm this version…")
                 onClicked: view.editRequested(entry.scopeId, entry.record.id, entry.record.text)
             }
             ActionButton {
-                glyph: "close_small"; hint: qsTr("遗忘；阻止自动整理重新加入同一条目")
+                glyph: "close_small"; hint: qsTr("Forget, and stop automatic organizing from adding it back")
                 onClicked: view.backend.forgetMemory(entry.scopeId, entry.record.id)
             }
         }
         ActionButton {
             visible: !!entry.record.source
-            text: entry.expanded ? qsTr("收起来源") : qsTr("查看来源")
+            text: entry.expanded ? qsTr("Hide source") : qsTr("Show source")
             onClicked: entry.expanded = !entry.expanded
         }
         ColumnLayout {
@@ -81,7 +81,7 @@ ColumnLayout {
             Layout.fillWidth: true
             spacing: 8
             Label {
-                text: entry.record.source ? qsTr("原文 · ") + entry.record.source.createdAt : ""
+                text: entry.record.source ? qsTr("Original quote · %1").arg(entry.record.source.createdAt) : ""
                 color: Theme.secondary; wrapMode: Text.Wrap; Layout.fillWidth: true
             }
             TextEdit {
@@ -92,7 +92,7 @@ ColumnLayout {
                 color: Theme.secondary
             }
             Label {
-                text: entry.record.source ? qsTr("来源任务：") + entry.record.source.runId : ""
+                text: entry.record.source ? qsTr("Source task: %1").arg(entry.record.source.runId) : ""
                 color: Theme.secondary; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true
             }
             Repeater {
@@ -102,7 +102,7 @@ ColumnLayout {
                     text: modelData.tool + (modelData.address ? " · " + modelData.address : "")
                     glyph: "file"
                     enabled: entry.record.originProjectId === view.backend.activeId
-                    hint: enabled ? qsTr("打开原始证据快照") : qsTr("证据保存在来源项目；此处保留引用与原文")
+                    hint: enabled ? qsTr("Open the original evidence snapshot") : qsTr("The evidence is stored in its source project; this entry keeps the reference and original quote.")
                     onClicked: view.backend.openEvidence(modelData.id)
                 }
             }
@@ -118,12 +118,12 @@ ColumnLayout {
             spacing: 14
             RowLayout {
                 Layout.fillWidth: true
-                Label { text: qsTr("项目记忆"); color: Theme.secondary; Layout.fillWidth: true }
-                ActionButton { glyph: "plus"; hint: qsTr("添加项目记忆"); onClicked: view.addRequested("") }
+                Label { text: qsTr("Project memory"); color: Theme.secondary; Layout.fillWidth: true }
+                ActionButton { glyph: "plus"; hint: qsTr("Add project memory…"); onClicked: view.addRequested("") }
             }
             Label {
                 visible: view.backend.projectMemory.length === 0
-                text: qsTr("项目偏好、研究方法和跨对象线索会保存在这里。")
+                text: qsTr("Project preferences, research methods and leads across objects are kept here.")
                 color: Theme.secondary; wrapMode: Text.Wrap; Layout.fillWidth: true
             }
             Repeater {
@@ -132,12 +132,12 @@ ColumnLayout {
             }
             Label {
                 visible: !!view.backend.selectedObjectId
-                text: (view.backend.selectedObject.name || "") + qsTr(" · 对象记忆")
+                text: qsTr("%1 · Object memory").arg(view.backend.selectedObject.name || "")
                 color: Theme.secondary; wrapMode: Text.Wrap; Layout.fillWidth: true
             }
             Label {
                 visible: !!view.backend.selectedObjectId && view.backend.memory.length === 0
-                text: qsTr("尚无对象记忆。自动提炼的发现始终绑定这份文件的 SHA-256。")
+                text: qsTr("No object memory yet. Extracted findings are always tied to this file's SHA-256.")
                 color: Theme.secondary; wrapMode: Text.Wrap; Layout.fillWidth: true
             }
             Repeater {
@@ -145,7 +145,7 @@ ColumnLayout {
                 delegate: Entry { required property var modelData; record: modelData; scopeId: view.backend.selectedObjectId }
             }
             Label {
-                text: view.backend.sharing ? qsTr("来自其他项目 · 只读") : qsTr("全局对象记忆共享已关闭")
+                text: view.backend.sharing ? qsTr("From other projects · Read-only") : qsTr("Object memory sharing across projects is off.")
                 color: Theme.secondary; wrapMode: Text.Wrap; Layout.fillWidth: true
             }
             Repeater {

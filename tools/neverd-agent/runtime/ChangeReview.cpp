@@ -7,6 +7,7 @@
 
 #include "project/EvidenceStore.h"
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
@@ -16,13 +17,16 @@
 
 namespace neverd::agent {
 namespace {
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(neverd::agent::ChangeReview)
+};
 QString path(const Project &project, const QString &id) {
   return QDir(ProjectStore::stateDirectory(project))
       .filePath("changes/" + id + ".json");
 }
 QString display(const QJsonValue &value) {
   if (value.isNull())
-    return "(由 ND 分析推断)";
+    return Text::tr("(inferred by NeverD analysis)");
   if (value.isString())
     return value.toString();
   return QString::fromUtf8(
@@ -199,7 +203,8 @@ public:
               exists = true;
           if (!exists) {
             Proposal["beforeDisplay"] =
-                Proposal["beforeDisplay"].toString() + name + ": 尚未定义\n";
+                Proposal["beforeDisplay"].toString() +
+                Text::tr("%1: not defined yet").arg(name) + '\n';
             typeDisplay(index + 1, done);
             return;
           }

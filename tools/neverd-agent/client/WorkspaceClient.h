@@ -131,6 +131,8 @@ public:
   QString dataDirectory() const { return Directory; }
   SideChatClient *sideChat() const { return Side; }
   Q_INVOKABLE bool prepareClose();
+  /// Ask the CLI to write later messages in interface \p language.
+  void setLanguage(const QString &language);
   Q_INVOKABLE QString pathFromUrl(const QString &url) const;
   Q_INVOKABLE QString shortcutText(const QString &sequence) const;
 #define AGENT_PROPERTY(Type, Name, Signal)                                     \

@@ -1,5 +1,4 @@
-//===- NphTools.cpp - Agent consumer of shared ND tools
-//--------------------===//
+//===- NphTools.cpp - Agent consumer of shared ND tools -------------------===//
 //
 // NeverD Decompiler
 //

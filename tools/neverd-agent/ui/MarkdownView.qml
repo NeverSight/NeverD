@@ -60,11 +60,11 @@ TextEdit {
     ThemedMenu {
         id: messageMenu
         property int codePosition: 0
-        ThemedMenuItem { text: qsTr("复制选中文字"); enabled: view.selectedText.length > 0; onTriggered: view.copy() }
-        ThemedMenuItem { text: qsTr("复制代码块"); enabled: renderer.hasCodeAt(messageMenu.codePosition); onTriggered: renderer.copyCodeAt(messageMenu.codePosition) }
-        ThemedMenuItem { text: qsTr("复制原文"); onTriggered: view.copyMessage() }
+        ThemedMenuItem { text: qsTr("Copy selected text"); enabled: view.selectedText.length > 0; onTriggered: view.copy() }
+        ThemedMenuItem { text: qsTr("Copy code block"); enabled: renderer.hasCodeAt(messageMenu.codePosition); onTriggered: renderer.copyCodeAt(messageMenu.codePosition) }
+        ThemedMenuItem { text: qsTr("Copy original text"); onTriggered: view.copyMessage() }
         ThemedSeparator { visible: view.canReference || view.canAskSide }
-        ThemedMenuItem { visible: view.canReference; text: qsTr("引用到输入"); enabled: view.selectedText.length > 0; onTriggered: view.referenceRequested(view.selectedText.replace(/\u2029/g, "\n")) }
-        ThemedMenuItem { visible: view.canAskSide; text: qsTr("在侧边聊天中追问"); enabled: view.selectedText.length > 0; onTriggered: view.sideQuestionRequested(view.selectedText.replace(/\u2029/g, "\n")) }
+        ThemedMenuItem { visible: view.canReference; text: qsTr("Attach as reference"); enabled: view.selectedText.length > 0; onTriggered: view.referenceRequested(view.selectedText.replace(/\u2029/g, "\n")) }
+        ThemedMenuItem { visible: view.canAskSide; text: qsTr("Follow up in side chat"); enabled: view.selectedText.length > 0; onTriggered: view.sideQuestionRequested(view.selectedText.replace(/\u2029/g, "\n")) }
     }
 }

@@ -31,7 +31,7 @@ bool AgentController::submitRequest(const QString &objectId,
       (!objectId.isEmpty() && !findObject(*project, objectId)))
     return false;
   if (mode != "queue" && mode != "steer") {
-    emit operationError(tr("未知的消息发送方式。"));
+    emit operationError(tr("Unknown message send mode."));
     return false;
   }
   const auto input = ConversationInput::capture(
@@ -41,8 +41,9 @@ bool AgentController::submitRequest(const QString &objectId,
   value["context"] = QJsonArray{};
   if (mode == "steer" && running()) {
     if (Runtimes[ActiveId]->selectedObjectId() != objectId) {
-      emit operationError(
-          tr("进行中的分析对象范围已固定。切换对象的消息请排到下一轮。"));
+      emit operationError(tr("The running analysis keeps its object scope. "
+                             "Queue messages for another object for the next "
+                             "round."));
       return false;
     }
     auto messages = value["messages"].toArray();

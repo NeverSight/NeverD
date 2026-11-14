@@ -1,5 +1,4 @@
-//===- ModelClient.cpp - Asynchronous model requests
-//-----------------------===//
+//===- ModelClient.cpp - Asynchronous model requests ----------------------===//
 //
 // NeverD Decompiler
 //
@@ -15,8 +14,11 @@
 namespace neverd::agent {
 ModelClient::ModelClient(QObject *parent) : QObject(parent) {
   Timer.setSingleShot(true);
+  // The timeout measures silence, not the whole answer: every chunk of a
+  // streamed reply starts it again, so long answers and reasoning finish.
   connect(&Timer, &QTimer::timeout, this, [this] {
-    Failure = "Model request timed out.";
+    Failure = tr("The model sent nothing for %1 seconds.")
+                  .arg(Timer.interval() / 1000);
     if (Reply)
       Reply->abort();
   });
@@ -57,7 +59,7 @@ void ModelClient::start(const ModelProfile &profile, const QString &key,
     const int status =
         Reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     if (Cancelled) {
-      turn.Error = "Analysis cancelled.";
+      turn.Error = tr("Analysis cancelled.");
       turn.Cancelled = true;
     } else if (!Failure.isEmpty()) {
       if (!Codec->error().isEmpty())
@@ -87,9 +89,11 @@ void ModelClient::read() {
   if (!Reply)
     return;
   const auto bytes = Reply->isOpen() ? Reply->readAll() : QByteArray{};
+  if (!bytes.isEmpty() && Timer.isActive())
+    Timer.start();
   Received += bytes.size();
   if (Received > model_limits::kMaxResponseBytes) {
-    Failure = "Model response exceeds the configured size limit.";
+    Failure = tr("Model response exceeds the configured size limit.");
     if (Reply->isRunning())
       Reply->abort();
     return;

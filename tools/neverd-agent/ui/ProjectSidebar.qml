@@ -19,9 +19,9 @@ Surface {
         spacing: Theme.spaceMedium
         RowLayout {
             Layout.fillWidth: true
-            Label { text: qsTr("项目"); color: Theme.secondary; font.pointSize: Theme.smallPointSize; font.weight: Font.Medium; Layout.fillWidth: true }
-            ActionButton { glyph: "open"; hint: qsTr("打开项目"); onClicked: sidebar.openRequested() }
-            ActionButton { glyph: "folder_new"; hint: qsTr("新建项目"); onClicked: sidebar.createRequested() }
+            Label { text: qsTr("Projects"); color: Theme.secondary; font.pointSize: Theme.smallPointSize; font.weight: Font.Medium; Layout.fillWidth: true }
+            ActionButton { glyph: "open"; hint: qsTr("Open project…"); onClicked: sidebar.openRequested() }
+            ActionButton { glyph: "folder_new"; hint: qsTr("New project"); onClicked: sidebar.createRequested() }
         }
         ScrollView {
             Layout.fillWidth: true
@@ -45,7 +45,7 @@ Surface {
                             spacing: 0
                             ActionButton {
                                 glyph: projectNode.expanded ? "chevron_down" : "chevron_right"
-                                hint: projectNode.expanded ? qsTr("折叠项目") : qsTr("展开项目")
+                                hint: projectNode.expanded ? qsTr("Collapse project") : qsTr("Expand project")
                                 onClicked: projectNode.expanded = !projectNode.expanded
                                 Layout.preferredWidth: 26
                             }
@@ -54,7 +54,7 @@ Surface {
                                 text: projectNode.modelData.name
                                 glyph: "folder"
                                 hint: projectNode.modelData.name + "\n" + projectNode.modelData.directory
-                                      + (approvalDot.visible ? "\n" + qsTr("有待审批请求") : "")
+                                      + (approvalDot.visible ? "\n" + qsTr("Approval request pending") : "")
                                 checked: sidebar.backend.activeId === projectNode.modelData.id
                                 font.weight: checked ? Font.Medium : Font.Normal
                                 Layout.fillWidth: true
@@ -77,7 +77,7 @@ Surface {
                             }
                             ActionButton {
                                 glyph: "more"
-                                hint: qsTr("项目菜单")
+                                hint: qsTr("Project menu")
                                 opacity: projectHover.hovered || activeFocus || hovered ? 1 : 0
                                 onClicked: sidebar.menuRequested(projectNode.modelData.id, "", this)
                                 Layout.preferredWidth: 28
@@ -118,7 +118,7 @@ Surface {
                                     }
                                     ActionButton {
                                         glyph: "more"
-                                        hint: qsTr("分析对象菜单")
+                                        hint: qsTr("Analysis object menu")
                                         opacity: objectHover.hovered || activeFocus || hovered ? 1 : 0
                                         onClicked: sidebar.menuRequested(projectNode.modelData.id, objectNode.modelData.id, this)
                                         Layout.preferredWidth: 28
@@ -127,7 +127,7 @@ Surface {
                             }
                             Label {
                                 visible: projectNode.modelData.objects.length === 0
-                                text: qsTr("还没有分析对象")
+                                text: qsTr("No analysis objects yet")
                                 color: Theme.secondary
                                 Layout.margins: 8
                             }
@@ -136,7 +136,7 @@ Surface {
                 }
                 Label {
                     visible: sidebar.backend.projects.length === 0
-                    text: qsTr("为一项研究建立项目，\n再添加需要一起分析的文件。")
+                    text: qsTr("Create a project for one line of research, then add the files to analyze together.")
                     color: Theme.secondary
                     wrapMode: Text.Wrap
                     Layout.fillWidth: true
@@ -146,7 +146,7 @@ Surface {
         }
         Rectangle { Layout.fillWidth: true; height: 1; color: Theme.border }
         ActionButton {
-            text: qsTr("工作区设置")
+            text: qsTr("Workspace settings…")
             glyph: "options"
             Layout.fillWidth: true
             onClicked: sidebar.settingsRequested()

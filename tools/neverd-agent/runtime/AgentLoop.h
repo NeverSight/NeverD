@@ -20,6 +20,8 @@ struct RunBudget {
   int Steps = 0, Active = 0;
   qint64 TokenLimit = 0, Tokens = 0, Reserved = 0;
   bool Estimated = false, LimitReached = false;
+  /// A persistent goal's allowance rather than one question's.
+  bool Goal = false;
 };
 class AgentLoop final : public QObject {
   Q_OBJECT

@@ -1,5 +1,4 @@
-//===- AgentWindowFrame.h - Application-painted Quick window -----*- C++
-//-*-===//
+//===- AgentWindowFrame.h - Application-painted Quick window ----*- C++ -*-===//
 //
 // NeverD Decompiler
 //

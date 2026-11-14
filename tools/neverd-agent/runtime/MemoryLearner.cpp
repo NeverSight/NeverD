@@ -1,5 +1,4 @@
-//===- MemoryLearner.cpp - Background extraction and consolidation
-//----------===//
+//===- MemoryLearner.cpp - Background extraction and consolidation --------===//
 //
 // NeverD Decompiler
 //

@@ -24,16 +24,19 @@ ColumnLayout {
         id: objects
         Layout.fillWidth: true; textRole: "name"; valueRole: "id"
         model: view.backend.activeProject.objects || []
-        Accessible.name: qsTr("证据的分析对象")
+        Accessible.name: qsTr("Analysis object for evidence")
     }
-    Field { id: query; Layout.fillWidth: true; placeholderText: qsTr("函数名或地址，例如 0x140001000") }
+    Field { id: query; Layout.fillWidth: true; placeholderText: qsTr("Function name or address, e.g. 0x140001000") }
     Flow {
         Layout.fillWidth: true; spacing: 6
         Repeater {
-            model: [{id:"c",title:qsTr("伪代码")},{id:"disasm",title:qsTr("反汇编")},{id:"xrefs",title:qsTr("交叉引用")},{id:"cfg",title:qsTr("控制流") }]
+            model: [{id:"c",title:qsTr("Pseudocode")},{id:"disasm",title:qsTr("Disassembly")},{id:"xrefs",title:qsTr("Cross references")},{id:"cfg",title:qsTr("Control flow") }]
+            // A view switch: quiet tool buttons, the shown view checked.
             ActionButton {
                 required property var modelData
+                quiet: true
                 text: modelData.title
+                checked: view.record.representation === modelData.id || (!view.record.representation && view.record.tool === ({c: "read_decompilation", disasm: "read_disassembly", xrefs: "list_xrefs", cfg: "read_cfg"})[modelData.id])
                 enabled: !view.backend.reviewBusy && !view.backend.evidenceBusy && !!objects.currentValue && query.text.trim().length > 0
                 onClicked: view.backend.inspectObject(objects.currentValue, query.text, modelData.id)
             }
@@ -41,15 +44,15 @@ ColumnLayout {
     }
     Label {
         Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.secondary; font.pointSize: Theme.smallPointSize
-        text: view.backend.evidenceBusy ? qsTr("正在读取并保存证据…") : view.record.id
-              ? view.record.objectName + " · " + (view.record.address || view.record.tool) + qsTr("\n分析版本 %1 · %2").arg(view.record.revision || "—").arg(new Date(view.record.createdAt).toLocaleString(Qt.locale(), Locale.ShortFormat))
-              : qsTr("读取指定函数，或点击回答中的证据链接。")
+        text: view.backend.evidenceBusy ? qsTr("Reading and saving evidence…") : view.record.id
+              ? qsTr("%1 · %2\nAnalysis revision %3 · %4").arg(view.record.objectName).arg(view.record.address || view.record.tool).arg(view.record.revision || "—").arg(new Date(view.record.createdAt).toLocaleString(Qt.locale(), Locale.ShortFormat))
+              : qsTr("Read a function, or click an evidence link in an answer.")
     }
     Label { visible: !!view.record.issue; text: view.record.issue || ""; color: Theme.error; wrapMode: Text.Wrap; Layout.fillWidth: true }
     RowLayout {
         visible: !!view.record.id; Layout.fillWidth: true
-        ActionButton { text: qsTr("引用到输入"); onClicked: view.backend.attachEvidence(view.record.id) }
-        ActionButton { text: qsTr("在 ND GUI 打开"); onClicked: view.backend.openInGui(view.record.objectId) }
+        ActionButton { quiet: true; glyph: "plus"; text: qsTr("Attach as reference"); onClicked: view.backend.attachEvidence(view.record.id) }
+        ActionButton { quiet: true; glyph: "float"; text: qsTr("Open in the NeverD workbench"); onClicked: view.backend.openInGui(view.record.objectId) }
     }
     ScrollView {
         Layout.fillWidth: true; Layout.fillHeight: true; clip: true; contentWidth: availableWidth
@@ -65,9 +68,9 @@ ColumnLayout {
     }
     RowLayout {
         visible: !!view.record.id; Layout.fillWidth: true
-        Label { text: view.record.complete === false ? qsTr("部分内容已保存") : qsTr("已保存到当前项目"); color: Theme.quiet; font.pointSize: Theme.smallPointSize; Layout.fillWidth: true }
-        ActionButton { visible: view.record.offset > 0; text: qsTr("回到开头"); onClicked: view.backend.openEvidence(view.record.id, 0) }
-        ActionButton { visible: view.record.nextOffset >= 0; text: qsTr("下一页"); onClicked: view.backend.openEvidence(view.record.id, view.record.nextOffset) }
+        Label { text: view.record.complete === false ? qsTr("Partially saved") : qsTr("Saved to the current project"); color: Theme.quiet; font.pointSize: Theme.smallPointSize; Layout.fillWidth: true }
+        ActionButton { visible: view.record.offset > 0; text: qsTr("Back to start"); onClicked: view.backend.openEvidence(view.record.id, 0) }
+        ActionButton { visible: view.record.nextOffset >= 0; text: qsTr("Next page"); onClicked: view.backend.openEvidence(view.record.id, view.record.nextOffset) }
     }
     function syncRecord() {
         if (!record.id) return

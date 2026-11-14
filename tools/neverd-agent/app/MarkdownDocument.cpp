@@ -68,7 +68,7 @@ void MarkdownDocument::render(const QString &source, bool markdown, QColor text,
     QTextCursor cursor(&Document);
     cursor.setPosition(it->first);
     cursor.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
-    cursor.insertText("[" + (it->second.isEmpty() ? tr("图片") : it->second) +
+    cursor.insertText("[" + (it->second.isEmpty() ? tr("Image") : it->second) +
                       "]");
   }
   const auto mono =
@@ -128,7 +128,13 @@ void MarkdownDocument::render(const QString &source, bool markdown, QColor text,
                          : compact ? 115
                                    : 140,
                          QTextBlockFormat::ProportionalHeight);
-    if (fenced) {
+    if (!markdown) {
+      // Plain text is code or a file: its lines follow one another as in an
+      // editor, not as paragraphs.
+      format.setLineHeight(120, QTextBlockFormat::ProportionalHeight);
+      format.setTopMargin(0);
+      format.setBottomMargin(0);
+    } else if (fenced) {
       format.setBackground(code);
       format.setLeftMargin(0);
       format.setRightMargin(0);

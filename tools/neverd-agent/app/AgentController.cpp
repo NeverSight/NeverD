@@ -1,5 +1,4 @@
-//===- AgentController.cpp - Agent desktop application state
-//---------------===//
+//===- AgentController.cpp - Agent desktop application state --------------===//
 //
 // NeverD Decompiler
 //
@@ -93,10 +92,12 @@ AgentController::AgentController(QString directory, QObject *parent)
   });
   connect(&Learner, &MemoryLearner::finished, this,
           [this](const QString &, int added, const QString &error) {
-            MemoryStatus = added < 0 ? tr("记忆整理已暂停，待处理记录保留")
-                           : error.isEmpty()
-                               ? tr("记忆整理完成 · 新增 %1 条").arg(added)
-                               : tr("记忆整理未完成：%1").arg(error);
+            MemoryStatus =
+                added < 0 ? tr("Memory organization is paused. Pending records "
+                               "are kept.")
+                : error.isEmpty()
+                    ? tr("Memory organized · new notes: %1").arg(added)
+                    : tr("Memory organization did not finish: %1").arg(error);
             refreshMemory();
             emit memoryChanged();
             scheduleMemory();
@@ -108,25 +109,33 @@ bool AgentController::loadConfiguration(QJsonObject &config, QString &error) {
   if (!ProjectStore::readJson(path, config, error, true))
     return false;
   if (QFileInfo::exists(path)) {
+    // Version and projects are required; settings a configuration predates
+    // or omits take their defaults. The theme follows the workbench, so
+    // "lightTheme" is kept only for older Agent builds.
+    const auto optional = [&config](const char *field,
+                                    bool (QJsonValue::*is)() const) {
+      return !config.contains(field) || (config.value(field).*is)();
+    };
     if (config.value("version").toInt(-1) != kStorageVersion ||
         !config.value("projects").isArray() ||
-        !config.value("sharing").isBool() ||
-        !config.value("lightTheme").isBool() ||
-        !config.value("guiPath").isString()) {
-      error = QStringLiteral("全局配置无效，请检查：%1").arg(path);
+        !optional("sharing", &QJsonValue::isBool) ||
+        !optional("lightTheme", &QJsonValue::isBool) ||
+        !optional("guiPath", &QJsonValue::isString) ||
+        !optional("mcpPath", &QJsonValue::isString)) {
+      error = tr("The global configuration is invalid. Check %1.").arg(path);
       return false;
     }
     Sharing = config.value("sharing").toBool();
     for (const auto *field : {"useMemory", "generateMemory"})
       if (config.contains(field) && !config[field].isBool()) {
-        error = "Invalid long-term memory preference.";
+        error = tr("The global configuration is invalid. Check %1.").arg(path);
         return false;
       }
     UseMemory = config["useMemory"].toBool(true);
     GenerateMemory = config["generateMemory"].toBool(true);
     if (config.contains("autoAddAnalysisObjects") &&
         !config["autoAddAnalysisObjects"].isBool()) {
-      error = tr("无效的分析对象添加权限设置。");
+      error = tr("Invalid setting for adding analysis objects.");
       return false;
     }
     AutoAddAnalysisObjects = config["autoAddAnalysisObjects"].toBool();
@@ -151,7 +160,8 @@ bool AgentController::initialize(QString &error) {
   if (!config.isEmpty()) {
     for (const auto &entry : config.value("projects").toArray()) {
       if (!entry.isString() || entry.toString().isEmpty()) {
-        error = QStringLiteral("全局配置包含无效项目路径：%1")
+        error = tr("The global configuration contains an invalid project "
+                   "path: %1")
                     .arg(QDir(DataDirectory).filePath("config.json"));
         return false;
       }
@@ -209,7 +219,7 @@ const AnalysisObject *AgentController::findObject(const Project &project,
 bool AgentController::bindProject(Project project, QString &error) {
   if (const auto *existing = findProject(project.Id)) {
     if (QFileInfo(existing->Directory) != QFileInfo(project.Directory)) {
-      error = QStringLiteral("两个目录使用相同项目 ID：%1\n%2")
+      error = tr("Two directories use the same project ID: %1\n%2")
                   .arg(existing->Directory, project.Directory);
       return false;
     }
@@ -221,7 +231,8 @@ bool AgentController::bindProject(Project project, QString &error) {
   auto lock = std::make_unique<QLockFile>(
       QDir(ProjectStore::stateDirectory(project)).filePath("editor.lock"));
   if (!lock->tryLock()) {
-    error = QStringLiteral("项目已在其他 Agent 窗口中打开，或目录无法写入：%1")
+    error = tr("The project is open in another Agent window, or its "
+               "directory cannot be written: %1")
                 .arg(project.Directory);
     return false;
   }
@@ -296,15 +307,18 @@ ShutdownStatus AgentController::prepareShutdown() {
   MemoryTimer.stop();
   Learner.cancel();
   if (credentialBusy()) {
-    emit notice(tr("正在访问系统凭据库，请完成或取消系统解锁提示后关闭。"));
+    emit notice(tr("Accessing the system credential store. Complete or cancel "
+                   "the system unlock prompt, then close again."));
     return ShutdownStatus::Pending;
   }
   if (!WritingProjects.isEmpty()) {
-    emit notice(tr("正在保存 ND 变更，请等待完成回执后关闭。"));
+    emit notice(tr("Saving NeverD changes. Close again after the save is "
+                   "confirmed."));
     return ShutdownStatus::Pending;
   }
   if (busy()) {
-    emit notice(QStringLiteral("正在完成文件登记，请稍后关闭。"));
+    emit notice(
+        tr("Finishing file registration. Try closing again in a moment."));
     return ShutdownStatus::Pending;
   }
   bool hasRuns = false;
@@ -328,7 +342,8 @@ ShutdownStatus AgentController::prepareShutdown() {
     }
   }
   if (hasRuns) {
-    emit notice(QStringLiteral("正在停止分析并保存记录，请稍后关闭。"));
+    emit notice(tr("Stopping analysis and saving records. Try closing again in "
+                   "a moment."));
     return ShutdownStatus::Pending;
   }
   QString error;
@@ -459,13 +474,15 @@ void AgentController::addObject(const QString &path) {
     auto *target = findProject(projectId);
     QString error;
     if (!target || !ProjectStore::addObject(*target, result, error)) {
-      emit operationError(target ? error : tr("目标项目已关闭。"));
+      emit operationError(target ? error
+                                 : tr("The target project was closed."));
       return;
     }
     if (ActiveId == projectId)
       selectObject(target->Objects.back().Id);
     objectAdded(*target);
-    emit notice(tr("已添加 %1 · 文件指纹已保存，尚未启动分析。")
+    emit notice(tr("Added %1. Its file fingerprint is saved; analysis has not "
+                   "started.")
                     .arg(QFileInfo(result.Path).fileName()));
   });
 }
@@ -520,11 +537,20 @@ void AgentController::requestObjectImport(
     call->fail({"object_import", message.toStdString()});
   };
   if (!project || (!sourceId.isEmpty() && !source)) {
-    fail(tr("目标项目或依赖来源已不可用。"));
+    fail(QStringLiteral(
+        "The target project or dependency source is no longer available."));
     return;
   }
   if (path.trimmed().isEmpty() || reason.trimmed().isEmpty()) {
-    fail(tr("请提供依赖文件路径和添加理由。"));
+    fail(QStringLiteral(
+        "Provide the dependency file path and the reason for adding it."));
+    return;
+  }
+  // A network path reaches another machine as soon as it is resolved, before
+  // any approval; the model may only name local files.
+  if (isRemotePath(path) || isRemotePath(localPath(path.trimmed()))) {
+    fail(QStringLiteral("Network paths cannot be added as analysis objects. "
+                        "Provide a local file path."));
     return;
   }
   const auto base =
@@ -539,7 +565,8 @@ void AgentController::requestObjectImport(
     for (const auto &candidate : QDir(base).entryInfoList(QDir::Files))
       if (candidate.fileName().compare(inputPath, Qt::CaseInsensitive) == 0) {
         if (!match.isEmpty()) {
-          fail(tr("发现多个同名依赖，请指定完整路径。"));
+          fail(QStringLiteral(
+              "Several dependencies match this name. Specify the full path."));
           return;
         }
         match = candidate.canonicalFilePath();
@@ -547,7 +574,8 @@ void AgentController::requestObjectImport(
     canonical = match;
   }
   if (canonical.isEmpty() || !QFileInfo(canonical).isFile()) {
-    fail(tr("找不到依赖文件：%1。请提供已有文件的完整路径。")
+    fail(QStringLiteral("Dependency file not found: %1. Provide the full path "
+                        "of an existing file.")
              .arg(QDir::toNativeSeparators(file.absoluteFilePath())));
     return;
   }
@@ -556,7 +584,8 @@ void AgentController::requestObjectImport(
   const auto relative = QDir(state).relativeFilePath(canonical);
   if (!state.isEmpty() && !QDir::isAbsolutePath(relative) && relative != ".." &&
       !relative.startsWith("../")) {
-    fail(tr("Agent 项目状态文件不能作为分析对象。"));
+    fail(QStringLiteral(
+        "Agent project state files cannot be analysis objects."));
     return;
   }
 
@@ -578,7 +607,9 @@ void AgentController::requestObjectImport(
     return;
   }
   if (!InteractiveObjectApprovals) {
-    fail(tr("此会话无法显示审批。请在桌面 Agent 中提交，或先手动登记该对象。"));
+    fail(QStringLiteral("This session cannot show approval requests. Submit "
+                        "the request in the desktop Agent, or register the "
+                        "object manually first."));
     return;
   }
   const auto id = request.Id;
@@ -668,7 +699,7 @@ void AgentController::importRequestedObject(ObjectImport request,
     }
     const auto added = target->Objects.back();
     objectAdded(*target);
-    emit notice(tr("Agent 已添加分析对象 %1").arg(added.Name));
+    emit notice(tr("Agent added the analysis object %1.").arg(added.Name));
     finishObjectImport(request, added, automatic ? "automatic" : "approved");
   });
 }
@@ -690,7 +721,8 @@ void AgentController::relocateObject(const QString &projectId,
   if (!project || !findObject(*project, objectId))
     return;
   if (WritingProjects.contains(projectId) || projectHasAnalysis(projectId)) {
-    emit operationError(tr("请先完成或停止该项目的分析，再重新定位文件。"));
+    emit operationError(tr(
+        "Finish or stop this project's analysis before relocating the file."));
     return;
   }
   auto *watcher = new QFutureWatcher<FingerprintResult>(this);
@@ -708,8 +740,9 @@ void AgentController::relocateObject(const QString &projectId,
           return;
         if (WritingProjects.contains(projectId) ||
             projectHasAnalysis(projectId)) {
-          emit operationError(
-              tr("项目已开始分析，未更改文件绑定；请停止后重试。"));
+          emit operationError(tr("The project started an analysis, so the "
+                                 "file binding was not changed. Stop it and "
+                                 "try again."));
           return;
         }
         QString error;
@@ -731,7 +764,9 @@ void AgentController::relocateObject(const QString &projectId,
           emit operationError(error);
         emit workspaceChanged();
         emit objectChanged();
-        emit notice(tr("文件已重新定位，原对象记忆与对话已保留。"));
+        emit notice(
+            tr("File relocated. The object's memory and conversations are "
+               "kept."));
       });
   watcher->setFuture(
       QtConcurrent::run([path] { return ProjectStore::fingerprint(path); }));
@@ -773,7 +808,7 @@ bool AgentController::saveRequest(const QString &objectId) {
   DraftDirty = false;
   DraftTimer.stop();
   emit conversationChanged();
-  emit notice(QStringLiteral("需求已保存。"));
+  emit notice(tr("Request saved."));
   return true;
 }
 
@@ -818,7 +853,7 @@ void AgentController::openTextLink(const QString &link) {
     return;
   }
   if (url.scheme() == "https" || url.scheme() == "http") {
-    emit desktopUrlRequested(url.toString(), tr("无法打开链接。"));
+    emit desktopUrlRequested(url.toString(), tr("Could not open the link."));
     return;
   }
   const auto *project = findProject(ActiveId);
@@ -832,7 +867,14 @@ void AgentController::openTextLink(const QString &link) {
   else if (link.size() > 2 && link[1] == ':' && link[0].isLetter())
     path = link;
   else {
-    emit operationError(QStringLiteral("该链接类型不支持在对话中打开。"));
+    emit operationError(
+        tr("This type of link cannot be opened from the conversation."));
+    return;
+  }
+  // A model wrote the link; a network path would contact its host.
+  if (isRemotePath(link) || isRemotePath(path)) {
+    emit operationError(tr("File links must point to an existing text file in "
+                           "the current project."));
     return;
   }
   const QString root = QFileInfo(project->Directory).canonicalFilePath();
@@ -844,8 +886,8 @@ void AgentController::openTextLink(const QString &link) {
   constexpr auto caseSensitivity = Qt::CaseSensitive;
 #endif
   if (target.isEmpty() || !target.startsWith(root + '/', caseSensitivity)) {
-    emit operationError(
-        QStringLiteral("文件链接须指向当前项目内已有的文本文件。"));
+    emit operationError(tr("File links must point to an existing text file in "
+                           "the current project."));
     return;
   }
   previewFile(target);
@@ -853,12 +895,11 @@ void AgentController::openTextLink(const QString &link) {
 void AgentController::previewFile(const QString &path) {
   QFile file(path);
   if (!file.open(QIODevice::ReadOnly)) {
-    emit operationError(
-        QStringLiteral("无法打开文件：%1").arg(file.errorString()));
+    emit operationError(tr("Cannot open the file: %1").arg(file.errorString()));
     return;
   }
   if (file.size() > kMaxPreviewBytes) {
-    emit operationError(QStringLiteral("此版支持预览 %1 KiB 以内的文本文件。")
+    emit operationError(tr("This version previews text files up to %1 KiB.")
                             .arg(kMaxPreviewBytes / 1024));
     return;
   }
@@ -866,8 +907,8 @@ void AgentController::previewFile(const QString &path) {
   QStringDecoder decoder(QStringDecoder::Utf8);
   const QString text = decoder(bytes);
   if (bytes.contains('\0') || decoder.hasError()) {
-    emit operationError(
-        QStringLiteral("该文件不是 UTF-8 文本，请在对应应用中打开。"));
+    emit operationError(tr("This file is not UTF-8 text. Open it in a "
+                           "suitable application."));
     return;
   }
   PreviewTitle = QFileInfo(path).fileName();
@@ -887,7 +928,7 @@ void AgentController::showProjectFolder() {
   const auto *project = findProject(ActiveId);
   if (project)
     emit desktopUrlRequested(QUrl::fromLocalFile(project->Directory).toString(),
-                             tr("无法打开项目文件夹。"));
+                             tr("Could not open the project folder."));
 }
 
 bool AgentController::updateSettings(bool sharing, bool lightTheme,
@@ -931,13 +972,14 @@ void AgentController::openInGui(const QString &objectId) {
     return;
   const QString program = findDesktopExecutable(GuiPath);
   if (program.isEmpty()) {
-    emit operationError(QStringLiteral(
-        "未找到 ND GUI。请在设置中选择 neverd-gui 可执行文件。"));
+    emit operationError(tr("The NeverD workbench was not found. Choose its "
+                           "executable in application settings."));
     return;
   }
   if (!QFileInfo(object->Path).isFile()) {
     emit operationError(
-        QStringLiteral("原始文件已移动或不存在：%1").arg(object->Path));
+        tr("The original file was moved or no longer exists: %1")
+            .arg(object->Path));
     return;
   }
   QProcess process;
@@ -945,10 +987,10 @@ void AgentController::openInGui(const QString &objectId) {
   process.setArguments({"--", object->Path});
   process.setWorkingDirectory(QFileInfo(program).absolutePath());
   if (!process.startDetached())
-    emit operationError(
-        QStringLiteral("启动 ND GUI 失败：%1").arg(process.errorString()));
+    emit operationError(tr("Could not start the NeverD workbench: %1")
+                            .arg(process.errorString()));
   else
-    emit notice(QStringLiteral("已启动 ND GUI：%1").arg(object->Name));
+    emit notice(tr("Started the NeverD workbench for %1.").arg(object->Name));
 }
 
 void AgentController::readMemoryViews() {
@@ -1021,7 +1063,7 @@ bool AgentController::addMemory(const QString &objectId, const QString &text) {
     return false;
   }
   refreshMemory();
-  emit notice(QStringLiteral("记忆已保存到当前项目。"));
+  emit notice(tr("Memory saved to the current project."));
   return true;
 }
 
@@ -1041,8 +1083,8 @@ bool AgentController::transferMemory(const QString &projectId,
     return false;
   }
   refreshMemory();
-  emit notice(importing ? QStringLiteral("记忆已导入，重复记录已合并。")
-                        : QStringLiteral("记忆已导出。"));
+  emit notice(importing ? tr("Memory imported. Duplicate records were merged.")
+                        : tr("Memory exported."));
   return true;
 }
 } // namespace neverd::agent

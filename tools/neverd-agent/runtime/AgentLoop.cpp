@@ -1,5 +1,4 @@
-//===- AgentLoop.cpp - Stateful model and tool loop
-//------------------------===//
+//===- AgentLoop.cpp - Stateful model and tool loop -----------------------===//
 //
 // NeverD Decompiler
 //
@@ -13,6 +12,7 @@
 #include "project/ProjectStore.h"
 
 #include <QJsonDocument>
+#include <QLocale>
 #include <QTimer>
 #include <algorithm>
 
@@ -42,7 +42,7 @@ AgentLoop::AgentLoop(QString projectId, QString id, ModelProfile profile,
     if (!Running || Completing)
       return;
     if (Cancelling || turn.Cancelled) {
-      complete({}, "Analysis cancelled.");
+      complete({}, tr("Analysis cancelled."));
       return;
     }
     if (!audit({{"kind", Usage.Compacting ? "context_summary_response"
@@ -91,7 +91,7 @@ bool AgentLoop::audit(QJsonObject event) {
   QString error;
   if (Audit(event, error))
     return true;
-  complete({}, "Unable to save analysis evidence: " + error);
+  complete({}, tr("Unable to save analysis evidence: %1").arg(error));
   return false;
 }
 void AgentLoop::start(QString system, QString prompt, QString sessionPath) {
@@ -102,7 +102,7 @@ void AgentLoop::start(QString system, QString prompt, QString sessionPath) {
   Prompt = std::move(prompt);
   SessionPath = std::move(sessionPath);
   if (Cancelling) {
-    complete({}, "Analysis cancelled.");
+    complete({}, tr("Analysis cancelled."));
     return;
   }
   QString error;
@@ -119,13 +119,13 @@ void AgentLoop::start(QString system, QString prompt, QString sessionPath) {
   if (!previous.isEmpty()) {
     const auto version = previous["version"].toInt();
     if ((version != 1 && version != 2) || !previous["groups"].isArray()) {
-      complete({}, "Invalid saved agent context.");
+      complete({}, tr("Invalid saved agent context."));
       return;
     }
     if (version == 2) {
       if (!previous["checkpoint"].isString() || !previous["usage"].isObject() ||
           !Usage.restore(previous["usage"].toObject())) {
-        complete({}, "Invalid saved context checkpoint or token usage.");
+        complete({}, tr("Invalid saved context checkpoint or token usage."));
         return;
       }
       Checkpoint = previous["checkpoint"].toString();
@@ -137,7 +137,7 @@ void AgentLoop::start(QString system, QString prompt, QString sessionPath) {
       if (!group["items"].isArray() || !group["prompt"].isString() ||
           !group["answer"].isString() ||
           (group.contains("requestOnly") && !group["requestOnly"].isBool())) {
-        complete({}, "Invalid saved agent turn.");
+        complete({}, tr("Invalid saved agent turn."));
         return;
       }
       if (previous["profile"] == Profile.identity())
@@ -184,8 +184,12 @@ bool AgentLoop::reserveRequest(ModelProfile &requestProfile,
                            Budget->Reserved - RequestEstimate;
     if (available <= 0) {
       Budget->LimitReached = true;
-      complete(
-          {}, "The remaining goal token budget cannot cover the next request.");
+      complete({}, Budget->Goal
+                       ? tr("The remaining goal token budget cannot cover the "
+                            "next request.")
+                       : tr("This question has used its token budget (%1 "
+                            "tokens). Ask a follow-up question to continue.")
+                             .arg(QLocale().toString(Budget->TokenLimit)));
       return false;
     }
     requestProfile.OutputTokens =
@@ -223,7 +227,7 @@ void AgentLoop::next() {
   if (!Running || Completing)
     return;
   if (Cancelling) {
-    complete({}, "Analysis cancelled.");
+    complete({}, tr("Analysis cancelled."));
     return;
   }
   if (!applySteering())
@@ -261,10 +265,10 @@ void AgentLoop::next() {
               {"profile", Profile.toJson()},
               {"request", request}}))
     return;
-  Activity = QStringLiteral("正在思考 · 第 %1 步").arg(Steps);
+  Activity = tr("Thinking · step %1").arg(Steps);
   emit changed();
   if (Cancelling || Completing) {
-    complete({}, "Analysis cancelled.");
+    complete({}, tr("Analysis cancelled."));
     return;
   }
   RequestSent = true;
@@ -363,7 +367,7 @@ void AgentLoop::compactNext() {
   if (!Running || Completing)
     return;
   if (Cancelling) {
-    complete({}, "Analysis cancelled.");
+    complete({}, tr("Analysis cancelled."));
     return;
   }
   if (CompactOffset == CompactSource.size()) {
@@ -412,13 +416,13 @@ void AgentLoop::compactNext() {
       PastGroups = oldGroups;
       Current = oldCurrent;
       Usage = oldUsage;
-      complete({}, "Unable to save context checkpoint: " + error);
+      complete({}, tr("Unable to save context checkpoint: %1").arg(error));
       return;
     }
     ExchangeStarts = RetainedExchangeStarts;
     CompactSource.clear();
     CompactSummary.clear();
-    Activity = QStringLiteral("上下文已压缩 · %1 → 约 %2 tokens")
+    Activity = tr("Context compacted · %1 → about %2 tokens")
                    .arg(Usage.Before)
                    .arg(Usage.After);
     emit changed();
@@ -455,8 +459,8 @@ void AgentLoop::compactNext() {
       CompactSource[CompactOffset + low - 1].isHighSurrogate())
     --low;
   if (low == 0) {
-    complete({}, "The question and checkpoint leave no space for context "
-                 "summarization. Original context was retained.");
+    complete({}, tr("The question and checkpoint leave no space for context "
+                    "summarization. Original context was retained."));
     return;
   }
   CompactEnd = CompactOffset + low;
@@ -474,10 +478,12 @@ void AgentLoop::compactNext() {
                                                  summaryInput, {})}}))
     return;
   ++CompactRequests;
-  Activity = QStringLiteral("正在整理较早的记录 · 保留近期对话与用户要求");
+  Activity =
+      tr("Summarizing earlier records · keeping recent conversation and user "
+         "requests");
   emit changed();
   if (Cancelling || Completing) {
-    complete({}, "Analysis cancelled.");
+    complete({}, tr("Analysis cancelled."));
     return;
   }
   RequestSent = true;
@@ -486,10 +492,11 @@ void AgentLoop::compactNext() {
 void AgentLoop::acceptCompaction(const ModelTurn &turn) {
   if (!turn.Error.isEmpty() || turn.Text.trimmed().isEmpty() ||
       !turn.Calls.isEmpty()) {
-    complete({}, "Context compaction failed; original context retained. " +
-                     (turn.Error.isEmpty()
-                          ? "Expected a nonempty summary without tool calls."
-                          : turn.Error));
+    complete(
+        {}, tr("Context compaction failed; original context retained. %1")
+                .arg(turn.Error.isEmpty()
+                         ? tr("Expected a nonempty summary without tool calls.")
+                         : turn.Error));
     return;
   }
   CompactSummary = turn.Text.trimmed();
@@ -550,7 +557,7 @@ void AgentLoop::invokeNext() {
   if (!Running || Completing || Calls.isEmpty())
     return;
   if (Cancelling) {
-    complete({}, "Analysis cancelled.");
+    complete({}, tr("Analysis cancelled."));
     return;
   }
   // A new user direction supersedes calls that have not started. Close each
@@ -657,7 +664,7 @@ void AgentLoop::cancel() {
     return;
   QTimer::singleShot(0, this, [this] {
     if (Running && !Completing)
-      complete({}, "Analysis cancelled.");
+      complete({}, tr("Analysis cancelled."));
   });
 }
 void AgentLoop::complete(QString text, QString error) {
@@ -690,7 +697,7 @@ void AgentLoop::complete(QString text, QString error) {
     Usage.Compacting = false;
     QString storageError;
     if (!persist(summary, items, storageError))
-      error = "Unable to persist agent context: " + storageError;
+      error = tr("Unable to persist agent context: %1").arg(storageError);
   }
   Tools.close([this, text = std::move(text), error = std::move(error)] {
     Running = false;
@@ -699,7 +706,7 @@ void AgentLoop::complete(QString text, QString error) {
     Status = Cancelling        ? "cancelled"
              : error.isEmpty() ? "succeeded"
                                : "failed";
-    Activity = error.isEmpty() ? QStringLiteral("已完成") : error;
+    Activity = error.isEmpty() ? tr("Completed") : error;
     emit changed();
     emit finished(text, error, Cancelling);
   });

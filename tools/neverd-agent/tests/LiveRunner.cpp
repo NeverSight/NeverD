@@ -1,5 +1,4 @@
-//===- LiveRunner.cpp - Explicit model integration runner
-//------------------===//
+//===- LiveRunner.cpp - Explicit model integration runner -----------------===//
 //
 // NeverD Decompiler
 //

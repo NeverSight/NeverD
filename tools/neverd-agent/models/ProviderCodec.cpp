@@ -1,5 +1,4 @@
-//===- ProviderCodec.cpp - Model wire protocols
-//----------------------------===//
+//===- ProviderCodec.cpp - Model wire protocols ---------------------------===//
 //
 // NeverD Decompiler
 //

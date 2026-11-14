@@ -1,5 +1,4 @@
-//===- MemoryTests.cpp - Durable memory lifecycle contracts
-//----------------===//
+//===- MemoryTests.cpp - Durable memory lifecycle contracts ---------------===//
 //
 // NeverD Decompiler
 //
@@ -142,6 +141,31 @@ public:
 class MemoryTests : public QObject {
   Q_OBJECT
 private slots:
+  // Redaction removes keys and local paths without eating the text around
+  // them: URLs, evidence links, identifiers and CJK sentences survive.
+  void redactionKeepsTheSurroundingText() {
+    QCOMPARE(MemoryStore::redact("See https://example.com/a and "
+                                 "nd-evidence://abc for details."),
+             QString("See https://example.com/a and nd-evidence://abc for "
+                     "details."));
+    QCOMPARE(MemoryStore::redact("kiosk-mode-enabled-for-everyone stays"),
+             QString("kiosk-mode-enabled-for-everyone stays"));
+    QCOMPARE(MemoryStore::redact("key sk-abcdefghijklmnop1234 used"),
+             QString("key [REDACTED] used"));
+    QCOMPARE(MemoryStore::redact("Opened C:\\Users\\me\\a.exe today"),
+             QString("Opened [LOCAL_PATH] today"));
+    QCOMPARE(
+        MemoryStore::redact(QString::fromUtf8(
+            "\xe6\x96\x87\xe4\xbb\xb6/home/me/x.bin\xe9\x87\x8c\xe7\x9a\x84"
+            "\xe5\x87\xbd\xe6\x95\xb0")),
+        QString::fromUtf8("\xe6\x96\x87\xe4\xbb\xb6[LOCAL_PATH]\xe9\x87\x8c"
+                          "\xe7\x9a\x84\xe5\x87\xbd\xe6\x95\xb0"));
+    QCOMPARE(MemoryStore::redact("Entry at 0x401000", "x"),
+             QString("Entry at 0x401000"));
+    QCOMPARE(MemoryStore::redact("token abcdefgh123 here", "abcdefgh123"),
+             QString("token [REDACTED] here"));
+  }
+
   void malformedExistingMemoryIsNotReset() {
     Workspace workspace;
     QVERIFY(workspace.Error.isEmpty());

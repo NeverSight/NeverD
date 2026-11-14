@@ -83,7 +83,7 @@ ListView {
                         Layout.alignment: Qt.AlignVCenter
                     }
                     Label {
-                        text: (messageRow.fromUser ? (messageRow.entry.goalId ? qsTr("目标") : qsTr("你")) : "NeverD" + (messageRow.entry.goalRound > 0 ? qsTr(" · 目标第 %1 轮").arg(messageRow.entry.goalRound) : "")) + (messageRow.entry.inherited ? qsTr(" · 主对话") : "")
+                        text: (messageRow.entry.inherited ? qsTr("%1 · Main conversation") : "%1").arg(messageRow.fromUser ? (messageRow.entry.goalId ? qsTr("Goal") : qsTr("You")) : messageRow.entry.goalRound > 0 ? qsTr("NeverD · Goal round %1").arg(messageRow.entry.goalRound) : "NeverD")
                         color: Theme.quiet
                         font.weight: Font.Medium
                         font.pointSize: Theme.smallPointSize
@@ -96,23 +96,24 @@ ListView {
                     Item { Layout.fillWidth: true }
                     ToolButton {
                         visible: messageList.allowQuote && !messageRow.fromUser && messageRow.entry.status !== "running"
-                        text: qsTr("引用")
+                        text: qsTr("Quote")
                         palette.buttonText: Theme.secondary
                         font.pointSize: Theme.smallPointSize
                         padding: 2
                         background: Rectangle { color: parent.hovered ? Theme.toolHover : "transparent"; radius: Theme.toolRadius }
                         onClicked: messageList.quoteRequested(messageRow.entry.id)
-                        ThemedToolTip { visible: parent.hovered; text: qsTr("引用到主对话草稿") }
+                        ThemedToolTip { visible: parent.hovered; text: qsTr("Quote in the main conversation draft") }
                     }
                     ToolButton {
-                        text: qsTr("复制")
+                        property bool copied: false
+                        text: copied ? qsTr("Copied") : qsTr("Copy")
                         opacity: messageHover.hovered || activeFocus || hovered || copyTimer.running ? 1 : 0
                         palette.buttonText: Theme.secondary
                         font.pointSize: Theme.smallPointSize
                         padding: 2
                         background: Rectangle { color: parent.hovered ? Theme.toolHover : "transparent"; radius: Theme.toolRadius }
-                        onClicked: { messageText.copyMessage(); text = qsTr("已复制"); copyTimer.restart() }
-                        Timer { id: copyTimer; interval: 1500; onTriggered: parent.text = qsTr("复制") }
+                        onClicked: { messageText.copyMessage(); copied = true; copyTimer.restart() }
+                        Timer { id: copyTimer; interval: 1500; onTriggered: parent.copied = false }
                     }
                 }
                 MarkdownView {
@@ -121,7 +122,7 @@ ListView {
                     source: messageRow.entry.text
                     canReference: messageList.backend !== null
                     canAskSide: messageList.backend !== null && !messageList.sideContext
-                    onReferenceRequested: text => messageList.backend.attachSelection(text, qsTr("对话选文"), messageList.sideContext)
+                    onReferenceRequested: text => messageList.backend.attachSelection(text, qsTr("Conversation selection"), messageList.sideContext)
                     onSideQuestionRequested: text => messageList.backend.createSideChatFromSelection(text)
                     streaming: messageRow.entry.status === "running"
                     onLinkRequested: link => messageList.linkRequested(link)
@@ -135,9 +136,10 @@ ListView {
                     backend: messageList.backend
                     runId: messageRow.entry.runId || ""
                     active: messageRow.entry.status === "running"
+                    onOpened: messageList.positionViewAtIndex(messageRow.index, ListView.End)
                 }
                 Label {
-                    text: ({running: qsTr("分析中…"), failed: qsTr("未完成"), cancelled: qsTr("已停止"), interrupted: qsTr("上次运行已中断，未自动重试"), snapshot: qsTr("创建侧边聊天时的回复片段"), pending: qsTr("等待当前调用结束后补充到任务")}[messageRow.entry.status] || (messageRow.entry.inputKind === "steer" ? qsTr("已补充到当前任务") : ""))
+                    text: ({running: qsTr("Analyzing…"), failed: qsTr("Not completed"), cancelled: qsTr("Stopped"), interrupted: qsTr("The last run was interrupted and not retried automatically."), snapshot: qsTr("Partial reply captured when the side chat was created"), pending: qsTr("Will be added to the task when the current call finishes")}[messageRow.entry.status] || (messageRow.entry.inputKind === "steer" ? qsTr("Added to the current task") : ""))
                     visible: text.length > 0
                     color: messageRow.entry.status === "failed" ? Theme.error : Theme.secondary
                     font.pointSize: Theme.smallPointSize

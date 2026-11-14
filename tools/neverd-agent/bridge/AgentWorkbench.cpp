@@ -1,5 +1,4 @@
-//===- AgentWorkbench.cpp - Headless workbench conversation
-//----------------===//
+//===- AgentWorkbench.cpp - Headless workbench conversation ---------------===//
 //
 // NeverD Decompiler
 //
@@ -11,6 +10,7 @@
 #include "project/EvidenceStore.h"
 #include "runtime/ExecutionTrace.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -19,6 +19,11 @@
 
 namespace neverd::agent {
 namespace {
+// AgentWorkbench has no Q_OBJECT; its own tr() would use the QObject context.
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(neverd::agent::AgentWorkbench)
+};
+
 constexpr qsizetype ExecutionRowsPerMessage = 64;
 
 QJsonObject executionSummary(const QJsonObject &record) {
@@ -202,7 +207,7 @@ void AgentWorkbench::navigateEvidence(const QString &id) {
     address = evidence.value("address").toString();
   }
   if (address.isEmpty())
-    fail(tr("This evidence does not have a code address."));
+    fail(Text::tr("This evidence does not have a code address."));
   else
     Publish({{"type", "navigate"}, {"address", address}});
 }
@@ -260,14 +265,16 @@ std::optional<QJsonValue> AgentWorkbench::dispatch(const QString &method,
       !args.at(1).isObject())
     return std::nullopt;
   if (!AnalysisReady || Controller.running()) {
-    fail(tr("The analysis is already running or the session is not ready."));
+    fail(Text::tr(
+        "The analysis is already running or the session is not ready."));
     return QJsonValue{};
   }
   const auto text = args.at(0).toString().trimmed();
   const auto context = args.at(1).toObject();
   if (text.isEmpty() || context.value("epoch") != Binding.value("epoch") ||
       context.value("project_id") != Binding.value("project_id")) {
-    fail(tr("The question or its captured analysis context is unavailable."));
+    fail(Text::tr(
+        "The question or its captured analysis context is unavailable."));
     return QJsonValue{};
   }
   Controller.setDraft(text);
@@ -279,7 +286,8 @@ std::optional<QJsonValue> AgentWorkbench::dispatch(const QString &method,
         QStringLiteral("Function: %1\nAddress: %2\nRevision: %3\n%4")
             .arg(function, address, context.value("revision").toString(),
                  selection);
-    Controller.attachSelection(captured, tr("Captured ND GUI context"));
+    Controller.attachSelection(captured,
+                               Text::tr("Captured workbench context"));
   }
   if (!Controller.sendRequest(
           Controller.selectedObject().value("id").toString()))

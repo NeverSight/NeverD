@@ -1,5 +1,4 @@
-//===- ChangeReview.h - Reviewable ND project commands ------------*- C++
-//-*-===//
+//===- ChangeReview.h - Reviewable ND project commands ----------*- C++ -*-===//
 //
 // NeverD Decompiler
 //

@@ -1,5 +1,4 @@
-//===- MemoryLearner.h - Idle memory extraction ------------------*- C++
-//-*-===//
+//===- MemoryLearner.h - Idle memory extraction -----------------*- C++ -*-===//
 //
 // NeverD Decompiler
 //

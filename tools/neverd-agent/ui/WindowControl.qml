@@ -14,8 +14,8 @@ ToolButton {
     implicitWidth: frame.buttonWidth
     implicitHeight: frame.titleHeight
     padding: 0
-    text: kind === "close" ? qsTr("关闭") : kind === "minimize" ? qsTr("最小化")
-          : frame.maximized ? qsTr("还原") : qsTr("最大化")
+    text: kind === "close" ? qsTr("Close") : kind === "minimize" ? qsTr("Minimize")
+          : frame.maximized ? qsTr("Restore") : qsTr("Maximize")
     Accessible.name: text
     ThemedToolTip { visible: control.hovered; text: control.text }
     onClicked: {

@@ -24,7 +24,8 @@ resolveWorkbenchConversation(const QString &dataDirectory,
   if (!binding.value("loaded").toBool() || inputPath.isEmpty() ||
       binding.value("project_id").toString().isEmpty() ||
       binding.value("epoch").toString().isEmpty()) {
-    error = QObject::tr("The workbench analysis session is unavailable.");
+    error =
+        AgentController::tr("The workbench analysis session is unavailable.");
     return std::nullopt;
   }
   auto input = ProjectStore::fingerprint(inputPath);

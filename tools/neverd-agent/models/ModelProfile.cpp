@@ -1,5 +1,4 @@
-//===- ModelProfile.cpp - Model endpoint and run policy
-//---------------------===//
+//===- ModelProfile.cpp - Model endpoint and run policy -------------------===//
 //
 // NeverD Decompiler
 //
@@ -10,7 +9,9 @@
 
 #include "ModelProfile.h"
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QHostAddress>
 #include <QJsonDocument>
 #include <QRegularExpression>
 #include <QUuid>
@@ -19,6 +20,12 @@
 #include <limits>
 
 namespace neverd::agent {
+namespace {
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(neverd::agent::ModelProfile)
+};
+} // namespace
+
 QString ModelProfile::protocolName() const {
   switch (Protocol) {
   case ModelProtocol::Responses:
@@ -71,13 +78,34 @@ QString ModelProfile::identity() const {
       QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
 }
 
+bool ModelProfile::carriesKeysSafely() const {
+  const QUrl url(BaseUrl, QUrl::StrictMode);
+  if (url.scheme() == QLatin1String("https"))
+    return true;
+  const QHostAddress address(url.host());
+  return url.scheme() == QLatin1String("http") &&
+         (url.host().compare(QLatin1String("localhost"), Qt::CaseInsensitive) ==
+              0 ||
+          address.isLoopback());
+}
+
+bool ModelProfile::sameServer(const QString &first, const QString &second) {
+  const QUrl a(first, QUrl::StrictMode), b(second, QUrl::StrictMode);
+  const auto port = [](const QUrl &url) {
+    return url.port(url.scheme() == QLatin1String("https") ? 443 : 80);
+  };
+  return a.isValid() && b.isValid() && a.scheme() == b.scheme() &&
+         a.host().compare(b.host(), Qt::CaseInsensitive) == 0 &&
+         port(a) == port(b);
+}
+
 bool ModelProfile::validate(QString &error, bool requireModel) const {
   const QUrl url(BaseUrl, QUrl::StrictMode);
   if (!url.isValid() || (url.scheme() != "https" && url.scheme() != "http") ||
       url.host().isEmpty() || !url.userInfo().isEmpty() || url.hasFragment() ||
       url.hasQuery()) {
-    error = QStringLiteral(
-        "API URL 必须是有效的 HTTP(S) 地址；API Key 请填在单独的字段中。");
+    error = Text::tr("The API URL must be a valid HTTP(S) address. Enter the "
+                     "API key in its own field.");
     return false;
   }
   const QString path =
@@ -89,50 +117,53 @@ bool ModelProfile::validate(QString &error, bool requireModel) const {
   for (const QString suffix : {QString("/responses"), QString("/messages"),
                                QString("/chat/completions")}) {
     if (path.endsWith(suffix) && suffix != expected) {
-      error = QStringLiteral("API URL 的接口路径与所选协议不一致。");
+      error = Text::tr(
+          "The API URL's endpoint path does not match the selected protocol.");
       return false;
     }
   }
   if (requireModel && Model.trimmed().isEmpty()) {
-    error = QStringLiteral("请填写服务端支持的模型名称。");
+    error = Text::tr("Enter a model name that the server supports.");
     return false;
   }
   if (Model.contains('\n') || Model.contains('\r')) {
-    error = QStringLiteral("模型名称不能包含换行。");
+    error = Text::tr("The model name cannot contain line breaks.");
     return false;
   }
   if (ContextTokens <= 0 || OutputTokens <= 0 ||
       OutputTokens >= ContextTokens) {
-    error = QStringLiteral("上下文窗口必须大于输出上限，两者均需为正整数。");
+    error = Text::tr("The context window must be larger than the output limit, "
+                     "and both must be positive integers.");
     return false;
   }
   if (TimeoutSeconds <= 0 ||
       TimeoutSeconds > std::numeric_limits<int>::max() / 1000 ||
       MaxAgents <= 0 || MaxDepth < 0) {
-    error = QStringLiteral(
-        "超时和并行任务数必须为有效正整数，子任务深度不能为负。");
+    error = Text::tr("The timeout and parallel task count must be positive "
+                     "integers, and the subtask depth cannot be negative.");
     return false;
   }
   if (CompletionTokenField != "max_tokens" &&
       CompletionTokenField != "max_completion_tokens") {
-    error = QStringLiteral("Chat Completions 的输出字段无效。");
+    error = Text::tr("Invalid output field for Chat Completions.");
     return false;
   }
   if (!ReasoningEffort.isEmpty() && ReasoningEffort != "low" &&
       ReasoningEffort != "medium" && ReasoningEffort != "high" &&
       ReasoningEffort != "max") {
-    error = QStringLiteral("不支持的思考强度。留空使用服务端默认值。");
+    error = Text::tr("Unsupported reasoning effort. Leave it empty to use the "
+                     "server default.");
     return false;
   }
   static const QRegularExpression version("^[0-9]{4}-[0-9]{2}-[0-9]{2}$");
   if (!version.match(AnthropicVersion).hasMatch()) {
-    error = QStringLiteral("Claude API 版本请填写 YYYY-MM-DD。");
+    error = Text::tr("Enter the Claude API version as YYYY-MM-DD.");
     return false;
   }
   if (!CredentialId.isEmpty() &&
       (QUuid(CredentialId).isNull() ||
        QUuid(CredentialId).toString(QUuid::WithoutBraces) != CredentialId)) {
-    error = QStringLiteral("模型凭据引用无效。");
+    error = Text::tr("Invalid model credential reference.");
     return false;
   }
   return true;
@@ -164,14 +195,14 @@ std::optional<ModelProfile> ModelProfile::fromJson(const QJsonObject &value,
   else if (protocol == "chat-completions")
     result.Protocol = ModelProtocol::ChatCompletions;
   else {
-    error = QStringLiteral("未知的模型协议。");
+    error = Text::tr("Unknown model protocol.");
     return std::nullopt;
   }
   for (const char *key : {"url", "model", "credentialId", "anthropicVersion",
                           "completionTokenField", "reasoningEffort"})
     if (value.contains(key) && !value.value(key).isString()) {
-      error =
-          QStringLiteral("模型配置字段类型错误：%1").arg(QLatin1String(key));
+      error = Text::tr("Wrong type for model configuration field: %1")
+                  .arg(QLatin1String(key));
       return std::nullopt;
     }
   result.BaseUrl = value.value("url").toString(result.BaseUrl).trimmed();
@@ -199,7 +230,8 @@ std::optional<ModelProfile> ModelProfile::fromJson(const QJsonObject &value,
       !integer("timeoutSeconds", result.TimeoutSeconds) ||
       !integer("maxAgents", result.MaxAgents) ||
       !integer("maxDepth", result.MaxDepth)) {
-    error = QStringLiteral("模型配置中的数量和上限必须是有效整数。");
+    error = Text::tr(
+        "Counts and limits in the model configuration must be valid integers.");
     return std::nullopt;
   }
   if (!result.validate(error, false))

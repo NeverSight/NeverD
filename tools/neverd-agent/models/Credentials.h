@@ -1,5 +1,4 @@
-//===- Credentials.h - User-local model credentials --------------*- C++
-//-*-===//
+//===- Credentials.h - User-local model credentials -------------*- C++ -*-===//
 //
 // NeverD Decompiler
 //

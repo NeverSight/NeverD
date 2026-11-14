@@ -11,6 +11,8 @@
 #include "bridge/AgentWorkspace.h"
 #include "client/AgentProtocol.h"
 #include "platform/AppPaths.h"
+#include "platform/Translation.h"
+#include "platform/WorkbenchSettings.h"
 
 #include <QCommandLineParser>
 #include <QCoreApplication>
@@ -36,6 +38,8 @@ namespace {
 constexpr int kClosePollMs = 20;
 
 class AgentServer final : public QObject {
+  Q_DECLARE_TR_FUNCTIONS(neverd::agent::AgentServer)
+
 public:
   AgentServer(const QString &home, QFile &output)
       : Home(home), Output(output) {}
@@ -43,6 +47,11 @@ public:
   void dispatch(const QJsonObject &request) {
     if (ExitCode)
       return;
+    // The frontend's interface language changed; later messages follow it.
+    if (request.value("command") == "language") {
+      installTranslations(request.value("language").toString());
+      return;
+    }
     if (request.value("command") == "initialize") {
       if (Workspace || Workbench ||
           request.value("protocol") != wire::kVersion) {
@@ -119,11 +128,17 @@ private:
       return;
     auto frame = wire::encode(message);
     if (frame.isEmpty()) {
-      frame = wire::encode(
-          {{"type", "error"},
-           {"fatal", true},
-           {"text", tr("NeverD Agent CLI response exceeds the frame limit.")}});
-      ExitCode = 1;
+      // One oversized answer must not end the session, or the frontend could
+      // neither stop the analysis nor save: the request gets an error reply,
+      // an update an error notice, and the session goes on.
+      const auto text =
+          tr("NeverD Agent CLI response exceeds the frame limit.");
+      frame =
+          wire::encode(message.value("type") == "response"
+                           ? QJsonObject{{"type", "response"},
+                                         {"id", message.value("id")},
+                                         {"error", text}}
+                           : QJsonObject{{"type", "error"}, {"text", text}});
     }
     if (Output.write(frame) != frame.size() || !Output.flush() ||
         message.value("fatal").toBool())
@@ -179,7 +194,8 @@ void readRequests(AgentServer &server) {
       &server,
       [&server, invalid] {
         if (invalid)
-          server.reject(QObject::tr("Invalid NeverD Agent CLI input frame."));
+          server.reject(
+              AgentServer::tr("Invalid NeverD Agent CLI input frame."));
         server.close();
       },
       Qt::QueuedConnection);
@@ -258,7 +274,14 @@ int main(int argc, char **argv) {
   parser.addOption({"project", "Existing Agent project for run.", "directory"});
   parser.addOption({"object", "Limit run to this analysis object ID.", "id"});
   parser.addOption({"prompt", "Question to analyze with run.", "text"});
+  parser.addOption({"language",
+                    "Interface language for messages (default: the NeverD "
+                    "workbench's).",
+                    "code"});
   parser.process(app);
+  neverd::agent::installTranslations(parser.isSet("language")
+                                         ? parser.value("language")
+                                         : neverd::agent::workbenchLanguage());
   const auto commands = parser.positionalArguments();
   const auto home = neverd::agent::agentHome(parser.value("data-dir"));
   if (commands.size() == 1 && commands.front() == "serve" &&

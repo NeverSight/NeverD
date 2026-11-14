@@ -5,7 +5,8 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   include(CTest)
 endif()
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Svg Concurrent Network)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Svg Concurrent Network
+  LinguistTools)
 qt_standard_project_setup(REQUIRES 6.8)
 
 if(NOT TARGET neverd_tools)
@@ -17,7 +18,7 @@ endif()
 
 set(NEVERD_AGENT_SOURCES
   project/ProjectStore.cpp project/MemoryStore.cpp project/GoalState.cpp project/ConversationInput.cpp project/EvidenceStore.cpp
-  platform/AppPaths.cpp
+  platform/AppPaths.cpp platform/Translation.cpp platform/WorkbenchSettings.cpp
   models/ModelProfile.cpp models/Credentials.cpp models/ProviderCodec.cpp models/ModelClient.cpp
   runtime/NphTools.cpp runtime/McpSession.cpp runtime/ContextUsage.cpp runtime/AgentLoop.cpp runtime/ResearchRuntime.cpp runtime/ExecutionTrace.cpp runtime/EvidenceCapture.cpp
   runtime/WorkerSession.cpp runtime/ChangeReview.cpp runtime/MemoryLearner.cpp project/ResearchPlan.cpp)
@@ -27,6 +28,8 @@ set(NEVERD_AGENT_CONTROLLERS app/AgentController.cpp app/AgentModelController.cp
 add_library(neverd-agent-objects OBJECT ${NEVERD_AGENT_CONTROLLERS} ${NEVERD_AGENT_SOURCES})
 target_compile_features(neverd-agent-objects PUBLIC cxx_std_20)
 target_include_directories(neverd-agent-objects PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+# Languages.def: the workbench's interface languages are the Agent's too.
+target_include_directories(neverd-agent-objects PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../neverd-gui/app")
 target_link_libraries(neverd-agent-objects PUBLIC Qt6::Core Qt6::Concurrent Qt6::Network neverd_tools neverd_tool_json)
 if(WIN32)
   target_link_libraries(neverd-agent-objects PUBLIC crypt32)
@@ -55,8 +58,9 @@ if(MSVC)
 endif()
 install(TARGETS neverd-agent-cli RUNTIME DESTINATION bin)
 qt_add_executable(neverd-agent WIN32 MACOSX_BUNDLE
-  main.cpp app/MarkdownDocument.cpp platform/AgentWindowFrame.cpp
-  platform/AppPaths.cpp client/AgentProcess.cpp client/WorkspaceClient.cpp)
+  main.cpp app/MarkdownDocument.cpp platform/AgentAppearance.cpp
+  platform/AgentWindowFrame.cpp platform/AppPaths.cpp platform/Translation.cpp
+  platform/WorkbenchSettings.cpp client/AgentProcess.cpp client/WorkspaceClient.cpp)
 target_compile_features(neverd-agent PRIVATE cxx_std_20)
 target_include_directories(neverd-agent PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_include_directories(neverd-agent PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../neverd-gui/app")
@@ -68,18 +72,22 @@ endif()
 
 # Share the workbench's QWindow-only OS integration, without linking its widgets,
 # analysis services or application. Frame rendering belongs to this QML shell.
+# The theme choice "system" reads the desktop's contrast as the workbench does.
 if(WIN32)
-  target_sources(neverd-agent PRIVATE ../neverd-gui/app/platform/WindowFrameWindows.cpp)
+  target_sources(neverd-agent PRIVATE ../neverd-gui/app/platform/WindowFrameWindows.cpp
+    ../neverd-gui/app/platform/DesktopContrastWindows.cpp)
   target_link_libraries(neverd-agent PRIVATE dwmapi)
 elseif(APPLE)
   enable_language(OBJCXX)
-  target_sources(neverd-agent PRIVATE ../neverd-gui/app/platform/WindowFrameMac.mm)
+  target_sources(neverd-agent PRIVATE ../neverd-gui/app/platform/WindowFrameMac.mm
+    ../neverd-gui/app/platform/DesktopContrastMac.mm)
   target_link_libraries(neverd-agent PRIVATE "-framework AppKit")
 else()
   if(NOT TARGET Qt6::GuiPrivate)
     find_package(Qt6 6.8 REQUIRED COMPONENTS GuiPrivate)
   endif()
-  target_sources(neverd-agent PRIVATE ../neverd-gui/app/platform/WindowFrameUnix.cpp)
+  target_sources(neverd-agent PRIVATE ../neverd-gui/app/platform/WindowFrameUnix.cpp
+    ../neverd-gui/app/platform/DesktopContrastUnix.cpp)
   target_link_libraries(neverd-agent PRIVATE Qt6::GuiPrivate)
 endif()
 
@@ -91,7 +99,24 @@ qt_add_qml_module(neverd-agent
     ui/Field.qml ui/ProjectSidebar.qml ui/Conversation.qml ui/ChatComposer.qml ui/SidePanel.qml
     ui/WindowControl.qml ui/ChoiceField.qml ui/ModelSettings.qml ui/MarkdownView.qml ui/ContextMeter.qml ui/Backdrop.qml
     ui/ChatTranscript.qml ui/SideChatView.qml ui/GoalStrip.qml ui/GoalEditor.qml ui/InputQueue.qml ui/ObjectApprovalCard.qml ui/ExecutionView.qml ui/EvidenceView.qml ui/ContextPicker.qml ui/ContextChips.qml ui/ReviewView.qml ui/ResearchView.qml ui/MemoryView.qml ui/CheckField.qml
-    ui/ThemedMenu.qml ui/ThemedMenuItem.qml ui/ThemedSeparator.qml ui/ThemedScrollBar.qml ui/ThemedToolTip.qml)
+    ui/ThemedMenu.qml ui/ThemedMenuItem.qml ui/ThemedSeparator.qml ui/ThemedScrollBar.qml ui/ThemedToolTip.qml
+    ui/ModalDim.qml)
+
+# Interface translations: the workbench's languages (i18n/*.ts), compiled into
+# the application and its CLI, which writes progress and errors.
+file(GLOB NEVERD_AGENT_TRANSLATIONS CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/i18n/*.ts")
+if(NEVERD_AGENT_TRANSLATIONS)
+  qt_add_translations(neverd-agent TS_FILES ${NEVERD_AGENT_TRANSLATIONS}
+    SOURCE_TARGETS neverd-agent neverd-agent-objects neverd-agent-cli
+    LUPDATE_TARGET neverd-agent_lupdate LRELEASE_TARGET neverd-agent_lrelease
+    QM_FILES_OUTPUT_VARIABLE NEVERD_AGENT_QM_FILES)
+  qt_add_resources(neverd-agent "agent_translations" PREFIX /i18n
+    BASE "${CMAKE_CURRENT_BINARY_DIR}" FILES ${NEVERD_AGENT_QM_FILES})
+  qt_add_resources(neverd-agent-cli "agent_cli_translations" PREFIX /i18n
+    BASE "${CMAKE_CURRENT_BINARY_DIR}" FILES ${NEVERD_AGENT_QM_FILES})
+  add_dependencies(neverd-agent-cli neverd-agent_lrelease)
+endif()
 
 # Brand artwork is shared; action glyphs belong to ui/Icon.qml.
 set(_agent_logo "${CMAKE_CURRENT_SOURCE_DIR}/../../docs/assets/neverd-logo-dark.svg")

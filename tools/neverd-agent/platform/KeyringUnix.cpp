@@ -10,6 +10,8 @@
 
 #include "Keyring.h"
 
+#include <QCoreApplication>
+
 #pragma push_macro("signals")
 #undef signals
 #include <libsecret/secret.h>
@@ -17,6 +19,10 @@
 
 namespace neverd::agent::keyring {
 namespace {
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(neverd::agent::KeyringUnix)
+};
+
 const SecretSchema Schema = {"org.neversight.neverd-agent",
                              SECRET_SCHEMA_NONE,
                              {{"id", SECRET_SCHEMA_ATTRIBUTE_STRING},
@@ -25,8 +31,9 @@ const SecretSchema Schema = {"org.neversight.neverd-agent",
 bool checked(GError *failure, QString &error) {
   if (!failure)
     return true;
-  error = QStringLiteral("无法访问系统凭据库：%1。请启动并解锁 Secret "
-                         "Service（GNOME Keyring 或兼容服务）。")
+  error = Text::tr("Cannot access the system credential store: %1. Start and "
+                   "unlock the Secret Service (GNOME Keyring or a compatible "
+                   "service).")
               .arg(QString::fromUtf8(failure->message));
   g_error_free(failure);
   return false;
@@ -43,8 +50,8 @@ bool store(const QString &id, const QByteArray &secret, QString &error) {
   if (!checked(failure, error))
     return false;
   if (!stored)
-    error =
-        QStringLiteral("系统凭据库未保存 API Key；请确认默认钥匙环已解锁。");
+    error = Text::tr("The system credential store did not save the API key. "
+                     "Make sure the default keyring is unlocked.");
   return stored;
 }
 
@@ -56,8 +63,8 @@ bool read(const QString &id, QByteArray &secret, QString &error) {
   if (!checked(failure, error))
     return false;
   if (!password) {
-    error = QStringLiteral(
-        "系统凭据库中没有可用的 API Key；请解锁钥匙环，或在设置中重新填写。");
+    error = Text::tr("The system credential store has no usable API key. "
+                     "Unlock the keyring, or enter the key again in settings.");
     return false;
   }
   secret = password;

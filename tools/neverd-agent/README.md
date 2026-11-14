@@ -47,8 +47,10 @@ KDE service. macOS uses the SDK's Security and CoreFoundation frameworks.
 
 The repository's build entry point refreshes its dependency snapshots even for
 this standalone target; no engine library is linked into this milestone.
-`NEVERD_BUILD_AGENT` defaults to ON for desktop builds and can be set to OFF
-for workbench-only builds. Its standalone source entry point always builds
+`NEVERD_BUILD_AGENT` defaults to `AUTO` for desktop builds: the Agent is built
+with the workbench when its dependencies are present, and configuration names
+the missing one otherwise (on Linux, the libsecret development files). `ON`
+requires the Agent and `OFF` builds the workbench alone. Its standalone source entry point always builds
 Agent. All included components use the build's shared runtime output and
 installation prefix.
 
@@ -58,9 +60,21 @@ alone. The application uses the existing NeverD logo and its own consistently
 stroked, monochrome Qt Quick vector action glyphs (`ui/Icon.qml`). No external
 agent source code or runtime is embedded.
 
-The Agent shell shares ND GUI's frame metrics, window controls and look. Every
-color in `ui/Theme.qml` is a role of the workbench's `ChromeColors.def` (Visual
-Studio Code Dark+ and Light+), read through `AgentWindowFrame::chromeColor`:
+The Agent shows the workbench's interface language and theme. It reads the
+workbench's own settings (`ui/language` and `appearance/theme`, English and
+dark until chosen there) at startup and again whenever its window becomes
+active, so a choice made in **Options → Language** or **Options → Colors…**
+reaches the Agent and its CLI without a separate setting. The theme choice
+"system" follows the desktop's light, dark and high contrast settings as the
+workbench does, and Arabic mirrors the window, dialogs and menus included.
+Catalogs for the workbench's eleven languages are in `i18n/`; the CLI writes its
+progress and errors in the same language. Model instructions stay English and
+ask for replies in the language of the user's latest message.
+
+The Agent shell shares the workbench's frame metrics, window controls and look.
+Every color in `ui/Theme.qml` is a role of the workbench's `ChromeColors.def`
+(Visual Studio Code Dark+, Light+ and the high contrast themes), read through
+`AgentAppearance::chromeColor`:
 the title band, panes a step apart parted by hairlines, the selection blue
 under white text, fields, check boxes, menus and one main button in the accent
 per window. Corners follow the workbench (fields and push buttons 2, tool
@@ -107,16 +121,24 @@ verification. Use a disposable data directory for testing.
 
 The desktop installation supplies and enables the **NeverD Agent** native GUI
 plugin on first use. Its enabled setting is managed in
-**Plugins → Plugin manager…**. The floating ball appears at the bottom-right
-with the chat closed. Hover over it to preview or click it to focus the chat.
-Choose **Pin** to keep it open when the pointer leaves. Drag the ball to move
-it inside the workbench. A pinned panel follows it and opens on the side with
-room. Press Escape or click the ball again to close the chat.
+**Plugins → Plugin manager…**. An accent **Ask Agent** button sits at the
+workbench's bottom-right corner, above the command line, as Office places its
+Copilot button; the first time a binary is open, a card beside it explains it
+once. Click the button, choose **Plugins → NeverD Agent → Open NeverD Agent**
+or press **Ctrl+Alt+I** (**⌘⌥I** on macOS) to open the conversation; the
+shortcut also brings the keyboard back to an open conversation. The
+conversation stays open until closed with its × button, **Esc**, the button or
+the shortcut, and closing returns the keyboard to the view that had it.
 
-Right-click the ball and choose **Hide floating ball**. The first hide shows
-where to restore it. **Plugins → NeverD Agent → Show floating ball** toggles
-the launcher, and its visibility is remembered across launches. Hiding it
-keeps the conversation and active request. Use **Stop** to cancel an answer.
+Drag the conversation by its title, as VS Code moves its quick input, and
+resize it from any edge; it opens where it was left, keeping its distance from
+the bottom-right corner when the workbench resizes. Double-click the title to
+put it back beside the button. Drag the button to move it; let go at the side
+and it docks there as its mark alone. Its context menu docks, undocks, resets
+the position or hides the button. **Plugins → NeverD Agent → Show Ask Agent
+button** brings a hidden button back, and the shortcut keeps working while it
+is hidden. A new conversation offers first questions about the current
+function. Use **Stop** to cancel an answer.
 
 Open an analysis object and send a question with **Enter**. **Shift+Enter**
 inserts a new line. **Attach current selection** adds
@@ -184,17 +206,17 @@ that interactive approval is unavailable when a new object requires it.
    `.nd-agent/project.json`. A project directory holds notes, scripts and reports.
 2. Right-click the project name to add analysis objects. Files remain in their
    original locations. SHA-256 calculation runs outside the UI thread.
-3. Open settings (`Ctrl+,`) → **模型与分析设置**. Select a protocol, API URL,
+3. Open settings (`Ctrl+,`) → **Model and analysis settings**. Select a protocol, API URL,
    model ID, API Key, context/output limits and `neverd-mcp` executable. The
-   **测试连接** button sends a short model request without project data. Save.
+   **Test connection** button sends a short model request without project data. Save.
 4. Enter a project-wide or object-specific request and press **Enter** or
-   choose **发送**. Use **Shift+Enter** for a new line in either the project
+   press **Enter**. Use **Shift+Enter** for a new line in either the project
    conversation or side chat. The model can use registered tools, delegate
-   analysis, and write reports. **停止** cancels the project's current task tree.
+   analysis, and write reports. **Stopped** cancels the project's current task tree.
 5. Use the top-right sidebar button, or a project/object context menu, to open
    files, progress or object memory. The sidebar starts hidden. File views
    always follow the active project; there is no second project selector.
-   The speech-bubble button opens **侧边聊天**; the **目标** button above the
+   The speech-bubble button opens **Side chat**; the **Goal** button above the
    main conversation opens persistent objective execution.
 6. To use **Open in ND GUI**, configure the workbench executable in settings.
    Otherwise the app checks its own executable directory and `PATH`. macOS
@@ -251,7 +273,7 @@ is identical. Paths inside a project are stored relatively so moving the whole
 project preserves those references; external paths remain absolute. Missing
 external files are not silently rebound to another file with the same name.
 Foreign absolute paths remain intact on reopening and saving a project on
-another OS. Right-click an object and choose **重新定位文件…** to select its new
+another OS. Right-click an object and choose **Relocate file…** to select its new
 location. A background SHA-256 check must match the original object; a different
 binary/version is refused. A successful rebind preserves the object ID, memory,
 conversations and evidence references, retires cached analysis processes, and
@@ -276,8 +298,8 @@ without changing destination memory. Different-version import is unsupported.
 
 ### Long-term memory
 
-**应用设置** has separate **分析时召回已有记忆** and
-**空闲时自动整理长期记忆** controls. Both start enabled for this local Agent;
+**Application settings** has separate **Recall saved memory during analysis** and
+**Organize long-term memory automatically when idle** controls. Both start enabled for this local Agent;
 global sharing remains off. Generation uses the configured model/protocol/key
 and incurs separate API usage. Disabling generation keeps existing notes and
 pending local sources; disabling use affects subsequent runs, including their
@@ -292,7 +314,7 @@ history. After 15 seconds without foreground analysis, a cancellable background
 request proposes reusable notes. A new foreground request cancels maintenance
 and retains its source for a later idle period. Pending work also resumes on
 reopening the project. Provider/validation failures retain a failed source and
-do not automatically retry it; **立即整理** explicitly retries failed work.
+do not automatically retry it; the organize button in the memory view explicitly retries failed work.
 
 Extraction may return no notes. It separates preferences, research procedures,
 binary findings and hypotheses. Preferences must quote the user request;
@@ -300,7 +322,7 @@ findings must reference successful, complete ND evidence captured in that run.
 Quote/evidence checks establish attribution, not truth: a model can still draw
 an incorrect inference from real evidence. All automatic discoveries remain
 historical leads requiring current ND verification. Exact duplicates are
-ignored; different text under the same topic key is marked **冲突待确认** and
+ignored; different text under the same topic key is marked **Conflict needs confirmation** and
 excluded from automatic recall until the user edits/confirms a version. The
 other versions remain visible as superseded notes.
 
@@ -312,7 +334,7 @@ by object identity, with optional same-hash shared notes. This first version
 does not use embeddings, semantic similarity deduplication or automatic proof
 of contradictions under different topic keys.
 
-Open the **记忆** sidebar to inspect project/object notes, view source quotes and
+Open the **Memory** sidebar to inspect project/object notes, view source quotes and
 ND evidence, add/edit/confirm or forget notes, import/export object notes and
 run maintenance immediately. Forgetting removes the record and stores local
 topic/text exclusion keys, preventing an in-flight extraction or later import
@@ -342,13 +364,17 @@ with its path, source object and reason. A filename resolves next to the source
 binary, or under the project directory if there is no source object. For a file
 elsewhere, provide its full local path. The tool returns the registered object
 ID so the same task can use the ordinary ND analysis tools on that dependency.
+Network paths (`\\host\share`, `//host/share` or a `file://` URL with a host)
+are refused before any file call, because resolving one already makes Windows
+authenticate to that host; the same rule holds for `read_project_file`, which
+also refuses absolute paths and `..` steps, and for file links in answers.
 
-In **应用设置 → AI 添加分析对象**, **逐次审批** is the default. The request
+In **Application settings → Analysis objects added by AI**, **Require approval each time** is the default. The request
 appears just above the initiating conversation's composer with the resolved file
 path, destination project, dependency source and reason. While the request
 waits, users can edit drafts, queue messages, browse history and switch projects.
-Choosing **允许一次** registers the file in that project. Declining resumes
-the task with the existing objects. **自动允许** is an explicit application-wide
+Choosing **Allow once** registers the file in that project. Declining resumes
+the task with the existing objects. **Allow automatically** is an explicit application-wide
 setting that approves Agent-requested additions automatically. Files stay in their
 original locations and are opened for read-only analysis. Registration records
 the file hash and the execution record shows the tool outcome.
@@ -365,6 +391,13 @@ For providers with a different root convention, enter the complete endpoint.
 Chat's output field is selectable (`max_completion_tokens` or `max_tokens`), and
 the Anthropic version header is configurable. No automatic model substitution,
 HTTP redirect with credentials, or tool-effect retry is performed.
+A saved API key belongs to the server it was saved for: when the URL names a
+different server (scheme, host or port), saving or testing asks for that
+server's key instead of sending the saved one. A key travels only over HTTPS,
+or over plain HTTP to this computer (`localhost` or a loopback address); a
+self-hosted service elsewhere without a key may still use HTTP. The request
+timeout measures silence: each chunk of a streamed answer starts it again, so
+long answers and reasoning are not cut off.
 Optional reasoning effort maps to Responses `reasoning.effort`, Chat
 `reasoning_effort`, or Messages `output_config.effort`. Empty leaves the server
 default unchanged.
@@ -380,7 +413,7 @@ local and are not part of portable project or memory exports.
 
 Keyring I/O runs off the GUI thread. Startup loads the configured key into the
 controller's private session cache; each analysis captures that value. If a key
-is changed outside the app or the keyring needs unlocking, use **重新读取系统凭据**
+is changed outside the app or the keyring needs unlocking, use **Reload key from system keychain**
 in model settings. The settings UI never reads the stored secret into a text
 field. Saving a replacement first stores the new secret, commits the configuration
 reference, then removes the old credential. A failed settings commit keeps the
@@ -442,8 +475,8 @@ have separate rings.
 
 ## Investigation interactions
 
-The right sidebar starts hidden. Its view menu opens **研究记录**, **函数证据**
-and **变更审阅**, in addition to files, object progress, memory and side chat.
+The right sidebar starts hidden. Its view menu opens **Research log**, **Function evidence**
+and **Change review**, in addition to files, object progress, memory and side chat.
 
 - **Execution records:** expand a reply's execution row to inspect actual tool
   requests, results, object/delegation identity, duration and skipped calls.
@@ -468,7 +501,7 @@ and **变更审阅**, in addition to files, object progress, memory and side cha
   resource serial against a replacement process. Open evidence links in answers
   or execution records; the inspector can request C, disassembly, xrefs or CFG
   directly. These are ND's results, not model-generated source. CFG currently
-  uses the native textual result. **在 ND GUI 打开** opens the corresponding
+  uses the native textual result. **Open in the NeverD workbench** opens the corresponding
   object; the current GUI launch protocol does not expose an address jump.
 - **Research steps:** `read_research_plan` / `update_research_plan` maintain
   per-conversation steps, outcomes, evidence links and unresolved questions.
@@ -486,7 +519,7 @@ in the review. The full rendered library's hash is retained for drift checking,
 without copying the system-header library into each review item. Proposing
 does **not** change the ND project.
 
-**应用变更** is an explicit user action. It requires idle analysis, side chats
+**Apply change** is an explicit user action. It requires idle analysis, side chats
 and inspector jobs for every open Agent project referencing that source path.
 Cached read-only engines are retired before starting a separate writer. The
 client rechecks the binary fingerprint and before-value, uses the existing ND
@@ -496,7 +529,7 @@ beside Agent, then through `PATH`; it must have its matching engine library.
 If a GUI holds the writable project lock, close that analysis session first.
 This version does not attach to a live writable GUI session.
 
-**撤销此变更** requires the current history head, cursor, total and source hash
+**Undo this change** requires the current history head, cursor, total and source hash
 to match the recorded receipt exactly. It never searches backwards for a similar
 entry or undoes an intervening command. ND history currently has no persistent
 command UUID; this is a state-matching undo contract, not proof of command
@@ -518,14 +551,14 @@ It inherits the existing checkpoint, completed model/tool exchanges and visible
 history. A main turn still in progress is captured as public evidence: completed
 tool results remain available, pending calls are labelled pending, and unmatched
 native calls are not replayed. Creating a side conversation sends no model request.
-Inherited messages are initially collapsed under **已继承主对话** and can be
+Inherited messages are initially collapsed under **Inherited from the main conversation** and can be
 expanded for inspection.
 
 After that fork, each side conversation has its own draft, transcript, context,
 compaction and runtime. Later main messages do not silently update an existing
 side conversation; use **+** to branch from the latest main context. Main and side
 requests can run at the same time. The history selector restores earlier side
-conversations, including after restarting the app. **引用** explicitly copies an
+conversations, including after restarting the app. **Quote** explicitly copies an
 answer into the main draft without sending it or changing the main model history.
 
 Side conversations share their project's registered analysis objects, report
@@ -535,7 +568,7 @@ include the session ID, and the copied transcript records its fork timestamp.
 
 ## Persistent goals
 
-Use **目标** to enter an objective, cumulative token budget and maximum number of
+Use **Goal** to enter an objective, cumulative token budget and maximum number of
 rounds. Each round uses the existing project analysis runtime and main context.
 Before the final answer, the model reports progress through `report_goal_progress`:
 `continue` requires a concrete next step, `completed` requires evidence for the
@@ -543,7 +576,7 @@ whole objective, and `blocked` records why progress needs attention. A successfu
 `continue` round schedules the next one automatically. A final answer alone does
 not mark a goal complete or create an unbounded retry loop.
 
-**暂停** cancels the current task tree and prevents another round. Manual main
+**Pause** cancels the current task tree and prevents another round. Manual main
 requests also stop automatic continuation. Completion, a blocked/missing progress
 report, a model/tool failure, or a token/round limit stops execution with a visible
 status. Editing/resuming preserves accumulated usage and round counts. Closing
@@ -687,10 +720,11 @@ planning question in 8.72 seconds (two model requests, no object delegation). A
 subsequent read-only check of `user32!GetMessageW` to
 `win32u!NtUserGetMessage` completed in 43.70 seconds, with both object analysts
 starting together, 14 model requests and 19 tool calls without tool errors. This
-qualification established only that bounded static chain. Evidence remains
-in the local `build-driverentry-lab/desktop-20261108/validation/agent-flow/`.
-These timings describe the earlier qualification build; current runs have no
-model-call count limit.
+qualification established only that bounded static chain. These timings
+describe the earlier qualification build. Current runs have no model-call count
+limit; an ordinary question stops when its model calls have used the token
+budget in `Config.h` (`kDefaultRunTokens`), and a persistent goal keeps its own
+budget.
 
 `NeverDAgent.Workspace` covers Unicode/space-containing paths, project reopen
 and relocation, independent per-project object IDs, export/import provenance,
@@ -736,9 +770,8 @@ without giving the model its source or executing the DLL:
 
 These are different tasks, not a controlled performance comparison. All three
 use DeepSeek's compatible endpoints; live OpenAI/Anthropic accounts have not
-been qualified. Evidence is under the local `build-driverentry-lab/
-neverd-agent-20261106/live/` directory, including `acceptance-summary.json`, raw
-per-project run logs and the generated reports. Checksum arithmetic, zero-length
+been qualified. The run logs and generated reports were kept with the author's
+qualification records. Checksum arithmetic, zero-length
 behavior, five error categories and successful returns 1/2 match the fixture.
 The reports' inferred business names (for example calling byte 2 a version)
 are not established by the machine code. Model/tool round trips remain more
@@ -777,5 +810,4 @@ before/after local estimates. This checks useful continuation, not mathematicall
 lossless summarization. Original transcripts remain available for verification.
 
 The regular user's DeepSeek context setting remains unchanged; only this
-acceptance project used the small test window. Evidence is under the local
-`build-driverentry-lab/neverd-agent-20261107/live-compaction/` directory.
+acceptance project used the small test window.

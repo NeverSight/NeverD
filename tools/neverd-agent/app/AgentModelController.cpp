@@ -1,5 +1,4 @@
-//===- AgentModelController.cpp - Desktop AI actions
-//-----------------------===//
+//===- AgentModelController.cpp - Desktop AI actions ----------------------===//
 //
 // NeverD Decompiler
 //
@@ -57,7 +56,8 @@ bool AgentController::updateModelSettings(const QVariantMap &settings,
                                           const QString &key, bool clearKey,
                                           const QString &mcpPath) {
   if (credentialBusy()) {
-    emit operationError(tr("正在访问系统凭据库，请稍候再保存。"));
+    emit operationError(tr("Accessing the system credential store. Wait a "
+                           "moment, then save again."));
     return false;
   }
   QString error;
@@ -65,7 +65,8 @@ bool AgentController::updateModelSettings(const QVariantMap &settings,
   config["credentialId"] = clearKey ? "" : Profile.CredentialId;
   auto candidate = ModelProfile::fromJson(config, error);
   if (!candidate || !candidate->validate(error) ||
-      !Credentials::validateKey(key, error)) {
+      !Credentials::validateKey(key, error) ||
+      !keyMayTravel(*candidate, key, clearKey, error)) {
     emit operationError(error);
     return false;
   }
@@ -93,6 +94,28 @@ bool AgentController::updateModelSettings(const QVariantMap &settings,
     Credentials(directory).store(key, result.first, result.second);
     return result;
   }));
+  return true;
+}
+
+// A saved key belongs to the server it was saved for; a key in the form is
+// typed for the form's server. Either travels only over HTTPS, or over plain
+// HTTP to this computer.
+bool AgentController::keyMayTravel(const ModelProfile &candidate,
+                                   const QString &key, bool clearKey,
+                                   QString &error) const {
+  const bool savedKey =
+      key.isEmpty() && !clearKey && !Profile.CredentialId.isEmpty();
+  if (savedKey &&
+      !ModelProfile::sameServer(Profile.BaseUrl, candidate.BaseUrl)) {
+    error = tr("The API URL now names a different server. Enter the API key "
+               "for that server, or remove the saved key.");
+    return false;
+  }
+  if ((savedKey || !key.isEmpty()) && !candidate.carriesKeysSafely()) {
+    error = tr("An API key is sent only over HTTPS, or over HTTP to this "
+               "computer. Use an HTTPS address for a remote server.");
+    return false;
+  }
   return true;
 }
 
@@ -128,7 +151,8 @@ bool AgentController::commitModelSettings(const ModelProfile &profile,
 }
 
 QString AgentController::credentialStatus() const {
-  return credentialBusy() ? tr("正在访问系统凭据库…") : CredentialError;
+  return credentialBusy() ? tr("Accessing the system credential store.")
+                          : CredentialError;
 }
 
 bool AgentController::readModelKey(QString &key, QString &error) const {
@@ -137,10 +161,12 @@ bool AgentController::readModelKey(QString &key, QString &error) const {
     return true;
   if (CachedCredentialId != Profile.CredentialId ||
       !CredentialError.isEmpty()) {
-    error =
-        credentialBusy() ? tr("正在读取 API Key，请稍候。") : CredentialError;
+    error = credentialBusy()
+                ? tr("The API key is still being read. Try again in a moment.")
+                : CredentialError;
     if (error.isEmpty())
-      error = tr("API Key 尚未就绪，请在模型设置中重新读取凭据。");
+      error = tr("The API key is not ready. Reload it from the system "
+                 "keychain in model settings.");
     return false;
   }
   key = CachedKey;
@@ -187,8 +213,9 @@ void AgentController::removeCredential(const QString &id) {
     watcher->deleteLater();
     --CredentialJobs;
     if (!removed)
-      emit operationError(
-          tr("配置已更新，但旧凭据未能清理；请检查系统凭据库权限。"));
+      emit operationError(tr("Settings were updated, but the old credential "
+                             "could not be removed. Check the permissions of "
+                             "the system credential store."));
     emit credentialChanged();
   });
   watcher->setFuture(QtConcurrent::run([directory = DataDirectory, id] {
@@ -205,6 +232,7 @@ void AgentController::testConnection(const QVariantMap &settings,
   auto profile = ModelProfile::fromJson(config, error);
   if (!profile || !profile->validate(error) ||
       !Credentials::validateKey(secret, error) ||
+      !keyMayTravel(*profile, secret, clearKey, error) ||
       (secret.isEmpty() && !clearKey && !readModelKey(secret, error))) {
     ConnectionStatus = error;
     emit connectionChanged();
@@ -213,17 +241,16 @@ void AgentController::testConnection(const QVariantMap &settings,
   profile->OutputTokens = std::min(profile->OutputTokens,
                                    model_limits::kConnectionTestOutputTokens);
   TestClient = new ModelClient(this);
-  connect(TestClient, &ModelClient::finished, this,
-          [this](const ModelTurn &turn) {
-            ConnectionStatus =
-                turn.Error.isEmpty()
-                    ? QStringLiteral("连接成功 · %1").arg(turn.Text.left(120))
-                    : turn.Error;
-            TestClient->deleteLater();
-            TestClient.clear();
-            emit connectionChanged();
-          });
-  ConnectionStatus = QStringLiteral("正在请求模型…");
+  connect(
+      TestClient, &ModelClient::finished, this, [this](const ModelTurn &turn) {
+        ConnectionStatus = turn.Error.isEmpty()
+                               ? tr("Connected · %1").arg(turn.Text.left(120))
+                               : turn.Error;
+        TestClient->deleteLater();
+        TestClient.clear();
+        emit connectionChanged();
+      });
+  ConnectionStatus = tr("Contacting the model.");
   emit connectionChanged();
   TestClient->start(*profile, secret, "Reply briefly.",
                     {ProviderCodec::message("user", "Reply with OK.")}, {});

@@ -18,7 +18,7 @@
 namespace neverd::agent {
 SideChat::SideChat(Project project, QString id, QObject *parent)
     : QObject(parent), ProjectValue(std::move(project)), Id(std::move(id)),
-      Title(tr("新聊天")), Runtime(this) {
+      Title(tr("New chat")), Runtime(this) {
   StreamTimer.setSingleShot(true);
   StreamTimer.setInterval(model_limits::kStreamUiUpdateMs);
   connect(&StreamTimer, &QTimer::timeout, this, &SideChat::messagesChanged);

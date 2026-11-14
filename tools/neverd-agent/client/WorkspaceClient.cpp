@@ -9,6 +9,7 @@
 #include "WorkspaceClient.h"
 
 #include "platform/AppPaths.h"
+#include "platform/Translation.h"
 
 #include <QDeadlineTimer>
 #include <QDesktopServices>
@@ -86,7 +87,7 @@ WorkspaceClient::WorkspaceClient(const QString &directory, QObject *parent)
 }
 
 bool WorkspaceClient::initialize(const QString &project, QString &error) {
-  if (!Process.start(Directory, error))
+  if (!Process.start(Directory, interfaceLanguage(), error))
     return false;
   auto request = wire::initialize("workspace");
   request["project"] = project;
@@ -100,6 +101,11 @@ bool WorkspaceClient::initialize(const QString &project, QString &error) {
   }
   Initialized = true;
   return true;
+}
+
+void WorkspaceClient::setLanguage(const QString &language) {
+  if (Ready)
+    Process.send({{"command", "language"}, {"language", language}});
 }
 
 bool WorkspaceClient::prepareClose() {

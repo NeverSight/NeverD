@@ -1,5 +1,4 @@
-//===- McpSession.h - Object-scoped ND analysis process ----------*- C++
-//-*-===//
+//===- McpSession.h - Object-scoped ND analysis process ---------*- C++ -*-===//
 //
 // NeverD Decompiler
 //

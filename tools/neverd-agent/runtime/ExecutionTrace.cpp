@@ -5,14 +5,40 @@
 //===----------------------------------------------------------------------===//
 #include "ExecutionTrace.h"
 
+#include "Config.h"
 #include "models/ModelProfile.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
 #include <QUuid>
 
 namespace neverd::agent {
+namespace {
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(neverd::agent::ExecutionTrace)
+};
+
+/// \p result as an execution row shows it: whole while small, else its
+/// leading text, marked as cut, beside the evidence that keeps it whole.
+QJsonValue resultPreview(const QJsonObject &result) {
+  const QByteArray text = QJsonDocument(result).toJson(QJsonDocument::Indented);
+  if (text.size() <= kMaxExecutionResultBytes)
+    return result;
+  QByteArray head = text.left(kMaxExecutionResultBytes);
+  // Do not end inside a UTF-8 sequence.
+  while (!head.isEmpty() && (uchar(head.back()) & 0xC0) == 0x80)
+    head.chop(1);
+  if (!head.isEmpty() && uchar(head.back()) >= 0xC0)
+    head.chop(1);
+  return QJsonObject{{"evidence_id", result["evidence_id"]},
+                     {"truncated", true},
+                     {"bytes", text.size()},
+                     {"preview", QString::fromUtf8(head)}};
+}
+} // namespace
+
 std::optional<qsizetype> ExecutionTrace::observe(const QJsonObject &event) {
   const auto kind = event["kind"].toString();
   if (kind == "tool_request") {
@@ -64,7 +90,7 @@ std::optional<qsizetype> ExecutionTrace::observe(const QJsonObject &event) {
                    : result.contains("error") || result["isError"].toBool()
                        ? "failed"
                        : "succeeded";
-    row["result"] = result;
+    row["result"] = resultPreview(result);
     row["evidenceId"] = result["evidence_id"];
     row["elapsedMs"] = qMax<qint64>(0, event["elapsedMs"].toInteger() -
                                            row["startMs"].toInteger());
@@ -74,7 +100,7 @@ std::optional<qsizetype> ExecutionTrace::observe(const QJsonObject &event) {
   if (kind == "user_input_applied") {
     Rows.append(
         QJsonObject{{"id", event["inputId"]},
-                    {"name", "已接收补充指令"},
+                    {"name", Text::tr("Follow-up instruction received")},
                     {"label", event["node"].toObject()["label"]},
                     {"state", "succeeded"},
                     {"arguments", QJsonObject{{"text", event["text"]}}}});

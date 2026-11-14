@@ -1,5 +1,4 @@
-//===- FixtureMcp.cpp - Disposable snapshot transport fixture
-//--------------===//
+//===- FixtureMcp.cpp - Disposable snapshot transport fixture -------------===//
 //
 // NeverD Decompiler
 //

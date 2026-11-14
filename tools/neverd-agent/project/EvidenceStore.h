@@ -1,5 +1,4 @@
-//===- EvidenceStore.h - Durable object-bound evidence -----------*- C++
-//-*-===//
+//===- EvidenceStore.h - Durable object-bound evidence ----------*- C++ -*-===//
 //
 // NeverD Decompiler
 //

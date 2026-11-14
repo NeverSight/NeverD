@@ -1,5 +1,4 @@
-//===- ConversationInput.cpp - Captured user input
-//-------------------------===//
+//===- ConversationInput.cpp - Captured user input ------------------------===//
 //
 // NeverD Decompiler
 //

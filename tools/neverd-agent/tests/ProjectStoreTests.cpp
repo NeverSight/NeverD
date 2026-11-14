@@ -1,5 +1,4 @@
-//===- ProjectStoreTests.cpp - Agent persistence regression tests
-//-----------===//
+//===- ProjectStoreTests.cpp - Agent persistence regression tests ---------===//
 //
 // NeverD Decompiler
 //
@@ -26,6 +25,27 @@ using namespace neverd::agent;
 class ProjectStoreTests : public QObject {
   Q_OBJECT
 private slots:
+  // Paths a model supplies are judged as text, before any file call could
+  // resolve a network path and contact its host.
+  void modelPathsNeverReachOtherMachines() {
+    for (const auto *remote :
+         {"\\\\attacker\\share\\x", "//attacker/share/x", "\\/attacker/x",
+          "/\\attacker/x", "\\\\?\\UNC\\host\\s", "file://attacker/share/x",
+          " \\\\attacker\\x"})
+      QVERIFY2(isRemotePath(QString::fromLatin1(remote)), remote);
+    for (const auto *local :
+         {"C:\\Windows\\kernel32.dll", "/usr/lib/libc.so", "file:///tmp/x",
+          "file://localhost/tmp/x", "notes/a.md", "kernel32.dll"})
+      QVERIFY2(!isRemotePath(QString::fromLatin1(local)), local);
+    for (const auto *inside : {"notes/a.md", "reports\\r.md", "a/./b.txt"})
+      QVERIFY2(isContainedRelativePath(QString::fromLatin1(inside)), inside);
+    for (const auto *outside :
+         {"", "/etc/passwd", "C:\\x.txt", "C:x.txt", "../secret",
+          "notes/../../x", "notes\\..\\..\\x", "//attacker/share/x",
+          "\\\\attacker\\share"})
+      QVERIFY2(!isContainedRelativePath(QString::fromLatin1(outside)), outside);
+  }
+
   void helpersFollowTheConfiguredBundleAndInstallation() {
     QTemporaryDir workspace;
     const QString bundle = workspace.filePath("NeverD with spaces.app");

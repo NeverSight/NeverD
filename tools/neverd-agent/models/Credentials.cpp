@@ -1,5 +1,4 @@
-//===- Credentials.cpp - User-local model credentials
-//----------------------===//
+//===- Credentials.cpp - User-local model credentials ---------------------===//
 //
 // NeverD Decompiler
 //
@@ -16,6 +15,7 @@
 #include "platform/Keyring.h"
 #endif
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QSaveFile>
@@ -35,6 +35,12 @@
 #endif
 
 namespace neverd::agent {
+namespace {
+struct Text {
+  Q_DECLARE_TR_FUNCTIONS(neverd::agent::Credentials)
+};
+} // namespace
+
 Credentials::Credentials(QString directory) : Directory(std::move(directory)) {}
 
 QString Credentials::path(const QString &id) const {
@@ -46,7 +52,7 @@ QString Credentials::path(const QString &id) const {
 bool Credentials::validateKey(const QString &key, QString &error) {
   if (key.toUtf8().size() > model_limits::kMaxCredentialBytes ||
       key.contains('\r') || key.contains('\n') || key.contains(QChar('\0'))) {
-    error = QStringLiteral("API Key 格式无效。");
+    error = Text::tr("Invalid API key format.");
     return false;
   }
   return true;
@@ -63,7 +69,7 @@ bool Credentials::store(const QString &key, QString &id, QString &error) const {
   DATA_BLOB output{};
   if (!CryptProtectData(&input, L"NeverD Agent API credential", nullptr,
                         nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &output)) {
-    error = QStringLiteral("Windows 无法保护 API Key（错误 %1）。")
+    error = Text::tr("Windows could not protect the API key (error %1).")
                 .arg(GetLastError());
     return false;
   }
@@ -73,7 +79,7 @@ bool Credentials::store(const QString &key, QString &id, QString &error) const {
   LocalFree(output.pbData);
   const QString directory = QDir(Directory).filePath("credentials");
   if (!QDir().mkpath(directory)) {
-    error = QStringLiteral("无法创建凭据目录。");
+    error = Text::tr("Cannot create the credential directory.");
     return false;
   }
   id = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -81,7 +87,7 @@ bool Credentials::store(const QString &key, QString &id, QString &error) const {
   if (!file.open(QIODevice::WriteOnly) ||
       !file.setPermissions(QFile::ReadOwner | QFile::WriteOwner) ||
       file.write(bytes) != bytes.size() || !file.commit()) {
-    error = QStringLiteral("无法保存 API Key：%1").arg(file.errorString());
+    error = Text::tr("Cannot save the API key: %1").arg(file.errorString());
     id.clear();
     return false;
   }
@@ -101,7 +107,7 @@ bool Credentials::read(const QString &id, QString &key, QString &error) const {
     return true;
   const QString location = path(id);
   if (location.isEmpty()) {
-    error = QStringLiteral("凭据引用无效。");
+    error = Text::tr("Invalid credential reference.");
     return false;
   }
 #ifndef Q_OS_WIN
@@ -113,7 +119,8 @@ bool Credentials::read(const QString &id, QString &key, QString &error) const {
     key = decoder(bytes);
     if (decoder.hasError() || key.isEmpty() || !validateKey(key, error)) {
       key.clear();
-      error = QStringLiteral("系统凭据库中的 API Key 无效，请重新填写。");
+      error = Text::tr("The API key in the system credential store is invalid. "
+                       "Enter it again.");
       return false;
     }
     return true;
@@ -122,7 +129,8 @@ bool Credentials::read(const QString &id, QString &key, QString &error) const {
   QFile file(location);
   if (!file.open(QIODevice::ReadOnly) ||
       file.size() > model_limits::kMaxCredentialBytes * 2) {
-    error = QStringLiteral("无法读取已保存的 API Key，请在设置中重新填写。");
+    error =
+        Text::tr("Cannot read the saved API key. Enter it again in settings.");
     return false;
   }
   QByteArray bytes = file.readAll();
@@ -132,8 +140,8 @@ bool Credentials::read(const QString &id, QString &key, QString &error) const {
   DATA_BLOB output{};
   if (!CryptUnprotectData(&input, nullptr, nullptr, nullptr, nullptr,
                           CRYPTPROTECT_UI_FORBIDDEN, &output)) {
-    error = QStringLiteral(
-        "无法解密 API Key，请使用保存它的 Windows 用户，或重新填写。");
+    error = Text::tr("Cannot decrypt the API key. Sign in as the Windows user "
+                     "who saved it, or enter the key again.");
     return false;
   }
   bytes =
@@ -145,7 +153,8 @@ bool Credentials::read(const QString &id, QString &key, QString &error) const {
   const QString candidate = decoder(bytes);
   if (decoder.hasError() || candidate.isEmpty() ||
       !validateKey(candidate, error)) {
-    error = QStringLiteral("已保存的 API Key 格式无效，请重新填写。");
+    error =
+        Text::tr("The saved API key has an invalid format. Enter it again.");
     return false;
   }
 #ifndef Q_OS_WIN
@@ -155,7 +164,8 @@ bool Credentials::read(const QString &id, QString &key, QString &error) const {
   if (!keyring::store(id, bytes, error))
     return false;
   if (!QFile::remove(location)) {
-    error = QStringLiteral("API Key 已存入系统凭据库，但无法删除旧凭据文件：%1")
+    error = Text::tr("The API key was stored in the system credential store, "
+                     "but the old credential file could not be deleted: %1")
                 .arg(location);
     return false;
   }

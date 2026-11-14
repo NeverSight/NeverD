@@ -18,7 +18,7 @@ Flow {
             ActionButton {
                 text: modelData.title; implicitHeight: 27
                 width: Math.min(230, implicitWidth)
-                hint: qsTr("查看将要发送的引用")
+                hint: qsTr("View the reference to be sent")
                 onClicked: referenceDetails.open()
                 Popup {
                     id: referenceDetails
@@ -26,6 +26,7 @@ Flow {
                     anchors.centerIn: parent
                     width: Math.min(600, parent.width - 40); height: Math.min(400, parent.height - 40)
                     padding: 18; modal: true
+                    Overlay.modal: ModalDim {}
                     background: Surface { glass: true }
                     contentItem: ScrollView {
                         clip: true
@@ -33,7 +34,7 @@ Flow {
                     }
                 }
             }
-            ActionButton { glyph: "close_small"; implicitHeight: 27; hint: qsTr("移除引用"); onClicked: chips.removeRequested(index) }
+            ActionButton { glyph: "close_small"; implicitHeight: 27; hint: qsTr("Remove reference"); onClicked: chips.removeRequested(index) }
         }
     }
 }

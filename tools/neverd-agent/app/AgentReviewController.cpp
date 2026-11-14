@@ -71,14 +71,16 @@ bool AgentController::applyChange(const QString &id, bool undo) {
         affected.insert(candidate.Id);
   for (const auto &projectId : affected)
     if (WritingProjects.contains(projectId) || projectHasAnalysis(projectId)) {
-      emit operationError(tr("该对象仍有分析、侧边聊天或证据查询在运行。完成或"
-                             "停止后再应用变更。"));
+      emit operationError(tr("An analysis, side chat or evidence query is "
+                             "still running for this object. Finish or stop "
+                             "it before applying changes."));
       return false;
     }
   const auto worker = resolveWorker();
   if (worker.isEmpty()) {
-    emit operationError(tr("未找到配套的 neverd-worker；请在设置中指定完整的 "
-                           "ND MCP 或 GUI 安装路径。"));
+    emit operationError(tr("Could not find the matching neverd-worker. In "
+                           "settings, give the full path of the NeverD MCP "
+                           "server or workbench installation."));
     return false;
   }
   const Project owner = *project;
@@ -102,10 +104,12 @@ bool AgentController::applyChange(const QString &id, bool undo) {
         if (result.contains("error"))
           emit operationError(result["error"].toString());
         else
-          emit notice(result["status"] == "undone" ? tr("变更已撤销并保存。")
+          emit notice(result["status"] == "undone"
+                          ? tr("Change undone and saved.")
                       : result["status"] == "no_change"
-                          ? tr("ND 当前值与提案一致，没有新增变更。")
-                          : tr("变更已应用并保存。"));
+                          ? tr("NeverD already matches the proposal; nothing "
+                               "was changed.")
+                          : tr("Change applied and saved."));
         for (const auto &projectId : affected)
           dispatchQueuedInput(projectId);
       });

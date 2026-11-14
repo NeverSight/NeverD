@@ -1,5 +1,4 @@
-//===- main.cpp - Standalone NeverD Agent desktop
-//---------------------------===//
+//===- main.cpp - Standalone NeverD Agent desktop -------------------------===//
 //
 // NeverD Decompiler
 //
@@ -13,6 +12,7 @@
 #include "Config.h"
 #include "app/MarkdownDocument.h"
 #include "client/WorkspaceClient.h"
+#include "platform/AgentAppearance.h"
 #include "platform/AgentWindowFrame.h"
 #include "platform/AppPaths.h"
 
@@ -27,6 +27,7 @@
 #include <QMutexLocker>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQmlProperty>
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QStyleHints>
@@ -102,17 +103,12 @@ int main(int argc, char **argv) {
   QString startupError;
   LogPath = QDir(directory).filePath("agent.log");
   qInstallMessageHandler(logMessage);
+  // The workbench's interface language and theme, before any text exists;
+  // the CLI starts in the same language.
+  neverd::agent::AgentAppearance appearance;
+  appearance.refresh();
   neverd::agent::WorkspaceClient controller(directory);
   controller.initialize(parser.value("project"), startupError);
-  app.styleHints()->setColorScheme(
-      controller.lightTheme() ? Qt::ColorScheme::Light : Qt::ColorScheme::Dark);
-  QObject::connect(&controller,
-                   &neverd::agent::WorkspaceClient::settingsChanged, &app,
-                   [&app, &controller] {
-                     app.styleHints()->setColorScheme(
-                         controller.lightTheme() ? Qt::ColorScheme::Light
-                                                 : Qt::ColorScheme::Dark);
-                   });
 
   const QString panel = parser.value("show-panel");
   if (!panel.isEmpty() && panel != "files" && panel != "progress" &&
@@ -126,6 +122,7 @@ int main(int argc, char **argv) {
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty("controller", &controller);
   engine.rootContext()->setContextProperty("windowFrame", &frame);
+  engine.rootContext()->setContextProperty("appearance", &appearance);
   engine.rootContext()->setContextProperty("appFont", uiFont);
   engine.rootContext()->setContextProperty("startupError", startupError);
   engine.rootContext()->setContextProperty("initialSidePanel", panel);
@@ -136,6 +133,31 @@ int main(int argc, char **argv) {
   if (!window)
     return 1;
   frame.attach(*window);
+  // Right-to-left languages mirror every item, dialogs and menus included,
+  // from the window's root, as the workbench mirrors its widgets.
+  const auto mirror = [window, &appearance] {
+    auto *context = qmlContext(window);
+    QQmlProperty(window->contentItem(), "LayoutMirroring.enabled", context)
+        .write(appearance.rightToLeft());
+    QQmlProperty(window->contentItem(), "LayoutMirroring.childrenInherit",
+                 context)
+        .write(true);
+  };
+  mirror();
+  // A language or theme chosen in the workbench shows here the next time
+  // this window becomes active.
+  QObject::connect(window, &QWindow::activeChanged, &appearance,
+                   [window, &appearance] {
+                     if (window->isActive())
+                       appearance.refresh();
+                   });
+  QObject::connect(&appearance,
+                   &neverd::agent::AgentAppearance::languageChanged, &engine,
+                   [&engine, &controller, &appearance, mirror] {
+                     engine.retranslate();
+                     mirror();
+                     controller.setLanguage(appearance.language());
+                   });
   window->show();
   if (parser.isSet("show-settings"))
     QMetaObject::invokeMethod(window, "showModelSettings");
