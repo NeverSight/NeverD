@@ -1298,6 +1298,58 @@ private slots:
                  .toString(),
              "c2");
   }
+  void anthropicCallsWithoutArgumentsKeepAnEmptyInput() {
+    // The block opens with an empty input and an empty input delta; a call
+    // without arguments may send no other delta.
+    for (const QString &rest : {QString(), QString("{}")}) {
+      ProviderCodec codec(ModelProtocol::Messages);
+      QList<QJsonObject> events{
+          {{"type", "content_block_start"},
+           {"index", 0},
+           {"content_block", QJsonObject{{"type", "tool_use"},
+                                         {"id", "c1"},
+                                         {"name", "list_objects"},
+                                         {"input", QJsonObject{}}}}},
+          {{"type", "content_block_delta"},
+           {"index", 0},
+           {"delta",
+            QJsonObject{{"type", "input_json_delta"}, {"partial_json", ""}}}}};
+      if (!rest.isEmpty())
+        events.append({{"type", "content_block_delta"},
+                       {"index", 0},
+                       {"delta", QJsonObject{{"type", "input_json_delta"},
+                                             {"partial_json", rest}}}});
+      events.append({{"type", "content_block_stop"}, {"index", 0}});
+      events.append({{"type", "message_delta"},
+                     {"delta", QJsonObject{{"stop_reason", "tool_use"}}}});
+      events.append({{"type", "message_stop"}});
+      for (const auto &e : events)
+        QVERIFY(codec.feed(sseEvent(e), [](auto) {}));
+      const auto turn = codec.finish(true, {});
+      QVERIFY2(turn.Error.isEmpty(), qPrintable(turn.Error));
+      QCOMPARE(turn.Calls.size(), 1);
+      QCOMPARE(turn.Calls[0].Name, "list_objects");
+      QVERIFY(turn.Calls[0].Arguments.isEmpty());
+    }
+    // Input that is there must still parse.
+    ProviderCodec codec(ModelProtocol::Messages);
+    for (const auto &e : QList<QJsonObject>{
+             {{"type", "content_block_start"},
+              {"index", 0},
+              {"content_block", QJsonObject{{"type", "tool_use"},
+                                            {"id", "c1"},
+                                            {"name", "inspect"},
+                                            {"input", QJsonObject{}}}}},
+             {{"type", "content_block_delta"},
+              {"index", 0},
+              {"delta", QJsonObject{{"type", "input_json_delta"},
+                                    {"partial_json", "{\"path\":"}}}},
+             {{"type", "message_delta"},
+              {"delta", QJsonObject{{"stop_reason", "tool_use"}}}},
+             {{"type", "message_stop"}}})
+      QVERIFY(codec.feed(sseEvent(e), [](auto) {}));
+    QVERIFY(!codec.finish(true, {}).Error.isEmpty());
+  }
   void incompleteStreamsNeverDispatch() {
     ProviderCodec codec(ModelProtocol::Responses);
     QVERIFY(codec.feed(sseEvent({{"type", "response.output_text.delta"},

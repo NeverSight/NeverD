@@ -278,7 +278,11 @@ ModelTurn ProviderCodec::finish(bool streaming, const QByteArray &body) {
   QJsonArray blocks;
   for (auto it = Blocks.begin(); it != Blocks.end(); ++it) {
     auto block = it.value();
-    if (Protocol == ModelProtocol::Messages && Arguments.contains(it.key())) {
+    // Every tool_use block opens with "input": {} and an empty input delta;
+    // a call without arguments may stream nothing more, so its input stays
+    // the object the block opened with.
+    if (Protocol == ModelProtocol::Messages && Arguments.contains(it.key()) &&
+        !Arguments[it.key()].trimmed().isEmpty()) {
       const auto parsed = QJsonDocument::fromJson(Arguments[it.key()].toUtf8());
       if (!parsed.isObject()) {
         ModelTurn r;
