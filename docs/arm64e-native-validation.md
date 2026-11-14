@@ -1542,3 +1542,16 @@ function from that range still needs a proved function boundary. Frameless
 saved-pair layouts and PAuth_LR compact publication also remain separate gaps.
 These cases do not qualify arbitrary lifted images, arbitrary protected
 non-call language cleanup or native CPTA-on.
+
+Both M1 runners passed all 83 cases using the Release host built from
+`b54eed139a515af9042314863daf30ad193f78b7`. Each executed 164 original or
+published images; the added compact cases made 364 normal calls with complete
+register observations and 24 signed caller resumptions across signal frames
+per host. The mixed native/Swift call case, original authentication and
+exception controls, existing signal cleanup and TLS cases remained enabled.
+Windows frontend checks passed. Local checks passed 83 publication cases,
+18 unwind-recovery cases and 137 ABI/format cases; 42 native-gated ABI/format
+cases were skipped locally. Both native CPTA probes remained unavailable.
+The LLVM fork revision and r6 prebuilt pin were unchanged.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43617563664)
+and [per-host verification record](evidence/arm64e-compact-frame-publication-2026-11-15.json).
