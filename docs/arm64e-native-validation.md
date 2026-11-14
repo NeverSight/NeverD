@@ -1595,3 +1595,25 @@ PAuth_LR cases report structural images separately from native execution.
 Neither a structurally correct compact record nor a passing classic PAC signal
 resumption qualifies execution on PAuth_LR hardware, arbitrary lifted images,
 arbitrary protected non-call language cleanup, or native CPTA-on.
+
+Both native runners passed all 96 cases from
+`941203f5d2036ad3541a2e797938ccba01a898ed`. Each executed 202 original or
+published images. The eleven added classic compact cases contributed 442
+register-observed calls and 48 signed signal-caller resumptions per host.
+The two PAuth_LR cases contributed four structural original/published images
+and zero native PAuth_LR executions per host. Windows frontend checks passed.
+The Xcode 27 linker word before fixture construction was recorded as
+`0x04000515` for the nonzero-offset case; the final installed image retained
+`0x05002515`.
+
+Local Release validation selected 909 cases: 862 passed, 47 native-gated cases
+were skipped, and none failed. Six LLVM MC/FileCheck invocations passed, as
+did the pinned 22.1.2 format check for all thirteen changed source files and
+the documentation inventory check. The r6 prebuilt configuration is unchanged.
+The encoder and consumer-boundary changes were merged directly into the LLVM
+fork in [PR #10](https://github.com/NeverSight/llvm-project/pull/10) and
+[PR #11](https://github.com/NeverSight/llvm-project/pull/11).
+Both M1 environments still reported native CPTA-on unavailable, and neither
+repository had a registered self-hosted runner at the recorded observation.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43628073491)
+and [per-host verification record](evidence/arm64e-compact-range-publication-2026-11-15.json).
