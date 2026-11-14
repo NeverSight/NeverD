@@ -1177,6 +1177,9 @@ The pinned Unicorn includes [the legacy ABS/NEG exception fix](https://github.co
 The independent sign tests distinguish pre-R6 arithmetic NaN behavior from R6
 bit operations, including enabled Invalid exceptions and preserved destinations.
 The rules follow [MIPS64 Volume II, revision 2.50](https://0x04.net/~mwk/doc/mips/MD00087-2B-MIPS64BIS-AFP-02.50.pdf).
+The [qualification receipt](evidence/mips-classic-fp-2026-11-14.json) records
+the bit/exception comparisons, both source projections and the o32/n32/n64
+fixed, variadic and indirect call roundtrips in both byte orders.
 
 ### Release 6 scalar FPU
 
