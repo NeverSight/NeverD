@@ -1405,3 +1405,27 @@ signed C and Objective-C controls at O0 and O2. Both M1 runners reported
 that native checked writeback remained unavailable.
 [Native and Windows Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43545498327)
 and [per-host verification record](evidence/arm64e-scalar-publication-2026-11-14.json).
+
+Ordinary register-indexed accesses and non-SP writeback accesses now enter
+the same audited native register-body producer as physical stack cursors.
+The producer retains each original memory instruction and its base update,
+including the runtime checked-pointer behavior. This covers signed and
+unsigned GPR loads, scalar and SIMD stores, signed word pairs, and B/H/S/D/Q
+memory registers. Unsupported vector arithmetic arrangements still refuse
+native-body construction. Publication continues to verify the relocated
+instruction words, control-transfer targets and unwind rows.
+
+Direct-call X8/X9 result discovery follows the function's control-flow edges.
+Backward liveness reaches reads across conditional, forward and backward
+branches. W writes kill the complete corresponding X value, and another call
+ends the previous result. Functions without direct calls skip this analysis.
+The two-bit worklist processes each edge at most twice and emits results in
+instruction order.
+
+The additional publication controls compare indexed reads and signed-offset
+stores, zero and nonzero loop counts, pre/post-indexed scalar and pair
+accesses, and all five SIMD memory widths. Narrow SIMD loads are subsequently
+stored as full 128-bit registers, checking that their upper lanes are cleared.
+Independent drivers compare complete destination buffers, untouched guards
+and updated pointers on the original and published libraries. A separate
+negative case verifies that intervening W8/W9 writes end both old call results.
