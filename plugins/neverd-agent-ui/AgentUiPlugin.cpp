@@ -122,8 +122,12 @@ public:
       return palette.color(QPalette::HighlightedText);
     if (is("Border") || is("FloatingWindowBorder"))
       return palette.color(QPalette::Mid);
-    if (is("ToolBarHoverBorder"))
+    if (is("ToolBarHoverBorder") || is("ButtonHoverBorder"))
       return Qt::transparent;
+    if (is("ToolButtonChecked"))
+      return palette.color(QPalette::Midlight);
+    if (is("ToolButtonCheckedText"))
+      return palette.color(QPalette::ButtonText);
     return palette.color(QPalette::Text);
   }
 
@@ -285,22 +289,31 @@ protected:
     const QRectF outline = QRectF(rect()).adjusted(1.5, 1.5, -1.5, -1.5);
     const qreal radius = outline.height() / 2;
     const bool hover = underMouse() || isDown();
-    // While its conversation is open the button shows in the button gray,
-    // so the conversation's Send keeps the window's one accent.
+    // While its conversation is open the button is a pressed toggle in the
+    // button gray, so the conversation's Send keeps the window's one accent.
+    // A high contrast theme, the one that draws hover borders, fills buttons
+    // with the window, so there it takes the checked tool button fill.
     const bool open = isChecked();
-    QColor face = open    ? Color(hover ? "ButtonHover" : "Button")
-                  : hover ? Color("ButtonPrimaryHover")
-                          : Color("ButtonPrimary");
+    const bool contrast = Color("ButtonHoverBorder").alpha() > 0;
+    QColor face = open && contrast ? Color("ToolButtonChecked")
+                  : open           ? Color(hover ? "ButtonHover" : "Button")
+                  : hover          ? Color("ButtonPrimaryHover")
+                                   : Color("ButtonPrimary");
     if (isDown())
       face = face.darker(112);
-    const QColor ink = Color(open ? "ButtonText" : "ButtonPrimaryText");
+    const QColor ink = Color(open && contrast ? "ToolButtonCheckedText"
+                             : open           ? "ButtonText"
+                                              : "ButtonPrimaryText");
     if (hasFocus() && FocusByKeyboard) {
       painter.setPen(QPen(Color("Focus"), 1.5));
       painter.setBrush(Qt::NoBrush);
       painter.drawRoundedRect(QRectF(rect()).adjusted(0.75, 0.75, -0.75, -0.75),
                               radius + 0.75, radius + 0.75);
     }
-    painter.setPen(QPen(Color(open ? "Border" : "ButtonPrimaryBorder"), 1));
+    painter.setPen(QPen(Color(hover && contrast ? "ButtonHoverBorder"
+                              : open            ? "Border"
+                                                : "ButtonPrimaryBorder"),
+                        1));
     painter.setBrush(face);
     painter.drawRoundedRect(outline.adjusted(1, 1, -1, -1), radius - 1,
                             radius - 1);
