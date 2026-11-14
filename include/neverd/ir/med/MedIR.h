@@ -790,6 +790,12 @@ struct MedFunc {
   /// The LowIR function lifted every instruction it reaches and kept every
   /// path inside the image (LowFunc::hasCompleteLiftCoverage).
   bool CompleteLiftCoverage = false;
+  /// Where a path left the image: addresses the LowIR function reached and
+  /// found no code the image maps at (LowFunc::TruncatedPathAddresses).  The
+  /// function is lifted all the same.  An edge to such an address has no
+  /// block, and each backend ends that path in a trap instead of inventing
+  /// where it goes.
+  std::set<va_t> TruncatedPathAddresses;
   std::optional<ExceptionFunction> ExceptionMetadata;
   /// Source analysis retained unknown machine entries instead of asserting a
   /// common SEH invocation frame. This function cannot be lowered to LLVM.

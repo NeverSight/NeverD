@@ -1098,16 +1098,29 @@ that follow it (`then`: at most four `{"operation":"decompile","payload":...}`, 
 naming the page its client keeps with `if_none_match`): once the request succeeds the
 reply answers each from the document that page is of, as a read made right after it
 would be answered, in the reply's own `then` list of `{status, payload}` or
-`{status, error}`, an answer over 1 MiB refused by itself.  A view of more pages than
+`{status, error}`, an answer over 1 MiB refused by itself.  One of them may be
+`{"operation":"listing","payload":...}`, the lines a client shows: at most 256 of them
+(`before` and `after` together), read as that `listing` read made right after the
+request reads, the page it names with `if_none_match` standing or taking what changed
+of it (`page_delta`).  More lines than that, a read with `recover_address` or
+`complete_anchor_item`, which may look for an address's owner, and any such read
+while the request left the listing names or functions to read again, or while the
+reference index is being built, are answered `{"status":"later"}`: the request's
+reply waits for no more than the lines, read from what the listing holds.  A view of more pages than
 one carries each: where an earlier answer had a patch written into the document they
 name, a later one is answered from what that patch says it wrote of it.  A page of no
 document the worker holds, nor of one a patch it holds was so written into, is answered
 `{"status":"later"}`, for the client to read itself.  A request
-that fails answers none, and a read that is no page's is refused alone.  A page given so
+that fails answers none, and a read that is neither a page's nor a listing's is refused alone.  A page given so
 is not read ahead again once the reply is sent.  `metadata.following_reads` counts the
 reads answered so.  The workbench's owner dispatcher has each edit carry the
 reads of the pages read at the revision it leaves, at most two, and takes the answers
-as those views' next reads.  `metadata.named_view_renders` counts the
+as those views' next reads; and, where the listing is what the user works in or the
+edit renames a function its lines show, the read of the lines the listing shows, whose
+answer the listing takes as the edit's revision is said.  Elsewhere the listing reads
+those lines itself behind the reply, so that the pseudocode's page waits for none of
+them; either way they come ahead of the lines around them, which it reads behind the
+edit.  `metadata.named_view_renders` counts the
 documents the engine rendered a function for, rather than built from pages kept.  `metadata.view_store_name_reads` counts
 the times an owner's views read which store they are kept under, which an edit that
 keeps the stores for what it changed says as it takes it.  A declaration of types nothing

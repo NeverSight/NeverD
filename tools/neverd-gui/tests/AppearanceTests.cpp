@@ -1396,11 +1396,15 @@ private slots:
     QCOMPARE(drawn(main), accepted);
     // And the accent is something to see where a theme fills it; a high
     // contrast theme outlines every button alike.
+    const QImage ordinary = drawn(plain);
     if (mode == int(Theme::Mode::Dark) || mode == int(Theme::Mode::Light))
-      QVERIFY(drawn(plain) != accepted);
-    // Marked once it is shown, a button takes the accent just the same.
+      QVERIFY(ordinary != accepted);
+    // Marked once it is shown, a button takes the accent just the same, and
+    // gives it up again when a window passes it to another command.
     showAsMainAction(*plain);
     QCOMPARE(drawn(plain), accepted);
+    showAsMainAction(*plain, false);
+    QCOMPARE(drawn(plain), ordinary);
   }
 
   void aFlatGroupBoxFramesNothing_data() {

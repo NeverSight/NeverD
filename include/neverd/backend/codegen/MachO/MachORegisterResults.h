@@ -31,7 +31,8 @@ struct MedFunc;
 bool needsMachONativeStackIndex(const MedFunc &Function);
 
 /// Lower audited patch-mode entries that use Darwin variadic cursors, indexed
-/// SP accesses or X8/X9 results consumed by an image-local direct caller.
+/// SP accesses, ordinary indexed/writeback memory or X8/X9 results consumed by
+/// an image-local direct caller, including across local control-flow edges.
 /// Keep physical operands, control flow and unwind rows in one native body.
 /// Return an error if any declaration withheld for a physical SP access
 /// cannot be defined; the caller must discard the incomplete module.

@@ -48,8 +48,9 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   when direct image data is rebound. Indexed merge reads into rebuilt image
   storage still require an explicit address contract.
 - `SWL`/`SWR` share a partial-store contract across classic, microMIPS and
-  MIPS16e2 encodings. Only selected bytes are written; no neighboring read or whole-word
-  read/modify/write is introduced. The emulator validates the full write span
+  MIPS16e2 encodings. Pre-R6 classic MIPS64 and microMIPS64 also lift
+  `SDL`/`SDR`. Each instruction writes its selected bytes in target byte
+  order and preserves the surrounding bytes. The emulator validates the full write span
   and observed source bytes before committing. Source image stores require a
   bounded writable backing and preserve guest alignment separately from its
   relocated host address. Source helpers use explicit classic MIPS mode when
@@ -100,12 +101,17 @@ two-byte slots and unproved instruction modes remain excluded.
 Concrete LowIR transport and source parameter inference have separate validation
 boundaries; this source proof does not initialize absent machine registers.
 
-Classic `DIV`/`DIVU` and MIPS16 word division capture both operands and define
+Classic, microMIPS and MIPS16 word `DIV`/`DIVU` capture both operands and define
 HI/LO together. Signed division truncates toward zero; remainder follows the
 dividend's sign. MIN32/-1 produces the truncated word quotient and zero
 remainder. A zero divisor makes both LowIR results unknown, without inventing
 an arithmetic exception or adopting a particular CPU's value. On MIPS64, both
 word inputs must be sign-extended words and each result is sign-extended.
+Pre-Release 6 classic MIPS64 and microMIPS64 also lift `DDIV` and `DDIVU`.
+They consume two full 64-bit GPRs and write the 64-bit quotient to LO and
+remainder to HI. In the signed case, MIN64/-1 produces MIN64 and zero.
+Division by zero leaves both results unknown. The 32-bit microMIPS
+encodings of `MFHI` and `MFLO` can read either result on n32 and n64.
 
 Generated source has an explicitly narrower domain: **every retained division
 that executes requires a nonzero divisor**. Its runtime domain check is not a
@@ -120,10 +126,10 @@ Reading only a low byte or halfword does not prove that incoming upper bits
 have the extension a narrow C parameter would require. Declared source types
 remain a separate contract.
 
-Historical MIPS I–V profiles,
-pre-Release 6 scalar floating point, MSA/DSP forms beyond the slices below, privileged instructions and reservations outside the MIPS16e2 and classic Release 6 LowIR coverage below,
-doubleword merge stores (`SDL`/`SDR`), pre-R6 doubleword division and trapping arithmetic are not admitted by
-the current lifter. Unsupported instructions, missing slots and transfers in a
+Coverage remains incomplete for historical MIPS I–V profiles, pre-Release 6
+scalar floating point, trapping arithmetic and the MSA/DSP forms outside the
+slices below. Privileged instructions and reservations are admitted by profile
+as described under MIPS16e2 and classic Release 6. Unsupported instructions, missing slots and transfers in a
 delay slot produce errors, not replacement NOPs. General aggregate source ABI
 classification, arbitrary PIC/gp recovery, raw-input target selection and
 native code rewriting are not claimed. Unicorn is a test reference, not a
@@ -265,8 +271,10 @@ MIPS64r2/n64 uses the word and packed DSP/DSPR2 operations from revision 3.02
 of the MIPS64 DSP specification. Arithmetic consumes the low word of each
 accumulator half and sign-extends each written half independently. The four
 banked register transfers copy the entire GPR-width half. The pinned Unicorn
-model truncates transfers to nonzero banks on n64, so the non-word test vectors
-for these four transfers use the specification directly. Indexed
+preserves the full width in all four banks, including non-word values in
+AC1–AC3. These transfers are checked by independent expectations and
+original/generated execution. Discarded MFHI/MFLO results still require
+DSP enablement when they address a nonzero bank. Indexed
 memory instructions use the full address registers, including the DSP-only
 doubleword load `LDX`. Both C views preserve DSPControl under the n64 ABI.
 An n64 source return requires the complete eight-byte incoming link, including
@@ -279,13 +287,43 @@ without identifying its historical revision. Concrete use of these encodings
 therefore requires a processor implementing them. Twenty dot-product and selected-lane instructions update complete 128-bit
 HI/LO accumulators. Q15/Q31 product saturation, carry/borrow, Q31/Q63 result
 saturation and the selected bank's sticky overflow flag remain explicit IR
-operations. The legacy DEXTR/DEXTP and DMADD families need separate coverage. In n64 DSPControl,
+operations. Classic `DMADDU` and `DMSUBU` add or subtract the sum of two
+unsigned 32×32-bit lane products in the selected 128-bit accumulator.
+Carry and borrow propagate between LO and HI. DSPControl is preserved.
+Classic `DEXTR.W/.L` and `DEXTRV.W/.L` extract
+the low word or doubleword after shifting the complete 128-bit accumulator.
+`DEXTP[V]` and `DEXTPDP[V]` extract up to 64 bits ending at the seven-bit
+POS, including fields crossing HI/LO and fields wholly within HI. A failed
+extraction sets EFI, preserves POS and returns an unpredictable value.
+Successful decrement forms update POS modulo 128. EFI and POS updates still
+occur when the destination is `$zero`; discarded results also retain the
+DSP-enabled check in the original executor. `DSHILO`/`DSHILOV` shift
+the complete accumulator logically by a signed seven-bit count, including
+the -64 endpoint. `DMTHLIP` moves LO to HI, writes the full GPR to LO and
+advances POS by 64; a POS greater than 64 leaves POS unpredictable.
+`DINSV` shares the INSV bitfield owner with 64-bit source/destination values
+and seven-bit positions. Empty or out-of-range fields remain unpredictable.
+The scalar-result contract preserves both 32- and 64-bit extraction values
+through LowIR, LLVM and C. Retained unpredictable extraction results trap
+in generated C to bound its source domain; this is not a guest exception.
+
+APInt unit tests cover all counts, all 128 positions and four accumulator
+banks in both byte orders. GNU-assembled source round trips separately execute
+the original forms and both C views, including mixed-width extraction helpers.
+The pinned Unicorn fixes legacy DEXTR's signed-LO shift, DEXTP's undefined
+host shifts and the DSHILO -64 endpoint. Original-machine comparisons cover
+negative LO, zero and full-width fields, fields wholly in HI, and the -64
+shift through both C views. Its dedicated regression constructs expected
+bits independently for every register count and position in all four banks
+and both byte orders. The native boundary checks do not qualify hardware
+or the remaining rounded/saturating legacy DEXTR and signed DMADD/DMSUB
+semantics. In n64 DSPControl,
 POS has seven bits and CCOND has eight. RDDSP zero-extends selected bits.
 See the register model and revision history in the
-[MIPS64 DSP Module, revision 3.02](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00375-2B-MIPS64DSP-AFP-03.02.pdf).
+[MIPS64 DSP Module, revision 3.02](https://docs.alexrp.com/mips/mips64_dsp_v3_02.pdf).
 
 Classic AC0 partial writes preserve the pre-R6 unread-result restriction:
-MULT/MULTU/DIV/DIVU (and supported doubleword multiply) establish pending
+MULT/MULTU/DIV/DIVU and their doubleword forms establish pending
 history; MFHI/MFLO consume it even when their destination is `$zero`. A partial
 write before consumption makes the other half unpredictable. A pure transport
 intrinsic carries unknown bits in LowIR; source propagation must discharge it
@@ -352,8 +390,16 @@ The microMIPS operation and slot rules were checked against
 and the pinned [GNU simulator definitions](https://gnu.googlesource.com/binutils-gdb/+/d01e823438c7dc264d6885fbbfeace4d8955dcb7/sim/mips/micromips.igen).
 On n64, tagged callable addresses, computed jumps, link registers and memory
 addresses retain all 64 bits. The r2 scalar subset adds doubleword arithmetic,
-shifts, rotates, bit fields, byte shuffles, LD/SD, LWU and the LDL/LDR merge
-loads. Both r2 widths also lift LWL/LWR and SWL/SWR with a signed 12-bit
+shifts, rotates, bit fields, byte shuffles, HI/LO division, LD/SD, LWU,
+LDL/LDR and SDL/SDR.
+The micro doubleword merge transfers use a signed 12-bit displacement.
+For micro functions, HighC and LLVMC select GCC's `micromips` attribute or
+Clang's `micromips,nomips16` pair. GCC requires `-minterlink-compressed` for
+calls between compressed functions and classic helpers in the same output.
+Compilation stops if Clang reports no microMIPS attribute for the selected
+target. GCC's MIPS attributes are
+documented in the [GCC manual](https://gcc.gnu.org/onlinedocs/gcc/MIPS-Attributes.html).
+Both r2 widths also lift LWL/LWR and SWL/SWR with a signed 12-bit
 displacement. The source fixtures compare the returned word and surrounding
 bytes for aligned and unaligned pairs. Word DSP and DSPR2 instructions use
 the same revision 3.02 accumulator rules as classic n64. GNU as encodes the
@@ -605,11 +651,12 @@ moves and the immediate mask operations share the vector register bank.
 BZ/BNZ test their predicate before the delay slot. The element forms test
 for any zero or all nonzero lanes, while .V tests the whole register.
 
-MSA requires classic or microMIPS32 Release 5/o32 ELF in either byte
+The o32 MSA profile requires classic or microMIPS32 Release 5 ELF in either byte
 order, with `.MIPS.abiflags` explicitly declaring MSA, 128-bit CPR1 registers
 and FP64 ABI tag 6. A reused decoder consumes the current revision as well as
 feature evidence; architecture-only initialization remains Release 2 without
-MSA. Other revisions, MSA64 and DSP/MSA combinations are refused.
+MSA. The n64 profile is described below. Other revisions and DSP/MSA
+combinations are refused.
 
 `FILL.W`, `INSERT.W`, `COPY_S.W`, all four B/H/W/D formats of `ADDV` and
 `SUBV`, `CEQ`, `CLT_S`/`CLT_U`, `CLE_S`/`CLE_U`, `MIN_S`/`MIN_U`,

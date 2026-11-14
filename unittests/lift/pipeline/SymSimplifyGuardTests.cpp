@@ -40,6 +40,7 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -379,6 +380,57 @@ TEST(SymSimplifyGuard, GeneratedVariableShiftsRequireCompleteValueBounds) {
     EXPECT_EQ(Xlat.hasCompatibleResultSemantics(Ctx.mkLShr(X, Extended)),
               Supported);
   }
+}
+
+TEST(SymSimplifyGuard, TranslatesRotationsAndPreservesBothFunnelInputs) {
+  namespace sym = neverd::symbolic;
+  llvm::LLVMContext C;
+  llvm::Module M("rotations", C);
+  auto *Ty = llvm::IntegerType::get(C, 17);
+  auto *FT = llvm::FunctionType::get(Ty, {Ty, Ty, Ty}, false);
+  auto *F = llvm::Function::Create(FT, llvm::Function::ExternalLinkage, "f", M);
+  llvm::IRBuilder<> B(llvm::BasicBlock::Create(C, "entry", F));
+  auto *X = F->getArg(0), *Y = F->getArg(1), *Count = F->getArg(2);
+  for (const auto ID : {llvm::Intrinsic::fshl, llvm::Intrinsic::fshr}) {
+    SCOPED_TRACE(ID);
+    auto *Rotate = B.CreateIntrinsic(ID, {Ty}, {X, X, Count});
+    auto *At = B.CreateRet(Rotate);
+    sym::SymContext Ctx;
+    Translator Xlat(Ctx);
+    auto R = Xlat.in(Rotate);
+    ASSERT_TRUE(R);
+    EXPECT_EQ(Ctx.op(R),
+              ID == llvm::Intrinsic::fshl ? sym::SymOp::Rol : sym::SymOp::Ror);
+    ASSERT_TRUE(Xlat.hasCompatibleResultSemantics(R));
+    llvm::SmallVector<llvm::Instruction *, 4> Generated;
+    auto *Out =
+        llvm::dyn_cast_or_null<llvm::IntrinsicInst>(Xlat.out(R, At, Generated));
+    ASSERT_NE(Out, nullptr);
+    EXPECT_EQ(Out->getIntrinsicID(), ID);
+    EXPECT_EQ(Out->getArgOperand(0), X);
+    EXPECT_EQ(Out->getArgOperand(1), X);
+    EXPECT_EQ(Out->getArgOperand(2), Count);
+    EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+    At->eraseFromParent();
+    // At zero (including a multiple of the width) a right funnel reads
+    // its second word. Different-word variable funnels remain opaque.
+    auto *Zero =
+        B.CreateIntrinsic(ID, {Ty}, {X, Y, llvm::ConstantInt::get(Ty, 34)});
+    Translator Funnel(Ctx);
+    EXPECT_EQ(Funnel.in(Zero), Funnel.in(ID == llvm::Intrinsic::fshl ? X : Y));
+    auto *Variable = B.CreateIntrinsic(ID, {Ty}, {X, Y, Count});
+    EXPECT_FALSE(isTranslatable(Variable, false));
+    auto *Splice =
+        B.CreateIntrinsic(ID, {Ty}, {X, Y, llvm::ConstantInt::get(Ty, 23)});
+    const auto Translated = Funnel.in(Splice);
+    ASSERT_TRUE(Translated);
+    const unsigned Left = ID == llvm::Intrinsic::fshl ? 6 : 11;
+    EXPECT_EQ(Translated,
+              Ctx.mkOr(Ctx.mkShl(Funnel.in(X), Ctx.mkConst(17, Left)),
+                       Ctx.mkLShr(Funnel.in(Y), Ctx.mkConst(17, 17 - Left))));
+  }
+  B.CreateRet(X);
+  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
 }
 
 TEST(SymSimplifyGuard, RewritesCarrySaveAdditionWithAConstantLeftShift) {
@@ -746,6 +798,36 @@ TEST(SymSimplifyGuard, MaskedMultiplyPreservesPoisonAndBoundedAdmission) {
       if (Mode != 3)
         EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
     }
+}
+
+TEST(SymSimplifyGuard, ScaledNarrowSignedWordsRequireProvenFlags) {
+  for (unsigned Mode = 0; Mode < 7; ++Mode) {
+    SCOPED_TRACE(Mode);
+    llvm::LLVMContext C;
+    llvm::Module M("narrow_signed_product", C);
+    auto *Ty = llvm::Type::getInt8Ty(C);
+    auto *F = llvm::Function::Create(llvm::FunctionType::get(Ty, {Ty}, false),
+                                     llvm::Function::ExternalLinkage, "f", &M);
+    llvm::IRBuilder<> B(llvm::BasicBlock::Create(C, "entry", F));
+    auto make = [&] {
+      auto *Left =
+          B.CreateShl(F->getArg(0), B.getInt8(4), "", false, Mode == 4);
+      auto *Part = B.CreateAShr(Left, B.getInt8(Mode == 1 ? 5 : 4), "", true);
+      auto *Product =
+          B.CreateMul(Part, B.getInt8(Mode == 2 ? 17 : 8), "", Mode == 5, true);
+      return B.CreateAdd(Product, B.getInt8(Mode == 3 ? 76 : 3), "", Mode == 6,
+                         true);
+    };
+    auto *Root = B.CreateXor(make(), make());
+    B.CreateRet(Root);
+    // At i8 the signed nibble is [-8, 7]. Each rejected variant has an
+    // input violating exactness, the left shift, or a no-wrap condition.
+    auto Result = SymSimplifyPass::constantValueOf(Root);
+    EXPECT_EQ(Result.has_value(), Mode == 0) << printFunction(*F);
+    if (Result)
+      EXPECT_TRUE(Result->isZero());
+    EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+  }
 }
 
 TEST(SymSimplifyGuard, MaskedDisjointOrMatchesExhaustiveByteDomains) {

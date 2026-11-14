@@ -371,6 +371,10 @@ struct HighStmt {
 
   /// For Goto
   va_t GotoTarget = 0;
+  /// For a Goto without a target (InvalidVA): the address its path left the
+  /// image for, where no code is mapped (MedFunc::TruncatedPathAddresses).
+  /// InvalidVA for an indirect branch that proved no target.
+  va_t LeftImageAt = InvalidVA;
 
   /// For While: original back-edge target address.
   va_t LoopHeaderAddr = 0;

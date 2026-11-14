@@ -13,8 +13,50 @@ from mips_validation_artifacts import MIPSValidationArtifacts, digest
 
 ASE = runpy.run_path(str(Path(__file__).with_name("ase-roundtrip.py")))
 
+DSP64_BOUNDARIES = {
+    f"mips64boundary_{op.replace('.', '_')}_{str(count).replace('-', 'n')}_{pos}_{half}":
+        (op, count, pos, half)
+    for op, count, pos, half in (
+        [(op, 1, 0, "value") for op in ("dextr.w", "dextr.l")]
+        + [(op, count, 0, "value") for op in ("dextrv.w", "dextrv.l")
+           for count in (0, 1, 32, 63)]
+        + [(op, 31, pos, "value") for op in ("dextp", "dextpdp")
+           for pos in (31, 95)]
+        + [(op, 63, pos, "value") for op in ("dextpv", "dextpdpv")
+           for pos in (63, 94, 127)]
+        + [(op, -64, 0, half) for op in ("dshilo", "dshilov")
+           for half in ("hi", "lo")]
+    )
+}
+
 
 def kernels():
+    for bank in range(4):
+        for op in ("dextp", "dextpv", "dextpdp", "dextpdpv"):
+            operand = "$4" if op.endswith("v") else "7"
+            yield (f"mips64discard{bank}_{op}", "mips64r2", "dsp",
+                   f"wrdsp $5,1\n{op} $0,$ac{bank},{operand}\nrddsp $2,63")
+    for bank in range(1, 4):
+        setup = f"mthi $4,$ac{bank}\nmtlo $5,$ac{bank}\n"
+        for form in ("hi", "lo", "extract", "position", "shift_hi", "shift_lo"):
+            if form in ("hi", "lo"):
+                operation = f"mf{form} $2,$ac{bank}"
+            elif form == "extract":
+                operation = f"ori $6,$0,1\ndextrv.l $2,$ac{bank},$6"
+            elif form == "position":
+                operation = ("ori $6,$0,95\nwrdsp $6,1\nori $6,$0,63\n"
+                             f"dextpv $2,$ac{bank},$6")
+            else:
+                operation = f"dshilo $ac{bank},-64\nmf{form[-2:]} $2,$ac{bank}"
+            yield f"mips64bank{bank}_{form}", "mips64r2", "dsp", setup + operation
+    for name, (op, count, pos, half) in DSP64_BOUNDARIES.items():
+        setup = f"mthi $4\nmtlo $5\ndaddiu $6,$0,{count}\n"
+        if op.startswith("dextp"):
+            setup += f"ori $7,$0,{pos}\nwrdsp $7,1\n"
+        operand = "$6" if "v" in op else str(count)
+        operation = (f"{op} $ac0,{operand}\nmf{half} $2" if half != "value" else
+                     f"{op} $2,$ac0,{operand}")
+        yield name, "mips64r2", "dsp", setup + operation
     for name, cpu in (("mips64", "mips64r2"), ("micromips", "mips32r2")):
         yield name + "dsp", cpu, "dsp", "subu.qb $2,$4,$5"
         yield name + "dspr2", cpu, "dspr2", "adduh_r.qb $2,$4,$5"
@@ -46,6 +88,37 @@ def kernels():
             "mips64acc_" + instruction.replace(".", "_"), "mips64r2", "dsp",
             "mthi $0\nmtlo $0\n" + instruction + " $ac0,$4,$5\nmflo $2",
         )
+    for instruction in ("dmaddu", "dmsubu"):
+        for half in ("hi", "lo"):
+            yield (
+                f"mips64acc_{instruction}_{half}", "mips64r2", "dsp",
+                f"mthi $4\nmtlo $5\n{instruction} $ac0,$4,$5\nmf{half} $2",
+            )
+    for instruction in ("dextr.w", "dextrv.w", "dextr.l", "dextrv.l",
+                        "dextp", "dextpv", "dextpdp", "dextpdpv"):
+        variable = "v" in instruction
+        setup = "mthi $4\nmtlo $5\nori $6,$0,17\nori $7,$0,63\nwrdsp $7,1\n"
+        yield (
+            "mips64extract_" + instruction.replace(".", "_"), "mips64r2", "dsp",
+            setup + instruction + " $2,$ac0," + ("$6" if variable else "17"),
+        )
+    for instruction in ("dshilo", "dshilov", "dmthlip"):
+        for half in ("hi", "lo"):
+            operation = (f"{instruction} $4,$ac0" if instruction == "dmthlip" else
+                         f"{instruction} $ac0," + ("$6" if instruction == "dshilov" else "-17"))
+            yield (
+                f"mips64extract_{instruction}_{half}", "mips64r2", "dsp",
+                "mthi $4\nmtlo $5\ndaddiu $6,$0,-17\n" + operation + f"\nmf{half} $2",
+            )
+    yield (
+        "mips64extract_mixed", "mips64r2", "dsp",
+        "mthi $4\nmtlo $5\nori $6,$0,63\nwrdsp $6,1\nori $7,$0,47\n"
+        "extp $3,$ac0,15\ndextpv $2,$ac0,$7\nxor $2,$2,$3",
+    )
+    yield (
+        "mips64extract_dinsv", "mips64r2", "dsp",
+        "ori $6,$0,2207\nwrdsp $6,3\nor $2,$5,$0\ndinsv $2,$4",
+    )
     # The R6 generic core executes the original microMIPS ELF directly.
     yield "micromips32r6", "mips32r6", "", "mul $2,$4,$5\nbitswap $2,$2\njrc16 $ra"
     yield (
@@ -94,12 +167,20 @@ def inputs(name, bits):
         for a in (0, 1, -1, 0x11223344, 0x8000000000000001)
         for b in (0, 7, -1, 0xA5A533FF)
     ]
+    if name.startswith(("mips64extract_", "mips64boundary_", "mips64bank", "mips64discard")):
+        values = (0, 1, 0x123456789abcdef0, (1 << 63) - 1, 1 << 63, (1 << 64) - 1)
+        return [(a, b) for a in values for b in values]
     if name.startswith("mips64acc_"):
-        return [
+        vectors = [
             (a, b)
             for a in (0, 1, 2, 0x0001000200030004, 0xFFFF00010002FFFF)
             for b in (0, 5, 6, 0x0005000600070008, 0xFFFF00020001FFFF)
         ]
+        if name.startswith(("mips64acc_dmaddu_", "mips64acc_dmsubu_")):
+            vectors.extend([(0x10000, 0x10000), (0xffffffff, 0xffffffff),
+                            (0xffffffff00000000, 0xffffffff),
+                            (0xffffffffffffffff, 0xffffffffffffffff)])
+        return vectors
     if "fp" in name:
         values = (
             (0, 0x80000000, 0x3FC00000, 0xBF800000, 0x7FC00000, 0x7F800001, 1)
@@ -372,6 +453,96 @@ def run(args, artifacts):
                 oracle = directory / "classic.elf"
                 assemble(oracle, False)
             wanted = observe(oracle, bits, little, feature, cases)
+            if name.startswith("mips64discard"):
+                op = name.split("_", 1)[1]
+                for i, ((a, b), actual) in enumerate(zip(cases, wanted, strict=True)):
+                    count, pos = a & 63 if op.endswith("v") else 7, b & 127
+                    control = (0x01004005 if i % 2 else 0) & ~127 | pos
+                    if pos < count:
+                        control |= 0x4000
+                    else:
+                        control &= ~0x4000
+                        if "dp" in op:
+                            control = (control & ~127) | ((pos - count - 1) & 127)
+                    if actual != (control, control):
+                        raise ValueError(f"{name}: original {actual}, independent {(control, control)}")
+            if name.startswith("mips64bank"):
+                form = name.split("_", 1)[1]
+                mask = (1 << 64) - 1
+                for i, ((a, b), actual) in enumerate(zip(cases, wanted, strict=True)):
+                    control = 0x01004005 if i % 2 else 0
+                    if form in ("hi", "lo"):
+                        value = a if form == "hi" else b
+                    elif form == "extract":
+                        value = (((a << 64) | b) >> 1) & mask
+                    elif form == "position":
+                        value = (((a << 64) | b) >> 32) & mask
+                        control = (control & ~0x407f) | 95
+                    else:
+                        value = b if form == "shift_hi" else 0
+                    if actual != (value, control):
+                        raise ValueError(f"{name}: original {actual}, independent {(value, control)}")
+            if name in DSP64_BOUNDARIES:
+                op, count, pos, half = DSP64_BOUNDARIES[name]
+                mask = (1 << 64) - 1
+                for i, ((a, b), actual) in enumerate(zip(cases, wanted, strict=True)):
+                    acc = (a << 64) | b
+                    control = 0x01004005 if i % 2 else 0
+                    if op.startswith("dextr"):
+                        value = (acc >> count) & mask
+                        if op.endswith(".w"):
+                            value &= 0xffffffff
+                            if value & (1 << 31):
+                                value |= mask ^ 0xffffffff
+                    elif op.startswith("dextp"):
+                        value = (acc >> (pos - count)) & ((1 << (count + 1)) - 1)
+                        control = (control & ~0x407f) | (
+                            (pos - count - 1) & 127 if "dp" in op else pos)
+                    else:
+                        shifted = acc >> count if count >= 0 else acc << -count
+                        value = (shifted >> (64 if half == "hi" else 0)) & mask
+                    if actual != (value, control):
+                        raise ValueError(f"{name}: original {actual}, independent {(value, control)}")
+            if name.startswith("mips64extract_"):
+                mask = (1 << 64) - 1
+                instruction = name.removeprefix("mips64extract_")
+                for i, ((a, b), actual) in enumerate(zip(cases, wanted, strict=True)):
+                    acc = (a << 64) | b
+                    control = 0x01004005 if i % 2 else 0
+                    if instruction.startswith("dextr"):
+                        value = (acc >> 17) & mask
+                        if instruction.endswith("_w"):
+                            value &= 0xffffffff
+                            if value & (1 << 31):
+                                value |= mask ^ 0xffffffff
+                        control = (control & ~127) | 63
+                    elif instruction.startswith("dextp"):
+                        value = (acc >> 46) & ((1 << 18) - 1)
+                        control = (control & ~0x407f) | (45 if "dp" in instruction else 63)
+                    elif instruction.startswith("dshilo"):
+                        value = ((acc << 17) >> (64 if instruction.endswith("_hi") else 0)) & mask
+                    elif instruction.startswith("dmthlip"):
+                        value = b if instruction.endswith("_hi") else a
+                        control += 64
+                    elif instruction == "dinsv":
+                        field = ((1 << 17) - 1) << 31
+                        value = (b & ~field) | ((a << 31) & field)
+                        control = (control & ~0x1fff) | 2207
+                    else:
+                        word_acc = ((a & 0xffffffff) << 32) | (b & 0xffffffff)
+                        value = ((acc >> 16) & ((1 << 48) - 1)) ^ ((word_acc >> 48) & 0xffff)
+                        control = (control & ~0x407f) | 63
+                    if actual != (value, control):
+                        raise ValueError(f"{name}: original {actual}, independent {(value, control)}")
+            if name.startswith(("mips64acc_dmaddu_", "mips64acc_dmsubu_")):
+                word = (1 << 32) - 1
+                mask = (1 << 64) - 1
+                for (a, b), (value, _) in zip(cases, wanted, strict=True):
+                    dot = (a >> 32) * (b >> 32) + (a & word) * (b & word)
+                    result = ((a << 64) | b) + (-dot if "dmsubu" in name else dot)
+                    expected = (result >> (64 if name.endswith("_hi") else 0)) & mask
+                    if value != expected:
+                        raise ValueError(f"{name}: original returned {value:#x}, expected {expected:#x}")
             for view in ("highc", "llvmc"):
                 source = directory / (view + ".c")
                 command(

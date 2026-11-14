@@ -76,6 +76,14 @@ public:
   /// changed stays its own (prepareFollowingViews), and the stores' relabels
   /// wait for the reply (afterReply).
   std::optional<Reply> followingRead(const Json &payload);
+  /// The lines of the listing a client shows, read to follow the request
+  /// just answered: what a `listing` read made right after it gets, the page
+  /// \p payload names (if_none_match) standing or changed as that read would
+  /// find it.  Nothing for more lines than a view shows
+  /// (kMainThenListingLines), for a read that may look for an address's
+  /// owner, or while the listing has names or functions to read again or
+  /// its index is being built: those the client reads itself.
+  std::optional<Reply> followingListing(const Json &payload);
   /// A read that followed a request was answered in its reply
   /// (metadata.following_reads).
   void noteFollowingRead() { ++followingReads_; }

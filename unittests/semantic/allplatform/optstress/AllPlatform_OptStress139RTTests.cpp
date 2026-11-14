@@ -133,3 +133,13 @@ INSTANTIATE_TEST_SUITE_P(OptStress139HighC, ARM32OptStress139RT,
 INSTANTIATE_TEST_SUITE_P(OptStress139LLVMC, ARM32OptStress139RT,
                          ::testing::ValuesIn(onLLVMC(kARM, {"_paren"})),
                          rtTCName);
+
+// The i386 interpreter's switch reads its table behind a GOT base that is
+// spilled across stores no proof bounds.  Its jump goes to the label its value
+// names: the C of both source routes is checked by execution.
+INSTANTIATE_TEST_SUITE_P(OptStress139HighC, X86OptStress139RT,
+                         ::testing::ValuesIn(onHighC(kX86, {"_rpn"})),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress139LLVMC, X86OptStress139RT,
+                         ::testing::ValuesIn(onLLVMC(kX86, {"_rpn"})),
+                         rtTCName);

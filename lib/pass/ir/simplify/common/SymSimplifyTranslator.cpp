@@ -90,22 +90,58 @@ bool safeWidenedShift(const llvm::Instruction &I) {
   return Amount->getValue().ule(ResultWidth - SourceWidth);
 }
 
-struct MaskedAddBounds {
+// (X << K) ashr K sign-extends the low W-K bits. The left shift also
+// proves that all bits discarded by an exact right shift are zero.
+// The translator validates the left shift and its own flags independently.
+unsigned shiftedSignedWidth(const llvm::Instruction &I) {
+  if (I.getOpcode() != llvm::Instruction::AShr || !I.getType()->isIntegerTy())
+    return 0;
+  const auto *Left = llvm::dyn_cast<llvm::BinaryOperator>(I.getOperand(0));
+  const auto *K = llvm::dyn_cast<llvm::ConstantInt>(I.getOperand(1));
+  const unsigned Width = I.getType()->getIntegerBitWidth();
+  if (!Left || Left->getOpcode() != llvm::Instruction::Shl || !K ||
+      Left->getOperand(1) != K || K->getValue().uge(Width))
+    return 0;
+  return Width - K->getZExtValue();
+}
+
+struct MaskedArithmeticBounds {
   llvm::APInt UnsignedMax, SignedMin, SignedMax;
 
-  explicit MaskedAddBounds(unsigned Width)
+  explicit MaskedArithmeticBounds(unsigned Width)
       : UnsignedMax(llvm::APInt::getAllOnes(Width)),
         SignedMin(llvm::APInt::getSignedMinValue(Width)),
         SignedMax(llvm::APInt::getSignedMaxValue(Width)) {}
 };
 
+// The interval extrema of a signed product occur at its four corners.
+bool signedProductBounds(const MaskedArithmeticBounds &Left,
+                         const MaskedArithmeticBounds &Right, llvm::APInt &Min,
+                         llvm::APInt &Max) {
+  Min = llvm::APInt::getSignedMaxValue(Left.SignedMin.getBitWidth());
+  Max = ~Min;
+  for (const auto *L : {&Left.SignedMin, &Left.SignedMax})
+    for (const auto *R : {&Right.SignedMin, &Right.SignedMax}) {
+      bool Overflow;
+      auto Product = L->smul_ov(*R, Overflow);
+      if (Overflow)
+        return false;
+      if (Product.slt(Min))
+        Min = Product;
+      if (Product.sgt(Max))
+        Max = std::move(Product);
+    }
+  return true;
+}
+
 // Compute bounds from values alone, never from nowrap flags, range metadata,
 // assumptions or the instruction being justified. Unknown operations keep the
 // full domain. The small depth/node/width limits bound admission work.
-MaskedAddBounds maskedAddBounds(const llvm::Value *V, unsigned Depth,
-                                unsigned &Remaining) {
+MaskedArithmeticBounds maskedArithmeticBounds(const llvm::Value *V,
+                                              unsigned Depth,
+                                              unsigned &Remaining) {
   const unsigned Width = V->getType()->getIntegerBitWidth();
-  MaskedAddBounds Result(Width);
+  MaskedArithmeticBounds Result(Width);
   if (!Remaining || !Depth)
     return Result;
   --Remaining;
@@ -128,11 +164,28 @@ MaskedAddBounds maskedAddBounds(const llvm::Value *V, unsigned Depth,
       }
     }
   }
-  if (I->getOpcode() != llvm::Instruction::Add)
+  if (const unsigned Bits = shiftedSignedWidth(*I)) {
+    Result.SignedMin = llvm::APInt::getSignedMinValue(Bits).sextOrTrunc(Width);
+    Result.SignedMax = llvm::APInt::getSignedMaxValue(Bits).sextOrTrunc(Width);
     return Result;
-  auto Left = maskedAddBounds(I->getOperand(0), Depth - 1, Remaining);
-  auto Right = maskedAddBounds(I->getOperand(1), Depth - 1, Remaining);
+  }
+  const bool Product = I->getOpcode() == llvm::Instruction::Mul;
+  if (!Product && I->getOpcode() != llvm::Instruction::Add)
+    return Result;
+  auto Left = maskedArithmeticBounds(I->getOperand(0), Depth - 1, Remaining);
+  auto Right = maskedArithmeticBounds(I->getOperand(1), Depth - 1, Remaining);
   bool Overflow;
+  if (Product) {
+    auto UMax = Left.UnsignedMax.umul_ov(Right.UnsignedMax, Overflow);
+    if (!Overflow)
+      Result.UnsignedMax = std::move(UMax);
+    llvm::APInt Min, Max;
+    if (signedProductBounds(Left, Right, Min, Max)) {
+      Result.SignedMin = std::move(Min);
+      Result.SignedMax = std::move(Max);
+    }
+    return Result;
+  }
   auto UMax = Left.UnsignedMax.uadd_ov(Right.UnsignedMax, Overflow);
   if (!Overflow)
     Result.UnsignedMax = std::move(UMax);
@@ -160,8 +213,8 @@ bool safeMaskedArithmetic(const llvm::Instruction &I) {
       kSymSimplifyTranslatorSafeMaskedArithmeticRemaining;
   const unsigned Depth =
       ::neverd::limits::pass::kSymSimplifyTranslatorSafeMaskedArithmeticDepth;
-  auto Left = maskedAddBounds(I.getOperand(0), Depth, Remaining);
-  auto Right = maskedAddBounds(I.getOperand(1), Depth, Remaining);
+  auto Left = maskedArithmeticBounds(I.getOperand(0), Depth, Remaining);
+  auto Right = maskedArithmeticBounds(I.getOperand(1), Depth, Remaining);
   bool Overflow;
   if (I.hasNoUnsignedWrap()) {
     if (Product)
@@ -173,15 +226,8 @@ bool safeMaskedArithmetic(const llvm::Instruction &I) {
   }
   if (I.hasNoSignedWrap()) {
     if (Product) {
-      // Signed multiplication reaches its extrema at interval corners.
-      // Check all four: two negative endpoints can overflow positively.
-      for (const auto *L : {&Left.SignedMin, &Left.SignedMax})
-        for (const auto *R : {&Right.SignedMin, &Right.SignedMax}) {
-          (void)L->smul_ov(*R, Overflow);
-          if (Overflow)
-            return false;
-        }
-      return true;
+      llvm::APInt Min, Max;
+      return signedProductBounds(Left, Right, Min, Max);
     }
     (void)Left.SignedMin.sadd_ov(Right.SignedMin, Overflow);
     if (Overflow)
@@ -270,7 +316,8 @@ bool hasCompatibleSemantics(const llvm::Instruction &I) {
   const bool SafeArithmetic = safeMaskedArithmetic(I);
   const bool SafeOr = safeMaskedOr(I);
   if ((I.hasPoisonGeneratingFlags() && !SafeArithmetic && !SafeOr &&
-       !splitWordAssembly(I) && !safeWidenedShift(I)) ||
+       !splitWordAssembly(I) && !safeWidenedShift(I) &&
+       !shiftedSignedWidth(I)) ||
       I.hasPoisonGeneratingAttributes() || I.hasPoisonGeneratingMetadata())
     return false;
 
@@ -299,8 +346,9 @@ bool hasCompatibleSemantics(const llvm::Instruction &I) {
     return (!HasNoWrap() || safeWidenedShift(I)) && HasInRangeConstantShift();
   case OpTag::LShr:
   case OpTag::AShr:
-    return !llvm::cast<llvm::PossiblyExactOperator>(I).isExact() &&
-           HasInRangeConstantShift();
+    return HasInRangeConstantShift() &&
+           (!llvm::cast<llvm::PossiblyExactOperator>(I).isExact() ||
+            shiftedSignedWidth(I));
   case OpTag::UDiv:
   case OpTag::SDiv:
   case OpTag::URem:
@@ -318,10 +366,9 @@ bool hasCompatibleSemantics(const llvm::Instruction &I) {
     return !llvm::cast<llvm::ICmpInst>(I).hasSameSign();
   case OpTag::Select:
     return I.getOperand(0)->getType()->isIntegerTy(1);
-  case OpTag::FShl: {
-    const auto *Amount = llvm::dyn_cast<llvm::ConstantInt>(I.getOperand(2));
-    return Amount != nullptr;
-  }
+  case OpTag::FShl:
+  case OpTag::FShr:
+    return true; // isTranslatable has already checked the funnel operands.
   case OpTag::None:
     return false;
   }
@@ -379,9 +426,12 @@ bool hasHiddenIncompatibleSemantics(const llvm::Instruction &Root,
 } // namespace
 
 OpTag tagOf(const llvm::Instruction &I) {
-  if (const auto *Intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(&I))
+  if (const auto *Intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(&I)) {
     if (Intrinsic->getIntrinsicID() == llvm::Intrinsic::fshl)
       return OpTag::FShl;
+    if (Intrinsic->getIntrinsicID() == llvm::Intrinsic::fshr)
+      return OpTag::FShr;
+  }
   if (llvm::isa<llvm::TruncInst>(I))
     return OpTag::Trunc;
   if (llvm::isa<llvm::ZExtInst>(I))
@@ -429,7 +479,9 @@ bool isTranslatable(const llvm::Value *V, bool WithComparisons) {
   if (!I || !I->getType()->isIntegerTy())
     return false;
   OpTag Tag = tagOf(*I);
-  if (Tag == OpTag::FShl && !llvm::isa<llvm::ConstantInt>(I->getOperand(2)))
+  if ((Tag == OpTag::FShl || Tag == OpTag::FShr) &&
+      I->getOperand(0) != I->getOperand(1) &&
+      !llvm::isa<llvm::ConstantInt>(I->getOperand(2)))
     return false;
   return Tag != OpTag::None &&
          (WithComparisons || (Tag != OpTag::ICmp && Tag != OpTag::Select));
@@ -481,6 +533,11 @@ sym::SymRef Translator::build(const llvm::Instruction &I) {
   case OpTag::LShr:
     return Ctx.mkLShr(M(A), M(B));
   case OpTag::AShr:
+    if (const unsigned Bits = shiftedSignedWidth(I)) {
+      const auto Source = M(llvm::cast<llvm::Instruction>(A)->getOperand(0));
+      if (Source)
+        return Ctx.mkSExt(Ctx.mkExtract(Source, 0, Bits), Width);
+    }
     return Ctx.mkAShr(M(A), M(B));
   case OpTag::UDiv:
     return Ctx.mkUDiv(M(A), M(B));
@@ -524,16 +581,19 @@ sym::SymRef Translator::build(const llvm::Instruction &I) {
     break;
   case OpTag::Select:
     return Ctx.mkIte(M(A), M(B), M(I.getOperand(2)));
-  case OpTag::FShl: {
-    const auto *Amount = llvm::cast<llvm::ConstantInt>(I.getOperand(2));
-    const uint32_t Shift = static_cast<uint32_t>(
-        Amount->getValue()
-            .urem(llvm::APInt(Amount->getBitWidth(), Width))
-            .getZExtValue());
-    if (Shift == 0)
-      return M(A);
-    return Ctx.mkOr(Ctx.mkShl(M(A), Ctx.mkConst(Width, Shift)),
-                    Ctx.mkLShr(M(B), Ctx.mkConst(Width, Width - Shift)));
+  case OpTag::FShl:
+  case OpTag::FShr: {
+    const bool Left = tagOf(I) == OpTag::FShl;
+    auto *Count = I.getOperand(2);
+    if (A == B)
+      return Left ? Ctx.mkRol(M(A), M(Count)) : Ctx.mkRor(M(A), M(Count));
+    const auto &Amount = llvm::cast<llvm::ConstantInt>(Count)->getValue();
+    const auto Shift = Amount.urem(Width);
+    if (!Shift)
+      return Left ? M(A) : M(B);
+    const auto HighShift = Left ? Shift : Width - Shift;
+    return Ctx.mkOr(Ctx.mkShl(M(A), Ctx.mkConst(Width, HighShift)),
+                    Ctx.mkLShr(M(B), Ctx.mkConst(Width, Width - HighShift)));
   }
   case OpTag::None:
     break;
@@ -792,6 +852,21 @@ Translator::out(sym::SymRef R, llvm::Instruction *At,
       Result = X ? B.CreateNot(X) : nullptr;
       break;
     }
+    case sym::SymOp::Rol:
+    case sym::SymOp::Ror: {
+      auto *Word = get(Ops[0]);
+      auto *Amount =
+          Ctx.isConst(Ops[1])
+              ? llvm::ConstantInt::get(Ty, Ctx.constValue(Ops[1]).urem(Width))
+              : get(Ops[1]);
+      if (Word && Amount && Amount->getType() == Ty) {
+        const auto ID = Ctx.op(Item.Ref) == sym::SymOp::Rol
+                            ? llvm::Intrinsic::fshl
+                            : llvm::Intrinsic::fshr;
+        Result = B.CreateIntrinsic(ID, {Ty}, {Word, Word, Amount});
+      }
+      break;
+    }
     case sym::SymOp::Shl: {
       llvm::Value *X = get(Ctx.operand(Item.Ref, 0));
       llvm::Value *Y = get(Ctx.operand(Item.Ref, 1));
@@ -878,7 +953,7 @@ Translator::out(sym::SymRef R, llvm::Instruction *At,
       break;
     }
     default:
-      // Rotates and comparisons have no output spelling in this translator.
+      // Comparisons have no output spelling in this translator.
       Result = nullptr;
       break;
     }

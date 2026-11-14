@@ -8,6 +8,7 @@
 #include "MachODependencyState.h"
 #include "MachOExportLayout.h"
 #include "MachOLiftedObject.h"
+#include "MachOTLSRuntime.h"
 
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/codegen/MachO/MachOAuthenticatedFixups.h"
@@ -106,6 +107,20 @@ struct NativeMachO {
   MachORuntimeSections Runtime;
   std::optional<size_t> InitializerPointers, InitializerOffsets;
   std::map<std::string, uint64_t> TLSExports;
+  std::vector<size_t> ThreadInitializers;
+  struct ThreadRuntime {
+    size_t Code, Config, Anchor, Guard;
+    uint64_t DeltaOffset, CallbackCount;
+    struct Field {
+      size_t Section;
+      uint64_t Offset;
+      CompiledPointerAuthentication Schema;
+    };
+    std::vector<Field> SignedFields;
+    std::vector<va_t> OldInitializers;
+    std::vector<va_t> OldDescriptors;
+  };
+  std::optional<ThreadRuntime> PerThread;
   std::vector<MachOAuthenticatedFixup>
       TemplateFixups; // Template-relative until placed.
   std::optional<std::pair<size_t, size_t>>
@@ -117,8 +132,11 @@ struct NativeMachO {
 // dyld discovers runtime sections from segment commands. Reserve their
 // command bytes before assigning code, unwind and fixup addresses.
 uint64_t runtimeCommandBytes(const NativeMachO &Object) {
-  const auto Sections = (Object.Descriptors ? kTLVSectionCount : 0) +
-                        unsigned(Object.InitializerOffsets.has_value());
+  const auto Sections =
+      ((Object.Descriptors || !Object.ThreadInitializers.empty())
+           ? kTLVSectionCount
+           : 0) +
+      unsigned(Object.InitializerOffsets.has_value());
   return Sections
              ? sizeof(segment_command_64) * kRuntimeSegmentCount +
                    sizeof(section_64) * Sections + sizeof(linkedit_data_command)
@@ -141,7 +159,11 @@ MachOUnwindFunctionCounts unwindFunctionCounts(const NativeMachO &Object) {
       LSDAs += bool(Encoding & macho_unwind::kHasLSDA);
     }
   }
-  return {Object.Symbols.size(), LSDAs};
+  return {Object.Symbols.size() +
+              unsigned(Object.Descriptors.has_value() ||
+                       !Object.ThreadInitializers.empty()) +
+              unsigned(Object.Descriptors.has_value()),
+          LSDAs};
 }
 
 // A linked arm64e input can have only compact records while the replacement
@@ -329,8 +351,9 @@ prepareArm64eGOT(NativeMachO &Object, const BinaryImage &Original,
             Resolver == Original.MachOAuthenticatedPointers.end())
           return fail(kTLVDescriptor);
         const auto &P = Resolver->second;
-        if (P.Symbol != kTLVBootstrap || P.Key != kDefaultFunctionPointerKey ||
-            P.Addend || P.AddressDiversity || P.Diversity || P.WeakImport ||
+        if (P.Symbol != macho_arm64e_abi::kTLVBootstrap ||
+            P.Key != kDefaultFunctionPointerKey || P.Addend ||
+            P.AddressDiversity || P.Diversity || P.WeakImport ||
             !P.LibraryOrdinal || *P.LibraryOrdinal <= 0 ||
             !MatchesProvider(P.Symbol, P))
           return fail(kTLVDescriptor);
@@ -474,17 +497,19 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
       continue;
     const bool Initializers =
         Original.isArm64e() && Type == S_MOD_INIT_FUNC_POINTERS;
+    const bool ThreadInit =
+        Original.isArm64e() && Type == S_THREAD_LOCAL_INIT_FUNCTION_POINTERS;
     const bool Template =
         Original.isArm64e() &&
         (Type == S_THREAD_LOCAL_REGULAR || Type == S_THREAD_LOCAL_ZEROFILL);
     const bool Descriptors =
         Original.isArm64e() && Type == S_THREAD_LOCAL_VARIABLES;
-    if ((Name->starts_with(kThreadSectionPrefix) && !Template &&
-         !Descriptors) ||
+    if ((Name->starts_with(kThreadSectionPrefix) && !Template && !Descriptors &&
+         !ThreadInit) ||
         (Type == S_MOD_INIT_FUNC_POINTERS && !Initializers) ||
         Type == S_MOD_TERM_FUNC_POINTERS ||
         Type == S_THREAD_LOCAL_VARIABLE_POINTERS ||
-        Type == S_THREAD_LOCAL_INIT_FUNCTION_POINTERS ||
+        (Type == S_THREAD_LOCAL_INIT_FUNCTION_POINTERS && !ThreadInit) ||
         *Name == kBitcodeSegment || *Name == kModuleTermSection ||
         (*Name == kModuleInitSection && !Initializers) ||
         M->getSectionFinalSegmentName(S.getRawDataRefImpl()) == kBitcodeSegment)
@@ -524,7 +549,7 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
     if (Type != S_REGULAR && Type != S_COALESCED && Type != S_ZEROFILL &&
         Type != S_CSTRING_LITERALS && Type != S_4BYTE_LITERALS &&
         Type != S_8BYTE_LITERALS && Type != S_16BYTE_LITERALS && !Indirect &&
-        !Template && !Descriptors && !Initializers)
+        !Template && !Descriptors && !Initializers && !ThreadInit)
       return fail("unsupported native section kind: " + *Name);
     if (S.getSize() >
         ::neverd::limits::backend::kMachOPatchObjectMaxStorage - Total)
@@ -581,11 +606,14 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
       }
     }
     const size_t Index = Image.Sections.size();
-    if (Initializers) {
-      if (Code || Result.InitializerPointers ||
+    if (Initializers || ThreadInit) {
+      if (Code || (Initializers && Result.InitializerPointers) ||
           Item.Size % arm64e::kPointerBytes)
         return fail(kInitializerStorage);
-      Result.InitializerPointers = Index;
+      if (ThreadInit)
+        Result.ThreadInitializers.push_back(Index);
+      else
+        Result.InitializerPointers = Index;
       Item.IsAllocated = Item.IsInImage = false;
       Item.Kind = Kind::Other;
     }
@@ -1038,25 +1066,35 @@ bool needsThreadLocalTerminator(const NativeMachO &Object) {
 llvm::Error
 prepareTLSDependencies(const NativeMachO &Object,
                        std::vector<SourcePatchDependency> &Dependencies) {
-  if (!Object.Descriptors)
+  if (!Object.Descriptors && Object.ThreadInitializers.empty())
     return llvm::Error::success();
   const auto Add = [&](llvm::StringRef Name) -> llvm::Error {
     const auto Old = llvm::find_if(
         Dependencies, [&](const auto &D) { return D.Symbol == Name; });
     if (Old != Dependencies.end())
-      return Old->Library == kTLVProvider &&
+      return Old->Library == macho_arm64e_abi::kTLVProvider &&
                      Old->Kind == SourcePatchDependencyKind::Function
                  ? llvm::Error::success()
                  : fail(kTLVStorage);
-    Dependencies.push_back(
-        {kTLVProvider, Name.str(), SourcePatchDependencyKind::Function});
+    Dependencies.push_back({macho_arm64e_abi::kTLVProvider, Name.str(),
+                            SourcePatchDependencyKind::Function});
     return llvm::Error::success();
   };
-  if (auto E = Add(canonical(kTLVBootstrap)))
+  if (auto E = Add(canonical(macho_arm64e_abi::kTLVBootstrap)))
     return E;
   if (needsThreadLocalTerminator(Object))
     return Add(kTLVAtExit);
   return llvm::Error::success();
+}
+
+static CompiledFixupReference boundThreadResolver() {
+  CompiledFixupReference Ref;
+  Ref.BitWidth = arm64e::kPointerBytes * CHAR_BIT;
+  Ref.Symbol = canonical(macho_arm64e_abi::kTLVBootstrap);
+  Ref.IsResolved = true;
+  Ref.PointerAuth =
+      CompiledPointerAuthentication{kDefaultFunctionPointerKey, 0, false};
+  return Ref;
 }
 
 // Existing descriptors and public TLS exports retain their address and byte
@@ -1065,9 +1103,10 @@ prepareTLSDependencies(const NativeMachO &Object,
 // a forward 32-bit delta to the initialized bytes.
 llvm::Error prepareThreadLocals(NativeMachO &Object,
                                 const BinaryImage &Original) {
-  if (!Object.Descriptors && Object.TemplateSections.empty())
+  if (!Object.Descriptors && Object.TemplateSections.empty() &&
+      Object.ThreadInitializers.empty())
     return llvm::Error::success();
-  if (!Object.Descriptors || Object.TemplateSections.empty())
+  if (Object.Descriptors.has_value() == Object.TemplateSections.empty())
     return fail(kTLVStorage);
   // Clang's dynamic TLS initializer registers its destructor with libSystem.
   // A freshly imported function needs a real authenticated callable and a
@@ -1105,10 +1144,41 @@ llvm::Error prepareThreadLocals(NativeMachO &Object,
   Prefix.Name = kTLVTemplatePrefix;
   Prefix.Kind = Kind::WritableData;
   std::optional<va_t> Start;
+  std::vector<va_t> OldInitializers, OldDescriptors;
+  std::vector<NativeMachO::ThreadRuntime::Field> Fields;
+  const size_t PrefixIndex = Object.Image.Sections.size();
   for (const auto &Section : Original.Sections) {
     const auto Type = Section.Type & SECTION_TYPE;
-    if (Type == S_THREAD_LOCAL_INIT_FUNCTION_POINTERS && Section.Size)
-      return fail(kThreadInitPointers);
+    if (Type == S_THREAD_LOCAL_INIT_FUNCTION_POINTERS) {
+      if (Section.Size != Section.FileSz ||
+          Section.Size % arm64e::kPointerBytes)
+        return fail(kThreadInitPointers);
+      // dyld visits sections in load-command order and entries in reverse.
+      for (auto End = Section.Size; End; End -= arm64e::kPointerBytes) {
+        const auto Slot = Section.VA + End - arm64e::kPointerBytes;
+        auto P = Original.MachOAuthenticatedPointers.find(Slot);
+        va_t Target;
+        if (P != Original.MachOAuthenticatedPointers.end()) {
+          const auto &Recipe = P->second;
+          if (Recipe.Key != kDefaultFunctionPointerKey || Recipe.Addend ||
+              Recipe.AddressDiversity || Recipe.Diversity ||
+              !Recipe.Symbol.empty())
+            return fail(kThreadInitPointers);
+          Target = Recipe.Target;
+        } else {
+          const auto *Value = Original.readVA(Slot, arm64e::kPointerBytes);
+          if (!Value || Original.DyldBindSlots.contains(Slot) ||
+              !Original.MachOResolvedChainedPointerSlots.contains(Slot))
+            return fail(kThreadInitPointers);
+          Target = readLE<uint64_t>(Value);
+        }
+        if (!Original.hasAuthenticatedFunctionEntryAt(Target) ||
+            Target % neverd::aarch64::kInsnSize)
+          return fail(kThreadInitPointers);
+        OldInitializers.push_back(Target);
+      }
+      continue;
+    }
     if (Type != S_THREAD_LOCAL_REGULAR && Type != S_THREAD_LOCAL_ZEROFILL)
       continue;
     if (!Section.Size)
@@ -1139,13 +1209,16 @@ llvm::Error prepareThreadLocals(NativeMachO &Object,
                               bool Authenticated) -> llvm::Error {
       if (Type != S_THREAD_LOCAL_REGULAR ||
           !rangeInBounds(Address - Section.VA, arm64e::kPointerBytes,
-                         Section.Size) ||
-          (Authenticated && Recipe.AddressDiversity))
+                         Section.Size))
         return fail(kTLVStorage);
       // The source word encodes its old chain successor. Only the decoded
       // bind/rebase and PAC schema describe the new template slot.
       Recipe.EncodedValue.reset();
       const auto At = Address - *Start;
+      if (Authenticated && Recipe.AddressDiversity) {
+        Fields.push_back(
+            {PrefixIndex, At, {Recipe.Key, Recipe.Diversity, true}});
+      }
       writeLE<uint64_t>(Prefix.ExternalBytes.data() + At, 0);
       Object.TemplateFixups.push_back(
           {At, std::move(Recipe), false, Authenticated});
@@ -1197,12 +1270,74 @@ llvm::Error prepareThreadLocals(NativeMachO &Object,
                                           arm64e::kPointerBytes);
       if (!Field || readLE<uint64_t>(Field) >= Prefix.Size)
         return fail(kTLVStorage);
+      OldDescriptors.push_back(Section.VA + At);
     }
   }
   if (Start) {
     Object.TemplatePrefix = Object.Image.Sections.size();
     Object.Image.Sections.push_back(std::move(Prefix));
   }
+  for (const auto &R : Object.Relocations) {
+    if (!Object.TemplateSections.contains(R.Section) ||
+        R.Type != ARM64_RELOC_AUTHENTICATED_POINTER)
+      continue;
+    const auto &S = Object.Image.Sections[R.Section];
+    if (!rangeInBounds(R.Offset, arm64e::kPointerBytes, S.ExternalBytes.size()))
+      return fail(kTLVStorage);
+    const auto Word = arm64e::decodeObjectPointerWord(
+        readLE<uint64_t>(S.ExternalBytes.data() + R.Offset));
+    if (!Word)
+      return fail(kAuthMetadata);
+    if (Word->AddressDiversity) {
+      Fields.push_back(
+          {R.Section, R.Offset, {Word->Key, Word->Diversity, true}});
+    }
+  }
+  if (Fields.empty() && OldInitializers.empty() &&
+      Object.ThreadInitializers.empty())
+    return llvm::Error::success();
+  if (!Object.Descriptors && OldDescriptors.empty())
+    return fail(kTLVStorage);
+  size_t Count = OldInitializers.size();
+  for (size_t I : Object.ThreadInitializers)
+    Count += Object.Image.Sections[I].Size / arm64e::kPointerBytes;
+  const auto Words =
+      kThreadConfigWords + kThreadFieldWords * Fields.size() + Count;
+  if (Words >
+      limits::backend::kMachOPatchObjectMaxStorage / arm64e::kPointerBytes)
+    return fail(kTLVStorage);
+  auto Resolver = buildMachOTLSResolver();
+  if (!Resolver)
+    return Resolver.takeError();
+  auto &Sections = Object.Image.Sections;
+  const auto Append = [&](llvm::StringRef Name, Kind K, size_t Size,
+                          uint64_t Align) {
+    CompiledSection S;
+    S.Name = Name.str();
+    S.Kind = K;
+    S.Alignment = Align;
+    S.Size = Size;
+    S.ExternalBytes.resize(Size);
+    Sections.push_back(std::move(S));
+    return Sections.size() - 1;
+  };
+  const size_t Code = Append(kThreadResolver, Kind::Code, Resolver->Code.size(),
+                             arm64e::kPointerBytes);
+  Sections[Code].ExternalBytes = std::move(Resolver->Code);
+  const size_t Config =
+      Append(kThreadConfig, Kind::WritableData, Words * arm64e::kPointerBytes,
+             arm64e::kPointerBytes);
+  Sections[Config].ReadOnlyAfterFixups = true;
+  const size_t Anchor = Append(kThreadAnchor, Kind::WritableData,
+                               kTLVDescriptorBytes, arm64e::kPointerBytes);
+  Sections[Anchor].FixupReferences.push_back(boundThreadResolver());
+  const size_t Guard = Append(kThreadGuard, Kind::WritableData, 1, 1);
+  Object.TemplateSections.insert(Guard);
+  Object.PerThread.emplace(NativeMachO::ThreadRuntime{
+      Code, Config, Anchor, Guard, Resolver->ConfigDeltaOffset, Count,
+      std::move(Fields), std::move(OldInitializers),
+      std::move(OldDescriptors)});
+  Object.Runtime.UsesThreadResolver = true;
   return llvm::Error::success();
 }
 
@@ -1221,7 +1356,8 @@ llvm::Error place(NativeMachO &Object, uint64_t Base,
     Template
   };
   auto GroupOf = [&](size_t I, const CompiledSection &S) {
-    if (Object.Descriptors == I)
+    if (Object.PerThread ? Object.PerThread->Anchor == I
+                         : Object.Descriptors == I)
       return Group::Descriptors;
     if (Object.TemplatePrefix == I)
       return Group::Prefix;
@@ -1245,7 +1381,7 @@ llvm::Error place(NativeMachO &Object, uint64_t Base,
     if (G == Group::Relro || G == Group::Mutable)
       Cursor = llvm::alignTo(
           Cursor, sourcePatchStorageAlignment(Image.TargetArch, Image.Format));
-    if (G == Group::Prefix && Object.Descriptors) {
+    if (G == Group::Prefix && (Object.Descriptors || Object.PerThread)) {
       Cursor = llvm::alignTo(Cursor, TemplateAlignment);
       Object.Runtime.Template = {Cursor, 0, TemplateAlignment};
     }
@@ -1305,7 +1441,51 @@ llvm::Error place(NativeMachO &Object, uint64_t Base,
   for (auto &Fixup : Object.TemplateFixups)
     Fixup.Address += Object.Runtime.Template.VA;
   for (auto &[Name, Address] : Object.TLSExports)
-    Address += Object.Runtime.Descriptors.VA;
+    Address += Object.Image.Sections[*Object.Descriptors].VA;
+  if (Object.PerThread) {
+    const auto &T = *Object.PerThread;
+    const auto &Resolver = Image.Sections[T.Code];
+    auto &Config = Image.Sections[T.Config];
+    auto *Data = Config.IsInImage ? Image.Bytes.data() + Config.Offset
+                                  : Config.ExternalBytes.data();
+    const auto SetRebase = [&](uint64_t Slot, uint64_t Target, bool Auth) {
+      MachOAuthenticatedPointer Recipe;
+      Recipe.Target = Target;
+      Object.TemplateFixups.push_back({Slot, std::move(Recipe), true, Auth});
+    };
+    // All table pointers are dyld rebases in RELRO. The text contains only
+    // the signed slide-independent displacement to that table.
+    writeLE<uint64_t>(Image.Bytes.data() + Resolver.Offset + T.DeltaOffset,
+                      Config.VA - (Resolver.VA + T.DeltaOffset));
+    SetRebase(Config.VA, Image.Sections[T.Anchor].VA, false);
+    writeLE<uint64_t>(Data + arm64e::kPointerBytes,
+                      Image.Sections[T.Guard].VA - Object.Runtime.Template.VA);
+    SetRebase(Config.VA + kTLVOffsetField, Object.Runtime.Template.VA, false);
+    uint64_t At = kThreadConfigWords * arm64e::kPointerBytes;
+    writeLE<uint64_t>(Data + kThreadFieldCountOffset, T.SignedFields.size());
+    writeLE<uint64_t>(Data + kThreadCallbackCountOffset, T.CallbackCount);
+    for (const auto &[Section, Offset, Schema] : T.SignedFields) {
+      writeLE<uint64_t>(Data + At, Image.Sections[Section].VA + Offset -
+                                       Object.Runtime.Template.VA);
+      writeLE<uint64_t>(Data + At + arm64e::kPointerBytes,
+                        (uint64_t(Schema.Key) << kThreadKeyShift) |
+                            Schema.Diversity);
+      At += kThreadFieldWords * arm64e::kPointerBytes;
+    }
+    for (va_t Target : T.OldInitializers) {
+      SetRebase(Config.VA + At, Target, true);
+      At += arm64e::kPointerBytes;
+    }
+    for (va_t Public : T.OldDescriptors) {
+      MachOAuthenticatedPointer Recipe;
+      Recipe.Target = Resolver.VA;
+      Object.TemplateFixups.push_back(
+          {Public, std::move(Recipe), false, true, true});
+    }
+    Object.Compact.push_back({Resolver.VA, Resolver.VA + T.DeltaOffset,
+                              macho_unwind::kARM64ModeFrame, std::nullopt,
+                              std::nullopt});
+  }
   if (Object.AtExitThunk) {
     const auto &Code = Image.Sections[Object.AtExitThunk->first];
     const auto &Slot = Image.Sections[Object.AtExitThunk->second];
@@ -1359,13 +1539,13 @@ resolve(const NativeMachO &Object, unsigned Index, const BinaryImage &Original,
     return fail("relocation symbol is invalid");
   const auto &S = Object.Symbols.at(Index);
   if (S.Section) {
-    if (Object.InitializerPointers && Object.Sections.contains(S.Section) &&
-        Object.Sections.at(S.Section) == *Object.InitializerPointers)
-      return fail(kInitializerStorage);
     if (!Object.Sections.contains(S.Section))
       return fail("nonallocated native symbol");
-    if (Object.CompactOnly && Object.EH &&
-        Object.Sections.at(S.Section) == *Object.EH)
+    const auto Section = Object.Sections.at(S.Section);
+    if (Object.InitializerPointers == Section ||
+        llvm::is_contained(Object.ThreadInitializers, Section))
+      return fail(kInitializerStorage);
+    if (Object.CompactOnly && Object.EH && Section == *Object.EH)
       return fail("reference to unregistered native DWARF storage");
     return Object.Image.Sections[Object.Sections.at(S.Section)].VA + S.Offset +
            (S.Function && S.Thumb ? 1 : 0);
@@ -1433,7 +1613,9 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
     const uint64_t Raw = R.Width == 8 ? readLE<uint64_t>(Out)
                                       : readLE<uint32_t>(Out),
                    P = S.VA + R.Offset;
-    if (Object.InitializerPointers == R.Section) {
+    const auto ThreadInit = llvm::find(Object.ThreadInitializers, R.Section);
+    if (Object.InitializerPointers == R.Section ||
+        ThreadInit != Object.ThreadInitializers.end()) {
       if (R.Width != arm64e::kPointerBytes || R.Offset % R.Width || R.PCRel ||
           R.Scattered || R.SubtractSymbol || R.SubtractVA ||
           (R.Type != ARM64_RELOC_UNSIGNED &&
@@ -1472,6 +1654,22 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
           return fail(kInitializerStorage);
         Address = Code.VA + Raw - Old;
       }
+      if (ThreadInit != Object.ThreadInitializers.end()) {
+        const auto &T = *Object.PerThread;
+        auto At =
+            (kThreadConfigWords + kThreadFieldWords * T.SignedFields.size() +
+             T.OldInitializers.size()) *
+            arm64e::kPointerBytes;
+        for (auto I = Object.ThreadInitializers.begin(); I != ThreadInit; ++I)
+          At += Object.Image.Sections[*I].Size;
+        At += S.Size - R.Offset - R.Width;
+        MachOAuthenticatedPointer Recipe;
+        Recipe.Target = Address;
+        Object.TemplateFixups.push_back(
+            {Object.Image.Sections[T.Config].VA + At, std::move(Recipe), true,
+             true});
+        continue;
+      }
       auto Header = Original.fileOffsetToVA(0);
       if (Address < Header || Address - Header > UINT32_MAX)
         return fail(kInitializerStorage);
@@ -1500,7 +1698,8 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
         writeLE<uint64_t>(Out, Target.VA - Object.Runtime.Template.VA +
                                    Sym.Offset + Raw);
       } else if (!Field) {
-        if (Sym.Section || Sym.Name != canonical(kTLVBootstrap))
+        if (Sym.Section ||
+            Sym.Name != canonical(macho_arm64e_abi::kTLVBootstrap))
           return fail(kTLVStorage);
         if (R.Type == ARM64_RELOC_AUTHENTICATED_POINTER) {
           const auto Word = arm64e::decodeObjectPointerWord(Raw);
@@ -1510,15 +1709,16 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
         } else if (R.Type != ARM64_RELOC_UNSIGNED || Raw) {
           return fail(kTLVStorage);
         }
-        CompiledFixupReference Ref;
-        Ref.Offset = R.Offset;
-        Ref.BitWidth = R.Width * CHAR_BIT;
-        Ref.Symbol = Sym.Name;
-        Ref.IsResolved = true;
-        Ref.PointerAuth =
-            CompiledPointerAuthentication{kDefaultFunctionPointerKey, 0, false};
-        Object.Image.Sections[R.Section].FixupReferences.push_back(
-            std::move(Ref));
+        if (Object.PerThread) {
+          MachOAuthenticatedPointer Recipe;
+          Recipe.Target = Object.Image.Sections[Object.PerThread->Code].VA;
+          Object.TemplateFixups.push_back({P, std::move(Recipe), false, true});
+        } else {
+          auto Ref = boundThreadResolver();
+          Ref.Offset = R.Offset;
+          Object.Image.Sections[R.Section].FixupReferences.push_back(
+              std::move(Ref));
+        }
         writeLE<uint64_t>(Out, 0);
       } else {
         return fail(kTLVStorage);
@@ -1535,8 +1735,6 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
       const auto Word = arm64e::decodeObjectPointerWord(Raw);
       if (!Word)
         return fail(arm64e::kInvalidObjectPointerBits);
-      if (Word->AddressDiversity && Object.TemplateSections.contains(R.Section))
-        return fail(kTLVStorage);
       const auto Symbol = Object.Symbols.find(R.SymbolIndex);
       if (Symbol == Object.Symbols.end() || Symbol->second.Name.empty() ||
           Bindings.contains(Symbol->second.Name))
@@ -1877,6 +2075,11 @@ relocate(NativeMachO &Object, const BinaryImage &Original,
     } else
       return fail("unsupported native relocation " + llvm::Twine(R.Type));
   }
+  for (size_t I : Object.ThreadInitializers)
+    for (uint64_t Off = 0; Off < Object.Image.Sections[I].Size;
+         Off += arm64e::kPointerBytes)
+      if (!Written.contains({I, Off}))
+        return fail(kThreadInitPointers);
   if (Object.InitializerPointers)
     for (uint64_t Off = 0;
          Off < Object.Image.Sections[*Object.InitializerPointers].Size;
@@ -2226,8 +2429,10 @@ appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
     return Error;
   if (auto Error = Patcher.appendReplacementImage(
           Candidate, Object->Image, Object->TemplateFixups, Dependencies,
-          (Object->Descriptors || Object->InitializerOffsets) ? &Object->Runtime
-                                                              : nullptr))
+          (Object->Descriptors || Object->PerThread ||
+           Object->InitializerOffsets)
+              ? &Object->Runtime
+              : nullptr))
     return Error;
   if (auto Error =
           installMachOThreadLocalExports(Candidate, Object->TLSExports))
@@ -2237,7 +2442,7 @@ appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
     return After.takeError();
   if (auto Error = preserveMachODependencyState(
           SlidDependencies ? *SlidDependencies : *Before, *After,
-          Object->TLSExports))
+          Object->TLSExports, Object->TemplateFixups))
     return Error;
   auto Installed = Load(Candidate);
   if (!Installed)
@@ -2380,7 +2585,8 @@ static llvm::Expected<PatchResult> installObject(
               if (auto E = Patcher.appendReplacementImage(
                       Binary, Object->Image, Object->TemplateFixups,
                       Dependencies,
-                      (Object->Descriptors || Object->InitializerOffsets)
+                      (Object->Descriptors || Object->PerThread ||
+                       Object->InitializerOffsets)
                           ? &Object->Runtime
                           : nullptr))
                 return Reject(std::move(E));
@@ -2465,12 +2671,13 @@ static llvm::Expected<PatchResult> installObject(
             return After.takeError();
           if (SlidDependencies)
             return preserveMachODependencyState(*SlidDependencies, *After,
-                                                Object->TLSExports);
+                                                Object->TLSExports,
+                                                Object->TemplateFixups);
           auto Before = readMachODependencyState(Original.Raw);
           if (!Before)
             return Before.takeError();
-          if (auto E = preserveMachODependencyState(*Before, *After,
-                                                    Object->TLSExports))
+          if (auto E = preserveMachODependencyState(
+                  *Before, *After, Object->TLSExports, Object->TemplateFixups))
             return E;
         }
         return llvm::Error::success();

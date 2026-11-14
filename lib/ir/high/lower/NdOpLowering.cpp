@@ -49,8 +49,12 @@ void MedToHighConverter::lowerCBranch(HighFunc &Func, const MedOp &CurOp) {
       ExpressionObserver(CurOp, S.Cond);
     HighStmt GotoStmt;
     GotoStmt.Kind = StmtKind::Goto;
-    if (CurOp.Inputs[0].isConst())
-      GotoStmt.GotoTarget = CurOp.Inputs[0].ConstVal;
+    if (CurOp.Inputs[0].isConst()) {
+      if (CurMed)
+        aimDirectBranch(GotoStmt, *CurMed, CurOp);
+      else
+        GotoStmt.GotoTarget = CurOp.Inputs[0].ConstVal;
+    }
     S.Body.push_back(GotoStmt);
   }
   Func.Body.push_back(std::move(S));
@@ -60,9 +64,24 @@ void MedToHighConverter::lowerBranch(HighFunc &Func, const MedOp &CurOp) {
   HighStmt S;
   S.Kind = StmtKind::Goto;
   S.Addr = CurOp.Addr;
-  if (CurOp.NumInputs >= 1 && CurOp.Inputs[0].isConst())
-    S.GotoTarget = CurOp.Inputs[0].ConstVal;
+  if (CurOp.NumInputs >= 1 && CurOp.Inputs[0].isConst()) {
+    if (CurMed)
+      aimDirectBranch(S, *CurMed, CurOp);
+    else
+      S.GotoTarget = CurOp.Inputs[0].ConstVal;
+  }
   Func.Body.push_back(std::move(S));
+}
+
+void aimDirectBranch(HighStmt &Goto, const MedFunc &Med, const MedOp &Branch) {
+  const va_t Target = Branch.Inputs[0].ConstVal;
+  if (Med.TruncatedPathAddresses.count(Target)) {
+    Goto.Addr = Branch.Addr;
+    Goto.GotoTarget = InvalidVA;
+    Goto.LeftImageAt = Target;
+    return;
+  }
+  Goto.GotoTarget = Target;
 }
 
 void MedToHighConverter::lowerGenericAssign(HighFunc &Func, const MedOp &CurOp,

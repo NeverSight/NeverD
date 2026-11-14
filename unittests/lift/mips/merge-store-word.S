@@ -19,3 +19,39 @@ mips_merge_store_word:
   nop
 .end mips_merge_store_word
 .size mips_merge_store_word,.-mips_merge_store_word
+
+#ifdef WIDE
+.macro single_store name,store
+.globl \name
+.type \name,@function
+.ent \name
+\name:
+  \store $5,0($4)
+  jr $31
+  or $2,$5,$0
+.end \name
+.size \name,.-\name
+.endm
+single_store mips_merge_store_left_double,sdl
+single_store mips_merge_store_right_double,sdr
+
+.globl mips_merge_store_double
+.type mips_merge_store_double,@function
+.ent mips_merge_store_double
+mips_merge_store_double:
+#ifdef __MIPSEL__
+  sdl $5,7($4)
+  sdr $5,0($4)
+  ldl $2,7($4)
+  ldr $2,0($4)
+#else
+  sdl $5,0($4)
+  sdr $5,7($4)
+  ldl $2,0($4)
+  ldr $2,7($4)
+#endif
+  jr $31
+  nop
+.end mips_merge_store_double
+.size mips_merge_store_double,.-mips_merge_store_double
+#endif

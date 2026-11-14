@@ -638,6 +638,8 @@ add_neverd_unittest(NeverDLiftTests
   format/ELFFunctionListingTests.cpp
   format/ELFWithoutSectionsTests.cpp
   format/ELFARM32ModeTests.cpp
+  core/PathLeavesImageTests.cpp
+  format/ELFObjectBranchRelocationTests.cpp
   format/COFFFunctionListingTests.cpp
   format/RegistrationFunctionSelectionTests.cpp
   format/MachOLLVMNameBoundaryTests.cpp
@@ -2461,6 +2463,9 @@ add_neverd_unittest(NeverDArm64eLiftedImageTests
   LINK_COMPONENTS CodeGen Pipeline AArch64UnwindRecovery
 )
 
+set(NEVERD_ARM64E_TEST_CLANG_EXECUTABLE
+  "${NEVERD_TEST_CLANG_EXECUTABLE}" CACHE FILEPATH
+  "Clang frontend for Darwin arm64e pointer authentication fixtures")
 add_neverd_unittest(NeverDArm64eAnalysisTests
   aarch64/AArch64EntryABITests.cpp
   aarch64/AArch64AddressMemoryTests.cpp
@@ -2482,6 +2487,11 @@ target_compile_definitions(NeverDArm64eAnalysisTests PRIVATE
 if(NEVERD_TEST_CLANG_EXECUTABLE)
   target_compile_definitions(NeverDArm64eAnalysisTests PRIVATE
     NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")
+endif()
+if(NEVERD_ARM64E_TEST_CLANG_EXECUTABLE)
+  set_property(SOURCE aarch64/AArch64PAuthSemanticTests.cpp APPEND
+    PROPERTY COMPILE_DEFINITIONS
+      NEVERD_PAUTH_TEST_CLANG="${NEVERD_ARM64E_TEST_CLANG_EXECUTABLE}")
 endif()
 
 add_neverd_unittest(NeverDAArch64SVEPredicateTests
@@ -2876,9 +2886,9 @@ add_neverd_unittest(NeverDAArch64AuthenticatedCallTests
 )
 target_compile_definitions(NeverDAArch64AuthenticatedCallTests PRIVATE
   NEVERD_ARM64E_TEST_HEADERS="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arm64e")
-if(NEVERD_TEST_CLANG_EXECUTABLE)
+if(NEVERD_ARM64E_TEST_CLANG_EXECUTABLE)
   target_compile_definitions(NeverDAArch64AuthenticatedCallTests PRIVATE
-    NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")
+    NEVERD_TEST_CLANG="${NEVERD_ARM64E_TEST_CLANG_EXECUTABLE}")
 endif()
 add_neverd_unittest(NeverDCallRegisterUnreadTests
   core/CallRegisterUnreadTests.cpp
@@ -3495,6 +3505,7 @@ set(X86_32_TEST_SOURCES
   x86_32/test_i386_direct_gotoff_group.s
   x86_32/test_i386_gotpc_model.s
   x86_32/test_i386_gotoff_stage_abort.s
+  x86_32/test_i386_gotoff_unproved_base.s
   x86_32/test_i386_gotpc_thunk.s
   x86_32/test_i386_gotoff_forcepeel.s
   x86_32/test_i386_gotoff_stack_group.s

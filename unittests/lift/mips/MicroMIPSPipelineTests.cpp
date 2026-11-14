@@ -12,11 +12,13 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -27,6 +29,38 @@ using namespace neverd;
 namespace {
 
 class MicroMIPSPipeline : public ::testing::TestWithParam<Arch> {};
+
+TEST(MicroMIPSPipelineSource, LLVMCModePreludeFollowsEmittedSignatures) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("mixed", Context);
+  llvm::IRBuilder<> IR(Context);
+  auto *Type = llvm::FunctionType::get(IR.getInt32Ty(), false);
+  auto *Micro = llvm::Function::Create(Type, llvm::Function::ExternalLinkage,
+                                       "micro_target", Module);
+  Micro->addFnAttr("micromips");
+  IR.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Micro));
+  IR.CreateRet(IR.getInt32(7));
+  CEmitterOptions Options;
+  Options.TheArch = Arch::MIPS64;
+  Options.Format = BinaryFormat::ELF;
+  for (bool CallsMicro : {false, true}) {
+    auto *Classic =
+        llvm::Function::Create(Type, llvm::Function::ExternalLinkage,
+                               CallsMicro ? "calls_micro" : "leaf", Module);
+    IR.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Classic));
+    if (CallsMicro)
+      IR.CreateRet(IR.CreateCall(Micro));
+    else
+      IR.CreateRet(IR.getInt32(42));
+    std::string Text;
+    llvm::raw_string_ostream Out(Text);
+    ASSERT_TRUE(
+        LLVMCEmitter().emit(Module, Out, Options, nullptr, nullptr, Classic));
+    EXPECT_EQ(Text.find("#define NEVERD_MICROMIPS") != std::string::npos,
+              CallsMicro)
+        << Text;
+  }
+}
 
 void checkHalfwordAlignedALUSources(Arch Target, unsigned Revision) {
   mips_test::ELFBytes File(Target);
@@ -64,24 +98,29 @@ void checkHalfwordAlignedALUSources(Arch Target, unsigned Revision) {
     ASSERT_EQ(Result.MedFuncs.size(), 1u);
     EXPECT_EQ(Result.MedFuncs.front().Params.size(), 1u);
     EXPECT_EQ(Result.MedIRVerifierFailures, 0u);
+    CEmitterOptions Emit;
+    Emit.TheArch = Target;
+    Emit.Format = BinaryFormat::ELF;
+    Emit.Image = &*Image;
+    std::string Text;
+    llvm::raw_string_ostream Output(Text);
     if (LLVM) {
       ASSERT_TRUE(Result.LlvmModule);
       EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
       const auto *Body = Result.LlvmModule->getFunction("micro_increment");
       ASSERT_NE(Body, nullptr);
       EXPECT_TRUE(Body->hasFnAttribute("micromips"));
+      ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Output, Emit));
     } else {
-      CEmitterOptions Emit;
-      Emit.TheArch = Target;
-      Emit.Format = BinaryFormat::ELF;
-      Emit.Image = &*Image;
-      std::string Text;
-      llvm::raw_string_ostream Output(Text);
       ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Output, Emit));
-      EXPECT_NE(Text.find("__attribute__((micromips,nomips16))"),
-                std::string::npos)
-          << Text;
     }
+    EXPECT_NE(Text.find("__attribute__((micromips,nomips16))"),
+              std::string::npos)
+        << Text;
+    EXPECT_NE(Text.find("__attribute__((micromips))"), std::string::npos);
+    const auto PreludeEnd = Text.find("#endif\n\n");
+    ASSERT_NE(PreludeEnd, std::string::npos);
+    EXPECT_NE(Text.find("NEVERD_MICROMIPS ", PreludeEnd), std::string::npos);
   }
 }
 

@@ -2576,6 +2576,47 @@ the resulting selector plan. Skipped SSA, cycles or exhausted projection work
 cannot publish that numeric plan; effects and memory observations are never
 replayed to create it.
 
+An indirect jump can keep its branch identity and still have no proved target:
+its table proof was lost, its evidence ran out, or it reads labels of its own
+function through an exact GOTOFF field behind a base nothing proves. Such a
+jump is no tail call, since a label is no entry, and it used to trap on every
+value. `CFGBuilder::dispatchUnprovedBranchesByValue` gives it a dispatch by
+value instead. Its candidates are the labels of the function that
+relocation-proven pointers outside the code hold, which are roots of the
+function already. A jump that reads its table through an exact field takes only
+the labels of that table's run, which ends where another field of the code
+names an address. An edge is kept only where every callee-saved register the
+label's code reads before writing has been written on every path to the jump:
+a table has words its index never selects, and following one must not turn a
+register the caller keeps into an input of the function. Jumps are decided in
+the order control reaches them and the result is checked once more as a whole.
+`LowFunc::ValueDispatches` holds the result beside the recovered tables,
+because it recovers none; MedIR lists it with them, marked
+`JumpTable::ValueDispatch`, with the labels' original addresses as case keys
+and the value the jump takes as the selector. Both C routes and the LLVM
+emitter print a switch on that value whose default arm is the trap, so a value
+that names no kept label fails as loudly as before. The comparison needs every
+label as a number. HighC prints the image's words as numbers already. The LLVM
+mirror of a relocated slot that holds such a label keeps the label's original
+address as a plain integer for the same reason: LLVM defines no comparison of
+block addresses, and an optimizer may give two labels one. The proof-based
+recoveries run first and are unchanged; a dispatch by value claims no table
+storage, no index and no relocation suppression.
+
+A direct branch, or the end of a block, can reach an address where the image
+maps no code: data, bytes the file does not hold, the end of a section.
+`CFGBuilder` records the address in `LowFunc::TruncatedPathAddresses` and
+lifts the function all the same (`hasCompleteInstructionLift`); the proofs
+that need every path refuse it (`hasCompleteLiftCoverage`). The edge has no
+block. `MedFunc::TruncatedPathAddresses` carries the addresses on, and each
+backend ends such a path in a trap: the LLVM emitter in place of the branch,
+the taken or the other arm of a conditional one, or a block's missing
+terminator, and HighIR as a jump without a label (`aimDirectBranch`,
+`HighStmt::LeftImageAt`), which HighC prints as `__builtin_trap()` with the
+address the path went on at. Returning a zero there, or letting a conditional branch always take the
+arm that stayed, would invent control flow, as it would for an indirect
+branch without a proved target.
+
 MedIR invariant and copy propagation share `canPropagateConstantToOperand`.
 A computed indirect-call target stays an SSA value even when its producer is
 constant: the legacy literal `INDIR_CALL` operand denotes pointer storage.
@@ -4894,6 +4935,18 @@ pass the first argument in the result register, so the bare `ret` beside the
 tail call of `if (b) return g(b); return a;` returns `a`. Whether the
 function returns a value at all stays with the return contracts
 (`settleReturnContracts`).
+An inferred integer result is as wide as the widest value some return path
+is seen to leave (`inferReturnType`). The write in the return's own block,
+the writes that reach a return without one from the blocks before it, and the
+arms of a merge each count for what they leave: a zero-extension its source,
+a constant below 2^32 the four bytes a zero-extended write leaves, an address
+a pointer's bytes however small it is in this image, a sub-register write its
+own low bytes and what the register held under them, any other write all it
+writes. That includes a call's result, since no callee's integer width
+reaches the pass. A pointer one path returns is then not cut to
+the 32 bits a sibling path's `xor eax, eax` writes, whichever block comes
+first. This evidence only widens the type the first write chose, and a value
+the function did not write is none.
 An absent ordinary RETURN does not establish a void result. The shared
 no-return proof must also close exceptional paths; an external catch funclet
 can still supply the parent's value when its source body is attached later.
@@ -6214,7 +6267,12 @@ coefficient precision. Completed polynomial groups remain factored beside
 independent scaled variables or XOR words; a shared direct factor or an AND
 partition still admits the nested reconstruction search.
 A product can also group different views of a word when their live low bits
-agree. A mask or addend that changes only higher bits drops out; a mask
+agree. An interior window starting at bit `i` has the same low bits as a
+right rotation by `i`. Constant rotations compose modulo the word width
+even when the window wraps. A variable rotation stays in the source word.
+The LLVM translator carries same-word funnel shifts as rotates in both
+directions and emits them with their modulo-width count.
+A mask or addend that changes only higher bits drops out; a mask
 that changes even one live bit stays. If every weight has at least `s` low
 zeros, the degree-`k` coefficient is a multiple of `2^(k*s)`. Its quotient
 needs only `P-k*s` bits at precision `P`. When all nonconstant terms of a
@@ -6225,7 +6283,9 @@ Equal or opposite weights can share a factor. After removing a common power
 of two, an odd weight is invertible at the remaining width, which lets long
 literal coefficients share one scale. The simplifier compares expression
 costs before accepting either form. When the top bit multiplies a Boolean
-correction beside an unscaled sum, the parity of the sum can be absorbed into
+correction beside a literal, concatenation can store the correction's low
+bit above the literal's lower bits. The cost comparison uses the full printed
+expression. Beside an unscaled sum, the parity of the sum can be absorbed into
 its coefficient if the remaining Boolean word becomes cheaper. A surviving
 sum can also replace a binary AND and OR of the same two words with their
 sum while preserving its other terms.
@@ -10922,6 +10982,17 @@ register is taken. There the last register passes zero when the function has
 no value to name for it. A call that leaves more registers without one keeps
 its list, as do i386, variadic calls and a call recovery lists no arguments
 for, which takes the block scan's.
+
+Where the register scan recovers the arguments (System V x86-64), a jump to
+an import that no summary, source binding, declaration or C library table
+describes passes on the function's leading register parameters that still hold
+their incoming value there (`forwardedParameterCount`). The jump hands the
+import the registers as they are, MedIR's call recovery passes them, and LLVM C
+prints them; HighC printed `outside()` for `cmp rdi, 6; jl outside`, which
+built against the unprototyped declaration and passed nothing. The marker is
+the jump's own provenance (`MedOp::IsTailCall`), not a call a return follows,
+which sets what it passes. A position ends the list once its register holds
+anything else: a value an earlier call left, a join, a write on the way.
 
 An AAPCS64 register save area also spills q0-q7, which carry only the floating
 and vector arguments a caller passes. Where the function's va_arg reads none of
@@ -16346,7 +16417,10 @@ tentative definition.
 `BinaryImage::ObjectExternFunctionEntries`. CFG recovery uses that provenance
 for direct external tail calls in relocatable objects without admitting the
 extern storage as executable code. An IAT address or function symbol alone
-does not grant this exception.
+does not grant this exception. A conditional branch there is the same tail
+call on its taken path, modelled as a `CALL` and `RETURN` at the callee's
+identity. That stub is in the instruction set of the branch: an AArch32
+callee with no bytes states none of its own.
 
 <a id="support-and-test-depth"></a>
 
@@ -16443,6 +16517,13 @@ byte writes and original-image backing qualification. This differs from a
 general source memory-fault equivalence guarantee. ABI memory recovery stops
 at partial stores, while queries confined to registers retain their existing
 values across these memory effects.
+
+The same scalar contract admits word extraction results and, on MIPS64,
+doubleword extraction results. `MIPSLiftDSP64` owns full accumulator extraction
+and shifts; `MIPSLiftDSPAdditional` shares INSV/DINSV field semantics. Invalid
+fields produce fresh unknown values in LowIR. LLVM and C retain a source-domain
+guard when those values are observed. HighC helper identity includes the result
+width, so a function can use both extraction widths without truncating either.
 
 The qualified MIPS16e2 system/atomic slice shares scalar shape admission but
 retains separate effectful IDs. `MIPSSystemContext` authenticates a system step;
@@ -18584,7 +18665,7 @@ If the same cache already holds a completed empty-projection proof for the ident
 
 For constant-only projections, `InterpreterSpecialization` reuses a completed empty-projection proof under the identical predicate and tuple limit, then reconstructs the literal tuple. Constants do not establish reachability. Observers still validate every original address and extent, including cache hits; rejected observations and incomplete enumeration never supply a completed proof.
 
-ELF object parsing, native relocation writers and loader provenance share one field-width table. AArch64 `PREL64` consumes eight bytes and preserves signed `S + A - P`, including full-width implicit REL addends. Bounds, overlapping writers and signed overflow fail before publication.
+ELF object parsing, native relocation writers and loader provenance share one field-width table. AArch64 `PREL64` consumes eight bytes and preserves signed `S + A - P`, including full-width implicit REL addends. Bounds, overlapping writers and signed overflow fail before publication. The object loader applies AArch64 `CONDBR19` and `TSTBR14`, which the assembler leaves on a conditional branch to a global label or to another section, when the instruction is of the relocation's kind and reaches its target. A relocation it does not apply to executable code is recorded in `BinaryImage::UnappliedCodeRelocations`: a type it does not model, such as a thread-local offset or a MOVW group, or a branch out of reach. The instruction over such a field still holds the assembler's placeholder, so `CFGBuilder` reports it as unsupported instead of lifting it; empty records and the ARMv4 `bx` marker ask for no change and are not recorded.
 
 DarwinFiles extends its sole authorizer with typed Query, ModeSearch and ModeChange purposes. DarwinModes.cpp owns the three mode routes; DarwinServices only forwards raw events. The shared walker and statusMetadata owner select current complete directory/target records before effective-credential security actions. Initial regular objects retain independent provider/time grants in Contents. One commit changes only permissions/ctime after all checks; invalidated metadata, object/name identity, byte/namespace grants, accounting, xattrs and VM leases retain their owners. Process JSON imports a strict declaration through the same admission owner. Empty/absent declarations differ; both immutable query closures remain closed before mode preflight. This operation-specific ordinary environment excludes native file/directory leases and unmodeled pre-setattr lifecycle, and does not open general DAC or vnode authorization.
 

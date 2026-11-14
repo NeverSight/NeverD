@@ -86,8 +86,10 @@ private:
 
 void leaveWithoutDefaultButton(QDialog &dialog) { new NoDefaultButton(dialog); }
 
-void showAsMainAction(QPushButton &button) {
-  button.setProperty("mainAction", true);
+void showAsMainAction(QPushButton &button, bool on) {
+  if (button.property("mainAction").toBool() == on)
+    return;
+  button.setProperty("mainAction", on);
   // The style sheet reads the property as it polishes the button.
   if (button.testAttribute(Qt::WA_WState_Polished)) {
     button.style()->unpolish(&button);

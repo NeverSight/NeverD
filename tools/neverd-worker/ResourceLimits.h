@@ -601,6 +601,10 @@ inline constexpr int kMainIdleGracePeriodMilliseconds = 150;
 /// answer may take in its reply.
 inline constexpr std::size_t kMainThenReads = 4;
 inline constexpr std::size_t kMainThenReadBytes = 1024 * 1024;
+/// The lines of the listing one such read may ask for: those a client shows,
+/// which hold the request's reply back by little.  A page of the listing is
+/// read by itself.
+inline constexpr std::size_t kMainThenListingLines = 256;
 inline constexpr int kMainExecuteLoopMilliseconds = 10;
 inline constexpr int kMainMainHeartbeatSeconds = 1;
 inline constexpr int kMainMainHelloCancelTargetRequestIdStringFieldMax = 128;

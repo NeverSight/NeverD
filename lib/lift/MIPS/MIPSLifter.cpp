@@ -380,6 +380,16 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
              {NdVar::cst(1, 1)});
       return true;
     }
+    case 30:   // DDIV
+    case 31: { // DDIVU
+      if (!Wide || RD || SA)
+        return false;
+      S.divide(S.read(RS), S.read(RT), Function == 30,
+               NdVar::reg(mipsreg::LO, 8), NdVar::reg(mipsreg::HI, 8));
+      S.emit(NdOp::COPY, NdVar::reg(mipsreg::AC0Pending, 1),
+             {NdVar::cst(1, 1)});
+      return true;
+    }
     case 33:   // ADDU
     case 35:   // SUBU
     case 36:   // AND

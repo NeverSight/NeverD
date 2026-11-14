@@ -80,3 +80,4 @@ mips_merge_word:
 .size mips_merge_word,.-mips_merge_word
 
 #include "merge-store-word.S"
+#include "division.S"

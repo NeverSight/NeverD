@@ -1000,6 +1000,9 @@ inline constexpr int kMaxCallingConventionUseRounds = 64;
 
 // lib/ir/med/pass/MedTypePass.cpp
 inline constexpr int kMaxTypeInferencePredecessorHops = 4;
+// Blocks searched back from one return for the writes of the integer return
+// register that reach it.
+inline constexpr int kMaxReturnRegisterWriteSearchBlocks = 64;
 
 // lib/ir/low/X86/RegistrationCalleeStack.cpp
 inline constexpr int kMaxReturningStackProofDepth = 32;

@@ -442,16 +442,21 @@ void collectPagesAfterIdle(State &state, std::unique_lock<std::mutex> &lock) {
 /// The answers to \p reads, a request's "then", each as a reply's status and
 /// payload or error: a source page's read naming the page its client keeps,
 /// which a reply carries whole, what refused it, or "later" where the client
-/// reads it itself (Engine::followingRead).
+/// reads it itself (Engine::followingRead, Engine::followingListing).
 Json followingReads(Engine &engine, const Json &reads) {
   Json answers = Json::array();
   for (const auto &read : reads) {
     try {
-      if (!read.is_object() || read.value("operation", Json()) != "decompile" ||
-          !read.contains("payload") || !read.at("payload").is_object())
+      const Json operation =
+          read.is_object() ? read.value("operation", Json()) : Json();
+      const bool lines = operation == "listing";
+      if ((!lines && operation != "decompile") || !read.contains("payload") ||
+          !read.at("payload").is_object())
         throw Error("invalid_request",
-                    "A read that follows is a decompile naming its page");
-      auto reply = engine.followingRead(read.at("payload"));
+                    "A read that follows is a decompile naming its page, or "
+                    "the lines a listing shows");
+      auto reply = lines ? engine.followingListing(read.at("payload"))
+                         : engine.followingRead(read.at("payload"));
       if (!reply) {
         answers.push_back({{"status", "later"}});
         continue;

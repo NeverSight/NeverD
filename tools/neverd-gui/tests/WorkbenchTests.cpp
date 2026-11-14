@@ -44,6 +44,7 @@
 #include "PdbPromptDialog.h"
 #include "ProjectDatabase.h"
 #include "QuickStartDialog.h"
+#include "RenamedPages.h"
 #include "ResourceLimits.h"
 #include "Session.h"
 #include "SessionTestAccess.h"
@@ -537,6 +538,27 @@ void setClipboard(const QString &text) {
 }
 } // namespace
 
+/// Whether \p code shows a text the worker gave and waits for none.  A view
+/// that shows a function's new name ahead of the worker's answer is not
+/// loading yet, and reads its pages again once the answer is there: what a
+/// test does to the text meanwhile, it would do to a text about to be read
+/// again.
+bool settled(const CodeText *code) {
+  return !code->loading() && !code->aheadOfTheWorker();
+}
+
+/// Waits for the commands that wait or run to be done.  A rename is read
+/// ahead where none waits ahead of it (Session::rename), and a third of a
+/// second after any edit one does, of the session's own: the project's
+/// files, which the worker wrote behind the edit, are read again.  A test
+/// that holds a rename to be read ahead makes it once that command, where it
+/// has come, is done; nothing runs between this and the rename it stands
+/// before.
+bool noCommandWaits(Session &session) {
+  return QTest::qWaitFor([&] { return !session.queries().hasCommands(); },
+                         OpenTimeoutMs);
+}
+
 /// What the window keeps of \p widget: the pixels of its backing store, which
 /// a paint of part of the widget leaves as they were elsewhere.  None where
 /// the store keeps no image.
@@ -598,9 +620,13 @@ public:
   /// it happens to.
   static constexpr int Every = -1, Some = -2;
 
-  RowsOfAView(QWidget *viewport, int rowHeight)
-      : viewport_(viewport), rowHeight_(rowHeight) {
-    viewport_->installEventFilter(&painted_);
+  /// \p asked says how many pixels the view has asked its viewport to
+  /// paint, all told: a change is held to what the view asks for.  What the
+  /// window paints is more where the dock that holds the view lays itself
+  /// out again, as it does while the workbench settles after a file opened,
+  /// and that is no doing of the view's.
+  RowsOfAView(QWidget *viewport, int rowHeight, std::function<quint64()> asked)
+      : viewport_(viewport), rowHeight_(rowHeight), asked_(std::move(asked)) {
     settle();
   }
   /// Whether the window keeps a picture of the view that can be looked at.
@@ -613,10 +639,10 @@ public:
   /// Returns how many rows' worth of the view it painted, rounded up.
   int change(const QString &what, int rows, const std::function<void()> &act) {
     settle();
-    painted_.region = {};
+    const quint64 before = asked_();
     act();
     settle();
-    const qint64 area = painted_.area();
+    const qint64 area = qint64(asked_() - before);
     const qint64 whole = qint64(viewport_->width()) * viewport_->height();
     const QImage kept = windowPixels(viewport_);
     viewport_->update();
@@ -653,7 +679,7 @@ public:
 private:
   QWidget *viewport_;
   int rowHeight_;
-  PaintedParts painted_;
+  std::function<quint64()> asked_;
 };
 
 class WorkbenchTests : public QObject {
@@ -815,6 +841,465 @@ private slots:
       if (name == QStringLiteral("listed_once_again"))
         QCOMPARE(deltas(), changes + 1);
     }
+  }
+
+  void anEditBringsTheLinesTheListingShows() {
+    // An edit carries the read of the lines the listing shows, and its reply
+    // answers it.  The listing takes those lines as the edit's revision is
+    // said, ahead of the lines around them, which it reads behind the edit:
+    // the row that changed reads its new name while that read is on its way.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loads;
+    bench.window->openFile(writeFixture(directory, "floating-code.bin"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *assembly = bench.window->disassembly();
+    assembly->navigate(Base + 0x140);
+    QTRY_COMPARE(assembly->currentFunction(),
+                 std::optional<Address>(Base + 0x140));
+    auto *listing = assembly->listing();
+    using Access = ListingViewTestAccess;
+    const auto quiet = [&] {
+      return Access::settled(*listing) && !bench.session.queries().hasPending();
+    };
+    // The worker leaves the lines to the listing while the index behind
+    // them is being built.
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.indexReady() && quiet(),
+                             OpenTimeoutMs);
+    QObject reader;
+    const auto counted = [&](const char *what) {
+      QJsonObject payload;
+      bench.session.read(QStringLiteral("metadata"), {}, &reader,
+                         [&](const QJsonObject &answer) { payload = answer; });
+      (void)QTest::qWaitFor([&] { return !payload.isEmpty(); }, OpenTimeoutMs);
+      return payload.value(QLatin1String(what)).toInteger(-1);
+    };
+    const auto shows = [&](const QString &name) {
+      const int first = Access::top(*listing);
+      const int rows =
+          listing->viewport()->height() / Access::lineHeight(*listing);
+      for (int row = first; row < Access::rows(*listing) && row <= first + rows;
+           ++row)
+        if (Access::text(*listing, row).contains(name))
+          return true;
+      return false;
+    };
+    for (const auto &name :
+         {QStringLiteral("shown_at_once"), QStringLiteral("shown_again")}) {
+      const auto taken = Access::visiblePagesTaken(*listing);
+      const auto requests = Access::requests(*listing);
+      const auto followed = counted("following_reads");
+      QVERIFY(!shows(name));
+      // As the revision is said: the name in view, the lines around it asked
+      // for and not there yet.
+      std::optional<bool> shown, settledThen;
+      const auto said =
+          connect(&bench.session, &Session::revisionChanged, &reader, [&] {
+            if (shown)
+              return;
+            shown = shows(name);
+            settledThen = Access::settled(*listing);
+          });
+      bench.session.rename(Base + 0x140, name);
+      QTRY_VERIFY_WITH_TIMEOUT(shown.has_value() && quiet(), OpenTimeoutMs);
+      disconnect(said);
+      QCOMPARE(shown, std::optional<bool>(true));
+      QCOMPARE(settledThen, std::optional<bool>(false));
+      QCOMPARE(Access::visiblePagesTaken(*listing), taken + 1);
+      // One refresh, as before, and the lines in view answered with the edit.
+      QCOMPARE(Access::requests(*listing), requests + 1);
+      QCOMPARE(counted("following_reads"), followed + 1);
+      QVERIFY(shows(name));
+      QCOMPARE(Access::linesReadOtherwise(*listing), quint64(0));
+    }
+    // The edit's reply waits for the lines it carries.  A rename of a
+    // function the lines show carries them whichever view the user works in,
+    // as above: pseudocode that links it reads the name before the reply.
+    // Another edit carries them where the listing is the view worked in,
+    // and where it is not, the listing reads them itself behind the reply,
+    // ahead of the lines around them all the same.  The view worked in is
+    // the last analysis view to take the keyboard, and a dialog a command
+    // asks with leaves it so: the edit leaves as the dialog closes, when the
+    // listing may have no focus yet.
+    QVERIFY(activateTestWindow(bench.window.get()));
+    bench.action(ActionId::ViewPseudocode)->trigger();
+    auto *source = bench.codeView(QStringLiteral("source"));
+    QVERIFY(source);
+    QTRY_VERIFY_WITH_TIMEOUT(settled(source->text()) &&
+                                 source->text()->lineCount() > 2 && quiet(),
+                             OpenTimeoutMs);
+    enum Way { InThePseudocode, InTheListing, ThroughTheListingsDialog };
+    for (const Way way :
+         {InThePseudocode, InTheListing, ThroughTheListingsDialog}) {
+      const bool here = way != InThePseudocode;
+      QWidget *working = here ? static_cast<QWidget *>(listing)
+                              : static_cast<QWidget *>(source->text());
+      working->setFocus();
+      QTRY_VERIFY(working->hasFocus());
+      QCOMPARE(listing->workedIn(), here);
+      const auto note =
+          way == InThePseudocode ? QStringLiteral("said elsewhere")
+          : way == InTheListing  ? QStringLiteral("said in the listing")
+                                 : QStringLiteral("said through a dialog");
+      const auto taken = Access::visiblePagesTaken(*listing);
+      const auto requests = Access::requests(*listing);
+      const auto followed = counted("following_reads");
+      std::optional<bool> shown;
+      const auto said =
+          connect(&bench.session, &Session::revisionChanged, &reader, [&] {
+            if (!shown)
+              shown = shows(note);
+          });
+      if (way == ThroughTheListingsDialog) {
+        // `;` asks what the address is commented with, then the user; the
+        // comment leaves as the dialog is accepted.  Whether the listing
+        // has the focus back by then is the window system's to say, and
+        // differs from one time to the next: the edit asks which view is
+        // worked in, not which has the focus.
+        bool accepted = false;
+        QTimer filler;
+        connect(&filler, &QTimer::timeout, &filler, [&] {
+          if (auto *dialog = qobject_cast<QInputDialog *>(
+                  QApplication::activeModalWidget())) {
+            filler.stop();
+            dialog->setTextValue(note);
+            accepted = true;
+            dialog->accept();
+          }
+        });
+        filler.start(10);
+        QTest::keyClick(listing->window()->windowHandle(), Qt::Key_Semicolon);
+        QTRY_VERIFY_WITH_TIMEOUT(accepted, OpenTimeoutMs);
+        QVERIFY(listing->workedIn());
+      } else {
+        bench.session.setComment(Base + 0x140, note);
+      }
+      QTRY_VERIFY_WITH_TIMEOUT(shows(note) && quiet(), OpenTimeoutMs);
+      disconnect(said);
+      QCOMPARE(counted("following_reads"), followed + (here ? 1 : 0));
+      // Carried, the lines are there as the revision is said; read by the
+      // listing itself, they come a round trip later, and still ahead.
+      QCOMPARE(shown, std::optional<bool>(here));
+      QCOMPARE(Access::visiblePagesTaken(*listing), taken + 1);
+      QCOMPARE(Access::requests(*listing), requests + 1);
+      QCOMPARE(Access::linesReadOtherwise(*listing), quint64(0));
+    }
+  }
+
+  void theViewWorkedInShowsAnEditBeforeTheOther() {
+    // What an edit's reply carried, the views take as the revision is said,
+    // in two turns (Session::shownRevisionAsked, shownRevisionTaken).  The
+    // listing takes its lines in the first where it is the view worked in,
+    // and in the second where it is not: behind a pseudocode view that has
+    // the change still to show its reader.
+    QObject reader;
+    {
+      QTemporaryDir directory;
+      Workbench bench;
+      LoadDialogAcceptor loads;
+      bench.window->openFile(writeFixture(directory, "floating-code.bin"));
+      QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+      auto *assembly = bench.window->disassembly();
+      assembly->navigate(Base + 0x140);
+      QTRY_COMPARE(assembly->currentFunction(),
+                   std::optional<Address>(Base + 0x140));
+      auto *listing = assembly->listing();
+      using Access = ListingViewTestAccess;
+      bench.action(ActionId::ViewPseudocode)->trigger();
+      QTRY_VERIFY_WITH_TIMEOUT(bench.codeView(QStringLiteral("source")),
+                               OpenTimeoutMs);
+      auto *code = bench.codeView(QStringLiteral("source"))->text();
+      const auto quiet = [&] {
+        return Access::settled(*listing) && settled(code) &&
+               !bench.session.queries().hasPending();
+      };
+      QTRY_VERIFY_WITH_TIMEOUT(bench.session.indexReady() &&
+                                   code->lineCount() > 2 && quiet(),
+                               OpenTimeoutMs);
+      QVERIFY(activateTestWindow(bench.window.get()));
+      // These hear each turn after the views have: they were told of it
+      // later.
+      quint64 atFirst = 0, atSecond = 0, atRevision = 0;
+      connect(&bench.session, &Session::shownRevisionAsked, &reader,
+              [&] { atFirst = Access::visiblePagesTaken(*listing); });
+      connect(&bench.session, &Session::shownRevisionTaken, &reader,
+              [&] { atSecond = Access::visiblePagesTaken(*listing); });
+      connect(&bench.session, &Session::revisionChanged, &reader,
+              [&] { atRevision = Access::visiblePagesTaken(*listing); });
+      for (const bool inTheListing : {false, true}) {
+        QWidget *working = inTheListing ? static_cast<QWidget *>(listing)
+                                        : static_cast<QWidget *>(code);
+        working->setFocus();
+        QTRY_VERIFY(working->hasFocus());
+        QCOMPARE(listing->workedIn(), inTheListing);
+        const auto taken = Access::visiblePagesTaken(*listing);
+        const auto revision = bench.session.revision();
+        // A rename of the function the listing shows carries its lines
+        // whichever view is worked in.
+        bench.session.rename(
+            Base + 0x140, inTheListing ? QStringLiteral("named_in_the_listing")
+                                       : QStringLiteral("named_elsewhere"));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            bench.session.revision() != revision && quiet(), OpenTimeoutMs);
+        QCOMPARE(atFirst, taken + (inTheListing ? 1 : 0));
+        QCOMPARE(atSecond, taken + 1);
+        QCOMPARE(atRevision, taken + 1);
+        QCOMPARE(Access::linesReadOtherwise(*listing), quint64(0));
+      }
+      disconnect(&bench.session, nullptr, &reader, nullptr);
+    }
+    // A pseudocode view that has the change still to show takes its page in
+    // the first turn: a note, which no view reads ahead, on a function whose
+    // pages an earlier session rendered, so that the worker answers the page
+    // with the edit.
+    QTemporaryDir directory;
+    const auto path = writeFixture(
+        directory,
+        QStringLiteral("summaries-ready-render-store-source-cache.bin"));
+    {
+      Session session(QString::fromLocal8Bit(TEST_WORKER));
+      session.open(path);
+      QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+      session.prepareFunctionRead(Base);
+      QTRY_COMPARE_WITH_TIMEOUT(session.analysisRenderAheadState(),
+                                QStringLiteral("done"), NativeOpenTimeoutMs);
+    }
+    Workbench bench;
+    LoadDialogAcceptor loads;
+    bench.window->openFile(path);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *assembly = bench.window->disassembly();
+    assembly->navigate(Base + 32);
+    QTRY_COMPARE(assembly->currentFunction(),
+                 std::optional<Address>(Base + 32));
+    bench.action(ActionId::ViewPseudocode)->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(bench.codeView(QStringLiteral("source")),
+                             OpenTimeoutMs);
+    auto *code = bench.codeView(QStringLiteral("source"))->text();
+    auto *listing = assembly->listing();
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() > 2 &&
+                                 ListingViewTestAccess::settled(*listing) &&
+                                 !bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    QVERIFY(activateTestWindow(bench.window.get()));
+    code->setFocus();
+    QTRY_VERIFY(code->hasFocus());
+    const auto note = QStringLiteral("shown in the first turn");
+    std::optional<bool> shownAtFirst;
+    connect(&bench.session, &Session::shownRevisionAsked, &reader, [&] {
+      if (!shownAtFirst)
+        shownAtFirst = code->allText().contains(note);
+    });
+    bench.session.setComment(Base + 32, note);
+    QTRY_VERIFY_WITH_TIMEOUT(shownAtFirst.has_value() && settled(code) &&
+                                 ListingViewTestAccess::settled(*listing) &&
+                                 !bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    QCOMPARE(shownAtFirst, std::optional<bool>(true));
+  }
+
+  void editsInABurstLeaveTheListingAsTheLastSays() {
+    // Two renames of the function the listing shows, the second accepted
+    // while the first is with the worker.  The lines the first's reply
+    // carried answer a read that has an edit waiting ahead of it, and wait
+    // with it; the second's reply brings the lines the listing takes.  The
+    // listing ends with the last name, has read no line it took ahead
+    // otherwise, and no paint of it kept a row of the name before
+    // (PaintCheck, cleanup).
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loads;
+    bench.window->openFile(writeFixture(directory, "floating-code.bin"));
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded(), OpenTimeoutMs);
+    auto *assembly = bench.window->disassembly();
+    assembly->navigate(Base + 0x140);
+    QTRY_COMPARE(assembly->currentFunction(),
+                 std::optional<Address>(Base + 0x140));
+    auto *listing = assembly->listing();
+    using Access = ListingViewTestAccess;
+    const auto quiet = [&] {
+      return Access::settled(*listing) && !bench.session.queries().hasPending();
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.indexReady() && quiet(),
+                             OpenTimeoutMs);
+    const auto shows = [&](const QString &name) {
+      const int first = Access::top(*listing);
+      const int rows =
+          listing->viewport()->height() / Access::lineHeight(*listing);
+      for (int row = first; row < Access::rows(*listing) && row <= first + rows;
+           ++row)
+        if (Access::text(*listing, row).contains(name))
+          return true;
+      return false;
+    };
+    for (int burst = 0; burst < 4; ++burst) {
+      const auto first = QStringLiteral("burst_%1_first").arg(burst);
+      const auto last = QStringLiteral("burst_%1_last").arg(burst);
+      const auto taken = Access::visiblePagesTaken(*listing);
+      const auto revision = bench.session.revision();
+      bench.session.rename(Base + 0x140, first);
+      bench.session.rename(Base + 0x140, last);
+      QTRY_VERIFY_WITH_TIMEOUT(shows(last) && quiet(), OpenTimeoutMs);
+      QVERIFY(bench.session.revision() != revision);
+      QVERIFY(!shows(first));
+      QVERIFY(Access::visiblePagesTaken(*listing) > taken);
+      QCOMPARE(Access::linesReadOtherwise(*listing), quint64(0));
+    }
+  }
+
+  void theLinesInViewAreReadAheadWhereTheyStandForTheLinesHeld() {
+    // The lines in view come ahead of a refresh, as an edit left them.  They
+    // take the place of the lines held where each stands at the place of the
+    // line it replaces; where they do not (a line added or taken in view,
+    // the view scrolled since, fewer lines than asked for), they are left
+    // to the refresh, as they are once the refresh has landed.  The refresh
+    // then reads the lines taken as they read: none otherwise.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("fixture.bin")));
+    auto *listing = bench.window->disassembly()->listing();
+    using Access = ListingViewTestAccess;
+    QTRY_VERIFY_WITH_TIMEOUT(
+        bench.session.loaded() && bench.session.indexReady() &&
+            !bench.session.busy() && Access::settled(*listing),
+        OpenTimeoutMs);
+    const int Lines = 300;
+    // The listing's lines, the one at \p named reading \p name.
+    const auto rowAt = [](int at, const QString &name = {}) {
+      return QJsonObject{
+          {"item", hexAddress(0x1000 + 4 * Address(at))},
+          {"sub", 0},
+          {"kind", "insn"},
+          {"prefix", QStringLiteral(".text:%1")
+                         .arg(0x1000 + 4 * at, 8, 16, QLatin1Char('0'))},
+          {"text", name.isEmpty() ? QStringLiteral("mov     eax, %1").arg(at)
+                                  : QStringLiteral("call    ") + name},
+          // One span in a list of spans.  Braces around a lone list are a
+          // copy of it to one compiler and a list that holds it to another;
+          // a value is neither's to copy.
+          {"spans", QJsonArray{QJsonValue(QJsonArray{0, 3, 2})}}};
+    };
+    const auto page = [&](int named = -1, const QString &name = {}) {
+      QJsonArray rows;
+      for (int at = 0; at < Lines; ++at)
+        rows.append(rowAt(at, at == named ? name : QString()));
+      return rows;
+    };
+    // The lines from \p from on, \p count of them.
+    const auto window = [&](int from, int count, int named = -1,
+                            const QString &name = {}) {
+      QJsonArray rows;
+      for (int at = from; at < from + count && at < Lines; ++at)
+        rows.append(rowAt(at, at == named ? name : QString()));
+      return rows;
+    };
+    Access::acceptRows(*listing, page(), Access::Page::Replace);
+    RowsOfAView::settle();
+    const auto read = Access::visibleRead(*listing);
+    QVERIFY(read);
+    // The lines in view, from the first of them on, and no more.
+    QCOMPARE(read->value("address").toString(), hexAddress(0x1000));
+    QCOMPARE(read->value("before").toInt(), 0);
+    const int asked = read->value("after").toInt();
+    QVERIFY(asked > 20 && asked < 200);
+    QVERIFY(!read->contains("recover_address"));
+    const auto taken = [&] { return Access::visiblePagesTaken(*listing); };
+    auto was = taken();
+    // The lines in view with one renamed: the row reads it, and is painted,
+    // while the listing's rows are not current, and the refresh reads it the
+    // same.
+    Access::refreshAsked(*listing);
+    {
+      // Painted within the call, and no more asked for than the row: what
+      // else a window paints then is not the listing's doing.
+      const auto told = Access::pixelsAsked(*listing);
+      PaintedParts atOnce;
+      listing->viewport()->installEventFilter(&atOnce);
+      Access::acceptVisible(*listing, window(0, asked, 9, "ahead"), asked);
+      listing->viewport()->removeEventFilter(&atOnce);
+      const qint64 row =
+          qint64(Access::lineHeight(*listing)) * listing->viewport()->width();
+      const qint64 toldNow = qint64(Access::pixelsAsked(*listing) - told);
+      QVERIFY(atOnce.area() > 0);
+      QVERIFY(toldNow > 0 && toldNow <= row);
+    }
+    QCOMPARE(taken(), ++was);
+    QCOMPARE(Access::text(*listing, 9), QStringLiteral("call    ahead"));
+    QVERIFY(!Access::settled(*listing));
+    Access::acceptRowsAtCursor(*listing, page(9, "ahead"));
+    QVERIFY(Access::settled(*listing));
+    QCOMPARE(Access::linesReadOtherwise(*listing), quint64(0));
+    // A refresh that reads a line taken ahead otherwise is counted: the
+    // oracle of what the two reads show (none, of one worker's two answers).
+    Access::refreshAsked(*listing);
+    Access::acceptVisible(*listing, window(0, asked, 9, "early"), asked);
+    QCOMPARE(taken(), ++was);
+    Access::acceptRowsAtCursor(*listing, page(9, "late"));
+    QCOMPARE(Access::linesReadOtherwise(*listing), quint64(1));
+    QCOMPARE(Access::text(*listing, 9), QStringLiteral("call    late"));
+    // Lines read ahead of a refresh that another has taken the place of
+    // since are that older state's.
+    Access::refreshAsked(*listing);
+    Access::refreshAsked(*listing);
+    Access::acceptVisible(*listing, window(0, asked, 9, "older"), asked, false,
+                          0, 1);
+    QCOMPARE(taken(), was);
+    Access::acceptRowsAtCursor(*listing, page(9, "late"));
+    // Once the refresh has landed, the lines that went ahead of it are late.
+    Access::refreshAsked(*listing);
+    Access::acceptRowsAtCursor(*listing, page(9, "landed"));
+    Access::acceptVisible(*listing, window(0, asked, 9, "stale"), asked);
+    QCOMPARE(taken(), was);
+    QCOMPARE(Access::text(*listing, 9), QStringLiteral("call    landed"));
+    // A line more in view, as an edit that adds one leaves them: the rows
+    // do not stand for the lines held, and none is taken.
+    Access::refreshAsked(*listing);
+    {
+      auto rows = window(0, asked - 1, 9, "moved");
+      auto added = rowAt(4);
+      added["sub"] = 1;
+      added["text"] = QStringLiteral("; a line more");
+      rows.insert(5, added);
+      Access::acceptVisible(*listing, rows, asked);
+    }
+    QCOMPARE(taken(), was);
+    QCOMPARE(Access::text(*listing, 9), QStringLiteral("call    landed"));
+    // Fewer lines than were asked for, where the listing holds more.
+    Access::acceptVisible(*listing, window(0, asked - 3, 9, "short"), asked);
+    QCOMPARE(taken(), was);
+    // Lines that begin above the first in view.
+    Access::acceptVisible(*listing, window(0, asked, 9, "above"), asked, false,
+                          1);
+    QCOMPARE(taken(), was);
+    // The view scrolled since it asked: the rows are another place's.
+    Access::scroll(*listing, 2);
+    Access::acceptVisible(*listing, window(0, asked, 9, "scrolled"), asked);
+    QCOMPARE(taken(), was);
+    QCOMPARE(Access::text(*listing, 9), QStringLiteral("call    landed"));
+    // As the view stands now, they are taken.
+    Access::acceptVisible(*listing, window(2, asked, 9, "there"), asked);
+    QCOMPARE(taken(), ++was);
+    QCOMPARE(Access::text(*listing, 9), QStringLiteral("call    there"));
+    Access::acceptRowsAtCursor(*listing, page(9, "there"));
+    QCOMPARE(Access::linesReadOtherwise(*listing), quint64(1));
+    // At the listing's end fewer lines come than were asked for, and stand.
+    Access::scroll(*listing, Lines);
+    RowsOfAView::settle();
+    const int top = Access::top(*listing);
+    QVERIFY(Lines - top < asked + 1);
+    Access::refreshAsked(*listing);
+    Access::acceptVisible(*listing, window(top, asked, Lines - 2, "last"),
+                          asked, true);
+    QCOMPARE(taken(), ++was);
+    QCOMPARE(Access::text(*listing, Lines - 2), QStringLiteral("call    last"));
+    // Not so where the listing goes on beyond them.
+    Access::acceptVisible(*listing, window(top, asked, Lines - 2, "on"), asked,
+                          false);
+    QCOMPARE(taken(), was);
+    Access::acceptRowsAtCursor(*listing, page(Lines - 2, "last"));
+    QCOMPARE(Access::linesReadOtherwise(*listing), quint64(1));
   }
 
   void codeOpensBesideFloatingDisassembly() {
@@ -1342,7 +1827,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount() > 3);
+    QTRY_VERIFY(settled(code) && code->lineCount() > 3);
     code->setPreludeFolded(false);
     QVERIFY(activateTestWindow(bench.window.get()));
     code->setFocus();
@@ -1354,7 +1839,7 @@ private slots:
     auto *mode = bench.action(ActionId::ViewFocusMode);
     QTest::keyClick(code->window()->windowHandle(), Qt::Key_Q);
     QCOMPARE(hex.size(), 1); // No delay waiting to distinguish a Q sequence.
-    QTRY_VERIFY(!code->loading() &&
+    QTRY_VERIFY(settled(code) &&
                 code->allText().contains(QStringLiteral("v0 + 0x18; /* 8 */")));
     QCOMPARE(code->window(), bench.window.get());
     code->setCursorLine(1);
@@ -1837,7 +2322,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount());
+    QTRY_VERIFY(settled(code) && code->lineCount());
     code->setFocus();
     QTRY_VERIFY(code->hasFocus());
     shown = false;
@@ -3930,7 +4415,7 @@ private slots:
     view->setRepresentation(representation);
     QCOMPARE(view->representation(), representation);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount() == 19);
+    QTRY_VERIFY(settled(code) && code->lineCount() == 19);
     const QString original = code->allText();
     QVERIFY(activateTestWindow(bench.window.get()));
     code->setFocus();
@@ -4015,7 +4500,7 @@ private slots:
     code->setCursorLine(3);
     QVERIFY(code->setCurrentBlockFolded(true));
     code->load(Base + 0x140, representation);
-    QTRY_VERIFY(!code->loading() && code->lineCount() == 16);
+    QTRY_VERIFY(settled(code) && code->lineCount() == 16);
     code->selectAddress(Base + 0x142);
     QCOMPARE(code->lineCount(), 19);
     QCOMPARE(code->currentAddress(), std::optional<Address>(Base + 0x142));
@@ -4075,7 +4560,7 @@ private slots:
     view->setRepresentation(representation);
     QCOMPARE(view->representation(), representation);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->allText().contains("return v7 + v7"));
+    QTRY_VERIFY(settled(code) && code->allText().contains("return v7 + v7"));
     if (floating) {
       auto *dock = bench.dockFor(view);
       QVERIFY(dock);
@@ -4102,7 +4587,7 @@ private slots:
       edit["kind"] = "name";
       edit["name"] = "counter";
       bench.session.editCode(edit, bench.session.epoch());
-      QTRY_VERIFY(!code->loading() &&
+      QTRY_VERIFY(settled(code) &&
                   code->allText().contains("return counter + counter"));
     }
     const auto name =
@@ -4462,7 +4947,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->allText().contains("v7 = 0"));
+    QTRY_VERIFY(settled(code) && code->allText().contains("v7 = 0"));
     QVERIFY(code->findText(QStringLiteral("v7 = 0"), true));
     bench.window->activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
@@ -4635,7 +5120,7 @@ private slots:
       return;
     }
     QTRY_COMPARE(code->function(), std::optional<Address>(Base + 0x160));
-    QTRY_VERIFY(!code->loading() && !mapped.isEmpty());
+    QTRY_VERIFY(settled(code) && !mapped.isEmpty());
     QCOMPARE(origin->representation(), representation);
     QVERIFY(origin->locked());
     QTRY_VERIFY(code->hasFocus());
@@ -4721,7 +5206,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("low"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading());
+    QTRY_VERIFY(settled(code));
     bench.window->activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
     const QFontMetricsF metrics(Theme::instance().codeFont());
@@ -4914,7 +5399,7 @@ private slots:
       QVERIFY(codeView);
       codeView->setRepresentation(representation);
       auto *code = codeView->text();
-      QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 3,
+      QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() > 3,
                                OpenTimeoutMs);
       if (view == QLatin1String("llvmc"))
         QVERIFY(code->preludeFolded());
@@ -5537,7 +6022,7 @@ private slots:
     auto *view = bench.codeView(representation);
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount() > 2);
+    QTRY_VERIFY(settled(code) && code->lineCount() > 2);
     code->setPreludeFolded(false);
     bool queryRow = false;
     if (native) {
@@ -5655,7 +6140,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount() > 3);
+    QTRY_VERIFY(settled(code) && code->lineCount() > 3);
     code->setPreludeFolded(false);
     bench.window->activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
@@ -5881,7 +6366,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount() > 3);
+    QTRY_VERIFY(settled(code) && code->lineCount() > 3);
     code->setPreludeFolded(false);
     code->setCursorLine(1);
     bench.window->activateWindow();
@@ -5978,7 +6463,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount() > 3);
+    QTRY_VERIFY(settled(code) && code->lineCount() > 3);
     code->setPreludeFolded(false);
     bench.window->activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
@@ -6001,7 +6486,7 @@ private slots:
     QVERIFY(!bench.action(ActionId::EditOperandOffset)->isEnabled());
     bench.action(ActionId::EditOperandDecimal)->trigger();
     QTRY_VERIFY_WITH_TIMEOUT(
-        !code->loading() &&
+        settled(code) &&
             code->allText().contains(QStringLiteral("v0 + 0x18; /* 8 */")),
         OpenTimeoutMs);
     QStringList offered;
@@ -6023,18 +6508,18 @@ private slots:
                                    QStringLiteral("&Binary\t0b11000"),
                                    QStringLiteral("&Character\t'\\030'")}));
     QTRY_VERIFY_WITH_TIMEOUT(
-        !code->loading() &&
+        settled(code) &&
             code->allText().contains(QStringLiteral("v0 + 030; /* 8 */")),
         OpenTimeoutMs);
     bench.action(ActionId::EditOperandNumber)->trigger();
     QTRY_VERIFY_WITH_TIMEOUT(
-        !code->loading() &&
+        settled(code) &&
             code->allText().contains(QStringLiteral("v0 + 24; /* 8 */")),
         OpenTimeoutMs);
     QTRY_VERIFY(bench.session.canUndo());
     bench.session.undo();
     QTRY_VERIFY_WITH_TIMEOUT(
-        !code->loading() &&
+        settled(code) &&
             code->allText().contains(QStringLiteral("v0 + 030; /* 8 */")),
         OpenTimeoutMs);
 
@@ -6047,7 +6532,7 @@ private slots:
     QVERIFY(code->allText().contains(QStringLiteral("v1 & 0xFFFFFFFF;")));
     bench.action(ActionId::EditOperandDecimal)->trigger();
     QTRY_VERIFY_WITH_TIMEOUT(
-        !code->loading() &&
+        settled(code) &&
             code->allText().contains(QStringLiteral("v1 & 4294967295U;")),
         OpenTimeoutMs);
     QVERIFY(code->allText().contains(QStringLiteral("v0 + 030; /* 8 */")));
@@ -6088,7 +6573,7 @@ private slots:
               pressed = true;
               QTest::keyClick(code, Qt::Key_A, Qt::ControlModifier);
             });
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 600,
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() > 600,
                              OpenTimeoutMs);
     QVERIFY(pressed);
     QCOMPARE(code->selectedText(), code->allText());
@@ -6178,7 +6663,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount() > 6);
+    QTRY_VERIFY(settled(code) && code->lineCount() > 6);
     bench.window->activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
     code->setFocus();
@@ -6266,7 +6751,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount() == 8);
+    QTRY_VERIFY(settled(code) && code->lineCount() == 8);
     QVERIFY(code->allText().contains(QStringLiteral("gap0[54]")));
     QVERIFY(activateTestWindow(bench.window.get()));
     code->setFocus();
@@ -6330,13 +6815,13 @@ private slots:
     QCOMPARE(code->function(), std::optional<Address>(function));
     // A refresh preserves an expanded layout as well as a collapsed one.
     code->load(function, QStringLiteral("source"));
-    QTRY_VERIFY(!code->loading() && code->lineCount() == 12);
+    QTRY_VERIFY(settled(code) && code->lineCount() == 12);
     code->setCursorLine(0);
     QVERIFY(code->findText(record, true));
     QVERIFY(code->setCurrentBlockFolded(true));
     QCOMPARE(code->lineCount(), 8);
     code->load(function, QStringLiteral("source"));
-    QTRY_VERIFY(!code->loading() && code->lineCount() == 8);
+    QTRY_VERIFY(settled(code) && code->lineCount() == 8);
     code->setCursorLine(0);
     QVERIFY(code->findText(QStringLiteral("gap0"), true));
     QCOMPARE(code->lineCount(), 12);
@@ -6359,7 +6844,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 600,
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() > 600,
                              OpenTimeoutMs);
     bench.window->activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
@@ -6373,7 +6858,7 @@ private slots:
     QVERIFY(top > 256);
     bench.action(ActionId::EditOperandDecimal)->trigger();
     QTRY_VERIFY_WITH_TIMEOUT(
-        !code->loading() &&
+        settled(code) &&
             code->allText().contains(QStringLiteral("return v0 + 0x18;")),
         OpenTimeoutMs);
     QCOMPARE(code->cursorLine(), line);
@@ -6516,7 +7001,7 @@ private slots:
     CodeView *view = nullptr;
     QTRY_VERIFY((view = bench.codeView(QStringLiteral("source"))));
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading());
+    QTRY_VERIFY(settled(code));
     QCOMPARE(code->function(), std::optional<Address>(function));
     QCOMPARE(code->currentAddress(), std::optional<Address>(function + 9));
     QCOMPARE(code->commentTarget()->value("line").toInt(), 550);
@@ -6552,7 +7037,7 @@ private slots:
     assembly->focusContent();
     QTRY_VERIFY(assembly->listing()->hasFocus());
     QTest::keyClick(assembly->listing(), Qt::Key_Tab);
-    QTRY_VERIFY(!code->loading() && code->function() == other);
+    QTRY_VERIFY(settled(code) && code->function() == other);
     QCOMPARE(code->currentAddress(), std::optional<Address>(other + 9));
     QCOMPARE(code->commentTarget()->value("line").toInt(), 550);
     QTRY_VERIFY(code->hasFocus());
@@ -6638,7 +7123,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading());
+    QTRY_VERIFY(settled(code));
     // Simulate a note saved while an older engine could not map this line.
     bench.session.editCode({{"address", hexAddress(function)},
                             {"representation", "source"},
@@ -6647,7 +7132,7 @@ private slots:
                             {"anchor", "  int32_t v1 = v0 + function_22();"},
                             {"text", "old source note"}},
                            bench.session.epoch());
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() &&
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) &&
                                  code->allText().contains("old source note"),
                              OpenTimeoutMs);
     code->setPreludeFolded(false);
@@ -6722,7 +7207,7 @@ private slots:
     }
     auto *code = view->text();
     QTRY_VERIFY_WITH_TIMEOUT(
-        !code->loading() &&
+        settled(code) &&
             code->allText().contains(native ? "value" : "int32_t v1"),
         NativeOpenTimeoutMs);
     for (auto *button : view->findChildren<QToolButton *>())
@@ -6775,7 +7260,7 @@ private slots:
         qPrintable(code->status() + '\n' + diagnostics.join('\n') + '\n' +
                    code->allText()),
         NativeOpenTimeoutMs);
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading(), OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code), OpenTimeoutMs);
     if (!native)
       QVERIFY(code->allText().contains("\"v0 v1 function_22\""));
     QCOMPARE(assembly->currentFunction(), std::optional<Address>(elsewhere));
@@ -6785,7 +7270,7 @@ private slots:
              QStringLiteral("renamed_callee")));
     QTRY_VERIFY_WITH_TIMEOUT(code->allText().contains("renamed_callee("),
                              NativeOpenTimeoutMs);
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading(), OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code), OpenTimeoutMs);
     if (!native)
       QVERIFY(code->allText().contains("\"v0 v1 function_22\""));
     QVERIFY(edit(native ? QStringLiteral("return (") : QStringLiteral("v1 ="),
@@ -8040,7 +8525,7 @@ private slots:
                              OpenTimeoutMs);
     auto *view = bench.codeView(QStringLiteral("source"));
     auto *code = view->text();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 2,
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() > 2,
                              OpenTimeoutMs);
     auto *listing = assembly->listing();
     QTRY_VERIFY(ListingViewTestAccess::settled(*listing));
@@ -8130,7 +8615,7 @@ private slots:
     bench.session.setComment(Base + 32, QStringLiteral("known at once"));
     QTRY_VERIFY_WITH_TIMEOUT(
         code->allText().contains(QStringLiteral("known at once")) &&
-            !code->loading() && !bench.session.queries().hasPending() &&
+            settled(code) && !bench.session.queries().hasPending() &&
             ListingViewTestAccess::settled(*listing),
         OpenTimeoutMs);
     for (int turn = 0; turn < 4; ++turn)
@@ -8156,9 +8641,8 @@ private slots:
     // A revision said by itself is read as before.
     const auto version = code->documentVersion();
     emit bench.session.revisionChanged();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() &&
-                                 !bench.session.queries().hasPending(),
-                             OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        settled(code) && !bench.session.queries().hasPending(), OpenTimeoutMs);
     QVERIFY(code->documentVersion() != version ||
             code->allText().contains(QStringLiteral("known at once")));
     // The page read again brought the rows it had brought: they were not
@@ -8199,6 +8683,826 @@ private slots:
     return QTest::qWaitFor([&] { return code->hasFocus(); }) ? code : nullptr;
   }
 
+  void theLinesARenameWritesAreLaidOutWhileTheWorkerReadsIt() {
+    // A rename's answer brings a caller's text with the new name on the lines
+    // that linked the old one.  The view lays those lines out as the rename
+    // leaves, while the worker reads it, and shows nothing of them; the line
+    // the answer brings takes the layout where it reads as the view read the
+    // rename to write it.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    auto *code = shownCode(bench, directory,
+                           QStringLiteral("pseudocode-navigation.bin"));
+    QVERIFY(code);
+    if (code->hasPrelude() && code->preludeFolded())
+      code->setPreludeFolded(false);
+    QVERIFY(code->allText().contains(QStringLiteral("return function_22();")));
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    // What a view does that does not read ahead of the answer.
+    CodeTextTestAccess::setReadsAhead(*code, false);
+    const auto renamed = [&](Address address, const QString &name) {
+      const QString before = code->allText();
+      const auto revision = bench.session.revision();
+      bench.session.rename(address, name);
+      // The worker has the say: the text reads as it did until it answers.
+      if (code->allText() != before)
+        return false;
+      return QTest::qWaitFor(
+          [&] {
+            return bench.session.revision() != revision && code->complete() &&
+                   !bench.session.queries().hasPending();
+          },
+          OpenTimeoutMs);
+    };
+    auto taken = code->readyLinesTaken();
+    QVERIFY(renamed(Base + 0x160, QStringLiteral("made_ready")));
+    QVERIFY(code->allText().contains(QStringLiteral("return made_ready();")));
+    QCOMPARE(code->readyLinesTaken(), taken + 1);
+    QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    // The function's own name, on the line of its definition.
+    taken = code->readyLinesTaken();
+    QVERIFY(renamed(Base + 0x140, QStringLiteral("the_caller")));
+    QVERIFY(code->allText().contains(QStringLiteral("the_caller(void)")));
+    QCOMPARE(code->readyLinesTaken(), taken + 1);
+    // A name of something the text links nowhere makes no line ready.
+    taken = code->readyLinesTaken();
+    QVERIFY(renamed(Base + 16, QStringLiteral("named_elsewhere")));
+    QCOMPARE(code->readyLinesTaken(), taken);
+    // A name the worker refuses leaves the text as it was, and the lines made
+    // ready for it are no one's: the next rename's are taken as before.
+    const QString standing = code->allText();
+    bench.session.rename(Base + 0x160, QStringLiteral("not a name"));
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    QCOMPARE(code->allText(), standing);
+    QCOMPARE(code->readyLinesTaken(), taken);
+    QVERIFY(renamed(Base + 0x160, QStringLiteral("named_after_all")));
+    QVERIFY(
+        code->allText().contains(QStringLiteral("return named_after_all();")));
+    QCOMPARE(code->readyLinesTaken(), taken + 1);
+    // A line the viewport does not show is laid out when it is painted.
+    code->verticalScrollBar()->setValue(code->verticalScrollBar()->maximum());
+    if (code->verticalScrollBar()->value() > 0) {
+      taken = code->readyLinesTaken();
+      QVERIFY(renamed(Base + 0x140, QStringLiteral("out_of_view")));
+      QCOMPARE(code->readyLinesTaken(), taken);
+    }
+  }
+
+  void theFirstLinesOfManyARenameWritesAreMadeReady() {
+    // Where many lines of the viewport link the name, the first few are laid
+    // out ahead and the rest as they are painted.  One of the few holds the
+    // name twice with characters beyond ASCII between: it reads as the worker
+    // writes it, or the line the answer brings would not take its layout.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    auto *code = shownCode(bench, directory, QStringLiteral("code-calls.bin"));
+    QVERIFY(code);
+    if (code->hasPrelude() && code->preludeFolded())
+      code->setPreludeFolded(false);
+    QVERIFY(!code->anyFolded());
+    QVERIFY(code->lineCount() > 300);
+    code->verticalScrollBar()->setValue(0);
+    QVERIFY(code->viewport()->height() / QFontMetrics(code->font()).height() >
+            2 * ::neverd::limits::gui::kCodeViewLinesMadeReadyForRename);
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    CodeTextTestAccess::setReadsAhead(*code, false);
+    const auto renamed = [&](Address address, const QString &name) {
+      const auto revision = bench.session.revision();
+      bench.session.rename(address, name);
+      return QTest::qWaitFor(
+          [&] {
+            return bench.session.revision() != revision && code->complete() &&
+                   !bench.session.queries().hasPending();
+          },
+          OpenTimeoutMs);
+    };
+    auto taken = code->readyLinesTaken();
+    QVERIFY(renamed(Base + 0x160, QStringLiteral("called_often")));
+    QCOMPARE(code->readyLinesTaken(),
+             taken + ::neverd::limits::gui::kCodeViewLinesMadeReadyForRename);
+    const QStringList lines = code->allText().split(QLatin1Char('\n'));
+    QCOMPARE(lines.value(3),
+             QString::fromUtf8("  v0 += called_often(v0); /* \xE5\x90\x8D"
+                               "\xE7\xA7\xB0 */ v0 -= called_often(v0);"));
+    // The comment and the string spell the name the function had.
+    QVERIFY(lines.value(2).contains(QStringLiteral("function_22")));
+    QVERIFY(lines.value(4).contains(QStringLiteral("\"function_22\"")));
+    QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    // Lines below the viewport are not made ready, and those under a fold's
+    // summary are not either.
+    code->verticalScrollBar()->setValue(0);
+    taken = code->readyLinesTaken();
+    QVERIFY(renamed(Base + 0x150, QStringLiteral("called_seldom")));
+    QVERIFY(code->allText().contains(QStringLiteral("called_seldom(v0)")));
+    QCOMPARE(code->readyLinesTaken(), taken + 1);
+    code->verticalScrollBar()->setValue(code->verticalScrollBar()->maximum());
+    QVERIFY(code->verticalScrollBar()->value() > 20);
+    code->setFolded(true);
+    QVERIFY(code->anyFolded());
+    taken = code->readyLinesTaken();
+    QVERIFY(renamed(Base + 0x160, QStringLiteral("called_under_a_fold")));
+    QVERIFY(code->readyLinesTaken() > taken);
+    QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+  }
+
+  void aRenamesPagesReadAsTheWorkerWritesThem_data() {
+    QTest::addColumn<QString>("fixture");
+    QTest::addColumn<int>("named");
+    QTest::addColumn<QString>("name");
+    QTest::newRow("a call") << QStringLiteral("pseudocode-navigation.bin")
+                            << 0x160 << QStringLiteral("renamed_callee");
+    QTest::newRow("the definition")
+        << QStringLiteral("pseudocode-navigation.bin") << 0x140
+        << QStringLiteral("renamed_itself");
+    QTest::newRow("calls down two pages")
+        << QStringLiteral("code-calls.bin") << 0x160
+        << QStringLiteral("called_by_a_longer_name");
+    QTest::newRow("a shorter name")
+        << QStringLiteral("code-calls.bin") << 0x160 << QStringLiteral("fn");
+    QTest::newRow("a few calls") << QStringLiteral("code-calls.bin") << 0x150
+                                 << QStringLiteral("seldom");
+    QTest::newRow("a name beyond ASCII")
+        << QStringLiteral("code-calls.bin") << 0x160
+        << QString::fromUtf8("\xE5\x90\x8D\xE7\xA7\xB0_fn");
+  }
+
+  void aRenamesPagesReadAsTheWorkerWritesThem() {
+    // What a view reads ahead of a rename's answer is what the answer brings:
+    // the pages it holds, read as pagesRenamed reads them, are the pages the
+    // worker gives after the rename, field for field, but for the revision
+    // they are of and the name each has in the worker.
+    QFETCH(QString, fixture);
+    QFETCH(int, named);
+    QFETCH(QString, name);
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    auto *code = shownCode(bench, directory, fixture);
+    QVERIFY(code);
+    CodeTextTestAccess::setReadsAhead(*code, false);
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    const auto before = CodeTextTestAccess::pages(*code);
+    const auto read = pagesRenamed(before, Base + named, name);
+    QVERIFY(read.has_value());
+    QVERIFY(!read->data);
+    const auto revision = bench.session.revision();
+    bench.session.rename(Base + named, name);
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.revision() != revision &&
+                                 code->complete() &&
+                                 !bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    const auto after = CodeTextTestAccess::pages(*code);
+    QCOMPARE(after.size(), read->pages.size());
+    QVERIFY(after != before);
+    QStringList differing;
+    for (qsizetype page = 0; page < after.size(); ++page) {
+      QStringList fields = after[page].keys();
+      for (const QString &field : read->pages[page].keys())
+        if (!fields.contains(field))
+          fields.append(field);
+      for (const QString &field : std::as_const(fields))
+        if (after[page].value(field) != read->pages[page].value(field))
+          differing.append(
+              QStringLiteral("%1 of page %2").arg(field).arg(page));
+    }
+    QStringList expected;
+    for (qsizetype page = 0; page < after.size(); ++page)
+      for (const char *field : {"etag", "revision"})
+        expected.append(QStringLiteral("%1 of page %2")
+                            .arg(QLatin1String(field))
+                            .arg(page));
+    differing.sort();
+    expected.sort();
+    QCOMPARE(differing, expected);
+  }
+
+  void aRenameShowsBeforeTheWorkerAnswers_data() {
+    QTest::addColumn<QString>("fixture");
+    QTest::addColumn<int>("named");
+    QTest::addColumn<QString>("was");
+    QTest::addColumn<QString>("call");
+    QTest::addColumn<bool>("onePage");
+    QTest::newRow("a call") << QStringLiteral("pseudocode-navigation.bin")
+                            << 0x160 << QStringLiteral("function_22")
+                            << QStringLiteral("  return %1();") << true;
+    // A text of two pages is read a page at a time where the answer does not
+    // carry its pages, as this worker's, which keeps no renders, does not:
+    // the view shows the first page while the second is on its way, as one
+    // that waited for the answer does.
+    QTest::newRow("a few calls on two pages")
+        << QStringLiteral("code-calls.bin") << 0x150
+        << QStringLiteral("function_21") << QStringLiteral("  v0 ^= %1(v0);")
+        << false;
+    QTest::newRow("calls down two pages")
+        << QStringLiteral("code-calls.bin") << 0x160
+        << QStringLiteral("function_22") << QStringLiteral("  v0 += %1(v0);")
+        << false;
+  }
+
+  void aRenameShowsBeforeTheWorkerAnswers() {
+    // A rename leaves for the worker, and the view that shows names of the
+    // address reads at once as its pages say the rename leaves it: its text
+    // and its pixels, before the call that renames returns.  The answer is
+    // read as any other and finds nothing to paint.  A name the worker
+    // refuses is taken back; a read asked for meanwhile waits for the answer;
+    // and a second rename behind one still with the worker is not read ahead.
+    QFETCH(QString, fixture);
+    QFETCH(int, named);
+    QFETCH(QString, was);
+    QFETCH(QString, call);
+    QFETCH(bool, onePage);
+    const Address renamed = Base + Address(named);
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    auto *code = shownCode(bench, directory, fixture);
+    QVERIFY(code);
+    if (code->hasPrelude() && code->preludeFolded())
+      code->setPreludeFolded(false);
+    code->verticalScrollBar()->setValue(0);
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    QCoreApplication::processEvents();
+    struct Paints : QObject {
+      int count = 0;
+      bool eventFilter(QObject *object, QEvent *event) override {
+        if (event->type() == QEvent::Paint)
+          ++count;
+        return QObject::eventFilter(object, event);
+      }
+    } paints;
+    code->viewport()->installEventFilter(&paints);
+    const auto settled = [&](const QString &revision) {
+      return QTest::qWaitFor(
+          [&] {
+            return bench.session.revision() != revision && code->complete() &&
+                   !code->aheadOfTheWorker() &&
+                   !bench.session.queries().hasPending();
+          },
+          OpenTimeoutMs);
+    };
+    // What an edit names by the cursor is the name the text spells there.
+    const auto targetAt = [&](const QString &name) {
+      code->setCursorLine(0);
+      if (!code->findText(name + QLatin1Char('('), true))
+        return QJsonObject();
+      return code->renameTarget().value_or(QJsonObject());
+    };
+    QCOMPARE(targetAt(was).value("name").toString(), was);
+    QCOMPARE(addressValue(targetAt(was).value("address")),
+             std::optional<Address>(renamed));
+    code->setCursorLine(0);
+    QCoreApplication::processEvents();
+    {
+      QVERIFY(noCommandWaits(bench.session));
+      const auto reads = code->readsAhead();
+      const auto revision = bench.session.revision();
+      paints.count = 0;
+      bench.session.rename(renamed, QStringLiteral("shown_at_once"));
+      // Before anything else happens: the text, whole, and its pixels.
+      QVERIFY(code->aheadOfTheWorker());
+      QCOMPARE(code->readsAhead(), reads + 1);
+      QVERIFY(code->complete());
+      QVERIFY(code->allText().contains(
+          call.arg(QStringLiteral("shown_at_once")) + QLatin1Char('\n')));
+      QVERIFY(!code->allText().contains(was + QLatin1Char('(')));
+      QCOMPARE(paints.count, 1);
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+      const QString ahead = code->allText();
+      const auto pages = CodeTextTestAccess::pages(*code);
+      QVERIFY(settled(revision));
+      QCOMPARE(code->allText(), ahead);
+      // The worker's pages are those it read ahead, and none of its rows was
+      // painted again.
+      const auto taken = CodeTextTestAccess::pages(*code);
+      QCOMPARE(taken.size(), pages.size());
+      for (qsizetype page = 0; page < taken.size(); ++page)
+        QCOMPARE(taken[page].value("text"), pages[page].value("text"));
+      QCoreApplication::processEvents();
+      if (onePage)
+        QCOMPARE(paints.count, 1);
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+      const auto target = targetAt(QStringLiteral("shown_at_once"));
+      QCOMPARE(target.value("name").toString(),
+               QStringLiteral("shown_at_once"));
+      QCOMPARE(addressValue(target.value("address")),
+               std::optional<Address>(renamed));
+      QCOMPARE(target.value("kind").toString(), QStringLiteral("address"));
+    }
+    // A name another address has is none the worker gives a second time,
+    // which the view cannot know: it is taken back.
+    {
+      const auto revision = bench.session.revision();
+      bench.session.rename(Base + 16, QStringLiteral("has_the_name"));
+      QVERIFY(!code->aheadOfTheWorker());
+      QTRY_VERIFY_WITH_TIMEOUT(bench.session.revision() != revision &&
+                                   code->complete() &&
+                                   !bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+      const QString standing = code->allText();
+      QVERIFY(noCommandWaits(bench.session));
+      const auto reads = code->readsAhead();
+      bench.session.rename(renamed, QStringLiteral("has_the_name"));
+      QVERIFY(code->aheadOfTheWorker());
+      QCOMPARE(code->readsAhead(), reads + 1);
+      QVERIFY(
+          code->allText().contains(call.arg(QStringLiteral("has_the_name"))));
+      QTRY_VERIFY_WITH_TIMEOUT(!code->aheadOfTheWorker() &&
+                                   !bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+      QVERIFY(code->complete());
+      QCOMPARE(code->allText(), standing);
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    }
+    // A read asked for while the text is ahead waits for the answer: one
+    // made before the worker took the rename would bring the old name back.
+    {
+      QVERIFY(noCommandWaits(bench.session));
+      const auto revision = bench.session.revision();
+      bench.session.rename(renamed, QStringLiteral("read_meanwhile"));
+      QVERIFY(code->aheadOfTheWorker());
+      emit bench.session.sourceRefined();
+      QVERIFY(code->aheadOfTheWorker());
+      QVERIFY(code->complete());
+      QVERIFY(
+          code->allText().contains(call.arg(QStringLiteral("read_meanwhile"))));
+      QVERIFY(settled(revision));
+      QVERIFY(
+          code->allText().contains(call.arg(QStringLiteral("read_meanwhile"))));
+    }
+    // A name refused after such a read was asked for: taken back, and read.
+    {
+      QVERIFY(noCommandWaits(bench.session));
+      const QString standing = code->allText();
+      bench.session.rename(renamed, QStringLiteral("has_the_name"));
+      QVERIFY(code->aheadOfTheWorker());
+      const auto version = code->documentVersion();
+      emit bench.session.sourceRefined();
+      QCOMPARE(code->documentVersion(), version);
+      QTRY_VERIFY_WITH_TIMEOUT(!code->aheadOfTheWorker() && code->complete() &&
+                                   !bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+      QCOMPARE(code->allText(), standing);
+      // Taken back, and then read as it was asked to be.
+      QCOMPARE(code->documentVersion(), version + 2);
+    }
+    // Of two renames one behind the other the first is read ahead, the
+    // second when its answer comes.
+    {
+      QVERIFY(noCommandWaits(bench.session));
+      const auto reads = code->readsAhead();
+      const auto revision = bench.session.revision();
+      bench.session.rename(renamed, QStringLiteral("first_of_two"));
+      bench.session.rename(Base + 0x140, QStringLiteral("second_of_two"));
+      QCOMPARE(code->readsAhead(), reads + 1);
+      QVERIFY(
+          code->allText().contains(call.arg(QStringLiteral("first_of_two"))));
+      QVERIFY(!code->allText().contains(QStringLiteral("second_of_two")));
+      QVERIFY(settled(revision));
+      QTRY_VERIFY_WITH_TIMEOUT(
+          code->complete() &&
+              code->allText().contains(QStringLiteral("second_of_two(")) &&
+              !bench.session.queries().hasPending(),
+          OpenTimeoutMs);
+      QVERIFY(
+          code->allText().contains(call.arg(QStringLiteral("first_of_two"))));
+    }
+    // A name the text spells already is not read ahead: the word may link
+    // the address too once it is its name.  A name with a space is none, and
+    // neither is one of the engine's own.
+    for (const QString &name :
+         {QStringLiteral("return"), QStringLiteral("no name"),
+          QStringLiteral("sub_1234")}) {
+      const auto reads = code->readsAhead();
+      const QString standing = code->allText();
+      bench.session.rename(renamed, name);
+      QCOMPARE(code->readsAhead(), reads);
+      QVERIFY(!code->aheadOfTheWorker());
+      QCOMPARE(code->allText(), standing);
+      QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+    }
+    // Each row painted ahead stood as the pages then made it.
+    QCOMPARE(code->rowsShownTwice(), 0);
+  }
+
+  void whatOnlyTheWorkerKnowsOfARenameIsNotReadAhead() {
+    // Data's name is the engine's text's too, which the worker reads again
+    // for what else the name moves: the view waits for it, as it does for a
+    // rename that leaves behind comments still to be committed.
+    {
+      QTemporaryDir directory;
+      Workbench bench;
+      LoadDialogAcceptor loadDialogs;
+      auto *code =
+          shownCode(bench, directory, QStringLiteral("pseudocode-global.bin"));
+      QVERIFY(code);
+      if (code->hasPrelude() && code->preludeFolded())
+        code->setPreludeFolded(false);
+      QVERIFY(code->allText().contains(QStringLiteral("return global_value;")));
+      QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+      const auto reads = code->readsAhead();
+      const auto revision = bench.session.revision();
+      const QString standing = code->allText();
+      bench.session.rename(Base + 0x3000, QStringLiteral("named_data"));
+      QCOMPARE(code->readsAhead(), reads);
+      QVERIFY(!code->aheadOfTheWorker());
+      QCOMPARE(code->allText(), standing);
+      QTRY_VERIFY_WITH_TIMEOUT(bench.session.revision() != revision &&
+                                   code->complete() &&
+                                   !bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+      QTRY_VERIFY_WITH_TIMEOUT(
+          code->allText().contains(QStringLiteral("return named_data;")),
+          OpenTimeoutMs);
+    }
+    {
+      QTemporaryDir directory;
+      Workbench bench;
+      LoadDialogAcceptor loadDialogs;
+      auto *code = shownCode(bench, directory,
+                             QStringLiteral("pseudocode-navigation.bin"));
+      QVERIFY(code);
+      QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+      bench.session.setComment(Base + 16, QStringLiteral("still staged"));
+      QTRY_VERIFY(bench.session.dirty());
+      const auto reads = code->readsAhead();
+      const QString standing = code->allText();
+      bench.session.rename(Base + 0x160, QStringLiteral("behind_a_comment"));
+      QCOMPARE(code->readsAhead(), reads);
+      QCOMPARE(code->allText(), standing);
+      QTRY_VERIFY_WITH_TIMEOUT(code->complete() &&
+                                   code->allText().contains(QStringLiteral(
+                                       "return behind_a_comment();")) &&
+                                   !bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+    }
+  }
+
+  void aNameThatOpensACommentColorsWhatFollowsIt() {
+    // A name is what the user gives, and the worker takes one that opens a
+    // comment.  Read ahead, the lines after it are colored as the comment
+    // they then are, as they are when the answer has come; and a cursor on a
+    // bracket the name moves away from leaves no box where the bracket was.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    auto *code = shownCode(bench, directory, QStringLiteral("code-calls.bin"));
+    QVERIFY(code);
+    if (code->hasPrelude() && code->preludeFolded())
+      code->setPreludeFolded(false);
+    code->verticalScrollBar()->setValue(0);
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    QCoreApplication::processEvents();
+    struct Paints : QObject {
+      int count = 0;
+      bool eventFilter(QObject *object, QEvent *event) override {
+        if (event->type() == QEvent::Paint)
+          ++count;
+        return QObject::eventFilter(object, event);
+      }
+    } paints;
+    code->viewport()->installEventFilter(&paints);
+    const auto settled = [&](const QString &revision) {
+      return QTest::qWaitFor(
+          [&] {
+            return bench.session.revision() != revision && code->complete() &&
+                   !code->aheadOfTheWorker() &&
+                   !bench.session.queries().hasPending();
+          },
+          OpenTimeoutMs);
+    };
+    // The cursor on the bracket that follows a name of a line of the first
+    // page, which a longer name writes over.
+    const QStringList before = code->allText().split(QLatin1Char('\n'));
+    const int line = 14;
+    QVERIFY(before.value(line).contains(QStringLiteral("function_21(v0)")));
+    code->setCursorLine(line);
+    const int bracket =
+        int(before[line].indexOf(QStringLiteral("function_21("))) + 11;
+    for (int i = 0; i < bracket; ++i)
+      QTest::keyClick(code, Qt::Key_Right);
+    QCOMPARE(code->cursorColumn(), bracket);
+    QVERIFY(code->bracketPair().has_value());
+    QCoreApplication::processEvents();
+    {
+      QVERIFY(noCommandWaits(bench.session));
+      paints.count = 0;
+      const auto revision = bench.session.revision();
+      bench.session.rename(Base + 0x150,
+                           QStringLiteral("a_name_that_reaches_far"));
+      QVERIFY(code->aheadOfTheWorker());
+      // One paint showed the row as it stands, the bracket's box gone.
+      QCOMPARE(paints.count, 1);
+      QVERIFY(!code->bracketPair().has_value());
+      QVERIFY(settled(revision));
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    }
+    {
+      QVERIFY(noCommandWaits(bench.session));
+      const auto revision = bench.session.revision();
+      bench.session.rename(Base + 0x160, QStringLiteral("opens/*"));
+      QVERIFY(code->aheadOfTheWorker());
+      QVERIFY(code->allText().contains(QStringLiteral("  v0 += opens/*(v0);")));
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+      QVERIFY(settled(revision));
+      QVERIFY(code->allText().contains(QStringLiteral("  v0 += opens/*(v0);")));
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    }
+    // And one that closes it again.
+    {
+      QVERIFY(noCommandWaits(bench.session));
+      const auto revision = bench.session.revision();
+      bench.session.rename(Base + 0x160, QStringLiteral("closes"));
+      QVERIFY(code->aheadOfTheWorker());
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+      QVERIFY(settled(revision));
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    }
+    // A cursor past the end of a line that grows shorter stands at its end
+    // in the row painted ahead already.
+    {
+      code->setCursorLine(3);
+      QTest::keyClick(code, Qt::Key_End);
+      QVERIFY(noCommandWaits(bench.session));
+      const auto revision = bench.session.revision();
+      bench.session.rename(Base + 0x160, QStringLiteral("zq"));
+      QVERIFY(code->aheadOfTheWorker());
+      QVERIFY(settled(revision));
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+      QCOMPARE(code->rowsShownTwice(), 0);
+    }
+    // A block folded over its lines shows its header with a summary of
+    // them.  The header holds the name: it is no line of code to paint
+    // ahead, and the pages make it.
+    {
+      const QStringList lines = code->allText().split(QLatin1Char('\n'));
+      const int header = int(lines.indexOf(QStringLiteral("  if (zq(v0)) {")));
+      QVERIFY(header > 0 && header < 30);
+      code->setCursorLine(header);
+      const int count = code->lineCount();
+      QVERIFY(code->setCurrentBlockFolded(true));
+      QCOMPARE(code->lineCount(), count - 2);
+      QCoreApplication::processEvents();
+      QVERIFY(noCommandWaits(bench.session));
+      const auto revision = bench.session.revision();
+      bench.session.rename(Base + 0x160, QStringLiteral("under_a_header"));
+      QVERIFY(code->aheadOfTheWorker());
+      QVERIFY(CodeTextTestAccess::shownLines(*code).value(header).startsWith(
+          QStringLiteral("  if (under_a_header(v0)) {")));
+      QVERIFY(settled(revision));
+      QCOMPARE(code->lineCount(), count - 2);
+      QCOMPARE(CodeTextTestAccess::firstMiscolored(*code), -1);
+    }
+    QCOMPARE(code->rowsShownTwice(), 0);
+  }
+
+  void aNameOfTheSourcesLanguageIsColoredAsTheNewNameIs_data() {
+    QTest::addColumn<QString>("fixture");
+    QTest::addColumn<QString>("call");
+    QTest::newRow("rust") << QStringLiteral("pseudocode-rust.bin")
+                          << QStringLiteral("        v0 = %1(1);");
+    QTest::newRow("go") << QStringLiteral("pseudocode-go.bin")
+                        << QStringLiteral("    v0 = %1(1)");
+  }
+
+  void aNameOfTheSourcesLanguageIsColoredAsTheNewNameIs() {
+    // A function the source names in its own language, `core::fmt::write`,
+    // is a name the text is colored by.  Its new name is one too: the rows
+    // painted ahead are colored by the names as the rename leaves them, as
+    // the pages then color them, and none is painted again.
+    QFETCH(QString, fixture);
+    QFETCH(QString, call);
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    auto *code = shownCode(bench, directory, fixture);
+    QVERIFY(code);
+    QVERIFY(code->allText().contains(
+        call.arg(QStringLiteral("core::fmt::write")) + QLatin1Char('\n')));
+    QTRY_VERIFY_WITH_TIMEOUT(!bench.session.queries().hasPending(),
+                             OpenTimeoutMs);
+    const auto colored = [&](const QString &name) {
+      const QStringList lines = code->allText().split(QLatin1Char('\n'));
+      const int line = int(lines.indexOf(call.arg(name)));
+      if (line < 0)
+        return false;
+      const auto named =
+          code->sourceNameAt(line, int(lines[line].indexOf(name)));
+      return named && named->first == name &&
+             named->second.address == std::optional<Address>(Base + 0x160);
+    };
+    QVERIFY(colored(QStringLiteral("core::fmt::write")));
+    for (const QString &name :
+         {QStringLiteral("named::by::the::user"), QStringLiteral("n"),
+          QStringLiteral("a_plain_name")}) {
+      // A name of one character the text holds is not read ahead.
+      const bool reads = name.size() > 1;
+      QVERIFY(noCommandWaits(bench.session));
+      const auto ahead = code->readsAhead();
+      const auto revision = bench.session.revision();
+      bench.session.rename(Base + 0x160, name);
+      QCOMPARE(code->readsAhead(), ahead + (reads ? 1 : 0));
+      if (reads) {
+        QVERIFY(code->allText().contains(call.arg(name) + QLatin1Char('\n')));
+        QVERIFY(colored(name));
+      }
+      QTRY_VERIFY_WITH_TIMEOUT(bench.session.revision() != revision &&
+                                   code->complete() &&
+                                   !code->aheadOfTheWorker() &&
+                                   !bench.session.queries().hasPending(),
+                               OpenTimeoutMs);
+      QVERIFY(code->allText().contains(call.arg(name) + QLatin1Char('\n')));
+      QVERIFY(colored(name));
+      QCOMPARE(code->rowsShownTwice(), 0);
+    }
+  }
+
+  void aTextReadAheadEndsAsOneThatWaited() {
+    // Reading ahead changes when the rows are painted and nothing else: after
+    // the answer the view stands as one that waited for it, its text, its
+    // cursor and selection, where it is scrolled to and what it folds.
+    const auto states = [&](bool ahead) {
+      QList<QStringList> written;
+      QTemporaryDir directory;
+      Workbench bench;
+      LoadDialogAcceptor loadDialogs;
+      auto *code =
+          shownCode(bench, directory, QStringLiteral("code-calls.bin"));
+      if (!code)
+        return written;
+      CodeTextTestAccess::setReadsAhead(*code, ahead);
+      if (code->hasPrelude() && code->preludeFolded())
+        code->setPreludeFolded(false);
+      const auto write = [&] {
+        written.append(
+            {code->allText(), QString::number(code->cursorLine()),
+             QString::number(code->cursorColumn()), code->selectedText(),
+             QString::number(code->verticalScrollBar()->value()),
+             QString::number(code->horizontalScrollBar()->value()),
+             QString::number(code->lineCount()), code->status(),
+             QString::number(code->anyFolded()),
+             QString::number(CodeTextTestAccess::firstMiscolored(*code))});
+      };
+      const auto renamed = [&](Address address, const QString &name) {
+        if (!noCommandWaits(bench.session))
+          return false;
+        const auto revision = bench.session.revision();
+        const auto reads = code->readsAhead();
+        bench.session.rename(address, name);
+        if (code->readsAhead() != reads + (ahead ? 1 : 0))
+          return false;
+        return QTest::qWaitFor(
+            [&] {
+              return bench.session.revision() != revision && code->complete() &&
+                     !code->aheadOfTheWorker() &&
+                     !bench.session.queries().hasPending();
+            },
+            OpenTimeoutMs);
+      };
+      // The cursor after both names of a line, some of the line selected.
+      code->setCursorLine(3);
+      QTest::keyClick(code, Qt::Key_End);
+      for (int i = 0; i < 9; ++i)
+        QTest::keyClick(code, Qt::Key_Left, Qt::ShiftModifier);
+      if (!renamed(Base + 0x160, QStringLiteral("a_name_longer_than_it_was")))
+        return written;
+      write();
+      // Scrolled down the first page, the cursor on a line of the second.
+      code->setCursorLine(290);
+      code->verticalScrollBar()->setValue(40);
+      if (!renamed(Base + 0x160, QStringLiteral("nm")))
+        return written;
+      write();
+      // With the library operation folded.
+      code->setFolded(true);
+      if (!code->anyFolded() ||
+          !renamed(Base + 0x150, QStringLiteral("under_a_fold")))
+        return written;
+      write();
+      // The function's own name, from the end of the text.
+      code->verticalScrollBar()->setValue(code->verticalScrollBar()->maximum());
+      if (!renamed(Base + 0x140, QStringLiteral("itself")))
+        return written;
+      write();
+      // After a local's new name, which changes names alone: the text is
+      // then read with its pages together and the cursor follows its word,
+      // which is not how a function's name is read, ahead or not.
+      code->setFolded(false);
+      QJsonObject local;
+      for (const auto &page : CodeTextTestAccess::pages(*code))
+        for (const auto &value : page.value("code_names").toArray())
+          if (const auto name = value.toObject();
+              local.isEmpty() && name.value("kind") == "local" &&
+              name.value("original") == "v0")
+            local = name;
+      if (local.isEmpty())
+        return written;
+      const auto revision = bench.session.revision();
+      bench.session.editCode({{"address", hexAddress(Base + 0x140)},
+                              {"representation", "source"},
+                              {"source_options", code->sourceOptions()},
+                              {"kind", "name"},
+                              {"original", local.value("original")},
+                              {"identity", local.value("identity")},
+                              {"name", "counted"}},
+                             bench.session.epoch());
+      if (!QTest::qWaitFor(
+              [&] {
+                return bench.session.revision() != revision &&
+                       code->complete() &&
+                       code->allText().contains(QStringLiteral("counted +=")) &&
+                       !bench.session.queries().hasPending();
+              },
+              OpenTimeoutMs) ||
+          !bench.session.queries().localNamesOnly())
+        return written;
+      code->setCursorLine(3);
+      QTest::keyClick(code, Qt::Key_End);
+      for (int i = 0; i < 4; ++i)
+        QTest::keyClick(code, Qt::Key_Left);
+      if (!renamed(Base + 0x160, QStringLiteral("after_a_local")))
+        return written;
+      write();
+      if (code->rowsShownTwice())
+        written.clear();
+      return written;
+    };
+    const auto waited = states(false);
+    QCOMPARE(waited.size(), 5);
+    const auto ahead = states(true);
+    QCOMPARE(ahead.size(), 5);
+    for (qsizetype at = 0; at < waited.size(); ++at)
+      QCOMPARE(ahead[at], waited[at]);
+    QVERIFY(waited[0][0].contains(
+        QStringLiteral("a_name_longer_than_it_was(v0); /*")));
+    QVERIFY(
+        waited[3][0].contains(QStringLiteral("int32_t itself(int32_t v0)")));
+  }
+
+  void anEditsTargetSaysHowTheTextSpellsIt() {
+    // What an edit names by the cursor is what the page links there with the
+    // name as the text spells it: the name a rename offers to change.  A
+    // function's is its image address, a local's what the engine calls it.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    auto *code = shownCode(bench, directory,
+                           QStringLiteral("pseudocode-navigation.bin"));
+    QVERIFY(code);
+    if (code->hasPrelude() && code->preludeFolded())
+      code->setPreludeFolded(false);
+    // The cursor inside the name, on the first line that spells it.
+    const auto targetAt = [&](const QString &name) {
+      const QStringList lines = code->allText().split(QLatin1Char('\n'));
+      for (int line = 0; line < lines.size(); ++line)
+        if (const int column = int(lines[line].indexOf(name)); column >= 0) {
+          code->setCursorLine(line);
+          for (int i = 0; i <= column; ++i)
+            QTest::keyClick(code, Qt::Key_Right);
+          return code->renameTarget().value_or(QJsonObject());
+        }
+      return QJsonObject();
+    };
+    const auto called = targetAt(QStringLiteral("function_22"));
+    QCOMPARE(called.value("name").toString(), QStringLiteral("function_22"));
+    QCOMPARE(called.value("kind").toString(), QStringLiteral("address"));
+    QCOMPARE(addressValue(called.value("address")),
+             std::optional<Address>(Base + 0x160));
+    QCOMPARE(called.value("original").toString(),
+             QStringLiteral("function_22"));
+    QVERIFY(called.contains("begin_byte") && called.contains("end_byte"));
+    const auto defined = targetAt(QStringLiteral("function_20"));
+    QCOMPARE(defined.value("name").toString(), QStringLiteral("function_20"));
+    QCOMPARE(addressValue(defined.value("address")),
+             std::optional<Address>(Base + 0x140));
+    // A name the user gave reads so in the target, under the name the engine
+    // has for it.
+    const auto revision = bench.session.revision();
+    bench.session.rename(Base + 0x160, QStringLiteral("named_by_the_user"));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        bench.session.revision() != revision && code->complete() &&
+            code->allText().contains(QStringLiteral("named_by_the_user(")) &&
+            !bench.session.queries().hasPending(),
+        OpenTimeoutMs);
+    const auto renamed = targetAt(QStringLiteral("named_by_the_user"));
+    QCOMPARE(renamed.value("name").toString(),
+             QStringLiteral("named_by_the_user"));
+    QCOMPARE(renamed.value("original").toString(),
+             QStringLiteral("function_22"));
+    QCOMPARE(addressValue(renamed.value("address")),
+             std::optional<Address>(Base + 0x160));
+  }
+
   void aChangePaintsTheRowsItReachesAndNoOther() {
     // The code view paints again the rows whose painting a change reaches,
     // and leaves the others as the window keeps them.  After each kind of
@@ -8215,7 +9519,8 @@ private slots:
     const int rowHeight = code->cursorViewportRect().height();
     QVERIFY(rowHeight > 0);
     QVERIFY(viewport->height() > 20 * rowHeight);
-    RowsOfAView rows(viewport, rowHeight);
+    RowsOfAView rows(viewport, rowHeight,
+                     [&] { return CodeTextTestAccess::pixelsAsked(*code); });
     if (!rows.pictures())
       QSKIP("The window keeps no picture that can be looked at");
     const int Every = RowsOfAView::Every, Some = RowsOfAView::Some;
@@ -8308,7 +9613,8 @@ private slots:
     auto *code =
         shownCode(bench, directory, QStringLiteral("code-brackets.bin"));
     QVERIFY(code);
-    RowsOfAView rows(code->viewport(), code->cursorViewportRect().height());
+    RowsOfAView rows(code->viewport(), code->cursorViewportRect().height(),
+                     [&] { return CodeTextTestAccess::pixelsAsked(*code); });
     if (!rows.pictures())
       QSKIP("The window keeps no picture that can be looked at");
     // After the brace that opens the block, where no bracket is.
@@ -8344,7 +9650,8 @@ private slots:
     QVERIFY(code);
     auto *viewport = code->viewport();
     const int rowHeight = code->cursorViewportRect().height();
-    RowsOfAView rows(viewport, rowHeight);
+    RowsOfAView rows(viewport, rowHeight,
+                     [&] { return CodeTextTestAccess::pixelsAsked(*code); });
     if (!rows.pictures())
       QSKIP("The window keeps no picture that can be looked at");
     const int Every = RowsOfAView::Every;
@@ -9627,7 +10934,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount() > 1);
+    QTRY_VERIFY(settled(code) && code->lineCount() > 1);
     for (auto *button : view->findChildren<QToolButton *>())
       if (button->toolTip().startsWith(QStringLiteral("Keep this function")))
         button->setChecked(true);
@@ -9690,7 +10997,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY(!code->loading() && code->lineCount() > 1);
+    QTRY_VERIFY(settled(code) && code->lineCount() > 1);
     for (auto *button : view->findChildren<QToolButton *>())
       if (button->toolTip().startsWith(QStringLiteral("Keep this function")))
         button->setChecked(true);
@@ -9850,7 +11157,7 @@ private slots:
     QVERIFY(view);
     view->setRepresentation(representation);
     auto *code = view->text();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 1,
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() > 1,
                              OpenTimeoutMs);
     QCOMPARE(code->function(), std::optional<Address>(caller));
     if (locked) {
@@ -9902,7 +11209,7 @@ private slots:
                QStringLiteral("_ZN3BarC1Ev"));
     QTRY_COMPARE_WITH_TIMEOUT(code->function(), std::optional<Address>(callee),
                               OpenTimeoutMs);
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading(), OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code), OpenTimeoutMs);
     QCOMPARE(view->representation(), representation);
     QVERIFY(code->isVisible());
     QTRY_VERIFY(code->hasFocus());
@@ -9917,7 +11224,7 @@ private slots:
     bench.action(ActionId::JumpBack)->trigger();
     QTRY_COMPARE_WITH_TIMEOUT(code->function(), std::optional<Address>(caller),
                               OpenTimeoutMs);
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading(), OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code), OpenTimeoutMs);
     QVERIFY(code->isVisible());
     QTRY_VERIFY(code->hasFocus());
     QCOMPARE(view->representation(), representation);
@@ -9931,7 +11238,7 @@ private slots:
     bench.action(ActionId::JumpForward)->trigger();
     QTRY_COMPARE_WITH_TIMEOUT(code->function(), std::optional<Address>(callee),
                               OpenTimeoutMs);
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading(), OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code), OpenTimeoutMs);
     QVERIFY(code->isVisible());
     QTRY_VERIFY(code->hasFocus());
     // Forward returns to where the callee was left.
@@ -9994,7 +11301,7 @@ private slots:
     QVERIFY(view);
     view->setRepresentation(representation);
     auto *code = view->text();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 0,
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() > 0,
                              OpenTimeoutMs);
     if (locked) {
       for (auto *button : view->findChildren<QToolButton *>())
@@ -10032,7 +11339,7 @@ private slots:
                            point);
       QVERIFY(code->isVisible());
       QTRY_COMPARE_WITH_TIMEOUT(code->function(), target, OpenTimeoutMs);
-      QTRY_VERIFY_WITH_TIMEOUT(!code->loading(), OpenTimeoutMs);
+      QTRY_VERIFY_WITH_TIMEOUT(settled(code), OpenTimeoutMs);
       QVERIFY(code->lineCount() > 0);
       QCOMPARE(view->representation(), representation);
       QCOMPARE(view->locked(), locked);
@@ -10042,10 +11349,10 @@ private slots:
       bench.action(ActionId::JumpBack)->trigger();
       QTRY_COMPARE_WITH_TIMEOUT(
           code->function(), std::optional<Address>(previous), OpenTimeoutMs);
-      QTRY_VERIFY(!code->loading() && code->hasFocus());
+      QTRY_VERIFY(settled(code) && code->hasFocus());
       bench.action(ActionId::JumpForward)->trigger();
       QTRY_COMPARE_WITH_TIMEOUT(code->function(), target, OpenTimeoutMs);
-      QTRY_VERIFY(!code->loading() && code->hasFocus());
+      QTRY_VERIFY(settled(code) && code->hasFocus());
       previous = *target;
     }
     if (native) {
@@ -10250,7 +11557,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 1,
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() > 1,
                              OpenTimeoutMs);
     QCOMPARE(code->language(), QStringLiteral("rust"));
     QCOMPARE(view->chosenLanguage(), QStringLiteral("Rust"));
@@ -10290,7 +11597,7 @@ private slots:
     bench.window->disassembly()->focusContent();
     bench.action(ActionId::JumpPseudocode)->trigger();
     QTRY_VERIFY_WITH_TIMEOUT(
-        !code->loading() &&
+        settled(code) &&
             code->status().contains(QStringLiteral("fixture refuses")),
         OpenTimeoutMs);
     QCOMPARE(code->language(), QStringLiteral("c"));
@@ -10301,7 +11608,7 @@ private slots:
     bench.window->disassembly()->navigate(Base + 0x140);
     bench.window->disassembly()->focusContent();
     bench.action(ActionId::JumpPseudocode)->trigger();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() &&
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) &&
                                  code->language() == QLatin1String("rust"),
                              OpenTimeoutMs);
     // Pseudocode reads the Rust; C beside it reads every function as C.
@@ -10312,9 +11619,8 @@ private slots:
         QStringLiteral("llvm")};
     QCOMPARE(representationsOf(view), pseudocodeAndC);
     view->setRepresentation(QStringLiteral("c"));
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() &&
-                                 code->language() == QLatin1String("c"),
-                             OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        settled(code) && code->language() == QLatin1String("c"), OpenTimeoutMs);
     QCOMPARE(view->chosenLanguage(), QString());
     QTRY_COMPARE(bench.dockTitle(QStringLiteral("pseudocode-a")),
                  QStringLiteral("C-A"));
@@ -10322,7 +11628,7 @@ private slots:
     view->setRepresentation(QStringLiteral("go"));
     QCOMPARE(view->representation(), QStringLiteral("c"));
     view->setRepresentation(QStringLiteral("source"));
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() &&
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) &&
                                  code->language() == QLatin1String("rust"),
                              OpenTimeoutMs);
     QTRY_COMPARE(bench.dockTitle(QStringLiteral("pseudocode-a")),
@@ -10347,7 +11653,7 @@ private slots:
     view->setRepresentation(QStringLiteral("llvm"));
     auto *code = view->text();
     QTRY_VERIFY_WITH_TIMEOUT(
-        !code->loading() && code->representation() == QLatin1String("llvm") &&
+        settled(code) && code->representation() == QLatin1String("llvm") &&
             code->hasPrelude(),
         OpenTimeoutMs);
     // The function shows alone: its declarations fold before it, its
@@ -10522,7 +11828,7 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() &&
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) &&
                                  code->language() == QLatin1String("go"),
                              OpenTimeoutMs);
     QCOMPARE(representationsOf(view),
@@ -12660,9 +13966,8 @@ private slots:
     auto *view = bench.codeView(QStringLiteral("source"));
     QVERIFY(view);
     auto *code = view->text();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() &&
-                                 code->allText().contains("void* arg0"),
-                             OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        settled(code) && code->allText().contains("void* arg0"), OpenTimeoutMs);
     const auto onParameter = [&](const QString &name, int position) {
       code->setCursorLine(0);
       if (!code->findText(name, true))
@@ -14668,7 +15973,7 @@ private slots:
     QVERIFY(view);
     view->setRepresentation(QStringLiteral("source"));
     auto *code = view->text();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 1,
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() > 1,
                              OpenTimeoutMs);
     bench.window->activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(bench.window.get()));
@@ -14684,7 +15989,7 @@ private slots:
     QTest::mouseDClick(code->viewport(), Qt::LeftButton, Qt::NoModifier, point);
     QTRY_COMPARE_WITH_TIMEOUT(code->function(), std::optional<Address>(callee),
                               OpenTimeoutMs);
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading(), OpenTimeoutMs);
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code), OpenTimeoutMs);
     QTRY_VERIFY(code->hasFocus());
     QCOMPARE(disassembly->stops(false).front(), caller);
     QMenu *back = nullptr;
@@ -14707,7 +16012,7 @@ private slots:
     QCOMPARE(place, QStringLiteral("function_20:2") + address);
     // Shown as LLVM C, the code would not return to that line.
     view->setRepresentation(QStringLiteral("llvmc"));
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 1,
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() > 1,
                              OpenTimeoutMs);
     code->setFocus();
     QTRY_VERIFY(code->hasFocus());
@@ -14716,7 +16021,7 @@ private slots:
     // Shown as C again, it would; with the disassembly in focus, the code
     // does not go back along.
     view->setRepresentation(QStringLiteral("source"));
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() > 1,
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() > 1,
                              OpenTimeoutMs);
     code->setFocus();
     QTRY_VERIFY(code->hasFocus());
@@ -14927,9 +16232,12 @@ private slots:
     for (int pass = 0; pass < 3; ++pass) {
       const int previous = paints;
       listing->refresh();
-      QTRY_VERIFY_WITH_TIMEOUT(ListingViewTestAccess::settled(*listing) &&
-                                   paints > previous,
+      QTRY_VERIFY_WITH_TIMEOUT(ListingViewTestAccess::settled(*listing),
                                OpenTimeoutMs);
+      // Lines that come again as they were are not painted again: what the
+      // window keeps is looked at as a paint of all of it finds the view.
+      listing->viewport()->update();
+      QTRY_VERIFY_WITH_TIMEOUT(paints > previous, OpenTimeoutMs);
       QCOMPARE(listing->currentItem(), std::optional<Address>(address));
       QCOMPARE(listing->topItem(), top);
       QVERIFY(keptContext);
@@ -14953,6 +16261,423 @@ private slots:
     QCOMPARE(listing->currentItem(), std::optional<Address>(Base + 0x1500));
     QCOMPARE(ListingViewTestAccess::edges(*listing),
              ListingViewTestAccess::expectedEdges(*listing));
+  }
+
+  void aChangeToTheListingPaintsTheRowsItReachesAndNoOther() {
+    // The listing paints again the rows whose painting a change reaches, and
+    // the arrows' gutter where an arrow changed, and leaves the rest as the
+    // window keeps it.  After each kind of change, what the window keeps of
+    // the view is what painting all of the view gives; and the changes that
+    // reach few rows paint few.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    // Narrow enough for the lines to scroll sideways.
+    bench.window->resize(1000, 900);
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("fixture.bin")));
+    auto *assembly = bench.window->disassembly();
+    auto *listing = assembly->listing();
+    // Nothing of the workbench is on its way: a list that lands in another
+    // dock may have the docks lay themselves out again.
+    QTRY_VERIFY_WITH_TIMEOUT(
+        bench.session.loaded() && bench.session.indexReady() &&
+            !bench.session.busy() && ListingViewTestAccess::settled(*listing) &&
+            !bench.session.queries().hasPending(),
+        OpenTimeoutMs);
+    using Access = ListingViewTestAccess;
+    auto *viewport = listing->viewport();
+    const int rowHeight = Access::lineHeight(*listing);
+    QVERIFY(rowHeight > 0);
+    // The steps look at the page's first twenty-six lines.  How many lines a
+    // view shows is the font's to say and the screen's scale's, so the window
+    // grows until it shows them, with two to spare for a scroll bar that
+    // comes with the page.
+    const int Looked = 26;
+    for (int turn = 0;
+         turn < 4 && viewport->height() < (Looked + 2) * rowHeight; ++turn) {
+      bench.window->resize(bench.window->width(), bench.window->height() +
+                                                      (Looked + 2) * rowHeight -
+                                                      viewport->height());
+      RowsOfAView::settle();
+    }
+    QTRY_VERIFY(Access::settled(*listing));
+    const int Instructions = 200;
+    // Lines of the listing's kinds: a jump down to a line in view, one up to
+    // a line in view, and one to a line that is not loaded; names with the
+    // places they lead to; text beyond ASCII.
+    const auto line = [](Address address, int sub, const char *kind,
+                         const QString &text, const QJsonArray &spans = {},
+                         const char *flow = "",
+                         std::optional<Address> target = {}) {
+      QJsonObject value{
+          {"item", hexAddress(address)},
+          {"sub", sub},
+          {"kind", QLatin1String(kind)},
+          {"flow", QLatin1String(flow)},
+          {"prefix",
+           QStringLiteral(".text:%1").arg(address, 16, 16, QLatin1Char('0'))},
+          {"cls", 1},
+          {"function", QStringLiteral("start")},
+          {"function_address", hexAddress(0x1000)},
+          {"item_size", "0x4"},
+          {"text", text},
+          {"spans", spans}};
+      if (target)
+        value["target"] = hexAddress(*target);
+      return value;
+    };
+    // What the page's rows say.  One page differs from the one before it in
+    // one of these.
+    struct Said {
+      QString callee = QStringLiteral("callee");
+      QString function = QStringLiteral("start");
+      int calleeRole = 3;
+      QString calleePlace = QStringLiteral("0x2000");
+      int callClass = 1;
+      QString callPrefix;
+      const char *jumpFlow = "jump";
+    };
+    const auto page = [&](const Said &said) {
+      QJsonArray rows;
+      rows.append(line(0x1000, 0, "header", QStringLiteral("start proc near")));
+      for (int at = 0; at < Instructions; ++at) {
+        const Address address = 0x1004 + 4 * Address(at);
+        QJsonObject row;
+        if (at == 3) {
+          row = line(
+              address, 0, "insn", QStringLiteral("jmp     loc_1028"),
+              QJsonArray{QJsonArray{0, 3, 2}, QJsonArray{8, 8, 3, "0x1028"}},
+              said.jumpFlow, 0x1028);
+        } else if (at == 10) {
+          row =
+              line(address, 0, "insn", QStringLiteral("call    ") + said.callee,
+                   QJsonArray{QJsonArray{0, 4, 2},
+                              QJsonArray{8, int(said.callee.toUtf8().size()),
+                                         said.calleeRole, said.calleePlace}},
+                   "call", 0x2000);
+          row["cls"] = said.callClass;
+          if (!said.callPrefix.isEmpty())
+            row["prefix"] = said.callPrefix;
+        } else if (at == 14) {
+          row = line(
+              address, 0, "insn", QStringLiteral("jnz     loc_1010"),
+              QJsonArray{QJsonArray{0, 3, 2}, QJsonArray{8, 8, 3, "0x1010"}},
+              "cjump", 0x1010);
+        } else if (at == 20) {
+          row = line(
+              address, 0, "insn", QStringLiteral("jmp     loc_9000"),
+              QJsonArray{QJsonArray{0, 3, 2}, QJsonArray{8, 8, 3, "0x9000"}},
+              "jump", 0x9000);
+        } else if (at == 24) {
+          row = line(address, 0, "insn",
+                     QStringLiteral("mov     eax, ebx ; 注释 eax"),
+                     QJsonArray{QJsonArray{0, 3, 2}, QJsonArray{8, 3, 4},
+                                QJsonArray{13, 3, 4}});
+        } else {
+          row = line(address, 0, "insn",
+                     QStringLiteral("mov     eax, %1").arg(at),
+                     QJsonArray{QJsonArray{0, 3, 2}, QJsonArray{8, 3, 4}});
+        }
+        row["function"] = said.function;
+        rows.append(row);
+      }
+      return rows;
+    };
+    Said said;
+    Access::acceptRows(*listing, page(said), Access::Page::Replace);
+    listing->setFocus();
+    QTRY_VERIFY(listing->hasFocus());
+    const int inView = viewport->height() / rowHeight;
+    QVERIFY2(inView >= Looked,
+             qPrintable(QStringLiteral("%1 lines of %2 in a view of %3, in a "
+                                       "window of %4")
+                            .arg(inView)
+                            .arg(rowHeight)
+                            .arg(viewport->height())
+                            .arg(bench.window->height())));
+    RowsOfAView rows(viewport, rowHeight,
+                     [&] { return Access::pixelsAsked(*listing); });
+    if (!rows.pictures())
+      QSKIP("The window keeps no picture that can be looked at");
+    const int Every = RowsOfAView::Every, Some = RowsOfAView::Some;
+    const auto keys = [&](Qt::Key key, int count,
+                          Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+      for (int at = 0; at < count; ++at)
+        QTest::keyClick(listing, key, modifiers);
+    };
+    // The cursor's line and the one it leaves.  The word under the cursor is
+    // marked wherever it stands (`mov`, in most rows), so the cursor goes
+    // down a column that holds no word.
+    rows.change(QStringLiteral("to an instruction, between its words"), Some,
+                [&] {
+                  keys(Qt::Key_Home, 1);
+                  keys(Qt::Key_Right, 5);
+                  keys(Qt::Key_Down, 1);
+                });
+    QVERIFY(Access::highlight(*listing).isEmpty());
+    rows.change(QStringLiteral("a line down"), 2,
+                [&] { keys(Qt::Key_Down, 1); });
+    rows.change(QStringLiteral("a column on"), 1,
+                [&] { keys(Qt::Key_Right, 1); });
+    rows.change(QStringLiteral("a column back"), 1,
+                [&] { keys(Qt::Key_Left, 1); });
+    // A line an arrow leaves: the arrow is drawn as the current one, which
+    // the gutter says, and the two rows of the cursor.
+    while (Access::cursorRow(*listing) < 3)
+      keys(Qt::Key_Down, 1);
+    RowsOfAView::settle();
+    // What all of the gutter comes to, in rows, at the most.
+    const int gutterRows = 8;
+    rows.change(QStringLiteral("onto a line with an arrow"), 2 + gutterRows,
+                [&] { keys(Qt::Key_Down, 1); });
+    rows.change(QStringLiteral("off the line with an arrow"), 2 + gutterRows,
+                [&] { keys(Qt::Key_Down, 1); });
+    rows.change(QStringLiteral("a selection in a line"), 1,
+                [&] { keys(Qt::Key_Right, 1, Qt::ShiftModifier); });
+    rows.change(QStringLiteral("a selection over lines"), 3,
+                [&] { keys(Qt::Key_Down, 2, Qt::ShiftModifier); });
+    rows.change(QStringLiteral("no selection"), 4,
+                [&] { keys(Qt::Key_Left, 1); });
+    // A locked word keeps its color in the rows that spell it.
+    auto &locks = bench.session.highlightLocks();
+    rows.change(QStringLiteral("a locked word"), 2,
+                [&] { locks.toggle(QStringLiteral("loc_1028")); });
+    rows.change(QStringLiteral("no locked word"), 2,
+                [&] { locks.toggle(QStringLiteral("loc_1028")); });
+    // A search marks its matches in place of the other highlights, in the
+    // address prefixes too.
+    rows.change(QStringLiteral("a search"), Some, [&] {
+      listing->setSearchHighlight({QStringLiteral("10"), Qt::CaseInsensitive});
+    });
+    rows.change(QStringLiteral("no search"), Some,
+                [&] { listing->setSearchHighlight({}); });
+    // The text cursor shows with the focus.
+    rows.change(QStringLiteral("the focus leaves"), 1, [&] {
+      listing->clearFocus();
+      QTRY_VERIFY(!listing->hasFocus());
+    });
+    // Without it, the cursor's line is the one row that says where it is,
+    // and a text another view finds is selected with no cursor drawn: from
+    // one column to another, to a column further on, from a column before.
+    rows.change(QStringLiteral("a line down, out of focus"), 2,
+                [&] { QTest::keyClick(listing, Qt::Key_Down); });
+    QVERIFY(!listing->hasFocus());
+    const int found =
+        int(listing->searchText().indexOf(QStringLiteral("eax, 12")));
+    QVERIFY(found > 0);
+    rows.change(QStringLiteral("a found text"), Some,
+                [&] { QVERIFY(listing->selectSearchRange(found, 3)); });
+    QCOMPARE(listing->selectedText(), QStringLiteral("eax"));
+    rows.change(QStringLiteral("a longer found text"), 1,
+                [&] { QVERIFY(listing->selectSearchRange(found, 4)); });
+    rows.change(QStringLiteral("a text found a column before"), 1,
+                [&] { QVERIFY(listing->selectSearchRange(found - 1, 5)); });
+    QCOMPARE(listing->selectedText(), QStringLiteral(" eax,"));
+    rows.change(QStringLiteral("the focus comes back"), Some, [&] {
+      listing->setFocus();
+      QTRY_VERIFY(listing->hasFocus());
+      keys(Qt::Key_Left, 1);
+      keys(Qt::Key_Home, 1);
+      keys(Qt::Key_Right, 5);
+    });
+    QVERIFY(Access::highlight(*listing).isEmpty());
+    // A page read again that brings the lines it brought: nothing is painted,
+    // and every line read from it stands.
+    const auto again = [&] {
+      Access::acceptRowsAtCursor(*listing, page(said));
+    };
+    auto kept = Access::linesKept(*listing);
+    QCOMPARE(rows.change(QStringLiteral("the page again"), 0, again), 0);
+    QCOMPARE(Access::linesKept(*listing) - kept, quint64(Instructions + 1));
+    // One whose row calls another name is painted in that row: as it lands,
+    // within the call that takes it.
+    kept = Access::linesKept(*listing);
+    said.callee = QStringLiteral("renamed");
+    {
+      RowsOfAView::settle();
+      const auto told = Access::pixelsAsked(*listing);
+      PaintedParts atOnce;
+      viewport->installEventFilter(&atOnce);
+      again();
+      viewport->removeEventFilter(&atOnce);
+      const qint64 row = qint64(rowHeight) * viewport->width();
+      QVERIFY(atOnce.area() > 0);
+      QCOMPARE((qint64(Access::pixelsAsked(*listing) - told) + row - 1) / row,
+               qint64(1));
+    }
+    QCOMPARE(Access::linesKept(*listing) - kept, quint64(Instructions));
+    QVERIFY(listing->searchText().contains(QStringLiteral("call    renamed")));
+    // A name as long, which the same spans color: the text alone differs.
+    said.callee = QStringLiteral("renamer");
+    QCOMPARE(rows.change(QStringLiteral("a name as long"), 1, again), 1);
+    QVERIFY(listing->searchText().contains(QStringLiteral("call    renamer")));
+    // The name in another color, and the name leading elsewhere: the spans
+    // alone differ, and what the text had laid out is not kept for them.
+    said.calleeRole = 5;
+    QCOMPARE(rows.change(QStringLiteral("a name in another color"), 1, again),
+             1);
+    said.calleePlace = QStringLiteral("0x3000");
+    rows.change(QStringLiteral("a name that leads elsewhere"), 1, again);
+    while (Access::cursorRow(*listing) != 11)
+      keys(Access::cursorRow(*listing) < 11 ? Qt::Key_Down : Qt::Key_Up, 1);
+    keys(Qt::Key_End, 1);
+    QCOMPARE(listing->operandTarget(), std::optional<Address>(0x3000));
+    keys(Qt::Key_Home, 1);
+    keys(Qt::Key_Right, 5);
+    RowsOfAView::settle();
+    // Its address in another class's color.
+    said.callClass = 2;
+    QCOMPARE(
+        rows.change(QStringLiteral("an address of another class"), 1, again),
+        1);
+    // Rows that say another function without showing it: none is painted,
+    // and what their text had laid out stands.  The header's row says the
+    // function it always said, and is kept whole.
+    kept = Access::linesKept(*listing);
+    said.function = QStringLiteral("begin");
+    QCOMPARE(rows.change(QStringLiteral("another function's name"), 0, again),
+             0);
+    QCOMPARE(Access::linesKept(*listing) - kept, quint64(1));
+    QCOMPARE(listing->currentFunctionName(), QStringLiteral("begin"));
+    // A jump that became a conditional one in a row that reads as it did:
+    // the gutter draws its arrow anew, and no row is painted.
+    said.jumpFlow = "cjump";
+    {
+      const int painted = rows.change(
+          QStringLiteral("a jump that became conditional"), gutterRows, again);
+      QVERIFY(painted > 0);
+    }
+    // A longer address before one line moves where every line begins.
+    said.callPrefix = QStringLiteral(".text:000000000000102C:and:more");
+    rows.change(QStringLiteral("a longer address"), Every, again);
+    said.callPrefix.clear();
+    rows.change(QStringLiteral("the addresses as they were"), Every, again);
+    // Changes no code of the view's makes, and so none says: the view finds
+    // them as it paints anything, and paints what they reach next.
+    const QRect corner(viewport->width() - 1, viewport->height() - 1, 1, 1);
+    rows.change(QStringLiteral("a highlight no one spoke of"), 3, [&] {
+      Access::highlightUnsaid(*listing, QStringLiteral("loc_9000"));
+      viewport->update(corner);
+    });
+    {
+      const int painted = rows.change(
+          QStringLiteral("an arrow no one spoke of"), gutterRows + 1, [&] {
+            Access::arrowUnsaid(*listing, 7, 9);
+            viewport->update(corner);
+          });
+      QVERIFY(painted > 0);
+    }
+    // Every row shows another line as the listing scrolls, begins elsewhere
+    // as it scrolls sideways or drops its prefixes, and is colored anew by
+    // another style.
+    rows.change(QStringLiteral("three lines scrolled"), Every,
+                [&] { Access::scroll(*listing, 3); });
+    QCOMPARE(Access::top(*listing), 3);
+    auto *across = listing->horizontalScrollBar();
+    QVERIFY(across->maximum() > 20);
+    rows.change(QStringLiteral("scrolled sideways"), Every,
+                [&] { across->setValue(20); });
+    rows.change(QStringLiteral("scrolled back"), Every,
+                [&] { across->setValue(0); });
+    rows.change(QStringLiteral("no prefixes"), Every,
+                [&] { listing->setShowPrefixes(false); });
+    rows.change(QStringLiteral("prefixes"), Every,
+                [&] { listing->setShowPrefixes(true); });
+    rows.change(QStringLiteral("another style"), Every,
+                [&] { emit Theme::instance().changed(); });
+    // One arrow, from a line in view to a line two views below.  Scrolled by
+    // a line, where it leaves moves and where it lands, beyond the view,
+    // does not; a view further down, where it lands moves and where it left,
+    // above the view, does not; and on its line, it is drawn as the cursor's
+    // without another arrow changing place with it.
+    QJsonArray lone;
+    for (int at = 0; at < 4 * inView; ++at)
+      lone.append(at == 5 ? line(0x4000 + 4 * Address(at), 0, "insn",
+                                 QStringLiteral("jmp     below"),
+                                 QJsonArray{QJsonValue(QJsonArray{0, 3, 2})},
+                                 "jump", 0x4000 + 4 * Address(5 + 2 * inView))
+                          : line(0x4000 + 4 * Address(at), 0, "insn",
+                                 QStringLiteral("mov     eax, ebx")));
+    Access::acceptRows(*listing, lone, Access::Page::Replace);
+    RowsOfAView::settle();
+    QCOMPARE(Access::edges(*listing),
+             QJsonArray{QJsonValue(QJsonArray{5, 5 + 2 * inView, false})});
+    rows.change(QStringLiteral("where the one arrow leaves"), Every,
+                [&] { Access::scroll(*listing, 1); });
+    Access::scroll(*listing, 4 + inView);
+    RowsOfAView::settle();
+    QCOMPARE(Access::top(*listing), 5 + inView);
+    rows.change(QStringLiteral("where the one arrow lands"), Every,
+                [&] { Access::scroll(*listing, 1); });
+    Access::scroll(*listing, -(6 + inView));
+    listing->setFocus();
+    keys(Qt::Key_Home, 1);
+    keys(Qt::Key_Right, 5);
+    keys(Qt::Key_Down, 4);
+    RowsOfAView::settle();
+    QCOMPARE(Access::top(*listing), 0);
+    QCOMPARE(Access::cursorRow(*listing), 4);
+    QVERIFY(Access::highlight(*listing).isEmpty());
+    {
+      const int painted =
+          rows.change(QStringLiteral("onto the one arrow's line"),
+                      2 + gutterRows, [&] { keys(Qt::Key_Down, 1); });
+      QVERIFY(painted > 2);
+    }
+    QVERIFY2(rows.wrong.isEmpty(),
+             qPrintable(rows.wrong.join(QStringLiteral("; "))));
+    // Each of those paints was also compared with the view painted afresh,
+    // where the screen's scale is whole (PaintCheck, cleanup).
+    if (viewport->devicePixelRatioF() == 1)
+      QVERIFY(PaintCheck::checks() > 0);
+  }
+
+  void aPatchedItemsRowIsPaintedOnceItsPatchIsKnown() {
+    // The listing reads its lines again at a patch's revision, and learns
+    // which bytes are patched from a read of the session's that lands after
+    // them: the row of the patched item is painted again for that alone, and
+    // once more when the patch is taken back.
+    QTemporaryDir directory;
+    Workbench bench;
+    LoadDialogAcceptor loadDialogs;
+    bench.window->openFile(
+        writeFixture(directory, QStringLiteral("fixture.bin")));
+    auto *listing = bench.window->disassembly()->listing();
+    const auto quiet = [&] {
+      return ListingViewTestAccess::settled(*listing) &&
+             !bench.session.queries().hasPending();
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(bench.session.loaded() &&
+                                 bench.session.indexReady() &&
+                                 !bench.session.busy() && quiet(),
+                             OpenTimeoutMs);
+    const auto item = listing->currentItem();
+    QVERIFY(item);
+    RowsOfAView rows(
+        listing->viewport(), ListingViewTestAccess::lineHeight(*listing),
+        [&] { return ListingViewTestAccess::pixelsAsked(*listing); });
+    if (!rows.pictures())
+      QSKIP("The window keeps no picture that can be looked at");
+    rows.change(QStringLiteral("a patch"), RowsOfAView::Some, [&] {
+      bool done = false;
+      bench.session.editBytePatch(
+          "patch_apply",
+          {{"address", hexAddress(*item)}, {"kind", "bytes"}, {"bytes", "2a"}},
+          bench.session.epoch(), [&] { done = true; });
+      QTRY_VERIFY_WITH_TIMEOUT(
+          done && bench.session.hasBytePatch(*item) && quiet(), OpenTimeoutMs);
+    });
+    rows.change(QStringLiteral("the patch taken back"), RowsOfAView::Some, [&] {
+      bool done = false;
+      bench.session.editBytePatch("patch_revert",
+                                  {{"address", hexAddress(*item)}},
+                                  bench.session.epoch(), [&] { done = true; });
+      QTRY_VERIFY_WITH_TIMEOUT(
+          done && !bench.session.hasBytePatches() && quiet(), OpenTimeoutMs);
+    });
+    QVERIFY2(rows.wrong.isEmpty(),
+             qPrintable(rows.wrong.join(QStringLiteral("; "))));
   }
 
   void listingArrowEndpointsFollowLoadedRows() {
@@ -16336,7 +18061,7 @@ private slots:
     QCOMPARE(bench.dockTitle(QStringLiteral("ir-a")),
              QStringLiteral("Pseudocode-A"));
     auto *code = pseudocode->text();
-    QTRY_VERIFY_WITH_TIMEOUT(!code->loading() && code->lineCount() == 702,
+    QTRY_VERIFY_WITH_TIMEOUT(settled(code) && code->lineCount() == 702,
                              OpenTimeoutMs);
     QVERIFY(code->allText().startsWith(QStringLiteral("#include <stdint.h>")));
     QCOMPARE(code->foldableCount(), 0);

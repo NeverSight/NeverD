@@ -5,10 +5,10 @@ description: >-
 license: LicenseRef-Qt-Commercial OR BSD-3-Clause
 metadata:
   author: qt-ai-skills
-  version: "1.5"
+  version: "1.6"
   qt-version: "6.x"
   category: conceptual
-  changelog: "Added auditing every window: inventory from the code, measured widget trees, a baseline, what the numbers usually find, keeping the fixes and their checks true on other platforms, and one accent per window as a look apart from the Return key"
+  changelog: "Added a one-page summary of NeverD's style to the desktop profile: color roles, type, sizes and the rules every window keeps"
 ---
 # Qt UI Design
 
@@ -17,7 +17,10 @@ metadata:
 For NeverD screens, read [the NeverD desktop profile](references/neverd-desktop.md)
 before designing or auditing. It records the product's established visual
 direction, workbench chrome, content hierarchy, resizing behavior, and Qt
-rendering checks. Apply its desktop density and layout guidance in place of
+rendering checks. Start with its "Style at a glance" section, which gathers
+the color roles, type, sizes and the rules every window keeps on one page,
+each pointing to the section with its reasons.
+Apply its desktop density and layout guidance in place of
 the generic sizing defaults below; preserve accessibility requirements and the
 user's current instructions.
 For other products, use the general guidance without importing NeverD's palette
@@ -244,7 +247,7 @@ A screen looks calm when each part is only as loud as its job. It looks wrong, a
 
 **One accent, on the main action; the key is a separate decision.**
 - Give a window one filled accent button: the action the window is for. In a dialog that asks one thing it is the accept. In a window of tools it is the command that brings the content in or produces it (import, connect, trace), or the accept of a form inside it. In a window that only shows things it is the way on (Close, OK). A window with buttons and no accent looks unfinished beside every window that has one; users say it has "only one color".
-- At most one. While the main action cannot act yet, keep its accent, faint, so the way forward stays recognizable. Where pressing it again would only redo finished work (a comparison that is already shown), take the Return key away from it and keep the accent: the window still needs its one. Do not move the accent from button to button with a window's state unless the window is built as a sequence of steps and each step is tested.
+- At most one. While the main action cannot act yet, keep its accent, faint, so the way forward stays recognizable. Where pressing it again would only redo finished work (a comparison that is already shown), take the Return key away from it and keep the accent: the window still needs its one. Do not move the accent from button to button with a window's state unless the window is built as a sequence of steps and each step is tested. One case is not a move but a fallback: a main action must be on show, so where it sits on a page of tabs, a command that stays visible takes the accent while that page is hidden.
 - Choose the button from evidence, not taste: the window's own line of help names it, Return in a field already runs it, it is the window's only command, or the window does nothing but show. Where nothing names it, take the command that acts on what is selected, as OK does in a chooser, or the first step of a sequence. Never leave a window without one: shown renders of candidates for four windows left bare, the user answered that every window keeps at least one, on its key action.
 - The accent is a look and the default is a key: decide them separately. A toolkit ties them together and then chooses for you. Qt makes a dialog's first push button its default and then each button that takes focus, which puts the accent on an arbitrary button and binds Return to it. Where that key does harm, take the key away and keep the look: give the style a state it draws exactly like the default (a property on the button) without making the button the default.
 - Decide what Return does in each kind of place, and test each. On a focused button it presses that button. In an input that feeds the main action it runs that action, but only where the input changed what would run, so the key cannot throw finished work away, and again after a run that failed. In a filter, a table or a toggle it starts nothing.

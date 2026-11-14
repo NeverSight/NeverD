@@ -1284,6 +1284,101 @@ def dynamic_lane_corpus(width, count):
     return rows
 
 
+def spliced_word_corpus(width, count):
+    """Repeated low words under unrelated high lanes and signed extensions."""
+    axes = ("(x^y)", "((x|z)^(y&w))", "((x+y)^(z*w))")
+    observed = min(width - 2, max(9, (width + 1) * 2 // 3))
+    scale = 3 << (width - observed)
+    rows = []
+    for case in range(count):
+        rng = random.Random(741421 + 1031 * width + 1723 * case)
+        degree = (41, 79, 127, 181)[case % 4]
+        shift = max(2, observed // (3 + case % 2))
+        factors = []
+        for i in range(degree):
+            axis = axes[(i + case) % (1 + case % 3)]
+            zeros = shift + i % 2
+            bits = observed - zeros
+            live = case % 12 >= 6 and i == degree // 2
+            low = bits - 1 if live else bits + i % 4
+            noise = f"(({rng.randrange(7, 200, 2)}+z*y)^(x+w))"
+            prefix = f"extract({axis},0,{low})"
+            high = width - low
+            kind = (case + i) % 4
+            if kind == 1:
+                view = f"sext({prefix},{width})"
+            elif kind == 2:
+                view = f"zext({prefix},{width})"
+            elif kind == 3 and high >= 2:
+                first = high // 2
+                view = (f"concat(extract({noise},{width-first},{first}),"
+                        f"extract((z^x),{low},{high-first}),{prefix})")
+            else:
+                view = f"concat(extract({noise},{low},{high}),{prefix})"
+            if case % 2:
+                offset = rng.randrange(-29, 30) | 1
+                weight = rng.randrange(-15, 16) | 1
+                view = f"({offset}+({weight})*{view})"
+            offset = rng.randrange(-27, 28) | 1
+            weight = (rng.randrange(-19, 20) | 1) << zeros
+            factors.append(f"({offset}+({weight})*{view})")
+        rows.append(f"({scale}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(z^w)")
+    return rows
+
+
+def rotating_window_corpus(width, count):
+    """High-degree products of affine windows, including wraparound and a live high bit."""
+    axes = ("(x^y)", "((x+u)^(z*w))", "((x|v)^(y&w))", "((x^z)*(u+(v|w)))")
+    positions = (0, 1 + width // 5, width - 3, 1 + width // 3)
+    rows = []
+    for case in range(count):
+        rng = random.Random(0xc17e5 + width * 1297 + case * 1993)
+        degree = (71, 127, 193, 257)[case % 4]
+        observed = min(width - 4, max(10, width * 3 // 8 + case % 3))
+        scale = 3 << (width - observed)
+        shift = max(1, (observed + 2) // (3 + case % 2))
+        factors = []
+        for i in range(degree):
+            axis = (i + case) % (2 + case % 3)
+            zeros = shift + i % 2
+            bits = observed - zeros
+            live = case % 14 >= 7 and i == degree // 2
+            size = bits - 1 if live else min(width - 2, bits + i % 4)
+            start = 1 + rng.randrange(width - size)
+            turn = (start - positions[axis]) % width
+            if (i + case) % 2:
+                source = f"rol({axes[axis]},{turn})"
+            else:
+                source = f"ror({axes[axis]},{-turn % width})"
+            if (i + case) % 3:
+                back = rng.randrange(1, width)
+                source = f"rol(ror({source},{back}),{back + width})"
+            field = f"extract({source},{start},{size})"
+            noise = f"(({rng.randrange(1, 128, 2)}+v*y)^(x+u*w))"
+            kind = (i + case) % 4
+            if kind == 0:
+                word = f"zext({field},{width})"
+            elif kind == 1:
+                word = f"sext({field},{width})"
+            elif kind == 2:
+                word = f"concat(extract({noise},{size},{width - size}),{field})"
+            else:
+                high = width - size
+                top = max(1, high // 2)
+                word = (f"concat(extract({noise},{width - top},{top}),"
+                        f"extract((w^u),{size},{high - top}),{field})")
+            if (case + i) % 3:
+                offset = rng.randrange(-23, 24) | 1
+                weight = rng.randrange(-17, 18) | 1
+                word = f"({offset}+({weight})*{word})"
+            offset = rng.randrange(-31, 32) | 1
+            weight = (rng.randrange(-17, 18) | 1) << zeros
+            factors.append(f"({offset}+({weight})*{word})")
+        tail = "(x^y)+2*(x&y)+(z^w)+(u&v)"
+        rows.append(f"({scale}*" + "*".join(factors) + ")+" + tail)
+    return rows
+
+
 def affine_product_corpus(width, count):
     """Repeated words hidden under up to three affine coordinate changes."""
     axes = ("(x^y)", "((x&z)^(y|w))", "((x+y)^(z&w))")
@@ -1413,6 +1508,18 @@ def check_semantics(expressions, results, width):
                         return value.value & ((1 << bits.value) - 1), bits.value
                     if isinstance(value, ast.Name) and value.id in values:
                         return values[value.id] & ((1 << bits.value) - 1), bits.value
+            if name in ("rol", "ror") and len(node.args) == 2:
+                value, bits = evaluated[node.args[0]]
+                count = evaluated[node.args[1]][0] % bits
+                left = count if name == "rol" else (-count) % bits
+                return ((value << left) | (value >> (bits - left))) & ((1 << bits) - 1), bits
+            if name == "concat" and node.args:
+                result = bits = 0
+                for arg in node.args:
+                    value, arg_bits = evaluated[arg]
+                    result = (result << arg_bits) | value
+                    bits += arg_bits
+                return result, bits
             if name == "extract" and len(node.args) == 3:
                 value, _ = evaluated[node.args[0]]
                 offset, bits = node.args[1:]
@@ -1445,6 +1552,9 @@ def check_semantics(expressions, results, width):
                 pending.extend(((current.right, False), (current.left, False)))
             elif isinstance(current, ast.UnaryOp):
                 pending.append((current.operand, False))
+            elif (isinstance(current, ast.Call) and isinstance(current.func, ast.Name)
+                  and current.func.id in ("concat", "rol", "ror")):
+                pending.extend((arg, False) for arg in reversed(current.args))
             elif (isinstance(current, ast.Call)
                   and isinstance(current.func, ast.Name)
                   and current.func.id in ("extract", "zext", "sext", "trunc")
@@ -1463,7 +1573,7 @@ def check_semantics(expressions, results, width):
     names = sorted({
         node.id for expression in [*expressions, *(r["output"] for r in results)]
         for node in ast.walk(parse(expression))
-        if isinstance(node, ast.Name) and node.id not in ("word", "extract", "zext", "sext", "trunc")
+        if isinstance(node, ast.Name) and node.id not in ("word", "extract", "zext", "sext", "trunc", "concat", "rol", "ror")
     })
     assignments = [
         {name: (x if index % 2 == 0 else y)
@@ -1534,7 +1644,7 @@ def main():
                  "residue-power", "residue-quotient", "residue-subgroup",
                  "sparse-linear-mixed-degree", "upper-perturbation", "masked-perturbation",
                  "mixed-perturbation", "truncated-product", "integer-product", "affine-product",
-                 "residue-view", "dynamic-lane"),
+                 "residue-view", "dynamic-lane", "spliced-word", "rotating-window"),
         default="complement",
     )
     args = parser.parse_args()
@@ -1556,6 +1666,8 @@ def main():
             "integer-product": (8, 16, 31, 64, 97, 193, 257),
             "mixed-perturbation": (8, 16, 32, 64, 65, 129, 257),
             "residue-view": (9, 16, 32, 65, 97, 257, 513),
+            "rotating-window": (17, 24, 32, 64, 97, 193, 257, 513),
+            "spliced-word": (17, 24, 32, 64, 97, 193, 257, 513),
             "dynamic-lane": (9, 16, 32, 65, 97, 257, 513),
             "affine-product": (8, 9, 16, 32, 65, 97, 257, 513),
             "upper-perturbation": (8, 16, 32, 64, 65, 97, 129, 257),
@@ -1596,6 +1708,8 @@ def main():
                 "affine-product": affine_product_corpus,
                 "residue-view": residue_view_corpus,
                 "dynamic-lane": dynamic_lane_corpus,
+                "spliced-word": spliced_word_corpus,
+                "rotating-window": rotating_window_corpus,
                 "truncated-product": truncated_product_corpus,
                 "integer-product": integer_product_corpus,
             }[args.family]

@@ -54,6 +54,30 @@ inline std::optional<int64_t> a64ConditionalBranchDisplacement(uint32_t Word) {
          A64InstructionBytes;
 }
 
+/// \p Word, an A64 conditional branch, with its offset field set to branch
+/// \p Displacement bytes, or std::nullopt when \p Word is no conditional
+/// branch or its field cannot hold that displacement: a whole number of
+/// instructions within the reach of the 19-bit field, or of the 14-bit one of
+/// TBZ and TBNZ.
+inline std::optional<uint32_t>
+withA64ConditionalBranchDisplacement(uint32_t Word, int64_t Displacement) {
+  const bool TestsABit = A64TestBranch.matches(Word);
+  if (!TestsABit && !A64ConditionalBranch.matches(Word) &&
+      !A64CompareBranch.matches(Word))
+    return std::nullopt;
+  constexpr unsigned InstructionBits =
+      llvm::ConstantLog2<A64InstructionBytes>();
+  const BitField Offset =
+      TestsABit ? A64TestBranchOffset : A64ConditionalBranchOffset;
+  if (Displacement % A64InstructionBytes != 0 ||
+      !llvm::isIntN(Offset.Width + InstructionBits, Displacement))
+    return std::nullopt;
+  const uint32_t Instructions = static_cast<uint32_t>(
+      static_cast<uint64_t>(Displacement >> InstructionBits));
+  return (Word & ~Offset.mask()) |
+         ((Instructions << Offset.Low) & Offset.mask());
+}
+
 /// Where an A64 `b` or `bl` \p Word at \p Address branches, or std::nullopt
 /// when that lies outside the 64-bit address space.
 inline std::optional<uint64_t> a64BranchTarget(uint32_t Word,

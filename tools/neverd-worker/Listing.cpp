@@ -6010,6 +6010,11 @@ bool Listing::hasIdleWork() const {
          impl_->indexState == Impl::IndexState::Building;
 }
 
+bool Listing::indexing() const {
+  return impl_->discoveryListingPending ||
+         impl_->indexState == Impl::IndexState::Building;
+}
+
 bool Listing::idleStep() {
   // Function discovery comes first, so the reference index covers its
   // functions.
@@ -6894,6 +6899,11 @@ const Json &Listing::uncachedFunctionRows() {
 }
 
 void Listing::build() { impl_->build(); }
+bool Listing::standing() const {
+  const auto &d = *impl_;
+  return d.built && !d.namesStale &&
+         neverd_func_count(d.session) == d.builtFunctionCount;
+}
 
 const std::unordered_map<std::string, std::string> &Listing::functionAliases() {
   impl_->build();

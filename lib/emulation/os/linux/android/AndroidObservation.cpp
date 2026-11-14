@@ -14,6 +14,86 @@
 #include <set>
 
 namespace neverd::emulation::android_model {
+namespace {
+std::optional<uint64_t> registerAddress(uint64_t Base, int64_t Offset) {
+  const uint64_t Magnitude =
+      Offset < 0 ? 0 - uint64_t(Offset) : uint64_t(Offset);
+  if ((Offset < 0 && Base < Magnitude) ||
+      (Offset >= 0 && Base > UINT64_MAX - Magnitude))
+    return std::nullopt;
+  return Offset < 0 ? Base - Magnitude : Base + Magnitude;
+}
+
+void recordSnapshotError(NativeMemorySnapshot &Snapshot, llvm::Error E) {
+  constexpr size_t Limit =
+      ::neverd::limits::emulation::kAndroidFailureMemoryDiagnosticBytes;
+  const llvm::StringRef Suffix(diagnostic::SnapshotDiagnosticTruncated);
+  static_assert(Limit > sizeof(diagnostic::SnapshotDiagnosticTruncated));
+  Snapshot.Bytes.clear();
+  Snapshot.Diagnostic = llvm::toString(std::move(E));
+  if (Snapshot.Diagnostic.size() > Limit) {
+    Snapshot.Diagnostic.resize(Limit - Suffix.size());
+    Snapshot.Diagnostic += Suffix;
+  }
+}
+} // namespace
+
+llvm::Expected<uint64_t>
+finalMemorySnapshotBytes(const AndroidNativeOptions &Options,
+                         uint64_t Available) {
+  uint64_t Remaining = Available;
+  auto Reserve = [&](uint64_t Size, bool WithDiagnostic) {
+    const uint64_t Extra =
+        WithDiagnostic
+            ? ::neverd::limits::emulation::kAndroidFailureMemoryDiagnosticBytes
+            : 0;
+    if (!Size || Extra > Remaining || Size > Remaining - Extra)
+      return false;
+    Remaining -= Size + Extra;
+    return true;
+  };
+  for (const auto &Read : Options.ReadMemory)
+    if (Read.Address > UINT64_MAX - Read.Size ||
+        !Reserve(Read.Size,
+                 Options.ObserveMemoryOnFailure || Options.ObserveMemoryAtStop))
+      return failure(diagnostic::SnapshotLimits);
+  for (const auto &Read : Options.ReadRegisterMemory)
+    if (Read.Register > 31 || !Reserve(Read.Size, true))
+      return failure(diagnostic::SnapshotLimits);
+  return Available - Remaining;
+}
+
+void captureStoppedMemory(ExecutionBackend &CPU,
+                          const AndroidNativeOptions &Options,
+                          bool IncludeFixed,
+                          std::vector<NativeMemorySnapshot> &Out) {
+  auto Capture = [&](uint64_t Address, uint64_t Size) {
+    auto &Snapshot = Out.emplace_back(Address, std::vector<uint8_t>(Size));
+    if (auto E = CPU.snapshotBacking(Address, Snapshot.Bytes))
+      recordSnapshotError(Snapshot, std::move(E));
+  };
+  if (IncludeFixed)
+    for (const auto &Read : Options.ReadMemory)
+      Capture(Read.Address, Read.Size);
+  for (const auto &Read : Options.ReadRegisterMemory) {
+    const auto Reg =
+        Read.Register == 31
+            ? CPURegister::AArch64SP
+            : CPURegister(unsigned(CPURegister::AArch64X0) + Read.Register);
+    auto Base = CPU.readRegister(Reg);
+    auto Address =
+        Base ? registerAddress((*Base)[0], Read.Offset) : std::nullopt;
+    if (Address) {
+      Capture(*Address, Read.Size);
+    } else {
+      Out.push_back({0, {}, {}, false});
+      recordSnapshotError(Out.back(),
+                          Base ? failure(diagnostic::SnapshotAddressOverflow)
+                               : Base.takeError());
+    }
+  }
+}
+
 llvm::Error
 validateExecutionObservation(const NativeExecutionObservationOptions &Options) {
   if (Options.PCs.empty() ||
@@ -106,14 +186,10 @@ llvm::Expected<NativeExecutionObservation> captureExecutionObservation(
   for (const auto &Read : Options.ReadRegisterMemory) {
     const uint64_t Base =
         Read.Register == 31 ? Out.SP : Out.Registers[Read.Register];
-    const uint64_t Magnitude =
-        Read.Offset < 0 ? 0 - uint64_t(Read.Offset) : uint64_t(Read.Offset);
-    if ((Read.Offset < 0 && Base < Magnitude) ||
-        (Read.Offset >= 0 && Base > UINT64_MAX - Magnitude))
+    auto Address = registerAddress(Base, Read.Offset);
+    if (!Address)
       return failure(diagnostic::ObservationMemory);
-    const uint64_t Address =
-        Read.Offset < 0 ? Base - Magnitude : Base + Magnitude;
-    if (auto E = Capture(Address, Read.Size))
+    if (auto E = Capture(*Address, Read.Size))
       return std::move(E);
   }
   return Out;

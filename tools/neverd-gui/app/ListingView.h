@@ -11,15 +11,21 @@
 #define NEVERD_TOOLS_NEVERD_GUI_APP_LISTINGVIEW_H
 
 #include "Address.h"
+#include "PaintCheck.h"
 #include "StyledText.h"
+#include "Theme.h"
 #include "ViewSearch.h"
 #include "WheelInput.h"
 
 #include <QAbstractScrollArea>
+#include <QJsonObject>
 #include <QPointer>
+#include <QRegion>
 #include <QTimer>
+#include <QVarLengthArray>
 #include <QVector>
 #include <deque>
+#include <limits>
 #include <optional>
 
 namespace neverd::gui {
@@ -41,6 +47,12 @@ public:
     QString kind, prefix, flow, function;
     std::optional<Address> target, functionAddress;
     StyledLine styled;
+    /// The row of a page that this line was read from.  A line is what its
+    /// row says and no more, so a row that comes again as it was keeps the
+    /// line read from it, with the layout its text has taken.
+    QJsonObject row;
+    /// Read ahead of the refresh that is still to land (acceptVisible).
+    bool ahead = false;
   };
 
   ListingView(Session &session, const AddressSpace &space,
@@ -80,6 +92,14 @@ public:
   const Line *cursorLine() const;
   QRect cursorViewportRect() const;
   void setShowPrefixes(bool show);
+  /// Whether this is the view the user works in: the last analysis view to
+  /// take the keyboard, which the window that holds the views knows and says
+  /// (MainWindow).  A dialog a command asks with leaves it so, and the edit
+  /// such a command makes leaves as its dialog closes, when the listing may
+  /// not have the focus back.  An edit carries the lines in view of the
+  /// listing worked in.
+  void setWorkedIn(bool worked) { workedIn_ = worked; }
+  bool workedIn() const { return workedIn_; }
   void setOpcodeBytes(int count);
   int opcodeBytes() const { return opcodeBytes_; }
   /// Refetch the loaded window (names, comments or analysis changed).
@@ -124,6 +144,7 @@ protected:
   bool viewportEvent(QEvent *event) override;
   void focusInEvent(QFocusEvent *event) override;
   void focusOutEvent(QFocusEvent *event) override;
+  void scrollContentsBy(int dx, int dy) override;
 
 private:
   friend struct ListingViewTestAccess;
@@ -143,6 +164,25 @@ private:
                std::optional<CursorPlace> cursor = {});
   void accept(Fetch kind, const QJsonObject &payload, quint64 serial,
               std::optional<CursorPlace> cursor, Address jumpAddress);
+  /// The line the row of a page says, at the place \p item and \p sub it
+  /// names.  \p was, the line held at that place if any, gives what its text
+  /// had laid out where the row's text and spans are its own.
+  static Line lineOf(QJsonObject row, Address item, int sub, Line *was);
+  /// The lines in view as a read of their own, from the first of them on:
+  /// what an edit carries for the listing (QueryService::carryWithEdits),
+  /// and what the listing asks for as the edit's revision is said.  None
+  /// while it shows nothing or a jump is on its way.
+  std::optional<QJsonObject> visibleRead() const;
+  /// Whether a line in view is of the function at \p function or calls it.
+  bool showsFunction(std::optional<Address> function) const;
+  /// Asks for the lines in view ahead of the refresh that is asked for next
+  /// (its serial is \p refresh).
+  void readVisible(quint64 refresh);
+  /// Takes the lines in view as an edit left them, \p asked of them asked
+  /// for, into the lines held where each stands at the place of the one it
+  /// replaces, and paints those that changed; else leaves them to the
+  /// refresh, which is still to land.
+  void acceptVisible(const QJsonObject &payload, int asked, quint64 refresh);
   void ensureLoaded();
   void placeJump(int anchor, Address address);
   void trim();
@@ -168,6 +208,105 @@ private:
   void paintArrows(QPainter &painter, int first, int last);
   void showHint(const QPoint &position);
   void emitLocation();
+
+  /// What every row of the viewport is painted with, beside the theme.
+  struct RowFrame {
+    int width = 0, height = 0, lineHeight = 0, ascent = 0, arrowsWidth = 0;
+    /// Where the bodies and the address prefixes begin.
+    int left = 0, prefixLeft = 0;
+    bool prefixes = false;
+    quint64 style = 0;
+    bool operator==(const RowFrame &) const = default;
+  };
+  /// A fill under a row's text from one column to another; a column below
+  /// zero lies in the address prefix.
+  struct RowFill {
+    int first = 0, last = 0;
+    ColorRole role = ColorRole::ListingHighlight;
+    bool operator==(const RowFill &) const = default;
+  };
+  /// All that one row of the viewport is painted from to the right of the
+  /// arrows, beside its frame and the theme.  paintRow is given this and
+  /// nothing of the view, so that two rows which compare equal paint the same
+  /// pixels: a row is painted again only where this changed (showChanges).
+  /// What a row paints from belongs here, or its row is left as it was
+  /// painted.
+  struct Row {
+    /// A line; else a row below the lines, which shows the background alone;
+    /// else one of which nothing is known.
+    enum class Shows : quint8 { Line, Nothing, Unknown };
+    Shows shows = Shows::Nothing;
+    QString prefix;
+    int cls = 0;
+    QString text;
+    QVector<StyledSpan> spans;
+    /// The cursor's line; an item whose bytes a patch changed.
+    bool current = false, patched = false;
+    /// The fills are a search's matches, painted under the prefix; else they
+    /// mark the highlighted words, over it.
+    bool searched = false;
+    QVarLengthArray<RowFill, 4> fills;
+    /// The selected columns [first, second) of a selected row.
+    bool selected = false;
+    int selectionBegin = 0, selectionEnd = 0;
+    /// The column the text cursor is drawn at, or NoCaret.
+    int caret = NoCaret;
+    bool operator==(const Row &) const = default;
+  };
+  static constexpr int NoCaret = std::numeric_limits<int>::min();
+  /// One branch arrow as the gutter draws it: the heights it leaves and
+  /// lands at, the column it runs down, and what it looks like.
+  struct GutterArrow {
+    qreal from = 0, to = 0;
+    int level = 0;
+    bool conditional = false, current = false, lands = false;
+    bool operator==(const GutterArrow &) const = default;
+  };
+  /// All that the arrows' gutter is painted from, beside the frame and the
+  /// theme: its arrows in the order they are drawn.
+  using Gutter = QVector<GutterArrow>;
+  /// What the rows of one paint share of the view's state.
+  struct RowsContext;
+  /// The address prefixes are as wide as the widest among the lines in view:
+  /// takes that width, as each paint took it.
+  void settlePrefix();
+  RowFrame rowFrame() const;
+  RowsContext rowsContext() const;
+  /// What the line \p index is painted from; a row below the lines for none.
+  Row rowAt(int index, const RowsContext &context) const;
+  /// The arrows among the lines \p first to \p last.
+  Gutter gutterArrows(int first, int last) const;
+  /// Where a column of \p row lies across the viewport.
+  static qreal columnX(const RowFrame &frame, const Row &row,
+                       QTextLayout &layout, int column);
+  /// Paints a line over its row's background, which starts at \p y, with
+  /// the layout of its text.
+  static void paintRow(QPainter &painter, const RowFrame &frame, const Row &row,
+                       int y, QTextLayout &layout);
+  /// Paints the gutter over its background; its arrows alone.
+  static void paintGutter(QPainter &painter, const RowFrame &frame,
+                          const Gutter &gutter);
+  static void paintGutterArrows(QPainter &painter, int arrowsWidth,
+                                const Gutter &gutter);
+  /// Paints what \p region touches of the rows and of the gutter, each over
+  /// its background: from what the viewport was last told it shows where
+  /// \p told, else from what the view holds now, \p painted then taking what
+  /// each row it painted was painted from, by the row's place in the viewport.
+  void paintRows(QPainter &painter, const QRegion &region, bool told,
+                 QVector<Row> *painted = nullptr) const;
+  /// Says that what the view shows changed: every such change ends here, as
+  /// it ended in an update of the whole viewport.  What changed is looked for
+  /// once the one who says so is done (showChanges), so that it may change
+  /// more after saying it, as it might before an update painted.
+  void updateView();
+  /// Has the viewport paint the rows whose painting changed since it was last
+  /// told what they show, and no other.
+  void showChanges();
+  /// Whether all of the viewport is painted from what it was last told: not
+  /// so after a change that no one said (updateView), which the view looks
+  /// for as it paints.  \p painted holds what the rows just painted were
+  /// painted from, the others being unknown.
+  bool rowsKnown(const QVector<Row> &painted) const;
 
   WheelInput wheel_;
   Session &session_;
@@ -215,6 +354,35 @@ private:
   std::optional<Address> lastFunction_;
   bool contentReported_ = false;
   std::optional<Address> pendingJump_;
+  /// What showChanges last told the viewport it shows.  The window keeps
+  /// those pixels of a row and of the gutter until one of them changes.
+  RowFrame knownFrame_;
+  QVector<Row> knownRows_;
+  Gutter knownGutter_;
+  /// updateView was called and showChanges is still to look.
+  bool viewChanged_ = false;
+  /// showChanges has asked for rows that no paint has painted yet: until
+  /// someone says a change, the next paint finds them as they were told.
+  bool rowsTold_ = false;
+  /// The pixels showChanges has asked the viewport to paint, all told: what
+  /// a change has the view paint, where a test holds it to few rows.  A
+  /// window paints more for reasons of its own, as when the dock that holds
+  /// the view lays itself out again.
+  quint64 pixelsAsked_ = 0;
+  /// What showChanges had painted again since a page was taken, for the
+  /// one that took it to paint at once.
+  QRegion rowsUpdated_;
+  /// Lines that kept what an earlier page had read for them, and reads of
+  /// the lines in view taken ahead of a refresh, for tests to count.
+  quint64 linesKept_ = 0, visiblePagesTaken_ = 0;
+  /// The refresh the lines in view were last read ahead of, how many of them
+  /// that replaced, and those the refresh then read otherwise or not at all:
+  /// none, where the lines in view are read as the refresh reads them.
+  quint64 aheadOf_ = 0;
+  int linesAhead_ = 0;
+  quint64 linesReadOtherwise_ = 0;
+  bool workedIn_ = false;
+  PaintCheck::Picture paintChecked_;
 };
 
 } // namespace neverd::gui

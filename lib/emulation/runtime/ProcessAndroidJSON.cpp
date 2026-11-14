@@ -1108,6 +1108,11 @@ androidOptionsFromJSON(const llvm::json::Value &Value) {
       if (!Reads)
         return Reads.takeError();
       Out.ReadMemory = std::move(*Reads);
+    } else if (Name == field::ReadRegisterMemory) {
+      auto Reads = registerMemoryReads(V);
+      if (!Reads)
+        return Reads.takeError();
+      Out.ReadRegisterMemory = std::move(*Reads);
     } else if (Name == field::Memory) {
       const auto *A = V.getAsArray();
       if (!A)
@@ -1191,8 +1196,11 @@ llvm::json::Object androidResultJSON(const ProcessResult &Result) {
   for (uint64_t PC : Result.Trace)
     Trace.push_back(bits(PC));
   for (const auto &Snapshot : Result.MemorySnapshots) {
-    llvm::json::Object Value{{field::Address, bits(Snapshot.Address)},
-                             {field::Bytes, llvm::toHex(Snapshot.Bytes, true)}};
+    llvm::json::Object Value{
+        {field::Address, Snapshot.AddressResolved
+                             ? llvm::json::Value(bits(Snapshot.Address))
+                             : nullptr},
+        {field::Bytes, llvm::toHex(Snapshot.Bytes, true)}};
     if (!Snapshot.Diagnostic.empty())
       Value[field::Diagnostic] = Snapshot.Diagnostic;
     Memory.push_back(std::move(Value));

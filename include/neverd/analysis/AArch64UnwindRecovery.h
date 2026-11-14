@@ -45,6 +45,10 @@ struct AArch64RecoveredUnwindRow {
   // and kFirstHighSlot. Unavailable upper lanes are caller-clobbered.
   std::array<AArch64UnwindRegister, aarch64_unwind::kFrameRegisters> Registers;
   dwarf_eh::AArch64RAQueryResult Signing;
+  /// Live frame lower bound, relative to the incoming SP, when proved.
+  std::optional<int64_t> StackOffset;
+  /// Live FP relative to incoming SP, independently of the chosen CFA base.
+  std::optional<int64_t> FramePointerOffset;
 };
 
 struct AArch64UnwindRecoveryLimits {
@@ -87,7 +91,8 @@ prepareDarwinArm64eSystemCaller(const AArch64RecoveredUnwindRow &Row,
 
 /// Bind the instruction and its recovery row to the language table and its
 /// actual load address. A forwarding range contains no cleanup. A protected
-/// call owns its landing pad and must keep its interrupted frame on the stack.
+/// call keeps the interrupted frame. A transparent prefix must belong to its
+/// protected range or lead straight back to the same call from its return edge.
 std::optional<NDDarwinArm64eExceptionSite>
 prepareDarwinArm64eExceptionSite(const BinaryImage &Image,
                                  const ExceptionFunction &Function,

@@ -83,6 +83,7 @@ private:
     NdVar vectorElement(unsigned Reg, unsigned Index, uint16_t Bytes);
     void writeVector(unsigned Reg, llvm::MutableArrayRef<NdVar> Elements);
     void requireWord(unsigned Register);
+    void divide(NdVar A, NdVar B, bool Signed, NdVar Quotient, NdVar Remainder);
     NdVar resize(NdVar Value, uint16_t Bytes, bool SignExtend = false);
     void write(unsigned Register, NdVar Value, bool SignExtend = true);
     NdVar binary(NdOp Opcode, NdVar A, NdVar B, uint16_t Bytes = 0);
@@ -98,6 +99,7 @@ private:
   bool liftDSP(State &S, uint32_t Word) const;
   bool liftDSP64Packed(State &S, uint32_t Word) const;
   bool liftDSP64Accumulator(State &S, uint32_t Word) const;
+  bool liftDSP64Extract(State &S, uint32_t Word) const;
   bool liftDSPAdditional(State &S, uint32_t Word) const;
   bool liftMSA(State &S, uint32_t Word) const;
   bool liftMSAAdditional(State &S, uint32_t Word) const;

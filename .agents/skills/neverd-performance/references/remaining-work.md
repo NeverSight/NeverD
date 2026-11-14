@@ -193,6 +193,32 @@ A/B with identical output.
   pinned-corpus run. Entry: a runner with stable hardware counters. Until
   then, the same-base A/B is the guard.
 
+### Workbench, after an edit
+
+Found while the listing learned to show an edit's lines first (`ffb77c8063`);
+none is started.
+
+- **The repaint that follows a dialog.** When a dialog closes, the window takes
+  its activation back and repaints its title bar and every item view
+  (`QAbstractItemView` updates its viewport on each activation change): 598 k
+  pixels, 3 to 10 ms on the GUI thread, of which the functions list is 1.7 to
+  5. Where it is still unpainted when the edit's answer lands, the edit's row
+  waits behind it. The theme draws an inactive list as an active one, so the
+  list's repaint buys nothing; a change needs a test that the two paint the
+  same pixels in every theme, high contrast included, and figures taken under
+  a window system, where activation always moves.
+- **A command for the worker's own writes.** Every edit is followed, 300 ms
+  later, by a read of the project's files on the GUI thread and a
+  `project_sync` command that answers `changed: false`. While it waits, a
+  rename is not read ahead. The worker could say what it wrote, or a read
+  could ask before a command does.
+- **The listing's rename leaves late.** Its dialog runs inside the delivery of
+  the read that asked the address's name, and the rename is sent when that
+  delivery returns: 0.4 to 0.5 ms after the dialog is accepted.
+- **Lines carried by a worker that slept.** 1.2 ms where the warm path takes
+  0.2. The prepare request a pseudocode rename sends as its dialog opens has
+  no counterpart for the listing's lines.
+
 ## Rejected
 
 `docs/bbtree-evaluation.md` gives the reasons:

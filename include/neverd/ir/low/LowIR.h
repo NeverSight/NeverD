@@ -1375,6 +1375,17 @@ struct JumpTable {
   /// keeps its successors (the trap path needs them).
   bool MutatedUnsafe = false;
 
+  /// Set for the dispatch of an indirect jump that kept its branch identity
+  /// with no proved target (CFGBuilder::dispatchUnprovedBranchesByValue).
+  /// Targets are labels of the function whose addresses the image's
+  /// relocated pointers hold, CaseLabels those addresses, and the one selector
+  /// occurrence the value the jump takes: the jump goes to the label its
+  /// value names and traps on any other.  There is no table and no index, so
+  /// MutatedUnsafe is set as well and every consumer of an index mapping
+  /// leaves the dispatch alone.  The image's slots of these labels keep the
+  /// original addresses as plain numbers, which the comparison reads.
+  bool ValueDispatch = false;
+
   std::vector<va_t> Targets;
 
   /// Physical table slot corresponding to each Targets element.  Keeping this
@@ -1505,6 +1516,12 @@ struct LowFunc {
   uint32_t SourceLine = 0;
   std::vector<LowBlock> Blocks;
   std::vector<JumpTable> JumpTables;
+  /// The dispatches by value (JumpTable::ValueDispatch), one per indirect
+  /// jump that reaches its function's labels by comparing its target with
+  /// them.  They recover no table and stay out of JumpTables, which lists what
+  /// the resolver proved; MedIR lists both, since each gives a jump its
+  /// successors.
+  std::vector<JumpTable> ValueDispatches;
   /// Every returning path consumes one incoming x87 value, with no access
   /// to the caller's lower stack entries. This value is a typed parameter.
   bool ConsumesX87Argument = false;

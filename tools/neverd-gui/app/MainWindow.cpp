@@ -1004,6 +1004,16 @@ void MainWindow::buildDocks() {
               hexActive_ = it.key() == QLatin1String(HexDock);
             if (!hexActive_)
               hexFollower_.clear();
+            // An edit carries the lines of the listing the user works in,
+            // which is that of the last analysis view used where it is a
+            // disassembly.
+            for (const auto &other : std::as_const(docks_))
+              if (other)
+                if (auto *assembly =
+                        qobject_cast<DisassemblyView *>(other->widget()))
+                  assembly->listing()->setWorkedIn(assembly == disassembly_ &&
+                                                   !lastCodeView_ &&
+                                                   !hexActive_);
             // What the commands act on follows the view: a pseudocode
             // window converts a parameter, the disassembly an operand.
             updateActions();

@@ -2723,6 +2723,7 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
       session(s)->path.ends_with("code-folding-cpp.bin") ||
       session(s)->path.ends_with("code-brackets.bin") ||
       session(s)->path.ends_with("code-repeats.bin") ||
+      session(s)->path.ends_with("code-calls.bin") ||
       session(s)->path.ends_with("local-references.bin") ||
       session(s)->path.ends_with("local-references-cpp.bin") ||
       session(s)->path.ends_with("tab-sync-paged.bin")) {
@@ -2834,6 +2835,29 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
       }
       full += "  return v0;\n}\n";
     }
+    // Calls of one function down two pages, beside a few of another: two on
+    // a line with characters beyond ASCII between them, under a comment and
+    // over a string that spell its name and link nothing, one on a line that
+    // begins within a comment, one that heads a block, and a library
+    // operation among those of the second page.
+    const bool calls = session(s)->path.ends_with("code-calls.bin");
+    if (calls) {
+      full = "#include <stdint.h>\n"
+             "int32_t function_20(int32_t v0) {\n"
+             "  // function_22 \xE5\x90\x8D \xC3\xA9: a comment names nothing\n"
+             "  v0 += function_22(v0); /* \xE5\x90\x8D\xE7\xA7\xB0 */ v0 -= "
+             "function_22(v0);\n"
+             "  const char *message = \"function_22\";\n"
+             "  /* a comment that goes on\n"
+             "     and ends */ v0 += function_22(v0);\n";
+      for (int i = 0; i < 300; ++i) {
+        if (i == 20)
+          full += "  if (function_22(v0)) {\n    v0 += 1;\n    v0 += 2;\n  }\n";
+        full += i % 50 == 7 ? "  v0 ^= function_21(v0);\n"
+                            : "  v0 += function_22(v0);\n";
+      }
+      full += "  return v0;\n}\n";
+    }
     // Brackets of the code, nested and across lines, beside brackets of a
     // string and a comment.
     if (session(s)->path.ends_with("code-brackets.bin"))
@@ -2898,6 +2922,9 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
     }
     const auto beginByte = first < starts.size() ? starts[first] : full.size();
     const auto endByte = end < starts.size() ? starts[end] : full.size();
+    // The lines a library operation takes, where a text has one.
+    const bool taken = paged || calls;
+    const std::size_t low = calls ? 280 : 549, top = low + 3;
     return copy(Json{
         {"schema_version", 1},
         {"address", hexAddress(address)},
@@ -2914,13 +2941,13 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
          {{"lines", localReferences ? 2 : 1},
           {"end_byte", starts[localReferences ? 2 : 1]}}},
         {"library_regions",
-         paged ? Json::array(
+         taken ? Json::array(
                      {{{"id", "late-operation"},
                        {"display_name", "fixture operation"},
                        {"foldable", true},
                        {"mapping_status", "mapped"},
-                       {"spans", Json::array({{{"begin_byte", starts[549]},
-                                               {"end_byte", starts[552]}}})}}})
+                       {"spans", Json::array({{{"begin_byte", starts[low]},
+                                               {"end_byte", starts[top]}}})}}})
                : Json::array()},
         {"source_names", Json::array()}}
                     .dump());

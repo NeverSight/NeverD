@@ -1398,6 +1398,20 @@ although the listing, which jumps by name, refuses it. Names are kept in
 the project folder's `renames.json`, which the command line reads and writes too
 (`neverd rename <input> --addr <address> --to <name>`, `--clear`).
 
+Pseudocode that shows a function's name reads the new one at once, before the
+engine has answered: the name stands in each place the text links the function,
+as the engine writes it there. The engine's answer is read when it comes, and
+where the engine refuses the name, because another address has it, the text
+reads again as it did and Output says why. A name the text already spells as a
+word, data's name and a local variable's show when the engine has answered.
+
+After an edit the listing reads the lines in view ahead of the lines beyond
+it. Where the listing is the view worked in, or the edit renames a function
+those lines show, they come with the engine's answer itself; elsewhere they are
+read right behind it, so that the pseudocode's page waits for none of them. The
+view worked in is the last analysis view to take the keyboard; a dialog that a
+command asks with leaves it so.
+
 **Edit → Code** (C) defines native instructions from the selected byte through
 one basic block, ending at a branch, return, unmodelled control transfer or
 existing code. It uses the image's processor and instruction mode, validates

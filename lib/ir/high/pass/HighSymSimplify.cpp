@@ -1095,6 +1095,20 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       if (Ctx.op(Child) == sym::SymOp::Extract && Ctx.width(Child) < 8)
         UnsignedFragment = Child;
     }
+    // The source language stores integer fields in whole bytes. A packed
+    // sign bit above a literal can be emitted directly at its carrier width.
+    sym::SymRef SignWord, LowLiteral;
+    if (Ctx.op(Item.Ref) == sym::SymOp::Concat &&
+        Ctx.numOperands(Item.Ref) == 2) {
+      const auto High = Ctx.operand(Item.Ref, 0),
+                 Low = Ctx.operand(Item.Ref, 1);
+      if (Ctx.op(High) == sym::SymOp::Extract && Ctx.node(High).Aux == 0 &&
+          Ctx.width(High) == 1 && Ctx.isConst(Low) &&
+          Ctx.width(Ctx.operand(High, 0)) == Ctx.width(Item.Ref)) {
+        SignWord = Ctx.operand(High, 0);
+        LowLiteral = Low;
+      }
+    }
     if (!Item.ChildrenReady)
       if (const auto Parity = lowByteParityInput(Ctx, Item.Ref); Parity.first)
         ParityInputs.emplace(Index, Parity);
@@ -1109,6 +1123,11 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       if (Parity != ParityInputs.end()) {
         if (!Built.contains(Parity->second.first.index()))
           Work.push_back({Parity->second.first, false});
+        continue;
+      }
+      if (SignWord) {
+        if (!Built.contains(SignWord.index()))
+          Work.push_back({SignWord, false});
         continue;
       }
       llvm::ArrayRef<sym::SymRef> Operands =
@@ -1367,6 +1386,29 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       break;
     }
 
+    case sym::SymOp::Rol:
+    case sym::SymOp::Ror: {
+      const auto Count = Ctx.operand(Item.Ref, 1);
+      const auto Word = get(Ctx.operand(Item.Ref, 0));
+      if (!Word || !Ctx.isConst(Count))
+        break;
+      const auto Amount = Ctx.constValue(Count).urem(NodeWidth);
+      if (!Amount) {
+        Result = Word;
+        break;
+      }
+      const auto Left =
+          Ctx.op(Item.Ref) == sym::SymOp::Rol ? Amount : NodeWidth - Amount;
+      auto Shift = [&](NdOp Op, uint64_t N) {
+        return HighExpr::makeBinop(
+            Op, Word,
+            HighExpr::makeConst(N, ByteSize,
+                                ConstantAddressProvenance::Scalar));
+      };
+      Result = HighExpr::makeBinop(NdOp::INT_OR, Shift(NdOp::INT_LEFT, Left),
+                                   Shift(NdOp::INT_RIGHT, NodeWidth - Left));
+      break;
+    }
     case sym::SymOp::Shl:
       Result = binop(NdOp::INT_LEFT, Ctx.operands(Item.Ref));
       break;
@@ -1461,6 +1503,19 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       break;
     }
     case sym::SymOp::Concat: {
+      if (SignWord) {
+        const auto Source = get(SignWord);
+        const auto Literal =
+            literalExpr(Ctx.constValue(LowLiteral).zext(NodeWidth), ByteSize,
+                        ScalarLiterals);
+        if (Source && Literal) {
+          const auto Shift = HighExpr::makeConst(
+              NodeWidth - 1, ByteSize, ConstantAddressProvenance::Scalar);
+          const auto High = HighExpr::makeBinop(NdOp::INT_LEFT, Source, Shift);
+          Result = HighExpr::makeBinop(NdOp::INT_OR, High, Literal);
+        }
+        break;
+      }
       llvm::ArrayRef<sym::SymRef> Parts = Ctx.operands(Item.Ref);
       if (Parts.size() != 2)
         break;

@@ -184,6 +184,15 @@ public:
   /// Reads what the session holds now, not at the first thing that needs it.
   /// It advances generation().
   void build();
+  /// Whether a read made now reads what the listing has built, and costs its
+  /// own lines alone: no name, item or function it read has changed under it
+  /// that it has yet to read again.
+  bool standing() const;
+  /// Whether the reference index is being built, or the functions that
+  /// discovery found are still to be listed: what the listing decoded is
+  /// decoded again once that ends, and a read then pays for it.  Not so
+  /// while the index merely waits to be built.
+  bool indexing() const;
   /// Engine function name -> display name, for engine text such as
   /// pseudocode that spells functions the engine's way.
   const std::unordered_map<std::string, std::string> &functionAliases();

@@ -1928,7 +1928,12 @@ and published code at O0 and O2, on the ordinary and alternate stacks. They
 check object identity, cleanup order and the restored signal mask. Set
 `NEVERD_ARM64E_LIFTED_NATIVE=1` to execute the TLS lifecycle and lifted
 arithmetic controls. The TLS cases compare against a compiler-linked dylib,
-including a pre-existing TLS template and thread-exit callbacks. See the
+including a pre-existing TLS template and thread-exit callbacks.
+`RunsLegacyThreadInitializersWithPerInstancePAC` compares a compiler-linked
+per-thread reference with the published dylib at O0 and O2. Three threads
+exercise old and new descriptors, recursive initializers, all four PAC keys
+and the TLV calling convention. The signal tests also interrupt a proved
+path back to a protected call on both ordinary and alternate stacks. See the
 [publication and signal-delivery checks](arm64e-native-validation.md#signal-delivery-language-cleanup-and-new-thread-local-storage).
 
 `NeverDArm64eUnwindRecoveryTests` runs without Apple hardware. It checks
@@ -4223,13 +4228,28 @@ Native tests change a single observed bit, exhaust a six-bit input pair and
 check full-width equivalence with Z3. Both an outer scale and a scale already
 multiplied into one factor must preserve the same observations. A 63-factor executable uses these masks
 through CLI and GUI worker source paths. The 32-bit top-column regression
-requires the same 16-node reading at a 256-unit work limit and at the usual
-limit; Z3 verifies the short-budget result.
+requires at most 15 nodes at both the 256-unit work limit and the usual
+limit. The printed result round-trips at the same cost and Z3 checks
+full-width equality. The HighIR test replays the same product and checks
+the sign-column expression against its original full-word arithmetic.
 Use `--family dynamic-lane --count 12` for 84 products with masks that depend
 on runtime inputs. Half the cases leave one more low bit observable, and
 28 also have a fixed low literal that must stay in the output. The
 native test checks the whole seven-bit input space and wider words with Z3.
 A 63-factor x64 fixture exercises both CLI and GUI worker source paths.
+Use `--family spliced-word --count 12` for 96 products of 41 to 181 factors
+at 17 through 513 bits. They mix sign extension, zero extension and two-
+or three-piece concatenation. In half the products a replacement high lane
+reaches one observable bit. A 97-factor x64 fixture uses partial-register
+writes and both extensions through the CLI and GUI worker source paths.
+Use `--family rotating-window --count 14` for 112 products of 71 to 257 factors
+at the same widths. Nested rotations move a source window across bit zero.
+Half the products retain a live bit in an extension or high piece.
+A 127-factor x64 fixture reads CH after rotating ECX and checks signed and
+unsigned byte extensions through the CLI and GUI worker source paths.
+The LLVM pass also checks sign extension lowered to an exact right shift,
+signed and unsigned factor bounds, and neighboring shifts or coefficients
+that can produce poison.
 For latency comparisons, retain per-run and pooled per-input P95, separate
 thread CPU from wall time, and include same-binary A/A controls. Pooling input
 medians can change the sample at the 95th percentile and reverse the apparent
@@ -7251,13 +7271,74 @@ word, a bracket's partner lines away, a fold, the focus, a row another row of it
 instruction marks, a line's number, a scroll either way, another style, and a
 highlight no code of the view's sets) and compare, after each, what the window's
 backing store keeps of the view with the view painted whole; a change that reaches
-few rows may paint few. `theViewsThatShowAnEditGoAheadOfTheOthersAtItsRevision` holds
+few rows may paint few. What it paints is counted as what the view asks its viewport to
+paint: a window paints more for reasons of its own, as when the dock that holds the view
+lays itself out again. `theViewsThatShowAnEditGoAheadOfTheOthersAtItsRevision` holds
 an edit's page to the line the edit reaches, painted before the others hear of the
 revision. `NeverDGuiPaintedRowsScaled` runs the four at `QT_SCALE_FACTOR=1.25`, where
 the edges of a row round. `NeverDGuiController`, `NeverDGuiPatchKeys` and
 `NeverDGuiSourceVariableTypes` turn `PaintCheck` on: every paint of a code view is
 painted again into a picture of what its paints add up to, which is compared with the
 view painted afresh, and a test after which the two differ fails.
+The listing paints the same way: the rows a change reaches, and the gutter of branch
+arrows where an arrow changed. `WorkbenchTests::aChangeToTheListingPaintsTheRowsItReachesAndNoOther`
+moves the cursor by lines and columns, onto and off a line an arrow leaves, with the focus
+and without it, selects by key and as another view's search does, locks and searches
+words, scrolls both ways, drops the address prefixes and changes the style, comparing
+after each what the window keeps of the listing with the listing painted whole. It reads
+the listing's page again as it was, which paints nothing and keeps every line read from
+it, and then with one thing changed at a time: a row under another name, painted within
+the call that takes the page; a name as long, where the text alone differs; a name in
+another color or leading elsewhere, where the spans alone do and what the text had laid
+out is not kept; an address of another class; rows that say another function without
+showing it, of which none is painted; a jump turned conditional in a row that reads as it
+did, which the gutter alone paints; and a longer address prefix, which moves every row.
+A highlight and an arrow that no code of the view's set are found as it paints anything.
+A page with one arrow then moves where the arrow leaves, where it lands and whether it
+is the cursor's, each without the others.
+`aPatchedItemsRowIsPaintedOnceItsPatchIsKnown` patches a byte the listing shows and takes
+the patch back: the lines are read again first, and the row is painted once more when the
+session has read which bytes are patched. `NeverDGuiPaintedRowsScaled` runs both at
+`QT_SCALE_FACTOR=1.25` with the others, and the tests that turn `PaintCheck` on check
+every paint of the listing as they check a code view's.
+An edit carries the read of the lines the listing shows, and the listing takes the
+answer ahead of the lines around them. `QueryServiceTests::anEditCarriesTheReadAViewSaysItMakesNext`
+has a view say that read: the edit carries it naming no page, then the page the first
+answer gave; the read made as the edit's revision is said takes the answer with nothing
+sent, a second read of the same lines asks the worker, a `later` answers none, and a view
+that shows nothing, is gone or says no read has the edit carry none.
+`aReadTakesTheAnswerCarriedForItThoughACommandWaits` has a command accepted while the edit
+is with the worker, as the project's files are read again a moment after an edit wrote
+them: the read takes the carried answer as the revision is said all the same, the command
+leaves next, and an answer no read took is gone once a command has left. Where the command
+that waits is another edit, the read waits for that edit's reply and takes its lines.
+`WorkbenchTests::anEditBringsTheLinesTheListingShows` renames a function the listing
+shows: as the revision is said the row reads its new name while the listing's rows are
+not yet current, one refresh follows, and the worker answered one read with the edit.
+It then comments a line three times: with the pseudocode the view worked in the edit
+carries nothing, so that the pseudocode's page waits for no line of the listing, and the
+listing reads its lines itself ahead of the refresh; with the listing worked in the edit
+carries them; and so it does where the comment is made through the listing's own dialog,
+which may still hold the focus as the edit leaves.
+`theViewWorkedInShowsAnEditBeforeTheOther` holds the two turns in which the views take
+what an edit's reply carried: the listing takes its lines in the first where it is the
+view worked in and in the second where it is not, and a pseudocode view that has the
+change still to show (a note, which nothing reads ahead) takes its page in the first.
+`editsInABurstLeaveTheListingAsTheLastSays` renames a function the listing shows twice,
+the second rename accepted while the first is with the worker: the listing ends with the
+last name and has read no line it took ahead otherwise.
+`theLinesInViewAreReadAheadWhereTheyStandForTheLinesHeld` gives the listing such lines by
+hand: they are taken where each stands at the place of the line it replaces, and left to
+the refresh where a line was added in view, the view scrolled since it asked, fewer lines
+came than were asked for short of the listing's end, they begin above the view, or the
+refresh has landed; and a refresh that reads a line taken ahead otherwise is counted,
+which the other tests hold at none. `anEditLeavesThePagesKeptInTheOrderTheyWereRead`
+keeps as many pages as a dispatcher keeps, the last a page a view shows, and has one more
+kept after an edit looked at them all: the page read longest ago goes, and no other.
+`NeverDWorkerListingPages` carries the lines a view shows with a rename, naming the page
+kept and naming none, and has more lines than a view shows, a read that may look for an
+owner, and the lines after an edit that leaves the listing its functions to read again
+left to the client.
 `NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
 session takes up what the replica keeps of a function's first look, a later session
 lists what asking the engine lists, a new name of a function or of data keeps the
@@ -23724,6 +23805,21 @@ readonly/writable globals, image pointers, MUL, both word-merge orders,
 doubleword merges and a merge read in an indirect call's slot. Uninitialized
 merge destinations cover both orders, all offsets, fixed and seeded random
 machine values, independent expected bytes and fault order at both page edges.
+For n64, the runner also checks isolated `SDL`, isolated `SDR` and a paired
+store followed by a paired reload. It compares the returned 64 bits and all
+16 bytes around the destination against an independent byte-array splice at
+each of the eight alignments, in both byte orders.
+The four `mips_ddiv*` kernels return the quotient or remainder of a signed
+or unsigned doubleword division. Their edge cases include MIN64/-1, operands
+with significant high words, and signed remainders of both signs. The classic
+n64 runner also checks seeded random inputs against Python integer arithmetic.
+For physical microMIPS64, run `micro64-merge-store-roundtrip.py` from the same
+directory with `--neverd`, `--cc` (MIPS64 GNU C), `--assembler`, `--linker` and
+`--simulator` (GNU sim for `mipsisa64r2-mti-elf`). It checks the function tags
+in the rebuilt objects and executes both C backends at `-O0` and `-O2` for
+n32 and n64. Add `--suite division` to execute the corresponding doubleword
+division kernels, including their physical HI/LO reads. The default suite
+executes the merge-store kernels.
 An invalid-memory branch-likely slot is tested both annulled and executed.
 Bitfield and shuffle kernels cover all 13 classic SPECIAL3 forms and full-width
 fields with independent bit/lane expectations. MIPS64 invalid word inputs are
@@ -23971,6 +24067,27 @@ original mode attributes. The driver checks each return value and, for DSP
 and DSPR2, the final DSPControl bits. The selected micro MSA integer kernel
 recompiles to scalar microMIPS. Its original vector instructions are checked
 against the classic encoding and the P5600.
+
+The `mips64extract_*` selections cover classic DSP64 extraction, insertion,
+signed accumulator shifts and DMTHLIP in both byte orders. The `mixed`
+selection retains both word and doubleword extraction helpers in one function.
+Each original return and DSPControl value must match independent integer
+arithmetic before the two C outputs are compiled at O0/O2. The
+`mips64boundary_*` selections additionally cover zero/one/32/63 extraction
+counts, full-width and HI-only fields, and the signed -64 shift. Both groups
+include negative LO values and use the corrected pinned Unicorn helper.
+`MIPSDSP64.*` separately tests all encoded counts, positions, banks, overlaps
+and unpredictable results with APInt expectations. The fork's
+`test_mips64_dsp_extract` exercises all register counts and all positions in
+all four banks with independent bit-at-a-time expectations in both byte
+orders. It also checks DSP-disabled MFHI/MFLO with discarded results on o32
+and n64. The `mips64bank*` source profiles preserve full-width AC1–AC3
+transfers, extraction and accumulator shifts through both C views. The
+`mips64discard*` profiles check success/failure EFI and POS updates with a
+zero destination and no observed accumulator input. Their source returns
+the resulting DSPControl value. Native zero-result regressions additionally
+check DSP-disabled exceptions and an unchanged zero register. These checks
+do not qualify hardware execution.
 
 Run `micro-dsp-simulator.py` with `--assembler`, `--linker`, `--bench` and
 `--simulator` to execute the physical microMIPS DSP and DSPR2 instructions.

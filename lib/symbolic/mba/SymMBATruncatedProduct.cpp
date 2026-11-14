@@ -12,6 +12,7 @@
 
 #include "SymMBADetail.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/MathExtras.h"
@@ -20,6 +21,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 
 namespace neverd::symbolic::detail {
 
@@ -31,8 +33,106 @@ struct Factor {
   bool Complement;
 };
 
+// Concatenation and either extension retain their low operand verbatim.
+SymRef lowOperand(const SymContext &Ctx, SymRef R) {
+  switch (Ctx.op(R)) {
+  case SymOp::Concat:
+    return Ctx.operands(R).back();
+  case SymOp::ZExt:
+  case SymOp::SExt:
+    return Ctx.operand(R, 0);
+  default:
+    return {};
+  }
+}
+
+// A narrow sum, product or bitwise expression is congruent to the same
+// operation on word-sized representatives modulo its original width. Pick
+// common representatives so different high lanes can share a polynomial.
+SymRef widenCoordinate(SymContext &Ctx, SymRef Low, unsigned Width,
+                       llvm::DenseMap<uint32_t, SymRef> &Widened,
+                       WorkBudget &Budget, size_t &Storage) {
+  if (const auto Known = Widened.lookup(Low.index()))
+    return Known;
+  llvm::SmallVector<std::pair<SymRef, bool>, 16> Stack{{Low, false}};
+  const size_t Words = llvm::APInt::getNumWords(Width);
+  while (!Stack.empty()) {
+    const auto [V, Visited] = Stack.pop_back_val();
+    if (Widened.contains(V.index()))
+      continue;
+    const auto Op = Ctx.op(V);
+    const bool Modular = Op == SymOp::Add || Op == SymOp::Mul || isBitwise(Op);
+    const auto Children = Ctx.operands(V);
+    if (!Visited) {
+      const size_t Count = Modular ? Children.size() : 0;
+      const size_t Entry =
+          sizeof(SymNode) + 4 * sizeof(SymRef) + Words * sizeof(uint64_t);
+      if (Storage < Entry || Count > (Storage - Entry) / (4 * sizeof(SymRef)) ||
+          !Budget.consume(1 + Words + Count))
+        return {};
+      Storage -= Entry + Count * 4 * sizeof(SymRef);
+      if (Modular) {
+        Stack.emplace_back(V, true);
+        for (SymRef Child : Children)
+          Stack.emplace_back(Child, false);
+        continue;
+      }
+    }
+    SymRef Wide;
+    if (Modular) {
+      llvm::SmallVector<SymRef, 8> Args;
+      size_t Count = 0;
+      for (SymRef Child : Children) {
+        auto Value = Widened.lookup(Child.index());
+        Count += Ctx.op(Value) == Op ? Ctx.numOperands(Value) : 1;
+        Args.push_back(Value);
+      }
+      if (Count > Storage / sizeof(SymRef) ||
+          Count > Budget.available() / (2 + Words))
+        return {};
+      Storage -= Count * sizeof(SymRef);
+      Budget.consume(Count * (2 + Words));
+      Wide = Ctx.rebuild(V, Args);
+    } else if (Op == SymOp::Extract && Ctx.width(Ctx.operand(V, 0)) == Width) {
+      // Rotating the word right by the extraction offset puts this window
+      // in its low bits, including windows crossing a prior rotation seam.
+      // Compose constant counts modulo the source width; a variable count
+      // remains part of the source word.
+      auto Source = Ctx.operand(V, 0);
+      uint64_t Offset = Ctx.node(V).Aux;
+      while (Ctx.op(Source) == SymOp::Rol || Ctx.op(Source) == SymOp::Ror) {
+        const auto Count = Ctx.operand(Source, 1);
+        if (!Ctx.isConst(Count))
+          break;
+        if (!Budget.consume(1 + llvm::APInt::getNumWords(Ctx.width(Count))))
+          return {};
+        const uint64_t Shift = Ctx.constValue(Count).urem(Width);
+        Offset =
+            (Offset + (Ctx.op(Source) == SymOp::Ror ? Shift : Width - Shift)) %
+            Width;
+        Source = Ctx.operand(Source, 0);
+      }
+      Wide = Source;
+      if (Offset) {
+        const size_t Extra = sizeof(SymNode) + 2 * sizeof(SymRef);
+        if (Storage < Extra || !Budget.consume(2 + Words))
+          return {};
+        Storage -= Extra;
+        Wide = Ctx.mkRor(Source, Ctx.mkConst(Width, Offset));
+      }
+    } else if (Ctx.isConst(V)) {
+      Wide = Ctx.mkConst(Ctx.constValue(V).sext(Width));
+    } else {
+      Wide = Ctx.mkZExt(V, Width);
+    }
+    Widened.try_emplace(V.index(), Wide);
+  }
+  return Widened.lookup(Low.index());
+}
+
 bool readTruncatedCoordinate(SymContext &Ctx, Factor &Row, unsigned Observed,
-                             WorkBudget &Budget, size_t &Storage) {
+                             WorkBudget &Budget, size_t &Storage,
+                             llvm::DenseMap<uint32_t, SymRef> &Widened) {
   const unsigned Width = Ctx.width(Row.Word);
   const size_t Words = llvm::APInt::getNumWords(Width);
   auto &Word = Row.Word;
@@ -61,6 +161,8 @@ bool readTruncatedCoordinate(SymContext &Ctx, Factor &Row, unsigned Observed,
   };
   auto CanRead = [&] {
     const auto Op = Ctx.op(Word);
+    if (Op == SymOp::Concat || Op == SymOp::ZExt || Op == SymOp::SExt)
+      return true;
     if (HasScalar(Word) && (Op == SymOp::Add || Op == SymOp::Mul))
       return true;
     if (Op == SymOp::And || Op == SymOp::Or || Op == SymOp::Xor) {
@@ -89,6 +191,22 @@ bool readTruncatedCoordinate(SymContext &Ctx, Factor &Row, unsigned Observed,
       return Scaled(T) && !Ctx.constValue(Ctx.operand(T, 0))[0];
     });
   };
+  // A direct splice needs no affine arithmetic. Keep the original weight
+  // and offset when its low word has no further coordinate to read.
+  unsigned Zeros = std::min(Observed, Row.Zeros);
+  if (const auto Low = lowOperand(Ctx, Word)) {
+    if (!Budget.consume())
+      return false;
+    if (Ctx.width(Low) < Observed - Zeros)
+      return true;
+    const auto Wide =
+        widenCoordinate(Ctx, Low, Width, Widened, Budget, Storage);
+    if (!Wide)
+      return false;
+    if (Wide == Word)
+      return true;
+    Word = Wide;
+  }
   if (CanRead()) {
     const size_t ReadBytes =
         2 * (sizeof(llvm::APInt) + Words * sizeof(uint64_t));
@@ -106,14 +224,32 @@ bool readTruncatedCoordinate(SymContext &Ctx, Factor &Row, unsigned Observed,
         const auto K = Ctx.constValue(Ctx.operand(Word, 0)).trunc(Observed);
         if (Op == SymOp::Add)
           A += B * K;
-        else
+        else {
           B *= K;
+          if (!K[0])
+            Zeros += std::min(Observed - Zeros, K.countr_zero());
+        }
         Word = Ctx.operand(Word, 1);
         continue;
       }
       // B annihilates every bit above this prefix. A literal XOR of
       // all ones in the prefix is -1 - word there.
-      const unsigned Bits = Observed - B.countr_zero();
+      const unsigned Bits = Observed - Zeros;
+      if (const auto Low = lowOperand(Ctx, Word)) {
+        if (!Budget.consume())
+          return false;
+        if (Ctx.width(Low) < Bits)
+          break;
+        auto Wide = widenCoordinate(Ctx, Low, Width, Widened, Budget, Storage);
+        if (!Wide)
+          return false;
+        if (Wide == Word)
+          break;
+        Word = Wide;
+        if (Ctx.op(Word) == SymOp::ZExt)
+          break;
+        continue;
+      }
       if (!Budget.consume(2 + 2 * Words))
         return false;
       if (Op != SymOp::Add && Ctx.isConst(Ctx.operand(Word, 0))) {
@@ -376,12 +512,13 @@ SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
   }
   // Admit the complete product's content before reading coordinates.
   // Once that prefix proves zero, none of their alternate spellings matter.
+  llvm::DenseMap<uint32_t, SymRef> Widened;
   for (auto &Row : Rows) {
     const unsigned InitialContent = Row.Content;
     // Other factors annihilate high bits here too: instruction combining
     // can place the outer scale inside one offset instead of on the product.
     const unsigned LiveBits = Observed - (TotalZeros - InitialContent);
-    if (!readTruncatedCoordinate(Ctx, Row, LiveBits, Budget, Storage))
+    if (!readTruncatedCoordinate(Ctx, Row, LiveBits, Budget, Storage, Widened))
       return Root;
     TotalZeros += std::min(Observed - TotalZeros, Row.Content - InitialContent);
     if (TotalZeros == Observed)

@@ -1312,7 +1312,11 @@ without performing those native steps.
 Resolve the unwind rows and call-site table while the image is loaded.
 `prepareDarwinArm64eExceptionSite` intersects the recovered row with the
 personality's guarded range. At a protected call, it requires a saved LR and
-an actual call instruction. A frame with no local action can forward to its
+an actual call instruction. The same rule covers a prefix in its guarded
+range and a call's own return edge that loops back to the call. Every
+instruction on that path must preserve the row, memory and the callee-saved
+registers. A stack reload must fit inside the recovered live frame.
+A frame with no local action can forward to its
 authenticated caller. The SA_SIGINFO handler passes this plan and a throw
 or rethrow callback to `ndDarwinArm64eDeliverSignalException`, then returns.
 The kernel restores the interrupted thread's signal mask and stack. The
@@ -1330,11 +1334,17 @@ descriptors. Strong exported definitions receive per-thread export-trie
 entries. Reading the C or C++ variable resolves the descriptor for the
 calling thread. Compiled first-use code and the authenticated libSystem
 terminator call supply C++ initialization and thread-exit destruction.
-Address-diversified pointers in copyable template storage require an
-instance-specific signing contract. An old template can contain an ordinary
-pointer or an address-independent authenticated function pointer. Copying its
-dyld recipe preserves the target and signing schema while the new slot gets
-its own chain successor. [Apple's dyld TLS implementation](https://github.com/apple-oss-distributions/dyld/blob/main/libdyld/ThreadLocalVariables.cpp)
+When the template contains an address-diverse pointer or the object supplies
+per-thread initializer pointers, the publisher registers a private descriptor
+with dyld. On first access the public descriptor obtains the calling thread's
+block, authenticates each nonnull pointer against its template address and
+signs it for the corresponding address in that block. The resolver uses
+the original IA, IB, DA or DB key and discriminator. It runs the original
+initializer sections before the added sections, traversing each in reverse
+entry order. Recursive TLS lookups from callbacks use the same initialized
+pointers. The resolver preserves Darwin's TLV argument and SIMD registers.
+[Apple dyld TLS allocation](https://github.com/apple-oss-distributions/dyld/blob/main/libdyld/ThreadLocalVariables.cpp)
+and [legacy initializer ordering](https://github.com/apple-oss-distributions/dyld/blob/dyld-852.2/src/threadLocalVariables.c).
 
 Image constructors have a different lifetime. The publisher resolves each
 native module-initializer relocation to a local function and emits a
@@ -1358,3 +1368,72 @@ reported unchecked ordinary-memory writeback. Xcode 27 built and signed the
 x1 slice, and the M1 loader returned Darwin error 86 on launch.
 [Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43387041250)
 and [verification record](evidence/arm64e-signal-cleanup-and-new-tls-2026-11-13.json).
+
+The per-thread resolver and protected-call path tests ran in the 40-case
+Release suite on macOS 26.7.2 and 27.0.1. Each M1 runner executed 24 C++
+and 24 Objective-C signal deliveries and eight reference or published TLS
+lifecycles. Xcode 27 built and signed the x1 probe. Its loader rejected
+the slice on this hardware.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43462907219)
+and [per-host results](evidence/arm64e-tls-resolver-and-call-setup-2026-11-14.json).
+
+Register-only lifted leaves can also publish integer REV, RBIT and CLZ.
+The object producer uses LLVM's bit-provenance matcher to recognize the
+lifter's shifts and masks. The publication check still compares the emitted
+instruction words and their operands. The byte-reversal and trailing-zero
+fixture compares both entries with independent loops, including a zero input.
+
+Lifted integer leaves also publish signed and unsigned selects, register
+division and remainder, sign- or zero-extending loads, and local conditional
+loads and stores. The producer recognizes division only after proving the
+zero and signed-overflow guards carry the architecture's results. Conditional
+branches must keep their displacement and land inside the same function.
+Native drivers check null and nonnull paths, adjacent memory, signed extrema,
+and zero divisors on the original and published libraries.
+
+The Windows CI analysis and authenticated-call fixtures use the same checked
+Clang 22.1.6 frontend as the Windows source-patch tests. Clang 20.1.8 accepts
+the arm64e target while leaving function-pointer authentication off by default.
+Explicit flags enable C function-pointer signing in that version, but its
+Objective-C class and method metadata still lacks the authentication relocations
+exercised by the loader tests.
+
+The Release host passed all 46 cases on macOS 26.7.2 and 27.0.1. Each M1
+runner executed 74 original or published images and verified 24 C++ and 24
+Objective-C signal cleanups. The Windows runner independently compiled the
+signed C and Objective-C controls at O0 and O2. Both M1 runners reported
+that native checked writeback remained unavailable.
+[Native and Windows Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43545498327)
+and [per-host verification record](evidence/arm64e-scalar-publication-2026-11-14.json).
+
+Ordinary register-indexed accesses and non-SP writeback accesses now enter
+the same audited native register-body producer as physical stack cursors.
+The producer retains each original memory instruction and its base update,
+including the runtime checked-pointer behavior. This covers signed and
+unsigned GPR loads, scalar and SIMD stores, signed word pairs, and B/H/S/D/Q
+memory registers. Unsupported vector arithmetic arrangements still refuse
+native-body construction. Publication continues to verify the relocated
+instruction words, control-transfer targets and unwind rows.
+
+Direct-call X8/X9 result discovery follows the function's control-flow edges.
+Backward liveness reaches reads across conditional, forward and backward
+branches. W writes kill the complete corresponding X value, and another call
+ends the previous result. Functions without direct calls skip this analysis.
+The two-bit worklist processes each edge at most twice and emits results in
+instruction order.
+
+The additional publication controls compare indexed reads and signed-offset
+stores, zero and nonzero loop counts, pre/post-indexed scalar and pair
+accesses, and all five SIMD memory widths. Narrow SIMD loads are subsequently
+stored as full 128-bit registers, checking that their upper lanes are cleared.
+Independent drivers compare complete destination buffers, untouched guards
+and updated pointers on the original and published libraries. A separate
+negative case verifies that intervening W8/W9 writes end both old call results.
+
+Both M1 runners passed all 57 cases with the Release host built from
+`7991be5e74e7c671ce0e30b5fdfba002df64f72b`. Each executed 94 original or
+published images, 24 C++ and 24 Objective-C signal cleanups, and eight
+per-thread resolver lifecycles. The Windows frontend controls also passed.
+Both hosts still reported native CPTA-on unavailable.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43581342838)
+and [per-host verification record](evidence/arm64e-memory-and-register-publication-2026-11-14.json).

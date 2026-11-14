@@ -759,9 +759,11 @@ void CFGBuilder::extractJumpTables(LowFunc &Func) {
     JT.InsnAddr = Addr;
     JT.Targets = Rec.JumpTableTargets;
 
-    if ((Rec.ScalarBranchInput || Rec.ComputedScalarTargets) &&
+    if ((Rec.ScalarBranchInput || Rec.ComputedScalarTargets ||
+         Rec.ValueDispatch) &&
         Rec.IsIndirect) {
       JT.OriginalAddressSelector = Rec.ScalarBranchInput.has_value();
+      JT.ValueDispatch = JT.MutatedUnsafe = Rec.ValueDispatch;
       // A logical dispatch on the original numeric branch value. There is no
       // physical table, LOAD, slot map or relocation-suppression authority.
       // Bind the exact use after SSA; never infer a selector by register name.
@@ -776,7 +778,8 @@ void CFGBuilder::extractJumpTables(LowFunc &Func) {
         continue;
       for (va_t Target : JT.Targets)
         JT.CaseLabels.push_back(static_cast<int64_t>(Target));
-      Func.JumpTables.push_back(std::move(JT));
+      (JT.ValueDispatch ? Func.ValueDispatches : Func.JumpTables)
+          .push_back(std::move(JT));
       continue;
     }
 

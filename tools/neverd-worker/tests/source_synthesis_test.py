@@ -314,7 +314,8 @@ def carry_product_elf(degree, product=True, needed=7, high_bits=None, additive=F
 
 
 def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
-                          observed=32, dynamic_masks=False):
+                          observed=32, dynamic_masks=False, spliced_words=False,
+                          rotated_bytes=False):
     scale = 1 << (32 - observed)
     code = bytearray.fromhex("b8") + struct.pack("<I", scale)
     factors = []
@@ -326,7 +327,35 @@ def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
         coefficient = ((2 * i + 1) << shift) & 0xffffffff
         offset = 2 * i + 1
         code += bytes.fromhex("89f9" + op)
-        if observed < 32:
+        if rotated_bytes:
+            # CH reads the byte at bit 8 after a rotate. Each axis has one
+            # source position, including a byte which wraps past bit 31.
+            source_bit = (0, 5, 29)[i % 3]
+            left = (8 - source_bit) % 32
+            if i % 2:
+                code += bytes.fromhex("c1c1") + bytes([left])  # rol ecx, imm8
+            else:
+                code += bytes.fromhex("c1c9") + bytes([32 - left])  # ror ecx, imm8
+            value = f"((({value}<<{left})|({value}>>{32-left}))>>8&255U)"
+            if i % 4 < 2:
+                code += bytes.fromhex("0fbecd")  # movsx ecx, ch
+                value = f"(({value}^128U)-128U)"
+            else:
+                code += bytes.fromhex("0fb6cd")  # movzx ecx, ch
+        elif spliced_words:
+            # Keep CX and vary the high half of ECX three ways. Some high
+            # halves depend on the third argument at runtime.
+            if i % 4 == 0:
+                code += bytes.fromhex("0fbfc9")  # movsx ecx, cx
+                value = f"((({value}&65535U)^32768U)-32768U)"
+            elif i % 4 == 1:
+                code += bytes.fromhex("0fb7c9")  # movzx ecx, cx
+                value = f"({value}&65535U)"
+            else:
+                code += bytes.fromhex("4189d0 4181c0") + struct.pack("<I", offset)
+                code += bytes.fromhex("664189c8 4489c1")  # r8w = cx; ecx = r8d
+                value = f"(((z+{offset}U)&0xffff0000U)|({value}&65535U))"
+        elif observed < 32:
             # The mask changes only bits discarded by the outer scale and
             # this factor's coefficient. Keep the full operation in C.
             low = (1 << (observed - shift)) - 1
@@ -492,7 +521,7 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
-        elif kind.startswith(("truncated-perturbation-", "affine-perturbation-", "view-perturbation-", "dynamic-perturbation-")):
+        elif kind.startswith(("truncated-perturbation-", "affine-perturbation-", "view-perturbation-", "dynamic-perturbation-", "spliced-perturbation-", "rotated-perturbation-")):
             code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
             assert code.count("*") <= 12, text
         elif kind.startswith(("power-group-", "high-perturbation-", "mixed-perturbation-")):
@@ -554,7 +583,7 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
                 function_name(enhanced)
                 enhanced_shape(enhanced)
                 if representation == "source":
-                    if kind.startswith(("residue-", "multiple-residual-", "carry-product-", "carry-cofactor-", "power-group-", "high-perturbation-", "mixed-perturbation-", "truncated-perturbation-", "affine-perturbation-", "view-perturbation-", "dynamic-perturbation-")) or kind in ("affine-residue-neighbor", "prefix-residue-neighbor", "coarse-residue-neighbor", "distributed-residue-neighbor"):
+                    if kind.startswith(("residue-", "multiple-residual-", "carry-product-", "carry-cofactor-", "power-group-", "high-perturbation-", "mixed-perturbation-", "truncated-perturbation-", "affine-perturbation-", "view-perturbation-", "dynamic-perturbation-", "spliced-perturbation-", "rotated-perturbation-")) or kind in ("affine-residue-neighbor", "prefix-residue-neighbor", "coarse-residue-neighbor", "distributed-residue-neighbor"):
                         code = re.sub(r"/\*.*?\*/|//[^\n]*", "", ordinary,
                                       flags=re.S)
                         assert "*" in code, ordinary
@@ -664,6 +693,10 @@ if __name__ == "__main__":
             ("mixed-perturbation-49", *high_perturbation_elf(49, (0, 19, 48))),
             ("truncated-perturbation-63", *high_perturbation_elf(63, shift_base=7)),
             ("affine-perturbation-63", *high_perturbation_elf(63, shift_base=7, affine_depth=2)),
+            ("rotated-perturbation-127", *high_perturbation_elf(
+                127, shift_base=6, affine_depth=1, observed=14, rotated_bytes=True)),
+            ("spliced-perturbation-97", *high_perturbation_elf(
+                97, shift_base=6, affine_depth=1, observed=22, spliced_words=True)),
             ("dynamic-perturbation-63", *high_perturbation_elf(
                 63, shift_base=6, affine_depth=1, observed=23, dynamic_masks=True)),
             ("view-perturbation-63", *high_perturbation_elf(63, shift_base=6, affine_depth=1, observed=23)),

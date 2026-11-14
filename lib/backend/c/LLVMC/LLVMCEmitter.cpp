@@ -562,11 +562,14 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
   // it once it is written.
   std::string Rest;
   llvm::raw_string_ostream RestOS(Rest);
+  UsesMicroMIPSAttribute = false;
   {
     RestoreOutput Restore{OS, &OS.stream()};
     OS.retarget(&RestOS);
     writeModuleBody(Mod);
   }
+  if (UsesMicroMIPSAttribute)
+    OS << mips::MicroModeCPrelude;
   std::string Records;
   {
     llvm::raw_string_ostream RecordsOS(Records);
@@ -2755,6 +2758,12 @@ static uint64_t argumentSlotBytes(const llvm::Function &Fn,
   return Bytes;
 }
 
+const char *LLVMCWriter::mipsModeAttribute(const llvm::Function &Function) {
+  const auto Mode = mips::instructionModeFromLLVM(Function);
+  UsesMicroMIPSAttribute |= Mode == InstructionMode::MicroMIPS;
+  return mips::instructionModeCAttribute(Mode);
+}
+
 void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
   const c_library::ImportPops StdcallPops =
       Img ? c_library::stdcallImportPops(*Img) : c_library::ImportPops();
@@ -2854,7 +2863,7 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
           Opts.TheArch, Img ? Img : Opts.Image,
           Fn.hasFnAttribute(mips::DSPSourceMarker),
           Fn.hasFnAttribute(mips::NoMSAMarker));
-      OS << mips::instructionModeCAttribute(mips::instructionModeFromLLVM(Fn));
+      OS << mipsModeAttribute(Fn);
     }
     if (Fn.hasFnAttribute("neverd.x64_dispatch_frame"))
       OS << "__attribute__((ms_abi)) ";

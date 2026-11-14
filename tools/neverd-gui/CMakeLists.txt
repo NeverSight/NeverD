@@ -438,6 +438,8 @@ if(BUILD_TESTING)
       aChangePaintsTheRowsItReachesAndNoOther
       aBracketsPartnerIsPaintedAgainInItsOwnRow
       aRowIsPaintedAgainForItsNumberItsMarkOrItsPlaceAlone
+      aChangeToTheListingPaintsTheRowsItReachesAndNoOther
+      aPatchedItemsRowIsPaintedOnceItsPatchIsKnown
       theViewsThatShowAnEditGoAheadOfTheOthersAtItsRevision)
     set_tests_properties(NeverDGuiPaintedRowsScaled PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1.25" TIMEOUT 180)

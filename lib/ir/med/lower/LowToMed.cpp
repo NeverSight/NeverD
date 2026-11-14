@@ -1119,10 +1119,14 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
   Func.Entry = Low.Entry;
   Func.Name = Low.Name;
   Func.JumpTables = Low.JumpTables;
+  Func.JumpTables.insert(Func.JumpTables.end(), Low.ValueDispatches.begin(),
+                         Low.ValueDispatches.end());
   Func.ModuleAnalysisRoots = Low.ModuleAnalysisRoots;
   Func.CxxContinuationEntries = Low.CxxContinuationEntries;
   Func.UnsafeIndirectBranchAddresses = Low.UnsafeIndirectBranchAddresses;
   Func.CompleteLiftCoverage = Low.hasCompleteLiftCoverage();
+  Func.TruncatedPathAddresses.insert(Low.TruncatedPathAddresses.begin(),
+                                     Low.TruncatedPathAddresses.end());
   Func.ExceptionMetadata = Low.ExceptionMetadata;
   Func.SEHTerminationFrameBytes = collectLowSEHTerminationFrames(Low, TheArch);
   Func.SEHHomedArguments = collectLowSEHHomedArguments(Low, TheArch);

@@ -26,6 +26,7 @@
 #include "NativeWindowStates.h"
 #include "PatchMenu.h"
 #include "ProjectDatabase.h"
+#include "RenamedPages.h"
 #include "StyledText.h"
 #include "SymbolTablePromptDialog.h"
 #include "Theme.h"
@@ -594,6 +595,277 @@ private slots:
     lender.layout(font, 9, color);
     QVERIFY(taker.adoptLayout(lender));
     QCOMPARE(render(taker), render(alone));
+  }
+
+  void aSourceTextsPagesTakeANewName() {
+    // pagesRenamed reads the pages of a source text as a worker writes a
+    // function's new name into the text: the name in each place the text
+    // links the address, the spans after each moved by what the name's length
+    // differs, on every page.  It reads nothing where the pages do not say
+    // what the worker would write.
+    // Two pages of one text.  The first holds characters beyond ASCII ahead
+    // of a name it links twice; the second links the name once more, after a
+    // local and ahead of a library operation's span.
+    const QByteArray first =
+        QByteArray("int f(void) {\n  /* \xE5\x90\x8D */ g(); h(); g();\n");
+    const QByteArray second =
+        QByteArray("  v0 = g() + data;\n  return v0;\n}\n");
+    const auto at = [](const QByteArray &text, const char *word, int nth = 0) {
+      qsizetype found = -1;
+      for (int i = 0; i <= nth; ++i)
+        found = text.indexOf(word, found + 1);
+      return found;
+    };
+    const auto linked = [](qint64 begin, qint64 length, const char *kind,
+                           const char *address) {
+      QJsonObject name{{"begin_byte", begin},
+                       {"end_byte", begin + length},
+                       {"kind", kind},
+                       {"original", "x"}};
+      if (*address)
+        name.insert("address", address);
+      return name;
+    };
+    const qint64 base = 100, next = base + first.size();
+    const QJsonArray regions{
+        QJsonObject{{"id", "plain"}},
+        QJsonObject{{"id", "operation"},
+                    {"spans", QJsonArray{QJsonObject{
+                                  {"begin_byte", next + at(second, "return")},
+                                  {"end_byte", next + second.size()}}}}}};
+    const QJsonObject prelude{{"lines", 1}, {"end_byte", base + 14}};
+    QJsonObject one{
+        {"text", QString::fromUtf8(first)},
+        {"byte_offset", base},
+        {"offset", 0},
+        {"next_offset", 2},
+        {"prelude", prelude},
+        {"library_regions", regions},
+        {"source_names",
+         QJsonArray{QJsonObject{{"begin_byte", base + at(first, "h()")},
+                                {"end_byte", base + at(first, "h()") + 1},
+                                {"identifier", "h"}}}},
+        {"code_names",
+         QJsonArray{
+             linked(base + 4, 1, "address", "0x1000"),
+             linked(base + at(first, "g()"), 1, "address", "0x2000"),
+             linked(base + at(first, "h()"), 1, "address", "0x3000"),
+             linked(base + at(first, "g()", 1), 1, "address", "0x2000")}}};
+    QJsonObject two{
+        {"text", QString::fromUtf8(second)},
+        {"byte_offset", next},
+        {"offset", 2},
+        {"next_offset", QJsonValue::Null},
+        {"prelude", prelude},
+        {"library_regions", regions},
+        {"source_names", QJsonArray{}},
+        {"code_names",
+         QJsonArray{linked(next + at(second, "v0"), 2, "local", ""),
+                    linked(next + at(second, "g()"), 1, "address", "0x2000"),
+                    linked(next + at(second, "v0", 1), 2, "local", "")}}};
+    const QVector<QJsonObject> pages{one, two};
+    const auto spans = [](const QJsonObject &page, const char *field) {
+      QVector<std::pair<qint64, qint64>> read;
+      for (const auto &value : page.value(QLatin1String(field)).toArray())
+        read.append({value.toObject().value("begin_byte").toInteger(),
+                     value.toObject().value("end_byte").toInteger()});
+      return read;
+    };
+    for (const QString &name :
+         {QStringLiteral("gg"), QStringLiteral("a_longer_name"),
+          QString::fromUtf8("\xE5\x90\x8D_n"), QStringLiteral("q::r")}) {
+      const auto renamed = pagesRenamed(pages, 0x2000, name);
+      QVERIFY2(renamed.has_value(), qPrintable(name));
+      QCOMPARE(renamed->places, 3);
+      QVERIFY(!renamed->data);
+      QCOMPARE(renamed->pages.size(), 2);
+      const QByteArray spelled = name.toUtf8();
+      const qint64 grown = spelled.size() - 1;
+      // The texts, as writing the name into their bytes gives them.
+      QByteArray firstNow = first, secondNow = second;
+      firstNow.replace(at(first, "g()", 1), 1, spelled);
+      firstNow.replace(at(first, "g()"), 1, spelled);
+      secondNow.replace(at(second, "g()"), 1, spelled);
+      QCOMPARE(renamed->pages[0].value("text").toString(),
+               QString::fromUtf8(firstNow));
+      QCOMPARE(renamed->pages[1].value("text").toString(),
+               QString::fromUtf8(secondNow));
+      // The first page begins where it did, the second after two names.
+      QCOMPARE(renamed->pages[0].value("byte_offset").toInteger(), base);
+      QCOMPARE(renamed->pages[1].value("byte_offset").toInteger(),
+               next + 2 * grown);
+      // Each name covers its spelling, and those after one moved with it.
+      const auto places = [&](const QJsonObject &page, const QByteArray &text) {
+        QStringList read;
+        const qint64 offset = page.value("byte_offset").toInteger();
+        for (const auto &[begin, end] : spans(page, "code_names"))
+          read.append(QString::fromUtf8(text.mid(begin - offset, end - begin)));
+        return read;
+      };
+      QCOMPARE(
+          places(renamed->pages[0], firstNow),
+          QStringList({QStringLiteral("f"), name, QStringLiteral("h"), name}));
+      QCOMPARE(places(renamed->pages[1], secondNow),
+               QStringList({QStringLiteral("v0"), name, QStringLiteral("v0")}));
+      QCOMPARE(spans(renamed->pages[0], "source_names"),
+               (QVector<std::pair<qint64, qint64>>{
+                   {base + at(first, "h()") + grown,
+                    base + at(first, "h()") + grown + 1}}));
+      // What a page says of the whole text is said on each of its pages:
+      // the prelude ends ahead of every name, the operation after them all.
+      for (const QJsonObject &page : renamed->pages) {
+        QCOMPARE(page.value("prelude").toObject(), prelude);
+        const auto region = page.value("library_regions").toArray();
+        QCOMPARE(region.at(0), regions.at(0));
+        const auto span =
+            region.at(1).toObject().value("spans").toArray().at(0).toObject();
+        QCOMPARE(span.value("begin_byte").toInteger(),
+                 next + at(second, "return") + 3 * grown);
+        QCOMPARE(span.value("end_byte").toInteger(),
+                 next + second.size() + 3 * grown);
+      }
+      // What the name does not reach stands as it was.
+      for (const char *field : {"offset", "next_offset"})
+        for (int i = 0; i < 2; ++i)
+          QCOMPARE(renamed->pages[i].value(QLatin1String(field)),
+                   pages[i].value(QLatin1String(field)));
+    }
+    // A name of the function the text defines moves the prelude's end too,
+    // where the prelude ends after it.
+    {
+      QVector<QJsonObject> defined = pages;
+      for (QJsonObject &page : defined)
+        page.insert("prelude",
+                    QJsonObject{{"lines", 1}, {"end_byte", base + 5}});
+      const auto renamed =
+          pagesRenamed(defined, 0x1000, QStringLiteral("main"));
+      QVERIFY(renamed.has_value());
+      QCOMPARE(renamed->places, 1);
+      for (const QJsonObject &page : renamed->pages)
+        QCOMPARE(page.value("prelude").toObject().value("end_byte").toInteger(),
+                 base + 5 + 3);
+    }
+    // What a page states of the function it is of, and of one a library
+    // operation of it calls, is the user's name where that one is renamed.
+    {
+      QVector<QJsonObject> stating = pages;
+      const QJsonObject engine{
+          {"addr", "0x2000"},           {"name", "g"},
+          {"display_name", "g"},        {"name_origin", "engine"},
+          {"display_origin", "engine"}, {"else", 7}};
+      const QJsonObject other{{"addr", "0x3000"}, {"name", "h"}};
+      for (QJsonObject &page : stating) {
+        page.insert("function_identity", engine);
+        QJsonArray held = page.value("library_regions").toArray();
+        QJsonObject plain = held.at(0).toObject();
+        plain.insert("callee_identity", engine);
+        held.replace(0, plain);
+        QJsonObject operation = held.at(1).toObject();
+        operation.insert("callee_identity", other);
+        held.replace(1, operation);
+        page.insert("library_regions", held);
+      }
+      const auto renamed = pagesRenamed(stating, 0x2000, QStringLiteral("gg"));
+      QVERIFY(renamed.has_value());
+      const QJsonObject user{
+          {"addr", "0x2000"},         {"name", "gg"},
+          {"display_name", "gg"},     {"name_origin", "user"},
+          {"display_origin", "user"}, {"else", 7}};
+      for (const QJsonObject &page : renamed->pages) {
+        QCOMPARE(page.value("function_identity").toObject(), user);
+        const auto held = page.value("library_regions").toArray();
+        QCOMPARE(held.at(0).toObject().value("callee_identity").toObject(),
+                 user);
+        QCOMPARE(held.at(1).toObject().value("callee_identity").toObject(),
+                 other);
+      }
+      // Another function's name leaves what the pages state of this one.
+      const auto elsewhere =
+          pagesRenamed(stating, 0x1000, QStringLiteral("main"));
+      QVERIFY(elsewhere.has_value());
+      for (const QJsonObject &page : elsewhere->pages)
+        QCOMPARE(page.value("function_identity").toObject(), engine);
+    }
+    // Data's name is told apart: the worker reads the text again for it.
+    {
+      QVector<QJsonObject> named = pages;
+      QJsonArray names = named[1].value("code_names").toArray();
+      QJsonObject object = names.at(1).toObject();
+      object.insert("object", true);
+      names.replace(1, object);
+      named[1].insert("code_names", names);
+      const auto renamed = pagesRenamed(named, 0x2000, QStringLiteral("gg"));
+      QVERIFY(renamed.has_value() && renamed->data);
+    }
+    // No worker takes a name that is empty or holds a space or a control
+    // character.
+    for (const QString &name :
+         {QString(), QStringLiteral("a b"), QStringLiteral("a\tb"),
+          QStringLiteral("a\nb"), QString(QChar(0x7f))})
+      QVERIFY2(!pagesRenamed(pages, 0x2000, name), qPrintable(name));
+    // Nor one of the engine's own, a prefix and an address in hexadecimal;
+    // what only looks like one is a name as any other.
+    for (const QString &name :
+         {QStringLiteral("sub_1234"), QStringLiteral("qword_3FB8"),
+          QStringLiteral("loc_0"), QStringLiteral("off_abc"),
+          QStringLiteral("j_1"), QStringLiteral("unk_FFFFFFFFFFFFFFFF")})
+      QVERIFY2(!pagesRenamed(pages, 0x2000, name), qPrintable(name));
+    for (const QString &name :
+         {QStringLiteral("sub_"), QStringLiteral("sub_12G4"),
+          QStringLiteral("Sub_1234"), QStringLiteral("mysub_1234"),
+          QStringLiteral("sub_12345678901234567")})
+      QVERIFY2(pagesRenamed(pages, 0x2000, name).has_value(), qPrintable(name));
+    // A word the text spells already may link the address once it is its
+    // name: `data`, `v0`, `return` and, of one character, any that occurs.
+    for (const QString &name :
+         {QStringLiteral("data"), QStringLiteral("v0"),
+          QStringLiteral("return"), QStringLiteral("h"), QStringLiteral("t")})
+      QVERIFY2(!pagesRenamed(pages, 0x2000, name), qPrintable(name));
+    // Part of a word is no word, and neither is a name the text spells after
+    // a letter: `dat`, `ata`, `eturn`; nor one that is no identifier.
+    for (const QString &name : {QStringLiteral("dat"), QStringLiteral("ata"),
+                                QStringLiteral("eturn"), QStringLiteral("v0;")})
+      QVERIFY2(pagesRenamed(pages, 0x2000, name).has_value(), qPrintable(name));
+    // Nothing links the address, or what links it reads so already.
+    QVERIFY(!pagesRenamed(pages, 0x4000, QStringLiteral("gg")));
+    QVERIFY(!pagesRenamed(pages, 0x2000, QStringLiteral("g")));
+    QVERIFY(!pagesRenamed({}, 0x2000, QStringLiteral("gg")));
+    // Pages that are not one text, name no bytes, or link a place outside
+    // themselves or over another.
+    const auto with = [&](int page, const char *field,
+                          const QJsonValue &value) {
+      QVector<QJsonObject> changed = pages;
+      if (value.isUndefined())
+        changed[page].remove(QLatin1String(field));
+      else
+        changed[page].insert(QLatin1String(field), value);
+      return changed;
+    };
+    QVERIFY(!pagesRenamed(with(1, "byte_offset", next + 1), 0x2000,
+                          QStringLiteral("gg")));
+    QVERIFY(!pagesRenamed(with(0, "byte_offset", QJsonValue()), 0x2000,
+                          QStringLiteral("gg")));
+    QVERIFY(!pagesRenamed(with(0, "byte_offset", -1), 0x2000,
+                          QStringLiteral("gg")));
+    QVERIFY(!pagesRenamed(with(1, "code_names", QJsonValue()), 0x2000,
+                          QStringLiteral("gg")));
+    QVERIFY(!pagesRenamed(with(1, "text", 7), 0x2000, QStringLiteral("gg")));
+    const QVector<std::pair<qint64, qint64>> misplaced{
+        {next + second.size(), 1},
+        {next - 1, 1},
+        {next + 4, -1},
+        {next + at(second, "g()") - 1, 2}};
+    for (const auto &[begin, length] : misplaced) {
+      QJsonArray names = two.value("code_names").toArray();
+      names.append(linked(begin, length, "address", "0x2000"));
+      QVERIFY(!pagesRenamed(with(1, "code_names", names), 0x2000,
+                            QStringLiteral("gg")));
+    }
+    // One page alone is a text too.
+    const auto alone = pagesRenamed({two}, 0x2000, QStringLiteral("gg"));
+    QVERIFY(alone.has_value());
+    QCOMPARE(alone->places, 1);
+    QCOMPARE(alone->pages[0].value("byte_offset").toInteger(), next);
   }
 
   void registerFamiliesShareTheirParts() {
