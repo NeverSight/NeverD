@@ -228,6 +228,9 @@ public:
   Launcher(const AppearanceContext *appearance, QWidget *parent)
       : QAbstractButton(parent), Color(appearance) {
     setObjectName("NeverDAgentLauncher");
+    // Checked while its conversation is open: a pressed toggle, also to
+    // assistive technology.
+    setCheckable(true);
     setCursor(Qt::PointingHandCursor);
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_Hover);
@@ -255,12 +258,6 @@ public:
     if (std::exchange(Unread, unread) != unread)
       update();
   }
-  /// While its conversation is open the button is a pressed toggle in the
-  /// button gray, so the conversation's Send keeps the window's one accent.
-  void setOpen(bool open) {
-    if (std::exchange(Open, open) != open)
-      update();
-  }
   void setSubject(const QString &subject) {
     Subject = subject;
     retranslate();
@@ -278,25 +275,30 @@ public:
   QSize minimumSizeHint() const override { return sizeHint(); }
 
 protected:
+  // A click asks for the conversation; whether it opens decides the state.
+  void nextCheckState() override {}
   void paintEvent(QPaintEvent *) override {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     const QRectF outline = QRectF(rect()).adjusted(1.5, 1.5, -1.5, -1.5);
     const qreal radius = outline.height() / 2;
     const bool hover = underMouse() || isDown();
-    QColor face = Open    ? Color(hover ? "ButtonHover" : "Button")
+    // While its conversation is open the button shows in the button gray,
+    // so the conversation's Send keeps the window's one accent.
+    const bool open = isChecked();
+    QColor face = open    ? Color(hover ? "ButtonHover" : "Button")
                   : hover ? Color("ButtonPrimaryHover")
                           : Color("ButtonPrimary");
     if (isDown())
       face = face.darker(112);
-    const QColor ink = Color(Open ? "ButtonText" : "ButtonPrimaryText");
+    const QColor ink = Color(open ? "ButtonText" : "ButtonPrimaryText");
     if (hasFocus() && FocusByKeyboard) {
       painter.setPen(QPen(Color("Focus"), 1.5));
       painter.setBrush(Qt::NoBrush);
       painter.drawRoundedRect(QRectF(rect()).adjusted(0.75, 0.75, -0.75, -0.75),
                               radius + 0.75, radius + 0.75);
     }
-    painter.setPen(QPen(Color(Open ? "Border" : "ButtonPrimaryBorder"), 1));
+    painter.setPen(QPen(Color(open ? "Border" : "ButtonPrimaryBorder"), 1));
     painter.setBrush(face);
     painter.drawRoundedRect(outline.adjusted(1, 1, -1, -1), radius - 1,
                             radius - 1);
@@ -374,7 +376,6 @@ private:
   bool Docked = false;
   bool Busy = false;
   bool Unread = false;
-  bool Open = false;
   bool FocusByKeyboard = false;
 };
 
@@ -1078,9 +1079,9 @@ private:
       return true;
     }
     // However the conversation shows or hides, the button follows it.
-    if (object == Panel.data() &&
+    if (Ball && object == Panel.data() &&
         (event->type() == QEvent::Show || event->type() == QEvent::Hide))
-      Ball->setOpen(event->type() == QEvent::Show);
+      Ball->setChecked(event->type() == QEvent::Show);
     if (object == Ball.data() && event->type() == QEvent::LanguageChange) {
       loadTranslations();
       retranslate();
@@ -1283,7 +1284,6 @@ private:
       FocusBefore = current;
     Panel->show();
     Panel->raise();
-    Ball->setOpen(true);
     Ball->setUnread(false);
     if (focus)
       Prompt->setFocus(Qt::OtherFocusReason);
@@ -1296,7 +1296,6 @@ private:
   void hidePanel() {
     const bool hadFocus = Panel->isAncestorOf(QApplication::focusWidget());
     Panel->hide();
-    Ball->setOpen(false);
     if (hadFocus && FocusBefore && FocusBefore->isVisible())
       FocusBefore->setFocus(Qt::OtherFocusReason);
   }

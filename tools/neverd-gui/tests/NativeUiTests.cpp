@@ -357,7 +357,7 @@ private slots:
       window.activateWindow();
       QVERIFY(QTest::qWaitForWindowActive(&window));
       open->trigger();
-      QVERIFY(panel->isVisible());
+      QVERIFY(panel->isVisible() && ball->isChecked());
       QTRY_COMPARE(QApplication::focusWidget(), prompt);
       window.setFocus();
       QTRY_COMPARE(QApplication::focusWidget(), &window);
@@ -365,7 +365,7 @@ private slots:
       QVERIFY(panel->isVisible());
       QTRY_COMPARE(QApplication::focusWidget(), prompt);
       open->trigger();
-      QVERIFY(panel->isHidden());
+      QVERIFY(panel->isHidden() && !ball->isChecked());
       QTRY_COMPARE(QApplication::focusWidget(), &window);
 
       const QPoint at = ball->rect().center();
@@ -393,7 +393,7 @@ private slots:
       open->trigger();
       QVERIFY(panel->isHidden());
       toggle->trigger();
-      QVERIFY(ball->isVisible() && panel->isHidden());
+      QVERIFY(ball->isVisible() && panel->isHidden() && !ball->isChecked());
       toggle->trigger();
       QVERIFY(ball->isHidden());
       QVERIFY(!window.findChild<QMessageBox *>(hintId));
@@ -634,8 +634,11 @@ private slots:
     auto *panel = window.findChild<QWidget *>("NeverDAgentChat");
     QVERIFY(panel);
     QVERIFY(!panel->isVisible());
+    // The button is a toggle that follows the conversation.
+    QVERIFY(ball->isCheckable() && !ball->isChecked());
     ball->click();
     QTRY_VERIFY(panel->isVisible());
+    QVERIFY(ball->isChecked());
     auto *status = panel->findChild<QLabel *>("NeverDAgentStatus");
     QVERIFY(status);
     QTRY_VERIFY(status->text().isEmpty());
@@ -670,6 +673,7 @@ private slots:
     QCOMPARE(prompt->toPlainText(), "Draft a follow-up");
     ball->click();
     QVERIFY(!panel->isVisible());
+    QVERIFY(!ball->isChecked());
     model.respond(0, call("list_objects", "objects"));
     QTRY_COMPARE(model.Requests.size(), 2);
     auto *latest = panel->findChild<QLabel *>("NeverDAgentExecutionLatest");
