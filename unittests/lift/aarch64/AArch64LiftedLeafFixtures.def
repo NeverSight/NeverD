@@ -92,7 +92,7 @@ A64_LEAF_TEXT(kVariadicDirect, "va_direct")
 A64_LEAF_TEXT(kScratchTail, "#define NEVERD_TEST_SCRATCH_FORWARD 1\n")
 A64_LEAF_TEXT(kScratchBranches, "#define NEVERD_TEST_SCRATCH_BRANCHES 1\n")
 A64_LEAF_TEXT(kScratchKilled, "#define NEVERD_TEST_SCRATCH_BRANCHES 1\n"
-                             "#define NEVERD_TEST_SCRATCH_KILLED 1\n")
+                              "#define NEVERD_TEST_SCRATCH_KILLED 1\n")
 A64_LEAF_TEXT(kUnknownStackOperation, "-DNEVERD_TEST_UNSUPPORTED_STACK_BODY")
 A64_LEAF_TEXT(kUnknownVectorOperation, "-DNEVERD_TEST_UNSUPPORTED_VECTOR_BODY")
 A64_LEAF_TEXT(kUnknownStackInput, "unsupported-stack.dylib")
