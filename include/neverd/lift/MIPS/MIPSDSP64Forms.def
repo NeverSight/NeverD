@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 // Minor opcode, mnemonic, operand layout and word-form operand template.
+NEVERD_MIPS_DSP64(0x00d, "dinsv", Compare, 0x00c)
 NEVERD_MIPS_DSP64(0x014, "addu.ob", Binary, 0x010)
 NEVERD_MIPS_DSP64(0x054, "subu.ob", Binary, 0x010)
 NEVERD_MIPS_DSP64(0x114, "addu_s.ob", Binary, 0x010)
@@ -107,4 +108,15 @@ NEVERD_MIPS_DSP64(0x734, "maq_s.l.pwl", Accumulator, 0x130)
 NEVERD_MIPS_DSP64(0x774, "dmaddu", Accumulator, 0x130)
 NEVERD_MIPS_DSP64(0x7b4, "maq_s.l.pwr", Accumulator, 0x130)
 NEVERD_MIPS_DSP64(0x7f4, "dmsubu", Accumulator, 0x130)
+NEVERD_MIPS_DSP64(0x03c, "dextr.w", Accumulator, 0x038)
+NEVERD_MIPS_DSP64(0x07c, "dextrv.w", Accumulator, 0x078)
+NEVERD_MIPS_DSP64(0x0bc, "dextp", Accumulator, 0x0b8)
+NEVERD_MIPS_DSP64(0x0fc, "dextpv", Accumulator, 0x0f8)
+NEVERD_MIPS_DSP64(0x2bc, "dextpdp", Accumulator, 0x2b8)
+NEVERD_MIPS_DSP64(0x2fc, "dextpdpv", Accumulator, 0x2f8)
+NEVERD_MIPS_DSP64(0x43c, "dextr.l", Accumulator, 0x038)
+NEVERD_MIPS_DSP64(0x47c, "dextrv.l", Accumulator, 0x078)
+NEVERD_MIPS_DSP64(0x6bc, "dshilo", ShiftAccumulator, 0x6b8)
+NEVERD_MIPS_DSP64(0x6fc, "dshilov", ShiftAccumulatorReg, 0x6f8)
+NEVERD_MIPS_DSP64(0x7fc, "dmthlip", ShiftAccumulatorReg, 0x7f8)
 #undef NEVERD_MIPS_DSP64

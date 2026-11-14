@@ -391,8 +391,10 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
     return S.Inputs == 3 && S.OutputBytes == 8 && S.FirstBytes == 1 &&
            S.SecondBytes == 8;
   if (Id == Intrinsic::MIPSExtractResult)
-    return S.Inputs == 3 && S.OutputBytes == 4 && S.FirstBytes == 1 &&
-           S.SecondBytes == 4;
+    return S.Inputs == 3 && S.FirstBytes == 1 &&
+           S.SecondBytes == S.OutputBytes &&
+           (S.OutputBytes == 4 || S.Target == Arch::Unknown ||
+            isMIPS64(S.Target));
   if (Id == Intrinsic::MIPSAccumulatorAfterWrite)
     return S.Inputs == 3 && S.FirstBytes == 1 &&
            S.SecondBytes == S.OutputBytes &&

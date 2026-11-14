@@ -332,37 +332,48 @@ bool MIPSLifter::liftDSPAdditional(State &S, uint32_t Word) const {
                                 S.binary(NdOp::INT_RIGHT, Acc, Raw)));
     return true;
   }
-  case Form::Insv: {
+  case Form::Insv:
+  case Form::Dinsv: {
+    const bool Wide = Op == Form::Dinsv;
+    if (Wide && !hasClassicDSP64())
+      return false;
     if (!RT)
       return Discard();
+    const unsigned Bits = Wide ? 64 : 32;
+    const unsigned Bytes = Bits / 8;
+    const auto Source = S.read(RS, Bytes), Destination = S.read(RT, Bytes);
     const auto C = ReadControl();
-    const auto Pos = S.binary(NdOp::INT_AND, C, NdVar::cst(63, 4));
+    const auto Pos = S.binary(NdOp::INT_AND, C, NdVar::cst(Wide ? 127 : 63, 4));
     const auto Size =
         S.binary(NdOp::INT_AND, S.binary(NdOp::INT_RIGHT, C, NdVar::cst(7, 4)),
                  NdVar::cst(63, 4));
     auto Invalid = S.binary(
         NdOp::BOOL_OR, S.binary(NdOp::INT_EQUAL, Size, NdVar::cst(0, 4), 1),
-        S.binary(NdOp::INT_LESS, NdVar::cst(32, 4),
+        S.binary(NdOp::INT_LESS, NdVar::cst(Bits, 4),
                  S.binary(NdOp::INT_ADD, Pos, Size), 1),
         1);
-    if (S.Width == 8)
+    if (S.Width == 8 && !Wide)
       for (unsigned R : {RS, RT}) {
         const auto NotWord = S.binary(NdOp::INT_NOTEQUAL, S.read(R),
                                       S.resize(S.read(R, 4), 8, true), 1);
         Invalid = S.binary(NdOp::BOOL_OR, Invalid, NotWord, 1);
       }
-    const auto Last = S.binary(NdOp::INT_AND,
-                               S.binary(NdOp::INT_SUB, NdVar::cst(32, 4), Size),
-                               NdVar::cst(31, 4));
-    const auto Shift = S.binary(NdOp::INT_AND, Pos, NdVar::cst(31, 4));
-    const auto Mask = S.binary(
-        NdOp::INT_LEFT,
-        S.binary(NdOp::INT_RIGHT, NdVar::cst(UINT32_MAX, 4), Last), Shift);
-    const auto Different =
-        S.binary(NdOp::INT_XOR, B, S.binary(NdOp::INT_LEFT, A, Shift));
-    const auto New =
-        S.binary(NdOp::INT_XOR, B, S.binary(NdOp::INT_AND, Mask, Different));
-    const auto Result = S.makeTemp(4);
+    const auto Last = S.binary(
+        NdOp::INT_AND, S.binary(NdOp::INT_SUB, NdVar::cst(Bits, 4), Size),
+        NdVar::cst(Bits - 1, 4));
+    const auto Shift =
+        S.resize(S.binary(NdOp::INT_AND, Pos, NdVar::cst(Bits - 1, 4)), Bytes);
+    const auto Mask =
+        S.binary(NdOp::INT_LEFT,
+                 S.binary(NdOp::INT_RIGHT,
+                          NdVar::cst(Wide ? UINT64_MAX : UINT32_MAX, Bytes),
+                          S.resize(Last, Bytes)),
+                 Shift);
+    const auto Different = S.binary(NdOp::INT_XOR, Destination,
+                                    S.binary(NdOp::INT_LEFT, Source, Shift));
+    const auto New = S.binary(NdOp::INT_XOR, Destination,
+                              S.binary(NdOp::INT_AND, Mask, Different));
+    const auto Result = S.makeTemp(Bytes);
     S.emitIntrinsic(Intrinsic::MIPSExtractResult, Result, {Invalid, New});
     S.write(RT, Result);
     return true;

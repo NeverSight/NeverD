@@ -1,0 +1,16 @@
+//===- MIPSDSP64ExtractFixtures.def - Independent extraction encodings ---===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// GNU as forms with v0, ac0 and immediate zero / a0. The columns are mnemonic,
+// physical word, position extraction, decrement, 64-bit result and GPR count.
+NEVERD_TEST_DSP64_EXTRACT("dextr.w", 0x7c02003c, false, false, false, false)
+NEVERD_TEST_DSP64_EXTRACT("dextrv.w", 0x7c82007c, false, false, false, true)
+NEVERD_TEST_DSP64_EXTRACT("dextr.l", 0x7c02043c, false, false, true, false)
+NEVERD_TEST_DSP64_EXTRACT("dextrv.l", 0x7c82047c, false, false, true, true)
+NEVERD_TEST_DSP64_EXTRACT("dextp", 0x7c0200bc, true, false, true, false)
+NEVERD_TEST_DSP64_EXTRACT("dextpv", 0x7c8200fc, true, false, true, true)
+NEVERD_TEST_DSP64_EXTRACT("dextpdp", 0x7c0202bc, true, true, true, false)
+NEVERD_TEST_DSP64_EXTRACT("dextpdpv", 0x7c8202fc, true, true, true, true)
+#undef NEVERD_TEST_DSP64_EXTRACT

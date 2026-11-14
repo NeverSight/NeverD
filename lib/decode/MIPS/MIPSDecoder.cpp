@@ -246,6 +246,19 @@ bool Decoder::decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr) {
         if (Text)
           std::snprintf(InsnBuf->mnemonic, sizeof(InsnBuf->mnemonic), "%s",
                         Packed->Mnemonic);
+        if (Packed->LastImmediate) {
+          if (Detail) {
+            auto &Operands = InsnBuf->detail->mips;
+            Operands.operands[Operands.op_count - 1].imm =
+                *Packed->LastImmediate;
+          }
+          if (Text) {
+            char *Out = std::strrchr(InsnBuf->op_str, ',') + 1;
+            std::snprintf(Out,
+                          sizeof(InsnBuf->op_str) - (Out - InsnBuf->op_str),
+                          " %d", int(*Packed->LastImmediate));
+          }
+        }
         return true;
       }
     }
