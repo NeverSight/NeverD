@@ -375,6 +375,10 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
   case 0x3c:
     return microLegacyJump(First, uint16_t(Word));
   case 0x00: {
+    if (!R6 && RT == 0 &&
+        ((Word & 0xffff) == 0x0d7c || (Word & 0xffff) == 0x1d7c))
+      return Encoding{
+          registerForm(Word & 0x1000 ? 18 : 16, RS, 0)}; // MFLO / MFHI
     const unsigned Minor = (Word >> 6) & 31;
     if ((Word & 63) == 0 && Minor <= 3) { // SLL/SRL/SRA/ROTR
       return Encoding{registerForm(Minor == 0   ? 0

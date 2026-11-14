@@ -48,7 +48,7 @@ inline std::optional<uint32_t> micro64R6Word(uint32_t Word) {
     if (Sub == 0x084 || Sub == 0x088)
       return std::nullopt;
   }
-  return micro64Word(Word);
+  return micro64Word(Word, true);
 }
 } // namespace neverd::mips
 #endif // NEVERD_LIFT_MIPS_MICROMIPS64RELEASE6_H

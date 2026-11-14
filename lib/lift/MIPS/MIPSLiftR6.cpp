@@ -486,29 +486,38 @@ bool MIPSLifter::liftRelease6(State &S, uint32_t Word) const {
     S.write(RD, V);
     return true;
   }
-  const auto Zero = S.binary(NdOp::INT_EQUAL, B, NdVar::cst(0, Bytes), 1);
+  const auto Result = S.makeTemp(8);
+  S.divide(A, B, Signed, High ? NdVar{} : Result, High ? Result : NdVar{});
+  S.write(RD, S.resize(Result, Bytes));
+  return true;
+}
+
+// Legacy HI/LO and Release 6 GPR division share result and exceptional-input
+// semantics. Emit only the requested results with a single guarded divisor.
+void MIPSLifter::State::divide(NdVar A, NdVar B, bool Signed, NdVar Quotient,
+                               NdVar Remainder) {
+  const auto Bytes = A.Size;
+  const auto Zero = binary(NdOp::INT_EQUAL, B, NdVar::cst(0, Bytes), 1);
   auto Avoid = Zero;
   if (Signed) {
     const auto Min =
-        S.binary(NdOp::INT_EQUAL, A,
-                 NdVar::cst(uint64_t(1) << (Bytes * 8 - 1), Bytes), 1);
-    Avoid = S.binary(
+        binary(NdOp::INT_EQUAL, A,
+               NdVar::cst(uint64_t(1) << (Bytes * 8 - 1), Bytes), 1);
+    Avoid = binary(
         NdOp::BOOL_OR, Zero,
-        S.binary(NdOp::BOOL_AND, Min,
-                 S.binary(NdOp::INT_EQUAL, B, NdVar::cst(UINT64_MAX, Bytes), 1),
-                 1),
+        binary(NdOp::BOOL_AND, Min,
+               binary(NdOp::INT_EQUAL, B, NdVar::cst(UINT64_MAX, Bytes), 1), 1),
         1);
   }
   // MIN/-1 has the low quotient MIN and remainder zero. Replacing that
   // divisor with +1 gives both results without host or LLVM divide overflow.
-  const auto Safe = S.select(Avoid, NdVar::cst(1, Bytes), B);
-  const auto Value = S.binary(High ? (Signed ? NdOp::INT_SREM : NdOp::INT_REM)
-                                   : (Signed ? NdOp::INT_SDIV : NdOp::INT_DIV),
-                              A, Safe);
-  const auto Result = S.makeTemp(8);
-  S.emitIntrinsic(Intrinsic::MIPSRelease6DivideResult, Result,
-                  {Zero, S.resize(Value, 8, true)});
-  S.write(RD, S.resize(Result, Bytes));
-  return true;
+  const auto Safe = select(Avoid, NdVar::cst(1, Bytes), B);
+  const auto Write = [&](NdVar Dest, NdOp Opcode) {
+    if (Dest.Size)
+      emitIntrinsic(Intrinsic::MIPSRelease6DivideResult, Dest,
+                    {Zero, resize(binary(Opcode, A, Safe), 8, true)});
+  };
+  Write(Quotient, Signed ? NdOp::INT_SDIV : NdOp::INT_DIV);
+  Write(Remainder, Signed ? NdOp::INT_SREM : NdOp::INT_REM);
 }
 } // namespace neverd

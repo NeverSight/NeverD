@@ -588,10 +588,10 @@ code_pointer:
 #endif
 .size code_pointer,.-code_pointer
 
-/* Physical word divisions shared by MIPS32 and MIPS64. */
+/* Real two-input encodings avoid assembler-inserted checks and traps. */
 .text
 .p2align 2
-.macro division_word name,encoding,result
+.macro division name,encoding,result
 .globl \name
 .type \name,@function
 \name:
@@ -600,10 +600,16 @@ code_pointer:
   \result $2
 .size \name,.-\name
 .endm
-division_word mips_div_lo,0x0085001a,mflo
-division_word mips_div_hi,0x0085001a,mfhi
-division_word mips_divu_lo,0x0085001b,mflo
-division_word mips_divu_hi,0x0085001b,mfhi
+division mips_div_lo,0x0085001a,mflo
+division mips_div_hi,0x0085001a,mfhi
+division mips_divu_lo,0x0085001b,mflo
+division mips_divu_hi,0x0085001b,mfhi
+#ifdef WIDE
+division mips_ddiv_lo,0x0085001e,mflo
+division mips_ddiv_hi,0x0085001e,mfhi
+division mips_ddivu_lo,0x0085001f,mflo
+division mips_ddivu_hi,0x0085001f,mfhi
+#endif
 
 .globl mips_div_dead
 .type mips_div_dead,@function
