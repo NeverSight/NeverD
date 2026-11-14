@@ -1429,3 +1429,11 @@ stored as full 128-bit registers, checking that their upper lanes are cleared.
 Independent drivers compare complete destination buffers, untouched guards
 and updated pointers on the original and published libraries. A separate
 negative case verifies that intervening W8/W9 writes end both old call results.
+
+Both M1 runners passed all 57 cases with the Release host built from
+`7991be5e74e7c671ce0e30b5fdfba002df64f72b`. Each executed 94 original or
+published images, 24 C++ and 24 Objective-C signal cleanups, and eight
+per-thread resolver lifecycles. The Windows frontend controls also passed.
+Both hosts still reported native CPTA-on unavailable.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43581342838)
+and [per-host verification record](evidence/arm64e-memory-and-register-publication-2026-11-14.json).
