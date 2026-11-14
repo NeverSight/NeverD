@@ -70,8 +70,8 @@ def kernels():
             )
     yield (
         "mips64extract_mixed", "mips64r2", "dsp",
-        "mthi $4\nmtlo $5\nori $6,$0,47\nwrdsp $6,1\n"
-        "extp $3,$ac0,15\ndextp $2,$ac0,31\nxor $2,$2,$3",
+        "mthi $4\nmtlo $5\nori $6,$0,63\nwrdsp $6,1\nori $7,$0,47\n"
+        "extp $3,$ac0,15\ndextpv $2,$ac0,$7\nxor $2,$2,$3",
     )
     yield (
         "mips64extract_dinsv", "mips64r2", "dsp",
@@ -442,8 +442,8 @@ def run(args, artifacts):
                         control = (control & ~0x1fff) | 2207
                     else:
                         word_acc = ((a & 0xffffffff) << 32) | (b & 0xffffffff)
-                        value = ((acc >> 16) & 0xffffffff) ^ ((word_acc >> 32) & 0xffff)
-                        control = (control & ~0x407f) | 47
+                        value = ((acc >> 16) & ((1 << 48) - 1)) ^ ((word_acc >> 48) & 0xffff)
+                        control = (control & ~0x407f) | 63
                     if actual != (value, control):
                         raise ValueError(f"{name}: original {actual}, independent {(value, control)}")
             if name.startswith(("mips64acc_dmaddu_", "mips64acc_dmsubu_")):
