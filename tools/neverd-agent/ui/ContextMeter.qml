@@ -24,7 +24,7 @@ ToolButton {
     Accessible.name: text
     font.pointSize: Theme.smallPointSize
     palette.buttonText: Theme.secondary
-    background: Rectangle { color: meter.hovered ? Theme.hover : "transparent"; radius: 6 }
+    background: Rectangle { color: meter.hovered ? Theme.toolHover : "transparent"; radius: Theme.toolRadius }
     contentItem: Canvas {
         id: ring
         onPaint: {
@@ -32,7 +32,7 @@ ToolButton {
             ctx.reset()
             const radius = Math.max(0, Math.min(width, height) / 2 - 3)
             ctx.lineWidth = 2.5
-            ctx.strokeStyle = Theme.selected
+            ctx.strokeStyle = Theme.checkBoxBorder
             ctx.beginPath(); ctx.arc(width / 2, height / 2, radius, 0, Math.PI * 2); ctx.stroke()
             if (meter.known && meter.fraction > 0) {
                 ctx.strokeStyle = meter.fraction >= 1 ? Theme.error : Theme.secondary
@@ -64,7 +64,7 @@ ToolButton {
         padding: 12
         onClosed: meter.pinned = false
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: Surface { glass: true; radius: Theme.controlRadius }
+        background: Surface { glass: true; radius: Theme.radius }
         contentItem: ColumnLayout {
             spacing: 8
             HoverHandler { id: popupHover; onHoveredChanged: { if (!hovered) closeTimer.restart() } }

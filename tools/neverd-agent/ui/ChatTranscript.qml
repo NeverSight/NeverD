@@ -62,7 +62,7 @@ ListView {
             width: messageRow.fromUser ? Math.min(messageRow.width * 0.82, Math.max(210, userMetrics.advanceWidth + 40)) : messageRow.width - (messageList.compact ? 4 : 30)
             x: messageRow.fromUser ? messageRow.width - width - 6 : 0
             height: bubbleContent.implicitHeight + 32
-            radius: 12
+            radius: Theme.radius
             color: messageRow.fromUser ? Theme.userBubble : Theme.assistantBubble
             border.width: messageRow.fromUser ? 1 : 0
             border.color: Theme.bubbleBorder
@@ -100,7 +100,7 @@ ListView {
                         palette.buttonText: Theme.secondary
                         font.pointSize: Theme.smallPointSize
                         padding: 2
-                        background: Rectangle { color: parent.hovered ? Theme.hover : "transparent"; radius: 4 }
+                        background: Rectangle { color: parent.hovered ? Theme.toolHover : "transparent"; radius: Theme.toolRadius }
                         onClicked: messageList.quoteRequested(messageRow.entry.id)
                         ThemedToolTip { visible: parent.hovered; text: qsTr("引用到主对话草稿") }
                     }
@@ -110,7 +110,7 @@ ListView {
                         palette.buttonText: Theme.secondary
                         font.pointSize: Theme.smallPointSize
                         padding: 2
-                        background: Rectangle { color: parent.hovered ? Theme.hover : "transparent"; radius: 4 }
+                        background: Rectangle { color: parent.hovered ? Theme.toolHover : "transparent"; radius: Theme.toolRadius }
                         onClicked: { messageText.copyMessage(); text = qsTr("已复制"); copyTimer.restart() }
                         Timer { id: copyTimer; interval: 1500; onTriggered: parent.text = qsTr("复制") }
                     }

@@ -17,24 +17,26 @@ ApplicationWindow {
     title: "NeverD Agent" + (backend.activeProject.name ? " — " + backend.activeProject.name : "")
     color: "transparent"
     font: appFont
-    palette.window: Theme.background
-    palette.windowText: Theme.text
-    palette.text: Theme.text
-    palette.base: Theme.raised
-    palette.button: Theme.raised
-    palette.buttonText: Theme.text
-    palette.highlight: Theme.accent
-    palette.highlightedText: Theme.background
-    // Roles Basic-style controls draw borders, tooltips and the modal dim from.
-    palette.dark: Theme.borderStrong
-    palette.mid: Theme.border
-    palette.midlight: Theme.selected
-    palette.light: Theme.hover
-    palette.shadow: Theme.shadow
-    palette.toolTipBase: Theme.menu
-    palette.toolTipText: Theme.text
-    palette.placeholderText: Theme.quiet
-    palette.link: Theme.accent
+    // The workbench's palette roles, as its Theme builds the application's.
+    palette.window: Theme.chrome("Window")
+    palette.windowText: Theme.chrome("WindowText")
+    palette.text: Theme.chrome("Text")
+    palette.base: Theme.chrome("Base")
+    palette.alternateBase: Theme.chrome("AlternateBase")
+    palette.button: Theme.chrome("Button")
+    palette.buttonText: Theme.chrome("ButtonText")
+    palette.highlight: Theme.chrome("Highlight")
+    palette.highlightedText: Theme.chrome("HighlightedText")
+    palette.dark: Theme.chrome("Dark")
+    palette.mid: Theme.chrome("Mid")
+    palette.midlight: Theme.chrome("Midlight")
+    palette.light: Theme.chrome("Light")
+    palette.shadow: Theme.chrome("Shadow")
+    palette.toolTipBase: Theme.chrome("ToolTipBase")
+    palette.toolTipText: Theme.chrome("ToolTipText")
+    palette.placeholderText: Theme.chrome("PlaceholderText")
+    palette.link: Theme.chrome("Link")
+    palette.accent: Theme.chrome("Accent")
 
     property bool sideOpen: false
     property string menuObject: ""
@@ -102,6 +104,7 @@ ApplicationWindow {
     Component.onCompleted: {
         Theme.backdrop = workspaceBackdrop
         Theme.basePointSize = appFont.pointSize > 0 ? appFont.pointSize : 10
+        Theme.baseFont = appFont
         Theme.light = backend.lightTheme
         lastProject = backend.activeId
         if (startupError) {
@@ -121,32 +124,44 @@ ApplicationWindow {
         id: shell
         anchors.fill: parent
         anchors.margins: windowFrame.shadowMargin
+        // Rings fading away from the edge, then the edge's hairline, as the
+        // workbench frames its window.
         Repeater {
             model: windowFrame.shadowMargin
             Rectangle {
                 required property int index
+                readonly property real fade: 1 - index / Math.max(1, windowFrame.shadowMargin)
                 anchors.fill: parent
-                anchors.margins: -(index + 1)
-                radius: 8 + index
+                anchors.margins: -(index + 2)
                 color: "transparent"
                 border.width: 1
-                border.color: Qt.rgba(0.02, 0.04, 0.09, 0.2 * Math.pow(1 - index / Math.max(1, windowFrame.shadowMargin), 2))
+                border.color: Qt.rgba(Theme.windowShadow.r, Theme.windowShadow.g, Theme.windowShadow.b,
+                                      Theme.windowShadow.a * fade * fade)
             }
+        }
+        Rectangle {
+            visible: windowFrame.shadowMargin > 0
+            anchors.fill: parent
+            anchors.margins: -1
+            color: "transparent"
+            border.width: 1
+            border.color: Theme.windowEdge
         }
     }
     Backdrop {
         id: workspaceBackdrop
         anchors.fill: shell
-        cornerRadius: windowFrame.maximized ? 0 : 8
+        cornerRadius: 0
     }
     ColumnLayout {
         anchors.fill: shell
         spacing: 0
         enabled: !startupError
-        Item {
+        Rectangle {
             id: titleBar
             Layout.fillWidth: true
             Layout.preferredHeight: windowFrame.titleHeight
+            color: Theme.titleBar
             MouseArea {
                 anchors.fill: parent
                 property point pressAt
@@ -219,10 +234,7 @@ ApplicationWindow {
         RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.leftMargin: 10
-            Layout.rightMargin: 10
-            Layout.topMargin: 6
-            spacing: 8
+            spacing: 0
             ProjectSidebar {
                 Layout.preferredWidth: window.width < 1100 ? 214 : 264
                 Layout.fillHeight: true
@@ -232,6 +244,7 @@ ApplicationWindow {
                 onSettingsRequested: window.showSettings()
                 onMenuRequested: (projectId, objectId, origin) => window.showContext(projectId, objectId, origin)
             }
+            Rectangle { Layout.fillHeight: true; Layout.preferredWidth: 1; color: Theme.border }
             Conversation {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -244,6 +257,7 @@ ApplicationWindow {
                 onGoalRequested: goalEditor.open()
                 onContextRequested: window.showContextPicker(false)
             }
+            Rectangle { visible: sideSlot.visible; Layout.fillHeight: true; Layout.preferredWidth: 1; color: Theme.border }
             Item {
                 id: sideSlot
                 visible: window.sideOpen && window.width >= 1100
@@ -251,21 +265,28 @@ ApplicationWindow {
                 Layout.fillHeight: true
             }
         }
-        Label {
-            text: backend.busy ? qsTr("正在读取文件指纹…") : window.noticeText || qsTr("本地工作区")
-            color: Theme.secondary
-            font.pointSize: Theme.smallPointSize
+        Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 24
-            Layout.leftMargin: 18
-            verticalAlignment: Text.AlignVCenter
-            elide: Text.ElideRight
-            Accessible.name: text
+            Layout.preferredHeight: Math.max(22, statusText.implicitHeight + 4)
+            color: Theme.statusBar
+            Rectangle { anchors.left: parent.left; anchors.right: parent.right; height: 1; color: Theme.statusBarBorder }
+            Label {
+                id: statusText
+                anchors.fill: parent
+                anchors.leftMargin: 8
+                anchors.rightMargin: 8
+                text: backend.busy ? qsTr("正在读取文件指纹…") : window.noticeText || qsTr("本地工作区")
+                color: Theme.statusBarText
+                verticalAlignment: Text.AlignVCenter
+                elide: Text.ElideRight
+                Accessible.name: text
+            }
         }
     }
     SidePanel {
         id: details
         visible: window.sideOpen
+        floating: window.width < 1100
         parent: window.width >= 1100 ? sideSlot : Overlay.overlay
         width: window.width >= 1100 ? parent.width : Math.min(350, window.width - 32)
         height: window.width >= 1100 ? parent.height : window.height - 84
@@ -379,7 +400,7 @@ ApplicationWindow {
         modal: true
         padding: 18
         closePolicy: Popup.CloseOnEscape
-        background: Surface { glass: true; radius: Theme.workspaceRadius }
+        background: Surface { glass: true; radius: Theme.radius; color: Theme.background }
         header: Label {
             text: parent.title
             color: Theme.text
@@ -518,11 +539,11 @@ ApplicationWindow {
                 TextArea {
                     id: memoryText
                     color: Theme.text
-                    placeholderTextColor: Theme.secondary
+                    placeholderTextColor: Theme.quiet
                     placeholderText: qsTr("例如：关键函数、调用关系、地址与验证方式…")
                     selectByMouse: true
                     wrapMode: TextEdit.Wrap
-                    background: Rectangle { color: Theme.raised; radius: 8 }
+                    background: Rectangle { color: Theme.raised; radius: Theme.controlRadius; border.width: 1; border.color: memoryText.activeFocus ? Theme.focusBorder : Theme.inputBorder }
                 }
             }
             RowLayout {

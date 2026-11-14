@@ -15,6 +15,7 @@
 #include <QContextMenuEvent>
 #include <QCursor>
 #include <QEvent>
+#include <QFocusEvent>
 #include <QFrame>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -54,126 +55,102 @@ constexpr auto LauncherVisibleKey =
     "guiPlugins/neverd.agent-ui/launcherVisible";
 constexpr auto LauncherHintKey = "guiPlugins/neverd.agent-ui/launcherHintShown";
 
-bool darkWorkbench() {
-  return QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
-}
+// The corners of cards, as the workbench rounds its floating cards.
+constexpr int CardRadius = 6;
 
-QString chatStyle(bool dark) {
-  QString sheet = QStringLiteral(R"css(
+// The workbench's color roles: the host's theme when it offers one, else the
+// application palette's nearest roles, which the workbench also sets.
+class Colors {
+public:
+  explicit Colors(const ThemeContext *theme = nullptr) : Theme(theme) {}
+  QColor operator()(const char *role) const {
+    if (Theme)
+      if (const auto color = Theme->themeColor(QLatin1String(role));
+          color.isValid())
+        return color;
+    const auto palette = QGuiApplication::palette();
+    const QLatin1StringView name(role);
+    if (name == QLatin1StringView("Menu"))
+      return palette.color(QPalette::Window);
+    if (name == QLatin1StringView("Button"))
+      return palette.color(QPalette::Button);
+    if (name == QLatin1StringView("ButtonHover") ||
+        name == QLatin1StringView("ToolBarHover"))
+      return palette.color(QPalette::Midlight);
+    if (name == QLatin1StringView("ButtonText"))
+      return palette.color(QPalette::ButtonText);
+    if (name == QLatin1StringView("SecondaryText"))
+      return palette.color(QPalette::PlaceholderText);
+    if (name == QLatin1StringView("Accent") ||
+        name == QLatin1StringView("Focus"))
+      return palette.color(QPalette::Accent);
+    if (name == QLatin1StringView("Border"))
+      return palette.color(QPalette::Mid);
+    return palette.color(QPalette::Text);
+  }
+
+private:
+  const ThemeContext *Theme;
+};
+
+// Standard controls keep the workbench's own style. This sheet gives only the
+// card, the messages and the quiet labels their roles.
+QString chatStyle(const Colors &color) {
+  const auto hex = [&](const char *role) {
+    return color(role).name(QColor::HexArgb);
+  };
+  return QStringLiteral(R"css(
 QFrame#NeverDAgentChat {
-  background: @surface@; border: 1px solid @outline@; border-radius: 16px;
+  background: %1; border: 1px solid %2; border-radius: %3px;
 }
-QLabel#NeverDAgentTitle { color: @text@; }
 QLabel#NeverDAgentContext, QLabel#NeverDAgentStatus, QLabel#NeverDAgentSpeaker,
 QLabel#NeverDAgentExecutionLatest {
-  color: @secondary@;
+  color: %4;
 }
-QToolButton[agentHeader="true"] {
-  color: @secondary@; background: transparent; border: 1px solid transparent;
-  border-radius: 8px; min-height: 27px; padding: 0 7px;
-}
-QToolButton[agentHeader="true"]:hover, QToolButton[agentHeader="true"]:checked {
-  background: @hover@; color: @text@;
-}
-QToolButton[agentHeader="true"]:focus, QScrollArea#NeverDAgentTranscript:focus {
-  border-color: @focus@;
-}
-QScrollArea#NeverDAgentTranscript {
-  background: transparent; border: 1px solid transparent; border-radius: 9px;
-}
-QWidget#NeverDAgentMessages { background: transparent; }
-QFrame#NeverDAgentUserMessage { background: @user@; border-radius: 12px; }
-QFrame#NeverDAgentReply { background: @reply@; border-radius: 12px; }
 QToolButton#NeverDAgentExecutionToggle {
-  color: @secondary@; background: transparent; border: 1px solid transparent;
-  border-radius: 5px; padding: 2px 5px;
+  color: %4; background: transparent; border: 1px solid transparent;
+  border-radius: 3px; padding: 1px 4px;
 }
-QToolButton#NeverDAgentExecutionToggle:hover { background: @hover@; }
-QToolButton#NeverDAgentExecutionToggle:focus { border-color: @focus@; }
-QTreeWidget#NeverDAgentExecutionRows {
-  color: @text@; background: @composer@; border: none; border-radius: 6px;
+QToolButton#NeverDAgentExecutionToggle:hover { background: %7; }
+QToolButton#NeverDAgentExecutionToggle:focus { border-color: %8; }
+QScrollArea#NeverDAgentTranscript, QWidget#NeverDAgentMessages {
+  background: transparent; border: none;
 }
-QTreeWidget#NeverDAgentExecutionRows::item { padding: 2px 3px; }
+QFrame#NeverDAgentUserMessage {
+  background: %5; border: %6px solid %2; border-radius: %3px;
+}
+QFrame#NeverDAgentReply { background: transparent; border: none; }
 QTextBrowser#NeverDAgentMessageText {
-  color: @text@; background: transparent; border: none; padding: 0;
-  selection-background-color: @selection@; selection-color: @text@;
+  background: transparent; border: none; padding: 0;
 }
-QScrollBar#NeverDAgentChatScrollBar:vertical {
-  width: 8px; margin: 3px 0; background: transparent;
-}
-QScrollBar#NeverDAgentChatScrollBar::handle:vertical {
-  background: @scroll@; min-height: 24px; margin: 0 1px; border-radius: 3px;
-}
-QScrollBar#NeverDAgentChatScrollBar::add-line:vertical,
-QScrollBar#NeverDAgentChatScrollBar::sub-line:vertical { height: 0; }
-QScrollBar#NeverDAgentChatScrollBar::add-page:vertical,
-QScrollBar#NeverDAgentChatScrollBar::sub-page:vertical { background: transparent; }
-QFrame#NeverDAgentComposer {
-  background: @composer@; border: 1px solid @outline@; border-radius: 12px;
-}
-QFrame#NeverDAgentComposer[editing="true"] { border-color: @focus@; }
-QPlainTextEdit#NeverDAgentPrompt {
-  color: @text@; background: transparent; border: none; padding: 0;
-  font: @promptFont@; selection-background-color: @selection@; selection-color: @text@;
-}
-QCheckBox#NeverDAgentIncludeContext { color: @secondary@; spacing: 6px; }
-QPushButton#NeverDAgentSend {
-  background: @primary@; color: @primaryText@; border: 1px solid transparent;
-  border-radius: 8px; min-width: 54px; min-height: 28px; padding: 0 9px;
-  font-weight: 600;
-}
-QPushButton#NeverDAgentSend:hover { background: @primaryHover@; }
-QPushButton#NeverDAgentSend:focus { border-color: @text@; }
-QPushButton#NeverDAgentSend:disabled { background: @hover@; color: @secondary@; }
-)css");
-  // Use the standalone Agent's surface, composer, text and accent colors.
-  const struct {
-    const char *Token, *Dark, *Light;
-  } colors[] = {
-      {"@surface@", "#111318", "#f7f8fa"},
-      {"@outline@", "#3d424b", "#c4c9d2"},
-      {"@text@", "#e8ebf0", "#151820"},
-      {"@secondary@", "#99a1ad", "#5a6170"},
-      {"@user@", "#23272e", "#e7ebf2"},
-      {"@reply@", "#181b21", "#eef0f4"},
-      {"@hover@", "#282c33", "#e4e7ec"},
-      {"@composer@", "#13161b", "#ffffff"},
-      {"@scroll@", "#525965", "#a0a7b4"},
-      {"@focus@", "#729aca", "#2f6fb0"},
-      {"@selection@", "#324a66", "#c7ddf6"},
-      {"@primary@", "#78a9e0", "#2f6fb0"},
-      {"@primaryHover@", "#8bb8ea", "#255e99"},
-      {"@primaryText@", "#08111e", "#ffffff"},
-  };
-  for (const auto &color : colors)
-    sheet.replace(QLatin1StringView(color.Token),
-                  QLatin1StringView(dark ? color.Dark : color.Light));
-  const auto font = QGuiApplication::font();
-  sheet.replace("@promptFont@", QStringLiteral("%1pt \"%2\"")
-                                    .arg(std::max(10.0, font.pointSizeF()))
-                                    .arg(font.family()));
-  return sheet;
+QTreeWidget#NeverDAgentExecutionRows { border: none; }
+)css")
+      .arg(hex("Menu"), hex("Border"), QString::number(CardRadius),
+           hex("SecondaryText"), hex("Button"),
+           QString::number(BubbleBorderWidth), hex("ToolBarHover"),
+           hex("Focus"));
 }
 
 class Launcher final : public QToolButton {
 public:
-  using QToolButton::QToolButton;
+  Launcher(const ThemeContext *theme, QWidget *parent)
+      : QToolButton(parent), Color(theme) {}
   QSize sizeHint() const override { return LauncherSize; }
   bool Busy = false;
   bool Unread = false;
 
 protected:
+  // A push button's gray face inside the workbench's hairline; keyboard
+  // focus rings it in the focus color, and the accent marks work or news.
   void paintEvent(QPaintEvent *) override {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     const auto circle = QRectF(rect()).adjusted(1, 1, -1, -1);
-    const bool dark = darkWorkbench();
-    const QColor accent(dark ? "#8bb8ea" : "#2f6fb0");
-    const QColor border(dark ? "#858c97" : "#717a89");
-    const QColor face(dark ? (underMouse() ? "#444a54" : "#34383f")
-                           : (underMouse() ? "#e4ebf4" : "#f8fafc"));
-    const QColor glyph(dark ? "#e8ebf0" : "#26354b");
-    painter.setPen(QPen(hasFocus() ? accent : border, hasFocus() ? 1.8 : 1.2));
+    const QColor accent = Color("Accent");
+    const QColor face = Color(underMouse() ? "ButtonHover" : "Button");
+    const QColor glyph = Color("ButtonText");
+    const bool ringed = hasFocus() && FocusByKeyboard;
+    painter.setPen(QPen(ringed ? Color("Focus") : Color("Border"), 1));
     painter.setBrush(face);
     painter.drawEllipse(circle);
     painter.translate(circle.center());
@@ -203,47 +180,56 @@ protected:
       painter.drawEllipse(QPointF(14, -14), 4, 4);
     }
   }
+  void focusInEvent(QFocusEvent *event) override {
+    FocusByKeyboard = event->reason() != Qt::MouseFocusReason;
+    QToolButton::focusInEvent(event);
+  }
+
+private:
+  Colors Color;
+  bool FocusByKeyboard = false;
 };
 
 class ChatFrame final : public QFrame {
 public:
-  explicit ChatFrame(QWidget *parent) : QFrame(parent), Dark(darkWorkbench()) {
+  ChatFrame(const ThemeContext *theme, QWidget *parent)
+      : QFrame(parent), Color(theme) {
     setObjectName("NeverDAgentChat");
     setAttribute(Qt::WA_StyledBackground);
-    setStyleSheet(chatStyle(Dark));
-    auto uiFont = font();
-    if (uiFont.pointSizeF() > 0 && uiFont.pointSizeF() < 10)
-      uiFont.setPointSizeF(10);
-    setFont(uiFont);
+    Sheet = chatStyle(Color);
+    setStyleSheet(Sheet);
   }
 
   QSize sizeHint() const override { return ChatSize; }
 
 protected:
+  // The workbench sets a new application palette when its theme changes.
   void changeEvent(QEvent *event) override {
     QFrame::changeEvent(event);
-    if ((event->type() == QEvent::PaletteChange ||
-         event->type() == QEvent::ApplicationPaletteChange) &&
-        Dark != darkWorkbench()) {
-      Dark = !Dark;
-      setStyleSheet(chatStyle(Dark));
+    if (event->type() != QEvent::ApplicationPaletteChange)
+      return;
+    if (auto sheet = chatStyle(Color); sheet != Sheet) {
+      Sheet = std::move(sheet);
+      setStyleSheet(Sheet);
     }
   }
 
 private:
-  bool Dark;
+  Colors Color;
+  QString Sheet;
 };
 
 class FloatingChat final : public QObject {
 public:
   FloatingChat(Context &context, QObject &lifetime)
-      : QObject(&lifetime), Host(context) {}
+      : QObject(&lifetime), Host(context),
+        Theme(dynamic_cast<ThemeContext *>(&context)) {}
 
   bool mount(QString &error) {
     auto *ball = Host.mountView(
         "launcher", {},
-        [](QWidget *parent) {
-          auto *button = new Launcher(parent);
+        [this](QWidget *parent) {
+          auto *button = new Launcher(Theme, parent);
           button->setObjectName("NeverDAgentLauncher");
           button->setAccessibleName(tr("Open NeverD Agent"));
           button->setToolTip(tr(
@@ -311,7 +297,7 @@ public:
 
 private:
   QWidget *makePanel(QWidget *parent) {
-    auto *panel = new ChatFrame(parent);
+    auto *panel = new ChatFrame(Theme, parent);
     auto *layout = new QVBoxLayout(panel);
     layout->setContentsMargins(14, 11, 14, 14);
     layout->setSpacing(9);
@@ -321,13 +307,11 @@ private:
     auto *title = new QLabel(tr("NeverD Agent"), panel);
     title->setObjectName("NeverDAgentTitle");
     auto font = title->font();
-    if (font.pointSizeF() > 0)
-      font.setPointSizeF(font.pointSizeF() + 1.5);
     font.setBold(true);
     title->setFont(font);
     heading->addWidget(title, 1);
     auto *settings = new QToolButton(panel);
-    settings->setProperty("agentHeader", true);
+    settings->setAutoRaise(true);
     settings->setText(tr("Settings"));
     settings->setToolTip(
         tr("Open the standalone Agent to configure the model"));
@@ -340,7 +324,7 @@ private:
     heading->addWidget(settings);
     Pin = new QToolButton(panel);
     Pin->setObjectName("NeverDAgentPin");
-    Pin->setProperty("agentHeader", true);
+    Pin->setAutoRaise(true);
     Pin->setText(tr("Pin"));
     Pin->setCheckable(true);
     Pin->setToolTip(tr("Keep this conversation open"));
@@ -350,7 +334,7 @@ private:
     });
     heading->addWidget(Pin);
     auto *close = new QToolButton(panel);
-    close->setProperty("agentHeader", true);
+    close->setAutoRaise(true);
     close->setText(QStringLiteral("×"));
     close->setAccessibleName(tr("Hide Agent conversation"));
     connect(close, &QToolButton::clicked, this, [this] { hidePanel(); });
@@ -379,11 +363,10 @@ private:
     Status->hide();
     layout->addWidget(Status);
 
-    auto *composer = new QFrame(panel);
+    auto *composer = new QWidget(panel);
     composer->setObjectName("NeverDAgentComposer");
-    composer->setAttribute(Qt::WA_StyledBackground);
     auto *compose = new QVBoxLayout(composer);
-    compose->setContentsMargins(11, 9, 9, 8);
+    compose->setContentsMargins(0, 0, 0, 0);
     compose->setSpacing(6);
     Prompt = new QPlainTextEdit(composer);
     Prompt->setObjectName("NeverDAgentPrompt");
@@ -391,7 +374,9 @@ private:
     Prompt->setToolTip(tr("Enter to send · Shift+Enter for a new line"));
     Prompt->setTabChangesFocus(true);
     Prompt->ensurePolished();
-    Prompt->setFixedHeight(Prompt->fontMetrics().lineSpacing() * 3 + 6);
+    Prompt->setFixedHeight(Prompt->fontMetrics().lineSpacing() * 3 +
+                           2 * Prompt->frameWidth() +
+                           qRound(2 * Prompt->document()->documentMargin()));
     connect(Prompt, &QPlainTextEdit::textChanged, this,
             [this] { updateControls(); });
     compose->addWidget(Prompt);
@@ -402,6 +387,9 @@ private:
     commands->addWidget(IncludeContext, 1);
     Send = new QPushButton(tr("Send"), composer);
     Send->setObjectName("NeverDAgentSend");
+    // The panel's one accent, without taking Return from the prompt.
+    Send->setProperty("mainAction", true);
+    Send->setAutoDefault(false);
     connect(Send, &QPushButton::clicked, this, [this] { sendOrStop(); });
     commands->addWidget(Send);
     compose->addLayout(commands);
@@ -459,15 +447,7 @@ private:
       }
       case QEvent::FocusOut:
         PromptComposing = false;
-        [[fallthrough]];
-      case QEvent::FocusIn: {
-        auto *composer = Prompt->parentWidget();
-        composer->setProperty("editing", event->type() == QEvent::FocusIn);
-        composer->style()->unpolish(composer);
-        composer->style()->polish(composer);
-        composer->update();
         break;
-      }
       default:
         break;
       }
@@ -764,6 +744,7 @@ private:
   }
 
   Context &Host;
+  const ThemeContext *Theme;
   QPointer<Launcher> Ball;
   QPointer<QWidget> Panel;
   QAction *LauncherAction = nullptr;

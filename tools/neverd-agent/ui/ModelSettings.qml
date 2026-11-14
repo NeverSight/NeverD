@@ -15,7 +15,7 @@ Dialog {
     height: Math.min(implicitHeight, parent.height - 48)
     padding: 18
     topPadding: 4
-    background: Surface { glass: true; radius: Theme.workspaceRadius }
+    background: Surface { glass: true; radius: Theme.radius; color: Theme.background }
     header: Label { text: qsTr("模型与分析设置"); color: Theme.text; font.pointSize: Theme.bodyPointSize; font.weight: Font.Medium; padding: 18 }
     function values() {
         return {protocol: protocols[protocol.currentIndex], url: endpoint.text.trim(), model: modelName.text.trim(),

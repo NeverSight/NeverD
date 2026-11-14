@@ -58,24 +58,25 @@ alone. The application uses the existing NeverD logo and its own consistently
 stroked, monochrome Qt Quick vector action glyphs (`ui/Icon.qml`). No external
 agent source code or runtime is embedded.
 
-The Agent shell shares ND GUI's frame metrics and window controls. Its neutral
-material palette extends those controls with a static satin
-backdrop, rounded frost masks and half-resolution Qt Quick Effects blur on the
-caption, side panes, composer and sheets. Text and Markdown render outside the
-blur layer. No desktop imagery is captured and no perpetual background animation
-runs. The software renderer uses the same translucent surfaces without the blur.
+The Agent shell shares ND GUI's frame metrics, window controls and look. Every
+color in `ui/Theme.qml` is a role of the workbench's `ChromeColors.def` (Visual
+Studio Code Dark+ and Light+), read through `AgentWindowFrame::chromeColor`:
+the title band, panes a step apart parted by hairlines, the selection blue
+under white text, fields, check boxes, menus and one main button in the accent
+per window. Corners follow the workbench (fields and push buttons 2, tool
+buttons and menu highlights 3, cards and sheets 6, panes none), and the window
+frame is the workbench's square edge and fading shadow. There are no gradients,
+blur or translucent panels.
 The product logo appears only at the top-left of the caption; conversation
 messages and empty states use text hierarchy without repeated brand avatars.
 Project/object navigation and the initially hidden right pane keep their existing
 behavior. Caption-level controls and keyboard focus remain visible and reachable.
 Action glyphs share an 18-pixel optical size and 34-pixel hit target, including
 the send/stop and disclosure controls. Spacing follows 8/16/24-pixel steps.
-Scalable platform UI fonts supply control text (Microsoft YaHei UI / Segoe UI
-on Windows), with bundled Noto fallback; prose
-is one point larger and secondary text uses a quieter color. Markdown receives
-the actual view font explicitly instead of retaining a separate document
-default. JetBrains Mono is limited to code. Message bubbles remain, with softer
-surfaces and no persistent outlines; the composer has a larger, consistent inset.
+Text uses the bundled Noto Sans and Noto Sans CJK at the desktop's interface
+size, as the workbench does; secondary text is quieted by color, not size.
+Markdown receives the actual view font explicitly instead of retaining a
+separate document default. JetBrains Mono is limited to code.
 
 Compaction behavior was compared with the local Codex source at revision
 `95e1d5993` (`core/src/compact.rs`): exact earlier user messages and a checkpoint
@@ -642,9 +643,8 @@ index. Private conversations are not shared between projects.
   It paints its own caption, minimize/maximize/close controls, frame and shadow.
   The window manager still performs native movement, resizing and window-state
   transitions. Edge dragging from a maximized window restores it for resizing,
-  matching the workbench. Neutral black/gray or light translucent panels and
-  the platform UI font with bundled Noto fallback provides normal text;
-  JetBrains Mono is reserved for code.
+  matching the workbench. Workbench color roles and the bundled Noto fonts
+  provide normal text; JetBrains Mono is reserved for code.
   OS-level desktop acrylic is not enabled. Font license notices are included
   in installed products.
 

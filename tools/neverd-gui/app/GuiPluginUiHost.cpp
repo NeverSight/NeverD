@@ -9,6 +9,7 @@
 #include "GuiPluginUi.h"
 #include "PluginServices.h"
 #include "Session.h"
+#include "Theme.h"
 #include "mcp/GuiSessionBroker.h"
 
 #include <QAction>
@@ -71,7 +72,8 @@ QRect adjacentSpace(QRect area, const QRect &anchor, Qt::Edge edge, int gap) {
 
 class GuiPluginUiHost::Binding final : public QObject,
                                        public pluginui::Context,
-                                       public pluginui::MenuContext {
+                                       public pluginui::MenuContext,
+                                       public pluginui::ThemeContext {
 public:
   struct View {
     QString Id;
@@ -235,6 +237,10 @@ public:
       return {};
     }
     return Broker->credentialFile();
+  }
+
+  QColor themeColor(const QString &role) const override {
+    return Theme::instance().chrome(role);
   }
 
   bool navigate(const QString &address, const QJsonObject &binding) override {

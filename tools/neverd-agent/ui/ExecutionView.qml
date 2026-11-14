@@ -51,7 +51,7 @@ ColumnLayout {
         text: (trace.active ? qsTr("执行中 · 查看工具与对象进度") : qsTr("执行记录")) + (trace.records.length ? qsTr(" · %1 项").arg(trace.records.length) : "")
         palette.buttonText: Theme.secondary; hoverEnabled: true
         font.pointSize: Theme.smallPointSize
-        background: Rectangle { color: parent.hovered ? Theme.hover : "transparent"; radius: 6 }
+        background: Rectangle { color: parent.hovered ? Theme.toolHover : "transparent"; radius: Theme.toolRadius }
         onClicked: trace.expanded = !trace.expanded
     }
     ColumnLayout {
@@ -87,7 +87,7 @@ ColumnLayout {
                             text: JSON.stringify({arguments: row.modelData.arguments || {}, result: row.modelData.result || {}}, null, 2)
                             readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap
                             color: Theme.secondary; font.family: "JetBrains Mono NL"; font.pointSize: Theme.smallPointSize
-                            background: Rectangle { color: Theme.code; radius: 6 }
+                            background: Rectangle { color: Theme.code; radius: Theme.controlRadius; border.width: 1; border.color: Theme.border }
                         }
                     }
                 }

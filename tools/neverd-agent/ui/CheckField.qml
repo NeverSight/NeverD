@@ -2,19 +2,21 @@ import QtQuick
 import QtQuick.Controls.Basic
 import NeverD.Agent
 
-// Compact checkbox: 16px box, small text, accent fill when checked.
+// The workbench's check box: a 14-pixel box 6 from its label, the main
+// button's blue with a white mark while checked.
 CheckBox {
     id: control
-    spacing: 8
+    spacing: 6
     padding: 2
-    font.pointSize: Theme.smallPointSize
     indicator: Rectangle {
         x: control.leftPadding
         y: Math.round((control.height - height) / 2)
-        width: 16; height: 16; radius: 4
-        color: control.checked ? Theme.primary : "transparent"
-        border.width: control.checked ? 0 : 1
-        border.color: control.activeFocus ? Theme.focusBorder : control.hovered ? Theme.quiet : Theme.borderStrong
+        width: 14; height: 14; radius: Theme.toolRadius
+        color: control.checked ? Theme.checkBoxChecked : Theme.checkBox
+        border.width: 1
+        border.color: control.visualFocus ? Theme.focusBorder
+                    : control.checked ? Theme.checkBoxChecked : Theme.checkBoxBorder
+        opacity: control.enabled ? 1 : 0.4
         Icon {
             anchors.centerIn: parent
             width: 12; height: 12
@@ -27,7 +29,7 @@ CheckBox {
         leftPadding: control.indicator.width + control.spacing
         text: control.text
         font: control.font
-        color: Theme.text
+        color: control.enabled ? Theme.text : Theme.disabledText
         verticalAlignment: Text.AlignVCenter
         wrapMode: Text.Wrap
     }

@@ -7,6 +7,7 @@
 #ifndef NEVERD_PLUGINSDK_GUI_GUIPLUGINUI_H
 #define NEVERD_PLUGINSDK_GUI_GUIPLUGINUI_H
 
+#include <QColor>
 #include <QJsonObject>
 #include <QtPlugin>
 #include <functional>
@@ -59,6 +60,23 @@ public:
 
 protected:
   ~MenuContext() = default;
+};
+
+/// Optional workbench theme capability. Query it with dynamic_cast from
+/// Context. A view that styles or paints itself takes its colors from the
+/// workbench's roles, named as in the workbench's chrome color table
+/// ("Menu", "Border", "SecondaryText", "ButtonPrimary", ...), instead of
+/// choosing its own, so it follows the light, dark and high contrast themes.
+/// Standard Qt controls need nothing: the workbench's style already draws
+/// them. The application palette changes with the theme, so a view reads the
+/// roles again on QEvent::ApplicationPaletteChange.
+class ThemeContext {
+public:
+  /// The role's color in the current theme; invalid for an unknown role.
+  virtual QColor themeColor(const QString &role) const = 0;
+
+protected:
+  ~ThemeContext() = default;
 };
 
 class Module {

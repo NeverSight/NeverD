@@ -22,7 +22,7 @@ ColumnLayout {
                     id: card
                     required property var modelData
                     Layout.fillWidth: true; implicitHeight: content.implicitHeight + 28
-                    radius: 10
+                    radius: Theme.radius
                     ColumnLayout {
                         id: content
                         anchors.fill: parent; anchors.margins: 14; spacing: 8
@@ -44,7 +44,7 @@ ColumnLayout {
                         Label { visible: !!card.modelData.error; text: card.modelData.error || ""; color: Theme.error; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true }
                         Flow {
                             Layout.fillWidth: true; spacing: 6
-                            ActionButton { visible: card.modelData.status === "pending" || card.modelData.status === "failed"; text: qsTr("应用变更"); primary: true; enabled: !view.backend.reviewBusy && !view.backend.running; onClicked: view.backend.applyChange(card.modelData.id) }
+                            ActionButton { visible: card.modelData.status === "pending" || card.modelData.status === "failed"; text: qsTr("应用变更"); enabled: !view.backend.reviewBusy && !view.backend.running; onClicked: view.backend.applyChange(card.modelData.id) }
                             ActionButton { visible: ["pending","failed","conflict"].includes(card.modelData.status); text: qsTr("忽略"); enabled: !view.backend.reviewBusy; onClicked: view.backend.dismissChange(card.modelData.id) }
                             ActionButton { visible: card.modelData.status === "applied"; text: qsTr("撤销此变更"); enabled: !view.backend.reviewBusy && !view.backend.running; onClicked: view.backend.applyChange(card.modelData.id, true) }
                         }

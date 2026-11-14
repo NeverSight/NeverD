@@ -15,6 +15,7 @@
 #include <QLocale>
 #include <QScrollBar>
 #include <QTextBrowser>
+#include <QTextDocument>
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -27,6 +28,9 @@ namespace neverd::gui::pluginui {
 namespace {
 constexpr int BubblePadding = 12;
 constexpr int UserWidthPercent = 82;
+const QTextDocument::MarkdownFeatures MessageMarkdown =
+    QTextDocument::MarkdownFeatures(QTextDocument::MarkdownDialectGitHub) |
+    QTextDocument::MarkdownNoHTML;
 constexpr int VisibleExecutionRows = 5;
 
 class MessageText final : public QTextBrowser {
@@ -82,7 +86,10 @@ public:
     layout->setSpacing(4);
     Toggle = new QToolButton(this);
     Toggle->setObjectName("NeverDAgentExecutionToggle");
-    Toggle->setCheckable(true);
+    // A disclosure, not a toggled tool: its chevron shows whether it is open,
+    // so the workbench does not fill it with the checked-tool color. Keyboard
+    // focus frames it; a click leaves no frame behind.
+    Toggle->setFocusPolicy(Qt::TabFocus);
     Toggle->setArrowType(Qt::RightArrow);
     Toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     layout->addWidget(Toggle, 0, Qt::AlignLeft);
@@ -104,9 +111,10 @@ public:
     Tree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     layout->addWidget(Tree);
 
-    connect(Toggle, &QToolButton::toggled, this, [this, request](bool open) {
-      Toggle->setArrowType(open ? Qt::DownArrow : Qt::RightArrow);
-      if (open && !Received)
+    connect(Toggle, &QToolButton::clicked, this, [this, request] {
+      Expanded = !Expanded;
+      Toggle->setArrowType(Expanded ? Qt::DownArrow : Qt::RightArrow);
+      if (Expanded && !Received)
         request(RunId);
       refresh();
     });
@@ -198,7 +206,7 @@ private:
         Records.isEmpty()
             ? ChatTranscript::tr("Execution")
             : ChatTranscript::tr("Execution · %1").arg(Records.size()));
-    const bool expanded = Toggle->isChecked();
+    const bool expanded = Expanded;
     QString latest;
     if (expanded && Records.isEmpty())
       latest = Running ? ChatTranscript::tr("Waiting for tool calls…")
@@ -225,6 +233,7 @@ private:
   QList<QJsonObject> Records;
   bool Received = false;
   bool Running = false;
+  bool Expanded = false;
 };
 } // namespace
 
@@ -234,6 +243,9 @@ public:
       : QFrame(parent), User(user) {
     setObjectName(User ? "NeverDAgentUserMessage" : "NeverDAgentReply");
     setAttribute(Qt::WA_StyledBackground);
+    // Never taller than its text: a message that unwraps gives back the
+    // height its wrapped lines took.
+    setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(BubblePadding, 9, BubblePadding, 10);
     layout->setSpacing(4);
@@ -284,21 +296,23 @@ public:
     if (Displayed == text)
       return;
     Displayed = text;
-    Body->document()->setMarkdown(
-        Displayed,
-        QTextDocument::MarkdownFeatures(QTextDocument::MarkdownDialectGitHub) |
-            QTextDocument::MarkdownNoHTML);
+    Body->document()->setMarkdown(Displayed, MessageMarkdown);
   }
 
   void fitWidth(int width) {
     int bubbleWidth = width;
     if (User) {
-      const auto font = Body->fontMetrics();
-      int natural = Speaker->fontMetrics().horizontalAdvance(Speaker->text());
-      for (const auto &line : QStringView(Source).split(u'\n'))
-        natural = std::max(natural, font.horizontalAdvance(line.toString()));
-      bubbleWidth =
-          std::min(natural + 2 * BubblePadding, width * UserWidthPercent / 100);
+      // The widest line as the message's own layout sets it, unwrapped, and
+      // the cursor's pixel: summed font advances round below what the text
+      // layout needs, which wrapped short messages that had room.
+      QTextDocument probe;
+      probe.setDocumentMargin(0);
+      probe.setDefaultFont(Body->document()->defaultFont());
+      probe.setMarkdown(Source, MessageMarkdown);
+      const int natural =
+          std::max(Speaker->sizeHint().width(), qCeil(probe.idealWidth()) + 1);
+      bubbleWidth = std::min(natural + 2 * (BubblePadding + BubbleBorderWidth),
+                             width * UserWidthPercent / 100);
     }
     setFixedWidth(std::max(1, bubbleWidth));
   }

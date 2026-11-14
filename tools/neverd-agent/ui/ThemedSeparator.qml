@@ -8,5 +8,5 @@ MenuSeparator {
     bottomPadding: 4
     leftPadding: 6
     rightPadding: 6
-    contentItem: Rectangle { implicitHeight: 1; color: Theme.border }
+    contentItem: Rectangle { implicitHeight: 1; color: Theme.menuSeparator }
 }

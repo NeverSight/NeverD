@@ -43,6 +43,8 @@ public:
   Q_INVOKABLE void toggleMaximized();
   Q_INVOKABLE void startMove();
   Q_INVOKABLE QColor chromeColor(const QString &name, bool light) const;
+  /// A role of the workbench's code-view colors (ThemeColors.def).
+  Q_INVOKABLE QColor themeColor(const QString &name, bool light) const;
 
 signals:
   void stateChanged();

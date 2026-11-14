@@ -6,8 +6,6 @@ import NeverD.Agent
 Surface {
     id: sidebar
     color: Theme.surface
-    border.width: 1
-    border.color: Theme.border
     radius: Theme.workspaceRadius
     required property var backend
     signal createRequested()
@@ -63,12 +61,6 @@ Surface {
                                 onClicked: sidebar.backend.selectProject(projectNode.modelData.id)
                                 Keys.onMenuPressed: sidebar.menuRequested(projectNode.modelData.id, "", projectButton)
                                 Rectangle {
-                                    visible: projectButton.checked
-                                    width: 2; height: parent.height - 14
-                                    x: 1; anchors.verticalCenter: parent.verticalCenter
-                                    radius: 1; color: Theme.accent
-                                }
-                                Rectangle {
                                     id: approvalDot
                                     visible: sidebar.backend.analysisObjectApprovals.some(request =>
                                         request.projectId === projectNode.modelData.id)
@@ -118,12 +110,6 @@ Surface {
                                                 sidebar.backend.selectObject(objectNode.modelData.id)
                                         }
                                         Keys.onMenuPressed: sidebar.menuRequested(projectNode.modelData.id, objectNode.modelData.id, objectButton)
-                                        Rectangle {
-                                            visible: objectButton.checked
-                                            width: 2; height: parent.height - 14
-                                            x: 1; anchors.verticalCenter: parent.verticalCenter
-                                            radius: 1; color: Theme.accent
-                                        }
                                         MouseArea {
                                             anchors.fill: parent
                                             acceptedButtons: Qt.RightButton

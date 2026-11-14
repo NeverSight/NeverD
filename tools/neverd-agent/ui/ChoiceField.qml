@@ -11,16 +11,16 @@ ComboBox {
     contentItem: Text {
         text: control.displayText
         textFormat: Text.PlainText
-        color: Theme.text
+        color: control.enabled ? Theme.text : Theme.disabledText
         font: control.font
         verticalAlignment: Text.AlignVCenter
         elide: Text.ElideRight
     }
     background: Rectangle {
         radius: Theme.controlRadius
-        color: control.hovered ? Theme.raised : Theme.surface
+        color: control.enabled ? Theme.raised : Theme.controlDisabled
         border.width: 1
-        border.color: control.activeFocus || control.popup.visible ? Theme.focusBorder : Theme.border
+        border.color: control.activeFocus || control.popup.visible ? Theme.focusBorder : Theme.inputBorder
     }
     indicator: Icon {
         name: "chevron_down"
@@ -34,18 +34,18 @@ ComboBox {
         required property var modelData
         required property int index
         width: control.width - 8
-        implicitHeight: 34
+        implicitHeight: 26
         text: control.textRole ? modelData[control.textRole] : modelData
         highlighted: control.highlightedIndex === index
-        contentItem: Text { text: parent.text; textFormat: Text.PlainText; color: Theme.text; font: control.font; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
-        background: Rectangle { radius: 6; color: parent.highlighted || parent.hovered ? Theme.hover : "transparent" }
+        contentItem: Text { text: parent.text; textFormat: Text.PlainText; color: parent.highlighted || parent.hovered ? Theme.menuSelectionText : Theme.menuText; font: control.font; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
+        background: Rectangle { radius: Theme.toolRadius; color: parent.highlighted || parent.hovered ? Theme.menuSelection : "transparent" }
     }
     popup: Popup {
         y: control.height + 4
         width: control.width
         padding: 4
         implicitHeight: contentItem.implicitHeight + 8
-        background: Surface { glass: true; radius: Theme.controlRadius }
+        background: Surface { glass: true; radius: Theme.toolRadius }
         contentItem: ListView {
             clip: true
             implicitHeight: Math.min(contentHeight, 280)

@@ -17,6 +17,10 @@ class QVBoxLayout;
 
 namespace neverd::gui::pluginui {
 
+/// The outline of a user message, which the panel's style sheet draws in the
+/// workbench's border color (an outline the high contrast themes need).
+inline constexpr int BubbleBorderWidth = 1;
+
 class ChatTranscript final : public QScrollArea {
 public:
   using OpenLink = std::function<void(const QUrl &)>;

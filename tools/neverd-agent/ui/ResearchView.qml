@@ -26,7 +26,7 @@ ColumnLayout {
                 model: view.plan.steps || []
                 delegate: Surface {
                     id: step; required property var modelData
-                    Layout.fillWidth: true; implicitHeight: body.implicitHeight + 24; radius: 10
+                    Layout.fillWidth: true; implicitHeight: body.implicitHeight + 24; radius: Theme.radius
                     ColumnLayout {
                         id: body; anchors.fill: parent; anchors.margins: 12; spacing: 7
                         Label { text: ({pending:qsTr("待开始"),in_progress:qsTr("进行中"),completed:qsTr("已完成"),blocked:qsTr("待解决")}[step.modelData.status] || "") + " · " + step.modelData.title; color: Theme.text; wrapMode: Text.Wrap; Layout.fillWidth: true }

@@ -11,10 +11,10 @@ Surface {
     readonly property bool narrow: width < 290
     implicitHeight: content.implicitHeight + 24
     implicitWidth: 300
-    color: Theme.composerTint
+    color: Theme.surface
     border.width: 1
     border.color: Theme.borderStrong
-    radius: 16
+    radius: Theme.radius
     Accessible.name: title.text
 
     function choose(allow) {

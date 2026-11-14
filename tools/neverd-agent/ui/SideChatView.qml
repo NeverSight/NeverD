@@ -45,7 +45,7 @@ ColumnLayout {
         enabled: view.chat && view.chat.inheritedMessages.length > 0
         font.pointSize: Theme.smallPointSize
         palette.buttonText: Theme.secondary
-        background: Rectangle { radius: 6; color: parent.hovered ? Theme.hover : "transparent" }
+        background: Rectangle { radius: Theme.toolRadius; color: parent.hovered ? Theme.toolHover : "transparent" }
         onClicked: view.showInherited = !view.showInherited
         ThemedToolTip {
             visible: parent.hovered
@@ -92,8 +92,8 @@ ColumnLayout {
     Surface {
         Layout.fillWidth: true; Layout.preferredHeight: 132
         color: Theme.composerTint
-        radius: 18
-        border.color: composer.activeFocus ? Theme.focusBorder : Theme.borderStrong
+        radius: Theme.radius
+        border.color: composer.activeFocus ? Theme.focusBorder : Theme.inputBorder
         ColumnLayout {
             anchors.fill: parent; anchors.margins: 14; spacing: Theme.spaceSmall
             ScrollView {
@@ -128,7 +128,6 @@ ColumnLayout {
                     hint: view.chat && view.chat.running
                           ? qsTr("回车排到下一轮 · Shift+回车换行")
                           : qsTr("回车发送 · Shift+回车换行")
-                    primary: true
                     enabled: composer.canSubmit
                     onClicked: composer.submitRequested()
                 }

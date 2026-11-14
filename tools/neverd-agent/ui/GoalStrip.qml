@@ -7,7 +7,7 @@ Surface {
     id: strip
     required property var backend
     signal editRequested()
-    color: Theme.surface; radius: 9; border.width: 1
+    color: Theme.surface; radius: Theme.radius; border.width: 1
     implicitHeight: body.implicitHeight + 20
     readonly property var goal: backend.goal
     readonly property string stateText: ({active: qsTr("推进中"), paused: qsTr("已暂停"), completed: qsTr("已完成"), blocked: qsTr("等待处理"), budget_exhausted: qsTr("预算已用完"), round_limit: qsTr("达到轮次上限"), interrupted: qsTr("上次运行已中断"), failed: qsTr("运行失败")}[goal.status] || qsTr("目标"))

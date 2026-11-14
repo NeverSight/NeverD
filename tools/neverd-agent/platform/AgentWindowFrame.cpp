@@ -38,6 +38,12 @@ constexpr ChromeColor ChromeColors[] = {
   {#Name, Light, Dark},
 #include "../../neverd-gui/app/ChromeColors.def"
 };
+constexpr ChromeColor ThemeColors[] = {
+#define NEVERD_THEME_COLOR(Name, Light, Dark, LightHighContrast,               \
+                           DarkHighContrast)                                   \
+  {#Name, Light, Dark},
+#include "../../neverd-gui/app/ThemeColors.def"
+};
 } // namespace
 
 AgentWindowFrame::AgentWindowFrame(QObject *parent) : QObject(parent) {}
@@ -83,6 +89,14 @@ QColor AgentWindowFrame::chromeColor(const QString &name, bool light) const {
     if (name == QLatin1String(color.Name))
       return QColor(QLatin1String(light ? color.Light : color.Dark));
   qWarning("Unknown Agent chrome color: %s", qPrintable(name));
+  return {};
+}
+
+QColor AgentWindowFrame::themeColor(const QString &name, bool light) const {
+  for (const auto &color : ThemeColors)
+    if (name == QLatin1String(color.Name))
+      return QColor(QLatin1String(light ? color.Light : color.Dark));
+  qWarning("Unknown Agent theme color: %s", qPrintable(name));
   return {};
 }
 

@@ -18,8 +18,6 @@ Surface {
     signal contextRequested()
     color: Theme.content
     radius: Theme.workspaceRadius
-    border.width: 1
-    border.color: Theme.border
 
     ColumnLayout {
         anchors.fill: parent
@@ -161,17 +159,6 @@ Surface {
             Layout.fillHeight: true
             messages: conversation.backend.messages
             onLinkRequested: link => conversation.backend.openTextLink(link)
-            // Content scrolls under a short fade instead of being cut at a hard edge.
-            Rectangle {
-                parent: messageList
-                anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
-                height: 28; z: 1
-                visible: !messageList.atYBeginning
-                gradient: Gradient {
-                    GradientStop { position: 0; color: Theme.content }
-                    GradientStop { position: 1; color: Qt.rgba(Theme.content.r, Theme.content.g, Theme.content.b, 0) }
-                }
-            }
         }
         InputQueue {
             Layout.fillWidth: true
@@ -198,8 +185,8 @@ Surface {
             Layout.fillWidth: true
             Layout.preferredHeight: 104
             color: Theme.composerTint
-            border.color: composer.activeFocus ? Theme.focusBorder : Theme.borderStrong
-            radius: 14
+            border.color: composer.activeFocus ? Theme.focusBorder : Theme.inputBorder
+            radius: Theme.radius
             border.width: 1
             Behavior on border.color { ColorAnimation { duration: 140 } }
             ColumnLayout {
@@ -214,7 +201,7 @@ Surface {
                         id: composer
                         objectName: "requestComposer"
                         placeholderText: qsTr("描述问题，或继续追踪一条线索…")
-                        placeholderTextColor: Theme.secondary
+                        placeholderTextColor: Theme.quiet
                         color: Theme.text
                         selectByMouse: true
                         wrapMode: TextEdit.Wrap

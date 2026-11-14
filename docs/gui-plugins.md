@@ -79,6 +79,12 @@ component requires the workbench.
   During activation, `mountMenuAction` adds a native Qt action under
   **Plugins → package name**. The factory gives the action the supplied parent.
   The host keeps the action for that component activation.
+- A component that styles or paints its views can query `ThemeContext` the
+  same way. `themeColor` returns a workbench color role by its chrome color
+  name (`Menu`, `Border`, `SecondaryText`, `ButtonPrimary`, ...) in the current
+  light, dark or high contrast theme. Standard Qt controls need nothing: the
+  workbench style already draws them. Read the roles again on
+  `QEvent::ApplicationPaletteChange`, which a theme change sends.
 - Closing a project or disabling the plugin retires its NPH component and
   destroys its views. A project switch creates new view instances. Restart
   the workbench before replacing a loaded module binary.

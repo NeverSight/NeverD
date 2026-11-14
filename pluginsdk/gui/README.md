@@ -8,6 +8,10 @@ support is required for the Python example.
 Read the [process-plugin SDK contract](../../docs/process-plugin-sdk.md), then run the complete
 [Workbench Explorer example](examples/workbench-explorer/README.md).
 
+`GuiPluginUi.h` declares the in-process native view interface
+(`neverd.gui-ui.v1`) instead. [GUI plugins](../../docs/gui-plugins.md) describes
+its contexts, including the optional `MenuContext` and `ThemeContext`.
+
 `neverd_gui_plugin.py` is a Python 3.8+ standard-library helper for protocol v1:
 
 ```python

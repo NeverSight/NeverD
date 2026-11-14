@@ -18,8 +18,8 @@ TextEdit {
     persistentSelection: true
     wrapMode: TextEdit.Wrap
     color: Theme.text
-    selectedTextColor: Theme.text
-    selectionColor: Theme.selected
+    selectedTextColor: Theme.selectionText
+    selectionColor: Theme.selection
     font.pointSize: Theme.bodyPointSize
     font.family: appFont.family
     textFormat: TextEdit.RichText
@@ -27,7 +27,7 @@ TextEdit {
     function refresh() {
         const first = selectionStart
         const last = selectionEnd
-        renderer.render(source, markdown, Theme.text, Theme.code, Theme.accent, Theme.border, view.font)
+        renderer.render(source, markdown, Theme.text, Theme.code, Theme.link, Theme.border, view.font)
         if (last > first) select(Math.min(first, length), Math.min(last, length))
     }
     function schedule() {

@@ -5,10 +5,12 @@ import NeverD.Agent
 
 Surface {
     id: panel
+    // A pane beside the conversation; a card when it floats over a narrow window.
+    property bool floating: false
     color: Theme.surface
-    border.width: 1
-    border.color: Theme.border
-    radius: Theme.workspaceRadius
+    border.width: floating ? 1 : 0
+    border.color: Theme.borderStrong
+    radius: floating ? Theme.radius : Theme.workspaceRadius
     required property var backend
     property var views: []
     property int currentView: 0
@@ -59,7 +61,7 @@ Surface {
                         background: Item {
                             Rectangle {
                                 anchors.fill: parent; anchors.bottomMargin: 3
-                                radius: 6
+                                radius: Theme.toolRadius
                                 color: tab.hovered && !tab.checked ? Theme.hover : "transparent"
                             }
                             Rectangle {

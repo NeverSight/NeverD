@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import NeverD.Agent
 
-// Context/drop-down menu: rounded card, hairline border, compact rows.
+// The workbench's menu: the menu surface inside a hairline, inset 4.
 Menu {
     id: menu
     padding: 4
@@ -11,11 +11,9 @@ Menu {
     delegate: ThemedMenuItem {}
     background: Rectangle {
         implicitWidth: menu.width
-        radius: Theme.controlRadius
+        radius: Theme.toolRadius
         color: Theme.menu
         border.width: 1
         border.color: Theme.borderStrong
     }
-    enter: Transition { NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 90 } }
-    exit: Transition { NumberAnimation { property: "opacity"; from: 1; to: 0; duration: 70 } }
 }

@@ -68,19 +68,10 @@ int main(int argc, char **argv) {
     if (QFontDatabase::addApplicationFont(QStringLiteral(":/agent/fonts/") +
                                           QLatin1String(name)) < 0)
       qFatal("Unable to load the bundled Agent font %s", name);
+  // The workbench's type: the bundled Noto Sans and Noto Sans CJK on every
+  // platform, at the desktop's interface size.
   QFont uiFont = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
-  // QGuiApplication's Windows GeneralFont can name the legacy bitmap
-  // "MS Sans Serif". Use scalable platform UI faces and bundled fallbacks.
-#ifdef Q_OS_WIN
-  uiFont.setFamilies(
-      {"Microsoft YaHei UI", "Segoe UI", "Noto Sans", "Noto Sans CJK SC"});
-#elif defined(Q_OS_MACOS)
-  uiFont.setFamilies(
-      {uiFont.family(), "PingFang SC", "Noto Sans", "Noto Sans CJK SC"});
-#else
-  uiFont.setFamilies({uiFont.family(), "Noto Sans", "Noto Sans CJK SC"});
-#endif
-  uiFont.setPointSizeF(10.5);
+  uiFont.setFamilies({"Noto Sans", "Noto Sans CJK SC", "JetBrains Mono NL"});
   uiFont.setHintingPreference(QFont::PreferVerticalHinting);
   app.setFont(uiFont);
 

@@ -12,7 +12,7 @@ Dialog {
     width: Math.min(640, parent.width - 48)
     height: Math.min(660, parent.height - 48)
     padding: 18
-    background: Surface { glass: true; radius: Theme.workspaceRadius }
+    background: Surface { glass: true; radius: Theme.radius; color: Theme.background }
     header: Label { text: qsTr("持续目标"); color: Theme.text; font.pointSize: Theme.bodyPointSize; font.weight: Font.Medium; padding: 18 }
     onOpened: {
         const goal = backend.goal
@@ -34,7 +34,7 @@ Dialog {
                     placeholderText: qsTr("描述预期成果和完成条件…")
                     placeholderTextColor: Theme.quiet; color: Theme.text
                     wrapMode: TextEdit.Wrap; selectByMouse: true; padding: 12
-                    background: Rectangle { color: Theme.raised; radius: 8; border.color: objective.activeFocus ? Theme.focusBorder : Theme.border }
+                    background: Rectangle { color: Theme.raised; radius: Theme.controlRadius; border.color: objective.activeFocus ? Theme.focusBorder : Theme.inputBorder }
                 }
             }
             GridLayout {
