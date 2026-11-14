@@ -12,6 +12,10 @@
 #define NEVERD_PAUTH_NATIVE_TEXT(Name, Value)
 #endif
 
+NEVERD_PAUTH_NATIVE_TEXT(kPAuthCompiler, "clang")
+NEVERD_PAUTH_NATIVE_TEXT(
+    kPAuthCompilerUnavailable,
+    "clang is required for the arm64e source compilation check")
 NEVERD_PAUTH_NATIVE_TEXT(kPAuthFixtureEnvironment,
                          "NEVERD_ARM64E_PAUTH_FIXTURES")
 NEVERD_PAUTH_NATIVE_TEXT(kGenericOracle, "pacga_oracle.c")
