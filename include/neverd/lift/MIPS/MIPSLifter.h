@@ -63,7 +63,10 @@ public:
     HasDSPR2 = Rev2;
   }
   void setMSAEnabled(bool Enabled) { HasMSA = Enabled; }
-  void setScalarFPEnabled(bool Enabled) { HasScalarFP = Enabled; }
+  void setScalarFPEnabled(bool Enabled, bool PairedRegisters = false) {
+    HasScalarFP = Enabled;
+    FP32Registers = Enabled && PairedRegisters;
+  }
   void setMIPS16Enabled(bool Enabled) { HasMIPS16 = Enabled; }
   void setMIPS16E2Enabled(bool Enabled) { HasMIPS16E2 = Enabled; }
   void setMTEnabled(bool Enabled) { HasMT = Enabled; }
@@ -150,6 +153,7 @@ private:
   bool HasDSPR2 = false;
   bool HasMSA = false;
   bool HasScalarFP = false;
+  bool FP32Registers = false;
   bool HasMIPS16 = false;
   bool HasMIPS16E2 = false;
   bool HasMT = false;

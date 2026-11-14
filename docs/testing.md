@@ -24260,7 +24260,10 @@ PYTHONPATH=third_party/unicorn/bindings/python LIBUNICORN_PATH=/path/to/unicorn-
 
 The runner defaults to Release 6. Add `--revision 2` for classic FR=1 Release 2
 with legacy NaNs, delayed JAL/JALR calls and the 74Kf/MIPS64R2 reference CPUs.
-`--abi` and `--layout` narrow a diagnostic rerun; omitting them runs all cases.
+Add `--revision 2 --fr 0 --abi 32` for o32 physical register pairs, including
+single/double entry and call results, variadic/indirect calls and preserved
+f20–f31 words. `--abi` and `--layout` narrow a diagnostic rerun; omitting them
+runs all cases for the selected mode.
 `SourceCallABI.AlignmentGuardPreservesOutgoingStackBytesAndAddresses` checks
 the reaching-store proof in all six MIPS ABI/byte-order profiles, with malformed
 alignment and opaque-effect controls that must still fail qualification.
@@ -24287,13 +24290,25 @@ against original LLVM, including negative zero and NaN payloads.
 `MIPSLegacyFP` in `NeverDMIPSIntegerTests` covers classic FR=1 pre-R6 arithmetic,
 conversions, sign operations, COP1X multiply-add and all 32 S/D predicates at
 every FCC selector. Literal machine encodings are independent of the lifter's
-operation catalog. The original 74Kf/MIPS64R2_GENERIC execution is compared
+operation catalog. Original MIPS64R2_GENERIC FP execution is compared
 with LowIR for result bits, FCSR and destination suppression, in both byte
 orders and GPR widths. Separate cases check conditional moves, a slot that
 changes the branch's condition, likely-slot annulment and ten memory forms at
 all eight low address offsets. The loader test rejects inconsistent FP ABI and
-CPR1 width evidence. These checks do not qualify FR=0, paired-single or
-historical ISA profiles.
+CPR1 width evidence. `MIPSFR0` compares physical even/odd word pairs,
+alignment faults and untouched FPR words in both byte orders. Odd doubles,
+long formats, PS and unaligned indexed transfers are rejected under FR=0.
+Paired-single tests cover both lanes' exception flags, all even FCC pairs,
+conditional moves, packing, overlapping registers and defined/undefined ALNV
+offsets. The reference CPU supplies PS even for MIPS32 LowIR; this does not
+claim original-byte execution on a 32-bit PS CPU. Historical ISA profiles
+remain outside these checks.
+
+`MIPSPipeline.PairedFR0EntryAndResultFollowO32ABI` checks scalar/double
+source signatures in both backends. `FR0ScratchPairDoesNotConsumeAnIncomingArgument`
+checks scratch pairing through straight-line code and a diamond.
+`FPParameterMask.NarrowScalarViewRequiresUnobservedUpperBytes` checks that
+reading a scalar register in two words cannot narrow the incoming double.
 
 `MIPSPipeline.DoubleResultDiscardsOnlyOverwrittenUnknownFPRWords` checks that
 MTC1 followed by CVT.D.W may return a defined double after replacing the
@@ -24301,7 +24316,10 @@ unpredictable high word. ADD.D must still refuse that unknown input. Both
 source paths, ISA revisions and byte orders participate in the check.
 
 `profile-roundtrip.py` accepts `mips32r2fp_*` and `mips64r2fp_*` selections for
-82 pre-R6 source profiles. Examples are `mips32r2fp_abs`, `mips64r2fp_madd`,
+82 scalar pre-R6 source profiles. The `mips64ps_*` selections add 59 PS
+profiles, including all predicates at FCC0/FCC6, sign exceptions, ternary
+arithmetic, moves, packing and ALNV offsets. They use n64 integer carriers
+and do not establish a PS vector call ABI. Examples are `mips32r2fp_abs`, `mips64r2fp_madd`,
 `mips32r2fp_cc7`, `mips64r2fp_branch` and `mips64r2fp_memory_suxc1`.
 Use its existing GNU assembler/linker, NeverD, Clang and output arguments;
 repeat `--profile` to select more than one. The runner assembles explicit

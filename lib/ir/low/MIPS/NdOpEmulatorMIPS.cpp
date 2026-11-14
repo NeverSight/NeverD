@@ -53,7 +53,7 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
   const bool Wide = isMIPS64(Img.Arch);
   const bool R6 = Img.MIPS && Img.MIPS->ISARevision == 6;
   if (mips::isScalarFPControl(Id)) {
-    if (!Img.MIPS || (!R6 && !Img.MIPS->hasScalarFP64ABI(Wide)) ||
+    if (!Img.MIPS || (!R6 && !Img.MIPS->hasScalarFPABI(Wide)) ||
         !Context.ScalarFPU ||
         !Context.ScalarFPU->supportsRevision(Img.MIPS->ISARevision) ||
         !Context.FCSR || Context.FloatingPointException)
@@ -75,8 +75,9 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
     return true;
   }
   if (mips::isScalarFPArithmetic(Id)) {
-    if (!Img.MIPS || (!R6 && !Img.MIPS->hasScalarFP64ABI(Wide)) ||
-        !mips::scalarFPAvailable(Id, Img.MIPS->ISARevision) ||
+    if (!Img.MIPS || (!R6 && !Img.MIPS->hasScalarFPABI(Wide)) ||
+        !mips::scalarFPAvailable(Id, Img.MIPS->ISARevision,
+                                 Img.MIPS->hasScalarFP32ABI(Wide)) ||
         !Context.ScalarFPU ||
         !Context.ScalarFPU->supportsRevision(Img.MIPS->ISARevision) ||
         !Context.FCSR || Context.FloatingPointException)

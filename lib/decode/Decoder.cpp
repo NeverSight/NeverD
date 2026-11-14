@@ -222,8 +222,9 @@ void Decoder::configureFor(const BinaryImage &Img) {
     MIPS->setDSPEnabled(Img.MIPS && Img.MIPS->HasDSP,
                         Img.MIPS && Img.MIPS->HasDSPR2);
     MIPS->setMSAEnabled(Img.MIPS && Img.MIPS->HasMSA && MIPSISARevision == 5);
-    MIPS->setScalarFPEnabled(Img.MIPS &&
-                             Img.MIPS->hasScalarFP64ABI(isMIPS64(Img.Arch)));
+    MIPS->setScalarFPEnabled(
+        Img.MIPS && Img.MIPS->hasScalarFPABI(isMIPS64(Img.Arch)),
+        Img.MIPS && Img.MIPS->hasScalarFP32ABI(isMIPS64(Img.Arch)));
   }
   if (AArch64)
     AArch64->setPreserveImmediateMemory(

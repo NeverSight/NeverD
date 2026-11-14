@@ -120,6 +120,30 @@ TEST_P(MIPSLoader, ScalarFP64ABIRequiresMatchingCPR1Evidence) {
   }
 }
 
+TEST_P(MIPSLoader, ScalarFP32ABIRequiresMatchingCPR1Evidence) {
+  if (isMIPS64(GetParam()))
+    return;
+  for (unsigned Size = 0; Size < 4; ++Size) {
+    ELFBytes File(GetParam());
+    File.abiFlags();
+    File.Bytes[0xe5] = Size;
+    File.Bytes[0xe7] = 1;
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_EQ(bool(Image), Size == 1);
+    if (Image) {
+      EXPECT_TRUE(Image->MIPS->hasScalarFP32ABI(false));
+      EXPECT_FALSE(Image->MIPS->hasScalarFP64ABI(false));
+    } else
+      EXPECT_NE(llvm::toString(Image.takeError()).find("FP32"),
+                std::string::npos);
+    std::vector<LoadCandidate> Candidates;
+    ELFLoader::identify(File.buffer(), Candidates);
+    ASSERT_EQ(Candidates.size(), 1u);
+    EXPECT_EQ(Candidates[0].Loadable, Size == 1);
+  }
+}
+
 TEST_P(MIPSLoader, RuntimeSymbolModesAreValidatedWithoutSectionHeaders) {
   for (uint8_t Mode : {uint8_t(0x80), uint8_t(0xf0)}) {
     ELFBytes File(GetParam());

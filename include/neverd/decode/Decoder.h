@@ -361,6 +361,8 @@ private:
   bool decodeR6HardwareRegister(const uint8_t *Bytes, uint32_t Word, va_t Addr);
   bool decodeMicroMIPSRelease6(const uint8_t *Bytes, size_t Len, va_t Addr);
   bool decodeMIPSReservation(const uint8_t *Bytes, uint32_t Word, va_t Addr);
+  bool decodeMIPSPairedSingle(const uint8_t *Bytes, uint32_t Physical,
+                              va_t Addr);
   bool decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr);
   bool decodeArchitectureFallback(const uint8_t *Bytes, size_t Len, va_t Addr);
 

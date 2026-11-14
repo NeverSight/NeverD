@@ -31,6 +31,27 @@ DSP64_BOUNDARIES = {
 
 
 def kernels():
+    # The n64 r2 reference core implements PS; the 32-bit 74Kf does not.
+    setup = "dmtc1 $4,$f0\ndmtc1 $5,$f2\n"
+    for op in ("add", "sub", "mul", "abs", "neg", "mov", "pll", "plu", "pul", "puu"):
+        operands = "$f4,$f0" if op in ("abs", "neg", "mov") else "$f4,$f0,$f2"
+        yield f"mips64ps_{op}", "mips64r2", "ps", setup + f"{op}.ps {operands}\ndmfc1 $2,$f4"
+    for op in ("madd", "msub", "nmadd", "nmsub"):
+        yield f"mips64ps_{op}", "mips64r2", "ps", setup + f"{op}.ps $f4,$f0,$f0,$f2\ndmfc1 $2,$f4"
+    for op in ("f", "un", "eq", "ueq", "olt", "ult", "ole", "ule", "sf", "ngle", "seq", "ngl", "lt", "nge", "le", "ngt"):
+        for cc in (0, 6):
+            yield f"mips64ps_c_{op}_{cc}", "mips64r2", "ps", setup + f"c.{op}.ps $fcc{cc},$f0,$f2\ncfc1 $2,$25"
+    for op in ("movf", "movt"):
+        for cc in (0, 6):
+            yield f"mips64ps_{op}_{cc}", "mips64r2", "ps", (setup +
+                f"c.ult.ps $fcc{cc},$f0,$f2\nmov.ps $f4,$f2\n{op}.ps $f4,$f0,$fcc{cc}\ndmfc1 $2,$f4")
+    for op in ("movz", "movn"):
+        yield f"mips64ps_{op}", "mips64r2", "ps", setup + f"mov.ps $f4,$f2\n{op}.ps $f4,$f0,$5\ndmfc1 $2,$f4"
+    yield "mips64ps_pack", "mips64r2", "ps", "mtc1 $4,$f0\nmtc1 $5,$f2\ncvt.ps.s $f4,$f0,$f2\ndmfc1 $2,$f4"
+    for half in ("pl", "pu"):
+        yield f"mips64ps_unpack_{half}", "mips64r2", "ps", setup + f"cvt.s.{half} $f4,$f0\nmfc1 $2,$f4"
+    for offset in (0, 4, 8, 12):
+        yield f"mips64ps_align_{offset}", "mips64r2", "ps", setup + f"ori $6,$0,{offset}\nalnv.ps $f4,$f0,$f2,$6\ndmfc1 $2,$f4"
     # Scalar FR=1 Release 2 uses legacy NaNs and pre-R6 FCSR behavior.
     for bits in (32, 64):
         fmt = "s" if bits == 32 else "d"
@@ -217,6 +238,11 @@ def inputs(name, bits):
                             (0xffffffff00000000, 0xffffffff),
                             (0xffffffffffffffff, 0xffffffffffffffff)])
         return vectors
+    if name.startswith("mips64ps_"):
+        values = (0, 0x800000003fc00000, 0x3fc00000bf800000,
+                  0x7fc000003f800000, 0x3f8000007f800001,
+                  0x7f8000017fc00000, 0x8000000000000001)
+        return [(a, b) for a in values for b in values]
     if "fp_memory_" in name:
         stride = 1 if "uxc1" in name else 4 if "wc1" in name or "wxc1" in name else 8
         return [(roundtrip.DATA + base, offset - base)
@@ -245,7 +271,7 @@ def inputs(name, bits):
 
 
 def reference_model(bits, feature):
-    if feature == "fp":
+    if feature in ("fp", "ps"):
         return mips.UC_CPU_MIPS64_MIPS64R2_GENERIC if bits == 64 else mips.UC_CPU_MIPS32_74KF
     if not feature:
         return (
@@ -268,20 +294,20 @@ def observe(elf, bits, little, feature, cases):
         uc.mem_write(address, b"".join(w.to_bytes(4, order) for w in words))
         uc.emu_start(address, address + len(words) * 4, count=len(words))
 
-    if feature and feature != "fp":
+    if feature and feature not in ("fp", "ps"):
         execute(
             roundtrip.STOP + 0x200,
             ASE["ENABLE_MSA" if feature == "msa" else "ENABLE_DSP"],
         )
-    if not feature or feature == "fp":
+    if not feature or feature in ("fp", "ps"):
         status = uc.reg_read(mips.UC_MIPS_REG_CP0_STATUS) | 0x24000000
         uc.reg_write(mips.UC_MIPS_REG_CP0_STATUS, status)
     uc.mem_write(roundtrip.DATA, bytes((0x87 + 29 * i) & 255 for i in range(64)))
     observations = []
     for i, pair in enumerate(cases):
-        if not feature or feature == "fp":
-            uc.reg_write(mips.UC_MIPS_REG_FCSR, (0x1000000 if feature == "fp" else 0xC0000) | (i & 3))
-        if feature and feature != "fp":
+        if not feature or feature in ("fp", "ps"):
+            uc.reg_write(mips.UC_MIPS_REG_FCSR, (0x1000000 if feature in ("fp", "ps") else 0xC0000) | (i & 3))
+        if feature and feature not in ("fp", "ps"):
             uc.reg_write(
                 mips.UC_MIPS_REG_A0, 0x01004005 if feature != "msa" and i % 2 else 0
             )
@@ -289,14 +315,14 @@ def observe(elf, bits, little, feature, cases):
                 roundtrip.STOP + 0x300, [0x783E2059 if feature == "msa" else 0x7C81FCF8]
             )
         value = roundtrip.invoke(uc, entry, bits, little, pair)[0]
-        control = uc.reg_read(mips.UC_MIPS_REG_FCSR) if not feature or feature == "fp" else None
-        if feature and feature != "fp":
+        control = uc.reg_read(mips.UC_MIPS_REG_FCSR) if not feature or feature in ("fp", "ps") else None
+        if feature and feature not in ("fp", "ps"):
             execute(
                 roundtrip.STOP + 0x400, [0x787E0A19 if feature == "msa" else 0x7C3F44B8]
             )
             control = uc.reg_read(mips.UC_MIPS_REG_8) & 0xFFFFFFFF
         observation = (value, control)
-        if feature == "fp":
+        if feature in ("fp", "ps"):
             observation += (bytes(uc.mem_read(roundtrip.DATA, 64)).hex(),)
         observations.append(observation)
     return observations
@@ -414,7 +440,7 @@ def run(args, artifacts):
         if bits == 64 and feature == "msa":
             rebuild_cpu = "mips64r6"
         cases = inputs(name, bits)
-        extra = (["-mfp64"] if feature == "fp" else ["-m" + feature] if feature else []) + (
+        extra = (["-mfp64"] if feature in ("fp", "ps") else ["-m" + feature] if feature else []) + (
             ["-mfp64"] if feature == "msa" else []
         )
         for little in (False, True):

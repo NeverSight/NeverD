@@ -16520,12 +16520,19 @@ The scalar COP1 owner shares `MIPSScalarFPOperations.h` across pre-R6 and R6
 lifting, concrete evaluation and native source generation. Stable operation
 descriptors come from `MIPSR6Float.def` and `MIPSLegacyFloat.def`; revision
 admission stays in that owner. Legacy comparisons have a constant FCC selector
-and an ordered FCSR effect, with no FPR result. `MIPSImageMetadata` owns FR=1
+and an ordered FCSR effect, with no FPR result. Paired-single arithmetic combines
+both lane exceptions; moves and packing retain raw bits. `MIPSImageMetadata` owns FR=0/FR=1
 ABI evidence, and the ELF loader rejects a conflicting CPR1 width. A bound
 `MIPSScalarFPExecutor` must match the image revision; adapters must not silently
 substitute R6 NaN or exception behavior for a pre-R6 operation. Ordinary and
 indexed legacy FP memory use the existing alignment intrinsic. Delayed BC1
 uses the same snapshot and annulment path as integer branches.
+`MedMIPSSourceVectors` projects FR=0 physical words into even-register ABI
+carriers before SSA. A four-word entry-demand analysis distinguishes actual
+f12/f13 and f14/f15 inputs from scratch pairs whose synthetic preservation
+reads must not create parameters. Register pairing stays separate from the
+FR=1/MSA register alias table. The common parameter byte-use proof prevents
+narrowing a double when its upper word is observed.
 
 `MedMIPSMergeValues` owns the source-only proof for adjacent complementary
 merge loads in a single ordinary leaf block. It runs after SSA/projection/DCE
