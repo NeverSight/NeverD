@@ -923,6 +923,23 @@ TEST(AArch64LiftedImage, SignedFrameCallsImportBeforeReadingOriginalGlobal) {
   verifyPublishedLeaves(kGlobalLeaves, kGlobalCaller, kSource, kFramedImport,
                         LeafCheck::FramedImport);
 }
+TEST(AArch64LiftedImage, PublishesSignedAndUnsignedSelections) {
+  verifyPublishedLeaves(kScalarLeaves, kScalarCaller);
+}
+TEST(AArch64LiftedImage, PublishesArchitecturalDivisionAtExceptionalInputs) {
+  verifyPublishedLeaves(kDivisionLeaves, kScalarCaller, kAssemblyName,
+                        kDivisionOracle);
+}
+TEST(AArch64LiftedImage, PublishesWordDivisionAtExceptionalInputs) {
+  verifyPublishedLeaves(kDivisionLeaves, kScalarCaller, kAssemblyName,
+                        kWordDivisionOracle);
+}
+TEST(AArch64LiftedImage, PublishesConditionalReadsAndWrites) {
+  verifyPublishedLeaves(kConditionalLeaves, kConditionalCaller);
+}
+TEST(AArch64LiftedImage, PublishesSignAndZeroExtendingLoads) {
+  verifyPublishedLeaves(kNarrowLeaves, kNarrowCaller);
+}
 TEST(AArch64LiftedImage, PublishesByteReversalAndTrailingZeroCount) {
   verifyPublishedLeaves(kBitLeaves, kBitCaller);
 }

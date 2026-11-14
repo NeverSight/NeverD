@@ -1,0 +1,8 @@
+{
+  "asset": "LLVM-22.1.6-win64.exe",
+  "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.6/LLVM-22.1.6-win64.exe",
+  "sha256": "e2d9a6855ff22c0acf3adc87ff1e1ad9705b8b6fc5bab2542aefc3315fc24cf7",
+  "destination": "source-patch-clang",
+  "digest_error": "Clang fixture compiler installer digest mismatch",
+  "install_error": "Clang fixture compiler installation failed"
+}

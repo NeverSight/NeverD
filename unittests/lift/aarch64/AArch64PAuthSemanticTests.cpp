@@ -128,13 +128,21 @@ void compileArm64eC(const std::string &Source,
                     bool EmitLLVM = false, llvm::StringRef ExecuteTarget = {},
                     bool *ExecutionAvailable = nullptr,
                     llvm::StringRef Language = "c") {
+  const bool ExecuteNative = !ExecuteTarget.empty();
 #ifdef NEVERD_TEST_CLANG
-  const std::string Compiler = NEVERD_TEST_CLANG;
+  const std::string HostCompiler = NEVERD_TEST_CLANG;
 #else
-  const auto Found = llvm::sys::findProgramByName("clang");
+  const auto Found = llvm::sys::findProgramByName(kPAuthCompiler);
   if (!Found)
-    GTEST_SKIP() << "clang is required for the arm64e source compilation check";
-  const std::string Compiler = *Found;
+    GTEST_SKIP() << kPAuthCompilerUnavailable;
+  const std::string HostCompiler = *Found;
+#endif
+#ifdef NEVERD_PAUTH_TEST_CLANG
+  // Executable controls also need the host SDK and deployment target.
+  const llvm::StringRef Compiler =
+      ExecuteNative ? llvm::StringRef(HostCompiler) : NEVERD_PAUTH_TEST_CLANG;
+#else
+  const llvm::StringRef Compiler = HostCompiler;
 #endif
   llvm::SmallString<128> SourcePath, ObjectPath, ErrorPath;
   ASSERT_FALSE(
@@ -156,7 +164,6 @@ void compileArm64eC(const std::string &Source,
       std::nullopt, std::nullopt, ErrorPath.str()};
   // Exclude host libc headers explicitly. Only Clang's resource headers and
   // the fixture's C declarations are needed, including on Linux and Windows.
-  const bool ExecuteNative = !ExecuteTarget.empty();
   for (llvm::StringRef Optimization : {"-O0", "-O2"}) {
     llvm::SmallVector<llvm::StringRef> Args = {
         Compiler,
