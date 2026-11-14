@@ -4228,8 +4228,10 @@ Native tests change a single observed bit, exhaust a six-bit input pair and
 check full-width equivalence with Z3. Both an outer scale and a scale already
 multiplied into one factor must preserve the same observations. A 63-factor executable uses these masks
 through CLI and GUI worker source paths. The 32-bit top-column regression
-requires the same 16-node reading at a 256-unit work limit and at the usual
-limit; Z3 verifies the short-budget result.
+requires at most 15 nodes at both the 256-unit work limit and the usual
+limit. The printed result round-trips at the same cost and Z3 checks
+full-width equality. The HighIR test replays the same product and checks
+the sign-column expression against its original full-word arithmetic.
 Use `--family dynamic-lane --count 12` for 84 products with masks that depend
 on runtime inputs. Half the cases leave one more low bit observable, and
 28 also have a fixed low literal that must stay in the output. The
@@ -4240,6 +4242,11 @@ at 17 through 513 bits. They mix sign extension, zero extension and two-
 or three-piece concatenation. In half the products a replacement high lane
 reaches one observable bit. A 97-factor x64 fixture uses partial-register
 writes and both extensions through the CLI and GUI worker source paths.
+Use `--family rotating-window --count 14` for 112 products of 71 to 257 factors
+at the same widths. Nested rotations move a source window across bit zero.
+Half the products retain a live bit in an extension or high piece.
+A 127-factor x64 fixture reads CH after rotating ECX and checks signed and
+unsigned byte extensions through the CLI and GUI worker source paths.
 The LLVM pass also checks sign extension lowered to an exact right shift,
 signed and unsigned factor bounds, and neighboring shifts or coefficients
 that can produce poison.

@@ -137,8 +137,9 @@ bool signedProductBounds(const MaskedArithmeticBounds &Left,
 // Compute bounds from values alone, never from nowrap flags, range metadata,
 // assumptions or the instruction being justified. Unknown operations keep the
 // full domain. The small depth/node/width limits bound admission work.
-MaskedArithmeticBounds maskedArithmeticBounds(const llvm::Value *V, unsigned Depth,
-                                unsigned &Remaining) {
+MaskedArithmeticBounds maskedArithmeticBounds(const llvm::Value *V,
+                                              unsigned Depth,
+                                              unsigned &Remaining) {
   const unsigned Width = V->getType()->getIntegerBitWidth();
   MaskedArithmeticBounds Result(Width);
   if (!Remaining || !Depth)
@@ -365,10 +366,9 @@ bool hasCompatibleSemantics(const llvm::Instruction &I) {
     return !llvm::cast<llvm::ICmpInst>(I).hasSameSign();
   case OpTag::Select:
     return I.getOperand(0)->getType()->isIntegerTy(1);
-  case OpTag::FShl: {
-    const auto *Amount = llvm::dyn_cast<llvm::ConstantInt>(I.getOperand(2));
-    return Amount != nullptr;
-  }
+  case OpTag::FShl:
+  case OpTag::FShr:
+    return true; // isTranslatable has already checked the funnel operands.
   case OpTag::None:
     return false;
   }
@@ -426,9 +426,12 @@ bool hasHiddenIncompatibleSemantics(const llvm::Instruction &Root,
 } // namespace
 
 OpTag tagOf(const llvm::Instruction &I) {
-  if (const auto *Intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(&I))
+  if (const auto *Intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(&I)) {
     if (Intrinsic->getIntrinsicID() == llvm::Intrinsic::fshl)
       return OpTag::FShl;
+    if (Intrinsic->getIntrinsicID() == llvm::Intrinsic::fshr)
+      return OpTag::FShr;
+  }
   if (llvm::isa<llvm::TruncInst>(I))
     return OpTag::Trunc;
   if (llvm::isa<llvm::ZExtInst>(I))
@@ -476,7 +479,9 @@ bool isTranslatable(const llvm::Value *V, bool WithComparisons) {
   if (!I || !I->getType()->isIntegerTy())
     return false;
   OpTag Tag = tagOf(*I);
-  if (Tag == OpTag::FShl && !llvm::isa<llvm::ConstantInt>(I->getOperand(2)))
+  if ((Tag == OpTag::FShl || Tag == OpTag::FShr) &&
+      I->getOperand(0) != I->getOperand(1) &&
+      !llvm::isa<llvm::ConstantInt>(I->getOperand(2)))
     return false;
   return Tag != OpTag::None &&
          (WithComparisons || (Tag != OpTag::ICmp && Tag != OpTag::Select));
@@ -576,16 +581,19 @@ sym::SymRef Translator::build(const llvm::Instruction &I) {
     break;
   case OpTag::Select:
     return Ctx.mkIte(M(A), M(B), M(I.getOperand(2)));
-  case OpTag::FShl: {
-    const auto *Amount = llvm::cast<llvm::ConstantInt>(I.getOperand(2));
-    const uint32_t Shift = static_cast<uint32_t>(
-        Amount->getValue()
-            .urem(llvm::APInt(Amount->getBitWidth(), Width))
-            .getZExtValue());
-    if (Shift == 0)
-      return M(A);
-    return Ctx.mkOr(Ctx.mkShl(M(A), Ctx.mkConst(Width, Shift)),
-                    Ctx.mkLShr(M(B), Ctx.mkConst(Width, Width - Shift)));
+  case OpTag::FShl:
+  case OpTag::FShr: {
+    const bool Left = tagOf(I) == OpTag::FShl;
+    auto *Count = I.getOperand(2);
+    if (A == B)
+      return Left ? Ctx.mkRol(M(A), M(Count)) : Ctx.mkRor(M(A), M(Count));
+    const auto &Amount = llvm::cast<llvm::ConstantInt>(Count)->getValue();
+    const auto Shift = Amount.urem(Width);
+    if (!Shift)
+      return Left ? M(A) : M(B);
+    const auto HighShift = Left ? Shift : Width - Shift;
+    return Ctx.mkOr(Ctx.mkShl(M(A), Ctx.mkConst(Width, HighShift)),
+                    Ctx.mkLShr(M(B), Ctx.mkConst(Width, Width - HighShift)));
   }
   case OpTag::None:
     break;
@@ -844,6 +852,21 @@ Translator::out(sym::SymRef R, llvm::Instruction *At,
       Result = X ? B.CreateNot(X) : nullptr;
       break;
     }
+    case sym::SymOp::Rol:
+    case sym::SymOp::Ror: {
+      auto *Word = get(Ops[0]);
+      auto *Amount =
+          Ctx.isConst(Ops[1])
+              ? llvm::ConstantInt::get(Ty, Ctx.constValue(Ops[1]).urem(Width))
+              : get(Ops[1]);
+      if (Word && Amount && Amount->getType() == Ty) {
+        const auto ID = Ctx.op(Item.Ref) == sym::SymOp::Rol
+                            ? llvm::Intrinsic::fshl
+                            : llvm::Intrinsic::fshr;
+        Result = B.CreateIntrinsic(ID, {Ty}, {Word, Word, Amount});
+      }
+      break;
+    }
     case sym::SymOp::Shl: {
       llvm::Value *X = get(Ctx.operand(Item.Ref, 0));
       llvm::Value *Y = get(Ctx.operand(Item.Ref, 1));
@@ -930,7 +953,7 @@ Translator::out(sym::SymRef R, llvm::Instruction *At,
       break;
     }
     default:
-      // Rotates and comparisons have no output spelling in this translator.
+      // Comparisons have no output spelling in this translator.
       Result = nullptr;
       break;
     }

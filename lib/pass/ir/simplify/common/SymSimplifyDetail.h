@@ -66,6 +66,7 @@ enum class OpTag {
   ICmp,
   Select,
   FShl,
+  FShr,
 };
 
 OpTag tagOf(const llvm::Instruction &I);
@@ -132,6 +133,15 @@ public:
       case sym::SymOp::SExt:
       case sym::SymOp::Ite:
         break;
+      case sym::SymOp::Rol:
+      case sym::SymOp::Ror:
+        // LLVM funnel shifts reduce their count modulo the word width.
+        // A symbolic count may have its own width; only constant counts
+        // can be reduced unconditionally before conversion to the IR type.
+        if (!Ctx.isConst(Ctx.operand(Current, 1)) &&
+            Ctx.width(Ctx.operand(Current, 1)) != Ctx.width(Current))
+          return false;
+        break;
       case sym::SymOp::Shl:
       case sym::SymOp::LShr:
       case sym::SymOp::AShr: {
@@ -194,6 +204,7 @@ private:
       return {I.getOperand(0)};
     case OpTag::Select:
     case OpTag::FShl:
+    case OpTag::FShr:
       return {I.getOperand(0), I.getOperand(1), I.getOperand(2)};
     default:
       return {I.getOperand(0), I.getOperand(1)};

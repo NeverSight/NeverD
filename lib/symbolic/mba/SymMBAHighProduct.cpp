@@ -13,6 +13,8 @@
 #include "Limits.h"
 #include "SymMBADetail.h"
 
+#include "neverd/symbolic/Limits.h"
+
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -267,6 +269,36 @@ SymRef collectColumnUnion(SymContext &Ctx, SymRef Body, WorkBudget &Budget,
   return Body;
 }
 
+// Multiplication by the sign mask places bit zero of Body above the
+// literal's low field. Compare that spelling with the arithmetic sum.
+SymRef topColumnWithOffset(SymContext &Ctx, SymRef Body,
+                           const llvm::APInt &Offset, WorkBudget &Budget,
+                           size_t &Storage) {
+  const unsigned Width = Offset.getBitWidth();
+  const auto Sign = llvm::APInt::getSignMask(Width);
+  if (Offset.isMinSignedValue())
+    return Ctx.mkMul(Ctx.mkConst(Sign), Ctx.mkNot(Body));
+  const auto Sum =
+      Ctx.mkAdd(Ctx.mkConst(Offset), Ctx.mkMul(Ctx.mkConst(Sign), Body));
+  if (!Offset.isStrictlyPositive() || !isBitwise(Ctx.op(Body)))
+    return Sum;
+  // Charge for the Boolean projection and the packed word before building
+  // them. The ordinary sum stays available when this optional reading
+  // exceeds the remaining work or storage.
+  const size_t Nodes = Ctx.readabilityCost(Body);
+  const size_t Words = llvm::APInt::getNumWords(Width);
+  const size_t Entry =
+      2 * sizeof(SymNode) + 4 * sizeof(SymRef) + Words * sizeof(uint64_t);
+  if (Nodes > ::neverd::limits::symbolic::kSymExprPackedBitNodes ||
+      Nodes + 2 > Storage / Entry || !Budget.canConsume(Nodes * 2 + 2 + Words))
+    return Sum;
+  Storage -= (Nodes + 2) * Entry;
+  Budget.consume(Nodes * 2 + 2 + Words);
+  const auto Packed = Ctx.mkConcat(Ctx.mkExtract(Body, 0, 1),
+                                   Ctx.mkConst(Offset.trunc(Width - 1)));
+  return readingScore(Ctx, Packed) < readingScore(Ctx, Sum) ? Packed : Sum;
+}
+
 // The canonical sum has already combined equal disturbances. Its surviving
 // high coefficients can therefore observe fewer bits than any input factor.
 SymRef factorHighSum(SymContext &Ctx, SymRef Sum, WorkBudget &Budget,
@@ -318,10 +350,6 @@ SymRef factorHighSum(SymContext &Ctx, SymRef Sum, WorkBudget &Budget,
     for (auto &T : Terms)
       T = Parity(T);
     Body = Ctx.mkXor(Terms);
-    if (Constant.isMinSignedValue()) {
-      Body = Ctx.mkNot(Body);
-      Constant.clearAllBits();
-    }
   } else {
     // Modulo four the remaining nonzero weights are 1, -1 and 2.
     for (auto &T : Terms) {
@@ -336,7 +364,10 @@ SymRef factorHighSum(SymContext &Ctx, SymRef Sum, WorkBudget &Budget,
     }
     Body = Ctx.mkAdd(Terms);
   }
-  const auto Result = Ctx.mkAdd(Ctx.mkConst(Constant), Ctx.mkMul(Scale, Body));
+  const auto Result =
+      Zeros == Width - 1
+          ? topColumnWithOffset(Ctx, Body, Constant, Budget, Storage)
+          : Ctx.mkAdd(Ctx.mkConst(Constant), Ctx.mkMul(Scale, Body));
   return readingScore(Ctx, Result) <= readingScore(Ctx, Sum) ? Result : Sum;
 }
 
@@ -526,14 +557,17 @@ SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
       auto Constant = Prefix.back();
       if (Minimum > Live)
         Lowest.clear();
-      // Only surviving words need rebuilding and sorting.
+      // Only surviving words need rebuilding and sorting. Charge for the
+      // edges of a surviving product when its tail must be rebuilt.
       const size_t EmitWork =
-          Edges + Lowest.size() * (3 + std::bit_width(Lowest.size()));
+          Lowest.size() * (4 + std::bit_width(Lowest.size()));
       if (!Budget.canConsume(EmitWork))
         return Root;
       Budget.consume(EmitWork);
       for (auto &D : Lowest) {
         const auto Tail = Ctx.operands(D).drop_front();
+        if (Tail.size() > 1 && !Budget.consume(Tail.size()))
+          return Root;
         auto V = Tail.size() == 1 ? Tail.front() : Ctx.mkMul(Tail);
         if (Ctx.op(V) == SymOp::Not) {
           Constant -= Sign;
@@ -544,12 +578,7 @@ SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
       auto Result = Ctx.mkConst(Constant);
       if (!Lowest.empty()) {
         auto Body = collectColumnUnion(Ctx, Ctx.mkXor(Lowest), Budget, Storage);
-        if (Constant.isMinSignedValue()) {
-          Body = Ctx.mkNot(Body);
-          Constant.clearAllBits();
-        }
-        Result = Ctx.mkAdd(Ctx.mkConst(Constant),
-                           Ctx.mkMul(Ctx.mkConst(Sign), Body));
+        Result = topColumnWithOffset(Ctx, Body, Constant, Budget, Storage);
       }
       return readingScore(Ctx, Result) < readingScore(Ctx, Root) ? Result
                                                                  : Root;
@@ -656,20 +685,37 @@ SymRef foldResidueParitySum(SymContext &Ctx, SymRef Root,
   const size_t N = Ctx.numOperands(Root);
   if (N > limits::kMaxResidueBaseTerms || N < 2)
     return Root;
-  SymRef Scale, Word, Literal;
+  SymRef Scale, Word, Literal, PackedLow;
   llvm::SmallVector<SymRef, limits::kMaxResidueBaseTerms + 1> Leaves;
   for (auto T : Ctx.operands(Root)) {
-    if (Ctx.isConst(T))
+    if (Ctx.isConst(T)) {
       Literal = T;
-    else if (Ctx.isVar(T))
+    } else if (Ctx.isVar(T)) {
       Leaves.push_back(T);
-    else if (!Scale && Ctx.op(T) == SymOp::Mul && Ctx.numOperands(T) == 2 &&
-             Ctx.isConst(Ctx.operand(T, 0)) &&
-             Ctx.op(Ctx.operand(T, 1)) == SymOp::Xor) {
+    } else if (!Word && Ctx.op(T) == SymOp::Mul && Ctx.numOperands(T) == 2 &&
+               Ctx.isConst(Ctx.operand(T, 0)) &&
+               Ctx.op(Ctx.operand(T, 1)) == SymOp::Xor) {
       Scale = Ctx.operand(T, 0);
       Word = Ctx.operand(T, 1);
-    } else
+    } else if (!Word && !Literal && Ctx.op(T) == SymOp::Concat &&
+               Ctx.numOperands(T) == 2) {
+      const auto High = Ctx.operand(T, 0), Low = Ctx.operand(T, 1);
+      if (Ctx.width(High) != 1 || Ctx.op(High) != SymOp::Extract ||
+          Ctx.node(High).Aux != 0 || !Ctx.isConst(Low))
+        return Root;
+      Word = Ctx.operand(High, 0);
+      if (Ctx.op(Word) != SymOp::Xor || Ctx.width(Word) != Ctx.width(Root))
+        return Root;
+      PackedLow = Low;
+    } else {
       return Root;
+    }
+  }
+  // Keep the packed sign column eligible for the same shared-parity fold.
+  // Build its arithmetic parts after leaving the root operand range.
+  if (PackedLow) {
+    Scale = Ctx.mkConst(llvm::APInt::getSignMask(Ctx.width(Root)));
+    Literal = Ctx.mkZExt(PackedLow, Ctx.width(Root));
   }
   if (!Scale || Leaves.empty() ||
       !Budget.consume(llvm::APInt::getNumWords(Ctx.width(Root))) ||

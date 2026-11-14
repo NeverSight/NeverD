@@ -31,6 +31,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <array>
 #include <functional>
 #include <string>
 #include <thread>
@@ -1600,6 +1601,56 @@ TEST(HighSymSimplify, EffectBoundariesInvalidateAvailableDefinitions) {
     // read and every definition depending on it must be invalidated.
     EXPECT_EQ(Body.back().RetVal->str().find('|') != std::string::npos,
               Mutable);
+  }
+}
+
+TEST(HighSymSimplify, EmitsThePackedParityOfAFullWordProduct) {
+  const auto X = HighExpr::makeVar(tempOfSize(1, 4));
+  const auto Y = HighExpr::makeVar(tempOfSize(2, 4));
+  const auto Z = HighExpr::makeVar(tempOfSize(3, 4));
+  const auto W = HighExpr::makeVar(tempOfSize(4, 4));
+  auto C = [](uint32_t V) {
+    return HighExpr::makeConst(V, 4, ConstantAddressProvenance::Scalar);
+  };
+  auto Bin = HighExpr::makeBinop;
+  const auto XY = Bin(NdOp::INT_XOR, X, Y);
+  const std::array<ExprPtr, 6> Words{
+      Bin(NdOp::INT_OR, Y, Z),
+      Bin(NdOp::INT_MULT, Bin(NdOp::INT_AND, X, Z), Bin(NdOp::INT_OR, Y, W)),
+      XY,
+      Bin(NdOp::INT_ADD, X, Bin(NdOp::INT_XOR, W, Y)),
+      Bin(NdOp::INT_AND, Z, W),
+      HighExpr::makeUnary(NdOp::INT_NOT, Bin(NdOp::INT_OR, W, X))};
+  struct Factor {
+    unsigned Offset;
+    int Weight;
+    unsigned Word;
+  };
+  const Factor Factors[]{{8, 819200, 0},  {14, 507904, 1},  {6, 188416, 2},
+                         {12, 950272, 3}, {1, 278528, 3},   {5, 57344, 1},
+                         {9, 90112, 2},   {1, -16384, 4},   {3, 81920, 3},
+                         {1, -507904, 5}, {4, -622592, 5},  {2, 311296, 1},
+                         {3, 1146880, 2}, {10, -409600, 4}, {11, 106496, 0},
+                         {13, -53248, 4}, {7, -114688, 5}};
+  auto Product = C(768);
+  for (const auto &[Offset, Weight, Index] : Factors)
+    Product = Bin(NdOp::INT_MULT, Product,
+                  Bin(NdOp::INT_ADD, C(Offset),
+                      Bin(NdOp::INT_MULT, C(Weight), Words[Index])));
+  auto Input = Bin(NdOp::INT_ADD, Bin(NdOp::INT_ADD, Product, XY),
+                   Bin(NdOp::INT_MULT, C(2), Bin(NdOp::INT_AND, X, Y)));
+  std::vector<HighStmt> Body{returnValue(Input)};
+  simplifyExprSemantics(Body);
+  const auto &Output = Body.back().RetVal;
+  ASSERT_NE(Output->str().find("<<"), std::string::npos) << Output->str();
+  ASSERT_EQ(Output->str().find('*'), std::string::npos) << Output->str();
+  for (uint32_t I = 0; I < 128; ++I) {
+    const std::unordered_map<int, uint64_t> Values{{1, I * 0x9e3779b9u},
+                                                   {2, ~I},
+                                                   {3, (I + 11) * 0xd1b54a33u},
+                                                   {4, I ^ 0x80000000u}};
+    EXPECT_EQ(integerValue(Input, 0, 0, &Values),
+              integerValue(Output, 0, 0, &Values));
   }
 }
 
