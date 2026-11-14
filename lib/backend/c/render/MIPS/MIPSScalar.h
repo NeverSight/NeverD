@@ -53,6 +53,8 @@ inline bool mipsScalarHighShapeIsValid(const HighExpr &E, Arch Target) {
 }
 
 inline std::pair<Intrinsic, unsigned> mipsScalarHelperKey(const HighExpr &E) {
+  if (E.IntrinsicId == Intrinsic::MIPSExtractResult)
+    return {E.IntrinsicId, unsigned(E.Type->Size)};
   return {E.IntrinsicId, (mips::isMSAControl(E.IntrinsicId) ||
                           mips::isR6FPControl(E.IntrinsicId))
                              ? unsigned(E.Operands[0]->ConstVal)
@@ -178,8 +180,9 @@ void writeMIPSScalarHelpers(
     }
     if (Id == Intrinsic::MIPSExtractResult ||
         Id == Intrinsic::MIPSRelease6DivideResult) {
-      const auto *Type =
-          Id == Intrinsic::MIPSExtractResult ? "uint32_t" : "uint64_t";
+      const auto *Type = Id == Intrinsic::MIPSExtractResult && Selector == 4
+                             ? "uint32_t"
+                             : "uint64_t";
       OS << "static inline " << Type << " " << Name << "(uint32_t failed, "
          << Type
          << " value) {\n"

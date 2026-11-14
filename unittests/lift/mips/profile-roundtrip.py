@@ -52,6 +52,31 @@ def kernels():
                 f"mips64acc_{instruction}_{half}", "mips64r2", "dsp",
                 f"mthi $4\nmtlo $5\n{instruction} $ac0,$4,$5\nmf{half} $2",
             )
+    for instruction in ("dextr.w", "dextrv.w", "dextr.l", "dextrv.l",
+                        "dextp", "dextpv", "dextpdp", "dextpdpv"):
+        variable = "v" in instruction
+        setup = "mthi $4\nmtlo $5\nori $6,$0,17\nori $7,$0,63\nwrdsp $7,1\n"
+        yield (
+            "mips64extract_" + instruction.replace(".", "_"), "mips64r2", "dsp",
+            setup + instruction + " $2,$ac0," + ("$6" if variable else "17"),
+        )
+    for instruction in ("dshilo", "dshilov", "dmthlip"):
+        for half in ("hi", "lo"):
+            operation = (f"{instruction} $4,$ac0" if instruction == "dmthlip" else
+                         f"{instruction} $ac0," + ("$6" if instruction == "dshilov" else "-17"))
+            yield (
+                f"mips64extract_{instruction}_{half}", "mips64r2", "dsp",
+                "mthi $4\nmtlo $5\ndaddiu $6,$0,-17\n" + operation + f"\nmf{half} $2",
+            )
+    yield (
+        "mips64extract_mixed", "mips64r2", "dsp",
+        "mthi $4\nmtlo $5\nori $6,$0,63\nwrdsp $6,1\nori $7,$0,47\n"
+        "extp $3,$ac0,15\ndextpv $2,$ac0,$7\nxor $2,$2,$3",
+    )
+    yield (
+        "mips64extract_dinsv", "mips64r2", "dsp",
+        "ori $6,$0,2207\nwrdsp $6,3\nor $2,$5,$0\ndinsv $2,$4",
+    )
     # The R6 generic core executes the original microMIPS ELF directly.
     yield "micromips32r6", "mips32r6", "", "mul $2,$4,$5\nbitswap $2,$2\njrc16 $ra"
     yield (
@@ -100,6 +125,13 @@ def inputs(name, bits):
         for a in (0, 1, -1, 0x11223344, 0x8000000000000001)
         for b in (0, 7, -1, 0xA5A533FF)
     ]
+    if name.startswith("mips64extract_"):
+        # The pinned original-machine helper has independent boundary defects:
+        # DEXTR shifts a signed LO and DEXTP shifts by 64 for boundary positions.
+        # This execution corpus uses a nonnegative LO and nonboundary count;
+        # APInt unit tests separately cover all counts and all 128 positions.
+        return [(a, b) for a in (0, 1, 0x123456789abcdef0, 1 << 63, (1 << 64) - 1)
+                for b in (0, 1, 0x123456789abcdef0, (1 << 63) - 1)]
     if name.startswith("mips64acc_"):
         vectors = [
             (a, b)
@@ -383,6 +415,37 @@ def run(args, artifacts):
                 oracle = directory / "classic.elf"
                 assemble(oracle, False)
             wanted = observe(oracle, bits, little, feature, cases)
+            if name.startswith("mips64extract_"):
+                mask = (1 << 64) - 1
+                instruction = name.removeprefix("mips64extract_")
+                for i, ((a, b), actual) in enumerate(zip(cases, wanted, strict=True)):
+                    acc = (a << 64) | b
+                    control = 0x01004005 if i % 2 else 0
+                    if instruction.startswith("dextr"):
+                        value = (acc >> 17) & mask
+                        if instruction.endswith("_w"):
+                            value &= 0xffffffff
+                            if value & (1 << 31):
+                                value |= mask ^ 0xffffffff
+                        control = (control & ~127) | 63
+                    elif instruction.startswith("dextp"):
+                        value = (acc >> 46) & ((1 << 18) - 1)
+                        control = (control & ~0x407f) | (45 if "dp" in instruction else 63)
+                    elif instruction.startswith("dshilo"):
+                        value = ((acc << 17) >> (64 if instruction.endswith("_hi") else 0)) & mask
+                    elif instruction.startswith("dmthlip"):
+                        value = b if instruction.endswith("_hi") else a
+                        control += 64
+                    elif instruction == "dinsv":
+                        field = ((1 << 17) - 1) << 31
+                        value = (b & ~field) | ((a << 31) & field)
+                        control = (control & ~0x1fff) | 2207
+                    else:
+                        word_acc = ((a & 0xffffffff) << 32) | (b & 0xffffffff)
+                        value = ((acc >> 16) & ((1 << 48) - 1)) ^ ((word_acc >> 48) & 0xffff)
+                        control = (control & ~0x407f) | 63
+                    if actual != (value, control):
+                        raise ValueError(f"{name}: original {actual}, independent {(value, control)}")
             if name.startswith(("mips64acc_dmaddu_", "mips64acc_dmsubu_")):
                 word = (1 << 32) - 1
                 mask = (1 << 64) - 1

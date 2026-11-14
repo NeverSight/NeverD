@@ -16518,6 +16518,13 @@ general source memory-fault equivalence guarantee. ABI memory recovery stops
 at partial stores, while queries confined to registers retain their existing
 values across these memory effects.
 
+The same scalar contract admits word extraction results and, on MIPS64,
+doubleword extraction results. `MIPSLiftDSP64` owns full accumulator extraction
+and shifts; `MIPSLiftDSPAdditional` shares INSV/DINSV field semantics. Invalid
+fields produce fresh unknown values in LowIR. LLVM and C retain a source-domain
+guard when those values are observed. HighC helper identity includes the result
+width, so a function can use both extraction widths without truncating either.
+
 The qualified MIPS16e2 system/atomic slice shares scalar shape admission but
 retains separate effectful IDs. `MIPSSystemContext` authenticates a system step;
 `MIPSCP0.def` owns built-in CP0 word views, context fields and write
