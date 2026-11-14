@@ -128,8 +128,8 @@ void compileArm64eC(const std::string &Source,
                     bool EmitLLVM = false, llvm::StringRef ExecuteTarget = {},
                     bool *ExecutionAvailable = nullptr,
                     llvm::StringRef Language = "c") {
-#ifdef NEVERD_TEST_CLANG
-  const std::string Compiler = NEVERD_TEST_CLANG;
+#ifdef NEVERD_PAUTH_TEST_CLANG
+  const std::string Compiler = NEVERD_PAUTH_TEST_CLANG;
 #else
   const auto Found = llvm::sys::findProgramByName("clang");
   if (!Found)

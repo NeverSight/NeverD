@@ -2484,9 +2484,14 @@ target_include_directories(NeverDArm64eAnalysisTests PRIVATE
   ${CMAKE_SOURCE_DIR}/lib/backend)
 target_compile_definitions(NeverDArm64eAnalysisTests PRIVATE
   NEVERD_ARM64E_TEST_HEADERS="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arm64e")
-if(NEVERD_ARM64E_TEST_CLANG_EXECUTABLE)
+if(NEVERD_TEST_CLANG_EXECUTABLE)
   target_compile_definitions(NeverDArm64eAnalysisTests PRIVATE
-    NEVERD_TEST_CLANG="${NEVERD_ARM64E_TEST_CLANG_EXECUTABLE}")
+    NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")
+endif()
+if(NEVERD_ARM64E_TEST_CLANG_EXECUTABLE)
+  set_property(SOURCE aarch64/AArch64PAuthSemanticTests.cpp APPEND
+    PROPERTY COMPILE_DEFINITIONS
+      NEVERD_PAUTH_TEST_CLANG="${NEVERD_ARM64E_TEST_CLANG_EXECUTABLE}")
 endif()
 
 add_neverd_unittest(NeverDAArch64SVEPredicateTests
