@@ -8,6 +8,7 @@
 #define NEVERD_IR_INTRINSICS_MIPS_MIPSSCALARFPOPERATIONS_H
 #include "neverd/ir/intrinsics/Intrinsics.h"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 
@@ -85,25 +86,29 @@ constexpr bool scalarFPAvailable(Intrinsic Id, unsigned Revision) {
            Function == 36 || Function == 37 || Function >= 48)) ||
          ((Format == 20 || Format == 21) && (Function == 32 || Function == 33));
 }
-constexpr std::optional<Intrinsic> scalarFPArithmetic(uint32_t Word,
-                                                      unsigned Revision = 6) {
-  if (Word >> 26 != 17 && Word >> 26 != 19)
-    return std::nullopt;
-  Intrinsic Id;
-  switch ((Word >> 26 == 19 ? 0x8000 : (Word >> 15) & 0x7c0) | (Word & 63)) {
+// COP1 formats 16..21 occupy six 64-function rows; COP1X uses one row.
+// Keep dispatch under 1 KiB and derive every entry from the semantic catalog.
+inline constexpr auto ScalarFPDecode = [] {
+  std::array<uint16_t, 7 * 64> Result{};
 #define NEVERD_MIPS_R6_FLOAT(Name, Value, Key, Arity, In, Out, Text)           \
-  case Key:                                                                    \
-    Id = Intrinsic::MIPSFP##Name;                                              \
-    break;
+  Result[(Key & 0x8000) ? 6 * 64 + (Key & 63) : Key - 0x400] = Value;
 #include "neverd/ir/intrinsics/MIPS/MIPSR6Float.def"
 #define NEVERD_MIPS_R6_FLOAT(Name, Value, Key, Arity, In, Out, Text)           \
-  case Key:                                                                    \
-    Id = Intrinsic::MIPSFP##Name;                                              \
-    break;
+  Result[(Key & 0x8000) ? 6 * 64 + (Key & 63) : Key - 0x400] = Value;
 #include "neverd/ir/intrinsics/MIPS/MIPSLegacyFloat.def"
-  default:
+  return Result;
+}();
+constexpr std::optional<Intrinsic> scalarFPArithmetic(uint32_t Word,
+                                                      unsigned Revision = 6) {
+  const unsigned Opcode = Word >> 26, Format = (Word >> 21) & 31;
+  if ((Opcode != 17 && Opcode != 19) ||
+      (Opcode == 17 && (Format < 16 || Format > 21)))
     return std::nullopt;
-  }
+  const unsigned Row = Opcode == 19 ? 6 : Format - 16;
+  const auto Value = ScalarFPDecode[Row * 64 + (Word & 63)];
+  if (!Value)
+    return std::nullopt;
+  const auto Id = static_cast<Intrinsic>(Value);
   if (!scalarFPAvailable(Id, Revision))
     return std::nullopt;
   if (scalarFPOperation(Id).writesCondition() && (Word & 0xc0))
