@@ -154,6 +154,12 @@ class AgentBundleInputsTests(unittest.TestCase):
             ]}), encoding="utf-8")
             cache.write_text("NEVERD_BUILD_AGENT:BOOL=OFF\n", encoding="utf-8")
             self.assertEqual(PACKAGE.agent_inputs(build, bundle), [])
+            cache.write_text("NEVERD_BUILD_AGENT:STRING=AUTO\nNEVERD_AGENT_ENABLED:INTERNAL=OFF\n",
+                             encoding="utf-8")
+            self.assertEqual(PACKAGE.agent_inputs(build, bundle), [])
+            cache.write_text("NEVERD_BUILD_AGENT:STRING=AUTO\nNEVERD_AGENT_ENABLED:INTERNAL=ON\n",
+                             encoding="utf-8")
+            self.assertEqual(len(PACKAGE.agent_inputs(build, bundle)), 3)
             cache.write_text("NEVERD_BUILD_AGENT:BOOL=ON\n", encoding="utf-8")
             inputs = PACKAGE.agent_inputs(build, bundle)
             self.assertEqual([path.relative_to(bundle).as_posix() for _, _, path in inputs], [

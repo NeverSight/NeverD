@@ -61,8 +61,10 @@ redistributable libraries; the Python archive's bundled older VC runtime does
 not overwrite them.
 Agent additionally needs Qt Quick, QuickControls2 and its platform credential
 dependencies listed in the [Agent build guide](../neverd-agent/README.md#build-and-run).
-Pass `NEVERD_BUILD_AGENT=OFF` for a workbench-only desktop product;
-the enabled component set determines the install and runtime audit.
+`NEVERD_BUILD_AGENT` is `AUTO` by default: the Agent is built when its
+dependencies are present, and configuration says which one is missing
+otherwise. Pass `ON` to require it, or `OFF` for a workbench-only desktop
+product; the enabled component set determines the install and runtime audit.
 
 Linux deployment requires `patchelf`. Libraries and plugins receive paths
 relative to the installed package. Original absolute paths and build-relative

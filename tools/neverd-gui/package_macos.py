@@ -276,8 +276,10 @@ ENGINE_HOSTS = ("neverd-worker", "neverd-mcp")
 def agent_inputs(build: Path, bundle: Path) -> list[tuple[str, Path, Path]]:
     """Resolve the Agent artifacts from an enabled desktop build."""
     cache = build / "CMakeCache.txt"
+    # NEVERD_AGENT_ENABLED records the build's decision; caches written before
+    # NEVERD_BUILD_AGENT took AUTO kept it as a boolean option.
     if not cache.is_file() or not re.search(
-            r"^NEVERD_BUILD_AGENT:BOOL=(?:ON|TRUE|1)$",
+            r"^(?:NEVERD_AGENT_ENABLED:INTERNAL|NEVERD_BUILD_AGENT:BOOL)=(?:ON|TRUE|1)$",
             cache.read_text(encoding="utf-8"), flags=re.MULTILINE | re.IGNORECASE):
         return []
     package = build / "agent-ui"

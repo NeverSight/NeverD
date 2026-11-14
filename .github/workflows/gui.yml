@@ -3,11 +3,11 @@ name: Desktop GUI
 on:
   push:
     branches: [dev]
-    paths: ['tools/neverd-gui/**', 'tools/neverd-worker/**', 'tools/neverd-mcp/**', 'tools/common/**', 'include/neverd/plugin/**', 'lib/plugin/**', 'include/neverd/tools/**', 'lib/tools/**', 'tools/neverd-plugin-host/**', 'pluginsdk/gui/**', 'pluginsdk/common/**', 'unittests/plugin/**', 'cmake/NeverDJson.cmake', 'scripts/check_gui_i18n.py', 'scripts/check_gui_icons.py', '.github/workflows/gui.yml']
+    paths: ['tools/neverd-gui/**', 'tools/neverd-worker/**', 'tools/neverd-mcp/**', 'tools/common/**', 'include/neverd/plugin/**', 'lib/plugin/**', 'include/neverd/tools/**', 'lib/tools/**', 'tools/neverd-plugin-host/**', 'pluginsdk/gui/**', 'pluginsdk/common/**', 'unittests/plugin/**', 'cmake/NeverDJson.cmake', 'scripts/check_gui_i18n.py', 'scripts/check_gui_icons.py', 'tools/neverd-agent/**', 'plugins/neverd-agent-ui/**', 'cmake/NeverDAgent.cmake', 'scripts/check_agent_i18n.py', '.github/workflows/gui.yml']
   pull_request:
     # closed cancels this PR's run through its concurrency group; no job runs.
     types: [opened, synchronize, reopened, closed]
-    paths: ['tools/neverd-gui/**', 'tools/neverd-worker/**', 'tools/neverd-mcp/**', 'tools/common/**', 'include/neverd/plugin/**', 'lib/plugin/**', 'include/neverd/tools/**', 'lib/tools/**', 'tools/neverd-plugin-host/**', 'pluginsdk/gui/**', 'pluginsdk/common/**', 'unittests/plugin/**', 'cmake/NeverDJson.cmake', 'scripts/check_gui_i18n.py', 'scripts/check_gui_icons.py', '.github/workflows/gui.yml']
+    paths: ['tools/neverd-gui/**', 'tools/neverd-worker/**', 'tools/neverd-mcp/**', 'tools/common/**', 'include/neverd/plugin/**', 'lib/plugin/**', 'include/neverd/tools/**', 'lib/tools/**', 'tools/neverd-plugin-host/**', 'pluginsdk/gui/**', 'pluginsdk/common/**', 'unittests/plugin/**', 'cmake/NeverDJson.cmake', 'scripts/check_gui_i18n.py', 'scripts/check_gui_icons.py', 'tools/neverd-agent/**', 'plugins/neverd-agent-ui/**', 'cmake/NeverDAgent.cmake', 'scripts/check_agent_i18n.py', '.github/workflows/gui.yml']
   workflow_dispatch:
 
 permissions:
@@ -48,9 +48,11 @@ jobs:
           echo "$RUNNER_TEMP/Qt/6.8.3/${{ matrix.qt_dir }}/bin" >> "$GITHUB_PATH"
           if [ '${{ runner.os }}' = Linux ]; then
             sudo apt-get update
+            # libsecret-1-dev: NeverD Agent keeps model credentials in the
+            # desktop keyring.
             sudo apt-get install -y libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-0 \
               libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 \
-              xvfb xauth openbox xdotool x11-utils
+              xvfb xauth openbox xdotool x11-utils libsecret-1-dev
             # Qt's generic xcb startup error can name cursor support even when
             # another shared library is missing. Check the actual plugin before
             # spending a build on native tests that cannot start.
@@ -89,7 +91,7 @@ jobs:
             -DNEVERD_ENGINE_LIBRARY="$GITHUB_WORKSPACE/build-fixture/bin/${{ matrix.library }}" \
             -DNEVERD_ENGINE_IMPLIB="$GITHUB_WORKSPACE/build-fixture/bin/neverd_fixture.lib" \
             -DNEVERD_GUI_CI_DIAGNOSTICS=${{ runner.os != 'Linux' && 'ON' || 'OFF' }} \
-            -DNEVERD_BUILD_AGENT=OFF \
+            -DNEVERD_BUILD_AGENT=ON \
             -DNEVERD_WORKER_REAL_ENGINE_TESTS=OFF
           python scripts/build.py build-gui --parallel 3
           cp "build-fixture/bin/${{ matrix.library }}" build-gui/bin/
@@ -157,6 +159,7 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           python scripts/check_gui_i18n.py --check-sources
+          python scripts/check_agent_i18n.py --check-sources
           python scripts/check_gui_icons.py
           python -m unittest discover -s tools/neverd-gui/benchmarks/tests -p test_startup_bench.py -v
           if [ '${{ runner.os }}' != Linux ]; then
