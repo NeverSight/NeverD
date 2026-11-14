@@ -10,8 +10,8 @@ an explicit request warrants it.
 ## Style at a glance
 
 NeverD's style on one page, for building a window or judging one. Each line
-names where its value lives and the section below that gives the reasons and
-the user's verdicts. The code is the authority: colors are roles in
+names where its value lives and the section below that gives the reasons.
+The code is the authority: colors are roles in
 `ChromeColors.def` (chrome) and `ThemeColors.def` (code views), shapes live in
 `theme.qss` and `WorkbenchStyle.cpp`, sizes in `Config.h` and
 `ResourceLimits.h`. Where a number here differs from them, they are right;
@@ -149,37 +149,6 @@ In logical pixels, which Qt scales for the screen.
 - High contrast: outlines where the other themes fill, from border roles that
   are transparent in Dark+ and Light+, and no `if (highContrast)` in paint
   code ("Lists, fields, and states").
-
-### What the user has said
-
-- All-gray icons felt lifeless. The colored duotone toolbar icons were kept
-  over a single-accent recolor and an outline variant ("Visual direction",
-  "Workbench chrome").
-- An accent-filled padlock in every floating caption was too loud: a toggle
-  whose glyph shows its state takes no fill. A full-width accent status bar
-  read as decoration: the accent marks state, not chrome ("Workbench
-  chrome").
-- Disabled buttons as full gray blocks were "lifeless" (2026-11-09), and as
-  hollow outlines "有点难看" (a bit ugly, 2026-11-12); a faint plate, and
-  fewer commands waiting at once, settled it ("Judging a look").
-- "太左了" (too far left, 2026-11-12): a pane flush against the combo box
-  beside it. The gutter settled it ("Judging a look").
-- "不要任何窗口内，只有一个颜色" (no window in a single color) and
-  "至少留1个阿，而且要留关键的" (keep at least one, and the key one), both
-  2026-11-12, then "一点生机都没" (no life at all), 2026-11-13, about the
-  plugin manager in gray: every window keeps one accent ("Auditing every
-  window").
-- "按钮太小，就显得很空阿……之前那个设计没问题的" (buttons that small leave it
-  looking empty; the earlier design was fine), 2026-11-12: change only what
-  fails, and keep what worked ("Auditing every window").
-- "菜单那，PLUGIN的图标怎么只有1个" (in the menu, why only one icon for the
-  plugins), 2026-11-13: every menu command shows an icon ("Icon family").
-- "按照最舒服的来" (go with what is most comfortable): judge by comfort in the
-  real window, and trace the feeling to a number ("Judging a look").
-- Kept although a review may question them: the load dialog's centered OK
-  and Cancel and the Functions list's horizontal scroll bar ("Lists, fields,
-  and states"), and one comment command that shows only `;` in menus
-  ("Workbench chrome").
 
 ## Visual direction
 
@@ -526,15 +495,15 @@ rules below do, not from taste.
 
 ## Judging a look
 
-The user judges NeverD's windows by comfort ("按照最舒服的来") and names a
-defect by how it feels, not by its cause. Each verdict below was traced to a
-number or a count; start from these before reaching for taste.
+The user judges NeverD's windows by comfort and names a defect by how it
+feels, not by its cause. Each complaint below was traced to a number or a
+count; start from these before reaching for taste.
 
-| Verdict | What the window showed | Cause, measured | What settled it |
+| Complaint | What the window showed | Cause, measured | What settled it |
 | --- | --- | --- | --- |
-| "lifeless" (2026-11-09) | Disabled buttons as full gray blocks | The enabled fill (1.40:1 on the dark window) kept behind a gray label | The fill must fade with the label |
-| "有点难看" (2026-11-12) | Disabled buttons as hollow outlines | An outline of 1.39:1 around nothing, as loud as an enabled fill; seventeen at once | A faint plate (1.14:1), and commands that cannot apply yet stay away |
-| "太左了" (2026-11-12) | A pane flush against the combo box beside it | A 6-pixel splitter handle painted whole in the fields' gray | A hairline in a 13-pixel gutter, first rows on one line |
+| Lifeless (2026-11-09) | Disabled buttons as full gray blocks | The enabled fill (1.40:1 on the dark window) kept behind a gray label | The fill must fade with the label |
+| Unattractive (2026-11-12) | Disabled buttons as hollow outlines | An outline of 1.39:1 around nothing, as loud as an enabled fill; seventeen at once | A faint plate (1.14:1), and commands that cannot apply yet stay away |
+| Too far left (2026-11-12) | A pane flush against the combo box beside it | A 6-pixel splitter handle painted whole in the fields' gray | A hairline in a 13-pixel gutter, first rows on one line |
 
 How loud a button that cannot act is, as the contrast of each part against
 what lies behind it, composited over each system's own surface (fetched
@@ -658,12 +627,11 @@ push button the default; a fifteenth pressed a child window's:
 
 The accent stays. The first round of this audit took the default from
 those windows and, with it, their only colored button: the plugin manager
-showed "Import plugin…" in the gray of every other command. The user, the
-same day: "我建议是，不要任何窗口内，只有一个颜色，你给那个导入上个蓝色不行吗？
-还是？多思考思考，到底哪种更好" (no window should be left in one color; can
-the import not be blue? think about which is better). Every other dialog of
-the application has exactly one accent button, About's OK included, and
-the plugin manager's own line of help names the import. So:
+showed "Import plugin…" in the gray of every other command. The same day the
+user asked that no window be left in a single color, proposed the accent for
+the import, and asked which design was better. Every other dialog of the
+application has exactly one accent button, About's OK included, and the
+plugin manager's own line of help names the import. So:
 
 - `showAsMainAction(button)` (`DialogReturnKey.h`) sets the `mainAction`
   property, which `pushButtonFace` in `WorkbenchStyle.cpp` and the
@@ -692,11 +660,9 @@ the plugin manager's own line of help names the import. So:
 | Offline package review | Preview file… | The step every review starts with |
 
 - Five of these were first left without an accent, four of them shown to the
-  user as renders of candidates to choose from. The answer, the same
-  evening: "你改的很多地方，组建内的蓝色按钮怎么没了？至少留1个阿，而且要留
-  关键的" (in many of the places you changed, where has the blue button
-  gone? keep at least one, and keep the key one). Every window keeps one;
-  choosing it is the designer's work, not a question to hand back.
+  user as renders of candidates to choose from. The same evening the user
+  answered that every window keeps at least one accent button, on its key
+  action. Choosing it is the designer's work, not a question to hand back.
 - The capture probe writes `main` beside `default` in each window's widget
   tree; the query is "every window with push buttons has exactly one button
   that is either". What stands outside it: the main window, whose panes are
@@ -733,9 +699,8 @@ Commands and forms:
   to a vertical layout takes the layout's width: "Trace selected function"
   was 835 pixels wide, "Assess selected evidence" 1058, and the version
   graph's four release commands filled two columns. The audit cut them down
-  to their labels, and the user, reading the before and after: "这个你搞的
-  按钮太小，就显得很空阿。不是吗，之前那个设计没问题的" (the buttons you
-  made so small leave it looking empty; the earlier design was fine). They
+  to their labels; reading the before and after, the user found the panes
+  empty around the narrowed buttons and preferred the earlier design. They
   are back at the width of their panes, in the version graph and in Offline
   package review alike, and `LineageTests` holds the version graph's.
 - A `FlowLayout` inside a tab page reports one row as its minimum height, so
@@ -1022,7 +987,7 @@ field looked sharp. Chrome boxes and hairlines do not have to look like this.
   suits panes that are surfaces, such as two tables. Binary comparison set a
   6-pixel handle to keep its combo boxes off the next pane, and the style
   filled all of it: a band of the fields' own gray that the "All functions"
-  box ran into, with the next pane's title flush against it ("太左了").
+  box ran into, with the next pane's title flush against it.
   `WorkbenchStyle` draws a handle's hairline along the middle of its room,
   under a dock separator's bar while the pointer is over it, so a wider
   handle is a gutter: a layout's spacing on either side of the line

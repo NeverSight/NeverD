@@ -90,7 +90,11 @@ A64_LEAF_TEXT(kReturnMnemonic, "ret")
 A64_LEAF_TEXT(kChangeScratch, "mov x9, xzr\n")
 A64_LEAF_TEXT(kVariadicDirect, "va_direct")
 A64_LEAF_TEXT(kScratchTail, "#define NEVERD_TEST_SCRATCH_FORWARD 1\n")
+A64_LEAF_TEXT(kScratchBranches, "#define NEVERD_TEST_SCRATCH_BRANCHES 1\n")
+A64_LEAF_TEXT(kScratchKilled, "#define NEVERD_TEST_SCRATCH_BRANCHES 1\n"
+                             "#define NEVERD_TEST_SCRATCH_KILLED 1\n")
 A64_LEAF_TEXT(kUnknownStackOperation, "-DNEVERD_TEST_UNSUPPORTED_STACK_BODY")
+A64_LEAF_TEXT(kUnknownVectorOperation, "-DNEVERD_TEST_UNSUPPORTED_VECTOR_BODY")
 A64_LEAF_TEXT(kUnknownStackInput, "unsupported-stack.dylib")
 A64_LEAF_TEXT(kScratchFrame, "#define NEVERD_TEST_SCRATCH_FRAME 1\n")
 A64_LEAF_VALUE(unsigned, kScratchTailEntries, 3)
@@ -135,6 +139,9 @@ _leaf_difference:
 #ifdef NEVERD_TEST_UNSUPPORTED_STACK_BODY
   rbit x12, x0
 #endif
+#ifdef NEVERD_TEST_UNSUPPORTED_VECTOR_BODY
+  add v12.16b, v0.16b, v1.16b
+#endif
   mov x10,#1
   str x8,[sp,x10,lsl #3]
   ldr x8,[sp,w10,uxtw #3]
@@ -142,7 +149,24 @@ _leaf_difference:
   str x9,[sp,w11,sxtw #3]
   ldr x9,[sp,x11,sxtx #3]
 #endif
+#ifdef NEVERD_TEST_SCRATCH_BRANCHES
+  b Ldispatch
+Lconsume:
+#ifdef NEVERD_TEST_SCRATCH_KILLED
+  mov w8, wzr
+  mov w9, wzr
+#endif
   sub x0, x8, x9
+  b Lconsumed
+Ldispatch:
+  cbz x0, Lconsume
+  tbz x0, #40, Lconsume
+  tbnz w0, #0, Lconsume
+  b Lconsume
+Lconsumed:
+#else
+  sub x0, x8, x9
+#endif
 #ifdef NEVERD_TEST_SCRATCH_FRAME
 .cfi_remember_state
   cbz x0, Lzero
@@ -796,6 +820,293 @@ A64_LEAF_TEXT(kNarrowLeaves, R"c(
 #include <stdint.h>
 int leaf_sum(const int8_t *p) { return p[3]; }
 unsigned long leaf_difference(const uint16_t *p) { return p[2]; }
+)c")
+A64_LEAF_TEXT(kLoopLeaves, R"c(
+#include <stdint.h>
+uint64_t leaf_sum(const volatile uint64_t *p, uint64_t n) {
+  uint64_t result = 0;
+  while (n--) result += *p++;
+  return result;
+}
+uint64_t leaf_difference(volatile uint64_t *p, uint64_t n, uint64_t value) {
+  while (n--) *p++ = value;
+  return value;
+}
+)c")
+A64_LEAF_TEXT(kIndexedLeaves, R"c(
+#include <stdint.h>
+uint64_t leaf_sum(const uint64_t *p, uint64_t index) { return p[index]; }
+void leaf_difference(uint64_t *p, int index, uint64_t value) {
+  p[index] = value;
+}
+)c")
+A64_LEAF_TEXT(kVectorByteMemory, "#define NEVERD_TEST_VECTOR_BYTES 1\n")
+A64_LEAF_TEXT(kVectorHalfMemory, "#define NEVERD_TEST_VECTOR_BYTES 2\n")
+A64_LEAF_TEXT(kVectorWordMemory, "#define NEVERD_TEST_VECTOR_BYTES 4\n")
+A64_LEAF_TEXT(kVectorDoubleMemory, "#define NEVERD_TEST_VECTOR_BYTES 8\n")
+A64_LEAF_TEXT(kVectorCopyLeaves, R"asm(
+#ifndef NEVERD_TEST_VECTOR_BYTES
+#define NEVERD_TEST_VECTOR_BYTES 16
+#endif
+#if NEVERD_TEST_VECTOR_BYTES == 1
+#define SINGLE b0
+#elif NEVERD_TEST_VECTOR_BYTES == 2
+#define SINGLE h0
+#elif NEVERD_TEST_VECTOR_BYTES == 4
+#define SINGLE s0
+#elif NEVERD_TEST_VECTOR_BYTES == 8
+#define SINGLE d0
+#else
+#define SINGLE q0
+#endif
+#if NEVERD_TEST_VECTOR_BYTES <= 4
+#define PAIR0 s0
+#define PAIR1 s1
+#define PAIR_BYTES 8
+#elif NEVERD_TEST_VECTOR_BYTES == 8
+#define PAIR0 d0
+#define PAIR1 d1
+#define PAIR_BYTES 16
+#else
+#define PAIR0 q0
+#define PAIR1 q1
+#define PAIR_BYTES 32
+#endif
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  mov x8, x0
+  cbz x2, Lsingle_done
+Lsingle:
+  ldr SINGLE, [x1], #NEVERD_TEST_VECTOR_BYTES
+  str q0, [x8], #16
+  subs x2, x2, #1
+  b.ne Lsingle
+Lsingle_done:
+  ret
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  mov x8, x0
+  cbz x2, Lpair_done
+Lpair:
+  ldp PAIR0, PAIR1, [x1], #PAIR_BYTES
+  stp q0, q1, [x8], #32
+  subs x2, x2, #1
+  b.ne Lpair
+Lpair_done:
+  ret
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+A64_LEAF_TEXT(kPreIndexedMemory, "#define NEVERD_TEST_PREINDEXED_MEMORY 1\n")
+A64_LEAF_TEXT(kScalarWritebackLeaves, R"asm(
+#ifdef NEVERD_TEST_PREINDEXED_MEMORY
+#define A1 [x0, #1]!
+#define A2 [x0, #2]!
+#define A4 [x0, #4]!
+#define A8 [x0, #8]!
+#define A16 [x0, #16]!
+#else
+#define A1 [x0], #1
+#define A2 [x0], #2
+#define A4 [x0], #4
+#define A8 [x0], #8
+#define A16 [x0], #16
+#endif
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  ldrb w8, A1
+  ldrsb x9, A1
+  add x8, x8, x9
+  ldrsb w9, A1
+  add x8, x8, x9
+  ldrh w9, A2
+  add x8, x8, x9
+  ldrsh x9, A2
+  add x8, x8, x9
+  ldrsh w9, A2
+  add x8, x8, x9
+  ldr w9, A4
+  add x8, x8, x9
+  ldrsw x9, A4
+  add x8, x8, x9
+  ldr x9, A8
+  add x8, x8, x9
+  ldp w9, w10, A8
+  add x8, x8, x9
+  add x8, x8, x10
+  ldpsw x9, x10, A8
+  add x8, x8, x9
+  add x8, x8, x10
+  ldp x9, x10, A16
+  add x8, x8, x9
+  add x0, x8, x10
+  ret
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  strb w1, A1
+  strh w1, A2
+  str w1, A4
+  str x1, A8
+  stp w1, w1, A8
+  stp x1, x1, A16
+  ret
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+A64_LEAF_TEXT(kScalarWritebackCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+#include <string.h>
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  uint64_t (*read)(const void *) = dlsym(image, "leaf_sum");
+  void *(*write)(void *, uint64_t) = dlsym(image, "leaf_difference");
+  if (!read || !write) return 3;
+#ifdef NEVERD_TEST_PREINDEXED_MEMORY
+  const int pre = 1;
+#else
+  const int pre = 0;
+#endif
+  struct load { unsigned bytes, count; int sign, word_result; };
+  const struct load loads[] = {{1,1,0,0}, {1,1,1,0}, {1,1,1,1},
+                              {2,1,0,0}, {2,1,1,0}, {2,1,1,1},
+                              {4,1,0,0}, {4,1,1,0}, {8,1,0,0},
+                              {4,2,0,0}, {4,2,1,0}, {8,2,0,0}};
+  const struct load stores[] = {{1,1,0,0}, {2,1,0,0}, {4,1,0,0},
+                               {8,1,0,0}, {4,2,0,0}, {8,2,0,0}};
+  uint8_t source[96], output[96], expected[96];
+  for (unsigned round = 0; round < 4; ++round) {
+    for (unsigned i = 0; i < sizeof(source); ++i)
+      source[i] = i * 37 + 129 + round * 53;
+    unsigned offset = 0;
+    uint64_t sum = 0;
+    for (unsigned i = 0; i < sizeof(loads) / sizeof(*loads); ++i) {
+      struct load l = loads[i];
+      if (pre) offset += l.bytes * l.count;
+      for (unsigned j = 0; j < l.count; ++j) {
+        const void *at = source + offset + j * l.bytes;
+        uint64_t value = 0;
+        memcpy(&value, at, l.bytes);
+        if (l.sign) {
+          int64_t signed_value;
+          if (l.bytes == 1) { int8_t x; memcpy(&x, at, 1); signed_value = x; }
+          else if (l.bytes == 2) { int16_t x; memcpy(&x, at, 2); signed_value = x; }
+          else { int32_t x; memcpy(&x, at, 4); signed_value = x; }
+          value = l.word_result ? (uint32_t)signed_value : (uint64_t)signed_value;
+        }
+        sum += value;
+      }
+      if (!pre) offset += l.bytes * l.count;
+    }
+    if (read(source) != sum) return 4;
+    memset(output, 0xa5, sizeof(output));
+    memset(expected, 0xa5, sizeof(expected));
+    uint64_t value;
+    memcpy(&value, source + round, sizeof(value));
+    offset = 0;
+    for (unsigned i = 0; i < sizeof(stores) / sizeof(*stores); ++i) {
+      struct load l = stores[i];
+      if (pre) offset += l.bytes * l.count;
+      for (unsigned j = 0; j < l.count; ++j)
+        memcpy(expected + 3 + offset + j * l.bytes, &value, l.bytes);
+      if (!pre) offset += l.bytes * l.count;
+    }
+    if (write(output + 3, value) != output + 3 + offset ||
+        memcmp(output, expected, sizeof(output))) return 5;
+  }
+  return dlclose(image);
+}
+)c")
+A64_LEAF_TEXT(kVectorCopyCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+#include <string.h>
+#ifndef NEVERD_TEST_VECTOR_BYTES
+#define NEVERD_TEST_VECTOR_BYTES 16
+#endif
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  typedef void *(*copy)(void *, const void *, uint64_t);
+  copy single = (copy)dlsym(image, "leaf_sum");
+  copy pair = (copy)dlsym(image, "leaf_difference");
+  if (!single || !pair || single(0, 0, 0) || pair(0, 0, 0)) return 3;
+  uint8_t source[160], output[160], expected[160];
+  for (unsigned i = 0; i < sizeof(source); ++i) source[i] = i * 113 + 197;
+  for (unsigned p = 0; p < 2; ++p)
+    for (unsigned n = 0; n <= 4; ++n) {
+      memset(output, 0xa5, sizeof(output));
+      memset(expected, 0xa5, sizeof(expected));
+      const unsigned single_bytes = NEVERD_TEST_VECTOR_BYTES;
+      const unsigned load_bytes = p && single_bytes < 4 ? 4 : single_bytes;
+      const unsigned vectors = n * (p ? 2 : 1);
+      for (unsigned i = 0; i < vectors; ++i) {
+        memset(expected + 7 + i * 16, 0, 16);
+        memcpy(expected + 7 + i * 16, source + 5 + i * load_bytes, load_bytes);
+      }
+      if ((p ? pair : single)(output + 7, source + 5, n) != output + 7 ||
+          memcmp(output, expected, sizeof(output))) return 4;
+    }
+  return dlclose(image);
+}
+)c")
+A64_LEAF_TEXT(kIndexedCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  uint64_t (*read)(const uint64_t *, uint64_t) = dlsym(image, "leaf_sum");
+  void (*write)(uint64_t *, int, uint64_t) = dlsym(image, "leaf_difference");
+  if (!read || !write) return 3;
+  uint64_t words[] = {1, UINT64_MAX, 3, UINT64_C(0x8123456789abcdef), 5};
+  if (read(words, 1) != words[1] || read(words, 3) != words[3]) return 4;
+  write(words + 2, -1, 17);
+  write(words + 2, 1, 23);
+  if (words[0] != 1 || words[1] != 17 || words[2] != 3 ||
+      words[3] != 23 || words[4] != 5) return 5;
+  return dlclose(image);
+}
+)c")
+A64_LEAF_TEXT(kLoopCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  uint64_t (*sum)(const volatile uint64_t *, uint64_t) = dlsym(image, "leaf_sum");
+  uint64_t (*fill)(volatile uint64_t *, uint64_t, uint64_t) =
+      dlsym(image, "leaf_difference");
+  if (!sum || !fill || sum(0, 0) || fill(0, 0, UINT64_MAX) != UINT64_MAX)
+    return 3;
+  const uint64_t inputs[] = {0, 1, UINT64_MAX, UINT64_C(0x8123456789abcdef)};
+  for (unsigned n = 0; n <= 17; ++n) {
+    uint64_t words[19], expected = 0;
+    for (unsigned i = 0; i < 19; ++i) words[i] = inputs[i % 4];
+    for (unsigned i = 0; i < n; ++i) expected += words[i + 1];
+    if (sum(words + 1, n) != expected) return 4;
+    uint64_t value = inputs[n % 4];
+    if (fill(words + 1, n, value) != value) return 5;
+    for (unsigned i = 0; i < 19; ++i)
+      if (words[i] != (i && i <= n ? value : inputs[i % 4])) return 6;
+  }
+  return dlclose(image);
+}
 )c")
 A64_LEAF_TEXT(kNarrowCaller, R"c(
 #include <dlfcn.h>
