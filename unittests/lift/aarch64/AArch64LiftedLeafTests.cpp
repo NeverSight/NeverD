@@ -49,6 +49,8 @@ using namespace neverd;
 #define A64_LEAF_TEXT(Name, Text) constexpr char Name[] = Text;
 #define A64_LEAF_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #include "AArch64LiftedLeafFixtures.def"
+#define A64_LEAF_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "AArch64LiftedSIMDFixtures.def"
 
 #if defined(__APPLE__) && defined(__aarch64__)
 void verifyTailTargets(llvm::Module &Module, MachOPatcher &Patcher,
@@ -112,6 +114,7 @@ enum class LeafCheck {
   ScratchResult,
   KilledScratchResult,
   NativeAddressing,
+  NativeSIMD,
   FrameScratchResult,
   ErrorResult,
   Global,
@@ -190,14 +193,18 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   auto *Sum = Changed->getFunction(kSum);
   ASSERT_NE(Sum, nullptr);
   auto *Result = Sum->getReturnType();
-  ASSERT_TRUE(Result->isIntegerTy() || Result->isFloatingPointTy());
-  auto *Wrong = Result->isIntegerTy()
-                    ? llvm::ConstantInt::get(Result, kTamperedResult)
-                    : llvm::ConstantFP::get(Result, kTamperedResult);
+  auto *Wrong =
+      Result->isVoidTy() ? nullptr : llvm::Constant::getNullValue(Result);
+  if (Result->isIntegerTy())
+    Wrong = llvm::ConstantInt::get(Result, kTamperedResult);
+  else if (Result->isFloatingPointTy())
+    Wrong = llvm::ConstantFP::get(Result, kTamperedResult);
   if (Check == LeafCheck::ScratchResult || ScratchFrame ||
-      Check == LeafCheck::NativeAddressing) {
+      Check == LeafCheck::NativeAddressing || Check == LeafCheck::NativeSIMD) {
     ASSERT_FALSE(Sum->isVarArg());
     ASSERT_TRUE(Sum->hasFnAttribute(llvm::Attribute::Naked));
+  }
+  if (Sum->hasFnAttribute(llvm::Attribute::Naked)) {
     auto *End = Sum->getEntryBlock().getTerminator();
     llvm::ReturnInst::Create(Context, Wrong, End->getIterator());
     End->eraseFromParent();
@@ -208,6 +215,35 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   }
   EXPECT_FALSE(Patcher.patch(Input, Rejected, *Changed, Image->Arch).Success);
   EXPECT_FALSE(std::filesystem::exists(Rejected));
+
+  if (Check == LeafCheck::NativeSIMD) {
+    auto Modified = llvm::CloneModule(Module);
+    auto *F = Modified->getFunction(kSum);
+    auto *Call = llvm::dyn_cast<llvm::CallInst>(&F->front().front());
+    ASSERT_NE(Call, nullptr);
+    auto *Asm = llvm::dyn_cast<llvm::InlineAsm>(Call->getCalledOperand());
+    ASSERT_NE(Asm, nullptr);
+    std::string Text = Asm->getAsmString().str();
+    const auto Begin = Text.find(kSIMDEncodedWord);
+    ASSERT_NE(Begin, std::string::npos);
+    const auto WordAt = Begin + std::string_view(kSIMDEncodedWord).size();
+    const auto End = Text.find('\n', WordAt);
+    ASSERT_NE(End, std::string::npos);
+    uint32_t Word;
+    ASSERT_FALSE(
+        llvm::StringRef(Text).slice(WordAt, End).getAsInteger(10, Word));
+    // Change the encoded destination without altering the function's ABI,
+    // assembly shape, effects or relocations. Source binding must reject it.
+    Text.replace(WordAt, End - WordAt,
+                 std::to_string(Word ^ kSIMDDestinationBit));
+    Call->setCalledOperand(llvm::InlineAsm::get(
+        Asm->getFunctionType(), Text, Asm->getConstraintString(),
+        Asm->hasSideEffects(), Asm->isAlignStack(), Asm->getDialect(),
+        Asm->canThrow()));
+    EXPECT_FALSE(
+        Patcher.patch(Input, Rejected, *Modified, Image->Arch).Success);
+    EXPECT_FALSE(std::filesystem::exists(Rejected));
+  }
 
   if (ScratchFrame) {
     // Withholding a generic body is only legal when its entire native body
@@ -473,7 +509,9 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
         Insn.Id == AARCH64_INS_BLRAB || Insn.Id == AARCH64_INS_BLRABZ)
       ++AuthenticatedCalls;
   }
-  ASSERT_GE(AuthenticatedCalls, kCount);
+  ASSERT_GE(AuthenticatedCalls, Check == LeafCheck::NativeSIMD
+                                    ? kSharedDispatchAuthenticatedSites
+                                    : kCount);
   testing::Test::RecordProperty(kAuthenticatedSites, AuthenticatedCalls);
   if (std::getenv(kExecute)) {
     ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Input}), 0);
@@ -832,6 +870,10 @@ TEST(AArch64DarwinEntry, MultipleEpiloguesKeepFramePointerAndRememberedRows) {
   verifyPublishedLeaves(kScratchResultSource, kCaller, kAssemblyName,
                         kScratchFrame, LeafCheck::FrameScratchResult);
 }
+TEST(AArch64DarwinEntry, SIMDDataPreservesIndexedStackAndRememberedRows) {
+  verifyPublishedLeaves(kScratchResultSource, kCaller, kAssemblyName,
+                        kScratchFrameSIMD, LeafCheck::FrameScratchResult);
+}
 
 TEST(AArch64DarwinVariadic, OptimizedImagePreservesReturnedRegisters) {
   verifyVariadicRegisterImage(kOptimize);
@@ -991,6 +1033,54 @@ TEST(AArch64LiftedImage, PublishesSIMDWordAndPairWritebackLoops) {
 TEST(AArch64LiftedImage, PublishesSIMDDoubleAndPairWritebackLoops) {
   verifyPublishedLeaves(kVectorCopyLeaves, kVectorCopyCaller, kAssemblyName,
                         kVectorDoubleMemory, LeafCheck::NativeAddressing);
+}
+TEST(AArch64LiftedImage, PublishesSIMD16ByteArithmetic) {
+  verifyPublishedLeaves(kSIMDArithmeticLeaves, kSIMDArithmeticCaller,
+                        kAssemblyName, {}, LeafCheck::NativeSIMD);
+}
+TEST(AArch64LiftedImage, PublishesSIMD8ByteArithmetic) {
+  verifyPublishedLeaves(kSIMDArithmeticLeaves, kSIMDArithmeticCaller,
+                        kAssemblyName, kSIMD8B, LeafCheck::NativeSIMD);
+}
+TEST(AArch64LiftedImage, PublishesSIMD8HalfArithmetic) {
+  verifyPublishedLeaves(kSIMDArithmeticLeaves, kSIMDArithmeticCaller,
+                        kAssemblyName, kSIMD8H, LeafCheck::NativeSIMD);
+}
+TEST(AArch64LiftedImage, PublishesSIMD4HalfArithmetic) {
+  verifyPublishedLeaves(kSIMDArithmeticLeaves, kSIMDArithmeticCaller,
+                        kAssemblyName, kSIMD4H, LeafCheck::NativeSIMD);
+}
+TEST(AArch64LiftedImage, PublishesSIMD4WordArithmetic) {
+  verifyPublishedLeaves(kSIMDArithmeticLeaves, kSIMDArithmeticCaller,
+                        kAssemblyName, kSIMD4S, LeafCheck::NativeSIMD);
+}
+TEST(AArch64LiftedImage, PublishesSIMD2WordArithmetic) {
+  verifyPublishedLeaves(kSIMDArithmeticLeaves, kSIMDArithmeticCaller,
+                        kAssemblyName, kSIMD2S, LeafCheck::NativeSIMD);
+}
+TEST(AArch64LiftedImage, PublishesSIMD2DoubleArithmetic) {
+  verifyPublishedLeaves(kSIMDArithmeticLeaves, kSIMDArithmeticCaller,
+                        kAssemblyName, kSIMD2D, LeafCheck::NativeSIMD);
+}
+TEST(AArch64LiftedImage, PublishesSIMDScalarDoubleArithmetic) {
+  verifyPublishedLeaves(kSIMDArithmeticLeaves, kSIMDArithmeticCaller,
+                        kAssemblyName, kSIMD1D, LeafCheck::NativeSIMD);
+}
+TEST(AArch64LiftedImage, PublishesSIMDPermutationsTablesAndLanes) {
+  verifyPublishedLeaves(kSIMDPermutationLeaves, kSIMDPermutationCaller,
+                        kAssemblyName, {}, LeafCheck::NativeSIMD);
+}
+TEST(AArch64LiftedImage, PublishesSIMDFusedLanesWithFloatingEnvironment) {
+  verifyPublishedLeaves(kSIMDFloatingLeaves, kSIMDFloatingCaller, kAssemblyName,
+                        {}, LeafCheck::NativeSIMD);
+}
+TEST(AArch64LiftedImage, PublishesSIMDRegisterArgumentsAndResults) {
+  verifyPublishedLeaves(kSIMDRegisterLeaves, kSIMDRegisterCaller, kAssemblyName,
+                        {}, LeafCheck::NativeSIMD);
+}
+TEST(AArch64LiftedImage, PublishesSIMDWidenNarrowReduceAndSaturationState) {
+  verifyPublishedLeaves(kSIMDWidenLeaves, kSIMDWidenCaller, kAssemblyName, {},
+                        LeafCheck::NativeSIMD);
 }
 TEST(AArch64LiftedImage, PublishesPostIndexedScalarAndPairMemory) {
   verifyPublishedLeaves(kScalarWritebackLeaves, kScalarWritebackCaller,

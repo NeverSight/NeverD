@@ -55,6 +55,7 @@ struct RegisterBody {
   bool HasStackIndex = false;
   bool HasMemoryWriteback = false;
   bool HasMemoryIndex = false;
+  bool HasSIMDData = false;
   bool LoadsStackArgument = false;
   bool MaterializesCursor = false;
 };
@@ -405,6 +406,8 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
     const auto &D = I.Raw->detail->aarch64;
     const auto Ops = llvm::ArrayRef(D.operands, D.op_count);
     const auto Encoding = readLE<uint32_t>(I.Raw->bytes);
+    const bool SIMDData = (Encoding & kSIMDDataMask) == kSIMDDataClass;
+    Body.HasSIMDData |= SIMDData;
     if (const auto Memory = aarch64AddressMemoryInstruction(Encoding))
       Body.HasMemoryIndex |= Memory->hasRegisterIndex() && !Memory->stackBase();
     if (const auto Memory = aarch64WritebackMemoryInstruction(Encoding))
@@ -490,7 +493,7 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
     }
     if (I.Id != AARCH64_INS_RET && I.Id != AARCH64_INS_RETAB)
       Fallthrough();
-    if (!independent(I))
+    if (!SIMDData && !independent(I))
       return std::nullopt;
     // Frameless variadic entries can load directly at or above incoming SP
     // without materializing va_list. Count the pre-indexed address, not the
@@ -512,13 +515,22 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
         Ops[1].type == AARCH64_OP_REG && Ops[1].reg == AARCH64_REG_SP)
       Body.MaterializesCursor = true;
 
-    // MOVZ zero and ORR from zero both preserve NZCV and clear the entire
-    // physical destination. Use the register form including for a W result.
-    if ((I.Id == AARCH64_INS_MOV || I.Id == AARCH64_INS_MOVZ) &&
-        Ops.size() == 2 && Ops[0].type == AARCH64_OP_REG &&
-        Ops[1].type == AARCH64_OP_IMM && Ops[1].imm == 0 &&
-        ((Ops[0].reg >= AARCH64_REG_X0 && Ops[0].reg <= AARCH64_REG_X28) ||
-         (Ops[0].reg >= AARCH64_REG_W0 && Ops[0].reg <= AARCH64_REG_W30))) {
+    // This encoding class has no PC-relative operand. The whole function
+    // already passed the semantic audit. Retain its actual scalar FP/NEON
+    // word, including lanes, arrangements, register lists and FP controls,
+    // instead of reconstructing a second encoding from printed operands.
+    // The assembly and final linked words are both checked against the image.
+    if (SIMDData) {
+      OS << kInstructionWord << Encoding << '\n';
+    } else if ((I.Id == AARCH64_INS_MOV || I.Id == AARCH64_INS_MOVZ) &&
+               Ops.size() == 2 && Ops[0].type == AARCH64_OP_REG &&
+               Ops[1].type == AARCH64_OP_IMM && Ops[1].imm == 0 &&
+               ((Ops[0].reg >= AARCH64_REG_X0 &&
+                 Ops[0].reg <= AARCH64_REG_X28) ||
+                (Ops[0].reg >= AARCH64_REG_W0 &&
+                 Ops[0].reg <= AARCH64_REG_W30))) {
+      // MOVZ zero and ORR from zero both preserve NZCV and clear the entire
+      // physical destination. Use the register form including for a W result.
       llvm::StringRef Reg = cs_reg_name(Decode.getHandle(), Ops[0].reg);
       OS << kClear << Reg
          << (Ops[0].reg >= AARCH64_REG_W0 && Ops[0].reg <= AARCH64_REG_W30
@@ -618,9 +630,9 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
     Select(Entry->second);
   }
   for (const auto &[F, Body] : Bodies) {
-    // Preserve the one architectural access and base update, including its
-    // runtime checked-pointer behavior, throughout the complete native body.
-    if (Body.HasMemoryWriteback || Body.HasMemoryIndex)
+    // Keep physical addressing, vector lanes and FP status effects within
+    // their complete native body, including runtime checked-pointer behavior.
+    if (Body.HasMemoryWriteback || Body.HasMemoryIndex || Body.HasSIMDData)
       Select(F);
     if (HasVariadicCursor &&
         (F->isVarArg() || Body.MaterializesCursor || Body.LoadsStackArgument))

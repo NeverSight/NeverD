@@ -31,6 +31,7 @@ MACHO_REGISTER_TEXT(kInvalidBody,
 MACHO_REGISTER_TEXT(kLocal, "Lneverd_reg_${:uid}_")
 MACHO_REGISTER_TEXT(kCall, "bl ")
 MACHO_REGISTER_TEXT(kTail, "b ")
+MACHO_REGISTER_TEXT(kInstructionWord, ".inst ")
 MACHO_REGISTER_TEXT(kOperandStart, "${")
 MACHO_REGISTER_TEXT(kOperandEnd, ":c}")
 MACHO_REGISTER_TEXT(kSymbolConstraint, "s,")
@@ -58,6 +59,10 @@ MACHO_REGISTER_VALUE(unsigned, kScratchX9, 2)
 MACHO_REGISTER_VALUE(unsigned, kDwarfFP, 29)
 MACHO_REGISTER_VALUE(unsigned, kDwarfLR, 30)
 MACHO_REGISTER_VALUE(unsigned, kDwarfSP, 31)
+// A64 top-level op1[28:25] = x111: scalar FP and Advanced SIMD data processing.
+// Memory, branches, PC-relative addresses, SVE and SME use separate classes.
+MACHO_REGISTER_VALUE(uint32_t, kSIMDDataMask, 0x0e000000)
+MACHO_REGISTER_VALUE(uint32_t, kSIMDDataClass, 0x0e000000)
 
 // These register/immediate operations have no PC-relative operand.
 MACHO_REGISTER_ALU(ADD)
@@ -72,9 +77,6 @@ MACHO_REGISTER_ALU(MOVN)
 MACHO_REGISTER_ALU(MOVK)
 MACHO_REGISTER_ALU(MUL)
 MACHO_REGISTER_ALU(MADD)
-MACHO_REGISTER_ALU(UCVTF)
-MACHO_REGISTER_ALU(FADD)
-MACHO_REGISTER_ALU(FSUB)
 MACHO_REGISTER_MEMORY(LDR)
 MACHO_REGISTER_MEMORY(LDRB)
 MACHO_REGISTER_MEMORY(LDRH)
