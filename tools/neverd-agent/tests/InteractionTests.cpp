@@ -10,6 +10,7 @@
 #include "project/ResearchPlan.h"
 #include "runtime/ChangeReview.h"
 #include "runtime/EvidenceCapture.h"
+#include "runtime/WorkerSession.h"
 
 #include <QDir>
 #include <QJsonDocument>
@@ -371,6 +372,53 @@ private slots:
     QTRY_COMPARE(terminal.state(), QProcess::NotRunning);
     QCOMPARE(terminal.exitCode(), 0);
     QCOMPARE(terminal.readAllStandardOutput().trimmed(), "Terminal answer");
+  }
+
+  void workerSessionAnswersEachCommandOnce() {
+    // A command's callback runs once, and the session takes the next command
+    // after it. A moved-from std::function may keep its callable (libc++
+    // keeps a small one), which left the session busy and answered the open
+    // and the last command a second time when the worker exited.
+    QTemporaryDir directory;
+    QFile fixture(directory.filePath("object.bin"));
+    QVERIFY(fixture.open(QIODevice::WriteOnly));
+    fixture.write("plain");
+    fixture.close();
+    const auto fingerprint = ProjectStore::fingerprint(fixture.fileName());
+    QVERIFY2(fingerprint.Error.isEmpty(), qPrintable(fingerprint.Error));
+    const AnalysisObject object{"object", "object.bin", fixture.fileName(),
+                                fingerprint.Sha256};
+    const auto executable = QDir(QCoreApplication::applicationDirPath())
+                                .filePath(
+#ifdef Q_OS_WIN
+                                    "NeverDAgentFixtureMcp.exe"
+#else
+                                    "NeverDAgentFixtureMcp"
+#endif
+                                );
+    WorkerSession session;
+    int opened = 0, answered = 0, stopped = 0;
+    QJsonObject result;
+    session.start(executable, object, true, 5, [&](QJsonObject value) {
+      ++opened;
+      result = value;
+    });
+    QTRY_COMPARE_WITH_TIMEOUT(opened, 1, 10000);
+    QCOMPARE(result["status"].toString(), "ok");
+    for (int command = 1; command <= 2; ++command) {
+      session.request("resolve", {{"address", "0x1000"}}, false,
+                      [&](QJsonObject value) {
+                        ++answered;
+                        result = value;
+                      });
+      QTRY_COMPARE_WITH_TIMEOUT(answered, command, 10000);
+      QVERIFY2(result["status"].toString() == "ok",
+               QJsonDocument(result).toJson().constData());
+    }
+    session.stop([&] { ++stopped; });
+    QTRY_COMPARE_WITH_TIMEOUT(stopped, 1, 10000);
+    QCOMPARE(opened, 1);
+    QCOMPARE(answered, 2);
   }
 
   void uncertainWritesAreNotAutomaticallyRetried_data() {

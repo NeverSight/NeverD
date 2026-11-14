@@ -14,6 +14,7 @@
 #include <QJsonDocument>
 #include <QUuid>
 #include <algorithm>
+#include <utility>
 
 namespace neverd::agent {
 namespace {
@@ -370,7 +371,7 @@ public:
         if (!issue.isEmpty())
           result["error"] = issue;
       }
-      auto done = std::move(Done);
+      auto done = std::exchange(Done, nullptr);
       done(result);
       deleteLater();
     });

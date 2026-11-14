@@ -13,6 +13,7 @@
 #include <QJsonDocument>
 #include <QtConcurrentRun>
 #include <QtEndian>
+#include <utility>
 #ifdef Q_OS_WIN
 #include <windows.h>
 #endif
@@ -45,7 +46,7 @@ WorkerSession::WorkerSession(QObject *parent) : QObject(parent) {
     if (Current || Ready)
       fail("ND worker exited before acknowledging the command.");
     if (Stopped) {
-      auto done = std::move(Stopped);
+      auto done = std::exchange(Stopped, nullptr);
       done();
     }
   });
@@ -131,7 +132,10 @@ void WorkerSession::receive() {
       Deadline.stop();
       Revision = message["revision"].toString();
       ProjectId = message["project_id"].toString();
-      auto done = std::move(Current);
+      // Taken with exchange: libc++ leaves a moved-from std::function that
+      // holds a small callable non-empty, so the session would stay busy
+      // and a later failure would answer this command twice.
+      auto done = std::exchange(Current, nullptr);
       Mutation = false;
       done(message);
     } else if (message["type"] == "fatal") {
@@ -143,7 +147,7 @@ void WorkerSession::receive() {
 void WorkerSession::opened(const QJsonObject &result) {
   if (!Ready)
     return;
-  auto done = std::move(Ready);
+  auto done = std::exchange(Ready, nullptr);
   if (result["status"] != "ok") {
     done(result);
     return;
@@ -197,8 +201,8 @@ void WorkerSession::fail(const QString &error) {
   QJsonObject result{{"status", "error"},
                      {"uncertain", Mutation},
                      {"error", QJsonObject{{"message", error}}}};
-  auto current = std::move(Current);
-  auto ready = std::move(Ready);
+  auto current = std::exchange(Current, nullptr);
+  auto ready = std::exchange(Ready, nullptr);
   Mutation = false;
   if (current)
     current(result);
@@ -208,7 +212,7 @@ void WorkerSession::fail(const QString &error) {
 void WorkerSession::stop(std::function<void()> done) {
   Stopped = std::move(done);
   if (Process.state() == QProcess::NotRunning) {
-    auto stopped = std::move(Stopped);
+    auto stopped = std::exchange(Stopped, nullptr);
     if (stopped)
       stopped();
     return;
