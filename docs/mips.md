@@ -2,7 +2,8 @@
 
 The experimental MIPS analysis path targets linked ELF programs with classic
 MIPS32/o32 and MIPS64/n32 or n64 instructions in either byte order. The profiles below
-cover classic Release 2, classic and microMIPS Release 6 integer and FR=1 floating-point instructions, microMIPS32 and microMIPS64 integer profiles,
+cover classic Release 2 integer and FR=1 scalar floating-point instructions,
+classic and microMIPS Release 6 integer and FR=1 floating-point instructions, microMIPS32 and microMIPS64 integer profiles,
 MIPS16e32 and MIPS16e2, and Release 5/o32 and n64 MSA.
 The selected ELF profile determines register width, byte order, stack layout
 and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
@@ -127,7 +128,7 @@ have the extension a narrow C parameter would require. Declared source types
 remain a separate contract.
 
 Coverage remains incomplete for historical MIPS I–V profiles, pre-Release 6
-scalar floating point, trapping arithmetic and the MSA/DSP forms outside the
+FR=0 and paired-single floating point, trapping arithmetic and the MSA/DSP forms outside the
 slices below. Privileged instructions and reservations are admitted by profile
 as described under MIPS16e2 and classic Release 6. Unsupported instructions, missing slots and transfers in a
 delay slot produce errors, not replacement NOPs. General aggregate source ABI
@@ -1137,6 +1138,49 @@ containers/mapping are tracked separately by [#1727](https://github.com/NeverSig
 the ISA work belongs to [#97](https://github.com/NeverSight/NeverD/issues/97).
 
 
+### Classic Release 2 scalar FPU
+
+The scalar FP owner also admits classic pre-R6 COP1/COP1X with explicit FR=1
+evidence: o32 FP64 (GNU FP ABI 6) or n32/n64 hard double (ABI 1). The loader
+requires matching 64-bit CPR1 evidence; an integer-only ELF without that
+evidence does not acquire floating semantics. Both GPR widths and byte orders
+share the same instruction rules. FR=0 register pairs, paired-single formats,
+historical MIPS I–V profiles and pre-R6 microMIPS floating point are not covered
+by this profile.
+
+`MIPSLegacyFloat.def` extends the common scalar operation catalog with legacy
+ABS/NEG, the 16 S/D predicates and COP1X MADD/MSUB/NMADD/NMSUB. Together with
+the shared arithmetic and conversion forms there are 84 operations. Unlike
+R6 ABS/NEG, the legacy forms can raise Invalid. Comparisons write their selected
+FCC0–FCC7, preserve the other condition bits and retain FCSR exception effects.
+The bound scalar executor must match the ISA revision; the Unicorn adapter uses
+74Kf or MIPS64R2_GENERIC for these operations. A pending enabled exception
+commits FCSR and suppresses destination writeback. This is an explicit reference
+CPU policy, not an assertion that all implementations produce identical NaNs
+or reciprocal estimates.
+
+Register/control transfers, MOV.S/D, MOVF/T in GPRs and FPRs, and MOVZ/N.S/D
+have explicit rules. An untaken FP move preserves the full destination;
+a taken word write leaves its high word unpredictable. BC1F/T and their likely
+forms snapshot the selected FCC before the slot, including a slot that writes
+FCCR. A false likely branch annuls that write.
+
+LWC1/LDC1/SWC1/SDC1 and LWXC1/LDXC1/SWXC1/SDXC1 check natural alignment before
+memory or register effects. LUXC1/SUXC1 instead clear the low three effective
+address bits, as specified for FR=1. The existing source-domain checks for
+alignment and initialized memory continue to apply.
+
+HighC and LLVMC preserve the arithmetic and control operations with native
+target assembly and reuse the scalar ABI and byte-provenance checks described
+below. No host floating-point evaluation substitutes for the target's FCSR.
+The pinned Unicorn includes [the legacy ABS/NEG exception fix](https://github.com/NeverSight/unicorn/pull/28).
+The independent sign tests distinguish pre-R6 arithmetic NaN behavior from R6
+bit operations, including enabled Invalid exceptions and preserved destinations.
+The rules follow [MIPS64 Volume II, revision 2.50](https://0x04.net/~mwk/doc/mips/MD00087-2B-MIPS64BIS-AFP-02.50.pdf).
+The [qualification receipt](evidence/mips-classic-fp-2026-11-14.json) records
+the bit/exception comparisons, both source projections and the o32/n32/n64
+fixed, variadic and indirect call roundtrips in both byte orders.
+
 ### Release 6 scalar FPU
 
 Classic and microMIPS scalar FP use a common COP1 semantic owner in both GPR
@@ -1184,7 +1228,10 @@ A nonleaf's saved link is accepted only when exact reaching stores preserve
 the original RA and mode, its slot lies outside the callee's complete outgoing
 argument area, and no argument or other store exposes the private frame.
 Byte provenance ignores unread upper FPR bytes; stack arguments require their
-own reaching-store proof. Unresolved memory effects remain rejected.
+own reaching-store proof. A validated alignment guard preserves computed stack
+addresses and reaching stores; malformed guards and opaque effects invalidate
+that evidence. This also qualifies the aligned pre-R6 floating stores used for
+outgoing overflow and variadic arguments.
 Function-scoped instruction mode is preserved, including physical microMIPS FP
 assembly. LLVMC copies floating views of integer storage as object bytes;
 ordinary C assignment would change these bit patterns numerically.
@@ -1214,7 +1261,10 @@ unsigned narrow arguments observed at the full width of the register.
 Single-precision result inference follows the arithmetic operation rather than
 the FPR container. A final source byte-use proof may canonicalize unread upper
 bits; stores, calls, preserved registers and observed return bytes block that
-proof. LowIR and analysis-only MedIR retain the original unpredictable state.
+proof. A full replacement in the same block also proves an earlier return
+register definition cannot supply the implicit result; explicit reads of that
+earlier value remain observable. LowIR and analysis-only MedIR retain the
+original unpredictable state.
 
 Discovery keeps the detail-off decode path: a delayed-unit snapshot never reads
 Capstone's retained but unpopulated operand allocation. MIPS lifting uses the

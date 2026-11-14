@@ -76,9 +76,9 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
                static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) ||
            mips::isPureScalarValue(
                static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) ||
-           mips::isR6FPArithmetic(
+           mips::isScalarFPArithmetic(
                static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) ||
-           mips::isR6FPControl(
+           mips::isScalarFPControl(
                static_cast<Intrinsic>(Op.Inputs[0].ConstVal))) &&
           mipsScalarMedShapeIsValid(Op, Target);
       if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) && Op.NumInputs)
@@ -215,7 +215,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
       case NdOp::INTRINSIC:
         Safe =
             Op.NumInputs && Op.Inputs[0].isConst() &&
-            mips::isR6FPArithmetic(
+            mips::isScalarFPArithmetic(
                 static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) &&
             mipsScalarMedShapeIsValid(Op, Target) &&
             llvm::all_of(llvm::ArrayRef(Op.Inputs.data() + 1, Op.NumInputs - 1),

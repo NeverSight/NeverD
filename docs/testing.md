@@ -24210,7 +24210,7 @@ unknown-bit transport and source joins. MSA rounded shifts/inserts exhaust every
 count at every width with APInt expectations, aliases and reserved prefixes;
 source fixtures execute zero/mid/full immediate counts on both byte orders.
 
-### MIPS decode/lift and firmware performance
+### MIPS scalar floating-point and ABI roundtrips
 
 The hard-float call tests assemble original callers and callees and bind explicit declarations.
 
@@ -24222,6 +24222,12 @@ PYTHONPATH=third_party/unicorn/bindings/python LIBUNICORN_PATH=/path/to/unicorn-
   --output build-mips/floating-abi-roundtrip
 ```
 
+The runner defaults to Release 6. Add `--revision 2` for classic FR=1 Release 2
+with legacy NaNs, delayed JAL/JALR calls and the 74Kf/MIPS64R2 reference CPUs.
+`--abi` and `--layout` narrow a diagnostic rerun; omitting them runs all cases.
+`SourceCallABI.AlignmentGuardPreservesOutgoingStackBytesAndAddresses` checks
+the reaching-store proof in all six MIPS ABI/byte-order profiles, with malformed
+alignment and opaque-effect controls that must still fail qualification.
 The runner compares original machine code with recompiled HighC and LLVMC at
 O0/O2 for o32, n32 and n64 in both byte orders, including float/double
 mixed entry arguments and nine-argument FP overflow. The SDK fixture obtains
@@ -24241,6 +24247,34 @@ FP state (including f0 after a declared non-floating call).
 `NeverDMIPSFlowTests` covers delayed snapshots with detail disabled and poisoned
 operand counts. `NeverDLLVMCAllocaTests` executes floating/integer storage views
 against original LLVM, including negative zero and NaN payloads.
+
+`MIPSLegacyFP` in `NeverDMIPSIntegerTests` covers classic FR=1 pre-R6 arithmetic,
+conversions, sign operations, COP1X multiply-add and all 32 S/D predicates at
+every FCC selector. Literal machine encodings are independent of the lifter's
+operation catalog. The original 74Kf/MIPS64R2_GENERIC execution is compared
+with LowIR for result bits, FCSR and destination suppression, in both byte
+orders and GPR widths. Separate cases check conditional moves, a slot that
+changes the branch's condition, likely-slot annulment and ten memory forms at
+all eight low address offsets. The loader test rejects inconsistent FP ABI and
+CPR1 width evidence. These checks do not qualify FR=0, paired-single or
+historical ISA profiles.
+
+`MIPSPipeline.DoubleResultDiscardsOnlyOverwrittenUnknownFPRWords` checks that
+MTC1 followed by CVT.D.W may return a defined double after replacing the
+unpredictable high word. ADD.D must still refuse that unknown input. Both
+source paths, ISA revisions and byte orders participate in the check.
+
+`profile-roundtrip.py` accepts `mips32r2fp_*` and `mips64r2fp_*` selections for
+82 pre-R6 source profiles. Examples are `mips32r2fp_abs`, `mips64r2fp_madd`,
+`mips32r2fp_cc7`, `mips64r2fp_branch` and `mips64r2fp_memory_suxc1`.
+Use its existing GNU assembler/linker, NeverD, Clang and output arguments;
+repeat `--profile` to select more than one. The runner assembles explicit
+`-mfp64` input, recompiles HighC/LLVMC at O0/O2 in both byte orders, and checks
+return bits, FCSR and output memory against the original target program.
+The optional Unicorn reference must be built from the pinned fork. Generated
+products are deleted on success or failure after results are recorded.
+
+### MIPS decode/lift and firmware performance
 
 The opt-in `neverd-mips-request-bench` target repeatedly decompiles one loaded
 SDK session and checks that every request produces identical source.
@@ -24262,6 +24296,9 @@ Profiles are `mips`, `mipsel`, `mips64`, `mips64el`, `micromips`,
 profiles enable MIPS16e2 encoding. The DSP profiles select the named revision
 of the classic MIPS32 DSP ASE. MSA profiles select classic32 r5/o32 FP64 for the admitted integer,
 permutation, floating-point and control-transfer instructions.
+`mips32r2fp`, `mips32r2fpel`, `mips64r2fp` and `mips64r2fpel` select classic
+pre-R6 FR=1 profiles. Newly admitted instructions have no successful baseline
+lift; report their throughput separately from comparisons of unchanged work.
 Stages are `capstone`
 (direct physical decoding), `decode` (NeverD physical decoding) and `lift`
 (decoding plus LowIR, including delay slots). Both decode paths request the same

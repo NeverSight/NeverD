@@ -74,8 +74,8 @@ static uint16_t floatProducerBytes(const MedOp &Op) {
     return Op.Output.Size;
   if (mipsScalarMedShapeIsValid(Op)) {
     const auto Id = static_cast<Intrinsic>(Op.Inputs[0].ConstVal);
-    if (mips::isR6FPArithmetic(Id)) {
-      const auto &Operation = mips::r6FPOperation(Id);
+    if (mips::isScalarFPArithmetic(Id)) {
+      const auto &Operation = mips::scalarFPOperation(Id);
       if (Operation.hasFloatingResult())
         return Operation.OutputBytes;
     }

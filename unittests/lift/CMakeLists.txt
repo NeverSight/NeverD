@@ -40,6 +40,7 @@ add_neverd_unittest(NeverDMIPSIntegerTests
   mips/MicroMIPSIntegerTests.cpp
   mips/MIPSBitfieldTests.cpp
   mips/MIPSRelease6Tests.cpp
+  mips/MIPSLegacyFPTests.cpp
   mips/MicroMIPSSequenceTests.cpp
   mips/MicroMIPSRelease6Tests.cpp
   mips/MIPSIntegerTests.cpp
@@ -54,7 +55,7 @@ if(TARGET unicorn)
   else()
     target_sources(NeverDMIPSIntegerTests PRIVATE
       ${PROJECT_SOURCE_DIR}/lib/emulation/backends/unicorn/P5600MSA.cpp
-      ${PROJECT_SOURCE_DIR}/lib/emulation/backends/unicorn/R6ScalarFP.cpp)
+      ${PROJECT_SOURCE_DIR}/lib/emulation/backends/unicorn/ScalarFP.cpp)
   endif()
   target_link_libraries(NeverDMIPSIntegerTests PRIVATE unicorn)
   target_compile_definitions(NeverDMIPSIntegerTests PRIVATE

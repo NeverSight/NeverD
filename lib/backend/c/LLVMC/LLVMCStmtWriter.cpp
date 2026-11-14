@@ -51,7 +51,7 @@
 #include "neverd/backend/MIPS/MIPSDSPSource.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/MIPS/MIPSMSASource.h"
-#include "neverd/backend/MIPS/MIPSR6FPSource.h"
+#include "neverd/backend/MIPS/MIPSScalarFPSource.h"
 #include "neverd/backend/MachineInstructionText.h"
 #include "neverd/backend/c/render/AArch64/AArch64ExclusiveC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
@@ -5007,17 +5007,18 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
         K->getValue().uge(32) || !isMIPS(Opts.TheArch))
       throw std::runtime_error("invalid native MSA assembly metadata");
     const auto Id = static_cast<Intrinsic>(I->getZExtValue());
-    if (ScalarFP ? (!mips::isR6FPControl(Id) &&
-                    (!mips::isR6FPArithmetic(Id) || !K->isZero()))
+    if (ScalarFP ? (!mips::scalarFPHasSelector(Id) &&
+                    (!mips::isScalarFPArithmetic(Id) || !K->isZero()))
                  : (!mips::isMSAControl(Id) &&
                     (!mips::isMSANativeVector(Id) || !K->isZero())))
       throw std::runtime_error("invalid native MSA instruction");
-    const auto A = ScalarFP ? mips::r6FPAssembly(Id, K->getZExtValue(),
-                                                 mips::instructionModeFromLLVM(
-                                                     *Call.getFunction()) ==
-                                                     InstructionMode::MicroMIPS)
-                            : mips::msaAssembly(Id, K->getZExtValue(),
-                                                archLittleEndian(Opts.TheArch));
+    const auto A =
+        ScalarFP ? mips::scalarFPAssembly(
+                       Id, K->getZExtValue(),
+                       mips::instructionModeFromLLVM(*Call.getFunction()) ==
+                           InstructionMode::MicroMIPS)
+                 : mips::msaAssembly(Id, K->getZExtValue(),
+                                     archLittleEndian(Opts.TheArch));
     if (!IA->hasSideEffects() || IA->isAlignStack() || IA->canThrow() ||
         IA->getDialect() != llvm::InlineAsm::AD_ATT ||
         IA->getAsmString() != A.llvmText() ||

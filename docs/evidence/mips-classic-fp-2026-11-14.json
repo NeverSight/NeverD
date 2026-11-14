@@ -1,0 +1,91 @@
+{
+  "unicorn_commit": "68c10b9751e866b41524cd8265dc8b1e11c49305",
+  "host": "macOS arm64, Release",
+  "semantic_scope": {
+    "classic_pre_r6_fr1_arithmetic_forms": 84,
+    "widths": [
+      32,
+      64
+    ],
+    "byte_orders": [
+      "big",
+      "little"
+    ],
+    "original_vs_lowir_arithmetic_observations": 236544,
+    "legacy_abs_neg_independent_exception_cases": 640,
+    "memory_forms": 10,
+    "low_address_offsets": 8
+  },
+  "roundtrips": {
+    "source-profiles": {
+      "complete": true,
+      "builds": 656,
+      "recompiled_executions": 29680,
+      "receipt_sha256": "257d0dbd2c822014ce40b1570af4644bc653a4ec18c3df5b009f166c3a6a1569",
+      "binary_snapshot": "candidate",
+      "sdk_sha256": "41333a7eff668b17d9ab8dbc6e05c9199eb834214e944f6fd87d4ad6c9de7522"
+    },
+    "source-regression": {
+      "complete": true,
+      "builds": 96,
+      "recompiled_executions": 3712,
+      "receipt_sha256": "b1eb00509dba3d7195bafbec616165205bbde4a3e38ea4618a5b69e1ac25c7f4",
+      "binary_snapshot": "candidate",
+      "sdk_sha256": "41333a7eff668b17d9ab8dbc6e05c9199eb834214e944f6fd87d4ad6c9de7522"
+    },
+    "source-integrated": {
+      "complete": true,
+      "builds": 48,
+      "recompiled_executions": 3104,
+      "receipt_sha256": "f64764c0877f3bc0d627d26faad089d8d8d416c77266986443ad6a2c4961bdbc",
+      "binary_snapshot": "integrated",
+      "sdk_sha256": "6609402c0287183d48df4661cbfd2dbd341a3ba049aa3cac5f03f9b7c186b7ec"
+    },
+    "abi-r2-complete": {
+      "complete": true,
+      "builds": 816,
+      "recompiled_executions": 16320,
+      "receipt_sha256": "1c7b85165399449f9c50e25a4f7a56db052d2cf5bc7aa03a9c301b2e593f6254",
+      "binary_snapshot": "final",
+      "sdk_sha256": "3073176a0f0026a6f88c6a7d6631c827d2b5da8378e0742c47412ec3b06d86bc"
+    },
+    "abi-r6-final": {
+      "complete": true,
+      "builds": 816,
+      "recompiled_executions": 16320,
+      "receipt_sha256": "3c98eaec1e4a608035c5ea525aa9ec889cf8b70bde4b726eb7f38736c620e0f3",
+      "binary_snapshot": "integrated",
+      "sdk_sha256": "6609402c0287183d48df4661cbfd2dbd341a3ba049aa3cac5f03f9b7c186b7ec"
+    },
+    "abi-r6-return": {
+      "complete": true,
+      "builds": 168,
+      "recompiled_executions": 3360,
+      "receipt_sha256": "b91caa2f59e759149b6beda207da573ebcbc48a6643ed25a021215daa31f92dd",
+      "binary_snapshot": "final",
+      "sdk_sha256": "3073176a0f0026a6f88c6a7d6631c827d2b5da8378e0742c47412ec3b06d86bc"
+    },
+    "ubus-final": {
+      "complete": true,
+      "builds": 4,
+      "recompiled_executions": 48,
+      "receipt_sha256": "b6ebc5bcb258a55d8601ea0a7936728c0772c88d2668dce0a92feeb536501e55",
+      "binary_snapshot": "integrated",
+      "sdk_sha256": "6609402c0287183d48df4661cbfd2dbd341a3ba049aa3cac5f03f9b7c186b7ec"
+    }
+  },
+  "owner_tests": {
+    "full_mips_and_source_call_abi": 843,
+    "pipeline_after_return_proof_fix": 165,
+    "integer_and_pipeline_after_dispatch_refactor": 611
+  },
+  "limits": [
+    "Classic FR=1 only: o32 FP64 and n32/n64 hard double; explicit ELF evidence is required.",
+    "Reference CPU policy uses 74Kf/MIPS64R2_GENERIC for pre-R6 and MIPS32R6_GENERIC/I6400 for R6, not hardware qualification.",
+    "Legacy DSP64 rounded/saturated extraction and signed DMADD/DMSUB remain unqualified.",
+    "Historical MIPS I-V, FR=0, paired-single and pre-R6 microMIPS floating point remain outside this change.",
+    "Performance samples and toolchain manifests are retained locally, not in this semantic receipt."
+  ],
+  "semantic_qualification_head": "b8db81666d",
+  "dispatch_refactor_commit": "36ab9ddbc3"
+}

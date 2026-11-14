@@ -16,8 +16,8 @@
 #ifdef NEVERD_MIPS_UNICORN_REFERENCE
 #include "unicorn/unicorn.h"
 
-#include "neverd/emulation/arch/mips/R6ScalarFP.h"
-#include "neverd/ir/intrinsics/MIPS/MIPSR6FPOperations.h"
+#include "neverd/emulation/arch/mips/ScalarFP.h"
+#include "neverd/ir/intrinsics/MIPS/MIPSScalarFPOperations.h"
 #endif
 
 namespace neverd {
@@ -71,7 +71,7 @@ protected:
 
 #ifdef NEVERD_MIPS_UNICORN_REFERENCE
 TEST_P(MIPSRelease6, ScalarFPUCommitsFlagsAndSuppressesFaultingDestinations) {
-  auto FPU = emulation::createR6ScalarFPExecutor(GetParam());
+  auto FPU = emulation::createScalarFPExecutor(GetParam());
   ASSERT_TRUE(bool(FPU)) << llvm::toString(FPU.takeError());
   MIPSSystemContext C;
   C.FCSR = 0xc0000;
@@ -86,7 +86,7 @@ TEST_P(MIPSRelease6, ScalarFPUCommitsFlagsAndSuppressesFaultingDestinations) {
       const auto Id = Op.Opcode == NdOp::INTRINSIC
                           ? static_cast<Intrinsic>(Op.Inputs[0].Offset)
                           : Intrinsic::None;
-      if (mips::isR6FPArithmetic(Id) || mips::isR6FPControl(Id)) {
+      if (mips::isScalarFPArithmetic(Id) || mips::isScalarFPControl(Id)) {
         if (!E.stepMIPSSystem(Op, C))
           return false;
       } else if (!E.step(Op))
@@ -176,7 +176,7 @@ TEST_P(MIPSRelease6, FloatingCatalogHasIdenticalClassicAndMicroEffects) {
   const auto Order = archLittleEndian(GetParam()) ? llvm::endianness::little
                                                   : llvm::endianness::big;
 #ifdef NEVERD_MIPS_UNICORN_REFERENCE
-  auto FPU = emulation::createR6ScalarFPExecutor(GetParam());
+  auto FPU = emulation::createScalarFPExecutor(GetParam());
   ASSERT_TRUE(bool(FPU)) << llvm::toString(FPU.takeError());
   uc_engine *Raw = nullptr;
   ASSERT_EQ(
@@ -274,8 +274,9 @@ TEST_P(MIPSRelease6, FloatingCatalogHasIdenticalClassicAndMicroEffects) {
         const auto Id = Op.Opcode == NdOp::INTRINSIC
                             ? static_cast<Intrinsic>(Op.Inputs[0].Offset)
                             : Intrinsic::None;
-        ASSERT_TRUE(mips::isR6FPArithmetic(Id) ? E.stepMIPSSystem(Op, Context)
-                                               : E.step(Op));
+        ASSERT_TRUE(mips::isScalarFPArithmetic(Id)
+                        ? E.stepMIPSSystem(Op, Context)
+                        : E.step(Op));
       }
       if (Out == 8)
         EXPECT_EQ(E.getRegister(mipsreg::w(2)), Expected);

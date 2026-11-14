@@ -63,6 +63,7 @@ public:
     HasDSPR2 = Rev2;
   }
   void setMSAEnabled(bool Enabled) { HasMSA = Enabled; }
+  void setScalarFPEnabled(bool Enabled) { HasScalarFP = Enabled; }
   void setMIPS16Enabled(bool Enabled) { HasMIPS16 = Enabled; }
   void setMIPS16E2Enabled(bool Enabled) { HasMIPS16E2 = Enabled; }
   void setMTEnabled(bool Enabled) { HasMT = Enabled; }
@@ -129,7 +130,7 @@ private:
   static bool isR6Compact(uint32_t Word);
   static bool isR6ConditionalCompact(uint32_t Word);
   bool liftR6Compact(State &S, uint32_t Word, bool ForbiddenFollower) const;
-  bool liftR6Float(State &S, uint32_t Word) const;
+  bool liftScalarFloat(State &S, uint32_t Word) const;
   bool liftRelease6(State &S, uint32_t Word) const;
   bool liftNonControl(State &S, Encoding Code, va_t BasePC) const;
   std::optional<Encoding> encoding(const cs_insn &Instruction) const;
@@ -148,6 +149,7 @@ private:
   bool HasDSP = false;
   bool HasDSPR2 = false;
   bool HasMSA = false;
+  bool HasScalarFP = false;
   bool HasMIPS16 = false;
   bool HasMIPS16E2 = false;
   bool HasMT = false;

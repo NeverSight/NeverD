@@ -852,8 +852,10 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       isMIPS(TheArch) &&
       (Image
            ? (hasCompressedMIPSCode(Image->Mode) ||
-              (Image->MIPS && (Image->MIPS->HasDSP || Image->MIPS->HasMSA ||
-                               Image->MIPS->ISARevision == 6)))
+              (Image->MIPS &&
+               (Image->MIPS->HasDSP || Image->MIPS->HasMSA ||
+                Image->MIPS->ISARevision == 6 ||
+                Image->MIPS->hasScalarFP64ABI(isMIPS64(TheArch)))))
            : llvm::any_of(Low.Blocks, [](const auto &Block) {
                // Standalone IR cannot drop a changed return link merely
                // because the original image's ASE record is unavailable.

@@ -13,7 +13,7 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
-#include "neverd/ir/intrinsics/MIPS/MIPSR6FPOperations.h"
+#include "neverd/ir/intrinsics/MIPS/MIPSScalarFPOperations.h"
 
 #include <cstdint>
 #include <optional>
@@ -229,7 +229,7 @@ constexpr bool scalarMayWriteMemory(Intrinsic Id) {
   return mergeStore(Id).has_value() || isCacheIntrinsic(Id);
 }
 constexpr bool isStatefulScalar(Intrinsic Id) {
-  return isR6FPArithmetic(Id) || isR6FPControl(Id) ||
+  return isScalarFPArithmetic(Id) || isScalarFPControl(Id) ||
          reservationTransfer(Id).has_value() || isSystemIntrinsic(Id) ||
          Id == Intrinsic::MIPSPause || isCacheIntrinsic(Id);
 }
@@ -288,15 +288,19 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
   if (!S.IdIsValid || !S.Ordinary ||
       (S.Target != Arch::Unknown && !isMIPS(S.Target)))
     return false;
-  if (isR6FPControl(Id)) {
+  if (isScalarFPControl(Id)) {
     const bool Write = Id == Intrinsic::MIPSWriteFPControl;
     return S.FirstBytes == 1 && S.FirstConstant && *S.FirstConstant < 32 &&
-           r6FPControlSelector(*S.FirstConstant, Write) &&
+           scalarFPControlSelector(*S.FirstConstant, Write) &&
            (Write ? S.Inputs == 3 && S.SecondBytes == 4 && !S.OutputBytes
                   : S.Inputs == 2 && S.OutputWritable && S.OutputBytes == 4);
   }
-  if (isR6FPArithmetic(Id)) {
-    const auto &F = r6FPOperation(Id);
+  if (isScalarFPArithmetic(Id)) {
+    const auto &F = scalarFPOperation(Id);
+    if (F.writesCondition())
+      return !S.OutputBytes && S.Inputs == 4 && S.FirstBytes == 1 &&
+             S.FirstConstant && *S.FirstConstant < 8 &&
+             S.SecondBytes == F.InputBytes && S.ThirdBytes == F.InputBytes;
     return S.OutputWritable && S.OutputBytes == F.OutputBytes &&
            S.Inputs == F.Arity + 1 && S.FirstBytes == F.InputBytes &&
            (F.Arity < 2 || S.SecondBytes == F.InputBytes) &&

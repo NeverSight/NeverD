@@ -56,6 +56,9 @@ struct MIPSImageMetadata {
   /// GNU MIPS FP ABI tag, when supplied by .MIPS.abiflags. Integer analysis
   /// does not establish support for these floating-point calling conventions.
   std::optional<uint8_t> FPABI;
+
+  /// An explicit scalar hard-float ABI with 64-bit FPRs (FR=1).
+  bool hasScalarFP64ABI(bool Wide) const { return FPABI == (Wide ? 1 : 6); }
 };
 
 } // namespace neverd

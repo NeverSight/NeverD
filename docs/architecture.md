@@ -16502,6 +16502,17 @@ branch for its forbidden-slot check. Compact microMIPS R6 transfers use their
 physical length and permit consecutive branches. Tagged n64 control targets
 preserve all 64 address bits.
 
+The scalar COP1 owner shares `MIPSScalarFPOperations.h` across pre-R6 and R6
+lifting, concrete evaluation and native source generation. Stable operation
+descriptors come from `MIPSR6Float.def` and `MIPSLegacyFloat.def`; revision
+admission stays in that owner. Legacy comparisons have a constant FCC selector
+and an ordered FCSR effect, with no FPR result. `MIPSImageMetadata` owns FR=1
+ABI evidence, and the ELF loader rejects a conflicting CPR1 width. A bound
+`MIPSScalarFPExecutor` must match the image revision; adapters must not silently
+substitute R6 NaN or exception behavior for a pre-R6 operation. Ordinary and
+indexed legacy FP memory use the existing alignment intrinsic. Delayed BC1
+uses the same snapshot and annulment path as integer branches.
+
 `MedMIPSMergeValues` owns the source-only proof for adjacent complementary
 merge loads in a single ordinary leaf block. It runs after SSA/projection/DCE
 and before ABI recovery, binds physical LowIR occurrences to MedIR, and removes

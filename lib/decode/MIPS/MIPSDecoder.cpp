@@ -6,8 +6,8 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/decode/Decoder.h"
-#include "neverd/ir/intrinsics/MIPS/MIPSR6FPOperations.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
+#include "neverd/ir/intrinsics/MIPS/MIPSScalarFPOperations.h"
 #include "neverd/lift/MIPS/MIPSDSP64.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
@@ -288,7 +288,7 @@ bool Decoder::decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr) {
 
 bool Decoder::decodeR6FloatCompare(const uint8_t *Bytes, uint32_t Classic,
                                    va_t Addr) {
-  const auto Id = mips::r6FPArithmetic(Classic);
+  const auto Id = mips::scalarFPArithmetic(Classic);
   const auto Equivalent =
       (Classic & 0xffc00030) == 0x46800010 ? Classic & ~16u : Classic;
   if (!Id || !decodeMIPSEquivalent(Bytes, Equivalent, Addr))
@@ -299,7 +299,7 @@ bool Decoder::decodeR6FloatCompare(const uint8_t *Bytes, uint32_t Classic,
                 unsigned(Intrinsic::MIPSFPADD_S);
   if (Text)
     std::snprintf(InsnBuf->mnemonic, sizeof(InsnBuf->mnemonic), "%s",
-                  mips::r6FPOperation(*Id).Mnemonic);
+                  mips::scalarFPOperation(*Id).Mnemonic);
   return true;
 }
 
