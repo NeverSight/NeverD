@@ -19,10 +19,14 @@
 
 #include "neverd/backend/c/render/AArch64/AArch64AddressMemoryC.h"
 
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringExtras.h"
+
 #include <algorithm>
 #include <fstream>
 #include <initializer_list>
 #include <iterator>
+#include <map>
 #include <regex>
 #include <string>
 #include <vector>
@@ -37,6 +41,17 @@ protected:
   std::string KernelOptimization = "-O2";
   /// Run the C the LLVM route writes (`decompile --llvm`) instead of HighC.
   bool LLVMC = false;
+
+  /// Whether the test's Clang builds a program with \p Flags that runs on this
+  /// host, asked once per process for each set of flags.
+  static bool hostRunsProgramsWith(const std::vector<std::string> &Flags) {
+    static std::map<std::vector<std::string>, bool> Known;
+    const auto [Found, Inserted] = Known.try_emplace(Flags, false);
+    if (Inserted)
+      Found->second =
+          neverd::test::hostRunsProgramsBuiltWith(NEVERD_TEST_CLANG, Flags);
+    return Found->second;
+  }
 
   /// Compile \p Kernel with Clang and \p TargetFlags, decompile it to HighC,
   /// and expect the C of \p Entry, which takes and returns an int, to return
@@ -70,6 +85,12 @@ protected:
         HostFlags.end())
       GTEST_SKIP() << "32-bit native HighC execution is unavailable on macOS";
 #endif
+    // Elsewhere a 32-bit host build needs the host's 32-bit C library, which
+    // a Windows environment set up for x64 does not link.
+    if (llvm::is_contained(HostFlags, "-m32") &&
+        !hostRunsProgramsWith(HostFlags))
+      GTEST_SKIP() << "this host builds no runnable program with "
+                   << llvm::join(HostFlags, " ");
     const auto Source = tmpFile("kernel.c");
     const auto Object = tmpFile("kernel.o");
     std::ofstream(Source) << Kernel;

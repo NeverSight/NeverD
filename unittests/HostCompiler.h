@@ -112,6 +112,41 @@ inline bool compilerAccepts(llvm::StringRef Compiler, llvm::StringRef Extension,
   return Status == 0;
 }
 
+/// Whether \p Compiler builds a program with \p Arguments that runs on this
+/// host: a 32-bit program needs the host's 32-bit C library, which a Windows
+/// environment set up for x64 does not link.  Silent, and false when anything
+/// goes wrong.
+inline bool
+hostRunsProgramsBuiltWith(llvm::StringRef Compiler,
+                          const std::vector<std::string> &Arguments) {
+  llvm::SmallString<128> Input, Program;
+  int Descriptor = -1;
+  if (llvm::sys::fs::createTemporaryFile("neverd-host-probe", "c", Descriptor,
+                                         Input))
+    return false;
+  {
+    llvm::raw_fd_ostream OS(Descriptor, /*shouldClose=*/true);
+    OS << "int main(void) { return 0; }\n";
+  }
+  if (llvm::sys::fs::createTemporaryFile("neverd-host-probe", "exe", Program)) {
+    (void)llvm::sys::fs::remove(Input);
+    return false;
+  }
+  std::vector<llvm::StringRef> Command = {Compiler};
+  Command.insert(Command.end(), Arguments.begin(), Arguments.end());
+  Command.insert(Command.end(), {Input, "-o", Program});
+  const std::optional<llvm::StringRef> Quiet[] = {
+      llvm::StringRef(), llvm::StringRef(), llvm::StringRef()};
+  const llvm::StringRef Run[] = {Program};
+  const bool Runs =
+      llvm::sys::ExecuteAndWait(Compiler, Command, std::nullopt, Quiet, 60) ==
+          0 &&
+      llvm::sys::ExecuteAndWait(Program, Run, std::nullopt, Quiet, 60) == 0;
+  (void)llvm::sys::fs::remove(Input);
+  (void)llvm::sys::fs::remove(Program);
+  return Runs;
+}
+
 /// Whether \p Compiler parses the textual IR the linked LLVM prints.
 inline bool compilerReadsCurrentIR(llvm::StringRef Compiler) {
   return compilerAccepts(Compiler, "ll",

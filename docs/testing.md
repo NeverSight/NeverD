@@ -9142,8 +9142,10 @@ call and AArch64 strtof/strtod execution tests when changing this admission.
 `FloatCallsDefineOnlyTheirDeclaredScalarWidth` checks mixed float/double
 carriers in both input orders, using both call-site and callee-summary types.
 The shared HighC host fixture reports native `-m32` execution unavailable on
-macOS, where a 64-bit build would truncate the kernels' addresses. Linux and
-Windows retain the actual 32-bit differential. Native x87 IR inputs use
+macOS, where a 64-bit build would truncate the kernels' addresses, and on any
+host whose test Clang builds no runnable `-m32` program: the Windows CI's MSVC
+environment, set up for x64, links none. Linux retains the actual 32-bit
+differential. Native x87 IR inputs use
 `LLVMHostFixture.h` at both host compiler boundaries; the original verified
 module and semantic proofs remain unchanged. The compiler copy lowers
 whole-object lifetime markers to the older `(i64 size, ptr)` signature, using
