@@ -693,6 +693,127 @@ _leaf_difference:
 .subsections_via_symbols
 )asm")
 
+A64_LEAF_TEXT(kScalarLeaves, R"c(
+#include <stdint.h>
+int64_t leaf_sum(int64_t a, int64_t b) { return a < b ? a : b; }
+uint64_t leaf_difference(uint64_t a, uint64_t b) { return a > b ? a : b; }
+)c")
+A64_LEAF_TEXT(kDivisionLeaves, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+#ifdef TEST_WORD
+  sdiv w0, w0, w1
+#else
+  sdiv x0, x0, x1
+#endif
+  ret
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+#ifdef TEST_WORD
+  udiv w8, w0, w1
+  msub w0, w8, w1, w0
+#else
+  udiv x8, x0, x1
+  msub x0, x8, x1, x0
+#endif
+  ret
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+A64_LEAF_TEXT(kDivisionOracle, "#define TEST_DIVISION\n")
+A64_LEAF_TEXT(kWordDivisionOracle, "#define TEST_DIVISION\n#define TEST_WORD\n")
+A64_LEAF_TEXT(kScalarCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+#ifdef TEST_WORD
+typedef int32_t Signed;
+typedef uint32_t Unsigned;
+#define MIN_INPUT INT32_MIN
+#define MAX_INPUT INT32_MAX
+#else
+typedef int64_t Signed;
+typedef uint64_t Unsigned;
+#define MIN_INPUT INT64_MIN
+#define MAX_INPUT INT64_MAX
+#endif
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  Signed (*s)(Signed, Signed) = dlsym(image, "leaf_sum");
+  Unsigned (*u)(Unsigned, Unsigned) = dlsym(image, "leaf_difference");
+  if (!s || !u) return 3;
+  const Signed inputs[] = {0, 1, -1, 3, -7, MIN_INPUT, MAX_INPUT};
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(*inputs); ++i) {
+    for (unsigned j = 0; j < sizeof(inputs) / sizeof(*inputs); ++j) {
+      Signed a = inputs[i], b = inputs[j];
+      Unsigned x = a, y = b;
+#ifdef TEST_DIVISION
+      // AArch64 defines both cases where C division is undefined.
+      Signed sr = !b ? 0 : a == MIN_INPUT && b == -1 ? a : a / b;
+      Unsigned ur = y ? x % y : x;
+#else
+      Signed sr = a < b ? a : b;
+      Unsigned ur = x > y ? x : y;
+#endif
+      if (s(a, b) != sr || u(x, y) != ur) return 4;
+    }
+  }
+  return dlclose(image);
+}
+)c")
+A64_LEAF_TEXT(kConditionalLeaves, R"c(
+#include <stdint.h>
+uint64_t leaf_sum(const uint64_t *p) { return p ? *p : 0; }
+uint64_t leaf_difference(uint64_t *p, uint64_t value) {
+  if (!p) return 0;
+  *p = value;
+  return value;
+}
+)c")
+A64_LEAF_TEXT(kConditionalCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  uint64_t (*read)(const uint64_t *) = dlsym(image, "leaf_sum");
+  uint64_t (*write)(uint64_t *, uint64_t) = dlsym(image, "leaf_difference");
+  if (!read || !write || read(0) || write(0, UINT64_MAX)) return 3;
+  uint64_t words[] = {1, UINT64_C(0xf123456789abcdef), 3};
+  if (read(words + 1) != words[1] || write(words + 1, 7) != 7 ||
+      words[0] != 1 || words[1] != 7 || words[2] != 3) return 4;
+  return dlclose(image);
+}
+)c")
+A64_LEAF_TEXT(kNarrowLeaves, R"c(
+#include <stdint.h>
+int leaf_sum(const int8_t *p) { return p[3]; }
+unsigned long leaf_difference(const uint16_t *p) { return p[2]; }
+)c")
+A64_LEAF_TEXT(kNarrowCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  int (*s)(const int8_t *) = dlsym(image, "leaf_sum");
+  unsigned long (*u)(const uint16_t *) = dlsym(image, "leaf_difference");
+  if (!s || !u) return 3;
+  int8_t bytes[] = {3, 1, -8, INT8_MIN, INT8_MAX};
+  uint16_t words[] = {3, 1, UINT16_MAX, UINT16_C(0x8001)};
+  if (s(bytes) != INT8_MIN || s(bytes + 1) != INT8_MAX ||
+      u(words) != UINT16_MAX || u(words + 1) != UINT16_C(0x8001)) return 4;
+  return dlclose(image);
+}
+)c")
 A64_LEAF_TEXT(kBitLeaves, R"c(
 #include <stdint.h>
 uint64_t leaf_sum(uint64_t value) {

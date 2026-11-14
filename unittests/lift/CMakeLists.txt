@@ -2463,6 +2463,9 @@ add_neverd_unittest(NeverDArm64eLiftedImageTests
   LINK_COMPONENTS CodeGen Pipeline AArch64UnwindRecovery
 )
 
+set(NEVERD_ARM64E_TEST_CLANG_EXECUTABLE
+  "${NEVERD_TEST_CLANG_EXECUTABLE}" CACHE FILEPATH
+  "Clang frontend for Darwin arm64e pointer authentication fixtures")
 add_neverd_unittest(NeverDArm64eAnalysisTests
   aarch64/AArch64EntryABITests.cpp
   aarch64/AArch64AddressMemoryTests.cpp
@@ -2481,9 +2484,9 @@ target_include_directories(NeverDArm64eAnalysisTests PRIVATE
   ${CMAKE_SOURCE_DIR}/lib/backend)
 target_compile_definitions(NeverDArm64eAnalysisTests PRIVATE
   NEVERD_ARM64E_TEST_HEADERS="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arm64e")
-if(NEVERD_TEST_CLANG_EXECUTABLE)
+if(NEVERD_ARM64E_TEST_CLANG_EXECUTABLE)
   target_compile_definitions(NeverDArm64eAnalysisTests PRIVATE
-    NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")
+    NEVERD_TEST_CLANG="${NEVERD_ARM64E_TEST_CLANG_EXECUTABLE}")
 endif()
 
 add_neverd_unittest(NeverDAArch64SVEPredicateTests
@@ -2878,9 +2881,9 @@ add_neverd_unittest(NeverDAArch64AuthenticatedCallTests
 )
 target_compile_definitions(NeverDAArch64AuthenticatedCallTests PRIVATE
   NEVERD_ARM64E_TEST_HEADERS="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arm64e")
-if(NEVERD_TEST_CLANG_EXECUTABLE)
+if(NEVERD_ARM64E_TEST_CLANG_EXECUTABLE)
   target_compile_definitions(NeverDAArch64AuthenticatedCallTests PRIVATE
-    NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")
+    NEVERD_TEST_CLANG="${NEVERD_ARM64E_TEST_CLANG_EXECUTABLE}")
 endif()
 add_neverd_unittest(NeverDCallRegisterUnreadTests
   core/CallRegisterUnreadTests.cpp

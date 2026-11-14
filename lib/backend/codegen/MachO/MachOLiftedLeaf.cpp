@@ -15,6 +15,7 @@
 #include "neverd/backend/codegen/SourcePatch.h"
 #include "neverd/backend/llvm/AArch64/LLVMEntryABI.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
 #include "neverd/loader/BinaryImage.h"
@@ -29,17 +30,23 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/IntrinsicsAArch64.h"
+#include "llvm/IR/PatternMatch.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Scalar/DCE.h"
 #include "llvm/Transforms/Scalar/InstSimplifyPass.h"
 #include "llvm/Transforms/Scalar/SROA.h"
+#include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
 
+#include <climits>
 #include <tuple>
 
 namespace neverd {
@@ -102,6 +109,101 @@ void canonicalizeRegisterReversals(llvm::Function &F) {
   }
 }
 
+// The portable divide protects LLVM's partial operation twice when both the
+// lifter and the emitter guard it. Match the zero result and every substitute
+// divisor before selecting the target intrinsic with architectural semantics.
+void canonicalizeDarwinDivision(llvm::SelectInst &Result) {
+  using namespace llvm::PatternMatch;
+  llvm::Value *Numerator, *Denominator, *Guarded;
+  if (!match(Result.getCondition(),
+             m_c_SpecificICmp(llvm::ICmpInst::ICMP_EQ, m_Value(Denominator),
+                              m_ZeroInt())) ||
+      !match(Result.getTrueValue(), m_ZeroInt()))
+    return;
+  auto *Div = llvm::dyn_cast<llvm::BinaryOperator>(Result.getFalseValue());
+  if (!Div || !match(Div, m_IDiv(m_Value(Numerator), m_Value(Guarded))) ||
+      Div->isExact() ||
+      (!Div->getType()->isIntegerTy(sizeof(uint32_t) * CHAR_BIT) &&
+       !Div->getType()->isIntegerTy(sizeof(uint64_t) * CHAR_BIT)))
+    return;
+  const bool Signed = Div->getOpcode() == llvm::Instruction::SDiv;
+  bool GuardsOverflow = false;
+  while (Guarded != Denominator) {
+    // Replacing a zero divisor by one can also be canonicalized to umax(d, 1).
+    llvm::Value *Base, *Guard;
+    if (match(Guarded, m_UMax(m_Value(Base), m_One())) ||
+        match(Guarded, m_UMax(m_One(), m_Value(Base)))) {
+      Guarded = Base;
+      continue;
+    }
+    if (!match(Guarded, m_Select(m_Value(Guard), m_One(), m_Value(Base))))
+      return;
+    const auto Zero = m_c_SpecificICmp(llvm::ICmpInst::ICMP_EQ,
+                                       m_Specific(Base), m_ZeroInt());
+    const auto Minimum = m_c_SpecificICmp(llvm::ICmpInst::ICMP_EQ,
+                                          m_Specific(Numerator), m_SignMask());
+    const auto MinusOne = m_c_SpecificICmp(llvm::ICmpInst::ICMP_EQ,
+                                           m_Specific(Base), m_AllOnes());
+    const auto Overflow = m_c_And(Minimum, MinusOne);
+    if (!match(Guard, Zero)) {
+      if (!Signed ||
+          !(match(Guard, Overflow) || match(Guard, m_c_Or(Zero, Overflow))))
+        return;
+      GuardsOverflow = true;
+    }
+    Guarded = Base;
+  }
+  if (Signed && !GuardsOverflow)
+    return;
+  auto ID =
+      Signed ? llvm::Intrinsic::aarch64_sdiv : llvm::Intrinsic::aarch64_udiv;
+  auto *Native = llvm::IRBuilder<>(&Result).CreateIntrinsic(
+      ID, {Div->getType()}, {Numerator, Denominator});
+  Result.replaceAllUsesWith(Native);
+}
+
+void canonicalizeLeafOperations(llvm::Function &F,
+                                llvm::FunctionAnalysisManager &Analyses) {
+  const bool HasBranches = llvm::any_of(F, [](const auto &BB) {
+    using namespace llvm::PatternMatch;
+    return match(BB.getTerminator(), m_Br(m_Value(), m_Value(), m_Value()));
+  });
+  const bool HasSelects =
+      llvm::any_of(llvm::instructions(F), [](const auto &I) {
+        return llvm::isa<llvm::SelectInst>(I);
+      });
+  if (HasBranches || HasSelects) {
+    llvm::FunctionPassManager Combine;
+    Combine.addPass(llvm::InstCombinePass());
+    if (HasBranches) {
+      Combine.addPass(llvm::SimplifyCFGPass());
+      // Darwin scheduling avoids extending the address register's live range
+      // across a conditional store. Tuning does not enable any ISA features.
+      if (!F.hasFnAttribute(kTuneCPUAttribute))
+        F.addFnAttr(kTuneCPUAttribute, kClassicDarwinTuneCPU);
+    }
+    Combine.run(F, Analyses);
+  }
+  canonicalizeRegisterReversals(F);
+  for (auto &I : llvm::instructions(F)) {
+    if (auto *Select = llvm::dyn_cast<llvm::SelectInst>(&I)) {
+      if (!Select->use_empty())
+        canonicalizeDarwinDivision(*Select);
+      continue;
+    }
+    // Keep the compare for commutative min/max in Darwin argument order.
+    auto *MinMax = llvm::dyn_cast<llvm::MinMaxIntrinsic>(&I);
+    if (!MinMax)
+      continue;
+    auto *Left = llvm::dyn_cast<llvm::Argument>(MinMax->getArgOperand(0));
+    auto *Right = llvm::dyn_cast<llvm::Argument>(MinMax->getArgOperand(1));
+    if (Left && Right && Left->getArgNo() > Right->getArgNo()) {
+      MinMax->setArgOperand(0, Right);
+      MinMax->setArgOperand(1, Left);
+    }
+  }
+}
+
 bool equivalentLeafWord(uint32_t Original, uint32_t Emitted) {
   if (Original == Emitted)
     return true;
@@ -136,23 +238,20 @@ bool isPositionIndependentLeafInstruction(const DecodedInsn &I) {
                  (Op.type == AARCH64_OP_REG &&
                   leafRegister(Op.reg, Op.access == CS_AC_READ));
         });
-#define MACHO_LEAF_MEMORY(Name) case Name:
-#include "MachOLiftedLeaf.def"
-    // A literal LDR has the same instruction ID. Insist on an actual base
-    // register and displacement, with neither PC-relative addressing nor
-    // an implicit write to the base.
-    return Detail.op_count == kMemoryOperandCount &&
-           !I.Raw->detail->writeback && !Detail.post_index &&
-           Detail.operands[0].type == AARCH64_OP_REG &&
-           leafRegister(Detail.operands[0].reg,
-                        Detail.operands[0].access == CS_AC_READ) &&
-           Detail.operands[1].type == AARCH64_OP_MEM &&
-           Detail.operands[1].mem.index == AARCH64_REG_INVALID &&
-           (Detail.operands[1].mem.base == AARCH64_REG_SP ||
-            leafRegister(Detail.operands[1].mem.base, true));
   default:
-    return false;
+    break;
   }
+  // A literal LDR has no base register. Accept only the scalar address forms
+  // whose decoded base, width and extension the unchanged word reproduces.
+  const auto Memory =
+      aarch64AddressMemoryInstruction(readLE<uint32_t>(I.Raw->bytes));
+  return Memory && !Memory->hasRegisterIndex() &&
+         Detail.op_count == kMemoryOperandCount &&
+         Detail.operands[0].type == AARCH64_OP_REG &&
+         leafRegister(Detail.operands[0].reg, !Memory->isLoad()) &&
+         Detail.operands[1].type == AARCH64_OP_MEM &&
+         (Detail.operands[1].mem.base == AARCH64_REG_SP ||
+          leafRegister(Detail.operands[1].mem.base, true));
 }
 
 // A frameless leaf may reserve stack space that it never accesses. Removing
@@ -233,7 +332,7 @@ bool elidesUnusedStackFrame(Decoder &Decode, llvm::ArrayRef<uint8_t> Source,
         return false;
       continue;
     }
-    if (I.Id == AARCH64_INS_LDR || I.Id == AARCH64_INS_STR ||
+    if (aarch64AddressMemoryInstruction(readLE<uint32_t>(I.Raw->bytes)) ||
         !isPositionIndependentLeafInstruction(I) ||
         readLE<uint32_t>(Source.data() + Old) !=
             readLE<uint32_t>(Emitted.data() + Off))
@@ -678,6 +777,7 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
     }
     bool Signed = false;
     size_t MatchedEnd = 0;
+    llvm::SmallVector<va_t, 4> BranchTargets, SwappedSeconds;
     for (size_t Offset = 0; Offset < Source.size();
          Offset += aarch64::kInsnSize) {
       DecodedInsn Insn{};
@@ -728,7 +828,29 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
                                  Emitted.drop_front(Offset)))
           return refuse(kLeafCode);
         MatchedEnd = Offset + 2 * aarch64::kInsnSize;
+        SwappedSeconds.push_back(Start + Offset + aarch64::kInsnSize);
       }
+      const auto &D = Insn.Raw->detail->aarch64;
+      switch (Insn.Id) {
+#define MACHO_LEAF_LOCAL_JUMP(Name) case Name:
+#include "MachOLiftedLeaf.def"
+        // Both bodies have the same size and instruction offsets. An equal
+        // branch word is position-independent only inside this function.
+        if (Last || !D.op_count ||
+            D.operands[D.op_count - 1].type != AARCH64_OP_IMM)
+          return refuse(kDirectTarget);
+        if (const va_t Target = D.operands[D.op_count - 1].imm;
+            Target >= Start && Target < End)
+          BranchTargets.push_back(Target);
+        else
+          return refuse(kDirectTarget);
+        continue;
+      default:
+        break;
+      }
+      if (!Last && !Signed && Native == macho_unwind::kARM64ModeFrameless &&
+          readLE<uint32_t>(Source.data() + Offset) == kReturnToLR)
+        continue;
       if (Last) {
         // Plain RET must select LR. RETAB has an implicit LR, SP and B key.
         if (Signed ? Insn.Id != AARCH64_INS_RETAB
@@ -744,6 +866,12 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
         return refuse(kLeafCode);
       }
     }
+    // A jump into the second of two exchanged writes executes only one of
+    // them. Reordering preserves the entry state only along contiguous paths.
+    if (llvm::any_of(BranchTargets, [&](va_t Target) {
+          return llvm::is_contained(SwappedSeconds, Target);
+        }))
+      return refuse(kLeafCode);
   }
   return llvm::Error::success();
 }
@@ -927,8 +1055,16 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
   // accesses to the lifter's private frame before emitting that prologue.
   canonicalizePrivateFrameAccesses(*Candidate);
   {
+    llvm::LoopAnalysisManager Loops;
     llvm::FunctionAnalysisManager Analyses;
-    llvm::PassBuilder().registerFunctionAnalyses(Analyses);
+    llvm::CGSCCAnalysisManager CallGraph;
+    llvm::ModuleAnalysisManager Modules;
+    llvm::PassBuilder Passes;
+    Passes.registerModuleAnalyses(Modules);
+    Passes.registerCGSCCAnalyses(CallGraph);
+    Passes.registerFunctionAnalyses(Analyses);
+    Passes.registerLoopAnalyses(Loops);
+    Passes.crossRegisterProxies(Loops, Analyses, CallGraph, Modules);
     llvm::FunctionPassManager Cleanup;
     Cleanup.addPass(llvm::DCEPass());
     Cleanup.addPass(llvm::SROAPass(llvm::SROAOptions::PreserveCFG));
@@ -940,7 +1076,7 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
       if (F.isDeclaration())
         continue;
       Cleanup.run(F, Analyses);
-      canonicalizeRegisterReversals(F);
+      canonicalizeLeafOperations(F, Analyses);
       llvm::DCEPass().run(F, Analyses);
     }
   }

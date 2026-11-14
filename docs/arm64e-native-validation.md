@@ -1382,3 +1382,18 @@ The object producer uses LLVM's bit-provenance matcher to recognize the
 lifter's shifts and masks. The publication check still compares the emitted
 instruction words and their operands. The byte-reversal and trailing-zero
 fixture compares both entries with independent loops, including a zero input.
+
+Lifted integer leaves also publish signed and unsigned selects, register
+division and remainder, sign- or zero-extending loads, and local conditional
+loads and stores. The producer recognizes division only after proving the
+zero and signed-overflow guards carry the architecture's results. Conditional
+branches must keep their displacement and land inside the same function.
+Native drivers check null and nonnull paths, adjacent memory, signed extrema,
+and zero divisors on the original and published libraries.
+
+The Windows CI analysis and authenticated-call fixtures use the same checked
+Clang 22.1.6 frontend as the Windows source-patch tests. Clang 20.1.8 accepts
+the arm64e target while leaving function-pointer authentication off by default.
+Explicit flags enable C function-pointer signing in that version, but its
+Objective-C class and method metadata still lacks the authentication relocations
+exercised by the loader tests.
