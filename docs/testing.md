@@ -1913,6 +1913,14 @@ whose compact recipe requires PAuth_LR, leaving image and output unchanged.
 CFA changes, explicit B-key augmentation, remembered states and two epilogues.
 It compares the final linked CFI with the original and rejects altered source
 spill rules. Native replay exercises both exits over an integer input matrix.
+`AArch64SavedRegisters` adds complete lifted-image publication with all
+X19-X28 and V8-V15 saves. It checks offset, restore and same-value DWARF rules,
+rejects altered GPR/vector spill locations, and compares both epilogues against
+independent register seeds. Separate D and Q fixtures check the low lanes and
+full saved vectors. With `NEVERD_ARM64E_LIFTED_NATIVE=1`, their signal cases
+interrupt the published body and resume the authenticated caller from the
+recovered rows, checking every saved register after returning through the
+system signal frame.
 `InstructionAddressRecipesUseTheActualSigningPC` compiles the public Darwin
 signal cursor and an independent SP/PC signing oracle as C11 and C++20 at
 O0/O2. Set `NEVERD_ARM64E_ASYNC_NATIVE=1` only in a qualified arm64e process

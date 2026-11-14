@@ -1467,3 +1467,33 @@ signal cleanup and TLS lifecycle controls. The Windows frontend controls
 also passed. Neither host reported native CPTA-on.
 [Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43599335828)
 and [per-host verification record](evidence/arm64e-simd-publication-2026-11-14.json).
+
+### Preserved registers in whole lifted frames
+
+The native register-body producer retains DWARF offset, restore and same-value
+rules for X19-X28 and V8-V15, alongside FP/LR. Register admission reuses the
+Darwin unwind ABI definitions. The final image must still match the original
+instruction words, control transfers, B-key augmentation and complete CFI
+rows; changing an X19 or V8 spill to another valid stack slot is refused.
+CFA bases and unsupported CFI operations retain their existing restrictions.
+
+Four publication fixtures save and overwrite every preserved GPR and vector,
+use FP-based CFA rows, and retain two signed epilogues with remembered CFI
+state. Independent callers check normal returns over zero and wrapping integer
+inputs. The D fixtures check the low 64-bit lanes required by the Darwin call
+ABI; the Q fixtures additionally check the upper lanes explicitly saved by
+their instructions. D upper lanes are checked separately: reloads clear them,
+whereas signal resumption retains their interrupted values. Signal fixtures
+interrupt the fully established original
+or published frame, recover its caller from the linked metadata and machine
+instructions, and resume through the system signal frame. The resumed caller
+checks every saved register. These checks do not imply that ordinary language
+unwind tables preserve caller-clobbered vector upper lanes.
+
+This closes the indexed-DWARF preserved-register publication restriction. It
+does not reconstruct compact saved-pair frames, qualify arbitrary image
+layouts or arbitrary non-call language cleanup, or supply native CPTA-on
+evidence. The current GitHub [standard macOS ARM runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+list M1 processors, and [larger ARM runners](https://docs.github.com/en/actions/reference/runners/larger-runners)
+list M2. Neither test repository had a registered self-hosted runner during
+this qualification; hardware features remain subject to the native probe.

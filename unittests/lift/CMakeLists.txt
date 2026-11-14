@@ -2461,6 +2461,7 @@ add_neverd_unittest(NeverDArm64eUnwindRecoveryTests
 add_neverd_unittest(NeverDArm64eLiftedImageTests
   aarch64/AArch64AsyncUnwindTests.cpp
   aarch64/AArch64LiftedLeafTests.cpp
+  aarch64/AArch64SavedRegisterTests.cpp
   LINK_COMPONENTS CodeGen Pipeline AArch64UnwindRecovery
 )
 

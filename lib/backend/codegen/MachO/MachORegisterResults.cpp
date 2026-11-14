@@ -11,6 +11,7 @@
 
 #include "neverd/backend/codegen/MachO/MachORegisterResults.h"
 
+#include "neverd/analysis/AArch64UnwindRecovery.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
@@ -280,6 +281,16 @@ void observeScratchResults(llvm::MutableArrayRef<ScratchFlow> Flow,
       Body.ObservedCallees.push_back(State.Callee);
 }
 
+bool savedFrameRegister(unsigned Register) {
+  const unsigned FirstVector =
+      aarch64_unwind::kDwarfV0 + NDArm64eFirstPreservedD;
+  return (Register >= NDArm64eFirstPreservedGPR &&
+          Register - NDArm64eFirstPreservedGPR < NDArm64ePreservedGPRCount) ||
+         Register == kDwarfFP || Register == kDwarfLR ||
+         (Register >= FirstVector &&
+          Register - FirstVector < NDArm64ePreservedDCount);
+}
+
 bool emitFrameRow(const CFIInstruction &Row, llvm::raw_ostream &OS) {
   switch (Row.Kind) {
   case CFIOpKind::Nop:
@@ -302,14 +313,14 @@ bool emitFrameRow(const CFIInstruction &Row, llvm::raw_ostream &OS) {
     OS << kCFAOffset << Row.Offset << '\n';
     return true;
   case CFIOpKind::Offset:
-    if ((Row.Register != kDwarfFP && Row.Register != kDwarfLR) ||
+    if (!savedFrameRegister(Row.Register) ||
         Row.Offset % int64_t(sizeof(uint64_t)))
       return false;
     OS << kSpill << Row.Register << kSeparator << Row.Offset << '\n';
     return true;
   case CFIOpKind::Restore:
   case CFIOpKind::SameValue:
-    if (Row.Register != kDwarfFP && Row.Register != kDwarfLR)
+    if (!savedFrameRegister(Row.Register))
       return false;
     OS << (Row.Kind == CFIOpKind::Restore ? kRestore : kSameValue)
        << Row.Register << '\n';
