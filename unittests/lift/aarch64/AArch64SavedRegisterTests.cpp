@@ -138,6 +138,16 @@ void verifySavedRegisters(
   auto Image = Reader->load(Input);
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
   const auto Snapshot = Image->Raw;
+  if (SigningOffset) {
+    const auto *Symbol = Image->findSymbol(kSumSymbol);
+    ASSERT_NE(Symbol, nullptr);
+    const auto *Frame = Image->ExceptionMetadata.findFunction(Symbol->Addr);
+    ASSERT_TRUE(Frame && Frame->Compact);
+    ASSERT_EQ(Frame->CodeRange.Begin, Symbol->Addr);
+    ASSERT_EQ(Frame->Compact->NativeEncoding,
+              kCompactPAuthLRMode | *CompactPairs |
+                  (*SigningOffset / aarch64::kInsnSize) << kPAuthLRShift);
+  }
   if (Coalesced) {
     const auto *First = Image->findSymbol(kSumSymbol);
     const auto *Second = Image->findSymbol(kDifferenceSymbol);
@@ -192,7 +202,7 @@ void verifySavedRegisters(
     ASSERT_NE(Assembly, nullptr);
     std::string Text = Assembly->getAsmString().str();
     const auto At = Text.find(Before);
-    ASSERT_NE(At, std::string::npos);
+    ASSERT_NE(At, std::string::npos) << Before << '\n' << Text;
     Text.replace(At, llvm::StringRef(Before).size(), After);
     Call->setCalledOperand(llvm::InlineAsm::get(
         Assembly->getFunctionType(), Text, Assembly->getConstraintString(),
