@@ -237,7 +237,43 @@ bool Decoder::decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr) {
     if ((Physical & 0xffe0063f) == 0x7c00003b)
       return decodeR6HardwareRegister(Bytes, Physical, Addr);
   }
-  if (MIPSISARevision != 6 && CurrentMode != InstructionMode::MicroMIPS) {
+  if (isMIPS64(TargetArch) && CurrentMode != InstructionMode::MicroMIPS) {
+    if (MIPS->hasClassicDSP64()) {
+      if (const auto Packed = mips::dsp64PackedForm(Physical)) {
+        if (!decodeMIPSEquivalent(Bytes, Packed->OperandTemplate, Addr))
+          return false;
+        InsnBuf->id = MIPS_INS_ENDING + 32 + (Physical & 0x7ff);
+        if (Text)
+          std::snprintf(InsnBuf->mnemonic, sizeof(InsnBuf->mnemonic), "%s",
+                        Packed->Mnemonic);
+        if (Packed->LastImmediate) {
+          if (Detail) {
+            auto &Operands = InsnBuf->detail->mips;
+            Operands.operands[Operands.op_count - 1].imm =
+                *Packed->LastImmediate;
+          }
+          if (Text) {
+            char *Out = std::strrchr(InsnBuf->op_str, ',') + 1;
+            std::snprintf(Out,
+                          sizeof(InsnBuf->op_str) - (Out - InsnBuf->op_str),
+                          " %d", int(*Packed->LastImmediate));
+          }
+        }
+        return true;
+      }
+    }
+    if (MIPS->isDSPIndexedDoubleword(Physical)) {
+      if (!decodeMIPSEquivalent(Bytes, Physical & ~0x200u, Addr))
+        return false;
+      InsnBuf->id = MIPSLifter::IndexedLoadDoublewordID;
+      if (Text)
+        std::snprintf(InsnBuf->mnemonic, sizeof(InsnBuf->mnemonic), "%s",
+                      physicalMnemonic(Handle, InsnBuf->id));
+      return true;
+    }
+  }
+  if (MIPSISARevision != 6 && !isMIPSCompressedMode(CurrentMode) &&
+      (Physical >> 26 == 17 || Physical >> 26 == 19)) {
     // Missing PS forms reuse the scalar forms' operand roles. The catalog
     // owns arithmetic admission; the public record keeps the physical bytes.
     if (const auto Id = mips::scalarFPArithmetic(Physical, MIPSISARevision);
@@ -299,40 +335,6 @@ bool Decoder::decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr) {
       }
       return true;
     }
-  }
-  if (isMIPS64(TargetArch) && CurrentMode != InstructionMode::MicroMIPS) {
-    if (MIPS->hasClassicDSP64()) {
-      if (const auto Packed = mips::dsp64PackedForm(Physical)) {
-        if (!decodeMIPSEquivalent(Bytes, Packed->OperandTemplate, Addr))
-          return false;
-        InsnBuf->id = MIPS_INS_ENDING + 32 + (Physical & 0x7ff);
-        if (Text)
-          std::snprintf(InsnBuf->mnemonic, sizeof(InsnBuf->mnemonic), "%s",
-                        Packed->Mnemonic);
-        if (Packed->LastImmediate) {
-          if (Detail) {
-            auto &Operands = InsnBuf->detail->mips;
-            Operands.operands[Operands.op_count - 1].imm =
-                *Packed->LastImmediate;
-          }
-          if (Text) {
-            char *Out = std::strrchr(InsnBuf->op_str, ',') + 1;
-            std::snprintf(Out,
-                          sizeof(InsnBuf->op_str) - (Out - InsnBuf->op_str),
-                          " %d", int(*Packed->LastImmediate));
-          }
-        }
-        return true;
-      }
-    }
-    if (!MIPS->isDSPIndexedDoubleword(Physical) ||
-        !decodeMIPSEquivalent(Bytes, Physical & ~0x200u, Addr))
-      return false;
-    InsnBuf->id = MIPSLifter::IndexedLoadDoublewordID;
-    if (Text)
-      std::snprintf(InsnBuf->mnemonic, sizeof(InsnBuf->mnemonic), "%s",
-                    physicalMnemonic(Handle, InsnBuf->id));
-    return true;
   }
   if (CurrentMode != InstructionMode::MicroMIPS)
     return false;
