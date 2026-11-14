@@ -85,12 +85,15 @@ protected:
         HostFlags.end())
       GTEST_SKIP() << "32-bit native HighC execution is unavailable on macOS";
 #endif
+#if !defined(__linux__)
     // Elsewhere a 32-bit host build needs the host's 32-bit C library, which
-    // a Windows environment set up for x64 does not link.
+    // a Windows environment set up for x64 does not link.  Linux multilib
+    // serves it, so there a failed 32-bit build stays a failure.
     if (llvm::is_contained(HostFlags, "-m32") &&
         !hostRunsProgramsWith(HostFlags))
       GTEST_SKIP() << "this host builds no runnable program with "
                    << llvm::join(HostFlags, " ");
+#endif
     const auto Source = tmpFile("kernel.c");
     const auto Object = tmpFile("kernel.o");
     std::ofstream(Source) << Kernel;
