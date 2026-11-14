@@ -8,7 +8,7 @@ metadata:
   version: "1.6"
   qt-version: "6.x"
   category: conceptual
-  changelog: "Added a one-page summary of NeverD's style to the desktop profile: color roles, type, sizes, the rules every window keeps and the user's standing verdicts"
+  changelog: "Added a one-page summary of NeverD's style to the desktop profile: color roles, type, sizes and the rules every window keeps"
 ---
 # Qt UI Design
 
@@ -18,8 +18,8 @@ For NeverD screens, read [the NeverD desktop profile](references/neverd-desktop.
 before designing or auditing. It records the product's established visual
 direction, workbench chrome, content hierarchy, resizing behavior, and Qt
 rendering checks. Start with its "Style at a glance" section, which gathers
-the color roles, type, sizes, the rules every window keeps and the user's
-standing verdicts on one page, each pointing to the section with its reasons.
+the color roles, type, sizes and the rules every window keeps on one page,
+each pointing to the section with its reasons.
 Apply its desktop density and layout guidance in place of
 the generic sizing defaults below; preserve accessibility requirements and the
 user's current instructions.

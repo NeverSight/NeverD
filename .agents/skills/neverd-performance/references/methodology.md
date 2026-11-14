@@ -243,11 +243,11 @@ most time. Each step is an instruction, its reason and the case it comes from.
 
 ## 10. Changes to the Capstone fork
 
-On 2026-11-12 the user told one session: "你对capstone的改动，必须性能上超越iced"
-(your changes to Capstone must outperform iced). The sentence was about that
-session's changes. Whether it binds every change to the fork is the user's to
-say. When this was written nobody had measured the fork against iced from
-this skill's side, so the fork's present standing is not claimed here.
+On 2026-11-12 the user told one session that its changes to Capstone must
+outperform iced. The instruction was about that session's changes. Whether it
+binds every change to the fork is the user's to say. When this was written
+nobody had measured the fork against iced from this skill's side, so the
+fork's present standing is not claimed here.
 
 - Before changing the fork, or bumping its pointer for a change of your own,
   measure. Build two `compare` binaries, one per Capstone archive, as
