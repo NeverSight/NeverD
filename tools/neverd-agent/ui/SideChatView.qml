@@ -66,7 +66,7 @@ ColumnLayout {
             visible: (!view.chat || view.chat.messages.length === 0) && !view.showInherited
             text: qsTr("Explore a side question here, with the main conversation's context.")
             horizontalAlignment: Text.AlignHCenter
-            color: Theme.secondary; wrapMode: Text.Wrap; lineHeight: 1.5
+            color: Theme.secondary; wrapMode: Text.Wrap
         }
     }
     InputQueue {

@@ -202,7 +202,6 @@ Surface {
                         color: Theme.secondary
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
-                        lineHeight: 1.5
                     }
                     Repeater {
                         model: panel.backend.progress
