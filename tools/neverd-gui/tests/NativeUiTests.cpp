@@ -367,6 +367,14 @@ private slots:
       open->trigger();
       QVERIFY(panel->isHidden() && !ball->isChecked());
       QTRY_COMPARE(QApplication::focusWidget(), &window);
+      // A click on the button leaves the keyboard in the view, so Escape
+      // gives it back there rather than to the button.
+      QTest::mouseClick(ball, Qt::LeftButton);
+      QVERIFY(panel->isVisible());
+      QTRY_COMPARE(QApplication::focusWidget(), prompt);
+      QTest::keyClick(prompt, Qt::Key_Escape);
+      QVERIFY(panel->isHidden());
+      QTRY_COMPARE(QApplication::focusWidget(), &window);
 
       const QPoint at = ball->rect().center();
       QContextMenuEvent context(QContextMenuEvent::Mouse, at,

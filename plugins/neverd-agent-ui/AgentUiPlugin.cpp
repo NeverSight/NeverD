@@ -232,7 +232,9 @@ public:
     // assistive technology.
     setCheckable(true);
     setCursor(Qt::PointingHandCursor);
-    setFocusPolicy(Qt::StrongFocus);
+    // Reached by Tab, not taken by a click: the keyboard stays in the view
+    // being read, and closing the conversation gives it back there.
+    setFocusPolicy(Qt::TabFocus);
     setAttribute(Qt::WA_Hover);
     Spin.setInterval(SpinnerStepMs);
     connect(&Spin, &QTimer::timeout, this, [this] {
