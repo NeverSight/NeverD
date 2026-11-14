@@ -7,6 +7,7 @@
 #ifndef NEVERD_TOOLS_NEVERD_GUI_APP_GUIPLUGINUIHOST_H
 #define NEVERD_TOOLS_NEVERD_GUI_APP_GUIPLUGINUIHOST_H
 
+#include <QCoreApplication>
 #include <QList>
 #include <QObject>
 #include <QRect>
@@ -20,6 +21,8 @@ class PluginJobs;
 class Session;
 
 class GuiPluginUiHost final : public QObject {
+  Q_DECLARE_TR_FUNCTIONS(neverd::gui::GuiPluginUiHost)
+
 public:
   using Navigate = std::function<void(const QString &)>;
   GuiPluginUiHost(QWidget &workbench, Session &session,

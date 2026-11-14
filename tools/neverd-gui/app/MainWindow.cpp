@@ -374,8 +374,19 @@ MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
       *this, session_,
       [this] {
         const auto *center = centralWidget();
-        return center ? QRect(center->mapTo(this, QPoint{}), center->size())
-                      : contentsRect();
+        QRect area = center
+                         ? QRect(center->mapTo(this, QPoint{}), center->size())
+                         : contentsRect();
+        // Floating plugin views keep off the command line when it runs
+        // along the foot of the workbench, under their corner.
+        if (const auto *line = output_ ? output_->commandLine() : nullptr;
+            line && line->isVisible()) {
+          const QRect row(line->mapTo(this, QPoint{}), line->size());
+          if (row.bottom() >= area.bottom() - row.height() / 2 &&
+              row.right() >= area.right() - row.height() / 2)
+            area.setBottom(std::min(area.bottom(), row.top() - 1));
+        }
+        return area;
       },
       [this](const QString &address) {
         if (const auto parsed = parseAddress(address))
@@ -383,46 +394,46 @@ MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
       });
   plugins_ = new AnalysisPlugins(session_, actions_, nullptr,
                                  bundledAgentManifest, pluginUi_);
-  plugins_->setSelectionProvider([this, last = QJsonObject{},
-                                  epoch = quint64{}]() mutable {
-    if (epoch != session_.epoch()) {
-      epoch = session_.epoch();
-      last = {};
-    }
-    if (pluginUi_ && pluginUi_->contains(commandFocusWidget()) &&
-        !last.isEmpty())
-      return last;
-    QJsonObject selection;
-    auto address = currentAddress();
-    auto function = currentFunction();
-    if (auto *code = focusedCodeView()) {
-      function = code->text()->function();
-      address = code->text()->currentAddress();
-      if (!address)
-        address = function;
-    } else if (auto *chooser = focusedChooser()) {
-      address = chooser->currentAddress();
-      function = chooser->model().kind() == ChooserKind::Functions
-                     ? address
-                     : std::nullopt;
-    }
-    if (address)
-      selection.insert("address", hexAddress(*address));
-    if (function)
-      selection.insert("function_address", hexAddress(*function));
-    QString text;
-    if (auto *chooser = focusedChooser())
-      text = chooser->selectedText();
-    else if (auto *code = focusedCodeView())
-      text = code->text()->selectedText();
-    else
-      text = disassembly_->selectedText();
-    selection.insert(
-        "selection_text",
-        text.left(::neverd::limits::gui::plugin::kMaxSelectionCharacters));
-    last = selection;
-    return selection;
-  });
+  plugins_->setSelectionProvider(
+      [this, last = QJsonObject{}, epoch = quint64{}]() mutable {
+        if (epoch != session_.epoch()) {
+          epoch = session_.epoch();
+          last = {};
+        }
+        if (pluginUi_ && pluginUi_->contains(commandFocusWidget()) &&
+            !last.isEmpty())
+          return last;
+        QJsonObject selection;
+        auto address = currentAddress();
+        auto function = currentFunction();
+        if (auto *code = focusedCodeView()) {
+          function = code->text()->function();
+          address = code->text()->currentAddress();
+          if (!address)
+            address = function;
+        } else if (auto *chooser = focusedChooser()) {
+          address = chooser->currentAddress();
+          function = chooser->model().kind() == ChooserKind::Functions
+                         ? address
+                         : std::nullopt;
+        }
+        if (address)
+          selection.insert("address", hexAddress(*address));
+        if (function)
+          selection.insert("function_address", hexAddress(*function));
+        QString text;
+        if (auto *chooser = focusedChooser())
+          text = chooser->selectedText();
+        else if (auto *code = focusedCodeView())
+          text = code->text()->selectedText();
+        else
+          text = disassembly_->selectedText();
+        selection.insert(
+            "selection_text",
+            text.left(::neverd::limits::gui::plugin::kMaxSelectionCharacters));
+        last = selection;
+        return selection;
+      });
   auto *pluginDock =
       makeDock(QStringLiteral("analysisPlugins"), QT_TR_NOOP("Plugin tasks"),
                QStringLiteral("extensions"), plugins_);

@@ -12,7 +12,9 @@
 #include "Session.h"
 #include "Theme.h"
 
+#include <QAbstractButton>
 #include <QAction>
+#include <QApplication>
 #include <QContextMenuEvent>
 #include <QDir>
 #include <QEnterEvent>
@@ -260,7 +262,7 @@ private slots:
       QCOMPARE(agent.Path, manifest);
       QVERIFY(agent.Bundled);
       QCOMPARE(agent.Enabled, expectedEnabled);
-      QCOMPARE(bool(window.findChild<QToolButton *>("NeverDAgentLauncher")),
+      QCOMPARE(bool(window.findChild<QAbstractButton *>("NeverDAgentLauncher")),
                expectedEnabled);
 
       PluginManagerDialog manager(services);
@@ -276,7 +278,7 @@ private slots:
         QVERIFY(toggle && toggle->isEnabled());
         toggle->click();
         QTRY_COMPARE(
-            bool(window.findChild<QToolButton *>("NeverDAgentLauncher")),
+            bool(window.findChild<QAbstractButton *>("NeverDAgentLauncher")),
             !expectedEnabled);
         QCOMPARE(QSettings().value(enabledKey, true).toBool(),
                  !expectedEnabled);
@@ -299,6 +301,12 @@ private slots:
     constexpr auto id = "neverd.agent-ui";
     constexpr auto hintId = "NeverDAgentLauncherHint";
     const auto manifest = QStringLiteral(TEST_AGENT_UI);
+    const auto action = [](const QList<QAction *> &actions, const char *name) {
+      for (auto *entry : actions)
+        if (entry->objectName() == QLatin1String(name))
+          return entry;
+      return static_cast<QAction *>(nullptr);
+    };
 
     {
       Session session(QStringLiteral(TEST_WORKER));
@@ -309,38 +317,56 @@ private slots:
       AnalysisPlugins plugins(session, registry, nullptr, manifest, &host);
       window.resize(1000, 700);
       window.show();
-      auto *ball = window.findChild<QToolButton *>("NeverDAgentLauncher");
+      auto *ball = window.findChild<QAbstractButton *>("NeverDAgentLauncher");
       auto *panel = window.findChild<QWidget *>("NeverDAgentChat");
-      auto *pin = window.findChild<QToolButton *>("NeverDAgentPin");
       auto *prompt = window.findChild<QPlainTextEdit *>("NeverDAgentPrompt");
-      QVERIFY(ball && panel && pin && prompt);
-      QVERIFY(ball->isVisible() && panel->isHidden() && !pin->isChecked());
+      QVERIFY(ball && panel && prompt);
+      QVERIFY(ball->isVisible() && panel->isHidden());
+      QVERIFY(!window.findChild<QToolButton *>("NeverDAgentPin"));
 
-      const auto menuEntry = [&]() -> QAction * {
+      const auto menuActions = [&]() -> QList<QAction *> {
         for (auto *entry : plugins.menu()->actions())
           if (auto *menu = entry->menu();
               menu && menu->title() == "NeverD Agent")
-            for (auto *action : menu->actions())
-              if (action->objectName() == "NeverDAgentLauncherVisibility")
-                return action;
-        return nullptr;
+            return menu->actions();
+        return {};
       };
-      auto *toggle = menuEntry();
-      QVERIFY(toggle && toggle->isChecked());
+      auto *toggle = action(menuActions(), "NeverDAgentLauncherVisibility");
+      auto *open = action(menuActions(), "NeverDAgentOpenChat");
+      QVERIFY(toggle && toggle->isChecked() && open);
+      QCOMPARE(open->shortcut(), QKeySequence(QStringLiteral("Ctrl+Alt+I")));
+
+      // Hovering previews nothing; a click opens the conversation, and it
+      // stays open when the pointer and the keyboard go elsewhere.
+      QEnterEvent enter(QPointF(10, 10), QPointF(10, 10),
+                        ball->mapToGlobal(QPoint(10, 10)));
+      QCoreApplication::sendEvent(ball, &enter);
+      QTest::qWait(350);
+      QVERIFY(panel->isHidden());
       ball->click();
-      QVERIFY(panel->isVisible() && !pin->isChecked());
-      prompt->setFocus();
-      QVERIFY(!pin->isChecked());
-      window.move(QPoint(-2000, -2000));
+      QVERIFY(panel->isVisible());
       QEvent leave(QEvent::Leave);
-      QCoreApplication::sendEvent(panel, &leave);
-      QTRY_VERIFY(panel->isHidden());
-      ball->click();
-      pin->click();
-      QVERIFY(pin->isChecked());
       QCoreApplication::sendEvent(panel, &leave);
       QTest::qWait(350);
       QVERIFY(panel->isVisible());
+      ball->click();
+      QVERIFY(panel->isHidden());
+      // The shortcut opens and focuses the conversation, takes the keyboard
+      // back to it from elsewhere, and closes it from inside.
+      window.setFocusPolicy(Qt::StrongFocus);
+      window.activateWindow();
+      QVERIFY(QTest::qWaitForWindowActive(&window));
+      open->trigger();
+      QVERIFY(panel->isVisible());
+      QTRY_COMPARE(QApplication::focusWidget(), prompt);
+      window.setFocus();
+      QTRY_COMPARE(QApplication::focusWidget(), &window);
+      open->trigger();
+      QVERIFY(panel->isVisible());
+      QTRY_COMPARE(QApplication::focusWidget(), prompt);
+      open->trigger();
+      QVERIFY(panel->isHidden());
+      QTRY_COMPARE(QApplication::focusWidget(), &window);
 
       const QPoint at = ball->rect().center();
       QContextMenuEvent context(QContextMenuEvent::Mouse, at,
@@ -348,15 +374,24 @@ private slots:
       QCoreApplication::sendEvent(ball, &context);
       auto *contextMenu = ball->findChild<QMenu *>();
       QVERIFY(contextMenu);
-      QCOMPARE(contextMenu->actions().size(), 1);
-      contextMenu->actions().first()->trigger();
+      const auto entries = contextMenu->actions();
+      QVERIFY(!entries.isEmpty());
+      entries.last()->trigger();
       contextMenu->close();
-      QVERIFY(ball->isHidden() && panel->isHidden() && !pin->isChecked());
+      QVERIFY(ball->isHidden() && panel->isHidden());
       QVERIFY(!toggle->isChecked());
       auto *hint = window.findChild<QMessageBox *>(hintId);
-      QVERIFY(hint && hint->text().contains("Show floating ball"));
+      QVERIFY(hint && hint->text().contains("Show Ask Agent button"));
       hint->accept();
       QTRY_VERIFY(!window.findChild<QMessageBox *>(hintId));
+      window.activateWindow();
+      QVERIFY(QTest::qWaitForWindowActive(&window));
+      // The shortcut still opens the conversation without the button.
+      open->trigger();
+      QVERIFY(panel->isVisible() && ball->isHidden());
+      QTRY_COMPARE(QApplication::focusWidget(), prompt);
+      open->trigger();
+      QVERIFY(panel->isHidden());
       toggle->trigger();
       QVERIFY(ball->isVisible() && panel->isHidden());
       toggle->trigger();
@@ -368,7 +403,7 @@ private slots:
       QVERIFY2(session.pluginServices().setPluginEnabled(id, false, error),
                qPrintable(error));
       QTRY_VERIFY(oldToggle.isNull());
-      QVERIFY(!menuEntry());
+      QVERIFY(menuActions().isEmpty());
     }
 
     Session session(QStringLiteral(TEST_WORKER));
@@ -377,16 +412,18 @@ private slots:
         window, session, [&] { return window.rect(); }, [](const auto &) {});
     QSettings().setValue("guiPlugins/enabled/neverd.agent-ui", true);
     session.pluginServices().restorePlugins(manifest);
-    auto *ball = window.findChild<QToolButton *>("NeverDAgentLauncher");
+    auto *ball = window.findChild<QAbstractButton *>("NeverDAgentLauncher");
     auto *panel = window.findChild<QWidget *>("NeverDAgentChat");
     QVERIFY(ball && ball->isHidden() && panel && panel->isHidden());
     const auto actions = host.menuActions(id);
-    QCOMPARE(actions.size(), 1);
-    actions.first()->trigger();
+    QCOMPARE(actions.size(), 2);
+    action(actions, "NeverDAgentLauncherVisibility")->trigger();
     QVERIFY(!ball->isHidden() && panel->isHidden());
   }
 
   void launcherDragsWithoutClickingAndKeepsPanelInBounds() {
+    const ScopedTestSettings settings("AgentLauncherDrag");
+    QVERIFY(settings.isValid());
     Session session(QStringLiteral(TEST_WORKER));
     auto &jobs = session.pluginServices().jobs();
     QWidget window;
@@ -399,10 +436,12 @@ private slots:
              qPrintable(error));
     neverd::plugin::Diagnostic diagnostic;
     QVERIFY(jobs.catalog().setEnabled("neverd.agent-ui", true, diagnostic));
-    auto *ball = window.findChild<QToolButton *>("NeverDAgentLauncher");
+    auto *ball = window.findChild<QAbstractButton *>("NeverDAgentLauncher");
     auto *panel = window.findChild<QWidget *>("NeverDAgentChat");
     QVERIFY(ball && panel);
     QTRY_VERIFY(ball->geometry().right() > 900 && ball->isVisible());
+    // The labelled button: wider than tall.
+    QVERIFY(ball->width() > ball->height());
 
     const auto drag = [&](QPoint target) {
       const auto center = ball->rect().center();
@@ -414,7 +453,7 @@ private slots:
       QCoreApplication::processEvents();
       QTest::mouseRelease(ball, Qt::LeftButton, Qt::NoModifier, center);
     };
-    QSignalSpy clicks(ball, &QToolButton::clicked);
+    QSignalSpy clicks(ball, &QAbstractButton::clicked);
     drag({45, 24});
     QTRY_COMPARE(ball->pos(), QPoint(45, 24));
     QCOMPARE(clicks.count(), 0);
@@ -425,9 +464,6 @@ private slots:
     QTRY_VERIFY(panel->isVisible() &&
                 panel->geometry().top() > ball->geometry().bottom() &&
                 window.rect().contains(panel->geometry()));
-    auto *pin = panel->findChild<QToolButton *>("NeverDAgentPin");
-    QVERIFY(pin && !pin->isChecked());
-    pin->click();
 
     drag({45, 314});
     QTRY_COMPARE(ball->pos(), QPoint(45, 314));
@@ -435,9 +471,11 @@ private slots:
     QVERIFY(panel->isVisible());
     QCOMPARE(clicks.count(), 1);
 
+    // Let go at the side, the button docks there as its mark alone.
     drag({1400, 1100});
     QTRY_VERIFY(window.rect().contains(ball->geometry()) &&
                 ball->geometry().right() > 900);
+    QTRY_COMPARE(ball->width(), ball->height());
     window.resize(500, 380);
     QTRY_VERIFY(window.rect().contains(ball->geometry()) &&
                 window.rect().contains(panel->geometry()) &&
@@ -445,6 +483,95 @@ private slots:
     QTest::mouseClick(ball, Qt::LeftButton);
     QCOMPARE(clicks.count(), 2);
     QVERIFY(!panel->isVisible());
+    // Dragged away from the side, it is the labelled button again.
+    window.resize(1000, 700);
+    drag({300, 300});
+    QTRY_VERIFY(ball->width() > ball->height());
+  }
+
+  void conversationMovesResizesAndRemembersItsPlace() {
+    const ScopedTestSettings settings("AgentChatPlace");
+    QVERIFY(settings.isValid());
+    const auto open = [&](Session &session, QWidget &window,
+                          GuiPluginUiHost &) -> QWidget * {
+      auto &jobs = session.pluginServices().jobs();
+      window.resize(1000, 700);
+      window.show();
+      QString error;
+      jobs.install(QStringLiteral(TEST_AGENT_UI), error);
+      neverd::plugin::Diagnostic diagnostic;
+      jobs.catalog().setEnabled("neverd.agent-ui", true, diagnostic);
+      auto *ball = window.findChild<QAbstractButton *>("NeverDAgentLauncher");
+      if (!ball)
+        return nullptr;
+      ball->click();
+      return window.findChild<QWidget *>("NeverDAgentChat");
+    };
+    QRect moved;
+    {
+      Session session(QStringLiteral(TEST_WORKER));
+      QWidget window;
+      GuiPluginUiHost host(
+          window, session, [&] { return window.rect(); }, [](const auto &) {});
+      auto *panel = open(session, window, host);
+      QVERIFY(panel);
+      auto *ball = window.findChild<QAbstractButton *>("NeverDAgentLauncher");
+      // First beside the button, above it.
+      QTRY_VERIFY(panel->isVisible() &&
+                  panel->geometry().bottom() < ball->geometry().top());
+      auto *title = panel->findChild<QWidget *>("NeverDAgentTitleBar");
+      QVERIFY(title);
+      const QRect before = panel->geometry();
+      // The title moves the window.
+      const QPoint grip(title->width() / 2, title->height() / 2);
+      QTest::mousePress(title, Qt::LeftButton, Qt::NoModifier, grip);
+      const QPoint target = title->mapToGlobal(grip) + QPoint(-260, -60);
+      QMouseEvent move(QEvent::MouseMove, title->mapFromGlobal(target), target,
+                       Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+      QCoreApplication::sendEvent(title, &move);
+      QCoreApplication::processEvents();
+      QTest::mouseRelease(title, Qt::LeftButton, Qt::NoModifier,
+                          title->mapFromGlobal(target));
+      QTRY_COMPARE(panel->geometry().topLeft(),
+                   before.topLeft() + QPoint(-260, -60));
+      QCOMPARE(panel->size(), before.size());
+      // Its left edge resizes it.
+      const QPoint edge(2, panel->height() / 2);
+      QTest::mousePress(panel, Qt::LeftButton, Qt::NoModifier, edge);
+      const QPoint wider = panel->mapToGlobal(edge) + QPoint(-80, 0);
+      QMouseEvent stretch(QEvent::MouseMove, panel->mapFromGlobal(wider), wider,
+                          Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+      QCoreApplication::sendEvent(panel, &stretch);
+      QCoreApplication::processEvents();
+      QTest::mouseRelease(panel, Qt::LeftButton, Qt::NoModifier,
+                          panel->mapFromGlobal(wider));
+      QTRY_COMPARE(panel->width(), before.width() + 80);
+      QCOMPARE(panel->geometry().right(), before.right() - 260);
+      moved = panel->geometry();
+      // It stays inside the workbench when the workbench shrinks.
+      window.resize(700, 500);
+      QTRY_VERIFY(window.rect().contains(panel->geometry()));
+      window.resize(1000, 700);
+      QTRY_COMPARE(panel->geometry(), moved);
+    }
+    {
+      // The next workbench opens it where it was left.
+      Session session(QStringLiteral(TEST_WORKER));
+      QWidget window;
+      GuiPluginUiHost host(
+          window, session, [&] { return window.rect(); }, [](const auto &) {});
+      auto *panel = open(session, window, host);
+      QVERIFY(panel);
+      QTRY_COMPARE(panel->geometry(), moved);
+      // A double click on its title puts it back beside the button.
+      auto *title = panel->findChild<QWidget *>("NeverDAgentTitleBar");
+      QTest::mouseDClick(title, Qt::LeftButton, Qt::NoModifier,
+                         QPoint(title->width() / 2, title->height() / 2));
+      auto *ball = window.findChild<QAbstractButton *>("NeverDAgentLauncher");
+      QTRY_VERIFY(panel->geometry() != moved &&
+                  panel->geometry().bottom() < ball->geometry().top());
+      QVERIFY(!QSettings().contains("guiPlugins/neverd.agent-ui/chatOffset"));
+    }
   }
 
   void agentChatUsesTheLiveWorkbenchAndReopensAfterHiding() {
@@ -502,14 +629,12 @@ private slots:
              qPrintable(error));
     neverd::plugin::Diagnostic diagnostic;
     QVERIFY(jobs.catalog().setEnabled("neverd.agent-ui", true, diagnostic));
-    QTRY_VERIFY(window.findChild<QToolButton *>("NeverDAgentLauncher"));
-    auto *ball = window.findChild<QToolButton *>("NeverDAgentLauncher");
+    QTRY_VERIFY(window.findChild<QAbstractButton *>("NeverDAgentLauncher"));
+    auto *ball = window.findChild<QAbstractButton *>("NeverDAgentLauncher");
     auto *panel = window.findChild<QWidget *>("NeverDAgentChat");
     QVERIFY(panel);
     QVERIFY(!panel->isVisible());
-    QEnterEvent enter(QPointF(10, 10), QPointF(10, 10),
-                      ball->mapToGlobal(QPoint(10, 10)));
-    QCoreApplication::sendEvent(ball, &enter);
+    ball->click();
     QTRY_VERIFY(panel->isVisible());
     auto *status = panel->findChild<QLabel *>("NeverDAgentStatus");
     QVERIFY(status);
@@ -524,7 +649,6 @@ private slots:
     QVERIFY(panel->height() > 0);
     window.resize(1000, 700);
 
-    ball->click();
     auto *prompt = panel->findChild<QPlainTextEdit *>("NeverDAgentPrompt");
     auto *send = panel->findChild<QPushButton *>("NeverDAgentSend");
     QVERIFY(prompt && send);
@@ -617,18 +741,17 @@ private slots:
     QPointer<QWidget> oldPanel(panel);
     QVERIFY(jobs.catalog().setEnabled("neverd.agent-ui", false, diagnostic));
     QTRY_VERIFY(oldPanel.isNull());
-    QVERIFY(!window.findChild<QToolButton *>("NeverDAgentLauncher"));
+    QVERIFY(!window.findChild<QAbstractButton *>("NeverDAgentLauncher"));
 
     // Opening a saved conversation does not read the model configuration.
     QVERIFY(write(configPath, QByteArray("invalid model configuration")));
     QTRY_VERIFY(!jobs.catalog().retiring("neverd.agent-ui"));
     QVERIFY(jobs.catalog().setEnabled("neverd.agent-ui", true, diagnostic));
-    auto *reopenedBall = window.findChild<QToolButton *>("NeverDAgentLauncher");
+    auto *reopenedBall =
+        window.findChild<QAbstractButton *>("NeverDAgentLauncher");
     auto *reopened = window.findChild<QWidget *>("NeverDAgentChat");
     QVERIFY(reopenedBall && reopened);
-    QEnterEvent reopen(QPointF(10, 10), QPointF(10, 10),
-                       reopenedBall->mapToGlobal(QPoint(10, 10)));
-    QCoreApplication::sendEvent(reopenedBall, &reopen);
+    reopenedBall->click();
     QTRY_VERIFY(reopened->isVisible());
     QTRY_VERIFY(reopened->findChild<QWidget *>("NeverDAgentReply"));
     auto *previousReply = reopened->findChild<QWidget *>("NeverDAgentReply");
@@ -637,7 +760,6 @@ private slots:
     QVERIFY(savedText &&
             savedText->toPlainText().contains("Verified the listing."));
     QCOMPARE(model.Requests.size(), 5);
-    reopenedBall->click();
     QVERIFY(reopened->isVisible());
     auto *savedExecution =
         previousReply->findChild<QToolButton *>("NeverDAgentExecutionToggle");

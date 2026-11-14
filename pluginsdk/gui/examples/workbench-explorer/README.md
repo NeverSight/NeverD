@@ -24,7 +24,7 @@ python pluginsdk/gui/examples/workbench-explorer/prepare.py E:/plugins/workbench
 On Unix replace the destination with a writable external directory. The copy
 contains the provider, helper, two manifests, an `icons/` directory and this walkthrough. The manifests
 pin the interpreter used for preparation. Open the copied `plugin.json` through
-**Plugins → Import process plugin…**. The source `plugin.json` can also run
+**Plugins → Import plugin…**. The source `plugin.json` can also run
 directly when Python 3.8+ is on PATH; it finds the helper in the SDK tree without
 requiring `PYTHONPATH`.
 

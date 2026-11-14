@@ -10,7 +10,7 @@ Read the [process-plugin SDK contract](../../docs/process-plugin-sdk.md), then r
 
 `GuiPluginUi.h` declares the in-process native view interface
 (`neverd.gui-ui.v1`) instead. [GUI plugins](../../docs/gui-plugins.md) describes
-its contexts, including the optional `MenuContext` and `ThemeContext`.
+its contexts, including the optional `MenuContext` and `AppearanceContext`.
 
 `neverd_gui_plugin.py` is a Python 3.8+ standard-library helper for protocol v1:
 
@@ -32,7 +32,7 @@ if __name__ == "__main__":
 
 Copy the helper beside your provider or package it with your own application.
 Create a manifest with an explicit executable/argument list, declare actions
-and queries, and import it through **Plugins → Import process plugin…**.
+and queries, and import it through **Plugins → Import plugin…**.
 Other languages can implement the same framed protocol directly.
 
 String parameter declarations can include `maxLength` (0–262144 Unicode code

@@ -9,6 +9,7 @@
 
 #include <QColor>
 #include <QJsonObject>
+#include <QString>
 #include <QtPlugin>
 #include <functional>
 
@@ -22,10 +23,11 @@ struct Placement {
   QString Anchor;
 };
 
-/// Set this dynamic property on a mounted, unanchored widget to request a
-/// QPoint top-left in workbench coordinates. The host constrains the position
-/// to the workbench and places any anchored views next to it. Clear the
-/// property to return to the original corner.
+/// Set this dynamic property on a mounted widget to request a QPoint top-left
+/// in workbench coordinates, as when a person drags the view. The host
+/// constrains the position to the workbench. An anchored view leaves its
+/// anchor while the property is set, and views anchored to a moved view
+/// follow it. Clear the property to return to the original placement.
 inline constexpr char ViewPositionProperty[] = "neverdViewPosition";
 
 /// Workbench-thread API, valid for one component activation. Qt and C++ ABI
@@ -62,21 +64,27 @@ protected:
   ~MenuContext() = default;
 };
 
-/// Optional workbench theme capability. Query it with dynamic_cast from
+/// Optional workbench appearance capability. Query it with dynamic_cast from
 /// Context. A view that styles or paints itself takes its colors from the
 /// workbench's roles, named as in the workbench's chrome color table
-/// ("Menu", "Border", "SecondaryText", "ButtonPrimary", ...), instead of
+/// ("Menu", "Border", "SecondaryText", "ButtonPrimary", ...) instead of
 /// choosing its own, so it follows the light, dark and high contrast themes.
 /// Standard Qt controls need nothing: the workbench's style already draws
 /// them. The application palette changes with the theme, so a view reads the
 /// roles again on QEvent::ApplicationPaletteChange.
-class ThemeContext {
+///
+/// A component that ships its own translations loads the catalog for
+/// language() and loads it again on QEvent::LanguageChange, which the
+/// workbench sends to every widget when its interface language changes.
+class AppearanceContext {
 public:
   /// The role's color in the current theme; invalid for an unknown role.
   virtual QColor themeColor(const QString &role) const = 0;
+  /// The workbench's interface language: "en", "zh-CN", "ar", ...
+  virtual QString language() const = 0;
 
 protected:
-  ~ThemeContext() = default;
+  ~AppearanceContext() = default;
 };
 
 class Module {

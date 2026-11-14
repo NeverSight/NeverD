@@ -7,6 +7,7 @@
 #ifndef NEVERD_PLUGINS_AGENT_UI_CHATTRANSCRIPT_H
 #define NEVERD_PLUGINS_AGENT_UI_CHATTRANSCRIPT_H
 
+#include <QCoreApplication>
 #include <QList>
 #include <QScrollArea>
 #include <functional>
@@ -22,6 +23,8 @@ namespace neverd::gui::pluginui {
 inline constexpr int BubbleBorderWidth = 1;
 
 class ChatTranscript final : public QScrollArea {
+  Q_DECLARE_TR_FUNCTIONS(neverd::gui::pluginui::ChatTranscript)
+
 public:
   using OpenLink = std::function<void(const QUrl &)>;
   using RequestExecution = std::function<void(const QString &)>;
@@ -31,6 +34,10 @@ public:
   void replaceTail(qsizetype first, const QJsonArray &entries);
   void updateExecution(const QString &runId, qsizetype first,
                        const QJsonArray &records);
+  bool empty() const { return Bubbles.isEmpty(); }
+
+protected:
+  void changeEvent(QEvent *event) override;
 
 private:
   class Bubble;

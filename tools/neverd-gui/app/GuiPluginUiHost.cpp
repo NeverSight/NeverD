@@ -7,12 +7,14 @@
 #include "GuiPluginUiHost.h"
 
 #include "GuiPluginUi.h"
+#include "Language.h"
 #include "PluginServices.h"
 #include "Session.h"
 #include "Theme.h"
 #include "mcp/GuiSessionBroker.h"
 
 #include <QAction>
+#include <QCoreApplication>
 #include <QDir>
 #include <QEvent>
 #include <QFileInfo>
@@ -73,7 +75,9 @@ QRect adjacentSpace(QRect area, const QRect &anchor, Qt::Edge edge, int gap) {
 class GuiPluginUiHost::Binding final : public QObject,
                                        public pluginui::Context,
                                        public pluginui::MenuContext,
-                                       public pluginui::ThemeContext {
+                                       public pluginui::AppearanceContext {
+  Q_DECLARE_TR_FUNCTIONS(neverd::gui::GuiPluginUiHost::Binding)
+
 public:
   struct View {
     QString Id;
@@ -242,6 +246,7 @@ public:
   QColor themeColor(const QString &role) const override {
     return Theme::instance().chrome(role);
   }
+  QString language() const override { return currentLanguage(); }
 
   bool navigate(const QString &address, const QJsonObject &binding) override {
     if (!Active || !sameProject(captureContext(), binding) ||
@@ -406,12 +411,13 @@ void GuiPluginUiHost::layoutViews() {
       const auto desired = (hint.isValid() ? hint : widget->size())
                                .expandedTo(widget->minimumSizeHint())
                                .expandedTo(QSize(1, 1));
-      const auto *anchor = binding->find(view.Place.Anchor);
-      const auto requested = view.Place.Anchor.isEmpty()
-                                 ? requestedPosition(*widget)
-                                 : std::nullopt;
-      const bool movingAnchor = anchor && anchor->Place.Anchor.isEmpty() &&
-                                requestedPosition(*anchor->Widget).has_value();
+      // A view the person moved stands where they put it, apart from its
+      // anchor; views anchored to it follow.
+      const auto requested = requestedPosition(*widget);
+      const auto *anchor =
+          requested ? nullptr : binding->find(view.Place.Anchor);
+      const bool movingAnchor =
+          anchor && requestedPosition(*anchor->Widget).has_value();
       QRect bounds = area;
       QRect anchorRect;
       Qt::Edge side = bottom ? Qt::TopEdge : Qt::BottomEdge;

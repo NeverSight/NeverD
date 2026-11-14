@@ -67,10 +67,11 @@ component requires the workbench.
   that creates a child of the provided parent. The host places and destroys
   the root widget. Use `sizeHint()` for the preferred size and Qt's
   `show()`, `hide()` and `close()` to manage visibility and release.
-- A plugin can set the `ViewPositionProperty` dynamic property on an
-  unanchored view to a `QPoint` in workbench coordinates. The host fits the
-  view within the workbench and places its anchored views beside it. Clear
-  the property to return the view to its original corner.
+- A plugin can set the `ViewPositionProperty` dynamic property on a view to
+  a `QPoint` in workbench coordinates, as when a person drags it. The host fits
+  the view within the workbench. An anchored view leaves its anchor while the
+  property is set, and views anchored to a moved view follow it. Clear the
+  property to return the view to its original place.
 - `captureContext` returns the active workbench selection and project identity.
   `watchContext` scopes its observer to the activation and the receiving
   `QObject`. Use `attachSession` for a private read-only MCP connection and
@@ -79,12 +80,17 @@ component requires the workbench.
   During activation, `mountMenuAction` adds a native Qt action under
   **Plugins → package name**. The factory gives the action the supplied parent.
   The host keeps the action for that component activation.
-- A component that styles or paints its views can query `ThemeContext` the
-  same way. `themeColor` returns a workbench color role by its chrome color
-  name (`Menu`, `Border`, `SecondaryText`, `ButtonPrimary`, ...) in the current
-  light, dark or high contrast theme. Standard Qt controls need nothing: the
-  workbench style already draws them. Read the roles again on
+- A component that styles or paints its views can query `AppearanceContext`
+  the same way. `themeColor` returns a workbench color role by its chrome
+  color name (`Menu`, `Border`, `SecondaryText`, `ButtonPrimary`, ...) in the
+  current light, dark or high contrast theme. Standard Qt controls need
+  nothing: the workbench style already draws them. Read the roles again on
   `QEvent::ApplicationPaletteChange`, which a theme change sends.
+- `language` returns the workbench's interface language (`en`, `zh-CN`,
+  `ar`, ...). A component that ships its own Qt catalogs loads the one for
+  that language and loads it again on `QEvent::LanguageChange`, which every
+  widget receives when the workbench's language changes. The workbench lays
+  out right-to-left languages mirrored, and so does a view's own layout.
 - Closing a project or disabling the plugin retires its NPH component and
   destroys its views. A project switch creates new view instances. Restart
   the workbench before replacing a loaded module binary.

@@ -27,6 +27,8 @@ public:
   /// Clear.
   QMenu *createLogMenu();
   void focusCommandLine();
+  /// The command line along the window's foot.
+  QWidget *commandLine() const;
   /// Run one command line as if typed (echoed to the log).
   void run(const QString &line);
   /// Supplies the current address for `.`/`here` and command defaults.

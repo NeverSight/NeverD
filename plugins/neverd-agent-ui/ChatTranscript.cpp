@@ -129,6 +129,13 @@ public:
 
   bool hasRecords() const { return !Records.isEmpty(); }
 
+  void retranslate() {
+    Tree->setAccessibleName(ChatTranscript::tr("Tool execution records"));
+    for (qsizetype i = 0; i < Records.size(); ++i)
+      describe(int(i));
+    refresh();
+  }
+
   void setRunning(bool running) {
     if (Running == running)
       return;
@@ -152,26 +159,38 @@ public:
       } else {
         Records[index] = record;
       }
-      auto *item = Tree->topLevelItem(int(index));
-      const auto title = description(record);
-      const auto evidence = record.value("evidenceId").toString();
-      const auto error = record.value("error").toString();
-      item->setText(0, title);
-      item->setText(1, statusText(record));
-      item->setData(0, Qt::UserRole, evidence);
-      auto details = title.toHtmlEscaped();
-      if (!error.isEmpty())
-        details += QStringLiteral("<br>") + error.toHtmlEscaped();
-      if (!evidence.isEmpty())
-        details += QStringLiteral("<br>") +
-                   ChatTranscript::tr("Activate this row to open its evidence.")
-                       .toHtmlEscaped();
-      item->setToolTip(0, QStringLiteral("<qt>%1</qt>").arg(details));
+      describe(int(index));
     }
     refresh();
   }
 
+protected:
+  void changeEvent(QEvent *event) override {
+    QWidget::changeEvent(event);
+    if (event->type() == QEvent::LanguageChange)
+      retranslate();
+  }
+
 private:
+  void describe(int index) {
+    const auto &record = Records[index];
+    auto *item = Tree->topLevelItem(index);
+    const auto title = description(record);
+    const auto evidence = record.value("evidenceId").toString();
+    const auto error = record.value("error").toString();
+    item->setText(0, title);
+    item->setText(1, statusText(record));
+    item->setData(0, Qt::UserRole, evidence);
+    auto details = title.toHtmlEscaped();
+    if (!error.isEmpty())
+      details += QStringLiteral("<br>") + error.toHtmlEscaped();
+    if (!evidence.isEmpty())
+      details += QStringLiteral("<br>") +
+                 ChatTranscript::tr("Activate this row to open its evidence.")
+                     .toHtmlEscaped();
+    item->setToolTip(0, QStringLiteral("<qt>%1</qt>").arg(details));
+  }
+
   static QString description(const QJsonObject &record) {
     QStringList parts;
     for (const auto *field : {"label", "name", "address"})
@@ -281,6 +300,13 @@ public:
 
   const QString &runId() const { return RunId; }
 
+  void retranslate() {
+    Speaker->setText(User ? ChatTranscript::tr("You")
+                          : ChatTranscript::tr("Agent"));
+    Displayed.clear();
+    refreshBody();
+  }
+
   void updateExecution(qsizetype first, const QJsonArray &records) {
     if (Log) {
       Log->applyRows(first, records);
@@ -363,6 +389,15 @@ ChatTranscript::ChatTranscript(OpenLink openLink, RequestExecution request,
 int ChatTranscript::messageWidth() const {
   const auto margins = Messages->contentsMargins();
   return viewport()->width() - margins.left() - margins.right();
+}
+
+void ChatTranscript::changeEvent(QEvent *event) {
+  QScrollArea::changeEvent(event);
+  if (event->type() != QEvent::LanguageChange)
+    return;
+  setAccessibleName(tr("Conversation"));
+  for (auto *bubble : Bubbles)
+    bubble->retranslate();
 }
 
 bool ChatTranscript::viewportEvent(QEvent *event) {

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   project(NeverDAgentUi LANGUAGES CXX)
-  find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets)
+  find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets LinguistTools)
 endif()
 
 set(agent_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/neverd-agent")
@@ -14,6 +14,15 @@ target_compile_features(neverd-agent-ui PRIVATE cxx_std_20)
 target_include_directories(neverd-agent-ui PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../pluginsdk/gui" "${agent_dir}")
 target_link_libraries(neverd-agent-ui PRIVATE Qt6::Widgets)
+# The conversation's own catalogs, loaded for the workbench's language.
+file(GLOB agent_ui_translations CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/i18n/*.ts")
+if(agent_ui_translations)
+  qt_add_translations(neverd-agent-ui TS_FILES ${agent_ui_translations}
+    SOURCE_TARGETS neverd-agent-ui RESOURCE_PREFIX /neverd-agent-ui/i18n
+    LUPDATE_TARGET neverd-agent-ui_lupdate
+    LRELEASE_TARGET neverd-agent-ui_lrelease)
+endif()
 if(APPLE)
   set_property(TARGET neverd-agent-ui PROPERTY INSTALL_RPATH
     "@executable_path/../Frameworks")
