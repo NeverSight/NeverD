@@ -378,12 +378,12 @@ MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
                          ? QRect(center->mapTo(this, QPoint{}), center->size())
                          : contentsRect();
         // Floating plugin views keep off the command line when it runs
-        // along the foot of the workbench, under their corner.
+        // along the foot of the workbench, under either bottom corner.
         if (const auto *line = output_ ? output_->commandLine() : nullptr;
             line && line->isVisible()) {
           const QRect row(line->mapTo(this, QPoint{}), line->size());
           if (row.bottom() >= area.bottom() - row.height() / 2 &&
-              row.right() >= area.right() - row.height() / 2)
+              row.width() >= area.width() / 2)
             area.setBottom(std::min(area.bottom(), row.top() - 1));
         }
         return area;

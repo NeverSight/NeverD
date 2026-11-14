@@ -230,7 +230,11 @@ Surface {
                     ActionButton { glyph: "plus"; hint: qsTr("Add context… · @"); onClicked: conversation.contextRequested() }
                     ChoiceField {
                         id: scope
-                        Layout.preferredWidth: Math.min(150, conversation.width / 3)
+                        // As wide as the chosen scope's name, so a longer
+                        // language does not cut it, within a third of the row.
+                        TextMetrics { id: scopeText; font: scope.font; text: scope.displayText }
+                        Layout.preferredWidth: Math.min(Math.ceil(scopeText.width) + scope.leftPadding + scope.rightPadding + 4,
+                                                        conversation.width / 3)
                         textRole: "name"
                         valueRole: "id"
                         model: [{id: "", name: qsTr("Whole project")}].concat(conversation.backend.activeProject.objects || [])
@@ -284,6 +288,7 @@ Surface {
             visible: conversation.backend.activeId.length > 0 && conversation.backend.previewTitle.length === 0
             Layout.fillWidth: true
             Label {
+                id: composerStatus
                 text: conversation.approvalVisible ? qsTr("Waiting for approval")
                       : conversation.backend.running ? qsTr("Analyzing · Object progress is in the sidebar.")
                       : qsTr("Conversations and evidence are saved in the current project.")
@@ -292,9 +297,9 @@ Surface {
                 Layout.fillWidth: true
                 elide: Text.ElideRight
             }
-            // The key hint gives way first when the column narrows.
+            // The key hint gives way first when both do not fit.
             Label {
-                visible: conversation.width >= 760
+                visible: composerStatus.implicitWidth + implicitWidth + parent.spacing <= parent.width
                 text: qsTr("Enter to send · Shift+Enter for a new line"); color: Theme.quiet; font.pointSize: Theme.smallPointSize
             }
         }

@@ -124,7 +124,7 @@ public:
     // so the workbench does not fill it with the checked-tool color. Keyboard
     // focus frames it; a click leaves no frame behind.
     Toggle->setFocusPolicy(Qt::TabFocus);
-    Toggle->setArrowType(Qt::RightArrow);
+    Toggle->setArrowType(collapsedArrow());
     Toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     layout->addWidget(Toggle, 0, Qt::AlignLeft);
     Latest = new QLabel(this);
@@ -147,7 +147,7 @@ public:
 
     connect(Toggle, &QToolButton::clicked, this, [this, request] {
       Expanded = !Expanded;
-      Toggle->setArrowType(Expanded ? Qt::DownArrow : Qt::RightArrow);
+      Toggle->setArrowType(Expanded ? Qt::DownArrow : collapsedArrow());
       if (Expanded && !Received)
         request(RunId);
       refresh();
@@ -203,9 +203,17 @@ protected:
     QWidget::changeEvent(event);
     if (event->type() == QEvent::LanguageChange)
       retranslate();
+    else if (event->type() == QEvent::LayoutDirectionChange && !Expanded)
+      Toggle->setArrowType(collapsedArrow());
   }
 
 private:
+  // A closed disclosure points along the reading direction.
+  Qt::ArrowType collapsedArrow() const {
+    return layoutDirection() == Qt::RightToLeft ? Qt::LeftArrow
+                                                : Qt::RightArrow;
+  }
+
   void describe(int index) {
     const auto &record = Records[index];
     auto *item = Tree->topLevelItem(index);

@@ -35,6 +35,13 @@ Item {
         clock: "M21 12A9 9 0 1 1 3 12A9 9 0 1 1 21 12 M12 7V12L15 14",
         link: "M10 14L14 10 M8.5 12.5L6.5 14.5Q4 17 6.5 19.5Q9 22 11.5 19.5L13.5 17.5 M10.5 6.5L12.5 4.5Q15 2 17.5 4.5Q20 7 17.5 9.5L15.5 11.5"
     })
+    // Glyphs that point along the reading direction turn around in a
+    // right-to-left layout.
+    readonly property bool directional: name === "chevron_right" || name === "forward"
+    transform: Scale {
+        origin.x: icon.width / 2
+        xScale: icon.directional && icon.LayoutMirroring.enabled ? -1 : 1
+    }
     Shape {
         width: 24; height: 24
         scale: Math.min(icon.width, icon.height) / 24
