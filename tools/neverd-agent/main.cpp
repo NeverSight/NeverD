@@ -17,12 +17,15 @@
 #include "platform/AppPaths.h"
 
 #include <QCommandLineParser>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFontDatabase>
 #include <QGuiApplication>
 #include <QIcon>
 #include <QImage>
+#include <QLocalServer>
+#include <QLocalSocket>
 #include <QMutex>
 #include <QMutexLocker>
 #include <QQmlApplicationEngine>
@@ -52,6 +55,22 @@ void logMessage(QtMsgType type, const QMessageLogContext &,
   std::fprintf(stderr, "%s\n", bytes.constData());
   if (type == QtFatalMsg)
     std::abort();
+}
+} // namespace
+
+namespace {
+/// Bring \p window forward for a second start's \p request, "activate"
+/// and the token its launcher gave it. Qt's Wayland shell reads the token at
+/// the next activation; without one the compositor only asks for attention.
+void activateFrom(QWindow &window, const QByteArray &request) {
+  const QByteArray token = request.trimmed().mid(qsizetype(sizeof("activate")));
+  if (!token.isEmpty())
+    qputenv("XDG_ACTIVATION_TOKEN", token);
+  if (window.windowStates() & Qt::WindowMinimized)
+    window.showNormal();
+  window.show();
+  window.raise();
+  window.requestActivate();
 }
 } // namespace
 
@@ -100,6 +119,31 @@ int main(int argc, char **argv) {
   parser.process(app);
 
   const QString directory = neverd::agent::agentHome(parser.value("data-dir"));
+  // One window per data directory: a second start brings the first one
+  // forward instead of failing on the directory's lock.
+  const QString instanceName =
+      QStringLiteral("neverd-agent-") +
+      QString::fromLatin1(QCryptographicHash::hash(directory.toUtf8(),
+                                                   QCryptographicHash::Sha256)
+                              .toHex()
+                              .left(24));
+  if (!parser.isSet("capture")) {
+    QLocalSocket running;
+    running.connectToServer(instanceName);
+    if (running.waitForConnected(neverd::agent::kInstanceProbeMs)) {
+      // A Wayland compositor lets the running window take the focus only
+      // with the activation token the launcher gave this start.
+      running.write("activate " + qgetenv("XDG_ACTIVATION_TOKEN") + "\n");
+      running.waitForBytesWritten(neverd::agent::kInstanceProbeMs);
+      return 0;
+    }
+  }
+  QLocalServer instances;
+  instances.setSocketOptions(QLocalServer::UserAccessOption);
+  if (!parser.isSet("capture") && !instances.listen(instanceName)) {
+    QLocalServer::removeServer(instanceName);
+    instances.listen(instanceName);
+  }
   QString startupError;
   LogPath = QDir(directory).filePath("agent.log");
   qInstallMessageHandler(logMessage);
@@ -133,6 +177,19 @@ int main(int argc, char **argv) {
   if (!window)
     return 1;
   frame.attach(*window);
+  QObject::connect(
+      &instances, &QLocalServer::newConnection, window, [&instances, window] {
+        while (auto *peer = instances.nextPendingConnection()) {
+          QObject::connect(peer, &QLocalSocket::disconnected, peer,
+                           &QObject::deleteLater);
+          QObject::connect(peer, &QLocalSocket::readyRead, window,
+                           [peer, window] {
+                             if (!peer->canReadLine())
+                               return;
+                             activateFrom(*window, peer->readLine());
+                           });
+        }
+      });
   // Right-to-left languages mirror every item, dialogs and menus included,
   // from the window's root, as the workbench mirrors its widgets.
   const auto mirror = [window, &appearance] {

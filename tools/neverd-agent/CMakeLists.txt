@@ -64,7 +64,8 @@ qt_add_executable(neverd-agent WIN32 MACOSX_BUNDLE
 target_compile_features(neverd-agent PRIVATE cxx_std_20)
 target_include_directories(neverd-agent PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_include_directories(neverd-agent PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../neverd-gui/app")
-target_link_libraries(neverd-agent PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Svg)
+target_link_libraries(neverd-agent PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Svg
+  Qt6::Network)
 add_dependencies(neverd-agent neverd-agent-cli)
 if(MSVC)
   target_compile_options(neverd-agent PRIVATE /utf-8 /W4)

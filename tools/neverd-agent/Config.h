@@ -22,6 +22,8 @@ inline constexpr qint64 kMaxPreviewBytes = 256 * 1024;
 inline constexpr qint64 kMaxExecutionResultBytes = 8 * 1024;
 inline constexpr int kDraftSaveDelayMs = 500;
 inline constexpr int kCaptureSettleMs = 200;
+// How long a second start waits to reach the window already running.
+inline constexpr int kInstanceProbeMs = 500;
 inline constexpr int kSideChatTitleCharacters = 24;
 inline constexpr qint64 kDefaultGoalTokens = 100000;
 // An ordinary question stops once its model calls have used this many tokens,
