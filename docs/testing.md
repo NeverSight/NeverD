@@ -24072,11 +24072,15 @@ The `mips64extract_*` selections cover classic DSP64 extraction, insertion,
 signed accumulator shifts and DMTHLIP in both byte orders. The `mixed`
 selection retains both word and doubleword extraction helpers in one function.
 Each original return and DSPControl value must match independent integer
-arithmetic before the two C outputs are compiled at O0/O2. These original-machine
-cases deliberately avoid the pinned reference's signed-LO and boundary-shift
-defects; `MIPSDSP64.*` separately tests all encoded counts, positions, banks,
-overlaps and unpredictable results with APInt expectations. A passing source
-comparison is not original-machine qualification of those excluded boundaries.
+arithmetic before the two C outputs are compiled at O0/O2. The
+`mips64boundary_*` selections additionally cover zero/one/32/63 extraction
+counts, full-width and HI-only fields, and the signed -64 shift. Both groups
+include negative LO values and use the corrected pinned Unicorn helper.
+`MIPSDSP64.*` separately tests all encoded counts, positions, banks, overlaps
+and unpredictable results with APInt expectations. The fork's
+`test_mips64_dsp_extract` exercises all register counts and all positions on
+AC0 with independent bit-at-a-time expectations in both byte orders. These
+native checks do not qualify nonzero-bank transfers or hardware execution.
 
 Run `micro-dsp-simulator.py` with `--assembler`, `--linker`, `--bench` and
 `--simulator` to execute the physical microMIPS DSP and DSPR2 instructions.

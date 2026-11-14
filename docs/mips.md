@@ -306,11 +306,14 @@ in generated C to bound its source domain; this is not a guest exception.
 APInt unit tests cover all counts, all 128 positions and four accumulator
 banks in both byte orders. GNU-assembled source round trips separately execute
 the original forms and both C views, including mixed-width extraction helpers.
-The pinned Unicorn legacy DEXTR helper shifts signed LO, and its DEXTP helper
-has undefined host shifts at boundary positions. Original-machine comparisons
-therefore use nonnegative LO and nonboundary counts; those comparisons do not
-qualify the independent arithmetic boundary tests. Rounded/saturating legacy
-DEXTR and signed DMADD/DMSUB still need separate coverage. In n64 DSPControl,
+The pinned Unicorn fixes legacy DEXTR's signed-LO shift, DEXTP's undefined
+host shifts and the DSHILO -64 endpoint. Original-machine comparisons cover
+negative LO, zero and full-width fields, fields wholly in HI, and the -64
+shift through both C views. Its dedicated AC0 regression constructs expected
+bits independently for every register count and position in both byte orders.
+The native boundary checks do not qualify nonzero-bank transfers, hardware,
+or the remaining rounded/saturating legacy DEXTR and signed DMADD/DMSUB
+semantics. In n64 DSPControl,
 POS has seven bits and CCOND has eight. RDDSP zero-extends selected bits.
 See the register model and revision history in the
 [MIPS64 DSP Module, revision 3.02](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00375-2B-MIPS64DSP-AFP-03.02.pdf).

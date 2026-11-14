@@ -13,8 +13,32 @@ from mips_validation_artifacts import MIPSValidationArtifacts, digest
 
 ASE = runpy.run_path(str(Path(__file__).with_name("ase-roundtrip.py")))
 
+DSP64_BOUNDARIES = {
+    f"mips64boundary_{op.replace('.', '_')}_{str(count).replace('-', 'n')}_{pos}_{half}":
+        (op, count, pos, half)
+    for op, count, pos, half in (
+        [(op, 1, 0, "value") for op in ("dextr.w", "dextr.l")]
+        + [(op, count, 0, "value") for op in ("dextrv.w", "dextrv.l")
+           for count in (0, 1, 32, 63)]
+        + [(op, 31, pos, "value") for op in ("dextp", "dextpdp")
+           for pos in (31, 95)]
+        + [(op, 63, pos, "value") for op in ("dextpv", "dextpdpv")
+           for pos in (63, 94, 127)]
+        + [(op, -64, 0, half) for op in ("dshilo", "dshilov")
+           for half in ("hi", "lo")]
+    )
+}
+
 
 def kernels():
+    for name, (op, count, pos, half) in DSP64_BOUNDARIES.items():
+        setup = f"mthi $4\nmtlo $5\ndaddiu $6,$0,{count}\n"
+        if op.startswith("dextp"):
+            setup += f"ori $7,$0,{pos}\nwrdsp $7,1\n"
+        operand = "$6" if "v" in op else str(count)
+        operation = (f"{op} $ac0,{operand}\nmf{half} $2" if half != "value" else
+                     f"{op} $2,$ac0,{operand}")
+        yield name, "mips64r2", "dsp", setup + operation
     for name, cpu in (("mips64", "mips64r2"), ("micromips", "mips32r2")):
         yield name + "dsp", cpu, "dsp", "subu.qb $2,$4,$5"
         yield name + "dspr2", cpu, "dspr2", "adduh_r.qb $2,$4,$5"
@@ -125,13 +149,9 @@ def inputs(name, bits):
         for a in (0, 1, -1, 0x11223344, 0x8000000000000001)
         for b in (0, 7, -1, 0xA5A533FF)
     ]
-    if name.startswith("mips64extract_"):
-        # The pinned original-machine helper has independent boundary defects:
-        # DEXTR shifts a signed LO and DEXTP shifts by 64 for boundary positions.
-        # This execution corpus uses a nonnegative LO and nonboundary count;
-        # APInt unit tests separately cover all counts and all 128 positions.
-        return [(a, b) for a in (0, 1, 0x123456789abcdef0, 1 << 63, (1 << 64) - 1)
-                for b in (0, 1, 0x123456789abcdef0, (1 << 63) - 1)]
+    if name.startswith(("mips64extract_", "mips64boundary_")):
+        values = (0, 1, 0x123456789abcdef0, (1 << 63) - 1, 1 << 63, (1 << 64) - 1)
+        return [(a, b) for a in values for b in values]
     if name.startswith("mips64acc_"):
         vectors = [
             (a, b)
@@ -415,6 +435,27 @@ def run(args, artifacts):
                 oracle = directory / "classic.elf"
                 assemble(oracle, False)
             wanted = observe(oracle, bits, little, feature, cases)
+            if name in DSP64_BOUNDARIES:
+                op, count, pos, half = DSP64_BOUNDARIES[name]
+                mask = (1 << 64) - 1
+                for i, ((a, b), actual) in enumerate(zip(cases, wanted, strict=True)):
+                    acc = (a << 64) | b
+                    control = 0x01004005 if i % 2 else 0
+                    if op.startswith("dextr"):
+                        value = (acc >> count) & mask
+                        if op.endswith(".w"):
+                            value &= 0xffffffff
+                            if value & (1 << 31):
+                                value |= mask ^ 0xffffffff
+                    elif op.startswith("dextp"):
+                        value = (acc >> (pos - count)) & ((1 << (count + 1)) - 1)
+                        control = (control & ~0x407f) | (
+                            (pos - count - 1) & 127 if "dp" in op else pos)
+                    else:
+                        shifted = acc >> count if count >= 0 else acc << -count
+                        value = (shifted >> (64 if half == "hi" else 0)) & mask
+                    if actual != (value, control):
+                        raise ValueError(f"{name}: original {actual}, independent {(value, control)}")
             if name.startswith("mips64extract_"):
                 mask = (1 << 64) - 1
                 instruction = name.removeprefix("mips64extract_")
