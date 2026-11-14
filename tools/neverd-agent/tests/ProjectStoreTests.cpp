@@ -46,6 +46,16 @@ private slots:
       QVERIFY2(!isContainedRelativePath(QString::fromLatin1(outside)), outside);
   }
 
+  void agentStateIsPrivateInAnyLetterCase() {
+    for (const auto *state :
+         {".nd-agent", ".nd-agent/project.json", ".ND-Agent/project.json",
+          ".nd-agent\\memory.json", "./.Nd-Agent/x", " .nd-agent/x"})
+      QVERIFY2(isAgentStatePath(QString::fromLatin1(state)), state);
+    for (const auto *other :
+         {"notes/.nd-agent/x", ".nd-agent-notes/x", "reports/a.md", "", "."})
+      QVERIFY2(!isAgentStatePath(QString::fromLatin1(other)), other);
+  }
+
   void helpersFollowTheConfiguredBundleAndInstallation() {
     QTemporaryDir workspace;
     const QString bundle = workspace.filePath("NeverD with spaces.app");

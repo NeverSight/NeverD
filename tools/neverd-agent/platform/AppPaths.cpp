@@ -53,6 +53,15 @@ bool isContainedRelativePath(const QString &relative) {
   return true;
 }
 
+bool isAgentStatePath(const QString &relative) {
+  QString path = relative.trimmed();
+  path.replace(QLatin1Char('\\'), QLatin1Char('/'));
+  for (const auto &step : path.split(QLatin1Char('/'), Qt::SkipEmptyParts))
+    if (step != QLatin1String("."))
+      return step.compare(QLatin1String(".nd-agent"), Qt::CaseInsensitive) == 0;
+  return false;
+}
+
 QString agentHome(const QString &overridePath) {
   const auto configured = overridePath.isEmpty()
                               ? qEnvironmentVariable("NEVERD_AGENT_HOME")

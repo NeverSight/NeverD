@@ -23,6 +23,9 @@
 #include <QTemporaryDir>
 #include <QUuid>
 #include <QtTest>
+#ifndef Q_OS_WIN
+#include <sys/stat.h>
+#endif
 
 using namespace neverd::agent;
 namespace {
@@ -452,6 +455,72 @@ private slots:
     QVERIFY(done[0][1].toString().contains("Injected audit failure"));
     QCOMPARE(requests, 1);
     QCOMPARE(effects, 0);
+  }
+  void projectFileReadsKeepOutOfStateAndSpecialFiles() {
+    Server server;
+    QTemporaryDir directory;
+    QString error;
+    auto project =
+        ProjectStore::create(directory.filePath("project"), "Files", error);
+    QVERIFY2(project.has_value(), qPrintable(error));
+    QFile object(directory.filePath("object.bin"));
+    QVERIFY(object.open(QIODevice::WriteOnly));
+    object.write("object");
+    object.close();
+    QVERIFY(ProjectStore::addObject(
+        *project, ProjectStore::fingerprint(object.fileName()), error));
+    const QDir root(project->Directory);
+    const auto write = [&](const QString &relative, const QByteArray &bytes) {
+      QVERIFY(QFileInfo(root.filePath(relative)).dir().mkpath("."));
+      QFile file(root.filePath(relative));
+      QVERIFY(file.open(QIODevice::WriteOnly));
+      file.write(bytes);
+    };
+    write("notes.md", "visible notes");
+    // The state folder in another letter case: on Windows and macOS this
+    // is .nd-agent itself.
+    write(".ND-Agent/secret.txt", "private state");
+#ifndef Q_OS_WIN
+    QCOMPARE(
+        ::mkfifo(QFile::encodeName(root.filePath("pipe")).constData(), 0600),
+        0);
+#endif
+    ModelProfile profile;
+    profile.Model = "mock";
+    profile.BaseUrl = server.url();
+    ResearchRunOptions options;
+    options.Budget = std::make_shared<RunBudget>();
+    ResearchRuntime runtime;
+    QSignalSpy done(&runtime, &ResearchRuntime::finished);
+    QVERIFY(runtime.start(*project, profile, "", "", "Read the notes", "", {},
+                          error, options));
+    QTRY_COMPARE(server.Requests.size(), 1);
+    QJsonArray calls{
+        toolCall("read_project_file", "state",
+                 {{"path", ".ND-Agent/secret.txt"}}),
+        toolCall("read_project_file", "notes", {{"path", "notes.md"}})};
+#ifndef Q_OS_WIN
+    calls.append(toolCall("read_project_file", "pipe", {{"path", "pipe"}}));
+#endif
+    server.respond(0, response(calls));
+    QTRY_COMPARE_WITH_TIMEOUT(server.Requests.size(), 2, 10000);
+    QHash<QString, QJsonObject> results;
+    for (const auto &value : server.Requests[1]["input"].toArray()) {
+      const auto item = value.toObject();
+      if (item["type"] == "function_call_output")
+        results[item["call_id"].toString()] =
+            QJsonDocument::fromJson(item["output"].toString().toUtf8())
+                .object();
+    }
+    QVERIFY2(results["state"].contains("error"),
+             QJsonDocument(results["state"]).toJson().constData());
+    QCOMPARE(results["notes"]["text"].toString(), "visible notes");
+#ifndef Q_OS_WIN
+    QVERIFY2(results["pipe"].contains("error"),
+             QJsonDocument(results["pipe"]).toJson().constData());
+#endif
+    server.respond(1, response(answer("Read the notes.")));
+    QTRY_COMPARE(done.size(), 1);
   }
   void objectDelegationsQueueWithoutStarvingTheCoordinator() {
     QFETCH(bool, cancel);

@@ -595,9 +595,11 @@ void ResearchRuntime::configure(AgentLoop *loop, const AnalysisObject *object,
         const auto path =
             QFileInfo(QDir(root).filePath(relative)).canonicalFilePath();
         const auto rel = QDir(root).relativeFilePath(path);
+        // Regular files only: opening a FIFO or a device would block the
+        // read or never end.
         if (path.isEmpty() || QDir::isAbsolutePath(relative) ||
-            rel.startsWith("../") || rel == ".nd-agent" ||
-            rel.startsWith(".nd-agent/") || QDir::isAbsolutePath(rel)) {
+            rel.startsWith("../") || isAgentStatePath(rel) ||
+            QDir::isAbsolutePath(rel) || !QFileInfo(path).isFile()) {
           reply(call,
                 {{"error",
                   "Path must name a project text file outside .nd-agent."}});

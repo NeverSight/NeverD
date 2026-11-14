@@ -29,6 +29,10 @@ bool isRemotePath(const QString &path);
 /// Whether \p relative stays inside the directory it is resolved against:
 /// not empty, not absolute, no drive letter, no ".." step and not remote.
 bool isContainedRelativePath(const QString &relative);
+/// Whether the project-relative \p relative names the project's private
+/// ".nd-agent" state directory or a file in it, in any letter case: Windows
+/// and macOS volumes usually ignore case, so ".ND-AGENT" is the same folder.
+bool isAgentStatePath(const QString &relative);
 } // namespace neverd::agent
 
 #endif // NEVERD_TOOLS_AGENT_PLATFORM_APPPATHS_H
