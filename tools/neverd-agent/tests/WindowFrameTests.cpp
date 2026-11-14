@@ -34,6 +34,12 @@ private:
   }
 
 private slots:
+  void initTestCase() {
+    // Under another platform plugin winId() is no window handle.
+    QVERIFY2(QGuiApplication::platformName() == "windows",
+             "The native frame checks need the windows platform plugin.");
+  }
+
   void framelessWindowRetainsNativeResizeEdges() {
     QWindow window;
     window.setFlags(Qt::Window | Qt::FramelessWindowHint |

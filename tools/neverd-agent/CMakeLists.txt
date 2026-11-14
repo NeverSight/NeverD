@@ -217,6 +217,10 @@ if(BUILD_TESTING)
       target_compile_options(NeverDAgentFrameTests PRIVATE /utf-8)
     endif()
     add_test(NAME NeverDAgent.WindowFrame COMMAND NeverDAgentFrameTests)
-    set_tests_properties(NeverDAgent.WindowFrame PROPERTIES LABELS "NeverDAgent")
+    # Native hit testing needs real Win32 windows, whatever platform the
+    # surrounding test run chose for the others. Without a console QtTest
+    # writes to the debugger, so its findings go to stderr for the log.
+    set_tests_properties(NeverDAgent.WindowFrame PROPERTIES LABELS "NeverDAgent"
+      ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_FORCE_STDERR_LOGGING=1")
   endif()
 endif()
