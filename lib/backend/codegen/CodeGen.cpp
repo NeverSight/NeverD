@@ -401,7 +401,8 @@ static void ensureTargets() {
 
 CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
                                BinaryFormat ObjectFormat,
-                               llvm::StringRef TargetTriple) {
+                               llvm::StringRef TargetTriple,
+                               ObjectConsumer Consumer) {
   CodegenResult Result;
   ensureTargets();
   if (!supportsX86NativeExtensions(Mod) ||
@@ -446,6 +447,12 @@ CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
   }
 
   llvm::TargetOptions Opt;
+#if __has_include("llvm/BinaryFormat/AArch64CompactUnwind.def")
+  Opt.MCOptions.EmitCompactUnwindForFinalImage =
+      Consumer == ObjectConsumer::FinalImageInstaller;
+#else
+  (void)Consumer;
+#endif
   auto RM = std::optional<llvm::Reloc::Model>(llvm::Reloc::PIC_);
   auto [CPU, Features] = detectTargetFeatures(Mod, TargetArch);
   if (!Features.empty())

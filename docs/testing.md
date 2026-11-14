@@ -1928,9 +1928,29 @@ published image must retain the original compact word without a DWARF fallback;
 altering any declared spill is refused. Independent callers check original and
 published normal returns, both signed epilogues, preserved registers, and
 signal-driven caller resumption. Unselected vector upper lanes must remain
-unchanged. These fixtures each contain one function; they do not qualify
-instruction recovery across a coalesced multi-function compact range,
-frameless saved pairs, or PAuth_LR compact frames.
+unchanged. Coalesced fixtures assert that two source functions really share
+one compact record, then recover each function independently. Frameless
+variants retain the live signed LR and cover every saved pair, full/sparse
+masks, additional stack allocation and coalescing. They validate NeverD's
+instruction-derived caller resumption; they do not independently qualify the
+system unwinder's frameless saved-pair implementation.
+
+Two PAuth_LR cases independently encode final mode-5 image records and check
+complete publication with zero/nonzero signing-PC offsets, full/sparse saves
+and both PC-relative epilogues. The fixtures write their one validated encoding
+slot in an unsigned structural input after Apple linking: Xcode 27
+canonicalizes the raw nonzero object record to ordinary FP mode. The linker
+word is recorded before fixture construction.
+A contradictory ordinary-FP input and removal of the signing CFI must both
+refuse publication.
+They report `structural_pauth_lr_images` and zero native executions: these
+cases do not run PAuth_LR instructions on older CPUs. The updated LLVM fork's
+MC producer is required; the unchanged r6 prebuilt explicitly skips these
+two cases. LLVM MC tests separately check offset limits, fixed fragment
+boundaries, ordinary-arm64 rejection and DWARF fallback for unrepresentable
+rules. Ordinary relocatable objects retain DWARF for a nonzero signing offset;
+only the provenance-bound final-image writer and explicit native object
+installer consume that compact payload directly.
 `InstructionAddressRecipesUseTheActualSigningPC` compiles the public Darwin
 signal cursor and an independent SP/PC signing oracle as C11 and C++20 at
 O0/O2. Set `NEVERD_ARM64E_ASYNC_NATIVE=1` only in a qualified arm64e process
@@ -1958,6 +1978,11 @@ path back to a protected call on both ordinary and alternate stacks. See the
 implicit signing at exact instruction boundaries, including conflicting
 paths, live and spilled LR, stale stack slots, missing preserved registers,
 relocated signing instructions and analysis limits. The lifted-image suite
+also checks independent entry states, direct calls/tail transfers and crossed
+boundaries in coalesced compact ranges. Typed symbols from Mach-O function
+starts are admitted; local labels, boundary guesses and continuations are
+excluded. A DWARF frame or explicit compact signing-PC recipe cannot be
+reinterpreted relative to each of several function entries. The suite
 also compiles a compact-only Apple Clang dylib. With native replay enabled,
 it checks both that dylib and the system cursor's next frame after crossing
 the real signal trampoline. See the [system signal qualification](arm64e-native-validation.md#system-signal-trampoline-and-implicit-signing-rows).

@@ -15,6 +15,8 @@
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
 #include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/Loader.h"
+#include "neverd/loader/MachO/CompactUnwind.h"
+#include "neverd/object/SectionNames.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/ISAEncoding.h"
@@ -32,6 +34,7 @@
 #include "llvm/Support/SHA256.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdlib>
@@ -55,17 +58,56 @@ struct CompactPairCase {
 #define SAVED_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #include "AArch64CompactRegisterFixtures.def"
 
-void verifySavedRegisters(bool Quad, bool Signal,
-                          std::optional<unsigned> CompactPairs = std::nullopt,
-                          bool ExtraStack = false) {
 #if defined(__APPLE__) && defined(__aarch64__)
+// This is a final-image format fixture, not a test of Apple's selection of
+// compact object records. Xcode 27 rewrites the nonzero-offset input record
+// into ordinary FP mode. Install the independently specified fixture word in
+// its single validated encoding slot in an unsigned structural test image.
+void writeCompactFixture(const std::string &Path, const BinaryImage &Image,
+                         uint32_t Encoding) {
+  const auto *Section = Image.getSectionByName(section_names::macho::Unwind);
+  const auto *Symbol = Image.findSymbol(kSumSymbol);
+  ASSERT_TRUE(Section && Symbol);
+  auto Raw = macho_unwind::parseCompactUnwindRaw(
+      llvm::ArrayRef(Image.Raw).slice(Section->FileOff, Section->Size));
+  ASSERT_TRUE(bool(Raw)) << llvm::toString(Raw.takeError());
+  ASSERT_EQ(Raw->Pages.size(), 1u);
+  const auto &Page = Raw->Pages.front();
+  ASSERT_EQ(Page.Kind, macho_unwind::kSecondLevelCompressed);
+  ASSERT_EQ(Page.CompressedEntries.size(), 1u);
+  const auto &Entry = Page.CompressedEntries.front();
+  ASSERT_EQ(Entry.FunctionOffset + Image.Base, Symbol->Addr);
+  const auto Index = Entry.EncodingIndex;
+  const size_t Offset =
+      Index < Raw->CommonEncodings.size()
+          ? Raw->Header.CommonEncodingsSectionOffset + Index * sizeof(uint32_t)
+          : Page.SectionOffset + Page.EncodingsPageOffset +
+                (Index - Raw->CommonEncodings.size()) * sizeof(uint32_t);
+  auto Bytes = Image.Raw;
+  writeLE<uint32_t>(Bytes.data() + Section->FileOff + Offset, Encoding);
+  std::ofstream File(Path, std::ios::binary | std::ios::trunc);
+  File.write(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+  File.close();
+  ASSERT_TRUE(File);
+}
+#endif
+
+void verifySavedRegisters(
+    bool Quad, bool Signal, std::optional<unsigned> CompactPairs = std::nullopt,
+    bool ExtraStack = false, bool Coalesced = false, bool Frameless = false,
+    std::optional<unsigned> SigningOffset = std::nullopt) {
+#if defined(__APPLE__) && defined(__aarch64__)
+#if !__has_include("llvm/BinaryFormat/AArch64CompactUnwind.def")
+  if (SigningOffset)
+    GTEST_SKIP() << kPAuthLRMCUnavailable;
+#endif
   const bool Compact = CompactPairs.has_value();
-  const unsigned Functions = Compact ? 1 : kFunctions;
+  const unsigned Functions = Compact && !Coalesced ? 1 : kFunctions;
   const char *Names[] = {kSum, kDifference};
   const auto FunctionNames = llvm::ArrayRef(Names).take_front(Functions);
   llvm::SmallVector<std::pair<unsigned, int>> CompactSpills;
   unsigned VectorMask = Compact ? 0 : kVectorMask;
-  int SpillOffset = kCompactFirstSpill;
+  int SpillOffset = Frameless ? kFramelessFirstSpill : kCompactFirstSpill;
   if (Compact)
     for (const auto &Pair : kCompactPairCases) {
       if (!(*CompactPairs & Pair.Mask))
@@ -106,6 +148,14 @@ void verifySavedRegisters(bool Quad, bool Signal,
     Common.push_back(CompactFlag);
   if (ExtraStack)
     Common.push_back(kExtraStackFlag);
+  if (Coalesced)
+    Common.push_back(kCoalescedFlag);
+  if (Frameless)
+    Common.push_back(kFramelessFlag);
+  const auto PAuthFlag =
+      std::string(kPAuthLRFlag) + std::to_string(SigningOffset.value_or(0));
+  if (SigningOffset)
+    Common.push_back(PAuthFlag);
   auto Compile = Common;
   Compile.append({kDylib, kTight, Source, kOutputFlag, Input});
   ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, Compile), 0);
@@ -119,11 +169,70 @@ void verifySavedRegisters(bool Quad, bool Signal,
   Compile.append({kIncludeFlag, Include, kWarnings, kExtraWarnings,
                   kErrorWarnings, Caller, Wrapper, kOutputFlag, Driver});
   ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, Compile), 0);
+  if (SigningOffset)
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                  kFixtureCodesign,
+                  {kFixtureCodesign, kFixtureRemoveSignature, Input}),
+              0);
 
   auto Reader = Loader::create(BinaryFormat::MachO);
   auto Image = Reader->load(Input);
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  if (SigningOffset) {
+    const auto *OriginalSymbol = Image->findSymbol(kSumSymbol);
+    ASSERT_NE(OriginalSymbol, nullptr);
+    const auto *OriginalFrame =
+        Image->ExceptionMetadata.findFunction(OriginalSymbol->Addr);
+    ASSERT_TRUE(OriginalFrame && OriginalFrame->Compact);
+    testing::Test::RecordProperty(kLinkerCompactWord,
+                                  OriginalFrame->Compact->NativeEncoding);
+    // A classic FP recipe must not authorize copying PC-signed return words.
+    ASSERT_NO_FATAL_FAILURE(
+        writeCompactFixture(Input, *Image, kCompactFrameMode | *CompactPairs));
+    auto Contradictory = Reader->load(Input);
+    ASSERT_TRUE(bool(Contradictory))
+        << llvm::toString(Contradictory.takeError());
+    llvm::LLVMContext BadContext;
+    PipelineOptions BadOptions;
+    BadOptions.PatchMode = true;
+    BadOptions.EmitDumpOutput = false;
+    auto Bad = Pipeline().run(*Contradictory, BadContext, BadOptions);
+    if (Bad.Success) {
+      ASSERT_TRUE(Bad.LlvmModule);
+      MachOPatcher BadPatcher;
+      BadPatcher.setImageContext(&*Contradictory);
+      EXPECT_FALSE(
+          BadPatcher
+              .patch(Input, Rejected, *Bad.LlvmModule, Contradictory->Arch)
+              .Success);
+    } else {
+      EXPECT_FALSE(Bad.Error.empty());
+    }
+    EXPECT_FALSE(std::filesystem::exists(Rejected));
+    const auto Encoding = kCompactPAuthLRMode | *CompactPairs |
+                          (*SigningOffset / aarch64::kInsnSize)
+                              << kPAuthLRShift;
+    ASSERT_NO_FATAL_FAILURE(
+        writeCompactFixture(Input, *Contradictory, Encoding));
+    Image = Reader->load(Input);
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    const auto *Symbol = Image->findSymbol(kSumSymbol);
+    ASSERT_NE(Symbol, nullptr);
+    const auto *Frame = Image->ExceptionMetadata.findFunction(Symbol->Addr);
+    ASSERT_TRUE(Frame && Frame->Compact);
+    ASSERT_EQ(Frame->CodeRange.Begin, Symbol->Addr);
+    ASSERT_EQ(Frame->Compact->NativeEncoding, Encoding);
+  }
   const auto Snapshot = Image->Raw;
+  if (Coalesced) {
+    const auto *First = Image->findSymbol(kSumSymbol);
+    const auto *Second = Image->findSymbol(kDifferenceSymbol);
+    ASSERT_TRUE(First && Second);
+    const auto *Frame = Image->ExceptionMetadata.findFunction(First->Addr);
+    ASSERT_NE(Frame, nullptr);
+    ASSERT_EQ(Frame, Image->ExceptionMetadata.findFunction(Second->Addr));
+    ASSERT_LT(First->Addr, Second->Addr);
+  }
   llvm::LLVMContext Context;
   PipelineOptions Options;
   Options.PatchMode = true;
@@ -145,7 +254,8 @@ void verifySavedRegisters(bool Quad, bool Signal,
   llvm::SmallVector<std::pair<std::string, std::string>> Mutations;
   if (Compact) {
     auto Slots = CompactSpills;
-    Slots.emplace_back(aarch64_unwind::kFP, kFPOffset);
+    if (!Frameless)
+      Slots.emplace_back(aarch64_unwind::kFP, kFPOffset);
     for (const auto &[Reg, Offset] : Slots) {
       const auto Prefix =
           std::string(kCFISpill) + std::to_string(Reg) + kCFISeparator;
@@ -157,6 +267,8 @@ void verifySavedRegisters(bool Quad, bool Signal,
     Mutations = {{kCFIX19, kWrongCFIX19},
                  {Quad ? kCFIQ8 : kCFID8, Quad ? kWrongCFIQ8 : kWrongCFID8}};
   }
+  if (SigningOffset)
+    Mutations.emplace_back(kPAuthLRCFI, kMissingPAuthLRCFI);
   for (const auto &[Before, After] : Mutations) {
     auto Changed = llvm::CloneModule(Module);
     auto *Function = Changed->getFunction(kSum);
@@ -166,7 +278,7 @@ void verifySavedRegisters(bool Quad, bool Signal,
     ASSERT_NE(Assembly, nullptr);
     std::string Text = Assembly->getAsmString().str();
     const auto At = Text.find(Before);
-    ASSERT_NE(At, std::string::npos);
+    ASSERT_NE(At, std::string::npos) << Before << '\n' << Text;
     Text.replace(At, llvm::StringRef(Before).size(), After);
     Call->setCalledOperand(llvm::InlineAsm::get(
         Assembly->getFunctionType(), Text, Assembly->getConstraintString(),
@@ -194,8 +306,17 @@ void verifySavedRegisters(bool Quad, bool Signal,
       ASSERT_TRUE(Before->Compact && After->Compact);
       EXPECT_FALSE(Before->Dwarf);
       EXPECT_FALSE(After->Dwarf);
-      EXPECT_EQ(Before->Compact->NativeEncoding,
-                kCompactFrameMode | *CompactPairs);
+      const auto Mode =
+          Frameless ? kCompactFramelessMode |
+                          ((kCompactFrameDepth +
+                            (ExtraStack ? kCompactExtraDepth : 0)) /
+                           kCompactStackScale)
+                              << kCompactStackShift
+          : SigningOffset
+              ? kCompactPAuthLRMode | (*SigningOffset / aarch64::kInsnSize)
+                                          << kPAuthLRShift
+              : kCompactFrameMode;
+      EXPECT_EQ(Before->Compact->NativeEncoding, Mode | *CompactPairs);
       EXPECT_EQ(After->Compact->NativeEncoding,
                 Before->Compact->NativeEncoding);
       continue;
@@ -239,7 +360,7 @@ void verifySavedRegisters(bool Quad, bool Signal,
     for (const auto &[Name, Symbol] :
          {std::pair{kSum, kSumSymbol},
           std::pair{kDifference, kDifferenceSymbol}}) {
-      if (Compact && Name == kDifference)
+      if (Compact && !Coalesced && Name == kDifference)
         continue;
       const auto Entry =
           llvm::find_if(Installed.PatchedFunctions, [&](const auto &E) {
@@ -255,8 +376,13 @@ void verifySavedRegisters(bool Quad, bool Signal,
       ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
       std::optional<uint64_t> Offset;
       const auto Wanted = Signal ? kWaitLoad : kPlanInstruction;
-      for (uint64_t At = 0; At < Frame->CodeRange.size();
-           At += aarch64::kInsnSize) {
+      auto End = Frame->CodeRange.End;
+      for (const auto &Other : Installed.PatchedFunctions) {
+        const auto Next = InstalledImage ? Other.OwnerVA : Other.OriginalVA;
+        if (Next > VA)
+          End = std::min(End, Next);
+      }
+      for (uint64_t At = 0; At < End - VA; At += aarch64::kInsnSize) {
         const auto *Code = View.readVA(VA + At, aarch64::kInsnSize);
         ASSERT_NE(Code, nullptr);
         if (readLE<uint32_t>(Code) == Wanted) {
@@ -265,22 +391,27 @@ void verifySavedRegisters(bool Quad, bool Signal,
         }
       }
       ASSERT_TRUE(Offset);
-      const auto &Row = aarch64UnwindRowAt(*Rows, *Offset);
-      const auto Plan =
-          prepareDarwinArm64eSystemCaller(Row, Frame->CodeRange, VA);
+      const auto &Row =
+          aarch64UnwindRowAt(*Rows, VA + *Offset - Frame->CodeRange.Begin);
+      const auto Plan = prepareDarwinArm64eSystemCaller(Row, Frame->CodeRange,
+                                                        Frame->CodeRange.Begin);
       ASSERT_TRUE(Plan);
       ASSERT_TRUE(Plan->Vectors.Complete);
       EXPECT_EQ(Plan->Vectors.LowMask, VectorMask);
       EXPECT_EQ(Plan->Vectors.HighMask, Quad ? kVectorMask : 0u);
-      EXPECT_EQ(Plan->Frame.Signing, NDArm64eSignedIBWithCFA);
+      EXPECT_EQ(Plan->Frame.Signing, SigningOffset ? NDArm64eSignedIBWithCFAPC
+                                                   : NDArm64eSignedIBWithCFA);
+      if (SigningOffset)
+        EXPECT_EQ(Plan->Frame.SigningPC, VA + *SigningOffset);
       EXPECT_EQ(Plan->Frame.CFAFromFP, !Compact);
-      EXPECT_TRUE(Plan->Frame.SavedFP && Plan->Frame.SavedLR);
+      EXPECT_EQ(Plan->Frame.SavedFP, !Frameless);
+      EXPECT_EQ(Plan->Frame.SavedLR, !Frameless);
       EXPECT_EQ(Plan->Frame.CFAOffset,
                 Compact
                     ? kCompactFrameDepth + (ExtraStack ? kCompactExtraDepth : 0)
                     : kCFAOffset);
-      EXPECT_EQ(Plan->Frame.FPOffset, kFPOffset);
-      EXPECT_EQ(Plan->Frame.LROffset, kLROffset);
+      EXPECT_EQ(Plan->Frame.FPOffset, Frameless ? 0 : kFPOffset);
+      EXPECT_EQ(Plan->Frame.LROffset, Frameless ? 0 : kLROffset);
       const auto GPRCount =
           Compact
               ? llvm::count_if(CompactSpills,
@@ -291,8 +422,9 @@ void verifySavedRegisters(bool Quad, bool Signal,
       ASSERT_EQ(Plan->Count, GPRCount);
       Rules << int64_t(VA) - int64_t(Public->Addr) << ' ' << *Offset << ' '
             << *Offset + 2 * aarch64::kInsnSize << ' ' << Plan->Frame.CFAFromFP
-            << ' ' << Plan->Frame.CFAOffset << ' ' << Plan->Frame.FPOffset
-            << ' ' << Plan->Frame.LROffset << ' ' << Plan->Count << ' '
+            << ' ' << Plan->Frame.SavedFP << ' ' << Plan->Frame.SavedLR << ' '
+            << Plan->Frame.CFAOffset << ' ' << Plan->Frame.FPOffset << ' '
+            << Plan->Frame.LROffset << ' ' << Plan->Count << ' '
             << Plan->Vectors.LowMask << ' ' << Plan->Vectors.HighMask << '\n';
       for (unsigned I = 0; I < Plan->Count; ++I) {
         EXPECT_EQ(Plan->Saved[I].Register, Compact
@@ -328,7 +460,7 @@ void verifySavedRegisters(bool Quad, bool Signal,
     }
     Rules.close();
     ASSERT_TRUE(Rules);
-    if (std::getenv(kExecute)) {
+    if (!SigningOffset && std::getenv(kExecute)) {
       ASSERT_EQ(
           llvm::sys::ExecuteAndWait(
               Driver, {Driver, InstalledImage ? Output : Input, RulesPath}),
@@ -344,6 +476,8 @@ void verifySavedRegisters(bool Quad, bool Signal,
   testing::Test::RecordProperty(
       kPublishedHash, llvm::toHex(llvm::SHA256::hash(Published->Raw), true));
   testing::Test::RecordProperty(kNativeImages, Executions);
+  if (SigningOffset)
+    testing::Test::RecordProperty(kPAuthLRImages, 2);
   testing::Test::RecordProperty(Signal ? kResumptions : kObservedCalls,
                                 Executions * Functions *
                                     (Signal ? kSignalRounds : kNormalRounds));
@@ -400,5 +534,55 @@ TEST(AArch64CompactRegisters, PublishesEachPairAndFrameOnly) {
   testing::Test::RecordProperty(kObservedCalls,
                                 Executions * (1 + kCompactPairCases.size()) *
                                     kNormalRounds);
+}
+TEST(AArch64CompactRegisters, PublishesCoalescedAllPairFrames) {
+  verifySavedRegisters(false, false, kCompactAllPairs, true, true);
+}
+TEST(AArch64CompactRegisters, PublishesCoalescedSparseFrames) {
+  verifySavedRegisters(false, false, kCompactSparsePairs, false, true);
+}
+TEST(AArch64CompactRegisters, SignalResumesCoalescedAllPairFrames) {
+  verifySavedRegisters(false, true, kCompactAllPairs, true, true);
+}
+TEST(AArch64CompactRegisters, SignalResumesCoalescedSparseFrames) {
+  verifySavedRegisters(false, true, kCompactSparsePairs, false, true);
+}
+TEST(AArch64CompactRegisters, PublishesFramelessAllPairs) {
+  verifySavedRegisters(false, false, kCompactAllPairs, false, false, true);
+}
+TEST(AArch64CompactRegisters, PublishesFramelessSparsePairs) {
+  verifySavedRegisters(false, false, kCompactSparsePairs, true, false, true);
+}
+TEST(AArch64CompactRegisters, SignalResumesFramelessAllPairs) {
+  verifySavedRegisters(false, true, kCompactAllPairs, false, false, true);
+}
+TEST(AArch64CompactRegisters, SignalResumesFramelessSparsePairs) {
+  verifySavedRegisters(false, true, kCompactSparsePairs, true, false, true);
+}
+TEST(AArch64CompactRegisters, PublishesCoalescedFramelessPairs) {
+  verifySavedRegisters(false, false, kCompactAllPairs, true, true, true);
+}
+TEST(AArch64CompactRegisters, SignalResumesCoalescedFramelessPairs) {
+  verifySavedRegisters(false, true, kCompactSparsePairs, true, true, true);
+}
+TEST(AArch64CompactRegisters, PublishesEachFramelessPair) {
+  for (const auto &Pair : kCompactPairCases) {
+    SCOPED_TRACE(Pair.Mask);
+    verifySavedRegisters(false, false, Pair.Mask, false, false, true);
+  }
+  const auto Executions = std::getenv(kExecute) ? 2 : 0;
+  testing::Test::RecordProperty(kNativeImages,
+                                Executions * kCompactPairCases.size());
+  testing::Test::RecordProperty(
+      kObservedCalls, Executions * kCompactPairCases.size() * kNormalRounds);
+}
+
+TEST(AArch64CompactRegisters, PublishesPAuthLRAllPairs) {
+  verifySavedRegisters(false, false, kCompactAllPairs, false, false, false, 0);
+}
+
+TEST(AArch64CompactRegisters, PublishesPAuthLROffsetAndSparsePairs) {
+  verifySavedRegisters(false, false, kCompactSparsePairs, true, false, false,
+                       kPAuthLRNonzeroOffset);
 }
 } // namespace

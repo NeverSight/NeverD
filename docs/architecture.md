@@ -15516,6 +15516,24 @@ Preserved rows keep their original boundaries; splitting one would change its
 signing PC. Original callback preparation rejects these signed frames, including
 interior entries, until it can preserve the incoming signed LR state. This does
 not relax the arm64e native-rebuild restriction.
+Verified whole native bodies can publish canonical PAuth_LR FP recipes through
+the LLVM fork's MC compact producer. The signing CFI is placed immediately
+after the original PACIBSPPC; the final image must preserve the compact word,
+the signing offset and each instruction's function-relative position. Ordinary
+compact mode cannot authorize PC-signed return words. LLVM keeps nonzero
+signing offsets in DWARF for regular object emission, since Apple linking can
+discard that raw compact payload; the final-image writer and explicitly marked
+native object installer consume it directly. Classic frameless saved-pair
+bodies use their complete compact stack size and normalized slots, including
+PAC prefixes and multi-stage stack allocation.
+
+Instruction-derived unwind recovery can cover several functions under one
+classic compact record. Known metadata entries and nonguessed typed symbols
+seed independent incoming states, and control-flow joins remain within each
+entry's domain. A transfer to another proved entry is a call or tail transfer;
+fallthrough and branches into another function's interior are rejected. Rows
+remain relative to the original aggregate metadata range. DWARF/language
+records and PAuth_LR signing-PC records retain their single-owner restriction.
 Raw and semantic compact-page readers share offset, ordering and page-bound
 validation for every architecture. A malformed page contributes no recipes;
 its omission cannot extend a preceding valid row across the missing page.

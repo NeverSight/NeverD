@@ -16,9 +16,27 @@
 
 SAVED_TEXT(kCompactFlag, "-DTEST_COMPACT_PAIRS=")
 SAVED_TEXT(kExtraStackFlag, "-DTEST_EXTRA_STACK")
+SAVED_TEXT(kCoalescedFlag, "-DTEST_COALESCED")
+SAVED_TEXT(kFramelessFlag, "-DTEST_FRAMELESS")
+SAVED_TEXT(kPAuthLRFlag, "-DTEST_PAUTH_LR=")
+SAVED_TEXT(kPAuthLRImages, "structural_pauth_lr_images")
+SAVED_TEXT(kPAuthLRMCUnavailable,
+           "PAuth_LR compact publication requires the updated LLVM fork")
+SAVED_TEXT(kPAuthLRCFI, ".cfi_negate_ra_state_with_pc\n")
+SAVED_TEXT(kMissingPAuthLRCFI, "")
+SAVED_TEXT(kLinkerCompactWord, "linker_compact_word_before_fixture_encoding")
+SAVED_TEXT(kFixtureCodesign, "/usr/bin/codesign")
+SAVED_TEXT(kFixtureRemoveSignature, "--remove-signature")
+SAVED_VALUE(unsigned, kCompactPAuthLRMode, 0x05000000)
+SAVED_VALUE(unsigned, kPAuthLRShift, 12)
+SAVED_VALUE(unsigned, kPAuthLRNonzeroOffset, 8)
 SAVED_TEXT(kCFISpill, ".cfi_offset ")
 SAVED_TEXT(kCFISeparator, ", ")
 SAVED_VALUE(unsigned, kCompactFrameMode, 0x04000000)
+SAVED_VALUE(unsigned, kCompactFramelessMode, 0x02000000)
+SAVED_VALUE(unsigned, kCompactStackScale, 16)
+SAVED_VALUE(unsigned, kCompactStackShift, 12)
+SAVED_VALUE(int, kFramelessFirstSpill, -8)
 SAVED_VALUE(unsigned, kCompactAllPairs, 0x00000f1f)
 SAVED_VALUE(unsigned, kCompactSparsePairs, 0x00000515)
 SAVED_VALUE(unsigned, kCompactPairRegisters, 2)
@@ -41,27 +59,95 @@ SAVED_VALUE(auto, kCompactPairCases,
 // The frame pointer anchors the unwind recipe independently of a further
 // stack reservation. No DWARF-only operation forces a fallback from compact.
 SAVED_TEXT(kCompactBody, R"asm(
+#ifdef TEST_FRAMELESS
+#define SAVE_TOP 160
+#define FIRST_OFFSET -8
+#else
+#define SAVE_TOP 144
+#define FIRST_OFFSET -24
+#endif
 .text
-.globl _leaf_sum
-.p2align 2
-_leaf_sum:
-.cfi_startproc
-  pacibsp
-  sub sp, sp, #176
-  stp x29, x30, [sp, #160]
-  add x29, sp, #160
-.cfi_def_cfa x29, 16
-.cfi_offset x30, -8
-.cfi_offset x29, -16
-.set used, 0
 .macro save bit, first, second
 .if TEST_COMPACT_PAIRS & \bit
-  stp \second, \first, [sp, #144-used]
-.cfi_offset \first, -24-used
-.cfi_offset \second, -32-used
+  stp \second, \first, [sp, #SAVE_TOP-used]
+#ifndef TEST_PAUTH_LR
+.cfi_offset \first, FIRST_OFFSET-used
+.cfi_offset \second, FIRST_OFFSET-8-used
+#endif
 .set used, used+16
 .endif
 .endm
+.macro restore
+#ifdef TEST_EXTRA_STACK
+  add sp, sp, #32
+#endif
+.set used, 0
+.if TEST_COMPACT_PAIRS & 1
+  ldp x20, x19, [sp, #SAVE_TOP-used]
+.set used, used+16
+.endif
+.if TEST_COMPACT_PAIRS & 2
+  ldp x22, x21, [sp, #SAVE_TOP-used]
+.set used, used+16
+.endif
+.if TEST_COMPACT_PAIRS & 4
+  ldp x24, x23, [sp, #SAVE_TOP-used]
+.set used, used+16
+.endif
+.if TEST_COMPACT_PAIRS & 8
+  ldp x26, x25, [sp, #SAVE_TOP-used]
+.set used, used+16
+.endif
+.if TEST_COMPACT_PAIRS & 16
+  ldp x28, x27, [sp, #SAVE_TOP-used]
+.set used, used+16
+.endif
+.if TEST_COMPACT_PAIRS & 256
+  ldp d9, d8, [sp, #SAVE_TOP-used]
+.set used, used+16
+.endif
+.if TEST_COMPACT_PAIRS & 512
+  ldp d11, d10, [sp, #SAVE_TOP-used]
+.set used, used+16
+.endif
+.if TEST_COMPACT_PAIRS & 1024
+  ldp d13, d12, [sp, #SAVE_TOP-used]
+.set used, used+16
+.endif
+.if TEST_COMPACT_PAIRS & 2048
+  ldp d15, d14, [sp, #SAVE_TOP-used]
+.set used, used+16
+.endif
+#ifndef TEST_FRAMELESS
+  ldp x29, x30, [sp, #160]
+#endif
+  add sp, sp, #176
+.endm
+.macro function name, operation
+.globl \name
+.p2align 2
+\name:
+#ifdef TEST_PAUTH_LR
+  .rept TEST_PAUTH_LR/4
+  mov x16, x16
+  .endr
+Lsign\@:
+  .inst 0xdac1a7fe
+#else
+.cfi_startproc
+  pacibsp
+#endif
+  sub sp, sp, #176
+#ifndef TEST_FRAMELESS
+  stp x29, x30, [sp, #160]
+  add x29, sp, #160
+#ifndef TEST_PAUTH_LR
+.cfi_def_cfa x29, 16
+.cfi_offset x30, -8
+.cfi_offset x29, -16
+#endif
+#endif
+.set used, 0
 save 1, x19, x20
 save 2, x21, x22
 save 4, x23, x24
@@ -71,10 +157,19 @@ save 256, d8, d9
 save 512, d10, d11
 save 1024, d12, d13
 save 2048, d14, d15
+#ifndef TEST_FRAMELESS
   // Force caller recovery to use the signed stack copy, not the live LR.
   mov x30, #30
+#endif
 #ifdef TEST_EXTRA_STACK
   sub sp, sp, #32
+#endif
+#ifdef TEST_FRAMELESS
+#ifdef TEST_EXTRA_STACK
+.cfi_def_cfa_offset 208
+#else
+.cfi_def_cfa_offset 176
+#endif
 #endif
 .if TEST_COMPACT_PAIRS & 1
   mov x19, #19
@@ -112,67 +207,46 @@ save 2048, d14, d15
   movi v14.16b, #14
   movi v15.16b, #15
 .endif
-  add x0, x0, x1
+  \operation x0, x0, x1
   mov x17, x0
 #ifdef TEST_SIGNAL
   mov w9, #1
   str w9, [x2]
-Lwait:
+Lwait\@:
   ldr w9, [x2]
-  cbnz w9, Lwait
+  cbnz w9, Lwait\@
 #endif
-.macro restore
-#ifdef TEST_EXTRA_STACK
-  add sp, sp, #32
-#endif
-.set used, 0
-.if TEST_COMPACT_PAIRS & 1
-  ldp x20, x19, [sp, #144-used]
-.set used, used+16
-.endif
-.if TEST_COMPACT_PAIRS & 2
-  ldp x22, x21, [sp, #144-used]
-.set used, used+16
-.endif
-.if TEST_COMPACT_PAIRS & 4
-  ldp x24, x23, [sp, #144-used]
-.set used, used+16
-.endif
-.if TEST_COMPACT_PAIRS & 8
-  ldp x26, x25, [sp, #144-used]
-.set used, used+16
-.endif
-.if TEST_COMPACT_PAIRS & 16
-  ldp x28, x27, [sp, #144-used]
-.set used, used+16
-.endif
-.if TEST_COMPACT_PAIRS & 256
-  ldp d9, d8, [sp, #144-used]
-.set used, used+16
-.endif
-.if TEST_COMPACT_PAIRS & 512
-  ldp d11, d10, [sp, #144-used]
-.set used, used+16
-.endif
-.if TEST_COMPACT_PAIRS & 1024
-  ldp d13, d12, [sp, #144-used]
-.set used, used+16
-.endif
-.if TEST_COMPACT_PAIRS & 2048
-  ldp d15, d14, [sp, #144-used]
-.set used, used+16
-.endif
-  ldp x29, x30, [sp, #160]
-  add sp, sp, #176
-.endm
-  cbz x0, Lzero
+  cbz x0, Lzero\@
   restore
+#ifdef TEST_PAUTH_LR
+  .long 0xf3a0001f | ((.-Lsign\@)/4)<<5
+#else
   autibsp
+#endif
   ret
-Lzero:
+Lzero\@:
   restore
+#ifdef TEST_PAUTH_LR
+  .long 0x5520001f | ((.-Lsign\@)/4)<<5
+Lend\@:
+// Independently spell the source object's compact entry. This permits old
+// Apple assemblers to supply the new mode without using NeverD's MC producer.
+.section __LD,__compact_unwind,regular,debug
+.p2align 3
+.quad \name
+.long Lend\@-\name
+.long 0x05000000 | TEST_COMPACT_PAIRS | (TEST_PAUTH_LR/4)<<12
+.quad 0, 0
+.text
+#else
   retab
 .cfi_endproc
+#endif
+.endm
+function _leaf_sum, add
+#ifdef TEST_COALESCED
+function _leaf_difference, sub
+#endif
 .subsections_via_symbols
 )asm")
 

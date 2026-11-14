@@ -1555,3 +1555,65 @@ cases were skipped locally. Both native CPTA probes remained unavailable.
 The LLVM fork revision and r6 prebuilt pin were unchanged.
 [Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43617563664)
 and [per-host verification record](evidence/arm64e-compact-frame-publication-2026-11-15.json).
+
+
+### Coalesced, frameless and PAuth_LR compact frames
+
+Compact recovery now seeds each authenticated function entry in a coalesced
+range with its own incoming register state. Mach-O typed function symbols,
+including `LC_FUNCTION_STARTS`, supply roots without being reclassified as
+loader/CRT entry points. Guessed boundaries and continuation labels do not
+supply roots. Rows keep offsets relative to the original unwind range; calls
+and tail transfers to another proved entry do not merge its state. Fallthrough
+across a boundary and transfers into another function's interior are refused.
+DWARF, language tables and explicit signing-PC rules still require one owner.
+
+The native producer reconstructs frameless saved-pair recipes with the complete
+stack size and normalized slots. These preserve live LR, omit an invented
+FP/LR spill record and support an additional stack reservation. Coalesced
+fixture pairs must share the same original unwind record before publication.
+Independent native callers compare all preserved registers and signal-driven
+caller resumptions for both functions.
+
+PAuth_LR publication preserves PACIBSPPC, AUTIBSPPC and RETABSPPC words and their
+function-relative positions. The LLVM fork emits a canonical B-key mode-5
+recipe with the signing-PC offset. Ordinary compact mode cannot authorize
+these PC-signed words. The final verifier checks the complete emitted recipe
+and rejects removal of the signing CFI.
+
+The Xcode 27 diagnostic reproduced a transport difference: the input object
+contained `0x05002515`, but the Apple-linked image contained `0x04000515`.
+Regular LLVM object emission therefore retains DWARF for nonzero signing-PC
+offsets. The final-image writer and explicitly marked native-object installer
+can consume the full compact payload directly. Tests independently construct
+the single final-image encoding slot in an unsigned structural fixture after
+linking; they record the linker word before construction and also require
+rejection of an ordinary-FP record with PC-signed instructions. This does not
+qualify Apple's external linker as a mode-5 nonzero-offset producer.
+
+PAuth_LR cases report structural images separately from native execution.
+Neither a structurally correct compact record nor a passing classic PAC signal
+resumption qualifies execution on PAuth_LR hardware, arbitrary lifted images,
+arbitrary protected non-call language cleanup, or native CPTA-on.
+
+Both native runners passed all 96 cases from
+`941203f5d2036ad3541a2e797938ccba01a898ed`. Each executed 202 original or
+published images. The eleven added classic compact cases contributed 442
+register-observed calls and 48 signed signal-caller resumptions per host.
+The two PAuth_LR cases contributed four structural original/published images
+and zero native PAuth_LR executions per host. Windows frontend checks passed.
+The Xcode 27 linker word before fixture construction was recorded as
+`0x04000515` for the nonzero-offset case; the final installed image retained
+`0x05002515`.
+
+Local Release validation selected 909 cases: 862 passed, 47 native-gated cases
+were skipped, and none failed. Six LLVM MC/FileCheck invocations passed, as
+did the pinned 22.1.2 format check for all thirteen changed source files and
+the documentation inventory check. The r6 prebuilt configuration is unchanged.
+The encoder and consumer-boundary changes were merged directly into the LLVM
+fork in [PR #10](https://github.com/NeverSight/llvm-project/pull/10) and
+[PR #11](https://github.com/NeverSight/llvm-project/pull/11).
+Both M1 environments still reported native CPTA-on unavailable, and neither
+repository had a registered self-hosted runner at the recorded observation.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43628073491)
+and [per-host verification record](evidence/arm64e-compact-range-publication-2026-11-15.json).

@@ -72,6 +72,14 @@ struct Frame {
                    .Offset = -int(kRegisterBytes)});
   }
 
+  void useCompact(uint32_t Encoding = macho_unwind::kARM64ModeFrame) {
+    Function.Dwarf.reset();
+    auto &Compact = Function.Compact.emplace();
+    Compact.CodeRange = Function.CodeRange;
+    Compact.NativeEncoding = Encoding;
+    ASSERT_TRUE(macho_unwind::decodeEncoding(Arch::AArch64, Encoding, Compact));
+  }
+
   void addHandler(size_t Begin, size_t End, size_t Handler) {
     const auto LSDAVA = Function.CodeRange.End;
     Function.Personality = ExceptionPersonality::GxxPersonalityV0;
@@ -315,6 +323,112 @@ TEST(AArch64ImplicitUnwind, CompactRowsRecoverActualCarriersAtInterruption) {
   EXPECT_EQ(Plan->Frame.CFAOffset, 2 * kRegisterBytes);
   EXPECT_EQ(Plan->Frame.LROffset, -int(kRegisterBytes));
   EXPECT_EQ(Plan->Frame.Signing, NDArm64eSignedIBWithCFA);
+}
+
+TEST(AArch64ImplicitUnwind, CoalescedCompactFramesHaveIndependentEntries) {
+  Frame F{SignB, Ret, SignA, Ret};
+  F.useCompact();
+  F.Image.Symbols.push_back(Symbol::makeFunc(2 * sizeof(uint32_t)));
+  auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+  ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+  const auto &First = aarch64UnwindRowAt(*Rows, sizeof(uint32_t)).Signing;
+  const auto &Entry = aarch64UnwindRowAt(*Rows, 2 * sizeof(uint32_t)).Signing;
+  const auto &Second = aarch64UnwindRowAt(*Rows, 3 * sizeof(uint32_t)).Signing;
+  ASSERT_TRUE(First.State && Entry.State && Second.State);
+  EXPECT_EQ(First.State->Key, AArch64RAKey::B);
+  EXPECT_EQ(Entry.State->Kind, Kind::Unsigned);
+  EXPECT_EQ(Second.State->Key, AArch64RAKey::A);
+  const auto Query =
+      analyzeAArch64UnwindSigning(F.Image, F.Function, 3 * sizeof(uint32_t));
+  ASSERT_TRUE(Query.InstructionStateAtPC && Query.InstructionStateAtPC->State);
+  EXPECT_EQ(Query.InstructionStateAtPC->State, Second.State);
+}
+
+TEST(AArch64ImplicitUnwind, CoalescedCallsUseTheirOwnSavedCaller) {
+  Frame F{SignB, PushFP, MoveFP, CallNextFrame, PopFP, AuthB, Ret, SignA, Ret};
+  F.useCompact();
+  F.Image.Symbols.push_back(Symbol::makeFunc(7 * sizeof(uint32_t)));
+  auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+  ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+  const auto Plan = prepareDarwinArm64eSystemCaller(
+      aarch64UnwindRowAt(*Rows, 4 * sizeof(uint32_t)), F.Function.CodeRange, 0);
+  ASSERT_TRUE(Plan);
+  EXPECT_TRUE(Plan->Frame.SavedFP && Plan->Frame.SavedLR);
+  EXPECT_EQ(Plan->Frame.Signing, NDArm64eSignedIBWithCFA);
+  const auto &Second = aarch64UnwindRowAt(*Rows, 8 * sizeof(uint32_t)).Signing;
+  ASSERT_TRUE(Second.State);
+  EXPECT_EQ(Second.State->Key, AArch64RAKey::A);
+}
+
+TEST(AArch64ImplicitUnwind, CoalescedTailTransfersDoNotMergeEntryStates) {
+  Frame F{SignB, AuthB, Skip, Ret, SignA, Ret};
+  F.useCompact();
+  F.Image.Symbols.push_back(Symbol::makeFunc(4 * sizeof(uint32_t)));
+  auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+  ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+  const auto &Entry = aarch64UnwindRowAt(*Rows, 4 * sizeof(uint32_t)).Signing;
+  ASSERT_TRUE(Entry.State);
+  EXPECT_EQ(Entry.State->Kind, Kind::Unsigned);
+  EXPECT_EQ(aarch64UnwindRowAt(*Rows, 3 * sizeof(uint32_t)).Signing.Status,
+            Status::Unknown);
+}
+
+TEST(AArch64ImplicitUnwind, CoalescedRangesDoNotGuessMissingEntries) {
+  Frame F{Ret, SignB, Ret};
+  F.useCompact();
+  auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+  ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+  EXPECT_EQ(aarch64UnwindRowAt(*Rows, 2 * sizeof(uint32_t)).Signing.Status,
+            Status::Unknown);
+  F.Image.Symbols.push_back(Symbol::makeFunc(sizeof(uint32_t)));
+  Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+  ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+  EXPECT_EQ(aarch64UnwindRowAt(*Rows, 2 * sizeof(uint32_t)).Signing.Status,
+            Status::Known);
+}
+
+TEST(AArch64ImplicitUnwind, CoalescedFramesRejectCrossedBoundaries) {
+  for (auto Transfer : {Nop, Skip, LocalCall}) {
+    Frame F{Transfer, Ret, SignB, Ret};
+    F.useCompact();
+    F.Image.Symbols.push_back(Symbol::makeFunc(sizeof(uint32_t)));
+    auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+    EXPECT_FALSE(bool(Rows));
+    if (!Rows)
+      llvm::consumeError(Rows.takeError());
+  }
+}
+
+TEST(AArch64ImplicitUnwind, CoalescedRootsExcludeGuessesAndContinuations) {
+  for (unsigned Case = 0; Case != 3; ++Case) {
+    Frame F{Ret, SignB, Ret};
+    F.useCompact();
+    auto &Entry =
+        F.Image.Symbols.emplace_back(Symbol::makeFunc(sizeof(uint32_t)));
+    if (Case == 0)
+      Entry.IsFunc = false;
+    else if (Case == 1)
+      Entry.IsBoundaryGuess = true;
+    else
+      F.Image.ContinuationCodeStarts.insert(Entry.Addr);
+    auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+    ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+    EXPECT_EQ(aarch64UnwindRowAt(*Rows, 2 * sizeof(uint32_t)).Signing.Status,
+              Status::Unknown);
+  }
+}
+
+TEST(AArch64ImplicitUnwind, FrameRelativeMetadataCannotSpanOtherEntries) {
+  for (bool Dwarf : {false, true}) {
+    Frame F{ExplicitSignB, Ret, ExplicitSignB, Ret};
+    if (!Dwarf)
+      F.useCompact(macho_unwind::kARM64ModeFramePAuthLR);
+    F.Image.Symbols.push_back(Symbol::makeFunc(2 * sizeof(uint32_t)));
+    auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+    EXPECT_FALSE(bool(Rows));
+    if (!Rows)
+      llvm::consumeError(Rows.takeError());
+  }
 }
 
 TEST(AArch64ImplicitUnwind, SynchronousDwarfLeavesPartialFrameRowsImplicit) {
