@@ -3091,7 +3091,10 @@ TEST(LLVMCPointerAddresses, AModuleNamesTheDataOfAMirrorItsEnvironmentHolds) {
   EXPECT_NE(Source.find("/* completed.0 */\nextern uint8_t completed_0;"),
             std::string::npos)
       << Source;
-  EXPECT_NE(Source.find("completed_0 = 1;"), std::string::npos) << Source;
+  // The flag's store is volatile, as its load is, and keeps the qualifier.
+  EXPECT_NE(Source.find("*(volatile uint8_t*)(&completed_0) = 1;"),
+            std::string::npos)
+      << Source;
   EXPECT_NE(Source.find(" __nd_codeptr_140C00000;\n"), std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("140BFFFFF"), std::string::npos) << Source;
