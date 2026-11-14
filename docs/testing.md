@@ -24210,7 +24210,7 @@ unknown-bit transport and source joins. MSA rounded shifts/inserts exhaust every
 count at every width with APInt expectations, aliases and reserved prefixes;
 source fixtures execute zero/mid/full immediate counts on both byte orders.
 
-### MIPS decode/lift and firmware performance
+### MIPS scalar floating-point and ABI roundtrips
 
 The hard-float call tests assemble original callers and callees and bind explicit declarations.
 
@@ -24222,6 +24222,12 @@ PYTHONPATH=third_party/unicorn/bindings/python LIBUNICORN_PATH=/path/to/unicorn-
   --output build-mips/floating-abi-roundtrip
 ```
 
+The runner defaults to Release 6. Add `--revision 2` for classic FR=1 Release 2
+with legacy NaNs, delayed JAL/JALR calls and the 74Kf/MIPS64R2 reference CPUs.
+`--abi` and `--layout` narrow a diagnostic rerun; omitting them runs all cases.
+`SourceCallABI.AlignmentGuardPreservesOutgoingStackBytesAndAddresses` checks
+the reaching-store proof in all six MIPS ABI/byte-order profiles, with malformed
+alignment and opaque-effect controls that must still fail qualification.
 The runner compares original machine code with recompiled HighC and LLVMC at
 O0/O2 for o32, n32 and n64 in both byte orders, including float/double
 mixed entry arguments and nine-argument FP overflow. The SDK fixture obtains
@@ -24253,6 +24259,11 @@ all eight low address offsets. The loader test rejects inconsistent FP ABI and
 CPR1 width evidence. These checks do not qualify FR=0, paired-single or
 historical ISA profiles.
 
+`MIPSPipeline.DoubleResultDiscardsOnlyOverwrittenUnknownFPRWords` checks that
+MTC1 followed by CVT.D.W may return a defined double after replacing the
+unpredictable high word. ADD.D must still refuse that unknown input. Both
+source paths, ISA revisions and byte orders participate in the check.
+
 `profile-roundtrip.py` accepts `mips32r2fp_*` and `mips64r2fp_*` selections for
 82 pre-R6 source profiles. Examples are `mips32r2fp_abs`, `mips64r2fp_madd`,
 `mips32r2fp_cc7`, `mips64r2fp_branch` and `mips64r2fp_memory_suxc1`.
@@ -24262,6 +24273,8 @@ repeat `--profile` to select more than one. The runner assembles explicit
 return bits, FCSR and output memory against the original target program.
 The optional Unicorn reference must be built from the pinned fork. Generated
 products are deleted on success or failure after results are recorded.
+
+### MIPS decode/lift and firmware performance
 
 The opt-in `neverd-mips-request-bench` target repeatedly decompiles one loaded
 SDK session and checks that every request produces identical source.

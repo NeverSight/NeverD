@@ -1173,6 +1173,9 @@ alignment and initialized memory continue to apply.
 HighC and LLVMC preserve the arithmetic and control operations with native
 target assembly and reuse the scalar ABI and byte-provenance checks described
 below. No host floating-point evaluation substitutes for the target's FCSR.
+The pinned Unicorn includes [the legacy ABS/NEG exception fix](https://github.com/NeverSight/unicorn/pull/28).
+The independent sign tests distinguish pre-R6 arithmetic NaN behavior from R6
+bit operations, including enabled Invalid exceptions and preserved destinations.
 The rules follow [MIPS64 Volume II, revision 2.50](https://0x04.net/~mwk/doc/mips/MD00087-2B-MIPS64BIS-AFP-02.50.pdf).
 
 ### Release 6 scalar FPU
@@ -1222,7 +1225,10 @@ A nonleaf's saved link is accepted only when exact reaching stores preserve
 the original RA and mode, its slot lies outside the callee's complete outgoing
 argument area, and no argument or other store exposes the private frame.
 Byte provenance ignores unread upper FPR bytes; stack arguments require their
-own reaching-store proof. Unresolved memory effects remain rejected.
+own reaching-store proof. A validated alignment guard preserves computed stack
+addresses and reaching stores; malformed guards and opaque effects invalidate
+that evidence. This also qualifies the aligned pre-R6 floating stores used for
+outgoing overflow and variadic arguments.
 Function-scoped instruction mode is preserved, including physical microMIPS FP
 assembly. LLVMC copies floating views of integer storage as object bytes;
 ordinary C assignment would change these bit patterns numerically.
@@ -1252,7 +1258,10 @@ unsigned narrow arguments observed at the full width of the register.
 Single-precision result inference follows the arithmetic operation rather than
 the FPR container. A final source byte-use proof may canonicalize unread upper
 bits; stores, calls, preserved registers and observed return bytes block that
-proof. LowIR and analysis-only MedIR retain the original unpredictable state.
+proof. A full replacement in the same block also proves an earlier return
+register definition cannot supply the implicit result; explicit reads of that
+earlier value remain observable. LowIR and analysis-only MedIR retain the
+original unpredictable state.
 
 Discovery keeps the detail-off decode path: a delayed-unit snapshot never reads
 Capstone's retained but unpopulated operand allocation. MIPS lifting uses the
