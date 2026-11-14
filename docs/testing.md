@@ -24082,8 +24082,12 @@ and unpredictable results with APInt expectations. The fork's
 all four banks with independent bit-at-a-time expectations in both byte
 orders. It also checks DSP-disabled MFHI/MFLO with discarded results on o32
 and n64. The `mips64bank*` source profiles preserve full-width AC1–AC3
-transfers, extraction and accumulator shifts through both C views. These
-native checks do not qualify hardware execution.
+transfers, extraction and accumulator shifts through both C views. The
+`mips64discard*` profiles check success/failure EFI and POS updates with a
+zero destination and no observed accumulator input. Their source returns
+the resulting DSPControl value. Native zero-result regressions additionally
+check DSP-disabled exceptions and an unchanged zero register. These checks
+do not qualify hardware execution.
 
 Run `micro-dsp-simulator.py` with `--assembler`, `--linker`, `--bench` and
 `--simulator` to execute the physical microMIPS DSP and DSPR2 instructions.

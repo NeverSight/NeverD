@@ -295,7 +295,9 @@ the low word or doubleword after shifting the complete 128-bit accumulator.
 `DEXTP[V]` and `DEXTPDP[V]` extract up to 64 bits ending at the seven-bit
 POS, including fields crossing HI/LO and fields wholly within HI. A failed
 extraction sets EFI, preserves POS and returns an unpredictable value.
-Successful decrement forms update POS modulo 128. `DSHILO`/`DSHILOV` shift
+Successful decrement forms update POS modulo 128. EFI and POS updates still
+occur when the destination is `$zero`; discarded results also retain the
+DSP-enabled check in the original executor. `DSHILO`/`DSHILOV` shift
 the complete accumulator logically by a signed seven-bit count, including
 the -64 endpoint. `DMTHLIP` moves LO to HI, writes the full GPR to LO and
 advances POS by 64; a POS greater than 64 leaves POS unpredictable.

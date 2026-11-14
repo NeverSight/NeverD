@@ -31,6 +31,11 @@ DSP64_BOUNDARIES = {
 
 
 def kernels():
+    for bank in range(4):
+        for op in ("dextp", "dextpv", "dextpdp", "dextpdpv"):
+            operand = "$4" if op.endswith("v") else "7"
+            yield (f"mips64discard{bank}_{op}", "mips64r2", "dsp",
+                   f"wrdsp $5,1\n{op} $0,$ac{bank},{operand}\nrddsp $2,63")
     for bank in range(1, 4):
         setup = f"mthi $4,$ac{bank}\nmtlo $5,$ac{bank}\n"
         for form in ("hi", "lo", "extract", "position", "shift_hi", "shift_lo"):
@@ -162,7 +167,7 @@ def inputs(name, bits):
         for a in (0, 1, -1, 0x11223344, 0x8000000000000001)
         for b in (0, 7, -1, 0xA5A533FF)
     ]
-    if name.startswith(("mips64extract_", "mips64boundary_", "mips64bank")):
+    if name.startswith(("mips64extract_", "mips64boundary_", "mips64bank", "mips64discard")):
         values = (0, 1, 0x123456789abcdef0, (1 << 63) - 1, 1 << 63, (1 << 64) - 1)
         return [(a, b) for a in values for b in values]
     if name.startswith("mips64acc_"):
@@ -448,6 +453,19 @@ def run(args, artifacts):
                 oracle = directory / "classic.elf"
                 assemble(oracle, False)
             wanted = observe(oracle, bits, little, feature, cases)
+            if name.startswith("mips64discard"):
+                op = name.split("_", 1)[1]
+                for i, ((a, b), actual) in enumerate(zip(cases, wanted, strict=True)):
+                    count, pos = a & 63 if op.endswith("v") else 7, b & 127
+                    control = (0x01004005 if i % 2 else 0) & ~127 | pos
+                    if pos < count:
+                        control |= 0x4000
+                    else:
+                        control &= ~0x4000
+                        if "dp" in op:
+                            control = (control & ~127) | ((pos - count - 1) & 127)
+                    if actual != (control, control):
+                        raise ValueError(f"{name}: original {actual}, independent {(control, control)}")
             if name.startswith("mips64bank"):
                 form = name.split("_", 1)[1]
                 mask = (1 << 64) - 1
