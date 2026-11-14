@@ -236,7 +236,7 @@ void discardUnobservedMIPSFPUpperBits(
   if (!Function.ReturnType || !Function.MultiReturn.empty())
     return;
   const bool Floating = Function.ReturnType->Kind == NdTypeKind::Float;
-  if (!Declared && !(Floating && Function.ReturnType->Size == 4) &&
+  if (!Declared && !Floating &&
       !(Function.ReturnType->Kind == NdTypeKind::Int &&
         !Function.ReturnsVectorRegister))
     return;
@@ -290,6 +290,29 @@ void discardUnobservedMIPSFPUpperBits(
     if (Clobber.PreservedPrefixSize)
       return;
 
+  // A physical return register's earlier SSA definitions cannot reach the
+  // return if a full write replaces them in the same block. Explicit uses
+  // (including calls and stores) still participate in the byte-use proof.
+  std::set<Key> Overwritten;
+  for (const auto &Block : Function.Blocks) {
+    std::map<uint64_t, uint16_t> LaterWrites;
+    for (auto It = Block.Ops.rbegin(); It != Block.Ops.rend(); ++It) {
+      if (It->Opcode == NdOp::RETURN)
+        LaterWrites.clear();
+      const auto &Value = It->Output;
+      if (Value.Kind != MedVar::Reg)
+        continue;
+      auto &Bytes = LaterWrites[Value.RegOff];
+      if (Bytes >= Value.Size)
+        Overwritten.insert(KeyOf(Value));
+      Bytes = std::max(Bytes, Value.Size);
+    }
+    for (const auto &Phi : Block.Phis)
+      if (Phi.Output.Kind == MedVar::Reg &&
+          LaterWrites[Phi.Output.RegOff] >= Phi.Output.Size)
+        Overwritten.insert(KeyOf(Phi.Output));
+  }
+
   const auto &TRI = getTargetRegInfo(Target);
   const auto Observed = [&](MedVar Root) {
     struct Span {
@@ -303,14 +326,17 @@ void discardUnobservedMIPSFPUpperBits(
       Work.pop_back();
       if (!Seen.emplace(KeyOf(Value), First, End).second)
         continue;
-      // Keep every potentially returned FPR definition conservative; the
-      // ABI reads its low word even when RETURN still carries the GPR seed.
+      // Keep every potentially returned FPR definition conservative unless
+      // a later full write proves it cannot supply the implicit ABI result.
       if (Floating && Value.Kind == MedVar::Reg &&
-          Value.RegOff == TRI.FPReturnReg && First < Function.ReturnType->Size)
+          Value.RegOff == TRI.FPReturnReg &&
+          First < Function.ReturnType->Size &&
+          !Overwritten.contains(KeyOf(Value)))
         return true;
       // RETURN may still carry only its branch target here. Integer
       // result registers are observable even without an explicit operand.
       if (!Floating && Value.Kind == MedVar::Reg &&
+          !Overwritten.contains(KeyOf(Value)) &&
           ((Value.RegOff == TRI.IntReturnReg &&
             First < Function.ReturnType->Size) ||
            (Value.RegOff == TRI.IntReturnReg2 &&
