@@ -46,6 +46,12 @@ def kernels():
             "mips64acc_" + instruction.replace(".", "_"), "mips64r2", "dsp",
             "mthi $0\nmtlo $0\n" + instruction + " $ac0,$4,$5\nmflo $2",
         )
+    for instruction in ("dmaddu", "dmsubu"):
+        for half in ("hi", "lo"):
+            yield (
+                f"mips64acc_{instruction}_{half}", "mips64r2", "dsp",
+                f"mthi $4\nmtlo $5\n{instruction} $ac0,$4,$5\nmf{half} $2",
+            )
     # The R6 generic core executes the original microMIPS ELF directly.
     yield "micromips32r6", "mips32r6", "", "mul $2,$4,$5\nbitswap $2,$2\njrc16 $ra"
     yield (
@@ -95,11 +101,16 @@ def inputs(name, bits):
         for b in (0, 7, -1, 0xA5A533FF)
     ]
     if name.startswith("mips64acc_"):
-        return [
+        vectors = [
             (a, b)
             for a in (0, 1, 2, 0x0001000200030004, 0xFFFF00010002FFFF)
             for b in (0, 5, 6, 0x0005000600070008, 0xFFFF00020001FFFF)
         ]
+        if name.startswith(("mips64acc_dmaddu_", "mips64acc_dmsubu_")):
+            vectors.extend([(0x10000, 0x10000), (0xffffffff, 0xffffffff),
+                            (0xffffffff00000000, 0xffffffff),
+                            (0xffffffffffffffff, 0xffffffffffffffff)])
+        return vectors
     if "fp" in name:
         values = (
             (0, 0x80000000, 0x3FC00000, 0xBF800000, 0x7FC00000, 0x7F800001, 1)
@@ -372,6 +383,15 @@ def run(args, artifacts):
                 oracle = directory / "classic.elf"
                 assemble(oracle, False)
             wanted = observe(oracle, bits, little, feature, cases)
+            if name.startswith(("mips64acc_dmaddu_", "mips64acc_dmsubu_")):
+                word = (1 << 32) - 1
+                mask = (1 << 64) - 1
+                for (a, b), (value, _) in zip(cases, wanted, strict=True):
+                    dot = (a >> 32) * (b >> 32) + (a & word) * (b & word)
+                    result = ((a << 64) | b) + (-dot if "dmsubu" in name else dot)
+                    expected = (result >> (64 if name.endswith("_hi") else 0)) & mask
+                    if value != expected:
+                        raise ValueError(f"{name}: original returned {value:#x}, expected {expected:#x}")
             for view in ("highc", "llvmc"):
                 source = directory / (view + ".c")
                 command(
