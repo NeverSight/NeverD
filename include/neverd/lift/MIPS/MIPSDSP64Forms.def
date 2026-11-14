@@ -104,5 +104,7 @@ NEVERD_MIPS_DSP64(0x574, "maq_s.w.qhlr", Accumulator, 0x130)
 NEVERD_MIPS_DSP64(0x5b4, "maq_s.w.qhrl", Accumulator, 0x130)
 NEVERD_MIPS_DSP64(0x5f4, "maq_s.w.qhrr", Accumulator, 0x130)
 NEVERD_MIPS_DSP64(0x734, "maq_s.l.pwl", Accumulator, 0x130)
+NEVERD_MIPS_DSP64(0x774, "dmaddu", Accumulator, 0x130)
 NEVERD_MIPS_DSP64(0x7b4, "maq_s.l.pwr", Accumulator, 0x130)
+NEVERD_MIPS_DSP64(0x7f4, "dmsubu", Accumulator, 0x130)
 #undef NEVERD_MIPS_DSP64

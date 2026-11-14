@@ -285,7 +285,10 @@ without identifying its historical revision. Concrete use of these encodings
 therefore requires a processor implementing them. Twenty dot-product and selected-lane instructions update complete 128-bit
 HI/LO accumulators. Q15/Q31 product saturation, carry/borrow, Q31/Q63 result
 saturation and the selected bank's sticky overflow flag remain explicit IR
-operations. The legacy DEXTR/DEXTP and DMADD families need separate coverage. In n64 DSPControl,
+operations. Classic `DMADDU` and `DMSUBU` add or subtract the sum of two
+unsigned 32×32-bit lane products in the selected 128-bit accumulator.
+Carry and borrow propagate between LO and HI. DSPControl is preserved.
+Legacy DEXTR/DEXTP and signed DMADD/DMSUB still need separate coverage. In n64 DSPControl,
 POS has seven bits and CCOND has eight. RDDSP zero-extends selected bits.
 See the register model and revision history in the
 [MIPS64 DSP Module, revision 3.02](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00375-2B-MIPS64DSP-AFP-03.02.pdf).
