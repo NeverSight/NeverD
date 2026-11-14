@@ -15,7 +15,8 @@
 namespace neverd::mips {
 /// Canonical scalar word for doubleword forms absent from the micro decoder.
 /// The physical encoding always consists of two target-endian halfwords.
-inline std::optional<uint32_t> micro64Word(uint32_t Word) {
+inline std::optional<uint32_t> micro64Word(uint32_t Word,
+                                           bool Release6 = false) {
   const unsigned Major = Word >> 26, RT = (Word >> 21) & 31;
   const unsigned RS = (Word >> 16) & 31, RD = (Word >> 11) & 31;
   const uint32_t Bases = (RS << 21) | (RT << 16);
@@ -66,6 +67,11 @@ inline std::optional<uint32_t> micro64Word(uint32_t Word) {
     break;
   }
   switch (Word & 0xffff) {
+  case 0xab3c:
+  case 0xbb3c: // DDIV / DDIVU into HI/LO
+    if (Release6)
+      return std::nullopt;
+    return Bases | (Word & 0x1000 ? 31u : 30u);
   case 0x4b3c:
   case 0x5b3c: // DCLO / DCLZ (the classic format repeats rd in rt).
     return (28u << 26) | Bases | (RT << 11) | (Word & 0x1000 ? 36u : 37u);

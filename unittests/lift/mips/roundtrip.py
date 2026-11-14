@@ -32,7 +32,8 @@ from mips_validation_artifacts import MIPSValidationArtifacts
 PROFILES = [("mips", 32, False), ("mipsel", 32, True),
             ("mips64", 64, False), ("mips64el", 64, True)]
 MICRO_FUNCTIONS = ["mips_add", "mips_load", "mips_store", "mips_stack", "mips_branch_capture",
-                   "mips_merge_word", "mips_merge_store_word"]
+                   "mips_merge_word", "mips_merge_store_word",
+                   "mips_div_lo", "mips_div_hi", "mips_divu_lo", "mips_divu_hi"]
 KERNEL_FORMS = Path(__file__).with_name("MIPSBitfieldKernels.def").read_text()
 FIELDS = {name: tuple(map(int, (width, insert, pos, size)))
           for name, width, insert, pos, size in re.findall(
@@ -59,7 +60,9 @@ FUNCTIONS += ["mips_div_lo", "mips_div_hi", "mips_divu_lo", "mips_divu_hi", "mip
 FUNCTIONS += ["mips_store_byte", "mips_store_half"]
 DOUBLEWORD_STORES = ("mips_merge_store_left_double", "mips_merge_store_right_double",
                      "mips_merge_store_double")
-FUNCTIONS += list(DOUBLEWORD_STORES)
+DOUBLEWORD_DIVISIONS = ("mips_ddiv_lo", "mips_ddiv_hi", "mips_ddivu_lo", "mips_ddivu_hi")
+DOUBLEWORD_KERNELS = DOUBLEWORD_STORES + DOUBLEWORD_DIVISIONS + ("mips_ddiv_dead",)
+FUNCTIONS += list(DOUBLEWORD_KERNELS)
 FUNCTIONS += list(FIELDS) + list(SHUFFLES) + ["mips_word_likely", "mips_word_zero"]
 
 
@@ -71,14 +74,19 @@ def word_value(value):
 def independent_result(function, inputs):
     if function in ("mips_store_byte", "mips_store_half"):
         return inputs[1] & (0xff if function.endswith("_byte") else 0xffff)
-    if function == "mips_div_dead":
+    if function in ("mips_div_dead", "mips_ddiv_dead"):
         return 7
-    if function.startswith("mips_div"):
-        x, y = [v & 0xffffffff for v in inputs] if function.startswith("mips_divu") else inputs
+    if function.startswith("mips_div") or function in DOUBLEWORD_DIVISIONS:
+        wide = function in DOUBLEWORD_DIVISIONS
+        bits = 64 if wide else 32
+        x, y = inputs
+        if "divu" in function:
+            x, y = (v & ((1 << bits) - 1) for v in inputs)
         q = abs(x) // abs(y)
         if (x < 0) != (y < 0):
             q = -q
-        return word_value(x - q * y if function.endswith("_hi") else q)
+        result = x - q * y if function.endswith("_hi") else q
+        return result if wide else word_value(result)
     if function in FIELDS:
         width, insert, pos, size = FIELDS[function]
         source, old = inputs[0], inputs[1] if insert else 0
@@ -178,7 +186,15 @@ def invoke(uc, entry, bits, little, arguments, old_destination=0, initial_regist
 
 
 def cases(function, bits):
-    if function == "mips_div_dead":
+    if function in DOUBLEWORD_DIVISIONS:
+        limit = 1 << 63
+        rng = random.Random(0xDD17)
+        return [[0, -1], [-10, 3], [10, -3], [-10, -3], [-limit, -1],
+                [-limit, 3], [-1, -limit], [limit - 1, -limit],
+                [0x100000002, 0x100000001], [-1, 1]] + [
+                    [rng.randrange(-limit, limit), rng.randrange(-limit, limit) or 1]
+                    for _ in range(24)]
+    if function in ("mips_div_dead", "mips_ddiv_dead"):
         return [[0, 0], [7, 0], [-1, 0]]
     if function.startswith("mips_div"):
         return [[10, 3], [-10, 3], [10, -3], [-10, -3], [-2147483648, -1],
@@ -312,7 +328,7 @@ def run(args, artifacts):
         command([*link, "-e", "mips_add", obj, "-o", original],
                 output / f"{profile}-link.log")
         for function in args.function or (MICRO_FUNCTIONS if micro else FUNCTIONS):
-            if bits < 64 and function in DOUBLEWORD_STORES:
+            if bits < 64 and function in DOUBLEWORD_KERNELS:
                 continue
             if function in FIELDS or function in SHUFFLES:
                 if (FIELDS.get(function) or SHUFFLES[function])[0] > bits:
@@ -454,6 +470,18 @@ def run(args, artifacts):
                                            "original_executed": False})
                 else:
                     raise RuntimeError(f"{stem.name}: invalid word input was silently accepted")
+        if function in DOUBLEWORD_DIVISIONS:
+            # The original's zero result is unspecified. Generated sources
+            # enforce their nonzero divisor domain for a retained result.
+            uc, entry = emulator(rebuilt, bits, little, function,
+                                 original if backend == "llvmc" else None)
+            try:
+                invoke(uc, entry, bits, little, [7, 0])
+            except UcError as error:
+                if error.errno != UC_ERR_EXCEPTION:
+                    raise
+            else:
+                raise RuntimeError(f"{stem.name}: live division accepted a zero divisor")
         receipt = {"profile": profile, "encoding": args.encoding,
                 "function": function, "backend": backend,
                 "cases": observations,

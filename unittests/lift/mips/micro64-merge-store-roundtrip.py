@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run original and regenerated microMIPS64r2 merge stores on GNU sim."""
+"""Run original and regenerated microMIPS64r2 kernels on GNU sim."""
 
 import argparse
 import subprocess
@@ -8,8 +8,9 @@ from pathlib import Path
 
 from elftools.elf.elffile import ELFFile
 
-FUNCTIONS = ("mips_merge_store_left_double", "mips_merge_store_right_double",
-             "mips_merge_store_double")
+STORES = ("mips_merge_store_left_double", "mips_merge_store_right_double",
+          "mips_merge_store_double")
+DIVISIONS = ("mips_ddiv_lo", "mips_ddiv_hi", "mips_ddivu_lo", "mips_ddivu_hi")
 SUCCESS = 211
 
 
@@ -27,13 +28,10 @@ def check_micro_functions(path, names, n32):
                 raise ValueError(f"{path.name} has no tagged microMIPS function {name}")
 
 
-def harness(little):
-    text = [".text", ".set noreorder", ".set micromips", ".set insn32",
-            ".globl _start", ".ent _start", "_start:", "dla $29,stack_end"]
-    data = [".data", ".balign 16", ".space 32768", "stack_end:"]
+def store_cases(text, data, little):
     order = "little" if little else "big"
     case = 0
-    for name in FUNCTIONS:
+    for name in STORES:
         for offset in range(8):
             for value in (0, 0xfedcba9876543210, 0xffffffffffffffff):
                 case += 1
@@ -56,6 +54,37 @@ def harness(little):
                 text.extend([f"b pass{case}", "nop", f"fail{case}:", f"li $4,{case}",
                              "break 0x3ff", f"pass{case}:"])
                 data.extend([f"buffer{case}:", ".byte " + ",".join(map(str, initial))])
+    return case
+
+
+def division_cases(text):
+    mask = (1 << 64) - 1
+    limit = 1 << 63
+    inputs = [(0, -1), (10, 3), (-10, 3), (10, -3), (-10, -3),
+              (-limit, -1), (-limit, 3), (-1, -limit), (limit - 1, -limit),
+              (0x100000002, 0x100000001), (0x123456789abcdef, 0x12345), (-1, 1)]
+    case = 0
+    for name in DIVISIONS:
+        for a, b in inputs:
+            case += 1
+            if "divu" in name:
+                a, b = a & mask, b & mask
+            q = abs(a) // abs(b)
+            if (a < 0) != (b < 0):
+                q = -q
+            value = a - q * b if name.endswith("_hi") else q
+            text.extend([f"dli $4,{a & mask:#x}", f"dli $5,{b & mask:#x}",
+                         f"jal {name}", "nop", f"dli $8,{value & mask:#x}",
+                         f"beq $2,$8,pass{case}", "nop", f"li $4,{case}",
+                         "break 0x3ff", f"pass{case}:"])
+    return case
+
+
+def harness(little, division):
+    text = [".text", ".set noreorder", ".set micromips", ".set insn32",
+            ".globl _start", ".ent _start", "_start:", "dla $29,stack_end"]
+    data = [".data", ".balign 16", ".space 32768", "stack_end:"]
+    case = division_cases(text) if division else store_cases(text, data, little)
     text.extend([f"li $4,{SUCCESS}", "break 0x3ff", ".end _start"])
     return "\n".join(text + data) + "\n", case
 
@@ -71,22 +100,24 @@ def run(args, work, little, n32):
           "-mno-abicalls", "-minterlink-compressed",
           "-fno-pic", "-ffreestanding", "-fno-strict-aliasing", "-Werror=attributes",
           "-G0", endian]
-    fixture = Path(__file__).with_name("merge-store-word.S")
+    division = args.suite == "division"
+    functions = DIVISIONS if division else STORES
+    fixture = Path(__file__).with_name("division.S" if division else "merge-store-word.S")
     (work / fixture.name).write_bytes(fixture.read_bytes())
     source = subprocess.check_output([*cc, "-DWIDE", "-E", "-P",
                                       "-x", "assembler-with-cpp", fixture.name], cwd=work)
     (work / "forms.s").write_bytes(b".text\n.set noreorder\n.set micromips\n.set insn32\n" + source)
     subprocess.run([*assemble, "-o", "forms.o", "forms.s"], cwd=work, check=True)
-    subprocess.run([*link, "-e", FUNCTIONS[0], "-o", "forms.elf", "forms.o"], cwd=work, check=True)
-    check_micro_functions(work / "forms.elf", FUNCTIONS, n32)
-    driver, count = harness(little)
+    subprocess.run([*link, "-e", functions[0], "-o", "forms.elf", "forms.o"], cwd=work, check=True)
+    check_micro_functions(work / "forms.elf", functions, n32)
+    driver, count = harness(little, division)
     (work / "driver.s").write_text(driver)
     subprocess.run([*assemble, "-o", "driver.o", "driver.s"], cwd=work, check=True)
 
     def execute(objects, label):
         subprocess.run([*link, "-e", "_start", "-o", "run.elf", "driver.o", *objects],
                        cwd=work, check=True)
-        check_micro_functions(work / "run.elf", ("_start", *FUNCTIONS), n32)
+        check_micro_functions(work / "run.elf", ("_start", *functions), n32)
         result = subprocess.run([args.simulator, "--endian", order, "run.elf"], cwd=work,
                                 timeout=30)
         if result.returncode != SUCCESS:
@@ -98,26 +129,27 @@ def run(args, work, little, n32):
                                   "void *memcpy(void *, const void *, size_t);\n"
                                   "void *memset(void *, int, size_t);\n")
     for backend in ("highc", "llvmc"):
-        for name in FUNCTIONS:
+        for name in functions:
             subprocess.run([args.neverd, "decompile", "--func", name,
                             *(["--llvm"] if backend == "llvmc" else []),
                             "-o", f"{name}.c", "forms.elf"], cwd=work, check=True)
-            if "volatile uint8_t" not in (work / f"{name}.c").read_text():
+            if not division and "volatile uint8_t" not in (work / f"{name}.c").read_text():
                 raise ValueError(f"{backend} lost volatile byte stores in {name}")
         for opt in ("-O0", "-O2"):
-            for name in FUNCTIONS:
+            for name in functions:
                 subprocess.run([*cc, "-I.", opt, "-c", f"{name}.c", "-o", f"{name}.o"],
                                cwd=work, check=True)
                 check_micro_functions(work / f"{name}.o", (name,), n32)
-            execute([f"{name}.o" for name in FUNCTIONS], f"{backend} {opt}")
+            execute([f"{name}.o" for name in functions], f"{backend} {opt}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--suite", choices=("stores", "division"), default="stores")
     for flag in ("neverd", "cc", "assembler", "linker", "simulator"):
         parser.add_argument("--" + flag, type=lambda s: Path(s).absolute(), required=True)
     args = parser.parse_args()
     for little in (False, True):
         for n32 in (False, True):
-            with tempfile.TemporaryDirectory(prefix="neverd-micro64-stores-") as directory:
+            with tempfile.TemporaryDirectory(prefix="neverd-micro64-") as directory:
                 run(args, Path(directory), little, n32)

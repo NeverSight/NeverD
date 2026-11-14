@@ -101,12 +101,17 @@ two-byte slots and unproved instruction modes remain excluded.
 Concrete LowIR transport and source parameter inference have separate validation
 boundaries; this source proof does not initialize absent machine registers.
 
-Classic `DIV`/`DIVU` and MIPS16 word division capture both operands and define
+Classic, microMIPS and MIPS16 word `DIV`/`DIVU` capture both operands and define
 HI/LO together. Signed division truncates toward zero; remainder follows the
 dividend's sign. MIN32/-1 produces the truncated word quotient and zero
 remainder. A zero divisor makes both LowIR results unknown, without inventing
 an arithmetic exception or adopting a particular CPU's value. On MIPS64, both
 word inputs must be sign-extended words and each result is sign-extended.
+Pre-Release 6 classic MIPS64 and microMIPS64 also lift `DDIV` and `DDIVU`.
+They consume two full 64-bit GPRs and write the 64-bit quotient to LO and
+remainder to HI. In the signed case, MIN64/-1 produces MIN64 and zero.
+Division by zero leaves both results unknown. The 32-bit microMIPS
+encodings of `MFHI` and `MFLO` can read either result on n32 and n64.
 
 Generated source has an explicitly narrower domain: **every retained division
 that executes requires a nonzero divisor**. Its runtime domain check is not a
@@ -121,10 +126,10 @@ Reading only a low byte or halfword does not prove that incoming upper bits
 have the extension a narrow C parameter would require. Declared source types
 remain a separate contract.
 
-Historical MIPS I–V profiles,
-pre-Release 6 scalar floating point, MSA/DSP forms beyond the slices below, privileged instructions and reservations outside the MIPS16e2 and classic Release 6 LowIR coverage below,
-pre-R6 doubleword division and trapping arithmetic are not admitted by
-the current lifter. Unsupported instructions, missing slots and transfers in a
+Coverage remains incomplete for historical MIPS I–V profiles, pre-Release 6
+scalar floating point, trapping arithmetic and the MSA/DSP forms outside the
+slices below. Privileged instructions and reservations are admitted by profile
+as described under MIPS16e2 and classic Release 6. Unsupported instructions, missing slots and transfers in a
 delay slot produce errors, not replacement NOPs. General aggregate source ABI
 classification, arbitrary PIC/gp recovery, raw-input target selection and
 native code rewriting are not claimed. Unicorn is a test reference, not a
@@ -286,7 +291,7 @@ See the register model and revision history in the
 [MIPS64 DSP Module, revision 3.02](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00375-2B-MIPS64DSP-AFP-03.02.pdf).
 
 Classic AC0 partial writes preserve the pre-R6 unread-result restriction:
-MULT/MULTU/DIV/DIVU (and supported doubleword multiply) establish pending
+MULT/MULTU/DIV/DIVU and their doubleword forms establish pending
 history; MFHI/MFLO consume it even when their destination is `$zero`. A partial
 write before consumption makes the other half unpredictable. A pure transport
 intrinsic carries unknown bits in LowIR; source propagation must discharge it
@@ -353,7 +358,8 @@ The microMIPS operation and slot rules were checked against
 and the pinned [GNU simulator definitions](https://gnu.googlesource.com/binutils-gdb/+/d01e823438c7dc264d6885fbbfeace4d8955dcb7/sim/mips/micromips.igen).
 On n64, tagged callable addresses, computed jumps, link registers and memory
 addresses retain all 64 bits. The r2 scalar subset adds doubleword arithmetic,
-shifts, rotates, bit fields, byte shuffles, LD/SD, LWU, LDL/LDR and SDL/SDR.
+shifts, rotates, bit fields, byte shuffles, HI/LO division, LD/SD, LWU,
+LDL/LDR and SDL/SDR.
 The micro doubleword merge transfers use a signed 12-bit displacement.
 For micro functions, HighC and LLVMC select GCC's `micromips` attribute or
 Clang's `micromips,nomips16` pair. GCC requires `-minterlink-compressed` for

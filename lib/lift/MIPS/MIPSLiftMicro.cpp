@@ -375,6 +375,20 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
   case 0x3c:
     return microLegacyJump(First, uint16_t(Word));
   case 0x00: {
+    if (!R6) {
+      switch (uint16_t(Word)) {
+      case 0xab3c:
+      case 0xbb3c: // DIV / DIVU
+        return Encoding{registerForm(Word & 0x1000 ? 27 : 26, 0, RS, RT)};
+      case 0x0d7c:
+      case 0x1d7c: // MFHI / MFLO
+        if (RT)
+          return std::nullopt;
+        return Encoding{registerForm(Word & 0x1000 ? 18 : 16, RS, 0)};
+      default:
+        break;
+      }
+    }
     const unsigned Minor = (Word >> 6) & 31;
     if ((Word & 63) == 0 && Minor <= 3) { // SLL/SRL/SRA/ROTR
       return Encoding{registerForm(Minor == 0   ? 0
