@@ -1942,6 +1942,10 @@ Qui compaiono note, script e rapporti.</translation>
         <translation>Turno dell’agente salvato non valido.</translation>
     </message>
     <message>
+        <source>The model returned an empty answer.</source>
+        <translation>Il modello ha restituito una risposta vuota.</translation>
+    </message>
+    <message>
         <source>The remaining goal token budget cannot cover the next request.</source>
         <translation>Il budget di tokens rimanente dell’obiettivo non basta per la prossima richiesta.</translation>
     </message>

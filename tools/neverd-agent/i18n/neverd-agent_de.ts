@@ -1942,6 +1942,10 @@ Notizen, Skripte und Berichte erscheinen hier.</translation>
         <translation>Ungültiger gespeicherter Agentenbeitrag.</translation>
     </message>
     <message>
+        <source>The model returned an empty answer.</source>
+        <translation>Das Modell hat eine leere Antwort zurückgegeben.</translation>
+    </message>
+    <message>
         <source>The remaining goal token budget cannot cover the next request.</source>
         <translation>Das verbleibende Token-Budget des Ziels reicht für die nächste Anfrage nicht aus.</translation>
     </message>

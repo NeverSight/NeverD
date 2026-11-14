@@ -1942,6 +1942,10 @@ Notes, scripts and reports appear here.</translation>
         <translation>Invalid saved agent turn.</translation>
     </message>
     <message>
+        <source>The model returned an empty answer.</source>
+        <translation>The model returned an empty answer.</translation>
+    </message>
+    <message>
         <source>The remaining goal token budget cannot cover the next request.</source>
         <translation>The remaining goal token budget cannot cover the next request.</translation>
     </message>

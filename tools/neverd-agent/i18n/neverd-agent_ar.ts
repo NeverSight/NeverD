@@ -1942,6 +1942,10 @@ Notes, scripts and reports appear here.</source>
         <translation>دور الوكيل المحفوظ غير صالح.</translation>
     </message>
     <message>
+        <source>The model returned an empty answer.</source>
+        <translation>أعاد النموذج إجابة فارغة.</translation>
+    </message>
+    <message>
         <source>The remaining goal token budget cannot cover the next request.</source>
         <translation>لا تكفي ميزانية الرموز المميزة المتبقية للهدف لتغطية الطلب التالي.</translation>
     </message>

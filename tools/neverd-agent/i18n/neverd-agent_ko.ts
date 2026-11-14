@@ -1942,6 +1942,10 @@ Notes, scripts and reports appear here.</source>
         <translation>저장된 에이전트 턴이 잘못되었습니다.</translation>
     </message>
     <message>
+        <source>The model returned an empty answer.</source>
+        <translation>모델이 빈 답변을 반환했습니다.</translation>
+    </message>
+    <message>
         <source>The remaining goal token budget cannot cover the next request.</source>
         <translation>남은 목표 토큰 예산으로는 다음 요청을 처리할 수 없습니다.</translation>
     </message>

@@ -1942,6 +1942,10 @@ Notes, scripts and reports appear here.</source>
         <translation>已保存的 Agent 轮次无效。</translation>
     </message>
     <message>
+        <source>The model returned an empty answer.</source>
+        <translation>模型返回了空回答。</translation>
+    </message>
+    <message>
         <source>The remaining goal token budget cannot cover the next request.</source>
         <translation>目标剩余的 token 预算不足以完成下一次请求。</translation>
     </message>

@@ -1942,6 +1942,10 @@ Notes, scripts and reports appear here.</source>
         <translation>Некорректный сохранённый ход агента.</translation>
     </message>
     <message>
+        <source>The model returned an empty answer.</source>
+        <translation>Модель вернула пустой ответ.</translation>
+    </message>
+    <message>
         <source>The remaining goal token budget cannot cover the next request.</source>
         <translation>Оставшегося бюджета токенов цели недостаточно для следующего запроса.</translation>
     </message>

@@ -1942,6 +1942,10 @@ Notes, scripts and reports appear here.</source>
         <translation>保存済みの Agent のターンが無効です。</translation>
     </message>
     <message>
+        <source>The model returned an empty answer.</source>
+        <translation>モデルが空の回答を返しました。</translation>
+    </message>
+    <message>
         <source>The remaining goal token budget cannot cover the next request.</source>
         <translation>目標の残りのトークン予算では次のリクエストをまかなえません。</translation>
     </message>

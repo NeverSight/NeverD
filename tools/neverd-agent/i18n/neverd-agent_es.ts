@@ -1942,6 +1942,10 @@ Aquí aparecen las notas, los scripts y los informes.</translation>
         <translation>El turno guardado del agente no es válido.</translation>
     </message>
     <message>
+        <source>The model returned an empty answer.</source>
+        <translation>El modelo devolvió una respuesta vacía.</translation>
+    </message>
+    <message>
         <source>The remaining goal token budget cannot cover the next request.</source>
         <translation>El presupuesto de tokens restante del objetivo no alcanza para la siguiente solicitud.</translation>
     </message>

@@ -797,6 +797,90 @@ private slots:
                 .toString()
                 .contains("Only identify parameters"));
   }
+  void emptyAnswersFailWithoutBreakingTheConversation_data() {
+    QTest::addColumn<int>("protocol");
+    QTest::newRow("responses") << int(ModelProtocol::Responses);
+    QTest::newRow("messages") << int(ModelProtocol::Messages);
+    QTest::newRow("chat") << int(ModelProtocol::ChatCompletions);
+  }
+  void emptyAnswersFailWithoutBreakingTheConversation() {
+    QFETCH(int, protocol);
+    const auto codec = ModelProtocol(protocol);
+    ModelServer server;
+    QTemporaryDir directory;
+    const auto context = directory.filePath("context.json");
+    auto budget = std::make_shared<RunBudget>();
+    QString error;
+    const auto read = [](auto call) {
+      NphTools::succeed(call, {{"evidence", "read the listing"}});
+    };
+    // Every assistant turn a request carries says something or calls tools.
+    const auto assistantTurnsSaySomething =
+        [codec](const QJsonObject &request) {
+          const auto entries =
+              request[codec == ModelProtocol::Responses ? "input" : "messages"]
+                  .toArray();
+          for (const auto &value : entries) {
+            const auto entry = value.toObject();
+            if (entry["role"] != "assistant")
+              continue;
+            const auto content = entry["content"];
+            const bool said = content.isArray() ? !content.toArray().isEmpty()
+                                                : !content.toString().isEmpty();
+            if (!said && !entry.contains("tool_calls"))
+              return false;
+          }
+          return true;
+        };
+    {
+      // A tool round, then a turn that ends with nothing.
+      AgentLoop loop("project", "root", server.profile(codec), "", budget);
+      QVERIFY(loop.tools().add("read", "Read", {}, read, error));
+      loop.start("Test only", "First question", context);
+      QTRY_COMPARE(server.Requests.size(), 1);
+      server.respond(0, codec, "", {"read"});
+      QTRY_COMPARE(server.Requests.size(), 2);
+      server.respond(1, codec, "");
+      QTRY_VERIFY(!loop.running());
+      QCOMPARE(loop.status(), "failed");
+      QCOMPARE(loop.activity(), "The model returned an empty answer.");
+    }
+    {
+      // The next run carries no empty assistant turn and the tool result
+      // once.
+      AgentLoop loop("project", "root", server.profile(codec), "", budget);
+      QVERIFY(loop.tools().add("read", "Read", {}, read, error));
+      loop.start("Test only", "Second question", context);
+      QTRY_COMPARE(server.Requests.size(), 3);
+      const auto &request = server.Requests[2];
+      QVERIFY2(assistantTurnsSaySomething(request),
+               QJsonDocument(request).toJson().constData());
+      const auto wire = QJsonDocument(request).toJson(QJsonDocument::Compact);
+      QCOMPARE(wire.count("read the listing"), 1);
+      QVERIFY(wire.contains("Second question"));
+      server.respond(2, codec, "second answer");
+      QTRY_VERIFY(!loop.running());
+      QCOMPARE(loop.status(), "succeeded");
+    }
+    {
+      // With steering pending, the turn continues without the empty one.
+      AgentLoop loop("project", "root", server.profile(codec), "", budget);
+      loop.start("Test only", "Third question", "");
+      QTRY_COMPARE(server.Requests.size(), 4);
+      QVERIFY(loop.steer("correction", "Look at the callers too."));
+      server.respond(3, codec, "");
+      QTRY_COMPARE(server.Requests.size(), 5);
+      QVERIFY(loop.running());
+      const auto &request = server.Requests[4];
+      QVERIFY(
+          QJsonDocument(request).toJson().contains("Look at the callers too."));
+      QVERIFY2(assistantTurnsSaySomething(request),
+               QJsonDocument(request).toJson().constData());
+      server.respond(4, codec, "callers checked");
+      QTRY_VERIFY(!loop.running());
+      QCOMPARE(loop.status(), "succeeded");
+    }
+  }
   void steeringDuringFinalAnswerKeepsTaskOpen() {
     ModelServer server;
     auto budget = std::make_shared<RunBudget>();

@@ -59,9 +59,19 @@ AgentLoop::AgentLoop(QString projectId, QString id, ModelProfile profile,
       complete(turn.Text, turn.Error);
       return;
     }
-    ExchangeStarts.append(Current.size());
-    for (const auto &item : turn.Output) {
-      Current.append(item);
+    // A turn without text or calls answers nothing. Models end turns this way
+    // after tool results; kept in the history, the assistant message without
+    // content would make the Messages API refuse every later request of the
+    // conversation. Pending steering continues the turn without it.
+    const bool empty = turn.Calls.isEmpty() && turn.Text.trimmed().isEmpty();
+    if (empty && PendingSteers.isEmpty()) {
+      complete({}, tr("The model returned an empty answer."));
+      return;
+    }
+    if (!empty) {
+      ExchangeStarts.append(Current.size());
+      for (const auto &item : turn.Output)
+        Current.append(item);
     }
     Usage.observe(Profile.Protocol, turn.Usage,
                   ProviderCodec::request(

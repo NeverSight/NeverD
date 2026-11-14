@@ -1942,6 +1942,10 @@ Les notes, scripts et rapports s’affichent ici.</translation>
         <translation>Tour de l’agent enregistré invalide.</translation>
     </message>
     <message>
+        <source>The model returned an empty answer.</source>
+        <translation>Le modèle a renvoyé une réponse vide.</translation>
+    </message>
+    <message>
         <source>The remaining goal token budget cannot cover the next request.</source>
         <translation>Le budget de tokens restant pour l’objectif ne suffit pas pour la prochaine requête.</translation>
     </message>
