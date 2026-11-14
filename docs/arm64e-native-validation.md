@@ -1459,3 +1459,11 @@ rounding modes. A mixed SIMD/physical-SP case retains signed LR, remembered
 CFI states and multiple epilogues. Changing an encoded SIMD destination is
 rejected before publication. This extends the admitted image contract; it
 does not qualify arbitrary image layouts or native CPTA-on.
+
+Both M1 runners passed all 70 cases with the Release host built from
+`a726549412997a5be4b257148ece6cc57916ed65`. Each executed 120 original or
+published images, including all 13 added SIMD cases, and retained the signed
+signal cleanup and TLS lifecycle controls. The Windows frontend controls
+also passed. Neither host reported native CPTA-on.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43599335828)
+and [per-host verification record](evidence/arm64e-simd-publication-2026-11-14.json).
