@@ -8,8 +8,10 @@
 //===----------------------------------------------------------------------===//
 #include "ModelClient.h"
 
+#include <QCoreApplication>
 #include <QJsonDocument>
 #include <QNetworkRequest>
+#include <QTimer>
 
 namespace neverd::agent {
 ModelClient::ModelClient(QObject *parent) : QObject(parent) {
@@ -27,6 +29,20 @@ void ModelClient::start(const ModelProfile &profile, const QString &key,
                         const QString &system, const QJsonArray &history,
                         const QJsonArray &tools) {
   Q_ASSERT(!Reply);
+  // A key never crosses the network in clear text, whatever a saved or
+  // hand-edited configuration says: HTTPS, or HTTP to this computer only.
+  if (!key.isEmpty() && !profile.carriesKeysSafely()) {
+    Cancelled = false;
+    QTimer::singleShot(0, this, [this] {
+      ModelTurn turn;
+      turn.Error = QCoreApplication::translate(
+          "neverd::agent::AgentController",
+          "An API key is sent only over HTTPS, or over HTTP to this "
+          "computer. Use an HTTPS address for a remote server.");
+      emit finished(turn);
+    });
+    return;
+  }
   Key = key;
   Body.clear();
   Failure.clear();

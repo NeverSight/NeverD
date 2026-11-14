@@ -94,6 +94,51 @@ public:
 class ModelTests : public QObject {
   Q_OBJECT
 private slots:
+  // A saved key belongs to its server, and no key crosses the network in
+  // clear text: saving, testing and sending all hold to it.
+  void keysStayWithTheirServerAndOffPlainHttp() {
+    QVERIFY(ModelProfile::sameServer("https://api.example.com/v1",
+                                     "https://API.example.com:443/v2"));
+    QVERIFY(!ModelProfile::sameServer("https://api.example.com/v1",
+                                      "https://evil.example.net/v1"));
+    QVERIFY(!ModelProfile::sameServer("https://api.example.com/v1",
+                                      "http://api.example.com/v1"));
+    ModelProfile remote;
+    remote.Model = "mock";
+    remote.BaseUrl = "http://10.0.0.7:8080/v1";
+    QVERIFY(!remote.carriesKeysSafely());
+    for (const auto *local : {"http://127.0.0.1:9/v1", "http://localhost/v1",
+                              "http://[::1]:9/v1", "https://10.0.0.7/v1"}) {
+      ModelProfile profile = remote;
+      profile.BaseUrl = QString::fromLatin1(local);
+      QVERIFY2(profile.carriesKeysSafely(), local);
+    }
+    // Sending refuses before any connection is attempted.
+    ModelClient client;
+    QString refusal;
+    connect(&client, &ModelClient::finished, this,
+            [&refusal](const ModelTurn &turn) { refusal = turn.Error; });
+    client.start(remote, "sk-test-key-123456", "system", {}, {});
+    QTRY_VERIFY(refusal.contains("HTTPS"));
+
+    Server server;
+    QTemporaryDir directory;
+    AgentController controller(directory.filePath("global"));
+    QString error;
+    QVERIFY(controller.initialize(error));
+    ModelProfile saved;
+    saved.Model = "mock";
+    saved.BaseUrl = server.url();
+    QSignalSpy errors(&controller, &AgentController::operationError);
+    // A key for a plain HTTP server on another machine is refused.
+    auto settings = saved.toJson().toVariantMap();
+    settings["url"] = remote.BaseUrl;
+    QVERIFY(!controller.updateModelSettings(settings, "sk-new-key-123456",
+                                            false, ""));
+    QVERIFY(errors.count() == 1 &&
+            errors.last().first().toString().contains("HTTPS"));
+  }
+
   void sideChatInheritsContextThenContinuesIndependently() {
     Server server;
     QTemporaryDir directory;
