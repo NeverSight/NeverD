@@ -1259,6 +1259,7 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
     }
   }
 
+  const int StackParamBegin = static_cast<int>(Func.Params.size());
   int MaxIdx = MaxRegArgs - 1;
   for (int64_t Off : Offsets)
     MaxIdx = std::max(MaxIdx, offToIdx(Off));
@@ -1325,7 +1326,10 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
   for (int64_t SlotBase : MutableSlots) {
     int Idx = offToIdx(SlotBase);
     if (Idx >= MaxRegArgs && Idx <= MaxIdx)
-      Func.MutableStackParamHomes.push_back({Idx, SlotBase});
+      // Homes name positions in Params, whose register prefix includes FP
+      // parameters. Stack value ids retain the integer ABI slot numbering.
+      Func.MutableStackParamHomes.emplace_back(
+          StackParamBegin + Idx - MaxRegArgs, SlotBase);
   }
 
   // The compositions to insert before an op, by its block and index.

@@ -943,6 +943,55 @@ TEST(MedCallingConvStackParams, SharedStackPointerPhisAreTracedOnce) {
   EXPECT_TRUE(Read);
 }
 
+TEST(MedCallingConvStackParams, MutableHomesFollowEveryRegisterParameter) {
+  for (const auto Architecture : {Arch::X64, Arch::ARM, Arch::AArch64}) {
+    const auto &TRI = getTargetRegInfo(Architecture);
+    const auto Layout = TRI.integerArgumentLayout(BinaryFormat::ELF);
+    const auto FPRegisters = TRI.floatingParamRegs(BinaryFormat::ELF);
+    for (const unsigned FPCount : {0u, 1u, unsigned(FPRegisters.size())})
+      for (const bool PartialIntegerPrefix : {false, true}) {
+        SCOPED_TRACE(testing::Message() << int(Architecture) << ':' << FPCount
+                                        << ':' << PartialIntegerPrefix);
+        MedFunc F;
+        F.Blocks.resize(1);
+        auto &B = F.Blocks[0];
+        const auto SP =
+            reg(1, 0, TRI.PointerSize, TRI.StackPointer, Architecture);
+        addLiveIn(B, SP);
+        if (PartialIntegerPrefix) {
+          auto P = reg(100, 0, TRI.PointerSize, Layout.Registers.front(),
+                       Architecture);
+          P.Kind = MedVar::Param;
+          F.Params.push_back(P);
+        }
+        for (unsigned I = 0; I < FPCount; ++I) {
+          auto P = reg(200 + I, 0, 8, FPRegisters[I], Architecture);
+          P.Kind = MedVar::Param;
+          F.Params.push_back(P);
+        }
+        const auto Address = temp(2, 0, TRI.PointerSize, Architecture);
+        const auto Value = temp(3, 0, 4, Architecture);
+        B.Ops.push_back(
+            binary(NdOp::INT_ADD, Address, SP,
+                   MedVar::makeConst(Layout.EntryStackBase, TRI.PointerSize)));
+        B.Ops.push_back(unary(NdOp::LOAD, Value, Address));
+        B.Ops.push_back(binary(NdOp::STORE, {}, Address, Value));
+        med_calling_conv_detail::detectStackParams(F, Architecture,
+                                                   BinaryFormat::ELF);
+        const int StackPosition = int(Layout.Registers.size() + FPCount);
+        ASSERT_EQ(F.Params.size(), unsigned(StackPosition + 1));
+        ASSERT_EQ(F.MutableStackParamHomes.size(), 1u);
+        EXPECT_EQ(F.MutableStackParamHomes[0].first, StackPosition);
+        EXPECT_EQ(F.MutableStackParamHomes[0].second, Layout.EntryStackBase);
+        EXPECT_EQ(F.Params.back().RegOff, kNoParamReg);
+        // The ABI slot identity excludes FP registers; the vector position
+        // used to seed its physical home includes them.
+        EXPECT_EQ(F.Params.back().Id, int(Layout.Registers.size()));
+        EXPECT_EQ(B.Ops[B.Ops.size() - 2].Opcode, NdOp::LOAD);
+      }
+  }
+}
+
 TEST(MedCallingConvFPStack, InstructionOwnedReadsRecoverTheIncomingBytes) {
   for (auto Architecture : {Arch::X86, Arch::X64})
     for (auto Format :

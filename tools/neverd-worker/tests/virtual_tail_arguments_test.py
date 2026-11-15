@@ -2,6 +2,7 @@
 """Virtual tail transfers preserve untouched integer and floating carriers."""
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -85,9 +86,15 @@ extern "C" double forward_many(Device *object, float a0, float a1, float a2,
                 expected = {"forward_tail": ("value", "delta", "weight"),
                             "forward_integer": ("value", "context"),
                             "forward_result": ("ratio", "code"),
-                            "forward_many": ("a0", "a8", "marker")}[name]
+                            "forward_many": ("a0", "marker")}[name]
                 if representation == "c":
                     assert all(item in call_lines[0] for item in expected), call_lines
+                    if name == "forward_many":
+                        # A writable incoming home may carry a8 through a
+                        # temporary. Require its use beyond the signature;
+                        # the independent caller below checks the actual value.
+                        definition = re.search(r"\bforward_many\([^;{]*\)\s*\{", code)
+                        assert definition and re.search(r"\ba8\b", code[definition.end():]), code
                 if not native:
                     continue
                 harness = r"""
