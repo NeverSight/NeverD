@@ -1082,7 +1082,8 @@ the workbench.
   section 1.9). Down, it keeps to the middle of the whole workbench, which
   already sits above the middle of the dock area because the toolbars take the
   top (137 pixels of a 1440 by 864 workbench); a golden section down the whole
-  workbench pressed it against the toolbars. It keeps its place as its share
+  workbench would put its top 21 pixels above the dock area there, where the
+  host stops it against the toolbars. It keeps its place as its share
   of the room it can move in, so it holds its relative place when the
   workbench resizes. Moved within 20 pixels of where it opens, on either axis,
   it snaps there (VS Code snaps its quick input to the horizontal center

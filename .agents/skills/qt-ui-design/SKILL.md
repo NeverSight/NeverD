@@ -325,7 +325,7 @@ A panel that floats over a workbench (a chat, a quick input, a palette) is place
 
 **Open it at the golden section, on the side lines start from.**
 - Across, put the smaller golden part (0.382, that is 2 − φ) of the free room before the panel: left of the middle in a left-to-right language, right of it in a right-to-left one. The dead middle reads as stiff and the corner beside the panel's button as an afterthought; the golden section is where a reader's eye begins (Golden Ratio and Rule of Thirds, section 1). Take the share of the free room, not of the window, so a panel that nearly fills the window still fits and one that fills little still stands off the middle.
-- Down, check where the middle of the whole window falls. Toolbars along the top already put it above the middle of the panes below them, near the optical center; a golden section down the whole window then pressed the panel against the toolbars.
+- Down, check where the middle of the whole window falls. Toolbars along the top already put it above the middle of the panes below them, near the optical center; a golden section down the whole window would then press the panel against the toolbars.
 - Keep the person's place as a share of the room the panel moves in, so the panel holds its relative place while the window resizes. Snap it back to where it opens when it is let go a short distance away (20 pixels, as VS Code snaps its quick input to the horizontal center), and put it back there, at its first size, on a double click on its title.
 
 **Take floating views along wherever the person works.**
