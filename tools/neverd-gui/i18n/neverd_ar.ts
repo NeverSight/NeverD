@@ -10559,14 +10559,6 @@ Your previous graph is still available.</source>
         <translation>استيراد الشفرة إلى الصورة</translation>
     </message>
     <message>
-        <source>Import process plugin</source>
-        <translation>استيراد إضافة تعمل كعملية</translation>
-    </message>
-    <message>
-        <source>Import process plugin…</source>
-        <translation>استيراد إضافة تعمل كعملية…</translation>
-    </message>
-    <message>
         <source>Log for %1</source>
         <translation>سجل %1</translation>
     </message>
@@ -10627,10 +10619,6 @@ Your previous graph is still available.</source>
         <translation>الموضع</translation>
     </message>
     <message>
-        <source>Process plugin imported: %1</source>
-        <translation>تم استيراد الإضافة التي تعمل كعملية: %1</translation>
-    </message>
-    <message>
         <source>Progress</source>
         <translation>التقدم</translation>
     </message>
@@ -10673,6 +10661,18 @@ Your previous graph is still available.</source>
     <message>
         <source>This action registration is no longer active.</source>
         <translation>لم يعد تسجيل هذا الإجراء نشطًا.</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>استيراد إضافة</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>استيراد إضافة…</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>تم استيراد الإضافة: %1</translation>
     </message>
 </context>
 <context>
@@ -10738,16 +10738,8 @@ Your previous graph is still available.</source>
         <translation>ID: %1</translation>
     </message>
     <message>
-        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
-        <translation>استورد بيان إضافة تعمل كعملية لإضافة أوامر. لا تبدأ البرامج الموفّرة إلا عند تشغيل أمر.</translation>
-    </message>
-    <message>
         <source>Import plugin…</source>
         <translation>استيراد إضافة…</translation>
-    </message>
-    <message>
-        <source>Import process plugin</source>
-        <translation>استيراد إضافة تعمل كعملية</translation>
     </message>
     <message>
         <source>Inactive</source>
@@ -10760,10 +10752,6 @@ Your previous graph is still available.</source>
     <message>
         <source>Installation removed; active work is stopping.</source>
         <translation>أزيل سجل التثبيت؛ يجري إيقاف المهام النشطة.</translation>
-    </message>
-    <message>
-        <source>Installed process plugins</source>
-        <translation>الإضافات المثبّتة التي تعمل كعمليات</translation>
     </message>
     <message>
         <source>Manifest: %1</source>
@@ -10830,10 +10818,6 @@ Your previous graph is still available.</source>
         <translation>جارٍ الإيقاف</translation>
     </message>
     <message>
-        <source>Type: External process</source>
-        <translation>النوع: عملية خارجية</translation>
-    </message>
-    <message>
         <source>Unavailable</source>
         <translation>غير متاح</translation>
     </message>
@@ -10856,6 +10840,42 @@ Your previous graph is still available.</source>
     <message>
         <source>Yes</source>
         <translation>نعم</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>استيراد إضافة</translation>
+    </message>
+    <message>
+        <source>External process</source>
+        <translation>عملية خارجية</translation>
+    </message>
+    <message>
+        <source>Import a plugin manifest to add workbench commands or views.</source>
+        <translation>استورد ملف تعريف إضافة لإضافة أوامر أو عروض إلى مساحة العمل.</translation>
+    </message>
+    <message>
+        <source>Installed plugins</source>
+        <translation>الإضافات المثبتة</translation>
+    </message>
+    <message>
+        <source>Native GUI</source>
+        <translation>واجهة رسومية أصلية</translation>
+    </message>
+    <message>
+        <source>Source: Bundled with NeverD</source>
+        <translation>المصدر: مرفق مع NeverD</translation>
+    </message>
+    <message>
+        <source>This plugin ships with NeverD. Use Disable to turn it off.</source>
+        <translation>هذه الإضافة مرفقة مع NeverD. استخدم تعطيل لإيقافها.</translation>
+    </message>
+    <message>
+        <source>Type: %1</source>
+        <translation>النوع: %1</translation>
+    </message>
+    <message>
+        <source>Unknown</source>
+        <translation>غير معروف</translation>
     </message>
 </context>
 <context>
@@ -11034,6 +11054,48 @@ Your previous graph is still available.</source>
     <message>
         <source>Close Tab</source>
         <translation>إغلاق علامة التبويب</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost</name>
+    <message>
+        <source>The GUI module failed during activation.</source>
+        <translation>فشلت وحدة الواجهة الرسومية أثناء التفعيل.</translation>
+    </message>
+    <message>
+        <source>The GUI module failed to activate.</source>
+        <translation>تعذر تفعيل وحدة الواجهة الرسومية.</translation>
+    </message>
+    <message>
+        <source>The GUI module is missing or outside the package: %1</source>
+        <translation>وحدة الواجهة الرسومية مفقودة أو خارج الحزمة: %1</translation>
+    </message>
+    <message>
+        <source>The module does not provide the required GUI interface.</source>
+        <translation>لا توفر الوحدة واجهة GUI المطلوبة.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost::Binding</name>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin menu action: %1</source>
+        <translation>إجراء قائمة الإضافة غير صالح أو مكرر أو غير متاح: %1</translation>
+    </message>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin view: %1</source>
+        <translation>عرض الإضافة غير صالح أو مكرر أو غير متاح: %1</translation>
+    </message>
+    <message>
+        <source>The analysis session has changed.</source>
+        <translation>تغيرت جلسة التحليل.</translation>
+    </message>
+    <message>
+        <source>The menu action factory must use the supplied parent.</source>
+        <translation>يجب أن يستخدم مصنع إجراءات القائمة الكائن الأب المقدم.</translation>
+    </message>
+    <message>
+        <source>The view factory must create a workbench child widget.</source>
+        <translation>يجب أن ينشئ مصنع العروض عنصر واجهة تابعًا لمساحة العمل.</translation>
     </message>
 </context>
 </TS>

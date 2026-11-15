@@ -1,6 +1,6 @@
 **Sprachen**: [English](../README.md) | [简体中文](../zh-CN/README.md) | [繁體中文](../zh-TW/README.md) | [日本語](../ja/README.md) | [한국어](../ko/README.md) | [Français](../fr/README.md) | [Deutsch](README.md) | [Español](../es/README.md) | [Italiano](../it/README.md) | [Русский](../ru/README.md) | [العربية](../ar/README.md)
 
-<!-- i18n-source: 064a675b88d7887beb6eb1c62907468231caafde8b4f397b3f3ad6cb75e9c8bd -->
+<!-- i18n-source: 18b62c3b19d3e711366b54814bdb5d890bb3b16e26c208238f5e2e54b299469f -->
 
 [← NeverD-Projekt](project.md)
 
@@ -27,6 +27,7 @@ Englische Anleitungen liegen direkt unter `docs/`. Übersetzungen sind in `ar/`,
 | [MIPS-Analyse (Englisch)](../mips.md) | MIPS32/64-ELF-Profile, Delay-Slots, Ganzzahl-ABI, Validierung und TP-Link-Firmware-Beispiel |
 | [Tests](testing.md) | Testsuiten, generierte Fixtures, Unicorn-Roundtrips und inkrementelle Befehle |
 | [Desktop-Arbeitsplatz (Englisch)](../gui.md) | Klassische Disassembler-Aufteilung, separater Worker, Projektdatenbanken, Lokalisierung und MCP-Verbindungen |
+| [NeverD Agent](../../tools/neverd-agent/README.md) | Projektgespräche, Modellprotokolle, delegierte Analyse, portable Erinnerungen und GUI-Chat-Plugin |
 | [Abschnitte des Analyseabbilds (Englisch)](../analysis-sections.md) | Materialisierten Code und Daten über C-ABI, Worker, CLI und Arbeitsoberfläche hinzufügen; native Ansichten und Projektspeicherung |
 | [Bibliothekserkennung (Englisch)](../library-recognition.md) | Belegte STL-, ATL/MFC-, COM- und libc-Identitäten, Profile und umkehrbares Einklappen von C-Code |
 | [Desktop-Validierung (Englisch)](../gui-qualification.md) | Gemessene GUI-Nachweise, Paketierungsgrenzen und offene Plattformvalidierung |

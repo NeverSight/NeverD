@@ -355,6 +355,52 @@ void schemas() {
         "structured schema unsupported");
   check(!validateValue(Schema, {{"list", {1, "bad"}}}, Why),
         "nested output unchecked");
+  Json Text = Json::array({{{"id", "content"},
+                            {"title", "Report text"},
+                            {"type", "string"},
+                            {"default", ""}}});
+  const std::string Long(5000, 'a');
+  check(!validateParameters(Text, {{"content", Long}}, Why),
+        "legacy text limit changed");
+  check(parameterSchema(Text)["properties"]["content"]["maxLength"] == 4096,
+        "default string limit hidden from tool consumers");
+  Text[0]["maxLength"] = 6000;
+  auto TextSchema = parameterSchema(Text);
+  check(validateParameterFields(Text, Why) && validateSchema(TextSchema, Why) &&
+            validateParameters(Text, {{"content", Long}}, Why) &&
+            validateValue(TextSchema, {{"content", Long}}, Why),
+        "declared long-text parameter rejected");
+  check(!validateParameters(Text, {{"content", std::string(6001, 'a')}}, Why) &&
+            !validateValue(TextSchema, {{"content", std::string(6001, 'a')}},
+                           Why),
+        "declared text bound not enforced");
+  Text[0]["maxLength"] = 1;
+  check(validateParameters(Text, {{"content", "\xF0\x9F\x98\x80"}}, Why) &&
+            validateValue(parameterSchema(Text),
+                          {{"content", "\xF0\x9F\x98\x80"}}, Why),
+        "explicit JSON Schema string length must count Unicode code points");
+  Text[0]["maxLength"] = -1;
+  check(!validateParameterFields(Text, Why), "negative text bound admitted");
+  Json Structured = Json::array({{{"id", "arguments"},
+                                  {"title", "Service arguments"},
+                                  {"type", "object"},
+                                  {"default", Json::object()}}});
+  const Json Payload{
+      {"arguments",
+       {{"address", "0x1000"}, {"limit", 20}, {"nested", {1, 2}}}}};
+  check(validateParameterFields(Structured, Why) &&
+            validateParameters(Structured, Payload, Why) &&
+            validateSchema(parameterSchema(Structured), Why) &&
+            validateValue(parameterSchema(Structured), Payload, Why),
+        "structured service payload rejected");
+  check(!validateParameters(Structured, {{"arguments", "{\"limit\":20}"}}, Why),
+        "object parameter accepted a double-encoded string");
+  const Json OpenObject{{"type", "object"},
+                        {"properties", Json::object()},
+                        {"additionalProperties", true}};
+  check(validateSchema(OpenObject, Why) &&
+            validateValue(OpenObject, Payload, Why),
+        "explicit open result schema rejected");
 }
 void foreignTokens() {
   Fixture F, G;

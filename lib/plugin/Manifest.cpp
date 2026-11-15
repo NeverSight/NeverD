@@ -77,11 +77,20 @@ bool parameter(const Json &Field, const Json &Value) {
   const auto Type = string(get(Field, "type"));
   if (Type == "boolean")
     return Value.is_boolean();
+  if (Type == "object")
+    return Value.is_object();
   if (Type == "integer")
     return integer(Value, Field.value("minimum", 0),
                    Field.value("maximum", kDefaultParameterMaximum));
-  if (Type == "string")
-    return text(Value, kMaxParameterCharacters, true);
+  if (Type == "string") {
+    if (!Field.contains("maxLength"))
+      return text(Value, kMaxParameterCharacters, true);
+    if (!Value.is_string())
+      return false;
+    const auto &Text = Value.get_ref<const std::string &>();
+    return detail::codePoints(Text) <= Field["maxLength"].get<size_t>() &&
+           Text.find('\0') == std::string::npos;
+  }
   if (Type == "choice") {
     const auto &Choices = get(Field, "choices");
     return Value.is_string() &&
@@ -89,8 +98,12 @@ bool parameter(const Json &Field, const Json &Value) {
   }
   return false;
 }
-bool parameterDeclaration(const Json &Field) {
+bool parameterDeclaration(const Json &Field, bool Structured = false) {
   const auto Type = string(get(Field, "type"));
+  // V1 process-plugin forms remain scalar. Programmatic NPH actions may carry
+  // an explicit opaque object whose service validates the nested contract.
+  if (Type == "object" && !Structured)
+    return false;
   if (Type == "integer") {
     if (!fields(Field,
                 {"id", "title", "type", "default", "minimum", "maximum"}))
@@ -100,6 +113,11 @@ bool parameterDeclaration(const Json &Field) {
           !integer(Field[Key], std::numeric_limits<int>::min(),
                    std::numeric_limits<int>::max()))
         return false;
+  } else if (Type == "string") {
+    if (!fields(Field, {"id", "title", "type", "default", "maxLength"}) ||
+        (Field.contains("maxLength") &&
+         !integer(Field["maxLength"], 0, kMaxTextCharacters)))
+      return false;
   } else if (Type == "choice") {
     const auto &Choices = array(Field, "choices");
     if (!fields(Field, {"id", "title", "type", "default", "choices"}) ||
@@ -216,6 +234,42 @@ std::optional<Manifest> loadManifest(const std::filesystem::path &Path,
   if (!File.read(Bytes.data(), Bytes.size()))
     return Fail("Cannot read plugin manifest");
   const auto Root = parseJson(Bytes);
+  if (Root.is_object() && get(Root, "schema") == "neverd.plugin-package.v2") {
+    const auto &Components = get(Root, "components");
+    if (!fields(Root,
+                {"schema", "id", "name", "version", "icon", "components"}) ||
+        !identifier(get(Root, "id")) || !text(get(Root, "name")) ||
+        !text(get(Root, "version"), 64) ||
+        (Root.contains("icon") && !text(Root["icon"], kMaxPathCharacters)) ||
+        !Components.is_array() || Components.size() != 1)
+      return Fail("Expected one native GUI component in the plugin package");
+    const auto &Component = Components.front();
+    const auto &Entry = get(Component, "entry");
+    if (!fields(Component, {"id", "kind", "interface", "entry"}) ||
+        !identifier(get(Component, "id")) ||
+        get(Component, "kind") != "gui-native" ||
+        get(Component, "interface") != "neverd.gui-ui.v1" ||
+        !fields(Entry, {"library"}) ||
+        !text(get(Entry, "library"), kMaxPathCharacters))
+      return Fail("Invalid or unsupported native GUI component");
+    namespace fs = std::filesystem;
+    const auto Library = fs::u8path(Entry["library"].get<std::string>());
+    if (Library.has_root_path() || std::find(Library.begin(), Library.end(),
+                                             fs::path("..")) != Library.end())
+      return Fail("The GUI module must be relative to its plugin package");
+    Manifest M;
+    M.Id = Root["id"];
+    M.Name = Root["name"];
+    M.Version = Root["version"];
+    M.Icon = string(get(Root, "icon"));
+    M.Path = fs::absolute(Path, EC);
+    if (EC)
+      return Fail(EC.message());
+    M.GuiLibrary = M.Path.parent_path() / Library;
+    M.Actions = Json::array();
+    Error.clear();
+    return M;
+  }
   if (Root.is_discarded() ||
       !fields(Root, {"schema", "id", "name", "version", "program", "arguments",
                      "actions", "queries", "icon", "services", "events"}) ||
@@ -342,7 +396,7 @@ bool validateParameterFields(const Json &Fields, std::string &Error) {
   }
   std::set<std::string> Keys;
   for (const auto &Field : Fields)
-    if (!parameterDeclaration(Field) ||
+    if (!parameterDeclaration(Field, true) ||
         !Keys.insert(string(Field["id"])).second) {
       Error = "Invalid or repeated action parameter field";
       return false;

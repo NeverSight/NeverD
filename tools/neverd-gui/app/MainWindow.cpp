@@ -20,6 +20,7 @@
 #include "FunctionEditDialog.h"
 #include "GnomeWindowEdges.h"
 #include "GraphView.h"
+#include "GuiPluginUiHost.h"
 #include "HexView.h"
 #include "HighlightLocks.h"
 #include "Icons.h"
@@ -39,6 +40,7 @@
 #include "PathfinderView.h"
 #include "PdbPromptDialog.h"
 #include "PluginManagerDialog.h"
+#include "PluginServices.h"
 #include "ProjectDatabase.h"
 #include "QuickStartDialog.h"
 #include "Resolve.h"
@@ -354,7 +356,8 @@ protected:
 } // namespace
 
 MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
-                       GuiSessionBroker &broker)
+                       GuiSessionBroker &broker,
+                       const QString &bundledAgentManifest)
     : KDDockWidgets::QtWidgets::MainWindow(QStringLiteral("NeverDMainWindow")),
       session_(session), mcp_(mcp), broker_(broker), actions_(this) {
   instance_ = this;
@@ -367,38 +370,55 @@ MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
   qApp->installEventFilter(this);
   buildMenusAndToolbars();
   buildDocks();
-  plugins_ = new AnalysisPlugins(session_, actions_);
-  plugins_->setSelectionProvider([this] {
-    QJsonObject selection;
-    auto address = currentAddress();
-    auto function = currentFunction();
-    if (auto *code = focusedCodeView()) {
-      function = code->text()->function();
-      address = code->text()->currentAddress();
-      if (!address)
-        address = function;
-    } else if (auto *chooser = focusedChooser()) {
-      address = chooser->currentAddress();
-      function = chooser->model().kind() == ChooserKind::Functions
-                     ? address
-                     : std::nullopt;
-    }
-    if (address)
-      selection.insert("address", hexAddress(*address));
-    if (function)
-      selection.insert("function_address", hexAddress(*function));
-    QString text;
-    if (auto *chooser = focusedChooser())
-      text = chooser->selectedText();
-    else if (auto *code = focusedCodeView())
-      text = code->text()->selectedText();
-    else
-      text = disassembly_->selectedText();
-    selection.insert(
-        "selection_text",
-        text.left(::neverd::limits::gui::plugin::kMaxSelectionCharacters));
-    return selection;
-  });
+  pluginUi_ = new GuiPluginUiHost(
+      *this, session_,
+      [this] { return pluginViewArea(*this, centralWidget()); },
+      [this](const QString &address) {
+        if (const auto parsed = parseAddress(address))
+          navigate(*parsed);
+      });
+  plugins_ = new AnalysisPlugins(session_, actions_, nullptr,
+                                 bundledAgentManifest, pluginUi_);
+  plugins_->setSelectionProvider(
+      [this, last = QJsonObject{}, epoch = quint64{}]() mutable {
+        if (epoch != session_.epoch()) {
+          epoch = session_.epoch();
+          last = {};
+        }
+        if (pluginUi_ && pluginUi_->contains(commandFocusWidget()) &&
+            !last.isEmpty())
+          return last;
+        QJsonObject selection;
+        auto address = currentAddress();
+        auto function = currentFunction();
+        if (auto *code = focusedCodeView()) {
+          function = code->text()->function();
+          address = code->text()->currentAddress();
+          if (!address)
+            address = function;
+        } else if (auto *chooser = focusedChooser()) {
+          address = chooser->currentAddress();
+          function = chooser->model().kind() == ChooserKind::Functions
+                         ? address
+                         : std::nullopt;
+        }
+        if (address)
+          selection.insert("address", hexAddress(*address));
+        if (function)
+          selection.insert("function_address", hexAddress(*function));
+        QString text;
+        if (auto *chooser = focusedChooser())
+          text = chooser->selectedText();
+        else if (auto *code = focusedCodeView())
+          text = code->text()->selectedText();
+        else
+          text = disassembly_->selectedText();
+        selection.insert(
+            "selection_text",
+            text.left(::neverd::limits::gui::plugin::kMaxSelectionCharacters));
+        last = selection;
+        return selection;
+      });
   auto *pluginDock =
       makeDock(QStringLiteral("analysisPlugins"), QT_TR_NOOP("Plugin tasks"),
                QStringLiteral("extensions"), plugins_);
@@ -446,7 +466,15 @@ MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
   connect(&focusSequenceTimer_, &QTimer::timeout, this,
           &MainWindow::resetFocusSequence);
   connect(qApp, &QApplication::focusChanged, this,
-          [this] { resetFocusSequence(); });
+          [this](QWidget *previous, QWidget *current) {
+            resetFocusSequence();
+            if (!previous || !pluginUi_ || pluginUi_->contains(previous) ||
+                !pluginUi_->contains(current))
+              return;
+            QScopedValueRollback<QPointer<QWidget>> focus(contextMenuFocus_,
+                                                          previous);
+            session_.pluginServices().refreshContext();
+          });
   // Other programs find this window and open links in it, as in IDA 9.4.
   instances_.setInfo([this] { return instanceInfo(); });
   const auto comeToFront = [this] {
@@ -652,6 +680,7 @@ MainWindow::~MainWindow() {
   // notifications refresh that context: it must not reach a view being
   // destroyed.
   plugins_->setSelectionProvider({});
+  delete std::exchange(pluginUi_, nullptr);
   qApp->removeEventFilter(this);
   // The startup greeting has no widget parent: it is the application's only
   // visible window until a start is chosen.
@@ -6114,7 +6143,31 @@ void MainWindow::toggleFocusMode() {
                 0, std::max(header->minimumSectionSize(),
                             header->sectionSize(0) + difference));
           });
+  // Plugin views, such as the Agent's Ask Agent button and conversation,
+  // stay with the person in the workspace that covers the workbench.
+  pluginUi_->lendViews(*floating, [this,
+                                   workspace = QPointer<QWidget>(floating),
+                                   content = QPointer<QWidget>(area)] {
+    return workspace && content ? pluginViewArea(*workspace, content) : QRect();
+  });
   updateActions();
+}
+
+QRect MainWindow::pluginViewArea(const QWidget &surface,
+                                 const QWidget *content) const {
+  QRect area = content && surface.isAncestorOf(content)
+                   ? QRect(content->mapTo(&surface, QPoint{}), content->size())
+                   : surface.contentsRect();
+  // Floating plugin views keep off the command line when it runs along the
+  // foot of the window, under either bottom corner.
+  if (const auto *line = output_ ? output_->commandLine() : nullptr;
+      line && line->isVisible() && surface.isAncestorOf(line)) {
+    const QRect row(line->mapTo(&surface, QPoint{}), line->size());
+    if (row.bottom() >= area.bottom() - row.height() / 2 &&
+        row.width() >= area.width() / 2)
+      area.setBottom(std::min(area.bottom(), row.top() - 1));
+  }
+  return area;
 }
 
 void MainWindow::resetFocusSequence() {
@@ -6129,6 +6182,9 @@ void MainWindow::leaveFocusMode() {
     return;
   const auto layout = std::exchange(focusLayout_, {});
   const auto focus = std::exchange(focusReturn_, {});
+  // The workspace goes away with the layout before focus mode.
+  if (pluginUi_)
+    pluginUi_->returnViews();
   focusFunctions_.clear();
   delete focusSidebar_.data();
   if (auto *toolbar = focusToolbar_.data()) {
