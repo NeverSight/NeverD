@@ -515,6 +515,7 @@ TEST(ItaniumLSDA, DecodesExceptionSpecificationLists) {
   Req.FunctionEnd = FuncVA + 0x100;
   LSDAParseResult Result = parseLSDA(Img, Req, PointerBases{});
 
+  EXPECT_EQ(Result.ParseStatus, ExceptionParseStatus::Complete);
   ASSERT_TRUE(Result.Info.has_value());
   ASSERT_EQ(Result.Info->Actions.size(), 1u);
   EXPECT_TRUE(Result.Info->Actions[0].isExceptionSpecification());
@@ -522,6 +523,11 @@ TEST(ItaniumLSDA, DecodesExceptionSpecificationLists) {
   EXPECT_EQ(Result.Info->ExceptionSpecs[0].Index, 1u);
   ASSERT_EQ(Result.Info->ExceptionSpecs[0].TypeIndices.size(), 1u);
   EXPECT_EQ(Result.Info->ExceptionSpecs[0].TypeIndices[0], 1u);
+  ASSERT_EQ(Result.Info->TypeTable.size(), 1u);
+  EXPECT_EQ(Result.Info->TypeTable.front().TypeInfoVA, TypeInfoVA);
+  EXPECT_EQ(Result.Info->ActionTableRange.size(), 2u);
+  EXPECT_EQ(Result.Info->ExceptionSpecRange.Begin, Result.Info->TypeTableVA);
+  EXPECT_EQ(Result.Info->ExceptionSpecRange.End, LSDAVA + B.size());
 }
 //===----------------------------------------------------------------------===//
 // End-to-end normalization

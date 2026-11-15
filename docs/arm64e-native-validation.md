@@ -1773,10 +1773,10 @@ This follows the independent address bases used by
 [LLVM libc++abi's personality](https://github.com/llvm/llvm-project/blob/main/libcxxabi/src/cxa_personality.cpp)
 and [GNU libsupc++](https://github.com/gcc-mirror/gcc/blob/master/libstdc%2B%2B-v3/libsupc%2B%2B/eh_personality.cc).
 `ItaniumLSDA.ExplicitLPStart*` checks ELF/Mach-O and x64/AArch64 coordinates,
-including guarded-range overflow. Decoding explicit LPStart does not yet
-authorize reusing its table at a new function address: that still needs LSDA
-regeneration. Compact frameless language frames, other unsupported body
-operations, missing lifetime tables and native PAuth_LR/CPTA-on qualification
+including guarded-range overflow. At that milestone, publication still required
+an omitted LPStart and a compact FP or indexed frame. The next section records
+explicit-base rebuilding and compact frameless language publication. Unsupported
+body operations, missing lifetime tables and native PAuth_LR/CPTA-on qualification
 remain separate gaps.
 
 
@@ -1796,3 +1796,61 @@ release and asset were deleted with verified HTTP 404 responses, and the
 test repository was restored to its original tree.
 [Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43708062786)
 and [per-host verification record](evidence/arm64e-compact-language-frames-2026-11-15.json).
+
+
+### Explicit LPStart rebuilding and frameless language frames
+
+The native register producer now rebuilds explicit-base C++ and Objective-C
+LSDAs in generated read-only exception storage. Guarded ranges remain relative
+to the function; landing pads are rebased independently. The usual output omits
+LPStart. If a handler is at the function entry, an explicit base one instruction
+before it preserves a nonzero handler offset, since zero denotes no handler.
+Action links, selectors and exception-specification list offsets retain their
+original bytes. Type references use relocated PC-relative fields and preserve
+indirection through the original binding cells. The shared reader also resolves
+types referenced only by negative exception-specification filters.
+
+Publication validates the installed private candidate before making the output
+visible. It compares normalized guarded ranges, handler coordinates, action
+chains, type identities and specification lists with the source, in addition to
+the existing instruction, CFI, personality and dependency checks. Native object
+installation also reserves load-command capacity for new writable and zero-fill
+data mappings before assigning addresses; type-pointer cells no longer fail
+late because their segment commands lack header space. The original
+omitted-base table may still be reused when its function-relative contract
+holds. Truncated tables, handlers outside the copied function and incomplete
+metadata cannot authorize publication.
+
+Compact frameless language frames retain their personality and LSDA. Frames
+with saved pairs use indexed DWARF for the system walker's established spill
+layout, just as unwind-only frameless publication does. The regression suite
+separately checks ordinary signed returns, preserved registers and system walks
+of these installed language frames. SP-based indexed frames with a saved LR
+exercise actual C++ and Objective-C cleanup delivery at a protected non-call
+instruction, at O0 and O2 and on ordinary and alternate signal stacks.
+
+The typed explicit-base fixture executes a nonmatching catch followed by cleanup;
+its additional specification-only type tests reconstruction without invoking an
+unexpected-exception path. The entry-handler case qualifies address serialization
+only. Compact frames whose caller return exists solely in live LR still need a
+validated exception-delivery bridge: the current throw thunk would overwrite
+that return address. They are not admitted to protected exception delivery.
+Absent lifetime tables cannot establish arbitrary asynchronous cleanup scopes.
+
+Both macos-26 and xcode-27 passed all 119 source-bound publication cases from
+`42786bcb1fc38597a31cb79a04b4f434e635eb24`, with no failed or skipped cases. Each
+host executed 80 new language-cleanup deliveries, 52 new frameless preserved-
+register calls, six signal resumptions and three system frameless steps. The
+complete replay includes 226 original/published image checks per host. The
+Windows frontend job passed. Local publication passed 119 cases; related CTest
+coverage passed 1,067 with 48 explicitly skipped native/environment cases; all
+11 focused LSDA checks passed. Thirteen C++/header/definition files passed
+clang-format 22.1.2 and the documentation inventory passed.
+
+The fresh hardware reports still identify both runners as M1 virtual machines.
+Explicit PAuth_LR, PACM PC dependence and CPTA-on remain unqualified, including
+the arm64e.x1 launch attempt. LLVM and prebuilt r6 are unchanged. The temporary
+release and asset were deleted with verified HTTP 404 responses, and the replay
+branch was returned to its baseline tree after saving the results.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43733530036)
+and [per-host verification record](evidence/arm64e-lsda-frameless-2026-11-16.json).
