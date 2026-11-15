@@ -1079,8 +1079,11 @@ the workbench.
   place; moved within 20 pixels of the middle on either axis it snaps
   there (VS Code's quick input snaps to its horizontal center within the
   same distance), and a double click on the title puts it back in the
-  middle at its first size. In a small workbench a centered panel may
-  cover the entry button, so it closes by its own button and Escape too.
+  middle at its first size. It opens at 480 by 560 pixels, about the
+  tallest that still sits in the middle of a 1440 by 864 workbench, whose
+  dock area starts 137 pixels down; 440 by 520 read as cramped. In a small
+  workbench a centered panel may cover the entry button, so it closes by
+  its own button and Escape too.
   It stays open until closed, without a hover preview or a pin, and
   closing gives the keyboard back to the view that had it.
 - Known limit of that place: the share is of the whole workbench, while the
@@ -1092,8 +1095,43 @@ the workbench.
   Agent's mark, so the panel's title is the grip and the name alone; a
   second, smaller mark beside the title repeated it a few lines above.
 - Explain a new entry once, beside it, in a small card with one button, as
-  Fluent teaches a new entry point; open a new conversation with a line on
-  what the view does and a few first questions as outlined rows.
+  Fluent teaches a new entry point.
+- Lay out a conversation as VS Code's chat view. An empty conversation says
+  what the view does in the middle of the panel: the mark at 40 pixels in
+  the secondary text color, as VS Code draws its chat welcome's icon, a
+  heading a step larger than the panel's title, and the message centered at
+  a short measure of about 40 average characters. First questions are
+  compact chips as wide as their words, just above the composer. Full-width
+  outlined rows under a top-anchored welcome, with a blue mark beside the
+  blue Send, read as cluttered.
+- Make the composer one box in the input fill, outlined in the focus color
+  while the prompt has focus: the prompt, then what the question takes
+  along, then Send. Show that context as one chip, as VS Code shows a
+  chat's current file: its cross leaves the context out, and the chip
+  turns dashed and italic, with a plus that takes it back. A gray context
+  line above the conversation and an "Attach current selection" check box
+  below the prompt said the same thing twice. Without a binary, a line in
+  the chip's place says to open one, beside a Send that waits for it; a
+  placeholder alone left a disabled Send unexplained once typing hid it.
+- Type prose in the interface font. The workbench's text fields type in the
+  code font (`theme.qss`), so a chat prompt sets the interface font in its
+  own sheet, as VS Code's chat input uses the interface font. Grow a prompt
+  with its lines, two to eight here, and measure the laid-out lines: a
+  Chinese line among Latin text is taller than the font's line, and
+  `QPlainTextEdit` scrolls unless a pixel is left below its bottom margin.
+- To put a text field inside a box of your own, let the field paint the
+  box's fill over its whole frame when its paint event arrives. The
+  workbench paints a box, with its focus outline, on every text field that
+  takes typing (`fieldFace`) just before the field paints, whatever its
+  style sheet says, and the field's page and scroll bar are transparent, so
+  that outline showed inside the box's. No style sheet reaches the box;
+  rules for the field's page (Qt leaves a scroll area's viewport unstyled)
+  or its scroll bar painted nothing either.
+- Outline chips in VS Code's `chat.requestBorder`: a tenth of white in a
+  dark theme and of black in a light one, which shows on the panel and on
+  the input fill alike, and the theme's border in high contrast. A dark
+  theme's toolbar hover gray is its input gray, so a chip in the composer
+  hovers with the same tenth.
 - Show code in a plugin view in the workbench's code font
   (`AppearanceContext::codeFont`). Markdown asks for a generic monospace
   family that the workbench process does not resolve, and the workbench's
