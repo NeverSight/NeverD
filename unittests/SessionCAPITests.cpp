@@ -6260,6 +6260,11 @@ TEST_F(SessionCAPITest, IdentifyListsWhatLoadingReads) {
   std::string Mips = Native;
   llvm::support::endian::write16le(Mips.data() + llvm::ELF::EI_NIDENT + 2,
                                    llvm::ELF::EM_MIPS);
+  // Explicitly mismatch a 32-bit ISA with ELF64. Zero flags select a
+  // historical ISA and are rejected by a different profile check.
+  llvm::support::endian::write32le(
+      Mips.data() + offsetof(llvm::object::ELF64LE::Ehdr, e_flags),
+      llvm::ELF::EF_MIPS_ARCH_32R2);
   const auto MipsPath = write("identify-mips.elf", Mips);
   Rows = rows(MipsPath);
   ASSERT_EQ(Rows.size(), 2u);
