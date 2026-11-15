@@ -1,37 +1,39 @@
-//===- MicroMIPSFloat.def - microMIPS Release 6 POOL32F forms -------------===//
+//===- MicroMIPSFloat.def - microMIPS shared and Release 6 POOL32F forms
+//-------------===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
-// Physical minor, equivalent COP1 bits. Argument order is encoded by the group.
+// Physical minor, equivalent COP1 bits. Binary rows also state pre-R6
+// availability. Argument order is encoded by the group.
 
 #ifdef NEVERD_MICRO_FP_BINARY
-NEVERD_MICRO_FP_BINARY(0x0030, 0x46000000u) // add.s
-NEVERD_MICRO_FP_BINARY(0x0070, 0x46000001u) // sub.s
-NEVERD_MICRO_FP_BINARY(0x00b0, 0x46000002u) // mul.s
-NEVERD_MICRO_FP_BINARY(0x00f0, 0x46000003u) // div.s
-NEVERD_MICRO_FP_BINARY(0x01b8, 0x46000018u) // maddf.s
-NEVERD_MICRO_FP_BINARY(0x01f8, 0x46000019u) // msubf.s
-NEVERD_MICRO_FP_BINARY(0x0003, 0x4600001cu) // min.s
-NEVERD_MICRO_FP_BINARY(0x0023, 0x4600001du) // mina.s
-NEVERD_MICRO_FP_BINARY(0x000b, 0x4600001eu) // max.s
-NEVERD_MICRO_FP_BINARY(0x002b, 0x4600001fu) // maxa.s
-NEVERD_MICRO_FP_BINARY(0x0130, 0x46200000u) // add.d
-NEVERD_MICRO_FP_BINARY(0x0170, 0x46200001u) // sub.d
-NEVERD_MICRO_FP_BINARY(0x01b0, 0x46200002u) // mul.d
-NEVERD_MICRO_FP_BINARY(0x01f0, 0x46200003u) // div.d
-NEVERD_MICRO_FP_BINARY(0x03b8, 0x46200018u) // maddf.d
-NEVERD_MICRO_FP_BINARY(0x03f8, 0x46200019u) // msubf.d
-NEVERD_MICRO_FP_BINARY(0x0203, 0x4620001cu) // min.d
-NEVERD_MICRO_FP_BINARY(0x0223, 0x4620001du) // mina.d
-NEVERD_MICRO_FP_BINARY(0x020b, 0x4620001eu) // max.d
-NEVERD_MICRO_FP_BINARY(0x022b, 0x4620001fu) // maxa.d
-NEVERD_MICRO_FP_BINARY(0x00b8, 0x46000010u) // sel.s
-NEVERD_MICRO_FP_BINARY(0x0038, 0x46000014u) // seleqz.s
-NEVERD_MICRO_FP_BINARY(0x0078, 0x46000017u) // selnez.s
-NEVERD_MICRO_FP_BINARY(0x02b8, 0x46200010u) // sel.d
-NEVERD_MICRO_FP_BINARY(0x0238, 0x46200014u) // seleqz.d
-NEVERD_MICRO_FP_BINARY(0x0278, 0x46200017u) // selnez.d
+NEVERD_MICRO_FP_BINARY(0x0030, 0x46000000u, true)  // add.s
+NEVERD_MICRO_FP_BINARY(0x0070, 0x46000001u, true)  // sub.s
+NEVERD_MICRO_FP_BINARY(0x00b0, 0x46000002u, true)  // mul.s
+NEVERD_MICRO_FP_BINARY(0x00f0, 0x46000003u, true)  // div.s
+NEVERD_MICRO_FP_BINARY(0x01b8, 0x46000018u, false) // maddf.s
+NEVERD_MICRO_FP_BINARY(0x01f8, 0x46000019u, false) // msubf.s
+NEVERD_MICRO_FP_BINARY(0x0003, 0x4600001cu, false) // min.s
+NEVERD_MICRO_FP_BINARY(0x0023, 0x4600001du, false) // mina.s
+NEVERD_MICRO_FP_BINARY(0x000b, 0x4600001eu, false) // max.s
+NEVERD_MICRO_FP_BINARY(0x002b, 0x4600001fu, false) // maxa.s
+NEVERD_MICRO_FP_BINARY(0x0130, 0x46200000u, true)  // add.d
+NEVERD_MICRO_FP_BINARY(0x0170, 0x46200001u, true)  // sub.d
+NEVERD_MICRO_FP_BINARY(0x01b0, 0x46200002u, true)  // mul.d
+NEVERD_MICRO_FP_BINARY(0x01f0, 0x46200003u, true)  // div.d
+NEVERD_MICRO_FP_BINARY(0x03b8, 0x46200018u, false) // maddf.d
+NEVERD_MICRO_FP_BINARY(0x03f8, 0x46200019u, false) // msubf.d
+NEVERD_MICRO_FP_BINARY(0x0203, 0x4620001cu, false) // min.d
+NEVERD_MICRO_FP_BINARY(0x0223, 0x4620001du, false) // mina.d
+NEVERD_MICRO_FP_BINARY(0x020b, 0x4620001eu, false) // max.d
+NEVERD_MICRO_FP_BINARY(0x022b, 0x4620001fu, false) // maxa.d
+NEVERD_MICRO_FP_BINARY(0x00b8, 0x46000010u, false) // sel.s
+NEVERD_MICRO_FP_BINARY(0x0038, 0x46000014u, false) // seleqz.s
+NEVERD_MICRO_FP_BINARY(0x0078, 0x46000017u, false) // selnez.s
+NEVERD_MICRO_FP_BINARY(0x02b8, 0x46200010u, false) // sel.d
+NEVERD_MICRO_FP_BINARY(0x0238, 0x46200014u, false) // seleqz.d
+NEVERD_MICRO_FP_BINARY(0x0278, 0x46200017u, false) // selnez.d
 #undef NEVERD_MICRO_FP_BINARY
 #endif
 

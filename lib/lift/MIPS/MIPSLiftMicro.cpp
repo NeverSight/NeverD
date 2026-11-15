@@ -13,6 +13,7 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/lift/MIPS/MicroMIPS64Release6.h"
+#include "neverd/lift/MIPS/MicroMIPSLegacyFloat.h"
 #include "neverd/lift/MIPS/MicroMIPSRelease6.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -84,6 +85,9 @@ MIPSLifter::microLegacyJump(uint16_t First, uint16_t Second) const {
                       Second == 0x4f3c ? 2u : 4u};
     return std::nullopt;
   case 0x10: // DSP BPOSGE32
+    if (const auto Branch = mips::microLegacyFloatBranch(Word))
+      return Encoding{*Branch, 1};
+    [[fallthrough]];
   case 0x20: // MSA BZ/BNZ
     if (HasDSP || HasMSA)
       if (const auto Classic = microASEWord(Word))
@@ -346,6 +350,16 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
   case Micro:                                                                  \
     return Encoding{immediateForm(Classic, RT, RS, uint16_t(Word))};
 #include "neverd/lift/MIPS/MicroMIPSInteger.def"
+  case 0x15: // POOL32F
+  case 0x26: // SWC1
+  case 0x27: // LWC1
+  case 0x2e: // SDC1
+  case 0x2f: // LDC1
+    if (auto Classic = mips::microLegacyFloat(Word))
+      return Encoding{*Classic};
+    return std::nullopt;
+  case 0x10:
+    return microLegacyJump(First, uint16_t(Word));
   case 0x18: { // Pre-R6 POOL32C, signed twelve-bit displacement.
     const unsigned Sub = (Word >> 12) & 15;
     unsigned Op;

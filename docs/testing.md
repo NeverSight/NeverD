@@ -24344,6 +24344,26 @@ return bits, FCSR and output memory against the original target program.
 The optional Unicorn reference must be built from the pinned fork. Generated
 products are deleted on success or failure after results are recorded.
 
+Add `--micro-fp` to execute the original physical pre-R6 microMIPS floating
+kernels and both regenerated C views with the pinned generic micro FPU CPUs.
+The same scalar/PS profile names select the kernels. For n64, supply
+`--micro64-cc /path/to/mips64-linux-gnuabi64-gcc`; Clang cannot generate
+microMIPS64. The GNU C path uses `-minterlink-compressed` and the emitted
+function mode attribute. Both paths use `-fno-strict-aliasing`, verify the
+micro ELF flag and function tag, and compare return bits, FCSR and all 64
+observed data bytes. These tests execute micro originals directly, without
+re-encoding them into classic instructions for the reference CPU. Use a GNU
+MIPS linker for these fixed-address fixtures.
+
+`MIPSMicroLegacyFP` compares literal physical arithmetic, conversions and FCC
+predicates against LowIR in both GPR widths and endians. It also tests memory
+alignment, invalid fields, doubleword transfers refused on MIPS32, revision
+reuse and FCC capture before either slot width. `MIPSMicroFR0` compares
+physical paired registers and memory in both endians. The exhaustive
+`MicroMIPSDelaySlots.AllFirstHalfwordsAndPhysicalWidths` includes BC1F/T and
+their reserved selector bits for MIPS32 and MIPS64. These instruction tests
+do not claim compressed floating-call ABI coverage.
+
 ### MIPS decode/lift and firmware performance
 
 The opt-in `neverd-mips-request-bench` target repeatedly decompiles one loaded
