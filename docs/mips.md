@@ -4,7 +4,8 @@ The experimental MIPS analysis path targets linked ELF programs with classic
 MIPS32/o32 and MIPS64/n32 or n64 instructions in either byte order. The profiles below
 cover classic Release 2 integer, FR=0/FR=1 scalar floating-point and FR=1
 paired-single instructions,
-classic and microMIPS Release 6 integer and FR=1 floating-point instructions, microMIPS32 and microMIPS64 integer profiles,
+classic and microMIPS Release 6 integer and FR=1 floating-point instructions,
+pre-R6 microMIPS scalar/paired-single floating-point and integer profiles,
 MIPS16e32 and MIPS16e2, and Release 5/o32 and n64 MSA.
 Classic MIPS IV/V n32/n64 also admit the implemented integer and floating-point
 slice, with version-specific instruction checks described below.
@@ -130,8 +131,8 @@ Reading only a low byte or halfword does not prove that incoming upper bits
 have the extension a narrow C parameter would require. Declared source types
 remain a separate contract.
 
-Coverage remains incomplete for historical MIPS I–III profiles, pre-R6 microMIPS
-floating point, trapping arithmetic and the MSA/DSP forms outside the
+Coverage remains incomplete for historical MIPS I–III profiles, floating-point
+forms outside the qualified slices, trapping arithmetic and the MSA/DSP forms outside the
 slices below. Privileged instructions and reservations are admitted by profile
 as described under MIPS16e2 and classic Release 6. Unsupported instructions, missing slots and transfers in a
 delay slot produce errors, not replacement NOPs. General aggregate source ABI
@@ -365,6 +366,26 @@ The MSA branch displacement counts halfwords. Optional instructions require
 the corresponding ELF feature and local encoding evidence. Unlisted encodings
 produce a lift error.
 
+Pre-R6 microMIPS floating encodings share the classic COP1 semantic owner.
+`MicroMIPSLegacyFloat.def` supplies the legacy-only arithmetic and paired-single
+fields; shared S/D encodings remain in `MicroMIPSFloat.def`. The qualified slice
+includes scalar arithmetic and conversions, COP1X multiply-add, all S/D/PS
+predicates, conditional moves, PS packing/alignment, ordinary and indexed FP
+memory, and FPR/control transfers. DMFC1/DMTC1 require 64-bit GPRs. Explicit FP
+ABI evidence determines FR pairing. BC1F/T use halfword displacements and
+capture FCC before a two- or four-byte slot changes it. Reusing a decoder across
+R6 must distinguish legacy MOVF from R6 RINT even when the physical word is the
+same. Reserved fields remain errors.
+
+The tests compare 160 independently GNU-assembled classic/micro encoding pairs
+and execute physical micro instructions in both byte orders and GPR widths,
+including FR=0 on o32. The original and regenerated floating source leaves use
+Clang for o32 and GCC for n64, with scalar results, FCSR and memory compared at
+O0/O2. PS source tests use n64 integer carriers; they do not establish a vector
+call ABI. The generic Unicorn CPU profiles are bounded execution references,
+not complete physical processor models. FR=0 source-call qualification remains
+separate from the physical-instruction tests.
+
 Physical instructions occupy two or four bytes, including four-byte heads at
 addresses congruent to two modulo four. The execution-unit record keeps the
 actual head and slot widths. JALR16/JALRS16 require four/two-byte slots, JRC has
@@ -377,8 +398,8 @@ Both source routes retain explicit microMIPS/nomicromips and nomips16 function
 attributes. A source return must prove the captured incoming RA, including its
 mode bit, from the original instruction boundaries and SSA. Tail calls and unproved stack restores
 across calls remain outside this source proof. Source tests currently target
-bounded integer leaves, memory effects, o32 stack arguments and branch/slot
-capture.
+bounded integer and floating leaves, memory effects, o32 stack arguments and
+branch/slot capture.
 
 Numeric microMIPS code-pointer reconstruction is explicitly refused. The tested
 Clang 22 compiler folds a microMIPS function pointer's low bit to zero in some
@@ -400,6 +421,9 @@ The micro doubleword merge transfers use a signed 12-bit displacement.
 For micro functions, HighC and LLVMC select GCC's `micromips` attribute or
 Clang's `micromips,nomips16` pair. GCC requires `-minterlink-compressed` for
 calls between compressed functions and classic helpers in the same output.
+The micro source prelude supplies a single-evaluation, size-checked raw bit copy
+for GCC C, whose frontend lacks Clang's `__builtin_bit_cast`. This preserves
+pointer/integer and floating bit patterns without aliasing through another type.
 Compilation stops if Clang reports no microMIPS attribute for the selected
 target. GCC's MIPS attributes are
 documented in the [GCC manual](https://gcc.gnu.org/onlinedocs/gcc/MIPS-Attributes.html).

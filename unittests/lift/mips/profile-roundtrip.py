@@ -734,6 +734,7 @@ def run(args, artifacts):
                                 "-fno-pic",
                                 "-G0",
                                 "-ffreestanding",
+                                "-fno-strict-aliasing",
                                 "-nostdinc",
                                 "-isystem",
                                 includes,

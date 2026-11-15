@@ -16547,6 +16547,12 @@ ABI evidence, and the ELF loader rejects a conflicting CPR1 width. A bound
 substitute R6 NaN or exception behavior for a pre-R6 operation. Ordinary and
 indexed legacy FP memory use the existing alignment intrinsic. Delayed BC1
 uses the same snapshot and annulment path as integer branches.
+`MicroMIPSLegacyFloat` normalizes physical pre-R6 fields into this COP1 owner;
+it does not reimplement floating effects. Shared S/D field catalogs are reused
+with the R6 decoder and source assembler, while legacy-only fields have their
+own `.def`. Original halfword order, branch displacement scale and slot widths
+remain properties of the physical occurrence. Source helpers retain explicit
+classic mode; inline assembly in micro functions uses physical micro encodings.
 `MedMIPSSourceVectors` projects FR=0 physical words into even-register ABI
 carriers before SSA. A four-word entry-demand analysis distinguishes actual
 f12/f13 and f14/f15 inputs from scratch pairs whose synthetic preservation
