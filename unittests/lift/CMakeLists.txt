@@ -1557,6 +1557,7 @@ add_neverd_unittest(NeverDX86UndefinedEffectsTests
 
 add_neverd_unittest(NeverDX86DecodeDetailTests
   x86_64/X86_64_DisplacementDetailTests.cpp
+  x86_64/X86_64_PrefixLimitTests.cpp
   LINK_COMPONENTS Decode Lift Loader
 )
 
