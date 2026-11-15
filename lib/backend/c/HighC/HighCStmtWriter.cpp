@@ -2572,7 +2572,7 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent,
         // the join and its shared return unless this branch supplies a
         // return value of its own (or the function really returns void).
         if (ThenSinks && (ThenVal || InferredVoid) && ElseLive == 1 &&
-            AssignCall && MatchesCall) {
+            AssignCall && MatchesCall && !knownVoidCall(*AssignCall->Val)) {
           emitIndent(Indent);
           OS << "if (" << invertCondStr(*S.Cond) << ")\n";
           emitIndent(Indent + 1);

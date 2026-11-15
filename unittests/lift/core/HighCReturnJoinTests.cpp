@@ -215,8 +215,9 @@ bool returnsNamed(const std::string &Body, const std::string &Arg) {
 
 // One side of the join calls. The other side never writes x0, so it returns
 // the argument that arrived there. A load on that side is the loaded value.
-// A 32-bit write on the other side stays that write. A void call is returned
-// as that call. The reader is lifted so a used result is not settled as void.
+// A 32-bit write on the other side stays that write. A declared void call
+// keeps its effects and invalidates the result. The reader is lifted so a
+// result with an observed producer is not settled as void.
 TEST(HighCReturnJoin, ArgumentSurvivesBesideACall) {
   const std::string Source = decompileFixtureFunction(
       "test_return_w0_view_a64.o", "argument_survives_beside_a_call",
@@ -288,7 +289,14 @@ TEST(HighCReturnJoin, ArgumentSurvivesBesideACall) {
   EXPECT_EQ(Voided.find("void void_call_is_not_the_argument("),
             std::string::npos)
       << Voided;
-  EXPECT_NE(VoidBody.find("return clobber_x0("), std::string::npos) << VoidBody;
+  EXPECT_NE(Voided.find("void clobber_x0("), std::string::npos) << Voided;
+  EXPECT_NE(VoidBody.find("clobber_x0();"), std::string::npos) << VoidBody;
+  EXPECT_EQ(VoidBody.find("return clobber_x0("), std::string::npos) << VoidBody;
+  const auto CallAt = VoidBody.find("clobber_x0();");
+  EXPECT_NE(VoidBody.find("_known = 0;", CallAt), std::string::npos)
+      << VoidBody;
+  EXPECT_NE(VoidBody.find("no recovered semantics", CallAt), std::string::npos)
+      << VoidBody;
   EXPECT_EQ(VoidBody.find("unknown return value"), std::string::npos)
       << VoidBody;
   EXPECT_EQ(VoidBody.find("unknown value"), std::string::npos) << VoidBody;
@@ -336,7 +344,14 @@ TEST(HighCReturnJoin, UnreadArgumentSurvivesBesideACall) {
   EXPECT_EQ(Voided.find("void unread_void_call_is_not_the_argument("),
             std::string::npos)
       << Voided;
-  EXPECT_NE(VoidBody.find("return clobber_x0("), std::string::npos) << VoidBody;
+  EXPECT_NE(Voided.find("void clobber_x0("), std::string::npos) << Voided;
+  EXPECT_NE(VoidBody.find("clobber_x0();"), std::string::npos) << VoidBody;
+  EXPECT_EQ(VoidBody.find("return clobber_x0("), std::string::npos) << VoidBody;
+  const auto CallAt = VoidBody.find("clobber_x0();");
+  EXPECT_NE(VoidBody.find("_known = 0;", CallAt), std::string::npos)
+      << VoidBody;
+  EXPECT_NE(VoidBody.find("no recovered semantics", CallAt), std::string::npos)
+      << VoidBody;
   EXPECT_EQ(VoidBody.find("unknown return value"), std::string::npos)
       << VoidBody;
   EXPECT_EQ(VoidBody.find("unknown value"), std::string::npos) << VoidBody;
