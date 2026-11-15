@@ -606,7 +606,7 @@ static_assert(std::atomic<bool>::is_always_lock_free);
 static sigset_t beforeMask;
 static int trace;
 static volatile sig_atomic_t signalRaised;
-static bool resumeObserved;
+static volatile sig_atomic_t resumeObserved;
 static NDDarwinArm64eCursor interrupted, caller;
 static uintptr_t callerRegisters[NDArm64ePreservedGPRCount];
 
@@ -657,7 +657,7 @@ static void inspectLandingResume(ucontext_t *uc) {
   mach_port_deallocate(mach_task_self(), thread);
   if (result != KERN_SUCCESS)
     _exit(27);
-  resumeObserved = true;
+  resumeObserved = 1;
 }
 
 [[noreturn]] static void deliver(void *payload) {
