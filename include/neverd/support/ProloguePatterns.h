@@ -376,27 +376,27 @@ inline bool isStrictPrologueWordAArch64(uint32_t W) {
   return false;
 }
 
+/// Whether \p W is the frame push `stp x29, x30, [sp, #negative]!`.
+inline bool isAArch64FramePushWord(uint32_t W) {
+  return (W & 0xFFE07FFF) == 0xA9A07BFD;
+}
+
 /// Whether \p W is a candidate function-entry marker: PACIASP or PACIBSP, which
 /// sign the return address on entry, BTI c, the landing pad of an indirect
 /// call, or the frame push `stp x29, x30, [sp, #negative]!`. Shrink wrapping
 /// can also put these inside a function; the marker alone proves no boundary.
 inline bool isFunctionEntryMarkerWordAArch64(uint32_t W) {
-  return W == 0xD503233F ||              // paciasp
-         W == 0xD503237F ||              // pacibsp
-         W == 0xD503245F ||              // bti c
-         (W & 0xFFC07FFF) == 0xA9807BFD; // stp x29, x30, [sp, #imm]!
-}
-
-/// Whether \p W is the frame push `stp x29, x30, [sp, #imm]!`.
-inline bool isAArch64FramePushWord(uint32_t W) {
-  return (W & 0xFFC07FFF) == 0xA9807BFD;
+  return W == 0xD503233F || // paciasp
+         W == 0xD503237F || // pacibsp
+         W == 0xD503245F || // bti c
+         isAArch64FramePushWord(W);
 }
 
 /// Whether \p W ends a basic block unconditionally, so the word after it can
 /// begin a function laid out with no padding between the two: an
 /// unconditional branch, a return, an indirect branch, an exception return, a
-/// trap (BRK/HLT/UDF, zero reading as UDF #0), or an alignment NOP.  A
-/// conditional branch or a call does not: both fall through to the next word.
+/// trap (BRK/HLT/UDF, zero reading as UDF #0). NOPs, conditional branches and
+/// calls can fall through to the next word.
 inline bool isAArch64BlockEndWord(uint32_t W) {
   if (branch::A64Branch.matches(W))
     return true;
@@ -414,7 +414,7 @@ inline bool isAArch64BlockEndWord(uint32_t W) {
     return true;
   if ((W & 0xFFFF0000) == 0x00000000) // udf #imm (zero padding reads as udf)
     return true;
-  return W == 0xD503201F; // nop
+  return false;
 }
 
 /// Whether \p W lies in the A64 encoding space no instruction occupies: the
@@ -425,17 +425,12 @@ inline bool isAArch64UnallocatedWord(uint32_t W) {
          (Op0 == 0 && (W >> 16) != 0 && (W >> 31) == 0);
 }
 
-/// A page of AArch64 words holds data when this many of them, read as
-/// instructions, are unallocated encodings or small constants (UDF #imm),
-/// which code all but never holds; zero is padding.
-inline constexpr size_t kAArch64PageBytes = 0x1000;
-inline constexpr size_t kAArch64DataWordsPerPage = 64;
-
 /// Whether the \p Size bytes at \p Bytes, a page or the part of one an image
-/// holds, are data by kAArch64DataWordsPerPage.
+/// holds, are data by limits::support::kAArch64DataWordsPerPage.
 inline bool isAArch64DataPage(const uint8_t *Bytes, size_t Size) {
   size_t DataWords = 0;
-  for (size_t At = 0; At + 4 <= Size && DataWords < kAArch64DataWordsPerPage;
+  for (size_t At = 0;
+       At + 4 <= Size && DataWords < limits::support::kAArch64DataWordsPerPage;
        At += 4) {
     const uint32_t W = static_cast<uint32_t>(Bytes[At]) |
                        static_cast<uint32_t>(Bytes[At + 1]) << 8 |
@@ -443,7 +438,7 @@ inline bool isAArch64DataPage(const uint8_t *Bytes, size_t Size) {
                        static_cast<uint32_t>(Bytes[At + 3]) << 24;
     DataWords += isAArch64UnallocatedWord(W) || (W != 0 && (W >> 16) == 0);
   }
-  return DataWords >= kAArch64DataWordsPerPage;
+  return DataWords >= limits::support::kAArch64DataWordsPerPage;
 }
 
 /// Whether \p W is a call: BL, BLR, or an authenticating BLRAA[Z]/BLRAB[Z].

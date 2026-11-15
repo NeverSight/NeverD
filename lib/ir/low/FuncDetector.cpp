@@ -17,6 +17,7 @@
 #include "FuncDetectorDetail.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/Limits.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/NoReturnLoadedTarget.h"
@@ -215,6 +216,26 @@ bool runsIntoAArch64(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
        (!isAArch64FramePushWord(At) ||
         func_detect_detail::aarch64MarkedEntryAfterFunctionEnd(Img, Addr))))
     return false;
+  // Alignment NOPs do not end a block themselves. Skip only those words
+  // when an actual terminator before them proves the padding is unreachable.
+  if (Before == 0xD503201F) {
+    va_t Previous = Addr - 4;
+    for (size_t Words = 0;
+         Words < limits::ir::kAArch64EntryFillerWords && Previous >= 4;
+         ++Words) {
+      Previous -= 4;
+      if (!Img.hasExecutableCodeOwnerRange(Previous, 4))
+        break;
+      const uint8_t *PreviousBytes = Img.readVA(Previous, 4);
+      if (!PreviousBytes)
+        break;
+      const uint32_t Word = readLE<uint32_t>(PreviousBytes);
+      if (isAArch64BlockEndWord(Word))
+        return false;
+      if (Word != 0xD503201F)
+        break;
+    }
+  }
   DecodedInsn Insn;
   return Dec.decodeOne(Bytes, 4, Addr - 4, Insn) == 4;
 }
