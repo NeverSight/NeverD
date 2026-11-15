@@ -386,6 +386,13 @@ call ABI. The generic Unicorn CPU profiles are bounded execution references,
 not complete physical processor models. FR=0 source-call qualification remains
 separate from the physical-instruction tests.
 
+The [2026-11-15 physical microMIPS FP receipt](evidence/mips-micro-legacy-fp-2026-11-15.json)
+records 160 independently assembled encoding forms, 406,272 arithmetic
+comparisons, 448 memory cases and 512 branch/slot cases in both byte orders.
+Its source matrix contains 1,128 builds and 52,808 rebuilt execution comparisons.
+These checks qualify the listed instruction and source slices; compressed
+floating call ABI and full microMIPS ISA coverage remain separate work.
+
 Physical instructions occupy two or four bytes, including four-byte heads at
 addresses congruent to two modulo four. The execution-unit record keeps the
 actual head and slot widths. JALR16/JALRS16 require four/two-byte slots, JRC has
@@ -1216,7 +1223,8 @@ FR=1. o32 hard double (ABI 1) with 32-bit CPR1 evidence establishes FR=0.
 Conflicting CPR1 widths, EF_MIPS_FP64 with FR=0, and FR=0 under Release 6 are
 rejected. FPXX and integer-only images do not establish an FPR mode. Both GPR
 widths and byte orders share the instruction owner. Historical MIPS I–III
-profiles and pre-R6 microMIPS floating point remain outside this profile.
+profiles remain outside this profile. Pre-R6 microMIPS uses this semantic owner
+with the separate physical encoding and source qualification described above.
 
 FR=0 LowIR retains 32 independent physical FPR words. Doubles join the even
 register's low word with its odd partner's high word in either byte order;

@@ -1,0 +1,104 @@
+{
+  "implementation_commit": "b45bd03370db5edc8ac8268a8cf38c132d50f198",
+  "historical_base": "7205aeb37a513939aeade2260fafe8a2a5f121a1",
+  "host": "macOS arm64, Release",
+  "capstone_commit": "defa77a3b8395499e6dfc991808ed8d1c8d83df1",
+  "unicorn_commit": "bd582f668a29518bfa2e3c98cff56914f4661be1",
+  "unicorn_reference_sha256": "018547559f3609eb09ec04a64572eefc99bc378ff4e2c3a2f6b2f0728531200e",
+  "qualified_binary_sha256": {
+    "neverd": "b3b5b0cffb8f36acf4784e4367f35576d5c70ab38573d19db1558cf033b624bf",
+    "neverd-mips-bench": "5281a7badd3a73c65eb592cc56073f3ffb773ba66fb78604fc95132f12e26875",
+    "neverd-mips-request-bench": "5f18baa849687945e3b804b102f7ca9da1f196e845f399f2f43851b7883adf9e",
+    "libneverd.dylib": "83d2bb581ed81b65f95c18129ec093e569ec503251b152a6ef86e65953deb719"
+  },
+  "physical_micro_fp": {
+    "widths": [
+      32,
+      64
+    ],
+    "byte_orders": [
+      "big",
+      "little"
+    ],
+    "gnu_assembled_forms": 160,
+    "fr1_arithmetic_forms": 109,
+    "fr0_arithmetic_forms": 72,
+    "arithmetic_original_vs_lowir_observations": 406272,
+    "memory_original_vs_lowir_cases": 448,
+    "bc1_original_vs_lowir_cases": 512,
+    "reference_models": [
+      "MICROMIPS32R2_GENERIC",
+      "MICROMIPS64R2_GENERIC"
+    ],
+    "reference_prs": [
+      "https://github.com/NeverSight/unicorn/pull/30",
+      "https://github.com/NeverSight/unicorn/pull/31",
+      "https://github.com/NeverSight/unicorn/pull/32"
+    ],
+    "fixture_generation_sha256": "cacd00defb68f76e4825ec091a2f2bf8424f85bdceaad8fa871e3543b205b3cf"
+  },
+  "source_roundtrips": {
+    "micro32": {
+      "complete": true,
+      "source_builds": 328,
+      "original_cases": 3710,
+      "rebuilt_comparisons": 14840,
+      "result_sha256": "d029446aaa22434583c313a622ccfd2ce1bbfe12c25fa19507213646ecbdb26a",
+      "commands_sha256": "7692c5c5f54d6843b9f7fa88fe7475803fdd52d4f122963876edecb9d6f593c4",
+      "physical_encoding": "micro",
+      "views": [
+        "highc",
+        "llvmc"
+      ],
+      "optimization_levels": [
+        "-O0",
+        "-O2"
+      ],
+      "compiler": "Clang 22.1.6",
+      "abi": "o32 FP64"
+    },
+    "micro64": {
+      "complete": true,
+      "source_builds": 800,
+      "original_cases": 9492,
+      "rebuilt_comparisons": 37968,
+      "result_sha256": "f5bf2272be22e0096e0445865894ce4a8cc4cbbf8f8397ba4341977683731da7",
+      "commands_sha256": "de30d737af96fc50b7414f596661d993bcf0354436683785bd327e6446acad6c",
+      "physical_encoding": "micro",
+      "views": [
+        "highc",
+        "llvmc"
+      ],
+      "optimization_levels": [
+        "-O0",
+        "-O2"
+      ],
+      "compiler": "GNU MIPS64 GCC 12.2.0 Debian 12.2.0-14cross5",
+      "abi": "n64 hard-double / integer PS carriers"
+    }
+  },
+  "owner_tests": {
+    "mips": 857,
+    "artifact_lifecycle": 8,
+    "mips_log_sha256": "43d1c8a2673a91c7ba3f58f038c1e80177aabe963983d23de6801e008a86a798",
+    "artifact_log_sha256": "322ac1a076067df77be7654198d5de1dc25a2413439e9bd068ce82e84ff0a300",
+    "shared_fp_abi_and_sdk": 288,
+    "combined_mips_shared": 1145,
+    "shared_log_sha256": "2d91eaac3a6c5930fd45ad8d0faf8fc0ec5b6e2f5d1fff7dfb021361f1ab5bfd"
+  },
+  "limits": [
+    "The two generic Unicorn models are bounded execution references, not complete physical microMIPS processors or hardware qualification.",
+    "Both original and rebuilt source fixtures execute physical microMIPS bytes. Paired-single source fixtures use n64 integer carriers; a vector calling convention is not qualified.",
+    "FR=0 is qualified at the physical instruction/LowIR boundary; compressed FR=0 floating source calls are not qualified.",
+    "Compressed floating call ABI, historical I-III scheduling and historical o32, old DSP64 rounded/saturating DEXTR and signed DMADD/DMSUB, and the other documented unsupported instruction/system/ABI domains remain open.",
+    "The historical DSP64 manual needed to resolve existing executor/test discrepancies has not been recovered. Missing primary semantics are not inferred from decoder coverage.",
+    "Performance raw samples, identical dependency/toolchain inputs and source identity hashes are retained locally. This is not an all-ISA or world-fastest claim."
+  ],
+  "ubus_call": {
+    "original_cases": 12,
+    "rebuilt_comparisons": 48,
+    "complete": true,
+    "receipt_sha256": "012016cfe95b9cc48abef400d35e5f2f1d42f1f76a7e8a15eb8c1327ed30de52",
+    "firmware_sha256": "6e1129aa58cb398a2453876ea4aa2395feecc84ecf78ed8ab43efd534b40e475"
+  }
+}
