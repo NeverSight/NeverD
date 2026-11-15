@@ -488,7 +488,7 @@ Lexception:
  .byte 255
 #endif
 #if defined(NEVERD_TYPED_LSDA) || defined(NEVERD_LOCAL_CATCH)
-#ifdef NEVERD_LOCAL_CATCH
+#if defined(NEVERD_LOCAL_CATCH) && !defined(NEVERD_OBJC_PERSONALITY)
  .byte 0
 #else
  .byte 155
@@ -534,9 +534,17 @@ Ltable_end:
  // checking that begin_catch exposes the original exception object.
  .sleb128 1
  .sleb128 0
+#ifdef NEVERD_OBJC_PERSONALITY
+ // Objective-C @catch(id) must request the runtime's object adjustment.
+ // A C++ catch-all's null type instead exposes the exception wrapper.
+ .p2align 2
+ .long _OBJC_EHTYPE_id@GOT-.
+Ltypes_end:
+#else
  .p2align 3
  .quad 0
 Ltypes_end:
+#endif
 #elif defined(NEVERD_TYPED_LSDA)
  // A nonmatching catch(int), followed by the active cleanup.
  .sleb128 1
@@ -620,11 +628,14 @@ static void inspectLandingResume(ucontext_t *uc) {
     if (unw_set_reg(&cursor, UNW_ARM64_X0 + reg, state.__x[reg]))
       _exit(23);
   const auto sp = arm_thread_state64_get_sp(state);
-  const auto pc = arm_thread_state64_get_pc(state);
-  // Public cursors consume return PCs. Both resume instructions share one
-  // row; use its following edge so an entry PC cannot select the prior FDE.
+  // Both resume instructions share one row. An interior PC selects that row
+  // with either signal-PC or return-PC lookup, without crossing either FDE
+  // boundary when the second instruction is interrupted.
+  const auto pc = (uintptr_t)ptrauth_strip(
+      &ndDarwinArm64eLiveLRResume, ptrauth_key_function_pointer) +
+      NDArm64eInstructionAlignment;
   const auto signedPC = (uintptr_t)ptrauth_sign_unauthenticated(
-      (void *)(pc + NDArm64eInstructionAlignment), ptrauth_key_return_address, sp);
+      (void *)pc, ptrauth_key_return_address, sp);
   if (unw_set_reg(&cursor, UNW_ARM64_FP, arm_thread_state64_get_fp(state)) ||
       unw_set_reg(&cursor, UNW_ARM64_LR, arm_thread_state64_get_lr(state)) ||
       unw_set_reg(&cursor, UNW_REG_SP, sp) ||

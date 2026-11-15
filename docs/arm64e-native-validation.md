@@ -1893,7 +1893,9 @@ exception identity, interrupted/outer cleanup ordering, the original SP/LR,
 insufficient-stack rejection, and the emitted bridge's independent return
 columns. Four cases execute a local catch and authenticated normal return;
 the others spill live LR before calling `_Unwind_Resume`, with matching
-PC-specific CFI. Hardware breakpoints also interrupt each of the two resume
+PC-specific CFI. The Objective-C catch uses the compiler's `_OBJC_EHTYPE_id`
+GOT reference to obtain the original object through `objc_begin_catch`.
+Hardware breakpoints also interrupt each of the two resume
 instructions. A fresh public cursor walks through the interrupted frame to its
 caller and checks SP, LR, FP and the preserved general registers before signal
 return continues the landing pad. `LDUR` and `STUR` now participate in native register-

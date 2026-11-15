@@ -1048,6 +1048,7 @@ verifySignalLanguageCleanup(bool ObjectiveC,
         ASSERT_TRUE(Out);
         if (std::getenv(kExecute))
           for (bool Alternate : {false, true}) {
+            SCOPED_TRACE(Alternate);
             std::string Error;
             ASSERT_EQ(llvm::sys::ExecuteAndWait(
                           Driver,
