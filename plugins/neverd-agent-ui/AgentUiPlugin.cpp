@@ -20,9 +20,9 @@
 #include "platform/AppPaths.h"
 
 #include <QAbstractButton>
+#include <QAbstractTextDocumentLayout>
 #include <QAction>
 #include <QApplication>
-#include <QCheckBox>
 #include <QContextMenuEvent>
 #include <QCoreApplication>
 #include <QCursor>
@@ -51,6 +51,7 @@
 #include <QSettings>
 #include <QShortcut>
 #include <QStyleHints>
+#include <QTextBlock>
 #include <QTimer>
 #include <QToolButton>
 #include <QTranslator>
@@ -78,6 +79,15 @@ constexpr int DockReach = 24;
 constexpr int CenterSnap = 20;
 constexpr int TeachingWidth = 320;
 constexpr int SuggestionCount = 3;
+// A new conversation's mark, as large as VS Code draws its chat welcome's
+// icon.
+constexpr int WelcomeMarkSize = 40;
+// The welcome's message keeps to about this many average characters a line,
+// a short centered measure as VS Code keeps its chat welcome's message.
+constexpr int WelcomeMeasure = 40;
+// The prompt grows with its lines between these, then scrolls.
+constexpr int PromptLeastLines = 2;
+constexpr int PromptMostLines = 8;
 constexpr int SpinnerStepMs = 80;
 constexpr int SpinnerStepDegrees = 30;
 // The corners of cards, as the workbench rounds its floating cards; tool
@@ -127,8 +137,10 @@ public:
       return palette.color(QPalette::Accent).lighter(115);
     if (is("ButtonPrimaryText"))
       return palette.color(QPalette::HighlightedText);
-    if (is("Border") || is("FloatingWindowBorder"))
+    if (is("Border") || is("FloatingWindowBorder") || is("InputBorder"))
       return palette.color(QPalette::Mid);
+    if (is("Input"))
+      return palette.color(QPalette::Base);
     if (is("ToolBarHoverBorder") || is("ButtonHoverBorder"))
       return Qt::transparent;
     if (is("ToolButtonChecked"))
@@ -143,16 +155,25 @@ private:
 };
 
 // Standard controls keep the workbench's own style. This sheet gives only the
-// card, the messages and the quiet labels their roles.
+// card, the messages and the quiet labels their roles, and the prompt its
+// font. A question is prose, so the prompt types in the interface font, as
+// VS Code's chat input does, where the workbench's text fields type in the
+// code font.
 QString chatStyle(const Colors &color) {
   const auto hex = [&](const char *role) {
     return color(role).name(QColor::HexArgb);
   };
+  const QFont prose = QApplication::font();
+  const QString promptFont =
+      QStringLiteral("%1%2 \"%3\"")
+          .arg(prose.pixelSize() > 0 ? prose.pixelSize() : prose.pointSizeF())
+          .arg(prose.pixelSize() > 0 ? "px" : "pt")
+          .arg(prose.family());
   return QStringLiteral(R"css(
 QFrame#NeverDAgentChat, QFrame#NeverDAgentTeaching {
   background: %1; border: 1px solid %2; border-radius: %3px;
 }
-QLabel#NeverDAgentContext, QLabel#NeverDAgentStatus, QLabel#NeverDAgentSpeaker,
+QLabel#NeverDAgentStatus, QLabel#NeverDAgentSpeaker, QLabel#NeverDAgentNoBinary,
 QLabel#NeverDAgentExecutionLatest, QLabel#NeverDAgentTeachingText {
   color: %4;
 }
@@ -175,19 +196,24 @@ QTextBrowser#NeverDAgentMessageText {
 }
 QTreeWidget#NeverDAgentExecutionRows { border: none; }
 QLabel#NeverDAgentWelcomeText { color: %4; }
+QPlainTextEdit#NeverDAgentPrompt { font: %10; border: none; padding: 0; }
 )css")
       .arg(hex("Menu"), hex("FloatingWindowBorder"),
            QString::number(CardRadius), hex("SecondaryText"), hex("Button"),
            QString::number(BubbleBorderWidth), hex("ToolBarHover"),
-           hex("Focus"), hex("Border"));
+           hex("Focus"), hex("Border"))
+      .arg(promptFont);
 }
 
-/// The Agent's mark in a 16-unit box: a speech bubble with a spark.
-void paintAgentMark(QPainter &painter, const QRectF &box, const QColor &color) {
+/// The Agent's mark in a 16-unit box: a speech bubble with a spark, its
+/// outline \p stroke units wide.
+void paintAgentMark(QPainter &painter, const QRectF &box, const QColor &color,
+                    qreal stroke = 1.5) {
   painter.save();
   painter.translate(box.topLeft());
   painter.scale(box.width() / 16.0, box.height() / 16.0);
-  painter.setPen(QPen(color, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+  painter.setPen(
+      QPen(color, stroke, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
   painter.setBrush(Qt::NoBrush);
   QPainterPath bubble;
   bubble.moveTo(4, 4);
@@ -456,8 +482,42 @@ private:
   Colors Color;
 };
 
-/// A first question: an outlined row that fills on hover, as VS Code lists
-/// a new chat's suggestions.
+/// A thin outline that shows on the panel and on the input fill alike: a
+/// tenth of white in a dark theme and of black in a light one, as VS Code
+/// outlines a chat input's attachments and suggested prompts
+/// (chat.requestBorder), and the theme's border in a high contrast theme.
+QColor hairline(const Colors &color) {
+  if (color("ButtonHoverBorder").alpha() > 0)
+    return color("Border");
+  const bool dark = color("Text").lightnessF() > 0.5;
+  constexpr int Tenth = 26;
+  return dark ? QColor(255, 255, 255, Tenth) : QColor(0, 0, 0, Tenth);
+}
+
+/// The fill of a chip on the input fill under the pointer: the hairline's
+/// tenth of white or black, since a dark theme's toolbar hover gray is the
+/// input's own gray. VS Code's toolbar hover fill is translucent too
+/// (toolbar.hoverBackground). A high contrast theme outlines the chip
+/// instead (chipOutline).
+QColor chipHover(const Colors &color) {
+  return color("ButtonHoverBorder").alpha() > 0 ? QColor(Qt::transparent)
+                                                : hairline(color);
+}
+
+/// The outline of a chip: the focus color while it has focus, a high
+/// contrast theme's hover outline under the pointer, else a hairline.
+QColor chipOutline(const QWidget &chip, const Colors &color) {
+  if (chip.hasFocus())
+    return color("Focus");
+  if (chip.underMouse() && chip.isEnabled() &&
+      color("ToolBarHoverBorder").alpha() > 0)
+    return color("ToolBarHoverBorder");
+  return hairline(color);
+}
+
+/// A first question: a compact outlined chip, as wide as its words, that
+/// fills on hover, as VS Code offers a new chat's suggested prompts above its
+/// input.
 class SuggestionButton final : public QAbstractButton {
 public:
   SuggestionButton(const AppearanceContext *appearance, QWidget *parent)
@@ -466,11 +526,11 @@ public:
     setCursor(Qt::PointingHandCursor);
     setFocusPolicy(Qt::TabFocus);
     setAttribute(Qt::WA_Hover);
-    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
   }
   QSize sizeHint() const override {
-    return {fontMetrics().horizontalAdvance(text()) + 2 * Padding,
-            fontMetrics().height() + 2 * Padding - 2};
+    return {fontMetrics().horizontalAdvance(text()) + 2 * Padding + 1,
+            fontMetrics().height() + 2 * Inset};
   }
   QSize minimumSizeHint() const override {
     return {4 * Padding, sizeHint().height()};
@@ -481,10 +541,10 @@ protected:
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     const QRectF face = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-    painter.setPen(QPen(Color(hasFocus() ? "Focus" : "Border"), 1));
+    painter.setPen(QPen(chipOutline(*this, Color), 1));
     painter.setBrush(underMouse() && isEnabled() ? Color("ToolBarHover")
                                                  : QColor(Qt::transparent));
-    painter.drawRoundedRect(face, CardRadius, CardRadius);
+    painter.drawRoundedRect(face, ToolRadius, ToolRadius);
     painter.setPen(Color(isEnabled() ? "Text" : "DisabledText"));
     const QRect text = rect().adjusted(Padding, 0, -Padding, 0);
     painter.drawText(
@@ -494,10 +554,207 @@ protected:
 
 private:
   static constexpr int Padding = 10;
+  static constexpr int Inset = 4;
   Colors Color;
 };
 
-/// The Agent's mark at a size, in the accent color.
+/// What a question takes along, in the composer as VS Code shows a chat's
+/// current file: a chip with a cross that leaves it out; left out, it is
+/// dashed and in italics, with a plus that takes it back. It is a toggle,
+/// checked while the context goes along.
+class ContextChip final : public QAbstractButton {
+public:
+  ContextChip(const AppearanceContext *appearance, QWidget *parent)
+      : QAbstractButton(parent), Color(appearance) {
+    setObjectName("NeverDAgentIncludeContext");
+    setCheckable(true);
+    setChecked(true);
+    setCursor(Qt::PointingHandCursor);
+    setFocusPolicy(Qt::TabFocus);
+    setAttribute(Qt::WA_Hover);
+    setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
+  }
+  QSize sizeHint() const override {
+    QFont slanted = font();
+    slanted.setItalic(true);
+    const int words = std::max(fontMetrics().horizontalAdvance(text()),
+                               QFontMetrics(slanted).horizontalAdvance(text()));
+    return {Lead + Glyph + Gap + words + Trail + 1,
+            fontMetrics().height() + 2 * Inset};
+  }
+  QSize minimumSizeHint() const override {
+    return {Lead + Glyph + Gap + 3 * Trail, sizeHint().height()};
+  }
+
+protected:
+  void paintEvent(QPaintEvent *) override {
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const bool along = isChecked();
+    QPen outline(chipOutline(*this, Color), 1);
+    if (!along && !hasFocus())
+      outline.setDashPattern({3, 2});
+    painter.setPen(outline);
+    painter.setBrush(underMouse() ? chipHover(Color) : QColor(Qt::transparent));
+    painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5),
+                            ToolRadius, ToolRadius);
+    const bool mirrored = layoutDirection() == Qt::RightToLeft;
+    const QPointF center(mirrored ? width() - Lead - Glyph / 2.0
+                                  : Lead + Glyph / 2.0,
+                         height() / 2.0);
+    painter.setPen(
+        QPen(Color("SecondaryText"), 1.2, Qt::SolidLine, Qt::RoundCap));
+    constexpr qreal Arm = Glyph / 2.0 - 1;
+    if (along) {
+      painter.drawLine(center + QPointF(-Arm, -Arm),
+                       center + QPointF(Arm, Arm));
+      painter.drawLine(center + QPointF(Arm, -Arm),
+                       center + QPointF(-Arm, Arm));
+    } else {
+      painter.drawLine(center + QPointF(-Arm, 0), center + QPointF(Arm, 0));
+      painter.drawLine(center + QPointF(0, -Arm), center + QPointF(0, Arm));
+    }
+    QFont words = font();
+    words.setItalic(!along);
+    painter.setFont(words);
+    painter.setPen(Color(along ? "Text" : "SecondaryText"));
+    const int start = Lead + Glyph + Gap;
+    const QRect text = mirrored ? rect().adjusted(Trail, 0, -start, 0)
+                                : rect().adjusted(start, 0, -Trail, 0);
+    painter.drawText(text, Qt::AlignVCenter | Qt::AlignLeading,
+                     QFontMetrics(words).elidedText(
+                         this->text(), Qt::ElideRight, text.width()));
+  }
+
+private:
+  static constexpr int Lead = 5;
+  static constexpr int Glyph = 8;
+  static constexpr int Gap = 6;
+  static constexpr int Trail = 8;
+  static constexpr int Inset = 2;
+  Colors Color;
+};
+
+/// The question being written: as tall as its lines, between
+/// PromptLeastLines and PromptMostLines, without a frame of its own. The
+/// workbench paints a text field's box, with its focus outline, on the
+/// field before the field paints; the prompt paints the input fill over all
+/// of it, under its page and its scroll bar, so the composer's box around it
+/// is the only one. A style sheet reaches neither the box nor the page.
+class PromptEdit final : public QPlainTextEdit {
+public:
+  PromptEdit(const AppearanceContext *appearance, QWidget *parent)
+      : QPlainTextEdit(parent), Color(appearance) {
+    setObjectName("NeverDAgentPrompt");
+    setFrameShape(QFrame::NoFrame);
+    setTabChangesFocus(true);
+    setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    connect(document()->documentLayout(),
+            &QAbstractTextDocumentLayout::documentSizeChanged, this,
+            [this] { fit(); });
+    connect(this, &QPlainTextEdit::textChanged, this, [this] { fit(); });
+    fit();
+  }
+
+protected:
+  bool event(QEvent *event) override {
+    if (event->type() == QEvent::Paint)
+      QPainter(this).fillRect(rect(), Color("Input"));
+    return QPlainTextEdit::event(event);
+  }
+  void resizeEvent(QResizeEvent *event) override {
+    QPlainTextEdit::resizeEvent(event);
+    if (event->size().width() != event->oldSize().width())
+      fit();
+  }
+  void changeEvent(QEvent *event) override {
+    QPlainTextEdit::changeEvent(event);
+    if (event->type() == QEvent::FontChange ||
+        event->type() == QEvent::StyleChange)
+      fit();
+  }
+
+private:
+  // The text's own height, as its lines are laid out: a line with a fallback
+  // font, such as Chinese among Latin text, is taller than the font's line.
+  // The page shows all of it without scrolling only with a pixel to spare
+  // below the bottom margin.
+  void fit() {
+    // Laying a block out to measure it can report a new document size.
+    if (std::exchange(Fitting, true))
+      return;
+    const qreal margin = document()->documentMargin();
+    const int line = fontMetrics().lineSpacing();
+    const qreal least = PromptLeastLines * line + 2 * margin + 1;
+    const qreal most = PromptMostLines * line + 2 * margin + 1;
+    // The last block's height takes in the bottom margin.
+    qreal text = margin + 1;
+    const auto *layout = document()->documentLayout();
+    for (auto block = document()->begin(); block.isValid() && text < most;
+         block = block.next())
+      text += layout->blockBoundingRect(block).height();
+    const QMargins margins = contentsMargins();
+    const int height =
+        static_cast<int>(std::ceil(std::clamp(text, least, most))) +
+        margins.top() + margins.bottom();
+    if (height != maximumHeight() || height != minimumHeight())
+      setFixedHeight(height);
+    Fitting = false;
+  }
+
+  Colors Color;
+  bool Fitting = false;
+};
+
+/// The composer: one box in the input fill around the prompt, the context
+/// chip and Send, outlined in the focus color while the prompt has focus, as
+/// VS Code draws its chat input. A click on the box away from its controls
+/// puts the cursor in the prompt.
+class ComposerBox final : public QFrame {
+public:
+  ComposerBox(const AppearanceContext *appearance, QWidget *parent)
+      : QFrame(parent), Color(appearance) {
+    setObjectName("NeverDAgentComposer");
+  }
+  void setField(QWidget *field) {
+    Field = field;
+    field->installEventFilter(this);
+  }
+
+protected:
+  bool eventFilter(QObject *object, QEvent *event) override {
+    if (object == Field &&
+        (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut))
+      update();
+    return QFrame::eventFilter(object, event);
+  }
+  void mousePressEvent(QMouseEvent *event) override {
+    if (Field && event->button() == Qt::LeftButton) {
+      Field->setFocus(Qt::MouseFocusReason);
+      event->accept();
+      return;
+    }
+    QFrame::mousePressEvent(event);
+  }
+  void paintEvent(QPaintEvent *) override {
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const bool focused = Field && Field->hasFocus();
+    painter.setPen(QPen(Color(focused ? "Focus" : "InputBorder"), 1));
+    painter.setBrush(Color("Input"));
+    painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5),
+                            CardRadius, CardRadius);
+  }
+
+private:
+  Colors Color;
+  QPointer<QWidget> Field;
+};
+
+/// The Agent's mark at a size, in the secondary text color, as VS Code draws
+/// its chat welcome's icon. Its outline is a unit wide, which at 40 pixels is
+/// as heavy as the one pixel lines of a 16 pixel icon drawn that large.
 class Mark final : public QWidget {
 public:
   Mark(int size, const AppearanceContext *appearance, QWidget *parent)
@@ -510,7 +767,8 @@ protected:
   void paintEvent(QPaintEvent *) override {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
-    paintAgentMark(painter, QRectF(0, 0, Size, Size), Color("Accent"));
+    paintAgentMark(painter, QRectF(0, 0, Size, Size), Color("SecondaryText"),
+                   1.0);
   }
 
 private:
@@ -588,10 +846,12 @@ public:
   QSize chosenSize() const { return Chosen; }
 
 protected:
-  // The workbench sets a new application palette when its theme changes.
+  // The workbench sets a new application palette when its theme changes,
+  // and a new application font when its language does.
   void changeEvent(QEvent *event) override {
     QFrame::changeEvent(event);
-    if (event->type() != QEvent::ApplicationPaletteChange)
+    if (event->type() != QEvent::ApplicationPaletteChange &&
+        event->type() != QEvent::ApplicationFontChange)
       return;
     if (auto sheet = chatStyle(Color); sheet != Sheet) {
       Sheet = std::move(sheet);
@@ -914,15 +1174,11 @@ private:
 
     auto *body = new QVBoxLayout;
     body->setContentsMargins(0, 0, 4, 0);
-    body->setSpacing(9);
-    ContextLabel = new QLabel(panel);
-    ContextLabel->setObjectName("NeverDAgentContext");
-    ContextLabel->setWordWrap(true);
-    ContextLabel->setTextFormat(Qt::PlainText);
-    body->addWidget(ContextLabel);
-    // An empty conversation says what the Agent does and offers first
-    // questions, as VS Code's chat welcomes a new conversation.
-    // It scrolls in a small window rather than cut its lines.
+    body->setSpacing(12);
+    // An empty conversation says what the Agent does in the middle of the
+    // window and offers first questions just above the composer, as VS
+    // Code's chat welcomes a new conversation. It scrolls in a small window
+    // rather than cut its lines.
     auto *welcomeArea = new QScrollArea(panel);
     welcomeArea->setObjectName("NeverDAgentWelcomeArea");
     welcomeArea->setFrameShape(QFrame::NoFrame);
@@ -930,36 +1186,50 @@ private:
     welcomeArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     welcomeArea->viewport()->setAutoFillBackground(false);
     Welcome = welcomeArea;
-    auto *welcomeContent = new QWidget(welcomeArea);
-    welcomeContent->setObjectName("NeverDAgentWelcome");
-    welcomeContent->setAutoFillBackground(false);
-    auto *welcome = new QVBoxLayout(welcomeContent);
-    welcome->setContentsMargins(0, 12, 0, 0);
-    welcome->setSpacing(8);
-    welcome->addWidget(new Mark(28, Appearance, welcomeContent));
-    WelcomeTitle = new QLabel(welcomeContent);
+    WelcomeContent = new QWidget(welcomeArea);
+    WelcomeContent->setObjectName("NeverDAgentWelcome");
+    WelcomeContent->setAutoFillBackground(false);
+    WelcomeContent->installEventFilter(this);
+    auto *welcome = new QVBoxLayout(WelcomeContent);
+    welcome->setContentsMargins(0, 0, 0, 0);
+    welcome->setSpacing(0);
+    welcome->addStretch(1);
+    welcome->addWidget(new Mark(WelcomeMarkSize, Appearance, WelcomeContent), 0,
+                       Qt::AlignHCenter);
+    welcome->addSpacing(16);
+    // A step above the window's title, which says only whose window it is.
+    WelcomeTitle = new QLabel(WelcomeContent);
     auto titleFont = WelcomeTitle->font();
-    titleFont.setBold(true);
+    titleFont.setWeight(QFont::DemiBold);
+    if (titleFont.pixelSize() > 0)
+      titleFont.setPixelSize(qRound(titleFont.pixelSize() * 1.2));
+    else
+      titleFont.setPointSizeF(titleFont.pointSizeF() * 1.2);
     WelcomeTitle->setFont(titleFont);
     WelcomeTitle->setWordWrap(true);
+    WelcomeTitle->setAlignment(Qt::AlignHCenter);
     welcome->addWidget(WelcomeTitle);
-    WelcomeText = new QLabel(welcomeContent);
+    welcome->addSpacing(6);
+    WelcomeText = new QLabel(WelcomeContent);
     WelcomeText->setObjectName("NeverDAgentWelcomeText");
     WelcomeText->setWordWrap(true);
     WelcomeText->setTextFormat(Qt::PlainText);
+    WelcomeText->setAlignment(Qt::AlignHCenter);
     welcome->addWidget(WelcomeText);
-    welcome->addSpacing(4);
+    welcome->addStretch(1);
+    welcome->addSpacing(16);
     for (int index = 0; index < SuggestionCount; ++index) {
-      auto *suggestion = new SuggestionButton(Appearance, welcomeContent);
+      auto *suggestion = new SuggestionButton(Appearance, WelcomeContent);
       connect(suggestion, &QAbstractButton::clicked, this, [this, suggestion] {
         Prompt->setPlainText(suggestion->text());
         sendOrStop();
       });
-      welcome->addWidget(suggestion);
+      if (index)
+        welcome->addSpacing(6);
+      welcome->addWidget(suggestion, 0, Qt::AlignLeft);
       Suggestions[index] = suggestion;
     }
-    welcome->addStretch(1);
-    welcomeArea->setWidget(welcomeContent);
+    welcomeArea->setWidget(WelcomeContent);
     body->addWidget(Welcome, 1);
     History = new ChatTranscript(
         [this](const QUrl &url) {
@@ -985,26 +1255,29 @@ private:
     Status->hide();
     body->addWidget(Status);
 
-    auto *composer = new QWidget(panel);
-    composer->setObjectName("NeverDAgentComposer");
+    // The composer: the prompt, then what the question takes along and Send,
+    // in one box.
+    auto *composer = new ComposerBox(Appearance, panel);
     auto *compose = new QVBoxLayout(composer);
-    compose->setContentsMargins(0, 0, 0, 0);
-    compose->setSpacing(6);
-    Prompt = new QPlainTextEdit(composer);
-    Prompt->setObjectName("NeverDAgentPrompt");
-    Prompt->setTabChangesFocus(true);
-    Prompt->ensurePolished();
-    Prompt->setFixedHeight(Prompt->fontMetrics().lineSpacing() * 3 +
-                           2 * Prompt->frameWidth() +
-                           qRound(2 * Prompt->document()->documentMargin()));
+    compose->setContentsMargins(6, 6, 6, 6);
+    compose->setSpacing(4);
+    Prompt = new PromptEdit(Appearance, composer);
     connect(Prompt, &QPlainTextEdit::textChanged, this,
             [this] { updateControls(); });
     compose->addWidget(Prompt);
+    composer->setField(Prompt);
     auto *commands = new QHBoxLayout;
-    IncludeContext = new QCheckBox(composer);
-    IncludeContext->setObjectName("NeverDAgentIncludeContext");
-    IncludeContext->setChecked(true);
-    commands->addWidget(IncludeContext, 1);
+    commands->setSpacing(8);
+    IncludeContext = new ContextChip(Appearance, composer);
+    commands->addWidget(IncludeContext);
+    // Without a binary, a line in the chip's place says to open one, beside
+    // a Send that waits for it.
+    NoBinary = new QLabel(composer);
+    NoBinary->setObjectName("NeverDAgentNoBinary");
+    NoBinary->setWordWrap(true);
+    NoBinary->setTextFormat(Qt::PlainText);
+    commands->addWidget(NoBinary, 1);
+    commands->addStretch();
     Send = new QPushButton(composer);
     Send->setObjectName("NeverDAgentSend");
     // The panel's one accent, without taking Return from the prompt.
@@ -1063,7 +1336,9 @@ private:
         ->setToolTip(tr("Drag to move · Double-click to put it back"));
     Prompt->setPlaceholderText(tr("Ask about this function…"));
     Prompt->setToolTip(tr("Enter to send · Shift+Enter for a new line"));
-    IncludeContext->setText(tr("Attach current selection"));
+    NoBinary->setText(tr("Open a binary to ask about its analysis."));
+    IncludeContext->setToolTip(tr("Attach current selection"));
+    IncludeContext->setAccessibleName(IncludeContext->toolTip());
     WelcomeTitle->setText(tr("Ask about the code you are reading"));
     WelcomeText->setText(
         tr("NeverD Agent reads this analysis through the workbench and answers "
@@ -1123,6 +1398,12 @@ private:
     } else if (Ball && object == Ball->parentWidget() &&
                event->type() == QEvent::Resize) {
       applyPlaces();
+    } else if (object == WelcomeContent && WelcomeText &&
+               event->type() == QEvent::Resize) {
+      const int measure =
+          WelcomeText->fontMetrics().averageCharWidth() * WelcomeMeasure;
+      const int side = std::max(0, (WelcomeContent->width() - measure) / 2);
+      WelcomeText->setContentsMargins(side, 0, side, 0);
     } else if (object == Prompt) {
       switch (event->type()) {
       case QEvent::InputMethod:
@@ -1415,14 +1696,15 @@ private:
     HasProject = context.value("loaded").toBool();
     const auto function = context.value("function_address").toString();
     const auto address = context.value("address").toString();
-    if (!HasProject)
-      ContextLabel->setText(tr("Open a binary to ask about its analysis."));
-    else if (!function.isEmpty())
-      ContextLabel->setText(tr("Current function · %1").arg(function));
-    else if (!address.isEmpty())
-      ContextLabel->setText(tr("Current address · %1").arg(address));
-    else
-      ContextLabel->setText(tr("Current workbench project"));
+    // The composer's chip names what a question takes along; without a
+    // binary, a line in its place says to open one.
+    IncludeContext->setText(
+        !function.isEmpty()  ? tr("Current function · %1").arg(function)
+        : !address.isEmpty() ? tr("Current address · %1").arg(address)
+                             : tr("Current workbench project"));
+    IncludeContext->setAccessibleDescription(IncludeContext->text());
+    IncludeContext->setVisible(HasProject);
+    NoBinary->setVisible(!HasProject);
     Ball->setSubject(HasProject ? (!function.isEmpty() ? function : address)
                                 : QString());
     updateControls();
@@ -1615,9 +1897,9 @@ private:
   QAction *OpenAction = nullptr;
   QAction *LauncherAction = nullptr;
   QLabel *Title = nullptr;
-  QLabel *ContextLabel = nullptr;
   QLabel *Status = nullptr;
   QWidget *Welcome = nullptr;
+  QWidget *WelcomeContent = nullptr;
   QLabel *WelcomeTitle = nullptr;
   QLabel *WelcomeText = nullptr;
   std::array<SuggestionButton *, SuggestionCount> Suggestions{};
@@ -1628,7 +1910,8 @@ private:
   GlyphButton *CloseButton = nullptr;
   ChatTranscript *History = nullptr;
   QPlainTextEdit *Prompt = nullptr;
-  QCheckBox *IncludeContext = nullptr;
+  ContextChip *IncludeContext = nullptr;
+  QLabel *NoBinary = nullptr;
   QPushButton *Send = nullptr;
   agent::AgentProcess Process;
   QJsonObject Binding, Pending;

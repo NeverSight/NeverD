@@ -20,6 +20,7 @@
 #include <QEnterEvent>
 #include <QFile>
 #include <QFileInfo>
+#include <QFontInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLabel>
@@ -351,6 +352,17 @@ private slots:
       QVERIFY(panel->isHidden());
       ball->click();
       QVERIFY(panel->isVisible());
+      // Without a binary, the composer says to open one where the context
+      // chip would be, and Send waits for it.
+      auto *chip =
+          panel->findChild<QAbstractButton *>("NeverDAgentIncludeContext");
+      auto *noBinary = panel->findChild<QLabel *>("NeverDAgentNoBinary");
+      auto *send = panel->findChild<QPushButton *>("NeverDAgentSend");
+      QVERIFY(chip && noBinary && send);
+      QVERIFY(noBinary->isVisible() && !chip->isVisible());
+      prompt->setPlainText("A question");
+      QVERIFY(!send->isEnabled() && noBinary->isVisible());
+      prompt->clear();
       QEvent leave(QEvent::Leave);
       QCoreApplication::sendEvent(panel, &leave);
       QTest::qWait(350);
@@ -682,6 +694,41 @@ private slots:
     auto *prompt = panel->findChild<QPlainTextEdit *>("NeverDAgentPrompt");
     auto *send = panel->findChild<QPushButton *>("NeverDAgentSend");
     QVERIFY(prompt && send);
+    // With a binary, the composer names what a question takes along.
+    auto *chip =
+        panel->findChild<QAbstractButton *>("NeverDAgentIncludeContext");
+    QVERIFY(chip && chip->isCheckable() && chip->isChecked());
+    QTRY_VERIFY(
+        chip->isVisible() &&
+        !panel->findChild<QLabel *>("NeverDAgentNoBinary")->isVisible());
+    // A question is prose: the prompt types in the interface font, though the
+    // workbench types its text fields in the code font.
+    {
+      const QString sheet = qApp->styleSheet();
+      const auto restoreSheet =
+          qScopeGuard([&] { qApp->setStyleSheet(sheet); });
+      qApp->setStyleSheet(QStringLiteral(
+          "QPlainTextEdit[readOnly=\"false\"] { font: 23px \"Courier\"; }"));
+      QTRY_COMPARE(prompt->font().family(), QApplication::font().family());
+      QVERIFY(QFontInfo(prompt->font()).pixelSize() != 23);
+    }
+    // It grows with its lines and shows every one of them without scrolling,
+    // up to a limit; past it, it scrolls.
+    const int least = prompt->height();
+    prompt->setPlainText("one\ntwo");
+    QTRY_COMPARE(prompt->verticalScrollBar()->maximum(), 0);
+    const int two = prompt->height();
+    prompt->setPlainText("one\ntwo\nthree");
+    QTRY_VERIFY(prompt->height() > two);
+    QTRY_COMPARE(prompt->verticalScrollBar()->maximum(), 0);
+    prompt->setPlainText(QStringLiteral("line\n").repeated(12));
+    QTRY_VERIFY(prompt->verticalScrollBar()->maximum() > 0);
+    const int most = prompt->height();
+    prompt->setPlainText(QStringLiteral("line\n").repeated(20));
+    QTRY_VERIFY(prompt->verticalScrollBar()->maximum() > 6);
+    QCOMPARE(prompt->height(), most);
+    prompt->clear();
+    QTRY_COMPARE(prompt->height(), least);
     prompt->setPlainText("Inspect the current instruction");
     prompt->moveCursor(QTextCursor::End);
     QTest::keyClick(prompt, Qt::Key_Return, Qt::ShiftModifier);
