@@ -807,6 +807,7 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
   if (Result.EH) {
     const auto &EH = Image.Sections[*Result.EH];
     auto Logical = EH.ExternalBytes;
+    llvm::SmallVector<const Relocation *> ExternalLSDAs;
     // Native assemblers can leave FDE/LSDA section differences unresolved.
     // Decode a logical object-address view, preserving raw bytes for the final
     // placement relocation. Otherwise two placeholder FDEs look overlapping.
@@ -833,8 +834,20 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
         return fail(kLanguagePointer);
       const auto &Target = Result.Symbols.at(R.SymbolIndex);
       const auto &Subtract = Result.Symbols.at(*R.SubtractSymbol);
-      if (!Target.Section || !Subtract.Section)
+      if (!Subtract.Section)
         return fail(kLanguagePointer);
+      if (!Target.Section) {
+        // An explicitly bound LSDA may remain in the original image. Decode
+        // only the field shape here; the binding and final relocation supply
+        // its address. Never apply this to an FDE start or an arbitrary field.
+        if (!Original.isArm64e() || !R.External || R.PCRel || R.Scattered ||
+            Result.Sections.at(Subtract.Section) != *Result.EH ||
+            (R.Width != sizeof(uint32_t) && R.Width != sizeof(uint64_t)))
+          return fail(kLanguagePointer);
+        std::fill_n(Logical.data() + R.Offset, R.Width, 0);
+        ExternalLSDAs.push_back(&R);
+        continue;
+      }
       auto *Field = Logical.data() + R.Offset;
       const uint64_t Raw = R.Width == sizeof(uint64_t)
                                ? readLE<uint64_t>(Field)
@@ -860,6 +873,14 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
         Logical, Result.OldSectionVAs.at(Number), Image.PointerWidth == 8);
     if (!Records)
       return Records.takeError();
+    for (const auto *R : ExternalLSDAs)
+      if (llvm::none_of(*Records, [&](const auto &F) {
+            return F.LSDA && F.LSDA->Offset == R->Offset &&
+                   F.LSDA->Width == R->Width &&
+                   dweh::getApplication(F.LSDA->Encoding) == dweh::PCRel &&
+                   !(F.LSDA->Encoding & dweh::Indirect);
+          }))
+        return fail(kLanguagePointer);
     Result.OldFDEs = std::move(*Records);
   }
   if (Result.InitializerPointers) {
@@ -2552,7 +2573,8 @@ static llvm::Expected<PatchResult> installObject(
       return E;
   }
   if (VerifyGenerated)
-    if (auto E = VerifyGenerated(Object->Image, *Slide, Object->Compact))
+    if (auto E = VerifyGenerated(Object->Image, *LayoutImage, *Slide,
+                                 Object->Compact))
       return E;
   if (DynCode)
     if (auto E =
@@ -2697,7 +2719,8 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
         VerifyGenerated) {
   return installObject(Object, Original, Mappings, Bindings, Output,
                        PrepareReceipt, DynCode, Preparation, Dependencies,
-                       [&](const CompiledImage &Image, va_t,
+                       [&](const CompiledImage &Image, const BinaryImage &,
+                           va_t,
                            llvm::ArrayRef<NativeMachOCompactRange> Ranges) {
                          return VerifyGenerated ? VerifyGenerated(Image, Ranges)
                                                 : llvm::Error::success();

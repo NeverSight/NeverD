@@ -1685,3 +1685,36 @@ arbitrary lifted-image contracts and missing asynchronous lifetime information
 remain unqualified.
 [Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43675185998)
 and [per-host verification record](evidence/arm64e-system-frames-and-noncall-2026-11-15.json).
+
+
+### Lifted indexed language frames
+
+Automatic whole-image publication can retain a complete indexed C++ or
+Objective-C frame whose original read-only LSDA uses an omitted LPStart and
+ULEB128 function-relative call-site offsets. The native register-body producer
+keeps every instruction at its original function offset, including the cleanup
+landing pad, direct imported calls and terminal BRK. It emits the original
+personality and LSDA CFI references. The installer binds the LSDA to original
+storage and resolves the personality through the original authenticated GOT.
+A bare RET entry also retains its incoming physical result registers.
+
+The native-object reader accepts an external LSDA difference relocation only
+at a decoded PC-relative LSDA field. Original-image bindings and final
+relocations remain mandatory. The publication verifier parses linked CFI
+against the relocated image, compares the complete CIE/FDE rules, checks
+LSDA/personality slot addresses after any image slide, and compares every
+source instruction and direct transfer. A changed LSDA operand is rejected
+without publishing an output.
+
+`LiftedNonCallRunsInterruptedAndOuterCleanups` and its Objective-C companion
+run the complete Pipeline/PatchMode/MachOPatcher route at O0/O2. Their native
+driver checks interrupted and outer cleanup, exception identity, restored
+signal masks and ordinary/alternate signal stacks for original and published
+images. It separately calls the bare RET entry with nonzero 64-bit seeds.
+Native-object replacement remains an independent control.
+
+This contract requires unchanged instruction offsets and complete original
+language metadata. Explicit LPStart, SJLJ tables, compact-only language frames,
+unsupported native body operations and missing asynchronous lifetime tables
+remain outside this profile. It does not qualify arbitrary lifted-image
+publication or native PAuth_LR/CPTA-on execution.

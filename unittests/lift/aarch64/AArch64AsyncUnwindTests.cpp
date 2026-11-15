@@ -7,12 +7,14 @@
 #include "gtest/gtest.h"
 
 #include "neverd/analysis/AArch64UnwindRecovery.h"
+#include "neverd/backend/codegen/MachO/MachOPatch.h"
 #include "neverd/backend/codegen/PatchObject.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/loader/DWARF/AArch64ReturnAddressState.h"
 #include "neverd/loader/Loader.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/loader/ReturnAddressSigning.h"
+#include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -22,10 +24,12 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFDebugFrame.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -712,7 +716,8 @@ TEST(AArch64AsyncUnwind, SignalReturnResumesCallerWithRecoveredVectorLanes) {
 #endif
 }
 
-static void verifySignalLanguageCleanup(bool ObjectiveC, bool NonCall = false) {
+static void verifySignalLanguageCleanup(bool ObjectiveC, bool NonCall = false,
+                                        bool Lifted = false) {
 #if defined(__APPLE__) && defined(__aarch64__)
   llvm::SmallString<128> Dir;
   ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kDirectory, Dir));
@@ -747,6 +752,8 @@ static void verifySignalLanguageCleanup(bool ObjectiveC, bool NonCall = false) {
       DriverSource, kOutput,     Driver};
   if (ObjectiveC)
     DriverArgs.append({kObjCExceptions, kObjCFramework, kFoundation});
+  if (NonCall)
+    DriverArgs.push_back(kSignalNonCallDriver);
   ASSERT_EQ(llvm::sys::ExecuteAndWait(kCxxCompiler, DriverArgs), 0);
   auto Reader = Loader::create(BinaryFormat::MachO);
   unsigned Delivered = 0;
@@ -766,19 +773,55 @@ static void verifySignalLanguageCleanup(bool ObjectiveC, bool NonCall = false) {
       return llvm::sys::ExecuteAndWait(Compiler, Command);
     };
     ASSERT_EQ(Compile({kDylib, Source, kOutput, Input}), 0);
-    ASSERT_EQ(Compile({kCompile, kResumeChanged, Source, kOutput, Object}), 0);
+    if (!Lifted)
+      ASSERT_EQ(Compile({kCompile, kResumeChanged, Source, kOutput, Object}),
+                0);
     auto Original = Reader->load(Input);
     ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
-    auto Bytes = llvm::MemoryBuffer::getFile(Object);
-    ASSERT_TRUE(bool(Bytes));
     const auto *Scope = Original->findSymbol(kSignalScopeSymbol);
     const auto *Tick = Original->findSymbol(kSignalTickSymbol);
     ASSERT_TRUE(Scope && Tick);
+    const auto *SourceFrame =
+        Original->ExceptionMetadata.findFunction(Scope->Addr);
+    ASSERT_TRUE(SourceFrame && SourceFrame->Itanium);
     const SourcePatchMapping Maps[] = {{kSignalScopeMapping, Scope->Addr},
                                        {kSignalTickMapping, Tick->Addr}};
-    auto Patch = installMachOObjectPatch((*Bytes)->getBuffer(), *Original, Maps,
-                                         {}, Output, {});
+    llvm::Expected<PatchResult> Patch = [&]() -> llvm::Expected<PatchResult> {
+      if (!Lifted) {
+        auto Bytes = llvm::MemoryBuffer::getFile(Object);
+        if (!Bytes)
+          return llvm::errorCodeToError(Bytes.getError());
+        return installMachOObjectPatch((*Bytes)->getBuffer(), *Original, Maps,
+                                       {}, Output, {});
+      }
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.PatchMode = true;
+      Options.EmitDumpOutput = false;
+      auto Result = Pipeline().run(*Original, Context, Options);
+      if (!Result.Success)
+        return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                       Result.Error);
+      MachOPatcher Patcher;
+      Patcher.setImageContext(&*Original);
+      auto Changed = llvm::CloneModule(*Result.LlvmModule);
+      auto *Table = Changed->getNamedGlobal(
+          makeNdDataSymbol(SourceFrame->Itanium->LSDAVA));
+      EXPECT_NE(Table, nullptr);
+      if (Table) {
+        Table->replaceAllUsesWith(
+            llvm::ConstantPointerNull::get(llvm::PointerType::get(Context, 0)));
+        const auto Rejected = (Root / kRejectedLanguageImage).string();
+        EXPECT_FALSE(
+            Patcher.patch(Input, Rejected, *Changed, Original->Arch).Success);
+        EXPECT_FALSE(std::filesystem::exists(Rejected));
+      }
+      auto Installed =
+          Patcher.patch(Input, Output, *Result.LlvmModule, Original->Arch);
+      return Installed;
+    }();
     ASSERT_TRUE(bool(Patch)) << llvm::toString(Patch.takeError());
+    ASSERT_TRUE(Patch->Success);
     auto Published = Reader->load(Output);
     ASSERT_TRUE(bool(Published)) << llvm::toString(Published.takeError());
     for (bool Installed : {false, true}) {
@@ -854,7 +897,7 @@ static void verifySignalLanguageCleanup(bool ObjectiveC, bool NonCall = false) {
                           {Driver, Installed ? Output : Input, Rules,
                            std::to_string(Owner - Public->Addr),
                            std::to_string(Alternate),
-                           std::to_string(Installed ? 3 : 1)},
+                           std::to_string(Installed && !Lifted ? 3 : 1)},
                           std::nullopt, {}, 0, 0, &Error),
                       0)
                 << Error;
@@ -887,6 +930,14 @@ TEST(AArch64AsyncUnwind, ProtectedNonCallRunsInterruptedAndOuterCleanups) {
 
 TEST(AArch64AsyncUnwind, ProtectedNonCallRunsInterruptedAndOuterObjCCleanups) {
   verifySignalLanguageCleanup(true, true);
+}
+
+TEST(AArch64AsyncUnwind, LiftedNonCallRunsInterruptedAndOuterCleanups) {
+  verifySignalLanguageCleanup(false, true, true);
+}
+
+TEST(AArch64AsyncUnwind, LiftedNonCallRunsInterruptedAndOuterObjCCleanups) {
+  verifySignalLanguageCleanup(true, true, true);
 }
 
 TEST(AArch64AsyncUnwind, InstructionAddressRecipesUseTheActualSigningPC) {
