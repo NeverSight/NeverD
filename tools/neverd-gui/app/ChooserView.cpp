@@ -206,7 +206,7 @@ void ChooserModel::refreshFunctions() {
   finishLocation(std::nullopt,
                  tr("The table changed before the address was selected."));
   session_.queries().unsubscribeOwner(this);
-  refresh_.emplace();
+  refresh_.emplace(Refresh{});
   // Include the viewport's outstanding pages first. Keep the staging set
   // within the same page allowance as the ordinary cache.
   for (const int page : requestOrder_)
