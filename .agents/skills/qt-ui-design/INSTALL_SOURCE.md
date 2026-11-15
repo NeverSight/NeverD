@@ -40,3 +40,9 @@ file records installation provenance and those local additions. The local
 platform font sizes, docking style inheritance, Retina capture sampling and
 native validation constraints reproduced in NeverD; `SKILL.md` routes macOS
 work to it.
+
+Section 1.9 of `SKILL.md` and the floating-panels and conversations items
+in its audit checklist are NeverD additions from the review of the NeverD
+Agent's workbench conversation on 2026-11-14 and 2026-11-15: where a
+floating panel opens, how it goes with the person into focus mode, and the
+conversation laid out as Visual Studio Code's chat view.

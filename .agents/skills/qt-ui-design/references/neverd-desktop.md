@@ -1070,27 +1070,48 @@ the workbench.
 - Keep floating views off the command line along the foot of the workbench,
   under either bottom corner: mirrored, the command field does not reach the
   right edge, so test the row's width, not its right edge.
-- Make a floating panel a window a person places: it opens in the middle of
-  the workbench, moves by its title (a six-dot grip says so) and resizes by
-  its edges, as VS Code moves its quick input. The middle read more
-  comfortably than the corner beside its entry button. It keeps its place
-  as its share of the room it can move in, so a centered panel stays
-  centered when the workbench resizes and a moved one keeps its relative
-  place; moved within 20 pixels of the middle on either axis it snaps
-  there (VS Code's quick input snaps to its horizontal center within the
-  same distance), and a double click on the title puts it back in the
-  middle at its first size. It opens at 480 by 560 pixels, about the
-  tallest that still sits in the middle of a 1440 by 864 workbench, whose
-  dock area starts 137 pixels down; 440 by 520 read as cramped. In a small
-  workbench a centered panel may cover the entry button, so it closes by
-  its own button and Escape too.
-  It stays open until closed, without a hover preview or a pin, and
+- Make a floating panel a window a person places: it moves by its title (a
+  six-dot grip says so) and resizes by its edges, as VS Code moves its quick
+  input. It opens at the golden section across the workbench, with the smaller
+  golden part of the free width (0.382, `2 - std::numbers::phi` in
+  `AgentUiPlugin.cpp`) before it on the side a line starts from: left of the
+  middle in a left-to-right language, right of it in Arabic. In a 1000 by 700
+  workbench it stands at (199, 70). The corner beside the entry button read
+  worse than the middle, and on 2026-11-15 the user still found the middle
+  uncomfortable and asked for the golden section, further left (SKILL.md
+  section 1.9). Down, it keeps to the middle of the whole workbench, which
+  already sits above the middle of the dock area because the toolbars take the
+  top (137 pixels of a 1440 by 864 workbench); a golden section down the whole
+  workbench pressed it against the toolbars. It keeps its place as its share
+  of the room it can move in, so it holds its relative place when the
+  workbench resizes. Moved within 20 pixels of where it opens, on either axis,
+  it snaps there (VS Code snaps its quick input to the horizontal center
+  within the same distance), and a double click on the title puts it back
+  there at its first size. It opens at 480 by 560 pixels, about the tallest
+  that still sits in the middle of a 1440 by 864 workbench, whose dock area
+  starts 137 pixels down; 440 by 520 read as cramped. In a small workbench the
+  panel may cover the entry button, so it closes by its own button and Escape
+  too. It stays open until closed, without a hover preview or a pin, and
   closing gives the keyboard back to the view that had it.
 - Known limit of that place: the share is of the whole workbench, while the
   host keeps views inside the dock area, between the toolbars and the
   command line. A panel let go exactly at the dock area's top edge left it
   when the workbench grew from 864 to 1000 pixels high (54 pixels down); a
-  panel dragged past an edge, or centered, held its place.
+  panel dragged past an edge, or left where it opens, held its place.
+- Take plugin views along into focus mode. Focus mode (F pressed three times
+  in an analysis view) floats the disassembly, the pseudocode and the output
+  into a maximized workspace over the workbench, and the Ask Agent button and
+  the conversation stayed behind it, so the Agent looked gone there. The
+  workbench now lends that workspace every plugin view
+  (`GuiPluginUiHost::lendViews`): each moves there shown or hidden, at the
+  same corner and share, clear of the workspace's command line, and the
+  workspace's window takes the plugins' menu shortcuts, such as Ctrl+Alt+I,
+  which otherwise belong only to the workbench's menu bar. Leaving focus mode
+  returns them before the old layout is restored; a workspace that goes away
+  by any other path returns them from its `destroyed()` signal. A view placed
+  as a share of its parent places itself again on `QEvent::ParentChange`.
+  Known limit: in a right-to-left language the button sits at the bottom-left
+  corner, where the focus workspace's Functions sidebar also opens.
 - Show a view's mark once. The empty conversation's welcome carries the
   Agent's mark, so the panel's title is the grip and the name alone; a
   second, smaller mark beside the title repeated it a few lines above.
