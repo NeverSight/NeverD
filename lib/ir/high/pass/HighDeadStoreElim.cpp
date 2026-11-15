@@ -1127,9 +1127,9 @@ void narrowUnreadRegisterBytes(HighFunc &Func, Arch Architecture) {
 }
 
 /// The frame addresses that a contiguous entry prefix of single-definition
-/// pointer-width assignments names (`v0 = RSP - 32`). \p Statements receives
-/// those assignments. With \p PastStores the prefix also runs over plain
-/// stores, which assign no variable (`*(v0 - 4) = EAX; t1 = v0 - 4`).
+/// address-register-width assignments names (`v0 = RSP - 32`). \p Statements
+/// receives those assignments. With \p PastStores the prefix also runs over
+/// plain stores, which assign no variable (`*(v0 - 4) = EAX; t1 = v0 - 4`).
 static VarKeyMap<ExprPtr>
 entryFrameAliases(const HighFunc &Func, Arch Architecture, size_t &Budget,
                   std::unordered_set<const HighStmt *> *Statements = nullptr,
@@ -1156,8 +1156,8 @@ entryFrameAliases(const HighFunc &Func, Arch Architecture, size_t &Budget,
       continue;
     if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val ||
         S.Dst->Kind != ExprKind::Var || !S.Dst->Type ||
-        S.Dst->Type->Size != TRI.PointerSize ||
-        S.Dst->Var.Size != TRI.PointerSize ||
+        S.Dst->Type->Size != TRI.addressRegisterBytes() ||
+        S.Dst->Var.Size != TRI.addressRegisterBytes() ||
         S.MemoryOrdering != NdMemoryOrdering::None ||
         S.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
         !S.Body.empty() || !S.ElseBody.empty() || !S.Cases.empty() ||

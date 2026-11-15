@@ -944,22 +944,33 @@ TEST(MedCallingConvStackParams, SharedStackPointerPhisAreTracedOnce) {
 }
 
 TEST(MedCallingConvStackParams, MutableHomesFollowEveryRegisterParameter) {
-  for (const auto Architecture : {Arch::X64, Arch::ARM, Arch::AArch64}) {
+  for (const auto Architecture :
+       {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64, Arch::MIPS32,
+        Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL, Arch::MIPS64N32,
+        Arch::MIPS64N32EL}) {
     const auto &TRI = getTargetRegInfo(Architecture);
     const auto Layout = TRI.integerArgumentLayout(BinaryFormat::ELF);
     const auto FPRegisters = TRI.floatingParamRegs(BinaryFormat::ELF);
+    const bool StackFollowsUsedRegisters = Architecture == Arch::X86;
+    const int64_t StackBase =
+        StackFollowsUsedRegisters ? 4 : Layout.EntryStackBase;
     for (const unsigned FPCount : {0u, 1u, unsigned(FPRegisters.size())})
       for (const bool PartialIntegerPrefix : {false, true}) {
+        // cdecl/fastcall pass floating arguments on the stack.
+        if ((StackFollowsUsedRegisters && FPCount) ||
+            FPCount > FPRegisters.size() ||
+            (PartialIntegerPrefix && Layout.Registers.empty()))
+          continue;
+        const auto AddressBytes = TRI.addressRegisterBytes();
         SCOPED_TRACE(testing::Message() << int(Architecture) << ':' << FPCount
                                         << ':' << PartialIntegerPrefix);
         MedFunc F;
         F.Blocks.resize(1);
         auto &B = F.Blocks[0];
-        const auto SP =
-            reg(1, 0, TRI.PointerSize, TRI.StackPointer, Architecture);
+        const auto SP = reg(1, 0, AddressBytes, TRI.StackPointer, Architecture);
         addLiveIn(B, SP);
         if (PartialIntegerPrefix) {
-          auto P = reg(100, 0, TRI.PointerSize, Layout.Registers.front(),
+          auto P = reg(100, 0, TRI.FullRegWidth, Layout.Registers.front(),
                        Architecture);
           P.Kind = MedVar::Param;
           F.Params.push_back(P);
@@ -969,24 +980,29 @@ TEST(MedCallingConvStackParams, MutableHomesFollowEveryRegisterParameter) {
           P.Kind = MedVar::Param;
           F.Params.push_back(P);
         }
-        const auto Address = temp(2, 0, TRI.PointerSize, Architecture);
+        const auto Address = temp(2, 0, AddressBytes, Architecture);
         const auto Value = temp(3, 0, 4, Architecture);
-        B.Ops.push_back(
-            binary(NdOp::INT_ADD, Address, SP,
-                   MedVar::makeConst(Layout.EntryStackBase, TRI.PointerSize)));
+        B.Ops.push_back(binary(NdOp::INT_ADD, Address, SP,
+                               MedVar::makeConst(StackBase, AddressBytes)));
         B.Ops.push_back(unary(NdOp::LOAD, Value, Address));
         B.Ops.push_back(binary(NdOp::STORE, {}, Address, Value));
-        med_calling_conv_detail::detectStackParams(F, Architecture,
-                                                   BinaryFormat::ELF);
-        const int StackPosition = int(Layout.Registers.size() + FPCount);
+        if (StackFollowsUsedRegisters)
+          detectCdeclStackParams(F, Architecture, BinaryFormat::ELF);
+        else
+          med_calling_conv_detail::detectStackParams(F, Architecture,
+                                                     BinaryFormat::ELF);
+        const int RegisterSlots = StackFollowsUsedRegisters
+                                      ? int(PartialIntegerPrefix)
+                                      : int(Layout.Registers.size());
+        const int StackPosition = RegisterSlots + int(FPCount);
         ASSERT_EQ(F.Params.size(), unsigned(StackPosition + 1));
         ASSERT_EQ(F.MutableStackParamHomes.size(), 1u);
         EXPECT_EQ(F.MutableStackParamHomes[0].first, StackPosition);
-        EXPECT_EQ(F.MutableStackParamHomes[0].second, Layout.EntryStackBase);
+        EXPECT_EQ(F.MutableStackParamHomes[0].second, StackBase);
         EXPECT_EQ(F.Params.back().RegOff, kNoParamReg);
         // The ABI slot identity excludes FP registers; the vector position
         // used to seed its physical home includes them.
-        EXPECT_EQ(F.Params.back().Id, int(Layout.Registers.size()));
+        EXPECT_EQ(F.Params.back().Id, RegisterSlots);
         EXPECT_EQ(B.Ops[B.Ops.size() - 2].Opcode, NdOp::LOAD);
       }
   }

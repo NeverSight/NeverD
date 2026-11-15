@@ -75,6 +75,7 @@ class PointerTypes {
   const HighPointerTypeOrigins &Origins;
   Arch Architecture;
   uint16_t PointerBytes;
+  uint16_t AddressBytes;
   size_t Budget = limits::ir::kHighPointerTypeMaxOperations;
   bool Complete = true;
   ExprPtr StackPointer;
@@ -96,10 +97,10 @@ class PointerTypes {
     return true;
   }
 
-  bool scalar(const MedVar &Variable) const {
+  bool scalar(const MedVar &Variable, uint16_t Bytes) const {
     return Variable.Kind != MedVar::Stack &&
            !isSyntheticEntryStackPointer(Variable, Function, Architecture) &&
-           Variable.Size == PointerBytes &&
+           Variable.Size == Bytes &&
            !AddressTaken.count(highSourceLocalIdentity(Variable));
   }
 
@@ -159,11 +160,11 @@ class PointerTypes {
         return nullptr;
       auto [Cached, Fresh] = OffsetExpressions.try_emplace(It->second);
       if (Fresh) {
-        const uint64_t Bits = PointerBytes == 4 ? uint64_t(uint32_t(It->second))
+        const uint64_t Bits = AddressBytes == 4 ? uint64_t(uint32_t(It->second))
                                                 : uint64_t(It->second);
         Cached->second =
             HighExpr::makeBinop(NdOp::INT_ADD, StackPointer,
-                                HighExpr::makeConst(Bits, PointerBytes));
+                                HighExpr::makeConst(Bits, AddressBytes));
       }
       return Cached->second;
     };
@@ -205,7 +206,7 @@ class PointerTypes {
         return HighPointerLocation{Origin->second, 0};
     if (E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi) {
       if (const auto Origin = Origins.find(&E); Origin != Origins.end())
-        return scalar(E.Var) && recordPointer(Origin->second) &&
+        return scalar(E.Var, PointerBytes) && recordPointer(Origin->second) &&
                        Origin->second->Size == PointerBytes
                    ? std::optional(HighPointerLocation{Origin->second, 0})
                    : std::nullopt;
@@ -359,7 +360,7 @@ class PointerTypes {
     if (Variable.Kind == MedVar::Param)
       return;
     const auto Key = highSourceLocalIdentity(Variable);
-    if (!scalar(Variable) || !Location || !Location->Type ||
+    if (!scalar(Variable, PointerBytes) || !Location || !Location->Type ||
         Location->Type->Kind != NdTypeKind::Ptr ||
         Location->Type->Size != Variable.Size) {
       Rejected.insert(Key);
@@ -450,13 +451,11 @@ class PointerTypes {
     forget(State, S.Dst->Var);
     if (Derived)
       State.FrameDerived.insert(highSourceLocalIdentity(S.Dst->Var));
-    if (scalar(S.Dst->Var)) {
-      const auto Key = highSourceLocalIdentity(S.Dst->Var);
-      if (Location)
-        State.Pointers[Key] = *Location;
-      if (Offset)
-        State.Addresses[Key] = *Offset;
-    }
+    const auto Key = highSourceLocalIdentity(S.Dst->Var);
+    if (Location && scalar(S.Dst->Var, PointerBytes))
+      State.Pointers[Key] = *Location;
+    if (Offset && scalar(S.Dst->Var, AddressBytes))
+      State.Addresses[Key] = *Offset;
     if (Observe)
       observe(S.Dst->Var, Location);
     return State;
@@ -525,7 +524,9 @@ public:
                HighPointerUseLocations *Uses)
       : Function(Function), ParameterTypes(ParameterTypes), Origins(Origins),
         Architecture(Architecture),
-        PointerBytes(getTargetRegInfo(Architecture).PointerSize), Uses(Uses) {}
+        PointerBytes(getTargetRegInfo(Architecture).PointerSize),
+        AddressBytes(getTargetRegInfo(Architecture).addressRegisterBytes()),
+        Uses(Uses) {}
 
   HighPointerLocations run() {
     if (Origins.empty() && !readsRecordPointerParameter())
@@ -545,7 +546,7 @@ public:
     for (const auto &Effect : Effects)
       for (const auto &Expression : Effect.Expressions)
         if (const TypeRef Type = parameterPointer(*Expression);
-            Type && scalar(Expression->Var))
+            Type && scalar(Expression->Var, PointerBytes))
           Entry.Pointers[highSourceLocalIdentity(Expression->Var)] = {Type, 0};
     if (Entry.Pointers.empty() && Origins.empty())
       return {};

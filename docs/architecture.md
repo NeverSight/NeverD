@@ -16960,6 +16960,15 @@ Functions that never return are listed per runtime under `include/neverd/libc`
 Supporting another target then adds a file or a table entry instead of a branch
 in the shared pass.
 
+Frame-coordinate proofs use `TargetRegInfo::addressRegisterBytes()` for the
+entry SP, address aliases and arithmetic. `PointerSize` remains the width of
+C pointer values and their stored bytes: MIPS n32 has four-byte C pointers
+but eight-byte address registers. `HighEntryStackOffsets`, the Itanium
+call-frame projection, and `HighFrameAddress` share this target policy.
+Pointer inference records frame aliases at address width while preserving
+pointer values at pointer width. Load forwarding and dead-store cleanup use
+the same distinction. A truncated n32 address is not an entry-frame proof.
+
 A relocatable object's undefined symbols resolve in one shared layer,
 `include/neverd/loader/ObjectExterns.h`. Each format's loader collects the
 symbols its relocations name, whether a call or branch reaches each

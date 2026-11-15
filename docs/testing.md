@@ -11739,8 +11739,13 @@ diamond graphs check linear evidence growth rather than a wall-clock cutoff.
 affine solver's SSA adapter against independent path constraints and the prior
 recursive algorithm on its supported small domain. Coverage includes shared
 diamonds, balanced and unanchored cycles, conflicting paths, checked overflow,
-SSA ambiguity, exception entries, pointer widths and query-order-independent
-depth refusal.
+SSA ambiguity, exception entries, address widths and query-order-independent
+depth refusal. Balanced cycles, scalar views and the Itanium throwing-call
+frame projection cover x86/x64, ARM/AArch64 and all six MIPS ABI/byte-order
+profiles. N32 keeps its eight-byte SP distinct from four-byte C pointers;
+truncated address views remain unproved. `HighFrameStoreForwarding` checks
+that distinction for aliases, captured writebacks and unread stores, including
+changed aliases and truncated-address counterexamples.
 
 `ResolverFrameModes` checks that value-query mode switches retain independent
 frame equations, partial stack writes reject stale frame identities and an
@@ -17900,9 +17905,10 @@ runtime case compares generated C with a fixed-parameter function containing
 both register HFAs and overflow stack arguments.
 `MedCallingConvStackParams.MutableHomesFollowEveryRegisterParameter` keeps
 mutable stack homes bound to their parameter-vector position after integer and
-floating register parameters on AArch64, ARM and x64. The stack value's ABI
-slot identity remains unchanged. `NeverDWorkerVirtualTailArguments` and its
-x64 sibling check nine floating arguments through virtual tail calls; native
+floating register parameters on AArch64, ARM, x64 and all six MIPS profiles.
+The x86 cases use the cdecl/fastcall recovery entry with its actual register
+prefix. The stack value's ABI slot identity remains unchanged.
+`NeverDWorkerVirtualTailArguments` and its x64 sibling check nine floating arguments through virtual tail calls; native
 hosts execute both HighC and LLVMC with independent callers at O0/O2.
 `NeverDAAPCS64CallContractTests`, `NeverDLLVMCValueTests`,
 `NeverDMedLLVMDirectDataTests`, `NeverDMedLLVMEntryParameterTests` and
@@ -23110,7 +23116,12 @@ two complete stores keeps the first one.
 
 `NeverDHighPointerTypeInferenceTests` covers x86/x64/ARM/AArch64 frame aliases,
 slot reuse, joins, loops, escaped locals, clobbers, integer views and late source
-binding. Constant interior pointers retain their byte displacement through
+binding. Shared pointer-copy, private-spill, interior-pointer and virtual-call
+matrices also cover MIPS o32, n32 and n64 in both byte orders. Vtable bytes use
+the target byte order, and n32 frame addresses retain the full eight-byte
+register while pointer slots remain four bytes. These are shared IR/source
+checks; they do not establish MIPS DWARF receiver recovery or native rewriting.
+Constant interior pointers retain their byte displacement through
 private spills, including narrower constant carriers with unsigned extension
 and full-width negative displacements; truncated bases remain unproved.
 Native generated C checks captured pointer values after calls

@@ -10,9 +10,11 @@
 #include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/backend/c/CSourceMap.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/dialect/SourceDialect.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/loader/BinaryImage.h"
 
 namespace {
@@ -28,7 +30,7 @@ struct VirtualFixture : NullDebugContext {
   unsigned Bytes;
 
   explicit VirtualFixture(Arch Architecture = Arch::X64)
-      : Bytes(Architecture == Arch::X86 || Architecture == Arch::ARM ? 4 : 8) {
+      : Bytes(getTargetRegInfo(Architecture).PointerSize) {
     Image.Arch = Architecture;
     Image.Format = BinaryFormat::ELF;
     Image.Bits = Bytes == 8 ? Bitness::Bits64 : Bitness::Bits32;
@@ -39,7 +41,7 @@ struct VirtualFixture : NullDebugContext {
     Data.Flags = SegmentFlags::Readable;
     for (unsigned I = 2; I < 6; ++I) {
       writePtr(Data.Data.data() + I * Bytes, 0x8000 + (I - 2) * 16, Bytes == 8,
-               true);
+               archLittleEndian(Architecture));
       Image.CodePtrRelocSlots.insert(Data.VA + I * Bytes);
     }
     Image.Segments.push_back(std::move(Data));
@@ -173,7 +175,10 @@ int main(void) {
 
 TEST(HighCVirtualCalls, TargetPointerWidthOwnsTheAddressPoint) {
   for (const auto Architecture :
-       {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+       {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64, Arch::MIPS32,
+        Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL, Arch::MIPS64N32,
+        Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(int(Architecture));
     VirtualFixture F(Architecture);
     EXPECT_NE(F.emit().find("/* virtual Device_value"), std::string::npos);
   }
@@ -274,7 +279,9 @@ TEST(HighCVirtualCalls, CopiedReceiversRequireUnchangedValuesAndMemory) {
 
 TEST(HighCVirtualCalls, SavedTableSurvivesOnlyProvedDisjointStores) {
   for (const Arch Architecture :
-       {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+       {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64, Arch::MIPS32,
+        Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL, Arch::MIPS64N32,
+        Arch::MIPS64N32EL})
     for (const int64_t Offset : {0, 3, 7, 8, 16, -1, -2}) {
       SCOPED_TRACE(int(Architecture));
       SCOPED_TRACE(Offset);

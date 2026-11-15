@@ -20,6 +20,7 @@
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/lift/X86/X86Regs.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -32,6 +33,7 @@
 
 namespace neverd {
 void forwardPrivateFrameLoads(HighFunc &Function, Arch Architecture);
+void elimUnreadPrivateFrameStores(HighFunc &Function, Arch Architecture);
 bool forwardPrivateFrameLoads(HighFunc &Function, Arch Architecture,
                               bool AcrossJoins);
 bool forwardBoundPrivateFrameCopies(HighFunc &Function, Arch Architecture);
@@ -63,8 +65,8 @@ ExprPtr temporary(unsigned Index, TypeRef Type, Arch Architecture) {
 
 ExprPtr entryStackPointer(Arch Architecture) {
   const auto &Target = getTargetRegInfo(Architecture);
-  auto Result =
-      temporary(900, NdType::makeInt(Target.PointerSize, false), Architecture);
+  auto Result = temporary(
+      900, NdType::makeInt(Target.addressRegisterBytes(), false), Architecture);
   Result->Var.Kind = MedVar::Reg;
   Result->Var.RegOff = Target.StackPointer;
   return Result;
@@ -73,8 +75,8 @@ ExprPtr entryStackPointer(Arch Architecture) {
 ExprPtr frameSlot(Arch Architecture, uint64_t Distance = 16) {
   return HighExpr::makeBinop(
       NdOp::INT_SUB, entryStackPointer(Architecture),
-      HighExpr::makeConst(Distance,
-                          getTargetRegInfo(Architecture).PointerSize));
+      HighExpr::makeConst(
+          Distance, getTargetRegInfo(Architecture).addressRegisterBytes()));
 }
 
 HighStmt store(ExprPtr Address, ExprPtr Value) {
@@ -193,6 +195,66 @@ TEST(HighFrameStoreForwarding, ForwardsExactIntegerReadsAcrossArchitectures) {
         EXPECT_EQ(Function.Body.back().RetVal->Type->Size, Bytes);
         EXPECT_EQ(Function.Body.back().RetVal->Type->IsSigned, Signed);
       }
+}
+
+TEST(HighFrameStoreForwarding,
+     FrameAliasesUseAddressWidthRatherThanPointerWidth) {
+  for (const Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64,
+                       Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64,
+                       Arch::MIPS64EL, Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(getArchName(A));
+    const auto &TRI = getTargetRegInfo(A);
+    const auto ValueType = NdType::makeInt(TRI.PointerSize, false);
+    const auto AddressType = NdType::makeInt(TRI.addressRegisterBytes(), false);
+    auto F = roundTrip(A, ValueType);
+    auto Alias = temporary(12, AddressType, A);
+    F.Body[0].StoreAddr = Alias;
+    F.Body[1].RetVal->Operands[0] = Alias;
+    F.Body.insert(F.Body.begin(), assign(Alias, frameSlot(A)));
+    forwardPrivateFrameLoads(F, A);
+    EXPECT_FALSE(hasLoad(F.Body.back().RetVal));
+    ASSERT_TRUE(F.Body.back().RetVal->Type);
+    EXPECT_EQ(F.Body.back().RetVal->Type->Size, TRI.PointerSize);
+    auto Unread = roundTrip(A, ValueType);
+    Unread.Body[0].StoreAddr = Alias;
+    Unread.Body[1].RetVal = parameter(0, ValueType, A);
+    Unread.Body.insert(Unread.Body.begin(), assign(Alias, frameSlot(A)));
+    elimUnreadPrivateFrameStores(Unread, A);
+    EXPECT_TRUE(llvm::none_of(Unread.Body, [](const HighStmt &S) {
+      return S.Kind == StmtKind::Store;
+    }));
+  }
+}
+
+TEST(HighFrameStoreForwarding,
+     AddressWidthAliasesRetainCapturedWritebackProofs) {
+  for (const Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64,
+                       Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64,
+                       Arch::MIPS64EL, Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(getArchName(A));
+    const auto &TRI = getTargetRegInfo(A);
+    const auto ValueType = NdType::makeInt(TRI.PointerSize, false);
+    const auto AddressType = NdType::makeInt(TRI.addressRegisterBytes(), false);
+    for (bool Changed : {false, true}) {
+      SCOPED_TRACE(Changed);
+      auto F = roundTrip(A, ValueType);
+      auto Alias = temporary(12, AddressType, A);
+      auto Saved = temporary(13, ValueType, A);
+      HighStmt Branch;
+      Branch.Kind = StmtKind::If;
+      Branch.Cond = parameter(0, ValueType, A);
+      if (Changed)
+        Branch.Body.push_back(assign(Alias, frameSlot(A, 32)));
+      Branch.Body.push_back(store(Alias, Saved));
+      F.Body = {assign(Alias, frameSlot(A)),
+                assign(Saved, HighExpr::makeLoad(Alias, ValueType)), Branch,
+                returning(parameter(0, ValueType, A))};
+      forwardPrivateFrameLoads(F, A);
+      EXPECT_TRUE(hasLoad(F.Body[1].Val));
+      EXPECT_EQ(F.Body[2].Body.back().Kind,
+                Changed ? StmtKind::Store : StmtKind::Block);
+    }
+  }
 }
 
 TEST(HighFrameStoreForwarding, AcceptsCommutedFrameAdditionOnly) {
@@ -1630,6 +1692,30 @@ TEST(HighBoundPrivateFrameCopies, OrdinaryConversionsDoNotBecomePhiCopies) {
                   assign(temporary(20, Destination, A), parameter(0, T, A)));
     ASSERT_TRUE(forwardBoundPrivateFrameCopies(F, A));
     EXPECT_FALSE(F.Body[0].IsPhiCopy);
+  }
+}
+
+TEST(HighFrameStoreForwarding,
+     NarrowN32AddressAliasesDoNotProvePrivateStorage) {
+  for (const Arch A : {Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(getArchName(A));
+    const auto Narrow = NdType::makeInt(4, false);
+    auto F = roundTrip(A, Narrow);
+    auto Alias = temporary(12, Narrow, A);
+    auto Truncated = HighExpr::makeBinop(NdOp::SUBBYTES, frameSlot(A),
+                                         HighExpr::makeConst(0, 4));
+    Truncated->Type = Narrow;
+    F.Body[0].StoreAddr = Alias;
+    F.Body[1].RetVal->Operands[0] = Alias;
+    F.Body.insert(F.Body.begin(), assign(Alias, Truncated));
+    const auto Before = statementText(F);
+    forwardPrivateFrameLoads(F, A);
+    EXPECT_TRUE(hasLoad(F.Body.back().RetVal));
+    EXPECT_EQ(statementText(F), Before);
+    F.Body.back().RetVal = parameter(0, Narrow, A);
+    elimUnreadPrivateFrameStores(F, A);
+    EXPECT_TRUE(llvm::any_of(
+        F.Body, [](const HighStmt &S) { return S.Kind == StmtKind::Store; }));
   }
 }
 

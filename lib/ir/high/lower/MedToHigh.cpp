@@ -1363,13 +1363,14 @@ void MedToHighConverter::collectItaniumCallFrameOffsets(HighFunc &Func,
       (!Func.FrameSize && !Func.FrameHeadroom))
     return;
   const auto &TRI = getTargetRegInfo(TargetArch);
+  const auto AddressBytes = TRI.addressRegisterBytes();
   const auto &LSDA = *Med.ExceptionMetadata->Itanium;
   const MedVar *EntryStack = nullptr;
   for (const MedOp &Op : Med.Blocks.front().Ops)
     if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
         Op.Output == Op.Inputs[0] && Op.Output.Kind == MedVar::Reg &&
         Op.Output.RegOff == TRI.StackPointer &&
-        Op.Output.Size == TRI.PointerSize && Op.Output.SSAVer == 0)
+        Op.Output.Size == AddressBytes && Op.Output.SSAVer == 0)
       EntryStack = &Op.Output;
   if (!EntryStack)
     return;
@@ -1382,7 +1383,7 @@ void MedToHighConverter::collectItaniumCallFrameOffsets(HighFunc &Func,
   for (uint64_t Register : TRI.CalleeSaveRegs)
     if (!TRI.isVectorReg(Register) && !llvm::is_contained(Registers, Register))
       Registers.push_back(Register);
-  // These facts require a complete pointer, not the argument scanner's
+  // These facts require a complete address register, not the argument scanner's
   // narrower register views. Index each block's full-width PHIs and last
   // writes once, then share predecessor queries across all protected calls.
   using RegisterKey = std::pair<int, size_t>;
@@ -1392,7 +1393,7 @@ void MedToHighConverter::collectItaniumCallFrameOffsets(HighFunc &Func,
       for (const PhiNode &Phi : Block.Phis)
         if (Phi.Output.Kind == MedVar::Reg &&
             Phi.Output.RegOff == Registers[R] &&
-            Phi.Output.Size == TRI.PointerSize)
+            Phi.Output.Size == AddressBytes)
           Entries[{Block.Id, R}] = Phi.Output;
       for (const MedOp &Op : Block.Ops) {
         if (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
@@ -1400,15 +1401,15 @@ void MedToHighConverter::collectItaniumCallFrameOffsets(HighFunc &Func,
             Op.Inputs[1].ConstVal == 0 &&
             Op.Output.RegOff == Op.Inputs[0].RegOff &&
             Op.Output.Size <= Op.Inputs[0].Size)
-          continue; // a synchronized view does not write the pointer
+          continue; // a synchronized view does not write the address
         const auto Write = [&](const MedVar &V) {
           if (V.Kind == MedVar::Reg && V.Size &&
-              V.RegOff < Registers[R] + TRI.PointerSize &&
+              V.RegOff < Registers[R] + AddressBytes &&
               Registers[R] < V.RegOff + V.Size)
             Exits[{Block.Id, R}] =
-                V.RegOff == Registers[R] && V.Size == TRI.PointerSize
+                V.RegOff == Registers[R] && V.Size == AddressBytes
                     ? V
-                    : MedVar::makeUnspecified(TRI.PointerSize, TargetArch);
+                    : MedVar::makeUnspecified(AddressBytes, TargetArch);
         };
         Write(Op.Output);
         for (const MedVar &V : Op.IntrinsicOutputs)
@@ -1416,7 +1417,7 @@ void MedToHighConverter::collectItaniumCallFrameOffsets(HighFunc &Func,
         if (&Block == &Med.Blocks.front() && Op.Opcode == NdOp::COPY &&
             Op.NumInputs == 1 && Op.Output == Op.Inputs[0] &&
             Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == Registers[R] &&
-            Op.Output.Size == TRI.PointerSize)
+            Op.Output.Size == AddressBytes)
           Entries[{Block.Id, R}] = Op.Output;
       }
     }
@@ -1454,7 +1455,7 @@ void MedToHighConverter::collectItaniumCallFrameOffsets(HighFunc &Func,
     if (Block.ExceptionalSuccs.empty())
       continue;
     FrameValues Current(Registers.size(),
-                        MedVar::makeUnspecified(TRI.PointerSize, TargetArch));
+                        MedVar::makeUnspecified(AddressBytes, TargetArch));
     for (size_t R = 0; R != Registers.size(); ++R)
       if (const auto Value = Entries.find({Block.Id, R});
           Value != Entries.end())
@@ -1473,12 +1474,12 @@ void MedToHighConverter::collectItaniumCallFrameOffsets(HighFunc &Func,
         if (Value.Kind != MedVar::Reg || !Value.Size)
           return;
         for (size_t R = 0; R != Registers.size(); ++R)
-          if (Value.RegOff < Registers[R] + TRI.PointerSize &&
+          if (Value.RegOff < Registers[R] + AddressBytes &&
               Registers[R] < Value.RegOff + Value.Size)
             Current[R] =
-                Value.RegOff == Registers[R] && Value.Size == TRI.PointerSize
+                Value.RegOff == Registers[R] && Value.Size == AddressBytes
                     ? Value
-                    : MedVar::makeUnspecified(TRI.PointerSize, TargetArch);
+                    : MedVar::makeUnspecified(AddressBytes, TargetArch);
       };
       Written(Op.Output);
       for (const MedVar &Aux : Op.IntrinsicOutputs)
@@ -1496,8 +1497,8 @@ void MedToHighConverter::collectItaniumCallFrameOffsets(HighFunc &Func,
       Exceptional.insert(Edge.BlockId);
     for (PhiNode &Phi : Block.Phis) {
       const auto Register = llvm::find(Registers, Phi.Output.RegOff);
-      if (Phi.Output.Kind != MedVar::Reg ||
-          Phi.Output.Size != TRI.PointerSize || Register == Registers.end())
+      if (Phi.Output.Kind != MedVar::Reg || Phi.Output.Size != AddressBytes ||
+          Register == Registers.end())
         continue;
       decltype(Phi.Args) Inputs;
       for (const auto &[Pred, Value] : Phi.Args) {
@@ -1522,11 +1523,10 @@ void MedToHighConverter::collectItaniumCallFrameOffsets(HighFunc &Func,
           ExprPtr Address = HighExpr::makeBinop(
               NdOp::INT_ADD,
               HighExpr::makeVar(*EntryStack,
-                                NdType::makeInt(TRI.PointerSize, false)),
-              HighExpr::makeConst(static_cast<uint64_t>(*Offset),
-                                  TRI.PointerSize,
+                                NdType::makeInt(AddressBytes, false)),
+              HighExpr::makeConst(static_cast<uint64_t>(*Offset), AddressBytes,
                                   ConstantAddressProvenance::Scalar));
-          Address->Type = NdType::makeInt(TRI.PointerSize, false);
+          Address->Type = NdType::makeInt(AddressBytes, false);
           Func.ItaniumCallFrameOffsets.emplace_back(Phi.Output,
                                                     std::move(Address));
         }

@@ -24,10 +24,16 @@
 namespace {
 using namespace neverd;
 
+constexpr Arch PointerArchitectures[] = {
+    Arch::X86,       Arch::X64,        Arch::ARM,    Arch::AArch64,
+    Arch::MIPS32,    Arch::MIPS32EL,   Arch::MIPS64, Arch::MIPS64EL,
+    Arch::MIPS64N32, Arch::MIPS64N32EL};
+
 struct Fixture {
   Arch Architecture;
   uint16_t Bytes;
   TypeRef Integer;
+  TypeRef AddressInteger;
   TypeRef Record;
   TypeRef Pointer;
   HighFunc Function;
@@ -37,6 +43,8 @@ struct Fixture {
       : Architecture(Architecture),
         Bytes(getTargetRegInfo(Architecture).PointerSize),
         Integer(NdType::makeInt(Bytes, false)),
+        AddressInteger(NdType::makeInt(
+            getTargetRegInfo(Architecture).addressRegisterBytes(), false)),
         Record(NdType::makeNamedRecord("Device", 16)),
         Pointer(NdType::makePtr(Record)) {
     Pointer->Size = Bytes;
@@ -63,10 +71,12 @@ struct Fixture {
   ExprPtr parameter() const { return variable(0, MedVar::Param, Pointer); }
 
   ExprPtr slot(unsigned Distance = 16) const {
-    auto SP = variable(900, MedVar::Reg);
-    SP->Var.RegOff = getTargetRegInfo(Architecture).StackPointer;
+    const auto &TRI = getTargetRegInfo(Architecture);
+    const auto AddressBytes = TRI.addressRegisterBytes();
+    auto SP = variable(900, MedVar::Reg, NdType::makeInt(AddressBytes, false));
+    SP->Var.RegOff = TRI.StackPointer;
     return HighExpr::makeBinop(NdOp::INT_SUB, SP,
-                               HighExpr::makeConst(Distance, Bytes));
+                               HighExpr::makeConst(Distance, AddressBytes));
   }
 
   HighStmt store(ExprPtr Address, ExprPtr Value) const {
@@ -77,10 +87,10 @@ struct Fixture {
     return S;
   }
 
-  HighStmt assign(int Id, ExprPtr Value) const {
+  HighStmt assign(int Id, ExprPtr Value, TypeRef Carrier = nullptr) const {
     HighStmt S;
     S.Kind = StmtKind::Assign;
-    S.Dst = variable(Id);
+    S.Dst = variable(Id, MedVar::Temp, Carrier);
     S.Val = std::move(Value);
     return S;
   }
@@ -225,7 +235,7 @@ TEST(HighPointerTypeInference, ScopedDerivedMemberChainKeepsTheOtherBranch) {
 }
 
 TEST(HighPointerTypeInference, CapturedValueSurvivesCallAndFrameSlotReuse) {
-  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+  for (Arch Architecture : PointerArchitectures) {
     Fixture F(Architecture);
     SCOPED_TRACE(int(Architecture));
     F.Function.Body = {F.store(F.slot(), F.parameter()), F.load(), F.call(),
@@ -242,7 +252,7 @@ TEST(HighPointerTypeInference, CapturedValueSurvivesCallAndFrameSlotReuse) {
 }
 
 TEST(HighPointerTypeInference, DeclaredGlobalLoadsSurvivePrivateSpills) {
-  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+  for (Arch Architecture : PointerArchitectures) {
     Fixture F(Architecture);
     SCOPED_TRACE(int(Architecture));
     F.Function.Params.clear();
@@ -290,7 +300,7 @@ TEST(HighPointerTypeInference, ConflictingGlobalPointersDoNotMeetAtAJoin) {
 }
 
 TEST(HighPointerTypeInference, AssertedLocalTypesReachCopiesAndCanBeWithdrawn) {
-  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+  for (Arch Architecture : PointerArchitectures) {
     Fixture F(Architecture);
     F.Function.Params.clear();
     F.Function.Body = {F.assign(2, HighExpr::makeCall("obtain", 0x2000, {})),
@@ -343,7 +353,7 @@ TEST(HighPointerTypeInference, MemoryClobbersRevokeStoredType) {
 }
 
 TEST(HighPointerTypeInference, PrivatePointerSpillsSurviveCallsAndJoins) {
-  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+  for (Arch Architecture : PointerArchitectures) {
     Fixture F(Architecture);
     F.Function.Params.push_back({"arg1", F.Pointer});
     auto Call = F.call();
@@ -431,14 +441,15 @@ TEST(HighPointerTypeInference, JoinedReceiverFieldsKeepBothObjectIdentities) {
 }
 
 TEST(HighPointerTypeInference, KnownNonprivateWritesKeepDisjointPrivateFacts) {
-  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+  for (Arch Architecture : PointerArchitectures)
     for (bool AboveEntry : {false, true}) {
       Fixture F(Architecture);
+      SCOPED_TRACE(getArchName(Architecture));
       auto Address = AboveEntry
                          ? HighExpr::makeBinop(NdOp::INT_ADD, F.slot(0),
                                                HighExpr::makeConst(8, F.Bytes))
                          : F.slot(72);
-      F.Function.Body = {F.assign(2, F.slot(0)),
+      F.Function.Body = {F.assign(2, F.slot(0), F.AddressInteger),
                          F.store(F.slot(), F.parameter()),
                          F.store(Address, HighExpr::makeConst(19, F.Bytes)),
                          F.load(), F.returning(F.variable(1))};
@@ -582,18 +593,36 @@ TEST(HighPointerTypeInference, PartialValueAndOutsidePrivateFrameAreUnknown) {
 }
 
 TEST(HighPointerTypeInference, FollowsFrameAliasesButNotChangedAliases) {
-  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+  for (Arch Architecture : PointerArchitectures)
     for (bool Change : {false, true}) {
       Fixture F(Architecture);
-      F.Function.Body = {F.assign(2, F.slot()),
-                         F.store(F.variable(2), F.parameter())};
+      SCOPED_TRACE(getArchName(Architecture));
+      F.Function.Body = {F.assign(2, F.slot(), F.AddressInteger),
+                         F.store(F.variable(2, MedVar::Temp, F.AddressInteger),
+                                 F.parameter())};
       if (Change)
-        F.Function.Body.push_back(F.assign(2, F.slot(32)));
-      F.Function.Body.push_back(
-          F.assign(1, HighExpr::makeLoad(F.variable(2), F.Integer)));
+        F.Function.Body.push_back(F.assign(2, F.slot(32), F.AddressInteger));
+      F.Function.Body.push_back(F.assign(
+          1, HighExpr::makeLoad(F.variable(2, MedVar::Temp, F.AddressInteger),
+                                F.Integer)));
       F.Function.Body.push_back(F.returning(F.variable(1)));
       EXPECT_EQ(F.run(), !Change);
     }
+}
+
+TEST(HighPointerTypeInference, NarrowN32FrameAddressesCannotKeepPointerFacts) {
+  for (Arch Architecture : {Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(getArchName(Architecture));
+    Fixture F(Architecture);
+    auto Truncated = HighExpr::makeBinop(NdOp::SUBBYTES, F.slot(),
+                                         HighExpr::makeConst(0, 4));
+    Truncated->Type = F.Integer;
+    F.Function.Body = {
+        F.assign(2, Truncated), F.store(F.variable(2), F.parameter()),
+        F.assign(1, HighExpr::makeLoad(F.variable(2), F.Integer)),
+        F.returning(F.variable(1))};
+    EXPECT_FALSE(F.run());
+  }
 }
 
 TEST(HighPointerTypeInference, TypedMemberRenderingPreservesByteAddressing) {
@@ -633,8 +662,9 @@ TEST(HighPointerTypeInference, TypedMemberRenderingPreservesByteAddressing) {
 
 TEST(HighPointerTypeInference,
      ConstantInteriorPointersKeepTheirByteDisplacement) {
-  for (Arch Architecture : {Arch::X64, Arch::AArch64, Arch::X86, Arch::ARM}) {
+  for (Arch Architecture : PointerArchitectures) {
     Fixture F(Architecture);
+    SCOPED_TRACE(getArchName(Architecture));
     auto Interior = HighExpr::makeBinop(NdOp::INT_ADD, F.parameter(),
                                         HighExpr::makeConst(5, F.Bytes));
     F.Function.Body = {F.assign(1, Interior), F.store(F.slot(), F.variable(1)),
@@ -693,7 +723,7 @@ TEST(HighPointerTypeInference, InteriorMemberRenderingKeepsTheCapturedValue) {
 }
 
 TEST(HighPointerTypeInference, DisplacementsUseTheConstantsMachineWidth) {
-  for (Arch Architecture : {Arch::X64, Arch::AArch64, Arch::X86, Arch::ARM}) {
+  for (Arch Architecture : PointerArchitectures) {
     Fixture F(Architecture);
     for (uint16_t Width : {uint16_t(1), uint16_t(2), uint16_t(4), F.Bytes}) {
       SCOPED_TRACE(Width);

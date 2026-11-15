@@ -31,32 +31,33 @@ inline std::optional<int64_t> frameAddressOffsetFrom(
     unsigned Depth,
     llvm::function_ref<std::optional<int64_t>(const MedVar &, unsigned)>
         VariableOffset) {
-  const auto &TRI = getTargetRegInfo(Architecture);
-  if (!E || !E->Type || E->Type->Size != TRI.PointerSize ||
+  const unsigned AddressBytes =
+      getTargetRegInfo(Architecture).addressRegisterBytes();
+  if (!E || !E->Type || E->Type->Size != AddressBytes ||
       E->MemoryOrdering != NdMemoryOrdering::None ||
       E->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
       Depth > ::neverd::limits::ir::kHighFrameAddressOffsetDepthLimit ||
       !Budget)
     return std::nullopt;
   --Budget;
-  if (E->Kind == ExprKind::Var && E->Var.Size == TRI.PointerSize &&
+  if (E->Kind == ExprKind::Var && E->Var.Size == AddressBytes &&
       isSyntheticEntryStackPointer(E->Var, Func, Architecture))
     return 0;
-  if (VariableOffset && E->Kind == ExprKind::Var &&
-      E->Var.Size == TRI.PointerSize)
+  if (VariableOffset && E->Kind == ExprKind::Var && E->Var.Size == AddressBytes)
     if (const auto Known = VariableOffset(E->Var, Depth))
       return Known;
-  // A signedness view of the target pointer bits does not alter its address.
+  // A signedness view of the full address register does not alter its address.
+  // N32 stores four-byte pointers but computes frame addresses in eight bytes.
   // Keep widening and truncating conversions outside this proof.
   if ((E->Kind == ExprKind::Cast || E->Kind == ExprKind::BitCast) &&
       E->IntrinsicId == Intrinsic::None && E->IntrinsicOutputs.empty() &&
       !E->IndirectTarget && E->Type->Kind == NdTypeKind::Int &&
       E->Operands.size() == 1 && E->Operands[0] && E->Operands[0]->Type &&
       E->Operands[0]->Type->Kind == NdTypeKind::Int &&
-      E->Operands[0]->Type->Size == TRI.PointerSize &&
+      E->Operands[0]->Type->Size == AddressBytes &&
       (E->Kind == ExprKind::BitCast ||
        (E->CastTo && E->CastTo->Kind == NdTypeKind::Int &&
-        E->CastTo->Size == TRI.PointerSize &&
+        E->CastTo->Size == AddressBytes &&
         E->CastTo->IsSigned == E->Type->IsSigned)))
     return frameAddressOffsetFrom(E->Operands[0], Func, Architecture, Budget,
                                   Depth + 1, VariableOffset);
@@ -68,7 +69,7 @@ inline std::optional<int64_t> frameAddressOffsetFrom(
   const auto &BaseExpr = E->Operands[Swapped ? 1 : 0];
   const auto &OffsetExpr = E->Operands[Swapped ? 0 : 1];
   if (!OffsetExpr || OffsetExpr->Kind != ExprKind::Const || !OffsetExpr->Type ||
-      !OffsetExpr->Type->Size || OffsetExpr->Type->Size > TRI.PointerSize)
+      !OffsetExpr->Type->Size || OffsetExpr->Type->Size > AddressBytes)
     return std::nullopt;
   // A narrow constant holds its value zero- or sign-extended: i386's
   // `add esp, -12` carries 0xFFFFFFFFFFFFFFF4. Other high bits are not a value.
@@ -80,14 +81,14 @@ inline std::optional<int64_t> frameAddressOffsetFrom(
                                            Depth + 1, VariableOffset);
   if (!Base)
     return std::nullopt;
-  const int64_t Delta = TRI.PointerSize == 4
+  const int64_t Delta = AddressBytes == 4
                             ? int64_t(int32_t(OffsetExpr->ConstVal))
                             : int64_t(OffsetExpr->ConstVal);
   int64_t Result;
   if (E->Op == NdOp::INT_ADD ? llvm::AddOverflow(*Base, Delta, Result)
                              : llvm::SubOverflow(*Base, Delta, Result))
     return std::nullopt;
-  if (TRI.PointerSize == 4 && Result != int64_t(int32_t(Result)))
+  if (AddressBytes == 4 && Result != int64_t(int32_t(Result)))
     return std::nullopt;
   return Result;
 }
