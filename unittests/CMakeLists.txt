@@ -268,6 +268,15 @@ add_neverd_unittest(NeverDLocalTypesDebugContextTests
 target_include_directories(NeverDLocalTypesDebugContextTests PRIVATE
   "${CMAKE_SOURCE_DIR}/lib/sdk/capi")
 
+if(TARGET neverd AND Python3_EXECUTABLE)
+  add_test(NAME NeverDFunctionListingCLI
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_SOURCE_DIR}/scripts/tests/test_function_listing_cli.py"
+      --neverd $<TARGET_FILE:neverd>)
+  set_tests_properties(NeverDFunctionListingCLI PROPERTIES
+    TIMEOUT 120 LABELS "NeverDFunctionListingCLI")
+endif()
+
 if(TARGET neverd_shared)
   if(Python3_EXECUTABLE)
     set(_neverd_project_input_worker_args)
