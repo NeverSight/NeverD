@@ -90,12 +90,15 @@ ColumnLayout {
         onDecision: (id, allow) => view.backend.resolveAnalysisObjectApproval(id, allow)
     }
     Surface {
-        Layout.fillWidth: true; Layout.preferredHeight: 132
-        color: Theme.composerTint
+        Layout.fillWidth: true; Layout.preferredHeight: 124
+        // In the panel's card the composer is a well of the conversation's
+        // ground, inside a floating surface's outline.
+        color: Theme.content
         radius: Theme.radius
-        border.color: composer.activeFocus ? Theme.focusBorder : Theme.inputBorder
+        border.width: 1
+        border.color: composer.activeFocus ? Theme.focusBorder : Theme.borderStrong
         ColumnLayout {
-            anchors.fill: parent; anchors.margins: 14; spacing: Theme.spaceSmall
+            anchors.fill: parent; anchors.margins: 10; spacing: Theme.spaceSmall
             ScrollView {
                 Layout.fillWidth: true; Layout.fillHeight: true; clip: true
                 ChatComposer {

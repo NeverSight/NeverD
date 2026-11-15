@@ -164,28 +164,8 @@
 <context>
     <name>Conversation</name>
     <message>
-        <source>Research workspace</source>
-        <translation>Рабочее пространство исследований</translation>
-    </message>
-    <message>
         <source>Project file preview</source>
         <translation>Предпросмотр файла проекта</translation>
-    </message>
-    <message>
-        <source>Project conversation  /  Analysis objects: %1</source>
-        <translation>Беседа проекта  /  Объектов анализа: %1</translation>
-    </message>
-    <message>
-        <source>Organize objects, connect leads, keep evidence</source>
-        <translation>Упорядочивайте объекты, связывайте зацепки, сохраняйте свидетельства</translation>
-    </message>
-    <message>
-        <source>Goal</source>
-        <translation>Цель</translation>
-    </message>
-    <message>
-        <source>Set a persistent goal…</source>
-        <translation>Задать постоянную цель…</translation>
     </message>
     <message>
         <source>Add analysis object…</source>
@@ -576,14 +556,6 @@ Analysis revision %3 · %4</source>
 <context>
     <name>Main</name>
     <message>
-        <source>Research workspace</source>
-        <translation>Рабочее пространство исследований</translation>
-    </message>
-    <message>
-        <source>Settings…</source>
-        <translation>Настройки…</translation>
-    </message>
-    <message>
         <source>Side chat · Approval request pending</source>
         <translation>Побочный чат · Ожидает подтверждения</translation>
     </message>
@@ -598,10 +570,6 @@ Analysis revision %3 · %4</source>
     <message>
         <source>Reading file fingerprints…</source>
         <translation>Чтение отпечатков файлов…</translation>
-    </message>
-    <message>
-        <source>Local workspace</source>
-        <translation>Локальное рабочее пространство</translation>
     </message>
     <message>
         <source>Open in the NeverD workbench</source>
@@ -826,6 +794,14 @@ Analysis revision %3 · %4</source>
     <message>
         <source>OK</source>
         <translation>ОК</translation>
+    </message>
+    <message>
+        <source>Goal</source>
+        <translation>Цель</translation>
+    </message>
+    <message>
+        <source>Set a persistent goal…</source>
+        <translation>Задать постоянную цель…</translation>
     </message>
 </context>
 <context>

@@ -45,7 +45,7 @@ ToolButton {
                 Rectangle { x: 2; width: 8; height: 8; color: "transparent"; border.width: 1; border.color: control.ink }
                 Rectangle {
                     y: 2; width: 8; height: 8
-                    color: control.lit ? (control.down ? Theme.controlPressed : Theme.controlHover) : Theme.titleBar
+                    color: control.lit ? (control.down ? Theme.controlPressed : Theme.controlHover) : Theme.content
                     border.width: 1; border.color: control.ink
                 }
             }

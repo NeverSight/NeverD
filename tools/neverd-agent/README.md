@@ -71,24 +71,38 @@ Catalogs for the workbench's eleven languages are in `i18n/`; the CLI writes its
 progress and errors in the same language. Model instructions stay English and
 ask for replies in the language of the user's latest message.
 
-The Agent shell shares the workbench's frame metrics, window controls and look.
-Every color in `ui/Theme.qml` is a role of the workbench's `ChromeColors.def`
-(Visual Studio Code Dark+, Light+ and the high contrast themes), read through
-`AgentAppearance::chromeColor`:
-the title band, panes a step apart parted by hairlines, the selection blue
-under white text, fields, check boxes, menus and one main button in the accent
-per window. Corners follow the workbench (fields and push buttons 2, tool
-buttons and menu highlights 3, cards and sheets 6, panes none), and the window
-frame is the workbench's square edge and fading shadow. There are no gradients,
-blur or translucent panels.
-The product logo appears only at the top-left of the caption; conversation
-messages and empty states use text hierarchy without repeated brand avatars.
-Project/object navigation and the initially hidden right pane keep their existing
-behavior. Caption-level controls and keyboard focus remain visible and reachable.
-Action glyphs share an 18-pixel optical size and 34-pixel hit target, including
-the send/stop and disclosure controls. Spacing follows 8/16/24-pixel steps.
+The Agent keeps the workbench's colors, window frame and window controls, and
+takes its shapes from a conversation application. Every color in `ui/Theme.qml`
+is a role of the workbench's `ChromeColors.def` (Visual Studio Code Dark+,
+Light+ and the high contrast themes), read through
+`AgentAppearance::chromeColor`. There are no color literals, gradients, blur
+or translucent panels.
+
+The window is two columns. The side list takes the window's fill: the
+application's name on the strip that moves the window, the two ways to begin,
+the projects with their analysis objects, and the settings at its foot. The
+conversation takes the fill of views, under a strip with the project's name,
+its commands and the window's controls. The right pane is a card in the
+conversation's ground and starts hidden. Only the high contrast themes, where
+the fills are one, part these with lines and outline the cards.
+
+Rows, buttons, fields and menu items have corners of 8, cards, menus and sheets
+12, the composer and the person's messages 20; the window and its panes have
+none. A row is at least 30 pixels high, action glyphs are 16 pixels, and
+spacing follows a 4-pixel grid. A conversation is read in one column at most
+768 pixels wide: the person's messages in a bubble at the trailing edge, the
+answers plain across the column, and when it was said and what can be done
+with a message only while the pointer or keyboard is on it. The composer is a
+floating surface that grows from two lines to eight. The row that is open and
+a toggle that is on carry a quiet fill, so each window keeps one main button
+in the accent. The product logo appears at the head of the side list and once
+more on the start page.
+
 Text uses the bundled Noto Sans and Noto Sans CJK at the desktop's interface
-size, as the workbench does; secondary text is quieted by color, not size.
+size, with a small scale around it: notes a little under it, titles a step
+above it, and one line at twice its size where a window has nothing else to
+show. What the application reports while it works shows as a note over the
+conversation that leaves again; there is no status bar.
 Markdown receives the actual view font explicitly instead of retaining a
 separate document default. JetBrains Mono is limited to code.
 

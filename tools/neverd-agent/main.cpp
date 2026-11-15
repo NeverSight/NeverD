@@ -220,8 +220,11 @@ int main(int argc, char **argv) {
     QMetaObject::invokeMethod(window, "showModelSettings");
 
   if (parser.isSet("capture")) {
-    if (!startupError.isEmpty())
+    if (!startupError.isEmpty()) {
+      // A capture has no dialog to say this in.
+      qCritical("%s", qPrintable(startupError));
       return 1;
+    }
     const auto size = parser.value("capture-size").split('x');
     bool widthOK = false, heightOK = false;
     const int width = size.value(0).toInt(&widthOK);

@@ -164,28 +164,8 @@
 <context>
     <name>Conversation</name>
     <message>
-        <source>Research workspace</source>
-        <translation>Research workspace</translation>
-    </message>
-    <message>
         <source>Project file preview</source>
         <translation>Project file preview</translation>
-    </message>
-    <message>
-        <source>Project conversation  /  Analysis objects: %1</source>
-        <translation>Project conversation  /  Analysis objects: %1</translation>
-    </message>
-    <message>
-        <source>Organize objects, connect leads, keep evidence</source>
-        <translation>Organize objects, connect leads, keep evidence</translation>
-    </message>
-    <message>
-        <source>Goal</source>
-        <translation>Goal</translation>
-    </message>
-    <message>
-        <source>Set a persistent goal…</source>
-        <translation>Set a persistent goal…</translation>
     </message>
     <message>
         <source>Add analysis object…</source>
@@ -576,14 +556,6 @@ Analysis revision %3 · %4</translation>
 <context>
     <name>Main</name>
     <message>
-        <source>Research workspace</source>
-        <translation>Research workspace</translation>
-    </message>
-    <message>
-        <source>Settings…</source>
-        <translation>Settings…</translation>
-    </message>
-    <message>
         <source>Side chat · Approval request pending</source>
         <translation>Side chat · Approval request pending</translation>
     </message>
@@ -598,10 +570,6 @@ Analysis revision %3 · %4</translation>
     <message>
         <source>Reading file fingerprints…</source>
         <translation>Reading file fingerprints…</translation>
-    </message>
-    <message>
-        <source>Local workspace</source>
-        <translation>Local workspace</translation>
     </message>
     <message>
         <source>Open in the NeverD workbench</source>
@@ -826,6 +794,14 @@ Analysis revision %3 · %4</translation>
     <message>
         <source>OK</source>
         <translation>OK</translation>
+    </message>
+    <message>
+        <source>Goal</source>
+        <translation>Goal</translation>
+    </message>
+    <message>
+        <source>Set a persistent goal…</source>
+        <translation>Set a persistent goal…</translation>
     </message>
 </context>
 <context>

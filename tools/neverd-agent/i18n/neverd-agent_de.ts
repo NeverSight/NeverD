@@ -164,28 +164,8 @@
 <context>
     <name>Conversation</name>
     <message>
-        <source>Research workspace</source>
-        <translation>Recherche-Arbeitsbereich</translation>
-    </message>
-    <message>
         <source>Project file preview</source>
         <translation>Vorschau der Projektdatei</translation>
-    </message>
-    <message>
-        <source>Project conversation  /  Analysis objects: %1</source>
-        <translation>Projektunterhaltung  /  Analyseobjekte: %1</translation>
-    </message>
-    <message>
-        <source>Organize objects, connect leads, keep evidence</source>
-        <translation>Objekte ordnen, Spuren verknüpfen, Belege sichern</translation>
-    </message>
-    <message>
-        <source>Goal</source>
-        <translation>Ziel</translation>
-    </message>
-    <message>
-        <source>Set a persistent goal…</source>
-        <translation>Dauerhaftes Ziel festlegen…</translation>
     </message>
     <message>
         <source>Add analysis object…</source>
@@ -576,14 +556,6 @@ Analyserevision %3 · %4</translation>
 <context>
     <name>Main</name>
     <message>
-        <source>Research workspace</source>
-        <translation>Recherche-Arbeitsbereich</translation>
-    </message>
-    <message>
-        <source>Settings…</source>
-        <translation>Einstellungen…</translation>
-    </message>
-    <message>
         <source>Side chat · Approval request pending</source>
         <translation>Nebenchat · Genehmigungsanfrage ausstehend</translation>
     </message>
@@ -598,10 +570,6 @@ Analyserevision %3 · %4</translation>
     <message>
         <source>Reading file fingerprints…</source>
         <translation>Dateifingerabdrücke werden gelesen…</translation>
-    </message>
-    <message>
-        <source>Local workspace</source>
-        <translation>Lokaler Arbeitsbereich</translation>
     </message>
     <message>
         <source>Open in the NeverD workbench</source>
@@ -826,6 +794,14 @@ Analyserevision %3 · %4</translation>
     <message>
         <source>OK</source>
         <translation>OK</translation>
+    </message>
+    <message>
+        <source>Goal</source>
+        <translation>Ziel</translation>
+    </message>
+    <message>
+        <source>Set a persistent goal…</source>
+        <translation>Dauerhaftes Ziel festlegen…</translation>
     </message>
 </context>
 <context>

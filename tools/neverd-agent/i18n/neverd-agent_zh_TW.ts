@@ -164,28 +164,8 @@
 <context>
     <name>Conversation</name>
     <message>
-        <source>Research workspace</source>
-        <translation>研究工作區</translation>
-    </message>
-    <message>
         <source>Project file preview</source>
         <translation>專案檔案預覽</translation>
-    </message>
-    <message>
-        <source>Project conversation  /  Analysis objects: %1</source>
-        <translation>專案對話  /  分析物件：%1</translation>
-    </message>
-    <message>
-        <source>Organize objects, connect leads, keep evidence</source>
-        <translation>整理物件、串連線索、保留證據</translation>
-    </message>
-    <message>
-        <source>Goal</source>
-        <translation>目標</translation>
-    </message>
-    <message>
-        <source>Set a persistent goal…</source>
-        <translation>設定持續目標…</translation>
     </message>
     <message>
         <source>Add analysis object…</source>
@@ -576,14 +556,6 @@ Analysis revision %3 · %4</source>
 <context>
     <name>Main</name>
     <message>
-        <source>Research workspace</source>
-        <translation>研究工作區</translation>
-    </message>
-    <message>
-        <source>Settings…</source>
-        <translation>設定…</translation>
-    </message>
-    <message>
         <source>Side chat · Approval request pending</source>
         <translation>側邊聊天 · 有待核准的要求</translation>
     </message>
@@ -598,10 +570,6 @@ Analysis revision %3 · %4</source>
     <message>
         <source>Reading file fingerprints…</source>
         <translation>正在讀取檔案指紋…</translation>
-    </message>
-    <message>
-        <source>Local workspace</source>
-        <translation>本機工作區</translation>
     </message>
     <message>
         <source>Open in the NeverD workbench</source>
@@ -826,6 +794,14 @@ Analysis revision %3 · %4</source>
     <message>
         <source>OK</source>
         <translation>確定</translation>
+    </message>
+    <message>
+        <source>Goal</source>
+        <translation>目標</translation>
+    </message>
+    <message>
+        <source>Set a persistent goal…</source>
+        <translation>設定持續目標…</translation>
     </message>
 </context>
 <context>

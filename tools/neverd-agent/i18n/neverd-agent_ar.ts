@@ -164,28 +164,8 @@
 <context>
     <name>Conversation</name>
     <message>
-        <source>Research workspace</source>
-        <translation>بيئة البحث</translation>
-    </message>
-    <message>
         <source>Project file preview</source>
         <translation>معاينة ملف المشروع</translation>
-    </message>
-    <message>
-        <source>Project conversation  /  Analysis objects: %1</source>
-        <translation>محادثة المشروع  /  كائنات التحليل: %1</translation>
-    </message>
-    <message>
-        <source>Organize objects, connect leads, keep evidence</source>
-        <translation>نظّم الكائنات، واربط الخيوط، واحتفظ بالأدلة</translation>
-    </message>
-    <message>
-        <source>Goal</source>
-        <translation>الهدف</translation>
-    </message>
-    <message>
-        <source>Set a persistent goal…</source>
-        <translation>تعيين هدف مستمر…</translation>
     </message>
     <message>
         <source>Add analysis object…</source>
@@ -576,14 +556,6 @@ Analysis revision %3 · %4</source>
 <context>
     <name>Main</name>
     <message>
-        <source>Research workspace</source>
-        <translation>بيئة البحث</translation>
-    </message>
-    <message>
-        <source>Settings…</source>
-        <translation>الإعدادات…</translation>
-    </message>
-    <message>
         <source>Side chat · Approval request pending</source>
         <translation>الدردشة الجانبية · طلب موافقة معلّق</translation>
     </message>
@@ -598,10 +570,6 @@ Analysis revision %3 · %4</source>
     <message>
         <source>Reading file fingerprints…</source>
         <translation>جارٍ قراءة بصمات الملفات…</translation>
-    </message>
-    <message>
-        <source>Local workspace</source>
-        <translation>بيئة عمل محلية</translation>
     </message>
     <message>
         <source>Open in the NeverD workbench</source>
@@ -826,6 +794,14 @@ Analysis revision %3 · %4</source>
     <message>
         <source>OK</source>
         <translation>موافق</translation>
+    </message>
+    <message>
+        <source>Goal</source>
+        <translation>الهدف</translation>
+    </message>
+    <message>
+        <source>Set a persistent goal…</source>
+        <translation>تعيين هدف مستمر…</translation>
     </message>
 </context>
 <context>
