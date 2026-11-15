@@ -866,7 +866,6 @@ private:
     heading->setContentsMargins(0, 0, 0, 0);
     heading->setSpacing(6);
     heading->addWidget(new Grip(Appearance, title));
-    heading->addWidget(new Mark(16, Appearance, title));
     Title = new QLabel(title);
     Title->setObjectName("NeverDAgentTitle");
     Title->setAttribute(Qt::WA_TransparentForMouseEvents);
