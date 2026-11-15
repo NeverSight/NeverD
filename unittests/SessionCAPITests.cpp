@@ -5467,13 +5467,19 @@ TEST_F(SessionCAPITest, IdentifyListsWhatLoadingReads) {
   std::string Mips = Native;
   llvm::support::endian::write16le(Mips.data() + llvm::ELF::EI_NIDENT + 2,
                                    llvm::ELF::EM_MIPS);
+  // Make the class/ISA mismatch explicit: zero e_flags denotes MIPS I and
+  // follows the historical-profile diagnostic instead.
+  llvm::support::endian::write32le(Mips.data() +
+                                       offsetof(llvm::ELF::Elf64_Ehdr, e_flags),
+                                   llvm::ELF::EF_MIPS_ARCH_32R2);
   const auto MipsPath = write("identify-mips.elf", Mips);
   Rows = rows(MipsPath);
   ASSERT_EQ(Rows.size(), 2u);
   EXPECT_EQ(text(Rows[0]), "ELF64 for MIPS (Executable)");
   EXPECT_FALSE(loadable(Rows[0]));
   const auto Reason = Rows[0].getString("reason").value_or("");
-  EXPECT_TRUE(Reason.starts_with("elf: MIPS requires matching ELF"));
+  EXPECT_TRUE(Reason.starts_with("elf: MIPS requires matching ELF"))
+      << Reason.str();
   EXPECT_EQ(neverd_session_load(Session, MipsPath.c_str()), 0);
   const std::string LoadError = takeString(neverd_last_error(Session));
   EXPECT_EQ(llvm::StringRef(LoadError).rtrim(), Reason);
