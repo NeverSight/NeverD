@@ -1832,9 +1832,9 @@ instruction, at O0 and O2 and on ordinary and alternate signal stacks.
 The typed explicit-base fixture executes a nonmatching catch followed by cleanup;
 its additional specification-only type tests reconstruction without invoking an
 unexpected-exception path. The entry-handler case qualifies address serialization
-only. Compact frames whose caller return exists solely in live LR still need a
-validated exception-delivery bridge: the current throw thunk would overwrite
-that return address. They are not admitted to protected exception delivery.
+only. At that milestone, frames whose caller return exists solely in live LR
+were not admitted to protected exception delivery: the direct throw thunk
+would overwrite that return address.
 Absent lifetime tables cannot establish arbitrary asynchronous cleanup scopes.
 
 Both macos-26 and xcode-27 passed all 119 source-bound publication cases from
@@ -1854,3 +1854,72 @@ release and asset were deleted with verified HTTP 404 responses, and the replay
 branch was returned to its baseline tree after saving the results.
 [Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43733530036)
 and [per-host verification record](evidence/arm64e-lsda-frameless-2026-11-16.json).
+
+
+### Live-LR asynchronous language delivery
+
+Protected indexed-DWARF frames can retain their caller return in live x30.
+`prepareDarwinArm64eExceptionSite` requires the original system CFA and live-LR
+rule to match the recovered frame at the instruction and its virtual return
+edge. The live return must use the ordinary IB/CFA signing recipe. An inferred
+interrupt row cannot replace incompatible synchronous unwind metadata; compact
+FP records with a different saved return remain rejected.
+
+`ndDarwinArm64eDeliverSignalException` preserves the genuine signal context's
+SP and LR and schedules a small native bridge. The bridge runs after sigreturn,
+reserves the interrupted frame's 128-byte red zone and saves two independent
+returns. DWARF return column x17 supplies the signed virtual protected edge;
+the x30 column restores the original caller return. The language throw thunk
+then runs outside the handler, with the original signal mask and alternate-
+stack state restored. Stack capacity and authentication are checked before
+mutating the context. No bridge slots are written over an active kernel signal
+frame. Its assembly, register indices and frame size belong to
+`DarwinArm64eSystemUnwind.def`.
+
+The bridge personality advances the system cursor to the original language
+frame and delegates matching and cleanup selection to that frame's personality.
+A local catch retains the bridge's identity across the two unwind phases.
+Darwin's landing-pad resume itself consumes x30, so a separate authenticated
+entry restores the caller LR before the original handler can spill it. Its CFI
+retains the interrupted frame's virtual return, original SP and LR; a walker
+can still apply the original frame's saved-register rules. The resumed virtual
+return uses x12 because system resume does not restore x16/x17. Neither transfer
+disables return authentication or copies an opaque system cursor.
+
+The eight `AArch64AsyncUnwind.*LiveLR*` cases cover C++ and Objective-C,
+replacement objects and NeverD-generated images, O0/O2, and normal/alternate
+signal stacks. They verify red-zone contents, nested handler exceptions,
+exception identity, interrupted/outer cleanup ordering, the original SP/LR,
+insufficient-stack rejection, and the emitted bridge's independent return
+columns. Four cases execute a local catch and authenticated normal return;
+the others spill live LR before calling `_Unwind_Resume`, with matching
+PC-specific CFI. The Objective-C catch uses the compiler's `_OBJC_EHTYPE_id`
+GOT reference to obtain the original object through `objc_begin_catch`.
+Hardware breakpoints also interrupt each resume instruction. A fresh public
+cursor walks through the interrupted frame to its
+caller and checks SP, LR, FP and the preserved general registers before signal
+return continues the landing pad. `LDUR` and `STUR` now participate in native
+register body generation and the existing exact-instruction publication checks.
+
+This admission requires an owned language lifetime table. It does not infer
+cleanup scopes for arbitrary faulting instructions. Compact-only live-LR
+language delivery, additional signing recipes, and native PAuth_LR/PACM-PC/
+CPTA-on qualification remain separate coverage requirements. The LLVM fork
+revision and prebuilt r6 are unchanged.
+
+Both macos-26 and xcode-27 passed all 127 source-bound publication cases from
+`ec26d6dfa35fc2ae4e945a3bdfcfb07a034248e1`, with no failed or skipped cases.
+Each host completed 64 live-LR deliveries: 32 cleanup paths and 32 local catches,
+covering original/replacement/lifted images, O0/O2 and both signal stacks.
+All 64 also checked the resumed cursor against the original caller. The Windows
+frontend job passed. Local publication passed 127 cases, unwind recovery passed
+31, and related CTest coverage passed 142 with four explicit native/environment
+skips. C11/C++20 multi-translation-unit linking, clang-format 22.1.2 and the
+documentation inventory passed.
+
+Fresh reports still identify both runners as M1 virtual machines. Explicit
+PAuth_LR, PACM PC dependence and CPTA-on remain unqualified, including the signed
+arm64e.x1 launch attempt. The temporary release and asset were deleted with
+verified HTTP 404 responses; the replay repository was returned to its baseline
+tree. [Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43746760233)
+and [per-host verification record](evidence/arm64e-live-lr-2026-11-16.json).

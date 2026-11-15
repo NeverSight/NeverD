@@ -723,6 +723,8 @@ enum class LanguageFrame {
   IndexedNonCall,
   CompactNonCall,
   FramelessNonCall,
+  LiveLRNonCall,
+  LiveLRCatch,
   ExplicitLPStart,
   TypedExplicitLPStart,
   EntryLandingPad
@@ -738,6 +740,8 @@ verifySignalLanguageCleanup(bool ObjectiveC,
   const bool Explicit = Kind == LanguageFrame::ExplicitLPStart ||
                         Kind == LanguageFrame::TypedExplicitLPStart || EntryPad;
   const bool Typed = Kind == LanguageFrame::TypedExplicitLPStart;
+  const bool LocalCatch = Kind == LanguageFrame::LiveLRCatch;
+  const bool LiveLR = Kind == LanguageFrame::LiveLRNonCall || LocalCatch;
   llvm::SmallString<128> Dir;
   ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kDirectory, Dir));
   const std::filesystem::path Root(Dir.str().str());
@@ -773,8 +777,49 @@ verifySignalLanguageCleanup(bool ObjectiveC,
     DriverArgs.append({kObjCExceptions, kObjCFramework, kFoundation});
   if (NonCall)
     DriverArgs.push_back(kSignalNonCallDriver);
+  if (LocalCatch)
+    DriverArgs.push_back(kSignalLocalCatch);
   ASSERT_EQ(llvm::sys::ExecuteAndWait(kCxxCompiler, DriverArgs), 0);
   auto Reader = Loader::create(BinaryFormat::MachO);
+  if (LiveLR) {
+    auto DriverImage = Reader->load(Driver);
+    ASSERT_TRUE(bool(DriverImage)) << llvm::toString(DriverImage.takeError());
+    const auto *Bridge = DriverImage->findSymbol(kSignalLiveLRBridge);
+    ASSERT_NE(Bridge, nullptr);
+    const auto *Frame =
+        DriverImage->ExceptionMetadata.findFunction(Bridge->Addr);
+    ASSERT_TRUE(Frame && Frame->Dwarf);
+    const auto *CIE =
+        DriverImage->ExceptionMetadata.findCIE(Frame->Dwarf->CIESectionOffset);
+    ASSERT_NE(CIE, nullptr);
+    EXPECT_EQ(CIE->ReturnAddressRegister, NDArm64eVirtualReturnRegister);
+    for (unsigned Reg : {unsigned(NDArm64eVirtualReturnRegister), kDwarfLR}) {
+      EXPECT_TRUE(llvm::any_of(Frame->Dwarf->Instructions, [&](const auto &I) {
+        return I.Kind == CFIOpKind::Offset && I.Register == Reg &&
+               I.Offset == -int(NDArm64eLiveLRBridgeBytes) +
+                               (Reg == kDwarfLR ? int(sizeof(uintptr_t)) : 0);
+      }));
+    }
+    const auto *Resume = DriverImage->findSymbol(kSignalLiveLRResume);
+    ASSERT_NE(Resume, nullptr);
+    const auto *ResumeFrame =
+        DriverImage->ExceptionMetadata.findFunction(Resume->Addr);
+    ASSERT_TRUE(ResumeFrame && ResumeFrame->Dwarf);
+    const auto *ResumeCIE = DriverImage->ExceptionMetadata.findCIE(
+        ResumeFrame->Dwarf->CIESectionOffset);
+    ASSERT_NE(ResumeCIE, nullptr);
+    EXPECT_EQ(ResumeCIE->ReturnAddressRegister, NDArm64eResumeReturnRegister);
+    EXPECT_TRUE(
+        llvm::any_of(ResumeFrame->Dwarf->Instructions, [](const auto &I) {
+          return I.Kind == CFIOpKind::DefCFA &&
+                 I.Register == NDArm64eInterruptedSPRegister && I.Offset == 0;
+        }));
+    EXPECT_TRUE(
+        llvm::any_of(ResumeFrame->Dwarf->Instructions, [](const auto &I) {
+          return I.Kind == CFIOpKind::Register && I.Register == kDwarfLR &&
+                 I.Register2 == NDArm64eCallerLRRegister;
+        }));
+  }
   unsigned Delivered = 0;
   for (const auto *Opt : {kNoOptimize, kOptimize}) {
     SCOPED_TRACE(Opt);
@@ -797,6 +842,10 @@ verifySignalLanguageCleanup(bool ObjectiveC,
         Command.push_back(kSignalEntryPad);
       if (Kind == LanguageFrame::FramelessNonCall)
         Command.push_back(kSignalFramelessFrame);
+      if (LiveLR)
+        Command.push_back(kSignalLiveLR);
+      if (LocalCatch)
+        Command.push_back(kSignalLocalCatch);
       if (ObjectiveC && llvm::is_contained(Args, kDylib))
         Command.append({kObjCFramework, kFoundation});
       return llvm::sys::ExecuteAndWait(Compiler, Command);
@@ -983,6 +1032,8 @@ verifySignalLanguageCleanup(bool ObjectiveC,
           break;
         }
         ASSERT_TRUE(Site && Plan);
+        if (NonCall)
+          EXPECT_EQ(Plan->Frame.SavedLR, !LiveLR);
         std::ofstream Out(Rules, std::ios::binary);
         const auto Write = [&](const auto &Value) {
           Out.write(reinterpret_cast<const char *>(&Value), sizeof(Value));
@@ -997,6 +1048,7 @@ verifySignalLanguageCleanup(bool ObjectiveC,
         ASSERT_TRUE(Out);
         if (std::getenv(kExecute))
           for (bool Alternate : {false, true}) {
+            SCOPED_TRACE(Alternate);
             std::string Error;
             ASSERT_EQ(llvm::sys::ExecuteAndWait(
                           Driver,
@@ -1061,6 +1113,32 @@ TEST(AArch64AsyncUnwind, LiftedCompactNonCallRunsInterruptedAndOuterCleanups) {
 TEST(AArch64AsyncUnwind,
      LiftedCompactNonCallRunsInterruptedAndOuterObjCCleanups) {
   verifySignalLanguageCleanup(true, LanguageFrame::CompactNonCall, true);
+}
+
+TEST(AArch64AsyncUnwind, NativeLiveLRRunsLanguageCleanups) {
+  verifySignalLanguageCleanup(false, LanguageFrame::LiveLRNonCall);
+}
+TEST(AArch64AsyncUnwind, NativeLiveLRRunsObjCCleanups) {
+  verifySignalLanguageCleanup(true, LanguageFrame::LiveLRNonCall);
+}
+TEST(AArch64AsyncUnwind, LiftedLiveLRRunsLanguageCleanups) {
+  verifySignalLanguageCleanup(false, LanguageFrame::LiveLRNonCall, true);
+}
+TEST(AArch64AsyncUnwind, LiftedLiveLRRunsObjCCleanups) {
+  verifySignalLanguageCleanup(true, LanguageFrame::LiveLRNonCall, true);
+}
+
+TEST(AArch64AsyncUnwind, NativeLiveLRCatchesLanguageException) {
+  verifySignalLanguageCleanup(false, LanguageFrame::LiveLRCatch);
+}
+TEST(AArch64AsyncUnwind, NativeLiveLRCatchesObjCException) {
+  verifySignalLanguageCleanup(true, LanguageFrame::LiveLRCatch);
+}
+TEST(AArch64AsyncUnwind, LiftedLiveLRCatchesLanguageException) {
+  verifySignalLanguageCleanup(false, LanguageFrame::LiveLRCatch, true);
+}
+TEST(AArch64AsyncUnwind, LiftedLiveLRCatchesObjCException) {
+  verifySignalLanguageCleanup(true, LanguageFrame::LiveLRCatch, true);
 }
 
 TEST(AArch64AsyncUnwind, NativeFramelessRunsLanguageCleanups) {

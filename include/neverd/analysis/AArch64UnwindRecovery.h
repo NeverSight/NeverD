@@ -97,6 +97,8 @@ prepareDarwinArm64eSystemCaller(const AArch64RecoveredUnwindRow &Row,
 /// protected range or lead straight back to the same call from its return edge.
 /// An explicitly guarded non-call can supply its own return edge when both
 /// instruction boundaries have the same complete recovery row.
+/// A live IB/CFA-signed LR additionally needs matching system DWARF rows; the
+/// delivery bridge preserves it separately from the virtual return edge.
 std::optional<NDDarwinArm64eExceptionSite>
 prepareDarwinArm64eExceptionSite(const BinaryImage &Image,
                                  const ExceptionFunction &Function,
