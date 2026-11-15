@@ -306,7 +306,10 @@ def inputs(name, bits):
     return pairs
 
 
-def reference_model(bits, feature):
+def reference_model(bits, feature, micro_fp=False):
+    if micro_fp:
+        return (mips.UC_CPU_MIPS64_MICROMIPS64R2_GENERIC if bits == 64 else
+                mips.UC_CPU_MIPS32_MICROMIPS32R2_GENERIC)
     if feature in ("fp", "ps"):
         return mips.UC_CPU_MIPS64_MIPS64R2_GENERIC if bits == 64 else mips.UC_CPU_MIPS32_74KF
     if not feature:
@@ -320,9 +323,15 @@ def reference_model(bits, feature):
     return mips.UC_CPU_MIPS32_P5600 if feature == "msa" else mips.UC_CPU_MIPS32_74KF
 
 
-def observe(elf, bits, little, feature, cases):
+def observe(elf, bits, little, feature, cases, micro_fp=False):
+    if micro_fp:
+        with elf.open("rb") as stream:
+            image = ELFFile(stream)
+            symbol = image.get_section_by_name(".symtab").get_symbol_by_name("kernel")[0]
+            if not image["e_flags"] & 0x02000000 or not symbol["st_other"]["local"] & 4:
+                raise ValueError(f"{elf}: floating kernel lost its microMIPS mode")
     uc, entry = roundtrip.emulator(
-        elf, bits, little, "kernel", cpu_model=reference_model(bits, feature)
+        elf, bits, little, "kernel", cpu_model=reference_model(bits, feature, micro_fp)
     )
     order = "little" if little else "big"
 
@@ -467,6 +476,13 @@ def run(args, artifacts):
     for name, cpu, feature, body in selected:
         if args.profile and name not in args.profile:
             continue
+        if args.micro_fp:
+            if feature not in ("fp", "ps"):
+                continue
+            # microMIPS has ordinary BC1T/F, without the classic likely forms.
+            if name.endswith("_branch"):
+                body = body.replace("bc1tl", "bc1t").replace(
+                    "ori $2,$0,2\n1:", "ori $2,$0,2\nori $2,$0,3\n1:")
         if args.historical_isa:
             if feature not in ("fp", "ps") or (
                 args.historical_isa == 4 and (feature == "ps" or "uxc1" in name)
@@ -478,7 +494,14 @@ def run(args, artifacts):
             if args.historical_isa == 4:
                 body = body.replace("cfc1 $2,$25", "cfc1 $2,$31")
         bits = 64 if args.historical_isa or "64" in cpu else 32
-        micro = name.startswith("micro")
+        gcc = args.micro_fp and bits == 64
+        if gcc and not args.micro64_cc:
+            raise ValueError("microMIPS64 source validation requires --micro64-cc (GCC)")
+        compiler = args.micro64_cc if gcc else args.clang
+        includes = (subprocess.check_output(
+            [compiler, "-print-file-name=include"], text=True).strip()
+            if gcc else resource + "/include")
+        micro = args.micro_fp or name.startswith("micro")
         micro_r6 = micro and cpu.endswith("r6")
         # Clang 22's microR6 backend emits legacy LUI and JRC16 in its
         # prologue/epilogue. Keep the original R6 ISA and tagged entry, then
@@ -580,12 +603,12 @@ def run(args, artifacts):
                     original, args.historical_isa, args.historical_abi, little
                 )
             oracle = original
-            if micro and not micro_r6:
+            if micro and not micro_r6 and not args.micro_fp:
                 # The reference cores with DSP/MSA expose the classic encoding.
                 # NeverD receives the separately assembled physical micro ELF.
                 oracle = directory / "classic.elf"
                 assemble(oracle, False)
-            wanted = observe(oracle, bits, little, feature, cases)
+            wanted = observe(oracle, bits, little, feature, cases, args.micro_fp)
             if name.startswith("mips64discard"):
                 op = name.split("_", 1)[1]
                 for i, ((a, b), actual) in enumerate(zip(cases, wanted, strict=True)):
@@ -692,11 +715,13 @@ def run(args, artifacts):
                 )
                 try:
                     for opt in ("-O0", "-O2"):
-                        rebuilt = directory / "rebuilt.elf"
+                        obj = directory / f"{view}{opt}.o"
+                        rebuilt = directory / f"{view}{opt}.elf"
                         command(
                             [
-                                args.clang,
-                                f"--target={target}-linux-gnu",
+                                compiler,
+                                *(["-EL" if little else "-EB", "-minterlink-compressed"]
+                                  if gcc else [f"--target={target}-linux-gnu"]),
                                 "-march=" + rebuild_cpu,
                                 "-mabi=n32" if n32 else f"-mabi={bits}",
                                 "-mno-abicalls",
@@ -705,7 +730,7 @@ def run(args, artifacts):
                                 "-ffreestanding",
                                 "-nostdinc",
                                 "-isystem",
-                                resource + "/include",
+                                includes,
                                 "-I",
                                 headers,
                                 *extra,
@@ -730,7 +755,7 @@ def run(args, artifacts):
                                 assembly, "-o", obj,
                             ])
                             artifacts.discard(assembly)
-                        if micro:
+                        if micro and not args.micro_fp:
                             verify_micro(
                                 args,
                                 artifacts,
@@ -763,7 +788,7 @@ def run(args, artifacts):
                                     rebuilt, args.historical_isa,
                                     args.historical_abi, little
                                 )
-                            got = observe(rebuilt, bits, little, feature, cases)
+                            got = observe(rebuilt, bits, little, feature, cases, args.micro_fp)
                             for pair, actual, expected in zip(
                                 cases, got, wanted, strict=True
                             ):
@@ -775,8 +800,10 @@ def run(args, artifacts):
                             {
                                 "profile": directory.name,
                                 "source_isa": cpu,
+                                "encoding": "micro" if micro else "classic",
                                 "abi": "n32" if n32 else str(bits),
                                 "codegen_isa": rebuild_cpu,
+                                "compiler": str(compiler),
                                 "rebuilt_isa": (cpu if args.historical_isa == 5
                                                 else rebuild_cpu),
                                 "view": view,
@@ -792,7 +819,7 @@ def run(args, artifacts):
                     raise
                 artifacts.discard(source)
             artifacts.discard(original, log)
-            if micro and not micro_r6:
+            if micro and not micro_r6 and not args.micro_fp:
                 artifacts.discard(oracle)
             artifacts.write("results.json", report)
     report["complete"] = True
@@ -812,10 +839,20 @@ if __name__ == "__main__":
             "--" + option, type=lambda s: Path(s).absolute(), required=True
         )
     parser.add_argument("--historical-isa", type=int, choices=(4, 5))
+    parser.add_argument("--micro-fp", action="store_true",
+                        help="execute physical pre-R6 microMIPS FP originals and rebuilt C")
+    parser.add_argument("--micro64-cc", type=lambda s: Path(s).absolute(),
+                        help="GNU C compiler for physical microMIPS64 rebuilt functions")
     parser.add_argument("--historical-abi", choices=("n32", "n64"), default="n64")
     parser.add_argument("--simulator", type=lambda s: Path(s).absolute())
     parser.add_argument("--profile", action="append", choices=[k[0] for k in kernels()] + [k[0] for k in historical_integer_kernels()])
     args = parser.parse_args()
+    if args.micro_fp and args.historical_isa:
+        parser.error("historical MIPS has no microMIPS encoding")
+    if args.micro_fp and args.profile:
+        available = {name for name, _, feature, _ in kernels() if feature in ("fp", "ps")}
+        if not set(args.profile) <= available:
+            parser.error("--micro-fp requires pre-R6 floating profiles")
     if args.profile and not args.historical_isa and any(
         p.startswith("history_") for p in args.profile
     ):
@@ -829,7 +866,7 @@ if __name__ == "__main__":
         }
         if not set(args.profile) <= available:
             parser.error("selected profiles are unavailable in the historical ISA")
-    if not args.simulator and not args.historical_isa and (
+    if not args.simulator and not args.historical_isa and not args.micro_fp and (
         not args.profile or any(p.startswith("micro") for p in args.profile)
     ):
         parser.error("--simulator is required to execute rebuilt microMIPS kernels")
@@ -841,6 +878,7 @@ if __name__ == "__main__":
             args.linker,
             args.neverd,
             args.clang,
+            *([args.micro64_cc] if args.micro64_cc else []),
             *([args.simulator] if args.simulator else []),
         ),
     ) as artifacts:

@@ -3,6 +3,8 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+/// \file
+/// Normalize qualified pre-R6 microMIPS floating fields for the COP1 owner.
 
 #ifndef NEVERD_LIFT_MIPS_MICROMIPSLEGACYFLOAT_H
 #define NEVERD_LIFT_MIPS_MICROMIPSLEGACYFLOAT_H

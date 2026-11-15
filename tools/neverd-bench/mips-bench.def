@@ -61,6 +61,12 @@ NEVERD_MIPS_BENCH_PROFILE(mips32r2fp, MIPS32, Default, 2, 0, 0, 0, 0, 1)
 NEVERD_MIPS_BENCH_PROFILE(mips32r2fpel, MIPS32EL, Default, 2, 0, 0, 0, 0, 1)
 NEVERD_MIPS_BENCH_PROFILE(mips64r2fp, MIPS64, Default, 2, 0, 0, 0, 0, 1)
 NEVERD_MIPS_BENCH_PROFILE(mips64r2fpel, MIPS64EL, Default, 2, 0, 0, 0, 0, 1)
+NEVERD_MIPS_BENCH_PROFILE(micromips32r2fp, MIPS32, MicroMIPS, 2, 0, 0, 0, 0, 1)
+NEVERD_MIPS_BENCH_PROFILE(micromips32r2fpel, MIPS32EL, MicroMIPS, 2, 0, 0, 0, 0,
+                          1)
+NEVERD_MIPS_BENCH_PROFILE(micromips64r2fp, MIPS64, MicroMIPS, 2, 0, 0, 0, 0, 1)
+NEVERD_MIPS_BENCH_PROFILE(micromips64r2fpel, MIPS64EL, MicroMIPS, 2, 0, 0, 0, 0,
+                          1)
 #undef NEVERD_MIPS_BENCH_PROFILE
 #endif
 
