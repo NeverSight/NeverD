@@ -146,7 +146,11 @@ neverd::sdk::parseSourceCallType(Session &S, const SourceCallEdit &Edit,
         {"",
          sourceCallTypeOf(*Library, *Actual.Function->Params.front().Type)});
   }
-  if (!assignAnalystCallABI(Hint, S.Img.Arch, S.Img.abiFormat(), Error))
+  if (!assignAnalystCallABI(Hint, S.Img.Arch, S.Img.abiFormat(), Error,
+                            isMIPS(S.Img.Arch) && Site.StaticTarget
+                                ? S.Img.instructionModeAt(*Site.StaticTarget)
+                                      .value_or(InstructionMode::Default)
+                                : InstructionMode::Default))
     return {};
   return Hint;
 }

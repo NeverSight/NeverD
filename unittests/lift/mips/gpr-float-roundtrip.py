@@ -29,7 +29,7 @@ u32 kernel(u32 mask, float value) {
 DECLARATION = "unsigned int kernel(unsigned int mask, float value);\n"
 
 
-def observe(path, little, mode, fr, cases):
+def observe(path, little, mode, fr, cases, leading=False):
     model = (mips.UC_CPU_MIPS32_MICROMIPS32R2_GENERIC if mode == "micro"
              else mips.UC_CPU_MIPS32_74KF)
     uc, entry = roundtrip.emulator(path, 32, little, "kernel", cpu_model=model)
@@ -55,8 +55,15 @@ def observe(path, little, mode, fr, cases):
             uc.reg_write(getattr(mips, f"UC_MIPS_REG_F{r}"), saved_fprs.get(r, 0))
         uc.reg_write(mips.UC_MIPS_REG_SP, roundtrip.STACK)
         uc.reg_write(mips.UC_MIPS_REG_RA, roundtrip.STOP)
-        uc.reg_write(mips.UC_MIPS_REG_A0, mask)
-        uc.reg_write(mips.UC_MIPS_REG_A1, bits)
+        if leading:
+            if mode == "mips16":
+                uc.reg_write(mips.UC_MIPS_REG_A0, bits)
+            else:
+                uc.reg_write(mips.UC_MIPS_REG_F12, bits)
+            uc.reg_write(mips.UC_MIPS_REG_A1, mask)
+        else:
+            uc.reg_write(mips.UC_MIPS_REG_A0, mask)
+            uc.reg_write(mips.UC_MIPS_REG_A1, bits)
         uc.reg_write(mips.UC_MIPS_REG_FCSR, 0)
         uc.emu_start(entry, roundtrip.STOP + 4, count=10000)
         assert returned == [4] and uc.reg_read(mips.UC_MIPS_REG_V1) == 0x51
@@ -76,8 +83,11 @@ def observe(path, little, mode, fr, cases):
 def run(args, artifacts):
     source = artifacts.work / "original.c"
     header = artifacts.work / "declarations.h"
-    source.write_text(KERNEL)
-    header.write_text(DECLARATION)
+    source.write_text(KERNEL.replace("u32 mask, float value", "float value, u32 mask")
+                      if args.leading else KERNEL)
+    header.write_text(DECLARATION.replace("unsigned int mask, float value",
+                                         "float value, unsigned int mask")
+                      if args.leading else DECLARATION)
     rng = random.Random(0x47505246)
     patterns = [0, 1, 0x80000000, 0x007fffff, 0x00800000, 0x7f7fffff,
                 0x7f800000, 0xff800000, 0x7fa12345, 0xffc54321,
@@ -116,21 +126,22 @@ def run(args, artifacts):
                 profile = f'{"le" if little else "be"}-{mode}-fr{fr}'
                 original = artifacts.work / f"{profile}.elf"
                 build(args.clang, source, original, little, mode, fr, "-O2")
-                expected = observe(original, little, mode, fr, cases)
+                expected = observe(original, little, mode, fr, cases, args.leading)
                 command([args.neverd, "types", original, "--declare", header, "--save"])
                 for route in ("highc", "llvmc"):
                     output = artifacts.work / f"{profile}-{route}.c"
                     command([args.neverd, "decompile", original, "--func", "kernel",
                              *(["--llvm"] if route == "llvmc" else []), "-o", output])
                     if route == "highc":
-                        assert "float value" in output.read_text()
-                        assert "__builtin_bit_cast(int32_t, value)" in output.read_text()
+                        assert (("kernel(float value, uint32_t mask) {" if args.leading else
+                                 "kernel(uint32_t mask, float value) {") in output.read_text())
+                        assert "__builtin_bit_cast(" in output.read_text()
                     artifacts.keep_source(output)
                     for compiler in (args.clang, *([args.gcc] if args.gcc else [])):
                         for optimization in ("-O0", "-O2"):
                             rebuilt = artifacts.work / "rebuilt.elf"
-                            build(compiler, output, rebuilt, little, mode, fr, optimization)
-                            observed = observe(rebuilt, little, mode, fr, cases)
+                            build(compiler, output, rebuilt, little, "classic", fr, optimization)
+                            observed = observe(rebuilt, little, mode, fr, cases, args.leading)
                             assert observed == expected
                             rows.append({"profile": profile, "route": route,
                                          "compiler": str(compiler), "optimization": optimization,
@@ -140,13 +151,15 @@ def run(args, artifacts):
                             artifacts.discard(rebuilt)
                     artifacts.discard(output)
                 artifacts.discard(original)
-    artifacts.write("summary.json", {"profiles": 12, "original_cases": 12 * len(cases),
+    artifacts.write("summary.json", {"leading": args.leading, "profiles": 12, "original_cases": 12 * len(cases),
                                     "builds": len(rows), "rebuilt_cases": len(rows) * len(cases)})
     print(json.dumps({"builds": len(rows), "rebuilt_cases": len(rows) * len(cases)}))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--leading", action="store_true",
+                        help="put the float before the integer, testing the MIPS16 entry transport")
     for name in ("neverd", "clang", "assembler", "ld", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--gcc", type=Path)

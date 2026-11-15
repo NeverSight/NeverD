@@ -113,7 +113,8 @@ bool neverd::sourceCallRetainsResultStorage(const SourceCallTypeHint &Hint) {
              SourceABICarrierKind::IndirectResultPointer;
 }
 bool neverd::assignAnalystCallABI(SourceCallTypeHint &Hint, Arch Architecture,
-                                  BinaryFormat Format, std::string &Error) {
+                                  BinaryFormat Format, std::string &Error,
+                                  InstructionMode EntryMode) {
   auto &Signature = Hint.Signature;
   if (Hint.AnalystFixedCount < -1 || Hint.AnalystFixedCount == 0 ||
       (Hint.AnalystFixedCount > 0 &&
@@ -128,11 +129,15 @@ bool neverd::assignAnalystCallABI(SourceCallTypeHint &Hint, Arch Architecture,
     const auto Fixed = Hint.AnalystFixedCount < 0
                            ? std::nullopt
                            : std::optional<unsigned>(Hint.AnalystFixedCount);
-    auto Scalars = floatingCallArguments(Architecture, Format,
-                                         Signature.ReturnType, Types, Fixed);
+    auto Scalars = floatingCallArguments(
+        Architecture, Format, Signature.ReturnType, Types, Fixed, EntryMode);
     if (!Scalars)
-      return refuse(Error, "MIPS floating calls require complete scalar types "
-                           "and promoted variadic operands");
+      return refuse(Error, EntryMode == InstructionMode::MIPS16
+                               ? "MIPS16 calls require complete scalar types, "
+                                 "promoted variadic operands and an integer, "
+                                 "pointer or void result"
+                               : "MIPS floating calls require complete scalar "
+                                 "types and promoted variadic operands");
     Signature.HasExplicitABI = true;
     Signature.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
     Signature.Architecture = Architecture;

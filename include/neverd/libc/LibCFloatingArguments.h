@@ -23,7 +23,8 @@
 namespace neverd::libc {
 
 inline std::optional<FloatingCallArguments>
-floatingCallArguments(const FunctionSym &Function, Arch A, BinaryFormat F) {
+floatingCallArguments(const FunctionSym &Function, Arch A, BinaryFormat F,
+                      InstructionMode EntryMode = InstructionMode::Default) {
   if ((!Function.PrototypeFromHeader && !Function.PrototypeFromCLibrary &&
        Function.PrototypeLibrary != UserPrototypeLibrary) ||
       !Function.PlatformConvention || Function.IsVariadic ||
@@ -34,7 +35,8 @@ floatingCallArguments(const FunctionSym &Function, Arch A, BinaryFormat F) {
   std::vector<TypeRef> Parameters;
   for (const auto &[Name, Type] : Function.Params)
     Parameters.push_back(Type);
-  return neverd::floatingCallArguments(A, F, Function.ReturnType, Parameters);
+  return neverd::floatingCallArguments(A, F, Function.ReturnType, Parameters,
+                                       std::nullopt, EntryMode);
 }
 
 } // namespace neverd::libc

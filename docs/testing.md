@@ -24289,6 +24289,23 @@ PYTHONPATH=third_party/unicorn/bindings/python LIBUNICORN_PATH=/path/to/unicorn-
 
 Omit `--gcc` to run only Clang. Each attempt cleans its generated binaries;
 commands, source hashes and failed-source evidence remain in the output.
+Add `--leading` to check `kernel(float, uint32_t)`: classic and microMIPS
+receive the float in F12, while the MIPS16 body receives its bits in A0. The
+HighC check matches the function definition, not its prototype comment.
+
+`mips16-floating-call-roundtrip.py` takes the same tool/output arguments and
+executes a compiler-produced MIPS16 caller with a leading-float callee. It
+rebuilds the caller and callee separately against the original other side,
+then rebuilds both together. HighC uses `--callees`; LLVMC emits the whole
+two-function unit. Generated source is compiled from classic mode, so emitted
+attributes must retain the original function modes and parameter transport.
+FR=0/1 and both byte orders check result bits, FCSR, preserved registers,
+stack and the actual return ISA. Classic compiler entry-stub calls are recorded
+as explicit expected source refusals: their prototype propagation is not yet
+qualified. These refusals are separate from successful source-build counts.
+`MIPS16Pipeline.TypedDirectCallReadsGPRFloatInEitherSelection` checks both a
+selected caller and the caller/callee selection through HighC and LLVMC.
+
 `HighCIntegerConversion.MachineIntegerReadsOfFloatingParametersKeepBits`
 separately executes direct, forwarded and logical-shift reads through signed
 and unsigned 32/64-bit machine carriers at O0/O2 with undefined-behavior
@@ -24296,8 +24313,9 @@ checks. `MIPS16Pipeline.DeclaredGPRFloatKeepsItsIntegerBitUse` covers loader
 and source binding in both byte orders. MIPS16 source mode spelling uses a
 compiler-specific `.def` prelude because GCC rejects the Clang attribute
 pair; the selected LLVMC caller must retain its callee's prelude too.
-These checks do not qualify leading MIPS16 floating arguments, floating
-return helpers or linker/runtime floating-call stubs.
+The leading MIPS16 execution case has one `float` followed by `uint32_t` and a
+`uint32_t` result. Split double inputs, variadic entry reconstruction, floating
+return helpers and linker/runtime floating-call stubs remain unqualified.
 
 The hard-float call tests assemble original callers and callees and bind explicit declarations.
 

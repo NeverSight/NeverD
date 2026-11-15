@@ -3118,7 +3118,8 @@ LLVMCWriter::debugArgumentBindings(const llvm::Function &Fn,
           Fn.getDataLayout().getTypeStoreSize(Arg.getType()));
     Sites.push_back(Site);
   }
-  return bindDebugParams(Opts.TheArch, Opts.Format, Signature, Sites, Dbg);
+  return bindDebugParams(Opts.TheArch, Opts.Format, Signature, Sites, Dbg,
+                         mips::instructionModeFromLLVM(Fn));
 }
 
 void LLVMCWriter::bindDebugArguments(const llvm::Function &Fn) {

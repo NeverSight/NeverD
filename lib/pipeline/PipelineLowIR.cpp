@@ -4001,8 +4001,11 @@ ImportPrototypeArguments importPrototypeArguments(
           (Convention->ArgumentsFromCallSetup ||
            Convention->RegisterArgumentsFromCalleeSummary))
         if (Function)
-          if (auto Floating = libc::floatingCallArguments(*Function, Img.Arch,
-                                                          Img.abiFormat())) {
+          if (auto Floating = libc::floatingCallArguments(
+                  *Function, Img.Arch, Img.abiFormat(),
+                  isMIPS(Img.Arch) ? Img.instructionModeAt(Addr).value_or(
+                                         InstructionMode::Default)
+                                   : InstructionMode::Default)) {
             Result.FloatingArguments.emplace(Addr, std::move(*Floating));
             Result.PrototypeDeclared.insert(Addr);
             if (Function->PrototypeLibrary == UserPrototypeLibrary)
@@ -4043,8 +4046,10 @@ ImportPrototypeArguments importPrototypeArguments(
       if (isMIPS(Img.Arch) && Convention &&
           (Convention->ArgumentsFromCallSetup ||
            Convention->RegisterArgumentsFromCalleeSummary))
-        if (auto Floating = libc::floatingCallArguments(*Function, Img.Arch,
-                                                        Img.abiFormat())) {
+        if (auto Floating = libc::floatingCallArguments(
+                *Function, Img.Arch, Img.abiFormat(),
+                Img.instructionModeAt(Addr).value_or(
+                    InstructionMode::Default))) {
           if (Floating->ReturnKind == NdTypeKind::Float)
             Result.FloatReturns[Addr] = Floating->ReturnBytes;
           Result.FloatingArguments.emplace(Addr, std::move(*Floating));

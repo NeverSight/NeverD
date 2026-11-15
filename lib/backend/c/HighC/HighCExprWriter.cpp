@@ -2587,8 +2587,12 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   std::string S = Name + "(";
   const auto Callee = debugCallee(E);
   if (Callee && !Defined)
-    if (const auto Signature =
-            libc::floatingCallArguments(*Callee, Opts.TheArch, Opts.Format);
+    if (const auto Signature = libc::floatingCallArguments(
+            *Callee, Opts.TheArch, Opts.Format,
+            Opts.Image && isMIPS(Opts.TheArch) && E.CallAddr
+                ? Opts.Image->instructionModeAt(E.CallAddr)
+                      .value_or(InstructionMode::Default)
+                : InstructionMode::Default);
         Signature &&
         (Opts.TheArch == Arch::X86 || !Signature->Scalars.empty() ||
          Signature->ReturnElements) &&

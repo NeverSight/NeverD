@@ -95,8 +95,17 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   against original machine code, with Clang and GCC at O0/O2. MIPS16 source
   attributes use compiler-specific spelling from `MIPSInstructionModes.def`;
   LLVM still retains both the selected mode and excluded alternative.
-  Leading MIPS16 FP parameters, floating-return helpers and floating-call
-  linker/runtime stubs remain outside this qualification.
+  Parameter placement distinguishes an o32 MIPS16 body from its classic
+  entry stub: the body receives leading floating arguments in GPRs. The same
+  mode enters call classification, source binding and descriptor validation;
+  classic and microMIPS entry rules keep their FPR prefix. Both C routes retain
+  the target's mode on declarations even when its body is omitted. A complete
+  fixed MIPS16 signature whose parameters match individual recovered GPRs also
+  supplies the definition's logical types. Split values, missing inputs and
+  variadic entry adapters require separate qualification. MIPS16 floating
+  results still need a dual GPR/FPR result adapter and are declined by the
+  scalar-call classifier. Automatic typing of linker/runtime stubs remains
+  outside this qualification.
 
 LowIR execution retains the common known bits of the two permitted partial
 MIPS64 `LWR` upper words. Scalar COPY, SUBBYTES, CONCAT and integer extensions
@@ -438,10 +447,17 @@ by 2,176 source builds and 43,520 rebuilt comparisons. Its reference pin fixes
 microMIPS SWM word stores and 64-bit LWM sign extension, with an independent
 regression that fails against the previous executor.
 
-This matrix does not qualify MIPS16 hard-float calls. GNU MIPS16 uses GPR
-payloads and linker/runtime stubs to bridge the classic FPR convention; those
-stubs need their own entry, call and return proof. The microMIPS matrix does
-not establish their behavior.
+That microMIPS matrix does not qualify MIPS16 hard-float calls. The separate
+MIPS16 matrix checks `float, uint32_t` body entries and typed direct calls
+returning `uint32_t`, in FR=0/1 and both byte orders. HighC and LLVMC rebuild
+each side against the original other side, and both functions together, with
+Clang/GCC at O0/O2. The compiler starts in classic mode, so the generated
+attributes must select MIPS16 and its GPR parameter transport.
+Classic linker entry stubs remain distinct physical functions and need a
+verified prototype association; their names alone do not establish it.
+[GCC's MIPS16 function-stub implementation](https://gnu.googlesource.com/gcc/+/refs/tags/releases/gcc-12.1.0/gcc/config/mips/mips.cc)
+describes this FPR-to-GPR bridge. Floating-return helpers and indirect runtime
+stubs still require separate result and control-flow qualification.
 
 Numeric microMIPS code-pointer reconstruction is explicitly refused. The tested
 Clang 22 compiler folds a microMIPS function pointer's low bit to zero in some

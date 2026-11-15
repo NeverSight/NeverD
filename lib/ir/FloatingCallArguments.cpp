@@ -25,11 +25,18 @@ namespace neverd {
 std::optional<FloatingCallArguments>
 floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
                       llvm::ArrayRef<TypeRef> Parameters,
-                      std::optional<unsigned> FixedCount) {
+                      std::optional<unsigned> FixedCount,
+                      InstructionMode EntryMode) {
   if (FixedCount &&
       (!isMIPS(A) || !*FixedCount || *FixedCount > Parameters.size()))
     return std::nullopt;
   if (A != Arch::X86 && A != Arch::X64 && A != Arch::AArch64 && !isMIPS(A))
+    return std::nullopt;
+  // A MIPS16 caller observes an FP result through GPRs, while the classic
+  // entry uses FPRs. That dual result contract needs its own runtime-stub
+  // adapter; the ordinary scalar-result descriptor cannot represent it.
+  if (EntryMode == InstructionMode::MIPS16 && ReturnType &&
+      ReturnType->Kind == NdTypeKind::Float)
     return std::nullopt;
   const auto Scalar = [](const TypeRef &Type) {
     return Type && Type->Kind == NdTypeKind::Float &&
@@ -165,8 +172,9 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
   if (A != Arch::X86 && !isMIPS(A) && AllFloating &&
       Parameters.size() > Registers.size())
     return std::nullopt;
-  const auto Placement = placeSourceParameters(
-      A, F, ReturnType, Parameters, FixedCount.has_value(), FixedCount);
+  const auto Placement =
+      placeSourceParameters(A, F, ReturnType, Parameters,
+                            FixedCount.has_value(), FixedCount, EntryMode);
   if (!Placement || Placement->ResultPointer ||
       Placement->Parameters.size() != Parameters.size())
     return std::nullopt;
@@ -175,6 +183,7 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
   Result.ReturnKind = ReturnType->IsEnum ? NdTypeKind::Int : ReturnType->Kind;
   Result.SignedResult = MIPSSignedInteger(ReturnType);
   Result.FixedCount = FixedCount;
+  Result.MIPS16Parameters = isMIPS(A) && EntryMode == InstructionMode::MIPS16;
   if (A == Arch::X86 || !AllFloating || isMIPS(A)) {
     for (size_t I = 0; I < Parameters.size(); ++I) {
       const auto &Pieces = Placement->Parameters[I];
@@ -314,7 +323,9 @@ floatingCallTypes(Arch A, BinaryFormat F,
         NdType::makeFloat(Signature.ReturnBytes / Signature.ReturnElements)));
   }
   const auto Expected = floatingCallArguments(
-      A, F, Types.Result, Types.Parameters, Signature.FixedCount);
+      A, F, Types.Result, Types.Parameters, Signature.FixedCount,
+      Signature.MIPS16Parameters ? InstructionMode::MIPS16
+                                 : InstructionMode::Default);
   return Expected && *Expected == Signature ? std::optional(std::move(Types))
                                             : std::nullopt;
 }

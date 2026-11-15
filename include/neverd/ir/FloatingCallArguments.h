@@ -57,6 +57,9 @@ struct FloatingCallArguments {
   bool SignedResult = false;
   /// For a variadic occurrence Scalars includes all promoted actual arguments.
   std::optional<unsigned> FixedCount;
+  /// MIPS16 bodies take floating parameters through GPRs; classic entry
+  /// stubs and ordinary function pointers retain the platform FP transport.
+  bool MIPS16Parameters = false;
   bool operator==(const FloatingCallArguments &) const = default;
 };
 
@@ -68,7 +71,8 @@ struct FloatingCallArguments {
 std::optional<FloatingCallArguments>
 floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
                       llvm::ArrayRef<TypeRef> Parameters,
-                      std::optional<unsigned> FixedCount = std::nullopt);
+                      std::optional<unsigned> FixedCount = std::nullopt,
+                      InstructionMode EntryMode = InstructionMode::Default);
 
 struct FloatingCallTypes {
   TypeRef Result;

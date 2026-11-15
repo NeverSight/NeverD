@@ -48,7 +48,7 @@ neverd::stackParamOffset(Arch A, BinaryFormat F,
 DebugParamBindings
 neverd::bindDebugParams(Arch A, BinaryFormat F, const FunctionSym &Signature,
                         llvm::ArrayRef<RecoveredParamSite> Sites,
-                        const DebugContext *Dbg) {
+                        const DebugContext *Dbg, InstructionMode EntryMode) {
   DebugParamBindings Bindings;
   Bindings.Params.assign(Sites.size(), {});
   // A function of a language with conventions of its own, such as Go, has
@@ -85,7 +85,8 @@ neverd::bindDebugParams(Arch A, BinaryFormat F, const FunctionSym &Signature,
           ? placeEnteredParameters(A, F, Signature.ReturnType, Types,
                                    Signature.ParamEntryLocations)
       : OrdinaryConvention
-          ? placeSourceParameters(A, F, Signature.ReturnType, Types)
+          ? placeSourceParameters(A, F, Signature.ReturnType, Types, false,
+                                  std::nullopt, EntryMode)
           : std::nullopt;
   if (!Placement) {
     // A function that takes values in registers takes them in no order its

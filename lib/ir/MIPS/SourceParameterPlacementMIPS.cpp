@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// MIPS o32 FP64, n32 and n64 scalar hard-float parameter locations.
+/// MIPS o32 (including MIPS16 bodies), n32 and n64 scalar FP locations.
 /// ELF source admission authenticates the FP profile; records are not
 /// classified.
 //===----------------------------------------------------------------------===//
@@ -21,12 +21,18 @@ using namespace neverd::source_placement;
 
 std::optional<SourceParameterPlacement> source_placement::placeMIPS(
     const TargetRegInfo &TRI, BinaryFormat F, const TypeRef &ReturnType,
-    llvm::ArrayRef<TypeRef> ParamTypes, std::optional<unsigned> FixedCount) {
+    llvm::ArrayRef<TypeRef> ParamTypes, std::optional<unsigned> FixedCount,
+    InstructionMode EntryMode) {
   if (F != BinaryFormat::ELF || !ReturnType ||
       (ReturnType->Kind != NdTypeKind::Void &&
        ((!isIntegerScalar(ReturnType) && !isFloatingScalar(ReturnType)) ||
         ReturnType->Size >
             (ReturnType->Kind == NdTypeKind::Int ? 2 * TRI.FullRegWidth : 8))))
+    return std::nullopt;
+  // The MIPS16 body receives the leading floating arguments in GPRs.
+  // Its classic entry stub is a separate function with ordinary FP carriers.
+  const bool MIPS16 = EntryMode == InstructionMode::MIPS16;
+  if (MIPS16 && isMIPS64(TRI.TheArch))
     return std::nullopt;
   const auto Layout = TRI.integerArgumentLayout(F);
   const bool Little = archLittleEndian(TRI.TheArch);
@@ -54,7 +60,7 @@ std::optional<SourceParameterPlacement> source_placement::placeMIPS(
     // o32 uses f12/f14 only for the first two leading FP arguments; their
     // word positions still consume the integer argument area.
     const bool InFPR =
-        Floating &&
+        Floating && !MIPS16 &&
         (Slot == 8 ? Named && Next < 8 : LeadingFloating && FloatingPrefix < 2);
     LeadingFloating &= Floating;
     if (InFPR) {

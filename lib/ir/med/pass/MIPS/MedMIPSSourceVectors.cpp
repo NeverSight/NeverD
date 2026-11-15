@@ -359,7 +359,10 @@ void discardUnobservedMIPSFPUpperBits(
   if (Known == EntrySignatures.end() && Debug)
     if (const auto Symbol = Debug->resolveFunction(Function.Entry);
         Symbol && Symbol->Addr == Function.Entry)
-      Local = libc::floatingCallArguments(*Symbol, Target, BinaryFormat::ELF);
+      Local =
+          libc::floatingCallArguments(*Symbol, Target, BinaryFormat::ELF,
+                                      Image.instructionModeAt(Function.Entry)
+                                          .value_or(InstructionMode::Default));
   const auto *Signature = Known != EntrySignatures.end() ? &Known->second
                           : Local                        ? &*Local
                                                          : nullptr;
@@ -372,6 +375,25 @@ void discardUnobservedMIPSFPUpperBits(
           Types->Result->Kind == NdTypeKind::Int;
       Function.MultiReturn.clear();
       Function.ReturnsVectorRegister = false;
+      // A MIPS16 body and its typed direct callers must share the logical
+      // parameter types. Retain exact register identities and widths: a
+      // split double or an omitted input needs a separate entry adapter.
+      if (Signature->MIPS16Parameters && !Signature->FixedCount &&
+          Signature->Scalars.size() == Function.Params.size()) {
+        bool Exact = true;
+        for (size_t I = 0; I < Function.Params.size(); ++I) {
+          const auto &P = Function.Params[I];
+          const auto &S = Signature->Scalars[I];
+          Exact &= S.Kind == SourceABICarrierKind::IntegerRegister &&
+                   P.RegOff == S.Register && P.Size == S.Bytes;
+        }
+        if (Exact) {
+          Function.TypedParams.clear();
+          for (size_t I = 0; I < Function.Params.size(); ++I)
+            Function.TypedParams.push_back(
+                {Function.Params[I].display(), Types->Parameters[I]});
+        }
+      }
     }
   if (!Function.ReturnType || !Function.MultiReturn.empty())
     return;
