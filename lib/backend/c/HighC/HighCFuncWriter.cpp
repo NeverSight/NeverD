@@ -6470,7 +6470,8 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
       VaStartLastNamed = Identifier;
       // A parameter's name has its declared type, as a local's has.
       if (const TypeRef Display = cDisplayType(Ty);
-          Display && Display->Kind == NdTypeKind::Int && !Display->IsEnum)
+          Display && ((Display->Kind == NdTypeKind::Int && !Display->IsEnum) ||
+                      Display->Kind == NdTypeKind::Float))
         DeclaredCTypes.emplace(Identifier, Display);
       ++Emitted;
     };

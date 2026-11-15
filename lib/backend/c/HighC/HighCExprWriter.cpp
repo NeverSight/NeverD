@@ -7187,7 +7187,7 @@ std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec,
       if ((E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi) && E.Type)
         if (auto Bits = reinterpretedBits(E.Type, Declared->second, Text)) {
           if (isPlainInteger(E.Type))
-            PrintedIntegerTypes[&E] = {E.Type->Size, false};
+            PrintedIntegerTypes[&E] = {E.Type->Size, E.Type->IsSigned};
           Text = std::move(*Bits);
           return SourceRecorder && CurrentFunc
                      ? SourceRecorder->expression(CurrentFunc->Entry, E,
