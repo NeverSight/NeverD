@@ -1,5 +1,5 @@
 # plugins/example/CMakeLists.txt
-# Example NeverD plugin (demonstrates the plugin C API).
+# Example NeverD plugins (demonstrate the plugin C API).
 
 add_library(example_plugin SHARED example_plugin.c)
 
@@ -16,3 +16,7 @@ set_target_properties(example_plugin PROPERTIES
 )
 
 set_neverd_plugin_output_directories(example_plugin)
+
+# External bytecode rules and proof-gated semantic optimization examples.
+add_subdirectory(bytecode)
+add_subdirectory(semantic)
