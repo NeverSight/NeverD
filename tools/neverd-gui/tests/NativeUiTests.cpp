@@ -43,6 +43,7 @@
 #include <QTextCursor>
 #include <QToolButton>
 #include <QTreeWidget>
+#include <numbers>
 
 using namespace neverd::gui;
 
@@ -84,9 +85,14 @@ bool write(const QString &path, const QJsonObject &object) {
   return write(path, QJsonDocument(object).toJson());
 }
 
-/// Whether \p view stands in the middle of \p window.
-bool centeredIn(const QWidget &window, const QWidget &view) {
-  return view.pos() == QPoint((window.width() - view.width()) / 2,
+/// Whether \p view stands where a new conversation opens in \p window: at
+/// the golden section of the free room across, on the side a line starts
+/// from, and in the middle down.
+bool restsIn(const QWidget &window, const QWidget &view) {
+  const double share = view.layoutDirection() == Qt::RightToLeft
+                           ? std::numbers::phi - 1
+                           : 2 - std::numbers::phi;
+  return view.pos() == QPoint(qRound(share * (window.width() - view.width())),
                               (window.height() - view.height()) / 2);
 }
 
@@ -485,15 +491,15 @@ private slots:
     QCOMPARE(clicks.count(), 0);
     QVERIFY(!panel->isVisible());
 
-    // Wherever the button is, the conversation opens in the middle of the
-    // workbench and stays there while the button moves.
+    // Wherever the button is, the conversation opens at the golden section
+    // of the workbench and stays there while the button moves.
     QTest::mouseClick(ball, Qt::LeftButton);
     QCOMPARE(clicks.count(), 1);
-    QTRY_VERIFY(panel->isVisible() && centeredIn(window, *panel));
+    QTRY_VERIFY(panel->isVisible() && restsIn(window, *panel));
 
     drag({45, 314});
     QTRY_COMPARE(ball->pos(), QPoint(45, 314));
-    QVERIFY(panel->isVisible() && centeredIn(window, *panel));
+    QVERIFY(panel->isVisible() && restsIn(window, *panel));
     QCOMPARE(clicks.count(), 1);
 
     // Let go at the side, the button docks there as its mark alone.
@@ -506,7 +512,7 @@ private slots:
     window.resize(500, 380);
     QTRY_VERIFY(window.rect().contains(ball->geometry()) &&
                 window.rect().contains(panel->geometry()) &&
-                panel->geometry().center().x() == window.rect().center().x());
+                panel->geometry().center().x() <= window.rect().center().x());
     QTest::mouseClick(ball, Qt::LeftButton);
     QCOMPARE(clicks.count(), 2);
     QVERIFY(!panel->isVisible());
@@ -554,8 +560,10 @@ private slots:
           window, session, [&] { return window.rect(); }, [](const auto &) {});
       auto *panel = open(session, window, host);
       QVERIFY(panel);
-      // First in the middle of the workbench.
-      QTRY_VERIFY(panel->isVisible() && centeredIn(window, *panel));
+      // First at the golden section across the workbench, left of its
+      // middle: 199 of the 520 free pixels before it, and the middle down.
+      QTRY_VERIFY(panel->isVisible() && restsIn(window, *panel));
+      QCOMPARE(panel->pos(), QPoint(199, 70));
       auto *title = panel->findChild<QWidget *>("NeverDAgentTitleBar");
       QVERIFY(title);
       const QRect before = panel->geometry();
@@ -593,25 +601,65 @@ private slots:
       auto *panel = open(session, window, host);
       QVERIFY(panel);
       QTRY_COMPARE(panel->geometry(), moved);
-      // A double click on its title puts it back in the middle at its first
-      // size and forgets the place.
+      // A double click on its title puts it back where it opens at its
+      // first size and forgets the place.
       auto *title = panel->findChild<QWidget *>("NeverDAgentTitleBar");
       QTest::mouseDClick(title, Qt::LeftButton, Qt::NoModifier,
                          QPoint(title->width() / 2, title->height() / 2));
-      QTRY_VERIFY(panel->size() == QSize(480, 560) &&
-                  centeredIn(window, *panel));
+      QTRY_VERIFY(panel->size() == QSize(480, 560) && restsIn(window, *panel));
       QVERIFY(!QSettings().contains("guiPlugins/neverd.agent-ui/chatPlace"));
       QVERIFY(!QSettings().contains("guiPlugins/neverd.agent-ui/chatSize"));
-      // Away from the middle it stands where it is let go; near it, it
-      // snaps there and stays centered while the workbench resizes.
-      const QPoint middle = panel->pos();
+      // Away from there it stands where it is let go; near it, it snaps
+      // back and keeps that place while the workbench resizes.
+      const QPoint rest = panel->pos();
       dragTitle(*title, QPoint(150, 40));
-      QTRY_COMPARE(panel->pos(), middle + QPoint(150, 40));
+      QTRY_COMPARE(panel->pos(), rest + QPoint(150, 40));
       dragTitle(*title, QPoint(-140, -35));
-      QTRY_COMPARE(panel->pos(), middle);
+      QTRY_COMPARE(panel->pos(), rest);
       window.resize(900, 640);
-      QTRY_VERIFY(panel->pos() != middle && centeredIn(window, *panel));
+      QTRY_VERIFY(panel->pos() != rest && restsIn(window, *panel));
     }
+  }
+
+  void conversationOpensAtTheGoldenSection_data() {
+    QTest::addColumn<bool>("mirrored");
+    QTest::newRow("left-to-right") << false;
+    QTest::newRow("right-to-left") << true;
+  }
+
+  // The conversation opens left of the workbench's middle, or right of it
+  // where lines start at the right.
+  void conversationOpensAtTheGoldenSection() {
+    QFETCH(bool, mirrored);
+    const ScopedTestSettings settings("AgentChatRest");
+    QVERIFY(settings.isValid());
+    const auto direction = QGuiApplication::layoutDirection();
+    const auto restore = qScopeGuard(
+        [direction] { QGuiApplication::setLayoutDirection(direction); });
+    QGuiApplication::setLayoutDirection(mirrored ? Qt::RightToLeft
+                                                 : Qt::LeftToRight);
+    Session session(QStringLiteral(TEST_WORKER));
+    QWidget window;
+    GuiPluginUiHost host(
+        window, session, [&] { return window.rect(); }, [](const auto &) {});
+    window.resize(1000, 700);
+    window.show();
+    QString error;
+    QVERIFY2(session.pluginServices().jobs().install(
+                 QStringLiteral(TEST_AGENT_UI), error),
+             qPrintable(error));
+    neverd::plugin::Diagnostic diagnostic;
+    QVERIFY(session.pluginServices().jobs().catalog().setEnabled(
+        "neverd.agent-ui", true, diagnostic));
+    auto *ball = window.findChild<QAbstractButton *>("NeverDAgentLauncher");
+    auto *panel = window.findChild<QWidget *>("NeverDAgentChat");
+    QVERIFY(ball && panel);
+    QTRY_VERIFY(ball->isVisible());
+    ball->click();
+    // 520 pixels of room across: the smaller golden part before the
+    // conversation, on the side its lines start from.
+    QTRY_VERIFY(panel->isVisible());
+    QTRY_COMPARE(panel->pos(), QPoint(mirrored ? 321 : 199, 70));
   }
 
   void agentChatUsesTheLiveWorkbenchAndReopensAfterHiding() {

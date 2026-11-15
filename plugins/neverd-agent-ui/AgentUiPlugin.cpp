@@ -7,9 +7,9 @@
 /// \file
 /// The workbench's Agent entry: an "Ask Agent" button at the workbench's
 /// corner, as Office places its Copilot button, and a conversation window
-/// that opens in the middle of the workbench, moves by its title as VS
-/// Code's quick input does, and resizes by its edges. Both remember where
-/// they were left.
+/// that opens at the golden section across the workbench, on the side a
+/// line starts from, moves by its title as VS Code's quick input does, and
+/// resizes by its edges. Both remember where they were left.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -62,6 +62,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <functional>
+#include <numbers>
 #include <optional>
 #include <utility>
 
@@ -73,10 +74,15 @@ constexpr QSize ChatMinimumSize{340, 300};
 constexpr int ResizeBand = 6;
 // A button let go this close to the workbench's side docks there.
 constexpr int DockReach = 24;
-// A conversation moved this close to the middle of the workbench, on either
-// axis, snaps to it; VS Code's quick input snaps to its horizontal center
-// within the same distance.
-constexpr int CenterSnap = 20;
+// A conversation opens at the golden section of the room it can move in
+// across the workbench, on the side a line starts from, and in the middle
+// down it. The workbench's middle read as stiff, and the golden section is
+// where a reader's eye begins.
+constexpr double RestShare = 2 - std::numbers::phi;
+// A conversation moved this close to where it opens, on either axis, snaps
+// there; VS Code snaps its quick input to the horizontal center within the
+// same distance.
+constexpr int RestSnap = 20;
 constexpr int TeachingWidth = 320;
 constexpr int SuggestionCount = 3;
 // A new conversation's mark, as large as VS Code draws its chat welcome's
@@ -801,15 +807,28 @@ private:
   Colors Color;
 };
 
-/// The top-left corner that centers \p size in \p area.
-QPoint centeredIn(QSize area, QSize size) {
-  return {(area.width() - size.width()) / 2,
-          (area.height() - size.height()) / 2};
+/// The coordinate that leaves \p share of the free \p space before it; the
+/// middle rounds down.
+int along(double share, int space) {
+  space = std::max(space, 0);
+  return share == 0.5 ? space / 2 : qRound(share * space);
+}
+
+/// The share of the free room across where a card rests: the golden
+/// section, on the side a line starts from.
+double restShare(Qt::LayoutDirection direction) {
+  return direction == Qt::RightToLeft ? 1 - RestShare : RestShare;
+}
+
+/// The top-left corner where a card of \p size rests in \p area.
+QPoint restingPlace(QSize area, QSize size, Qt::LayoutDirection direction) {
+  return {along(restShare(direction), area.width() - size.width()),
+          along(0.5, area.height() - size.height())};
 }
 
 /// A card the person moves by its title and, when it is resizable, sizes by
 /// its edges. It asks the host for the place through ViewPositionProperty.
-/// Moved near the middle of its parent, it snaps there.
+/// Moved near where it rests in its parent, it snaps there.
 class FloatingCard : public QFrame {
 public:
   using Changed = std::function<void()>;
@@ -973,11 +992,12 @@ private:
     if (!Edges) {
       target.moveTopLeft(Origin.topLeft() + delta);
       if (const auto *parent = parentWidget()) {
-        const QPoint middle = centeredIn(parent->size(), target.size());
-        if (std::abs(target.left() - middle.x()) < CenterSnap)
-          target.moveLeft(middle.x());
-        if (std::abs(target.top() - middle.y()) < CenterSnap)
-          target.moveTop(middle.y());
+        const QPoint rest =
+            restingPlace(parent->size(), target.size(), layoutDirection());
+        if (std::abs(target.left() - rest.x()) < RestSnap)
+          target.moveLeft(rest.x());
+        if (std::abs(target.top() - rest.y()) < RestSnap)
+          target.moveTop(rest.y());
       }
     } else {
       const QSize least = minimumSize().expandedTo(minimumSizeHint());
@@ -1549,8 +1569,8 @@ private:
 
   // The button keeps its distance from the workbench's bottom-right corner,
   // or keeps to the side when docked. The conversation keeps its share of the
-  // room it can move in, the middle until the person moves it, so a centered
-  // conversation stays centered while the workbench resizes.
+  // room it can move in, where it opens until the person moves it, so it
+  // keeps that place while the workbench resizes.
   void applyPlaces() {
     if (LauncherOffset || Ball->docked()) {
       QPoint offset = LauncherOffset.value_or(QPoint());
@@ -1567,14 +1587,12 @@ private:
     if (const auto *parent = Panel->parentWidget()) {
       const QSize size = Panel->sizeHint();
       const QSize room = parent->size() - size;
-      const QPoint middle = centeredIn(parent->size(), size);
-      const QPointF share = ChatPlace.value_or(QPointF(0.5, 0.5));
-      const auto along = [](qreal part, int space, int center) {
-        return part == 0.5 ? center : qRound(part * std::max(space, 0));
-      };
-      Panel->setProperty(ViewPositionProperty,
-                         QPoint(along(share.x(), room.width(), middle.x()),
-                                along(share.y(), room.height(), middle.y())));
+      Panel->setProperty(
+          ViewPositionProperty,
+          ChatPlace
+              ? QPoint(along(ChatPlace->x(), room.width()),
+                       along(ChatPlace->y(), room.height()))
+              : restingPlace(parent->size(), size, Panel->layoutDirection()));
     }
   }
 
@@ -1589,21 +1607,24 @@ private:
                           : Panel->pos();
     const QSize size = Panel->sizeHint();
     const QSize room = parent->size() - size;
-    const QPoint middle = centeredIn(parent->size(), size);
-    const auto part = [](int position, int space, int center) {
-      return position == center || space <= 0
-                 ? 0.5
-                 : std::clamp(qreal(position) / space, 0.0, 1.0);
+    const auto direction = Panel->layoutDirection();
+    const QPoint rest = restingPlace(parent->size(), size, direction);
+    // Let go where it opens, it keeps that share exactly.
+    const auto part = [](int position, int space, int rest, double share) {
+      return position == rest || space <= 0
+                 ? share
+                 : std::clamp(double(position) / space, 0.0, 1.0);
     };
-    ChatPlace = QPointF(part(at.x(), room.width(), middle.x()),
-                        part(at.y(), room.height(), middle.y()));
+    ChatPlace =
+        QPointF(part(at.x(), room.width(), rest.x(), restShare(direction)),
+                part(at.y(), room.height(), rest.y(), 0.5));
     QSettings settings;
     settings.setValue(ChatPlaceKey, *ChatPlace);
     settings.setValue(ChatSizeKey, Panel->chosenSize());
   }
 
-  // A double click on the title puts the conversation back in the middle at
-  // its first size.
+  // A double click on the title puts the conversation back where it opens,
+  // at its first size.
   void resetChatPlace() {
     ChatPlace.reset();
     Panel->setChosenSize(ChatSize);
