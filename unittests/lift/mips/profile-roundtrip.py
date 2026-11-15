@@ -7,6 +7,7 @@ import runpy
 import subprocess
 
 from elftools.elf.elffile import ELFFile
+from unicorn import UcError
 from unicorn import mips_const as mips
 
 import roundtrip
@@ -359,7 +360,12 @@ def observe(elf, bits, little, feature, cases, micro_fp=False):
             execute(
                 roundtrip.STOP + 0x300, [0x783E2059 if feature == "msa" else 0x7C81FCF8]
             )
-        value = roundtrip.invoke(uc, entry, bits, little, pair)[0]
+        try:
+            value = roundtrip.invoke(uc, entry, bits, little, pair)[0]
+        except UcError as error:
+            raise RuntimeError(
+                f"{elf}: input {pair}, PC {uc.reg_read(mips.UC_MIPS_REG_PC):#x}: {error}"
+            ) from error
         control = uc.reg_read(mips.UC_MIPS_REG_FCSR) if not feature or feature in ("fp", "ps") else None
         if feature and feature not in ("fp", "ps"):
             execute(
