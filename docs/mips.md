@@ -453,6 +453,12 @@ returning `uint32_t`, in FR=0/1 and both byte orders. HighC and LLVMC rebuild
 each side against the original other side, and both functions together, with
 Clang/GCC at O0/O2. The compiler starts in classic mode, so the generated
 attributes must select MIPS16 and its GPR parameter transport.
+The [2026-11-16 MIPS16 carrier receipt](evidence/mips16-floating-carriers-2026-11-16.json)
+records 288 source builds and 36,864 rebuilt comparisons across this call matrix
+and the leading/after-integer floating leaf matrices. Its 1,319 local owner tests
+include four native-source tests that timed out in the parallel run and passed
+unchanged on individual reruns. Eight classic-stub source refusals are counted
+separately from successful reconstruction.
 Classic linker entry stubs remain distinct physical functions and need a
 verified prototype association; their names alone do not establish it.
 [GCC's MIPS16 function-stub implementation](https://gnu.googlesource.com/gcc/+/refs/tags/releases/gcc-12.1.0/gcc/config/mips/mips.cc)
