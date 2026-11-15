@@ -1076,6 +1076,9 @@ the workbench.
   so it stays there when the workbench resizes, and a double click on the
   title puts it back. It stays open until closed, without a hover preview or
   a pin, and closing gives the keyboard back to the view that had it.
+- Show a view's mark once. The empty conversation's welcome carries the
+  Agent's mark, so the panel's title is the grip and the name alone; a
+  second, smaller mark beside the title repeated it a few lines above.
 - Explain a new entry once, beside it, in a small card with one button, as
   Fluent teaches a new entry point; open a new conversation with a line on
   what the view does and a few first questions as outlined rows.

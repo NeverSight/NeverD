@@ -5,10 +5,10 @@ description: >-
 license: LicenseRef-Qt-Commercial OR BSD-3-Clause
 metadata:
   author: qt-ai-skills
-  version: "1.8"
+  version: "1.9"
   qt-version: "6.x"
   category: conceptual
-  changelog: "Plugin views and the Agent: the pressed toggle's high contrast fill and Tab-only focus for a floating entry button"
+  changelog: "Plugin views and the Agent: a floating panel's title leaves the view's mark to its welcome"
 ---
 # Qt UI Design
 
