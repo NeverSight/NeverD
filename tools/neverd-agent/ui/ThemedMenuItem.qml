@@ -5,8 +5,8 @@ import NeverD.Agent
 MenuItem {
     id: item
     // Hidden items collapse instead of leaving an empty row.
-    implicitHeight: visible ? Math.max(24, contentItem.implicitHeight + 8) : 0
-    leftPadding: 8
+    implicitHeight: visible ? Math.max(Theme.rowHeight - 2, contentItem.implicitHeight + 8) : 0
+    leftPadding: 10
     rightPadding: 24
     topPadding: 4
     bottomPadding: 4

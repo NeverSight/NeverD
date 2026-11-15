@@ -101,7 +101,7 @@ qt_add_qml_module(neverd-agent
     ui/WindowControl.qml ui/ChoiceField.qml ui/ModelSettings.qml ui/MarkdownView.qml ui/ContextMeter.qml ui/Backdrop.qml
     ui/ChatTranscript.qml ui/SideChatView.qml ui/GoalStrip.qml ui/GoalEditor.qml ui/InputQueue.qml ui/ObjectApprovalCard.qml ui/ExecutionView.qml ui/EvidenceView.qml ui/ContextPicker.qml ui/ContextChips.qml ui/ReviewView.qml ui/ResearchView.qml ui/MemoryView.qml ui/CheckField.qml
     ui/ThemedMenu.qml ui/ThemedMenuItem.qml ui/ThemedSeparator.qml ui/ThemedScrollBar.qml ui/ThemedToolTip.qml
-    ui/ModalDim.qml)
+    ui/ModalDim.qml ui/SidebarRow.qml ui/WindowDrag.qml)
 
 # Interface translations: the workbench's languages (i18n/*.ts), compiled into
 # the application and its CLI, which writes progress and errors.

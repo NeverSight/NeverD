@@ -5,12 +5,13 @@ import NeverD.Agent
 
 Surface {
     id: panel
-    // A pane beside the conversation; a card when it floats over a narrow window.
+    // A card beside the conversation, in its ground; over a narrow window it
+    // floats and takes a floating surface's outline.
     property bool floating: false
     color: Theme.surface
-    border.width: floating ? 1 : 0
+    border.width: floating || Theme.highContrast ? 1 : 0
     border.color: Theme.borderStrong
-    radius: floating ? Theme.radius : Theme.workspaceRadius
+    radius: Theme.radius
     required property var backend
     property var views: []
     property int currentView: 0
@@ -46,10 +47,11 @@ Surface {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 16
-        spacing: Theme.spaceMedium
+        anchors.margins: Theme.spaceMedium - Theme.spaceTiny
+        spacing: Theme.spaceMedium - Theme.spaceTiny
         RowLayout {
             Layout.fillWidth: true
+            spacing: 2
             TabBar {
                 id: viewTabs
                 Layout.fillWidth: true
@@ -58,38 +60,36 @@ Surface {
                 currentIndex: panel.currentView
                 onCurrentIndexChanged: if (currentIndex !== panel.currentView) panel.viewSelected(currentIndex)
                 background: null
+                spacing: 2
                 Repeater {
                     model: panel.views
                     delegate: TabButton {
                         required property var modelData
                         text: modelData.kind === "review" ? qsTr("Changes") : modelData.kind === "research" ? qsTr("Research") : modelData.kind === "evidence" ? qsTr("Evidence") : modelData.kind === "chat" ? qsTr("Chat") : modelData.kind === "files" ? qsTr("Files") : modelData.kind === "progress" ? qsTr("Progress") : qsTr("Memory")
                         id: tab
+                        // The window owns the view that shows, so the tab
+                        // that reads as current is the one it names.
+                        readonly property bool current: TabBar.index === panel.currentView
                         // As wide as its name, so no language cuts it off;
                         // the bar scrolls when the names outgrow it.
                         width: implicitWidth
-                        implicitWidth: Math.max(56, contentItem.implicitWidth + 20)
-                        implicitHeight: 30
+                        implicitWidth: Math.max(48, contentItem.implicitWidth + 20)
+                        implicitHeight: Theme.rowHeight - 2
                         font.pointSize: Theme.smallPointSize
                         contentItem: Text {
                             text: parent.text
-                            color: tab.checked ? Theme.text : Theme.secondary
+                            color: tab.current ? Theme.rowSelectedText : Theme.secondary
                             font: parent.font
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                         }
-                        // Selected tab: accent underline; hover: soft fill. No boxed outline.
-                        background: Item {
-                            Rectangle {
-                                anchors.fill: parent; anchors.bottomMargin: 3
-                                radius: Theme.toolRadius
-                                color: tab.hovered && !tab.checked ? Theme.hover : "transparent"
-                            }
-                            Rectangle {
-                                visible: tab.checked
-                                anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom
-                                width: parent.width - 20; height: 2; radius: 1
-                                color: Theme.accent
-                            }
+                        // The view that shows carries the quiet fill of a
+                        // row that is on; the accent stays on the main button.
+                        background: Rectangle {
+                            radius: Theme.toolRadius
+                            color: tab.current ? Theme.rowSelected : tab.hovered ? Theme.hover : "transparent"
+                            border.width: tab.visualFocus || (Theme.highContrast && (tab.current || tab.hovered)) ? 1 : 0
+                            border.color: tab.visualFocus ? Theme.focusBorder : Theme.toolHoverBorder
                         }
                         ThemedToolTip { visible: tab.hovered; text: panel.viewTitle(modelData) }
                     }

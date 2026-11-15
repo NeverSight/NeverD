@@ -164,28 +164,8 @@
 <context>
     <name>Conversation</name>
     <message>
-        <source>Research workspace</source>
-        <translation>연구 작업 공간</translation>
-    </message>
-    <message>
         <source>Project file preview</source>
         <translation>프로젝트 파일 미리 보기</translation>
-    </message>
-    <message>
-        <source>Project conversation  /  Analysis objects: %1</source>
-        <translation>프로젝트 대화  /  분석 대상: %1</translation>
-    </message>
-    <message>
-        <source>Organize objects, connect leads, keep evidence</source>
-        <translation>대상 정리, 단서 연결, 증거 보관</translation>
-    </message>
-    <message>
-        <source>Goal</source>
-        <translation>목표</translation>
-    </message>
-    <message>
-        <source>Set a persistent goal…</source>
-        <translation>지속 목표 설정…</translation>
     </message>
     <message>
         <source>Add analysis object…</source>
@@ -576,14 +556,6 @@ Analysis revision %3 · %4</source>
 <context>
     <name>Main</name>
     <message>
-        <source>Research workspace</source>
-        <translation>연구 작업 공간</translation>
-    </message>
-    <message>
-        <source>Settings…</source>
-        <translation>설정…</translation>
-    </message>
-    <message>
         <source>Side chat · Approval request pending</source>
         <translation>사이드 채팅 · 승인 요청 대기 중</translation>
     </message>
@@ -598,10 +570,6 @@ Analysis revision %3 · %4</source>
     <message>
         <source>Reading file fingerprints…</source>
         <translation>파일 지문을 읽는 중…</translation>
-    </message>
-    <message>
-        <source>Local workspace</source>
-        <translation>로컬 작업 공간</translation>
     </message>
     <message>
         <source>Open in the NeverD workbench</source>
@@ -826,6 +794,14 @@ Analysis revision %3 · %4</source>
     <message>
         <source>OK</source>
         <translation>확인</translation>
+    </message>
+    <message>
+        <source>Goal</source>
+        <translation>목표</translation>
+    </message>
+    <message>
+        <source>Set a persistent goal…</source>
+        <translation>지속 목표 설정…</translation>
     </message>
 </context>
 <context>

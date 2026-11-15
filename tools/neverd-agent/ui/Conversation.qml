@@ -21,73 +21,44 @@ Surface {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.topMargin: Theme.spaceLarge
-        anchors.bottomMargin: Theme.spaceMedium
-        anchors.leftMargin: Math.max(24, (parent.width - 800) / 2)
-        anchors.rightMargin: Math.max(24, (parent.width - 800) / 2)
-        spacing: Theme.spaceLarge
+        anchors.topMargin: Theme.spaceSmall
+        anchors.bottomMargin: Theme.spaceMedium - Theme.spaceTiny
+        // One reading column, in the middle of the pane.
+        anchors.leftMargin: Math.max(Theme.spaceLarge, (parent.width - Theme.readingWidth) / 2)
+        anchors.rightMargin: Math.max(Theme.spaceLarge, (parent.width - Theme.readingWidth) / 2)
+        spacing: Theme.spaceMedium
         RowLayout {
-            // Without a project, the empty state below says what this is.
-            visible: conversation.backend.activeId.length > 0 || conversation.backend.previewTitle.length > 0
+            // The window's top strip names the project; a file being read
+            // names itself here, with the ways back.
+            visible: conversation.backend.previewTitle.length > 0
             Layout.fillWidth: true
+            spacing: Theme.spaceSmall
             ColumnLayout {
                 Layout.fillWidth: true
-                spacing: 5
+                spacing: 2
                 Label {
-                    text: conversation.backend.previewTitle.length > 0
-                          ? conversation.backend.previewTitle
-                          : conversation.backend.activeProject.name || qsTr("Research workspace")
+                    text: conversation.backend.previewTitle
+                    textFormat: Text.PlainText
                     color: Theme.text
                     font.weight: Font.Medium
-                    font.pointSize: Theme.bodyPointSize + 2
+                    font.pointSize: Theme.titlePointSize
                     Layout.fillWidth: true
                     elide: Text.ElideMiddle
                 }
                 Label {
-                    text: conversation.backend.previewTitle.length > 0 ? qsTr("Project file preview")
-                          : conversation.backend.activeId ? qsTr("Project conversation  /  Analysis objects: %1").arg((conversation.backend.activeProject.objects || []).length)
-                          : qsTr("Organize objects, connect leads, keep evidence")
+                    text: qsTr("Project file preview")
                     color: Theme.quiet
                     font.pointSize: Theme.smallPointSize
                 }
             }
             ActionButton {
-                visible: conversation.backend.activeId.length > 0 && conversation.backend.previewTitle.length === 0
-                text: conversation.width >= 660 ? qsTr("Goal") : ""
-                glyph: "bookmark"
-                hint: qsTr("Set a persistent goal…")
-                checked: conversation.backend.goal.status === "active"
-                onClicked: conversation.goalRequested()
-            }
-            ActionButton {
-                visible: conversation.backend.activeId.length > 0 && conversation.backend.previewTitle.length === 0
-                glyph: "file_load"
-                hint: qsTr("Add analysis object…")
-                onClicked: conversation.addObjectRequested()
-            }
-            ActionButton {
-                visible: conversation.backend.activeId.length > 0 && conversation.backend.previewTitle.length === 0
-                glyph: "folder"
-                hint: qsTr("Project files")
-                onClicked: conversation.filesRequested()
-            }
-            ActionButton {
-                visible: conversation.backend.previewTitle.length > 0
                 text: qsTr("Attach file")
                 onClicked: conversation.backend.attachPreview()
             }
             ActionButton {
-                visible: conversation.backend.previewTitle.length > 0
                 text: qsTr("Back to conversation")
                 onClicked: conversation.backend.closePreview()
             }
-        }
-        Rectangle {
-            visible: conversation.backend.activeId.length > 0
-            Layout.fillWidth: true
-            Layout.preferredHeight: 1
-            Layout.topMargin: -Theme.spaceSmall
-            color: Theme.border
         }
         GoalStrip {
             visible: !!conversation.backend.goal.id && conversation.backend.previewTitle.length === 0
@@ -115,21 +86,28 @@ Surface {
             visible: conversation.backend.previewTitle.length === 0 && conversation.backend.messages.length === 0
             Layout.fillWidth: true
             Layout.fillHeight: true
-            // On the conversation's left edge, as the header and messages
-            // are, a little above the middle.
+            // What the window is for, in its one large line, in the middle
+            // of the pane and a little above it.
             ColumnLayout {
-                anchors.left: parent.left
+                anchors.horizontalCenter: parent.horizontalCenter
                 anchors.verticalCenter: parent.verticalCenter
-                anchors.verticalCenterOffset: -parent.height / 10
-                width: Math.min(parent.width, 560)
-                spacing: 12
+                anchors.verticalCenterOffset: -parent.height / 12
+                width: Math.min(parent.width, 600)
+                spacing: Theme.spaceMedium - Theme.spaceTiny
+                Image {
+                    visible: !conversation.backend.activeId
+                    source: "qrc:/agent/icons/brand.svg"
+                    sourceSize: Qt.size(48, 48)
+                    Layout.preferredWidth: 48
+                    Layout.preferredHeight: 48
+                    Layout.alignment: Qt.AlignHCenter
+                    Layout.bottomMargin: Theme.spaceSmall
+                }
                 Label {
                     text: conversation.backend.activeId ? qsTr("Bring your leads together here") : qsTr("Your next research project starts here")
                     color: Theme.text
-                    // The workbench's start page sets its empty-state line a
-                    // quarter above its text.
-                    font.pointSize: Theme.bodyPointSize * 1.25
-                    font.weight: Font.Medium
+                    font.pointSize: Theme.heroPointSize
+                    horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.Wrap
                     Layout.fillWidth: true
                 }
@@ -139,20 +117,25 @@ Surface {
                           : qsTr("One project, one working directory. Keep related analysis objects together and leave a research log you can build on.")
                     color: Theme.secondary
                     font.pointSize: Theme.bodyPointSize
+                    horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.Wrap
                     Layout.fillWidth: true
+                    Layout.maximumWidth: 480
+                    Layout.alignment: Qt.AlignHCenter
                 }
                 RowLayout {
-                    spacing: 10
-                    Layout.topMargin: 6
+                    spacing: Theme.spaceSmall
+                    Layout.topMargin: Theme.spaceSmall
+                    Layout.alignment: Qt.AlignHCenter
                     ActionButton {
-                        primary: true
+                        // The window's main button until it has something
+                        // to send: then the composer's is.
+                        primary: !conversation.backend.activeId || (conversation.backend.activeProject.objects || []).length === 0
                         text: conversation.backend.activeId ? qsTr("Add analysis object…") : qsTr("New project")
                         onClicked: conversation.backend.activeId ? conversation.addObjectRequested() : conversation.createRequested()
                     }
                     ActionButton {
                         text: conversation.backend.activeId ? qsTr("Project files") : qsTr("Open project…")
-                        glyph: "open"
                         onClicked: conversation.backend.activeId ? conversation.filesRequested() : conversation.openRequested()
                     }
                 }
@@ -183,36 +166,50 @@ Surface {
         ObjectApprovalCard {
             visible: conversation.approvalVisible
             Layout.fillWidth: true
-            Layout.bottomMargin: Theme.spaceSmall - Theme.spaceLarge
+            Layout.bottomMargin: Theme.spaceSmall - Theme.spaceMedium
             request: conversation.objectApproval
             onDecision: (id, allow) => conversation.backend.resolveAnalysisObjectApproval(id, allow)
         }
-        Surface {
+        Rectangle {
+            id: composerBox
             visible: conversation.backend.activeId.length > 0 && conversation.backend.previewTitle.length === 0
             Layout.fillWidth: true
-            Layout.preferredHeight: 104
-            color: Theme.composerTint
-            border.color: composer.activeFocus ? Theme.focusBorder : Theme.inputBorder
-            radius: Theme.radius
+            implicitHeight: composerColumn.implicitHeight + 2 * composerColumn.anchors.margins
+            // The window's main object: a floating surface's fill and
+            // outline, the focus color's outline while it is typed in.
+            color: Theme.menu
+            radius: Theme.largeRadius
             border.width: 1
+            border.color: composer.activeFocus ? Theme.focusBorder : Theme.borderStrong
+            antialiasing: true
             Behavior on border.color { ColorAnimation { duration: 140 } }
             ColumnLayout {
+                id: composerColumn
                 anchors.fill: parent
-                anchors.margins: Theme.spaceMedium
+                anchors.margins: 12
                 spacing: Theme.spaceSmall
                 ScrollView {
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
+                    // Two lines to begin with, eight before it scrolls, by
+                    // the lines as they are laid out: a line of mixed
+                    // scripts is taller than the font's.
+                    Layout.preferredHeight: Math.min(Math.max(composer.implicitHeight, Math.ceil(composer.linePitch * 2) + 8),
+                                                     Math.ceil(composer.linePitch * 8) + 8)
                     clip: true
                     ChatComposer {
                         id: composer
                         objectName: "requestComposer"
+                        readonly property real linePitch: contentHeight / Math.max(1, lineCount)
                         placeholderText: qsTr("Describe a question, or follow a lead…")
                         placeholderTextColor: Theme.quiet
                         color: Theme.text
                         selectByMouse: true
                         wrapMode: TextEdit.Wrap
                         font.pointSize: Theme.basePointSize
+                        topPadding: 4
+                        bottomPadding: 4
+                        leftPadding: 6
+                        rightPadding: 6
                         background: null
                         onTextChanged: {
                             conversation.backend.setDraft(text)
@@ -230,6 +227,7 @@ Surface {
                     ActionButton { glyph: "plus"; hint: qsTr("Add context… · @"); onClicked: conversation.contextRequested() }
                     ChoiceField {
                         id: scope
+                        quiet: true
                         // As wide as the chosen scope's name, so a longer
                         // language does not cut it, within a third of the row.
                         TextMetrics { id: scopeText; font: scope.font; text: scope.displayText }
@@ -243,15 +241,13 @@ Surface {
                         palette.buttonText: Theme.text
                         palette.button: Theme.raised
                         palette.base: Theme.raised
-                        font.pointSize: Theme.smallPointSize
                         Accessible.name: qsTr("Analysis scope for this request")
                     }
                     ActionButton {
                         text: conversation.width >= 660 ? (conversation.backend.modelConfigured ? conversation.backend.modelSettings.model : qsTr("Configure model…")) : ""
                         glyph: "options"
                         hint: qsTr("Model settings… · %1").arg(conversation.backend.modelSettings.model || qsTr("Not configured"))
-                        Layout.maximumWidth: 180
-                        font.pointSize: Theme.smallPointSize
+                        Layout.maximumWidth: 200
                         onClicked: conversation.modelSettingsRequested()
                     }
                     Item { Layout.fillWidth: true }
@@ -265,6 +261,7 @@ Surface {
                         glyph: conversation.backend.running ? "clock" : "send"
                         hint: conversation.backend.running ? qsTr("Queue for the next round · Enter") : qsTr("Send · Enter")
                         primary: true
+                        round: true
                         enabled: composer.canSubmit
                         onClicked: composer.submitRequested()
                     }
@@ -287,6 +284,9 @@ Surface {
             // Hints for the composer, which a project shows.
             visible: conversation.backend.activeId.length > 0 && conversation.backend.previewTitle.length === 0
             Layout.fillWidth: true
+            Layout.leftMargin: Theme.spaceMedium - Theme.spaceTiny
+            Layout.rightMargin: Theme.spaceMedium - Theme.spaceTiny
+            Layout.topMargin: -Theme.spaceSmall
             Label {
                 id: composerStatus
                 text: conversation.approvalVisible ? qsTr("Waiting for approval")

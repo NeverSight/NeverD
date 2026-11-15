@@ -9,10 +9,10 @@ Dialog {
     property bool side: false
     parent: Overlay.overlay; anchors.centerIn: parent
     width: Math.min(560, parent.width - 48)
-    modal: true; padding: 18
+    modal: true; padding: Theme.dialogPadding; topPadding: Theme.spaceSmall
     Overlay.modal: ModalDim {}
     background: Surface { glass: true }
-    header: Label { text: qsTr("Add analysis context"); color: Theme.text; padding: 18; font.pointSize: Theme.bodyPointSize; font.weight: Font.Medium }
+    header: Label { text: qsTr("Add analysis context"); color: Theme.text; padding: Theme.dialogPadding; bottomPadding: Theme.spaceSmall; font.pointSize: Theme.titlePointSize; font.weight: Font.Medium }
     contentItem: ColumnLayout {
         spacing: 12
         Label { text: qsTr("Reference an object, function or address in the current project. You can review and remove references before sending."); color: Theme.secondary; wrapMode: Text.Wrap; Layout.fillWidth: true }

@@ -2,16 +2,16 @@ import QtQuick
 import QtQuick.Controls.Basic
 import NeverD.Agent
 
-// The workbench's check box: a 14-pixel box 6 from its label, the main
-// button's blue with a white mark while checked.
+// A check box: a 16-pixel box 8 from its label, the main button's blue with
+// a white mark while checked.
 CheckBox {
     id: control
-    spacing: 6
+    spacing: 8
     padding: 2
     indicator: Rectangle {
         x: control.leftPadding
         y: Math.round((control.height - height) / 2)
-        width: 14; height: 14; radius: Theme.toolRadius
+        width: 16; height: 16; radius: Theme.checkRadius
         color: control.checked ? Theme.checkBoxChecked : Theme.checkBox
         border.width: 1
         border.color: control.visualFocus ? Theme.focusBorder

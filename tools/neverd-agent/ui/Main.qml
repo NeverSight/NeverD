@@ -49,6 +49,7 @@ ApplicationWindow {
 
     function popupAt(menu, origin) {
         const point = origin.mapToItem(Overlay.overlay, 0, origin.height)
+        menu.fit()
         menu.x = Math.min(point.x, window.width - menu.width - 12)
         menu.y = point.y
         menu.open()
@@ -97,6 +98,7 @@ ApplicationWindow {
         if (!backend.selectProject(projectId)) return
         menuObject = objectId
         if (objectId) backend.selectObject(objectId)
+        contextMenu.fit()
         contextMenu.x = Math.min(point.x, window.width - contextMenu.width - 12)
         contextMenu.y = point.y
         contextMenu.open()
@@ -153,133 +155,166 @@ ApplicationWindow {
         anchors.fill: shell
         cornerRadius: 0
     }
-    ColumnLayout {
+    // Two columns: the side list, and the conversation under the strip that
+    // carries the project's name, its commands and the window's controls.
+    RowLayout {
         anchors.fill: shell
         spacing: 0
         enabled: !startupError
-        Rectangle {
-            id: titleBar
-            Layout.fillWidth: true
-            Layout.preferredHeight: windowFrame.titleHeight
-            color: Theme.titleBar
-            MouseArea {
-                anchors.fill: parent
-                property point pressAt
-                property bool moving: false
-                onPressed: mouse => { pressAt = Qt.point(mouse.x, mouse.y); moving = false }
-                onPositionChanged: mouse => {
-                    if (pressed && !moving && Math.abs(mouse.x - pressAt.x) + Math.abs(mouse.y - pressAt.y) >= windowFrame.dragDistance) {
-                        moving = true
-                        windowFrame.startMove()
-                    }
-                }
-                onDoubleClicked: windowFrame.toggleMaximized()
-            }
-            RowLayout {
-                anchors.left: parent.left
-                anchors.leftMargin: 13
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: 9
-                Image { source: "qrc:/agent/icons/brand.svg"; sourceSize: Qt.size(20, 20); Layout.preferredWidth: 20; Layout.preferredHeight: 20 }
-                Label { text: "NeverD Agent"; color: window.active ? Theme.titleText : Theme.titleInactiveText; font.pointSize: Theme.smallPointSize }
-            }
-            Label {
-                anchors.centerIn: parent
-                width: Math.min(parent.width * 0.35, 420)
-                horizontalAlignment: Text.AlignHCenter
-                text: backend.activeProject.name || qsTr("Research workspace")
-                color: window.active ? Theme.titleText : Theme.titleInactiveText
-                font.pointSize: Theme.smallPointSize
-                elide: Text.ElideRight
-            }
-            RowLayout {
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                spacing: 0
-                ActionButton { glyph: "options"; hint: qsTr("Settings…"); onClicked: window.showSettings(); implicitHeight: 28 }
-                ActionButton {
-                    glyph: "comment"
-                    readonly property bool waiting: backend.analysisObjectApprovals.some(request =>
-                        request.projectId === backend.activeId && !!request.sideChatId)
-                    hint: waiting ? qsTr("Side chat · Approval request pending") : qsTr("Side chat")
-                    enabled: backend.activeId.length > 0; implicitHeight: 28
-                    onClicked: window.openSide("chat", "")
-                    Rectangle {
-                        visible: parent.waiting
-                        anchors.right: parent.right; anchors.top: parent.top
-                        anchors.margins: 4
-                        width: 6; height: 6; radius: 3; color: Theme.accent
-                    }
-                }
-                ActionButton {
-                    id: panelToggle
-                    glyph: "subviews"
-                    hint: qsTr("Show or hide the sidebar · %1").arg(backend.shortcutText("Ctrl+B"))
-                    checked: window.sideOpen
-                    enabled: backend.activeId.length > 0
-                    implicitHeight: 28
-                    Layout.rightMargin: 12
-                    onClicked: {
-                        if (window.sideOpen) window.sideOpen = false
-                        else if (window.sideViews.length) window.sideOpen = true
-                        else window.popupAt(viewMenu, this)
-                    }
-                }
-                WindowControl { kind: "minimize"; frame: windowFrame; appWindow: window }
-                WindowControl { kind: "maximize"; frame: windowFrame; appWindow: window }
-                WindowControl { kind: "close"; frame: windowFrame; appWindow: window }
-            }
+        ProjectSidebar {
+            Layout.preferredWidth: window.width < 1100 ? Theme.sidebarNarrowWidth : Theme.sidebarWidth
+            Layout.fillHeight: true
+            backend: controller
+            windowActive: window.active
+            onCreateRequested: createDialog.open()
+            onOpenRequested: openProjectDialog.open()
+            onSettingsRequested: window.showSettings()
+            onMenuRequested: (projectId, objectId, origin) => window.showContext(projectId, objectId, origin)
         }
-        RowLayout {
+        Rectangle { visible: Theme.highContrast; Layout.fillHeight: true; Layout.preferredWidth: 1; color: Theme.paneLine }
+        Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: 0
-            ProjectSidebar {
-                Layout.preferredWidth: window.width < 1100 ? 214 : 264
-                Layout.fillHeight: true
-                backend: controller
-                onCreateRequested: createDialog.open()
-                onOpenRequested: openProjectDialog.open()
-                onSettingsRequested: window.showSettings()
-                onMenuRequested: (projectId, objectId, origin) => window.showContext(projectId, objectId, origin)
-            }
-            Rectangle { Layout.fillHeight: true; Layout.preferredWidth: 1; color: Theme.border }
-            Conversation {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                backend: controller
-                onCreateRequested: createDialog.open()
-                onOpenRequested: openProjectDialog.open()
-                onAddObjectRequested: objectFileDialog.open()
-                onFilesRequested: window.openSide("files", "")
-                onModelSettingsRequested: window.showModelSettings()
-                onGoalRequested: goalEditor.open()
-                onContextRequested: window.showContextPicker(false)
-            }
-            Rectangle { visible: sideSlot.visible; Layout.fillHeight: true; Layout.preferredWidth: 1; color: Theme.border }
-            Item {
-                id: sideSlot
-                visible: window.sideOpen && window.width >= 1100
-                Layout.preferredWidth: window.sideViews[window.sideIndex] && ["evidence", "review", "research"].includes(window.sideViews[window.sideIndex].kind) ? 520 : window.sideViews[window.sideIndex] && window.sideViews[window.sideIndex].kind === "chat" ? 380 : 324
-                Layout.fillHeight: true
-            }
-        }
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: Math.max(22, statusText.implicitHeight + 4)
-            color: Theme.statusBar
-            Rectangle { anchors.left: parent.left; anchors.right: parent.right; height: 1; color: Theme.statusBarBorder }
-            Label {
-                id: statusText
+            color: Theme.content
+            ColumnLayout {
                 anchors.fill: parent
-                anchors.leftMargin: 8
-                anchors.rightMargin: 8
-                text: backend.busy ? qsTr("Reading file fingerprints…") : window.noticeText || qsTr("Local workspace")
-                color: Theme.statusBarText
-                verticalAlignment: Text.AlignVCenter
-                elide: Text.ElideRight
-                Accessible.name: text
+                spacing: 0
+                Item {
+                    id: titleBar
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Theme.topBarHeight
+                    WindowDrag { anchors.fill: parent }
+                    Label {
+                        anchors.left: parent.left
+                        anchors.leftMargin: Theme.spaceLarge
+                        anchors.right: titleActions.left
+                        anchors.rightMargin: Theme.spaceMedium
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: backend.activeProject.name || ""
+                        color: window.active ? Theme.titleText : Theme.titleInactiveText
+                        font.weight: Font.Medium
+                        elide: Text.ElideRight
+                    }
+                    RowLayout {
+                        id: titleActions
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        spacing: 2
+                        readonly property bool inProject: backend.activeId.length > 0 && backend.previewTitle.length === 0
+                        ActionButton {
+                            visible: titleActions.inProject
+                            text: window.width >= 1000 ? qsTr("Goal") : ""
+                            glyph: "bookmark"
+                            hint: qsTr("Set a persistent goal…")
+                            checked: backend.goal.status === "active"
+                            onClicked: goalEditor.open()
+                        }
+                        ActionButton {
+                            visible: titleActions.inProject
+                            glyph: "file_load"
+                            hint: qsTr("Add analysis object…")
+                            onClicked: objectFileDialog.open()
+                        }
+                        ActionButton {
+                            visible: titleActions.inProject
+                            glyph: "folder"
+                            hint: qsTr("Project files")
+                            onClicked: window.openSide("files", "")
+                        }
+                        ActionButton {
+                            glyph: "comment"
+                            readonly property bool waiting: backend.analysisObjectApprovals.some(request =>
+                                request.projectId === backend.activeId && !!request.sideChatId)
+                            hint: waiting ? qsTr("Side chat · Approval request pending") : qsTr("Side chat")
+                            visible: backend.activeId.length > 0
+                            onClicked: window.openSide("chat", "")
+                            Rectangle {
+                                visible: parent.waiting
+                                anchors.right: parent.right; anchors.top: parent.top
+                                anchors.margins: 5
+                                width: 6; height: 6; radius: 3; color: Theme.accent
+                            }
+                        }
+                        ActionButton {
+                            id: panelToggle
+                            glyph: "subviews"
+                            hint: qsTr("Show or hide the sidebar · %1").arg(backend.shortcutText("Ctrl+B"))
+                            checked: window.sideOpen
+                            visible: backend.activeId.length > 0
+                            Layout.rightMargin: Theme.spaceSmall
+                            onClicked: {
+                                if (window.sideOpen) window.sideOpen = false
+                                else if (window.sideViews.length) window.sideOpen = true
+                                else window.popupAt(viewMenu, this)
+                            }
+                        }
+                        WindowControl { kind: "minimize"; frame: windowFrame; appWindow: window; Layout.fillHeight: true }
+                        WindowControl { kind: "maximize"; frame: windowFrame; appWindow: window; Layout.fillHeight: true }
+                        WindowControl { kind: "close"; frame: windowFrame; appWindow: window; Layout.fillHeight: true }
+                    }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    spacing: 0
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Conversation {
+                            anchors.fill: parent
+                            backend: controller
+                            onCreateRequested: createDialog.open()
+                            onOpenRequested: openProjectDialog.open()
+                            onAddObjectRequested: objectFileDialog.open()
+                            onFilesRequested: window.openSide("files", "")
+                            onModelSettingsRequested: window.showModelSettings()
+                            onGoalRequested: goalEditor.open()
+                            onContextRequested: window.showContextPicker(false)
+                        }
+                        // What the application reports while it works, and
+                        // what an action just did: a note that leaves again.
+                        Rectangle {
+                            id: notice
+                            readonly property string message: backend.busy ? qsTr("Reading file fingerprints…") : window.noticeText
+                            visible: message.length > 0
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            anchors.top: parent.top
+                            anchors.topMargin: Theme.spaceSmall
+                            width: Math.min(parent.width - 2 * Theme.spaceLarge, noticeLabel.implicitWidth + 2 * Theme.spaceMedium)
+                            height: Theme.controlHeight
+                            radius: height / 2
+                            color: Theme.menu
+                            border.width: 1
+                            border.color: Theme.borderStrong
+                            Label {
+                                id: noticeLabel
+                                anchors.fill: parent
+                                anchors.leftMargin: Theme.spaceMedium
+                                anchors.rightMargin: Theme.spaceMedium
+                                text: notice.message
+                                color: Theme.menuText
+                                font.pointSize: Theme.smallPointSize
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                                elide: Text.ElideRight
+                                Accessible.role: Accessible.StatusBar
+                                Accessible.name: text
+                            }
+                            Timer {
+                                id: noticeTimer
+                                interval: 6000
+                                onTriggered: window.noticeText = ""
+                            }
+                        }
+                    }
+                    Item {
+                        id: sideSlot
+                        visible: window.sideOpen && window.width >= 1100
+                        Layout.preferredWidth: (window.sideViews[window.sideIndex] && ["evidence", "review", "research"].includes(window.sideViews[window.sideIndex].kind) ? 520 : window.sideViews[window.sideIndex] && window.sideViews[window.sideIndex].kind === "chat" ? 380 : 324) + Theme.spaceSmall
+                        Layout.fillHeight: true
+                    }
+                }
             }
         }
     }
@@ -288,10 +323,10 @@ ApplicationWindow {
         visible: window.sideOpen
         floating: window.width < 1100
         parent: window.width >= 1100 ? sideSlot : Overlay.overlay
-        width: window.width >= 1100 ? parent.width : Math.min(350, window.width - 32)
-        height: window.width >= 1100 ? parent.height : window.height - 84
-        x: window.width >= 1100 ? 0 : window.width - width - 10
-        y: window.width >= 1100 ? 0 : windowFrame.shadowMargin + windowFrame.titleHeight + 8
+        width: window.width >= 1100 ? parent.width - Theme.spaceSmall : Math.min(350, window.width - 32)
+        height: window.width >= 1100 ? parent.height - Theme.spaceSmall : window.height - Theme.topBarHeight - 2 * windowFrame.shadowMargin - 16
+        x: window.width >= 1100 ? 0 : window.width - width - windowFrame.shadowMargin - 10
+        y: window.width >= 1100 ? 0 : windowFrame.shadowMargin + Theme.topBarHeight + 8
         backend: controller
         views: window.sideViews
         onContextRequested: window.showContextPicker(true)
@@ -322,7 +357,6 @@ ApplicationWindow {
     readonly property var backend: controller
     ThemedMenu {
         id: contextMenu
-        width: 230
         ThemedMenuItem { text: qsTr("Open in the NeverD workbench"); visible: window.menuObject.length > 0; onTriggered: backend.openInGui(window.menuObject) }
         ThemedMenuItem {
             text: qsTr("Relocate file…")
@@ -342,7 +376,6 @@ ApplicationWindow {
     }
     ThemedMenu {
         id: viewMenu
-        width: 200
         ThemedMenuItem { text: qsTr("Project files"); onTriggered: window.openSide("files", "") }
         ThemedMenuItem { text: qsTr("Side chat"); onTriggered: window.openSide("chat", "") }
         ThemedMenuItem { text: qsTr("Analysis progress"); onTriggered: window.openSide("progress", backend.selectedObjectId) }
@@ -398,16 +431,17 @@ ApplicationWindow {
         parent: Overlay.overlay
         width: Math.min(560, window.width - 48)
         modal: true
-        padding: 18
+        padding: Theme.dialogPadding
+        topPadding: Theme.spaceMedium
         closePolicy: Popup.CloseOnEscape
         Overlay.modal: ModalDim {}
         background: Surface { glass: true; radius: Theme.radius; color: Theme.background }
         header: Label {
             text: parent.title
             color: Theme.text
-            font.pointSize: Theme.bodyPointSize
+            font.pointSize: Theme.titlePointSize
             font.weight: Font.Medium
-            padding: 18
+            padding: Theme.dialogPadding
             bottomPadding: 0
         }
     }
@@ -468,11 +502,11 @@ ApplicationWindow {
             }
             RowLayout {
                 Layout.fillWidth: true
-                Label { text: qsTr("Analysis objects added by AI"); color: Theme.secondary; Layout.fillWidth: true }
+                Label { text: qsTr("Analysis objects added by AI"); color: Theme.secondary; wrapMode: Text.Wrap; Layout.fillWidth: true }
                 ChoiceField {
                     id: objectApprovalMode
                     model: [qsTr("Require approval each time"), qsTr("Allow automatically")]
-                    Layout.preferredWidth: 180
+                    Layout.preferredWidth: Math.min(fittingWidth, settingsDialog.availableWidth * 0.6)
                     Accessible.name: qsTr("Analysis objects added by AI")
                 }
             }
@@ -582,7 +616,7 @@ ApplicationWindow {
         target: backend
         function onEvidenceOpened(id, title) { window.showEvidence(id, title) }
         function onSideChatOpened() { window.openSide("chat", "") }
-        function onNotice(message) { window.noticeText = message }
+        function onNotice(message) { window.noticeText = message; noticeTimer.restart() }
         function onOperationError(message) { failureText.text = message; failureDialog.open() }
         function onWorkspaceChanged() {
             if (window.lastProject !== backend.activeId) {

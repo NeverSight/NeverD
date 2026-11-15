@@ -164,28 +164,8 @@
 <context>
     <name>Conversation</name>
     <message>
-        <source>Research workspace</source>
-        <translation>調査ワークスペース</translation>
-    </message>
-    <message>
         <source>Project file preview</source>
         <translation>プロジェクトファイルのプレビュー</translation>
-    </message>
-    <message>
-        <source>Project conversation  /  Analysis objects: %1</source>
-        <translation>プロジェクトの会話  /  解析対象：%1</translation>
-    </message>
-    <message>
-        <source>Organize objects, connect leads, keep evidence</source>
-        <translation>解析対象を整理し、手がかりをつなぎ、証拠を残す</translation>
-    </message>
-    <message>
-        <source>Goal</source>
-        <translation>目標</translation>
-    </message>
-    <message>
-        <source>Set a persistent goal…</source>
-        <translation>継続目標を設定…</translation>
     </message>
     <message>
         <source>Add analysis object…</source>
@@ -576,14 +556,6 @@ Analysis revision %3 · %4</source>
 <context>
     <name>Main</name>
     <message>
-        <source>Research workspace</source>
-        <translation>調査ワークスペース</translation>
-    </message>
-    <message>
-        <source>Settings…</source>
-        <translation>設定…</translation>
-    </message>
-    <message>
         <source>Side chat · Approval request pending</source>
         <translation>サイドチャット · 承認待ちのリクエストあり</translation>
     </message>
@@ -598,10 +570,6 @@ Analysis revision %3 · %4</source>
     <message>
         <source>Reading file fingerprints…</source>
         <translation>ファイルのフィンガープリントを読み取り中…</translation>
-    </message>
-    <message>
-        <source>Local workspace</source>
-        <translation>ローカルワークスペース</translation>
     </message>
     <message>
         <source>Open in the NeverD workbench</source>
@@ -826,6 +794,14 @@ Analysis revision %3 · %4</source>
     <message>
         <source>OK</source>
         <translation>OK</translation>
+    </message>
+    <message>
+        <source>Goal</source>
+        <translation>目標</translation>
+    </message>
+    <message>
+        <source>Set a persistent goal…</source>
+        <translation>継続目標を設定…</translation>
     </message>
 </context>
 <context>
