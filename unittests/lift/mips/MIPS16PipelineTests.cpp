@@ -13,10 +13,12 @@
 
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/debug/DebugContext.h"
 #include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
@@ -28,6 +30,37 @@ using namespace neverd;
 namespace {
 
 class MIPS16Pipeline : public ::testing::TestWithParam<Arch> {};
+
+TEST(MIPS16PipelineSource, SelectedClassicCallerRetainsCompressedDeclaration) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("mixed", Context);
+  llvm::IRBuilder<> IR(Context);
+  auto *Type = llvm::FunctionType::get(IR.getInt32Ty(), false);
+  auto *Compressed = llvm::Function::Create(
+      Type, llvm::Function::ExternalLinkage, "compressed_target", Module);
+  mips::applyInstructionModeLLVMAttributes(*Compressed,
+                                           InstructionMode::MIPS16);
+  IR.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Compressed));
+  IR.CreateRet(IR.getInt32(7));
+  CEmitterOptions Options;
+  Options.TheArch = Arch::MIPS32;
+  Options.Format = BinaryFormat::ELF;
+  for (bool CallsCompressed : {false, true}) {
+    auto *Classic = llvm::Function::Create(
+        Type, llvm::Function::ExternalLinkage,
+        CallsCompressed ? "calls_compressed" : "leaf", Module);
+    IR.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Classic));
+    IR.CreateRet(CallsCompressed ? IR.CreateCall(Compressed)
+                                 : static_cast<llvm::Value *>(IR.getInt32(42)));
+    std::string Text;
+    llvm::raw_string_ostream Out(Text);
+    ASSERT_TRUE(
+        LLVMCEmitter().emit(Module, Out, Options, nullptr, nullptr, Classic));
+    EXPECT_EQ(Text.find(mips::MIPS16ModeCPrelude) != std::string::npos,
+              CallsCompressed)
+        << Text;
+  }
+}
 
 TEST_P(MIPS16Pipeline, DeclaredGPRFloatKeepsItsIntegerBitUse) {
   for (bool Compressed : {false, true}) {

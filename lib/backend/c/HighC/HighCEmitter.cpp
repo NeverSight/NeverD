@@ -1788,6 +1788,7 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
   const bool HasMicroModes = isMIPS(Opts.TheArch) && Opts.Image &&
                              hasCompressedMIPSCode(Opts.Image->Mode);
   bool NeedsMicroMode = false;
+  bool NeedsMIPS16Mode = false;
   bool NeedsBool = false;
   bool HasFloatingArithmetic = false;
   bool NeedsAArch64RawCall = false;
@@ -1840,9 +1841,11 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
       CheckExpr(Operand);
   };
   for (const auto &Function : Funcs) {
-    if (HasMicroModes && !NeedsMicroMode)
-      NeedsMicroMode = Opts.Image->instructionModeAt(Function.Entry) ==
-                       InstructionMode::MicroMIPS;
+    if (HasMicroModes) {
+      const auto Mode = Opts.Image->instructionModeAt(Function.Entry);
+      NeedsMicroMode |= Mode == InstructionMode::MicroMIPS;
+      NeedsMIPS16Mode |= Mode == InstructionMode::MIPS16;
+    }
     CheckType(Function.ReturnType);
     for (const auto &Parameter : Function.Params)
       CheckType(Parameter.Type);
@@ -1867,6 +1870,8 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     c_float::writeContractionPolicy(OS);
   if (NeedsMicroMode)
     OS << mips::MicroModeCPrelude;
+  if (NeedsMIPS16Mode)
+    OS << mips::MIPS16ModeCPrelude;
   if (isMIPS(Opts.TheArch))
     OS << mips::BitCastCPrelude;
   if (Opts.TheArch == Arch::AArch64 && NeedsAArch64RawCall)

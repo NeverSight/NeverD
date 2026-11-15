@@ -564,6 +564,7 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
   std::string Rest;
   llvm::raw_string_ostream RestOS(Rest);
   UsesMicroMIPSAttribute = false;
+  UsesMIPS16Attribute = false;
   {
     RestoreOutput Restore{OS, &OS.stream()};
     OS.retarget(&RestOS);
@@ -571,6 +572,8 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
   }
   if (UsesMicroMIPSAttribute)
     OS << mips::MicroModeCPrelude;
+  if (UsesMIPS16Attribute)
+    OS << mips::MIPS16ModeCPrelude;
   std::string Records;
   {
     llvm::raw_string_ostream RecordsOS(Records);
@@ -2768,6 +2771,7 @@ static uint64_t argumentSlotBytes(const llvm::Function &Fn,
 const char *LLVMCWriter::mipsModeAttribute(const llvm::Function &Function) {
   const auto Mode = mips::instructionModeFromLLVM(Function);
   UsesMicroMIPSAttribute |= Mode == InstructionMode::MicroMIPS;
+  UsesMIPS16Attribute |= Mode == InstructionMode::MIPS16;
   return mips::instructionModeCAttribute(Mode);
 }
 
