@@ -1664,3 +1664,24 @@ on both ordinary and alternate stacks, for original and installed images at
 O0 and O2. This qualifies explicitly guarded points with a proved frame;
 it does not infer missing asynchronous lifetime information in arbitrary
 compiler output.
+
+
+Both native runners passed all 99 cases from
+`c316fe83a8d07880aa6c851274ae0be62a8ea8ff`. Each reported 220 executed
+original/published images, 39 independent system frameless steps, eight C++
+non-call cleanup deliveries and eight Objective-C non-call cleanup deliveries.
+The latter cover both optimization settings, both image forms and both stacks.
+Windows frontend checks passed. The independent LSDA fixture includes a
+no-handler entry for `_Unwind_Resume`; omitting it was reproduced as a
+second-phase termination in a local ordinary-arm64 control before correction.
+
+Local validation passed 99 publication cases and 26 recovery cases, with the
+four affected cleanup cases rerun after the fixture correction. The broader
+1084-case ABI/language selection passed 1036 cases and explicitly skipped 48,
+with no failures. All twelve changed source files passed clang-format 22.1.2,
+and the documentation inventory check passed. LLVM and r6 pins are unchanged.
+Both M1 runners still report native CPTA unavailable; PAuth_LR execution,
+arbitrary lifted-image contracts and missing asynchronous lifetime information
+remain unqualified.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43675185998)
+and [per-host verification record](evidence/arm64e-system-frames-and-noncall-2026-11-15.json).
