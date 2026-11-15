@@ -45,4 +45,8 @@ Section 1.9 of `SKILL.md` and the floating-panels and conversations items
 in its audit checklist are NeverD additions from the review of the NeverD
 Agent's workbench conversation on 2026-11-14 and 2026-11-15: where a
 floating panel opens, how it goes with the person into focus mode, and the
-conversation laid out as Visual Studio Code's chat view.
+conversation laid out as Visual Studio Code's chat view. The section's last
+rule and the conversation-windows item came on 2026-11-15 from reshaping the
+Agent's own window after OpenAI's Codex desktop application: the shapes of a
+window that holds a conversation, with the product's own colors. The profile's
+"The Agent's own window" section records NeverD's values.

@@ -1175,6 +1175,88 @@ the workbench.
   workbench's own settings, and read them again when the Agent window becomes
   active, so a choice made in the workbench is the Agent's too.
 
+### The Agent's own window
+
+The standalone Agent window was first shaped as the workbench is: a title
+band, panes parted by hairlines, corners of 2, 3 and 6, one text size, a
+status bar, and an empty state set at the left edge. On 2026-11-15 the user
+found that window not good-looking and asked for the design of OpenAI's Codex
+desktop application, in NeverD's colors. The workbench's shapes belong to a
+dense tool window; a window that holds a conversation takes these instead
+(`tools/neverd-agent/ui/Theme.qml`).
+
+- Take geometry, type and spacing from the reference and every color from a
+  role of `ChromeColors.def`. Codex's desktop stylesheet (version 26.928, the
+  rules for its Electron window) gave: a side list 275 wide (240 to 520), rows
+  30 high with 8 of padding at the sides and corners of 10, a title strip of
+  44, a reading column of 768, a composer and message bubbles with corners of
+  22, dialogs 12 and menus 16, composer buttons of 28, panel padding of 20,
+  text at 12, 13 and 14 pixels with a 28-pixel line on the start page, and
+  weights of 400, 500 and 600. None of its colors, glyphs, fonts or text is in
+  NeverD.
+- Set those on NeverD's own grid of 4: corners of 8 for rows, buttons, fields
+  and menu items, 12 for cards, menus and sheets, 20 for the composer and a
+  message; rows at least 30 high, push buttons and fields 2 more; a side list
+  of 272 (232 in a window under 1100 wide); a strip of 44; a reading column
+  of 768. Codex scales its corners by 1.25 where the browser draws them as
+  superellipses; Qt draws arcs of a circle, where 8 at 30 high reads as its
+  10 does.
+- Keep NeverD's order of surfaces. Codex's content is a card lighter than its
+  side list (5% of white over the window). NeverD's views (`Base`, #1E1E1E)
+  are darker than its chrome (`Window`, #252526), as an editor is beside its
+  side bar. The Agent keeps that: the side list and the right panel take
+  `Window`, the conversation `Base`. No literal or alpha mix copies the lift.
+- Part surfaces by their fills, and by lines only where the fills are one.
+  The hairlines between the side list, the conversation and the panel are
+  gone in the dark and light themes and drawn in the high contrast ones
+  (`Theme.paneLine`), where a message bubble and the panel's card are also
+  outlined.
+- Build the window as two columns, without a band across its top or a bar
+  along its foot. The side list runs the window's height and carries the
+  application's name on a strip that moves the window. The conversation's
+  strip carries the project's name, its commands and the window's controls.
+  A status bar that mostly said "Local workspace" is gone: what the
+  application reports shows as a note over the conversation for six seconds,
+  or for as long as it works.
+- Give the side list rows a list's behavior: the whole row answers the pointer
+  (`Hover`), and the one that is open carries `ToolBarHover`, a quiet gray, not
+  the selection blue. One row carries the fill: the open project's, until one
+  of its objects is chosen. A project's folder turns into the chevron that
+  folds it while the pointer or keyboard is on its row, and the row's menu
+  button shows then too. The same quiet fill marks a toggle that is on and the
+  panel's current tab, whose accent underline went. High contrast fills
+  nothing with `ToolBarHover`, so there these take `ToolButtonChecked`.
+- Use a type scale in steps of the desktop's interface size, never fixed
+  pixels: 0.93 for notes, 1.15 for a sheet's title, and 2 for the one line of
+  a start page. One size with secondary text quieted by
+  color, the workbench's rule, left the window without a first thing to read.
+- Center what an empty window says: the mark, one line at twice the text
+  size in the regular weight, a sentence at a measure of 480, and its two
+  buttons, in the middle of the pane and a twelfth of its height above it. At
+  the left edge of an 800-wide column the same block read as stranded.
+- Show who spoke by where a message stands. The person's words are in a
+  bubble at the trailing edge, as wide as they are within four fifths of the
+  column, in `Window` without an outline; an answer is plain across the
+  column. A name is written only where it says more (a goal's round, a
+  message inherited from the main conversation). The time, Copy and Quote
+  show under a message while the pointer or keyboard is on it. A header in
+  every bubble (a dot, a name, a time, a button) read as a form.
+- Make the composer the window's main object: a floating surface (`Menu` fill,
+  `FloatingWindowBorder` outline, the focus color while typed in) with corners
+  of 20, growing from two lines to eight, its pickers quiet until hovered, and
+  Send a disc in the accent. A flat block in the input gray with a square
+  Send read as a form field. Inside the right panel's card, a composer is a
+  well of the conversation's `Base` in the same outline.
+- Size a menu to its longest command (`ThemedMenu.fit`). At a desktop's 11
+  point text a 230-pixel menu cut "Show project files in the sidebar".
+- Check the window with `neverd-agent --capture`, which needs no display, on
+  illustrative data in a private home: an empty workspace, a conversation, an
+  empty project, a paused goal with queued inputs, each right panel and the
+  settings sheet; in the four themes; in Chinese, German and Arabic; and at
+  800 by 560 and just under 1100 wide. Hover, menus and sheets need the window
+  on a private Xvfb. `--capture` exits with 1 and writes the reason to
+  `agent.log` when the workspace cannot start.
+
 ## Resizing is part of the design
 
 Content-heavy dialogs should support ordinary desktop resizing unless the task
