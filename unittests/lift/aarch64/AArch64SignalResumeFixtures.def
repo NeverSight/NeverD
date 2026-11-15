@@ -378,7 +378,9 @@ Lcleanup:
  add w9, w9, #1
 #endif
  str w9, [x19]
+Lresume:
  bl __Unwind_Resume
+Lresume_end:
  brk #1
  .cfi_endproc
  .globl _signal_tick
@@ -398,6 +400,12 @@ Ltable:
  .uleb128 Lprotected-Lfunc_begin
  .uleb128 Lprotected_end-Lprotected
  .uleb128 Lcleanup-Lfunc_begin
+ .byte 0
+ // Resuming the exception has no local cleanup. Without this entry the
+ // personality treats the second-phase return edge as a missing call site.
+ .uleb128 Lresume-Lfunc_begin
+ .uleb128 Lresume_end-Lresume
+ .byte 0
  .byte 0
 Ltable_end:
  .subsections_via_symbols

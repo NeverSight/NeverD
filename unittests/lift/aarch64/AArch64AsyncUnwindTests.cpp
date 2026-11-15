@@ -848,12 +848,16 @@ static void verifySignalLanguageCleanup(bool ObjectiveC, bool NonCall = false) {
         ASSERT_TRUE(Out);
         if (std::getenv(kExecute))
           for (bool Alternate : {false, true}) {
+            std::string Error;
             ASSERT_EQ(llvm::sys::ExecuteAndWait(
-                          Driver, {Driver, Installed ? Output : Input, Rules,
-                                   std::to_string(Owner - Public->Addr),
-                                   std::to_string(Alternate),
-                                   std::to_string(Installed ? 3 : 1)}),
-                      0);
+                          Driver,
+                          {Driver, Installed ? Output : Input, Rules,
+                           std::to_string(Owner - Public->Addr),
+                           std::to_string(Alternate),
+                           std::to_string(Installed ? 3 : 1)},
+                          std::nullopt, {}, 0, 0, &Error),
+                      0)
+                << Error;
             ++Delivered;
           }
       }
