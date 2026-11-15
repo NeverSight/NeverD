@@ -1335,6 +1335,14 @@
         <source>Plugin &amp;manager...</source>
         <translation>プラグインマネージャー(M)...</translation>
     </message>
+    <message>
+        <source>Computed strings</source>
+        <translation>計算された文字列</translation>
+    </message>
+    <message>
+        <source>Find conditional strings computed by functions</source>
+        <translation>関数によって計算される条件付き文字列を検索</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -1481,6 +1489,26 @@
     <message>
         <source>Patched bytes</source>
         <translation>変更済みバイト</translation>
+    </message>
+    <message>
+        <source>Computed strings</source>
+        <translation>計算された文字列</translation>
+    </message>
+    <message>
+        <source>Data address</source>
+        <translation>データアドレス</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>証拠</translation>
+    </message>
+    <message>
+        <source>Observed after</source>
+        <translation>この命令の実行後に観測</translation>
+    </message>
+    <message>
+        <source>Text / diagnostic</source>
+        <translation>テキスト / 診断</translation>
     </message>
 </context>
 <context>
@@ -1933,6 +1961,10 @@
         <source>Too many selection changes while refreshing the table.</source>
         <translation>テーブルの更新中に選択が変更された回数が多すぎます。</translation>
     </message>
+    <message>
+        <source>Search cancelled</source>
+        <translation>検索をキャンセルしました</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ChooserView</name>
@@ -1953,6 +1985,154 @@
         <translation>
             <numerusform>%n 個の項目</numerusform>
         </translation>
+    </message>
+    <message>
+        <source> %1 / %2</source>
+        <translation> %1 / %2</translation>
+    </message>
+    <message>
+        <source> · %1 s</source>
+        <translation> · %1 秒</translation>
+    </message>
+    <message>
+        <source> · Discovery failed: </source>
+        <translation> · 検出に失敗: </translation>
+    </message>
+    <message>
+        <source>%1 · %2/%3 functions · %4 rows · %5 issues</source>
+        <translation>%1 · 関数 %2/%3 · %4 行 · %5 件の問題</translation>
+    </message>
+    <message>
+        <source>Analysis changed; scan again</source>
+        <translation>解析が変更されました。再スキャンしてください</translation>
+    </message>
+    <message>
+        <source>Analyzing function %1…</source>
+        <translation>関数 %1 を解析中…</translation>
+    </message>
+    <message>
+        <source>Assumes the listed memory and register values at block entry, and successful execution through the observation. Initializers propose values; reachability is not proved.</source>
+        <translation>ブロック入口でメモリとレジスタが記載された値を持ち、観測点まで正常に実行されることを仮定しています。初期化子は値を提案するだけであり、到達可能性は証明されていません。</translation>
+    </message>
+    <message>
+        <source>Block entry</source>
+        <translation>ブロック入口</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>キャンセル</translation>
+    </message>
+    <message>
+        <source>Computed string conditions</source>
+        <translation>計算された文字列の条件</translation>
+    </message>
+    <message>
+        <source>Conditional text computed by instructions</source>
+        <translation>命令によって計算される条件付きテキスト</translation>
+    </message>
+    <message>
+        <source>Conditions…</source>
+        <translation>条件…</translation>
+    </message>
+    <message>
+        <source>Continue</source>
+        <translation>続行</translation>
+    </message>
+    <message>
+        <source>Data address</source>
+        <translation>データアドレス</translation>
+    </message>
+    <message>
+        <source>Encoding</source>
+        <translation>エンコーディング</translation>
+    </message>
+    <message>
+        <source>Initializer</source>
+        <translation>初期化子</translation>
+    </message>
+    <message>
+        <source>Loading…</source>
+        <translation>読み込み中…</translation>
+    </message>
+    <message>
+        <source>No results</source>
+        <translation>結果なし</translation>
+    </message>
+    <message>
+        <source>Observed after</source>
+        <translation>この命令の実行後に観測</translation>
+    </message>
+    <message>
+        <source>Open a binary first</source>
+        <translation>まずバイナリを開いてください</translation>
+    </message>
+    <message>
+        <source>Pause</source>
+        <translation>一時停止</translation>
+    </message>
+    <message>
+        <source>Paused</source>
+        <translation>一時停止中</translation>
+    </message>
+    <message>
+        <source>Pausing after the current function…</source>
+        <translation>現在の関数の処理後に一時停止します…</translation>
+    </message>
+    <message>
+        <source>Register offset %1, %2 bytes = %3&lt;br&gt;</source>
+        <translation>レジスタオフセット %1、%2 バイト = %3&lt;br&gt;</translation>
+    </message>
+    <message>
+        <source>Required entry registers</source>
+        <translation>必要な入口レジスタ</translation>
+    </message>
+    <message>
+        <source>Required input bytes</source>
+        <translation>必要な入力バイト</translation>
+    </message>
+    <message>
+        <source>Retry</source>
+        <translation>再試行</translation>
+    </message>
+    <message>
+        <source>Retry or navigate the list to continue loading.</source>
+        <translation>再試行するかリスト内を移動して、読み込みを続行してください。</translation>
+    </message>
+    <message>
+        <source>Scan all functions</source>
+        <translation>すべての関数をスキャン</translation>
+    </message>
+    <message>
+        <source>Scan cancelled</source>
+        <translation>スキャンをキャンセルしました</translation>
+    </message>
+    <message>
+        <source>Scan finished</source>
+        <translation>スキャンが完了しました</translation>
+    </message>
+    <message>
+        <source>Scanning</source>
+        <translation>スキャン中</translation>
+    </message>
+    <message>
+        <source>Search cancelled</source>
+        <translation>検索をキャンセルしました</translation>
+    </message>
+    <message>
+        <source>Search progress</source>
+        <translation>検索の進行状況</translation>
+    </message>
+    <message>
+        <source>Searching…</source>
+        <translation>検索中…</translation>
+    </message>
+    <message>
+        <source>Sorting…</source>
+        <translation>並べ替え中…</translation>
+    </message>
+    <message>
+        <source>Waiting to search…</source>
+        <translation>検索を待機中…</translation>
     </message>
 </context>
 <context>
@@ -2081,6 +2261,10 @@ Double-click to go to the declaration.</source>
     <message>
         <source>Recovery stopped: %1</source>
         <translation>復元停止: %1</translation>
+    </message>
+    <message>
+        <source>Analysis continues in background</source>
+        <translation>解析はバックグラウンドで続行中</translation>
     </message>
 </context>
 <context>
@@ -2908,7 +3092,7 @@ Use this PDB for analysis? Its symbols, types, function signatures and address r
     </message>
     <message>
         <source>Put the cursor in a function to set its type</source>
-        <translation>型を設定するには関数内にカーソルを置いてください</translation>
+        <translation type="vanished">型を設定するには関数内にカーソルを置いてください</translation>
     </message>
     <message>
         <source>Put the cursor on a parameter of the function to convert it</source>
@@ -3432,6 +3616,10 @@ After:
         <source>Plugin tasks</source>
         <translation>プラグインタスク</translation>
     </message>
+    <message>
+        <source>Put the cursor on a global object or in a function to set its type</source>
+        <translation>グローバルオブジェクト上または関数内にカーソルを置いて、型を設定してください</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::OutputWindow</name>
@@ -3822,6 +4010,14 @@ After:
     <message>
         <source>Project changes saved</source>
         <translation>プロジェクトの変更を保存しました</translation>
+    </message>
+    <message>
+        <source>Could not prepare source views: %1</source>
+        <translation>ソースビューを準備できませんでした: %1</translation>
+    </message>
+    <message>
+        <source>Preparing the decompiler</source>
+        <translation>デコンパイラを準備中</translation>
     </message>
 </context>
 <context>
@@ -5035,7 +5231,7 @@ After:
     </message>
     <message>
         <source>Types: %1</source>
-        <translation>型：%1</translation>
+        <translation type="vanished">型：%1</translation>
     </message>
     <message numerus="yes">
         <source>%n from the PDB</source>
@@ -5122,6 +5318,30 @@ After:
     <message>
         <source>No local types: this program has no PDB or DWARF with types.</source>
         <translation>ローカル型がありません: このプログラムには型を含む PDB も DWARF もありません。</translation>
+    </message>
+    <message>
+        <source> · %1 types not imported</source>
+        <translation> · %1 個の型がインポートされませんでした</translation>
+    </message>
+    <message>
+        <source>Next</source>
+        <translation>次へ</translation>
+    </message>
+    <message>
+        <source>No types match %1.</source>
+        <translation>%1 に一致する型はありません。</translation>
+    </message>
+    <message>
+        <source>Page </source>
+        <translation>ページ </translation>
+    </message>
+    <message>
+        <source>Previous</source>
+        <translation>前へ</translation>
+    </message>
+    <message>
+        <source>Types: %1 · showing %2–%3</source>
+        <translation>型: %1 · %2–%3 を表示</translation>
     </message>
 </context>
 <context>
@@ -5434,6 +5654,10 @@ After:
     <message>
         <source>Remove this source type assertion and use the analysis type</source>
         <translation>このソース型の指定を削除し、解析で得られた型を使用する</translation>
+    </message>
+    <message>
+        <source>%1 at %3 is a %2-byte global object. Enter a scalar or pointer type from the local types.</source>
+        <translation>%3 にある %1 は %2 バイトのグローバルオブジェクトです。ローカル型からスカラー型またはポインタ型を入力してください。</translation>
     </message>
 </context>
 <context>
@@ -10260,6 +10484,10 @@ Your previous graph is still available.</source>
         <source>Loading</source>
         <translation>読み込み中</translation>
     </message>
+    <message>
+        <source>Preparing the decompiler</source>
+        <translation>デコンパイラを準備中</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::LoadProgressCard</name>
@@ -10916,6 +11144,13 @@ Your previous graph is still available.</source>
     <message>
         <source>The view factory must create a workbench child widget.</source>
         <translation>ビューのファクトリはワークベンチの子ウィジェットを作成する必要があります。</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ListingView</name>
+    <message>
+        <source>Loading %1…</source>
+        <translation>%1 を読み込み中…</translation>
     </message>
 </context>
 </TS>

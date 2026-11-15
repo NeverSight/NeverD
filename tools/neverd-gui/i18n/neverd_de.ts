@@ -1335,6 +1335,14 @@
         <source>Plugin &amp;manager...</source>
         <translation>Pluginmanager...</translation>
     </message>
+    <message>
+        <source>Computed strings</source>
+        <translation>Berechnete Zeichenfolgen</translation>
+    </message>
+    <message>
+        <source>Find conditional strings computed by functions</source>
+        <translation>Bedingte, von Funktionen berechnete Zeichenfolgen finden</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -1481,6 +1489,26 @@
     <message>
         <source>Patched bytes</source>
         <translation>Gepatchte Bytes</translation>
+    </message>
+    <message>
+        <source>Computed strings</source>
+        <translation>Berechnete Zeichenfolgen</translation>
+    </message>
+    <message>
+        <source>Data address</source>
+        <translation>Datenadresse</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Nachweis</translation>
+    </message>
+    <message>
+        <source>Observed after</source>
+        <translation>Beobachtet nach</translation>
+    </message>
+    <message>
+        <source>Text / diagnostic</source>
+        <translation>Text / Diagnose</translation>
     </message>
 </context>
 <context>
@@ -1933,6 +1961,10 @@
         <source>Too many selection changes while refreshing the table.</source>
         <translation>Zu viele Auswahländerungen während der Tabellenaktualisierung.</translation>
     </message>
+    <message>
+        <source>Search cancelled</source>
+        <translation>Suche abgebrochen</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ChooserView</name>
@@ -1954,6 +1986,154 @@
             <numerusform>%n Eintrag</numerusform>
             <numerusform>%n Einträge</numerusform>
         </translation>
+    </message>
+    <message>
+        <source> %1 / %2</source>
+        <translation> %1 / %2</translation>
+    </message>
+    <message>
+        <source> · %1 s</source>
+        <translation> · %1 s</translation>
+    </message>
+    <message>
+        <source> · Discovery failed: </source>
+        <translation> · Ermittlung fehlgeschlagen: </translation>
+    </message>
+    <message>
+        <source>%1 · %2/%3 functions · %4 rows · %5 issues</source>
+        <translation>%1 · %2/%3 Funktionen · %4 Zeilen · %5 Probleme</translation>
+    </message>
+    <message>
+        <source>Analysis changed; scan again</source>
+        <translation>Analyse geändert; erneut scannen</translation>
+    </message>
+    <message>
+        <source>Analyzing function %1…</source>
+        <translation>Funktion %1 wird analysiert…</translation>
+    </message>
+    <message>
+        <source>Assumes the listed memory and register values at block entry, and successful execution through the observation. Initializers propose values; reachability is not proved.</source>
+        <translation>Setzt die aufgeführten Speicher- und Registerwerte beim Blockeintritt sowie eine erfolgreiche Ausführung bis einschließlich des Beobachtungspunkts voraus. Initialisierer schlagen Werte vor; die Erreichbarkeit ist nicht bewiesen.</translation>
+    </message>
+    <message>
+        <source>Block entry</source>
+        <translation>Blockeintritt</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Abbrechen</translation>
+    </message>
+    <message>
+        <source>Computed string conditions</source>
+        <translation>Bedingungen für berechnete Zeichenfolgen</translation>
+    </message>
+    <message>
+        <source>Conditional text computed by instructions</source>
+        <translation>Von Anweisungen berechneter bedingter Text</translation>
+    </message>
+    <message>
+        <source>Conditions…</source>
+        <translation>Bedingungen…</translation>
+    </message>
+    <message>
+        <source>Continue</source>
+        <translation>Fortsetzen</translation>
+    </message>
+    <message>
+        <source>Data address</source>
+        <translation>Datenadresse</translation>
+    </message>
+    <message>
+        <source>Encoding</source>
+        <translation>Kodierung</translation>
+    </message>
+    <message>
+        <source>Initializer</source>
+        <translation>Initialisierer</translation>
+    </message>
+    <message>
+        <source>Loading…</source>
+        <translation>Wird geladen…</translation>
+    </message>
+    <message>
+        <source>No results</source>
+        <translation>Keine Ergebnisse</translation>
+    </message>
+    <message>
+        <source>Observed after</source>
+        <translation>Beobachtet nach</translation>
+    </message>
+    <message>
+        <source>Open a binary first</source>
+        <translation>Zuerst eine Binärdatei öffnen</translation>
+    </message>
+    <message>
+        <source>Pause</source>
+        <translation>Pausieren</translation>
+    </message>
+    <message>
+        <source>Paused</source>
+        <translation>Pausiert</translation>
+    </message>
+    <message>
+        <source>Pausing after the current function…</source>
+        <translation>Nach der aktuellen Funktion wird pausiert…</translation>
+    </message>
+    <message>
+        <source>Register offset %1, %2 bytes = %3&lt;br&gt;</source>
+        <translation>Registeroffset %1, %2 Bytes = %3&lt;br&gt;</translation>
+    </message>
+    <message>
+        <source>Required entry registers</source>
+        <translation>Erforderliche Registerwerte beim Eintritt</translation>
+    </message>
+    <message>
+        <source>Required input bytes</source>
+        <translation>Erforderliche Eingabebytes</translation>
+    </message>
+    <message>
+        <source>Retry</source>
+        <translation>Erneut versuchen</translation>
+    </message>
+    <message>
+        <source>Retry or navigate the list to continue loading.</source>
+        <translation>Erneut versuchen oder in der Liste navigieren, um das Laden fortzusetzen.</translation>
+    </message>
+    <message>
+        <source>Scan all functions</source>
+        <translation>Alle Funktionen scannen</translation>
+    </message>
+    <message>
+        <source>Scan cancelled</source>
+        <translation>Scan abgebrochen</translation>
+    </message>
+    <message>
+        <source>Scan finished</source>
+        <translation>Scan abgeschlossen</translation>
+    </message>
+    <message>
+        <source>Scanning</source>
+        <translation>Scan läuft</translation>
+    </message>
+    <message>
+        <source>Search cancelled</source>
+        <translation>Suche abgebrochen</translation>
+    </message>
+    <message>
+        <source>Search progress</source>
+        <translation>Suchfortschritt</translation>
+    </message>
+    <message>
+        <source>Searching…</source>
+        <translation>Suche läuft…</translation>
+    </message>
+    <message>
+        <source>Sorting…</source>
+        <translation>Wird sortiert…</translation>
+    </message>
+    <message>
+        <source>Waiting to search…</source>
+        <translation>Warten auf Suche…</translation>
     </message>
 </context>
 <context>
@@ -2086,6 +2266,10 @@ Doppelklicken, um zur Deklaration zu springen.</translation>
     <message>
         <source>Recovery stopped: %1</source>
         <translation>Rekonstruktion angehalten: %1</translation>
+    </message>
+    <message>
+        <source>Analysis continues in background</source>
+        <translation>Analyse wird im Hintergrund fortgesetzt</translation>
     </message>
 </context>
 <context>
@@ -2914,7 +3098,7 @@ Diese PDB zur Analyse verwenden? Ihre Symbole, Typen, Funktionssignaturen und Ad
     </message>
     <message>
         <source>Put the cursor in a function to set its type</source>
-        <translation>Setzen Sie den Cursor in eine Funktion, um ihren Typ festzulegen</translation>
+        <translation type="vanished">Setzen Sie den Cursor in eine Funktion, um ihren Typ festzulegen</translation>
     </message>
     <message>
         <source>Put the cursor on a parameter of the function to convert it</source>
@@ -3438,6 +3622,10 @@ Nachher:
         <source>Plugin tasks</source>
         <translation>Pluginaufgaben</translation>
     </message>
+    <message>
+        <source>Put the cursor on a global object or in a function to set its type</source>
+        <translation>Den Cursor auf ein globales Objekt oder in eine Funktion setzen, um dessen bzw. deren Typ festzulegen</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::OutputWindow</name>
@@ -3829,6 +4017,14 @@ Nachher:
     <message>
         <source>Project changes saved</source>
         <translation>Projektänderungen gespeichert</translation>
+    </message>
+    <message>
+        <source>Could not prepare source views: %1</source>
+        <translation>Quellansichten konnten nicht vorbereitet werden: %1</translation>
+    </message>
+    <message>
+        <source>Preparing the decompiler</source>
+        <translation>Dekompilierer wird vorbereitet</translation>
     </message>
 </context>
 <context>
@@ -5048,7 +5244,7 @@ Nachher:
     </message>
     <message>
         <source>Types: %1</source>
-        <translation>Typen: %1</translation>
+        <translation type="vanished">Typen: %1</translation>
     </message>
     <message numerus="yes">
         <source>%n from the PDB</source>
@@ -5140,6 +5336,30 @@ Nachher:
     <message>
         <source>No local types: this program has no PDB or DWARF with types.</source>
         <translation>Keine lokalen Typen: Dieses Programm hat kein PDB oder DWARF mit Typen.</translation>
+    </message>
+    <message>
+        <source> · %1 types not imported</source>
+        <translation> · %1 Typen nicht importiert</translation>
+    </message>
+    <message>
+        <source>Next</source>
+        <translation>Weiter</translation>
+    </message>
+    <message>
+        <source>No types match %1.</source>
+        <translation>Keine Typen entsprechen %1.</translation>
+    </message>
+    <message>
+        <source>Page </source>
+        <translation>Seite </translation>
+    </message>
+    <message>
+        <source>Previous</source>
+        <translation>Zurück</translation>
+    </message>
+    <message>
+        <source>Types: %1 · showing %2–%3</source>
+        <translation>Typen: %1 · angezeigt: %2–%3</translation>
     </message>
 </context>
 <context>
@@ -5462,6 +5682,10 @@ Nachher:
     <message>
         <source>Remove this source type assertion and use the analysis type</source>
         <translation>Diese Quelltexttyp-Zuweisung entfernen und den ermittelten Typ verwenden</translation>
+    </message>
+    <message>
+        <source>%1 at %3 is a %2-byte global object. Enter a scalar or pointer type from the local types.</source>
+        <translation>%1 bei %3 ist ein globales Objekt mit %2 Bytes. Einen Skalar- oder Zeigertyp aus den lokalen Typen eingeben.</translation>
     </message>
 </context>
 <context>
@@ -10296,6 +10520,10 @@ Ihr vorheriger Graph ist weiterhin verfügbar.</translation>
         <source>Loading</source>
         <translation>Wird geladen</translation>
     </message>
+    <message>
+        <source>Preparing the decompiler</source>
+        <translation>Dekompilierer wird vorbereitet</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::LoadProgressCard</name>
@@ -10952,6 +11180,13 @@ Ihr vorheriger Graph ist weiterhin verfügbar.</translation>
     <message>
         <source>The view factory must create a workbench child widget.</source>
         <translation>Die Ansichts-Factory muss ein untergeordnetes Widget der Arbeitsumgebung erstellen.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ListingView</name>
+    <message>
+        <source>Loading %1…</source>
+        <translation>%1 wird geladen…</translation>
     </message>
 </context>
 </TS>
