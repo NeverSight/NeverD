@@ -90,7 +90,8 @@ TEST(MicroMIPSPipelineSource, N32RetainsNativeWideRecordTypes) {
     llvm::raw_string_ostream Out(Text);
     ASSERT_TRUE(LLVMCEmitter().emit(Module, Out, Options));
     EXPECT_NE(Text.find("struct WideResult { unsigned __int128 value; };"),
-              std::string::npos) << Text;
+              std::string::npos)
+        << Text;
     EXPECT_EQ(Text.find("#define __int128 _BitInt(128)") != std::string::npos,
               !isMIPS64(Target))
         << Text;
