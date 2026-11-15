@@ -92,7 +92,8 @@
     "FR=0 is qualified at the physical instruction/LowIR boundary; compressed FR=0 floating source calls are not qualified.",
     "Compressed floating call ABI, historical I-III scheduling and historical o32, old DSP64 rounded/saturating DEXTR and signed DMADD/DMSUB, and the other documented unsupported instruction/system/ABI domains remain open.",
     "The historical DSP64 manual needed to resolve existing executor/test discrepancies has not been recovered. Missing primary semantics are not inferred from decoder coverage.",
-    "Performance raw samples, identical dependency/toolchain inputs and source identity hashes are retained locally. This is not an all-ISA or world-fastest claim."
+    "Performance raw samples, identical dependency/toolchain inputs and source identity hashes are retained locally. This is not an all-ISA or world-fastest claim.",
+    "The latest-dev integration reruns 1,145 owner tests and the ubus executions; all 564 source outputs match the earlier compiled/executed matrix byte for byte. Source identity verification is not counted as another 1,128 compilation/execution pass."
   ],
   "ubus_call": {
     "original_cases": 12,
@@ -100,5 +101,25 @@
     "complete": true,
     "receipt_sha256": "012016cfe95b9cc48abef400d35e5f2f1d42f1f76a7e8a15eb8c1327ed30de52",
     "firmware_sha256": "6e1129aa58cb398a2453876ea4aa2395feecc84ecf78ed8ab43efd534b40e475"
+  },
+  "integrated_build": {
+    "source_commit": "afaf093243dcba8a454d891ed3fdf92b5fbe1cad",
+    "dev_base": "d4798a3bb8ddd9da62d04c9a4c8cf9d0fcab1b3b",
+    "capstone_commit": "dea9fee246c21a0045a2ea63a429f9147a6a1014",
+    "unicorn_commit": "bd582f668a29518bfa2e3c98cff56914f4661be1",
+    "qualified_binary_sha256": {
+      "neverd": "b3b5b0cffb8f36acf4784e4367f35576d5c70ab38573d19db1558cf033b624bf",
+      "neverd-mips-bench": "5281a7badd3a73c65eb592cc56073f3ffb773ba66fb78604fc95132f12e26875",
+      "neverd-mips-request-bench": "5f18baa849687945e3b804b102f7ca9da1f196e845f399f2f43851b7883adf9e",
+      "libneverd.dylib": "a5d3c21bffbf423777009acfae770298531064d13b1f995f4a8229e2575601e6"
+    },
+    "owner_tests": 1145,
+    "owner_log_sha256": "dd35af34da943aba7444b84994a9160d8065f4a54ec4eba69c7a98676dfbb995",
+    "source_outputs_identical_to_executed_qualification": 564,
+    "source_identity_receipt_sha256": "15e69258dbe4bbc5be02f38013aa5e14066d763e912e3340059d38d28b583e98",
+    "ubus_original_cases": 12,
+    "ubus_rebuilt_comparisons": 48,
+    "ubus_receipt_sha256": "012016cfe95b9cc48abef400d35e5f2f1d42f1f76a7e8a15eb8c1327ed30de52",
+    "primitive_binaries_identical_to_same_driver_measurements": true
   }
 }
