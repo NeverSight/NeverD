@@ -95,6 +95,8 @@ prepareDarwinArm64eSystemCaller(const AArch64RecoveredUnwindRow &Row,
 /// actual load address. A forwarding range contains no cleanup. A protected
 /// call keeps the interrupted frame. A transparent prefix must belong to its
 /// protected range or lead straight back to the same call from its return edge.
+/// An explicitly guarded non-call can supply its own return edge when both
+/// instruction boundaries have the same complete recovery row.
 std::optional<NDDarwinArm64eExceptionSite>
 prepareDarwinArm64eExceptionSite(const BinaryImage &Image,
                                  const ExceptionFunction &Function,

@@ -8,6 +8,7 @@
 
 #include "neverd/analysis/AArch64UnwindRecovery.h"
 #include "neverd/backend/codegen/PatchObject.h"
+#include "neverd/decode/Decoder.h"
 #include "neverd/loader/DWARF/AArch64ReturnAddressState.h"
 #include "neverd/loader/Loader.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
@@ -711,14 +712,16 @@ TEST(AArch64AsyncUnwind, SignalReturnResumesCallerWithRecoveredVectorLanes) {
 #endif
 }
 
-static void verifySignalLanguageCleanup(bool ObjectiveC) {
+static void verifySignalLanguageCleanup(bool ObjectiveC, bool NonCall = false) {
 #if defined(__APPLE__) && defined(__aarch64__)
   llvm::SmallString<128> Dir;
   ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kDirectory, Dir));
   const std::filesystem::path Root(Dir.str().str());
   auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
-  const auto Source =
-      (Root / (ObjectiveC ? kSignalObjCSource : kSignalScopeSource)).string();
+  const auto Source = (Root / (NonCall      ? kSignalNonCallSource
+                               : ObjectiveC ? kSignalObjCSource
+                                            : kSignalScopeSource))
+                          .string();
   const auto DriverSource =
       (Root / (ObjectiveC ? kSignalObjCDriver : kSignalScopeDriverFile))
           .string();
@@ -727,7 +730,9 @@ static void verifySignalLanguageCleanup(bool ObjectiveC) {
   const auto Object = (Root / kObject).string();
   const auto Output = (Root / kPublished).string();
   const auto Rules = (Root / kOriginalRules).string();
-  std::ofstream(Source) << (ObjectiveC ? kSignalObjCBody : kSignalScopeBody);
+  std::ofstream(Source) << (NonCall      ? kSignalNonCallBody
+                            : ObjectiveC ? kSignalObjCBody
+                                         : kSignalScopeBody);
   std::ofstream(DriverSource) << kSignalScopeDriver;
   const auto *Override = std::getenv(kHeaderRoot);
   const auto Include =
@@ -749,11 +754,13 @@ static void verifySignalLanguageCleanup(bool ObjectiveC) {
     SCOPED_TRACE(Opt);
     const auto Compile = [&](llvm::ArrayRef<llvm::StringRef> Args) {
       const auto *Compiler = ObjectiveC ? kCompiler : kCxxCompiler;
-      llvm::SmallVector<llvm::StringRef> Command{
-          Compiler, kTargetFlag,
-          kTarget,  kFramePointer,
-          Opt,      ObjectiveC ? kObjCExceptions : kCXXStandard};
+      llvm::SmallVector<llvm::StringRef> Command{Compiler, kTargetFlag, kTarget,
+                                                 kFramePointer, Opt};
+      if (!NonCall)
+        Command.push_back(ObjectiveC ? kObjCExceptions : kCXXStandard);
       Command.append(Args.begin(), Args.end());
+      if (NonCall && ObjectiveC)
+        Command.push_back(kSignalObjCPersonality);
       if (ObjectiveC && llvm::is_contained(Args, kDylib))
         Command.append({kObjCFramework, kFoundation});
       return llvm::sys::ExecuteAndWait(Compiler, Command);
@@ -776,9 +783,15 @@ static void verifySignalLanguageCleanup(bool ObjectiveC) {
     ASSERT_TRUE(bool(Published)) << llvm::toString(Published.takeError());
     for (bool Installed : {false, true}) {
       const auto &Image = Installed ? *Published : *Original;
-      enum class InterruptedSite { Leaf, Call, Prefix };
-      for (auto Mode : {InterruptedSite::Leaf, InterruptedSite::Call,
-                        InterruptedSite::Prefix}) {
+      enum class InterruptedSite { Leaf, Call, Prefix, NonCall };
+      llvm::SmallVector<InterruptedSite> Modes{InterruptedSite::Leaf,
+                                               InterruptedSite::Call,
+                                               InterruptedSite::Prefix};
+      if (NonCall)
+        Modes = {InterruptedSite::NonCall};
+      Decoder Decode;
+      ASSERT_TRUE(Decode.init(Image));
+      for (auto Mode : Modes) {
         const bool Protected = Mode != InterruptedSite::Leaf;
         SCOPED_TRACE(static_cast<unsigned>(Mode));
         SCOPED_TRACE(Installed);
@@ -803,6 +816,17 @@ static void verifySignalLanguageCleanup(bool ObjectiveC) {
           if (!Candidate || Candidate->AtProtectedCall != Protected ||
               bool(Candidate->ProtectedReturn) !=
                   (Mode == InterruptedSite::Prefix))
+            continue;
+          const auto *Code = Image.readVA(PC, NDArm64eInstructionAlignment);
+          ASSERT_NE(Code, nullptr);
+          DecodedInsn Instruction{};
+          ASSERT_EQ(Decode.decodeOne(Code, NDArm64eInstructionAlignment, PC,
+                                     Instruction),
+                    NDArm64eInstructionAlignment);
+          if (Mode == InterruptedSite::Call &&
+              !cs_insn_group(Decode.getHandle(), Instruction.Raw, CS_GRP_CALL))
+            continue;
+          if (NonCall && Instruction.Id != AARCH64_INS_LDR)
             continue;
           Site = Candidate;
           Plan = prepareDarwinArm64eSystemCaller(
@@ -837,7 +861,10 @@ static void verifySignalLanguageCleanup(bool ObjectiveC) {
     ASSERT_TRUE(std::filesystem::remove(Output));
   }
   ::testing::Test::RecordProperty(
-      ObjectiveC ? kSignalObjCExceptions : kSignalExceptions, Delivered);
+      NonCall ? (ObjectiveC ? kSignalNonCallObjCExceptions
+                            : kSignalNonCallExceptions)
+              : (ObjectiveC ? kSignalObjCExceptions : kSignalExceptions),
+      Delivered);
 #else
   GTEST_SKIP() << kUnavailable;
 #endif
@@ -848,6 +875,14 @@ TEST(AArch64AsyncUnwind, SignalExceptionRunsInterruptedAndOuterCleanups) {
 }
 TEST(AArch64AsyncUnwind, SignalExceptionRunsInterruptedAndOuterObjCCleanups) {
   verifySignalLanguageCleanup(true);
+}
+
+TEST(AArch64AsyncUnwind, ProtectedNonCallRunsInterruptedAndOuterCleanups) {
+  verifySignalLanguageCleanup(false, true);
+}
+
+TEST(AArch64AsyncUnwind, ProtectedNonCallRunsInterruptedAndOuterObjCCleanups) {
+  verifySignalLanguageCleanup(true, true);
 }
 
 TEST(AArch64AsyncUnwind, InstructionAddressRecipesUseTheActualSigningPC) {

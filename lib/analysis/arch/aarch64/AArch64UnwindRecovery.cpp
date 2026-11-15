@@ -921,6 +921,18 @@ recoverImplicitFrame(const BinaryImage &Image,
   return Result;
 }
 
+bool preservesLiveFrame(Decoder &Decode, const DecodedInsn &I) {
+  cs_regs Reads, Writes;
+  uint8_t NumReads = 0, NumWrites = 0;
+  if (cs_regs_access(Decode.getHandle(), I.Raw, Reads, &NumReads, Writes,
+                     &NumWrites) != CS_ERR_OK)
+    return false;
+  return llvm::all_of(llvm::ArrayRef(Writes, NumWrites), [](unsigned R) {
+    const auto Number = reg(R);
+    return (!Number || *Number <= kLastDarwinScratch) && !preservedDSlot(R);
+  });
+}
+
 // At a synchronous throwing call the personality can rely on preserved
 // registers and memory. A preceding straight-line setup or unconditional
 // branch can select that same landing pad if it leaves all of them intact.
@@ -1089,6 +1101,7 @@ prepareDarwinArm64eExceptionSite(const BinaryImage &Image,
     };
     const auto Initial = Lookup(PC);
     auto Protected = Sites.end();
+    bool PreservesLiveFrame = false;
     auto At = PC;
     Decoder Decode;
     if (!Decode.init(Image))
@@ -1111,6 +1124,8 @@ prepareDarwinArm64eExceptionSite(const BinaryImage &Image,
       if (!Code || Decode.decodeOne(Code, Width, At, I) != int(Width) ||
           !I.Raw || !I.Raw->detail)
         return std::nullopt;
+      if (At == PC)
+        PreservesLiveFrame = preservesLiveFrame(Decode, I);
       if (cs_insn_group(Decode.getHandle(), I.Raw, CS_GRP_CALL)) {
         // Outside a protected range the next call may belong to a newly
         // entered lexical scope. Only its own return edge, looping directly
@@ -1142,6 +1157,17 @@ prepareDarwinArm64eExceptionSite(const BinaryImage &Image,
       if (NextPC < Begin || NextPC >= End || NextPC % Width)
         break;
       At = NextPC;
+    }
+    // An explicitly guarded non-call instruction can supply its own virtual
+    // return edge. The complete recovery row must remain unchanged at that
+    // edge: the throw thunk replaces the instruction without executing it.
+    // In particular, do not skip a stack adjustment, spill or signing change.
+    if (!AtCall && PreservesLiveFrame && Initial != Sites.end() &&
+        Initial->LandingPadVA && Plan->Frame.SavedLR &&
+        Initial->GuardedRange.End - PC >= Width && End - PC > Width) {
+      AtCall = true;
+      Begin = PC;
+      End = PC + Width;
     }
     if (!AtCall) {
       if (Initial == Sites.end() || Initial->LandingPadVA)

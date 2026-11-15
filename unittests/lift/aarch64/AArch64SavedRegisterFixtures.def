@@ -348,7 +348,8 @@ static int checkSystemFrame(const ucontext_t *Context, const struct Plan *Plan) 
   if (unw_set_reg(&Cursor, UNW_REG_IP, (uintptr_t)PC) ||
       unw_step(&Cursor) <= 0 || unw_get_reg(&Cursor, UNW_REG_SP, &Value) ||
       Value != CFA || unw_get_reg(&Cursor, UNW_REG_IP, &Value) ||
-      Value != (uintptr_t)ptrauth_strip((void *)Interrupted.LR,
+      (uintptr_t)ptrauth_strip((void *)Value, ptrauth_key_return_address) !=
+          (uintptr_t)ptrauth_strip((void *)Interrupted.LR,
                                          ptrauth_key_return_address))
     return 0;
   for (unsigned I = 0; I < GPRCount; ++I)

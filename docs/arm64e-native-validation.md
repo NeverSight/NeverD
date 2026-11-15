@@ -1642,3 +1642,25 @@ authenticated return PC, X19-X28 and D8-D15 with independent caller inputs.
 All-pair, sparse, coalesced and each individual-pair cases exercise this path.
 These checks do not qualify native PAuth_LR or CPTA-on, nor arbitrary non-call
 language cleanup or arbitrary image publication.
+
+
+### Explicitly protected non-call exception delivery
+
+An address-based C++ or Objective-C LSDA can now authorize delivery at a
+non-call instruction without finding a later throwing call. Its entire
+instruction must belong to the guarded range, have a saved original LR,
+preserve live frame registers, and keep the same complete recovery row at
+the virtual return edge. The existing signal-return bridge runs the supplied
+throw thunk outside the handler; the original system personality selects and
+executes the interrupted frame's cleanup. Missing LSDA ownership, partial
+instruction coverage, changed CFA/signing/spills and preserved-register
+writes remain rejected.
+
+Independent assembly fixtures protect exactly one load in a loop with no
+calls. Their C++ and Objective-C landing pads record the original or changed
+published cleanup before resuming the exception. The driver checks that
+cleanup, the outer cleanup, exception identity and the restored signal mask
+on both ordinary and alternate stacks, for original and installed images at
+O0 and O2. This qualifies explicitly guarded points with a proved frame;
+it does not infer missing asynchronous lifetime information in arbitrary
+compiler output.

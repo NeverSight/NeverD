@@ -565,7 +565,7 @@ TEST(AArch64ImplicitUnwind, LandingPadsPopOnlyTheirOutgoingArgumentArea) {
   EXPECT_EQ(F.at(5).Status, Status::Unknown);
 }
 
-TEST(AArch64ImplicitUnwind, DeliversOnlyAcrossProvenCallSetup) {
+TEST(AArch64ImplicitUnwind, DeliversOnlyAcrossProvenReturnEdges) {
   for (auto Setup :
        {Nop, LoadInFrame, LoadAboveFrame, PartialStore, SaveInX19}) {
     SCOPED_TRACE(Setup);
@@ -577,10 +577,11 @@ TEST(AArch64ImplicitUnwind, DeliversOnlyAcrossProvenCallSetup) {
     const auto PC = 2 * sizeof(uint32_t);
     auto Site =
         prepareDarwinArm64eExceptionSite(F.Image, F.Function, *Rows, PC, 0);
-    if (Setup == Nop || Setup == LoadInFrame) {
+    if (Setup == Nop || Setup == LoadInFrame || Setup == LoadAboveFrame) {
       ASSERT_TRUE(Site);
       EXPECT_TRUE(Site->AtProtectedCall);
-      EXPECT_EQ(Site->ProtectedReturn, 4 * sizeof(uint32_t));
+      EXPECT_EQ(Site->ProtectedReturn,
+                Setup == LoadAboveFrame ? 0 : 4 * sizeof(uint32_t));
     } else {
       EXPECT_FALSE(Site);
     }
@@ -588,6 +589,33 @@ TEST(AArch64ImplicitUnwind, DeliversOnlyAcrossProvenCallSetup) {
     // A following call alone cannot establish an action for an earlier PC.
     F.Function.Itanium->CallSites.front().GuardedRange.Begin +=
         sizeof(uint32_t);
+    EXPECT_FALSE(
+        prepareDarwinArm64eExceptionSite(F.Image, F.Function, *Rows, PC, 0));
+  }
+}
+
+TEST(AArch64ImplicitUnwind, ProtectedNonCallNeedsAnUnchangedCompleteRow) {
+  for (auto Operation : {LoadAboveFrame, PartialStore, SaveInX19, Allocate}) {
+    SCOPED_TRACE(Operation);
+    Frame F{SignB, PushFP, Operation, Skip, Nop, PopFP, Ret, PopFP, Ret};
+    F.saveRow(2);
+    F.addHandler(2, 3, 7);
+    auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+    ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+    const auto PC = 2 * sizeof(uint32_t);
+    auto Site =
+        prepareDarwinArm64eExceptionSite(F.Image, F.Function, *Rows, PC, 0);
+    if (Operation == LoadAboveFrame) {
+      ASSERT_TRUE(Site);
+      EXPECT_TRUE(Site->AtProtectedCall);
+      EXPECT_EQ(Site->Begin, PC);
+      EXPECT_EQ(Site->End, PC + sizeof(uint32_t));
+      EXPECT_EQ(Site->ProtectedReturn, 0u);
+    } else {
+      EXPECT_FALSE(Site);
+    }
+    // Partial instruction coverage cannot authorize the virtual return edge.
+    --F.Function.Itanium->CallSites.front().GuardedRange.End;
     EXPECT_FALSE(
         prepareDarwinArm64eExceptionSite(F.Image, F.Function, *Rows, PC, 0));
   }

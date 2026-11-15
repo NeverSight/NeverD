@@ -57,10 +57,11 @@ typedef struct {
 } NDDarwinArm64eVectorSaves;
 
 /// One predecoded range for delivering a language exception after sigreturn.
-/// A protected call keeps its own frame. A forwarding range restores its
+/// A protected instruction keeps its own frame. A forwarding range restores its
 /// caller and uses the interrupted callee's real architectural return address.
 typedef struct {
   uintptr_t Begin, End;
+  /// Also true for a non-call with a proved equivalent virtual return edge.
   bool AtProtectedCall;
   /// Zero for the protected instruction itself or a forwarding range. A
   /// transparent prefix names the actual protected call's return address.
