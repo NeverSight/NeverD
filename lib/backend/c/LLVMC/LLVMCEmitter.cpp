@@ -570,6 +570,8 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
   }
   if (UsesMicroMIPSAttribute)
     OS << mips::MicroModeCPrelude;
+  if (isMIPS(Opts.TheArch))
+    OS << mips::BitCastCPrelude;
   std::string Records;
   {
     llvm::raw_string_ostream RecordsOS(Records);

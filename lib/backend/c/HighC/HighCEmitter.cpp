@@ -1867,6 +1867,8 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     c_float::writeContractionPolicy(OS);
   if (NeedsMicroMode)
     OS << mips::MicroModeCPrelude;
+  if (isMIPS(Opts.TheArch))
+    OS << mips::BitCastCPrelude;
   if (Opts.TheArch == Arch::AArch64 && NeedsAArch64RawCall)
     OS << kAArch64PAuthCRawCallHeader;
   if (NeedsAArch64ResultStorageCall)
