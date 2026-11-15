@@ -16,6 +16,11 @@
 #if defined(__APPLE__) && defined(__arm64e__)
 #include <libunwind.h>
 
+#define NEVERD_SYSTEM_UNWIND_BRIDGE(Name, Symbol, Assembly)                    \
+  void Name(void) __asm__(Symbol);                                             \
+  __asm__(Assembly);
+#include "neverd/runtime/DarwinArm64eSystemUnwind.def"
+
 // Recover from the interrupted stack before changing either native consumer.
 static inline bool
 ndDarwinArm64eReadCaller(const ucontext_t *Context, NDDarwinArm64eUnwindRow Row,
@@ -130,17 +135,33 @@ static inline bool ndDarwinArm64eDeliverSignalException(
   if (PC < Site.Begin || PC >= Site.End || PC % NDArm64eInstructionAlignment)
     return false;
   if (Site.AtProtectedCall) {
-    // The interrupted frame keeps its original signed return in its spill.
-    // The thunk can therefore use LR without destroying that frame's caller.
     NDDarwinArm64eCursor Caller = ndDarwinArm64eSignalCursor(Context);
+    const uintptr_t InterruptedSP = Caller.SP;
     if ((Site.ProtectedReturn &&
          Site.ProtectedReturn % NDArm64eInstructionAlignment) ||
-        !Row.SavedLR || Site.Begin != PC ||
-        Site.End - PC != NDArm64eInstructionAlignment || Caller.SP < Low ||
-        Caller.SP > High || Caller.SP % NDArm64eStackAlignment ||
+        Site.Begin != PC || Site.End - PC != NDArm64eInstructionAlignment ||
+        Caller.SP < Low || Caller.SP > High ||
+        Caller.SP % NDArm64eStackAlignment ||
+        (!Row.SavedLR && (Row.Signing != NDArm64eSignedIBWithCFA ||
+                          Caller.SP - Low < NDArm64eLiveLRBridgeBytes)) ||
         !ndDarwinArm64eStepFrameWithPAuthLR(&Caller, Row, Low, High,
                                             HasPAuthLR))
       return false;
+    if (!Row.SavedLR) {
+      // Preserve the genuine LR and SP in the signal context. The bridge
+      // allocates its frame after sigreturn and restores LR independently of
+      // the virtual protected edge. Nothing writes below interrupted SP here.
+      State->__x[NDArm64eDeliveryRegister] = (uintptr_t)Deliver;
+      State->__x[NDArm64eVirtualReturnRegister] =
+          (uintptr_t)ptrauth_sign_unauthenticated(
+              (void *)(Site.ProtectedReturn ? Site.ProtectedReturn : Site.End),
+              ptrauth_key_return_address, InterruptedSP);
+      State->__x[0] = (uintptr_t)Payload;
+      arm_thread_state64_set_pc_fptr(*State,
+                                     (void *)&ndDarwinArm64eLiveLRBridge);
+      return true;
+    }
+    // A spilled original return lets the thunk use LR directly.
     void *Return = ptrauth_sign_unauthenticated(
         (void *)(Site.ProtectedReturn ? Site.ProtectedReturn : Site.End),
         ptrauth_key_function_pointer, 0);

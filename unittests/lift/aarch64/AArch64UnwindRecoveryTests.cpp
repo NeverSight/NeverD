@@ -621,6 +621,58 @@ TEST(AArch64ImplicitUnwind, ProtectedNonCallNeedsAnUnchangedCompleteRow) {
   }
 }
 
+TEST(AArch64ImplicitUnwind, ProtectedNonCallRetainsTheLiveCallerReturn) {
+  Frame F{SignB, Allocate,       LoadInFrame, Skip,
+          Nop,   StoreLRAboveSP, Call,        CompilerTrap};
+  F.addHandler(LiveProtectedBegin, LiveProtectedEnd, LiveLandingPad);
+  F.Function.Dwarf->Instructions = {
+      {.Kind = CFIOpKind::AdvanceLoc,
+       .Offset = LiveProtectedBegin * sizeof(uint32_t)},
+      {.Kind = CFIOpKind::DefCFAOffset,
+       .CodeOffset = LiveProtectedBegin * sizeof(uint32_t),
+       .Offset = LiveFrameWords * kRegisterBytes},
+      {.Kind = CFIOpKind::AdvanceLoc,
+       .CodeOffset = LiveProtectedBegin * sizeof(uint32_t),
+       .Offset = (LiveLRSpilled - LiveProtectedBegin) * sizeof(uint32_t)},
+      {.Kind = CFIOpKind::Offset,
+       .CodeOffset = LiveLRSpilled * sizeof(uint32_t),
+       .Register = kLR,
+       .Offset = -kRegisterBytes}};
+  auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+  ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+  const auto PC = LiveProtectedBegin * sizeof(uint32_t);
+  const auto &Row = aarch64UnwindRowAt(*Rows, PC);
+  ASSERT_EQ(Row.Registers[kLR].Location, AArch64UnwindRegister::SameValue);
+  auto Site =
+      prepareDarwinArm64eExceptionSite(F.Image, F.Function, *Rows, PC, 0);
+  ASSERT_TRUE(Site);
+  EXPECT_TRUE(Site->AtProtectedCall);
+  EXPECT_EQ(Site->Begin, PC);
+  EXPECT_EQ(Site->End, PC + sizeof(uint32_t));
+}
+
+TEST(AArch64ImplicitUnwind, LiveReturnNeedsTheSystemCFARow) {
+  Frame F{SignB, Allocate,       LoadInFrame, Skip,
+          Nop,   StoreLRAboveSP, Call,        CompilerTrap};
+  F.addHandler(LiveProtectedBegin, LiveProtectedEnd, LiveLandingPad);
+  // The implicit proof can recover SP + 16 despite the declared SP + 32.
+  // The language personality still uses that declared row, so delivery fails.
+  F.Function.Dwarf->Instructions = {
+      {.Kind = CFIOpKind::AdvanceLoc,
+       .Offset = LiveProtectedBegin * sizeof(uint32_t)},
+      {.Kind = CFIOpKind::DefCFAOffset,
+       .CodeOffset = LiveProtectedBegin * sizeof(uint32_t),
+       .Offset = MismatchedLiveFrameWords * kRegisterBytes}};
+  auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+  ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+  const auto PC = LiveProtectedBegin * sizeof(uint32_t);
+  const auto &Row = aarch64UnwindRowAt(*Rows, PC);
+  ASSERT_EQ(Row.CFAOffset, LiveFrameWords * kRegisterBytes);
+  ASSERT_EQ(Row.Registers[kLR].Location, AArch64UnwindRegister::SameValue);
+  EXPECT_FALSE(
+      prepareDarwinArm64eExceptionSite(F.Image, F.Function, *Rows, PC, 0));
+}
+
 TEST(AArch64ImplicitUnwind, CompactProtectedNonCallUsesTheProvenFrameRecord) {
   for (auto Operation : {Nop, ClobberLR, ByteInsideLR, PopFP}) {
     SCOPED_TRACE(Operation);

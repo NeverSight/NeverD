@@ -339,6 +339,8 @@ ASYNC_FRAME_TEXT(kSignalNonCallDriver, "-DNEVERD_NONCALL_SCOPE")
 ASYNC_FRAME_TEXT(kSignalNonCallSource, "noncall.S")
 ASYNC_FRAME_TEXT(kSignalObjCPersonality, "-DNEVERD_OBJC_PERSONALITY")
 ASYNC_FRAME_TEXT(kSignalCompactFrame, "-DNEVERD_COMPACT_FRAME")
+ASYNC_FRAME_TEXT(kSignalLiveLR, "-DNEVERD_LIVE_LR")
+ASYNC_FRAME_TEXT(kSignalLiveLRBridge, "_ndDarwinArm64eLiveLRBridge")
 ASYNC_FRAME_TEXT(kSignalFramelessFrame, "-DNEVERD_FRAMELESS_FRAME")
 ASYNC_FRAME_TEXT(kSignalEntryPad, "-DNEVERD_ENTRY_LANDING_PAD")
 ASYNC_FRAME_TEXT(kSignalGeneratedExplicitLSDA,
@@ -370,7 +372,14 @@ Lfunc_begin:
  nop
 #endif
  pacibsp
-#ifdef NEVERD_FRAMELESS_FRAME
+#ifdef NEVERD_LIVE_LR
+ stp x20, x19, [sp, #-32]!
+ .cfi_def_cfa_offset 32
+ .cfi_offset x20, -32
+ .cfi_offset x19, -24
+ mov x9, #0x5a
+ stur x9, [sp, #-8]
+#elif defined(NEVERD_FRAMELESS_FRAME)
  stp x19, x30, [sp, #-32]!
  .cfi_def_cfa_offset 32
  .cfi_offset x19, -32
@@ -404,6 +413,15 @@ Lprotected:
 Lprotected_end:
  b Lprotected
 Lcleanup:
+#ifdef NEVERD_LIVE_LR
+ // The caller return is live at the protected instruction. The cleanup now
+ // calls _Unwind_Resume, so its own CFI must describe this later LR spill.
+ str x30, [sp, #16]
+ .cfi_offset x30, -16
+ ldur x9, [sp, #-8]
+ sub x9, x9, #0x5a
+ cbnz x9, Lresume_end
+#endif
  ldr w9, [x19]
  mov w10, #10
  madd w9, w9, w10, wzr
@@ -578,6 +596,15 @@ static void observe(int, siginfo_t *, void *ctx) {
                                            &exception) ||
       memcmp(&before, uc->uc_mcontext, sizeof(before)))
     _exit(12);
+  if (site.AtProtectedCall && !row.SavedLR) {
+    const auto sp = arm_thread_state64_get_sp(uc->uc_mcontext->__ss);
+    const auto tightLow = sp - NDArm64eLiveLRBridgeBytes + NDArm64eStackAlignment;
+    if (ndDarwinArm64eDeliverSignalException(
+            uc, site, row, saved, savedCount, &vectors, tightLow, high, false,
+            deliver, &exception) ||
+        memcmp(&before, uc->uc_mcontext, sizeof(before)))
+      _exit(20);
+  }
   // This synchronous breakpoint or managed checkpoint interrupts only the
   // tight test loop. Exercise a language throw raised and caught *inside*
   // the handler; retain its identity across the kernel's signal return.
@@ -605,6 +632,12 @@ static void observe(int, siginfo_t *, void *ctx) {
                                             &vectors, low, high, false, deliver,
                                             &exception))
     _exit(13);
+  if (site.AtProtectedCall && !row.SavedLR &&
+      (arm_thread_state64_get_sp(before.__ss) !=
+           arm_thread_state64_get_sp(uc->uc_mcontext->__ss) ||
+       arm_thread_state64_get_lr(before.__ss) !=
+           arm_thread_state64_get_lr(uc->uc_mcontext->__ss)))
+    _exit(21);
   active.store(false);
   handled.store(true);
 }
