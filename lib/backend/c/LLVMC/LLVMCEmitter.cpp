@@ -3739,7 +3739,8 @@ bool LLVMCEmitter::emit(llvm::Module &Mod, llvm::raw_ostream &Out,
         continue;
       const auto Function = Sources->Functions.find(Observation.Function);
       if (Function == Sources->Functions.end() ||
-          Function->second != Instruction->getFunction())
+          static_cast<llvm::Value *>(Function->second) !=
+              Instruction->getFunction())
         continue;
       const auto [At, Added] = SourceAddresses.try_emplace(
           Instruction, Observation.Occurrence.Address);
