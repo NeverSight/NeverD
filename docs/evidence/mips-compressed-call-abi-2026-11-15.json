@@ -1,5 +1,5 @@
 {
-  "implementation_commit": "36ebaec1cc0fe3b3646cfca094d5912936a7dc6a",
+  "implementation_commit": "094120516dae79ef7512cc44c70f763beb252fe1",
   "dev_base": "71c27bd7003f3781c2a048e4ed038b030d53da10",
   "host": "macOS arm64, Release",
   "capstone_commit": "0e6390fe9f8fa38c431ccbf7e8c54692afd3181e",
@@ -7,7 +7,7 @@
   "unicorn_reference_sha256": "92f0e64e9eec8ef02c710a2b5ed998b68b980d3ea637803b3607fa51686e4d82",
   "qualified_binary_sha256": {
     "neverd": "b3b5b0cffb8f36acf4784e4367f35576d5c70ab38573d19db1558cf033b624bf",
-    "libneverd.dylib": "95e8abef815b1d95f503111dee3f64d0f99a09febe22011a7100de150eaa9448",
+    "libneverd.dylib": "b7b6864f1c8e09c01f7332a62c6751bb224750d479e58bb9bd68c04311afcbb0",
     "neverd-mips-bench": "7091f68c0de55214fa0fc0ac77a412feca08c4368e50e74c98a56e43f4fa6930",
     "neverd-mips-request-bench": "5f18baa849687945e3b804b102f7ca9da1f196e845f399f2f43851b7883adf9e"
   },
@@ -29,7 +29,7 @@
       "original_cases": 1120,
       "source_builds": 272,
       "rebuilt_comparisons": 5440,
-      "result_sha256": "198d86ff170eb87fd476f1d3757885d4e486d01aa003f60b790aee35d015d142",
+      "result_sha256": "ddc5035a6528977929be10fa3abe2b1f18224c07733d372cfc85fe7032bc0562",
       "commands_sha256": "cc55373755d298a70b0f4a219345e457bf754ee83e78d8db9d8d7035275d861d",
       "compiler": "GNU MIPS64 GCC 12.2.0 (Debian 12.2.0-14cross5)",
       "views": [
@@ -59,7 +59,7 @@
       "original_cases": 3360,
       "source_builds": 816,
       "rebuilt_comparisons": 16320,
-      "result_sha256": "01be2833b6a7bb1f2a3d6bea88274cb3c39af4e5844872a400deda82b6a27527",
+      "result_sha256": "a5a2baad5c18837bacd6ae2005333fa3d63f1074d20d06e2451fa025c3eda1df",
       "commands_sha256": "9ed67762b1eb708ef181f5cf012e387fc66e18a0fb7903ffed375dc33391475b",
       "compiler": "GNU MIPS64 GCC 12.2.0 (Debian 12.2.0-14cross5)",
       "views": [
@@ -87,7 +87,7 @@
       "original_cases": 1120,
       "source_builds": 272,
       "rebuilt_comparisons": 5440,
-      "result_sha256": "fa8c3991f72838d2b0ce3fb5b23f316abd5ab3cd32c27e53566da3708aa291b9",
+      "result_sha256": "a37880f323d58660b7ca798377a47b5f5abb99feaec62545cd394889f62c5dc1",
       "commands_sha256": "e7161eed39b39fb3c8a65b62ff3e576883e220af362037bea144b9ffae10106a",
       "compiler": "GNU MIPS64 GCC 12.2.0 (Debian 12.2.0-14cross5)",
       "views": [
@@ -117,7 +117,7 @@
       "original_cases": 3360,
       "source_builds": 816,
       "rebuilt_comparisons": 16320,
-      "result_sha256": "40d745856e3a162bc60662c343cd4a03ba20642f676ed90e5a64a74de8686d82",
+      "result_sha256": "2a703c85ec631bf69e5385610573be98872501c4b7fe3e469ffb95b547e54acd",
       "commands_sha256": "de88fa4f133cf9b5486d5d5a90e551ff05eb8f3294fe9596b46428a42cb5a3c8",
       "compiler": "GNU MIPS64 GCC 12.2.0 (Debian 12.2.0-14cross5)",
       "views": [
@@ -165,20 +165,20 @@
     "owner_log_sha256": "4a40ffabf180143c9e91797099ecbc8c62a57b774c1533c2144c2f7538edae10"
   },
   "owner_tests": {
-    "total": 1430,
-    "passed": 1411,
+    "total": 1431,
+    "passed": 1412,
     "skipped": 19,
     "failed": 0,
     "skip_scope": "17 session tests require unavailable local/platform fixtures; two Windows segment source tests are platform-specific",
-    "junit_sha256": "7cbf6b285eb23dc2d67ff5f9514c4134d1516b9e8b35da4e3422987d2e47fb34",
-    "log_sha256": "f93a6a9a67bcf28ad733a9455468bbb771a567f464b080cf36a5903d7bed7678",
+    "junit_sha256": "f635c1aa415c6ada3f5bfd50d6407addf1487d00eb8cb0aea1addd7e3aaa7f2e",
+    "log_sha256": "6537942650bd1a0cf566725b8ea6595a0651c7917f648d74270858cf81d165d8",
     "artifact_lifecycle_passed": 8,
     "artifact_log_sha256": "6a39533282923fd58a7ffae876c26f6c4727a82552f356685c0aa8d4482b4ba8"
   },
   "ubus_call": {
     "original_cases": 12,
     "rebuilt_comparisons": 48,
-    "result_sha256": "e820a4f1680e0d671f08a50ad8827873802f33c366b719008341e5c70319caf4",
+    "result_sha256": "35353c39a97c04a4bc702b8d5b75a0cc9b8339e89bcca6e2d705a64296835ef9",
     "firmware_sha256": "6e1129aa58cb398a2453876ea4aa2395feecc84ecf78ed8ab43efd534b40e475",
     "entry": "0x4012d0"
   },
@@ -189,5 +189,10 @@
     "Historical MIPS I-III scheduling remains unsupported. Instruction availability alone does not satisfy load, HI/LO, FP comparison or coprocessor timing.",
     "This receipt does not certify complete MIPS ISA, system or ABI coverage.",
     "Performance samples and dependency/toolchain manifests are retained in the ignored build directory; performance and three-platform CI are separate qualification gates."
+  ],
+  "source_output_regressions": [
+    "n32 native __int128 fields in HighC and LLVMC",
+    "GCC bit-copy compatibility for compressed callers and classic callees",
+    "LLVMC emits GCC compatibility only when the selected body or records require bit casts, including exact NaN payloads"
   ]
 }

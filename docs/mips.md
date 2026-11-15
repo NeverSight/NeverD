@@ -454,6 +454,9 @@ The MIPS source prelude supplies a single-evaluation, size-checked raw bit copy
 for GCC C, whose frontend lacks Clang's `__builtin_bit_cast`. This preserves
 pointer/integer and floating bit patterns without aliasing through another type.
 Classic functions in mixed-mode outputs use the same compatibility definition.
+LLVMC emits it only when the selected bodies or record definitions use the
+bit-copy builtin, so unrelated floating functions cannot enlarge an integer
+function's cached source text.
 Both emitters retain native `__int128` for n32: its pointers are 32 bits, but
 the GNU-compatible compiler type follows its 64-bit register architecture.
 Targets lacking that type continue to use the existing `_BitInt(128)` mapping.

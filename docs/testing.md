@@ -24319,6 +24319,10 @@ guards. The oracle's own tests also cover sign extension on 64-bit loads.
 `MicroMIPSPipelineSource.N32RetainsNativeWideRecordTypes` and
 `HighCIntegerWidths.A32BitTargetSpellsA128BitIntegerAsBitInt` distinguish n32's
 native 128-bit type from a target with only 32-bit registers in both emitters.
+`MicroMIPSPipelineSource.GCCBitCastPreludeFollowsTheSelectedBody` separates an
+integer identity from a NaN payload constant in the same module, across all
+six ABI/byte-order targets and classic/micro attributes. Only the selected
+constant body requires the GCC compatibility prelude.
 
 `MIPSLegacyFP` in `NeverDMIPSIntegerTests` covers classic FR=1 pre-R6 arithmetic,
 conversions, sign operations, COP1X multiply-add and all 32 S/D predicates at
