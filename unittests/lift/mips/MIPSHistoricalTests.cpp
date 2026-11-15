@@ -154,6 +154,19 @@ TEST(MIPSHistorical, TimingAndCompressedProfilesCannotBypassAdmission) {
     }
 }
 
+TEST(MIPSHistorical, PhysicalPreprocessingDoesNotLeakAcrossArchitectures) {
+  Decoder D;
+  for (unsigned Level : {4, 5}) {
+    ASSERT_TRUE(D.init(historicalImage(Arch::MIPS64, Level)));
+    ASSERT_TRUE(D.init(Arch::X64));
+    // These four bytes alias a physical R6 FP word if the MIPS guard leaks.
+    const uint8_t Bytes[] = {0x1c, 0x00, 0x00, 0x46}; // SBB al,0; ...
+    DecodedInsn Decoded;
+    ASSERT_EQ(D.decodeOne(Bytes, sizeof(Bytes), 0x10000, Decoded), 2u);
+    EXPECT_EQ(Decoded.Raw->id, X86_INS_SBB);
+  }
+}
+
 TEST(MIPSHistorical, PairedRearrangementAliasesKeepPhysicalBytesAndOperands) {
   struct Case {
     uint32_t Word;

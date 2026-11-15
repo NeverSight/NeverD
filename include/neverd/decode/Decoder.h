@@ -418,6 +418,7 @@ private:
   InstructionMode CurrentMode = InstructionMode::Default;
   uint8_t MIPSISARevision = 2;
   uint8_t MIPSHistoricalISA = 0;
+  bool MIPSNeedsDecodeGuard = false;
   bool Strict = true;
   bool Detail = true;
   bool Text = true;

@@ -208,6 +208,7 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
   CurrentMode = Mode;
   MIPSISARevision = Revision;
   MIPSHistoricalISA = Historical;
+  MIPSNeedsDecodeGuard = NewMIPS && (Revision == 6 || Historical);
   MIPSInvalidAddressBits = mipsInvalidAddressBits(TheArch, Mode);
   Detail = true;
   Text = true;
@@ -336,20 +337,27 @@ LLVM_ATTRIBUTE_NOINLINE bool historicalMIPSWordAvailable(const uint8_t *Bytes,
 LLVM_ATTRIBUTE_ALWAYS_INLINE bool
 Decoder::decodePhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
   InsnBuf->illegal = false;
-  if (MIPSHistoricalISA &&
-      !historicalMIPSWordAvailable(Bytes, Len, TargetArch, MIPSHistoricalISA))
-    return false;
-  if (MIPSISARevision == 6 && CurrentMode == InstructionMode::MicroMIPS)
-    return decodeMicroMIPSRelease6(Bytes, Len, Addr);
-  if (MIPSISARevision == 6 && Len >= 4) {
-    const auto Word =
-        readTargetEndian<uint32_t>(Bytes, archLittleEndian(TargetArch));
-    if ((Word & 0xffc0003c) == 0x4600001c)
-      return decodeR6FloatCompare(Bytes, Word, Addr);
-    // The physical decoder aliases paired LL/SC to an offset form and swaps
-    // the n64 SC operands. Own SPECIAL3 before public decoding.
-    if ((Word & 0xfc00002e) == 0x7c000026)
-      return decodeMIPSReservation(Bytes, Word, Addr);
+  // Admission fixes whether this profile needs physical preprocessing. Keep
+  // historical checks off ordinary MIPS and unrelated architecture decoders.
+  if (MIPSNeedsDecodeGuard) {
+    if (MIPSHistoricalISA) {
+      if (!historicalMIPSWordAvailable(Bytes, Len, TargetArch,
+                                       MIPSHistoricalISA))
+        return false;
+    } else {
+      if (CurrentMode == InstructionMode::MicroMIPS)
+        return decodeMicroMIPSRelease6(Bytes, Len, Addr);
+      if (Len >= 4) {
+        const auto Word =
+            readTargetEndian<uint32_t>(Bytes, archLittleEndian(TargetArch));
+        if ((Word & 0xffc0003c) == 0x4600001c)
+          return decodeR6FloatCompare(Bytes, Word, Addr);
+        // The physical decoder aliases paired LL/SC to an offset form and
+        // swaps the n64 SC operands. Own SPECIAL3 before public decoding.
+        if ((Word & 0xfc00002e) == 0x7c000026)
+          return decodeMIPSReservation(Bytes, Word, Addr);
+      }
+    }
   }
   // POOL32S vector forms have no microMIPS entries in Capstone. Avoid a
   // failed physical decode for every vector arithmetic or load/store opcode.
