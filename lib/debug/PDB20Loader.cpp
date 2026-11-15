@@ -8,6 +8,7 @@
 #include "neverd/debug/PDBLoader.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/support/FilePath.h"
+#include "neverd/types/CodeViewFunctionParameters.h"
 
 #include "llvm/DebugInfo/CodeView/CodeView.h"
 #include "llvm/DebugInfo/CodeView/TypeIndex.h"
@@ -319,6 +320,7 @@ struct TypeStore {
     DebugCallConv CallConv = DebugCallConv::Unknown;
     std::vector<TypeRef> Args;
     TypeRef ThisType;
+    bool Variadic = false;
   };
 
   std::optional<ProcType> procedure(uint32_t Index) const {
@@ -351,23 +353,32 @@ struct TypeStore {
     } else {
       return std::nullopt;
     }
+    if (!Out.Return)
+      return std::nullopt;
+    if (ArgList == 0 && Argc == 0)
+      return Out;
     const auto ArgIt = Records.find(ArgList);
-    if (ArgIt != Records.end() && ArgIt->second.Kind == LK::LF_ARGLIST &&
-        ArgIt->second.Data.size() >= 4) {
-      const uint32_t N =
-          llvm::support::endian::read32le(ArgIt->second.Data.data());
-      const uint32_t Limit = std::min<uint32_t>(N, Argc);
-      for (uint32_t I = 0; I < Limit; ++I) {
-        const uint32_t Off = 4 + I * 4;
-        if (Off + 4 > ArgIt->second.Data.size())
-          break;
-        const uint32_t TI =
-            llvm::support::endian::read32le(ArgIt->second.Data.data() + Off);
-        if (TI == 0)
-          continue;
-        TypeRef T = resolve(TI);
-        Out.Args.push_back(T ? T : NdType::makeInt(4, true));
-      }
+    if (ArgIt == Records.end() || ArgIt->second.Kind != LK::LF_ARGLIST ||
+        ArgIt->second.Data.size() < 4)
+      return std::nullopt;
+    const uint32_t N =
+        llvm::support::endian::read32le(ArgIt->second.Data.data());
+    if (uint64_t(N) * 4 > ArgIt->second.Data.size() - 4)
+      return std::nullopt;
+    const auto Argument = [&](size_t I) {
+      return llvm::support::endian::read32le(ArgIt->second.Data.data() + 4 +
+                                             I * 4);
+    };
+    const auto Parameters = types::codeViewFunctionParameters(
+        Argc, N, [&](size_t I) { return Argument(I) == 0; });
+    if (!Parameters)
+      return std::nullopt;
+    Out.Variadic = Parameters->Variadic;
+    for (size_t I = 0; I < Parameters->FixedCount; ++I) {
+      TypeRef T = resolve(Argument(I));
+      if (!T)
+        return std::nullopt;
+      Out.Args.push_back(std::move(T));
     }
     return Out;
   }
@@ -728,10 +739,12 @@ loadPdb20DebugContext(const std::filesystem::path &PdbPath,
     if (Proc) {
       FS.CallConv = Proc->CallConv;
       FS.ReturnType = Proc->Return;
+      FS.IsVariadic = Proc->Variadic;
       AnyTypedSignature = AnyTypedSignature || static_cast<bool>(Proc->Return);
       if (FS.CallConv == DebugCallConv::Thiscall && Proc->ThisType)
         FS.Params.emplace_back("this", Proc->ThisType);
-    }
+    } else if (TypeIt != TypeIndices.end())
+      FS.PlatformConvention = false;
     auto ParamIt = ParamsByFunc.find(VA);
     if (ParamIt != ParamsByFunc.end()) {
       std::sort(ParamIt->second.begin(), ParamIt->second.end(),

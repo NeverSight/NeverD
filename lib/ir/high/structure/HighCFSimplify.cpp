@@ -409,70 +409,6 @@ void cleanupGuardBeforeSwitch(HighFunc &Func) {
 }
 
 //===----------------------------------------------------------------------===//
-// inlineGotoReturns — replace goto→return-block with inline return
-//===----------------------------------------------------------------------===//
-
-void MedToHighConverter::inlineGotoReturns(HighFunc &Func, const MedFunc &Med) {
-  std::map<va_t, ExprPtr> ReturnBlocks;
-  for (auto &MedBlock : Med.Blocks) {
-    if (MedBlock.Ops.size() < 2 || MedBlock.Ops.size() > 4)
-      continue;
-    auto &LastOp = MedBlock.Ops.back();
-    if (LastOp.Opcode != NdOp::RETURN)
-      continue;
-    // Only register bookkeeping (epilogue restores, stack adjustment) may
-    // sit beside the return value: a goto replaced by `return v` must not
-    // skip a store or call, or a load that computes v itself.
-    bool OnlyBookkeeping = true;
-    for (size_t J = 0; J + 1 < MedBlock.Ops.size(); ++J) {
-      const MedOp &Op = MedBlock.Ops[J];
-      OnlyBookkeeping &=
-          Op.Output.Kind == MedVar::Reg && Op.Opcode != NdOp::STORE &&
-          Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL &&
-          Op.Opcode != NdOp::INTRINSIC && Op.Opcode != NdOp::ATOMIC_XCHG &&
-          Op.Opcode != NdOp::ATOMIC_ADD && Op.Opcode != NdOp::ATOMIC_CMPXCHG;
-    }
-    if (!OnlyBookkeeping)
-      continue;
-    for (int J = static_cast<int>(MedBlock.Ops.size()) - 2; J >= 0; --J) {
-      auto &CurrOp = MedBlock.Ops[J];
-      if (CurrOp.Output.Kind == MedVar::Reg && CurrOp.Output.RegOff == 0) {
-        const bool DefinedHere = std::any_of(
-            MedBlock.Ops.begin(), MedBlock.Ops.end(), [&](const MedOp &Op) {
-              return CurrOp.NumInputs >= 1 && !Op.Output.isConst() &&
-                     Op.Output == CurrOp.Inputs[0];
-            });
-        if ((CurrOp.Opcode == NdOp::COPY || CurrOp.Opcode == NdOp::INT_ZEXT) &&
-            CurrOp.NumInputs >= 1 && !DefinedHere)
-          ReturnBlocks[MedBlock.Ops.front().Addr] =
-              medvarToExpr(CurrOp.Inputs[0]);
-        break;
-      }
-    }
-  }
-
-  std::function<void(std::vector<HighStmt> &)> Rewrite;
-  Rewrite = [&](std::vector<HighStmt> &Stmts) {
-    for (auto &S : Stmts) {
-      if (S.Kind == StmtKind::Goto && S.GotoTarget != 0 &&
-          S.GotoTarget != InvalidVA) {
-        auto It = ReturnBlocks.find(S.GotoTarget);
-        if (It != ReturnBlocks.end()) {
-          S.Kind = StmtKind::Return;
-          S.RetVal = It->second;
-        }
-      }
-      Rewrite(S.Body);
-      Rewrite(S.ElseBody);
-      for (auto &C : S.Cases)
-        Rewrite(C.Body);
-      Rewrite(S.DefaultBody);
-    }
-  };
-  Rewrite(Func.Body);
-}
-
-//===----------------------------------------------------------------------===//
 // Merge consecutive if-blocks with the same condition
 //===----------------------------------------------------------------------===//
 
@@ -5660,7 +5596,6 @@ void MedToHighConverter::simplifyControlFlow(HighFunc &Func,
   simplifyNestedGotos(Func.Body);
 
   mergeConsecutiveCondBlocks(Func.Body);
-  inlineGotoReturns(Func, Med);
   cleanupGuardBeforeSwitch(Func);
 
   Func.Body.erase(std::remove_if(Func.Body.begin(), Func.Body.end(),

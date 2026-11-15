@@ -169,6 +169,30 @@ class AgentBundleInputsTests(unittest.TestCase):
             ])
 
 
+class FrameworkDeploymentTests(unittest.TestCase):
+    def test_version_only_framework_gets_relative_bundle_links(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root).resolve()
+            source = root / "source/Python.framework"
+            version = source / "Versions/3.14"
+            (version / "Resources").mkdir(parents=True)
+            (version / "Python").write_bytes(bytes.fromhex("cffaedfe"))
+            (version / "Resources/Info.plist").write_bytes(plistlib.dumps({
+                "CFBundleExecutable": "Python", "CFBundlePackageType": "FMWK"}))
+            frameworks = root / "Frameworks"
+            origins = set()
+            PACKAGE.copy_dependency(version / "Python",
+                                    Path("Python.framework/Versions/3.14/Python"),
+                                    frameworks, origins)
+            copied = frameworks / "Python.framework"
+            self.assertEqual((copied / "Versions/Current").readlink(), Path("3.14"))
+            self.assertEqual((copied / "Python").resolve(), copied / "Versions/3.14/Python")
+            self.assertEqual((copied / "Resources").resolve(), copied / "Versions/3.14/Resources")
+            self.assertFalse((source / "Versions/Current").exists())
+            self.assertFalse((source / "Python").exists())
+            self.assertEqual(origins, {(version / "Python").resolve()})
+
+
 class HypervisorSigningTests(unittest.TestCase):
     def test_final_recursive_signing_preserves_and_checks_engine_host_entitlements(self):
         with tempfile.TemporaryDirectory() as root:

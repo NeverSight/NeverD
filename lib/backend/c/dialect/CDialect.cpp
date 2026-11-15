@@ -106,8 +106,8 @@ private:
     const size_t SourceOffset = Text.data() - T.Source.data();
     if (Opts.Dialect != SourceDialect::Cpp)
       return Text.str();
-    // Only identifiers are respelled. Strings, comments and assembler labels
-    // continue to name the original bytes and symbols.
+    // Identifiers and certified virtual-target annotations are respelled.
+    // Strings, ordinary comments and assembler labels keep their bytes.
     auto Tokens = lex(Text);
     if (!Tokens) {
       llvm::consumeError(Tokens.takeError());
@@ -128,6 +128,8 @@ private:
         Out += "alignas";
       else if (Tok.Kind == TokenKind::Identifier && Tok.Text == "_Alignof")
         Out += "alignof";
+      else if (Tok.Kind == TokenKind::Comment)
+        Out += commentText({Tok.Text, Tok.Offset});
       else
         Out += SpellNames && Tok.Kind == TokenKind::Identifier ? name(Tok.Text)
                                                                : Tok.Text.str();

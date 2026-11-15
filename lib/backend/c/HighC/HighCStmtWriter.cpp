@@ -118,16 +118,18 @@ const HighExpr *stmtCallExpr(const HighStmt &Stmt) {
   return nullptr;
 }
 
-bool isNoReturnCallStmt(const HighStmt &Stmt) {
-  if (isCxxThrowStmt(Stmt))
-    return true;
-  const HighExpr *E = stmtCallExpr(Stmt);
-  if (!E)
-    return false;
-  return isNoreturnCallExpr(*E);
-}
-
 using TryExitTest = llvm::function_ref<bool(const HighStmt &)>;
+
+/// Whether \p Stmt holds a list of statements: a body, an arm, a case or a
+/// handler.
+bool holdsStatements(const HighStmt &Stmt) {
+  return !Stmt.Body.empty() || !Stmt.ElseBody.empty() ||
+         !Stmt.DefaultBody.empty() ||
+         llvm::any_of(Stmt.Cases,
+                      [](const auto &Case) { return !Case.Body.empty(); }) ||
+         llvm::any_of(Stmt.EHClauseBodies,
+                      [](const auto &Body) { return !Body.empty(); });
+}
 
 bool hasFallthroughExceptClause(const HighStmt &Stmt) {
   return Stmt.Kind == StmtKind::SEHTry && Stmt.EHIsReducible &&
@@ -333,6 +335,13 @@ bool isZeroConstant(const HighExpr &E) {
 
 } // namespace
 
+bool isNoReturnCallStmt(const HighStmt &Stmt) {
+  if (isCxxThrowStmt(Stmt))
+    return true;
+  const HighExpr *E = stmtCallExpr(Stmt);
+  return E && isNoreturnCallExpr(*E);
+}
+
 void HighCWriter::emitIndent(int Indent) { emitCIndent(OS, Indent); }
 
 // GetExceptionCode() is only valid in the __except arm, so the arm stores it
@@ -433,7 +442,7 @@ void HighCWriter::writeCxxCleanupHandler(const HighStmt &Try,
       const bool SavedCleanup = InCxxCleanupBody;
       InEHClauseBody = true;
       InCxxCleanupBody = true;
-      writeStmtsIsolated(Try.EHClauseBodies[C], Indent);
+      writeStmtsIsolated(Try.EHClauseBodies[C], Indent, true);
       InEHClauseBody = SavedHandler;
       InCxxCleanupBody = SavedCleanup;
     } else if (Clause.FilterOrActionVA) {
@@ -464,6 +473,7 @@ bool HighCWriter::hasItaniumHandlerBodies(const HighStmt &Stmt) {
 
 void HighCWriter::writeCxxTry(const HighStmt &Try, int Indent,
                               llvm::function_ref<void(int)> WriteBody) {
+  const auto ProvedAtTry = DeferredFlagsProvedOne;
   std::vector<size_t> Handlers;
   std::vector<size_t> Cleanups;
   std::vector<size_t> NativeCleanups;
@@ -483,6 +493,11 @@ void HighCWriter::writeCxxTry(const HighStmt &Try, int Indent,
     OS << "try {\n";
   }
   WriteBody(Indent + (Nested ? 2 : 1));
+  // The handler is a different entry. Assignments inside the protected body
+  // are not facts there, and they are not facts after the try either: the
+  // handler can skip them.
+  DeferredFlagsProvedOne = ProvedAtTry;
+  forgetProvedFlagsWrittenIn(Try.Body);
   if (!Cleanups.empty()) {
     const int At = Indent + (Nested ? 1 : 0);
     emitIndent(At);
@@ -519,7 +534,7 @@ void HighCWriter::writeCxxTry(const HighStmt &Try, int Indent,
             llvm::StringRef(itaniumCatchType(Clause.TypeName)).ends_with("*")};
       else if (Named != CxxCatchNames.end())
         OpenCatchObjects.push_back(Named->second);
-      writeStmtsIsolated(Try.EHClauseBodies[C], Indent + 1);
+      writeStmtsIsolated(Try.EHClauseBodies[C], Indent + 1, true);
       if (Named != CxxCatchNames.end() &&
           Clause.Kind != HighEHClauseKind::ItaniumCatch)
         OpenCatchObjects.pop_back();
@@ -538,7 +553,15 @@ void HighCWriter::writeCxxTry(const HighStmt &Try, int Indent,
   OS << "\n";
 }
 
+std::string HighCWriter::failClosedComment(llvm::StringRef Reason,
+                                           va_t Addr) const {
+  return "/* " + Reason.str() + " at 0x" + llvm::utohexstr(Addr) + " */";
+}
+
 void HighCWriter::writeStmt(const HighStmt &Stmt, int Indent) {
+  llvm::SaveAndRestore<const HighStmt *> Observation(EmittingStmt, &Stmt);
+  llvm::SaveAndRestore<va_t> Site(EmittingAddr,
+                                  Stmt.Addr ? Stmt.Addr : EmittingAddr);
   auto Event = SourceRecorder && CurrentFunc
                    ? SourceRecorder->statement(CurrentFunc->Entry, Stmt)
                    : std::nullopt;
@@ -571,25 +594,32 @@ bool HighCWriter::writeDeferredUnknownCopy(const HighStmt &Stmt, int Indent) {
     OS << callStatementText(*Stmt.Val) << "\n";
     emitIndent(Indent);
     OS << Flag->second << " = 0;\n";
+    noteDeferredFlag(Flag->second, "0");
     return true;
   }
-  if (isUnknownCallOperand(Stmt.Val.get())) {
+  const DeferredAssignment Transfer = deferredAssignment(*Stmt.Val);
+  if (Transfer.Availability == c_availability::FlagWrite::Unknown) {
     emitIndent(Indent);
     OS << Flag->second << " = 0;\n";
+    noteDeferredFlag(Flag->second, "0");
     return true;
   }
   std::string Available = "1";
-  const HighExpr *Value = peelIntegerViewOps(Stmt.Val.get());
-  if (Value && (Value->Kind == ExprKind::Var || Value->Kind == ExprKind::Phi))
-    if (auto Source =
-            DeferredUnknownFlags.find(copyForwardName(varName(Value->Var)));
-        Source != DeferredUnknownFlags.end())
-      Available = Source->second;
+  if (Transfer.Availability == c_availability::FlagWrite::Copy)
+    Available = DeferredUnknownFlags.at(Transfer.Source);
+  // A copy of a flag already printed as 1 is that same constant.
+  if (Available != "1" && DeferredFlagsProvedOne.count(Available))
+    Available = "1";
   std::string Payload;
   {
     llvm::SaveAndRestore<bool> Transport(ReadingDeferredPayload,
                                          Available != "1");
     Payload = exprStr(*Stmt.Val);
+    // Availability changes when the value may be read, not its C carrier.
+    // A typed call result still needs the destination's normal conversion.
+    const TypeRef Declared = declaredTypeNamed(Name);
+    Payload = assignedText(Declared ? Declared : Stmt.Dst->Type, *Stmt.Val,
+                           std::move(Payload));
   }
   // The zero is only an unavailable payload. It cannot become a recovered
   // machine value: every observation checks the accompanying availability.
@@ -602,14 +632,45 @@ bool HighCWriter::writeDeferredUnknownCopy(const HighStmt &Stmt, int Indent) {
   OS << ";\n";
   emitIndent(Indent);
   OS << Flag->second << " = " << Available << ";\n";
+  noteDeferredFlag(Flag->second, Available);
   return true;
 }
 
+void HighCWriter::noteDeferredFlag(const std::string &Flag,
+                                   llvm::StringRef Available) {
+  if (Available == "1")
+    DeferredFlagsProvedOne.insert(Flag);
+  else
+    DeferredFlagsProvedOne.erase(Flag);
+}
+
+void HighCWriter::forgetProvedFlagsWrittenIn(
+    const std::vector<HighStmt> &Stmts) {
+  // Nothing proved, so no fact a write could invalidate. The walk is the
+  // whole region; skip it until a constant 1 actually exists.
+  if (DeferredFlagsProvedOne.empty() || DeferredUnknownFlags.empty())
+    return;
+  walkStmts(Stmts, [&](const HighStmt &S) {
+    if (DeferredFlagsProvedOne.empty() || stmtSuppressedAsDead(S) ||
+        S.Kind != StmtKind::Assign || !S.Dst ||
+        (S.Dst->Kind != ExprKind::Var && S.Dst->Kind != ExprKind::Phi))
+      return;
+    const auto Flag = DeferredUnknownFlags.find(varName(S.Dst->Var));
+    if (Flag != DeferredUnknownFlags.end())
+      DeferredFlagsProvedOne.erase(Flag->second);
+  });
+}
+
 void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
-  if (Analysis.DeadStmts.count(&Stmt) &&
-      !(Stmt.Kind == StmtKind::Assign && Stmt.Dst &&
-        (Stmt.Dst->Kind == ExprKind::Var || Stmt.Dst->Kind == ExprKind::Phi) &&
-        AmbiguousFrameAliases.count(varName(Stmt.Dst->Var))))
+  if (const auto Field = BitFieldStatements.find(&Stmt);
+      Field != BitFieldStatements.end()) {
+    if (!Field->second.empty()) {
+      emitIndent(Indent);
+      OS << Field->second << ";\n";
+    }
+    return;
+  }
+  if (stmtSuppressedAsDead(Stmt))
     return;
   // C++ spells the Itanium runtime's rethrow of the caught exception.
   if (Opts.StructuredExceptionSyntax &&
@@ -635,6 +696,16 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
       return;
     if (writeDeferredUnknownCopy(Stmt, Indent))
       return;
+    if (Stmt.Dst->Kind == ExprKind::Load && Stmt.Dst->Operands.size() == 1 &&
+        Stmt.Dst->Operands[0] && Stmt.Dst->Type && Stmt.Val->Type &&
+        Stmt.Dst->Type->Size == Stmt.Val->Type->Size &&
+        Stmt.Dst->MemoryOrdering == NdMemoryOrdering::None &&
+        Stmt.Dst->MemoryAddressSpace == NdMemoryAddressSpace::Default)
+      if (auto Update = bitFieldUpdate(*Stmt.Dst->Operands[0], *Stmt.Val)) {
+        emitIndent(Indent);
+        OS << *Update << ";\n";
+        break;
+      }
     if ((Stmt.Dst->Kind == ExprKind::Var || Stmt.Dst->Kind == ExprKind::Phi)) {
       const std::string DestRaw = varName(Stmt.Dst->Var);
       const std::string Printed = printedForwardedVar(DestRaw, 0);
@@ -700,6 +771,11 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
     }
     if (Stmt.Val->Kind == ExprKind::Call &&
         !Stmt.Val->IntrinsicOutputs.empty()) {
+      if (std::string Stack = reconstructedStackMemoryStatement(*Stmt.Val);
+          !Stack.empty()) {
+        writeCIndentedSnippet(OS, Stack, Indent);
+        break;
+      }
       auto Rendered = MultiOutputRender{Opts.Format != BinaryFormat::COFF}(
           Opts.TheArch, Stmt.Val->IntrinsicId, Stmt.Val->IntrinsicOutputs,
           Stmt.Val->Operands, [this](const HighExpr &E) { return exprStr(E); },
@@ -749,19 +825,20 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
       break;
     }
     // A callee declared to return nothing leaves no value in the result
-    // register. Keep the call; a destination that is still read gets the
-    // explicit unknown value rather than a void expression.
+    // register. Keep the call; unknown-only carriers are diagnosed by their
+    // observers and mixed carriers transport the availability flag above.
     if (knownVoidCall(*Stmt.Val) &&
         (Stmt.Dst->Kind == ExprKind::Var || Stmt.Dst->Kind == ExprKind::Phi)) {
       emitIndent(Indent);
       OS << callStatementText(*Stmt.Val) << "\n";
       const std::string Dest = varName(Stmt.Dst->Var);
       const std::string Printed = printedForwardedVar(Dest, 0);
-      if (!Analysis.OmittedCallResults.count(&Stmt) &&
+      if (!UnknownOnlyNames.count(Dest) &&
+          !Analysis.OmittedCallResults.count(&Stmt) &&
           (isEmittedParamName(Dest) || DeclaredCNames.count(Dest) ||
            DeclaredCNames.count(Printed))) {
         emitIndent(Indent);
-        OS << Printed << " = 0 /* unknown */;\n";
+        OS << Printed << " = " << unknownValueText(*Stmt.Dst, "value") << ";\n";
       }
       break;
     }
@@ -968,7 +1045,7 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
       if (auto It = PointerArgDestTypes.find(varName(Stmt.Dst->Var));
           It != PointerArgDestTypes.end() && It->second &&
           (!DeclaredPointer ||
-           typeToC(Declared->second) == typeToC(cDisplayType(It->second))) &&
+           typeToC(Declared->second) == typeToC(It->second)) &&
           (!DeclaredType || DeclaredType->Kind == NdTypeKind::Int ||
            DeclaredType->Kind == NdTypeKind::Unknown ||
            (DeclaredType->Kind == NdTypeKind::Ptr &&
@@ -1051,8 +1128,7 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
         else if ((PointerFromDeclaration || PointerTypeFromCall) &&
                  ((ProjectedValueType &&
                    ProjectedValueType->Kind == NdTypeKind::Ptr &&
-                   typeToC(cDisplayType(ProjectedValueType)) ==
-                       typeToC(DeclaredType) &&
+                   typeToC(ProjectedValueType) == typeToC(DeclaredType) &&
                    printsPointer(*Stmt.Val, ValueText)) ||
                   sameDeclaredLocal(*Stmt.Val, ValueText, DeclaredType)))
           OS << ValueText;
@@ -1106,6 +1182,11 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
       // A local C declares floating takes the integer of its width HighIR
       // assigns as the bits it is (strtod's double, read from the vector
       // register), and an integer one a floating value likewise.
+      else if (const auto Float =
+                   DestinationType != DeclaredCTypes.end()
+                       ? floatArgumentText(*Stmt.Val, DestinationType->second)
+                       : std::nullopt)
+        OS << *Float;
       else if (std::optional<std::string> Bits =
                    DestinationType != DeclaredCTypes.end()
                        ? reinterpretedBits(DestinationType->second,
@@ -1123,12 +1204,6 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
       OS << DestS << " = " << ValS;
     }
     OS << ";";
-    if (Opts.EmitComments && Stmt.Val && Stmt.Val->Kind == ExprKind::Load &&
-        Stmt.Val->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
-        Stmt.Val->Operands.size() == 1 && Stmt.Val->Operands[0])
-      if (const auto Address = constAddress(*Stmt.Val->Operands[0]))
-        if (const auto Text = imageStringComment(Opts.Image, *Address))
-          OS << " /* " << *Text << " */";
     OS << "\n";
     break;
   }
@@ -1146,6 +1221,13 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
     }
     if (!Stmt.StoreAddr || !Stmt.StoreVal)
       return;
+    if (Stmt.MemoryOrdering == NdMemoryOrdering::None &&
+        Stmt.MemoryAddressSpace == NdMemoryAddressSpace::Default)
+      if (auto Update = bitFieldUpdate(*Stmt.StoreAddr, *Stmt.StoreVal)) {
+        emitIndent(Indent);
+        OS << *Update << ";\n";
+        break;
+      }
     {
       const uint16_t AccessSize =
           Stmt.StoreVal->Type ? Stmt.StoreVal->Type->Size : 0;
@@ -1229,6 +1311,10 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
         const TypeRef MemberType =
             typedMemberType(*Stmt.StoreAddr, StoredType ? StoredType->Size : 0,
                             accessClassOf(Stmt.StoreVal.get()));
+        if (!Overlayed)
+          if (const auto Bits =
+                  reinterpretedBits(MemberType, StoredType, Value))
+            Value = *Bits;
         // A constant stored to an enumeration names its enumerator.
         if (MemberType && MemberType->Kind == NdTypeKind::Struct &&
             MemberType->IsEnum)
@@ -1337,6 +1423,9 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
                   printsPointer(*Stmt.StoreVal, ValueText)))
           OS << "(" << typeToC(ProjectedDestType) << ")(uintptr_t)("
              << ValueText << ")";
+        else if (const auto Bits = reinterpretedBits(
+                     ProjectedDestType, Stmt.StoreVal->Type, ValueText))
+          OS << *Bits;
         else
           OS << ValueText;
         OS << ";\n";
@@ -1426,6 +1515,11 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
       }
     }
     if (!Stmt.CallExpr->IntrinsicOutputs.empty()) {
+      if (std::string Stack = reconstructedStackMemoryStatement(*Stmt.CallExpr);
+          !Stack.empty()) {
+        writeCIndentedSnippet(OS, Stack, Indent);
+        break;
+      }
       auto Rendered = MultiOutputRender{Opts.Format != BinaryFormat::COFF}(
           Opts.TheArch, Stmt.CallExpr->IntrinsicId,
           Stmt.CallExpr->IntrinsicOutputs, Stmt.CallExpr->Operands,
@@ -1509,7 +1603,8 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
                 !Analysis.AssignedVars.count(varName(Stmt.RetVal->Var)) &&
                 (Stmt.RetVal->Var.Kind != MedVar::Param ||
                  (InEHClauseBody && !exceptionClausesUseFunctionFrame()))))
-      OS << "__builtin_trap(); /* unknown return value */\n";
+      OS << "__builtin_trap(); "
+         << failClosedComment("no recovered result", Stmt.Addr) << "\n";
     else
       OS << "return " << formatReturnExpr(*Stmt.RetVal) << ";\n";
     if (!IndirectReturnName.empty() && !InEHClauseBody && !InCxxCleanupBody)
@@ -1570,6 +1665,9 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
     break;
 
   case StmtKind::While:
+    // The header joins the back edge. A write later in the body makes a
+    // pre-loop 1 unknown at the condition and at the body's first use.
+    forgetProvedFlagsWrittenIn(Stmt.Body);
     emitIndent(Indent);
     OS << "while (" << (Stmt.Cond ? condStr(*Stmt.Cond) : "1") << ") {\n";
     writeStmtsIsolated(Stmt.Body, Indent + 1);
@@ -1578,6 +1676,7 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
     break;
 
   case StmtKind::DoWhile:
+    forgetProvedFlagsWrittenIn(Stmt.Body);
     emitIndent(Indent);
     OS << "do {\n";
     writeStmtsIsolated(Stmt.Body, Indent + 1);
@@ -1586,6 +1685,7 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
     break;
 
   case StmtKind::For:
+    forgetProvedFlagsWrittenIn(Stmt.Body);
     emitIndent(Indent);
     OS << "for (;;) {\n";
     if (Stmt.Cond) {
@@ -1645,8 +1745,9 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
            << " goes on at 0x" << llvm::utohexstr(Stmt.LeftImageAt)
            << ", where the image maps no code */\n";
       else
-        OS << "__builtin_trap(); /* unresolved indirect branch at 0x"
-           << llvm::utohexstr(Stmt.Addr) << " */\n";
+        OS << "__builtin_trap(); "
+           << failClosedComment("indirect targets not proved", Stmt.Addr)
+           << "\n";
       break;
     }
     // `__leave` ends a `__try` normally; a local unwind's goto ends it as a
@@ -1759,7 +1860,7 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
       {
         const bool SavedHandler = InEHClauseBody;
         InEHClauseBody = true;
-        writeStmtsIsolated(Stmt.EHClauseBodies.front(), Indent + 1);
+        writeStmtsIsolated(Stmt.EHClauseBodies.front(), Indent + 1, true);
         InEHClauseBody = SavedHandler;
       }
     } else {
@@ -1778,7 +1879,7 @@ void HighCWriter::writeStmtImpl(const HighStmt &Stmt, int Indent) {
       {
         const bool SavedHandler = InEHClauseBody;
         InEHClauseBody = true;
-        writeTryBody(Stmt.EHClauseBodies.front(), Indent + 1);
+        writeTryBody(Stmt.EHClauseBodies.front(), Indent + 1, true);
         InEHClauseBody = SavedHandler;
       }
       // An arm whose handler is where the try falls through ends there, and
@@ -2040,8 +2141,10 @@ bool HighCWriter::tryWriteCursorForLoop(const std::vector<HighStmt> &Stmts,
                     !Targeted(*MissRet);
 
   auto WriteLabel = [&](const HighStmt &S) {
-    if (Targeted(S))
+    if (Targeted(S)) {
       OS << blockLabel(S.Addr) + ":\n";
+      DeferredFlagsProvedOne.clear();
+    }
   };
   auto WriteAssignRhs = [&](const HighStmt &S) {
     auto DeclaredType = declaredParamType(S.Dst->Var);
@@ -2059,6 +2162,13 @@ bool HighCWriter::tryWriteCursorForLoop(const std::vector<HighStmt> &Stmts,
     writeStmt(Init, Indent);
     WriteLabel(Loop);
   }
+  // The step assigns the cursor on the back edge, and the body can assign a
+  // deferred flag. Neither fact from before the loop survives the header.
+  const auto AtLoop = DeferredFlagsProvedOne;
+  forgetProvedFlagsWrittenIn(Loop.Body);
+  if (const auto Flag = DeferredUnknownFlags.find(varName(Init.Dst->Var));
+      Flag != DeferredUnknownFlags.end())
+    DeferredFlagsProvedOne.erase(Flag->second);
   emitIndent(Indent);
   OS << "for (" << Cursor;
   if (HeaderTargeted)
@@ -2089,6 +2199,11 @@ bool HighCWriter::tryWriteCursorForLoop(const std::vector<HighStmt> &Stmts,
   }
   emitIndent(Indent);
   OS << "}\n";
+  DeferredFlagsProvedOne = AtLoop;
+  forgetProvedFlagsWrittenIn(Loop.Body);
+  if (const auto Flag = DeferredUnknownFlags.find(varName(Init.Dst->Var));
+      Flag != DeferredUnknownFlags.end())
+    DeferredFlagsProvedOne.erase(Flag->second);
   if (Fold) {
     emitIndent(Indent);
     OS << "return " << formatReturnExpr(*MissRet->RetVal) << ";\n";
@@ -2099,6 +2214,7 @@ bool HighCWriter::tryWriteCursorForLoop(const std::vector<HighStmt> &Stmts,
 
 void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent,
                              size_t End) {
+  llvm::SaveAndRestore<const HighStmt *> Observation(EmittingStmt, nullptr);
   if (End > Stmts.size())
     End = Stmts.size();
   va_t LastLabel = InvalidVA;
@@ -2232,10 +2348,12 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent,
           writeStmt(N, Ind);
         };
         writeCxxTry(Try, Indent, [&](int Inner) {
+          const auto BeforeIf = DeferredFlagsProvedOne;
           emitIndent(Inner);
           OS << "if (" << invertCondStr(*S.Cond) << ") {\n";
           for (size_t K = 0; K < LenIdx; ++K)
             WriteVisible(Try.Body[K], Inner + 1);
+          const auto BeforeInner = DeferredFlagsProvedOne;
           emitIndent(Inner + 1);
           OS << "if (" << condStr(*LenIf.Cond) << ") {\n";
           for (const HighStmt &B : LenIf.Body) {
@@ -2243,6 +2361,7 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent,
               continue;
             WriteVisible(B, Inner + 2);
           }
+          DeferredFlagsProvedOne = BeforeInner;
           emitIndent(Inner + 1);
           OS << "} else {\n";
           if (Try.Body[NameIdx].Kind == StmtKind::Block) {
@@ -2251,23 +2370,29 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent,
           } else {
             WriteVisible(Try.Body[NameIdx], Inner + 2);
           }
+          DeferredFlagsProvedOne = BeforeInner;
           emitIndent(Inner + 1);
           OS << "}\n";
           emitIndent(Inner);
           OS << "} else {\n";
+          DeferredFlagsProvedOne = BeforeIf;
           if (Try.Body[NameIdx].Kind == StmtKind::Block) {
             for (const HighStmt &B : Try.Body[NameIdx].Body)
               WriteVisible(B, Inner + 1);
           } else {
             WriteVisible(Try.Body[NameIdx], Inner + 1);
           }
+          DeferredFlagsProvedOne = BeforeIf;
+          forgetProvedFlagsWrittenIn(Try.Body);
           emitIndent(Inner);
           OS << "}\n";
           for (size_t K = NameIdx + 1; K < Try.Body.size(); ++K) {
             const HighStmt &N = Try.Body[K];
             if (N.Addr && N.Addr != InvalidVA && N.Addr != NameAt &&
-                N.Addr != JoinAt && GotoTargets.count(N.Addr))
+                N.Addr != JoinAt && GotoTargets.count(N.Addr)) {
               OS << blockLabel(N.Addr) + ":\n";
+              DeferredFlagsProvedOne.clear();
+            }
             WriteVisible(N, Inner);
           }
         });
@@ -2443,7 +2568,11 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent,
         const bool ThenSinks =
             ThenJoin ? ThenOther == 0
                      : (ThenLive == 0 || (ThenLive == 1 && ThenVal));
-        if (ThenSinks && ElseLive == 1 && AssignCall && MatchesCall) {
+        // An empty branch retains the value assigned before the if. Keep
+        // the join and its shared return unless this branch supplies a
+        // return value of its own (or the function really returns void).
+        if (ThenSinks && (ThenVal || InferredVoid) && ElseLive == 1 &&
+            AssignCall && MatchesCall) {
           emitIndent(Indent);
           OS << "if (" << invertCondStr(*S.Cond) << ")\n";
           emitIndent(Indent + 1);
@@ -2476,9 +2605,12 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent,
       OS << "\n";
       LastLabel = Addr;
       EmittedLabel = true;
+      // A printed label is a join. Facts from the straight-line prefix do
+      // not hold for an edge that jumps here.
+      DeferredFlagsProvedOne.clear();
     };
     EmitLabel(S.Addr);
-    if (EmittedLabel && (Analysis.DeadStmts.count(&S) || stmtHiddenFromC(S))) {
+    if (EmittedLabel && (stmtSuppressedAsDead(S) || stmtHiddenFromC(S))) {
       emitIndent(Indent);
       OS << ";\n";
       continue;
@@ -2591,20 +2723,40 @@ void HighCWriter::writeStmts(const std::vector<HighStmt> &Stmts, int Indent,
 }
 
 void HighCWriter::writeStmtsIsolated(const std::vector<HighStmt> &Stmts,
-                                     int Indent) {
+                                     int Indent, bool FreshEntry) {
   const auto SavedPtrs = ReachingCatchPtrs;
   const auto SavedFields = ReachingCatchFields;
+  const auto SavedProved = DeferredFlagsProvedOne;
+  if (FreshEntry)
+    DeferredFlagsProvedOne.clear();
   writeStmts(Stmts, Indent);
   ReachingCatchPtrs = SavedPtrs;
   ReachingCatchFields = SavedFields;
+  DeferredFlagsProvedOne = SavedProved;
+  forgetProvedFlagsWrittenIn(Stmts);
 }
 
-void HighCWriter::writeTryBody(const std::vector<HighStmt> &Stmts, int Indent) {
+void HighCWriter::writeStmtsUnproved(const std::vector<HighStmt> &Stmts,
+                                     int Indent) {
+  const auto SavedProved = DeferredFlagsProvedOne;
+  DeferredFlagsProvedOne.clear();
+  writeStmts(Stmts, Indent);
+  DeferredFlagsProvedOne = SavedProved;
+  forgetProvedFlagsWrittenIn(Stmts);
+}
+
+void HighCWriter::writeTryBody(const std::vector<HighStmt> &Stmts, int Indent,
+                               bool FreshEntry) {
   const auto SavedPtrs = ReachingCatchPtrs;
   const auto SavedFields = ReachingCatchFields;
+  const auto SavedProved = DeferredFlagsProvedOne;
+  if (FreshEntry)
+    DeferredFlagsProvedOne.clear();
   writeTryBodyUnisolated(Stmts, Indent);
   ReachingCatchPtrs = SavedPtrs;
   ReachingCatchFields = SavedFields;
+  DeferredFlagsProvedOne = SavedProved;
+  forgetProvedFlagsWrittenIn(Stmts);
 }
 
 void HighCWriter::writeTryBodyUnisolated(const std::vector<HighStmt> &Stmts,
@@ -2626,6 +2778,7 @@ void HighCWriter::writeTryBodyUnisolated(const std::vector<HighStmt> &Stmts,
       if (LandingPadLabels.count(S.Addr))
         OS << " /* landing pad: the unwinder enters here */";
       OS << "\n";
+      DeferredFlagsProvedOne.clear();
       emitIndent(Indent);
       OS << ";\n";
     }
@@ -2757,13 +2910,18 @@ void HighCWriter::decideExceptArms(const HighFunc &Func) {
                  const std::vector<va_t> &Continuation) {
         for (size_t I = 0; I < Stmts.size(); ++I) {
           const HighStmt &S = Stmts[I];
+          const bool EmptyArm = hasFallthroughExceptClause(S) &&
+                                S.EHClauseBodies.front().empty() &&
+                                S.EHClauses.front().FinallyKind !=
+                                    HighEHClause::FinallyBody::WholeBody &&
+                                EH.ownsCode(S.EHClauses.front().HandlerVA);
+          // A run of statements C hides can be long; what one of them falls
+          // through to matters only to an arm or a list of its own.
+          if (!EmptyArm && !holdsStatements(S))
+            continue;
           const std::vector<va_t> Next =
               fallthroughAddresses(Stmts, I, Continuation);
-          if (hasFallthroughExceptClause(S) &&
-              S.EHClauseBodies.front().empty() &&
-              S.EHClauses.front().FinallyKind !=
-                  HighEHClause::FinallyBody::WholeBody &&
-              EH.ownsCode(S.EHClauses.front().HandlerVA)) {
+          if (EmptyArm) {
             // A try printed in pieces falls into its next piece first.
             const va_t Handler = S.EHClauses.front().HandlerVA;
             if (!sehTrySplitPoint(S) && llvm::is_contained(Next, Handler))
@@ -2793,10 +2951,12 @@ void HighCWriter::decideTryExits(const std::vector<HighStmt> &Stmts,
                                  std::set<std::pair<va_t, va_t>> &Kept) {
   for (size_t I = 0; I < Stmts.size(); ++I) {
     const HighStmt &S = Stmts[I];
-    const std::vector<va_t> Next = fallthroughAddresses(Stmts, I, Continuation);
     const bool IsTry = S.Kind == StmtKind::SEHTry ||
                        S.Kind == StmtKind::CxxTry ||
                        S.Kind == StmtKind::ItaniumTry;
+    if (!IsTry && !hasFallthroughExceptClause(S) && !holdsStatements(S))
+      continue;
+    const std::vector<va_t> Next = fallthroughAddresses(Stmts, I, Continuation);
     auto RecordExits = [&](const std::vector<HighStmt> &Body) {
       // The first goto of the trailing run is the one that runs.  It can be
       // left out only when it lands where the try falls through anyway; a

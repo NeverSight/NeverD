@@ -3,6 +3,7 @@
 #include "SessionImpl.h"
 #include "SourceEdits.h"
 
+#include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/sdk/Limits.h"
 #include "neverd/sdk/NeverDCAPIPersist.h"
 #include "neverd/types/TypeParse.h"
@@ -207,6 +208,67 @@ const char *neverd_source_type_json(neverd_session_t Sess,
     return nullptr;
   }
   const auto *Object = Parsed->getAsObject();
+  if (Object && Object->get("object_address")) {
+    const auto Text = Object->getString("object_address");
+    va_t Address = 0;
+    if (!Text || !Text->starts_with("0x") ||
+        Text->drop_front(2).getAsInteger(16, Address)) {
+      S->setError("object_address must be a hexadecimal address");
+      return nullptr;
+    }
+    const Segment *Segment = S->Img.getSegmentFor(Address);
+    TypeRef Type;
+    std::string Name;
+    uint64_t Bytes = 0;
+    if (S->Dbg)
+      if (const auto Data = S->Dbg->resolveDataObject(Address);
+          Data && Data->Addr == Address) {
+        Name = Data->Name;
+        Type = Data->Type;
+        Bytes = Data->Size;
+      }
+    if (const auto Item = S->DataItems.find(Address);
+        Item != S->DataItems.end()) {
+      // Only an explicitly sized scalar item supplies a missing extent.
+#define NEVERD_DATA_SIZE_NAME(Keyword, Width, Prefix)                          \
+  if (Item->second.Kind == Keyword)                                            \
+    Bytes = Width;
+#include "neverd/DataNames.def"
+    }
+    if (!Bytes || Name.empty())
+      if (const auto *Symbol = S->Img.findSymbolAt(Address);
+          Symbol && !Symbol->IsFunc && !Symbol->IsSection) {
+        if (!Bytes)
+          Bytes = Symbol->Size;
+        Name = Symbol->Name;
+      }
+    if (!Segment || !Bytes || Bytes > Segment->Size - (Address - Segment->VA)) {
+      S->setError("No sized global object starts at this address; define a "
+                  "scalar data item first");
+      return nullptr;
+    }
+    if (!Type && Bytes <= 16)
+      Type = NdType::makeInt(Bytes, false);
+    if (!Type || Type->Size != Bytes || !hasCSpelling(Type)) {
+      S->setError(
+          "This object has no unambiguous source type of its storage width");
+      return nullptr;
+    }
+    if (const auto Rename = S->Renames.find(Address);
+        Rename != S->Renames.end())
+      Name = Rename->second;
+    if (Name.empty())
+      Name = "data_" + llvm::utohexstr(Address);
+    std::string Out;
+    llvm::raw_string_ostream OS(Out);
+    OS << llvm::json::Value(
+        llvm::json::Object{{"address", vaHex(Address)},
+                           {"name", Name},
+                           {"type", declarationToC(Type, "", true)},
+                           {"bytes", Bytes},
+                           {"floating", Type->Kind == NdTypeKind::Float}});
+    return dupStr(Out);
+  }
   const auto Text = Object ? Object->getString("type") : std::nullopt;
   const auto Bytes = Object ? Object->getInteger("bytes") : std::nullopt;
   if (!Text || !Bytes || *Bytes < 1 || *Bytes > 16 ||

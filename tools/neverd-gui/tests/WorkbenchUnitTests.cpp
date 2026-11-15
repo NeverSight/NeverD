@@ -12,6 +12,7 @@
 #include "AddressSpace.h"
 #include "AnalysisProgress.h"
 #include "AnalysisService.h"
+#include "ChooserView.h"
 #include "DeepLink.h"
 #include "DialogReturnKey.h"
 #include "Docking.h"
@@ -27,6 +28,7 @@
 #include "PatchMenu.h"
 #include "ProjectDatabase.h"
 #include "RenamedPages.h"
+#include "Session.h"
 #include "StyledText.h"
 #include "SymbolTablePromptDialog.h"
 #include "Theme.h"
@@ -80,11 +82,13 @@
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTextBlock>
+#include <QTextBrowser>
 #include <QTextDocument>
 #include <QTextLayout>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
+#include <QTreeView>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QWindow>
@@ -214,6 +218,55 @@ class WorkbenchUnitTests : public QObject {
 public:
   static void initMain() { WindowFrame::prepareNativeWindows(); }
 private slots:
+  void computedStringDetailsRetainConditionsAndNavigate() {
+    Session session(QString{});
+    AddressSpace space;
+    ChooserView view(session, space, ChooserKind::ComputedStrings);
+    const QString completeText =
+        QStringLiteral("Mix<牌>&") + QString(9000, QLatin1Char('x'));
+    view.model().setLocalRows({QJsonObject{
+        {"address", "0xffff800012340008"},
+        {"instruction", "0xffff800012340008"},
+        {"block", "0xffff800012340000"},
+        {"string_address", "0xffff800012343000"},
+        {"status", "conditional"},
+        {"encoding", "utf-8"},
+        {"text", completeText},
+        {"bytes", "012300"},
+        {"inputs", QJsonArray{QJsonObject{{"address", "0xffff800012343010"},
+                                          {"initializer", "0xffff800012340004"},
+                                          {"value", 127}}}},
+        {"entry_registers",
+         QJsonArray{QJsonObject{{"offset", "0xa0"},
+                                {"bytes", 8},
+                                {"value", "0xffff800012343000"}}}}}});
+    view.table()->setCurrentIndex(view.model().index(0, 0));
+    QCOMPARE(view.currentAddress(),
+             std::optional<Address>(0xffff800012340008ULL));
+    QCOMPARE(view.referenceTarget(),
+             std::optional<Address>(0xffff800012343000ULL));
+    auto *details = view.findChild<QPushButton *>("computedStringsDetails");
+    QVERIFY(details);
+    details->click();
+    auto *dialog = view.findChild<QDialog *>("computedStringDetails");
+    QVERIFY(dialog);
+    auto *text = dialog->findChild<QTextBrowser *>();
+    QVERIFY(text);
+    const auto plain = text->toPlainText();
+    QVERIFY(plain.contains(completeText));
+    QVERIFY(plain.contains("0xffff800012343010 = 0x7f"));
+    QVERIFY(plain.contains("0xffff800012340004"));
+    QVERIFY(plain.contains("0xa0, 8 bytes = 0xffff800012343000"));
+    QSignalSpy navigation(&view, &ChooserView::activated);
+    QVERIFY(QMetaObject::invokeMethod(text, "anchorClicked",
+                                      Qt::DirectConnection,
+                                      Q_ARG(QUrl, QUrl("0xffff800012340004"))));
+    QCOMPARE(navigation.count(), 1);
+    QCOMPARE(navigation.takeFirst().front().toULongLong(),
+             0xffff800012340004ULL);
+    dialog->close();
+  }
+
   void modelessBrowsersDetachBeforeTheirNativeOwnerChanges_data() {
     QTest::addColumn<bool>("ancestor");
     QTest::newRow("source") << false;

@@ -1,7 +1,12 @@
-//===- MedReturnValue.h - Propagated integer return values ------*- C++ -*-===//
+//===- MedReturnValue.h - Reaching return values ---------------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Shared return-value selection for ABI proof and source/LLVM lowering.
+///
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_IR_MED_MEDRETURNVALUE_H
@@ -11,6 +16,19 @@
 #include "neverd/ir/med/MedIR.h"
 
 namespace neverd {
+
+/// The whole register's join supplies an aggregate return field. Narrow
+/// read views may coexist in any order, but do not replace the other bytes.
+/// The caller checks the field width and incoming definitions separately.
+inline const PhiNode *aggregateReturnPhi(const MedBlock &Block,
+                                         uint64_t RegOff) {
+  const PhiNode *Whole = nullptr;
+  for (const PhiNode &Phi : Block.Phis)
+    if (Phi.Output.Kind == MedVar::Reg && Phi.Output.RegOff == RegOff &&
+        Phi.Output.Size && (!Whole || Phi.Output.Size > Whole->Output.Size))
+      Whole = &Phi;
+  return Whole;
+}
 
 /// An explicit return operand covers the required register view. Its reaching
 /// definition and any narrower physical-register reconstruction remain the

@@ -4,6 +4,7 @@
 #include "ChooserKind.h"
 
 #include <QAbstractTableModel>
+#include <QElapsedTimer>
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -18,12 +19,15 @@
 
 class QLabel;
 class QLineEdit;
+class QPushButton;
 class QTreeView;
+class QueryService;
 
 namespace neverd::gui {
 
 class AddressSpace;
 class Session;
+class ProgressStrip;
 
 /// A command of IDA's list windows that a list window can run on its current
 /// row by IDA's key (IdaActions.def).
@@ -67,6 +71,10 @@ public:
   /// Rows supplied locally instead of by the worker (bookmarks).
   void setLocalRows(const QJsonArray &rows);
   void reload();
+  void cancelLoading();
+  /// Resume an explicitly cancelled read without discarding visible rows.
+  void resumeLoading();
+  bool cancelled() const { return cancelled_; }
   /// Redraw the columns that name segments once the regions change.
   void addressSpaceChanged();
   int total() const { return total_; }
@@ -74,6 +82,9 @@ public:
     return refresh_.has_value() || !pageRequests_.isEmpty();
   }
   QJsonObject rowObject(int row) const;
+  /// Text already available for a valid cell, without requesting a page.
+  /// Selection/context observers must not initiate reads during subscription.
+  QString cachedDisplayText(int row, int column) const;
   std::optional<Address> addressAt(int row) const;
   /// The item a row stands for when its cross references are listed: a
   /// string reference's string, otherwise the row's address.
@@ -91,8 +102,11 @@ public:
 signals:
   void totalChanged(int total);
   void failed(const QString &message);
+  void loadingChanged();
+  void progressChanged(const QJsonObject &payload);
 
 private:
+  QueryService &queryService() const;
   /// Background discovery replaces cached pages together, keeping row
   /// identities and selections instead of emptying the table between reads.
   void refreshFunctions();
@@ -128,6 +142,7 @@ private:
   mutable std::list<int> requestOrder_;
   QJsonArray local_;
   bool localRows_ = false;
+  bool cancelled_ = false;
   int total_ = 0;
   quint64 serial_ = 0;
   quint64 locationSerial_ = 0;
@@ -172,6 +187,15 @@ protected:
   bool eventFilter(QObject *object, QEvent *event) override;
 
 private:
+  void resumeLoading();
+  void advanceComputedStrings();
+  void showComputedStringDetails();
+  Session &session_;
+  QPushButton *scanButton_ = nullptr;
+  QLabel *scanStatus_ = nullptr;
+  QJsonObject computedScan_;
+  quint64 scanSerial_ = 0;
+  bool scanning_ = false, scanInFlight_ = false;
   void updateStatus();
   /// The enabled command whose key \p key is.
   std::optional<ChooserCommand> commandFor(const QKeySequence &key) const;
@@ -183,6 +207,13 @@ private:
   QWidget *filterRow_;
   QLineEdit *filter_;
   QLabel *status_;
+  ProgressStrip *progress_;
+  QPushButton *cancel_;
+  QElapsedTimer elapsed_;
+  QTimer statusTimer_;
+  QJsonObject progressPayload_;
+  QString error_;
+  bool busy_ = false;
   QTimer filterTimer_;
 };
 

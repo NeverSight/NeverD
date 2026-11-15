@@ -1536,6 +1536,29 @@ entryStackOffsets(const MedFunc &Func, llvm::ArrayRef<MedVar> Values,
   return Offsets;
 }
 
+class EntryStackOffsetProof::Proof : public StackOffsetProof {
+public:
+  using StackOffsetProof::StackOffsetProof;
+};
+
+EntryStackOffsetProof::EntryStackOffsetProof(const MedFunc &Func,
+                                             Arch Architecture,
+                                             BinaryFormat Format,
+                                             StackEntryKind Entry)
+    : Func(Func), Architecture(Architecture), Format(Format), Entry(Entry) {}
+
+EntryStackOffsetProof::~EntryStackOffsetProof() = default;
+
+std::optional<int64_t> EntryStackOffsetProof::offset(const MedVar &Value) {
+  const auto &TRI = getTargetRegInfo(Architecture);
+  if ((TRI.PointerSize != 4 && TRI.PointerSize != 8) || Func.Blocks.empty())
+    return std::nullopt;
+  if (!Built)
+    Built = std::make_unique<Proof>(Func, Architecture, Format, Entry,
+                                    /*FollowJoins=*/true);
+  return Built->offset(Value);
+}
+
 std::vector<std::optional<EntryStackOffsetRange>>
 entryStackOffsetRanges(const MedFunc &Func, llvm::ArrayRef<MedVar> Values,
                        Arch Architecture, BinaryFormat Format,

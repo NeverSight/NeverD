@@ -25,7 +25,8 @@ namespace neverd::gui {
 class PageBytes {
 public:
   explicit PageBytes(const QString &text)
-      : bytes_(text.toUtf8()), ascii_(bytes_.size() == text.size()),
+      : bytes_(text.toUtf8()),
+        ascii_(bytes_.size() == text.size() && text.isValidUtf16()),
         counted_(!ascii_ && !bytes_.startsWith("\xef\xbb\xbf")) {}
 
   /// The bytes of the page.
@@ -79,7 +80,8 @@ private:
   }
 
   QByteArray bytes_;
-  /// Every byte is a unit of the text.
+  /// Equal lengths prove ASCII only when UTF-8 conversion cannot drop
+  /// malformed UTF-16 units.
   bool ascii_;
   /// The units before a byte are those counted in before_.
   bool counted_;

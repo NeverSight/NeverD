@@ -165,7 +165,7 @@ TEST(FiniteScalarBranchSource, SkippedSSACannotPublishANumericSelectorView) {
   ASSERT_EQ(Result.LowFuncs.size(), 1u);
   LowFunc Low = Result.LowFuncs.front();
   ASSERT_EQ(Low.JumpTables.size(), 1u);
-  Low.DecodedInstructionCount = limits::kMaxSSAFunctionOps + 1;
+  Low.DecodedInstructionCount = limits::kMaxSSABuildOps + 1;
   LowToMedConverter Converter;
   Converter.setBinaryImage(&Image);
   const auto Function = Converter.convert(Low, Image.Arch, Image.Format);

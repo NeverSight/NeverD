@@ -9,6 +9,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceCallTypeHint.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
@@ -96,6 +97,53 @@ void addLiveIn(MedBlock &Entry, const MedVar &LiveIn) {
   Entry.Ops.push_back(unary(NdOp::COPY, LiveIn, LiveIn));
 }
 
+TEST(MedCallABI, LinuxSyscallSelectorArithmeticRespectsItsWidth) {
+  struct Case {
+    uint16_t Bytes;
+    uint64_t Left, Right;
+    size_t Count;
+  };
+  // Both narrow additions wrap to AArch64 mq_open (180, four arguments).
+  // The unwrapped byte sum is close_range (436, three arguments); using
+  // it would silently discard mq_open's fourth input.
+  for (const auto &C : {Case{1, 200, 236, 5}, Case{4, 0xFFFFFFF0, 196, 5},
+                        Case{8, 0xFFFFFFF0, 196, 7}}) {
+    SCOPED_TRACE(C.Bytes);
+    constexpr Arch A = Arch::AArch64;
+    BinaryImage Image;
+    Image.Arch = A;
+    Image.Format = BinaryFormat::ELF;
+    Image.ELFMetadata.emplace();
+    Import Imported;
+    Imported.Name = "syscall";
+    Imported.IATAddr = 0x2000;
+    Image.Imports.push_back(std::move(Imported));
+    MedFunc F;
+    F.Entry = 0x1000;
+    F.Blocks.resize(1);
+    auto &Block = F.Blocks.front();
+    Block.Id = 0;
+    const auto Sum = temp(100, 0, C.Bytes, A);
+    Block.Ops.push_back(binary(NdOp::INT_ADD, Sum,
+                               MedVar::makeConst(C.Left, C.Bytes),
+                               MedVar::makeConst(C.Right, C.Bytes)));
+    const auto Registers = getTargetRegInfo(A).integerParamRegs(Image.Format);
+    Block.Ops.push_back(unary(C.Bytes == 8 ? NdOp::COPY : NdOp::INT_ZEXT,
+                              reg(0, 1, 8, Registers[0], A), Sum));
+    for (unsigned I = 1; I < Registers.size(); ++I)
+      Block.Ops.push_back(unary(NdOp::COPY, reg(I, 1, 8, Registers[I], A),
+                                MedVar::makeConst(10 + I, 8)));
+    MedOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.Output = reg(0, 2, 8, Registers[0], A);
+    Call.addInput(MedVar::makeConst(0x2000, 8));
+    Block.Ops.push_back(std::move(Call));
+    recoverCallAbi(F, A, {{0x2000, "syscall"}}, &Image);
+    ASSERT_EQ(F.CallInfos.size(), 1u);
+    EXPECT_EQ(F.CallInfos.front().Args.size(), C.Count);
+  }
+}
+
 TEST(MedCallABI, BodyCopiesRetainEveryWideCallOperand) {
   for (unsigned Count : {1u, 2u, 3u, 6u, 7u, 65u}) {
     SCOPED_TRACE(Count);
@@ -164,11 +212,207 @@ TEST(MedCallABI, CallbackTableAddressDoesNotReplaceTheActualFirstArgument) {
         B.Ops.push_back(Call);
         recoverCallAbi(F, A, {}, &Image);
         ASSERT_EQ(F.CallInfos.size(), 1u);
+        if (!Explicit) {
+          // A table's address is no evidence that the first argument register
+          // actually holds it, for any slot offset.
+          EXPECT_TRUE(F.CallInfos[0].Args.empty());
+          continue;
+        }
         ASSERT_FALSE(F.CallInfos[0].Args.empty());
         const auto &First = F.CallInfos[0].Args[0];
         ASSERT_TRUE(First.isConst()) << First.display();
-        EXPECT_EQ(First.ConstVal, Explicit ? 8u : Object.ConstVal);
+        EXPECT_EQ(First.ConstVal, 8u);
       }
+}
+
+TEST(MedCallABI, VirtualSlotKeepsItsPhysicalReceiverIncludingSlotZero) {
+  for (Arch A : {Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (unsigned SlotOffset : {0u, 8u})
+        for (bool Propagated : {false, true})
+          for (bool Clobbered : {false, true}) {
+            SCOPED_TRACE(testing::Message()
+                         << int(A) << ':' << int(Format) << ':' << SlotOffset
+                         << ':' << Propagated << ':' << Clobbered);
+            const auto &TRI = getTargetRegInfo(A);
+            const auto Layout = TRI.integerArgumentLayout(Format);
+            ASSERT_FALSE(Layout.Registers.empty());
+            BinaryImage Image;
+            Image.Arch = A;
+            Image.Format = Format;
+            MedFunc F;
+            F.Entry = 0x1000;
+            F.Blocks.resize(2);
+            F.Blocks[0].Id = 0;
+            F.Blocks[0].Succs = {1};
+            auto &B = F.Blocks[1];
+            B.Id = 1;
+            B.Preds = {0};
+            const auto Physical =
+                reg(1, 1, TRI.PointerSize, Layout.Registers[0], A);
+            const auto Object =
+                Propagated ? temp(7, 1, TRI.PointerSize, A) : Physical;
+            if (Propagated)
+              F.Blocks[0].Ops.push_back(
+                  unary(NdOp::LOAD, Object,
+                        MedVar::makeConst(0x6000, TRI.PointerSize)));
+            F.Blocks[0].Ops.push_back(
+                unary(NdOp::COPY, Physical,
+                      Propagated ? Object
+                                 : MedVar::makeConst(0x5000, TRI.PointerSize)));
+            const auto Table = temp(2, 0, TRI.PointerSize, A);
+            const auto Slot = temp(3, 0, TRI.PointerSize, A);
+            const auto Target = temp(4, 0, TRI.PointerSize, A);
+            B.Ops.push_back(unary(NdOp::LOAD, Table, Object));
+            if (SlotOffset)
+              B.Ops.push_back(
+                  binary(NdOp::INT_ADD, Slot, Table,
+                         MedVar::makeConst(SlotOffset, TRI.PointerSize)));
+            B.Ops.push_back(
+                unary(NdOp::LOAD, Target, SlotOffset ? Slot : Table));
+            if (Clobbered) {
+              auto Earlier = unary(
+                  NdOp::CALL, reg(5, 1, TRI.PointerSize, TRI.IntReturnReg, A),
+                  MedVar::makeConst(0x8000, TRI.PointerSize));
+              Earlier.Addr = F.Entry + 12;
+              B.Ops.push_back(Earlier);
+            }
+            auto Call =
+                unary(NdOp::INDIR_CALL,
+                      reg(6, 2, TRI.PointerSize, TRI.IntReturnReg, A), Target);
+            Call.Addr = F.Entry + 16;
+            B.Ops.push_back(Call);
+            recoverCallAbi(F, A, {}, &Image);
+            ASSERT_FALSE(F.CallInfos.empty());
+            const auto &Args = F.CallInfos.back().Args;
+            if (Clobbered) {
+              // Other ABI evidence may forward the earlier call's result;
+              // it must never resurrect the old receiver from the table load.
+              for (const auto &Arg : Args) {
+                EXPECT_NE(Arg, Object);
+                EXPECT_FALSE(Arg.isConst() && Arg.ConstVal == 0x5000);
+              }
+            } else {
+              ASSERT_FALSE(Args.empty());
+              // Win64 can already follow the predecessor's exact COPY.
+              if (Args[0].isConst())
+                EXPECT_EQ(Args[0].ConstVal, 0x5000u);
+              else
+                EXPECT_EQ(Args[0], Object);
+            }
+          }
+}
+
+TEST(MedCallABI, PropagatedVirtualReceiverRequiresEveryPhysicalPath) {
+  enum class Scenario {
+    OnePath,
+    SamePaths,
+    DifferentPath,
+    MissingPath,
+    PartialWrite,
+    InterveningCall,
+    ExceptionalEntry,
+    IndependentEntry,
+    LoopCall,
+    Exhausted
+  };
+  for (Arch A : {Arch::X64, Arch::ARM, Arch::AArch64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::MachO, BinaryFormat::COFF})
+      for (unsigned SlotOffset : {0u, 8u})
+        for (bool Reverse : {false, true})
+          for (Scenario S :
+               {Scenario::OnePath, Scenario::SamePaths, Scenario::DifferentPath,
+                Scenario::MissingPath, Scenario::PartialWrite,
+                Scenario::InterveningCall, Scenario::ExceptionalEntry,
+                Scenario::IndependentEntry, Scenario::LoopCall,
+                Scenario::Exhausted}) {
+            SCOPED_TRACE(testing::Message()
+                         << int(A) << ':' << int(Format) << ':' << SlotOffset
+                         << ':' << Reverse << ':' << int(S));
+            const auto &TRI = getTargetRegInfo(A);
+            const auto Layout = TRI.integerArgumentLayout(Format);
+            MedFunc F;
+            F.Entry = 0x1000;
+            F.Blocks.resize(4);
+            for (int I = 0; I < 4; ++I) {
+              F.Blocks[I].Id = I;
+              F.Blocks[I].StartAddr = F.Entry + I * 32;
+            }
+            const auto Object = temp(1, 1, TRI.PointerSize, A);
+            const auto Physical =
+                reg(2, 1, TRI.PointerSize, Layout.Registers[0], A);
+            F.Blocks[0].Ops.push_back(
+                unary(NdOp::LOAD, Object,
+                      MedVar::makeConst(0x6000, TRI.PointerSize)));
+            F.Blocks[0].Succs = S == Scenario::OnePath ? std::vector<int>{1}
+                                                       : std::vector<int>{1, 2};
+            for (int I : {1, 2}) {
+              auto &B = F.Blocks[I];
+              if (I == 2 && S == Scenario::OnePath)
+                continue;
+              B.Preds = {0};
+              B.Succs = {3};
+              if (I == 2 && S == Scenario::MissingPath)
+                continue;
+              auto Written = Physical;
+              Written.SSAVer = I;
+              const auto Other = temp(8, 1, TRI.PointerSize, A);
+              if (I == 2 && S == Scenario::DifferentPath)
+                B.Ops.push_back(
+                    unary(NdOp::LOAD, Other,
+                          MedVar::makeConst(0x7000, TRI.PointerSize)));
+              B.Ops.push_back(unary(
+                  NdOp::COPY, Written,
+                  I == 2 && S == Scenario::DifferentPath ? Other : Object));
+            }
+            auto &B = F.Blocks[3];
+            B.Preds = S == Scenario::OnePath ? std::vector<int>{1}
+                                             : std::vector<int>{1, 2};
+            if (S == Scenario::LoopCall) {
+              B.Preds.push_back(3);
+              B.Succs = {3};
+            }
+            if (Reverse)
+              std::reverse(B.Preds.begin(), B.Preds.end());
+            if (S == Scenario::ExceptionalEntry)
+              B.ExceptionalPreds.emplace_back(0, B.StartAddr,
+                                              ExceptionalEdgeKind::CxxCleanup);
+            if (S == Scenario::IndependentEntry)
+              F.ModuleAnalysisRoots.insert(B.StartAddr);
+            const auto Table = temp(3, 1, TRI.PointerSize, A);
+            const auto Slot = temp(4, 1, TRI.PointerSize, A);
+            const auto Target = temp(5, 1, TRI.PointerSize, A);
+            B.Ops.push_back(unary(NdOp::LOAD, Table, Object));
+            if (SlotOffset)
+              B.Ops.push_back(
+                  binary(NdOp::INT_ADD, Slot, Table,
+                         MedVar::makeConst(SlotOffset, TRI.PointerSize)));
+            B.Ops.push_back(
+                unary(NdOp::LOAD, Target, SlotOffset ? Slot : Table));
+            if (S == Scenario::PartialWrite)
+              B.Ops.push_back(unary(NdOp::COPY,
+                                    reg(6, 1, 1, Layout.Registers[0], A),
+                                    MedVar::makeConst(0, 1)));
+            if (S == Scenario::InterveningCall)
+              B.Ops.push_back(unary(
+                  NdOp::CALL, {}, MedVar::makeConst(0x8000, TRI.PointerSize)));
+            B.Ops.push_back(unary(NdOp::INDIR_CALL, {}, Target));
+            const MedBlockIdIndex Blocks(F);
+            size_t Work = S == Scenario::Exhausted
+                              ? 0
+                              : limits::ir::kMedABIVirtualReceiverWorkBudget;
+            const auto Result =
+                vtableCallObject(F, B, static_cast<int>(B.Ops.size()) - 1,
+                                 Target, TRI, Layout, Format, Blocks, Work);
+            if (S == Scenario::OnePath || S == Scenario::SamePaths) {
+              ASSERT_TRUE(Result);
+              EXPECT_EQ(*Result, Object);
+            } else {
+              EXPECT_FALSE(Result);
+            }
+          }
 }
 
 TEST(MedCallABI, AnIndirectCallRecordsTheSlotOfEachNarrowStackValue) {
@@ -506,8 +750,11 @@ TEST(MedABIPass, ForwardedFPParametersRequireAnUnclobberedEntryPath) {
       const bool Incoming = P == Path::Entry || P == Path::Linear ||
                             P == Path::IntrinsicStore ||
                             P == Path::PredecessorStore;
-      const bool AfterCall = P == Path::PriorCall || P == Path::PredecessorCall;
-      EXPECT_EQ(Info->Args.size(), Incoming || AfterCall ? 2u : 0u);
+      // The callee reads both lanes on every path. An incomplete reaching
+      // proof forbids promoting entry parameters; it cannot erase inputs
+      // from this independently known signature.
+      ASSERT_EQ(Info->Args.size(), 2u);
+      EXPECT_EQ(Info->ArgReadBytes, (std::vector<uint16_t>{4, 8}));
       if (Incoming) {
         ASSERT_EQ(F.Params.size(), 2u);
         EXPECT_EQ(Info->Args[0].Kind, MedVar::Param);
@@ -515,9 +762,8 @@ TEST(MedABIPass, ForwardedFPParametersRequireAnUnclobberedEntryPath) {
         EXPECT_EQ(F.FPParamScalarBytes.at(FP[0]), 4u);
         EXPECT_EQ(F.FPParamScalarBytes.at(FP[1]), 8u);
       } else {
-        if (AfterCall)
-          for (const auto &Argument : Info->Args)
-            EXPECT_EQ(Argument.Kind, MedVar::Unspecified);
+        for (const auto &Argument : Info->Args)
+          EXPECT_EQ(Argument.Kind, MedVar::Unspecified);
         EXPECT_TRUE(F.FPParamScalarBytes.empty());
         for (const auto &Parameter : F.Params)
           EXPECT_FALSE(TRI.isVectorReg(Parameter.RegOff));
@@ -6500,6 +6746,105 @@ TEST(MedABIPass, UnprovenIntrinsicStillSeparatesOutgoingArguments) {
   }
 }
 
+TEST(MedABIPass, CallClobberPhisDoNotInventTrailingArguments) {
+  constexpr va_t Callee = 0x5000;
+  for (const auto &[A, Format] : {std::pair{Arch::AArch64, BinaryFormat::ELF},
+                                  std::pair{Arch::X64, BinaryFormat::ELF},
+                                  std::pair{Arch::X64, BinaryFormat::COFF}})
+    for (unsigned Contract = 0; Contract != 4; ++Contract)
+      for (bool HasValue : {false, true})
+        for (bool Loop : {false, true}) {
+          SCOPED_TRACE(static_cast<int>(A));
+          SCOPED_TRACE(static_cast<int>(Format));
+          SCOPED_TRACE(Contract);
+          SCOPED_TRACE(HasValue);
+          SCOPED_TRACE(Loop);
+          const auto &TRI = getTargetRegInfo(A);
+          const auto Layout = TRI.integerArgumentLayout(Format);
+          const auto Arg2 = Layout.Registers[2];
+          const auto Bytes = static_cast<uint16_t>(TRI.PointerSize);
+          MedFunc F;
+          F.Entry = 0x1000;
+          F.Blocks.resize(4);
+          for (int I = 0; I != 4; ++I)
+            F.Blocks[I].Id = I;
+          F.Blocks[0].Succs = {1, 2};
+          for (int I = 1; I != 3; ++I) {
+            auto &B = F.Blocks[I];
+            B.Preds = {0};
+            B.Succs = {3};
+            MedOp Prior;
+            Prior.Opcode = NdOp::CALL;
+            Prior.CallSiteId = I;
+            Prior.addInput(MedVar::makeConst(0x2000 + 0x100 * I, Bytes));
+            B.Ops.push_back(Prior);
+            const auto Value = reg(20, I, Bytes, Arg2, A);
+            if (HasValue && I == 1)
+              B.Ops.push_back(
+                  unary(NdOp::COPY, Value, MedVar::makeConst(47, Bytes)));
+            else
+              F.CallClobbers.push_back({Value, static_cast<uint32_t>(I)});
+          }
+          auto &Join = F.Blocks[3];
+          Join.Preds = {1, 2};
+          const auto Merged = reg(20, 3, Bytes, Arg2, A);
+          PhiNode Phi;
+          Phi.Output = Merged;
+          Phi.Args = {{1, reg(20, 1, Bytes, Arg2, A)},
+                      {2, reg(20, 2, Bytes, Arg2, A)}};
+          if (Loop) {
+            Join.Preds.push_back(3);
+            Join.Succs.push_back(3);
+            Phi.Args.emplace_back(3, Merged);
+          }
+          Join.Phis.push_back(Phi);
+          // The helper's proven preservation keeps the PHI's bytes, but
+          // does not make those bytes an argument of the later call.
+          MedOp Helper;
+          Helper.Opcode = NdOp::CALL;
+          Helper.CallSiteId = 3;
+          Helper.CallPreservedGPRs = ~uint32_t{0};
+          Helper.addInput(MedVar::makeConst(0x3000, Bytes));
+          Join.Ops.push_back(Helper);
+          for (int K = 0; K != 2; ++K)
+            Join.Ops.push_back(unary(
+                NdOp::COPY, reg(100 + K, 1, Bytes, Layout.Registers[K], A),
+                MedVar::makeConst(11 + K, Bytes)));
+          // A later established slot still requires the intervening slot;
+          // a known fixed arity must also keep its unknown argument.
+          if (Contract == 3)
+            Join.Ops.push_back(unary(NdOp::COPY,
+                                     reg(103, 1, Bytes, Layout.Registers[3], A),
+                                     MedVar::makeConst(29, Bytes)));
+          MedOp Call;
+          Call.Opcode = NdOp::CALL;
+          Call.CallSiteId = 4;
+          Call.addInput(MedVar::makeConst(Callee, Bytes));
+          if (Contract == 1) {
+            Call.CalleeRegisterArgs = 2;
+            Call.CalleeVariadicFrom = 2;
+          }
+          Join.Ops.push_back(Call);
+          BinaryImage Image;
+          Image.Arch = A;
+          Image.Format = Format;
+          std::map<va_t, int> Arity;
+          if (Contract >= 2)
+            Arity[Callee] = Contract == 2 ? 3 : 4;
+          recoverCallAbi(F, A, {{Callee, "sink"}}, &Image, &Arity, &Arity);
+          const auto Found = std::find_if(
+              F.CallInfos.begin(), F.CallInfos.end(),
+              [&](const auto &Info) { return Info.TargetAddr == Callee; });
+          ASSERT_NE(Found, F.CallInfos.end());
+          const size_t Expected = Contract == 3                 ? 4
+                                  : (Contract == 2 || HasValue) ? 3
+                                                                : 2;
+          ASSERT_EQ(Found->Args.size(), Expected);
+          if (Expected >= 3)
+            EXPECT_EQ(Found->Args[2], Merged);
+        }
+}
+
 TEST(MedABIPass, DirectCallUsesWidestEquallySeededArgumentPhi) {
   constexpr Arch TheArch = Arch::AArch64;
   const TargetRegInfo &TRI = getTargetRegInfo(TheArch);
@@ -10128,6 +10473,126 @@ TEST(CallRegisterEffects, OverwrittenCopiesDoNotConsumeIncomingArguments) {
   }
 }
 
+TEST(CallRegisterEffects, MayWritesMatchReachabilityAcrossDeepCycles) {
+  // The oracle visits reachable definitions independently for each root.
+  // It does not share the solver's backwards propagation or fixed point.
+  constexpr size_t Count = 321;
+  constexpr GPRFamilyMask Volatile = 0x907;
+  for (bool Reverse : {false, true})
+    for (unsigned Mode = 0; Mode != 5; ++Mode) {
+      SCOPED_TRACE(Reverse);
+      SCOPED_TRACE(Mode);
+      const auto Address = [&](size_t I) {
+        return va_t{0x1000} + (Reverse ? Count - I : I) * 0x20;
+      };
+      std::map<va_t, LocalRegisterEffect> Functions;
+      for (size_t I = 0; I != Count; ++I) {
+        auto &Effect = Functions[Address(I)];
+        Effect.BodyUnknown = false;
+        Effect.BodyWrites = I % 47 == 0 ? 1u << (I % 16) : 0;
+        if (I % 79 == 0)
+          Effect.Writes = 1u << (I % 24);
+        if (I + 1 < Count - 2)
+          Effect.Callees.insert(Address(I + 1));
+        if (I == Count - 3)
+          Effect.Callees.insert(Address(Count - 17));
+      }
+      // Two unrelated definitions must not inherit a cycle's unknown effect.
+      auto &Inside = Functions.at(Address(Count - 5));
+      if (Mode == 1)
+        Inside.Callees.insert(0x100000); // Missing body.
+      if (Mode == 2)
+        Inside.Unknown = true;
+      if (Mode == 3)
+        Inside.CallsFixedContract = true;
+      if (Mode == 4)
+        Inside.BodyUnknown = true;
+      const auto Actual = solveCallRegisterEffects(Functions, Volatile, 0);
+      for (const auto &[Root, Definition] : Functions) {
+        std::set<va_t> Seen;
+        std::vector<va_t> Pending{Root};
+        GPRFamilyMask Expected = 0, BodyExpected = 0;
+        bool Unknown = false, BodyUnknown = false;
+        while (!Pending.empty()) {
+          const va_t Current = Pending.back();
+          Pending.pop_back();
+          if (!Seen.insert(Current).second)
+            continue;
+          const auto Found = Functions.find(Current);
+          if (Found == Functions.end()) {
+            Unknown = true;
+            continue;
+          }
+          const auto &Effect = Found->second;
+          Unknown |= Effect.Unknown;
+          BodyUnknown |= Effect.BodyUnknown || Effect.CallsFixedContract;
+          Expected |= Effect.Writes;
+          BodyExpected |= Effect.BodyWrites;
+          if (Effect.CallsFixedContract)
+            Expected |= Volatile;
+          Pending.insert(Pending.end(), Effect.Callees.begin(),
+                         Effect.Callees.end());
+        }
+        SCOPED_TRACE(Root);
+        EXPECT_EQ(Actual.MayWrite.count(Root), Unknown ? 0u : 1u);
+        if (!Unknown && Actual.MayWrite.count(Root))
+          EXPECT_EQ(Actual.MayWrite.at(Root), Expected);
+        BodyUnknown |= Unknown;
+        EXPECT_EQ(Actual.BodyMayWrite.count(Root), BodyUnknown ? 0u : 1u);
+        if (!BodyUnknown && Actual.BodyMayWrite.count(Root))
+          EXPECT_EQ(Actual.BodyMayWrite.at(Root), BodyExpected);
+      }
+    }
+}
+
+TEST(CallRegisterEffects,
+     BodyWritesRetainPhysicalWritesAndRejectOpaqueEffects) {
+  for (auto Architecture : {Arch::X64, Arch::AArch64})
+    for (auto Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+      for (unsigned Mode = 0; Mode != 7; ++Mode) {
+        SCOPED_TRACE(static_cast<int>(Architecture));
+        SCOPED_TRACE(static_cast<int>(Format));
+        SCOPED_TRACE(Mode);
+        BinaryImage Image;
+        Image.Arch = Architecture;
+        Image.Format = Format;
+        Image.Bits = Bitness::Bits64;
+        const NdVar R = NdVar::reg(24, 8);
+        auto F = makeOneBlockLow(0x1000, "physical_writes", [&](auto Push) {
+          Push(NdOp::COPY, NdVar::tmp(1, 8), {R});
+          Push(NdOp::COPY, NdVar::reg(27, 1), {NdVar::cst(1, 1)});
+          Push(NdOp::COPY, R, {NdVar::tmp(1, 8)}); // Restore is still a write.
+          if (Mode == 1)
+            Push(NdOp::INTRINSIC, {}, {NdVar::cst(0, 8)});
+          if (Mode == 2)
+            Push(NdOp::ATOMIC_XCHG, NdVar::reg(0, 8),
+                 {NdVar::reg(8, 8), NdVar::cst(0, 8)});
+          if (Mode == 6)
+            Push(NdOp::COPY, NdVar::reg(7, 2), {NdVar::cst(0, 2)});
+        });
+        if (Mode == 3)
+          F.ModuleAnalysisRoots.insert(0x1100);
+        if (Mode == 4)
+          F.Blocks.front().ExceptionalPreds.emplace_back();
+        if (Mode == 5)
+          F.Blocks.front().Succs.push_back(99);
+        const auto Effects = localRegisterEffect(Image, F);
+        const auto Result =
+            solveCallRegisterEffects({{F.Entry, Effects}}, 0, 0);
+        const bool Known = Mode == 0 || Mode == 6;
+        ASSERT_EQ(Result.BodyMayWrite.contains(F.Entry), Known);
+        if (Known) {
+          uint32_t Expected = 0xFFFF0008u;
+          if (Architecture == Arch::X64)
+            Expected |= 0x10;
+          if (Mode == 6)
+            Expected |= 3;
+          EXPECT_EQ(Result.BodyMayWrite.at(F.Entry), Expected);
+        }
+      }
+}
+
 TEST(CallRegisterEffects, EntryReadsCrossChainsCyclesAndPointerCalls) {
   // 0x1000 calls 0x1100, which calls 0x1200: callers precede their callees
   // in address order.  0x1200 and 0x1300 call each other, and 0x1400 calls
@@ -10363,6 +10828,10 @@ TEST(CallRegisterEffects, APreservedFamilyKeepsTheBytesItTracks) {
       (uint32_t(1) << registerFamilyOf(Arch::X64, XMM1)->first);
   EXPECT_TRUE(
       callPreservesRegisterBytes(Arch::X64, KeepsRAXAndXMM1, x86reg::RAX, 8));
+  EXPECT_FALSE(callPreservesRegisterBytes(Arch::X64, KeepsRAXAndXMM1,
+                                          x86reg::RAX + 7, 2));
+  EXPECT_FALSE(
+      callPreservesRegisterBytes(Arch::X64, KeepsRAXAndXMM1, x86reg::RAX, 0));
   EXPECT_TRUE(callPreservesRegisterBytes(Arch::X64, KeepsRAXAndXMM1, XMM1, 16));
   EXPECT_TRUE(
       callPreservesRegisterBytes(Arch::X64, KeepsRAXAndXMM1, XMM1 + 8, 8));
@@ -10372,7 +10841,13 @@ TEST(CallRegisterEffects, APreservedFamilyKeepsTheBytesItTracks) {
   EXPECT_FALSE(callPreservesRegisterBytes(Arch::X64, KeepsRAXAndXMM1,
                                           x86reg::VectorBase, 16));
   EXPECT_FALSE(callPreservesRegisterBytes(Arch::X64, 0, XMM1, 16));
-  EXPECT_FALSE(callPreservesRegisterBytes(Arch::AArch64, ~uint32_t(0), 0, 8));
+  // AArch64 X0-X15 share these families. X16 and SP stay untracked.
+  EXPECT_TRUE(
+      callPreservesRegisterBytes(Arch::AArch64, uint32_t(1) << 0, 0, 8));
+  EXPECT_FALSE(callPreservesRegisterBytes(Arch::AArch64, ~uint32_t(1), 0, 8));
+  EXPECT_FALSE(
+      callPreservesRegisterBytes(Arch::AArch64, ~uint32_t(0), 16 * 8, 8));
+  EXPECT_FALSE(callPreservesRegisterBytes(Arch::AArch64, ~uint32_t(0), 248, 8));
 }
 
 TEST(CallRegisterEffects, JoinedPlainStepsSolveAsTheirSteps) {

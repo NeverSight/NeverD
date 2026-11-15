@@ -137,9 +137,10 @@ TEST(AArch64FunctionDiscovery, ARawImageAtZeroStartsAtItsEntry) {
   }
 }
 
-TEST(AArch64FunctionDiscovery, ADirectCallRetainsAnEntrySharedWithRunningCode) {
-  // A direct call is entry evidence even where another path falls through
-  // into the same code. The preceding instruction alone cannot reject it.
+TEST(AArch64FunctionDiscovery, ACallIntoRunningCodeNamesNoFunction) {
+  // As a constant in an executable section can read as BL: a target the
+  // instruction before runs into is within that code, unless it marks an
+  // entry of its own.
   constexpr va_t AfterReturnVA = 0x14;
   constexpr va_t WithinCodeVA = 0x24;
   constexpr va_t MarkedVA = 0x30;
@@ -180,7 +181,7 @@ TEST(AArch64FunctionDiscovery, ADirectCallRetainsAnEntrySharedWithRunningCode) {
                        [&](const auto &F) { return F.first == A; });
   };
   EXPECT_TRUE(Has(AfterReturnVA));
-  EXPECT_TRUE(Has(WithinCodeVA));
+  EXPECT_FALSE(Has(WithinCodeVA));
   EXPECT_TRUE(Has(MarkedVA));
 }
 
@@ -314,20 +315,20 @@ TEST(AArch64FunctionDiscovery, AShrinkWrappedPrologueAfterOtherCodeBeginsNone) {
   EXPECT_FALSE(Entries.count(0x10));
 }
 
-TEST(AArch64FunctionDiscovery, ADirectCallCanEnterAnExistingPrologue) {
-  // The frame push follows another entry, but a real direct call also
-  // reaches it. Both entry paths must remain available to CFG recovery.
+TEST(AArch64FunctionDiscovery, ACallToAProloguesFramePushNamesNoFunction) {
+  // As a constant that reads as BL can: the frame push follows PACIASP and
+  // a shadow stack push within the prologue of the function at 0xc.
   const auto Entries =
       rawEntries({bl(0, 0x14), kRet, kRet, kPaciasp, kShadowPush, kFramePush,
                   kFramePop, kShadowPop, kAutiasp, kRet});
   EXPECT_TRUE(Entries.count(0xC));
-  EXPECT_TRUE(Entries.count(0x14));
+  EXPECT_FALSE(Entries.count(0x14));
 }
 
-TEST(AArch64FunctionDiscovery, ACalledTrapIsStillAFunction) {
+TEST(AArch64FunctionDiscovery, NoFunctionBeginsWithUDF) {
   const auto Entries =
       rawEntries({bl(0, 0xC), kRet, kRet, 0x00000123 /* udf #0x123 */, kRet});
-  EXPECT_TRUE(Entries.count(0xC));
+  EXPECT_FALSE(Entries.count(0xC));
 }
 
 TEST(AArch64FunctionDiscovery, PaddingEndsAtAWholeZeroWord) {

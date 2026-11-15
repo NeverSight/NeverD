@@ -13,6 +13,7 @@
 #include "llvm/ADT/ArrayRef.h"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -51,6 +52,32 @@ std::vector<std::optional<int64_t>>
 entryStackOffsets(const MedFunc &Func, llvm::ArrayRef<MedVar> Values,
                   Arch Architecture, BinaryFormat Format,
                   StackEntryKind Entry = StackEntryKind::Call);
+
+/// entryStackOffset of the values of \p Func, by one proof built at the first
+/// query. Adding, removing or moving its operations or PHIs requires a new
+/// one.
+class EntryStackOffsetProof {
+public:
+  EntryStackOffsetProof(const MedFunc &Func, Arch Architecture,
+                        BinaryFormat Format,
+                        StackEntryKind Entry = StackEntryKind::Call);
+  ~EntryStackOffsetProof();
+  EntryStackOffsetProof(const EntryStackOffsetProof &) = delete;
+  EntryStackOffsetProof &operator=(const EntryStackOffsetProof &) = delete;
+
+  bool provesFor(Arch A, BinaryFormat F, StackEntryKind E) const {
+    return A == Architecture && F == Format && E == Entry;
+  }
+  std::optional<int64_t> offset(const MedVar &Value);
+
+private:
+  class Proof;
+  const MedFunc &Func;
+  Arch Architecture;
+  BinaryFormat Format;
+  StackEntryKind Entry;
+  std::unique_ptr<Proof> Built;
+};
 
 /// Inclusive bounds on a pointer's signed displacement from entry SP. A
 /// dynamic allocation can have bounds without having an exact stack offset.

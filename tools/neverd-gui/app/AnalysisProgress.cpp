@@ -175,6 +175,8 @@ QString AnalysisProgress::statusText(Stage stage, int percent) {
 }
 
 QString AnalysisProgress::stepText() const {
+  if (phase_ == QLatin1String("prepare_views"))
+    return tr("Preparing the decompiler");
   if (readsTheFile(phase_))
     return tr("Reading the file");
   if (phase_ == QLatin1String("parse") || phase_ == QLatin1String("metadata") ||

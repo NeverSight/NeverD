@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PipelineCallAbiDetail.h"
+#include "PipelineDebugReceivers.h"
 #include "PipelineIncomingStack.h"
 #include "PipelineLowIRDetail.h"
 #include "PipelineMedAudit.h"
@@ -1110,10 +1111,28 @@ bool refuseObservedCallReturnReads(const BinaryImage &Image,
 //===----------------------------------------------------------------------===//
 
 void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
-                          PipelineResult &Result) {
+                          PipelineResult &Result, DebugContext *Dbg) {
   auto Phase2Start = std::chrono::steady_clock::now();
 
   const size_t Total = Result.LowFuncs.size();
+  std::vector<DebugVirtualCallArguments> VirtualArguments(Total);
+  if (Dbg && Opts.usesSourceDeclarations() && !Opts.usesMachineMedIR()) {
+    std::shared_ptr<const PipelineAnalysisCache::SymbolInventory> Inventory;
+    std::optional<ItaniumVTableIndex> OwnTables;
+    const auto Tables = [&]() -> const ItaniumVTableIndex & {
+      if (auto *Cache = sharedAnalysisCache(Img, Opts)) {
+        if (!Inventory)
+          Inventory = PipelineAnalysisCache::SymbolInventory::of(Img, *Cache);
+        return Inventory->virtualTables(Img);
+      }
+      if (!OwnTables)
+        OwnTables.emplace(Img);
+      return *OwnTables;
+    };
+    for (size_t I = 0; I < Total; ++I)
+      VirtualArguments[I] =
+          debugVirtualCallArguments(Img, Result.LowFuncs[I], *Dbg, Tables);
+  }
   Result.MedFuncs.resize(Total);
   // Each worker owns one element; publish errors in stable function order
   // only after all workers have joined.
@@ -1270,6 +1289,8 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     Converted[I] = 0;
     PendingStackProof[I] = 0;
     try {
+      Local.setCallSiteIntegerArguments(&VirtualArguments[I].Integers);
+      Local.setCallSiteFloatingArguments(&VirtualArguments[I].Floating);
       const auto Sites = SourceSites.find(Result.LowFuncs[I].Entry);
       Local.setSourceCallSiteHints(Opts.usesSourceDeclarations() &&
                                            Sites != SourceSites.end()
@@ -1560,7 +1581,7 @@ neverd::PipelineResult neverd::Pipeline::rebuildSourceCalls(
   COPY_SOURCE_FACT(StackProbeIndex);
 #undef COPY_SOURCE_FACT
   Result.Success = true;
-  buildMedIR(Img, Opts, Result);
+  buildMedIR(Img, Opts, Result, Dbg);
   if (!Result.Success || Result.MedIRVerifierFailures) {
     Result.Success = false;
     return Result;

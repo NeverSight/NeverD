@@ -1916,9 +1916,11 @@ TEST(HighFrameStoreForwarding,
     ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
     // Its unknown entry value must remain an explicit observation. Erasing
     // only the initializing store leaves an uninitialized C frame read.
-    EXPECT_EQ(Source.find("unknown register") != std::string::npos,
+    EXPECT_EQ(Source.find("incoming register has no definition") !=
+                  std::string::npos,
               Variant != 2)
         << Source;
+    EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
   }
 }
 
@@ -2792,13 +2794,13 @@ TEST(HighSourceExpressions, CallbackDeclaratorsBorrowIncompleteRecords) {
   const auto Callback =
       NdType::makePtr(NdType::makeFunc(NdType::makeVoid(), {Pointer}));
   EXPECT_EQ(declarationToC(Callback, "visit"), "void (*visit)(Context*)");
-  EXPECT_THROW((void)declarationToC(NdType::makePtr(NdType::makeFunc(
-                                        NdType::makeVoid(), {Record})),
-                                    "visit"),
-               std::invalid_argument);
+  const auto ByValue =
+      NdType::makePtr(NdType::makeFunc(NdType::makeVoid(), {Record}));
+  EXPECT_EQ(declarationToC(ByValue, "by_value"), "void (*by_value)(Context)");
   compileAndRun("typedef struct Context Context;\n" +
-                declarationToC(Callback, "visit") +
-                ";\nint main(void) { return visit!=0; }\n");
+                declarationToC(Callback, "visit") + ";\n" +
+                declarationToC(ByValue, "by_value") +
+                ";\nint main(void) { return visit!=0 || by_value!=0; }\n");
 }
 HighFunc duplicatedContinuation() {
   const auto A = Arch::X64;
@@ -3039,10 +3041,9 @@ int main(void) {
 )";
   compileAndRun(Source);
 }
-TEST(HighSourceExpressions, UnspellableCallbackPrototypeKeepsUntypedCall) {
-  // declarationToC spells no callback taking a pointer to an enumeration.
-  // The captured import's call keeps its unprototyped callee instead of
-  // failing the whole rendering.
+TEST(HighSourceExpressions, CallbackPrototypeDeclaresAnOpaqueEnumPointer) {
+  // A pointer needs the enumeration's declaration, not its enumerators or
+  // underlying layout. The target still comes from the captured value.
   class CalleeTypes : public NullDebugContext {
   public:
     bool hasInfo() const override { return true; }
@@ -3081,8 +3082,18 @@ TEST(HighSourceExpressions, UnspellableCallbackPrototypeKeepsUntypedCall) {
   bool Emitted = false;
   ASSERT_NO_THROW(Emitted = HighCEmitter().emit({F}, Out, Options, &Debug));
   ASSERT_TRUE(Emitted);
-  EXPECT_EQ(Source.find("(*t20)"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("(int32_t (*)())"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("typedef enum STATE STATE;"), std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("int32_t (*t20)(STATE*)"), std::string::npos) << Source;
+  Source += R"(
+static int token;
+static int32_t actual(STATE *value) { return value == (STATE *)(void *)&token; }
+int main(void) {
+  return captured_callback((uint64_t)(uintptr_t)&actual,
+                           (uint64_t)(uintptr_t)&token) != 1;
+}
+)";
+  compileAndRun(Source);
 }
 TEST(HighSourceExpressions, PredicateCleanupKeepsDistinctIndirectCallEffects) {
   const auto T = NdType::makeInt(8, false);

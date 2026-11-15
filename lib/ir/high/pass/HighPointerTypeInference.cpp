@@ -17,7 +17,10 @@
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/high/AArch64AddressMemory.h"
 #include "neverd/ir/high/HighSourceFlow.h"
+
+#include "llvm/ADT/APInt.h"
 
 #include <deque>
 #include <functional>
@@ -34,6 +37,11 @@ bool sameType(const TypeRef &Left, const TypeRef &Right) {
   return Left == Right || (Left && Right && equalSourceTypes(Left, Right));
 }
 
+bool sameLocation(const HighPointerLocation &Left,
+                  const HighPointerLocation &Right) {
+  return Left.ByteOffset == Right.ByteOffset && sameType(Left.Type, Right.Type);
+}
+
 /// A pointer to a record (a structure or union), the only source type a
 /// parameter gives its copies. Other pointers, and the types of calls,
 /// constants, addresses and casts, keep their machine carriers.
@@ -43,12 +51,15 @@ bool recordPointer(const TypeRef &Type) {
 }
 
 struct TypeState {
-  std::map<Identity, TypeRef> Pointers;
+  HighPointerLocations Pointers;
   std::map<Identity, int64_t> Addresses;
-  std::map<int64_t, TypeRef> Memory;
+  std::map<int64_t, HighPointerLocation> Memory;
+  std::set<Identity> FrameDerived;
+  bool FrameEscaped = false;
 
   size_t size() const {
-    return Pointers.size() + Addresses.size() + Memory.size();
+    return Pointers.size() + Addresses.size() + Memory.size() +
+           FrameDerived.size();
   }
 };
 
@@ -61,6 +72,7 @@ struct NodeEffects {
 class PointerTypes {
   const HighFunc &Function;
   llvm::ArrayRef<TypeRef> ParameterTypes;
+  const HighPointerTypeOrigins &Origins;
   Arch Architecture;
   uint16_t PointerBytes;
   size_t Budget = limits::ir::kHighPointerTypeMaxOperations;
@@ -68,8 +80,11 @@ class PointerTypes {
   ExprPtr StackPointer;
   std::map<int64_t, ExprPtr> OffsetExpressions;
   std::set<Identity> AddressTaken;
-  std::map<Identity, TypeRef> Candidates;
+  HighPointerLocations Candidates;
   std::set<Identity> Rejected;
+  HighPointerUseLocations *Uses;
+  HighPointerUseLocations UseCandidates;
+  std::set<const HighExpr *> RejectedUses;
 
   bool spend(size_t Count = 1) {
     if (Count > Budget) {
@@ -86,6 +101,13 @@ class PointerTypes {
            !isSyntheticEntryStackPointer(Variable, Function, Architecture) &&
            Variable.Size == PointerBytes &&
            !AddressTaken.count(highSourceLocalIdentity(Variable));
+  }
+
+  bool readOnlyMemoryIntrinsic(const HighExpr &Expression) const {
+    return Architecture == Arch::AArch64 &&
+           isAArch64AddressMemoryIntrinsic(Expression.IntrinsicId) &&
+           !isAArch64AddressStoreIntrinsic(Expression.IntrinsicId) &&
+           aarch64AddressMemoryHighShapeIsValid(Expression);
   }
 
   NodeEffects effects(const HighSourceFlowNode &Node) {
@@ -107,9 +129,9 @@ class PointerTypes {
       if (!Expression || !Seen.insert(Expression.get()).second)
         continue;
       Result.Expressions.push_back(Expression);
-      if (Expression->Kind == ExprKind::Call ||
-          Expression->Kind == ExprKind::Store ||
-          Expression->IntrinsicId != Intrinsic::None ||
+      if (Expression->Kind == ExprKind::Store ||
+          (Expression->IntrinsicId != Intrinsic::None &&
+           !readOnlyMemoryIntrinsic(*Expression)) ||
           Expression->MemoryOrdering != NdMemoryOrdering::None ||
           Expression->MemoryAddressSpace != NdMemoryAddressSpace::Default)
         Result.ClobbersMemory = true;
@@ -163,32 +185,58 @@ class PointerTypes {
     return Offset;
   }
 
-  TypeRef pointer(const ExprPtr &Expression, const TypeState &State,
-                  unsigned Depth = 0) {
+  std::optional<HighPointerLocation> pointer(const ExprPtr &Expression,
+                                             const TypeState &State,
+                                             unsigned Depth = 0) {
     if (!spend() || !Expression || !Expression->Type ||
         Expression->Type->Size != PointerBytes ||
         (Expression->Type->Kind != NdTypeKind::Int &&
          Expression->Type->Kind != NdTypeKind::Ptr))
-      return nullptr;
+      return std::nullopt;
     if (Depth > limits::ir::kHighPointerTypeMaxExpressionDepth) {
       Complete = false;
-      return nullptr;
+      return std::nullopt;
     }
     const auto &E = *Expression;
+    if (E.Kind == ExprKind::Call && E.IntrinsicId == Intrinsic::None)
+      if (const auto Origin = Origins.find(&E);
+          Origin != Origins.end() && recordPointer(Origin->second) &&
+          Origin->second->Size == PointerBytes)
+        return HighPointerLocation{Origin->second, 0};
     if (E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi) {
+      if (const auto Origin = Origins.find(&E); Origin != Origins.end())
+        return scalar(E.Var) && recordPointer(Origin->second) &&
+                       Origin->second->Size == PointerBytes
+                   ? std::optional(HighPointerLocation{Origin->second, 0})
+                   : std::nullopt;
       auto It = State.Pointers.find(highSourceLocalIdentity(E.Var));
-      return It == State.Pointers.end() ? nullptr : It->second;
+      return It == State.Pointers.end() ? std::nullopt
+                                        : std::optional(It->second);
     }
     if (E.Kind == ExprKind::Load) {
       if (E.Operands.size() != 1 ||
           E.MemoryOrdering != NdMemoryOrdering::None ||
           E.MemoryAddressSpace != NdMemoryAddressSpace::Default)
-        return nullptr;
+        return std::nullopt;
+      if (const auto Origin = Origins.find(&E);
+          Origin != Origins.end() && recordPointer(Origin->second) &&
+          Origin->second->Size == PointerBytes)
+        return HighPointerLocation{Origin->second, 0};
       auto Offset = slot(E.Operands[0], PointerBytes, State);
-      if (!Offset)
-        return nullptr;
-      auto It = State.Memory.find(*Offset);
-      return It == State.Memory.end() ? nullptr : It->second;
+      if (Offset) {
+        auto It = State.Memory.find(*Offset);
+        return It == State.Memory.end() ? std::nullopt
+                                        : std::optional(It->second);
+      }
+      if (const auto Base = pointer(E.Operands[0], State, Depth + 1);
+          Base && Base->ByteOffset >= 0) {
+        const auto Member = Base->Type->Pointee->displayFieldTypeAt(
+            Base->ByteOffset, PointerBytes, /*ArrayElements=*/true,
+            NdAccessClass::Pointer);
+        if (recordPointer(Member) && Member->Size == PointerBytes)
+          return HighPointerLocation{Member, 0};
+      }
+      return std::nullopt;
     }
     // A conversion to another pointer type changes the source type: only
     // a view of the same bits as the type they hold continues it.
@@ -198,24 +246,79 @@ class PointerTypes {
         (E.Type->Kind == NdTypeKind::Int || E.Type->Kind == NdTypeKind::Ptr) &&
         (E.Operands[0]->Type->Kind == NdTypeKind::Int ||
          E.Operands[0]->Type->Kind == NdTypeKind::Ptr)) {
-      const TypeRef Held = pointer(E.Operands[0], State, Depth + 1);
-      return E.Type->Kind != NdTypeKind::Ptr || sameType(Held, E.Type)
+      const auto Held = pointer(E.Operands[0], State, Depth + 1);
+      return E.Type->Kind != NdTypeKind::Ptr ||
+                     (Held && !Held->ByteOffset && sameType(Held->Type, E.Type))
                  ? Held
-                 : nullptr;
+                 : std::nullopt;
     }
-    // Arithmetic on integer pointer bits is byte arithmetic. A nonzero offset
-    // cannot retain the same record pointee, nor become scaled C arithmetic.
+    // Retain the byte displacement independently of the source pointer type.
+    // Consumers must subtract it before treating the carrier as a record base.
     if (E.Kind == ExprKind::BinOp && E.Operands.size() == 2 &&
-        (E.Op == NdOp::INT_ADD || E.Op == NdOp::INT_SUB) && E.Operands[1] &&
-        E.Operands[1]->Kind == ExprKind::Const && !E.Operands[1]->ConstVal)
-      return pointer(E.Operands[0], State, Depth + 1);
-    return nullptr;
+        (E.Op == NdOp::INT_ADD || E.Op == NdOp::INT_SUB)) {
+      ExprPtr Base = E.Operands[0], Offset = E.Operands[1];
+      if (E.Op == NdOp::INT_ADD && Base && Base->Kind == ExprKind::Const)
+        std::swap(Base, Offset);
+      if (!Offset || Offset->Kind != ExprKind::Const || !Offset->Type ||
+          Offset->Type->Kind != NdTypeKind::Int || !Offset->Type->Size ||
+          Offset->Type->Size > PointerBytes)
+        return std::nullopt;
+      auto Location = pointer(Base, State, Depth + 1);
+      if (!Location)
+        return std::nullopt;
+      // Integer addition reads the operand's own bits, zero-extending a
+      // narrower carrier. At pointer width the same bits also express a
+      // negative displacement; the source type's signedness does not change
+      // the machine operation.
+      const int64_t Delta =
+          llvm::APInt(Offset->Type->Size * 8, Offset->ConstVal)
+              .zext(PointerBytes * 8)
+              .getSExtValue();
+      int64_t Next = 0;
+      if (E.Op == NdOp::INT_ADD
+              ? llvm::AddOverflow(Location->ByteOffset, Delta, Next)
+              : llvm::SubOverflow(Location->ByteOffset, Delta, Next))
+        return std::nullopt;
+      if (PointerBytes == 4 && (Next < INT32_MIN || Next > INT32_MAX))
+        return std::nullopt;
+      Location->ByteOffset = Next;
+      return Location;
+    }
+    return std::nullopt;
+  }
+
+  // A loaded value cannot contain this frame's address before that address
+  // has escaped. Keep derivation through all arithmetic, including narrowing
+  // and unknown offsets: failure to resolve a cell does not prove isolation.
+  bool frameDerived(const ExprPtr &Expression, const TypeState &State,
+                    unsigned Depth = 0) {
+    if (!spend() || Depth > limits::ir::kHighPointerTypeMaxExpressionDepth) {
+      Complete = false;
+      return true;
+    }
+    if (!Expression)
+      return false;
+    const auto &E = *Expression;
+    if (E.Kind == ExprKind::Addr)
+      return true;
+    if (E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi)
+      return E.Var.Kind == MedVar::Stack ||
+             isSyntheticEntryStackPointer(E.Var, Function, Architecture) ||
+             State.FrameDerived.count(highSourceLocalIdentity(E.Var));
+    if (E.Kind == ExprKind::Load || E.Kind == ExprKind::Call)
+      return false;
+    bool Derived = false;
+    E.forEachChildExpr([&](const ExprPtr &Child) {
+      Derived |= frameDerived(Child, State, Depth + 1);
+    });
+    return Derived;
   }
 
   void forget(TypeState &State, const MedVar &Variable) {
     const auto Key = highSourceLocalIdentity(Variable);
     State.Pointers.erase(Key);
     State.Addresses.erase(Key);
+    State.FrameDerived.erase(Key);
   }
 
   void write(TypeState &State, const ExprPtr &Address, const ExprPtr &Value,
@@ -223,6 +326,10 @@ class PointerTypes {
     const uint16_t Bytes = Value && Value->Type ? Value->Type->Size : 0;
     const auto Offset = address(Address, State);
     int64_t End = 0;
+    if (!Offset && !State.FrameEscaped && !frameDerived(Address, State) &&
+        Bytes && Ordering == NdMemoryOrdering::None &&
+        Space == NdMemoryAddressSpace::Default)
+      return;
     if (!Bytes || !Offset || llvm::AddOverflow(*Offset, int64_t(Bytes), End) ||
         Ordering != NdMemoryOrdering::None ||
         Space != NdMemoryAddressSpace::Default) {
@@ -235,8 +342,8 @@ class PointerTypes {
     const bool Private = Function.FrameSize > 0 &&
                          *Offset >= -Function.FrameSize && *Offset < 0 &&
                          End <= 0;
-    TypeRef Stored =
-        Private && Bytes == PointerBytes ? pointer(Value, State) : nullptr;
+    const auto Stored =
+        Private && Bytes == PointerBytes ? pointer(Value, State) : std::nullopt;
     for (auto It = State.Memory.begin(); It != State.Memory.end();) {
       if (It->first < End && *Offset < It->first + PointerBytes)
         It = State.Memory.erase(It);
@@ -244,20 +351,22 @@ class PointerTypes {
         ++It;
     }
     if (Stored)
-      State.Memory[*Offset] = Stored;
+      State.Memory[*Offset] = *Stored;
   }
 
-  void observe(const MedVar &Variable, const TypeRef &Type) {
+  void observe(const MedVar &Variable,
+               const std::optional<HighPointerLocation> &Location) {
     if (Variable.Kind == MedVar::Param)
       return;
     const auto Key = highSourceLocalIdentity(Variable);
-    if (!scalar(Variable) || !Type || Type->Kind != NdTypeKind::Ptr ||
-        Type->Size != Variable.Size) {
+    if (!scalar(Variable) || !Location || !Location->Type ||
+        Location->Type->Kind != NdTypeKind::Ptr ||
+        Location->Type->Size != Variable.Size) {
       Rejected.insert(Key);
       return;
     }
-    auto [It, Fresh] = Candidates.try_emplace(Key, Type);
-    if (!Fresh && !sameType(It->second, Type))
+    auto [It, Fresh] = Candidates.try_emplace(Key, *Location);
+    if (!Fresh && !sameLocation(It->second, *Location))
       Rejected.insert(Key);
   }
 
@@ -266,17 +375,51 @@ class PointerTypes {
     if (!spend(State.size() + Effects.Expressions.size() + 1))
       return {};
     if (Effects.ClobbersMemory)
+      State.FrameEscaped = true;
+    bool Calls = false;
+    for (const ExprPtr &Expression : Effects.Expressions) {
+      if (Expression->Kind != ExprKind::Call ||
+          readOnlyMemoryIntrinsic(*Expression))
+        continue;
+      Calls = true;
+      Expression->forEachChildExpr([&](const ExprPtr &Argument) {
+        State.FrameEscaped |= frameDerived(Argument, State);
+      });
+    }
+    if (Node.Statement) {
+      const auto &S = *Node.Statement;
+      if (S.Kind == StmtKind::Store)
+        State.FrameEscaped |= frameDerived(S.StoreVal, State);
+      if (S.Kind == StmtKind::Assign && S.Dst && S.Dst->Kind != ExprKind::Var &&
+          S.Dst->Kind != ExprKind::Phi)
+        State.FrameEscaped |= frameDerived(S.Val, State);
+    }
+    // Calls can modify escaped storage, but cannot obtain an unexposed
+    // private cell from its contents (for example a saved object pointer).
+    if (Effects.ClobbersMemory || (Calls && State.FrameEscaped))
       State.Memory.clear();
     for (const MedVar &Output : Effects.Writes) {
       forget(State, Output);
       if (Observe)
-        observe(Output, nullptr);
+        observe(Output, std::nullopt);
     }
     if (Observe)
-      for (const ExprPtr &Expression : Effects.Expressions)
+      for (const ExprPtr &Expression : Effects.Expressions) {
+        const auto Location = pointer(Expression, State);
+        if (Uses) {
+          if (!Location)
+            RejectedUses.insert(Expression.get());
+          else {
+            const auto [It, Fresh] =
+                UseCandidates.emplace(Expression.get(), *Location);
+            if (!Fresh && !sameLocation(It->second, *Location))
+              RejectedUses.insert(Expression.get());
+          }
+        }
         if (Expression->Kind == ExprKind::Var ||
             Expression->Kind == ExprKind::Phi)
-          observe(Expression->Var, pointer(Expression, State));
+          observe(Expression->Var, Location);
+      }
     if (!Node.Statement)
       return State;
     const HighStmt &S = *Node.Statement;
@@ -297,21 +440,25 @@ class PointerTypes {
       State.Memory.clear();
       return State;
     }
-    const TypeRef Type = S.Dst->Type && (S.Dst->Type->Kind == NdTypeKind::Int ||
-                                         S.Dst->Type->Kind == NdTypeKind::Ptr)
-                             ? pointer(S.Val, State)
-                             : nullptr;
+    const auto Location =
+        S.Dst->Type && (S.Dst->Type->Kind == NdTypeKind::Int ||
+                        S.Dst->Type->Kind == NdTypeKind::Ptr)
+            ? pointer(Origins.count(S.Dst.get()) ? S.Dst : S.Val, State)
+            : std::nullopt;
     const auto Offset = address(S.Val, State);
+    const bool Derived = frameDerived(S.Val, State);
     forget(State, S.Dst->Var);
+    if (Derived)
+      State.FrameDerived.insert(highSourceLocalIdentity(S.Dst->Var));
     if (scalar(S.Dst->Var)) {
       const auto Key = highSourceLocalIdentity(S.Dst->Var);
-      if (Type)
-        State.Pointers[Key] = Type;
+      if (Location)
+        State.Pointers[Key] = *Location;
       if (Offset)
         State.Addresses[Key] = *Offset;
     }
     if (Observe)
-      observe(S.Dst->Var, Type);
+      observe(S.Dst->Var, Location);
     return State;
   }
 
@@ -373,13 +520,15 @@ class PointerTypes {
 
 public:
   PointerTypes(const HighFunc &Function, Arch Architecture,
-               llvm::ArrayRef<TypeRef> ParameterTypes)
-      : Function(Function), ParameterTypes(ParameterTypes),
+               llvm::ArrayRef<TypeRef> ParameterTypes,
+               const HighPointerTypeOrigins &Origins,
+               HighPointerUseLocations *Uses)
+      : Function(Function), ParameterTypes(ParameterTypes), Origins(Origins),
         Architecture(Architecture),
-        PointerBytes(getTargetRegInfo(Architecture).PointerSize) {}
+        PointerBytes(getTargetRegInfo(Architecture).PointerSize), Uses(Uses) {}
 
-  HighPointerTypeFacts run() {
-    if (!readsRecordPointerParameter())
+  HighPointerLocations run() {
+    if (Origins.empty() && !readsRecordPointerParameter())
       return {};
     const auto Graph = buildHighSourceFlowGraph(Function);
     if (!Graph.Diagnostics.Complete || !Graph.Diagnostics.Items.empty() ||
@@ -397,8 +546,8 @@ public:
       for (const auto &Expression : Effect.Expressions)
         if (const TypeRef Type = parameterPointer(*Expression);
             Type && scalar(Expression->Var))
-          Entry.Pointers[highSourceLocalIdentity(Expression->Var)] = Type;
-    if (Entry.Pointers.empty())
+          Entry.Pointers[highSourceLocalIdentity(Expression->Var)] = {Type, 0};
+    if (Entry.Pointers.empty() && Origins.empty())
       return {};
     std::vector<std::optional<TypeState>> Inputs(Graph.Nodes.size());
     Inputs[Graph.Entry] = Entry;
@@ -422,11 +571,16 @@ public:
           StateEntries += Input->size();
         } else {
           const size_t Before = Input->size();
-          Changed |= intersect(Input->Pointers, Output.Pointers, sameType);
-          Changed |= intersect(Input->Memory, Output.Memory, sameType);
+          Changed |= intersect(Input->Pointers, Output.Pointers, sameLocation);
+          Changed |= intersect(Input->Memory, Output.Memory, sameLocation);
           Changed |= intersect(Input->Addresses, Output.Addresses,
                                std::equal_to<int64_t>());
-          StateEntries -= Before - Input->size();
+          const bool Escaped = Input->FrameEscaped || Output.FrameEscaped;
+          Changed |= Escaped != Input->FrameEscaped;
+          Input->FrameEscaped = Escaped;
+          for (const auto &Key : Output.FrameDerived)
+            Changed |= Input->FrameDerived.insert(Key).second;
+          StateEntries = StateEntries - Before + Input->size();
         }
         if (StateEntries > limits::ir::kHighPointerTypeMaxStateEntries)
           Complete = false;
@@ -447,14 +601,23 @@ public:
       return {};
     for (const auto &Key : Rejected)
       Candidates.erase(Key);
+    if (Uses) {
+      for (const auto *Expression : RejectedUses)
+        UseCandidates.erase(Expression);
+      *Uses = std::move(UseCandidates);
+    }
     return Candidates;
   }
 };
 } // namespace
 
-HighPointerTypeFacts
-inferHighPointerTypes(const HighFunc &Function, Arch Architecture,
-                      llvm::ArrayRef<TypeRef> ParameterTypes) {
+HighPointerLocations
+inferHighPointerLocations(const HighFunc &Function, Arch Architecture,
+                          llvm::ArrayRef<TypeRef> ParameterTypes,
+                          const HighPointerTypeOrigins &Origins,
+                          HighPointerUseLocations *Uses) {
+  if (Uses)
+    Uses->clear();
   if (Architecture == Arch::Unknown ||
       (!ParameterTypes.empty() &&
        ParameterTypes.size() != Function.Params.size()))
@@ -463,8 +626,21 @@ inferHighPointerTypes(const HighFunc &Function, Arch Architecture,
   for (size_t I = 0; I < Function.Params.size(); ++I)
     HasRecordPointer |= recordPointer(
         ParameterTypes.empty() ? Function.Params[I].Type : ParameterTypes[I]);
-  if (!HasRecordPointer)
+  if (!HasRecordPointer && Origins.empty())
     return {};
-  return PointerTypes(Function, Architecture, ParameterTypes).run();
+  return PointerTypes(Function, Architecture, ParameterTypes, Origins, Uses)
+      .run();
+}
+
+HighPointerTypeFacts
+inferHighPointerTypes(const HighFunc &Function, Arch Architecture,
+                      llvm::ArrayRef<TypeRef> ParameterTypes,
+                      const HighPointerTypeOrigins &Origins) {
+  HighPointerTypeFacts Types;
+  for (auto &[Key, Location] : inferHighPointerLocations(
+           Function, Architecture, ParameterTypes, Origins))
+    if (!Location.ByteOffset)
+      Types.emplace(Key, std::move(Location.Type));
+  return Types;
 }
 } // namespace neverd

@@ -1,6 +1,6 @@
 **Lingue**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: edadf84089252d2d8a80ae25926c8013d54fb4a3fea7fc631f3731016652375c -->
+<!-- i18n-source: 95fe83b667a666030f97d08f0560a217df220426b80c7a4c36c9e24c60750765 -->
 
 <div align="center">
 
@@ -294,6 +294,7 @@ neverd <command> [options] <binary>
 |---------|--------|-------------|
 | `lift` | `.ll` | Lift a LLVM IR |
 | `decompile` | `.c` / `.sol` / `.rs` | C, Solidity EVM o Rust SBF selezionato con `--language` |
+| `decompile --check-all` | conteggi | C predefinito per ogni funzione caricata; ogni corpo viene liberato dopo la verifica |
 | `decompile -llvm` | `.c` | Via LLVM IR + ottimizzatore |
 | `decompile --devirtualize` | `.c` + JSON opzionale | Recupero sperimentale di interpreti x64; richiede `--func`; [contratto ed esempi](interpreter-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | Sperimentale: [Android](android.md), [iOS](ios.md) |

@@ -132,7 +132,8 @@ bool equalTypes(const TypeRef &Left, const TypeRef &Right, unsigned Depth,
     // A displayable stdcall/vectorcall callback is not evidence for that ABI.
     if (Left->FunctionConvention != types::CallingConvention::Unspecified ||
         Right->FunctionConvention != types::CallingConvention::Unspecified ||
-        Left->Size != 0 || !Left->RetType || !Right->RetType ||
+        Left->FunctionVariadic || Right->FunctionVariadic || Left->Size != 0 ||
+        !Left->RetType || !Right->RetType ||
         Left->RetType->Kind == NdTypeKind::Func ||
         Left->ParamTypes.size() >
             ::neverd::limits::ir::kSourceABIEqualTypesLeftParamTypesSizeLimit ||

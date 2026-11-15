@@ -150,7 +150,9 @@ constexpr bool wordByte(unsigned char c) {
 
 /// Calls \p emit with the begin and end of each token of \p text, as tokens()
 /// reads them.
-template <class Emit> void eachToken(const std::string &text, Emit &&emit) {
+template <class Emit>
+void eachToken(const std::string &text, Emit &&emit,
+               bool virtualTargets = false) {
   for (std::size_t i = 0; i < text.size();) {
     if (spaceByte(static_cast<unsigned char>(text[i]))) {
       ++i;
@@ -164,6 +166,14 @@ template <class Emit> void eachToken(const std::string &text, Emit &&emit) {
       }
       if (text[i + 1] == '*') {
         const auto end = text.find("*/", i + 2);
+        constexpr std::string_view prefix = "/* virtual ";
+        if (virtualTargets && end != std::string::npos &&
+            text.compare(i, prefix.size(), prefix) == 0) {
+          const auto begin = i + prefix.size();
+          const auto nameEnd = text.find(" [slot +0x", begin);
+          if (nameEnd != std::string::npos && nameEnd < end)
+            emit(begin, nameEnd);
+        }
         i = end == std::string::npos ? text.size() : end + 2;
         continue;
       }
@@ -1012,18 +1022,23 @@ void CodeEdits::spellIdentifierSymbols(Json &view) {
                          name.value("end_byte", std::size_t{0}));
   const SourceSpanIndex covered(spelled.begin(), spelled.end());
   const auto &text = view["text"].get_ref<const std::string &>();
-  for (const auto &token : tokens(text)) {
-    const auto found = named.find(token.text);
-    if (found == named.end() || covered.overlaps(token.begin, token.end))
-      continue;
-    const Json &name = *found->second;
-    names.push_back({{"begin_byte", token.begin},
-                     {"end_byte", token.end},
-                     {"identifier", token.text},
-                     {"symbol", name["symbol"]},
-                     {"address", hexAddress(parseAddress(
-                                     name["address"].get<std::string>()))}});
-  }
+  eachToken(
+      text,
+      [&](std::size_t begin, std::size_t end) {
+        const auto identifier = text.substr(begin, end - begin);
+        const auto found = named.find(identifier);
+        if (found == named.end() || covered.overlaps(begin, end))
+          return;
+        const Json &name = *found->second;
+        names.push_back(
+            {{"begin_byte", begin},
+             {"end_byte", end},
+             {"identifier", identifier},
+             {"symbol", name["symbol"]},
+             {"address",
+              hexAddress(parseAddress(name["address"].get<std::string>()))}});
+      },
+      true);
   std::sort(names.begin(), names.end(), [](const Json &a, const Json &b) {
     return a.value("begin_byte", std::size_t{0}) <
            b.value("begin_byte", std::size_t{0});

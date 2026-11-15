@@ -10,20 +10,26 @@
 
 #include "neverd/Limits.h"
 #include "neverd/decode/InstructionRelocations.h"
+#include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/NoReturnLoadedTarget.h"
 #include "neverd/loader/ELF/MIPSCodeMode.h"
+#include "neverd/loader/ExceptionEntryPoints.h"
 #include "neverd/sdk/Limits.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/Parallel.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <deque>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <tuple>
 
@@ -117,6 +123,248 @@ StackMove stackMove(const TargetRegInfo &Registers, llvm::ArrayRef<LowOp> Ops) {
   [[maybe_unused]] constexpr llvm::StringLiteral k##Id##ReferenceKind(Name);
 #include "neverd/sdk/ReferenceKinds.def"
 
+/// Numeric facts about the original machine, kept separate from the pointer
+/// certificates used by recompilation. A page fragment can determine the raw
+/// address of a load without becoming an independently relocatable pointer.
+class ReferenceValues {
+public:
+  enum class Role : uint8_t { Unknown, Scalar, Fragment, Address };
+  struct Known {
+    uint64_t Value;
+    Role Kind;
+    uint64_t Mask;
+    bool operator==(const Known &) const = default;
+  };
+
+  std::optional<Known> known(const NdVar &V) const {
+    if (!V.Size || V.Size > sizeof(uint64_t))
+      return std::nullopt;
+    if (V.isConst())
+      return Known{V.Offset & (UINT64_MAX >> ((8 - V.Size) * 8)),
+                   isExactAddressProvenance(V.Provenance) ? Role::Address
+                   : V.Provenance == ConstantAddressProvenance::AddressFragment
+                       ? Role::Fragment
+                   : V.Provenance == ConstantAddressProvenance::Scalar
+                       ? Role::Scalar
+                       : Role::Unknown,
+                   UINT64_MAX >> ((8 - V.Size) * 8)};
+    for (const Slot &S : Values) {
+      if (S.Variable.Space == V.Space && S.Variable.Offset == V.Offset &&
+          S.Variable.Size == V.Size)
+        return S.Fact;
+      // Physical register lanes share their low bytes (EAX inside RAX, for
+      // example). Temporaries have value identities, not register aliases.
+      if (V.isReg() && S.Variable.isReg() && V.Offset >= S.Variable.Offset &&
+          V.Offset - S.Variable.Offset < S.Variable.Size &&
+          V.Size <= S.Variable.Size - (V.Offset - S.Variable.Offset))
+        return Known{(S.Fact.Value >> ((V.Offset - S.Variable.Offset) * 8)) &
+                         (UINT64_MAX >> ((8 - V.Size) * 8)),
+                     Role::Scalar,
+                     (S.Fact.Mask >> ((V.Offset - S.Variable.Offset) * 8)) &
+                         (UINT64_MAX >> ((8 - V.Size) * 8))};
+    }
+    return std::nullopt;
+  }
+
+  std::optional<Known> value(const NdVar &V) const {
+    const auto K = known(V);
+    return K && K->Mask == (UINT64_MAX >> ((8 - V.Size) * 8)) ? K
+                                                              : std::nullopt;
+  }
+
+  void clear() { Values.clear(); }
+  void invalidate(const NdVar &Out) {
+    llvm::erase_if(Values, [&](const Slot &S) {
+      return S.Variable.Space == Out.Space &&
+             S.Variable.Offset < Out.Offset + Out.Size &&
+             Out.Offset < S.Variable.Offset + S.Variable.Size;
+    });
+  }
+  void beginInstruction() {
+    llvm::erase_if(Values, [](const Slot &S) { return S.Variable.isTemp(); });
+  }
+  void forgetUndefined(llvm::ArrayRef<LowUndefinedEffect> Effects,
+                       size_t Completed) {
+    for (const auto &Effect : Effects)
+      if (Effect.AfterOp == Completed) {
+        // An exact false guard preserves the old bits (for example an x86
+        // zero-count shift). An unknown guard may still produce arbitrary
+        // bits, so it cannot keep a constant result.
+        if (Effect.When)
+          if (auto Guard = value(*Effect.When); Guard && Guard->Value == 0)
+            continue;
+        invalidate(Effect.Output);
+      }
+  }
+  void advance(llvm::ArrayRef<LowOp> Ops,
+               llvm::ArrayRef<LowUndefinedEffect> Undefined) {
+    beginInstruction();
+    size_t Completed = 0;
+    forgetUndefined(Undefined, Completed);
+    for (const LowOp &Op : Ops) {
+      advance(Op);
+      forgetUndefined(Undefined, ++Completed);
+    }
+  }
+  void canonicalizeRegisters() {
+    beginInstruction();
+    llvm::sort(Values, [](const Slot &A, const Slot &B) {
+      return std::tie(A.Variable.Offset, A.Variable.Size) <
+             std::tie(B.Variable.Offset, B.Variable.Size);
+    });
+  }
+  bool intersect(const ReferenceValues &Other) {
+    bool Changed = false;
+    for (Slot &S : Values) {
+      const Known Previous = S.Fact;
+      const auto Incoming = Other.known(S.Variable);
+      S.Fact.Mask = Incoming ? S.Fact.Mask & Incoming->Mask &
+                                   ~(S.Fact.Value ^ Incoming->Value)
+                             : 0;
+      S.Fact.Value &= S.Fact.Mask;
+      if (!Incoming || S.Fact.Kind != Incoming->Kind)
+        S.Fact.Kind = Role::Unknown;
+      Changed |= Previous != S.Fact;
+    }
+    llvm::erase_if(Values, [](const Slot &S) { return S.Fact.Mask == 0; });
+    return Changed;
+  }
+
+  void advance(const LowOp &Op) {
+    if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
+        Op.Opcode == NdOp::INTRINSIC) {
+      clear();
+      return;
+    }
+    const NdVar &Out = Op.Output;
+    if (!Out.Size || (!Out.isReg() && !Out.isTemp()))
+      return;
+    const bool Ordinary =
+        Op.MemoryOrdering == NdMemoryOrdering::None &&
+        Op.MemoryAddressSpace == NdMemoryAddressSpace::Default;
+    const auto Bits =
+        Ordinary ? lowScalarConstantResult(
+                       Op,
+                       [&](const NdVar &Input) -> std::optional<uint64_t> {
+                         if (auto Fact = value(Input))
+                           return Fact->Value;
+                         return std::nullopt;
+                       })
+                 : std::nullopt;
+    auto Result =
+        Bits       ? std::optional<Known>{{*Bits, Role::Scalar,
+                                           UINT64_MAX >> ((8 - Out.Size) * 8)}}
+        : Ordinary ? partialResult(Op)
+                   : std::nullopt;
+    Role Kind = Role::Scalar;
+    if (Result && Op.Opcode == NdOp::COPY && Op.NumInputs == 1) {
+      if (auto Input = known(Op.Inputs[0]))
+        Kind = Input->Kind;
+    } else if (Bits && Op.NumInputs == 2 &&
+               (Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB)) {
+      const auto Left = value(Op.Inputs[0]), Right = value(Op.Inputs[1]);
+      if (Left && Right) {
+        const auto IsBase = [](Role R) {
+          return R == Role::Address || R == Role::Fragment;
+        };
+        if (IsBase(Left->Kind) && !IsBase(Right->Kind))
+          Kind = Role::Address;
+        else if (Op.Opcode == NdOp::INT_ADD && IsBase(Right->Kind) &&
+                 !IsBase(Left->Kind))
+          Kind = Role::Address;
+        else if (Left->Kind == Role::Unknown && Right->Kind == Role::Unknown)
+          Kind = Role::Unknown;
+      }
+    }
+    // Arithmetic completes a known page/base fragment into a concrete
+    // address for metadata xrefs (for example ADRP followed by ADD). This
+    // numeric observation does not certify a relocatable C/LLVM pointer.
+    invalidate(Out);
+    if (Result) {
+      Result->Kind = Kind;
+      Values.push_back({Out, *Result});
+    }
+  }
+
+private:
+  // A byte written through a full-register mask/merge is still known when
+  // the preserved bytes are not. Keep those facts without inventing the rest
+  // of the register. Exact arithmetic remains owned by the scalar evaluator.
+  std::optional<Known> partialResult(const LowOp &Op) const {
+    const unsigned Width = Op.Output.Size * 8;
+    if (Width > 64)
+      return std::nullopt;
+    const auto Bits = [&](const NdVar &V) {
+      llvm::KnownBits K(V.Size * 8);
+      if (auto F = known(V)) {
+        K.Zero = llvm::APInt(V.Size * 8, F->Mask & ~F->Value);
+        K.One = llvm::APInt(V.Size * 8, F->Mask & F->Value);
+      }
+      return K;
+    };
+    llvm::KnownBits Result(Width);
+    if (Op.NumInputs == 1 && Op.Inputs[0].Size &&
+        Op.Inputs[0].Size <= Op.Output.Size) {
+      const auto Input = Bits(Op.Inputs[0]);
+      if (Op.Opcode == NdOp::INT_ZEXT)
+        Result = Input.zext(Width);
+      else if (Op.Opcode == NdOp::INT_SEXT)
+        Result = Input.sext(Width);
+      else if (Input.getBitWidth() == Width) {
+        if (Op.Opcode == NdOp::COPY)
+          Result = Input;
+        else if (Op.Opcode == NdOp::INT_NOT || Op.Opcode == NdOp::INT_NEGATE) {
+          Result.Zero = Input.One;
+          Result.One = Input.Zero;
+        }
+      }
+    } else if (Op.NumInputs == 2 && Op.Inputs[0].Size == Op.Output.Size &&
+               Op.Inputs[1].Size == Op.Output.Size) {
+      const auto Left = Bits(Op.Inputs[0]), Right = Bits(Op.Inputs[1]);
+      if (Op.Opcode == NdOp::INT_AND)
+        Result = Left & Right;
+      else if (Op.Opcode == NdOp::INT_OR)
+        Result = Left | Right;
+      else if (Op.Opcode == NdOp::INT_XOR)
+        Result = Left ^ Right;
+      else if (Right.isConstant() &&
+               (Op.Opcode == NdOp::INT_LEFT || Op.Opcode == NdOp::INT_RIGHT ||
+                Op.Opcode == NdOp::INT_ASHR)) {
+        const unsigned Count = static_cast<unsigned>(
+            std::min<uint64_t>(Right.getConstant().getZExtValue(), Width));
+        Result = Left;
+        // LowIR shifts saturate; ISA-specific count masking was lifted.
+        if (Op.Opcode == NdOp::INT_LEFT) {
+          Result <<= Count;
+          Result.Zero.setLowBits(Count);
+        } else if (Op.Opcode == NdOp::INT_RIGHT) {
+          Result >>= Count;
+          Result.Zero.setHighBits(Count);
+        } else {
+          Result.Zero = Left.Zero.ashr(std::min(Count, Width - 1));
+          Result.One = Left.One.ashr(std::min(Count, Width - 1));
+        }
+      }
+    }
+    const uint64_t Mask = (Result.Zero | Result.One).getZExtValue();
+    if (!Mask)
+      return std::nullopt;
+    return Known{Result.One.getZExtValue(), Role::Scalar, Mask};
+  }
+
+  struct Slot {
+    NdVar Variable;
+    Known Fact;
+  };
+  llvm::SmallVector<Slot, 8> Values;
+};
+
+InstructionFlow
+summarizeLowFlow(const BinaryImage &Img, llvm::ArrayRef<LowOp> Ops, va_t Next,
+                 va_t CodeReference, ReferenceValues &Values,
+                 const libc::NoReturnTargetIndex *NoReturnTargets = nullptr,
+                 llvm::ArrayRef<LowUndefinedEffect> Undefined = {});
+
 } // namespace
 
 llvm::SmallVector<InstructionRef, 2>
@@ -190,7 +438,8 @@ InstructionFlow summarizeInstructionFlow(const BinaryImage &Img, Decoder &Dec,
 InstructionFlow
 InstructionFlowScratch::summarize(const BinaryImage &Img, Decoder &Dec,
                                   const DecodedInsn &DI,
-                                  const TargetRegInfo *StackRegisters) {
+                                  const TargetRegInfo *StackRegisters,
+                                  LowInstructionUndefinedEffects *Undefined) {
   InstructionFlow Flow;
   Ops.clear();
   // Each row is lifted independently of its neighbours.
@@ -232,83 +481,49 @@ InstructionFlowScratch::summarize(const BinaryImage &Img, Decoder &Dec,
                        [&](const LowOp &Op) { return Op.Addr != DI.Addr; });
       }
     } else {
-      Dec.liftToLow(DI, Ops, Relocations.Addresses, Relocations.Scalars);
+      Dec.liftToLow(DI, Ops, Relocations.Addresses, Relocations.Scalars,
+                    Undefined);
     }
   } catch (const UnliftedInstruction &) {
     // Nothing is known about what the instruction does, so it states no
     // transfer, no reference and no stack pointer.
     Flow.Kind = UnliftedFlow;
     Flow.Stack.Unknown = true;
+    Ops.clear();
     return Flow;
   }
+  ReferenceValues Values;
+  const auto DelaySlotBytes = Flow.DelaySlotBytes;
+  Flow = summarizeLowFlow(Img, Ops, DI.Addr + DI.Size + DelaySlotBytes,
+                          Dec.pcRelCodeRefTarget(DI), Values, NoReturnTargets,
+                          Undefined ? llvm::ArrayRef(Undefined->Effects)
+                                    : llvm::ArrayRef<LowUndefinedEffect>());
+  Flow.DelaySlotBytes = DelaySlotBytes;
+  if (DelaySlotBytes && Flow.Kind == "jump" &&
+      llvm::any_of(Ops,
+                   [](const LowOp &Op) { return Op.Opcode == NdOp::COND_BR; }))
+    Flow.Kind = "cjump";
   if (StackRegisters)
     Flow.Stack = stackMove(*StackRegisters, Ops);
+  return Flow;
+}
+
+namespace {
+InstructionFlow
+summarizeLowFlow(const BinaryImage &Img, llvm::ArrayRef<LowOp> Ops, va_t Next,
+                 va_t CodeReference, ReferenceValues &Values,
+                 const libc::NoReturnTargetIndex *NoReturnTargets,
+                 llvm::ArrayRef<LowUndefinedEffect> Undefined) {
+  InstructionFlow Flow;
+  Values.beginInstruction();
+  llvm::SmallVector<va_t, 2> Offsets;
   const auto ConstantInput = [](const LowOp &Op) -> std::optional<va_t> {
     if (Op.NumInputs == 0 || !Op.Inputs[0].isConst())
       return std::nullopt;
     return static_cast<va_t>(Op.Inputs[0].Offset);
   };
-  // Values the instruction's own ops compute from constants, such as a
-  // RIP-relative address: the next instruction's address plus a
-  // displacement.  A sum is an address when one of its terms is; a
-  // segment offset alone, which the lifter marks scalar, is not.
-  enum class Role : uint8_t { Unknown, Scalar, Address };
-  struct Known {
-    va_t Value;
-    Role Kind;
-  };
-  struct Slot {
-    VnodeSpace Space;
-    uint64_t Offset;
-    uint16_t Size;
-    Known Value;
-  };
-  llvm::SmallVector<Slot, 8> Computed;
-  // Addresses the instruction materializes as values: exact address
-  // constants (a relocated immediate, a PC-relative address) that it stores
-  // or puts in a register.  A number that only looks like an address is not
-  // one; without a relocation an immediate stays a number.
-  llvm::SmallVector<va_t, 2> Offsets;
-  const auto ValueOf = [&](const NdVar &V) -> std::optional<Known> {
-    if (V.isConst())
-      return Known{static_cast<va_t>(V.Offset),
-                   isExactAddressProvenance(V.Provenance) ? Role::Address
-                   : V.Provenance == ConstantAddressProvenance::Scalar
-                       ? Role::Scalar
-                       : Role::Unknown};
-    for (const Slot &S : Computed)
-      if (S.Space == V.Space && S.Offset == V.Offset && S.Size == V.Size)
-        return S.Value;
-    return std::nullopt;
-  };
-  const auto Record = [&](const LowOp &Op) {
-    const NdVar &Out = Op.Output;
-    if (!Out.Size || Out.isConst())
-      return;
-    std::optional<Known> Result;
-    if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1) {
-      Result = ValueOf(Op.Inputs[0]);
-    } else if (Op.Opcode == NdOp::INT_ADD && Op.NumInputs == 2) {
-      const auto Left = ValueOf(Op.Inputs[0]), Right = ValueOf(Op.Inputs[1]);
-      if (Left && Right)
-        Result =
-            Known{Left->Value + Right->Value,
-                  Left->Kind == Role::Address || Right->Kind == Role::Address
-                      ? Role::Address
-                  : Left->Kind == Role::Scalar || Right->Kind == Role::Scalar
-                      ? Role::Scalar
-                      : Role::Unknown};
-    }
-    llvm::erase_if(Computed, [&](const Slot &S) {
-      return S.Space == Out.Space && S.Offset < Out.Offset + Out.Size &&
-             Out.Offset < S.Offset + S.Size;
-    });
-    if (!Result)
-      return;
-    if (Out.Size < 8)
-      Result->Value &= (uint64_t{1} << (Out.Size * 8)) - 1;
-    Computed.push_back({Out.Space, Out.Offset, Out.Size, *Result});
-  };
+  size_t Completed = 0;
+  Values.forgetUndefined(Undefined, Completed);
   for (const LowOp &Op : Ops) {
     switch (Op.Opcode) {
     case NdOp::CALL:
@@ -346,28 +561,29 @@ InstructionFlowScratch::summarize(const BinaryImage &Img, Decoder &Dec,
     case NdOp::LOAD:
     case NdOp::STORE: {
       const LowMemoryOperandView Memory = lowMemoryOperands(Op);
-      if (!Memory.Complete || !Memory.Address)
+      if (!Memory.Complete || !Memory.Address ||
+          Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
         break;
-      if (const auto Address = ValueOf(*Memory.Address);
-          Address && Address->Kind != Role::Scalar)
+      if (const auto Address = Values.value(*Memory.Address); Address)
         Flow.Refs.push_back({Address->Value,
                              Op.Opcode == NdOp::LOAD ? "read" : "write",
                              Memory.AccessSize});
       // A stored address, such as an argument pushed as `offset aText`.
       if (Op.Opcode == NdOp::STORE && Memory.StoredValue)
-        if (const auto Stored = ValueOf(*Memory.StoredValue);
-            Stored && Stored->Kind == Role::Address)
+        if (const auto Stored = Values.value(*Memory.StoredValue);
+            Stored && Stored->Kind == ReferenceValues::Role::Address)
           Offsets.push_back(Stored->Value);
       break;
     }
     default:
       break;
     }
-    Record(Op);
+    Values.advance(Op);
+    Values.forgetUndefined(Undefined, ++Completed);
     // An address the instruction puts in a register, as `mov eax, offset X`.
     if (Op.Output.isReg())
-      if (const auto Value = ValueOf(Op.Output);
-          Value && Value->Kind == Role::Address)
+      if (const auto Value = Values.value(Op.Output);
+          Value && Value->Kind == ReferenceValues::Role::Address)
         Offsets.push_back(Value->Value);
   }
   // A predicated call's unexecuted arm still reaches the next instruction.
@@ -376,15 +592,10 @@ InstructionFlowScratch::summarize(const BinaryImage &Img, Decoder &Dec,
         return Op.Opcode == NdOp::COND_BR;
       }))
     Flow.NoReturn = false;
-  if (Flow.DelaySlotBytes && Flow.Kind == "jump" &&
-      llvm::any_of(Ops,
-                   [](const LowOp &Op) { return Op.Opcode == NdOp::COND_BR; }))
-    Flow.Kind = "cjump";
-  if (va_t Address = Dec.pcRelCodeRefTarget(DI); Address != InvalidVA)
+  if (va_t Address = CodeReference; Address != InvalidVA)
     Offsets.push_back(Address);
   // The next instruction's address, which a call pushes and a system call
   // saves, is where execution returns, not an address the code refers to.
-  const va_t Next = DI.Addr + DI.Size + Flow.DelaySlotBytes;
   for (const va_t Address : Offsets)
     if (Address != Next && Address != Flow.Target &&
         llvm::none_of(Flow.Refs, [&](const InstructionRef &Ref) {
@@ -393,6 +604,7 @@ InstructionFlowScratch::summarize(const BinaryImage &Img, Decoder &Dec,
       Flow.Refs.push_back({Address, "offset"});
   return Flow;
 }
+} // namespace
 
 namespace {
 std::vector<const FuncInfo *>
@@ -414,7 +626,17 @@ orderedFunctions(llvm::ArrayRef<FuncInfo> Functions) {
   return Ordered;
 }
 
+std::shared_ptr<const std::vector<va_t>>
+functionEntries(llvm::ArrayRef<const FuncInfo *> Ordered) {
+  auto Entries = std::make_shared<std::vector<va_t>>();
+  Entries->reserve(Ordered.size());
+  for (const FuncInfo *F : Ordered)
+    Entries->push_back(F->Entry);
+  return Entries;
+}
+
 FunctionPage pageFunctions(llvm::ArrayRef<const FuncInfo *> Ordered,
+                           std::shared_ptr<const std::vector<va_t>> Entries,
                            va_t FirstEntry, int MaxFunctions) {
   const auto First = std::lower_bound(
       Ordered.begin(), Ordered.end(), FirstEntry,
@@ -427,10 +649,7 @@ FunctionPage pageFunctions(llvm::ArrayRef<const FuncInfo *> Ordered,
   if (End < static_cast<size_t>(Ordered.end() - First))
     Page.NextEntry = First[End]->Entry;
   Page.Functions.assign(First, First + End);
-  // The order holds each entry once, ascending: every function's entry.
-  Page.Entries.reserve(Ordered.size());
-  for (const FuncInfo *F : Ordered)
-    Page.Entries.push_back(F->Entry);
+  Page.Entries = std::move(Entries);
   return Page;
 }
 } // namespace
@@ -438,16 +657,22 @@ FunctionPage pageFunctions(llvm::ArrayRef<const FuncInfo *> Ordered,
 FunctionPage functionPage(const Session &S, va_t FirstEntry, int MaxFunctions) {
   if (!S.FunctionPages || S.FunctionPages->Revision != S.FunctionListRevision ||
       S.FunctionPages->List != S.Functions.data() ||
-      S.FunctionPages->Count != S.Functions.size())
+      S.FunctionPages->Count != S.Functions.size()) {
+    auto Ordered = orderedFunctions(S.Functions);
+    auto Entries = functionEntries(Ordered);
     S.FunctionPages = Session::FunctionPageIndex{
         S.FunctionListRevision, S.Functions.data(), S.Functions.size(),
-        orderedFunctions(S.Functions)};
-  return pageFunctions(S.FunctionPages->Ordered, FirstEntry, MaxFunctions);
+        std::move(Ordered), std::move(Entries)};
+  }
+  return pageFunctions(S.FunctionPages->Ordered, S.FunctionPages->Entries,
+                       FirstEntry, MaxFunctions);
 }
 
 FunctionPage functionPage(llvm::ArrayRef<FuncInfo> Functions, va_t FirstEntry,
                           int MaxFunctions) {
-  return pageFunctions(orderedFunctions(Functions), FirstEntry, MaxFunctions);
+  const auto Ordered = orderedFunctions(Functions);
+  return pageFunctions(Ordered, functionEntries(Ordered), FirstEntry,
+                       MaxFunctions);
 }
 
 namespace {
@@ -468,13 +693,12 @@ std::vector<va_t> unsizedBody(const BinaryImage &Img, Decoder &Dec,
   const bool FollowsJumps = Img.Arch != Arch::ARM && !Entries.empty();
   std::set<va_t> Body;
   std::vector<va_t> Pending{Entry};
-  while (!Pending.empty() && Body.size() < kMaxUnsizedInstructions &&
-         !(Stop && Stop())) {
+  while (!Pending.empty() && !(Stop && Stop())) {
     const va_t Start = Pending.back();
     Pending.pop_back();
     bool Terminated = false;
     const bool ModeKnown = decodeNativeRange(
-        Img, Dec, Start, 0, kMaxUnsizedInstructions - Body.size(),
+        Img, Dec, Start, 0, std::numeric_limits<uint64_t>::max(),
         [&](const DecodedInsn &DI, const uint8_t *, int) {
           if ((Stop && Stop()) || OtherEntry(DI.Addr) ||
               !Body.insert(DI.Addr).second) {
@@ -510,6 +734,8 @@ std::vector<va_t> unsizedBody(const BinaryImage &Img, Decoder &Dec,
 
 /// decodeFunctions over the functions of \p Extents, each an entry and its
 /// recorded size; \p Entries are every function's entries.
+using OutlyingChunks = std::map<va_t, std::vector<ExceptionAddressRange>>;
+
 bool decodeExtents(
     const BinaryImage &Img, llvm::ArrayRef<std::pair<va_t, uint64_t>> Extents,
     llvm::ArrayRef<va_t> Entries,
@@ -518,14 +744,19 @@ bool decodeExtents(
         Visit,
     const std::function<bool()> &Stop = {},
     std::vector<FunctionDecodeStatus> *Status = nullptr,
-    const libc::NoReturnTargetIndex *NoReturnTargets = nullptr) {
+    const libc::NoReturnTargetIndex *NoReturnTargets = nullptr,
+    llvm::function_ref<void(size_t, const FunctionDecodeStatus &)> Finish = {},
+    const OutlyingChunks *Chunks = nullptr) {
   std::vector<FunctionDecodeStatus> Reports(Extents.size());
   // The parts of a function its unwind records keep apart from its body,
   // past other functions' code, are its code too: MSVC moves cold paths
   // there.
-  std::map<va_t, std::vector<ExceptionAddressRange>> Chunks;
-  for (const auto &Chunk : Img.ExceptionMetadata.outlyingChunks())
-    Chunks[Chunk.Function].push_back(Chunk.Range);
+  OutlyingChunks LocalChunks;
+  if (!Chunks) {
+    for (const auto &Chunk : Img.ExceptionMetadata.outlyingChunks())
+      LocalChunks[Chunk.Function].push_back(Chunk.Range);
+    Chunks = &LocalChunks;
+  }
   std::atomic<bool> DecoderFailed{false};
   std::optional<libc::NoReturnTargetIndex> LocalNoReturnTargets;
   if (!NoReturnTargets && llvm::any_of(Extents, [](const auto &Extent) {
@@ -571,13 +802,15 @@ bool decodeExtents(
           ReadRange(Address, 0, 1);
         }
       }
-      if (const auto It = Chunks.find(Entry); It != Chunks.end())
+      if (const auto It = Chunks->find(Entry); It != Chunks->end())
         for (const ExceptionAddressRange &Range : It->second) {
           if (Stop && Stop())
             break;
           ReadRange(Range.Begin, Range.End - Range.Begin,
                     Range.End - Range.Begin);
         }
+      if (Finish)
+        Finish(Index, Report);
     }
   });
   if (Stop && Stop())
@@ -608,8 +841,332 @@ bool decodeFunctions(
   Extents.reserve(Page.Functions.size());
   for (const FuncInfo *F : Page.Functions)
     Extents.emplace_back(F->Entry, F->Size);
-  return decodeExtents(Img, Extents, Page.Entries, Visit, Stop, Status,
+  return decodeExtents(Img, Extents, *Page.Entries, Visit, Stop, Status,
                        NoReturnTargets);
+}
+
+struct ReferenceImageIndex {
+  libc::NoReturnTargetIndex NoReturnTargets;
+  std::vector<va_t> Independent;
+  std::vector<ExceptionAddressRange> Exceptional;
+  OutlyingChunks Chunks;
+
+  explicit ReferenceImageIndex(const BinaryImage &Img) : NoReturnTargets(Img) {
+    // Address-taken code and other function entries can arrive with independent
+    // register state. Build this image inventory once, not once per function.
+    for (va_t Slot : Img.CodePtrRelocSlots)
+      if (auto Target = relocatedPointer(Img, Slot))
+        Independent.push_back(*Target);
+    // Handler and continuation entries start with unknown registers. Incomplete
+    // tables cannot establish where those entries are; retain instruction-local
+    // references in their ranges instead of assuming ordinary edges suffice.
+    for (const ExceptionFunction &F : Img.ExceptionMetadata.Functions) {
+      visitExceptionEntryPoints(F, [&](va_t Address, ExceptionEntryKind) {
+        Independent.push_back(Address);
+      });
+      if (!hasCompleteExceptionEntryInventory(F)) {
+        Exceptional.push_back(F.CodeRange);
+        Exceptional.insert(Exceptional.end(), F.FragmentRanges.begin(),
+                           F.FragmentRanges.end());
+      }
+    }
+    llvm::sort(Independent);
+    Independent.erase(std::unique(Independent.begin(), Independent.end()),
+                      Independent.end());
+    llvm::sort(Exceptional,
+               [](const auto &A, const auto &B) { return A.Begin < B.Begin; });
+    size_t Ranges = 0;
+    for (const auto &Range : Exceptional) {
+      if (Ranges && Range.Begin <= Exceptional[Ranges - 1].End)
+        Exceptional[Ranges - 1].End =
+            std::max(Exceptional[Ranges - 1].End, Range.End);
+      else
+        Exceptional[Ranges++] = Range;
+    }
+    Exceptional.resize(Ranges);
+    for (const auto &Chunk : Img.ExceptionMetadata.outlyingChunks())
+      Chunks[Chunk.Function].push_back(Chunk.Range);
+  }
+};
+
+namespace {
+bool decodeFunctionReferences(
+    const BinaryImage &Img, const FunctionPage &Page,
+    const ReferenceImageIndex &ImageIndex,
+    llvm::function_ref<void(size_t, va_t, llvm::StringRef,
+                            const InstructionFlow &, unsigned, InstructionMode)>
+        Visit) {
+  struct Instruction {
+    va_t Address, Next, CodeReference;
+    InstructionMode Mode;
+    std::string Text;
+    InstructionFlow Direct;
+    size_t OpsBegin, OpsCount;
+    std::vector<LowUndefinedEffect> Undefined;
+    bool Fallthrough, Transfer;
+  };
+  struct Sweep {
+    std::vector<Instruction> Instructions;
+    std::vector<LowOp> Ops;
+    bool DirectOnly = false;
+  };
+  std::vector<Sweep> Sweeps(Page.Functions.size());
+  std::vector<std::pair<va_t, uint64_t>> Extents;
+  Extents.reserve(Page.Functions.size());
+  for (const FuncInfo *F : Page.Functions)
+    Extents.emplace_back(F->Entry, F->Size);
+  const auto &NoReturnTargets = ImageIndex.NoReturnTargets;
+  const auto &Independent = ImageIndex.Independent;
+  const auto &Exceptional = ImageIndex.Exceptional;
+  const auto HasExceptionalFlow = [&](va_t Address) {
+    auto It = std::upper_bound(
+        Exceptional.begin(), Exceptional.end(), Address,
+        [](va_t A, const ExceptionAddressRange &R) { return A < R.Begin; });
+    return It != Exceptional.begin() && std::prev(It)->contains(Address);
+  };
+  const auto PublishDirect = [&](size_t Index) {
+    auto &S = Sweeps[Index];
+    for (const auto &I : S.Instructions)
+      Visit(Index, I.Address, I.Text, I.Direct, I.Next - I.Address, I.Mode);
+    // Retire per-function storage inside its worker, also when an unresolved
+    // edge makes the remaining traversal instruction-local.
+    const bool DirectOnly = S.DirectOnly;
+    S = {};
+    S.DirectOnly = DirectOnly;
+  };
+  return decodeExtents(
+      Img, Extents, *Page.Entries,
+      [&](size_t Index, Decoder &Dec, const DecodedInsn &DI,
+          InstructionFlowScratch &Scratch) {
+        auto &S = Sweeps[Index];
+        LowInstructionUndefinedEffects Undefined;
+        const bool X86 = Img.Arch == Arch::X86 || Img.Arch == Arch::X64;
+        InstructionFlow Flow = Scratch.summarize(
+            Img, Dec, DI, nullptr, X86 && !S.DirectOnly ? &Undefined : nullptr);
+        std::string Text = DI.Raw ? DI.Raw->mnemonic : "";
+        if (DI.Raw && *DI.Raw->op_str)
+          Text += std::string(" ") + DI.Raw->op_str;
+        const auto Ops = Scratch.operations();
+        // ARM IT state and mode-changing flow are not ordinary native edges.
+        // An unlifted or unresolved transfer can enter any part of a body;
+        // carrying values only along its known neighbours would be unsound.
+        bool Unresolved = Img.Arch == Arch::ARM || Flow.Kind == UnliftedFlow ||
+                          Flow.Kind == "ijump" || HasExceptionalFlow(DI.Addr);
+        for (size_t O = 0; O < Ops.size(); ++O)
+          if (Ops[O].Opcode == NdOp::BRANCH || Ops[O].Opcode == NdOp::COND_BR)
+            Unresolved |= O + 1 != Ops.size() || Flow.Target == InvalidVA;
+        if (Unresolved && !S.DirectOnly) {
+          S.DirectOnly = true;
+          PublishDirect(Index);
+        }
+        if (S.DirectOnly) {
+          Visit(Index, DI.Addr, Text, Flow, DI.Size, Dec.currentMode());
+          return;
+        }
+        const bool Fallthrough =
+            !Flow.NoReturn && Flow.Kind != "jump" && Flow.Kind != "ret" &&
+            (Flow.Kind == "cjump" || Flow.Kind == "call" ||
+             Flow.Kind == "icall" || !Dec.isFunctionTerminator(DI) ||
+             Dec.isResumableTrap(DI));
+        S.Instructions.push_back(
+            {DI.Addr, DI.Addr + DI.Size, Dec.pcRelCodeRefTarget(DI),
+             Dec.currentMode(), std::move(Text), std::move(Flow), S.Ops.size(),
+             Ops.size(), std::move(Undefined.Effects), Fallthrough,
+             !X86 || Undefined.Coverage == LowUndefinedCoverage::Complete});
+        S.Ops.insert(S.Ops.end(), Ops.begin(), Ops.end());
+      },
+      {}, nullptr, &NoReturnTargets,
+      [&](size_t Index, const FunctionDecodeStatus &Status) {
+        auto &S = Sweeps[Index];
+        if (S.DirectOnly || S.Instructions.empty())
+          return;
+        if (Status.Incomplete || Status.Stopped) {
+          PublishDirect(Index);
+          return;
+        }
+        const size_t Count = S.Instructions.size();
+        llvm::DenseMap<va_t, size_t> At;
+        At.reserve(Count);
+        for (size_t I = 0; I < Count; ++I)
+          if (!At.try_emplace(S.Instructions[I].Address, I).second) {
+            PublishDirect(Index);
+            return;
+          }
+        // An independently callable entry in the middle of a decoded
+        // instruction needs an overlapping decode, not inherited values from
+        // the surrounding function. This matters for sized x86 bodies.
+        const auto [Entry, Size] = Extents[Index];
+        for (const auto *Roots : {Page.Entries.get(), &Independent})
+          for (auto It = std::lower_bound(Roots->begin(), Roots->end(), Entry);
+               It != Roots->end() && *It - Entry < Size; ++It)
+            if (!At.count(*It)) {
+              PublishDirect(Index);
+              return;
+            }
+        std::vector<bool> Leader(Count, false), Root(Count, false);
+        Leader[0] = true;
+        const auto IndependentEntry = [&](va_t Address) {
+          if (auto It = At.find(Address); It != At.end())
+            Leader[It->second] = Root[It->second] = true;
+        };
+        IndependentEntry(Extents[Index].first);
+        for (size_t I = 0; I < Count; ++I) {
+          const auto &N = S.Instructions[I];
+          if (std::binary_search(Independent.begin(), Independent.end(),
+                                 N.Address) ||
+              std::binary_search(Page.Entries->begin(), Page.Entries->end(),
+                                 N.Address))
+            Leader[I] = Root[I] = true;
+          if (I + 1 < Count) {
+            if (!N.Direct.Kind.empty() || !N.Fallthrough)
+              Leader[I + 1] = true;
+            if (N.Next != S.Instructions[I + 1].Address)
+              Leader[I + 1] = true;
+          }
+          if (N.Direct.Kind == "jump" || N.Direct.Kind == "cjump") {
+            if (auto It = At.find(N.Direct.Target); It != At.end()) {
+              Leader[It->second] = true;
+            } else {
+              // A target inside the sized body but not at one of its decoded
+              // instruction boundaries needs another decode/control-flow
+              // model. It is not an ordinary tail exit from this graph.
+              const auto [Entry, Size] = Extents[Index];
+              if (N.Direct.Target >= Entry && N.Direct.Target - Entry < Size) {
+                PublishDirect(Index);
+                return;
+              }
+            }
+          } else if (N.Direct.Kind == "call") {
+            IndependentEntry(N.Direct.Target);
+          }
+          for (const InstructionRef &Ref : N.Direct.Refs)
+            if (Ref.Kind == "offset")
+              IndependentEntry(Ref.To);
+          if (N.Fallthrough)
+            if (auto It = At.find(N.Next); It != At.end())
+              if (It->second != I + 1)
+                Leader[It->second] = true;
+        }
+        struct Block {
+          size_t Begin, End;
+          llvm::SmallVector<size_t, 2> Successors;
+          ReferenceValues Incoming;
+          size_t Predecessors = 0;
+          bool Seen = false, Queued = false;
+        };
+        std::vector<Block> Blocks;
+        std::vector<size_t> BlockOf(Count);
+        for (size_t I = 0; I < Count; ++I) {
+          if (Leader[I])
+            Blocks.push_back({I, I + 1, {}, {}, 0, false, false});
+          BlockOf[I] = Blocks.size() - 1;
+          Blocks.back().End = I + 1;
+        }
+        for (auto &B : Blocks) {
+          const auto &N = S.Instructions[B.End - 1];
+          const auto Edge = [&](va_t Address) {
+            if (auto It = At.find(Address); It != At.end()) {
+              const auto To = BlockOf[It->second];
+              if (!llvm::is_contained(B.Successors, To)) {
+                B.Successors.push_back(To);
+                ++Blocks[To].Predecessors;
+              }
+            }
+          };
+          if (N.Direct.Kind == "jump" || N.Direct.Kind == "cjump")
+            Edge(N.Direct.Target);
+          if (N.Fallthrough)
+            Edge(N.Next);
+        }
+        std::deque<size_t> Pending;
+        const auto Queue = [&](size_t B) {
+          if (!Blocks[B].Queued) {
+            Blocks[B].Queued = true;
+            Pending.push_back(B);
+          }
+        };
+        for (size_t B = 0; B < Blocks.size(); ++B)
+          if (Root[Blocks[B].Begin] || !Blocks[B].Predecessors) {
+            Blocks[B].Seen = true;
+            Queue(B);
+          }
+        const auto Operations = [&](const Instruction &N) {
+          return llvm::ArrayRef(S.Ops).slice(N.OpsBegin, N.OpsCount);
+        };
+        // Unseen is lattice bottom; a seen empty map means all registers are
+        // unknown. A join can only lose facts. Backedges therefore converge
+        // without recursion, a distance cutoff or a state/work budget.
+        while (!Pending.empty()) {
+          const size_t B = Pending.front();
+          Pending.pop_front();
+          auto &Current = Blocks[B];
+          Current.Queued = false;
+          auto Values = Current.Incoming;
+          for (size_t I = Current.Begin; I < Current.End; ++I) {
+            const auto &N = S.Instructions[I];
+            if (N.Transfer)
+              Values.advance(Operations(N), N.Undefined);
+            else
+              Values.clear();
+          }
+          Values.canonicalizeRegisters();
+          for (size_t To : Current.Successors) {
+            auto &Next = Blocks[To];
+            if (!Next.Seen) {
+              Next.Seen = true;
+              Next.Incoming = Values;
+              Queue(To);
+            } else if (Next.Incoming.intersect(Values)) {
+              Queue(To);
+            }
+          }
+        }
+        // Publish once from the settled inputs. An optimistic first visit to
+        // a join or loop is not a reference that may escape this analysis.
+        for (const auto &B : Blocks) {
+          auto Values = B.Incoming;
+          for (size_t I = B.Begin; I < B.End; ++I) {
+            const auto &N = S.Instructions[I];
+            if (B.Seen && N.Transfer) {
+              const auto Flow =
+                  summarizeLowFlow(Img, Operations(N), N.Next, N.CodeReference,
+                                   Values, &NoReturnTargets, N.Undefined);
+              Visit(Index, N.Address, N.Text, Flow, N.Next - N.Address, N.Mode);
+            } else {
+              Values.clear();
+              Visit(Index, N.Address, N.Text, N.Direct, N.Next - N.Address,
+                    N.Mode);
+            }
+          }
+        }
+        S = {};
+      },
+      &ImageIndex.Chunks);
+}
+
+} // namespace
+
+bool decodeFunctionReferences(
+    const BinaryImage &Img, const FunctionPage &Page,
+    llvm::function_ref<void(size_t, va_t, llvm::StringRef,
+                            const InstructionFlow &, unsigned, InstructionMode)>
+        Visit) {
+  const ReferenceImageIndex Index(Img);
+  return decodeFunctionReferences(Img, Page, Index, Visit);
+}
+
+const ReferenceImageIndex &Session::referenceImageIndex() const {
+  if (!ReferenceImage)
+    ReferenceImage = std::make_shared<ReferenceImageIndex>(Img);
+  return *ReferenceImage;
+}
+
+bool decodeFunctionReferences(
+    const Session &S, const FunctionPage &Page,
+    llvm::function_ref<void(size_t, va_t, llvm::StringRef,
+                            const InstructionFlow &, unsigned, InstructionMode)>
+        Visit) {
+  return decodeFunctionReferences(S.Img, Page, S.referenceImageIndex(), Visit);
 }
 
 std::optional<DataAccessWidths>
@@ -617,12 +1174,13 @@ collectDataAccessWidths(const BinaryImage &Img,
                         llvm::ArrayRef<FuncInfo> Functions) {
   std::vector<std::pair<va_t, unsigned>> Accesses;
   const auto Ordered = orderedFunctions(Functions);
+  const auto Entries = functionEntries(Ordered);
   std::optional<libc::NoReturnTargetIndex> NoReturnTargets;
   if (llvm::any_of(Ordered, [](const FuncInfo *F) { return !F->Size; }))
     NoReturnTargets.emplace(Img);
   for (std::optional<va_t> Cursor = va_t{0}; Cursor;) {
-    const FunctionPage Page =
-        pageFunctions(Ordered, *Cursor, FunctionPage::MaxFunctionsPerPage);
+    const FunctionPage Page = pageFunctions(Ordered, Entries, *Cursor,
+                                            FunctionPage::MaxFunctionsPerPage);
     // Each function's accesses, which only the thread decoding it writes.
     std::vector<std::vector<std::pair<va_t, unsigned>>> Slots(
         Page.Functions.size());

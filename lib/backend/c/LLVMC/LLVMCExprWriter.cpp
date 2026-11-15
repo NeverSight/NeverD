@@ -42,6 +42,7 @@
 #include "llvm/IR/Argument.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/Support/SaveAndRestore.h"
 
 #include <algorithm>
 #include <cctype>
@@ -351,9 +352,10 @@ bool LLVMCWriter::isImageDataAddress(va_t Addr) const {
   const Segment *Seg = Img->getSegmentFor(Addr);
   if (!Seg || !Seg->isReadable())
     return false;
-  // Data the debug information places among the code is data.
+  // Section-level data provenance wins over a coarse executable mapping,
+  // just as it does for HighC and string recognition.
   if (Seg->isExecutable() && !Seg->isWritable() &&
-      !isCodeSectionData(Img, Addr))
+      !Img->hasObjectDataProvenance(Addr) && !isCodeSectionData(Img, Addr))
     return false;
   // An import's slot or stub is no data object.  Asked last: a code address
   // asks whether a function starts there, which reads the symbols.
@@ -370,21 +372,6 @@ LLVMCWriter::codeSectionAddress(const llvm::ConstantInt &CI) const {
   if (!Seg || !Seg->isExecutable() || Seg->isWritable())
     return std::nullopt;
   return Addr;
-}
-
-std::optional<std::string>
-LLVMCWriter::codeSectionAddressText(const llvm::ConstantInt &CI) const {
-  const auto Addr = codeSectionAddress(CI);
-  if (!Addr)
-    return std::nullopt;
-  std::string Text;
-  if (auto Literal = stringLiteralAt(Img, Dbg, *Addr, /*AllowEmpty=*/true))
-    Text = std::move(*Literal);
-  else if (isCodeSectionData(Img, *Addr))
-    Text = "&" + namedImageObject(*Addr);
-  else
-    return std::nullopt;
-  return "(" + typeToCLLVM(CI.getType()) + ")(uintptr_t)" + Text;
 }
 
 std::optional<va_t>
@@ -875,7 +862,6 @@ std::string LLVMCWriter::rawSourceName(const llvm::Value *V) {
 }
 
 std::string LLVMCWriter::constStr(const llvm::Constant *C,
-                                  bool AllowImageAddress,
                                   bool *PointerSpelling) {
   if (PointerSpelling)
     *PointerSpelling = false;
@@ -910,7 +896,7 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C,
       } else {
         Text += llvm::isa<llvm::UndefValue, llvm::PoisonValue>(Element)
                     ? "0"
-                    : constStr(Element, /*AllowImageAddress=*/false);
+                    : constStr(Element);
       }
     }
     return Text + "}";
@@ -937,13 +923,6 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C,
       return "(((__uint128_t)0x" + llvm::utohexstr(High) +
              "ULL << 64) | (__uint128_t)0x" + llvm::utohexstr(Low) + "ULL)";
     }
-    if (!AllowImageAddress)
-      return integerConstantText(CI->getValue());
-    if (auto Text = codeSectionAddressText(*CI))
-      return *Text;
-    if (auto Lit = stringLiteralAt(Img, Dbg, CI->getZExtValue(),
-                                   /*AllowEmpty=*/true))
-      return AddressText(*Lit);
     return integerConstantText(CI->getValue());
   }
 
@@ -986,7 +965,7 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C,
       if (const auto *Folded =
               llvm::ConstantFoldConstant(CE, CurMod->getDataLayout());
           Folded != CE)
-        return constStr(Folded, AllowImageAddress, PointerSpelling);
+        return constStr(Folded, PointerSpelling);
     }
     if (CE->getOpcode() == llvm::Instruction::GetElementPtr) {
       std::string Image = imageDataCName(CE);
@@ -996,7 +975,8 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C,
     }
     if (CE->getOpcode() == llvm::Instruction::PtrToInt) {
       auto *Src = CE->getOperand(0);
-      return "(" + typeToCLLVM(CE->getType()) + ")(void*)" + valueStr(Src);
+      return castStr(CE->getOpcode(), "(void*)" + valueStr(Src), Src->getType(),
+                     CE->getType());
     }
     if (CE->getOpcode() == llvm::Instruction::IntToPtr) {
       if (auto *CI = llvm::dyn_cast<llvm::ConstantInt>(CE->getOperand(0));
@@ -1009,26 +989,28 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C,
         CE->getOpcode() == llvm::Instruction::IntToPtr) {
       if (PointerSpelling)
         *PointerSpelling = CE->getType()->isPointerTy();
-      return "(" + typeToCLLVM(CE->getType()) + ")" +
-             valueStr(CE->getOperand(0));
+      return castStr(CE->getOpcode(), valueStr(CE->getOperand(0)),
+                     CE->getOperand(0)->getType(), CE->getType());
     }
+    if (CE->getOpcode() == llvm::Instruction::Trunc)
+      return castStr(CE->getOpcode(), constStr(CE->getOperand(0)),
+                     CE->getOperand(0)->getType(), CE->getType());
     if ((CE->getOpcode() == llvm::Instruction::Add ||
-         CE->getOpcode() == llvm::Instruction::Sub) &&
-        (CE->getType()->isIntegerTy(8) || CE->getType()->isIntegerTy(16) ||
-         CE->getType()->isIntegerTy(32) || CE->getType()->isIntegerTy(64))) {
+         CE->getOpcode() == llvm::Instruction::Sub ||
+         CE->getOpcode() == llvm::Instruction::Xor) &&
+        CE->getType()->isIntegerTy() &&
+        CE->getType()->getIntegerBitWidth() <= 128) {
       // Symbol-relative integer addresses remain relocatable in C too. Keep
       // each operand at the LLVM bit width and normalize the result after C's
       // integer promotions; do not evaluate a pointer using its old image VA.
-      const std::string Type = typeToCLLVM(CE->getType());
-      const std::string Left = "(" + Type + ")(" +
-                               constStr(CE->getOperand(0), AllowImageAddress) +
-                               ")";
-      const std::string Right = "(" + Type + ")(" +
-                                constStr(CE->getOperand(1), AllowImageAddress) +
-                                ")";
-      return "(" + Type + ")(" + Left +
-             (CE->getOpcode() == llvm::Instruction::Add ? " + " : " - ") +
-             Right + ")";
+      auto *Type = CE->getType();
+      const auto Operand = [&](unsigned I) {
+        return castStr(llvm::Instruction::Trunc, constStr(CE->getOperand(I)),
+                       Type, Type);
+      };
+      return castStr(llvm::Instruction::Trunc,
+                     binopStr(CE->getOpcode(), Operand(0), Operand(1), Type),
+                     Type, Type);
     }
     std::string Detail;
     llvm::raw_string_ostream Stream(Detail);
@@ -1076,7 +1058,7 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C,
         const auto *Element = C->getAggregateElement(I);
         // Aggregate integer elements are literal bits, never image addresses.
         // Low byte values can coincide with strings in a low-VA ELF header.
-        Text += constStr(Element, /*AllowImageAddress=*/false);
+        Text += constStr(Element);
       }
     }
     return Text + (Array ? "}}" : "}");
@@ -1090,8 +1072,7 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C,
     for (unsigned I = 0; I < CA->getNumOperands(); ++I) {
       if (I > 0)
         S += ", ";
-      S += constStr(llvm::cast<llvm::Constant>(CA->getOperand(I)),
-                    /*AllowImageAddress=*/false);
+      S += constStr(llvm::cast<llvm::Constant>(CA->getOperand(I)));
     }
     S += "}";
     return S;
@@ -1104,7 +1085,7 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C,
     for (unsigned I = 0; I < CDA->getNumElements(); ++I) {
       if (I > 0)
         S += ", ";
-      S += constStr(CDA->getElementAsConstant(I), /*AllowImageAddress=*/false);
+      S += constStr(CDA->getElementAsConstant(I));
     }
     S += "}";
     return S;
@@ -1405,19 +1386,6 @@ uint16_t LLVMCWriter::llvmAccessSize(const llvm::Type *Ty) const {
   return 0;
 }
 
-TypeRef LLVMCWriter::cDisplayType(const TypeRef &Ty) const {
-  if (!Ty)
-    return Ty;
-  if (Ty->Kind == NdTypeKind::Ptr)
-    return NdType::makePtr(cDisplayType(Ty->Pointee));
-  if (Ty->Kind == NdTypeKind::Struct && !Ty->SourceName.empty()) {
-    auto Out = std::make_shared<NdType>(*Ty);
-    Out->SourceName = cNamedTypeSpelling(Ty->SourceName);
-    return Out;
-  }
-  return Ty;
-}
-
 bool LLVMCWriter::isReservedFrameName(llvm::StringRef Name) const {
   if (Name.empty() || Name == "this" || Name == "result")
     return true;
@@ -1577,7 +1545,7 @@ std::optional<VariableSym> LLVMCWriter::debugFrameVariable(int64_t Disp) const {
       return std::nullopt;
     if (Dbg && Var->Type)
       Dbg->completeType(Var->Type);
-    Var->Type = cDisplayType(Var->Type);
+    Var->Type = Var->Type;
     Var->Name = Name;
     return Var;
   };
@@ -3315,18 +3283,30 @@ std::string LLVMCWriter::bitCastSourceStr(const llvm::Value *V) {
   return Text;
 }
 
+std::string LLVMCWriter::unknownValueText(llvm::StringRef Reason) const {
+  std::optional<va_t> Address;
+  if (SourceAddresses)
+    Address = SourceAddresses->lookup(EmittingInstruction);
+  if (!Address && SourceAddresses && VectorGatherConsumer)
+    Address = SourceAddresses->lookup(VectorGatherConsumer);
+  return "(__builtin_trap(), 0 /* " + Reason.str() +
+         (Address ? " at 0x" + llvm::utohexstr(*Address)
+                  : " (source address unavailable)") +
+         " */)";
+}
+
 std::string LLVMCWriter::valueStr(const llvm::Value *V, bool *PointerSpelling) {
   if (PointerSpelling)
     *PointerSpelling = false;
   if (auto Flag = DeferredUnknownFlags.find(V);
       Flag != DeferredUnknownFlags.end()) {
-    if (ReadingDeferredPayload)
+    if (ReadingDeferredPayload || deferredValueAvailable(V))
       return getName(V);
-    return "(" + Flag->second + " ? " + getName(V) +
-           " : (__builtin_trap(), 0 /* unknown machine state */))";
+    return "(" + Flag->second + " ? " + getName(V) + " : " +
+           unknownValueText("no recovered machine state") + ")";
   }
   if (llvm_source_unknown::isValue(V))
-    return "(__builtin_trap(), 0 /* unknown machine state */)";
+    return unknownValueText("no recovered machine state");
   // A parameter the signature types as a pointer is the integer the code
   // computes with.
   if (const auto *Arg = llvm::dyn_cast<llvm::Argument>(V);
@@ -3334,9 +3314,11 @@ std::string LLVMCWriter::valueStr(const llvm::Value *V, bool *PointerSpelling) {
     if (auto Name = ValNames.find(Arg); Name != ValNames.end())
       return "((" + typeToCLLVM(Arg->getType()) + ")(uintptr_t)" +
              Name->second + ")";
+  // A numeric occurrence has no pointer identity merely because its bits
+  // coincide with readable image bytes. Pointer constants and source call
+  // contracts carry that interpretation explicitly.
   if (const auto *CI = llvm::dyn_cast<llvm::ConstantInt>(V))
-    if (auto Text = codeSectionAddressText(*CI))
-      return *Text;
+    return constStr(CI, PointerSpelling);
   if (UseScalarExpressionTypes)
     if (auto Text = scalarExpressionText(V))
       return *Text;
@@ -3358,7 +3340,7 @@ std::string LLVMCWriter::valueStr(const llvm::Value *V, bool *PointerSpelling) {
       return It->second;
   }
   if (isCallClobberValue(V))
-    return "0 /* unknown */";
+    return unknownValueText("no recovered semantics");
   if (llvm::isa<llvm::FreezeInst>(V))
     return getName(V);
   if (auto Imm = foldImmediate(V)) {
@@ -3423,7 +3405,11 @@ std::string LLVMCWriter::valueStr(const llvm::Value *V, bool *PointerSpelling) {
   if (const auto Peeled = peelPointerOffset(V)) {
     if (const auto *AI = llvm::dyn_cast<llvm::AllocaInst>(Peeled->first)) {
       const auto *Arr = llvm::dyn_cast<llvm::ArrayType>(AI->getAllocatedType());
-      if (Arr && Arr->getElementType()->isIntegerTy(8)) {
+      if (Arr && Arr->getElementType()->isIntegerTy(8) &&
+          Peeled->second <= Arr->getNumElements()) {
+        // Integer arithmetic can temporarily leave the frame's allocation.
+        // Only an in-object or one-past address admits C pointer arithmetic;
+        // other offsets retain their original modular integer expression.
         const std::string Name = getName(const_cast<llvm::AllocaInst *>(AI));
         const int64_t Signed = static_cast<int64_t>(Peeled->second);
         if (Signed == 0)
@@ -3539,18 +3525,26 @@ std::string LLVMCWriter::valueStr(const llvm::Value *V, bool *PointerSpelling) {
       return It->second + "[" + std::to_string(EV->getIndices()[0]) + "]";
   }
   if (Analysis.Inlinable.count(V)) {
-    auto It = InlineCache.find(V);
-    if (It != InlineCache.end())
-      return It->second;
+    if (const auto *Insert = llvm::dyn_cast<llvm::InsertElementInst>(V);
+        Insert && VectorGathers.count(Insert)) {
+      llvm::SaveAndRestore<const llvm::Instruction *> Consumer(
+          VectorGatherConsumer,
+          VectorGatherConsumer ? VectorGatherConsumer : EmittingInstruction);
+      return renderInline(*Insert);
+    }
+    if (!VectorGatherConsumer)
+      if (auto It = InlineCache.find(V); It != InlineCache.end())
+        return It->second;
     auto *Inst = llvm::dyn_cast<llvm::Instruction>(V);
     if (Inst) {
       auto Expr = renderInline(*Inst);
-      InlineCache[V] = Expr;
+      if (!VectorGatherConsumer)
+        InlineCache[V] = Expr;
       return Expr;
     }
   }
   if (auto *C = llvm::dyn_cast<llvm::Constant>(V))
-    return constStr(C, /*AllowImageAddress=*/true, PointerSpelling);
+    return constStr(C, PointerSpelling);
   if (const llvm::AllocaInst *Slot = llvm::dyn_cast<llvm::AllocaInst>(V))
     return AddressText("&" + getName(Slot));
   return getName(V);
@@ -3693,7 +3687,7 @@ std::string LLVMCWriter::binopStr(unsigned Opcode, const std::string &LHS,
   case llvm::Instruction::Xor:
     return LHS + " ^ " + RHS;
   default:
-    return LHS + " /* unknown_binop */ " + RHS;
+    return LHS + " /* no recovered operator at 0x0 */ " + RHS;
   }
 }
 
@@ -3805,6 +3799,13 @@ std::string LLVMCWriter::castStr(unsigned Opcode, const std::string &Src,
                std::to_string(Width) + ") - 1))";
     return Result;
   };
+  const unsigned PointerWidth = CurMod->getDataLayout().getPointerSizeInBits(0);
+  if (Opcode == llvm::Instruction::PtrToInt && DstWidth != PointerWidth)
+    return Normalize(Cast("uintptr_t", Src), DstTy);
+  if (Opcode == llvm::Instruction::IntToPtr && SrcWidth < PointerWidth)
+    // LLVM zero-extends a narrow integer address. Preserve its unsigned
+    // bit pattern before converting to the host's pointer-sized carrier.
+    return Cast(Dst, Cast("uintptr_t", Normalize(Src, SrcTy)));
   // LLVM integer values have no signed type; their C storage is unsigned.
   // Interpret the source bits before a numeric floating conversion, and
   // convert a signed floating result before normalizing its integer bits.
@@ -3968,7 +3969,7 @@ std::string LLVMCWriter::cmpStr(llvm::CmpInst::Predicate Pred,
   case llvm::CmpInst::FCMP_UNO:
     return LHS + " != " + LHS + " || " + RHS + " != " + RHS;
   default:
-    return LHS + " /* unknown_cmp */ " + RHS;
+    return LHS + " /* no recovered comparison at 0x0 */ " + RHS;
   }
 }
 
@@ -4010,6 +4011,8 @@ std::string LLVMCWriter::logicalShiftLhs(const llvm::Instruction &Shift,
 }
 
 std::string LLVMCWriter::icmpInlineText(const llvm::ICmpInst &CI, bool Invert) {
+  llvm::SaveAndRestore<const llvm::Instruction *> Context(EmittingInstruction,
+                                                          &CI);
   if (UseScalarExpressionTypes)
     if (auto Text = scalarExpressionText(&CI, /*ForceExpression=*/true, Invert))
       return peelOperandWrap(*Text);
@@ -4057,6 +4060,8 @@ bool LLVMCWriter::isFloatingPointBitcast(const llvm::Instruction &Inst) {
 }
 
 std::string LLVMCWriter::fcmpInlineText(const llvm::FCmpInst &Compare) {
+  llvm::SaveAndRestore<const llvm::Instruction *> Context(EmittingInstruction,
+                                                          &Compare);
   const char *Builtin = nullptr;
   bool Negate = false;
   switch (Compare.getPredicate()) {
@@ -4188,6 +4193,8 @@ std::string LLVMCWriter::aggregateMemberPath(llvm::Type *Ty,
 }
 
 std::string LLVMCWriter::renderInline(const llvm::Instruction &Inst) {
+  llvm::SaveAndRestore<const llvm::Instruction *> Context(EmittingInstruction,
+                                                          &Inst);
   std::string Text = renderInlineImpl(Inst);
   if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst))
     if (const auto Comment = imagePointerComment(Load->getPointerOperand());
@@ -4224,6 +4231,18 @@ LLVMCWriter::unknownBitwiseText(const llvm::BinaryOperator &Op) {
 }
 
 std::string LLVMCWriter::renderInlineImpl(const llvm::Instruction &Inst) {
+  if (const auto *Insert = llvm::dyn_cast<llvm::InsertElementInst>(&Inst))
+    if (const auto At = VectorGathers.find(Insert); At != VectorGathers.end()) {
+      std::string Text = "(" + typeToCLLVM(Insert->getType()) + "){";
+      for (auto [Index, Element] : llvm::enumerate(At->second)) {
+        if (Index)
+          Text += ", ";
+        Text += Element->getType()->isIntegerTy()
+                    ? integerPointerOperandStr(Element)
+                    : valueStr(Element);
+      }
+      return Text + "}";
+    }
   if (const auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Inst))
     if (RawMemoryExpressionLoads.count(Load))
       return rawMemoryLoadText(*Load);
@@ -4312,32 +4331,36 @@ std::string LLVMCWriter::renderInlineImpl(const llvm::Instruction &Inst) {
     }
   }
   if (Inst.isCast()) {
-    auto Src = valueStr(Inst.getOperand(0));
+    const auto *Operand = Inst.getOperand(0);
+    auto Src = Operand->getType()->isIntegerTy()
+                   ? integerPointerOperandStr(Operand)
+                   : valueStr(Operand);
     return castStr(Inst.getOpcode(), Src, Inst.getOperand(0)->getType(),
                    Inst.getType());
   }
   if (llvm::isa<llvm::GetElementPtrInst>(Inst))
     return gepExpr(*llvm::cast<llvm::GEPOperator>(&Inst));
-  if (auto *Sel = llvm::dyn_cast<llvm::SelectInst>(&Inst)) {
-    if (auto Condition = foldImmediate(Sel->getCondition());
-        Condition && (*Condition == "0" || *Condition == "1"))
-      return valueStr(*Condition == "1" ? Sel->getTrueValue()
-                                        : Sel->getFalseValue());
-    // An arm C spells as a pointer, such as a string literal, converts to
-    // the integer the select yields.
-    auto Arm = [&](const llvm::Value *V) {
-      bool Pointer = false;
-      std::string Text = valueStr(V, &Pointer);
-      if (Pointer && Sel->getType()->isIntegerTy())
-        return "(" + typeToCLLVM(Sel->getType()) + ")(uintptr_t)(" + Text + ")";
-      return Text;
-    };
-    return "(" + valueStr(Sel->getCondition()) + " ? " +
-           Arm(Sel->getTrueValue()) + " : " + Arm(Sel->getFalseValue()) + ")";
-  }
+  if (auto *Sel = llvm::dyn_cast<llvm::SelectInst>(&Inst))
+    return "(" + selectExpr(*Sel) + ")";
   if (const auto *RMW = llvm::dyn_cast<llvm::AtomicRMWInst>(&Inst))
     return atomicRMWText(*RMW);
   return getName(&Inst);
+}
+
+std::string LLVMCWriter::selectExpr(const llvm::SelectInst &Select) {
+  // Assigned, inlined and constant-condition selects have the same LLVM
+  // result type. A frame address's pointer spelling cannot change that type
+  // or make C choose pointer arithmetic for an integer arm.
+  auto Arm = [&](const llvm::Value *Value) {
+    return Select.getType()->isIntegerTy() ? integerPointerOperandStr(Value)
+                                           : valueStr(Value);
+  };
+  if (auto Condition = foldImmediate(Select.getCondition());
+      Condition && (*Condition == "0" || *Condition == "1"))
+    return Arm(*Condition == "1" ? Select.getTrueValue()
+                                 : Select.getFalseValue());
+  return valueStr(Select.getCondition()) + " ? " + Arm(Select.getTrueValue()) +
+         " : " + Arm(Select.getFalseValue());
 }
 
 std::string LLVMCWriter::atomicRMWText(const llvm::AtomicRMWInst &AI) {

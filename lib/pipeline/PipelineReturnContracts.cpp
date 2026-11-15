@@ -315,7 +315,7 @@ public:
       : Img(Img), Result(Result), Dbg(Dbg), TRI(getTargetRegInfo(Img.Arch)) {
     for (const MedFunc &Func : Result.MedFuncs) {
       Facts.emplace(Func.Entry,
-                    collectFacts(Func, TRI, Img, Result.CallArgumentSources));
+                    collectFacts(Func, TRI, Img, Result.callArgumentSources()));
       if (const std::optional<bool> None = declaredNoValue(Func))
         Declared.emplace(Func.Entry, *None);
       if (!Func.Name.empty())
@@ -449,7 +449,7 @@ private:
     // A call through the stub or slot of an import the loader starts at
     // this image's own routine calls that routine, as the C prints it.
     if (const std::optional<va_t> Own =
-            ownRoutineOf(Img, Result.CallArgumentSources, Address)) {
+            ownRoutineOf(Img, Result.callArgumentSources(), Address)) {
       Target = Own;
       Slot.reset();
     }

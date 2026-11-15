@@ -71,9 +71,38 @@ void dropDebugDataBoundaryGuesses(BinaryImage &Img, const DebugContext &Dbg,
   for (const Symbol &Sym : Img.Symbols)
     if (Sym.IsFunc && !IsGuess(Sym) && !Img.isFunctionContinuationAt(Sym.Addr))
       Confirmed.insert(Sym.Addr);
-  for (const auto &[Start, End] : Img.KnownCodeRanges)
-    if (Img.hasKnownFunctionEntryAt(Start))
-      Confirmed.insert(Start);
+  // KnownCodeRanges is sorted by start. An earlier range contains a start
+  // when the maximum end seen so far passes it, which is what
+  // hasKnownFunctionEntryAt walks for one address. Repeating that walk for
+  // every start is quadratic on a large image. The first range at a start is
+  // the one lower_bound would read.
+  va_t EarlierReach = 0;
+  const auto &Ranges = Img.KnownCodeRanges;
+  for (size_t Index = 0, Count = Ranges.size(); Index < Count;) {
+    const va_t Start = Ranges[Index].first;
+    size_t Next = Index + 1;
+    while (Next < Count && Ranges[Next].first == Start)
+      ++Next;
+    const va_t Normalized = normalizeCodeAddress(Start, Img.Arch, Img.Mode);
+    if (Start != Normalized) {
+      if (Img.hasKnownFunctionEntryAt(Start))
+        Confirmed.insert(Start);
+    } else {
+      const bool InsideEarlier = EarlierReach > Normalized;
+      const bool ProvedByRange =
+          !InsideEarlier && Ranges[Index].second > Normalized;
+      if (Img.isFunctionEntryCandidateAt(Start) &&
+          (ProvedByRange || Img.isRuntimeFunctionAt(Start) ||
+           Img.ExceptionMetadata.hasPrimaryFunctionEntry(Normalized) ||
+           Img.hasPdataFunctionEntryAt(Start) ||
+           Img.hasPdataFunctionEntryAt(Normalized)))
+        Confirmed.insert(Start);
+    }
+    for (size_t Range = Index; Range < Next; ++Range)
+      if (Ranges[Range].second > EarlierReach)
+        EarlierReach = Ranges[Range].second;
+    Index = Next;
+  }
   std::set<va_t> Refuted;
   for (const Symbol &Sym : Img.Symbols)
     if (IsGuess(Sym) && !Confirmed.count(Sym.Addr) &&

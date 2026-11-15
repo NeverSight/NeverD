@@ -41,14 +41,17 @@ inline constexpr unsigned kFunctionDiscoveryPollMilliseconds = 5;
 
 // Query paging and decoding.
 
-/// Instructions read from a function without a recorded size. Bounds a
-/// corrupt or missing extent, including the function's reachable jump paths.
-inline constexpr uint64_t kMaxUnsizedInstructions = 65536;
 inline constexpr int kMaxFunctionsPerPage = 4096;
 inline constexpr int kMaxSwitchFunctionsPerPage = 4096;
 inline constexpr int kMaxDataSlotsPerQuery = 65536;
 inline constexpr int kMaxSourceEntriesPerQuery = 65536;
 inline constexpr int kMaxStringRowsPerPage = 65536;
+/// Rows one neverd_data_symbols_page_json call emits. A page of ordinary
+/// names stays far under the worker's 32 MiB adapter.
+inline constexpr int kMaxDataSymbolRowsPerPage = 8192;
+/// Serialized bytes one data-symbol page may hold. This is under the
+/// adapter, so a page the engine returns can be read whole.
+inline constexpr size_t kMaxDataSymbolPageBytes = 8 * 1024 * 1024;
 inline constexpr int kMaxDecodedTextBytes = 65536;
 inline constexpr size_t kStringSearchWindowBytes = 65536;
 // The fewest spans of an image string scan (strings::scan) run on several
@@ -78,6 +81,12 @@ inline constexpr unsigned kMaxCallPathWaypoints = 64;
 inline constexpr uint64_t kCallPathStepBudget = 4'000'000;
 
 // Local types and persisted user edits.
+
+/// Paged type rows and diagnostics stay below the worker's 8 MiB frame;
+/// these bound a reply, never the number of imported or reachable types.
+inline constexpr int64_t kMaxLocalTypePageRows = 512;
+inline constexpr size_t kMaxLocalTypePageBytes = 2u << 20;
+inline constexpr size_t kMaxLocalTypeDiagnosticBytes = 512u << 10;
 
 inline constexpr size_t kMaxTypeFitAccesses = 4096;
 inline constexpr size_t kMaxTypeFitTextBytes = 256;
@@ -214,8 +223,9 @@ inline constexpr int kNeverDCAPINeverdSessionInspectPdbJsonTextSizeLimit =
 inline constexpr double kDecodeBenchmarkDurationMilliseconds = 200.0;
 
 // lib/sdk/capi/NeverDCAPIDecompile.cpp
-inline constexpr int kNeverDCAPIDecompileWriteSourcePageFullSizeLimit =
-    32 * 1024 * 1024;
+// Bound the encoded page crossing the SDK adapter, not the cached function
+// from which its text and original-instruction anchors are sliced.
+inline constexpr int kMaxSourcePageJSONBytes = 32 * 1024 * 1024;
 inline constexpr int kNeverDCAPIDecompileWriteSourcePageCountLimit = 4096;
 inline constexpr int kNeverDCAPIDecompileReadSourceOptionsPassesSizeLimit = 4;
 inline constexpr int kNeverDCAPIDecompileNeverdIrViewExJsonLimit =

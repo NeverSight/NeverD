@@ -168,6 +168,38 @@ SPDX catalogs are collected from the libraries actually copied into the bundle.
 The pinned static zlib notice and any notices staged beside the engine in its
 `licenses` directory are retained too; build and package matching engine inputs.
 
+`--qt-platform-plugin /path/to/libqcocoa.dylib` replaces only the bundle's Cocoa
+plugin after Qt deployment, before dependency repair, audit and signing. Use a
+plugin built for the exact Qt kit's private ABI; the helper records its original
+path and hash in `build_inputs`. Keep its matching source/build notice with the
+`--qt-licenses` catalog and validate it through a native accessibility probe and
+an application launch. This supports a locally rebuilt Qt bug fix without
+modifying the installed kit. Qt's upstream accessibility ownership fix for
+[QTBUG-149612](https://qt-project.atlassian.net/browse/QTBUG-149612) is
+[b74d6cb3c5e8418602494ae549b60839d88ef858](https://github.com/qt/qtbase/commit/b74d6cb3c5e8418602494ae549b60839d88ef858):
+native accessibility element disposal must not delete interfaces owned by Qt's
+accessibility cache and item views. A table selection/row-removal probe should
+retain its native element while checking that the table interface stays alive.
+
+Qt 6.11.1 also has a separate CoreGraphics color-space ownership regression
+([QTBUG-147602](https://qt-project.atlassian.net/browse/QTBUG-147602)). A local
+color-space owner expires before `QImage::toCGImage()` calls `CGImageCreate`;
+toolbar and bitmap cursors can therefore crash in `CGColorSpaceGetType`.
+Use a matching Qt kit containing
+[the upstream fix](https://github.com/qt/qtbase/commit/08e464f85597), such as
+6.11.3, or rebuild QtGui with that fix. Replacing the Cocoa plugin alone does
+not repair this QtGui bug. The stock 6.11.3 Cocoa plugin still needs the
+accessibility ownership fix above. Do not mix private headers or plugins
+from different Qt versions. When rebuilding the plugin, use the kit's
+deployment target (13 for the official macOS 6.11.3 kit); an implicit host
+deployment target can reject Qt's compatibility calls to older macOS APIs.
+
+Build `neverd-gui-mac-image-tests` and run it with `QT_QPA_PLATFORM=cocoa`
+against the deployed frameworks and plugins. It checks color-space and pixel
+ownership for default, sRGB, Display P3 and custom-gamma images, plus native
+toolbar and bitmap cursors. Retain the failing kit's crash evidence and the
+replacement kit's probe results separately from accessibility validation.
+
 The helper copies the GUI, worker, engine, Qt plugins and recursive non-system
 dependencies. It rewrites library IDs and dependencies, supplies
 bundle-relative search paths, rejects unresolved references and escaping or
@@ -175,7 +207,9 @@ dangling symlinks, and derives `LSMinimumSystemVersion` from every bundled
 Mach-O image. Engine frameworks' dependencies are collected before
 `macdeployqt` rewrites their original paths, including Python extension
 libraries such as Homebrew's keg-only SQLite. The final repair pass also covers
-the plugins deployed by Qt. `Info.plist` declares the `neverd` URL scheme
+the plugins deployed by Qt. Version-only frameworks, such as Homebrew Python,
+receive the relative framework links required for signing in the copied bundle;
+the installed dependency is unchanged. `Info.plist` declares the `neverd` URL scheme
 (`CFBundleURLTypes`), so that LaunchServices hands a clicked `neverd://` link
 to the workbench; on Linux and Windows, `neverd-gui --register-link-handler`
 registers it for the user instead. `Contents/Resources/dependency-audit.json` records that audit;

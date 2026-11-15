@@ -326,6 +326,7 @@ neverd <command> [options] <binary>
 |---------|--------|-------------|
 | `lift` | `.ll` | Lift to LLVM IR |
 | `decompile` | `.c` / `.sol` / `.rs` | C, EVM Solidity, or SBF Rust selected with `--language` |
+| `decompile --check-all` | counts | Default C for every loaded function; each body is dropped after it is checked |
 | `decompile -llvm` | `.c` | Via LLVM IR + optimizer |
 | `decompile --devirtualize` | `.c` + optional JSON | Experimental x64 interpreter recovery; requires `--func`; [contract and examples](docs/interpreter-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | Experimental: [Android](docs/android.md), [iOS](docs/ios.md) |

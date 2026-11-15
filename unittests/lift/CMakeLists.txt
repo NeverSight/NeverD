@@ -1871,6 +1871,10 @@ add_neverd_unittest(NeverDAAPCS64CallContractTests
 target_include_directories(NeverDAAPCS64CallContractTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
 
+add_neverd_unittest(NeverDSourceImageBytesTests
+  core/SourceImageBytesTests.cpp
+  LINK_COMPONENTS IR Loader Symbolic)
+
 add_neverd_unittest(NeverDMedPositionalCallArgumentsTests
   core/MedPositionalCallArgumentsTests.cpp
   LINK_COMPONENTS BackendC BackendLLVM Pipeline)
@@ -1878,6 +1882,13 @@ add_neverd_unittest(NeverDMedPositionalCallArgumentsTests
 add_neverd_unittest(NeverDMedCallResultControlTests
   core/MedCallResultControlTests.cpp
   LINK_COMPONENTS BackendC BackendLLVM Pipeline)
+
+add_neverd_unittest(NeverDAArch64SystemCallSetupTests
+  core/AArch64SystemCallSetupTests.cpp
+  LINK_COMPONENTS BackendC Loader Pipeline
+)
+target_include_directories(NeverDAArch64SystemCallSetupTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
 
 add_neverd_unittest(NeverDWin64CallContractTests
   core/MedCallLeftoversTests.cpp
@@ -2384,6 +2395,11 @@ target_include_directories(NeverDMedLLVMDeadSlotsTests PRIVATE
   ${CMAKE_SOURCE_DIR}/lib/backend/llvm/emit
 )
 
+add_neverd_unittest(NeverDMedLLVMEntryParameterTests
+  core/MedLLVMEntryParameterTests.cpp
+  LINK_COMPONENTS BackendLLVM BackendC Pipeline
+)
+
 add_neverd_unittest(NeverDRegistrationCallResultTests
   eh/RegistrationCallResultTests.cpp
   eh/RegistrationSEHLocalUnwindTests.cpp
@@ -2537,6 +2553,24 @@ target_include_directories(NeverDCMemoryCopyTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
 if(NEVERD_TEST_CLANG_EXECUTABLE)
   target_compile_definitions(NeverDCMemoryCopyTests PRIVATE
+    NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")
+endif()
+
+add_neverd_unittest(NeverDCValueAvailabilityTests
+  core/CValueAvailabilityTests.cpp
+  LINK_COMPONENTS BackendC
+)
+target_include_directories(NeverDCValueAvailabilityTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
+
+add_neverd_unittest(NeverDHighCValueAvailabilityTests
+  core/HighCValueAvailabilityTests.cpp
+  LINK_COMPONENTS BackendC
+)
+target_include_directories(NeverDHighCValueAvailabilityTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
+if(NEVERD_TEST_CLANG_EXECUTABLE)
+  target_compile_definitions(NeverDHighCValueAvailabilityTests PRIVATE
     NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")
 endif()
 
@@ -3547,6 +3581,8 @@ set(AARCH64_TEST_SOURCES
   aarch64/test_extern_calls_a64.c
   aarch64/test_extern_calls_nopic_a64.c
   aarch64/test_return_join_a64.c
+  aarch64/test_return_w0_view_a64.s
+  aarch64/test_entry_register_a64.s
   aarch64/test_param_phi_a64.s
   aarch64/test_linux_svc_a64.s
   aarch64/test_smccc_a64.s
@@ -3557,6 +3593,8 @@ set(AARCH64_TEST_SOURCES
   aarch64/test_jumptable_inflate_gcc_a64.s
   aarch64/test_jumptable_byte_loop_a64.s
   aarch64/test_jumptable_masked_lane_a64.s
+  aarch64/test_jumptable_full_lane_zext_a64.s
+  aarch64/test_jumptable_saved_base_a64.s
   aarch64/test_jumptable_twotable_select_a64.s
   aarch64/test_jumptable_twotable_select_open_a64.s
   aarch64/test_pageoff_wrong_base_a64.s
@@ -3564,6 +3602,8 @@ set(AARCH64_TEST_SOURCES
   aarch64/test_pageoff_alternatives_a64.s
   aarch64/test_pageoff_nominal_miss_a64.s
   aarch64/test_jumptable_width_mismatch_a64.s
+  aarch64/test_jumptable_dense_mask_a64.s
+  aarch64/test_jumptable_lane_identity_a64.s
   aarch64/test_arith_a64.c
   aarch64/test_cond_a64.c
   aarch64/test_hbc_a64.c
@@ -4075,6 +4115,8 @@ foreach(src ${AARCH64_TEST_SOURCES})
     set(a64_extra_flags -march=armv8.5-a+memtag)
   elseif(src MATCHES "test_pauth_a64")
     set(a64_extra_flags -march=armv8.3-a+pauth)
+  elseif(src MATCHES "test_entry_register_a64")
+    set(a64_extra_flags -march=armv8.3-a+crypto+pauth)
   elseif(src MATCHES "test_sve_(length|state|store)_a64")
     set(a64_extra_flags -march=armv8.2-a+sve -msve-vector-bits=256)
   elseif(src MATCHES "test_return_join")
@@ -5129,7 +5171,7 @@ add_neverd_unittest(NeverDLLVMCAllocaTests
 add_neverd_unittest(NeverDCSourcePresentationTests
   core/CSourcePresentationTests.cpp
   core/CStringCommentTests.cpp
-  LINK_COMPONENTS BackendC
+  LINK_COMPONENTS BackendC Types
 )
 target_include_directories(NeverDCSourcePresentationTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include
@@ -5454,9 +5496,12 @@ target_compile_definitions(NeverDWindowsEHSourceTests PRIVATE
   NEVERD_RUNTIME_FIXTURE_COMPILER="${NEVERD_HOST_RUNTIME_FIXTURE_COMPILER_EXECUTABLE}")
 
 add_neverd_unittest(NeverDHighPointerTypeInferenceTests
-  core/HighPointerTypeInferenceTests.cpp LINK_COMPONENTS BackendC)
+  core/HighPointerTypeInferenceTests.cpp
+  core/HighCVirtualCallTests.cpp LINK_COMPONENTS BackendC Types)
 target_compile_definitions(NeverDHighPointerTypeInferenceTests PRIVATE
   NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")
+add_neverd_unittest(NeverDDebugCallReceiverTests
+  core/DebugCallReceiverTests.cpp LINK_COMPONENTS Pipeline)
 add_neverd_unittest(NeverDCDisplayFrameRecordTests
   core/CDisplayFrameRecordTests.cpp LINK_COMPONENTS BackendC)
 

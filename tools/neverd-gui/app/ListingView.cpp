@@ -24,6 +24,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QPainter>
 #include <QPainterPath>
 #include <QScrollBar>
@@ -64,12 +65,27 @@ ListingView::ListingView(Session &session, const AddressSpace &space,
   viewport()->setCursor(Qt::IBeamCursor);
   viewport()->setMouseTracking(true);
   setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  loadingLabel_ = new QLabel(viewport());
+  loadingLabel_->setObjectName(QStringLiteral("listingLoading"));
+  loadingLabel_->setAttribute(Qt::WA_TransparentForMouseEvents);
+  loadingLabel_->setAutoFillBackground(true);
+  loadingLabel_->setMargin(
+      ::neverd::limits::gui_config::kListingViewTextMargin);
+  loadingLabel_->hide();
   scrollJump_.setSingleShot(true);
   scrollJump_.setInterval(::neverd::limits::gui::kListingViewScrollDebounceMs);
   connect(&scrollJump_, &QTimer::timeout, this, [this] {
-    request(Fetch::Jump, pendingScrollAddress_, 0,
-            ::neverd::limits::gui::kListingViewPageLines / 2,
-            ::neverd::limits::gui::kListingViewPageLines);
+    request(
+        Fetch::Jump, pendingScrollAddress_, 0, 0,
+        std::min(visibleLines(), ::neverd::limits::gui::kListingViewPageLines));
+  });
+  connect(verticalScrollBar(), &QScrollBar::sliderReleased, this, [this] {
+    if (scrollJump_.isActive()) {
+      scrollJump_.stop();
+      request(Fetch::Jump, pendingScrollAddress_, 0, 0,
+              std::min(visibleLines(),
+                       ::neverd::limits::gui::kListingViewPageLines));
+    }
   });
   connect(verticalScrollBar(), &QScrollBar::actionTriggered, this,
           [this](int action) {
@@ -102,6 +118,16 @@ ListingView::ListingView(Session &session, const AddressSpace &space,
                   static_cast<long double>(position) / ScrollResolution;
               pendingScrollAddress_ = space_.addressAt(
                   static_cast<Address>(fraction * space_.total()));
+              if (revealItem(pendingScrollAddress_))
+                return;
+              // Retire the old viewport immediately, including its queued
+              // prefetch. Only the latest drag position may publish rows.
+              ++serial_;
+              session_.queries().unsubscribeOwner(this);
+              fetchingBefore_ = fetchingAfter_ = false;
+              pendingJump_ = pendingScrollAddress_;
+              updateLoadingLabel();
+              emit searchDocumentChanged();
               scrollJump_.start();
               return; // Keep the dragged slider position.
             }
@@ -215,6 +241,7 @@ void ListingView::clear() {
   lines_.clear();
   arrowEdges_.clear();
   pendingJump_.reset();
+  updateLoadingLabel();
   pendingScrollAddress_ = 0;
   fetchingBefore_ = fetchingAfter_ = false;
   atStart_ = atEnd_ = false;
@@ -341,6 +368,13 @@ void ListingView::request(Fetch kind, Address address, int sub, int before,
     return;
   if (kind == Fetch::Jump || kind == Fetch::Refresh) {
     ++serial_;
+    if (kind == Fetch::Jump) {
+      session_.queries().unsubscribeOwner(this);
+      pendingJump_ = address;
+    }
+    // A refresh has already asked for its visible rows. Keep that read so
+    // the edit's reply can deliver them before the surrounding context.
+    updateLoadingLabel();
     fetchingBefore_ = fetchingAfter_ = false;
     // The old rows are no longer a searchable document while this request
     // is pending. Retire matches at the same boundary as their row serial.
@@ -373,6 +407,7 @@ void ListingView::request(Fetch kind, Address address, int sub, int before,
           return;
         if (kind == Fetch::Jump) {
           pendingJump_.reset();
+          updateLoadingLabel();
           emit jumpSettled();
         }
         if (kind == Fetch::Before)
@@ -394,6 +429,7 @@ void ListingView::accept(Fetch kind, const QJsonObject &payload, quint64 serial,
   const bool settledJump = kind == Fetch::Jump;
   if (settledJump)
     pendingJump_.reset();
+  updateLoadingLabel();
   const auto rows = payload.value("lines").toArray();
   // A page that takes the place of the lines held brings most of them again:
   // one read anew after an edit differs in the rows the edit reached.  The
@@ -837,8 +873,22 @@ qreal ListingView::columnX(const Line &line, int column) const {
 
 void ListingView::resizeEvent(QResizeEvent *event) {
   QAbstractScrollArea::resizeEvent(event);
+  updateLoadingLabel();
   ensureLoaded();
   updateScrollBar();
+}
+
+void ListingView::updateLoadingLabel() {
+  loadingLabel_->setVisible(pendingJump_.has_value());
+  if (!pendingJump_)
+    return;
+  loadingLabel_->setText(tr("Loading %1…").arg(hexAddress(*pendingJump_)));
+  loadingLabel_->setMaximumWidth(viewport()->width());
+  loadingLabel_->adjustSize();
+  loadingLabel_->move(
+      std::max(0, viewport()->width() - loadingLabel_->width()),
+      std::max(0, viewport()->height() - loadingLabel_->height()));
+  loadingLabel_->raise();
 }
 
 void ListingView::updateScrollBar() {

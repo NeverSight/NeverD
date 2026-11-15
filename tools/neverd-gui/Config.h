@@ -278,7 +278,7 @@ inline constexpr int kTitleBarTitlePadding = 12;
 // tools/neverd-gui/app/WindowFrame.cpp
 /// The band outside the visible window that holds its shadow.
 inline constexpr int kWindowFrameShadowExtent = 10;
-/// Resize presses take precedence over content and docking inside this band.
+/// Resize presses take precedence inside this band, except over scrollbars.
 inline constexpr int kWindowFrameResizeInset = 8;
 /// Corner resize reach measured from the visible edge.
 inline constexpr int kWindowFrameCornerReach = 16;

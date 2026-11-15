@@ -1,6 +1,7 @@
 add_neverd_component_library(NeverDBackendC
   CSourceRecorder.cpp
   CSourceEvidence.cpp
+  CValueAvailability.cpp
   CAnalysisDispatch.cpp
   DebugParamBinding.cpp
   dialect/CDialect.cpp
@@ -23,6 +24,9 @@ add_neverd_component_library(NeverDBackendC
   HighC/HighCSourceNames.cpp
   HighC/HighCFuncWriter.cpp
   HighC/HighCStmtWriter.cpp
+  HighC/HighCValueAvailability.cpp
+  HighC/HighCVirtualCalls.cpp
+  HighC/HighCBitFields.cpp
   HighC/HighCWindowsThrow.cpp
   HighC/COFF/HighCWindowsCallbacks.cpp
   HighC/COFF/HighCSEH.cpp
@@ -32,6 +36,7 @@ add_neverd_component_library(NeverDBackendC
   HighC/X86/HighCCallSetup.cpp
   HighC/X86/HighCRegistration.cpp
   LLVMC/LLVMCEmitter.cpp
+  LLVMC/LLVMCValueAvailability.cpp
   LLVMC/COFF/LLVMCImageBase.cpp
   LLVMC/LLVMCVariableEdits.cpp
   LLVMC/LLVMCExprWriter.cpp

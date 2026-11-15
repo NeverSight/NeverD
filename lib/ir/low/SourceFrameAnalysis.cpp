@@ -3,6 +3,7 @@
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/med/MedNoReturn.h"
 
@@ -113,6 +114,8 @@ struct ByteFact {
   enum Kind {
     Unknown,
     Entry,
+    SignedLink,
+    AuthenticatedLink,
     Frame,
     FrameOrExternal,
     BorrowedOutput,
@@ -325,6 +328,9 @@ public:
   bool DidTerminate = false;
   int64_t RequiredFrameSize = 0;
   bool TrackDefinitions = false;
+  // A return-state proof may carry an opaque signed entry link through exact
+  // private spills. This is not a source projection or frame-rewrite permit.
+  bool TrackReturnProtection = false;
   bool TrackInitializedFrame = false;
   bool OutputQuery = false;
   size_t OutputExtent = 0;
@@ -475,12 +481,18 @@ public:
           return std::nullopt;
       return First.Value;
     };
-    auto IsRestored = [&] {
-      return std::all_of(RequiredExitRegisters.begin(),
-                         RequiredExitRegisters.end(), [&](const auto &Item) {
-                           return lookup(Current.Registers, Item.first) ==
-                                  Item.second;
-                         });
+    auto IsRestored = [&](bool AtReturn = false) {
+      return std::all_of(
+          RequiredExitRegisters.begin(), RequiredExitRegisters.end(),
+          [&](const auto &Item) {
+            const auto Actual = lookup(Current.Registers, Item.first);
+            return Actual == Item.second ||
+                   (AtReturn && Actual.TheKind == ByteFact::AuthenticatedLink &&
+                    Item.second.TheKind == ByteFact::Entry &&
+                    Item.first >= TRI.LinkRegister &&
+                    Item.first - TRI.LinkRegister < 8 &&
+                    Actual.Value == Item.second.Value);
+          });
     };
     for (size_t Index = 0; Index < End; ++Index) {
       const auto &Op = Block.Ops[Index];
@@ -507,8 +519,18 @@ public:
           !aarch64AddressMemoryInstruction(
                Op.Inputs[kAddressMemoryWordOperand + 1].Offset)
                ->stackBase();
+      std::optional<AArch64PAuthOperation> ReturnProtection;
+      if (TrackReturnProtection && Architecture == Arch::AArch64 &&
+          Op.NumInputs == 3 && lowAArch64PAuthShapeIsValid(Op)) {
+        ReturnProtection =
+            aarch64PAuthOperation(static_cast<Intrinsic>(Op.Inputs[0].Offset));
+        if (ReturnProtection &&
+            (ReturnProtection->Strip ||
+             !aarch64PAuthCodeKeyIsValid(ReturnProtection->Key)))
+          ReturnProtection.reset();
+      }
       if (Op.NumInputs > std::size(Op.Inputs) || Op.Output.Size > 64 ||
-          (Op.Opcode == NdOp::INTRINSIC && !OriginalLoad &&
+          (Op.Opcode == NdOp::INTRINSIC && !OriginalLoad && !ReturnProtection &&
            !hasNativeScalarIntrinsicEvidence(Op, Architecture) &&
            !(Architecture == Arch::X64 && !ObservationPointers.empty() &&
              isSourceFrameObservationGuard(Op))) ||
@@ -565,7 +587,7 @@ public:
           !OriginalLoad && !privateFrameScalarTransfer(Op.Opcode))
         return false;
       if (UsedEntryRegisters && Op.Opcode != NdOp::COPY &&
-          Op.Opcode != NdOp::RETURN) {
+          Op.Opcode != NdOp::RETURN && !ReturnProtection) {
         std::optional<LowMemoryOperandView> Memory;
         std::optional<int64_t> MemoryAddress;
         if (Op.Opcode == NdOp::STORE) {
@@ -1210,7 +1232,7 @@ public:
             !Current.Values.empty())
           return false;
         if (Index + 1 != Block.Ops.size() || !Block.Succs.empty() ||
-            (CheckExits && !IsRestored()))
+            (CheckExits && !IsRestored(true)))
           return false;
         if (CheckExits && OutputQuery) {
           if (!OutputExtent || Current.OutputWrites.size() != OutputExtent)
@@ -1243,11 +1265,14 @@ public:
         if (CheckExits && Architecture == Arch::AArch64 && !TailReturn) {
           if (Op.NumInputs != 1 || Op.Inputs[0].Size != 8)
             return false;
-          for (unsigned I = 0; I < 8; ++I)
-            if (Read(Op.Inputs[0], I) !=
-                ByteFact{ByteFact::Entry,
-                         static_cast<int64_t>(TRI.LinkRegister + I)})
+          for (unsigned I = 0; I < 8; ++I) {
+            const auto Byte = Read(Op.Inputs[0], I);
+            const auto Offset = static_cast<int64_t>(TRI.LinkRegister + I);
+            if (Byte != ByteFact{ByteFact::Entry, Offset} &&
+                !(Byte.TheKind == ByteFact::AuthenticatedLink &&
+                  Byte.Value == Offset))
               return false;
+          }
         }
         continue;
       }
@@ -1256,7 +1281,36 @@ public:
         return false;
       std::vector<ByteFact> Value(Op.Output.Size,
                                   {ByteFact::Unknown, 0, 0, MayBeFrame});
-      if (OriginalLoad) {
+      if (ReturnProtection) {
+        if (Op.Output != NdVar::reg(TRI.LinkRegister, 8) ||
+            FrameOffset(Op.Inputs[2]) != 0)
+          return false;
+        const auto Key = ReturnProtection->Key;
+        for (unsigned I = 0; I < 8; ++I) {
+          const auto Expected =
+              ByteFact{ReturnProtection->Authenticate ? ByteFact::SignedLink
+                                                      : ByteFact::Entry,
+                       static_cast<int64_t>(TRI.LinkRegister + I),
+                       ReturnProtection->Authenticate ? Key : 0};
+          if (Read(Op.Inputs[1], I) != Expected)
+            return false;
+          Value[I] = {ReturnProtection->Authenticate
+                          ? ByteFact::AuthenticatedLink
+                          : ByteFact::SignedLink,
+                      Expected.Value, Key};
+        }
+        if (ReturnProtection->Authenticate) {
+          // AUT can poison its result or trap. Only an immediate normal RET
+          // may consume this conditional identity; it is never an ordinary
+          // Entry value, and the original authentication remains in LowIR.
+          if (Index + 2 != Block.Ops.size() || !Block.Succs.empty())
+            return false;
+          const auto &Return = Block.Ops.back();
+          if (Return.Opcode != NdOp::RETURN || Return.NumInputs != 1 ||
+              Return.Inputs[0] != Op.Output)
+            return false;
+        }
+      } else if (OriginalLoad) {
         // Only normal-continuation effects are known: no frame write and
         // one unknown scalar result. Never recover a spill through an
         // unproved checked address, or erase a possibly loaded frame alias.
@@ -1597,7 +1651,7 @@ public:
           else
             std::erase_if(Current.Scratch,
                           [&](const auto &Item) { return Item.first < *SP; });
-          if (TrackDefinitions) {
+          if (TrackDefinitions || TrackReturnProtection) {
             if (Remaining < Current.Stack.size())
               return false;
             Remaining -= Current.Stack.size();
@@ -1910,6 +1964,8 @@ static bool restoresNativeSourceStateImpl(
   PreservationProof Proof(Architecture, Calls, false,
                           std::move(IncomingStackSlots), RequirePrivateFrame,
                           ExternalMemoryDisjoint, EntrySignature, Format);
+  Proof.TrackReturnProtection =
+      Architecture == Arch::AArch64 && !RequirePrivateFrame && !CopyQuery;
   if (CopyQuery)
     Proof.CopyQuery = *CopyQuery;
   const auto Graph = frameGraph(Function, Architecture, Calls, Proof.Remaining);

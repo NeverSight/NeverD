@@ -205,6 +205,14 @@ if(BUILD_TESTING)
       -o "-,txt")
   endif()
   find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
+  if(APPLE)
+    qt_add_executable(neverd-gui-mac-image-tests tests/platform/MacImageConversionTests.mm)
+    target_link_libraries(neverd-gui-mac-image-tests PRIVATE
+      Qt6::Widgets Qt6::Test "-framework CoreGraphics")
+    add_test(NAME NeverDGuiMacImageConversion COMMAND neverd-gui-mac-image-tests)
+    set_tests_properties(NeverDGuiMacImageConversion PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+  endif()
   if(NEVERD_WORKER_REAL_ENGINE_TESTS)
     qt_add_executable(neverd-gui-lineage-tests tests/LineageTests.cpp)
     target_link_libraries(neverd-gui-lineage-tests PRIVATE neverd_gui_app Qt6::Test)
@@ -480,7 +488,8 @@ if(BUILD_TESTING)
   if(NEVERD_WORKER_REAL_ENGINE_TESTS)
     add_test(NAME NeverDGuiAnalysis COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/analysis_probe_test.py"
-      "$<TARGET_FILE:neverd-gui>" "$<TARGET_FILE:neverd_shared>")
+      "$<TARGET_FILE:neverd-gui>" "$<TARGET_FILE:neverd_shared>"
+      "$<TARGET_FILE:neverd-worker>")
     set_tests_properties(NeverDGuiAnalysis PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60 SKIP_RETURN_CODE 77)
   endif()
   add_test(NAME NeverDGuiSmoke COMMAND neverd-gui --smoke-test)

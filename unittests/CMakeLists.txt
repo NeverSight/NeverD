@@ -417,6 +417,12 @@ if(TARGET neverd_shared)
     TypeConversionCAPITests.cpp
     LINK_LIBS neverd_shared
   )
+  add_neverd_unittest(NeverDSessionEmbeddedObjectTests
+    SessionEmbeddedObjectTests.cpp
+    LINK_LIBS neverd_shared
+  )
+  target_include_directories(NeverDSessionEmbeddedObjectTests PRIVATE
+    "${CMAKE_SOURCE_DIR}/include" ${LLVM_INCLUDE_DIRS})
   # As for shared-backed tools, macOS must resolve LLVM from the SDK alone.
   # The Types archive brings a second LLVM transitively; dyld can then coalesce
   # pass-manager methods without their AnalysisKeys and crash SDK optimization.

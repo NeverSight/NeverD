@@ -309,9 +309,10 @@ private:
   /// user picks among those the code's accesses fit (TypePickerDialog).
   void chooseStructOffset();
   void editDataPresentation(const QString &kind);
-  /// IDA's Y: the type of the parameter under a pseudocode cursor, else the
-  /// declaration of the current function.
+  /// Y: the selected global, local or parameter type, else the current
+  /// function's declaration. Globals do not require a decompiled function.
   void setType();
+  std::optional<Address> globalTypeTarget() const;
   void editVariable(const QString &action);
   void editCallType(bool resetAll = false);
   void editStackFrame(int mode);

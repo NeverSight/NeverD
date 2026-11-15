@@ -197,6 +197,28 @@ bool hasEntryPoint(const BinaryImage &Img) {
   return Img.Entry != 0 || Img.Format == BinaryFormat::Raw;
 }
 
+/// Whether the AArch64 instruction before \p Addr runs into it: it decodes
+/// and is neither a block end nor a call, after which a function may begin.
+/// A call to such an address names no function unless an entry marker is
+/// there: a data word that reads as BL, as in an executable section's
+/// constants, lands within other code.  The frame push also follows PACIASP
+/// and a shadow stack push within a function's prologue, so a call names it
+/// only after the end of the function before.
+bool runsIntoAArch64(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
+  const uint8_t *Bytes = Addr >= 4 ? Img.readVA(Addr - 4, 8) : nullptr;
+  if (!Bytes)
+    return false;
+  const uint32_t Before = readLE<uint32_t>(Bytes);
+  const uint32_t At = readLE<uint32_t>(Bytes + 4);
+  if (isAArch64BlockEndWord(Before) || isAArch64CallWord(Before) ||
+      (isFunctionEntryMarkerWordAArch64(At) &&
+       (!isAArch64FramePushWord(At) ||
+        func_detect_detail::aarch64MarkedEntryAfterFunctionEnd(Img, Addr))))
+    return false;
+  DecodedInsn Insn;
+  return Dec.decodeOne(Bytes, 4, Addr - 4, Insn) == 4;
+}
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -541,7 +563,8 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
   if (hasEntryPoint(Img) && !RelocationsOnly) {
     scanCallTargets(Img, Dec, DirectCallTargets, CodeNamedByCode);
     std::erase_if(DirectCallTargets, [&](va_t Addr) {
-      return !Img.isFunctionEntryCandidateAt(Addr);
+      return !Img.isFunctionEntryCandidateAt(Addr) ||
+             (Img.Arch == Arch::AArch64 && runsIntoAArch64(Img, Dec, Addr));
     });
     MarkedEntries = MarkedAArch64Entries;
     Entries.insert(DirectCallTargets.begin(), DirectCallTargets.end());
@@ -1063,6 +1086,12 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
   const auto *Seg = Img.getSegmentFor(Addr);
   if (!Seg || !Img.hasExecutableCodeOwnerAt(Addr))
     return false;
+  // No AArch64 function begins with UDF: a word that reads as one is a zero
+  // or small constant, or padding.
+  if (Img.Arch == Arch::AArch64)
+    if (const uint8_t *Bytes = Img.readVA(Addr, 4);
+        Bytes && (readLE<uint32_t>(Bytes) & 0xFFFF0000) == 0)
+      return false;
 
   va_t Cur = Addr;
   std::optional<InstructionMode> PathMode = Img.instructionModeAt(Addr);

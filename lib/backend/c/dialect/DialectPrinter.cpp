@@ -53,7 +53,8 @@ SourceDialectText DialectPrinter::run() {
       for (llvm::StringRef Identifier : Sharing.Identifiers)
         SourceNames[Identifier] = Spelled;
   for (const CSourceName &Name : Opts.Names)
-    if (SourceNames.contains(Name.Identifier))
+    if (SourceNames.contains(Name.Identifier) ||
+        (Name.TheKind == CSourceName::Kind::Function && Name.Address))
       NameEntries[Name.Identifier] = &Name;
 
   header();
@@ -178,9 +179,9 @@ void DialectPrinter::item(const TopLevel &Item, const TopLevel *Next) {
     directive(Item);
     break;
   case TopLevel::Kind::Unread:
-    unread(Item.Text, Item.Reason);
+    unread(Item.Begin, Item.End, Item.Reason);
     trailingComments(Item.Trailing);
-    break;
+    return;
   case TopLevel::Kind::StaticAssert:
     staticAssert(Item);
     break;
@@ -193,9 +194,10 @@ void DialectPrinter::item(const TopLevel &Item, const TopLevel *Next) {
     Pieces.resize(PiecesBefore);
     Depth = 0;
     AtLineStart = true;
-    unread(T.Source.slice(Item.Begin, Item.End), Refusal);
+    unread(Item.Begin, Item.End, Refusal);
     trailingComments(Item.Trailing);
     Refusal.clear();
+    return;
   }
   piece(Item.Begin, Item.End, Begin);
 }
@@ -244,17 +246,92 @@ bool DialectPrinter::localRecord(const CType *Ty) const {
          Opts.LocalTypes->Opaque.contains(Tag.str());
 }
 
-void DialectPrinter::unread(llvm::StringRef Text, llvm::StringRef Reason) {
+void DialectPrinter::unread(size_t CBegin, size_t CEnd,
+                            llvm::StringRef Reason) {
   Unread.push_back(Reason.str());
   line((lineComment() + " NeverD: shown as C: " + Reason).str());
-  llvm::SmallVector<llvm::StringRef, 16> Lines;
-  Text.split(Lines, '\n');
-  for (llvm::StringRef L : Lines) {
-    // The C text keeps its own indentation.
-    Buffer += L.str();
-    AtLineStart = false;
-    endLine();
+  // Keep the bytes as well as their offsets. A failed dialect conversion does
+  // not invalidate instruction anchors in the C that remains on screen.
+  const llvm::StringRef Text = T.Source.slice(CBegin, CEnd);
+  const size_t Begin = mark();
+  // A refused type conversion does not invalidate published function
+  // identities. Keep C++ names and their address links even in copied C;
+  // strings, assembler text, and ordinary comments are not symbol uses.
+  bool Respelled = false;
+  if (Opts.Dialect == SourceDialect::Cpp) {
+    if (auto Tokens = lex(Text)) {
+      size_t Previous = 0;
+      for (size_t I = 0; I < Tokens->size(); ++I) {
+        const Token &Tok = (*Tokens)[I];
+        std::string Spelling = Tok.Text.str();
+        const CSourceName *Entry = NameEntries.lookup(Tok.Text);
+        const bool Member = I && ((*Tokens)[I - 1].Text == "." ||
+                                  (*Tokens)[I - 1].Text == "->");
+        if (Tok.Kind == TokenKind::Identifier && !Member && Entry &&
+            Entry->TheKind == CSourceName::Kind::Function)
+          Spelling = name(Tok.Text);
+        else if (Tok.Kind == TokenKind::Comment &&
+                 Tok.Text.starts_with("/* virtual "))
+          Spelling = commentText({Tok.Text, Tok.Offset});
+        if (Spelling == Tok.Text)
+          continue;
+        const size_t CopyBegin = mark();
+        Buffer += Text.slice(Previous, Tok.Offset).str();
+        if (Previous < Tok.Offset)
+          Pieces.push_back({CBegin + Previous, CBegin + Tok.Offset, CopyBegin,
+                            mark(), true, CBegin + 1});
+        const size_t NameBegin = mark();
+        Buffer += Spelling;
+        Pieces.push_back({CBegin + Tok.Offset,
+                          CBegin + Tok.Offset + Tok.Text.size(), NameBegin,
+                          mark(), false, CBegin + 1});
+        Previous = Tok.Offset + Tok.Text.size();
+        Respelled = true;
+      }
+      if (Respelled) {
+        const size_t CopyBegin = mark();
+        Buffer += Text.substr(Previous).str();
+        if (Previous < Text.size())
+          Pieces.push_back(
+              {CBegin + Previous, CEnd, CopyBegin, mark(), true, CBegin + 1});
+        // A source statement normally occupies a line. Record its exact
+        // rewritten extent as well as the unchanged byte ranges above.
+        // Replacements contain no newlines; do not widen a partial token or
+        // an unrelated statement to the enclosing refused function.
+        llvm::StringRef Printed(Buffer.data() + Begin, mark() - Begin);
+        size_t CLine = 0, PrintedLine = 0;
+        while (CLine < Text.size()) {
+          const size_t CNext = Text.find('\n', CLine);
+          const size_t PNext = Printed.find('\n', PrintedLine);
+          const llvm::StringRef Original = Text.slice(CLine, CNext).trim();
+          const llvm::StringRef Replacement =
+              Printed.slice(PrintedLine, PNext).trim();
+          if (!Original.empty() && Original != Replacement)
+            Pieces.push_back(
+                {CBegin + size_t(Original.data() - Text.data()),
+                 CBegin + size_t(Original.data() - Text.data()) +
+                     Original.size(),
+                 Begin + size_t(Replacement.data() - Printed.data()),
+                 Begin + size_t(Replacement.data() - Printed.data()) +
+                     Replacement.size()});
+          if (CNext == llvm::StringRef::npos)
+            break;
+          CLine = CNext + 1;
+          PrintedLine = PNext + 1;
+        }
+      }
+    } else {
+      llvm::consumeError(Tokens.takeError());
+    }
   }
+  if (!Respelled) {
+    Buffer += Text.str();
+    if (!Text.empty())
+      Pieces.push_back({CBegin, CEnd, Begin, mark(), true});
+  }
+  if (!Text.ends_with('\n'))
+    Buffer += '\n';
+  AtLineStart = true;
 }
 
 void DialectPrinter::write(llvm::StringRef Text) {
@@ -283,6 +360,25 @@ void DialectPrinter::piece(size_t CBegin, size_t CEnd, size_t Begin) {
 }
 
 std::string DialectPrinter::commentText(const Comment &C) const {
+  // A declared virtual target is navigation evidence, not a direct call.
+  // Keep its name linked even though the expression still calls the runtime
+  // table slot. Ordinary comments and unknown identifiers remain verbatim.
+  constexpr llvm::StringLiteral Prefix = "/* virtual ";
+  if (C.Text.starts_with(Prefix)) {
+    llvm::StringRef Tail = C.Text.drop_front(Prefix.size());
+    const auto End = Tail.find(" [slot +0x");
+    if (End != llvm::StringRef::npos) {
+      const llvm::StringRef Identifier = Tail.take_front(End);
+      const CSourceName *Entry = NameEntries.lookup(Identifier);
+      if (Entry && Entry->TheKind == CSourceName::Kind::Function &&
+          Entry->Address) {
+        const std::string Spelling =
+            sourceSpelling(Identifier).value_or(Identifier.str());
+        return Prefix.str() + NameOpen + Identifier.str() + NameClose +
+               Spelling + NameEnd + Tail.drop_front(End).str();
+      }
+    }
+  }
   if (C.Text.starts_with("//"))
     return (lineComment() + C.Text.drop_front(2)).str();
   // Neither language nests block comments the way C does not: an opening
@@ -726,15 +822,71 @@ SourceDialectText::mapExact(llvm::StringRef C, size_t CBegin,
   CBegin = Piece.data() - C.data();
   CEnd = CBegin + Piece.size();
   std::optional<std::pair<size_t, size_t>> Mapped;
+  std::set<size_t> CopyOrigins;
   for (const SourceDialectPiece &P : Pieces) {
-    if (P.CBegin != CBegin || P.CEnd != CEnd)
+    if (P.CopyOrigin && P.CBegin <= CBegin && P.CEnd > CBegin)
+      CopyOrigins.insert(P.CopyOrigin);
+    if (P.Verbatim ? P.CBegin > CBegin || P.CEnd < CEnd
+                   : P.CBegin != CBegin || P.CEnd != CEnd)
       continue;
     if (P.Begin >= P.End || P.End > Text.size())
       return std::nullopt;
-    const auto Span = std::make_pair(P.Begin, P.End);
+    auto Span = std::make_pair(P.Begin, P.End);
+    if (P.Verbatim) {
+      if (P.CEnd - P.CBegin != P.End - P.Begin)
+        return std::nullopt;
+      Span = {P.Begin + CBegin - P.CBegin, P.Begin + CEnd - P.CBegin};
+      if (llvm::StringRef(Text).slice(Span.first, Span.second) != Piece)
+        return std::nullopt;
+    }
     if (Mapped && *Mapped != Span)
       return std::nullopt;
     Mapped = Span;
+  }
+  if (Mapped)
+    return Mapped;
+  for (const size_t Origin : CopyOrigins) {
+    size_t Cursor = CBegin;
+    std::optional<std::pair<size_t, size_t>> Span;
+    bool Valid = true;
+    for (const SourceDialectPiece &P : Pieces) {
+      if (P.CopyOrigin != Origin || P.CEnd <= CBegin || P.CBegin >= CEnd)
+        continue;
+      const size_t Left = std::max(P.CBegin, CBegin);
+      const size_t Right = std::min(P.CEnd, CEnd);
+      if (Left != Cursor || P.Begin >= P.End || P.End > Text.size() ||
+          (!P.Verbatim && (Left != P.CBegin || Right != P.CEnd))) {
+        Valid = false;
+        break;
+      }
+      auto Part = std::pair{P.Begin, P.End};
+      if (P.Verbatim) {
+        if (P.CEnd - P.CBegin != P.End - P.Begin) {
+          Valid = false;
+          break;
+        }
+        Part = {P.Begin + Left - P.CBegin, P.Begin + Right - P.CBegin};
+        if (llvm::StringRef(Text).slice(Part.first, Part.second) !=
+            C.slice(Left, Right)) {
+          Valid = false;
+          break;
+        }
+      }
+      if (!Span)
+        Span = Part;
+      else if (Span->second == Part.first)
+        Span->second = Part.second;
+      else {
+        Valid = false;
+        break;
+      }
+      Cursor = Right;
+    }
+    if (Valid && Cursor == CEnd && Span) {
+      if (Mapped && *Mapped != *Span)
+        return std::nullopt;
+      Mapped = Span;
+    }
   }
   return Mapped;
 }

@@ -655,8 +655,8 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
       input->setMinimumWidth(
           ::neverd::limits::gui_config::kMainWindowInputDialogWidth);
   if (auto *code = qobject_cast<CodeView *>(object)) {
-    // Reopening resumes this pane's interrupted function, independently of
-    // the assembly cursor. Hidden panes do not keep analysis jobs running.
+    // Reopening rejoins this pane's analysis or reads its completed result,
+    // independently of the assembly cursor.
     if (event->type() == QEvent::Show) {
       const QPointer<CodeView> view = code;
       QTimer::singleShot(0, this, [view] {
@@ -666,9 +666,9 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
       });
     }
     // A completed document keeps its exact instruction across tab changes.
-    // Only an active request needs to be stopped while its pane is hidden.
+    // Detach hidden pages while their expensive engine call finishes.
     if (event->type() == QEvent::Hide && code->text()->loading())
-      code->text()->cancel();
+      code->text()->cancel(true);
   }
   return KDDockWidgets::QtWidgets::MainWindow::eventFilter(object, event);
 }
@@ -2472,6 +2472,8 @@ void MainWindow::connectActions() {
   on(ActionId::ViewNames, [openChooser] { openChooser(ChooserKind::Names); });
   on(ActionId::ViewStrings,
      [openChooser] { openChooser(ChooserKind::Strings); });
+  on(ActionId::ViewComputedStrings,
+     [openChooser] { openChooser(ChooserKind::ComputedStrings); });
   // The list opens ready for a query, like a debugger's reference search.
   on(ActionId::SearchStringReferences, [this, openChooser] {
     openChooser(ChooserKind::StringReferences);
@@ -2864,8 +2866,9 @@ void MainWindow::updateActions() {
   const bool declarations =
       location && !session_.readOnly() && session_.typesFunctions();
   enable(ActionId::EditSetType,
-         declarations && (code ? code->text()->function().has_value()
-                               : currentFunction().has_value()));
+         declarations && (globalTypeTarget().has_value() ||
+                          (code ? code->text()->function().has_value()
+                                : currentFunction().has_value())));
   // The stack variables are a code window's own function's; an instruction's
   // SP and operand are the disassembly's.
   enable(ActionId::EditStackFrame,
@@ -3743,6 +3746,15 @@ void MainWindow::showCrossReferences(std::optional<Address> address, bool to) {
       showReferencesDialog(at, to, view);
       return;
     }
+  // HighC goto labels belong to this source document, not the image's symbol
+  // table. Reuse the definition that double-click follows; its block can
+  // differ from both the current instruction and the label row's source map.
+  if (!target)
+    if (const auto label =
+            view->text()->addressLabel(view->text()->currentToken())) {
+      showReferencesDialog(label->first, to, view);
+      return;
+    }
   const auto query = target && !target->value("query").toString().isEmpty()
                          ? target->value("query").toString()
                          : view->text()->currentToken();
@@ -3973,7 +3985,7 @@ void MainWindow::showPseudocode(const QString &representation, CodeOpen mode) {
   // the only ordinary cursor action that selects an address in the other pane.
   if (!selectAssemblyAddress || view->text()->function() != function ||
       view->text()->interrupted())
-    view->showFunction(*function);
+    view->showFunction(*function, mode == CodeOpen::Generate);
   if (selectAssemblyAddress)
     if (const auto address = disassembly_->currentAddress())
       view->text()->selectAddress(*address);
@@ -5304,6 +5316,24 @@ void MainWindow::chooseStructOffset() {
                                dialog.delta(), dialog.others(), epoch);
 }
 
+std::optional<Address> MainWindow::globalTypeTarget() const {
+  if (const auto *view = focusedCodeView()) {
+    if (const auto target = view->text()->renameTarget();
+        target && target->value(QStringLiteral("object")).toBool())
+      return addressValue(target->value(QStringLiteral("address")));
+    return std::nullopt;
+  }
+  if (disassembly_->onData())
+    return disassembly_->currentItem();
+  if (const auto target = disassembly_->operandTarget())
+    if (const auto *region = space_.regionOf(*target); region && !region->exec)
+      return target;
+  if (const auto item = disassembly_->currentItem())
+    if (const auto *region = space_.regionOf(*item); region && !region->exec)
+      return item;
+  return std::nullopt;
+}
+
 void MainWindow::setType() {
   if (session_.readOnly() || !session_.typesFunctions())
     return;
@@ -5314,7 +5344,12 @@ void MainWindow::setType() {
   std::optional<int> parameter;
   QString name;
   QJsonObject variable;
-  if (view) {
+  const auto object = globalTypeTarget();
+  if (object) {
+    function = object;
+    variable = {{"address", hexAddress(*object)},
+                {"object_address", hexAddress(*object)}};
+  } else if (view) {
     function = view->text()->function();
     if (const auto target = view->text()->renameTarget();
         target && target->contains(QStringLiteral("parameter"))) {
@@ -5341,7 +5376,9 @@ void MainWindow::setType() {
     function = currentFunction();
   }
   if (!function) {
-    output_->append(tr("Put the cursor in a function to set its type"), 1);
+    output_->append(tr("Put the cursor on a global object or in a function to "
+                       "set its type"),
+                    1);
     return;
   }
   if (name.isEmpty())
@@ -5349,7 +5386,8 @@ void MainWindow::setType() {
   const auto epoch = session_.epoch();
   // What the dialog states, a replica renders: it starts on it as the user
   // types.
-  session_.prepareFunctionRead(*function);
+  if (!object)
+    session_.prepareFunctionRead(*function);
   SetTypeDialog dialog(session_, *function, parameter, name, commandWindow(),
                        variable);
   const bool accepted = dialog.exec() == QDialog::Accepted;

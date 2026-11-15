@@ -15,16 +15,20 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../../lib/pipeline/PipelineLowIRDetail.h"
+#include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/CEmitterOptions.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/BinaryFormat/ELF.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
@@ -259,6 +263,11 @@ void compileAndRun(const std::string &Source) {
                          << Source;
     Result = llvm::sys::ExecuteAndWait(BinaryPath, {BinaryPath}, std::nullopt,
                                        Redirects, 30, 0, &Error);
+#if defined(__APPLE__) && defined(__aarch64__)
+    if (Result == -1 &&
+        llvm::StringRef(Error).contains("Bad CPU type in executable"))
+      GTEST_SKIP() << "x86-64 execution requires an available Rosetta runtime";
+#endif
     Errors = llvm::MemoryBuffer::getFile(ErrorPath);
     ASSERT_EQ(Result, 0) << Error
                          << (Errors ? (*Errors)->getBuffer().str() : "") << '\n'
@@ -429,6 +438,177 @@ makeImportImage(std::vector<uint8_t> Code,
     Img.Symbols.push_back(std::move(Function));
   }
   return Img;
+}
+
+TEST(SysVCallContract, LinuxSyscallImportsKeepTheirStackArgumentWhenRead) {
+  class Declared final : public NullDebugContext {
+    std::optional<FunctionSym>
+    resolvePrototype(llvm::StringRef Name) const override {
+      if (Name != "syscall")
+        return std::nullopt;
+      FunctionSym Function;
+      Function.Name = Name.str();
+      Function.ReturnType = NdType::makeInt(8);
+      Function.PrototypeFromHeader = true;
+      for (unsigned I = 0; I < 7; ++I)
+        Function.Params.push_back({"", NdType::makeInt(8)});
+      return Function;
+    }
+  } Debug;
+  struct Case {
+    uint32_t Number;
+    size_t Count;
+    bool FreeBSD = false;
+    bool WithoutOS = false;
+    bool Declared = false;
+    bool Indirect = false;
+  };
+  for (const auto &C :
+       {Case{39, 1}, Case{3, 2}, Case{62, 3}, Case{0, 4}, Case{257, 5},
+        Case{25, 6}, Case{9, 7}, Case{65535, 7}, Case{39, 7, true},
+        Case{39, 7, false, true}, Case{39, 7, false, false, true},
+        Case{39, 1, false, false, false, true},
+        Case{9, 7, false, false, false, true}}) {
+    SCOPED_TRACE(C.Number);
+    SCOPED_TRACE(C.FreeBSD);
+    SCOPED_TRACE(C.WithoutOS);
+    SCOPED_TRACE(C.Declared);
+    SCOPED_TRACE(C.Indirect);
+    constexpr va_t Stub = Text + 0x80;
+    std::vector<uint8_t> Code(0x90, 0xCC);
+    std::vector<uint8_t> Wrapper{0x48, 0x83, 0xEC, 0x18, 0xBF};
+    for (unsigned B = 0; B < 4; ++B)
+      Wrapper.push_back(static_cast<uint8_t>(C.Number >> (B * 8)));
+    const std::vector<uint8_t> Arguments{
+        0xBE, 11,   0,    0,    0,           // esi = 11
+        0xBA, 12,   0,    0,    0,           // edx = 12
+        0xB9, 13,   0,    0,    0,           // ecx = 13
+        0x41, 0xB8, 14,   0,    0,  0,       // r8d = 14
+        0x41, 0xB9, 15,   0,    0,  0,       // r9d = 15
+        0x48, 0xC7, 0x04, 0x24, 16, 0, 0, 0, // [rsp] = 16
+        0x31, 0xC0};                         // no vector arguments
+    Wrapper.insert(Wrapper.end(), Arguments.begin(), Arguments.end());
+    if (C.Indirect)
+      Wrapper.insert(Wrapper.end(), {0xFF, 0x15}); // call [GOT]
+    else
+      Wrapper.push_back(0xE8); // call stub
+    const auto Relative =
+        rel32(Text + Wrapper.size() + 4, C.Indirect ? 0x403000 : Stub);
+    Wrapper.insert(Wrapper.end(), Relative.begin(), Relative.end());
+    Wrapper.insert(Wrapper.end(), {0x48, 0x83, 0xC4, 0x18, 0xC3});
+    put(Code, Text, Wrapper);
+    auto Image =
+        makeImportImage(Code, {{Text, "syscall_caller"}}, {{Stub, "syscall"}});
+    ASSERT_TRUE(Image.recordImportStorageSlot(
+        0x403000, "syscall", 0, ImportStorageEvidence::LoaderBind));
+    if (!C.WithoutOS) {
+      Image.ELFMetadata.emplace();
+      Image.ELFMetadata->OSABI =
+          C.FreeBSD ? llvm::ELF::ELFOSABI_FREEBSD : llvm::ELF::ELFOSABI_NONE;
+    }
+    for (bool LLVM : {false, true}) {
+      SCOPED_TRACE(LLVM);
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.OnlyFunctionEntries = {Text};
+      Options.LiftMode = LLVM;
+      Options.SourceProjection = LLVM;
+      auto Result = Pipeline().run(Image, Context, Options,
+                                   C.Declared ? &Debug : nullptr);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      ASSERT_EQ(Result.MedFuncs.size(), 1u);
+      if (LLVM) {
+        const auto &Calls = Result.MedFuncs.front().CallInfos;
+        ASSERT_EQ(Calls.size(), 1u);
+        ASSERT_EQ(Calls.front().Args.size(), C.Count);
+        for (size_t I = 0; I < C.Count; ++I) {
+          EXPECT_TRUE(Calls.front().Args[I].isConst());
+          EXPECT_EQ(Calls.front().Args[I].ConstVal, I ? 10 + I : C.Number);
+        }
+        ASSERT_TRUE(Result.LlvmModule);
+        const auto *Caller = Result.LlvmModule->getFunction("syscall_caller");
+        ASSERT_NE(Caller, nullptr);
+        const llvm::CallBase *Call = nullptr;
+        for (const auto &Block : *Caller)
+          for (const auto &I : Block)
+            if (const auto *Each = llvm::dyn_cast<llvm::CallBase>(&I);
+                Each && ((Each->getCalledFunction() &&
+                          Each->getCalledFunction()->getName() == "syscall") ||
+                         (C.Indirect && !Each->getCalledFunction())))
+              Call = Each;
+        std::string IR;
+        llvm::raw_string_ostream IRStream(IR);
+        Caller->print(IRStream);
+        ASSERT_NE(Call, nullptr) << IR;
+        EXPECT_EQ(Call->arg_size(), C.Count);
+      }
+      if (!LLVM || C.Number == 9) {
+        // System V HighC gathers its own register/stack setup, so inspect
+        // the emitted call as well as the LLVM route's MedCallInfo.
+        CEmitterOptions EmitOptions;
+        EmitOptions.TheArch = Image.Arch;
+        EmitOptions.Format = Image.Format;
+        EmitOptions.Image = &Image;
+        std::string Source;
+        llvm::raw_string_ostream Out(Source);
+        ASSERT_TRUE(
+            LLVM ? LLVMCEmitter().emit(*Result.LlvmModule, Out, EmitOptions,
+                                       nullptr, &Image)
+                 : HighCEmitter().emit(Result.HighFuncs, Out, EmitOptions));
+        const auto Caller = body(Source, "syscall_caller");
+        const auto Call = Caller.find("syscall(");
+        ASSERT_NE(Call, std::string::npos) << Source;
+        size_t Count = 1;
+        unsigned Depth = 1;
+        for (size_t I = Call + 8; I < Caller.size() && Depth; ++I) {
+          if (Caller[I] == '(')
+            ++Depth;
+          else if (Caller[I] == ')')
+            --Depth;
+          else if (Caller[I] == ',' && Depth == 1)
+            ++Count;
+        }
+        EXPECT_EQ(Depth, 0u) << Caller;
+        EXPECT_EQ(Count, C.Count) << Caller;
+        if (C.Number == 9) {
+          source_call_execution_test::checkSyntax(Source);
+          // This is host scalar-C execution with an independent provider,
+          // not native x64 execution or an actual kernel call.
+          // The module may place an import-cell global between a forward
+          // declaration and the definition. Execute the definition alone;
+          // the complete module is syntax-checked above.
+          const auto Definition = Caller.rfind("syscall_caller(");
+          const auto DefinitionLine = Caller.rfind('\n', Definition);
+          const auto ExecutableCaller = Caller.substr(
+              DefinitionLine == std::string::npos ? 0 : DefinitionLine + 1);
+          const std::string Program =
+              R"(
+#include <stdint.h>
+#include <stdarg.h>
+static int64_t observed_syscall(int64_t number, ...) {
+  if (number != 9) return -1;
+  va_list ap;
+  va_start(ap, number);
+  int64_t result = 0;
+  for (int i = 0; i < 6; ++i)
+    result += (i + 1) * va_arg(ap, int64_t);
+  va_end(ap);
+  return result;
+}
+#define WORD(x) ((void)sizeof(char[sizeof(x) == sizeof(int64_t) ? 1 : -1]), (x))
+#define syscall(n, a, b, c, d, e, f) \
+  observed_syscall(n, WORD(a), WORD(b), WORD(c), WORD(d), WORD(e), WORD(f))
+)" + ExecutableCaller +
+              "\nint main(void) { return syscall_caller() != 301; }\n";
+          for (const char *Optimization : {"-O0", "-O2"})
+            source_call_execution_test::compileAndRun(
+                Program, {Optimization, "-fsanitize=undefined",
+                          "-fno-sanitize-recover=undefined"});
+        }
+      }
+    }
+  }
 }
 
 /// HighC for the functions at \p Entries of \p Img.
@@ -647,6 +827,98 @@ int main(void) {
   }
 }
 
+TEST(SysVCallContract, OpaqueVariadicVectorsKeepTheSimdBank) {
+  constexpr va_t Stub = Text + 0x40;
+  for (uint8_t Vectors : {0, 1, 2}) {
+    SCOPED_TRACE(Vectors);
+    std::vector<uint8_t> Code(0x50, 0xCC);
+    std::vector<uint8_t> Words{
+        0xF3, 0x0F,    0x6F, 0x06,       // movdqu xmm0, [rsi]
+        0xF3, 0x0F,    0x6F, 0x4E, 0x10, // movdqu xmm1, [rsi+16]
+        0xBE, 0x07,    0x00, 0x00, 0x00, // mov esi, 7
+        0xB8, Vectors, 0x00, 0x00,
+        0x00,  // mov eax, count (vector argument upper bound)
+        0xE9}; // jmp printf
+    const auto Displacement = rel32(Text + Words.size() + 4, Stub);
+    Words.insert(Words.end(), Displacement.begin(), Displacement.end());
+    put(Code, Text, Words);
+    for (BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::MachO}) {
+      SCOPED_TRACE(static_cast<int>(Format));
+      auto Image = makeImportImage(
+          Code, {{Text, "opaque_vector_call"}, {Stub, "printf_stub"}},
+          {{Stub, "printf"}});
+      Image.Format = Format;
+      for (bool LLVM : {false, true}) {
+        SCOPED_TRACE(LLVM);
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.EmitDumpOutput = false;
+        Options.OnlyFunctionEntries = {Text};
+        Options.LiftMode = LLVM;
+        Options.SourceProjection = LLVM;
+        auto Result = Pipeline().run(Image, Context, Options);
+        ASSERT_TRUE(Result.Success) << Result.Error;
+        ASSERT_EQ(Result.MedFuncs.size(), 1u);
+        std::string Operations;
+        for (const auto &Block : Result.MedFuncs.front().Blocks)
+          for (const auto &Op : Block.Ops) {
+            Operations += std::string(ndOpName(Op.Opcode)) + " ";
+            for (unsigned I = 0; I < Op.NumInputs; ++I)
+              Operations += Op.Inputs[I].display() + " ";
+            Operations += "\n";
+          }
+        if (LLVM) {
+          ASSERT_EQ(Result.MedFuncs.front().CallInfos.size(), 1u) << Operations;
+          const auto &Call = Result.MedFuncs.front().CallInfos.front();
+          ASSERT_EQ(Call.IntegerRegisterArgCount, 2);
+          ASSERT_EQ(Call.FloatingRegisterArgCount, Vectors);
+          ASSERT_EQ(Call.Args.size(), 2u + Vectors);
+          EXPECT_EQ(Call.VarArgFixedCount, 1);
+          for (unsigned I = 2; I < Call.Args.size(); ++I)
+            EXPECT_EQ(Call.Args[I].Size, 16);
+        }
+        CEmitterOptions COptions;
+        COptions.TheArch = Image.Arch;
+        COptions.Format = Image.Format;
+        COptions.Image = &Image;
+        std::string Source;
+        llvm::raw_string_ostream Output(Source);
+        if (LLVM) {
+          ASSERT_TRUE(Result.LlvmModule);
+          bool Found = false;
+          for (const auto &Function : *Result.LlvmModule)
+            for (const auto &Block : Function)
+              for (const auto &Instruction : Block)
+                if (const auto *C =
+                        llvm::dyn_cast<llvm::CallBase>(&Instruction);
+                    C && C->getCalledFunction() &&
+                    C->getCalledFunction()->getName() == "printf") {
+                  Found = true;
+                  ASSERT_EQ(C->arg_size(), 2u + Vectors);
+                  for (unsigned I = 2; I < C->arg_size(); ++I) {
+                    EXPECT_TRUE(C->getArgOperand(I)->getType()->isVectorTy());
+                    EXPECT_EQ(C->getArgOperand(I)
+                                  ->getType()
+                                  ->getPrimitiveSizeInBits(),
+                              128u);
+                  }
+                }
+          EXPECT_TRUE(Found);
+          ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions,
+                                          nullptr, &Image));
+        } else {
+          ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+        }
+        if (Vectors)
+          EXPECT_NE(Source.find("vector_size(16)"), std::string::npos)
+              << Source;
+        EXPECT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+        source_call_execution_test::checkSyntax(Source);
+      }
+    }
+  }
+}
+
 TEST(SysVCallContract, AFloatArgumentReachesAPrototypedImport) {
   // twice_sin(x) = 2 * sin(x + x): math.h declares sin's double parameter,
   // so the sum in xmm0 is its argument and x the function's own parameter.
@@ -722,6 +994,78 @@ int main(void) {
   return twice_ldexp(1.5) == 12.0 && twice_ldexp(-0.25) == -2.0 ? 0 : 1;
 }
 )");
+}
+
+TEST(SysVCallContract, VoidFloatingImportsKeepTheirCallEffects) {
+  constexpr va_t Stub = Text + 0x40;
+  class Header : public NullDebugContext {
+  public:
+    uint16_t Bytes = 4;
+    std::optional<FunctionSym>
+    resolvePrototype(llvm::StringRef Name) const override {
+      if (Name != "fixture_void_fp")
+        return std::nullopt;
+      FunctionSym Function;
+      Function.Name = Name.str();
+      Function.ReturnType = NdType::makeVoid();
+      Function.Params = {{"value", NdType::makeFloat(Bytes)}};
+      Function.PrototypeFromHeader = true;
+      return Function;
+    }
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      auto Function = Address == Stub || Address == 0x403000
+                          ? resolvePrototype("fixture_void_fp")
+                          : std::nullopt;
+      if (Function)
+        Function->Addr = Address;
+      return Function;
+    }
+  } Debug;
+  for (bool Double : {false, true}) {
+    Debug.Bytes = Double ? 8 : 4;
+    std::vector<uint8_t> Code(0x50, 0xCC);
+    std::vector<uint8_t> Wrapper = {0x48, 0x83, 0xEC, 0x08}; // sub rsp, 8
+    if (Double)
+      Wrapper.insert(Wrapper.end(),
+                     {0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0xF8, 0x3F, 0x66, 0x48,
+                      0x0F, 0x6E, 0xC0}); // xmm0 = double 1.5
+    else
+      Wrapper.insert(Wrapper.end(), {0xB8, 0, 0, 0xC0, 0x3F, 0x66, 0x0F, 0x6E,
+                                     0xC0}); // xmm0 = float 1.5
+    Wrapper.push_back(0xE8);
+    const auto Relative = rel32(Text + Wrapper.size() + 4, Stub);
+    Wrapper.insert(Wrapper.end(), Relative.begin(), Relative.end());
+    Wrapper.insert(Wrapper.end(), {0xB8, 17, 0, 0, 0, // mov eax, 17
+                                   0x48, 0x83, 0xC4, 0x08, 0xC3});
+    put(Code, Text, Wrapper);
+    const auto Image = makeImportImage(Code, {{Text, "observe_call"}},
+                                       {{Stub, "fixture_void_fp"}});
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    Options.OnlyFunctionEntries = {Text};
+    auto Result = Pipeline().run(Image, Context, Options, &Debug);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    CEmitterOptions COptions;
+    COptions.TheArch = Image.Arch;
+    COptions.Format = Image.Format;
+    COptions.Image = &Image;
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, COptions, &Debug));
+    Source += Double ? "\ntypedef double real;\n" : "\ntypedef float real;\n";
+    // This recovered body contains no x86 machine-state helpers, so its C
+    // scalar contract can execute on the host without an x86 runtime.
+    for (const char *Optimization : {"-O0", "-O2"})
+      source_call_execution_test::compileAndRun(Source + R"(
+static real seen;
+void fixture_void_fp(real value) { seen = value; }
+int main(void) {
+  return observe_call() != 17 || seen != (real)1.5;
+}
+)",
+                                                {Optimization});
+  }
 }
 
 TEST(SysVCallContract, ALocalMathNameDoesNotOverrideMixedReturnEvidence) {

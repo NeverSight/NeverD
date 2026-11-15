@@ -25,12 +25,17 @@
 #include "llvm/DebugInfo/CodeView/CodeView.h"
 #include "llvm/DebugInfo/CodeView/SymbolRecord.h"
 #include "llvm/DebugInfo/CodeView/SymbolSerializer.h"
+#include "llvm/DebugInfo/MSF/MSFBuilder.h"
 #include "llvm/DebugInfo/MSF/MSFCommon.h"
 #include "llvm/DebugInfo/PDB/Native/DbiStream.h"
+#include "llvm/DebugInfo/PDB/Native/DbiStreamBuilder.h"
+#include "llvm/DebugInfo/PDB/Native/InfoStreamBuilder.h"
 #include "llvm/DebugInfo/PDB/Native/NativeSession.h"
 #include "llvm/DebugInfo/PDB/Native/PDBFile.h"
+#include "llvm/DebugInfo/PDB/Native/PDBFileBuilder.h"
 #include "llvm/DebugInfo/PDB/Native/RawConstants.h"
 #include "llvm/DebugInfo/PDB/Native/RawTypes.h"
+#include "llvm/DebugInfo/PDB/Native/TpiStreamBuilder.h"
 #include "llvm/DebugInfo/PDB/PDB.h"
 #include "llvm/Object/CVDebugRecord.h"
 #include "llvm/Support/BinaryByteStream.h"
@@ -2199,6 +2204,109 @@ TEST(PDB20IdentityIntegration, StdcallParamsLocalsAndExtentReachDebugContext) {
   ASSERT_TRUE(Param.has_value());
   EXPECT_EQ(Param->Name, "left");
   EXPECT_TRUE(Param->IsParam);
+}
+
+TEST(PDBIdentityIntegration, CallbackSignaturesKeepEllipsisAndRejectBadLists) {
+  constexpr uint32_t Signature = 0x11223344, Age = 1, Chars = 0x60000020;
+  constexpr uint32_t Int32 = 0x74;
+  const std::vector<std::vector<uint8_t>> Records = {
+      makeArgList({Int32, 0}),
+      makeProcedure(Int32, 0, 2, 0x1000),
+      makeMemberFunction(Int32, 0, 0, 0, 2, 0x1000),
+      makeProcedure(Int32, 0, 1, 0x1000), // Count disagrees with the list.
+      makeProcedure(Int32, 0, 1, 0x9999), // Missing list is not (void).
+      makeArgList({0, Int32}),
+      makeProcedure(Int32, 0, 2, 0x1005),  // Ellipsis is not a parameter.
+      makeProcedure(0x9999, 0, 2, 0x1000), // Missing return is not void.
+  };
+  const auto Sections =
+      makeLegacySectionHdr(".text", 0x1000, 0x1000, 0x200, 0x400, Chars);
+  ScratchDir Dir;
+  const auto Path = Dir.path("callback.pdb");
+  llvm::BumpPtrAllocator Allocator;
+  llvm::pdb::PDBFileBuilder Builder(Allocator);
+  if (auto Error = Builder.initialize(4096))
+    FAIL() << llvm::toString(std::move(Error));
+  for (unsigned I = 0; I < llvm::pdb::kSpecialStreamCount; ++I) {
+    auto Stream = Builder.getMsfBuilder().addStream(0);
+    ASSERT_TRUE(static_cast<bool>(Stream))
+        << llvm::toString(Stream.takeError());
+  }
+  auto Identity = makeIdentity(17, Age);
+  llvm::codeview::GUID Guid;
+  std::copy(Identity.Guid.begin(), Identity.Guid.end(), Guid.Guid);
+  auto &Info = Builder.getInfoBuilder();
+  Info.setVersion(llvm::pdb::PdbImplVC70);
+  Info.setGuid(Guid);
+  Info.setAge(Age);
+  auto &Dbi = Builder.getDbiBuilder();
+  Dbi.setVersionHeader(llvm::pdb::PdbDbiV70);
+  Dbi.setMachineType(llvm::pdb::PDB_Machine::x86);
+  Dbi.setAge(Age);
+  if (auto Error =
+          Dbi.addDbgStream(llvm::pdb::DbgHeaderType::SectionHdr, Sections))
+    FAIL() << llvm::toString(std::move(Error));
+  auto &Tpi = Builder.getTpiBuilder();
+  Tpi.setVersionHeader(llvm::pdb::PdbTpiV80);
+  for (const auto &Record : Records)
+    Tpi.addTypeRecord(Record, 0);
+  if (auto Error = Builder.commit(Path.string(), &Guid))
+    FAIL() << llvm::toString(std::move(Error));
+  BinaryImage Image = makeX86PeImage(Signature, Age, Chars);
+  Image.DynInfo.CodeViewPDBIdentity = Identity;
+  auto Context = PDBDebugContext::load(Path, Image);
+  ASSERT_TRUE(static_cast<bool>(Context))
+      << llvm::toString(Context.takeError());
+  for (uint32_t Index : {0x1001, 0x1002}) {
+    const auto Type = (*Context)->resolveType(Index);
+    ASSERT_TRUE(Type && Type->Type);
+    const auto &Function = Type->Type;
+    EXPECT_EQ(Function->Kind, NdTypeKind::Func);
+    EXPECT_EQ(Function->Size, 0);
+    EXPECT_TRUE(Function->RetType);
+    EXPECT_TRUE(Function->FunctionVariadic);
+    ASSERT_EQ(Function->ParamTypes.size(), 1u);
+    ASSERT_TRUE(Function->ParamTypes.front());
+    EXPECT_EQ(Function->ParamTypes.front()->Kind, NdTypeKind::Int);
+  }
+  for (uint32_t Index : {0x1003, 0x1004, 0x1006, 0x1007}) {
+    const auto Type = (*Context)->resolveType(Index);
+    ASSERT_TRUE(Type && Type->Type);
+    EXPECT_FALSE(Type->Type->RetType) << Index;
+  }
+}
+
+TEST(PDB20IdentityIntegration, VariadicAndIncompleteSignaturesStayDistinct) {
+  constexpr uint32_t Signature = 0x11223344, Age = 1, Chars = 0x60000020;
+  constexpr uint32_t Int32 = 0x74;
+  for (unsigned Case = 0; Case < 4; ++Case) {
+    SCOPED_TRACE(Case);
+    auto Module =
+        makeLegacyProcStream("variadic_probe", 0x100, 1, 0x20, 0x1001);
+    const auto End = makeEnd();
+    Module.insert(Module.end(), End.begin(), End.end());
+    std::vector<std::vector<uint8_t>> Streams(6);
+    Streams[1] = makeLegacyInfo(Signature, Age);
+    Streams[2] = makeTpi800(
+        {Case == 3 ? makeArgList({0, Int32}) : makeArgList({Int32, 0}),
+         makeProcedure(Int32, 0, Case == 1 ? 1 : 2,
+                       Case == 2 ? 0x9999 : 0x1000)});
+    Streams[3] = makeLegacyDbi(Age, 5, static_cast<uint32_t>(Module.size()), 4);
+    Streams[4] =
+        makeLegacySectionHdr(".text", 0x1000, 0x1000, 0x200, 0x400, Chars);
+    Streams[5] = Module;
+    ScratchDir Dir;
+    const auto Path = writePdb(writeJgPdb(Streams), Dir);
+    BinaryImage Image = makeX86PeImage(Signature, Age, Chars);
+    auto Context = PDBDebugContext::load(Path, Image);
+    ASSERT_TRUE(static_cast<bool>(Context))
+        << llvm::toString(Context.takeError());
+    const auto Function = (*Context)->resolveFunction(0x401100);
+    ASSERT_TRUE(Function);
+    EXPECT_EQ(Function->IsVariadic, Case == 0);
+    EXPECT_EQ(Function->PlatformConvention, Case == 0);
+    EXPECT_EQ(Function->Params.size(), Case == 0 ? 1u : 0u);
+  }
 }
 
 TEST(PDB20IdentityIntegration, TpiParamsWithoutLocalsStillPublishArity) {

@@ -194,6 +194,10 @@ NEVERD_API const char *neverd_stack_frame_json(neverd_session_t Sess,
                                                const char *OptionsJSON);
 /// Check a source-only scalar/pointer type against the local library and
 /// exact machine width. Request: {"type":string,"bytes":1..16,"floating":bool}.
+/// Alternatively, {"object_address":"0x..."} inspects the original type,
+/// name and width of a global object without decompiling a function. Debug
+/// declarations, exact data symbols or explicitly sized data items own the
+/// extent; an interior address or unsized label is refused.
 /// Does not change the image, machine IR, ABI or rewriting authority.
 /// Null with neverd_last_error on refusal; free with neverd_free_string.
 NEVERD_API const char *neverd_source_type_json(neverd_session_t Sess,

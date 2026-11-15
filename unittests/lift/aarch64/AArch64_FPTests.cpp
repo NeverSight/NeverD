@@ -1,6 +1,8 @@
 #include "AArch64HighCBehavior.h"
 #include "CSourceText.h"
 
+#include <sstream>
+
 class AArch64_FP : public AArch64HighCBehaviorTest {
 protected:
   void expectPairedClangSyntax(const fs::path &CFile,
@@ -130,6 +132,108 @@ int main(void) {
       ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err << "\n" << Source;
       const auto Executed = exec(Program.string(), {});
       EXPECT_EQ(Executed.exitCode, 0) << Executed.err << "\n" << Source;
+    }
+  }
+}
+
+TEST_F(AArch64_FP, AngleReductionKeepsFloatingViewsAndRounding) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "floating-point source execution requires Clang";
+  const std::string Body = R"(
+  mov w9, #0xfa35
+  movk w9, #0x3c8e, lsl #16
+  fmov s2, w9
+  fmul s0, s0, s2
+  fmov s1, #0.5
+  fmov s4, #-0.5
+  fcmp s0, #0.0
+  fcsel s1, s4, s1, lt
+  mov w9, #0xf983
+  movk w9, #0x3e22, lsl #16
+  fmov s3, w9
+  fmul s5, s0, s3
+  fadd s1, s5, s1
+  fcvtzs s1, s1
+  scvtf s1, s1
+  mov w9, #0x0fdb
+  movk w9, #0xc0c9, lsl #16
+  fmov s4, w9
+  fmadd s0, s1, s4, s0
+ )";
+  const auto Assembly = tmpFile("fp-angle.s");
+  const auto Object = tmpFile("fp-angle.o");
+  std::ofstream(Assembly)
+      << ".text\n.global angle_reduce\n.type angle_reduce,%function\n"
+         "angle_reduce:\n  fmov s0, w0\n"
+      << Body << "  fmov w0, s0\n  ret\n.size angle_reduce,.-angle_reduce\n";
+  const auto Assembled =
+      exec(NEVERD_TEST_CLANG, {"-target", "aarch64-none-elf", "-c",
+                               Assembly.string(), "-o", Object.string()});
+  ASSERT_EQ(Assembled.exitCode, 0) << Assembled.err;
+  std::string Harness = R"C(
+#include <math.h>
+#include <stdint.h>
+static uint32_t reference(uint32_t bits) {
+#if defined(__aarch64__)
+  uint32_t result;
+  __asm__ volatile("fmov s0, %w1\n"
+)C";
+  std::istringstream Lines(Body);
+  for (std::string Line; std::getline(Lines, Line);)
+    Harness += "\"" + Line + "\\n\"\n";
+  Harness += R"C(
+    "fmov %w0, s0\n" : "=r"(result) : "r"(bits)
+    : "x9", "v0", "v1", "v2", "v3", "v4", "v5", "cc");
+  return result;
+#else
+  float angle = __builtin_bit_cast(float, bits) * 0x1.1df46ap-6f;
+  float adjustment = !(angle >= 0.0f) ? -0.5f : 0.5f;
+  volatile float scaled = angle * 0x1.45f306p-3f;
+  float rounded = scaled + adjustment;
+  int32_t turns = isnan(rounded) ? 0 : rounded >= 0x1p31f ? INT32_MAX
+      : rounded <= -0x1p31f ? INT32_MIN : (int32_t)rounded;
+  float result = fmaf((float)turns, -0x1.921fb6p+2f, angle);
+  return __builtin_bit_cast(uint32_t, result);
+#endif
+}
+int main(void) {
+  const uint32_t edges[] = {0, 0x80000000, 1, 0x80000001, 0x3fa00000,
+    0xbfe00000, 0x42b40000, 0xc2b40000, 0x43340000, 0xc3340000,
+    0x7f800000, 0xff800000, 0x7fc12345, 0xffc12345, 0x7f7fffff};
+  uint32_t random = 0x926da371;
+  for (unsigned i = 0; i < 1039; ++i) {
+    random = random * 1664525u + 1013904223u;
+    uint32_t bits = i < 15 ? edges[i] : random;
+    uint32_t expected = reference(bits), actual = angle_reduce(bits);
+    if (actual != expected &&
+        !(isnan(__builtin_bit_cast(float, actual)) &&
+          isnan(__builtin_bit_cast(float, expected)))) return 1;
+  }
+  return 0;
+}
+)C";
+  for (bool LLVMRoute : {false, true}) {
+    SCOPED_TRACE(LLVMRoute ? "LLVMC" : "HighC");
+    const auto Decompiled =
+        LLVMRoute ? decompileToC(Object) : decompileToHighC(Object);
+    ASSERT_EQ(Decompiled.exitCode, 0) << Decompiled.err;
+    std::ifstream Input(
+        tmpFile(LLVMRoute ? "decompiled.c" : "decompiled_high.c"));
+    ASSERT_TRUE(Input.good());
+    const std::string Source((std::istreambuf_iterator<char>(Input)),
+                             std::istreambuf_iterator<char>());
+    ASSERT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+    const auto CFile = tmpFile("fp-angle-generated.c");
+    std::ofstream(CFile) << Source << '\n' << Harness;
+    const auto Program = tmpFile("fp-angle-generated.exe");
+    for (const char *Level : {"-O0", "-O2"}) {
+      SCOPED_TRACE(Level);
+      const auto Compiled =
+          exec(NEVERD_TEST_CLANG, {"-std=gnu11", Level, CFile.string(), "-lm",
+                                   "-o", Program.string()});
+      ASSERT_EQ(Compiled.exitCode, 0) << Compiled.err << '\n' << Source;
+      const auto Executed = exec(Program.string(), {});
+      EXPECT_EQ(Executed.exitCode, 0) << Executed.err << '\n' << Source;
     }
   }
 }

@@ -84,7 +84,8 @@ public:
   CodeText(Session &session, QWidget *parent = nullptr);
 
   void load(Address function, const QString &representation,
-            std::optional<QJsonObject> options = std::nullopt);
+            std::optional<QJsonObject> options = std::nullopt,
+            bool refresh = false);
   const QJsonObject &sourceOptions() const { return sourceOptions_; }
   const QJsonObject &recoveryReport() const { return RecoveryReport; }
   const QJsonObject &recoveryOptions() const { return RecoveryOptions; }
@@ -94,7 +95,7 @@ public:
   void clear();
   /// Stop obsolete requests/pages, including an in-flight analysis process
   /// when no other view still subscribes to its result.
-  void cancel();
+  void cancel(bool finishRunning = false);
   /// Cancel as the user does: a symbolic simplification of a function that
   /// shows no source yet gives way to its ordinary source.
   void cancelTransformation();
@@ -320,8 +321,9 @@ private:
   /// taken (takePages), no one is told of a load before they are: its status
   /// and what it folds are said once, as it stands with them.
   quint64 beginLoad(Address function, const QString &representation,
-                    std::optional<QJsonObject> options, bool here);
-  void request(int offset, quint64 serial);
+                    std::optional<QJsonObject> options, bool here,
+                    bool refresh = false);
+  void request(int offset, quint64 serial, bool refresh = false);
   /// Takes a page of the text being read, at \p offset: the offset of the
   /// page to take next, or none once the text is whole or cannot be.
   std::optional<int> takePage(const QJsonObject &payload, int offset);
@@ -687,7 +689,7 @@ public:
   CodeView(Session &session, const QString &representation,
            QWidget *parent = nullptr);
   CodeText *text() const { return text_; }
-  void showFunction(Address function);
+  void showFunction(Address function, bool refresh = false);
   void setRepresentation(const QString &representation);
   void addSourceActions(QMenu &menu);
   /// The representation the selector shows, loaded or still to load.

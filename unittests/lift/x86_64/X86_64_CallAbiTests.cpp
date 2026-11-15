@@ -862,7 +862,17 @@ __asm__(".text\n"
     for (const char *Name : {"spill", "chain"}) {
       const std::string Body = definitionOf(C, Name);
       ASSERT_FALSE(Body.empty()) << Name << "\n" << C;
-      EXPECT_NE(Body.find("unknown"), std::string::npos) << Body;
+      if (Route) {
+        EXPECT_NE(Body.find("unknown"), std::string::npos) << Body;
+      } else {
+        EXPECT_TRUE(Body.find("incoming register has no definition") !=
+                        std::string::npos ||
+                    Body.find("no recovered semantics") != std::string::npos)
+            << Body;
+        EXPECT_EQ(Body.find("unknown register"), std::string::npos) << Body;
+        EXPECT_EQ(Body.find("unknown value"), std::string::npos) << Body;
+        EXPECT_EQ(Body.find("unknown return value"), std::string::npos) << Body;
+      }
     }
   }
 }

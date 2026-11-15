@@ -138,6 +138,10 @@ struct ItaniumEHInfo {
   ExceptionAddressRange ActionTableRange;
   ExceptionAddressRange ExceptionSpecRange;
 
+  /// Coverage of this LSDA's bytes, separate from the enclosing frame's
+  /// structural decode and from identifying its personality routine.
+  ExceptionParseStatus ParseStatus = ExceptionParseStatus::Complete;
+
   /// True when no call site names a catch or exception-specification action,
   /// so every landing pad is destructor cleanup.  A Rust frame compiled with
   /// `panic=unwind` and no `catch_unwind` has exactly this shape.

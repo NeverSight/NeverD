@@ -44,6 +44,8 @@ bool readable(const QString &operation) {
                                         "metadata",
                                         "analysis_sections",
                                         "analysis_snapshot",
+                                        "analysis_virtual_calls",
+                                        "prepare_views",
                                         "code_edit_prepare",
                                         "history",
                                         "annotations",
@@ -57,6 +59,8 @@ bool readable(const QString &operation) {
                                         "xrefs",
                                         "kept_renders",
                                         "string_references",
+                                        "computed_strings",
+                                        "computed_strings_step",
                                         "string_encodings",
                                         "x87_capabilities",
                                         "string_options",
@@ -216,6 +220,7 @@ struct QueryService::State {
     QList<Id> subscribers;
     QString wireId, wireOperation, wireProject, wireRevision;
     bool cancelRequested = false, discoveredAnalysis = false;
+    bool retained = false;
     int graphRetries = 0;
     QJsonObject summary, result;
     QJsonObject BackgroundSnapshot;
@@ -345,6 +350,8 @@ struct QueryService::State {
   /// dispatcher was given, which the caller says (givenRead).  \p carried
   /// takes the second kind alone.
   std::optional<Cached> takeAnswer(const Job &job, bool carried = false) {
+    if (job.spec.payload.value("refresh").toBool())
+      return std::nullopt;
     const auto name = key(job, true);
     auto *cached = cache.object(name);
     if (!cached ||
@@ -380,18 +387,24 @@ struct QueryService::State {
   /// move it: an edit moves the listing's generation, and the worker answers
   /// for the page by its name whatever moved.
   QByteArray keptPageKey(const Job &job) const {
-    return QJsonDocument(
-               QJsonArray{project, job.spec.operation, job.spec.payload})
+    auto payload = job.spec.payload;
+    payload.remove(QStringLiteral("refresh"));
+    return QJsonDocument(QJsonArray{project, job.spec.operation, payload})
         .toJson(QJsonDocument::Compact);
   }
 
   QByteArray key(const Job &job, bool forCache) const {
+    auto payload = job.spec.payload;
+    // Refresh bypasses cached reads, but its result is the current page for
+    // ordinary navigation and for the reads carried with the next edit.
+    if (forCache)
+      payload.remove(QStringLiteral("refresh"));
     QJsonArray parts{QString::number(epoch),
                      project,
                      forCache ? revision : QString::number(job.fence),
                      QString::number(job.listing),
                      job.spec.operation,
-                     job.spec.payload};
+                     payload};
     if (!forCache) {
       parts.append(int(job.kind));
       parts.append(int(job.spec.policy));
@@ -776,7 +789,16 @@ struct QueryService::State {
       active.reset();
   }
 
-  void detach(Id id) {
+  void cancelJob(const JobPtr &job) {
+    if (job->cancelRequested)
+      return;
+    job->retained = false;
+    job->cancelRequested = true;
+    // Only the original request's terminal response releases active.
+    sender("cancel", {{"request_id", job->wireId}}, {});
+  }
+
+  void detach(Id id, QueryService::DetachPolicy policy = CancelRunning) {
     const auto iterator = subscriptions.constFind(id);
     if (iterator == subscriptions.cend())
       return;
@@ -794,12 +816,11 @@ struct QueryService::State {
       // Preserve the delivery barrier even if all subscribers have detached.
       // Analysis discovery is published only after this job has finished.
       return;
-    } else if (!job->cancelRequested) {
-      job->cancelRequested = true;
-      // The administrative ACK has a different ID and is deliberately not
-      // owned. Only the original request's terminal response releases active.
-      sender("cancel", {{"request_id", job->wireId}}, {});
-    }
+    } else if (policy == FinishRunning && job->kind == Read &&
+               !job->cancelRequested)
+      job->retained = true;
+    else
+      cancelJob(job);
   }
 
   void dispatch(const JobPtr &job, const QString &operation,
@@ -933,7 +954,9 @@ struct QueryService::State {
       if (keepsPage(*job)) {
         // A page kept from an earlier revision is named; a worker that still
         // holds its document answers that it stands rather than sending it.
-        const auto *kept = keptPages.object(keptPageKey(*job));
+        const auto *kept = job->spec.payload.value("refresh").toBool()
+                               ? nullptr
+                               : keptPages.object(keptPageKey(*job));
         job->keptEtag = kept ? kept->etag : QString();
         job->keptResponse = kept ? kept->response : QJsonObject();
         job->keptBytes = kept ? kept->bytes : 0;
@@ -1111,7 +1134,21 @@ struct QueryService::State {
     }
     const auto status = response["status"].toString();
     if (status == "progress") {
-      emit q->loadProgress(response.value("payload").toObject());
+      const auto payload = response.value("payload").toObject();
+      const auto ids = job->subscribers;
+      const QPointer<QueryService> guard(q);
+      for (const auto id : ids) {
+        const auto it = subscriptions.constFind(id);
+        if (it == subscriptions.cend() || it->job != job->id || !it->owner ||
+            it->epoch != epoch)
+          continue;
+        emit q->queryProgress(id, payload);
+        if (!guard)
+          return;
+      }
+      // Query progress belongs to its pane, not the file-loading card.
+      if (job->kind == Command && job->spec.operation == "open")
+        emit q->loadProgress(payload);
       return;
     }
     if (response.contains("then")) {
@@ -1384,11 +1421,11 @@ void QueryService::unsubscribe(SubscriptionId id) {
   state_->detach(id);
   state_->notify();
 }
-void QueryService::unsubscribeOwner(QObject *owner) {
+void QueryService::unsubscribeOwner(QObject *owner, DetachPolicy policy) {
   const auto ids = state_->subscriptions.keys();
   for (const auto id : ids)
     if (state_->subscriptions.value(id).ownerKey == owner)
-      state_->detach(id);
+      state_->detach(id, policy);
   state_->notify();
 }
 void QueryService::cancelReads(const QSet<QObject *> &keep) {
@@ -1400,6 +1437,11 @@ void QueryService::cancelReads(const QSet<QObject *> &keep) {
         !keep.contains(subscription.ownerKey))
       state_->detach(id);
   }
+  const auto jobs = state_->jobs.values();
+  for (const auto &job : jobs)
+    if (job->retained && job->subscribers.isEmpty() &&
+        job->phase != State::Delivering)
+      state_->cancelJob(job);
   state_->notify();
 }
 void QueryService::resetSession() {
@@ -1443,7 +1485,8 @@ bool QueryService::hasPending() const { return state_->pending(); }
 qsizetype QueryService::pendingReadCount() const {
   qsizetype count = 0;
   for (const auto &job : std::as_const(state_->jobs))
-    if (job->kind != State::Command && !job->subscribers.isEmpty())
+    if (job->kind != State::Command &&
+        (!job->subscribers.isEmpty() || job->retained))
       ++count;
   return count;
 }

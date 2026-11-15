@@ -37,13 +37,11 @@ void LibraryCodeView::reset(const QString &original,
   auto position = [&](const QJsonValue &value) -> int {
     // Reject absent, fractional, negative and overflowing offsets. No rounding
     // a byte in the middle of a multibyte character onto a Qt position.
-    const auto number = value.toDouble(-1);
-    if (!value.isDouble() || !std::isfinite(number) || byteOffset < 0 ||
-        byteOffset > ::neverd::limits::gui::kMaxLibraryViewByteOffset ||
-        number < byteOffset || number - byteOffset > bytes.size() ||
-        number != static_cast<double>(static_cast<qint64>(number)))
+    const auto absolute = value.toInteger(-1);
+    if (!value.isDouble() || byteOffset < 0 || absolute < byteOffset ||
+        absolute - byteOffset > bytes.size())
       return -1;
-    const auto local = static_cast<qsizetype>(number - byteOffset);
+    const auto local = static_cast<qsizetype>(absolute - byteOffset);
     if (local < bytes.size() &&
         (static_cast<unsigned char>(bytes[local]) & 0xc0) == 0x80)
       return -1;

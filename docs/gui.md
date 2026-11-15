@@ -134,6 +134,8 @@ Double-clicking a goto's label (`goto L_14024FAB5;`) moves the cursor to the
 label and the disassembly to the block it labels, as IDA's labels do; Back
 returns to the goto. Pseudocode and C name a label after its block's address,
 so the label's row maps to that block: clicking it, or Tab, goes there too.
+Cross references to a goto label use that same block address, from either
+the goto or its definition, without looking up the label as an image symbol.
 LLVM C numbers its labels, which name no address. The record pseudocode
 declares for a function's stack is named after the function
 (`struct frame_140003FE0 { ... } stack_storage;`): double-clicking it,
@@ -276,6 +278,20 @@ differ); other unwritten bytes run as `db N dup(?)` up to the next item. Only a 
 maps to the linear address space. The arrow gutter draws branches, and clicking
 an identifier highlights every occurrence; a register brings the registers that
 share it along, `eax` and `al` with `rax` or `w0` with `x0`, as in IDA.
+Dragging the scroll bar replaces obsolete viewport requests and loads the new
+visible rows before prefetching their context. A loading label shows the target
+address while those rows are pending; a destination already in the current
+window reuses its rows.
+Large images keep a single reusable analysis process alongside the browsing
+process, so opening several source panes does not duplicate the image's debug
+indexes in another process. With automatic analysis enabled, opening a large
+file waits for the analysis process to prepare shared source indexes before
+reporting the file ready. Initial discovery releases the snapshot used by that
+process; loading progress reports preparation throughout this interval. The
+browsing process does not also prepare the source type catalogue. The Output
+pane reports preparation failures without preventing browsing; individual
+functions still undergo their own analysis on demand. Changing source panes or
+pressing F5 reuses the prepared process and catalogue.
 **Search → Lock highlight** keeps up to eight words highlighted, each in its
 own color, in every disassembly and code window while the cursor's highlight
 moves on: Ctrl+Alt+1 through Ctrl+Alt+8 lock the word under the cursor in that
@@ -312,7 +328,12 @@ the last code window, creating one when needed. The first code window opens
 on the right of disassembly, and additional windows become tabs that can be
 split or floated independently. Repeated F5 from disassembly can open the
 same function in multiple windows. Inside a source window, F5 refreshes that
-window and preserves its chosen language. **Generate MedIR** and the other
+window and preserves its chosen language. It explicitly rebuilds that function's
+analysis; ordinary navigation reuses completed source or rejoins its running
+request. A refreshed result becomes the current cached page and can receive
+the next edit's updated rows without another decompile. Switching tabs lets an
+already-started decompile finish in the background. **Cancel pending requests** and the source cancellation action still
+stop work explicitly. **Generate MedIR** and the other
 representation commands follow the same rule: refresh a focused window of
 that representation, otherwise open a new one for the originating view's
 function. The cursors follow each other, as
@@ -330,7 +351,31 @@ decompiles, and the source side only searches the rows it shows. **Tab** from a 
 in disassembly and moves the focus there; Tab from disassembly selects the
 mapped source row in the last code window used, keeping its representation and
 both panes visible. A folded target row expands, and a new function waits for
-all its source pages before selecting the row. An unmapped source row falls
+all its source pages before selecting the row. The source API can page functions
+larger than 32 MiB, with text and transport limits applied to each page. The
+engine indexes the emitted C's rows and function metadata once; Low, Med and High
+IR pages likewise reuse a physical line index for the current function and stage.
+Changing names, options or pipeline inputs invalidates the corresponding view.
+The workbench retains recent documents within a 256 MiB memory cache. Evicted
+documents keep their original engine pages in session-owned temporary storage,
+so revisiting them does not rerun decompilation. Explicit refresh and changes to
+bytes, types or analysis inputs invalidate the relevant results. A document
+that would exceed that budget stores its text, original engine pages and
+chunked row/name metadata in an owned temporary file. Later pages read only
+intersecting chunks; local renames replay the retained original, and checked
+edits still validate their original row or variable identity. Temporary storage
+is removed when its analysis context closes or changes. Replayed pages retain
+shared function metadata once. Large functions keep statement navigation when the separate optional
+library-expression observation budget is exhausted.
+Browsing recovered instructions prepares only the control-flow graph; source
+and ABI recovery begin when an analysis view needs them. The listing retains
+up to 262,144 detailed instructions per function. Larger bodies keep a compact
+index of all recovered instruction boundaries and fetch further details by
+page, preserving ownership and references beyond the retained prefix. These
+pages display raw operands when no retained stack-frame facts are available.
+Graph snapshots retain every node and edge in an admitted backend graph; the
+backend response, optional layout vertices and viewport pages keep their own
+budgets. An unmapped source row falls
 back to its function entry with a message; an unmapped instruction reports that
 no source row is available and keeps the existing source cursor. Closing or
 hiding a pane stops its requests; showing it again resumes its own function.
@@ -462,6 +507,32 @@ bracket the cursor is on stands boxed with its partner, nested or lines away:
 a parenthesis, square bracket or brace of the code, not one in a string or
 comment.
 
+Computed strings can appear as `conditional text` comments beside their
+producing operations. Each comment lists the required input bytes and known
+initializer locations. These conditions have not established that every
+execution reaches those initializers, and the comment does not replace the
+original operations. Both C views retain explicit `no recovered semantics`
+or `no recovered machine state` checks where an observed value remains
+unavailable; successful export and source navigation alone do not prove
+whole-function equivalence.
+
+**View → Open subviews → Computed strings** lists this evidence without
+generating C. **Scan all functions** advances one function at a time in an
+existing analysis replica, keeping the main navigation worker available.
+**Pause** finishes the current function before stopping; **Continue** resumes.
+The worker retains the complete catalogue and filters/sorts its pages. Failed
+or incomplete functions remain diagnostic rows, and newly discovered function
+entries are included until the inventory stops growing. Finishing the scan
+means every known function was attempted, not that every string or semantic
+effect was recovered.
+
+**Conditions…** shows the full text and bytes, required block-entry memory and
+register values, and links to initializers, the block, observation and data.
+“Observed after” can follow the last store in the supported instruction suffix.
+These observations do not modify the image's literal strings or turn into
+unconditional string cross references. Analysis changes or cancellation of the
+analysis replica retire its catalogue; scan again to populate the new context.
+
 Global data is declared the way C source declares it, with the value the image
 holds: a string the code reaches by its address is its array
 (`const char gbk[] = "\xD6\xD0\xCE\xC4"; /* GBK "中文" */`), a pointer the code
@@ -498,6 +569,12 @@ a routine returns keeps the integer the machine reads,
 `(uintptr_t)__errno_location()`. A function passed to a standard function
 converts to the type its header declares: `qsort(base, n, 4, (int (*)(const
 void *, const void *))compare)`.
+
+A C++ call retains the exact target's linkage symbol when DWARF supplies only
+a short method name. The C++ view therefore shows the class-qualified method
+and double-click resolves that symbol, including its overload. An adjusting
+thunk keeps its own identity and `this` adjustment while its call links to the
+separate target method. Explicit user-assigned call names remain intact.
 
 Functions that share a symbol name, such as the static `helper` of two
 files, are numbered as IDA numbers them: the one at the lowest address keeps
@@ -651,6 +728,25 @@ stays in the field. Cross references (X, Ctrl+X, Ctrl+J) list call
 (`p`), jump (`j`), read (`r`), write (`w`) and offset (`o`) references from the
 worker's reference index.
 
+Quick filters show waiting, loading/searching, sorting, elapsed time, result
+count, no-results and error states beside the filter. The progress strip shows
+scanned rows when the worker knows a total; otherwise it animates. **Cancel**
+stops the pending filter or page read and keeps loaded rows. **Retry**, scrolling
+or keyboard navigation resumes loading; further typing replaces the old search.
+Background catalog updates leave an explicitly cancelled search paused. The
+global cancel action also releases the list's loading state. Function
+and name search includes catalogs above one million rows: only requested result
+pages become JSON, and narrowing a completed function filter reuses its matching
+row order. Search progress belongs to the list, independently of file loading.
+
+Plaintext embedded ELF objects also contribute relocation references (`e`).
+Their descriptions identify the contained object by file offset and retain
+source/target section offsets; they are not outer-image functions or native
+control-flow edges. String references include these rows too. A reference to
+a non-NUL control prefix can be found from the printable string, while the
+record retains its actual target before the visible text. Encrypted payloads
+are not decoded, and unsupported relocation forms do not create guessed xrefs.
+
 Reference lists and jump browsers stay open while you use the workbench.
 Reference selections retain their originating code or disassembly view, and
 jump browsers keep their original navigation context when focus moves elsewhere.
@@ -792,7 +888,7 @@ Knowledge Exchange assets, and it registers only the `neverd://` scheme.
 | P | Create a function at the address (**Edit → Functions** also deletes the current one) |
 | D / A / U | Make data (again for the next size) / a string / bytes of the item |
 | T | Show the operand as a structure offset, the local types ranked by the code's accesses |
-| Y | Set the type of the local, parameter or global object under the pseudocode cursor, or the current function's declaration, checked as you type |
+| Y | Inspect or set a global object's type in the data listing or pseudocode; set a local, parameter or current function type, checked as you type |
 | C | Define native instructions from the selected byte through a basic block |
 | ; or / | Enter or edit the comment at the current address or source line |
 | Alt+M / Ctrl+M | Mark a position / jump to a marked position |
@@ -848,6 +944,14 @@ therefore has no key: IDA's Ctrl+O makes an operand an offset into the current
 segment. Deliberate differences are the unified comment command above and
 Ctrl+F: in a disassembly, pseudocode or IR window it finds text, where IDA's
 disassembly goes to the next error.
+
+Local Types displays 256 rows at a time, with Previous, Next and a page
+selector. Search, origin filters and column sorting apply to the entire
+library. Following a member's type or returning to an earlier selection
+locates its page automatically. The status line shows the displayed range,
+total matches and skipped-type count; hovering shows the first available
+import diagnostic. C++ member pointers are shown as explicitly identified
+ABI storage, with their owner and target retained in the layout response.
 
 Buttons in Local Types, Type Libraries, Pathfinder, Declare and Find show
 shortcut hints. The main toolbars use icons only, with shortcuts in their tooltips.
@@ -950,8 +1054,9 @@ How the rest of the frame is drawn depends on the system:
 - On macOS the window keeps its frame and traffic lights, and its title bar
   turns transparent with the workbench's own drawn under it.
 
-Scrollbars that touch a window edge keep their full clickable track and draggable
-thumb. The adjacent frame and outer shadow still resize the window.
+Scrollbars retain their full clickable width even when they touch the window's
+inner resize band. Clicking the track or dragging the thumb scrolls the view;
+the surrounding frame and outer shadow still resize the window.
 
 To keep the system's whole frame instead, set `nativeTitleBar=true` in the
 `[ui]` group of the NeverD settings (`~/.config/NeverSight/NeverD.conf` on
@@ -1262,7 +1367,10 @@ Commit the binary with its project folder; a large binary suits Git LFS.
   as they are, says so in the output window, and starts the undo history
   there. A comment not saved yet stays on top of what arrived. Files changed
   while no workbench had the project open are taken the same way when it
-  opens.
+  opens. Watch registration and project file reads run on a separate I/O
+  thread: a slow filesystem or an OS permission prompt does not stop window
+  input, opening another project, or closing the window. A completed read
+  from a previous project cannot update the current project.
 - **Merging.** Two people's edits at different addresses merge without a
   conflict, whichever rows they are beside: the merge driver merges each table
   row by row and a row field by field, and writes the result as the workbench
@@ -1532,6 +1640,14 @@ changed. Local type assertions tied to an older association profile need review.
 
 Ordinary locals and global pointer/scalar objects accept a type from the local
 library with the same byte width and floating-point class as the original value.
+Select a global in the data listing, an instruction's data operand, or pseudocode
+and press **Y** to inspect its declaration and address. This reads the debug
+declaration directly and does not decompile an enclosing function. Without a
+debug declaration, an exact sized data symbol or explicitly defined scalar data
+item supplies its width; an unsized or interior address cannot invent a type.
+Global record pointers retain their debug types through temporary values and
+private stack spills, so member accesses use the declared layout when the
+reaching paths agree. Partial loads and conflicting pointer types remain raw.
 For example, setting a local to `struct DEVICE_CONTEXT *` makes accesses at known
 member offsets read as `context->State`. Ordinary C uses the chosen declaration
 and explicit machine-width conversions. LLVM C retains its scalar storage and
@@ -1539,6 +1655,17 @@ shows the chosen source type beside the declaration, casting that value at field
 accesses so arithmetic and PHI copies keep their original bits. A global type
 applies in both C routes; local values have separate identities in the two routes.
 By-value records, arrays and changes of machine width are refused.
+
+Y accepts existing catalog types with complete C++ names, including namespaces,
+nested template instances, type and non-type arguments, and pointer qualifiers.
+For example, `sample::Box<sample::Pair<int, unsigned int>, 3> *` selects that
+instance's stored layout. Whitespace and adjacent closing `>>` are accepted;
+an absent or ambiguous instance is reported rather than instantiated. Name
+completion replaces the qualified prefix, and reopening Y retains the original
+class identity instead of its generated C identifier. Accepted types restore
+known fields and primary Itanium virtual slots in pseudocode, including their
+navigation/xrefs. Calls still dispatch through the runtime vtable; unsupported
+layouts or missing call evidence retain the raw indirect form.
 
 Variable/object types are source assertions in `code.json`, with the same
 transactional history, undo/redo, database packing and replica loading as code
@@ -1607,6 +1734,39 @@ it does not run when views open every function under symbolic simplification,
 because they would read none of it.
 
 ## Call-site types
+
+HighC follows record pointers through local copies, private stack saves and
+branch joins, so member accesses retain their field names when those paths
+agree on the type. Escaping stack addresses and conflicting types prevent that
+inference; combined stores retain their original byte width.
+
+For ordinary Itanium primary vtables in ELF and Mach-O, a typed receiver and
+validated relocated slots can identify the declared virtual method. The call
+shows a `virtual` comment with the method's name and address-point-relative
+slot offset. It still loads the runtime target, so overrides continue to run.
+A compatible debug prototype supplies argument types; otherwise the raw call
+remains with the name annotation. Secondary tables, virtual-base prefixes and
+unbound slots retain their existing representation.
+
+Virtual-method annotations link to the declared method address in both C and
+C++ views. C++ uses the qualified `Class::method` spelling; C keeps legal C
+identifiers. Double-clicking any part of the published name follows its address,
+including names inside these annotations. Ordinary comments and quoted text do
+not acquire navigation targets merely by containing the same words.
+If a type prevents C++ syntax conversion, certified function names and their
+address links still survive in the retained C expressions. The conversion reason
+remains visible, and single-line and multiline instruction mappings remain exact.
+The same evidence adds `vcall` references to that method and `vslot` references
+to its table entry, in both directions. Xrefs show the receiver type and slot
+offset, and listing comments label these as virtual references. These describe
+the static type's declaration; they do not prove the runtime override target.
+Coverage follows functions rendered in this session, including accepted cached
+renders. Re-rendering replaces a function's evidence; changing declarations or
+invalidating the image clears it. An incoming xref query does not decompile
+every unvisited function to infer additional virtual calls. Reopening a still
+valid cached view restores its references after an unrelated declaration edit.
+Source workers publish accepted evidence to the project owner before the page
+is displayed, so xrefs also include calls rendered in another analysis worker.
 
 In either **Pseudocode** or **LLVM C**, put the cursor on a call row and choose
 **Set call type…** from its context menu. Enter a complete C declaration, for
@@ -1723,7 +1883,10 @@ python3 tools/neverd-gui/package_macos.py --build-dir build-gui \
 This produces an ad-hoc signed development application, not a notarized
 release. Test native dialogs, IME, accessibility, mixed-DPI screens and platform
 packaging on each target platform before a public release; automated offscreen
-tests do not prove those properties. `--startup-benchmark` writes startup
+tests do not prove those properties. On macOS, native image/cursor conversion
+and accessibility ownership require separate checks; a Cocoa plugin fix does
+not repair QtGui's color-space lifetime. The packaging guide records the
+corresponding upstream fixes and probe commands. `--startup-benchmark` writes startup
 milestones from main entry to the first painted listing of the opened file; see
 the [benchmark harness](../tools/neverd-gui/benchmarks/README.md).
 

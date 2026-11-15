@@ -43,6 +43,7 @@ namespace neverd::sdk {
 
 struct FuncInfo;
 struct Session;
+struct ReferenceImageIndex;
 
 /// Linear native decode from \p Addr, bounded by \p Span bytes when nonzero
 /// and by \p Limit instructions.  Mode selection, segment bounds and ARM state
@@ -149,14 +150,18 @@ public:
   explicit InstructionFlowScratch(
       const libc::NoReturnTargetIndex *NoReturnTargets = nullptr)
       : NoReturnTargets(NoReturnTargets) {}
-  InstructionFlow summarize(const BinaryImage &Img, Decoder &Dec,
-                            const DecodedInsn &DI,
-                            const TargetRegInfo *StackRegisters = nullptr);
+  InstructionFlow
+  summarize(const BinaryImage &Img, Decoder &Dec, const DecodedInsn &DI,
+            const TargetRegInfo *StackRegisters = nullptr,
+            LowInstructionUndefinedEffects *Undefined = nullptr);
   /// References needed by the width inventory. Scalar x86 register/immediate
   /// forms cannot access static memory and need no temporary flag arithmetic.
   /// Every other form retains the complete LowIR reference computation.
   llvm::SmallVector<InstructionRef, 2>
   dataAccesses(const BinaryImage &Img, Decoder &Dec, const DecodedInsn &DI);
+  /// The most recent lift, borrowed until the next summarize/dataAccesses.
+  /// Only a successfully lifted instruction supplies operations to a sweep.
+  llvm::ArrayRef<LowOp> operations() const { return Ops; }
 
 private:
   const libc::NoReturnTargetIndex *NoReturnTargets;
@@ -189,7 +194,7 @@ struct FunctionPage {
   std::optional<va_t> NextEntry;
   /// The entries of every function of the list the page was read from, in
   /// ascending order: where a function without a recorded size ends.
-  std::vector<va_t> Entries;
+  std::shared_ptr<const std::vector<va_t>> Entries;
 };
 FunctionPage functionPage(llvm::ArrayRef<FuncInfo> Functions, va_t FirstEntry,
                           int MaxFunctions);
@@ -210,7 +215,9 @@ struct FunctionDecodeStatus {
 /// when it has none, the instructions its own direct jumps reach from its
 /// entry short of another function's entry (Page.Entries; on 32-bit ARM, up
 /// to its first terminator), then the parts of it that lie apart from its
-/// body (ExceptionInfo::outlyingChunks).  One function's visits run on one
+/// body (ExceptionInfo::outlyingChunks). Unsized traversal is bounded by mapped
+/// executable bytes, other entries and visited addresses, without an
+/// instruction cap. One function's visits run on one
 /// thread, so writing only to its own output keeps the result independent of
 /// the thread count.  False when a decoder could not be set up.
 /// Multi-page readers share one immutable image index through NoReturnTargets;
@@ -223,6 +230,30 @@ bool decodeFunctions(
     const std::function<bool()> &Stop = {},
     std::vector<FunctionDecodeStatus> *Status = nullptr,
     const libc::NoReturnTargetIndex *NoReturnTargets = nullptr);
+
+/// The same native traversal, with agreed register constants propagated over
+/// each function's ordinary control flow to a fixed point. References are
+/// published only after joins and backedges settle. Independent entries,
+/// overlapping register writes, calls and opaque effects do not inherit stale
+/// values. Unresolved control flow retains instruction-local references.
+/// This is an original-address inventory, not relocatable pointer evidence,
+/// and does not start the session's decompilation pipeline.
+bool decodeFunctionReferences(
+    const BinaryImage &Img, const FunctionPage &Page,
+    llvm::function_ref<
+        void(size_t Index, va_t Address, llvm::StringRef Instruction,
+             const InstructionFlow &Flow, unsigned Size, InstructionMode Mode)>
+        Visit);
+
+/// Session pages reuse the image's no-return, relocation and exception facts.
+/// Selection and discovery change function entries, not these image facts;
+/// clearPipeline retires them on edits and reloads.
+bool decodeFunctionReferences(
+    const Session &S, const FunctionPage &Page,
+    llvm::function_ref<
+        void(size_t Index, va_t Address, llvm::StringRef Instruction,
+             const InstructionFlow &Flow, unsigned Size, InstructionMode Mode)>
+        Visit);
 
 /// The width of the reads and writes the instructions of each of \p
 /// Functions state at each address in \p Img: the direct references

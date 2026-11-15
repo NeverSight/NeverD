@@ -2597,11 +2597,31 @@ enum class ResolverResultKind : uint8_t { Invalid, Cycle, Value };
 struct ResolverResult {
   ResolverResultKind Kind = ResolverResultKind::Invalid;
   ResolverValue Value;
+  // Lane whose in-progress value query produced this cycle.  A full-width
+  // copy carries the token into another register without retagging it.  Empty
+  // for a legacy untagged cycle and for every memory cycle.
+  bool HasCycleLane = false;
+  VnodeSpace CycleSpace = VnodeSpace::CONST;
+  uint64_t CycleOffset = 0;
+  uint16_t CycleSize = 0;
 };
 
+static bool sameCycleLane(const ResolverResult &Cycle, const NdVar &Lane) {
+  return Cycle.HasCycleLane && Cycle.CycleSpace == Lane.Space &&
+         Cycle.CycleOffset == Lane.Offset && Cycle.CycleSize == Lane.Size;
+}
+
 static ResolverResult resolverInvalid() { return {}; }
-static ResolverResult resolverCycle() {
-  return {ResolverResultKind::Cycle, {}};
+static ResolverResult resolverCycle(const NdVar *Lane = nullptr) {
+  ResolverResult Result;
+  Result.Kind = ResolverResultKind::Cycle;
+  if (Lane && Lane->Size != 0 && (Lane->isReg() || Lane->isTemp())) {
+    Result.HasCycleLane = true;
+    Result.CycleSpace = Lane->Space;
+    Result.CycleOffset = Lane->Offset;
+    Result.CycleSize = Lane->Size;
+  }
+  return Result;
 }
 static ResolverResult resolverValue(ResolverValue Value) {
   return Value ? ResolverResult{ResolverResultKind::Value, std::move(Value)}
@@ -2636,11 +2656,22 @@ mergeResolverResults(llvm::ArrayRef<ResolverResult> Incoming,
   const ResolverValue *FirstValue = nullptr;
   size_t ValueCount = 0;
   bool SawCycle = false;
+  bool SawUntaggedCycle = false;
+  bool CycleTagConflict = false;
+  const ResolverResult *UnanimousCycle = nullptr;
   for (const ResolverResult &R : Incoming) {
     if (!consume())
       return resolverInvalid();
     if (R.Kind == ResolverResultKind::Cycle) {
       SawCycle = true;
+      if (!R.HasCycleLane)
+        SawUntaggedCycle = true;
+      else if (!UnanimousCycle)
+        UnanimousCycle = &R;
+      else if (UnanimousCycle->CycleSpace != R.CycleSpace ||
+               UnanimousCycle->CycleOffset != R.CycleOffset ||
+               UnanimousCycle->CycleSize != R.CycleSize)
+        CycleTagConflict = true;
       continue;
     }
     if (R.Kind != ResolverResultKind::Value || !R.Value)
@@ -2651,12 +2682,24 @@ mergeResolverResults(llvm::ArrayRef<ResolverResult> Incoming,
       FirstValue = &R.Value;
     ++ValueCount;
   }
-  if (!FirstValue)
-    return resolverCycle();
+  if (!FirstValue) {
+    // Every arm is a cycle.  A unanimous lane tag is that lane's value.
+    // Mixed tags are different values.  An untagged arm keeps the legacy
+    // transparent cycle so memory merges and same-register copies do not
+    // gain a lane they never had.
+    if (CycleTagConflict)
+      return resolverInvalid();
+    if (SawUntaggedCycle || !UnanimousCycle)
+      return resolverCycle();
+    return *UnanimousCycle;
+  }
   // A raw predecessor cycle is transparent only when the caller reached it
   // without crossing any overlapping definition.  Definitions propagate a
-  // cycle as Invalid below (except an exact self-copy), so this opt-in cannot
-  // erase a loop-carried SELECT/arithmetic/partial-lane update.
+  // cycle as Invalid below, except an exact full-width copy.  The caller
+  // keeps a token carried in another register as that saved value and does
+  // not pass it here: mixing it with a different arm is a disagreement.
+  // This opt-in cannot erase a loop-carried SELECT, arithmetic update, or
+  // partial-lane write.
   if (SawCycle && !IgnoreTransparentCycles)
     return resolverInvalid();
   const ResolverValue &Common = *FirstValue;
@@ -6157,7 +6200,12 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
       return ResolverPredicateMode::Joined;
     if (Query && Query->Relation == JumpTableValueRelation::UnsignedFeasibleSet)
       return ResolverPredicateMode::Unsigned;
-    if (Query && Query->Relation == JumpTableValueRelation::MustEqual)
+    // ConstantAddress is a structural match of one discovered pointer. An
+    // edge constraint wraps that pointer and can only make an equal arm
+    // look different, while walking every equality predicate in a dispatch
+    // loop exhausts the proof before the base's own copies are joined.
+    if (Query && (Query->Relation == JumpTableValueRelation::MustEqual ||
+                  Query->Relation == JumpTableValueRelation::ConstantAddress))
       return ResolverPredicateMode::Unconstrained;
     return ResolverPredicateMode::Equality;
   };
@@ -7479,7 +7527,15 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           Def.Opcode == NdOp::ATOMIC_ADD || Def.Opcode == NdOp::ATOMIC_CMPXCHG;
       bool Tainted = false;
       if (!FreshValue) {
-        for (int Input = 0; Input < Def.NumInputs; ++Input) {
+        // Address bits of a PAC/AUT result are the pointer operand.  The
+        // modifier, key, and mode only sign that pointer, so an SP modifier
+        // does not publish a frame cell.  A pointer operand that is SP still
+        // taints through the ordinary frame-register check.
+        const bool SignedPointer =
+            Def.Opcode == NdOp::INTRINSIC && lowAArch64PAuthShapeIsValid(Def);
+        const int InputBegin = SignedPointer ? 1 : 0;
+        const int InputEnd = SignedPointer ? 2 : Def.NumInputs;
+        for (int Input = InputBegin; Input < InputEnd; ++Input) {
           if (!consumeEvidence()) {
             FrameAddressTaintMemo.erase(MemoIt);
             return std::nullopt;
@@ -8232,7 +8288,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                          {Graph.Blocks[Block].Start,
                           static_cast<uint64_t>(Before),
                           static_cast<uint64_t>(V.Space), V.Offset, V.Size}))
-                   : resolverCycle();
+                   : resolverCycle(&V);
       };
       if (!Entry.Result) {
         Walks.observe(Entry.Pending);
@@ -8397,10 +8453,20 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                                  consumeEvidence, &EvidenceBudgetExhausted);
         } else if (Input.Kind == ResolverResultKind::Cycle &&
                    Def.Opcode == NdOp::COPY && Def.NumInputs >= 1 &&
-                   Def.Inputs[0].Space == Def.Output.Space &&
-                   Def.Inputs[0].Offset == Def.Output.Offset &&
-                   Def.Inputs[0].Size == Def.Output.Size) {
-          Result = resolverCycle();
+                   Def.Inputs[0].Size == Def.Output.Size &&
+                   Def.Output.Size != 0 && OBegin == QBegin && OEnd == QEnd &&
+                   (Input.HasCycleLane
+                        ? Input.CycleSize == Def.Output.Size
+                        : (Def.Inputs[0].Space == Def.Output.Space &&
+                           Def.Inputs[0].Offset == Def.Output.Offset))) {
+          // The token names the lane already on the stack.  Saving that
+          // value in another register and copying it back does not produce
+          // a new value.  The query has to be that whole copied lane; a
+          // narrower read stays a different value.  An untagged cycle has
+          // no lane to follow across registers.  Leave Full empty so the
+          // unmodelled-operation fallback below does not replace the token
+          // with a transform of an unknown input.
+          Result = Input.HasCycleLane ? Input : resolverCycle();
         }
       } else if (Def.Opcode == NdOp::SUBBYTES && Def.NumInputs >= 2 &&
                  Def.Inputs[1].isConst()) {
@@ -9025,7 +9091,11 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         }
       }
 
-      if (!Full && Def.NumInputs > 0) {
+      // An exact copy already forwarded a value-cycle token into Result.
+      // Rebuilding it as a transform would name a new value and drop the
+      // save/restore join.
+      if (!Full && Result.Kind != ResolverResultKind::Cycle &&
+          Def.NumInputs > 0) {
         // Preserve occurrence-level dependency even when this proof session
         // does not model the operation's value semantics.  Must-equality still
         // requires the exact same transform occurrence and input graph, while
@@ -9116,7 +9186,7 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                                   &EvidenceBudgetExhausted);
         }
       }
-      if (!Full)
+      if (!Full && Result.Kind != ResolverResultKind::Cycle)
         Full = namedResolverRoot(Def.Output.Size, "D",
                                  {Def.Addr, static_cast<uint64_t>(Def.Seq),
                                   static_cast<unsigned>(Def.Output.Space),
@@ -9255,26 +9325,62 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
           Incoming.clear();
           break;
         }
+        // A cycle of this lane is transparent below.  A cycle of another
+        // lane is the value an exact copy saved in this register.  The
+        // restore reads it back, so the carried token has to survive the
+        // block boundary.  It is not this lane's own value.
         Incoming.push_back(std::move(IncomingValue));
       }
       if (Incoming.empty()) {
         Result = resolverInvalid();
       } else {
-        ResolverRootKey MergeRoot;
-        Result =
-            makeResolverRootKey(MergeRoot, "PB",
-                                {B.Start, static_cast<unsigned>(Query.Space),
-                                 Query.Container, Query.Begin},
-                                consumeEvidence, &EvidenceBudgetExhausted)
-                ? mergeResolverResults(
-                      Incoming, MergeRoot.view(),
-                      /*IgnoreTransparentCycles=*/true, GraphWorkBudget,
-                      consumeEvidence, &EvidenceBudgetExhausted,
-                      /*CompareAddressArithmetic=*/false,
-                      ActiveValueQuery &&
-                          ActiveValueQuery->Relation ==
-                              JumpTableValueRelation::JoinedUnsignedFeasibleSet)
-                : resolverInvalid();
+        const ResolverResult *CarriedToken = nullptr;
+        bool CarriedConflict = false;
+        bool CarriedDisagrees = false;
+        for (const ResolverResult &Arm : Incoming) {
+          if (Arm.Kind == ResolverResultKind::Cycle && Arm.HasCycleLane &&
+              !sameCycleLane(Arm, V)) {
+            if (!CarriedToken)
+              CarriedToken = &Arm;
+            else if (CarriedToken->CycleSpace != Arm.CycleSpace ||
+                     CarriedToken->CycleOffset != Arm.CycleOffset ||
+                     CarriedToken->CycleSize != Arm.CycleSize)
+              CarriedConflict = true;
+            continue;
+          }
+          if (Arm.Kind == ResolverResultKind::Cycle)
+            continue;
+          CarriedDisagrees = true;
+        }
+        if (CarriedToken) {
+          // Charge the same arm walk the value merge would have charged.
+          // A concrete value, an invalid arm, or two different tokens does
+          // not agree with the saved value.  Same-lane and untagged cycles
+          // add none.
+          if (Incoming.size() > (std::numeric_limits<size_t>::max() - 2) / 2)
+            consumeEvidence(std::numeric_limits<size_t>::max());
+          if (EvidenceBudgetExhausted || CarriedConflict || CarriedDisagrees ||
+              !consumeEvidence(Incoming.size() * 2 + 2))
+            Result = resolverInvalid();
+          else
+            Result = *CarriedToken;
+        } else {
+          ResolverRootKey MergeRoot;
+          Result =
+              makeResolverRootKey(MergeRoot, "PB",
+                                  {B.Start, static_cast<unsigned>(Query.Space),
+                                   Query.Container, Query.Begin},
+                                  consumeEvidence, &EvidenceBudgetExhausted)
+                  ? mergeResolverResults(
+                        Incoming, MergeRoot.view(),
+                        /*IgnoreTransparentCycles=*/true, GraphWorkBudget,
+                        consumeEvidence, &EvidenceBudgetExhausted,
+                        /*CompareAddressArithmetic=*/false,
+                        ActiveValueQuery && ActiveValueQuery->Relation ==
+                                                JumpTableValueRelation::
+                                                    JoinedUnsignedFeasibleSet)
+                  : resolverInvalid();
+        }
       }
     }
 
@@ -9438,8 +9544,12 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
   // of the same register: libc++abi's readEncodedPointer has
   // `and w8,w1,#0xf; cmp w8,#0xc` before `and x8,x1,#0xf` on AArch64, and
   // `andb $0xf,%al; cmpb $0xc,%al` before `movzbl %sil,%eax; andl $0xf,%eax`
-  // on x86-64.  Sign extension does not commute this way, so only zero
-  // extension may use it; a zero extension of the wider mask keeps its value.
+  // on x86-64.  The same lane is also compared raw and indexed after a mask
+  // that keeps every bit of it: `cmp w0,#N` before `and x2,x0,#0xffffffff`.
+  // A mask that drops bits inside the lane (`and x2,x0,#0xff`) is a different
+  // value, and a raw W compare does not bound the high half of a live X
+  // index.  Sign extension does not commute this way, so only zero extension
+  // may use it; a zero extension of the wider mask keeps its value.
   auto maskedLaneZeroExtends = [&](const ResolverValue &Narrow,
                                    const ResolverValue &Wide,
                                    bool RequireExactAddressOwner) {
@@ -9456,11 +9566,11 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
             Other->K == ResolverValueExpr::Kind::Constant ||
             Other->Size != Value->Size)
           continue;
-        // A constant narrower than the operation is widened to it; with its
-        // top bit clear, zero and sign extension agree on the mask.
-        if (Mask->Size == 0 || Mask->Size > Value->Size ||
-            (Mask->Size < Value->Size &&
-             ((Mask->Constant >> (unsigned(Mask->Size) * 8u - 1u)) & 1u)))
+        // A constant narrower than the operation is zero-extended to it.
+        // Numeric bitwise immediates use that rule (SymExec::fit); a set top
+        // bit is still the zero-extended mask, not a sign extension.  An
+        // explicit sign extension is its own value, not a narrow AND immediate.
+        if (Mask->Size == 0 || Mask->Size > Value->Size)
           return std::nullopt;
         Masked = Other;
         return Mask->Constant & resolverWidthMask(Mask->Size);
@@ -9479,9 +9589,129 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     ResolverValue NarrowInput, WideInput;
     const std::optional<uint64_t> NarrowMask = maskOf(Narrow, NarrowInput);
     const std::optional<uint64_t> WideMask = maskOf(WideAnd, WideInput);
-    return NarrowMask && WideMask && *NarrowMask == *WideMask &&
-           (*WideMask & ~resolverWidthMask(Narrow->Size)) == 0 &&
-           sameLowBytes(NarrowInput, WideInput, Narrow->Size,
+    if (NarrowMask && WideMask && *NarrowMask == *WideMask &&
+        (*WideMask & ~resolverWidthMask(Narrow->Size)) == 0 &&
+        sameLowBytes(NarrowInput, WideInput, Narrow->Size,
+                     RequireExactAddressOwner))
+      return true;
+    // The compared value is the raw lane.  The index keeps every bit of that
+    // lane and clears every bit above it, so the index is the lane's zero
+    // extension.  Both-sides masking stays with the rule above.
+    // A full-width address index is also proved by comparing the masked
+    // register with its own low lane (`x2` against the 4-byte view of `x2`).
+    // That lane is a zero-offset slice of this same AND.  Unwrapping the
+    // slice yields the AND, which is not its input, so the low-byte walk
+    // below cannot see the identity.  The mask itself proves it: every bit
+    // above the slice is clear, so the AND is the slice's zero extension.
+    // The field may be narrower than the slice.  `ubfx xD` then `cmp wD`
+    // compares that slice of `(src >> lsb) & mask`; bits above the slice are
+    // already clear, so the W compare bounds the X index.  A mask with any
+    // bit above the slice is a wider value, and a zero mask is not a field.
+    // Comparing the raw lane and then masking it remains the rule below.
+    const uint64_t Lane = resolverWidthMask(Narrow->Size);
+    auto sameTransformOccurrence = [&](const ResolverValue &A,
+                                       const ResolverValue &B) {
+      if (!A || !B)
+        return false;
+      if (A == B)
+        return true;
+      return A->K == ResolverValueExpr::Kind::Transform &&
+             B->K == ResolverValueExpr::Kind::Transform && A->HasOpcode &&
+             B->HasOpcode && A->Opcode == B->Opcode && A->Size == B->Size &&
+             A->Root.size() >= 2 && A->Root.starts_with("T:") &&
+             A->Root.size() == B->Root.size() &&
+             budgetedResolverRootsEqual(A->Root, B->Root, consumeMatchWork);
+    };
+    const bool OwnLowLane = !NarrowMask && WideMask && *WideMask != 0 &&
+                            (*WideMask & ~Lane) == 0 &&
+                            Narrow->K == ResolverValueExpr::Kind::Slice &&
+                            Narrow->SliceOffset == 0 && Narrow->Input &&
+                            sameTransformOccurrence(Narrow->Input, WideAnd);
+    const bool LaneMatch =
+        OwnLowLane || (!NarrowMask && WideMask && *WideMask == Lane &&
+                       sameLowBytes(Narrow, WideInput, Narrow->Size,
+                                    RequireExactAddressOwner));
+    return LaneMatch;
+  };
+  // `ubfx wD, wS, #lsb, #width` and a later `ubfx xD, xS, #lsb, #width` are
+  // the same field.  The load wants a 64-bit index, so the compiler extracts
+  // it again after the compare; both writes share one architectural register,
+  // and the second kills the value the compare read.  Each extract is
+  // `(src >> lsb) & mask`.  They are equal when the shift and mask match, the
+  // field lies inside the narrower extract, and the sources share that lane.
+  // Following either extract back to the whole source would treat a bound on
+  // the field as a bound on every other bit.  A signed shift is a different
+  // operation, and a mask or shift that differs is a different field.
+  auto sameUnsignedBitfieldExtract = [&](const ResolverValue &First,
+                                         const ResolverValue &Second,
+                                         bool RequireExactAddressOwner) {
+    struct Field {
+      ResolverValue Source;
+      uint16_t Size = 0;
+      uint64_t Shift = 0;
+      uint64_t Mask = 0;
+      uint64_t Span = 0;
+    };
+    auto numeric = [](const ResolverValue &Value) -> std::optional<uint64_t> {
+      if (!Value || Value->K != ResolverValueExpr::Kind::Constant ||
+          Value->Size == 0 || Value->Size > sizeof(uint64_t) ||
+          (Value->Provenance != ConstantAddressProvenance::Scalar &&
+           Value->Provenance != ConstantAddressProvenance::Unknown))
+        return std::nullopt;
+      return Value->Constant & resolverWidthMask(Value->Size);
+    };
+    auto parse = [&](ResolverValue Value) -> std::optional<Field> {
+      for (int Peel = 0; Peel < 4; ++Peel) {
+        if (!Value || !consumeMatchWork())
+          return std::nullopt;
+        if (Value->K != ResolverValueExpr::Kind::ZeroExtend || !Value->Input ||
+            Value->Input->Size == 0 || Value->Input->Size > Value->Size)
+          break;
+        Value = Value->Input;
+      }
+      if (!Value || Value->K != ResolverValueExpr::Kind::Transform ||
+          !Value->HasOpcode || Value->Opcode != NdOp::INT_AND ||
+          Value->Inputs.size() != 2 || Value->Size == 0 || !consumeMatchWork())
+        return std::nullopt;
+      const ResolverValue *Shifted = nullptr;
+      std::optional<uint64_t> Mask;
+      for (int Side = 0; Side < 2; ++Side) {
+        const std::optional<uint64_t> Bits = numeric(Value->Inputs[Side]);
+        if (!Bits)
+          continue;
+        Shifted = &Value->Inputs[1 - Side];
+        Mask = Bits;
+      }
+      if (!Shifted || !*Shifted || !Mask || *Mask == 0 || !consumeMatchWork())
+        return std::nullopt;
+      const ResolverValue &Sh = *Shifted;
+      if (Sh->K != ResolverValueExpr::Kind::Transform || !Sh->HasOpcode ||
+          Sh->Opcode != NdOp::INT_RIGHT || Sh->Inputs.size() != 2)
+        return std::nullopt;
+      const std::optional<uint64_t> Shift = numeric(Sh->Inputs[1]);
+      const ResolverValue &Src = Sh->Inputs[0];
+      if (!Shift || *Shift >= 64 || !Src ||
+          Src->K == ResolverValueExpr::Kind::Constant)
+        return std::nullopt;
+      uint64_t Span = 0;
+      for (uint64_t Bits = *Mask; Bits != 0; Bits >>= 1)
+        ++Span;
+      if (Span == 0 || Span > 64 - *Shift)
+        return std::nullopt;
+      return Field{Src, Value->Size, *Shift, *Mask, Span};
+    };
+    const std::optional<Field> Left = parse(First);
+    const std::optional<Field> Right = parse(Second);
+    if (!Left || !Right || Left->Shift != Right->Shift ||
+        Left->Mask != Right->Mask || Left->Span != Right->Span)
+      return false;
+    const Field &Narrow = Left->Size <= Right->Size ? *Left : *Right;
+    const uint64_t NarrowBits = uint64_t(Narrow.Size) * 8u;
+    if (Narrow.Shift + Narrow.Span > NarrowBits)
+      return false;
+    if ((Narrow.Mask & ~resolverWidthMask(Narrow.Size)) != 0)
+      return false;
+    return sameLowBytes(Left->Source, Right->Source, Narrow.Size,
                         RequireExactAddressOwner);
   };
 
@@ -11127,7 +11357,10 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
                    (maskedLaneZeroExtends(Value, Allowed,
                                           Query.RequireExactAddressOwner) ||
                     maskedLaneZeroExtends(Allowed, Value,
-                                          Query.RequireExactAddressOwner)))) {
+                                          Query.RequireExactAddressOwner))) ||
+                  (Query.AllowZeroExtension &&
+                   sameUnsignedBitfieldExtract(
+                       Value, Allowed, Query.RequireExactAddressOwner))) {
                 Matches = true;
                 break;
               }
@@ -11260,6 +11493,120 @@ bool relativeTargetTransformUsesPointerWidth(NdOp Opcode,
   }
 }
 
+// A complete block prefix can prove a local relation from arbitrary incoming
+// registers. It cannot borrow predecessor, storage, or guarded-edge facts.
+std::unique_ptr<CFGBuilder>
+CFGBuilder::localTableLoadProof(va_t LastAddr,
+                                const JumpTableValueOccurrence &Load,
+                                size_t *AggregateEvidenceBudget) const {
+  if (!JumpTableProofContextComplete || !CurrentImg)
+    return nullptr;
+  auto consumeWork = [&](size_t Amount) {
+    return consumeResolverGraphWork(AggregateEvidenceBudget, Amount);
+  };
+  auto consumeProduct = [&](size_t Count, size_t Cost) {
+    if (Count && Cost > std::numeric_limits<size_t>::max() / Count) {
+      if (AggregateEvidenceBudget)
+        *AggregateEvidenceBudget = 0;
+      return false;
+    }
+    return consumeWork(Count * Cost);
+  };
+  if (!consumeWork(orderedSetLookupWork(BlockStarts.size())))
+    return nullptr;
+  auto StartIt = BlockStarts.upper_bound(LastAddr);
+  if (StartIt == BlockStarts.begin())
+    return nullptr;
+  va_t Begin = *std::prev(StartIt);
+  const auto includeRoots = [&](const auto &Roots) {
+    if (!consumeWork(orderedSetLookupWork(Roots.size())))
+      return false;
+    auto It = Roots.upper_bound(LastAddr);
+    if (It != Roots.begin())
+      Begin = std::max(Begin, *std::prev(It));
+    return true;
+  };
+  if (!includeRoots(PersistentCFGRoots) ||
+      (ActiveJumpTableProofRoots &&
+       !includeRoots(*ActiveJumpTableProofRoots)) ||
+      !consumeWork(orderedSetLookupWork(DiscoveredCodeRefSources.size())))
+    return nullptr;
+  auto Root = DiscoveredCodeRefSources.upper_bound(LastAddr);
+  if (Root != DiscoveredCodeRefSources.begin())
+    Begin = std::max(Begin, std::prev(Root)->first);
+  if (Begin > Load.Addr || !consumeWork(2 * orderedSetLookupWork(Insns.size())))
+    return nullptr;
+  auto First = Insns.lower_bound(Begin);
+  auto End = Insns.upper_bound(LastAddr);
+  // The local invocation already owns the complete interval: do not recurse.
+  if (First == Insns.begin() && End == Insns.end())
+    return nullptr;
+  if (!consumeWork(16))
+    return nullptr;
+  auto Local = std::make_unique<CFGBuilder>();
+  Local->CurrentImg = CurrentImg;
+  Local->CurrentFuncEntry = Begin;
+  Local->JumpTableProofContextComplete = true;
+  Local->PersistentCFGRoots.insert(Begin);
+  Local->BlockStarts.insert(Begin);
+  va_t Next = Begin;
+  for (auto It = First; It != End; ++It) {
+    const InsnRecord &Insn = It->second;
+    if (!consumeWork(16) || !consumeProduct(Insn.Ops.size(), 3) ||
+        !consumeProduct(Insn.JumpTableTargets.size(), 3))
+      return nullptr;
+    if (Insn.Addr != Next || Insn.Size == 0 ||
+        Insn.Size > InvalidVA - Insn.Addr || Insn.IsInstructionGuard ||
+        Insn.IsCall || Insn.IsRet || Insn.IsOpaqueTerminator ||
+        Insn.IsResumableTerminator || (Insn.IsBranch && Insn.Addr != LastAddr))
+      return nullptr;
+    for (const LowOp &Op : Insn.Ops) {
+      switch (Op.Opcode) {
+      case NdOp::COPY:
+      case NdOp::INT_ADD:
+      case NdOp::INT_SUB:
+      case NdOp::INT_AND:
+      case NdOp::INT_OR:
+      case NdOp::INT_XOR:
+      case NdOp::INT_SEXT:
+      case NdOp::INT_ZEXT:
+      case NdOp::INT_LEFT:
+      case NdOp::INT_RIGHT:
+      case NdOp::INT_ASHR:
+      case NdOp::INT_MULT:
+      case NdOp::INT_NEGATE:
+      case NdOp::INT_NOT:
+      case NdOp::CONCAT:
+      case NdOp::SUBBYTES:
+        break;
+      case NdOp::INTRINSIC:
+        if (!originalAArch64TableLoad(Op))
+          return nullptr;
+        [[fallthrough]];
+      case NdOp::LOAD:
+        if (Op.Addr != Load.Addr || Op.Seq != Load.Seq)
+          return nullptr;
+        break;
+      case NdOp::INDIR_BR:
+        if (Insn.Addr != LastAddr)
+          return nullptr;
+        break;
+      default:
+        return nullptr;
+      }
+    }
+    if (!consumeWork(orderedSetLookupWork(Local->Insns.size())))
+      return nullptr;
+    Local->Insns.emplace(It->first, Insn);
+    Next = Insn.Addr + Insn.Size;
+  }
+  auto Last = Local->Insns.find(LastAddr);
+  if (Last == Local->Insns.end())
+    return nullptr;
+  Last->second.JumpTableTargets.clear();
+  return Local;
+}
+
 bool CFGBuilder::branchTargetDependsOnTableLoad(
     const InsnRecord &Rec, const JumpTableInfo &Info,
     size_t *AggregateEvidenceBudget, bool *AnalysisComplete,
@@ -11334,6 +11681,25 @@ bool CFGBuilder::branchTargetDependsOnTableLoad(
     Values.reserve(NewCapacity);
     return true;
   };
+  // A local proof uses the same value resolver with arbitrary block inputs.
+  // Only a positive, complete proof replaces the full-graph query.
+  if (Info.TargetLoads.size() == 1 && !GuardedGroupProofContext &&
+      (!CertifiedEdgeOverrides || CertifiedEdgeOverrides->empty())) {
+    if (auto Local = localTableLoadProof(Rec.Addr, Info.TargetLoads.front(),
+                                         AggregateEvidenceBudget)) {
+      bool LocalComplete = false;
+      if (Local->branchTargetDependsOnTableLoad(
+              Local->Insns.at(Rec.Addr), Info, AggregateEvidenceBudget,
+              &LocalComplete, UseDefinedAlternativesAsRoots, nullptr, false) &&
+          LocalComplete)
+        return true;
+    }
+    if (AggregateEvidenceBudget && *AggregateEvidenceBudget == 0) {
+      Complete = false;
+      return false;
+    }
+  }
+
   const size_t MaxProofQueries =
       AggregateEvidenceBudget ? limits::kMaxJumpTableRoleMatchEvidenceWork
                               : limits::kMaxJumpTableEntries;
@@ -14725,57 +15091,146 @@ std::vector<std::optional<bool>> CFGBuilder::tableLoadConditionValues(
   }
   const int LoadBlock = LI->second;
 
-  // Block IDs are dense in this immutable graph. Reuse one visitation array
-  // and LIFO buffer across all guard queries instead of allocating an ordered
-  // set and one list node per edge on every walk. SeenCount keeps every old
-  // logical lookup/insertion charge, including the budget-failure boundary.
-  std::vector<uint32_t> Seen(Graph.Blocks.size(), 0);
-  uint32_t Generation = 0;
-  std::vector<int> Work;
-  auto reachable = [&](llvm::ArrayRef<int> Starts, int Target,
-                       int Excluded) -> std::optional<bool> {
-    if (++Generation == 0) {
-      std::fill(Seen.begin(), Seen.end(), 0);
-      ++Generation;
+  // Two dominator trees answer all guard-deletion reachability queries.
+  // Forward dominance identifies guards every root-to-load path crosses.
+  // In the reverse graph rooted at the load, a guard dominates a successor
+  // exactly when every successor-to-load path crosses that guard again.
+  // Rewalking the entire graph for every conditional branch was quadratic.
+  struct Dominance {
+    std::vector<size_t> Enter;
+    std::vector<size_t> Exit;
+    bool reaches(int Node) const { return Enter[Node] != 0; }
+    bool dominates(int A, int B) const {
+      return reaches(A) && reaches(B) && Enter[A] <= Enter[B] &&
+             Exit[B] <= Exit[A];
     }
-    Work.clear();
-    size_t SeenCount = 0;
-    for (int Start : Starts) {
-      if (!consumeWork(4))
-        return std::nullopt;
-      Work.push_back(Start);
-    }
-    while (!Work.empty()) {
+  };
+  auto dominance = [&](bool Reverse,
+                       llvm::ArrayRef<int> Roots) -> std::optional<Dominance> {
+    const int VirtualRoot = static_cast<int>(Graph.Blocks.size());
+    const size_t Count = Graph.Blocks.size() + 1;
+    // Prepay the dense arrays, DFS buffers and their lifetimes. Traversal and
+    // convergence work are charged below, including irreducible graphs.
+    if (!consumeProduct(Count, 40))
+      return std::nullopt;
+    std::vector<bool> IsRoot(Count, false);
+    for (int Root : Roots) {
       if (!consumeWork())
         return std::nullopt;
-      int B = Work.back();
-      Work.pop_back();
-      if (B == Excluded)
-        continue;
-      if (!consumeWork(orderedSetLookupWork(SeenCount)))
+      IsRoot[Root] = true;
+    }
+    auto successors = [&](int Node) -> llvm::ArrayRef<int> {
+      if (Node == VirtualRoot)
+        return Roots;
+      return Reverse ? Graph.Blocks[Node].Preds : Graph.Blocks[Node].Succs;
+    };
+    std::vector<int> RPONumber(Count, -1);
+    std::vector<int> Order;
+    std::vector<std::pair<int, size_t>> Stack;
+    Order.reserve(Count);
+    Stack.reserve(Count);
+    Stack.emplace_back(VirtualRoot, 0);
+    RPONumber[VirtualRoot] = -2;
+    while (!Stack.empty()) {
+      if (!consumeWork(4))
         return std::nullopt;
-      const bool ValidBlock = B >= 0 && B < static_cast<int>(Seen.size());
-      if (ValidBlock && Seen[B] == Generation)
-        continue;
-      if (!consumeWork(3))
-        return std::nullopt;
-      ++SeenCount;
-      if (B == Target)
-        return true;
-      if (!ValidBlock) {
-        Complete = false;
-        return std::nullopt;
-      }
-      Seen[B] = Generation;
-      for (int S : Graph.Blocks[B].Succs) {
-        if (!consumeWork() || !consumeWork(3))
-          return std::nullopt;
-        Work.push_back(S);
+      auto &[Node, Next] = Stack.back();
+      const auto Succs = successors(Node);
+      if (Next == Succs.size()) {
+        Order.push_back(Node);
+        Stack.pop_back();
+      } else {
+        const int Succ = Succs[Next++];
+        if (RPONumber[Succ] == -1) {
+          RPONumber[Succ] = -2;
+          Stack.emplace_back(Succ, 0);
+        }
       }
     }
-    return false;
+    if (!consumeProduct(Order.size(), 3))
+      return std::nullopt;
+    std::reverse(Order.begin(), Order.end());
+    for (size_t I = 0; I < Order.size(); ++I)
+      RPONumber[Order[I]] = static_cast<int>(I);
+    std::vector<int> IDom(Count, -1);
+    IDom[VirtualRoot] = VirtualRoot;
+    bool Changed = true;
+    while (Changed) {
+      Changed = false;
+      for (int Node : Order) {
+        if (!consumeWork(4))
+          return std::nullopt;
+        if (Node == VirtualRoot)
+          continue;
+        int Parent = IsRoot[Node] ? VirtualRoot : -1;
+        const auto &Preds =
+            Reverse ? Graph.Blocks[Node].Succs : Graph.Blocks[Node].Preds;
+        for (int Pred : Preds) {
+          if (!consumeWork(3))
+            return std::nullopt;
+          if (IDom[Pred] == -1)
+            continue;
+          if (Parent == -1) {
+            Parent = Pred;
+            continue;
+          }
+          int Other = Pred;
+          while (Parent != Other) {
+            if (!consumeWork(4))
+              return std::nullopt;
+            if (RPONumber[Parent] > RPONumber[Other])
+              Parent = IDom[Parent];
+            else
+              Other = IDom[Other];
+          }
+        }
+        if (IDom[Node] != Parent) {
+          IDom[Node] = Parent;
+          Changed = true;
+        }
+      }
+    }
+    std::vector<int> FirstChild(Count, -1), NextSibling(Count, -1);
+    for (int Node : Order) {
+      if (!consumeWork(4))
+        return std::nullopt;
+      if (Node == VirtualRoot)
+        continue;
+      NextSibling[Node] = FirstChild[IDom[Node]];
+      FirstChild[IDom[Node]] = Node;
+    }
+    Dominance Result{std::vector<size_t>(Count), std::vector<size_t>(Count)};
+    size_t Clock = 0;
+    Stack.emplace_back(VirtualRoot, 0);
+    while (!Stack.empty()) {
+      if (!consumeWork(4))
+        return std::nullopt;
+      const int Node = Stack.back().first;
+      if (!Result.Enter[Node])
+        Result.Enter[Node] = ++Clock;
+      int &Child = FirstChild[Node];
+      if (Child == -1) {
+        Result.Exit[Node] = ++Clock;
+        Stack.pop_back();
+      } else {
+        const int Next = Child;
+        Child = NextSibling[Child];
+        Stack.emplace_back(Next, 0);
+      }
+    }
+    return Result;
   };
-  const std::vector<int> &Roots = Graph.RootBlocks;
+  const auto Forward = dominance(false, Graph.RootBlocks);
+  if (!Forward)
+    return Results;
+  if (!Forward->reaches(LoadBlock)) {
+    RememberComplete();
+    return Results;
+  }
+  const std::array<int, 1> ReverseRoots = {LoadBlock};
+  const auto Reverse = dominance(true, ReverseRoots);
+  if (!Reverse)
+    return Results;
   bool BlockLookupComplete = true;
   auto blockFor = [&](va_t Addr) -> int {
     if (!consumeWork(orderedSetLookupWork(Graph.InsnToBlock.size()))) {
@@ -14786,17 +15241,6 @@ std::vector<std::optional<bool>> CFGBuilder::tableLoadConditionValues(
     return It == Graph.InsnToBlock.end() ? -1 : It->second;
   };
 
-  const std::optional<bool> RootReaches = Roots.empty()
-                                              ? std::optional<bool>{false}
-                                              : reachable(Roots, LoadBlock, -1);
-  if (!RootReaches) {
-    Complete = false;
-    return Results;
-  }
-  if (!*RootReaches) {
-    RememberComplete();
-    return Results;
-  }
   for (size_t QueryIndex = 0; QueryIndex < BranchAddrs.size(); ++QueryIndex) {
     if (!consumeWork())
       return Results;
@@ -14813,14 +15257,7 @@ std::vector<std::optional<bool>> CFGBuilder::tableLoadConditionValues(
     if (!BranchSnapshot->IsBranch || !BranchSnapshot->IsCond)
       continue;
     const int GuardBlock = BI->second;
-    const std::optional<bool> ReachesWithoutGuard =
-        GuardBlock == LoadBlock ? std::optional<bool>{true}
-                                : reachable(Roots, LoadBlock, GuardBlock);
-    if (!ReachesWithoutGuard) {
-      Complete = false;
-      return Results;
-    }
-    if (*ReachesWithoutGuard)
+    if (GuardBlock == LoadBlock || !Forward->dominates(GuardBlock, LoadBlock))
       continue;
 
     const ResolverFlowBlock &Guard = Graph.Blocks[GuardBlock];
@@ -14852,22 +15289,13 @@ std::vector<std::optional<bool>> CFGBuilder::tableLoadConditionValues(
     const int FalseBlock = blockFor(FalseTarget);
     if (!BlockLookupComplete)
       return Results;
-    std::optional<bool> TrueReaches = false;
-    if (TrueBlock >= 0) {
-      const std::array<int, 1> Starts = {TrueBlock};
-      TrueReaches = reachable(Starts, LoadBlock, GuardBlock);
-    }
-    std::optional<bool> FalseReaches = false;
-    if (!GuardedTerminalEffect && FalseBlock >= 0) {
-      const std::array<int, 1> Starts = {FalseBlock};
-      FalseReaches = reachable(Starts, LoadBlock, GuardBlock);
-    }
-    if (!TrueReaches || !FalseReaches) {
-      Complete = false;
-      return Results;
-    }
-    if (*TrueReaches != *FalseReaches)
-      Results[QueryIndex] = *TrueReaches;
+    const bool TrueReaches = TrueBlock >= 0 && Reverse->reaches(TrueBlock) &&
+                             !Reverse->dominates(GuardBlock, TrueBlock);
+    const bool FalseReaches = !GuardedTerminalEffect && FalseBlock >= 0 &&
+                              Reverse->reaches(FalseBlock) &&
+                              !Reverse->dominates(GuardBlock, FalseBlock);
+    if (TrueReaches != FalseReaches)
+      Results[QueryIndex] = TrueReaches;
   }
   RememberComplete();
   return Results;

@@ -658,19 +658,20 @@ void CodeText::scrollContentsBy(int, int) {
   updateView();
 }
 
-void CodeText::cancel() {
+void CodeText::cancel(bool finishRunning) {
   ++serial_;
   refreshPages_.reset();
   pendingAddress_.reset();
   // Cancelling hidden-pane work leaves the displayed document and its exact
   // instruction selection intact. A replacement document clears it below.
   statusNote_.clear();
-  session_.cancelAnalysisReads(this);
+  session_.cancelAnalysisReads(this, finishRunning);
   if (loading_) {
     sourceOptions_ = renderedOptions_;
     interrupted_ = true;
     loading_ = false;
-    status_ = tr("Cancelled");
+    status_ = finishRunning ? tr("Analysis continues in background")
+                            : tr("Cancelled");
     emit statusChanged();
   }
 }
@@ -730,29 +731,37 @@ void CodeText::clear() {
 }
 
 void CodeText::load(Address function, const QString &representation,
-                    std::optional<QJsonObject> options) {
+                    std::optional<QJsonObject> options, bool refresh) {
   // A text that reads ahead of a rename's answer is read again when the
   // answer comes, and not before: a page the worker made before it took the
   // rename would bring the name of before it back for a moment.
-  if (ahead_ && function_ == function && representation_ == representation) {
+  if (!refresh && ahead_ && function_ == function &&
+      representation_ == representation) {
     ahead_->read = true;
     if (options)
       ahead_->options = std::move(options);
     return;
   }
   ahead_.reset();
-  request(0, beginLoad(function, representation, std::move(options), false));
+  if (refresh)
+    session_.analysisQueries({{"address", hexAddress(function)}}, this)
+        .listingChanged();
+  request(
+      0,
+      beginLoad(function, representation, std::move(options), false, refresh),
+      refresh);
 }
 
 quint64 CodeText::beginLoad(Address function, const QString &representation,
-                            std::optional<QJsonObject> options, bool here) {
+                            std::optional<QJsonObject> options, bool here,
+                            bool refresh) {
   ++DocumentVersion;
   const bool same = function_ == function && representation_ == representation;
   const auto nextOptions = options.value_or(
       same ? sourceOptions_ : SourceDefaults::options(representation));
   // Pages that are here are those of the text as a whole, whatever changed.
   const bool nameRefresh =
-      !here && ((complete_ && !interrupted_) || refreshPages_) &&
+      !here && !refresh && ((complete_ && !interrupted_) || refreshPages_) &&
       !lines_.isEmpty() && same && nextOptions == sourceOptions_ &&
       session_.queries().localNamesOnly() && CodeView::isSource(representation);
   pageLines_ = nameRefresh
@@ -767,7 +776,7 @@ quint64 CodeText::beginLoad(Address function, const QString &representation,
   } else if (!placeAfterLoad_ && !loading_ && !interrupted_ &&
              cursorLine_ < lines_.size())
     placeAfterLoad_ = currentPlace();
-  cancel();
+  cancel(true);
   selectedAddress_.reset();
   if (nameRefresh)
     refreshPages_.emplace();
@@ -939,6 +948,9 @@ void CodeText::showOrdinary(const QString &why) {
   auto options = sourceOptions_;
   options.remove("symbolic");
   options.remove("interpreter_recovery");
+  // An explicit cancellation must stop the transformation before loading its
+  // ordinary replacement. Navigation alone keeps running analysis alive.
+  cancel();
   load(*function_, representation_, options);
   // Pages arrive from the event loop, after this.
   statusNote_ = why;
@@ -1002,17 +1014,18 @@ void CodeText::makeReadyFor(Address address, const QString &name, int most) {
   }
 }
 
-void CodeText::request(int offset, quint64 serial) {
+void CodeText::request(int offset, quint64 serial, bool refresh) {
   if (!function_)
     return;
+  QJsonObject payload{{"address", hexAddress(*function_)},
+                      {"representation", representation_},
+                      {"source_options", sourceOptions_},
+                      {"offset", offset},
+                      {"limit", pageLines_}};
+  if (refresh)
+    payload["refresh"] = true;
   session_.read(
-      QStringLiteral("decompile"),
-      {{"address", hexAddress(*function_)},
-       {"representation", representation_},
-       {"source_options", sourceOptions_},
-       {"offset", offset},
-       {"limit", pageLines_}},
-      this,
+      QStringLiteral("decompile"), payload, this,
       [this, offset, serial](const QJsonObject &payload) {
         if (serial != serial_)
           return;
@@ -1542,6 +1555,7 @@ void CodeText::rebuildLines(bool append) {
     renderedChars_ = renderedRows_ = widestLine_ = 0;
   }
   int start = renderedChars_;
+  const int firstNewLine = lines_.size();
   const bool addressLabels = labelsNameAddresses();
   // A line colored among no source names is colored by its text, its dialect
   // and the comment open where it begins alone.  One that reads as the lent
@@ -1602,7 +1616,7 @@ void CodeText::rebuildLines(bool append) {
   }
   renderedChars_ = display.size();
   renderedRows_ = shown;
-  for (int i = 0; i < lines_.size(); ++i) {
+  for (int i = append && !folding ? firstNewLine : 0; i < lines_.size(); ++i) {
     lines_[i].sourceLine = folding ? library_.sourceLineAt(lineStarts_[i]) : i;
     lines_[i].block.clear();
     lines_[i].blockFolded = false;
@@ -2006,7 +2020,22 @@ void CodeText::highlightLine(Line &line, bool &inComment) const {
         add(i, n, Comment);
         return;
       }
-      add(i, end + 2, Comment);
+      // The engine publishes the exact virtual target as a source name.
+      // Keep its annotation navigable while ordinary comment text stays inert.
+      const QString prefix = QStringLiteral("/* virtual ");
+      const int nameStart = i + int(prefix.size());
+      const int length = s.mid(i, prefix.size()) == prefix && nameStart < end
+                             ? sourceNameLength(s, nameStart)
+                             : 0;
+      if (length && nameStart + length < end &&
+          QStringView(s).mid(nameStart + length).startsWith(u" [slot +0x")) {
+        add(i, nameStart, Comment);
+        const auto name = sourceNames_.value(s.mid(nameStart, length));
+        spans.append({nameStart, length, Function, name.address});
+        add(nameStart + length, end + 2, Comment);
+      } else {
+        add(i, end + 2, Comment);
+      }
       i = end + 2;
       inComment = false;
       continue;
@@ -3247,10 +3276,12 @@ void CodeText::mouseDoubleClickEvent(QMouseEvent *event) {
   if (event->button() != Qt::LeftButton ||
       !blockAt(event->position().toPoint()).isEmpty())
     return;
-  // A source name resolves by its symbol, as the C view's linked names do.
+  // The emitter's exact target also works for C projections, debug-only
+  // names and linker veneers that cannot be resolved by their printed name.
   if (const auto name = sourceNameAt(cursorLine_, cursorColumn_)) {
-    emit nameActivated(name->second.symbol.isEmpty() ? name->second.identifier
-                                                     : name->second.symbol);
+    emit nameActivated(name->second.address ? hexAddress(*name->second.address)
+                       : name->second.symbol.isEmpty() ? name->second.identifier
+                                                       : name->second.symbol);
     return;
   }
   if (dialectOf(representation_, pageLanguage_) == Dialect::LLVM) {
@@ -3970,8 +4001,9 @@ void CodeView::updateRepresentations() {
     selector_->setCurrentIndex(selector_->findData(pseudocodeRepresentation()));
 }
 
-void CodeView::showFunction(Address function) {
-  text_->load(function, selector_->currentData().toString());
+void CodeView::showFunction(Address function, bool refresh) {
+  text_->load(function, selector_->currentData().toString(), std::nullopt,
+              refresh);
 }
 
 void CodeView::setRepresentation(const QString &representation) {

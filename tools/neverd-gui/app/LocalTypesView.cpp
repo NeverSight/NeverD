@@ -1,6 +1,7 @@
 #include "LocalTypesView.h"
 
 #include "../Config.h"
+#include "../ResourceLimits.h"
 #include "DeclareTypesDialog.h"
 #include "FlowLayout.h"
 #include "Icons.h"
@@ -38,7 +39,9 @@
 #include <QSaveFile>
 #include <QScrollBar>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QSortFilterProxyModel>
+#include <QSpinBox>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStandardItemModel>
@@ -46,6 +49,7 @@
 #include <QTabBar>
 #include <QTextBlock>
 #include <QTextDocument>
+#include <QTimer>
 #include <QToolButton>
 #include <QToolTip>
 #include <QTreeView>
@@ -309,6 +313,32 @@ LocalTypesView::LocalTypesView(Session &session, QWidget *parent)
   delete_->setObjectName(QStringLiteral("localTypesDelete"));
   makeRowShrinkable(*filterRow);
   leftLayout->addWidget(filterRow);
+  auto *pagination = new QHBoxLayout;
+  previousPage_ = new QToolButton(left);
+  previousPage_->setText(tr("Previous"));
+  previousPage_->setObjectName(QStringLiteral("localTypesPreviousPage"));
+  nextPage_ = new QToolButton(left);
+  nextPage_->setText(tr("Next"));
+  nextPage_->setObjectName(QStringLiteral("localTypesNextPage"));
+  listPage_ = new QSpinBox(left);
+  listPage_->setObjectName(QStringLiteral("localTypesPage"));
+  listPage_->setPrefix(tr("Page "));
+  listPage_->setRange(1, 1);
+  listPage_->setKeyboardTracking(false);
+  pagination->addWidget(previousPage_);
+  pagination->addWidget(listPage_, 1);
+  pagination->addWidget(nextPage_);
+  leftLayout->addLayout(pagination);
+  connect(previousPage_, &QToolButton::clicked, this, [this] {
+    requestList(
+        std::max<qint64>(0, lastList_.value("offset").toInteger() -
+                                ::neverd::limits::gui::kChooserViewPageSize));
+  });
+  connect(nextPage_, &QToolButton::clicked, this,
+          [this] { requestList(lastList_.value("next_offset").toInteger()); });
+  connect(listPage_, &QSpinBox::valueChanged, this, [this](int page) {
+    requestList(qint64(page - 1) * ::neverd::limits::gui::kChooserViewPageSize);
+  });
   model_ = new QStandardItemModel(0, ListColumns, this);
   proxy_ = new QSortFilterProxyModel(this);
   proxy_->setSourceModel(model_);
@@ -322,6 +352,10 @@ LocalTypesView::LocalTypesView(Session &session, QWidget *parent)
   list_->setUniformRowHeights(true);
   list_->setSortingEnabled(true);
   list_->sortByColumn(OrdinalColumn, Qt::AscendingOrder);
+  connect(list_->header(), &QHeaderView::sortIndicatorChanged, this, [this] {
+    if (session_.loaded())
+      requestList(0, current_);
+  });
   list_->setSelectionMode(QAbstractItemView::ExtendedSelection);
   list_->setAllColumnsShowFocus(true);
   list_->header()->setStretchLastSection(false);
@@ -512,13 +546,14 @@ LocalTypesView::LocalTypesView(Session &session, QWidget *parent)
       0));
   connect(origin_, &QComboBox::currentIndexChanged, this, [this] {
     QSettings().setValue(OriginSetting, origin_->currentData().toString());
-    if (!lastList_.isEmpty())
-      listed(lastList_);
+    reload();
   });
-  connect(filter_, &QLineEdit::textChanged, this, [this](const QString &text) {
-    proxy_->setFilterFixedString(text);
-    updateActions();
-  });
+  auto *filterTimer = new QTimer(this);
+  filterTimer->setSingleShot(true);
+  filterTimer->setInterval(::neverd::limits::gui::kChooserViewFilterDebounceMs);
+  connect(filterTimer, &QTimer::timeout, this, &LocalTypesView::reload);
+  connect(filter_, &QLineEdit::textChanged, this,
+          [filterTimer] { filterTimer->start(); });
   connect(list_->selectionModel(), &QItemSelectionModel::selectionChanged, this,
           &LocalTypesView::selectionChanged);
   connect(list_->selectionModel(), &QItemSelectionModel::currentRowChanged,
@@ -739,7 +774,7 @@ QStringList LocalTypesView::selectedNames() const {
 }
 
 void LocalTypesView::reload() {
-  const quint64 serial = ++listSerial_;
+  ++listSerial_;
   if (!session_.loaded() || !session_.listsLocalTypes()) {
     lastList_ = {};
     model_->removeRows(0, model_->rowCount());
@@ -754,11 +789,37 @@ void LocalTypesView::reload() {
     summary_->setText(session_.loaded() ? tr("This engine has no local types.")
                                         : QString());
     updateActions();
+    previousPage_->setEnabled(false);
+    nextPage_->setEnabled(false);
+    listPage_->setEnabled(false);
     return;
   }
+  requestList(0, showNext_.isEmpty() ? current_ : showNext_);
+}
+
+void LocalTypesView::requestList(qint64 offset, const QString &locate) {
+  const quint64 serial = ++listSerial_;
+  static constexpr const char *SortFields[] = {"ordinal", "name", "kind",
+                                               "size", "members"};
+  QJsonObject options{
+      {"offset", offset},
+      {"limit", ::neverd::limits::gui::kChooserViewPageSize},
+      {"filter", filter_->text()},
+      {"sort", QString::fromLatin1(
+                   SortFields[list_->header()->sortIndicatorSection()])},
+      {"descending",
+       list_->header()->sortIndicatorOrder() == Qt::DescendingOrder}};
+  const QString origin = origin_->currentData().toString();
+  if (!origin.isEmpty())
+    options["origin"] = origin;
+  if (!locate.isEmpty())
+    options["locate"] = locate;
+  previousPage_->setEnabled(false);
+  nextPage_->setEnabled(false);
+  listPage_->setEnabled(false);
   summary_->setText(tr("Reading the program's types…"));
   session_.read(
-      QStringLiteral("local_types"), {}, this,
+      QStringLiteral("local_types"), options, this,
       [this, serial](const QJsonObject &payload) {
         if (serial == listSerial_)
           listed(payload);
@@ -777,6 +838,20 @@ void LocalTypesView::listed(const QJsonObject &payload) {
   cards_.clear();
   const QString origin = origin_->currentData().toString();
   const QJsonArray types = payload.value("types").toArray();
+  const qint64 total = payload.value("total").toInteger(types.size());
+  const qint64 offset = payload.value("offset").toInteger();
+  {
+    QSignalBlocker blocked(listPage_);
+    listPage_->setRange(
+        1, int(std::max<qint64>(
+               1, (total + ::neverd::limits::gui::kChooserViewPageSize - 1) /
+                      ::neverd::limits::gui::kChooserViewPageSize)));
+    listPage_->setValue(
+        int(offset / ::neverd::limits::gui::kChooserViewPageSize + 1));
+  }
+  previousPage_->setEnabled(offset > 0);
+  nextPage_->setEnabled(payload.value("next_offset").toInteger(total) < total);
+  listPage_->setEnabled(total > 0);
   qint64 fromPdb = 0, fromDwarf = 0, fromHeaders = 0, declared = 0;
   for (const QJsonValue &value : types) {
     const QJsonObject type = value.toObject();
@@ -847,7 +922,9 @@ void LocalTypesView::listed(const QJsonObject &payload) {
   for (int column : {OrdinalColumn, KindColumn, SizeColumn, MembersColumn})
     list_->resizeColumnToContents(column);
   const QString source = payload.value("source").toString();
-  if (types.isEmpty())
+  if (types.isEmpty() && !filter_->text().isEmpty())
+    summary_->setText(tr("No types match %1.").arg(filter_->text()));
+  else if (types.isEmpty())
     summary_->setText(source == QLatin1String("pdb")
                           ? tr("The PDB defines no types.")
                       : source == QLatin1String("dwarf")
@@ -857,8 +934,18 @@ void LocalTypesView::listed(const QJsonObject &payload) {
   else {
     // How many, from where: the program's PDB, the system's headers, the
     // user's declarations.
-    QStringList parts{
-        tr("Types: %1").arg(QLocale().toString(qlonglong(types.size())))};
+    const auto origins =
+        payload.value("stats").toObject().value("origins").toObject();
+    if (!origins.isEmpty()) {
+      fromPdb = origins.value("pdb").toInteger();
+      fromDwarf = origins.value("dwarf").toInteger();
+      fromHeaders = origins.value("header").toInteger();
+      declared = origins.value("user").toInteger();
+    }
+    QStringList parts{tr("Types: %1 · showing %2–%3")
+                          .arg(QLocale().toString(total))
+                          .arg(offset + 1)
+                          .arg(offset + types.size())};
     if (fromPdb)
       parts << tr("%n from the PDB", "", int(fromPdb));
     if (fromDwarf)
@@ -876,6 +963,16 @@ void LocalTypesView::listed(const QJsonObject &payload) {
     summary_->setToolTip(
         tr("Types that do not lay out as the PDB lists them: %1")
             .arg(mismatches.toVariantList().size()));
+  const auto diagnostics = payload.value("diagnostics").toObject();
+  const qint64 skipped =
+      diagnostics.value("skipped").toObject().value("total").toInteger();
+  if (skipped)
+    summary_->setText(summary_->text() +
+                      tr(" · %1 types not imported").arg(skipped));
+  const auto skippedRows =
+      payload.value("stats").toObject().value("skipped").toArray();
+  if (!skippedRows.isEmpty())
+    summary_->setToolTip(skippedRows.first().toString());
   const QJsonArray problems = payload.value("declarationProblems").toArray();
   if (!problems.isEmpty()) {
     const QJsonObject first = problems.first().toObject();
@@ -898,9 +995,11 @@ void LocalTypesView::listed(const QJsonObject &payload) {
                               ->match(model_->index(0, NameColumn), NameRole,
                                       keep, 1, Qt::MatchExactly)
                               .isEmpty();
-  if (!next.isEmpty() && names_.contains(next))
-    open(next, !keep.isEmpty());
-  else if (listsKeep)
+  if (!next.isEmpty() && names_.contains(next)) {
+    if (!keep.isEmpty() && rememberNext_)
+      history_.append(keep);
+    open(next, false);
+  } else if (listsKeep)
     open(keep, false);
   else if (proxy_->rowCount() > 0)
     list_->setCurrentIndex(proxy_->index(0, NameColumn));
@@ -910,6 +1009,8 @@ void LocalTypesView::listed(const QJsonObject &payload) {
     source_->clear();
   }
   updateActions();
+  if (!next.isEmpty() && !names_.contains(next))
+    summary_->setText(tr("No local type is named %1").arg(next));
 }
 
 void LocalTypesView::selectionChanged() {
@@ -932,16 +1033,22 @@ void LocalTypesView::selectionChanged() {
 }
 
 void LocalTypesView::showType(const QString &name) {
-  if (names_.contains(name)) {
+  if (!model_
+           ->match(model_->index(0, NameColumn), NameRole, name, 1,
+                   Qt::MatchExactly)
+           .isEmpty()) {
     open(name, true);
     return;
   }
-  // A type the list has not read yet shows once it has.
-  if (lastList_.isEmpty()) {
-    showNext_ = name;
-    return;
-  }
-  summary_->setText(tr("No local type is named %1").arg(name));
+  // Find a type outside the current page without reading every intervening
+  // page. Following a member can also cross the origin/name filters.
+  QSignalBlocker originBlock(origin_), filterBlock(filter_);
+  origin_->setCurrentIndex(0);
+  QSettings().setValue(OriginSetting, QString());
+  filter_->clear();
+  showNext_ = name;
+  if (session_.loaded())
+    requestList(0, name);
 }
 
 void LocalTypesView::open(const QString &name, bool remember) {
@@ -954,7 +1061,7 @@ void LocalTypesView::open(const QString &name, bool remember) {
                          Qt::MatchExactly);
   }
   if (rows.isEmpty())
-    return;
+    return showType(name);
   // Show the type even where the filter hides it.
   if (!proxy_->mapFromSource(rows.first()).isValid())
     filter_->clear();
@@ -969,10 +1076,9 @@ void LocalTypesView::open(const QString &name, bool remember) {
 void LocalTypesView::back() {
   while (!history_.isEmpty()) {
     const QString previous = history_.takeLast();
-    if (names_.contains(previous)) {
-      open(previous, false);
-      break;
-    }
+    rememberNext_ = false;
+    open(previous, false);
+    break;
   }
   updateActions();
 }
@@ -1058,6 +1164,7 @@ void LocalTypesView::laidOut(const QJsonObject &type) {
   if (type.value("defined").isBool() && !type.value("defined").toBool())
     heading += QStringLiteral(" · ") + tr("declared only");
   heading_->setText(heading);
+  heading_->setToolTip(type.value("comment").toString());
 
   // An enumeration lists values where a record lists offsets, and a
   // typedef or function type the one type it names.
@@ -1092,9 +1199,12 @@ void LocalTypesView::laidOut(const QJsonObject &type) {
                                   ? type.value("target").toString()
                                   : type.value("declaration").toString());
     if (const QString refers = type.value("refers").toString();
-        !refers.isEmpty())
+        !refers.isEmpty()) {
       item->setData(0, RefersRole, refers);
+      names_.insert(refers);
+    }
   }
+  highlighter_->setTypeNames(names_);
   layout_->expandAll();
   fitLayoutColumns();
   // The member selected before, found again by its names.
@@ -1299,6 +1409,9 @@ void LocalTypesView::addMembers(QTreeWidgetItem *parent,
               .toHtmlEscaped();
       if (const QString type = member.value("type").toString(); !type.isEmpty())
         text += QStringLiteral("<br><code>%1</code>").arg(type.toHtmlEscaped());
+      if (const QString note = member.value("comment").toString();
+          !note.isEmpty())
+        text += QStringLiteral("<br>%1").arg(note.toHtmlEscaped());
       item->setToolTip(MemberColumn, text);
     };
     if (kind == QLatin1String("struct") || kind == QLatin1String("union")) {
@@ -1322,7 +1435,8 @@ void LocalTypesView::addMembers(QTreeWidgetItem *parent,
     item->setText(TypeColumn, member.value("type").toString());
     card();
     if (const QString refers = member.value("refers").toString();
-        !refers.isEmpty() && names_.contains(refers)) {
+        !refers.isEmpty()) {
+      names_.insert(refers);
       item->setData(0, RefersRole, refers);
       item->setForeground(TypeColumn,
                           theme.color(ColorRole::ListingLibraryName));

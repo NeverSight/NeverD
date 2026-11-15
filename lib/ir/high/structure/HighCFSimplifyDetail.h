@@ -20,15 +20,30 @@
 
 #include "neverd/ir/high/HighIR.h"
 
+#include "llvm/ADT/DenseMap.h"
+
 #include <algorithm>
 #include <unordered_map>
 #include <vector>
 
 namespace neverd {
 
+/// Keys of AddrMap's table: statement addresses, which never are the two
+/// addresses just below InvalidVA that the table reserves.
+struct StatementAddressInfo {
+  static va_t getEmptyKey() { return InvalidVA - 1; }
+  static va_t getTombstoneKey() { return InvalidVA - 2; }
+  static unsigned getHashValue(va_t Address) {
+    return llvm::DenseMapInfo<va_t>::getHashValue(Address);
+  }
+  static bool isEqual(va_t A, va_t B) { return A == B; }
+};
+
 /// Address-to-statement-index map used by multiple CF simplification passes.
+/// A pass maps a list anew after each rewrite of it: an open-addressing
+/// table keeps that from allocating each entry.
 struct AddrMap {
-  std::unordered_map<va_t, size_t> Idx;
+  llvm::DenseMap<va_t, size_t, StatementAddressInfo> Idx;
   std::vector<std::pair<va_t, size_t>> Sorted;
   bool SortedValid = false;
 
@@ -54,7 +69,9 @@ struct AddrMap {
     Idx.clear();
     Idx.reserve(Stmts.size());
     for (size_t I = 0; I < Stmts.size(); ++I)
-      if (const va_t Address = entryAddress(Stmts[I]))
+      if (const va_t Address = entryAddress(Stmts[I]);
+          Address && Address != StatementAddressInfo::getEmptyKey() &&
+          Address != StatementAddressInfo::getTombstoneKey())
         Idx.try_emplace(Address, I);
     SortedValid = false;
   }

@@ -490,6 +490,7 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
     }
   }
 
+  Info.ParseStatus = Result.ParseStatus;
   Result.Info = std::move(Info);
   LLVM_DEBUG(llvm::dbgs() << "dwarf-eh: LSDA at 0x"
                           << llvm::utohexstr(Req.LSDAVA) << " has "

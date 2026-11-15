@@ -78,7 +78,10 @@ public:
                                 QString expectedRevision = {},
                                 bool leaves = false);
   void unsubscribe(SubscriptionId id);
-  void unsubscribeOwner(QObject *owner);
+  enum DetachPolicy { CancelRunning, FinishRunning };
+  /// FinishRunning detaches the view but retains a started read for reuse.
+  /// Queued reads still retire; explicit cancellation stops retained reads too.
+  void unsubscribeOwner(QObject *owner, DetachPolicy policy = CancelRunning);
   /// Detach every read except those owned by \p keep (commands always run).
   void cancelReads(const QSet<QObject *> &keep = {});
 
@@ -102,7 +105,8 @@ public:
   // Monotonic within an open project; ordinary edit revisions do not reset it.
   bool analysisComplete() const;
   bool hasPending() const;
-  /// Read jobs with live subscribers, excluding a cancelled job's final ACK.
+  /// Useful read jobs, including detached reads retained for reuse, excluding
+  /// a cancelled job's final ACK.
   qsizetype pendingReadCount() const;
   bool hasCommands() const;
   /// A command's reply has been taken in and its own answer is yet to be
@@ -177,6 +181,8 @@ signals:
   /// A read took an answer this dispatcher was given (give), the first that
   /// did.
   void givenRead();
+  /// Progress is scoped to live subscriptions, like terminal delivery.
+  void queryProgress(SubscriptionId id, const QJsonObject &payload);
   /// Validated executor state, after subscribers have installed the reply.
   /// Cached reads never republish an older snapshot.
   void backgroundSnapshotReady(const QJsonObject &snapshot);

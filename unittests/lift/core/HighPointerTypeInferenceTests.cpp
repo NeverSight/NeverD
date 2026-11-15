@@ -15,7 +15,9 @@
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/high/AArch64AddressMemory.h"
 #include "neverd/ir/high/HighPointerTypeInference.h"
+#include "neverd/loader/BinaryImage.h"
 
 #include "llvm/Support/raw_ostream.h"
 
@@ -113,6 +115,115 @@ struct Fixture {
   }
 };
 
+TEST(HighPointerTypeInference,
+     ReadOnlyIndexedMemoryDoesNotEscapePrivateSpills) {
+  Fixture F(Arch::AArch64);
+  auto Read = HighExpr::makeCall("indexed_read", 0,
+                                 {F.slot(32), HighExpr::makeConst(0, 8),
+                                  HighExpr::makeConst(0xf87f6800, 4)});
+  Read->IntrinsicId = Intrinsic::A64_Load64RegisterOffset;
+  Read->Type = F.Integer;
+  ASSERT_TRUE(aarch64AddressMemoryHighShapeIsValid(*Read));
+  F.Function.Body = {F.store(F.slot(), F.parameter()), F.assign(2, Read),
+                     F.call(), F.load(), F.returning(F.variable(1))};
+  ASSERT_TRUE(F.run());
+  EXPECT_EQ(F.inferred(F.Function.Body[3].Dst), F.Pointer);
+
+  // The exception is a checked read contract, not an intrinsic-name heuristic.
+  Read->Operands.back() = HighExpr::makeConst(0, 4);
+  EXPECT_FALSE(F.run());
+  Read->Operands.back() = HighExpr::makeConst(0xf87f6800, 4);
+  Read->MemoryAddressSpace = NdMemoryAddressSpace::X86FS;
+  EXPECT_FALSE(F.run());
+}
+
+TEST(HighPointerTypeInference, PointerUsesAndMembersSurviveLaterCarrierReuse) {
+  Fixture F;
+  auto Child = NdType::makeNamedRecord("Child", 16);
+  auto ChildPointer = NdType::makePtr(Child);
+  F.Record->FieldDisplayTypes[1] = ChildPointer;
+  auto Call = HighExpr::makeCall("produce", 0x2000, {});
+  Call->Type = F.Integer;
+  const auto Use = F.variable(1);
+  const auto Member = HighExpr::makeLoad(
+      HighExpr::makeBinop(NdOp::INT_ADD, Use, HighExpr::makeConst(8, F.Bytes)),
+      F.Integer);
+  F.Function.Body = {F.assign(1, Call), F.assign(2, Member),
+                     F.assign(1, HighExpr::makeConst(42, F.Bytes)),
+                     F.returning(F.variable(2))};
+  HighPointerUseLocations Uses;
+  const HighPointerTypeOrigins Origins{{Call.get(), F.Pointer}};
+  const auto Whole =
+      inferHighPointerLocations(F.Function, F.Architecture, {}, Origins, &Uses);
+  EXPECT_FALSE(Whole.count(highSourceLocalIdentity(Use->Var)));
+  ASSERT_TRUE(Uses.count(Use.get()));
+  EXPECT_EQ(Uses.at(Use.get()).Type, F.Pointer);
+  ASSERT_TRUE(Whole.count(highSourceLocalIdentity(F.variable(2)->Var)));
+  EXPECT_EQ(Whole.at(highSourceLocalIdentity(F.variable(2)->Var)).Type,
+            ChildPointer);
+  // An expression DAG shared between two program points must satisfy both.
+  F.Function.Body.back().RetVal = Use;
+  inferHighPointerLocations(F.Function, F.Architecture, {}, Origins, &Uses);
+  EXPECT_FALSE(Uses.count(Use.get()));
+}
+
+TEST(HighPointerTypeInference, ScopedDerivedMemberChainKeepsTheOtherBranch) {
+  Fixture F;
+  auto Leaf = NdType::makeNamedRecord("Leaf", 16);
+  Leaf->FieldDisplayNames = {"tag", "payload"};
+  Leaf->FieldDisplayOffsets = {0, 8};
+  Leaf->FieldDisplayTypes = {F.Integer, F.Integer};
+  auto Derived = NdType::makeNamedRecord("Extended", 24);
+  Derived->FieldDisplayNames = {"base", "child"};
+  Derived->FieldDisplayOffsets = {0, 16};
+  Derived->FieldDisplayTypes = {F.Record, NdType::makePtr(Leaf)};
+  auto Use = F.variable(1);
+  Use->SourcePointerType = NdType::makePtr(Derived);
+  EXPECT_FALSE(Use->structuralEq(*F.variable(1)));
+  F.Function.Params.push_back({"choose", F.Integer});
+  HighStmt Branch;
+  Branch.Kind = StmtKind::If;
+  Branch.Cond = F.variable(1, MedVar::Param);
+  Branch.Body = {
+      F.assign(2, HighExpr::makeLoad(
+                      HighExpr::makeBinop(NdOp::INT_ADD, Use,
+                                          HighExpr::makeConst(16, F.Bytes)),
+                      F.Integer)),
+      F.returning(HighExpr::makeLoad(
+          HighExpr::makeBinop(NdOp::INT_ADD, F.variable(2),
+                              HighExpr::makeConst(8, F.Bytes)),
+          F.Integer))};
+  F.Function.Body = {F.assign(1, F.parameter()), Branch,
+                     F.returning(HighExpr::makeLoad(
+                         HighExpr::makeBinop(NdOp::INT_ADD, F.variable(1),
+                                             HighExpr::makeConst(8, F.Bytes)),
+                         F.Integer))};
+  CEmitterOptions Options;
+  Options.TheArch = F.Architecture;
+  Options.RecordDefinitions = [](const std::vector<TypeRef> &) {
+    CRecordDefinitions D;
+    D.Text = "struct Device { uint64_t flags, value; };\n"
+             "struct Leaf { uint64_t tag, payload; };\n"
+             "struct Extended { struct Device base; struct Leaf *child; };\n";
+    D.Records = {{"Device", false}, {"Leaf", false}, {"Extended", false}};
+    D.Tags = D.Records;
+    return D;
+  };
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  ASSERT_TRUE(HighCEmitter().emit({F.Function}, OS, Options));
+  EXPECT_NE(Text.find("->child"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("->payload"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("->value"), std::string::npos) << Text;
+  for (llvm::StringRef Opt : {"-O0", "-O2"})
+    source_call_execution_test::compileAndRun(
+        Text + "\nint main(void) { struct Leaf leaf = {11, 91};"
+               "struct Extended d = {{7, 43}, &leaf};"
+               "return transport(&d.base, 1) != 91 ||"
+               " transport(&d.base, 0) != 43; }\n",
+        {Opt, "-Werror=int-conversion", "-Werror=incompatible-pointer-types"});
+}
+
 TEST(HighPointerTypeInference, CapturedValueSurvivesCallAndFrameSlotReuse) {
   for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
     Fixture F(Architecture);
@@ -130,11 +241,85 @@ TEST(HighPointerTypeInference, CapturedValueSurvivesCallAndFrameSlotReuse) {
   }
 }
 
+TEST(HighPointerTypeInference, DeclaredGlobalLoadsSurvivePrivateSpills) {
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    Fixture F(Architecture);
+    SCOPED_TRACE(int(Architecture));
+    F.Function.Params.clear();
+    const auto Global =
+        HighExpr::makeLoad(HighExpr::makeConst(0x2000, F.Bytes), F.Integer);
+    F.Function.Body = {F.assign(2, Global), F.store(F.slot(), F.variable(2)),
+                       F.call(), F.load(), F.returning(F.variable(1))};
+    const HighPointerTypeOrigins Origins{{Global.get(), F.Pointer}};
+    F.Facts = inferHighPointerTypes(F.Function, Architecture, {}, Origins);
+    EXPECT_EQ(F.inferred(F.Function.Body[0].Dst), F.Pointer);
+    EXPECT_EQ(F.inferred(F.Function.Body[3].Dst), F.Pointer);
+    EXPECT_EQ(F.Function.Body[0].Dst->Type, F.Integer);
+    EXPECT_TRUE(inferHighPointerTypes(F.Function, Architecture).empty());
+
+    // A partial read is not the declared pointer, even if an origin was
+    // supplied for it. Nor may a declaration promote a floating carrier.
+    for (TypeRef Narrow : {NdType::makeInt(2), NdType::makeFloat(F.Bytes)}) {
+      Global->Type = Narrow;
+      EXPECT_TRUE(
+          inferHighPointerTypes(F.Function, Architecture, {}, Origins).empty());
+    }
+  }
+}
+
+TEST(HighPointerTypeInference, ConflictingGlobalPointersDoNotMeetAtAJoin) {
+  Fixture F;
+  F.Function.Params = {{"condition", F.Integer}};
+  auto Left =
+      HighExpr::makeLoad(HighExpr::makeConst(0x2000, F.Bytes), F.Integer);
+  auto Right =
+      HighExpr::makeLoad(HighExpr::makeConst(0x2010, F.Bytes), F.Integer);
+  auto Other = NdType::makePtr(NdType::makeNamedRecord("Other", 16));
+  HighStmt Choice;
+  Choice.Kind = StmtKind::IfElse;
+  Choice.Cond = F.variable(0, MedVar::Param);
+  Choice.Body = {F.store(F.slot(), Left)};
+  Choice.ElseBody = {F.store(F.slot(), Right)};
+  F.Function.Body = {Choice, F.load(), F.returning(F.variable(1))};
+  HighPointerTypeOrigins Origins{{Left.get(), F.Pointer}, {Right.get(), Other}};
+  auto Facts = inferHighPointerTypes(F.Function, F.Architecture, {}, Origins);
+  EXPECT_FALSE(Facts.count(highSourceLocalIdentity(F.variable(1)->Var)));
+  Origins[Right.get()] = F.Pointer;
+  Facts = inferHighPointerTypes(F.Function, F.Architecture, {}, Origins);
+  EXPECT_EQ(Facts.at(highSourceLocalIdentity(F.variable(1)->Var)), F.Pointer);
+}
+
+TEST(HighPointerTypeInference, AssertedLocalTypesReachCopiesAndCanBeWithdrawn) {
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    Fixture F(Architecture);
+    F.Function.Params.clear();
+    F.Function.Body = {F.assign(2, HighExpr::makeCall("obtain", 0x2000, {})),
+                       F.store(F.slot(), F.variable(2)), F.load(),
+                       F.returning(F.variable(1))};
+    F.Function.Body[0].Val->Type = F.Integer;
+    auto Definition = F.Function.Body[0].Dst;
+    auto Use = F.Function.Body[1].StoreVal;
+    HighPointerTypeOrigins Origins{{Definition.get(), F.Pointer},
+                                   {Use.get(), F.Pointer}};
+    F.Facts = inferHighPointerTypes(F.Function, Architecture, {}, Origins);
+    EXPECT_EQ(F.inferred(F.Function.Body[2].Dst), F.Pointer);
+    EXPECT_EQ(Definition->Type, F.Integer);
+    for (const auto &Type : {F.Integer, NdType::makePtr(NdType::makeVoid())}) {
+      Origins[Definition.get()] = Type;
+      Origins[Use.get()] = Type;
+      EXPECT_TRUE(
+          inferHighPointerTypes(F.Function, Architecture, {}, Origins).empty());
+    }
+    EXPECT_TRUE(inferHighPointerTypes(F.Function, Architecture).empty());
+  }
+}
+
 TEST(HighPointerTypeInference, MemoryClobbersRevokeStoredType) {
   for (unsigned Kind = 0; Kind < 5; ++Kind) {
     Fixture F;
     SCOPED_TRACE(Kind);
     auto Clobber = F.call();
+    Clobber.CallExpr->Operands = {F.slot()};
     if (Kind == 1)
       Clobber = F.store(F.slot(), HighExpr::makeConst(12, F.Bytes));
     if (Kind == 2)
@@ -147,9 +332,102 @@ TEST(HighPointerTypeInference, MemoryClobbersRevokeStoredType) {
     }
     F.Function.Body = {F.store(F.slot(), F.parameter()), Clobber, F.load(),
                        F.returning(F.variable(1))};
+    if (Kind == 3) {
+      auto Escape = F.call();
+      Escape.CallExpr->Operands = {F.slot()};
+      F.Function.Body.insert(F.Function.Body.begin(), Escape);
+    }
     EXPECT_FALSE(F.run());
-    EXPECT_EQ(F.Function.Body[2].Dst->Type, F.Integer);
+    EXPECT_EQ(F.Function.Body[F.Function.Body.size() - 2].Dst->Type, F.Integer);
   }
+}
+
+TEST(HighPointerTypeInference, PrivatePointerSpillsSurviveCallsAndJoins) {
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    Fixture F(Architecture);
+    F.Function.Params.push_back({"arg1", F.Pointer});
+    auto Call = F.call();
+    Call.CallExpr->Operands = {F.parameter()};
+    HighStmt Branch;
+    Branch.Kind = StmtKind::IfElse;
+    Branch.Cond = F.parameter();
+    Branch.Body = {F.store(F.slot(), F.parameter()), Call,
+                   F.store(F.parameter(), HighExpr::makeConst(3, 8)), F.load()};
+    Branch.ElseBody = {F.assign(1, F.variable(1, MedVar::Param, F.Pointer))};
+    F.Function.Body = {Branch, F.returning(F.variable(1))};
+    EXPECT_TRUE(F.run());
+    EXPECT_EQ(F.inferred(F.Function.Body.back().RetVal), F.Pointer);
+  }
+}
+
+TEST(HighPointerTypeInference, EscapesRemainVisibleThroughAliasesAndJoins) {
+  for (bool BranchEscape : {false, true}) {
+    Fixture F;
+    auto Escape = F.call();
+    Escape.CallExpr->Operands = {HighExpr::makeBinop(
+        NdOp::INT_ADD, F.variable(2), F.variable(3, MedVar::Param))};
+    HighStmt Branch;
+    Branch.Kind = StmtKind::If;
+    Branch.Cond = F.parameter();
+    Branch.Body = {Escape};
+    F.Function.Body = {F.assign(2, F.slot()),
+                       BranchEscape ? Branch : Escape,
+                       F.store(F.slot(), F.parameter()),
+                       F.call(),
+                       F.load(),
+                       F.returning(F.variable(1))};
+    EXPECT_FALSE(F.run());
+    EXPECT_EQ(F.inferred(F.Function.Body.back().RetVal), F.Integer);
+  }
+}
+
+TEST(HighPointerTypeInference, JoinedReceiverFieldsKeepBothObjectIdentities) {
+  Fixture F(Arch::AArch64);
+  F.Function.Params.push_back({"arg1", F.Pointer});
+  F.Function.Params.push_back({"choose", F.Integer});
+  F.Function.Params.push_back({"expected", F.Integer});
+  auto Call = F.call();
+  Call.CallExpr->Operands = {F.parameter()};
+  HighStmt Branch;
+  Branch.Kind = StmtKind::IfElse;
+  Branch.Cond = F.variable(2, MedVar::Param);
+  Branch.Body = {F.store(F.slot(), F.parameter()), Call, F.load()};
+  Branch.ElseBody = {F.assign(1, F.variable(1, MedVar::Param, F.Pointer))};
+  const auto Field = HighExpr::makeBinop(NdOp::INT_ADD, F.variable(1),
+                                         HighExpr::makeConst(8, F.Bytes));
+  HighStmt Check;
+  Check.Kind = StmtKind::If;
+  Check.Cond = HighExpr::makeBinop(NdOp::INT_NOTEQUAL, F.variable(1),
+                                   F.variable(3, MedVar::Param));
+  Check.Body = {F.returning(HighExpr::makeConst(1, 8))};
+  F.Function.Body = {
+      Branch, Check, F.store(Field, HighExpr::makeConst(42, 8)),
+      F.returning(HighExpr::makeLoad(Field, NdType::makeInt(8)))};
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  CEmitterOptions Options;
+  Options.TheArch = F.Architecture;
+  Options.EmitComments = false;
+  Options.RecordDefinitions = [](const std::vector<TypeRef> &) {
+    CRecordDefinitions Definitions;
+    Definitions.Text = "struct Device { uint64_t flags; uint64_t value; };\n";
+    Definitions.Records["Device"] = false;
+    return Definitions;
+  };
+  ASSERT_TRUE(HighCEmitter().emit({F.Function}, OS, Options));
+  EXPECT_NE(Text.find("->value ="), std::string::npos) << Text;
+  source_call_execution_test::compileAndRun(
+      Text + "\nint touch(uint64_t p) { ((struct Device *)(uintptr_t)p)->flags"
+             " += 1; return 0; }\n"
+             "int main(void) { for (int choose = 0; choose < 2; ++choose) {"
+             " struct Device a = {11, 12}, b = {21, 22};"
+             " if (transport(&a, &b, choose, (uintptr_t)(choose ? &a : &b)) != "
+             "42 ||"
+             " a.flags != 11 + choose || b.flags != 21 ||"
+             " a.value != (choose ? 42 : 12) ||"
+             " b.value != (choose ? 22 : 42)) return 1; } return 0; }\n",
+      {"-Werror=int-conversion", "-Werror=incompatible-pointer-types",
+       "-Werror=pointer-integer-compare"});
 }
 
 TEST(HighPointerTypeInference, KnownNonprivateWritesKeepDisjointPrivateFacts) {
@@ -351,6 +629,393 @@ TEST(HighPointerTypeInference, TypedMemberRenderingPreservesByteAddressing) {
           "int main(void) { struct Device d = {11, 12}; "
           "return transport(&d) != 42 || d.flags != 11 || d.value != 42; }\n",
       {"-Werror=int-conversion", "-Werror=incompatible-pointer-types"});
+}
+
+TEST(HighPointerTypeInference,
+     ConstantInteriorPointersKeepTheirByteDisplacement) {
+  for (Arch Architecture : {Arch::X64, Arch::AArch64, Arch::X86, Arch::ARM}) {
+    Fixture F(Architecture);
+    auto Interior = HighExpr::makeBinop(NdOp::INT_ADD, F.parameter(),
+                                        HighExpr::makeConst(5, F.Bytes));
+    F.Function.Body = {F.assign(1, Interior), F.store(F.slot(), F.variable(1)),
+                       F.call(), F.load(2), F.returning(F.variable(2))};
+    const auto Locations = inferHighPointerLocations(F.Function, Architecture);
+    for (int Id : {1, 2}) {
+      const auto Found =
+          Locations.find(highSourceLocalIdentity(F.variable(Id)->Var));
+      ASSERT_NE(Found, Locations.end());
+      EXPECT_EQ(Found->second.Type, F.Pointer);
+      EXPECT_EQ(Found->second.ByteOffset, 5);
+    }
+    // A carrier pointing inside the object must not be declared as its base.
+    EXPECT_TRUE(inferHighPointerTypes(F.Function, Architecture).empty());
+    F.Function.Body.insert(
+        F.Function.Body.end() - 1,
+        F.assign(2, HighExpr::makeBinop(NdOp::INT_ADD, F.variable(2),
+                                        HighExpr::makeConst(1, F.Bytes))));
+    EXPECT_FALSE(inferHighPointerLocations(F.Function, Architecture)
+                     .count(highSourceLocalIdentity(F.variable(2)->Var)));
+  }
+}
+
+TEST(HighPointerTypeInference, InteriorMemberRenderingKeepsTheCapturedValue) {
+  Fixture F;
+  F.Function.Body = {
+      F.assign(1, HighExpr::makeBinop(NdOp::INT_ADD, F.parameter(),
+                                      HighExpr::makeConst(5, 4))),
+      F.store(F.slot(), F.variable(1)),
+      F.call(),
+      F.load(2),
+      F.store(HighExpr::makeBinop(NdOp::INT_ADD, F.variable(2),
+                                  HighExpr::makeConst(3, F.Bytes)),
+              HighExpr::makeConst(42, 8)),
+      F.returning(HighExpr::makeLoad(
+          HighExpr::makeBinop(NdOp::INT_ADD, F.variable(2),
+                              HighExpr::makeConst(3, F.Bytes)),
+          F.Integer))};
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  CEmitterOptions Options;
+  Options.RecordDefinitions = [](const std::vector<TypeRef> &) {
+    CRecordDefinitions Definitions;
+    Definitions.Text = "struct Device { uint64_t flags; uint64_t value; };\n";
+    Definitions.Records["Device"] = false;
+    return Definitions;
+  };
+  ASSERT_TRUE(HighCEmitter().emit({F.Function}, OS, Options));
+  EXPECT_NE(Text.find("->value"), std::string::npos) << Text;
+  source_call_execution_test::compileAndRun(
+      Text +
+          "\nint touch(void) { return 0; }\n"
+          "int main(void) { struct Device d = {11, 12}; "
+          "return transport(&d) != 42 || d.flags != 11 || d.value != 42; }\n",
+      {"-Werror=int-conversion", "-Werror=incompatible-pointer-types"});
+}
+
+TEST(HighPointerTypeInference, DisplacementsUseTheConstantsMachineWidth) {
+  for (Arch Architecture : {Arch::X64, Arch::AArch64, Arch::X86, Arch::ARM}) {
+    Fixture F(Architecture);
+    for (uint16_t Width : {uint16_t(1), uint16_t(2), uint16_t(4), F.Bytes}) {
+      SCOPED_TRACE(Width);
+      for (NdOp Op : {NdOp::INT_ADD, NdOp::INT_SUB}) {
+        const uint64_t Bits = UINT64_MAX - 2;
+        F.Function.Body = {
+            F.assign(1, HighExpr::makeBinop(Op, F.parameter(),
+                                            HighExpr::makeConst(Bits, Width))),
+            F.returning(F.variable(1))};
+        const auto Locations =
+            inferHighPointerLocations(F.Function, Architecture);
+        const auto Found =
+            Locations.find(highSourceLocalIdentity(F.variable(1)->Var));
+        ASSERT_NE(Found, Locations.end());
+        const int64_t Delta =
+            Width == F.Bytes
+                ? -3
+                : int64_t(Bits & ((UINT64_C(1) << (Width * 8)) - 1));
+        EXPECT_EQ(Found->second.ByteOffset,
+                  Op == NdOp::INT_ADD ? Delta : -Delta);
+      }
+    }
+    // A truncated base no longer identifies the original object.
+    auto Narrow = HighExpr::makeBitCast(F.parameter(), NdType::makeInt(2));
+    auto Offset =
+        HighExpr::makeBinop(NdOp::INT_ADD, Narrow, HighExpr::makeConst(3, 2));
+    Offset->Type = F.Integer;
+    F.Function.Body = {F.assign(1, Offset), F.returning(F.variable(1))};
+    EXPECT_TRUE(inferHighPointerLocations(F.Function, Architecture).empty());
+  }
+}
+
+TEST(HighPointerTypeInference, GlobalWrapperPointerKeepsItsCapturedObject) {
+  Fixture F;
+  F.Function.Params.clear();
+  auto Wrapper = NdType::makeNamedRecord("Handle", 16);
+  Wrapper->FieldDisplayNames = {"object", "count"};
+  Wrapper->FieldDisplayOffsets = {0, 8};
+  Wrapper->FieldDisplayTypes = {F.Pointer, F.Integer};
+  class Globals : public NullDebugContext {
+  public:
+    TypeRef Wrapper;
+    std::optional<DataObjectSym>
+    resolveDataObject(va_t Address) const override {
+      if (Address == 0x2000)
+        return DataObjectSym{"GlobalRoot", Address, 16, false, Wrapper};
+      return std::nullopt;
+    }
+  } Debug;
+  Debug.Wrapper = Wrapper;
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::ELF;
+  Segment Data;
+  Data.VA = 0x2000;
+  Data.Size = Data.FileSz = 16;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.Data.resize(16);
+  Image.Segments.push_back(std::move(Data));
+  Image.Symbols = {{"GlobalRoot", 0x2000, 16, false}};
+  auto Pointer = HighExpr::makeLoad(HighExpr::makeConst(0x2000, 8), F.Integer);
+  F.Function.Body = {F.assign(1, Pointer), F.call(),
+                     F.returning(HighExpr::makeLoad(
+                         HighExpr::makeBinop(NdOp::INT_ADD, F.variable(1),
+                                             HighExpr::makeConst(8, 8)),
+                         F.Integer))};
+  CEmitterOptions Options;
+  Options.Image = &Image;
+  Options.RecordDefinitions = [](const std::vector<TypeRef> &) {
+    CRecordDefinitions Definitions;
+    Definitions.Text = "struct Device { uint64_t flags; uint64_t value; };\n";
+    Definitions.Records["Device"] = false;
+    return Definitions;
+  };
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  ASSERT_TRUE(HighCEmitter().emit({F.Function}, OS, Options, &Debug));
+  EXPECT_NE(Text.find("->value"), std::string::npos) << Text;
+  source_call_execution_test::compileAndRun(
+      Text + "\nint touch(void) { GlobalRoot = 0; return 0; }\n"
+             "int main(void) { struct Device d = {11, 37}; GlobalRoot = &d;"
+             "return transport() != 37 || GlobalRoot != 0; }\n",
+      {"-Werror=int-conversion", "-Werror=incompatible-pointer-types"});
+}
+
+TEST(HighPointerTypeInference, BitfieldUpdatesPreserveEveryOtherBit) {
+  for (bool Set : {false, true})
+    for (bool Assignment : {false, true}) {
+      Fixture F;
+      auto Flags = NdType::makeNamedRecord("FlagState", 2);
+      Flags->FieldDisplayBits = {{"active", 13, 1, false}};
+      F.Record->FieldDisplayNames = {"flags", "base"};
+      F.Record->FieldDisplayTypes[1] = Flags;
+      auto Address = HighExpr::makeBinop(NdOp::INT_ADD, F.parameter(),
+                                         HighExpr::makeConst(8, F.Bytes));
+      auto Read = HighExpr::makeLoad(Address, NdType::makeInt(2, false));
+      auto Value =
+          HighExpr::makeBinop(Set ? NdOp::INT_OR : NdOp::INT_AND, Read,
+                              HighExpr::makeConst(Set ? 0x2000 : 0xdfff, 2));
+      auto Write = F.store(Address, Value);
+      if (Assignment) {
+        Write.Kind = StmtKind::Assign;
+        Write.Dst = Read;
+        Write.Val = Value;
+        Write.StoreAddr = Write.StoreVal = nullptr;
+      }
+      F.Function.Body = {Write, F.returning()};
+      CEmitterOptions Options;
+      Options.RecordDefinitions = [](const std::vector<TypeRef> &) {
+        CRecordDefinitions Definitions;
+        Definitions.Text =
+            "struct FlagState { uint16_t low:13, active:1, high:2; };\n"
+            "struct Device { uint64_t flags; struct FlagState base; uint8_t "
+            "tail[6]; };\n";
+        Definitions.Records["Device"] = false;
+        Definitions.Records["FlagState"] = false;
+        return Definitions;
+      };
+      auto Emit = [&] {
+        std::string Text;
+        llvm::raw_string_ostream OS(Text);
+        EXPECT_TRUE(HighCEmitter().emit({F.Function}, OS, Options));
+        return Text;
+      };
+      auto Text = Emit();
+      EXPECT_NE(
+          Text.find(std::string("->base.active = ") + (Set ? "1;" : "0;")),
+          std::string::npos)
+          << Text;
+      source_call_execution_test::compileAndRun(
+          Text +
+          "\nint main(void) { for (unsigned bits = 0; bits < 65536; ++bits) {"
+          " struct Device d; __builtin_memset(&d, 0xa5, sizeof(d));"
+          " uint16_t before = bits, after;"
+          " __builtin_memcpy(&d.base, &before, 2); transport(&d);"
+          " __builtin_memcpy(&after, &d.base, 2);"
+          " if (after != (uint16_t)(before " +
+          (Set ? "| 0x2000" : "& 0xdfff") +
+          ")) return 1; const uint8_t *p = (const uint8_t *)&d;"
+          " for (unsigned i = 0; i < sizeof(d); ++i)"
+          " if ((i < 8 || i >= 10) && p[i] != 0xa5) return 2; } return 0; }\n");
+      // A signed field, conflicting overlay, or an ordered access must not
+      // borrow the unsigned ordinary-bitfield spelling.
+      Flags->FieldDisplayBits[0].IsSigned = true;
+      EXPECT_EQ(Emit().find("->base.active ="), std::string::npos);
+      Flags->FieldDisplayBits[0].IsSigned = false;
+      Flags->FieldDisplayBits.push_back({"other", 13, 1, false});
+      EXPECT_EQ(Emit().find("->base.active ="), std::string::npos);
+      Flags->FieldDisplayBits.pop_back();
+      if (Assignment)
+        F.Function.Body[0].Dst->MemoryOrdering =
+            NdMemoryOrdering::SequentiallyConsistent;
+      else
+        F.Function.Body[0].MemoryOrdering = NdMemoryOrdering::Release;
+      EXPECT_EQ(Emit().find("->base.active ="), std::string::npos);
+    }
+}
+
+TEST(HighPointerTypeInference, CapturedBitfieldRestoresOnlyItsOwnBits) {
+  for (bool AliasingWrite : {false, true}) {
+    Fixture F;
+    auto Flags = NdType::makeNamedRecord("FlagState", 3);
+    Flags->FieldDisplayBits = {{"active", 13, 1, false}};
+    F.Record->FieldDisplayNames[1] = "state";
+    F.Record->FieldDisplayTypes[1] = Flags;
+    auto U8 = NdType::makeInt(1, false), U16 = NdType::makeInt(2, false),
+         U32 = NdType::makeInt(4, false);
+    const auto Address = HighExpr::makeBinop(NdOp::INT_ADD, F.parameter(),
+                                             HighExpr::makeConst(8, F.Bytes));
+    const auto Next = HighExpr::makeBinop(NdOp::INT_ADD, F.parameter(),
+                                          HighExpr::makeConst(10, F.Bytes));
+    const auto Cast = [](ExprPtr Value, TypeRef Type) {
+      auto Result = std::make_shared<HighExpr>();
+      Result->Kind = ExprKind::Cast;
+      Result->Type = Result->CastTo = std::move(Type);
+      Result->Operands = {std::move(Value)};
+      return Result;
+    };
+    const auto Assign = [&](int Id, ExprPtr Value) {
+      auto S = F.assign(Id, Value);
+      S.Dst = F.variable(Id, MedVar::Temp, Value->Type);
+      return S;
+    };
+    const auto Old = F.variable(4, MedVar::Temp, U32);
+    const auto High = F.variable(5, MedVar::Temp, U32);
+    const auto Merged = F.variable(6, MedVar::Temp, U32);
+    auto Set =
+        HighExpr::makeBinop(NdOp::INT_OR, Old, HighExpr::makeConst(0x2000, 4));
+    auto Reload = HighExpr::makeBinop(
+        NdOp::INT_OR, Cast(HighExpr::makeLoad(Address, U16), U32),
+        HighExpr::makeBinop(NdOp::INT_LEFT, High, HighExpr::makeConst(16, 4)));
+    auto Clear = HighExpr::makeBinop(NdOp::INT_AND, Reload,
+                                     HighExpr::makeConst(0xffdfff, 4));
+    auto Restore = HighExpr::makeBinop(
+        NdOp::INT_OR, Merged,
+        HighExpr::makeBinop(NdOp::INT_AND, Old,
+                            HighExpr::makeConst(0x2000, 4)));
+    auto Call = F.call();
+    Call.CallExpr->Operands = {F.parameter()};
+    F.Function.Body = {Assign(4, Cast(HighExpr::makeLoad(Address, U16), U32))};
+    if (AliasingWrite) {
+      const auto OtherType = NdType::makePtr(U16);
+      F.Function.Params.push_back({"other", OtherType});
+      F.Function.Body.push_back(F.store(F.variable(1, MedVar::Param, OtherType),
+                                        HighExpr::makeConst(0x5a5a, 2)));
+    }
+    F.Function.Body.push_back(F.store(Address, Cast(Set, U16)));
+    F.Function.Body.push_back(Call);
+    F.Function.Body.push_back(
+        Assign(5, Cast(HighExpr::makeLoad(Next, U8), U32)));
+    F.Function.Body.push_back(Assign(6, Clear));
+    F.Function.Body.push_back(F.store(Address, Cast(Restore, U16)));
+    F.Function.Body.push_back(
+        F.store(Next, Cast(HighExpr::makeBinop(NdOp::INT_RIGHT, Merged,
+                                               HighExpr::makeConst(16, 4)),
+                           U8)));
+    F.Function.Body.push_back(F.returning());
+    class Calls : public NullDebugContext {
+    public:
+      FunctionSym Touch;
+      std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+        return Address == Touch.Addr ? std::optional(Touch) : std::nullopt;
+      }
+    } Debug;
+    Debug.Touch.Name = "touch";
+    Debug.Touch.Addr = 0x1000;
+    Debug.Touch.ReturnType = NdType::makeVoid();
+    Debug.Touch.Params = {{"object", F.Pointer}};
+    Debug.Touch.PlatformConvention = true;
+    CEmitterOptions Options;
+    Options.RecordDefinitions = [](const std::vector<TypeRef> &) {
+      CRecordDefinitions D;
+      D.Text = "struct FlagState { uint8_t low; uint8_t pad:5, active:1, "
+               "top:2; uint8_t high; };\n"
+               "struct Device { uint64_t flags; struct FlagState state; "
+               "uint8_t tail[5]; };\n";
+      D.Records["Device"] = D.Records["FlagState"] = false;
+      return D;
+    };
+    std::string Text;
+    llvm::raw_string_ostream OS(Text);
+    ASSERT_TRUE(HighCEmitter().emit({F.Function}, OS, Options, &Debug));
+    EXPECT_NE(Text.find("->state.active ="), std::string::npos) << Text;
+    if (!AliasingWrite)
+      EXPECT_NE(Text.find("= arg0->state.active;"), std::string::npos) << Text;
+    const std::string Main =
+        std::string(R"c(
+static uint16_t expected_before, changed;
+static unsigned error;
+void touch(Device *d) {
+  uint16_t before;
+  __builtin_memcpy(&before, &d->state, 2);
+  if (before != expected_before) error = 1;
+  __builtin_memcpy(&d->state, &changed, 2);
+  d->state.high = (uint8_t)(changed ^ 0x7b);
+}
+int main(void) {
+  for (unsigned bits = 0; bits < 65536; ++bits) {
+    Device d; __builtin_memset(&d, 0xa5, sizeof(d));
+    uint16_t before = bits, after;
+    expected_before = before | 0x2000;
+    changed = (uint16_t)(bits * 109 + 0x731);
+    __builtin_memcpy(&d.state, &before, 2);
+)c") +
+        (AliasingWrite ? "transport(&d, (uint16_t *)(void *)&d.state);\n"
+                       : "transport(&d);\n") +
+        R"c(
+    __builtin_memcpy(&after, &d.state, 2);
+    if (error || after != (uint16_t)((changed & ~0x2000) | (before & 0x2000))) return 1;
+    if (d.state.high != (uint8_t)(changed ^ 0x7b)) return 2;
+    const uint8_t *p = (const uint8_t *)&d;
+    for (unsigned i = 0; i < sizeof(d); ++i)
+      if ((i < 8 || i >= 11) && p[i] != 0xa5) return 3;
+  }
+  return 0;
+}
+)c";
+    for (const auto Optimization : {"-O0", "-O2"})
+      source_call_execution_test::compileAndRun(Text + Main, {Optimization});
+  }
+}
+
+TEST(HighPointerTypeInference, MaskedBitfieldReadKeepsSignExtendedSourceBits) {
+  Fixture F;
+  F.Record->FieldDisplayNames.clear();
+  F.Record->FieldDisplayTypes.clear();
+  F.Record->FieldDisplayOffsets.clear();
+  F.Record->FieldDisplayBits = {{"active", 13, 1, false}};
+  auto Address = HighExpr::makeBinop(NdOp::INT_ADD, F.parameter(),
+                                     HighExpr::makeConst(1, F.Bytes));
+  auto Read = HighExpr::makeLoad(Address, NdType::makeInt(1, true));
+  auto Extended = std::make_shared<HighExpr>();
+  Extended->Kind = ExprKind::Cast;
+  Extended->Type = Extended->CastTo = NdType::makeInt(4, true);
+  Extended->Operands = {Read};
+  auto Shift =
+      HighExpr::makeBinop(NdOp::INT_ASHR, Extended, HighExpr::makeConst(5, 4));
+  auto Mask =
+      HighExpr::makeBinop(NdOp::INT_AND, Shift, HighExpr::makeConst(1, 4));
+  F.Function.Body = {F.returning(Mask)};
+  CEmitterOptions Options;
+  Options.RecordDefinitions = [](const std::vector<TypeRef> &) {
+    CRecordDefinitions D;
+    D.Text = "struct Device { uint8_t low; uint8_t pad:5, active:1, top:2; "
+             "uint8_t tail[14]; };\n";
+    D.Records["Device"] = false;
+    return D;
+  };
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  ASSERT_TRUE(HighCEmitter().emit({F.Function}, OS, Options));
+  EXPECT_NE(Text.find("->active"), std::string::npos) << Text;
+  source_call_execution_test::compileAndRun(Text + R"c(
+int main(void) {
+  for (unsigned value = 0; value < 256; ++value) {
+    Device d = {0}; ((uint8_t *)&d)[1] = value;
+    if (transport(&d) != ((value >> 5) & 1)) return 1;
+  }
+  return 0;
+}
+)c");
 }
 
 TEST(HighPointerTypeInference, DeclarationAndAssignmentsSpellOnePointer) {

@@ -406,6 +406,8 @@ void MedToHighConverter::lowerCallInd(HighFunc &Func, const MedBlock &CurBlock,
               Image ? Image->abiFormat() : BinaryFormat::Unknown))
         Call->FloatingCallSignature =
             std::make_shared<FloatingCallArguments>(std::move(*Signature));
+  if (Call->FloatingCallSignature)
+    Call->Type = sourceCallResultType(CurOp);
   if (CurOp.SourceCallHint) {
     Call->CallAddr = CurOp.SourceCallHint->TargetAddress;
     // A bound void call has no output SSA value, but its expression still

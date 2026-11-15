@@ -233,7 +233,7 @@ protected:
 
 private:
   void item(const TopLevel &Item, const TopLevel *Next);
-  void unread(llvm::StringRef Text, llvm::StringRef Reason);
+  void unread(size_t CBegin, size_t CEnd, llvm::StringRef Reason);
 
   std::string Buffer;
   std::vector<SourceDialectPiece> Pieces;

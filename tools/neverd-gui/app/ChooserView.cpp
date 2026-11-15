@@ -3,15 +3,19 @@
 #include "../Config.h"
 #include "../ResourceLimits.h"
 #include "AddressSpace.h"
+#include "AnalysisProgress.h"
 #include "Icons.h"
 #include "ItemViewActivation.h"
 #include "KeepTranslated.h"
+#include "ModelessDialog.h"
 #include "Session.h"
 #include "ShrinkableRow.h"
 #include "Theme.h"
 
 #include <QApplication>
 #include <QClipboard>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QFontInfo>
 #include <QFontMetrics>
 #include <QHBoxLayout>
@@ -19,6 +23,10 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLocale>
+#include <QPushButton>
+#include <QScrollBar>
+#include <QTextBrowser>
 #include <QTreeView>
 #include <QVBoxLayout>
 #include <algorithm>
@@ -105,6 +113,13 @@ ChooserModel::ChooserModel(Session &session, const AddressSpace &space,
       kind_(kind),
       operation_(QString::fromLatin1(Specs[static_cast<int>(kind)].operation)),
       columns_(columnsOf(kind)) {
+  connect(&session_.queries(), &QueryService::queryProgress, this,
+          [this](quint64 id, const QJsonObject &payload) {
+            if (pageRequests_.values().contains(id))
+              emit progressChanged(payload);
+          });
+  connect(&session_.queries(), &QueryService::pendingChanged, this,
+          &ChooserModel::loadingChanged, Qt::QueuedConnection);
   connect(&session_, &Session::revisionChanged, this,
           [this, epoch = session_.epoch()]() mutable {
             const bool sameProject = epoch == session_.epoch();
@@ -122,6 +137,10 @@ ChooserModel::ChooserModel(Session &session, const AddressSpace &space,
               reload();
           });
   connect(&session_, &Session::unloaded, this, &ChooserModel::reload);
+  connect(&session_, &Session::readsCancelled, this, [this] {
+    if (loading() || locationDone_)
+      cancelLoading();
+  });
   if (kind_ == ChooserKind::Functions || kind_ == ChooserKind::Names)
     connect(&session_, &Session::functionsChanged, this,
             &ChooserModel::refreshFunctions);
@@ -139,7 +158,7 @@ bool ChooserModel::filterable() const {
 }
 
 void ChooserModel::setFilter(const QString &filter) {
-  if (filter == filter_)
+  if (filter == filter_ && !cancelled_)
     return;
   filter_ = filter;
   reload();
@@ -159,6 +178,12 @@ void ChooserModel::setLocalRows(const QJsonArray &rows) {
   emit totalChanged(total_);
 }
 
+QueryService &ChooserModel::queryService() const {
+  return AnalysisService::handles(operation_)
+             ? session_.analysisQueries({}, const_cast<ChooserModel *>(this))
+             : session_.queries();
+}
+
 void ChooserModel::addressSpaceChanged() {
   const int rows = rowCount();
   for (int column = 0; column < columnCount(); ++column)
@@ -169,6 +194,7 @@ void ChooserModel::addressSpaceChanged() {
 }
 
 void ChooserModel::reload() {
+  cancelled_ = false;
   refresh_.reset();
   ++locationSerial_;
   finishLocation(std::nullopt,
@@ -181,7 +207,7 @@ void ChooserModel::reload() {
   }
   ++serial_;
   // Old filters, sorts and revisions no longer need their queued pages.
-  session_.queries().unsubscribeOwner(this);
+  queryService().unsubscribeOwner(this);
   beginResetModel();
   pages_.clear();
   pageOrder_.clear();
@@ -194,9 +220,26 @@ void ChooserModel::reload() {
   if (session_.loaded() && !operation_.isEmpty() &&
       (!Specs[static_cast<int>(kind_)].requested || !request_.isEmpty()))
     requestPage(0);
+  emit loadingChanged();
+}
+
+void ChooserModel::cancelLoading() {
+  ++serial_;
+  ++locationSerial_;
+  cancelled_ = true;
+  queryService().unsubscribeOwner(this);
+  refresh_.reset();
+  pageRequests_.clear();
+  requestOrder_.clear();
+  finishLocation(std::nullopt, tr("Search cancelled"));
+  emit loadingChanged();
 }
 
 void ChooserModel::refreshFunctions() {
+  // Discovery must not restart a search the user explicitly stopped. Resume
+  // stages the current inventory before publishing any newly requested page.
+  if (cancelled_)
+    return;
   if (!session_.loaded() || localRows_ || pages_.isEmpty()) {
     reload();
     return;
@@ -205,7 +248,7 @@ void ChooserModel::refreshFunctions() {
   ++locationSerial_;
   finishLocation(std::nullopt,
                  tr("The table changed before the address was selected."));
-  session_.queries().unsubscribeOwner(this);
+  queryService().unsubscribeOwner(this);
   refresh_.emplace(Refresh{});
   // Include the viewport's outstanding pages first. Keep the staging set
   // within the same page allowance as the ordinary cache.
@@ -219,6 +262,16 @@ void ChooserModel::refreshFunctions() {
   pageRequests_.clear();
   requestOrder_.clear();
   refreshNextPage(serial_);
+}
+
+void ChooserModel::resumeLoading() {
+  if (!std::exchange(cancelled_, false))
+    return;
+  if (kind_ == ChooserKind::Functions || kind_ == ChooserKind::Names)
+    refreshFunctions();
+  else if (pages_.isEmpty())
+    reload();
+  emit loadingChanged();
 }
 
 void ChooserModel::refreshNextPage(quint64 serial) {
@@ -258,6 +311,7 @@ void ChooserModel::publishFunctionRefresh(quint64 serial) {
   const int total = refresh_->total;
   if (total == total_ && refresh_->pages == pages_) {
     refresh_.reset();
+    emit loadingChanged();
     return;
   }
   QHash<Address, int> positions;
@@ -399,8 +453,8 @@ void ChooserModel::seekRefreshAddress(quint64 serial, Address address,
 }
 
 void ChooserModel::requestPage(int page) const {
-  if (refresh_ || pageRequests_.contains(page) || !session_.loaded() ||
-      operation_.isEmpty())
+  if (cancelled_ || refresh_ || pageRequests_.contains(page) ||
+      !session_.loaded() || operation_.isEmpty())
     return;
   // Fast scrolling replaces older viewport requests instead of filling the
   // shared dispatcher. The latest pages leave room for other views and edits.
@@ -408,7 +462,7 @@ void ChooserModel::requestPage(int page) const {
          ::neverd::limits::gui::kChooserViewMaxPendingPages) {
     const int oldPage = requestOrder_.back();
     requestOrder_.pop_back();
-    session_.queries().unsubscribe(pageRequests_.take(oldPage));
+    queryService().unsubscribe(pageRequests_.take(oldPage));
   }
   const QJsonObject payload = pagePayload(page);
   const quint64 serial = serial_;
@@ -426,9 +480,11 @@ void ChooserModel::requestPage(int page) const {
         emit self->failed(code == QLatin1String("analysis_pending")
                               ? tr("References are still being indexed…")
                               : message);
+        emit self->loadingChanged();
       });
   pageRequests_.insert(page, subscription);
   requestOrder_.push_front(page);
+  emit self->loadingChanged();
 }
 
 QJsonObject ChooserModel::pagePayload(int page) const {
@@ -544,6 +600,7 @@ void ChooserModel::accept(int page, quint64 serial,
       std::min(total_, first + ::neverd::limits::gui::kChooserViewPageSize) - 1;
   if (last >= first)
     emit dataChanged(index(first, 0), index(last, columnCount() - 1));
+  emit loadingChanged();
 }
 
 QJsonObject ChooserModel::rowObject(int row) const {
@@ -570,7 +627,8 @@ ChooserModel::itemAddress(const QJsonObject &object) const {
 }
 
 std::optional<Address> ChooserModel::referenceAddressAt(int row) const {
-  if (kind_ == ChooserKind::StringReferences)
+  if (kind_ == ChooserKind::StringReferences ||
+      kind_ == ChooserKind::ComputedStrings)
     return addressValue(rowObject(row).value("string_address"));
   return addressAt(row);
 }
@@ -656,6 +714,13 @@ QString ChooserModel::display(const QJsonObject &row,
   return {};
 }
 
+QString ChooserModel::cachedDisplayText(int row, int column) const {
+  if (!localRows_ &&
+      !pages_.contains(row / ::neverd::limits::gui::kChooserViewPageSize))
+    return column == 0 ? QStringLiteral("…") : QString();
+  return display(rowObject(row), columns_[column]);
+}
+
 QVariant ChooserModel::data(const QModelIndex &index, int role) const {
   if (!index.isValid() || index.column() >= columns_.size())
     return {};
@@ -665,7 +730,7 @@ QVariant ChooserModel::data(const QModelIndex &index, int role) const {
     if (role == Qt::DisplayRole) {
       // Fetch on demand; the visible rows decide which pages load.
       requestPage(row / ::neverd::limits::gui::kChooserViewPageSize);
-      return index.column() == 0 ? QStringLiteral("…") : QString();
+      return cachedDisplayText(row, index.column());
     }
     return {};
   }
@@ -738,12 +803,61 @@ void ChooserModel::sort(int column, Qt::SortOrder order) {
 
 ChooserView::ChooserView(Session &session, const AddressSpace &space,
                          ChooserKind kind, QWidget *parent)
-    : QWidget(parent), model_(new ChooserModel(session, space, kind, this)),
+    : QWidget(parent), session_(session),
+      model_(new ChooserModel(session, space, kind, this)),
       table_(new QTreeView(this)), filterRow_(new QWidget(this)),
-      filter_(new QLineEdit(filterRow_)), status_(new QLabel(this)) {
+      filter_(new QLineEdit(filterRow_)), status_(new QLabel(this)),
+      progress_(new ProgressStrip(this)),
+      cancel_(new QPushButton(tr("Cancel"), this)) {
   auto *layout = new QVBoxLayout(this);
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(0);
+  if (kind == ChooserKind::ComputedStrings) {
+    auto *controls = new QHBoxLayout;
+    scanButton_ = new QPushButton(tr("Scan all functions"), this);
+    scanButton_->setObjectName(QStringLiteral("computedStringsScan"));
+    auto *details = new QPushButton(tr("Conditions…"), this);
+    details->setObjectName(QStringLiteral("computedStringsDetails"));
+    scanStatus_ =
+        new QLabel(tr("Conditional text computed by instructions"), this);
+    scanStatus_->setWordWrap(true);
+    controls->addWidget(scanButton_);
+    controls->addWidget(details);
+    controls->addWidget(scanStatus_, 1);
+    layout->addLayout(controls);
+    connect(scanButton_, &QPushButton::clicked, this, [this] {
+      scanning_ = !scanning_;
+      scanButton_->setText(scanning_ ? tr("Pause") : tr("Continue"));
+      if (scanning_)
+        advanceComputedStrings();
+      else if (scanInFlight_)
+        scanStatus_->setText(tr("Pausing after the current function…"));
+    });
+    connect(details, &QPushButton::clicked, this,
+            &ChooserView::showComputedStringDetails);
+    const auto resetScan = [this] {
+      ++scanSerial_;
+      scanning_ = scanInFlight_ = false;
+      session_.cancelAnalysisReads(this);
+      computedScan_ = {};
+      model_->setRequest({});
+      scanButton_->setText(tr("Scan all functions"));
+      scanButton_->setEnabled(true);
+      scanStatus_->setText(tr("Analysis changed; scan again"));
+    };
+    connect(&session_, &Session::revisionChanged, this, resetScan);
+    connect(&session_, &Session::readsCancelled, this, resetScan);
+    connect(&session_, &Session::unloaded, this, resetScan);
+    connect(&session_, &Session::sourceRefined, this, [this, resetScan] {
+      const bool resume = scanning_;
+      resetScan();
+      if (resume) {
+        scanning_ = true;
+        scanButton_->setText(tr("Pause"));
+        advanceComputedStrings();
+      }
+    });
+  }
   table_->setModel(model_);
   activateOnReturn(*table_);
   table_->setRootIsDecorated(false);
@@ -760,6 +874,8 @@ ChooserView::ChooserView(Session &session, const AddressSpace &space,
   table_->header()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
   table_->setIconSize(QSize(16, 16));
   table_->installEventFilter(this);
+  table_->viewport()->installEventFilter(this);
+  table_->verticalScrollBar()->installEventFilter(this);
   layout->addWidget(table_, 1);
   filter_->setObjectName(QStringLiteral("chooserFilter"));
   filter_->setClearButtonEnabled(true);
@@ -770,14 +886,43 @@ ChooserView::ChooserView(Session &session, const AddressSpace &space,
   filterRow->addWidget(filter_);
   filterRow_->setVisible(false);
   layout->addWidget(filterRow_);
+  progress_->setObjectName(QStringLiteral("chooserProgress"));
+  progress_->setAccessibleName(tr("Search progress"));
+  layout->addWidget(progress_);
   makeStatusLine(*status_);
-  layout->addWidget(status_);
+  status_->setObjectName(QStringLiteral("chooserStatus"));
+  auto *statusLine = new QHBoxLayout;
+  statusLine->addWidget(status_, 1);
+  cancel_->setObjectName(QStringLiteral("chooserCancel"));
+  statusLine->addWidget(cancel_);
+  layout->addLayout(statusLine);
+  statusTimer_.setInterval(::neverd::limits::gui::kChooserViewStatusIntervalMs);
+  connect(&statusTimer_, &QTimer::timeout, this, &ChooserView::updateStatus);
+  connect(cancel_, &QPushButton::clicked, this, [this] {
+    if (model_->cancelled()) {
+      resumeLoading();
+      return;
+    }
+    filterTimer_.stop();
+    model_->cancelLoading();
+    error_ = tr("Search cancelled");
+    updateStatus();
+  });
   filterTimer_.setSingleShot(true);
   filterTimer_.setInterval(::neverd::limits::gui::kChooserViewFilterDebounceMs);
-  connect(&filterTimer_, &QTimer::timeout, this,
-          [this] { model_->setFilter(filter_->text().trimmed()); });
-  connect(filter_, &QLineEdit::textChanged, this,
-          [this] { filterTimer_.start(); });
+  connect(&filterTimer_, &QTimer::timeout, this, [this] {
+    model_->setFilter(filter_->text().trimmed());
+    updateStatus();
+  });
+  connect(filter_, &QLineEdit::textChanged, this, [this] {
+    if (model_->loading())
+      model_->cancelLoading();
+    error_.clear();
+    progressPayload_ = {};
+    elapsed_.restart();
+    filterTimer_.start();
+    updateStatus();
+  });
   connect(table_->header(), &QHeaderView::sectionClicked, this,
           [this](int section) {
             const auto order = table_->header()->sortIndicatorOrder();
@@ -797,8 +942,17 @@ ChooserView::ChooserView(Session &session, const AddressSpace &space,
           });
   connect(model_, &ChooserModel::totalChanged, this,
           [this] { updateStatus(); });
-  connect(model_, &ChooserModel::failed, this,
-          [this](const QString &message) { status_->setText(message); });
+  connect(model_, &ChooserModel::failed, this, [this](const QString &message) {
+    error_ = message;
+    updateStatus();
+  });
+  connect(model_, &ChooserModel::loadingChanged, this,
+          &ChooserView::updateStatus);
+  connect(model_, &ChooserModel::progressChanged, this,
+          [this](const QJsonObject &payload) {
+            progressPayload_ = payload;
+            updateStatus();
+          });
   // Each column but the last, which stretches, starts as wide as its
   // format needs in the font it prints in.
   const int textDigit =
@@ -820,6 +974,130 @@ ChooserView::ChooserView(Session &session, const AddressSpace &space,
     filter_->setPlaceholderText(tr("Quick filter"));
     updateStatus();
   });
+}
+
+void ChooserView::advanceComputedStrings() {
+  if (!scanning_ || scanInFlight_)
+    return;
+  if (!session_.loaded()) {
+    scanning_ = false;
+    scanButton_->setText(tr("Scan all functions"));
+    scanStatus_->setText(tr("Open a binary first"));
+    return;
+  }
+  scanInFlight_ = true;
+  const auto serial = scanSerial_;
+  scanStatus_->setText(tr("Analyzing function %1…")
+                           .arg(computedScan_.value("done").toInteger() + 1));
+  // Both the catalogue and its pages stay in the first existing analysis
+  // replica. The owner's navigation and project writes keep their worker.
+  session_.analysisQueries({}, this).subscribe(
+      {QStringLiteral("computed_strings_step"), {}}, this,
+      [this, serial](const QJsonObject &response) {
+        if (serial != scanSerial_)
+          return;
+        scanInFlight_ = false;
+        if (response.value("status") != QLatin1String("ok")) {
+          scanning_ = false;
+          scanButton_->setText(tr("Scan all functions"));
+          scanStatus_->setText(
+              response.value("error").toObject().value("message").toString(
+                  tr("Scan cancelled")));
+          return;
+        }
+        const auto result = response.value("payload").toObject();
+        if (result.value("generation") != computedScan_.value("generation") ||
+            result.value("rows") != computedScan_.value("rows"))
+          model_->setRequest({{"generation", result.value("generation")},
+                              {"rows_revision", result.value("rows")}});
+        computedScan_ = result;
+        const bool complete = result.value("complete").toBool();
+        if (complete)
+          scanning_ = false;
+        scanStatus_->setText(tr("%1 · %2/%3 functions · %4 rows · %5 issues")
+                                 .arg(complete    ? tr("Scan finished")
+                                      : scanning_ ? tr("Scanning")
+                                                  : tr("Paused"))
+                                 .arg(result.value("done").toInteger())
+                                 .arg(result.value("total").toInteger())
+                                 .arg(result.value("rows").toInteger())
+                                 .arg(result.value("failures").toInteger()));
+        if (!result.value("discovery_error").toString().isEmpty())
+          scanStatus_->setText(scanStatus_->text() +
+                               tr(" · Discovery failed: ") +
+                               result.value("discovery_error").toString());
+        scanButton_->setText(scanning_ ? tr("Pause") : tr("Continue"));
+        scanButton_->setEnabled(!complete);
+        if (scanning_)
+          QTimer::singleShot(0, this, &ChooserView::advanceComputedStrings);
+      });
+}
+
+void ChooserView::showComputedStringDetails() {
+  const auto row = model_->rowObject(table_->currentIndex().row());
+  if (row.isEmpty())
+    return;
+  const auto escaped = [&](const char *field) {
+    return row.value(QLatin1String(field)).toString().toHtmlEscaped();
+  };
+  const auto link = [](const QJsonValue &value) {
+    const auto text = value.toString().toHtmlEscaped();
+    return addressValue(value)
+               ? QStringLiteral("<a href=\"%1\">%1</a>").arg(text)
+               : text;
+  };
+  QString html = QStringLiteral("<h3>%1</h3><pre>%2</pre>")
+                     .arg(escaped("status"), escaped("text"));
+  if (row.value("status") == QLatin1String("conditional")) {
+    html +=
+        QStringLiteral("<p>%1</p>")
+            .arg(tr("Assumes the listed memory and register values at block "
+                    "entry, and successful execution through the observation. "
+                    "Initializers propose values; reachability is not proved.")
+                     .toHtmlEscaped());
+    html += QStringLiteral("<p>%1: %2<br>%3: %4<br>%5: %6</p>")
+                .arg(tr("Block entry"), link(row.value("block")),
+                     tr("Observed after"), link(row.value("instruction")),
+                     tr("Data address"), link(row.value("string_address")));
+    html += QStringLiteral("<p>%1: %2</p><pre>%3</pre><h4>%4</h4>")
+                .arg(tr("Encoding"), escaped("encoding"), escaped("bytes"),
+                     tr("Required input bytes"));
+    for (const auto &item : row.value("inputs").toArray()) {
+      const auto input = item.toObject();
+      html += QStringLiteral("%1 = 0x%2 (%3: %4)<br>")
+                  .arg(link(input.value("address")),
+                       QString::number(input.value("value").toInt(), 16)
+                           .rightJustified(2, QLatin1Char('0')),
+                       tr("Initializer"), link(input.value("initializer")));
+    }
+    html += QStringLiteral("<h4>%1</h4>").arg(tr("Required entry registers"));
+    for (const auto &item : row.value("entry_registers").toArray()) {
+      const auto input = item.toObject();
+      html += tr("Register offset %1, %2 bytes = %3<br>")
+                  .arg(input.value("offset").toString().toHtmlEscaped())
+                  .arg(input.value("bytes").toInt())
+                  .arg(input.value("value").toString().toHtmlEscaped());
+    }
+  }
+  auto *dialog = new QDialog(this);
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  dialog->setObjectName(QStringLiteral("computedStringDetails"));
+  dialog->setWindowTitle(tr("Computed string conditions"));
+  dialog->resize(::neverd::limits::gui::kComputedStringDetailsWidth,
+                 ::neverd::limits::gui::kComputedStringDetailsHeight);
+  auto *layout = new QVBoxLayout(dialog);
+  auto *text = new QTextBrowser(dialog);
+  text->setOpenLinks(false);
+  text->setHtml(html);
+  connect(text, &QTextBrowser::anchorClicked, this, [this](const QUrl &url) {
+    if (const auto address = addressValue(url.toString()))
+      emit activated(*address);
+  });
+  layout->addWidget(text);
+  auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
+  connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+  layout->addWidget(buttons);
+  showModelessDialog(dialog, this, &session_);
 }
 
 std::optional<Address> ChooserView::currentAddress() const {
@@ -849,8 +1127,7 @@ QString ChooserView::selectedText() const {
     for (int visual = 0; visual < header->count(); ++visual)
       if (const int column = header->logicalIndex(visual);
           !header->isSectionHidden(column))
-        cells.append(
-            model_->index(row.row(), column).data(Qt::DisplayRole).toString());
+        cells.append(model_->cachedDisplayText(row.row(), column));
     lines.append(cells.join(QLatin1Char('\t')));
   }
   return lines.join(QLatin1Char('\n'));
@@ -886,13 +1163,78 @@ void ChooserView::locateAddress(Address address, ChooserModel::Located done) {
   model_->locateAddress(address, std::move(done));
 }
 
+void ChooserView::resumeLoading() {
+  if (!model_->cancelled())
+    return;
+  error_.clear();
+  progressPayload_ = {};
+  // Cancel can arrive before the debounce applies the text to the model.
+  // Retry the text the user sees, rather than the preceding filter.
+  const auto filter = filter_->text().trimmed();
+  if (filter != model_->filter())
+    model_->setFilter(filter);
+  else
+    model_->resumeLoading();
+  table_->viewport()->update();
+  updateStatus();
+}
+
 void ChooserView::updateStatus() {
+  const bool busy = filterTimer_.isActive() || model_->loading();
+  if (busy && !busy_) {
+    elapsed_.restart();
+    progressPayload_ = {};
+    error_.clear();
+    statusTimer_.start();
+  } else if (!busy) {
+    statusTimer_.stop();
+    // A viewport can move while an unchanged catalog refresh blocks paging.
+    // Its earlier paint could only show placeholders; ask for those visible
+    // pages again once the successful refresh releases them.
+    if (busy_ && !model_->cancelled() && error_.isEmpty())
+      table_->viewport()->update();
+  }
+  busy_ = busy;
+  progress_->setVisible(busy);
+  cancel_->setVisible(busy || model_->cancelled());
+  cancel_->setText(model_->cancelled() ? tr("Retry") : tr("Cancel"));
+  if (busy) {
+    const auto total = progressPayload_.value("total").toInteger();
+    const auto done = progressPayload_.value("done").toInteger();
+    progress_->setFraction(total > 0 ? double(done) / total : -1.0);
+    QString text =
+        filterTimer_.isActive() ? tr("Waiting to search…")
+        : progressPayload_.value("phase").toString().startsWith("sort")
+            ? tr("Sorting…")
+        : model_->filter().isEmpty() ? tr("Loading…")
+                                     : tr("Searching…");
+    if (total > 0)
+      text += tr(" %1 / %2")
+                  .arg(QLocale().toString(done), QLocale().toString(total));
+    text += tr(" · %1 s").arg(
+        QLocale().toString(elapsed_.elapsed() / 1000.0, 'f', 1));
+    status_->setText(text);
+    status_->setToolTip(text);
+    return;
+  }
+  if (model_->cancelled()) {
+    status_->setText(tr("Search cancelled"));
+    status_->setToolTip(tr("Retry or navigate the list to continue loading."));
+    return;
+  }
+  status_->setToolTip(error_);
+  if (!error_.isEmpty()) {
+    status_->setText(error_);
+    return;
+  }
   const int total = model_->total();
   const auto current = table_->currentIndex();
   if (current.isValid())
     status_->setText(tr("Line %1 of %2").arg(current.row() + 1).arg(total));
   else
-    status_->setText(total == 1 ? tr("1 item") : tr("%n items", "", total));
+    status_->setText(!total && !model_->filter().isEmpty() ? tr("No results")
+                     : total == 1 ? tr("1 item")
+                                  : tr("%n items", "", total));
 }
 
 void ChooserView::enableCommand(ChooserCommand command, bool enabled) {
@@ -919,6 +1261,30 @@ ChooserView::commandFor(const QKeySequence &key) const {
 }
 
 bool ChooserView::eventFilter(QObject *object, QEvent *event) {
+  // Resume before Qt computes a scroll destination. actionTriggered fires
+  // before the new slider value is committed; resizing the progress strip
+  // from that signal can overwrite the destination on native pixel scrolling.
+  if ((object == table_->viewport() || object == table_->verticalScrollBar()) &&
+      (event->type() == QEvent::MouseButtonPress ||
+       event->type() == QEvent::Wheel))
+    resumeLoading();
+  if ((object == table_ || object == table_->verticalScrollBar()) &&
+      event->type() == QEvent::KeyPress) {
+    switch (static_cast<QKeyEvent *>(event)->key()) {
+    case Qt::Key_Up:
+    case Qt::Key_Down:
+    case Qt::Key_PageUp:
+    case Qt::Key_PageDown:
+    case Qt::Key_Home:
+    case Qt::Key_End:
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+      resumeLoading();
+      break;
+    default:
+      break;
+    }
+  }
   // A list window's own command takes its key before any window-wide one.
   if (object == table_ && (event->type() == QEvent::ShortcutOverride ||
                            event->type() == QEvent::KeyPress)) {

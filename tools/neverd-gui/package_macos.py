@@ -78,6 +78,17 @@ def copy_dependency(origin: Path, relative: Path, frameworks: Path, origins: set
         shutil.copytree(origin_framework, frameworks / framework_name, symlinks=True, dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns("Headers", "*.prl", "_CodeSignature", "__pycache__",
                                                       "site-packages", "test", "tests"))
+        # Homebrew Python can ship only Versions/<version>, without the links
+        # codesign requires to recognize the enclosing framework bundle.
+        parts = origin.relative_to(origin_framework).parts
+        if len(parts) == 3 and parts[0] == "Versions":
+            copied_framework = frameworks / framework_name
+            for name, target in (("Versions/Current", parts[1]),
+                                 (parts[2], "Versions/Current/" + parts[2]),
+                                 ("Resources", "Versions/Current/Resources")):
+                link = copied_framework / name
+                if not os.path.lexists(link):
+                    link.symlink_to(target)
     else:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(origin, destination)
@@ -318,6 +329,8 @@ def main() -> None:
     parser.add_argument("--build-dir", type=Path, required=True)
     parser.add_argument("--engine", type=Path, required=True)
     parser.add_argument("--qt-dir", type=Path, required=True)
+    parser.add_argument("--qt-platform-plugin", type=Path,
+                        help="Cocoa plugin built for this exact Qt kit, replacing its deployed plugin")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--qt-licenses", type=Path)
     parser.add_argument("--kddw-source", type=Path)
@@ -328,6 +341,8 @@ def main() -> None:
     bundle = args.output.resolve()
     if bundle.suffix != ".app" or bundle.exists():
         parser.error("--output must be a new .app path")
+    if args.qt_platform_plugin and not macho(args.qt_platform_plugin):
+        parser.error("--qt-platform-plugin must be a regular Mach-O plugin")
     source = Path(__file__).resolve().parent
     macos, frameworks, resources = (bundle / "Contents" / name for name in ("MacOS", "Frameworks", "Resources"))
     agent = agent_inputs(args.build_dir, bundle)
@@ -379,6 +394,15 @@ def main() -> None:
     run(args.qt_dir / "bin/macdeployqt", bundle,
         *("-executable=" + str(executable) for executable in executables), "-libpath=" + str(args.qt_dir / "lib"),
         "-libpath=" + str(frameworks))
+    if args.qt_platform_plugin:
+        destination = bundle / "Contents/PlugIns/platforms/libqcocoa.dylib"
+        if not destination.is_file() or destination.is_symlink():
+            raise RuntimeError("macdeployqt did not deploy a regular Cocoa plugin")
+        shutil.copy2(args.qt_platform_plugin, destination)
+        origins.add(args.qt_platform_plugin.resolve())
+        build_inputs.append({"name": "libqcocoa.dylib",
+                             "source": str(args.qt_platform_plugin.resolve()),
+                             "sha256": hashlib.sha256(destination.read_bytes()).hexdigest()})
     validate_and_prune_sql_drivers(bundle)
     repair_dependencies(bundle, args.qt_dir, origins)
     report = audit_bundle(bundle)

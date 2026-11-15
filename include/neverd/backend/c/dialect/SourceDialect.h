@@ -114,6 +114,12 @@ struct SourceDialectPiece {
   size_t CEnd = 0;
   size_t Begin = 0;
   size_t End = 0;
+  /// Copied C bytes, whose interior ranges retain their original offsets.
+  bool Verbatim = false;
+  /// Contiguous lexical copies from one refused declaration. Nonzero groups
+  /// permit exact spans across certified name replacements, including calls
+  /// split over multiple lines. Converted statements never join these groups.
+  size_t CopyOrigin = 0;
 };
 
 /// A source language's name in the dialect text, which splitting the text
@@ -140,7 +146,8 @@ struct SourceDialectText {
   /// them, or the smallest piece around them.
   std::optional<std::pair<size_t, size_t>> map(size_t CBegin,
                                                size_t CEnd) const;
-  /// Map one complete recorded piece, ignoring surrounding C whitespace.
+  /// Map one complete recorded piece, or a range within verbatim C bytes,
+  /// ignoring surrounding C whitespace.
   /// Navigation must not expand a partial piece to an enclosing declaration
   /// or combine pieces across unrecorded text. Ambiguous renderings are
   /// refused.
