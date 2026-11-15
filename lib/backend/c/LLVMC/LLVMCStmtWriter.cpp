@@ -6571,56 +6571,6 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
 
   if (const auto *Callee = Call.getCalledFunction()) {
     const auto IID = Callee->getIntrinsicID();
-    if (IID == llvm::Intrinsic::scmp || IID == llvm::Intrinsic::ucmp) {
-      const auto *Result = llvm::dyn_cast<llvm::IntegerType>(Call.getType());
-      const auto *Input = Call.arg_size() == 2
-                              ? llvm::dyn_cast<llvm::IntegerType>(
-                                    Call.getArgOperand(0)->getType())
-                              : nullptr;
-      if (!Result || !Input || Result->getBitWidth() < 2 ||
-          Result->getBitWidth() > 128 || Input->getBitWidth() > 128 ||
-          Call.getArgOperand(1)->getType() != Input ||
-          Call.hasOperandBundles() || !llvm::isa<llvm::CallInst>(Call))
-        throw std::runtime_error(
-            "unsupported LLVM scalar three-way comparison");
-      const auto Mask = [](unsigned Bits, const std::string &Type) {
-        const unsigned Carrier = Bits <= 8    ? 8
-                                 : Bits <= 16 ? 16
-                                 : Bits <= 32 ? 32
-                                 : Bits <= 64 ? 64
-                                              : 128;
-        return Bits == Carrier ? std::string()
-                               : "(((" + Type + ")~(" + Type + ")0) >> " +
-                                     std::to_string(Carrier - Bits) + ")";
-      };
-      const std::string Type = typeToCLLVM(Call.getArgOperand(0)->getType());
-      const std::string Left = freshVar("compare_left");
-      const std::string Right = freshVar("compare_right");
-      std::string Expr =
-          "({ " + Type + " " + Left + " = (" + Type + ")(" +
-          integerPointerOperandStr(Call.getArgOperand(0), &Call, 0) + "); " +
-          Type + " " + Right + " = (" + Type + ")(" +
-          integerPointerOperandStr(Call.getArgOperand(1), &Call, 1) + "); ";
-      if (const std::string Bits = Mask(Input->getBitWidth(), Type);
-          !Bits.empty())
-        Expr += Left + " &= " + Bits + "; " + Right + " &= " + Bits + "; ";
-      if (IID == llvm::Intrinsic::scmp) {
-        // Flipping the sign bit orders two's-complement integers without
-        // signed overflow or an implementation-defined out-of-range cast.
-        const std::string Sign = "((" + Type + ")1 << " +
-                                 std::to_string(Input->getBitWidth() - 1) + ")";
-        Expr += Left + " ^= " + Sign + "; " + Right + " ^= " + Sign + "; ";
-      }
-      const std::string ReturnType = typeToCLLVM(Call.getType());
-      Expr += "((" + ReturnType + ")((" + Left + " > " + Right + ") - (" +
-              Left + " < " + Right + ")))";
-      if (const std::string Bits = Mask(Result->getBitWidth(), ReturnType);
-          !Bits.empty())
-        Expr += " & " + Bits;
-      Expr += "; })";
-      RenderingCalls.pop_back();
-      return Expr;
-    }
     if (IID == llvm::Intrinsic::assume) {
       if (!Callee->isDeclaration() || !llvm::isa<llvm::CallInst>(Call) ||
           Call.arg_size() != 1 ||
@@ -6890,12 +6840,12 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
       continue;
     }
     if (BoundedVarargs && ArgIdx >= BoundedVarargs->FixedCount &&
-        llvm::isa<llvm::ConstantInt>(Operand)) {
+        (Integer || Operand->getType()->isPointerTy())) {
       // A variadic argument has no parameter conversion. In particular, a
       // small literal is an int even when the import reads a machine word.
       // Use the same tail type as its forwarding contract, including the
-      // target's long width and signedness. Nonconstant values already carry
-      // their recovered type; preserve it rather than narrowing that carrier.
+      // target's long width and signedness. LLVM integers are signless, and
+      // a pointer carrier also needs the exact C type read by va_arg.
       const std::string Type = c_library::typeSpelling(
           BoundedVarargs->Type, Opts.TheArch, Opts.Format);
       const std::string Bridge =

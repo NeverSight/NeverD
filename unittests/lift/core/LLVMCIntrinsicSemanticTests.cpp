@@ -263,6 +263,16 @@ TEST(LLVMCIntrinsicSemantics, FloatingMinMaxKeepNaNsAndSignedZeros) {
   std::string Source = "#include <math.h>\n" + emit(Module);
   EXPECT_EQ(Source.find("llvm_minnum"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("llvm_maximum"), std::string::npos) << Source;
+  const auto Compiler = llvm::sys::findProgramByName("clang");
+  if (!Compiler || !neverd::test::compilerAccepts(
+                       *Compiler, "c",
+                       "double f(double a, double b) {\n"
+                       "  return __builtin_elementwise_minimum(a, b) +\n"
+                       "      __builtin_elementwise_maximum(a, b) +\n"
+                       "      __builtin_elementwise_minnum(a, b) +\n"
+                       "      __builtin_elementwise_maxnum(a, b);\n}\n",
+                       {}))
+    GTEST_SKIP() << "this Clang lacks the elementwise builtins the C spells";
   Source += R"c(
 static int correct(double a, double b, double got, int kind) {
   const int maximum = kind & 1;
@@ -319,8 +329,11 @@ TEST(LLVMCIntrinsicSemantics, FusedMultiplyAddKeepsSingleRounding) {
   CEmitterOptions Options;
   Options.TheArch = Arch::AArch64;
   ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
-  EXPECT_NE(Source.find("#include <math.h>"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("__builtin_elementwise_fma("), std::string::npos)
+      << Source;
   EXPECT_EQ(Source.find("llvm_fma"), std::string::npos) << Source;
+  // The independent oracle uses math.h; the emitted builtin does not.
+  Source += "\n#include <math.h>\n";
   Source += R"(
 int main(void) {
   if (fused64(0x1.0000002p0, 0x1.ffffffcp-1, -1.0) != -0x1p-54)
@@ -848,8 +861,8 @@ TEST(LLVMCIntrinsicSemantics, ThreeWayComparisonKeepsWidthsSignsAndProducers) {
       }
   ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
   const std::string Text = emit(Module);
-  EXPECT_EQ(Text.find("llvm_ucmp"), std::string::npos);
-  EXPECT_EQ(Text.find("llvm_scmp"), std::string::npos);
+  EXPECT_NE(Text.find("neverd_llvm_ucmp_i2_i1("), std::string::npos);
+  EXPECT_NE(Text.find("neverd_llvm_scmp_i128_i128("), std::string::npos);
   const std::string Source = "#include <stdint.h>\n" + Text + R"c(
 typedef unsigned __int128 U;
 static unsigned calls;
@@ -1723,13 +1736,13 @@ TEST(LLVMCIntrinsicSemantics, ThreeWayComparisonRejectsUncarriedWidths) {
   llvm::Module Module("odd-three-way", Context);
   llvm::IRBuilder<> Builder(Context);
   auto *Function = llvm::Function::Create(
-      llvm::FunctionType::get(Builder.getIntNTy(2),
+      llvm::FunctionType::get(Builder.getIntNTy(129),
                               {Builder.getInt32Ty(), Builder.getInt32Ty()},
                               false),
       llvm::GlobalValue::ExternalLinkage, "odd_order", Module);
   auto *Intrinsic = llvm::Intrinsic::getOrInsertDeclaration(
       &Module, llvm::Intrinsic::scmp,
-      {Builder.getIntNTy(2), Builder.getInt32Ty()});
+      {Builder.getIntNTy(129), Builder.getInt32Ty()});
   Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Function));
   Builder.CreateRet(Builder.CreateCall(
       Intrinsic, {Function->getArg(0), Function->getArg(1)}));

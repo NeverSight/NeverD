@@ -13284,7 +13284,10 @@ intrinsics their headers name (`_mm_crc32_u8`, `vsha1h_u32`). A helper the
 unit defines captures each operand once and works on the
 unsigned carriers the values have: funnel shifts, integer minimum and
 maximum, saturating addition and subtraction of either signedness, and the
-three-way comparisons `scmp` and `ucmp`. An addition, subtraction or
+three-way comparisons `scmp` and `ucmp`. The shared three-way shape check accepts
+1–128-bit operands and 2–128-bit results; the helper masks nonstandard widths
+to their LLVM bit width before ordering and after producing the result.
+An addition, subtraction or
 multiplication that reports overflow writes its pair through
 `__builtin_*_overflow` on operands cast to the exact width and signedness. Any
 other intrinsic refuses its function in a unit that leaves out and names what

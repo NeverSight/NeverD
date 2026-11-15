@@ -1593,14 +1593,25 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     OS << "}\n\n";
   }
   for (const auto &[Name, Shape] : IntegerThreeWays) {
-    auto Carrier = [](unsigned Bits) {
-      return Bits == 128 ? std::string("__uint128_t")
-                         : "uint" + std::to_string(Bits) + "_t";
+    auto Carrier = [&](unsigned Bits) {
+      return typeToCLLVM(llvm::IntegerType::get(Mod.getContext(), Bits));
+    };
+    auto Mask = [](unsigned Bits, const std::string &Type) {
+      const unsigned CarrierBits = Bits <= 8    ? 8
+                                   : Bits <= 16 ? 16
+                                   : Bits <= 32 ? 32
+                                   : Bits <= 64 ? 64
+                                                : 128;
+      return Bits == CarrierBits ? std::string()
+                                 : "(((" + Type + ")~(" + Type + ")0) >> " +
+                                       std::to_string(CarrierBits - Bits) + ")";
     };
     const std::string Type = Carrier(Shape.OperandBits);
     const std::string Result = Carrier(Shape.ResultBits);
     OS << "static inline " << Result << " " << Name << "(" << Type << " a, "
        << Type << " b) {\n";
+    if (const auto Bits = Mask(Shape.OperandBits, Type); !Bits.empty())
+      OS << "    a &= " << Bits << ";\n    b &= " << Bits << ";\n";
     // Flipping the sign bit maps two's-complement signed order to unsigned
     // order, as the minimum and maximum above do.
     if (Shape.Signed)
@@ -1608,7 +1619,10 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
          << Shape.OperandBits - 1 << ";\n"
          << "    a ^= sign;\n    b ^= sign;\n";
     // Less is every bit set: -1 in the result's width.
-    OS << "    return (" << Result << ")((a > b) - (a < b));\n}\n\n";
+    OS << "    return (" << Result << ")((a > b) - (a < b))";
+    if (const auto Bits = Mask(Shape.ResultBits, Result); !Bits.empty())
+      OS << " & " << Bits;
+    OS << ";\n}\n\n";
   }
   for (const auto &[Name, Shape] : FunnelShifts) {
     const auto [Width, Left] = Shape;

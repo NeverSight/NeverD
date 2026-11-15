@@ -6242,8 +6242,10 @@ int main(void) {
 }
 
 TEST(LLVMCValues, BoundedLibraryVarargsKeepTheirDeclaredCarrierTypes) {
-  for (bool Unsigned : {false, true}) {
-    SCOPED_TRACE(Unsigned);
+  for (unsigned Case = 0; Case != 4; ++Case) {
+    const bool Unsigned = Case & 1;
+    const bool Pointer = Case & 2;
+    SCOPED_TRACE(Case);
     llvm::LLVMContext Context;
     llvm::Module Module("bounded-library-varargs", Context);
     Module.setDataLayout("e-p:64:64");
@@ -6254,8 +6256,11 @@ TEST(LLVMCValues, BoundedLibraryVarargsKeepTheirDeclaredCarrierTypes) {
         llvm::FunctionType::get(Fixed, {Fixed}, true),
         llvm::GlobalValue::ExternalLinkage, Name, Module);
     auto *Caller = llvm::Function::Create(
-        llvm::FunctionType::get(Builder.getInt64Ty(), {Builder.getInt64Ty()},
-                                false),
+        llvm::FunctionType::get(
+            Builder.getInt64Ty(),
+            {Pointer ? static_cast<llvm::Type *>(Builder.getPtrTy())
+                     : Builder.getInt64Ty()},
+            false),
         llvm::GlobalValue::ExternalLinkage, "bounded_call", Module);
     Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Caller));
     auto *Call = Builder.CreateCall(
@@ -6296,8 +6301,9 @@ TEST(LLVMCValues, BoundedLibraryVarargsKeepTheirDeclaredCarrierTypes) {
 #define EXACT(x) ((void)sizeof(char[_Generic((x), word: 1, default: -1)]), (x))
 )" + "#define " +
         Name + "(n,a,b,c,d) observed(n,EXACT(a),EXACT(b),EXACT(c),EXACT(d))\n" +
-        Source.substr(Definition) +
-        "\nint main(void) { return bounded_call(UINT64_C(0xfedcba9876543210)) "
+        Source.substr(Definition) + "\nint main(void) { return bounded_call(" +
+        (Pointer ? "(void *)(uintptr_t)" : "") +
+        "UINT64_C(0xfedcba9876543210)) "
         "!= 17; }\n";
     for (const char *Optimization : {"-O0", "-O2"})
       source_call_execution_test::compileAndRun(
