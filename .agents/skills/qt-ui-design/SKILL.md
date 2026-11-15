@@ -5,10 +5,10 @@ description: >-
 license: LicenseRef-Qt-Commercial OR BSD-3-Clause
 metadata:
   author: qt-ai-skills
-  version: "1.9"
+  version: "1.10"
   qt-version: "6.x"
   category: conceptual
-  changelog: "Plugin views and the Agent: a floating panel's title leaves the view's mark to its welcome"
+  changelog: "Plugin views and the Agent: a floating panel opens in the middle of the workbench, keeps its share of the room and snaps to the middle"
 ---
 # Qt UI Design
 

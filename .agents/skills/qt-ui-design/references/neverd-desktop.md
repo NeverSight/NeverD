@@ -1070,12 +1070,24 @@ the workbench.
 - Keep floating views off the command line along the foot of the workbench,
   under either bottom corner: mirrored, the command field does not reach the
   right edge, so test the row's width, not its right edge.
-- Make a floating panel a window a person places: it moves by its title (a
-  six-dot grip says so) and resizes by its edges, as VS Code moves its quick
-  input; it remembers its place as a distance from the corner it started in,
-  so it stays there when the workbench resizes, and a double click on the
-  title puts it back. It stays open until closed, without a hover preview or
-  a pin, and closing gives the keyboard back to the view that had it.
+- Make a floating panel a window a person places: it opens in the middle of
+  the workbench, moves by its title (a six-dot grip says so) and resizes by
+  its edges, as VS Code moves its quick input. The middle read more
+  comfortably than the corner beside its entry button. It keeps its place
+  as its share of the room it can move in, so a centered panel stays
+  centered when the workbench resizes and a moved one keeps its relative
+  place; moved within 20 pixels of the middle on either axis it snaps
+  there (VS Code's quick input snaps to its horizontal center within the
+  same distance), and a double click on the title puts it back in the
+  middle at its first size. In a small workbench a centered panel may
+  cover the entry button, so it closes by its own button and Escape too.
+  It stays open until closed, without a hover preview or a pin, and
+  closing gives the keyboard back to the view that had it.
+- Known limit of that place: the share is of the whole workbench, while the
+  host keeps views inside the dock area, between the toolbars and the
+  command line. A panel let go exactly at the dock area's top edge left it
+  when the workbench grew from 864 to 1000 pixels high (54 pixels down); a
+  panel dragged past an edge, or centered, held its place.
 - Show a view's mark once. The empty conversation's welcome carries the
   Agent's mark, so the panel's title is the grip and the name alone; a
   second, smaller mark beside the title repeated it a few lines above.
