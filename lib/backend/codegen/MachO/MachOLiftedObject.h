@@ -12,7 +12,7 @@
 namespace neverd {
 /// Verify lifted code at its final PCs before committing the source entries.
 using MachOLiftedObjectVerifier = llvm::function_ref<llvm::Error(
-    const CompiledImage &, va_t OriginalSectionSlide,
+    const CompiledImage &, const BinaryImage &Layout, va_t OriginalSectionSlide,
     llvm::ArrayRef<NativeMachOCompactRange>)>;
 
 llvm::Expected<PatchResult>

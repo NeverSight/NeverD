@@ -29,6 +29,7 @@ class Module;
 namespace neverd {
 struct BinaryImage;
 struct CompactUnwindEntry;
+struct ExceptionFunction;
 struct MedFunc;
 
 /// Complete-prologue DWARF for a frameless compact recipe with saved pairs.
@@ -36,6 +37,12 @@ struct MedFunc;
 /// Both the native producer and final-object verifier use this contract.
 std::vector<CFIInstruction>
 machOFramelessSpillRows(const CompactUnwindEntry &Compact);
+
+/// A complete indexed C++/Objective-C frame whose original LSDA uses only
+/// function-relative call-site and landing-pad offsets. Reuse is conditional
+/// on separately proving every native instruction keeps its original offset.
+bool canReuseMachOLanguageFrame(const BinaryImage &Image,
+                                const ExceptionFunction &Frame);
 
 /// An indexed access using the physical SP cannot use a reconstructed stack.
 bool needsMachONativeStackIndex(const MedFunc &Function);
