@@ -1039,7 +1039,7 @@ const char *neverd_local_types_json(neverd_session_t Sess,
   auto &Index = S->LocalTypeList;
   if (!Index || Index->Filter != Filter || Index->Origin != Origin ||
       Index->Sort != Sort || Index->Descending != Descending) {
-    Index.emplace();
+    Index.emplace(Session::LocalTypeListIndex{});
     Index->Filter = Filter;
     Index->Origin = Origin;
     Index->Sort = Sort;
