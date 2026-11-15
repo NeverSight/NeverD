@@ -1530,7 +1530,8 @@ TEST(HighCIntegerWidths, A32BitTargetSpellsA128BitIntegerAsBitInt) {
   Func.Body = {std::move(Define), std::move(Return)};
   for (const Arch Target :
        {Arch::X86, Arch::ARM, Arch::MIPS32, Arch::MIPS32EL, Arch::X64,
-        Arch::AArch64, Arch::MIPS64, Arch::MIPS64EL}) {
+        Arch::AArch64, Arch::MIPS64, Arch::MIPS64EL, Arch::MIPS64N32,
+        Arch::MIPS64N32EL}) {
     std::string Source;
     llvm::raw_string_ostream OS(Source);
     CEmitterOptions Options;
@@ -1542,7 +1543,7 @@ TEST(HighCIntegerWidths, A32BitTargetSpellsA128BitIntegerAsBitInt) {
     const bool Narrow = Target == Arch::X86 || Target == Arch::ARM ||
                         Target == Arch::MIPS32 || Target == Arch::MIPS32EL;
     EXPECT_EQ(Mapped, Narrow) << getArchName(Target) << Source;
-    if (Narrow) {
+    if (Narrow || isMIPSN32(Target)) {
       const auto Errors =
           compileForTarget(Source, getTriple(Target, BinaryFormat::ELF));
       EXPECT_FALSE(Errors) << *Errors << Source;

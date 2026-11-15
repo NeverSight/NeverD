@@ -18,6 +18,7 @@
 #include "../FloatConversion.h"
 #include "../HeaderPrototype.h"
 #include "../LibraryPrototype.h"
+#include "../NativeIntegerTypes.h"
 #include "../StdcallImportPops.h"
 #include "../UnalignedMemory.h"
 #include "../VariadicImportStub.h"
@@ -580,9 +581,9 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
     writeRecordDefinitions(Rest);
   }
   // A 16-byte integer spelled by its type, as a frame record's member is, is
-  // `__int128`, which a 32-bit target's compiler lacks: there it is the C23
-  // type of that width, as in HighC.
-  if (getTargetRegInfo(Opts.TheArch).PointerSize < 8 &&
+  // `__int128`. Targets without that compiler type use C23 _BitInt, as in
+  // HighC. Pointer width alone cannot distinguish n32 from a 32-bit ISA.
+  if (!cTargetHasInt128(Opts.TheArch) &&
       (spellsInt128Keyword(Records) || spellsInt128Keyword(Rest)))
     OS << "#define __int128 _BitInt(128)\n\n";
   OS << Records << Rest;

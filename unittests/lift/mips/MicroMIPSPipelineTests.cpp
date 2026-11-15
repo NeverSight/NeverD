@@ -62,6 +62,41 @@ TEST(MicroMIPSPipelineSource, LLVMCModePreludeFollowsEmittedSignatures) {
   }
 }
 
+TEST(MicroMIPSPipelineSource, N32RetainsNativeWideRecordTypes) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("wide-call-result", Context);
+  llvm::IRBuilder<> IR(Context);
+  auto *Type =
+      llvm::FunctionType::get(IR.getInt128Ty(), {IR.getInt128Ty()}, false);
+  auto *Function = llvm::Function::Create(Type, llvm::Function::ExternalLinkage,
+                                          "wide_identity", Module);
+  IR.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Function));
+  IR.CreateRet(Function->getArg(0));
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64,
+                      Arch::MIPS64EL, Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(Target));
+    CEmitterOptions Options;
+    Options.TheArch = Target;
+    Options.Format = BinaryFormat::ELF;
+    Options.PreserveLLVMFunctionTypes = true;
+    Options.RecordDefinitions = [](const std::vector<TypeRef> &) {
+      CRecordDefinitions Definitions;
+      Definitions.Text = "struct WideResult { unsigned __int128 value; };\n";
+      Definitions.Records = {{"WideResult", false}};
+      Definitions.Tags = {{"WideResult", false}};
+      return Definitions;
+    };
+    std::string Text;
+    llvm::raw_string_ostream Out(Text);
+    ASSERT_TRUE(LLVMCEmitter().emit(Module, Out, Options));
+    EXPECT_NE(Text.find("struct WideResult { unsigned __int128 value; };"),
+              std::string::npos) << Text;
+    EXPECT_EQ(Text.find("#define __int128 _BitInt(128)") != std::string::npos,
+              !isMIPS64(Target))
+        << Text;
+  }
+}
+
 void checkHalfwordAlignedALUSources(Arch Target, unsigned Revision) {
   mips_test::ELFBytes File(Target);
   const bool R6 = Revision == 6;

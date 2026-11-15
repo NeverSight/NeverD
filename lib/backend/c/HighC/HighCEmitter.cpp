@@ -18,6 +18,7 @@
 #include "../../../loader/Swift/SwiftErrorRuntime.h"
 #include "../../AArch64ImmediateMemoryBase.h"
 #include "../LibraryPrototype.h"
+#include "../NativeIntegerTypes.h"
 #include "../UnalignedMemory.h"
 #include "../VariadicImportStub.h"
 #include "../render/MIPS/MIPSScalar.h"
@@ -660,8 +661,7 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
   // x86 values and checked aggregate-call result bridges use scalar carriers.
   const bool ProjectsScalarWideIntegers =
       Opts.TheArch == Arch::X86 || Opts.TheArch == Arch::X64;
-  // C compilers provide __int128 on targets with 64-bit pointers only.
-  const bool TargetHasInt128 = pointerBytes(Opts.TheArch) >= sizeof(uint64_t);
+  const bool TargetHasInt128 = cTargetHasInt128(Opts.TheArch);
   auto CollectWideType = [&](const TypeRef &Type, bool ScalarResult = false) {
     if (const unsigned Bytes = partialIntegerBytes(Type))
       PartialIntegerBytes.emplace(typeToC(Type), Bytes);
