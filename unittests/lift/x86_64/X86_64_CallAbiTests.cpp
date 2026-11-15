@@ -863,7 +863,9 @@ __asm__(".text\n"
       const std::string Body = definitionOf(C, Name);
       ASSERT_FALSE(Body.empty()) << Name << "\n" << C;
       if (Route) {
-        EXPECT_NE(Body.find("unknown"), std::string::npos) << Body;
+        EXPECT_NE(Body.find("no recovered machine state"), std::string::npos)
+            << Body;
+        EXPECT_NE(Body.find("__builtin_trap()"), std::string::npos) << Body;
       } else {
         EXPECT_TRUE(Body.find("incoming register has no definition") !=
                         std::string::npos ||

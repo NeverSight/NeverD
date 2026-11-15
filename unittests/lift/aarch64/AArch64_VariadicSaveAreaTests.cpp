@@ -305,8 +305,11 @@ TEST_F(AArch64_VariadicSaveArea, AnUnrolledFloatingWalkKeepsTheVectorHalf) {
   EXPECT_EQ(spills(Body, "Q[0-7]"), 8u) << Body;
   const auto High = decompileToHighC(Object);
   ASSERT_EQ(High.exitCode, 0) << High.err;
-  EXPECT_NE(readText(tmpFile("decompiled_high.c")).find("unknown register"),
-            std::string::npos);
+  const auto Source = readText(tmpFile("decompiled_high.c"));
+  EXPECT_NE(Source.find("incoming register has no definition"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("__builtin_trap()"), std::string::npos) << Source;
 }
 
 TEST_F(AArch64_VariadicSaveArea,

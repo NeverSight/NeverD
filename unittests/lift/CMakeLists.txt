@@ -1897,8 +1897,8 @@ add_neverd_unittest(NeverDWin64CallContractTests
   core/FloatingCallLeftoversTests.cpp
   x86_64/Win64CallContractTests.cpp
   LINK_COMPONENTS BackendC BackendLLVM Pipeline
-  # Native source/ABI matrices share the AAPCS64 suite's aggregate budget.
-  TIMEOUT 600
+  # The largest native source/ABI matrix takes 575 seconds on macOS.
+  TIMEOUT 900
 )
 target_include_directories(NeverDWin64CallContractTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
@@ -2598,6 +2598,8 @@ target_include_directories(NeverDMachineInstructionTextTests PRIVATE
 add_neverd_unittest(NeverDLLVMCValueTests
   core/LLVMCValueTests.cpp
   LINK_COMPONENTS BackendC
+  # Native compiler/executable matrices take up to 249 seconds on macOS.
+  TIMEOUT 600
 )
 
 target_include_directories(NeverDLLVMCValueTests PRIVATE

@@ -17904,12 +17904,14 @@ floating register parameters on AArch64, ARM and x64. The stack value's ABI
 slot identity remains unchanged. `NeverDWorkerVirtualTailArguments` and its
 x64 sibling check nine floating arguments through virtual tail calls; native
 hosts execute both HighC and LLVMC with independent callers at O0/O2.
-`NeverDAAPCS64CallContractTests`, `NeverDWin64CallContractTests`,
+`NeverDAAPCS64CallContractTests`, `NeverDLLVMCValueTests`,
 `NeverDMedLLVMDirectDataTests`, `NeverDMedLLVMEntryParameterTests` and
 `NeverDArm64eAnalysisTests` allow 600 seconds per CTest case for their native
 compilation/execution matrices. The 144-variant omitted floating-result case
 takes 455 seconds on macOS, and the 72-variant entry-join case takes 428 seconds;
-individual compiler and executable invocations retain their 30-second limits.
+`NeverDWin64CallContractTests` allows 900 seconds for a matrix measured at
+575 seconds. Individual compiler and executable invocations retain their
+30-second limits.
 `NeverDWorkerSourceSynthesis` also allows 600 seconds for its complete corpus,
 which takes 420 seconds on the same host. These are aggregate test budgets,
 not changes to the semantic assertions or production pipeline limits.
@@ -21686,8 +21688,8 @@ still reach the missing-value guard. Its test-only trap hook observes that
 branch through `longjmp`. `MedCallABI.LinuxSyscallSelectorArithmeticRespectsItsWidth`
 checks byte/word wrapping and the distinct unwrapped 64-bit selector.
 `LLVMCValues.BoundedLibraryVarargsKeepTheirDeclaredCarrierTypes` checks signed
-and unsigned bounded tails, small constants, negative/high-bit words and a
-dynamic input. Its independent providers check both exact C expression types
+and unsigned bounded tails, small constants, negative/high-bit words and
+dynamic integer and pointer carriers. Its independent providers check both exact C expression types
 and values at O0/O2 with UBSan.
 These tests execute scalar C on the host with local providers; they neither
 invoke real kernel services nor qualify native x64 execution on an ARM host.
@@ -24133,9 +24135,16 @@ transport chains and checks the remaining control-flow result at O0/O2.
 `UnreachableUnknownStoresStayOutsideSource` removes a disconnected cycle with
 volatile unknown stores only from the private C projection. The original LLVM
 module stays intact, and a reachable unknown return still traps at O0/O2.
+LLVM control-flow fixtures with additional predecessors connect those entries
+to an opaque runtime branch and verify the module, so unreachable-block
+elimination cannot erase the multiple-entry condition being checked. Three
+fixtures that become structured conditions execute every entry/condition
+combination at O0/O2 and compare exact call order and counts.
 `HighCSourceCalls.VoidCallResultIsUnknownOnlyWhenObserved` similarly preserves
 declared-void call effects through a later overwrite and rejects the path that
-reads its absent result.
+reads its absent result. `HighCReturnJoin.ArgumentSurvivesBesideACall` and its
+unread-argument sibling require a declared-void call to invalidate the joined
+result; a return fold must not manufacture a value from that call.
 `HighCSourceCalls.NarrowUnknownCopiesTrapOnlyWhenObserved` transports low-byte
 views through 96 copies: ignored values and a known overwrite execute, while
 the remaining unknown read still traps.
@@ -24558,7 +24567,10 @@ The `NeverDAArch64DecodeValidityTests` target and the `NeverDLiftTests` suites
 `MedCallLeftovers` and `X86_64NoReturnCall`
 cover packed entry markers, distant shrink-wrapped frames, unsupported SME ZA
 operands, complete versus incomplete no-return cycles, call continuations and
-executable ownership. `MedCallLeftovers.PlatformRegisterPreservationFollowsTheABI`
+executable ownership. A NOP is not a block terminator, and a frame push
+requires a negative stack displacement. A directly called leaf after NOP
+alignment is retained only when a real terminator precedes that padding;
+the paired fallthrough case must not invent another entry. `MedCallLeftovers.PlatformRegisterPreservationFollowsTheABI`
 checks x18 preservation and register-view widths across ELF, unknown, Mach-O and
 COFF conventions. `HighCPointerAddresses.PlatformRegisterReadRequiresAReservingABI`
 checks platform-specific C emission, cross-target compilation (including the

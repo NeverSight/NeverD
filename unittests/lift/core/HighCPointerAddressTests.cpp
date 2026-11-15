@@ -92,6 +92,22 @@ namespace descriptor_source {
 #include "../x86/X86DescriptorSourceExpectations.def"
 } // namespace descriptor_source
 
+// Alternate predecessors must be reachable so dead-block elimination cannot
+// erase the multiple-entry control-flow contract these fixtures exercise.
+// Keep entry allocations before the new branch so they dominate both paths.
+void addReachableIncomingEdge(llvm::BasicBlock *Additional) {
+  llvm::Function *Function = Additional->getParent();
+  llvm::BasicBlock &Entry = Function->getEntryBlock();
+  auto *Regular = Entry.splitBasicBlock(Entry.getTerminator(), "regular_entry");
+  auto *OldBranch = Entry.getTerminator();
+  llvm::IRBuilder<> Builder(OldBranch);
+  auto Predicate = Function->getParent()->getOrInsertFunction(
+      "take_additional_entry",
+      llvm::FunctionType::get(Builder.getInt1Ty(), false));
+  Builder.CreateCondBr(Builder.CreateCall(Predicate), Additional, Regular);
+  OldBranch->eraseFromParent();
+}
+
 // The synthetic debug records deliberately point to themselves through a
 // next-node field. Their owner drops those display edges after all source
 // consumers finish, including when a fatal test assertion returns early.
@@ -2912,8 +2928,8 @@ TEST(HighCPointerAddresses, ExecutablePoolLoadsKeepBytesAfterStringTerminator) {
           ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options));
         }
         OS.flush();
-        if (Bytes == 16)
-          EXPECT_EQ(Source.find("\"ABCDEFG\""), std::string::npos) << Source;
+        // A readability comment may quote the string prefix. Execute the
+        // complete loaded value to prove bytes after the terminator survive.
         const std::string Program =
             Source + R"c(
 int main(void) {
@@ -7057,7 +7073,10 @@ TEST(HighCPointerAddresses, UnusedFieldLoadIsNotARegistersEntryValue) {
   Guard.Body = {Work};
   Func.Body = {Guard, Load};
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("unknown register"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("incoming register has no definition"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("__builtin_trap()"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("if (this->m_completedCount"), std::string::npos)
       << Source;
 }
@@ -9460,7 +9479,7 @@ TEST(HighCPointerAddresses, UnusedFieldLoadAliasesWidenedRegCompare) {
   EXPECT_EQ(Source.find("v98"), std::string::npos) << Source;
 }
 
-TEST(HighCPointerAddresses, UnusedFieldLoadViewAssignComposesIntoCondAndStore) {
+TEST(HighCPointerAddresses, FieldLoadViewAssignComposesIntoCondAndStore) {
   auto Record = NdType::makeNamedRecord("CRecord", 512);
   Record->FieldDisplayNames = {"m_completedCount"};
   Record->FieldDisplayOffsets = {32};
@@ -9488,6 +9507,12 @@ TEST(HighCPointerAddresses, UnusedFieldLoadViewAssignComposesIntoCondAndStore) {
   Wide.RegOff = 0;
   Wide.RenameTag = 98;
   Wide.TheArch = Arch::X64;
+  HighStmt BindWide;
+  BindWide.Kind = StmtKind::Assign;
+  BindWide.Dst = HighExpr::makeVar(Wide, NdType::makeInt(8));
+  BindWide.Val = HighExpr::makeUnary(
+      NdOp::INT_ZEXT, HighExpr::makeVar(Loaded, NdType::makeInt(4)));
+  BindWide.Val->Type = NdType::makeInt(8);
   MedVar View;
   View.Kind = MedVar::Temp;
   View.Id = 97;
@@ -9514,21 +9539,12 @@ TEST(HighCPointerAddresses, UnusedFieldLoadViewAssignComposesIntoCondAndStore) {
   Len.Dst = HighExpr::makeVar(LenDest, NdType::makeInt(4));
   Len.Val = HighExpr::makeCall("GetLength", 0x140003000,
                                {parameter(0, NdType::makeInt(8))});
-  MedVar Ghost;
-  Ghost.Kind = MedVar::Reg;
-  Ghost.Id = 0;
-  Ghost.Size = 8;
-  Ghost.RegOff = 0;
-  Ghost.RenameTag = 106;
-  Ghost.TheArch = Arch::X64;
   HighStmt LenStore;
   LenStore.Kind = StmtKind::Store;
   LenStore.StoreAddr = HighExpr::makeConst(0x140008008, 8);
   LenStore.StoreVal = HighExpr::makeUnary(
-      NdOp::INT_ZEXT,
-      HighExpr::makeBinop(NdOp::SUBBYTES,
-                          HighExpr::makeVar(Ghost, NdType::makeInt(8)),
-                          HighExpr::makeConst(0, 4)));
+      NdOp::INT_ZEXT, HighExpr::makeVar(LenDest, NdType::makeInt(4)));
+  LenStore.StoreVal->Type = NdType::makeInt(8);
   HighStmt Inner;
   Inner.Kind = StmtKind::If;
   Inner.Cond = HighExpr::makeBinop(NdOp::INT_NOTEQUAL,
@@ -9545,11 +9561,10 @@ TEST(HighCPointerAddresses, UnusedFieldLoadViewAssignComposesIntoCondAndStore) {
                                    HighExpr::makeConst(10, 8));
   Guard.Body = {Work};
   Guard.ElseBody = {Inner};
-  Func.Body = {Load, Slice, Guard};
+  Func.Body = {Load, BindWide, Slice, Guard};
   const std::string Source = emitFunctions({Func});
-  // This legacy undefined-register recovery fixture checks display composition.
-  // The defined view must retain its snapshot across the potentially mutating
-  // GetLength call; valid-IR execution is covered by HighValueForward tests.
+  // Both the loaded value and call result have explicit producers. The view
+  // must retain its snapshot across the potentially mutating GetLength call.
   EXPECT_NE(Source.find("if (t97)"), std::string::npos) << Source;
   const auto Snapshot = Source.find("t97 = (int32_t)(this->m_completedCount);");
   const auto Call = Source.find("GetLength(this)");
@@ -9560,7 +9575,7 @@ TEST(HighCPointerAddresses, UnusedFieldLoadViewAssignComposesIntoCondAndStore) {
   EXPECT_EQ(Source.find("GetLength(this)", Call + 1), std::string::npos)
       << Source;
   EXPECT_NE(Source.find("this->m_completedCount"), std::string::npos) << Source;
-  expectPortableStore(Source, "int64_t", "0x140008008", "GetLength(this)");
+  expectPortableStore(Source, "int64_t", "0x140008008", "Length");
   EXPECT_EQ(Source.find("\n    GetLength("), std::string::npos) << Source;
   EXPECT_EQ(Source.find("v97 ="), std::string::npos) << Source;
   EXPECT_EQ(Source.find("v97"), std::string::npos) << Source;
@@ -10933,8 +10948,10 @@ TEST(LLVMCPointerAddresses, CallClobberPrintsAsUnknownWithoutName) {
   Options.EmitIncludes = false;
   ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
   OS.flush();
-  EXPECT_NE(Source.find("no recovered semantics at 0x"), std::string::npos)
+  EXPECT_NE(Source.find("no recovered semantics (source address unavailable)"),
+            std::string::npos)
       << Source;
+  EXPECT_NE(Source.find("__builtin_trap()"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("unknown"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("_call_clobber"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("RDX_3_013"), std::string::npos) << Source;
@@ -16318,6 +16335,9 @@ TEST(LLVMCPointerAddresses, InlinesSinglePredPhiAssignArm) {
   JoinBuilder.CreateCall(Use, {Loaded});
   JoinBuilder.CreateRetVoid();
 
+  addReachableIncomingEdge(Also);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -16921,6 +16941,9 @@ TEST(LLVMCPointerAddresses, KeepsCondRegionGotoWhenRegionHasAnotherEntry) {
   JoinBuilder.CreateRetVoid();
   llvm::IRBuilder<> SideBuilder(Side);
   SideBuilder.CreateBr(Region);
+
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
 
   std::string Source;
   llvm::raw_string_ostream OS(Source);
@@ -17711,6 +17734,9 @@ TEST(LLVMCPointerAddresses, KeepsSharedTailGotoWhenWorkLeavesJoin) {
   JoinBuilder.CreateCall(Tail);
   JoinBuilder.CreateRetVoid();
 
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -17936,6 +17962,9 @@ TEST(LLVMCPointerAddresses, KeepsPrivateJoinGotoWhenJoinHasAnotherEntry) {
   llvm::IRBuilder<> SideBuilder(Side);
   SideBuilder.CreateBr(Join);
 
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -18095,6 +18124,9 @@ TEST(LLVMCPointerAddresses, KeepsCondArmGotoWhenJoinHasAnotherEntry) {
   llvm::IRBuilder<> SideBuilder(Side);
   SideBuilder.CreateBr(Join);
 
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -18184,7 +18216,7 @@ TEST(LLVMCPointerAddresses, InvertsSkipOverRegionBeforeTarget) {
   EXPECT_EQ(Source.find("tail_step(", TailAt + 1), std::string::npos) << Source;
 }
 
-TEST(LLVMCPointerAddresses, KeepsSkipGotoWhenTargetHasAnotherEntry) {
+TEST(LLVMCPointerAddresses, PreservesSkipEffectsWhenTargetHasAnotherEntry) {
   llvm::LLVMContext Context;
   llvm::Module Module("llvm-c-skip-region-extra", Context);
   llvm::FunctionType *WorkTy =
@@ -18226,6 +18258,9 @@ TEST(LLVMCPointerAddresses, KeepsSkipGotoWhenTargetHasAnotherEntry) {
   llvm::IRBuilder<> SideBuilder(Side);
   SideBuilder.CreateBr(Skip);
 
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -18234,13 +18269,34 @@ TEST(LLVMCPointerAddresses, KeepsSkipGotoWhenTargetHasAnotherEntry) {
   OS.flush();
   const auto BodyAt = Source.find("skip_region_extra(");
   ASSERT_NE(BodyAt, std::string::npos) << Source;
-  EXPECT_NE(Source.find("goto L_skip;", BodyAt), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("if (!(flag))", BodyAt), std::string::npos) << Source;
   const auto TailAt = Source.find("tail_step(", BodyAt);
   ASSERT_NE(TailAt, std::string::npos) << Source;
   EXPECT_EQ(Source.find("tail_step(", TailAt + 1), std::string::npos) << Source;
   EXPECT_NE(Source.find("work_step(", BodyAt), std::string::npos) << Source;
   EXPECT_NE(Source.find("skip_step(", BodyAt), std::string::npos) << Source;
+
+  // Every reachable entry must keep its exact effects, whether the writer
+  // uses a label or combines the now-reachable outer condition.
+  const std::string Program = "#include <stdint.h>\n" + Source + R"c(
+static int additional, observed, decisions;
+uint8_t take_additional_entry(void) { ++decisions; return additional; }
+void work_step(void) { observed = observed * 10 + 1; }
+void more_step(void) { observed = observed * 10 + 2; }
+void skip_step(void) { observed = observed * 10 + 3; }
+void tail_step(void) { observed = observed * 10 + 4; }
+int main(void) {
+  for (additional = 0; additional != 2; ++additional)
+    for (int flag = 0; flag != 2; ++flag) {
+      observed = decisions = 0;
+      skip_region_extra(flag);
+      const int expected = (additional || flag) ? 3 : 124;
+      if (observed != expected || decisions != 1) return 1;
+    }
+  return 0;
+}
+)c";
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    source_call_execution_test::compileAndRun(Program, {Level});
 }
 
 TEST(LLVMCPointerAddresses, KeepsSkipRegionWhenSideExitFollowsJoin) {
@@ -19160,6 +19216,9 @@ TEST(LLVMCPointerAddresses, InvertsSkipReachedThroughPassthroughs) {
   TailBuilder.CreateCall(TailFn);
   TailBuilder.CreateRetVoid();
 
+  addReachableIncomingEdge(Outside);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -19302,6 +19361,10 @@ TEST(LLVMCPointerAddresses, KeepsSkipGotoWhenPassthroughHasOutsideEntry) {
   TailBuilder.CreateRetVoid();
   llvm::IRBuilder<> SideBuilder(Side);
   SideBuilder.CreateBr(Skip);
+
+  addReachableIncomingEdge(Outside);
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
 
   std::string Source;
   llvm::raw_string_ostream OS(Source);
@@ -19568,6 +19631,9 @@ TEST(LLVMCPointerAddresses, PassthroughToSharedBlockKeepsRegionInsideTest) {
   LateBuilder.CreateCall(LateFn);
   LateBuilder.CreateRetVoid();
 
+  addReachableIncomingEdge(Outside);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -19682,7 +19748,8 @@ TEST(LLVMCPointerAddresses, LaterTrueArmJoinsFallthroughAsIfElse) {
       << Source;
 }
 
-TEST(LLVMCPointerAddresses, KeepsJoinGotoWhenLaterArmJoinHasAnotherEntry) {
+TEST(LLVMCPointerAddresses,
+     PreservesJoinEffectsWhenLaterArmJoinHasAnotherEntry) {
   llvm::LLVMContext Context;
   llvm::Module Module("llvm-c-later-arm-join-extra", Context);
   llvm::FunctionType *WorkTy =
@@ -19722,6 +19789,9 @@ TEST(LLVMCPointerAddresses, KeepsJoinGotoWhenLaterArmJoinHasAnotherEntry) {
   SideBuilder.CreateCall(SideFn);
   SideBuilder.CreateBr(Release);
 
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -19730,9 +19800,6 @@ TEST(LLVMCPointerAddresses, KeepsJoinGotoWhenLaterArmJoinHasAnotherEntry) {
   OS.flush();
   const auto BodyAt = Source.find("later_arm_join_extra(");
   ASSERT_NE(BodyAt, std::string::npos) << Source;
-  EXPECT_NE(Source.find("goto L_release;", BodyAt), std::string::npos)
-      << Source;
-  EXPECT_EQ(Source.find("else {", BodyAt), std::string::npos) << Source;
   const auto CtorAt = Source.find("ctor_step(", BodyAt);
   const auto WorkAt = Source.find("work_step(", BodyAt);
   const auto ReleaseAt = Source.find("release_step(", BodyAt);
@@ -19743,6 +19810,29 @@ TEST(LLVMCPointerAddresses, KeepsJoinGotoWhenLaterArmJoinHasAnotherEntry) {
   EXPECT_EQ(Source.find("work_step(", WorkAt + 1), std::string::npos) << Source;
   EXPECT_EQ(Source.find("release_step(", ReleaseAt + 1), std::string::npos)
       << Source;
+
+  // Every reachable entry must keep its exact effects, whether the writer
+  // uses a label or combines the now-reachable outer condition.
+  const std::string Program = "#include <stdint.h>\n" + Source + R"c(
+static int additional, observed, decisions;
+uint8_t take_additional_entry(void) { ++decisions; return additional; }
+void work_step(void) { observed = observed * 10 + 1; }
+void release_step(void) { observed = observed * 10 + 2; }
+void ctor_step(void) { observed = observed * 10 + 3; }
+void side_step(void) { observed = observed * 10 + 4; }
+int main(void) {
+  for (additional = 0; additional != 2; ++additional)
+    for (int flag = 0; flag != 2; ++flag) {
+      observed = decisions = 0;
+      later_arm_join_extra(flag);
+      const int expected = additional ? 42 : (flag ? 32 : 12);
+      if (observed != expected || decisions != 1) return 1;
+    }
+  return 0;
+}
+)c";
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    source_call_execution_test::compileAndRun(Program, {Level});
 }
 
 TEST(LLVMCPointerAddresses, SharedCtorBetweenTestsPrintsInBothMissArms) {
@@ -19979,6 +20069,9 @@ TEST(LLVMCPointerAddresses, KeepsSharedCtorGotoWhenThirdEdgeEnters) {
   llvm::IRBuilder<> SideBuilder(Side);
   SideBuilder.CreateCall(SideFn);
   SideBuilder.CreateBr(Shared);
+
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
 
   std::string Source;
   llvm::raw_string_ostream OS(Source);
@@ -20488,6 +20581,9 @@ TEST(LLVMCPointerAddresses, KeepsAssignSelectGotoWhenArmHasAnotherEntry) {
   llvm::IRBuilder<> SideBuilder(Side);
   SideBuilder.CreateBr(ArmLabel);
 
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -20558,6 +20654,9 @@ TEST(LLVMCPointerAddresses, KeepsTailGotoWhenTailHasAnotherEntry) {
   llvm::IRBuilder<> SideBuilder(Side);
   SideBuilder.CreateBr(Later);
 
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -20584,7 +20683,7 @@ TEST(LLVMCPointerAddresses, KeepsTailGotoWhenTailHasAnotherEntry) {
   EXPECT_EQ(Source.find("use_step(", UseAt + 1), std::string::npos) << Source;
 }
 
-TEST(LLVMCPointerAddresses, KeepsPassthroughGotoWhenArmHasAnotherEntry) {
+TEST(LLVMCPointerAddresses, PreservesPassthroughEffectsWhenArmHasAnotherEntry) {
   llvm::LLVMContext Context;
   llvm::Module Module("llvm-c-pass-arm-extra", Context);
   llvm::FunctionType *WorkTy =
@@ -20625,6 +20724,9 @@ TEST(LLVMCPointerAddresses, KeepsPassthroughGotoWhenArmHasAnotherEntry) {
   llvm::IRBuilder<> SideBuilder(Side);
   SideBuilder.CreateBr(Later);
 
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -20636,16 +20738,36 @@ TEST(LLVMCPointerAddresses, KeepsPassthroughGotoWhenArmHasAnotherEntry) {
   const auto LaterAt = Source.find("later_step(", BodyAt);
   const auto OtherAt = Source.find("other_step(", BodyAt);
   const auto UseAt = Source.find("use_step(", BodyAt);
-  const auto GotoAt = Source.find("goto L_later;", BodyAt);
   ASSERT_NE(LaterAt, std::string::npos) << Source;
   ASSERT_NE(OtherAt, std::string::npos) << Source;
   ASSERT_NE(UseAt, std::string::npos) << Source;
-  ASSERT_NE(GotoAt, std::string::npos) << Source;
   EXPECT_EQ(Source.find("later_step(", LaterAt + 1), std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("other_step(", OtherAt + 1), std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("use_step(", UseAt + 1), std::string::npos) << Source;
+
+  // Every reachable entry must keep its exact effects, whether the writer
+  // uses a label or combines the now-reachable outer condition.
+  const std::string Program = "#include <stdint.h>\n" + Source + R"c(
+static int additional, observed, decisions;
+uint8_t take_additional_entry(void) { ++decisions; return additional; }
+void later_step(void) { observed = observed * 10 + 1; }
+void other_step(void) { observed = observed * 10 + 2; }
+void use_step(void) { observed = observed * 10 + 3; }
+int main(void) {
+  for (additional = 0; additional != 2; ++additional)
+    for (int flag = 0; flag != 2; ++flag) {
+      observed = decisions = 0;
+      pass_arm_extra(flag);
+      const int expected = (additional || flag) ? 13 : 23;
+      if (observed != expected || decisions != 1) return 1;
+    }
+  return 0;
+}
+)c";
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    source_call_execution_test::compileAndRun(Program, {Level});
 }
 
 TEST(LLVMCPointerAddresses, KeepsSharedAssignGotoWhenDefaultHasAnotherEntry) {
@@ -20770,6 +20892,9 @@ TEST(LLVMCPointerAddresses, KeepsConditionChainGotoWhenDefaultHasAnotherEntry) {
   AfterBuilder.CreateRetVoid();
   llvm::IRBuilder<> SideBuilder(Side);
   SideBuilder.CreateBr(MissBB);
+
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
 
   std::string Source;
   llvm::raw_string_ostream OS(Source);
@@ -21777,6 +21902,9 @@ TEST(LLVMCPointerAddresses, KeepsFalseBodyLabelWhenItHasAnotherEntry) {
   OtherBuilder.CreateBr(Body);
   llvm::IRBuilder<> AfterBuilder(After);
   AfterBuilder.CreateRetVoid();
+
+  addReachableIncomingEdge(Other);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
 
   std::string Source;
   llvm::raw_string_ostream OS(Source);
