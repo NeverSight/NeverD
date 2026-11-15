@@ -135,7 +135,6 @@ inline constexpr size_t kEHFrameMaxAugmentationLength = 32;
 inline constexpr uint64_t kEHFrameCFIMaxExpressionBytes = 64 * 1024;
 
 // lib/loader/DWARF/ItaniumEH.cpp
-inline constexpr uint64_t kItaniumEHMaxIndex = 32 * 1024 * 1024;
 inline constexpr uint64_t kItaniumEHMaxDecode = 64 * 1024 * 1024;
 
 // lib/loader/DWARF/LSDA.cpp

@@ -10451,14 +10451,6 @@ Your previous graph is still available.</source>
         <translation>Импорт кода в образ</translation>
     </message>
     <message>
-        <source>Import process plugin</source>
-        <translation>Импорт процессного плагина</translation>
-    </message>
-    <message>
-        <source>Import process plugin…</source>
-        <translation>Импорт процессного плагина…</translation>
-    </message>
-    <message>
         <source>Log for %1</source>
         <translation>Журнал %1</translation>
     </message>
@@ -10519,10 +10511,6 @@ Your previous graph is still available.</source>
         <translation>Положение</translation>
     </message>
     <message>
-        <source>Process plugin imported: %1</source>
-        <translation>Процессный плагин импортирован: %1</translation>
-    </message>
-    <message>
         <source>Progress</source>
         <translation>Ход выполнения</translation>
     </message>
@@ -10565,6 +10553,18 @@ Your previous graph is still available.</source>
     <message>
         <source>This action registration is no longer active.</source>
         <translation>Регистрация этого действия больше не активна.</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>Импортировать плагин</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>Импортировать плагин…</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>Плагин импортирован: %1</translation>
     </message>
 </context>
 <context>
@@ -10630,16 +10630,8 @@ Your previous graph is still available.</source>
         <translation>ID: %1</translation>
     </message>
     <message>
-        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
-        <translation>Импортируйте манифест процессного плагина для добавления команд. Провайдер запускается только при выполнении команды.</translation>
-    </message>
-    <message>
         <source>Import plugin…</source>
         <translation>Импорт плагина…</translation>
-    </message>
-    <message>
-        <source>Import process plugin</source>
-        <translation>Импорт процессного плагина</translation>
     </message>
     <message>
         <source>Inactive</source>
@@ -10652,10 +10644,6 @@ Your previous graph is still available.</source>
     <message>
         <source>Installation removed; active work is stopping.</source>
         <translation>Запись установки удалена; выполняемые задачи останавливаются.</translation>
-    </message>
-    <message>
-        <source>Installed process plugins</source>
-        <translation>Установленные процессные плагины</translation>
     </message>
     <message>
         <source>Manifest: %1</source>
@@ -10722,10 +10710,6 @@ Your previous graph is still available.</source>
         <translation>Остановка</translation>
     </message>
     <message>
-        <source>Type: External process</source>
-        <translation>Тип: внешний процесс</translation>
-    </message>
-    <message>
         <source>Unavailable</source>
         <translation>Недоступен</translation>
     </message>
@@ -10748,6 +10732,42 @@ Your previous graph is still available.</source>
     <message>
         <source>Yes</source>
         <translation>Да</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>Импортировать плагин</translation>
+    </message>
+    <message>
+        <source>External process</source>
+        <translation>Внешний процесс</translation>
+    </message>
+    <message>
+        <source>Import a plugin manifest to add workbench commands or views.</source>
+        <translation>Импортируйте манифест плагина, чтобы добавить команды или представления в рабочую область.</translation>
+    </message>
+    <message>
+        <source>Installed plugins</source>
+        <translation>Установленные плагины</translation>
+    </message>
+    <message>
+        <source>Native GUI</source>
+        <translation>Нативный GUI</translation>
+    </message>
+    <message>
+        <source>Source: Bundled with NeverD</source>
+        <translation>Источник: входит в состав NeverD</translation>
+    </message>
+    <message>
+        <source>This plugin ships with NeverD. Use Disable to turn it off.</source>
+        <translation>Этот плагин входит в состав NeverD. Нажмите «Отключить», чтобы выключить его.</translation>
+    </message>
+    <message>
+        <source>Type: %1</source>
+        <translation>Тип: %1</translation>
+    </message>
+    <message>
+        <source>Unknown</source>
+        <translation>Неизвестно</translation>
     </message>
 </context>
 <context>
@@ -10926,6 +10946,48 @@ Your previous graph is still available.</source>
     <message>
         <source>Close Tab</source>
         <translation>Закрыть вкладку</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost</name>
+    <message>
+        <source>The GUI module failed during activation.</source>
+        <translation>Ошибка модуля GUI во время активации.</translation>
+    </message>
+    <message>
+        <source>The GUI module failed to activate.</source>
+        <translation>Не удалось активировать модуль GUI.</translation>
+    </message>
+    <message>
+        <source>The GUI module is missing or outside the package: %1</source>
+        <translation>Модуль GUI отсутствует или находится вне пакета: %1</translation>
+    </message>
+    <message>
+        <source>The module does not provide the required GUI interface.</source>
+        <translation>Модуль не предоставляет требуемый интерфейс GUI.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost::Binding</name>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin menu action: %1</source>
+        <translation>Недопустимое, повторное или недоступное действие меню плагина: %1</translation>
+    </message>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin view: %1</source>
+        <translation>Недопустимое, повторное или недоступное представление плагина: %1</translation>
+    </message>
+    <message>
+        <source>The analysis session has changed.</source>
+        <translation>Сеанс анализа изменился.</translation>
+    </message>
+    <message>
+        <source>The menu action factory must use the supplied parent.</source>
+        <translation>Фабрика действий меню должна использовать переданный родительский объект.</translation>
+    </message>
+    <message>
+        <source>The view factory must create a workbench child widget.</source>
+        <translation>Фабрика представлений должна создавать дочерний виджет рабочей области.</translation>
     </message>
 </context>
 </TS>

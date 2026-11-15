@@ -5,8 +5,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../../lib/backend/c/HighC/HighCWriter.h"
+#include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
+#include "neverd/Limits.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/pass/HighC/HighCPasses.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
@@ -478,6 +480,25 @@ TEST(HighCStoreForwarding, RetainsDefinitionsUsedByForwardedValues) {
       // This must exercise forwarding, rather than pass by disabling it.
       EXPECT_EQ(countPointerDerefStores(Body), 0u) << Body;
       EXPECT_EQ(countPointerDerefLoads(Body), 0u) << Body;
+      // Execute the emitted expression: a declaration change must not turn a
+      // forwarded bit reinterpretation into a numeric float-to-int cast.
+      const std::string Signature = FloatConversion ? "double" : "int32_t";
+      const std::string Inputs =
+          FloatConversion
+              ? "float values[] = {1.5f, -2.25f, 0.0f, -0.0f, 1.0e-30f};"
+              : "int32_t values[] = {0, 1, -1, 42, -500};";
+      source_call_execution_test::compileAndRun(
+          "#include <stdint.h>\n#include <string.h>\n" + Signature +
+          " forwarded_value_definition(int32_t arg0) {" + Body + "}\n" +
+          "int main(void) { " + Inputs +
+          " for (unsigned i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {"
+          " int32_t bits; memcpy(&bits, &values[i], sizeof(bits)); " +
+          Signature + " expected = (" + Signature + ")values[i]" +
+          (AdditionalUse ? " + (" + Signature + ")values[i]" : "") + "; " +
+          Signature +
+          " actual = forwarded_value_definition(bits);"
+          " if (memcmp(&actual, &expected, sizeof(actual))) return 1;"
+          " } return 0; }\n");
     }
   }
 }
@@ -835,6 +856,64 @@ TEST(HighCStoreForwarding,
       << Body;
   // The member names every access, so nothing reads the storage's base.
   EXPECT_EQ(Body.find("frame_base"), std::string::npos) << Body;
+}
+
+TEST(HighCStoreForwarding, EscapedFrameIncrementKeepsItsLoadDefinition) {
+  const auto I32 = NdType::makeInt(4, true);
+  const auto U32 = NdType::makeInt(4, false);
+  HighFunc Func;
+  Func.Name = "escaped_frame_increment";
+  Func.FrameSize = 16;
+  Func.ReturnType = U32;
+  Func.Params = {{"arg0", U32}, {"arg1", NdType::makePtr(NdType::makeInt(8))}};
+  MedVar Old;
+  Old.Kind = MedVar::Temp;
+  Old.Id = 324;
+  Old.SSAVer = 1502;
+  Old.Size = 4;
+  HighStmt Load;
+  Load.Kind = StmtKind::Assign;
+  Load.Dst = HighExpr::makeVar(Old, I32);
+  Load.Val = HighExpr::makeLoad(frameSlot(8), U32);
+  auto Address = std::make_shared<HighExpr>();
+  Address->Kind = ExprKind::Addr;
+  Address->Type = NdType::makePtr(U32);
+  Address->Operands = {HighExpr::makeLoad(frameSlot(8), U32)};
+  Func.Body = {
+      store(frameSlot(8), makeParam(0, 4, U32)),
+      store(makeParam(1, 8, Func.Params[1].Type), Address), Load,
+      store(frameSlot(8),
+            HighExpr::makeBinop(NdOp::INT_ADD, HighExpr::makeVar(Old, I32),
+                                HighExpr::makeConst(1, 4))),
+      ret(HighExpr::makeLoad(frameSlot(8), U32))};
+  // The large-function path retains single-use temporaries. In that path
+  // the increment's load must survive any later change to frame storage.
+  std::vector<HighStmt> Statements;
+  Statements.reserve(limits::kMaxValueForwardSites + 1 + Func.Body.size());
+  for (size_t I = 0; I <= limits::kMaxValueForwardSites; ++I)
+    Statements.push_back(
+        store(makeParam(1, 8, Func.Params[1].Type), HighExpr::makeConst(I, 8)));
+  for (auto &Stmt : Func.Body)
+    Statements.push_back(std::move(Stmt));
+  Func.Body = std::move(Statements);
+  std::string Body;
+  llvm::raw_string_ostream OS(Body);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  const std::map<int64_t, CEmitterOptions::FrameVariable> FrameNames{
+      {-8, {"counter", U32}}};
+  Options.FrameVariables = &FrameNames;
+  ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options));
+  EXPECT_NE(Body.find("} stack_storage;"), std::string::npos)
+      << llvm::StringRef(Body).take_back(2048).str();
+  if (Body.find("t324_1502") != std::string::npos) {
+    EXPECT_NE(Body.find("int32_t t324_1502;"), std::string::npos)
+        << llvm::StringRef(Body).take_back(2048).str();
+    EXPECT_NE(Body.find("t324_1502 ="), std::string::npos)
+        << llvm::StringRef(Body).take_back(2048).str();
+  }
+  EXPECT_NE(Body.find(" + 1;"), std::string::npos)
+      << llvm::StringRef(Body).take_back(2048).str();
 }
 
 TEST(HighCStoreForwarding, NamedPointerFrameSlotKeepsExplicitPointerBits) {

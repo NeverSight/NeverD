@@ -10379,14 +10379,6 @@ Your previous graph is still available.</source>
         <translation>이미지로 코드 가져오기</translation>
     </message>
     <message>
-        <source>Import process plugin</source>
-        <translation>프로세스 플러그인 가져오기</translation>
-    </message>
-    <message>
-        <source>Import process plugin…</source>
-        <translation>프로세스 플러그인 가져오기…</translation>
-    </message>
-    <message>
         <source>Log for %1</source>
         <translation>%1 로그</translation>
     </message>
@@ -10447,10 +10439,6 @@ Your previous graph is still available.</source>
         <translation>위치</translation>
     </message>
     <message>
-        <source>Process plugin imported: %1</source>
-        <translation>프로세스 플러그인을 가져왔습니다: %1</translation>
-    </message>
-    <message>
         <source>Progress</source>
         <translation>진행률</translation>
     </message>
@@ -10493,6 +10481,18 @@ Your previous graph is still available.</source>
     <message>
         <source>This action registration is no longer active.</source>
         <translation>이 동작의 등록이 더 이상 활성 상태가 아닙니다.</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>플러그인 가져오기</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>플러그인 가져오기…</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>플러그인을 가져왔습니다: %1</translation>
     </message>
 </context>
 <context>
@@ -10558,16 +10558,8 @@ Your previous graph is still available.</source>
         <translation>ID: %1</translation>
     </message>
     <message>
-        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
-        <translation>프로세스 플러그인 매니페스트를 가져와 명령을 추가하세요. 제공 프로그램은 명령 실행 시에만 시작됩니다.</translation>
-    </message>
-    <message>
         <source>Import plugin…</source>
         <translation>플러그인 가져오기…</translation>
-    </message>
-    <message>
-        <source>Import process plugin</source>
-        <translation>프로세스 플러그인 가져오기</translation>
     </message>
     <message>
         <source>Inactive</source>
@@ -10580,10 +10572,6 @@ Your previous graph is still available.</source>
     <message>
         <source>Installation removed; active work is stopping.</source>
         <translation>설치 기록을 제거했습니다. 실행 중인 작업을 중지합니다.</translation>
-    </message>
-    <message>
-        <source>Installed process plugins</source>
-        <translation>설치된 프로세스 플러그인</translation>
     </message>
     <message>
         <source>Manifest: %1</source>
@@ -10650,10 +10638,6 @@ Your previous graph is still available.</source>
         <translation>중지 중</translation>
     </message>
     <message>
-        <source>Type: External process</source>
-        <translation>유형: 외부 프로세스</translation>
-    </message>
-    <message>
         <source>Unavailable</source>
         <translation>사용 불가</translation>
     </message>
@@ -10676,6 +10660,42 @@ Your previous graph is still available.</source>
     <message>
         <source>Yes</source>
         <translation>예</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>플러그인 가져오기</translation>
+    </message>
+    <message>
+        <source>External process</source>
+        <translation>외부 프로세스</translation>
+    </message>
+    <message>
+        <source>Import a plugin manifest to add workbench commands or views.</source>
+        <translation>플러그인 매니페스트를 가져와 워크벤치 명령이나 뷰를 추가합니다.</translation>
+    </message>
+    <message>
+        <source>Installed plugins</source>
+        <translation>설치된 플러그인</translation>
+    </message>
+    <message>
+        <source>Native GUI</source>
+        <translation>네이티브 GUI</translation>
+    </message>
+    <message>
+        <source>Source: Bundled with NeverD</source>
+        <translation>출처: NeverD에 포함</translation>
+    </message>
+    <message>
+        <source>This plugin ships with NeverD. Use Disable to turn it off.</source>
+        <translation>이 플러그인은 NeverD에 포함되어 있습니다. 비활성화를 사용하여 끌 수 있습니다.</translation>
+    </message>
+    <message>
+        <source>Type: %1</source>
+        <translation>유형: %1</translation>
+    </message>
+    <message>
+        <source>Unknown</source>
+        <translation>알 수 없음</translation>
     </message>
 </context>
 <context>
@@ -10854,6 +10874,48 @@ Your previous graph is still available.</source>
     <message>
         <source>Close Tab</source>
         <translation>탭 닫기</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost</name>
+    <message>
+        <source>The GUI module failed during activation.</source>
+        <translation>GUI 모듈 활성화 중 오류가 발생했습니다.</translation>
+    </message>
+    <message>
+        <source>The GUI module failed to activate.</source>
+        <translation>GUI 모듈을 활성화하지 못했습니다.</translation>
+    </message>
+    <message>
+        <source>The GUI module is missing or outside the package: %1</source>
+        <translation>GUI 모듈이 없거나 패키지 외부에 있습니다: %1</translation>
+    </message>
+    <message>
+        <source>The module does not provide the required GUI interface.</source>
+        <translation>모듈에 필요한 GUI 인터페이스가 없습니다.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost::Binding</name>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin menu action: %1</source>
+        <translation>플러그인 메뉴 작업이 잘못되었거나 중복되었거나 사용할 수 없습니다: %1</translation>
+    </message>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin view: %1</source>
+        <translation>플러그인 뷰가 잘못되었거나 중복되었거나 사용할 수 없습니다: %1</translation>
+    </message>
+    <message>
+        <source>The analysis session has changed.</source>
+        <translation>분석 세션이 변경되었습니다.</translation>
+    </message>
+    <message>
+        <source>The menu action factory must use the supplied parent.</source>
+        <translation>메뉴 작업 팩터리는 제공된 부모 객체를 사용해야 합니다.</translation>
+    </message>
+    <message>
+        <source>The view factory must create a workbench child widget.</source>
+        <translation>뷰 팩터리는 워크벤치의 자식 위젯을 만들어야 합니다.</translation>
     </message>
 </context>
 </TS>

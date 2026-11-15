@@ -4,6 +4,8 @@
 #include "QueryService.h"
 
 #include <QElapsedTimer>
+#include <QHash>
+#include <QJsonArray>
 #include <QSet>
 #include <array>
 #include <memory>
@@ -46,10 +48,12 @@ public:
   /// That job's state as the replica's last heartbeat reports it; empty where
   /// it reports none.
   const QString &renderAheadState() const { return renderAheadState_; }
+  void setPrepareViews(bool prepare) { prepareViews_ = prepare; }
   static bool handles(const QString &operation);
 
 signals:
   void diagnostic(const QString &message);
+  void loadProgress(const QJsonObject &payload);
   /// The replica's decompiles read the image's call summaries now, which it
   /// solved in idle time: earlier replies no longer answer.
   void sourceRefined();
@@ -113,6 +117,9 @@ private:
   QElapsedTimer restoring_;
   qint64 restoreMilliseconds_ = 0;
   QJsonObject payload_, snapshot_;
+  /// Facts already sent to the project owner at its current revision. Source
+  /// pages share these arrays, so scrolling sends no duplicate publications.
+  QHash<QString, QJsonArray> publishedVirtualCalls_;
   QueryService::SubscriptionId snapshotRequest_ = 0;
   QueryService::SubscriptionId keptStateRequest_ = 0, keptRead_ = 0;
   /// What the owner says the store holds for the current project state.
@@ -142,6 +149,7 @@ private:
   /// The project whose replica last exited abnormally, whose replicas render
   /// nothing ahead from then on.
   std::optional<QString> renderCrashProject_;
+  bool prepareViews_ = false;
 };
 
 /// Bounded independent replicas. A function's pages and graph transaction stay
@@ -206,6 +214,12 @@ public:
   /// Prepare one native entry in the same replica later source reads use.
   /// This is speculative read-only work; context changes cancel it normally.
   void prefetchSource(quint64 address);
+  /// Finish restoring and preparing the reusable source executor. This read
+  /// is handled locally after restore, without decompiling an arbitrary entry.
+  void prepareViews(QObject *owner, QueryService::Completion complete);
+  /// Set when opening a project. Large images keep one reusable analysis
+  /// session instead of duplicating their image and debug indexes per view.
+  void setSingleReplica(bool single);
   /// Avoid overlapping a large discovery snapshot with a fresh image replica.
   /// Reads in an existing replica remain independent of the owner.
   void setSnapshotBlocked(bool blocked);
@@ -213,11 +227,13 @@ public:
   // Keep that stateful protocol on one replica, as before the pool existed.
   QueryService &externalQueries() { return lanes_.front().service->queries(); }
   QSet<QObject *> snapshotOwners() const;
-  void unsubscribeOwner(QObject *owner);
+  void unsubscribeOwner(QObject *owner, QueryService::DetachPolicy policy =
+                                            QueryService::CancelRunning);
   void cancelReads(const QSet<QObject *> &keep = {});
 
 signals:
   void diagnostic(const QString &message);
+  void loadProgress(const QJsonObject &payload);
   /// A replica's decompiles changed once, as AnalysisService::sourceRefined.
   void sourceRefined();
 
@@ -235,8 +251,10 @@ private:
   QHash<QObject *, Binding> bindings_;
   /// The project those bindings are of.
   QString boundProject_;
+  QHash<quint64, size_t> functionLanes_;
   QObject preparationOwner_;
   quint64 preparationSerial_ = 0;
   bool preparing_ = false;
+  bool singleReplica_ = false;
 };
 } // namespace neverd::gui

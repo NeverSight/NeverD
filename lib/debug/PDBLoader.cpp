@@ -24,6 +24,7 @@
 #include "neverd/loader/COFF/PEHeaderMapping.h"
 #include "neverd/support/FilePath.h"
 #include "neverd/types/CodeViewCallingConvention.h"
+#include "neverd/types/CodeViewFunctionParameters.h"
 
 #define DEBUG_TYPE "neverd-pdb-loader"
 #include "llvm/ADT/STLFunctionalExtras.h"
@@ -1030,8 +1031,8 @@ struct PDBDebugContext::Impl {
                            int Depth) const;
   TypeRef functionReturnFromType(llvm::codeview::TypeIndex TI,
                                  bool FromIpi) const;
-  std::vector<TypeRef> functionParamTypesFromType(llvm::codeview::TypeIndex TI,
-                                                  bool FromIpi) const;
+  TypeRef functionTypeFromType(llvm::codeview::TypeIndex TI,
+                               bool FromIpi) const;
   DebugCallConv functionCallConvFromType(llvm::codeview::TypeIndex TI,
                                          bool FromIpi) const;
   std::optional<llvm::codeview::CVType>
@@ -1154,6 +1155,52 @@ TypeRef PDBDebugContext::Impl::resolveRecord(llvm::codeview::CVType CV,
   };
   auto RecurseNamed = [&](llvm::codeview::TypeIndex Next) -> TypeRef {
     return resolveTpi(Next, Depth + 1, TpiWalk::Named);
+  };
+  // Procedure and member-function records share the same fixed parameters
+  // and trailing no-type marker. Never truncate an inconsistent list or
+  // replace an unreadable signature with a zero-argument function.
+  const auto FunctionType = [&](const auto &Rec) -> TypeRef {
+    TypeRef Return = Rec.ReturnType.isNoneType() ? NdType::makeVoid()
+                                                 : Recurse(Rec.ReturnType);
+    auto Function = NdType::makeFunc(
+        Return, {}, types::codeViewCallingConvention(Rec.CallConv, PtrSize));
+    if (Rec.ArgumentList.isNoneType() && Rec.ParameterCount == 0)
+      return Function;
+    llvm::codeview::CVType ArgCV;
+    bool HaveArgs = false;
+    {
+      std::lock_guard<std::mutex> Guard(TypeMutex);
+      TypeGraph &Graph = UseIpi ? Ipi : Tpi;
+      ensureGraph(Graph, UseIpi);
+      if (Graph.Valid && Graph.Stream && !Rec.ArgumentList.isSimple()) {
+        if (auto TypeOr = Graph.Stream->tryGetType(Rec.ArgumentList)) {
+          ArgCV = *TypeOr;
+          HaveArgs = true;
+        }
+      }
+    }
+    llvm::codeview::ArgListRecord Args;
+    bool Valid = HaveArgs;
+    if (Valid) {
+      if (auto Err =
+              llvm::codeview::TypeDeserializer::deserializeAs(ArgCV, Args)) {
+        llvm::consumeError(std::move(Err));
+        Valid = false;
+      }
+    }
+    const auto Parameters =
+        Valid ? types::codeViewFunctionParameters(
+                    Rec.ParameterCount, Args.ArgIndices.size(),
+                    [&](size_t I) { return Args.ArgIndices[I].isNoneType(); })
+              : std::nullopt;
+    if (!Parameters) {
+      Function->RetType.reset();
+      return Function;
+    }
+    Function->FunctionVariadic = Parameters->Variadic;
+    for (size_t I = 0; I < Parameters->FixedCount; ++I)
+      Function->ParamTypes.push_back(Recurse(Args.ArgIndices[I]));
+    return Function;
   };
 
   switch (CV.kind()) {
@@ -1324,43 +1371,7 @@ TypeRef PDBDebugContext::Impl::resolveRecord(llvm::codeview::CVType CV,
       llvm::consumeError(std::move(Err));
       return {};
     }
-    TypeRef Return = Recurse(Rec.ReturnType);
-    if (!Return)
-      Return = NdType::makeVoid();
-    std::vector<TypeRef> Params;
-    llvm::codeview::ArgListRecord Args;
-    llvm::codeview::CVType ArgCV;
-    bool HaveArgs = false;
-    {
-      std::lock_guard<std::mutex> Guard(TypeMutex);
-      TypeGraph &Graph = UseIpi ? Ipi : Tpi;
-      ensureGraph(Graph, UseIpi);
-      if (Graph.Valid && Graph.Stream && !Rec.ArgumentList.isSimple()) {
-        if (auto TypeOr = Graph.Stream->tryGetType(Rec.ArgumentList)) {
-          ArgCV = *TypeOr;
-          HaveArgs = true;
-        }
-      }
-    }
-    if (HaveArgs) {
-      if (auto Err =
-              llvm::codeview::TypeDeserializer::deserializeAs(ArgCV, Args)) {
-        llvm::consumeError(std::move(Err));
-      } else {
-        const uint32_t Limit = std::min<uint32_t>(
-            Args.ArgIndices.size(),
-            Rec.ParameterCount ? Rec.ParameterCount : Args.ArgIndices.size());
-        for (uint32_t I = 0; I < Limit; ++I) {
-          if (Args.ArgIndices[I].isNoneType())
-            continue;
-          TypeRef Arg = Recurse(Args.ArgIndices[I]);
-          Params.push_back(Arg ? Arg : NdType::makeVoid());
-        }
-      }
-    }
-    return NdType::makeFunc(
-        Return, std::move(Params),
-        types::codeViewCallingConvention(Rec.CallConv, PtrSize));
+    return FunctionType(Rec);
   }
   case LK::LF_MFUNCTION: {
     llvm::codeview::MemberFunctionRecord Rec;
@@ -1368,43 +1379,7 @@ TypeRef PDBDebugContext::Impl::resolveRecord(llvm::codeview::CVType CV,
       llvm::consumeError(std::move(Err));
       return {};
     }
-    TypeRef Return = Recurse(Rec.ReturnType);
-    if (!Return)
-      Return = NdType::makeVoid();
-    std::vector<TypeRef> Params;
-    llvm::codeview::ArgListRecord Args;
-    llvm::codeview::CVType ArgCV;
-    bool HaveArgs = false;
-    {
-      std::lock_guard<std::mutex> Guard(TypeMutex);
-      TypeGraph &Graph = UseIpi ? Ipi : Tpi;
-      ensureGraph(Graph, UseIpi);
-      if (Graph.Valid && Graph.Stream && !Rec.ArgumentList.isSimple()) {
-        if (auto TypeOr = Graph.Stream->tryGetType(Rec.ArgumentList)) {
-          ArgCV = *TypeOr;
-          HaveArgs = true;
-        }
-      }
-    }
-    if (HaveArgs) {
-      if (auto Err =
-              llvm::codeview::TypeDeserializer::deserializeAs(ArgCV, Args)) {
-        llvm::consumeError(std::move(Err));
-      } else {
-        const uint32_t Limit = std::min<uint32_t>(
-            Args.ArgIndices.size(),
-            Rec.ParameterCount ? Rec.ParameterCount : Args.ArgIndices.size());
-        for (uint32_t I = 0; I < Limit; ++I) {
-          if (Args.ArgIndices[I].isNoneType())
-            continue;
-          TypeRef Arg = Recurse(Args.ArgIndices[I]);
-          Params.push_back(Arg ? Arg : NdType::makeVoid());
-        }
-      }
-    }
-    return NdType::makeFunc(
-        Return, std::move(Params),
-        types::codeViewCallingConvention(Rec.CallConv, PtrSize));
+    return FunctionType(Rec);
   }
   case LK::LF_BITFIELD: {
     llvm::codeview::BitFieldRecord Rec;
@@ -1696,12 +1671,12 @@ PDBDebugContext::Impl::functionReturnFromType(llvm::codeview::TypeIndex TI,
   return {};
 }
 
-std::vector<TypeRef>
-PDBDebugContext::Impl::functionParamTypesFromType(llvm::codeview::TypeIndex TI,
-                                                  bool FromIpi) const {
+TypeRef
+PDBDebugContext::Impl::functionTypeFromType(llvm::codeview::TypeIndex TI,
+                                            bool FromIpi) const {
   const TypeRef Ty = FromIpi ? resolveIpi(TI) : resolveTpi(TI);
   if (Ty && Ty->Kind == NdTypeKind::Func)
-    return Ty->ParamTypes;
+    return Ty;
   return {};
 }
 
@@ -2261,6 +2236,13 @@ void PDBDebugContext::ensureLocalsForAddress(va_t Addr) const {
         FuncIt->second.CallConv = PImpl->functionCallConvFromType(
             Proc.FunctionType, Proc.FunctionTypeFromIpi);
     }
+    const auto Signature = PImpl->functionTypeFromType(
+        Proc.FunctionType, Proc.FunctionTypeFromIpi);
+    if (!Proc.FunctionType.isNoneType() &&
+        (!Signature || !Signature->RetType || !Signature->FunctionConvention))
+      FuncIt->second.PlatformConvention = false;
+    if (Signature)
+      FuncIt->second.IsVariadic = Signature->FunctionVariadic;
     // Template / optimized procs often have LF_PROCEDURE arity but no
     // S_LOCAL IsParameter names. TPI still owns display params.
     if (!FuncIt->second.Params.empty())
@@ -2268,12 +2250,8 @@ void PDBDebugContext::ensureLocalsForAddress(va_t Addr) const {
     std::vector<std::pair<std::string, TypeRef>> Params;
     for (const auto &Param : Proc.ParamIds)
       Params.emplace_back(Param.first, TypeRef{});
-    if (!Proc.FunctionType.isNoneType()) {
-      const auto TpiParams = PImpl->functionParamTypesFromType(
-          Proc.FunctionType, Proc.FunctionTypeFromIpi);
-      if (!TpiParams.empty())
-        Params = bindDebugParamsToTpi(std::move(Params), TpiParams);
-    }
+    if (Signature && !Signature->ParamTypes.empty())
+      Params = bindDebugParamsToTpi(std::move(Params), Signature->ParamTypes);
     size_t Id = 0;
     for (auto &Param : Params) {
       if (Param.second)

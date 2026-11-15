@@ -69,6 +69,14 @@ markedEntryAfterFunctionEnd(const BinaryImage &Img, va_t Addr,
 
 } // namespace
 
+/// fork 路径（runsIntoAArch64 等）需要 2 参的 bool 判定接口；上游的
+/// 判定核心在匿名命名空间的 3 参版里，需要一个 NoReturn 索引来确认
+/// 调用是否结束。此处构造一个无共享证明的轻量本地实例做委托。
+bool aarch64MarkedEntryAfterFunctionEnd(const BinaryImage &Img, va_t Addr) {
+  InternalNoReturnIndex NoReturn(Img, nullptr, nullptr, nullptr, nullptr);
+  return markedEntryAfterFunctionEnd(Img, Addr, NoReturn).has_value();
+}
+
 void scanSegmentCallsAArch64(const BinaryImage &Img, const Segment *Seg,
                              va_t Start, va_t End, std::set<va_t> &Out,
                              AArch64EntryScan &Entries,

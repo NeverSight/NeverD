@@ -281,8 +281,7 @@ bool MedLLVMEmitter::dataOccurrenceSymbolizes(
   uint64_t Address = 0;
   if (isExactAddressProvenance(Cur.Provenance) &&
       resolveMaterializableDataAddress(Cur, Address))
-    return Cur.Provenance != ConstantAddressProvenance::Address ||
-           !addrInCodePtrMirrorRun(Cur.ConstVal);
+    return true;
 
   if (Cur.Provenance != ConstantAddressProvenance::Unknown)
     return false;
@@ -415,6 +414,8 @@ MedLLVMEmitter::summarizeConstantProvenance(const MedVar &V) const {
       case ConstantAddressProvenance::Scalar:
         return {Model::Scalar, false};
       case ConstantAddressProvenance::AddressFragment:
+        if (isOriginalImagePageAddress(Cur))
+          return {Model::Address, false};
         return {Model::AddressFragment, true};
       case ConstantAddressProvenance::Address:
       case ConstantAddressProvenance::DataAddress:
@@ -550,7 +551,8 @@ MedLLVMEmitter::summarizeConstantProvenance(const MedVar &V) const {
 
 bool MedLLVMEmitter::occurrenceHasAddressFragmentTaint(const MedVar &V) const {
   if (V.isConst())
-    return isIncompleteRelocatableConstant(V, TargetArch);
+    return isIncompleteRelocatableConstant(V, TargetArch) &&
+           !isOriginalImagePageAddress(V);
   if (!CurMedFunc || AddressFragmentTaintFor != CurMedFunc)
     return false;
   return AddressFragmentTaint.count(addressProvenanceVarKey(V)) != 0;
@@ -985,13 +987,81 @@ llvm::Value *MedLLVMEmitter::getRawInteger(const MedVar &V, RawIntegerRole Role,
   return Result;
 }
 
+llvm::Value *MedLLVMEmitter::getIncomingParameter(const MedVar &V,
+                                                  llvm::IRBuilder<> &Builder) {
+  const bool UnwrittenRegister = V.Kind == MedVar::Reg && V.SSAVer < 0;
+  llvm::Value *ArgVal = nullptr;
+  if ((V.Kind == MedVar::Param || V.Kind == MedVar::Reg) &&
+      V.RegOff != kNoParamReg) {
+    auto RIt = ParamRegoffMap.find(V.RegOff);
+    if (RIt != ParamRegoffMap.end())
+      ArgVal = RIt->second;
+  }
+  if (!ArgVal && !UnwrittenRegister) {
+    auto PIt = ParamArgs.find(V.display());
+    if (PIt != ParamArgs.end())
+      ArgVal = PIt->second;
+  }
+  if (!ArgVal && V.Kind == MedVar::Reg && Img && Img->isArm64e() && V.Size &&
+      V.Size <= getTargetRegInfo(TargetArch).PointerSize) {
+    ArgVal = readDarwinAArch64EntryRegister(*CurFunc, V.RegOff);
+    if (ArgVal)
+      ParamRegoffMap.emplace(V.RegOff, ArgVal);
+  }
+  if (!ArgVal)
+    return nullptr;
+  const unsigned WantBits = V.Size > 0 ? V.Size * 8 : 64;
+  const unsigned ArgBits =
+      ArgVal->getType()->isPointerTy()
+          ? CurFunc->getParent()->getDataLayout().getPointerTypeSizeInBits(
+                ArgVal->getType())
+          : ArgVal->getType()->getPrimitiveSizeInBits();
+  // The negative SSA sentinel reads the unchanged incoming register. An
+  // established argument supplies only its own bits, never an unknown high
+  // suffix or the version-zero write on another path.
+  auto *WantTy = llvm::IntegerType::get(*Ctx, WantBits);
+  llvm::Value *Bits = ArgVal;
+  if (ArgVal->getType()->isPointerTy())
+    Bits =
+        Builder.CreatePtrToInt(ArgVal, llvm::IntegerType::get(*Ctx, ArgBits));
+  // A vector/FP argument read through another register-slice width carries
+  // its bits, not a numeric conversion of the floating-point value.
+  else if (!ArgVal->getType()->isIntegerTy())
+    Bits = Builder.CreateBitCast(ArgVal, llvm::IntegerType::get(*Ctx, ArgBits),
+                                 "arg_bits");
+  if (ArgBits == WantBits)
+    return Bits;
+  if (ArgBits > WantBits)
+    return Builder.CreateTrunc(Bits, WantTy);
+  Bits = Builder.CreateZExt(Bits, WantTy);
+  if (!UnwrittenRegister)
+    return Bits;
+  // Transporting the wider register must retain the known low bits. A later
+  // slice can discard the unknown suffix; observing that suffix still fails
+  // closed in source projection.
+  auto *HighTy = llvm::IntegerType::get(*Ctx, WantBits - ArgBits);
+  llvm::Value *High =
+      PreserveUnknownSourceValues
+          ? llvm_source_unknown::create(Builder, HighTy)
+          : Builder.CreateFreeze(llvm::PoisonValue::get(HighTy));
+  High = Builder.CreateShl(Builder.CreateZExt(High, WantTy), ArgBits);
+  return Builder.CreateOr(Bits, High, "incoming_bits");
+}
+
 llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
                                     llvm::IRBuilder<> &Builder) {
   // Validated mutable source has no image relocation. Its constants are raw
   // occurrence values; whole-function variable roles are not SSA evidence.
   if (CurMedFunc && CurMedFunc->SkippedSSA && V.isConst())
     return rawIntegerConstant(*Ctx, sizeToType(V.Size), V.ConstVal);
-  if (V.Kind == MedVar::Unspecified) {
+  if (V.Kind == MedVar::Unspecified ||
+      (V.Kind == MedVar::Reg && V.SSAVer < 0)) {
+    if (V.Kind == MedVar::Reg)
+      if (auto *Parameter = getIncomingParameter(V, Builder))
+        return Parameter;
+    // No established parameter covers this register view. Explicitly
+    // unspecified state never becomes a parameter merely by sharing its
+    // register; neither a zero fill nor another path's definition is valid.
     auto *Type = llvm::Type::getIntNTy(*Ctx, std::max<unsigned>(V.Size, 1) * 8);
     if (PreserveUnknownSourceValues)
       return llvm_source_unknown::create(Builder, Type);
@@ -1093,8 +1163,12 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
         FatalDataPointerResolution = true;
       return llvm::UndefValue::get(sizeToType(V.Size));
     };
-    // Explicit scalar and page-fragment occurrences never enter the legacy
-    // value-global classifier.  A fragment is allowed to exist as an
+    if (isOriginalImagePageAddress(V))
+      return materializeDataRelationConstant(V.ConstVal, V.Size, Builder,
+                                             V.ConstVal);
+
+    // Explicit scalar and remaining page-fragment occurrences never enter the
+    // legacy value-global classifier.  A fragment is allowed to exist as an
     // intermediate ADRP/page-base value; escape sinks reject it separately.
     if (V.Provenance == ConstantAddressProvenance::Scalar ||
         V.Provenance == ConstantAddressProvenance::AddressFragment)
@@ -1158,20 +1232,13 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
         return rawConstant();
       }
 
-      // A role-neutral address anywhere in a contiguous pointer-mirror run
-      // must stay in the original numeric model until the complete memory
-      // access is anchored to that mirror.  This includes a relocation-free
-      // tail object in an adjacent .rodata segment; eagerly materializing only
-      // that tail would mix it with the raw RELRO head nodes in a PHI/SELECT.
-      if (V.Provenance == ConstantAddressProvenance::Address &&
-          !usesOriginalImageStorage() && addrInCodePtrMirrorRun(V.ConstVal))
-        return rawConstant();
-
       uint64_t Address = 0;
       uint64_t OwnerVA = InvalidVA;
       if (resolveMaterializableDataAddress(V, Address, &OwnerVA))
         return materializeDataRelationConstant(Address, V.Size, Builder,
                                                OwnerVA);
+      // The shared owner keeps immutable pointer-table addresses deferred;
+      // complete mutable mirrors already materialized their runtime identity.
       if (V.Provenance == ConstantAddressProvenance::Address)
         return rawConstant();
       return failUnresolvableDataConstant();
@@ -1357,53 +1424,8 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
   // promoted forwarders deliberately share the synthetic Id -1, so their
   // display names are not unique.
   if (V.Kind == MedVar::Param || (!HasLocalDef && V.SSAVer == 0)) {
-    llvm::Value *ArgVal = nullptr;
-    if ((V.Kind == MedVar::Param || V.Kind == MedVar::Reg) &&
-        V.RegOff != kNoParamReg) {
-      auto RIt = ParamRegoffMap.find(V.RegOff);
-      if (RIt != ParamRegoffMap.end())
-        ArgVal = RIt->second;
-    }
-    if (!ArgVal) {
-      auto PIt = ParamArgs.find(V.display());
-      if (PIt != ParamArgs.end())
-        ArgVal = PIt->second;
-    }
-    if (!ArgVal && V.Kind == MedVar::Reg && Img && Img->isArm64e() && V.Size &&
-        V.Size <= getTargetRegInfo(TargetArch).PointerSize) {
-      ArgVal = readDarwinAArch64EntryRegister(*CurFunc, V.RegOff);
-      if (ArgVal)
-        ParamRegoffMap.emplace(V.RegOff, ArgVal);
-    }
-    if (ArgVal) {
-      unsigned WantBits = V.Size > 0 ? V.Size * 8 : 64;
-      auto *WantTy = llvm::IntegerType::get(*Ctx, WantBits);
-      if (ArgVal->getType()->isPointerTy())
-        return Builder.CreatePtrToInt(ArgVal, WantTy);
-      if (ArgVal->getType() == WantTy)
-        return ArgVal;
-      if (ArgVal->getType()->getPrimitiveSizeInBits() == WantBits)
-        return Builder.CreateBitCast(ArgVal, WantTy, "vec2int");
-      if (ArgVal->getType()->isIntegerTy()) {
-        if (ArgVal->getType()->getIntegerBitWidth() > WantBits)
-          return Builder.CreateTrunc(ArgVal, WantTy);
-        return Builder.CreateZExt(ArgVal, WantTy);
-      }
-      // A vector/FP argument (e.g. the <2 x i64> ABI form of an XMM/V register)
-      // read at a different register-slice width: bridge through an integer of
-      // the argument's own width, then narrow (a scalar in the low lane) or
-      // widen.  A direct bitcast is only valid at equal width (handled above).
-      if (unsigned ArgBits = ArgVal->getType()->getPrimitiveSizeInBits()) {
-        llvm::Value *AsInt = Builder.CreateBitCast(
-            ArgVal, llvm::IntegerType::get(*Ctx, ArgBits), "arg_bits");
-        if (ArgBits > WantBits)
-          return Builder.CreateTrunc(AsInt, WantTy);
-        if (ArgBits < WantBits)
-          return Builder.CreateZExt(AsInt, WantTy);
-        return AsInt;
-      }
-      return Builder.CreateBitCast(ArgVal, WantTy, "arg_cast");
-    }
+    if (auto *Parameter = getIncomingParameter(V, Builder))
+      return Parameter;
   }
 
   if (HasLocalDef) {

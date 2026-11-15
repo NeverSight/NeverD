@@ -220,7 +220,9 @@ bool HighExpr::structuralEq(const HighExpr &Other) const {
       return false;
     break;
   case ExprKind::Var:
-    return Var == Other.Var;
+    return Var == Other.Var &&
+           (!(SourcePointerType || Other.SourcePointerType) ||
+            equalSourceTypes(SourcePointerType, Other.SourcePointerType));
   case ExprKind::EntryRegister:
     return EntryFunctionVA == Other.EntryFunctionVA &&
            EntryVA == Other.EntryVA && Var.TheArch == Other.Var.TheArch &&
@@ -235,6 +237,8 @@ bool HighExpr::structuralEq(const HighExpr &Other) const {
   case ExprKind::Call:
     if (CallTarget != Other.CallTarget || CallAddr != Other.CallAddr ||
         SourceCallHint != Other.SourceCallHint ||
+        ((SourceCalleeType || Other.SourceCalleeType) &&
+         !equalSourceTypes(SourceCalleeType, Other.SourceCalleeType)) ||
         ((FloatingCallSignature || Other.FloatingCallSignature) &&
          (!FloatingCallSignature || !Other.FloatingCallSignature ||
           *FloatingCallSignature != *Other.FloatingCallSignature)) ||

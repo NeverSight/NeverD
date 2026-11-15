@@ -589,6 +589,7 @@ int finishSessionLoad(neverd_session_t Sess, Session &S, BinaryImage Image,
   S.DiscoveredFunctions.reset();
   S.ProgramMainFound.reset();
   S.ImageStrings.reset();
+  S.EmbeddedELFObjects.reset();
   if (ProjectState) {
     S.Annotations = std::move(ProjectState->Annotations);
     S.Renames = std::move(ProjectState->Renames);

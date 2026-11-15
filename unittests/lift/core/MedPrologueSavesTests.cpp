@@ -474,6 +474,65 @@ TEST(SourceUnknownSpills, ASpillOfAKnownValueIsUnchanged) {
   EXPECT_FALSE(Store.PrologueSave);
 }
 
+TEST_P(MedPrologueSaves, RestoredRegisterViewsAreNotValueObservers) {
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (unsigned Observer = 0; Observer != 4; ++Observer) {
+      SCOPED_TRACE(testing::Message()
+                   << unsigned(Architecture) << ':' << Observer);
+      const auto &TRI = getTargetRegInfo(Architecture);
+      const uint16_t Width = TRI.PointerSize;
+      MedFunc Func = pushedRbx();
+      Func.FrameSize = Width;
+      auto &Ops = Func.Blocks.front().Ops;
+      // AArch64 LDP D8 also writes a zero-extended Q8, whose later D view
+      // can be synchronized again. Neither view observes the saved bits
+      // unless an ordinary operation actually consumes it.
+      const auto Adapt = [&](MedVar &Value) {
+        Value.TheArch = Architecture;
+        Value.Size = Width;
+        if (Value.Kind == MedVar::Reg) {
+          if (Value.Id == kSP)
+            Value.RegOff = TRI.StackPointer;
+          else if (Value.Id == kRBX)
+            Value.RegOff = Architecture == Arch::AArch64
+                               ? TRI.VecRegBase + 8 * TRI.VecRegStride
+                               : TRI.CalleeSaveRegs.front();
+          else if (Value.Id == kRCX)
+            Value.RegOff = TRI.IntParamRegs.front();
+        }
+      };
+      for (MedOp &Operation : Ops) {
+        Adapt(Operation.Output);
+        for (unsigned I = 0; I < Operation.NumInputs; ++I)
+          Adapt(Operation.Inputs[I]);
+      }
+      Ops[3].Inputs[1].ConstVal = Width;
+      Ops[8].Inputs[1].ConstVal = Width;
+      auto Wide = temp(20);
+      Wide.TheArch = Architecture;
+      Wide.Size = 2 * Width;
+      auto Narrow = temp(21);
+      Narrow.TheArch = Architecture;
+      Narrow.Size = Width;
+      auto WideAgain = Wide;
+      WideAgain.Id = 22;
+      Ops.insert(Ops.end() - 1,
+                 {op(NdOp::INT_ZEXT, Wide, {Ops[6].Output}),
+                  op(NdOp::SUBBYTES, Narrow, {Wide, MedVar::makeConst(0, 4)}),
+                  op(NdOp::INT_ZEXT, WideAgain, {Narrow})});
+      if (Observer == 1)
+        Ops.back().Inputs[0] = Narrow;
+      else if (Observer == 2)
+        Ops.back().Inputs[0] = WideAgain;
+      else if (Observer == 3)
+        Ops.insert(
+            Ops.end() - 1,
+            op(NdOp::CALL, none(), {MedVar::makeConst(0x2000, Width), Narrow}));
+      markStackAccesses(Func, Architecture, BinaryFormat::ELF);
+      EXPECT_EQ(save(Func).PrologueSave, Observer == 0);
+    }
+}
+
 TEST_P(MedPrologueSaves, AComputedValueIsNoSave) {
   MedFunc Func = pushedRbx();
   Func.Blocks[0].Ops[4] = op(NdOp::STORE, none(), {sp(1), rbx(1)});

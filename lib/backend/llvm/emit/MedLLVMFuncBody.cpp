@@ -25,6 +25,7 @@
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/backend/LLVMAnalysisDispatch.h"
+#include "neverd/backend/LLVMControlFlowFailure.h"
 #include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/ParameterSites.h"
@@ -908,8 +909,16 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
                     // blockaddress.  When recovery did not prove its finite
                     // destination set, fail loudly on the selected path; the
                     // guard-taken continuation remains executable.
-                    EffectBuilder.CreateIntrinsic(llvm::Type::getVoidTy(*Ctx),
-                                                  llvm::Intrinsic::trap, {});
+                    auto *Failure = llvm_control_flow_failure::create(
+                        EffectBuilder,
+                        llvm_control_flow_failure::Reason::IndirectTargets,
+                        Effect.Addr);
+                    if (SourceMap && Effect.Addr != InvalidVA &&
+                        Effect.OriginSeq >= 0)
+                      SourceMap->Observations.push_back(
+                          {Func.Entry,
+                           {Effect.Addr, Effect.OriginSeq},
+                           Failure});
                     EffectBuilder.CreateUnreachable();
                   }
                   break;
@@ -1000,11 +1009,25 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
             }
           }
           if (TakenBB && FallthroughBB) {
+            llvm::BasicBlock *ProvenSuccessor = nullptr;
+            if (OI + 1 == Blk.Ops.size() && Blk.Succs.size() == 2 &&
+                !Func.SkippedSSA && !RegistrationSEH &&
+                FeasibleEdgeState == FeasibleEdgeCacheState::Ready) {
+              // Use the same completed edge proof as PHIs and dead bodies.
+              // A finite PHI/SELECT state set can prove one edge impossible
+              // even when the older single-constant query cannot fold it.
+              const bool First = FeasibleEdges.count({Blk.Id, Blk.Succs[0]});
+              const bool Second = FeasibleEdges.count({Blk.Id, Blk.Succs[1]});
+              if (First != Second)
+                ProvenSuccessor = BBMap.at(Blk.Succs[First ? 0 : 1]);
+            }
             // Native registration SEH replays every source block edge. Keep
             // even a known scalar branch until that graph has been checked;
             // removing it here would need a separate control-flow receipt.
-            if (auto Known = traceControlConst(Op.Inputs[1]);
-                Known && !Func.SkippedSSA && !RegistrationSEH)
+            if (ProvenSuccessor)
+              Builder.CreateBr(ProvenSuccessor);
+            else if (auto Known = traceControlConst(Op.Inputs[1]);
+                     Known && !Func.SkippedSSA && !RegistrationSEH)
               Builder.CreateBr(*Known ? TakenBB : FallthroughBB);
             else
               Builder.CreateCondBr(Cond, TakenBB, FallthroughBB);
@@ -1021,8 +1044,12 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
           // a predicated PC write: it may legitimately have zero recovered
           // successors.  Falling through or returning in either case invents
           // control flow, so fail loudly whenever switch reconstruction fails.
-          Builder.CreateIntrinsic(llvm::Type::getVoidTy(*Ctx),
-                                  llvm::Intrinsic::trap, {});
+          auto *Failure = llvm_control_flow_failure::create(
+              Builder, llvm_control_flow_failure::Reason::IndirectTargets,
+              Op.Addr);
+          if (SourceMap && Op.Addr != InvalidVA && Op.OriginSeq >= 0)
+            SourceMap->Observations.push_back(
+                {Func.Entry, {Op.Addr, Op.OriginSeq}, Failure});
           Builder.CreateUnreachable();
         }
         break;

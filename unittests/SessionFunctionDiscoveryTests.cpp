@@ -137,6 +137,42 @@ TEST_F(SessionFunctionDiscovery,
   }
 }
 
+TEST_F(SessionFunctionDiscovery,
+       NativeFunctionDisassemblyDefersSourcePreparation) {
+  for (bool AArch64 : {false, true}) {
+    SCOPED_TRACE(AArch64);
+    const auto Path = write("listing.elf", makeNativeELF(AArch64));
+    ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+    const auto Entry = neverd_session_entry_addr(Session);
+    const unsigned Options =
+        NEVERD_DISASM_FLOW | NEVERD_DISASM_STACK | NEVERD_DISASM_OPERANDS;
+    const auto Source = takeString(neverd_decompile(Session, Entry));
+    ASSERT_FALSE(Source.empty()) << takeString(neverd_last_error(Session));
+    const auto Prepared =
+        takeString(neverd_function_disasm_json(Session, Entry, 0, 16, Options));
+    ASSERT_FALSE(Prepared.empty()) << takeString(neverd_last_error(Session));
+
+    ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+    auto &State = *neverd::sdk::toSession(Session);
+    EXPECT_EQ(
+        takeString(neverd_function_disasm_json(Session, Entry, 0, 16, Options)),
+        Prepared);
+    EXPECT_TRUE(State.PipeResult.MedIRDeferred);
+    EXPECT_TRUE(State.PipeResult.MedFuncs.empty());
+    EXPECT_TRUE(State.PipeResult.HighFuncs.empty());
+    const auto *Low = State.findLowFunc(Entry);
+    ASSERT_NE(Low, nullptr);
+    // Source preparation resumes the listing's recovered CFG without
+    // changing either the machine rows or the eventual C source.
+    EXPECT_EQ(takeString(neverd_decompile(Session, Entry)), Source);
+    EXPECT_FALSE(State.PipeResult.MedIRDeferred);
+    EXPECT_EQ(State.findLowFunc(Entry), Low);
+    EXPECT_EQ(
+        takeString(neverd_function_disasm_json(Session, Entry, 0, 16, Options)),
+        Prepared);
+  }
+}
+
 TEST_F(SessionFunctionDiscovery, CallsAtTheEntryAreSweptInStep) {
   // The image's one PT_LOAD maps its headers too, and a sweep from them
   // decodes `00 e8`, the last header byte with the opcode of the entry's
@@ -158,6 +194,89 @@ TEST_F(SessionFunctionDiscovery, CallsAtTheEntryAreSweptInStep) {
   ASSERT_EQ(neverd_session_discover_functions(Session), 5);
   for (const uint64_t Offset : {0x0, 0x10, 0x16, 0x1c, 0x22})
     EXPECT_GE(neverd_func_find_by_addr(Session, Entry + Offset), 0) << Offset;
+}
+
+TEST_F(SessionFunctionDiscovery, SourcePagesBoundThePageNotTheFunction) {
+  const auto Path = write("source-pages.elf", makeNativeELF(true));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  const auto Entry = neverd_session_entry_addr(Session);
+  ASSERT_FALSE(
+      takeString(neverd_ir_view_json(Session, Entry, "c", 0, 2048)).empty());
+  auto &State = *neverd::sdk::toSession(Session);
+  auto *Kept = State.findFunctionSource(
+      Entry, neverd::sdk::Session::SourceRoute::PlainC);
+  ASSERT_NE(Kept, nullptr);
+  ASSERT_TRUE(Kept->Map);
+  ASSERT_FALSE(Kept->Map->Anchors.empty());
+  const auto Occurrences = Kept->Map->Anchors.front().Occurrences;
+  ASSERT_FALSE(Occurrences.empty());
+
+  // The cached rendering exceeds one adapter response. Multi-byte UTF-8 and
+  // a byte-limited page boundary must keep their absolute source coordinates.
+  std::string Line = "// \xe8\xa1\x8c";
+  Line.resize(8191, 'x');
+  Line += '\n';
+  constexpr size_t Lines = 4097;
+  Kept->Text.clear();
+  for (size_t I = 0; I < Lines; ++I)
+    Kept->Text += Line;
+  ASSERT_GT(Kept->Text.size(), 32u * 1024 * 1024);
+  Kept->Map->Anchors = {{Entry, {0, Kept->Text.size()}, Occurrences}};
+  Kept->Map->Regions.clear();
+  Kept->Map->Definitions.clear();
+  Kept->View.reset();
+
+  size_t Offset = 0;
+  do {
+    const auto Raw =
+        takeString(neverd_ir_view_json(Session, Entry, "c", Offset, 2048));
+    ASSERT_FALSE(Raw.empty()) << takeString(neverd_last_error(Session));
+    ASSERT_LE(Raw.size(), 32u * 1024 * 1024);
+    auto Parsed = llvm::json::parse(Raw);
+    ASSERT_TRUE(bool(Parsed));
+    const auto *Page = Parsed->getAsObject();
+    ASSERT_NE(Page, nullptr);
+    const auto Text = Page->getString("text");
+    ASSERT_TRUE(Text);
+    ASSERT_LE(Text->size(), 2u * 1024 * 1024);
+    EXPECT_EQ(
+        *Text,
+        llvm::StringRef(Kept->Text).substr(Offset * Line.size(), Text->size()));
+    EXPECT_EQ(Page->getInteger("byte_offset"), Offset * Line.size());
+    EXPECT_EQ(Page->getInteger("total_lines"), Lines);
+    const auto *Rows = Page->getArray("rows");
+    ASSERT_NE(Rows, nullptr);
+    ASSERT_GT(Rows->size(), 0u);
+    EXPECT_EQ(Rows->size() * Line.size(), Text->size());
+    for (size_t I = 0; I < Rows->size(); ++I) {
+      const auto *Row = (*Rows)[I].getAsObject();
+      ASSERT_NE(Row, nullptr);
+      EXPECT_EQ(Row->getInteger("line"), Offset + I);
+      EXPECT_EQ(Row->getString("mapping_status"), "instruction_anchor");
+      const auto *Addresses = Row->getArray("addresses");
+      ASSERT_NE(Addresses, nullptr);
+      ASSERT_FALSE(Addresses->empty());
+      EXPECT_EQ(Addresses->front().getAsString(),
+                neverd::sdk::vaHex(Occurrences.front().Address));
+    }
+    Offset += Rows->size();
+    if (Page->getBoolean("complete").value_or(false))
+      break;
+    EXPECT_EQ(Page->getInteger("next_offset"), Offset);
+  } while (Offset < Lines);
+  EXPECT_EQ(Offset, Lines);
+
+  Kept->Text.assign(2u * 1024 * 1024 + 1, 'x');
+  Kept->Map->Anchors.clear();
+  Kept->View.reset();
+  EXPECT_EQ(neverd_ir_view_json(Session, Entry, "c", 0, 2048), nullptr);
+  EXPECT_NE(takeString(neverd_last_error(Session)).find("source line"),
+            std::string::npos);
+  Kept->Text = "\xff\n";
+  Kept->View.reset();
+  EXPECT_EQ(neverd_ir_view_json(Session, Entry, "c", 0, 2048), nullptr);
+  EXPECT_NE(takeString(neverd_last_error(Session)).find("UTF-8"),
+            std::string::npos);
 }
 
 TEST_F(SessionFunctionDiscovery,

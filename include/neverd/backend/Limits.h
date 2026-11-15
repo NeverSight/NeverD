@@ -114,7 +114,8 @@ inline constexpr unsigned kLLVMCStoreForwardingAnalyzeStoreForwardingBudget =
 // belong to the character before them.
 inline constexpr unsigned kCTypeFormatMaxCharacters = 64;
 /// A string that does not end within this many bytes is not read. Literal
-/// replacement keeps the complete string; only comments use the display cap.
+/// replacement and bounded image-byte observations keep the complete string;
+/// image-reference previews use the display cap.
 inline constexpr size_t kCTypeFormatStringWindow = 4096;
 
 // lib/backend/codegen/COFF/COFFExceptionPatch.cpp

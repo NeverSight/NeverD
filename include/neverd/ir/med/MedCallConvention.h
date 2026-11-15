@@ -237,7 +237,7 @@ inline bool isUndefinedIncomingScratch(const TargetRegInfo &TRI, Arch TheArch,
   if (!Convention || !Convention->UndefinedIncomingScratchRegisters ||
       V.Kind != MedVar::Reg || V.SSAVer != 0 || V.RenameTag >= 0 ||
       TRI.isStackPointer(V.RegOff) || TRI.isCalleeSaveReg(V.RegOff) ||
-      TRI.isLinkRegister(V.RegOff))
+      TRI.isLinkRegister(V.RegOff) || TRI.isPlatformRegister(V.RegOff))
     return false;
   const std::optional<unsigned> Family = gprFamilyOf(TheArch, V.RegOff);
   return Family && llvm::none_of(ArgRegs, [&](uint64_t Reg) {

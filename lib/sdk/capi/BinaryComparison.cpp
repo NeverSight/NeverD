@@ -789,9 +789,11 @@ readComparisonInputImpl(Session &S, const ComparisonInputOptions &Options,
   ComparisonInput Result;
   uint64_t Done = 0;
   auto It = Functions.begin();
+  const auto Entries = std::make_shared<const std::vector<va_t>>(
+      Keys.Functions.begin(), Keys.Functions.end());
   while (It != Functions.end() && !Stop()) {
     FunctionPage Page;
-    Page.Entries.assign(Keys.Functions.begin(), Keys.Functions.end());
+    Page.Entries = Entries;
     const unsigned PageLimit = Serial ? 1 : limits::kDecodePageFunctions;
     for (unsigned I = 0; I < PageLimit && It != Functions.end() &&
                          Done + Page.Functions.size() < Options.MaxFunctions;

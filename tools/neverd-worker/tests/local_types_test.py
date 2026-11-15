@@ -40,6 +40,35 @@ def run(executable):
         assert headers["types"][0]["name"] == "_DEVICE"
         assert any(row["origin"] == "header" for row in headers["types"]), headers["types"][:3]
         assert listing["types"][0]["size"] == 0x58
+        whole = ok(owner, "local_types", {"origin": "pdb"})
+        paged = []
+        offset = 0
+        while offset < len(whole["types"]):
+            page = ok(owner, "local_types", {"origin": "pdb", "offset": offset, "limit": 2})
+            assert page["offset"] == offset and page["total"] == len(whole["types"]), page
+            paged.extend(page["types"])
+            assert page["next_offset"] > offset, page
+            offset = page["next_offset"]
+        assert paged == whole["types"]
+        located = ok(owner, "local_types", {"origin": "pdb", "limit": 1,
+                                             "locate": "_PACKED", "sort": "name", "descending": True})
+        assert located["types"][0]["name"] == "_PACKED" and "index" in located, located
+
+        # Debug template names can be longer than the ordinary-label limit.
+        long_name = "LongType_" + "x" * 5000
+        created = ok(owner, "local_types_declare", {
+            "source": "struct " + long_name + " { int Value; };"})
+        assert created["problems"] == [], created
+        located = ok(owner, "local_types", {"limit": 1, "locate": long_name})
+        assert located["types"][0]["name"] == long_name, located
+        filtered = ok(owner, "local_types", {"limit": 1, "filter": long_name})
+        assert filtered["total"] == 1, filtered
+        assert ok(owner, "local_type", {"name": long_name})["size"] == 4
+        assert long_name in ok(owner, "local_types_source", {
+            "types": [long_name], "dependencies": False})["source"]
+        ok(owner, "local_types_forget", {"names": [long_name]})
+        ok(owner, "undo")
+        ok(owner, "undo")
 
         # Exact widths unless asked.
         device = ok(owner, "local_type", {"name": "_DEVICE"})

@@ -1474,9 +1474,27 @@ uint8_t intrinsicOutputCount(Intrinsic Id);
 /// exceptions that FILD, FABS and FCHS also check, and the owned x87
 /// context's transport around a call, which moves the function's private
 /// context between its buffer and the FPU.
+/// An AArch64 system instruction that changes no general register but its
+/// result: a system register read defines its destination and nothing else
+/// (`mrs x2, sp_el0` passes the current task beside earlier setup), and a
+/// system register write, a barrier, cache or TLB maintenance or a hint
+/// changes none (the kernel's uaccess enable, `msr ttbr0_el1, x11; isb`,
+/// sits between a copy's arguments and its call).
+constexpr bool keepsGeneralRegisters(Intrinsic Id) {
+  return Id == Intrinsic::Mrs || Id == Intrinsic::A64_GetFPSR ||
+         Id == Intrinsic::A64_GetFPCR || Id == Intrinsic::CntRead ||
+         Id == Intrinsic::Msr || Id == Intrinsic::A64_SetFPSR ||
+         Id == Intrinsic::A64_SetFPCR || Id == Intrinsic::Dmb ||
+         Id == Intrinsic::Dsb || Id == Intrinsic::Isb || Id == Intrinsic::Dc ||
+         Id == Intrinsic::Ic || Id == Intrinsic::Tlbi || Id == Intrinsic::At ||
+         Id == Intrinsic::Yield_A64 || Id == Intrinsic::Wfe ||
+         Id == Intrinsic::Wfi || Id == Intrinsic::Sev ||
+         Id == Intrinsic::Sevl || Id == Intrinsic::A64_Clrex;
+}
+
 constexpr bool preservesCallSetup(Intrinsic Id) {
   return Id == Intrinsic::X87Wait || Id == Intrinsic::X87ContextExport ||
-         Id == Intrinsic::X87ContextRefresh;
+         Id == Intrinsic::X87ContextRefresh || keepsGeneralRegisters(Id);
 }
 
 /// The control or debug register (`%cr8`, `%dr7`) that a ReadCr*/WriteCr*

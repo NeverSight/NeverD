@@ -131,12 +131,42 @@ inline void writeTypes(Stream &OS, ScalarPointerSpelling Spelling) {
   OS << "#endif\n\n";
 }
 
-/// \p Text as the operand of a cast.  A name, a number or one balanced
-/// parenthesized whole binds as tightly as the cast already; anything else,
-/// an embedded assignment included, is parenthesized.
+/// Whether \p Text is one string literal: `"text"`, `L"text"`.
+inline bool singleStringLiteral(llvm::StringRef Text) {
+  if (!Text.consume_front("u8") && !Text.consume_front("L") &&
+      !Text.consume_front("u"))
+    Text.consume_front("U");
+  if (Text.size() < 2 || Text.front() != '"' || Text.back() != '"')
+    return false;
+  for (size_t I = 1; I + 1 < Text.size(); ++I)
+    if (Text[I] == '"' || (Text[I] == '\\' && ++I + 1 == Text.size()))
+      return false;
+  return true;
+}
+
+/// Whether \p Text is the address of a string literal's bytes, which needs no
+/// conversion to a data pointer: `"text"`, `("text" + 7)`.
+inline bool stringLiteralAddress(llvm::StringRef Text) {
+  if (singleStringLiteral(Text))
+    return true;
+  if (!Text.consume_front("(") || !Text.consume_back(")"))
+    return false;
+  const size_t Plus = Text.rfind(" + ");
+  return Plus != llvm::StringRef::npos &&
+         singleStringLiteral(Text.take_front(Plus)) &&
+         !Text.drop_front(Plus + 3).empty() &&
+         llvm::all_of(Text.drop_front(Plus + 3),
+                      [](char C) { return llvm::isDigit(C); });
+}
+
+/// \p Text as the operand of a cast.  A name, a number, a string literal or
+/// one balanced parenthesized whole binds as tightly as the cast already;
+/// anything else, an embedded assignment included, is parenthesized.
 inline std::string castOperand(llvm::StringRef Text) {
   if (!Text.empty() &&
       llvm::all_of(Text, [](char C) { return llvm::isAlnum(C) || C == '_'; }))
+    return Text.str();
+  if (singleStringLiteral(Text))
     return Text.str();
   bool Whole = Text.size() >= 2 && Text.front() == '(' && Text.back() == ')';
   int Depth = 0;
@@ -228,6 +258,11 @@ inline std::string integerOperand(llvm::StringRef Address) {
 // memcpy forbids overlapping source and destination objects.
 inline std::string loadCopy(llvm::StringRef Value, llvm::StringRef Address,
                             llvm::StringRef Size) {
+  if (const std::string Bytes = unparenthesized(Address);
+      stringLiteralAddress(Bytes) || stringLiteralAddress(Address))
+    return "__builtin_memcpy(&" + Value.str() + ", " +
+           (singleStringLiteral(Bytes) ? Bytes : Address.str()) + ", " +
+           Size.str() + ")";
   return "__builtin_memcpy(&" + Value.str() + ", (const void *)" +
          integerOperand(Address) + ", " + Size.str() + ")";
 }

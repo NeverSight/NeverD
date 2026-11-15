@@ -154,10 +154,22 @@ void SetTypeDialog::loaded(const QJsonObject &reply) {
   if (!variable_.isEmpty()) {
     reset_button_->setVisible(reply.value(QStringLiteral("stated")).toBool());
     parameters_->hide();
-    subject_->setText(tr("%1 is a %2-byte source variable. Enter a scalar or "
-                         "pointer type from the local types.")
-                          .arg(name_)
-                          .arg(reply.value(QStringLiteral("bytes")).toInt()));
+    const bool global = variable_.contains(QStringLiteral("object_address"));
+    if (global) {
+      name_ = reply.value(QStringLiteral("name")).toString();
+      setWindowTitle(tr("Set the type of %1").arg(name_));
+    }
+    subject_->setText((
+        global
+            ? tr("%1 at %3 is a %2-byte global object. Enter a scalar or "
+                 "pointer type from the local types.")
+                  .arg(name_)
+                  .arg(reply.value(QStringLiteral("bytes")).toInt())
+                  .arg(reply.value(QStringLiteral("object_address")).toString())
+            : tr("%1 is a %2-byte source variable. Enter a scalar or "
+                 "pointer type from the local types.")
+                  .arg(name_)
+                  .arg(reply.value(QStringLiteral("bytes")).toInt())));
     field_->setEnabled(true);
     field_->setText(reply.value(QStringLiteral("type")).toString());
     field_->selectAll();
@@ -335,8 +347,13 @@ std::pair<int, QString> SetTypeDialog::wordAtCursor() const {
   const QString text = field_->text();
   const int end = field_->cursorPosition();
   int begin = end;
-  while (begin > 0 && identifierCharacter(text.at(begin - 1)))
-    --begin;
+  do {
+    while (begin > 0 && identifierCharacter(text.at(begin - 1)))
+      --begin;
+    if (begin < 2 || text.mid(begin - 2, 2) != QStringLiteral("::"))
+      break;
+    begin -= 2;
+  } while (begin > 0);
   // A number is no type's name.
   if (begin < end && text.at(begin).isDigit())
     return {end, QString()};

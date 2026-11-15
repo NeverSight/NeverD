@@ -40,6 +40,7 @@
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
 #include "neverd/backend/llvm/PEImportShadow.h"
 #include "neverd/backend/llvm/SourceFrameBytes.h"
+#include "neverd/backend/llvm/SourceImageBytes.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/X86/X86RegistrationEntry.h"
 #include "neverd/ir/SourceABI.h"
@@ -492,6 +493,8 @@ llvm::Type *MedLLVMEmitter::mapNdtype(const TypeRef &Ty) {
            : Ty->Size == 4  ? llvm::Type::getFloatTy(*Ctx)
            : Ty->Size == 10 ? llvm::Type::getX86_FP80Ty(*Ctx)
                             : llvm::Type::getDoubleTy(*Ctx);
+  case NdTypeKind::Vector:
+    return llvm::FixedVectorType::get(mapNdtype(Ty->ElemType), Ty->ArrayCount);
   case NdTypeKind::Ptr:
     return llvm::PointerType::get(*Ctx, 0);
   case NdTypeKind::Int:
@@ -812,6 +815,7 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
     LLVMFunc->addFnAttr(llvm::Attribute::NoReturn);
   rewrite_source::setOriginalVA(*LLVMFunc, Func.Entry);
   writeSourceFrameBytes(*LLVMFunc, Func.FrameBytes);
+  writeSourceImageBytes(*LLVMFunc, Func.ImageBytes);
   return LLVMFunc;
 }
 
@@ -1226,6 +1230,8 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   AffineFrameKeys.clear();
   AddressFragmentTaintFor = nullptr;
   AddressFragmentTaint.clear();
+  UniformAddressFragmentCacheFor = nullptr;
+  UniformAddressFragmentCache.clear();
   SymbolizedWritableSegsFor = nullptr;
   SymbolizedWritableSegs.clear();
   DefPhiIndexFor = nullptr;
@@ -1261,7 +1267,7 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   WritableDataSegCache.clear();
   PtrTableUniqueSegCache.clear();
   ConstClassCacheFor = nullptr;
-  ConstUsedAsPointerCache.clear();
+  ConstUsedAsPointerValues.reset();
   ConstValueUsedAsIntegerCache.clear();
   FatalCodePointerResolution = false;
   FinalRegistrationFrameProofs.clear();

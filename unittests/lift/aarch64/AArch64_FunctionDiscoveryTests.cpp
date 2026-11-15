@@ -137,9 +137,10 @@ TEST(AArch64FunctionDiscovery, ARawImageAtZeroStartsAtItsEntry) {
   }
 }
 
-TEST(AArch64FunctionDiscovery, ADirectCallRetainsAnEntrySharedWithRunningCode) {
-  // A direct call is entry evidence even where another path falls through
-  // into the same code. The preceding instruction alone cannot reject it.
+TEST(AArch64FunctionDiscovery, ACallIntoRunningCodeNamesNoFunction) {
+  // As a constant in an executable section can read as BL: a target the
+  // instruction before runs into is within that code, unless it marks an
+  // entry of its own.
   constexpr va_t AfterReturnVA = 0x14;
   constexpr va_t WithinCodeVA = 0x24;
   constexpr va_t MarkedVA = 0x30;
@@ -180,7 +181,7 @@ TEST(AArch64FunctionDiscovery, ADirectCallRetainsAnEntrySharedWithRunningCode) {
                        [&](const auto &F) { return F.first == A; });
   };
   EXPECT_TRUE(Has(AfterReturnVA));
-  EXPECT_TRUE(Has(WithinCodeVA));
+  EXPECT_FALSE(Has(WithinCodeVA));
   EXPECT_TRUE(Has(MarkedVA));
 }
 
@@ -314,20 +315,20 @@ TEST(AArch64FunctionDiscovery, AShrinkWrappedPrologueAfterOtherCodeBeginsNone) {
   EXPECT_FALSE(Entries.count(0x10));
 }
 
-TEST(AArch64FunctionDiscovery, ADirectCallCanEnterAnExistingPrologue) {
-  // The frame push follows another entry, but a real direct call also
-  // reaches it. Both entry paths must remain available to CFG recovery.
+TEST(AArch64FunctionDiscovery, ACallToAProloguesFramePushNamesNoFunction) {
+  // As a constant that reads as BL can: the frame push follows PACIASP and
+  // a shadow stack push within the prologue of the function at 0xc.
   const auto Entries =
       rawEntries({bl(0, 0x14), kRet, kRet, kPaciasp, kShadowPush, kFramePush,
                   kFramePop, kShadowPop, kAutiasp, kRet});
   EXPECT_TRUE(Entries.count(0xC));
-  EXPECT_TRUE(Entries.count(0x14));
+  EXPECT_FALSE(Entries.count(0x14));
 }
 
-TEST(AArch64FunctionDiscovery, ACalledTrapIsStillAFunction) {
+TEST(AArch64FunctionDiscovery, NoFunctionBeginsWithUDF) {
   const auto Entries =
       rawEntries({bl(0, 0xC), kRet, kRet, 0x00000123 /* udf #0x123 */, kRet});
-  EXPECT_TRUE(Entries.count(0xC));
+  EXPECT_FALSE(Entries.count(0xC));
 }
 
 TEST(AArch64FunctionDiscovery, PaddingEndsAtAWholeZeroWord) {
@@ -844,54 +845,59 @@ TEST(AArch64FunctionDiscovery,
 
 TEST(AArch64FunctionDiscovery,
      PreservesVerifiedDirectCallInsideBroadCompactUnwindRange) {
-  constexpr va_t ImageVA = 0x3000;
-  constexpr va_t HelperVA = ImageVA + 0x10;
-  constexpr va_t InvalidVA = ImageVA + 0x18;
+  for (bool EndsBeforePadding : {true, false}) {
+    SCOPED_TRACE(EndsBeforePadding);
+    constexpr va_t ImageVA = 0x3000;
+    constexpr va_t HelperVA = ImageVA + 0x10;
+    constexpr va_t InvalidVA = ImageVA + 0x18;
 
-  BinaryImage Img;
-  Img.Arch = Arch::AArch64;
-  Img.Bits = Bitness::Bits64;
-  Img.Format = BinaryFormat::MachO;
-  Img.Base = ImageVA;
-  Img.Entry = ImageVA;
+    BinaryImage Img;
+    Img.Arch = Arch::AArch64;
+    Img.Bits = Bitness::Bits64;
+    Img.Format = BinaryFormat::MachO;
+    Img.Base = ImageVA;
+    Img.Entry = ImageVA;
 
-  Segment Text;
-  Text.Name = "__TEXT";
-  Text.VA = ImageVA;
-  Text.Size = 0x1c;
-  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
-  Text.Data.assign(Text.Size, 0);
-  writeLE<uint32_t>(Text.Data.data(), 0x94000004u);      // bl HelperVA
-  writeLE<uint32_t>(Text.Data.data() + 4, 0x94000005u);  // bl InvalidVA
-  writeLE<uint32_t>(Text.Data.data() + 8, 0xD65F03C0u);  // ret
-  writeLE<uint32_t>(Text.Data.data() + 12, 0xD503201Fu); // nop
-  writeLE<uint32_t>(Text.Data.data() + 16, 0x52800540u); // mov w0, #42
-  writeLE<uint32_t>(Text.Data.data() + 20, 0xD65F03C0u); // ret
-  writeLE<uint32_t>(Text.Data.data() + 24, 0xFFFFFFFFu); // undecodable
-  Img.Segments.push_back(std::move(Text));
-  Img.Sections.push_back(
-      makeMachOSection("__text", ImageVA, 0x1c, /*ContainsInstructions=*/true));
+    Segment Text;
+    Text.Name = "__TEXT";
+    Text.VA = ImageVA;
+    Text.Size = 0x1c;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Data.assign(Text.Size, 0);
+    writeLE<uint32_t>(Text.Data.data(), 0x94000004u);     // bl HelperVA
+    writeLE<uint32_t>(Text.Data.data() + 4, 0x94000005u); // bl InvalidVA
+    writeLE<uint32_t>(Text.Data.data() + 8,
+                      EndsBeforePadding ? 0xD65F03C0u
+                                        : 0x52800021u);    // ret / mov w1, #1
+    writeLE<uint32_t>(Text.Data.data() + 12, 0xD503201Fu); // nop
+    writeLE<uint32_t>(Text.Data.data() + 16, 0x52800540u); // mov w0, #42
+    writeLE<uint32_t>(Text.Data.data() + 20, 0xD65F03C0u); // ret
+    writeLE<uint32_t>(Text.Data.data() + 24, 0xFFFFFFFFu); // undecodable
+    Img.Segments.push_back(std::move(Text));
+    Img.Sections.push_back(makeMachOSection("__text", ImageVA, 0x1c,
+                                            /*ContainsInstructions=*/true));
 
-  Symbol Covering = Symbol::makeFunc(ImageVA, 0x1c);
-  Covering.Name = "_main";
-  Img.Symbols.push_back(std::move(Covering));
-  Img.Exports.push_back({"_main", 0, ImageVA});
-  Img.KnownCodeRanges.emplace_back(ImageVA, ImageVA + 0x1c);
+    Symbol Covering = Symbol::makeFunc(ImageVA, 0x1c);
+    Covering.Name = "_main";
+    Img.Symbols.push_back(std::move(Covering));
+    Img.Exports.push_back({"_main", 0, ImageVA});
+    Img.KnownCodeRanges.emplace_back(ImageVA, ImageVA + 0x1c);
 
-  Decoder Dec;
-  ASSERT_TRUE(Dec.init(Arch::AArch64));
-  FuncDetector Detector;
-  auto Functions = Detector.detect(Img, Dec);
+    Decoder Dec;
+    ASSERT_TRUE(Dec.init(Arch::AArch64));
+    FuncDetector Detector;
+    auto Functions = Detector.detect(Img, Dec);
 
-  EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
-                          [](const auto &F) { return F.first == ImageVA; }),
-            1u);
-  EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
-                          [](const auto &F) { return F.first == HelperVA; }),
-            1u);
-  EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
-                          [](const auto &F) { return F.first == InvalidVA; }),
-            0u);
+    EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
+                            [](const auto &F) { return F.first == ImageVA; }),
+              1u);
+    EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
+                            [](const auto &F) { return F.first == HelperVA; }),
+              EndsBeforePadding ? 1u : 0u);
+    EXPECT_EQ(std::count_if(Functions.begin(), Functions.end(),
+                            [](const auto &F) { return F.first == InvalidVA; }),
+              0u);
+  }
 }
 
 TEST(AArch64FunctionDiscovery,
@@ -1190,6 +1196,9 @@ TEST(AArch64FunctionDiscovery,
 }
 
 TEST(AArch64FunctionDiscovery, MarkersAndBlockEndsAreOnlyBoundaryCandidates) {
+  EXPECT_TRUE(isAArch64FramePushWord(0xa9bf7bfdu));
+  EXPECT_FALSE(isAArch64FramePushWord(0xa9817bfdu));
+  EXPECT_FALSE(isAArch64FramePushWord(0xa9807bfdu));
   EXPECT_TRUE(isFunctionEntryMarkerWordAArch64(0xa9bf7bfdu));  // push -16
   EXPECT_FALSE(isFunctionEntryMarkerWordAArch64(0xa9817bfdu)); // store at +16
   EXPECT_FALSE(isAArch64BlockEndWord(0xd503201fu)); // nop falls through

@@ -304,6 +304,8 @@ NameSpelling::NameSpelling(const TypeLibrary &Library, Language Lang,
     const bool Changed = Spelled != Type->Name;
     if (Changed)
       Renamed.push_back({Type->Name, Spelled});
+    if (Changed)
+      OriginalTypes[Spelled] = Type->Name;
     Types[Type->Name] = Changed ? std::move(Spelled) : std::string();
   }
   if (IncludeEnumerators)
@@ -381,6 +383,14 @@ std::string NameSpelling::type(llvm::StringRef Name) const {
     return identifier(Name, /*TypeName=*/true, Lang, Reserved);
   // Known unchanged names need no second string or repeated normalization.
   return Found->second.empty() ? Name.str() : Found->second;
+}
+
+std::string NameSpelling::sourceType(llvm::StringRef Identifier) const {
+  if (const auto It = OriginalTypes.find(Identifier); It != OriginalTypes.end())
+    return It->second;
+  const auto It = Types.find(Identifier);
+  return It != Types.end() && It->second.empty() ? Identifier.str()
+                                                 : std::string();
 }
 
 std::string NameSpelling::enumerator(const EnumDef &Enum, size_t Index) const {
@@ -615,6 +625,8 @@ BitAccess bitAccess(const TypeLibrary &Library, const Member &Field) {
   Access.UnitBits = Access.ValueBits = Storage.Bytes * 8;
   Access.Shift = Field.BitOffset - Field.StorageBitOffset;
   Access.Width = Field.BitWidth;
+  Access.UnitBits = std::max(
+      Access.UnitBits, unsigned((Access.Shift + Access.Width + 7) / 8 * 8));
   Access.Signed = Storage.Signed;
   const uint64_t Mask =
       Field.BitWidth >= 64 ? ~uint64_t(0) : (uint64_t(1) << Field.BitWidth) - 1;
@@ -884,6 +896,30 @@ TypeSpeller::TypeSpeller(const TypeLibrary &Library,
 
 TypeSpeller::~TypeSpeller() = default;
 
+CTypeRenderer::CTypeRenderer(const TypeLibrary &Library, Language Lang)
+    : Library(Library), Lang(Lang),
+      Names(std::make_unique<render::NameSpelling>(Library, Lang,
+                                                   /*CppToo=*/true)) {
+  assert(Lang == Language::C || Lang == Language::Cpp);
+}
+
+CTypeRenderer::~CTypeRenderer() = default;
+
+std::string CTypeRenderer::render(llvm::ArrayRef<const LocalType *> Roots,
+                                  const RenderOptions &Options,
+                                  bool Dependencies) const {
+  assert(Options.Lang == Lang);
+  if (Roots.empty() || Dependencies)
+    return render::renderCHeader(Library, Roots, Options, Names.get());
+  std::string Text;
+  for (const auto *Type : Roots) {
+    if (!Text.empty())
+      Text += '\n';
+    Text += render::renderC(Library, *Type, Options, Names.get());
+  }
+  return Text;
+}
+
 std::string TypeSpeller::spell(const TypeExpr &Type,
                                const std::string &Declarator) const {
   return Speller->declare(Type, Declarator);
@@ -898,6 +934,20 @@ EmbeddedCRenderer::EmbeddedCRenderer(const TypeLibrary &Library,
 }
 
 EmbeddedCRenderer::~EmbeddedCRenderer() = default;
+
+std::string EmbeddedCRenderer::typeName(llvm::StringRef SourceName) const {
+  return Library.find(SourceName) ? Names->type(SourceName) : std::string();
+}
+
+std::string
+EmbeddedCRenderer::sourceTypeName(llvm::StringRef Identifier) const {
+  return Names->sourceType(Identifier);
+}
+
+const std::vector<std::pair<std::string, std::string>> &
+EmbeddedCRenderer::renamed() const {
+  return Names->renamed();
+}
 
 EmbeddedC
 EmbeddedCRenderer::render(llvm::ArrayRef<const LocalType *> Roots) const {

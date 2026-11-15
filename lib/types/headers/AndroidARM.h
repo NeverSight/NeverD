@@ -1,14 +1,14 @@
 // The Android types and prototypes for ARM (ILP32), as a program declares them
-// with bionic's headers, <jni.h> and <android/log.h> and _GNU_SOURCE, for API
-// level 35.  Generated on 2026-10-18 by scripts/generate_linux_types.py
-// --target android-arm from the headers of bionic at commit
-// 731631f300090436d7f5df80d50b6275c8c60a93, libnativehelper at commit
-// aef2939781fc0b57b4477df7160935cdf5697919 and system/logging at commit
+// with bionic's headers, <jni.h>, <android/log.h>, <sys/system_properties.h>
+// and _GNU_SOURCE, for API level 35.  Generated on 2026-11-07 by
+// scripts/generate_linux_types.py --target android-arm from the headers of
+// bionic at commit 731631f300090436d7f5df80d50b6275c8c60a93, libnativehelper at
+// commit aef2939781fc0b57b4477df7160935cdf5697919 and system/logging at commit
 // bcac7c30d88a3773a7c0bc9f5617a23a886331fd: changed from them, as NeverD reads
 // and renders their declarations again.  The headers' notices are in
 // LICENSES/bionic-headers.txt and LICENSES/android-ndk-headers.txt.  Do not
 // edit; generate it again.
-// 527 types, 1399 prototypes, rendered by NeverD.
+// 528 types, 1416 prototypes, rendered by NeverD.
 #pragma once
 
 #include <stdbool.h>
@@ -297,6 +297,7 @@ typedef struct JavaVMAttachArgs JavaVMAttachArgs;
 typedef struct JavaVMOption JavaVMOption;
 typedef struct JavaVMInitArgs JavaVMInitArgs;
 struct __android_log_message;
+typedef struct prop_info prop_info;
 
 #pragma neverd_header("stdlib.h")
 // HeapTaggingLevel: 4 bytes
@@ -3358,7 +3359,7 @@ struct DECLSPEC_ALIGN(8) NEVERD_GNU_STRUCT tcp_ao_del
 };
 
 // tcp_ao_info_opt: 0x30 (48) bytes
-struct NEVERD_GNU_STRUCT tcp_ao_info_opt
+struct DECLSPEC_ALIGN(8) NEVERD_GNU_STRUCT tcp_ao_info_opt
 {
     __u32 set_current : 1;
     __u32 set_rnext : 1;
@@ -3377,7 +3378,7 @@ struct NEVERD_GNU_STRUCT tcp_ao_info_opt
 };
 
 // tcp_ao_getsockopt: 0x130 (304) bytes
-struct NEVERD_GNU_STRUCT tcp_ao_getsockopt
+struct DECLSPEC_ALIGN(8) NEVERD_GNU_STRUCT tcp_ao_getsockopt
 {
     struct sockaddr_storage addr;
     char alg_name[64];
@@ -4012,6 +4013,10 @@ typedef void (*__android_logger_function)(const struct __android_log_message *lo
 
 typedef void (*__android_aborter_function)(const char *abort_message);
 
+#pragma neverd_header()
+// Declared only: its members are unknown.
+struct prop_info;
+
 
 jint JNI_CreateJavaVM(JavaVM **, JNIEnv **, void *);
 jint JNI_GetCreatedJavaVMs(JavaVM **, jsize, jsize *);
@@ -4077,6 +4082,23 @@ __u32 __swahb32p(const __u32 *p);
 void __swahb32s(__u32 *p);
 __u32 __swahw32p(const __u32 *p);
 void __swahw32s(__u32 *p);
+int __system_properties_init(void);
+int __system_properties_zygote_reload(void);
+int __system_property_add(const char *__name, unsigned int __name_length, const char *__value, unsigned int __value_length);
+int __system_property_area_init(void);
+unsigned int __system_property_area_serial(void);
+const prop_info *__system_property_find(const char *__name);
+const prop_info *__system_property_find_nth(unsigned int __n);
+int __system_property_foreach(void (*__callback)(const prop_info *__pi, void *__cookie), void *__cookie);
+int __system_property_get(const char *__name, char *__value);
+int __system_property_read(const prop_info *__pi, char *__name, char *__value);
+void __system_property_read_callback(const prop_info *__pi, void (*__callback)(void *__cookie, const char *__name, const char *__value, unsigned int __serial), void *__cookie);
+unsigned int __system_property_serial(const prop_info *__pi);
+int __system_property_set(const char *__name, const char *__value);
+int __system_property_set_filename(const char *__filename);
+int __system_property_update(prop_info *__pi, const char *__value, unsigned int __value_length);
+bool __system_property_wait(const prop_info *__pi, unsigned int __old_serial, unsigned int *__new_serial_ptr, const struct timespec *__relative_timeout);
+unsigned int __system_property_wait_any(unsigned int __old_serial);
 _Noreturn void _exit(int __status);
 _Noreturn void _longjmp(jmp_buf __env, int __value);
 int _setjmp(jmp_buf __env);

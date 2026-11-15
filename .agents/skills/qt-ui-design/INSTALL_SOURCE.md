@@ -30,10 +30,19 @@ correction that every window keeps one accent, which section 1.7 now states
 as a look apart from the Return key. The profile's "Style at a glance"
 section, added on 2026-11-14, gathers NeverD's color roles, type and sizes
 and the rules every window keeps on one page, each pointing to the section
-that holds its reasons. The
+that holds its reasons. Its "Plugin views and the Agent" section, also
+added on 2026-11-14, records the floating entry point, movable panels, code
+fonts in plugin views and the rules a Qt Quick window shares with the
+workbench. The
 upstream copyright, license, and general guidance are retained. This
 file records installation provenance and those local additions. The local
 `references/macos-qt.md` guide records Cocoa menu defaults, precision input,
 platform font sizes, docking style inheritance, Retina capture sampling and
 native validation constraints reproduced in NeverD; `SKILL.md` routes macOS
 work to it.
+
+Section 1.9 of `SKILL.md` and the floating-panels and conversations items
+in its audit checklist are NeverD additions from the review of the NeverD
+Agent's workbench conversation on 2026-11-14 and 2026-11-15: where a
+floating panel opens, how it goes with the person into focus mode, and the
+conversation laid out as Visual Studio Code's chat view.

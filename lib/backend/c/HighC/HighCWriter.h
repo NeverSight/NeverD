@@ -17,6 +17,7 @@
 #include "../../AArch64OriginalMemory.h"
 #include "../CIdentifier.h"
 #include "../CSourceRecorder.h"
+#include "../CValueAvailability.h"
 #include "../DebugParamBinding.h"
 #include "../FloatConversion.h"
 #include "../StdcallImportPops.h"
@@ -27,6 +28,7 @@
 #include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/backend/c/render/HighC/HighCIntrinsicRender.h"
 #include "neverd/debug/DebugContext.h"
+#include "neverd/ir/high/HighPointerTypeInference.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/DataSymbolBinding.h"
@@ -61,6 +63,10 @@ namespace c_stack {
 
 /// The attribute that spells \p CC on a declaration, empty for none.
 llvm::StringRef debugCallConvAttribute(DebugCallConv CC);
+
+/// The statement renderer's terminating call/throw decision, also used by
+/// analyses of the paths that its C can execute.
+bool isNoReturnCallStmt(const HighStmt &Stmt);
 
 /// Internal writer that converts HighIR functions to C source text.
 /// Split across HighCEmitter.cpp (module-level orchestration),
@@ -148,24 +154,27 @@ public:
   static std::optional<std::string> sourceValue(llvm::StringRef Text,
                                                 const TypeRef &Carrier,
                                                 const TypeRef &Source);
-  HighCWriter(
-      llvm::raw_ostream &Stream, const CEmitterOptions &Opts, DebugContext *Dbg,
-      bool GuardAnalysisOnlyFunctions = true,
-      const std::unordered_set<std::string_view> *SharedNames = nullptr,
-      CSourceRecorder *Recorder = nullptr,
-      const HighCImageDataObjects *SharedDataObjects = nullptr,
-      const HighCImageFunctionSymbols *SharedFunctionSymbols = nullptr,
-      const PreparedPortableX87Function *PortableInterface = nullptr,
-      const std::unordered_set<std::string_view> *SharedLinkNames = nullptr,
-      const HighCImageNameIndex *SharedNameIndex = nullptr)
+  HighCWriter(llvm::raw_ostream &Stream, const CEmitterOptions &Opts,
+              DebugContext *Dbg, bool GuardAnalysisOnlyFunctions = true,
+              const std::unordered_set<std::string_view> *SharedNames = nullptr,
+              CSourceRecorder *Recorder = nullptr,
+              const HighCImageDataObjects *SharedDataObjects = nullptr,
+              const HighCImageFunctionSymbols *SharedFunctionSymbols = nullptr,
+              const llvm::StringSet<> *SharedFunctionLinkNames = nullptr,
+              const std::map<va_t, DataSymbolBinding>
+                  *SharedDataSymbolBindings = nullptr,
+              const PreparedPortableX87Function *PortableInterface = nullptr,
+              const HighCImageNameIndex *SharedNameIndex = nullptr,
+              const RelocationProvenanceIndex *SharedRelocations = nullptr)
       : OS(Stream), Opts(Opts), Dbg(Dbg),
         GuardAnalysisOnlyFunctions(GuardAnalysisOnlyFunctions),
         SharedImageFunctionNames(SharedNames), SourceRecorder(Recorder),
         SharedDataObjects(SharedDataObjects),
         SharedFunctionSymbols(SharedFunctionSymbols),
-        PortableInterface(PortableInterface),
-        SharedFunctionLinkNames(SharedLinkNames),
-        SharedNameIndex(SharedNameIndex) {}
+        SharedFunctionLinkNames(SharedFunctionLinkNames),
+        SharedDataSymbolBindings(SharedDataSymbolBindings),
+        PortableInterface(PortableInterface), SharedNameIndex(SharedNameIndex),
+        SharedRelocations(SharedRelocations) {}
 
   //--- Module-level (HighCEmitter.cpp) ---
   void writeAll(const std::vector<HighFunc> &Funcs);
@@ -416,8 +425,15 @@ public:
                   size_t End = static_cast<size_t>(-1));
   bool tryWriteCursorForLoop(const std::vector<HighStmt> &Stmts, size_t I,
                              size_t End, int Indent, size_t &Last);
-  void writeStmtsIsolated(const std::vector<HighStmt> &Stmts, int Indent);
-  void writeTryBody(const std::vector<HighStmt> &Stmts, int Indent);
+  /// \p FreshEntry starts from no proved flag. A handler did not run the
+  /// assignments of the protected body.
+  void writeStmtsIsolated(const std::vector<HighStmt> &Stmts, int Indent,
+                          bool FreshEntry = false);
+  void writeTryBody(const std::vector<HighStmt> &Stmts, int Indent,
+                    bool FreshEntry = false);
+  /// Handler bodies printed outside writeStmtsIsolated. Facts from the
+  /// protected body do not reach them, and their assignments do not leak out.
+  void writeStmtsUnproved(const std::vector<HighStmt> &Stmts, int Indent);
   void writeTryBodyUnisolated(const std::vector<HighStmt> &Stmts, int Indent);
   bool isCompilerEHConstant(const HighExpr &Val) const;
   void emitIndent(int Indent);
@@ -477,6 +493,10 @@ public:
   /// that holds a string's bytes is the string itself, as
   /// imageStringLiteral asks of a symbol.
   bool objectOutgrowsLiteral(va_t Addr, llvm::StringRef Literal) const;
+  /// \p Addr inside a narrow string stringLiteral() spells from its start, as
+  /// that literal and the byte offset into it, `("text" + 7)`, when every
+  /// access at \p Addr stays within the literal's array.
+  std::optional<std::string> literalInterior(va_t Addr) const;
   std::string renderUnaryOp(const HighExpr &E, int ParentPrec);
   /// The name a call's target goes by, resolved once for each call address,
   /// indirection and stated target, all it reads of a call: the image and
@@ -628,6 +648,17 @@ public:
   typedMemberAccess(const HighExpr &Addr, uint16_t AccessSize = 0,
                     bool EnterNestedAtZero = true,
                     NdAccessClass Class = NdAccessClass::Unknown) const;
+  std::optional<std::string> recordMemberAccess(const HighExpr &Base,
+                                                llvm::StringRef Path) const;
+  /// An ordinary read/modify/write which sets or clears one whole bitfield.
+  std::optional<std::string> bitFieldUpdate(const HighExpr &Address,
+                                            const HighExpr &Value) const;
+  std::optional<std::string> bitFieldAccess(const HighExpr &Address,
+                                            unsigned Bytes, unsigned First,
+                                            unsigned Count) const;
+  std::optional<std::string> bitFieldRead(const HighExpr &Value);
+  void collectBitFieldStatements(const HighFunc &Function);
+  std::map<const HighStmt *, std::string> BitFieldStatements;
   std::optional<std::string> typedMemberAddress(const HighExpr &Addr) const;
   TypeRef typedMemberType(const HighExpr &Addr, uint16_t AccessSize = 0,
                           NdAccessClass Class = NdAccessClass::Unknown) const;
@@ -686,6 +717,16 @@ public:
   static bool pointsToVoid(const TypeRef &Ty);
   /// Pointer object used as an `INDIR_CALL` base, without `(uintptr_t)`.
   std::string pointerObjectStr(const HighExpr &E);
+  /// Fail-closed note: the reason and the instruction address, with no
+  /// generic unknown or unresolved wording.
+  std::string failClosedComment(llvm::StringRef Reason, va_t Addr) const;
+  /// SP-origin original memory under an image has no raw SP to project.
+  bool imageReconstructedStackMemory(const HighExpr &E) const;
+  /// That access, as a value that fails closed at the instruction address.
+  std::string reconstructedStackMemoryText(const HighExpr &E) const;
+  /// The same access when its results are intrinsic outputs. Empty when
+  /// this call is not that case, so a value use still prints the expression.
+  std::string reconstructedStackMemoryStatement(const HighExpr &E);
   /// An unavailable value retains its pointer type as well as its failure.
   std::string unknownValueText(const HighExpr &E, llvm::StringRef Kind);
   /// The failure an unknown value prints at its use, or empty when \p E
@@ -697,6 +738,20 @@ public:
   /// ***)p`. A loaded vtable slot `Load(Load(obj)+imm)` is
   /// `*(void **)((uintptr_t)(*(void **)(obj)) + imm)`, not integer soup.
   TypeRef indirectCallFunctionType(const HighExpr &Call) const;
+  TypeRef checkedCalleeFunctionType(const HighExpr &Call,
+                                    const FunctionSym &Callee) const;
+  void collectVirtualCallees(const std::vector<HighFunc> &Functions);
+  struct VirtualCallee {
+    FunctionSym Function;
+    std::string Symbol;
+    uint64_t SlotOffset = 0;
+    va_t Caller = 0;
+    va_t Table = 0;
+    va_t Slot = 0;
+    std::string ReceiverType;
+    bool Compatible = false;
+  };
+  std::map<const HighExpr *, VirtualCallee> VirtualCallees;
   TypeRef fixedCalleeFunctionType(const FunctionSym &Callee) const;
   std::string authenticatedCalleeStr(const HighExpr &E,
                                      llvm::StringRef FunctionPointerType);
@@ -795,6 +850,16 @@ public:
   /// record's pointer member, or an object of the image declared as a
   /// pointer.  An integer it is stored to takes it as the address it is.
   TypeRef printedPointerType(const HighExpr &Value) const;
+  /// The declaration of an exactly addressed, full-width global pointer load.
+  TypeRef globalPointerType(const HighExpr &Load) const;
+  TypeRef globalPointerTypeAt(va_t Address, uint16_t Bytes) const;
+  HighPointerTypeFacts
+  pointerTypeFacts(const HighFunc &Function, llvm::ArrayRef<TypeRef> Parameters,
+                   HighPointerLocations *Locations = nullptr,
+                   HighPointerUseLocations *Uses = nullptr) const;
+  HighPointerLocations RecordPointerLocations;
+  HighPointerUseLocations RecordPointerUses;
+  const HighPointerLocation *recordPointerLocation(const HighExpr &Value) const;
   /// An unchanged local pointer behind full-width machine bit views, where
   /// the destination has the same declared pointer type. Never replay its
   /// definition: a captured pointer may outlive a reassignment of its source.
@@ -857,11 +922,42 @@ public:
   /// or prints as a literal already.
   std::string stringArgumentNote(const HighExpr &Arg);
   void collectUnknownOnlyNames(const HighFunc &Func);
+  /// Full-width AArch64 entry GPRs whose only use is to be stored. A context
+  /// save stores the caller-saved bank this way; HighC then names those
+  /// registers instead of trapping.
+  void collectCapturedEntryRegisters(const HighFunc &Func);
+  /// Entry Q registers printed as the value of a store. That spill stays
+  /// unknown. A different use of the same register is not in this set.
+  void collectEntryVectorSpills(const HighFunc &Func);
+  /// Incoming Q register \p V, printed as that architectural register.
+  /// Empty for a parameter, a later definition, or any other width.
+  std::string entryQRegisterText(const MedVar &V) const;
+  /// The incoming architectural register \p Operand still holds, when \p Call
+  /// reads it as a 128-bit vector operand or as a pointer-authentication
+  /// modifier. Empty for a parameter, a later definition, an address, or a
+  /// value this function did not prove.
+  std::string provedEntryOperandText(const HighExpr &Call, size_t Index,
+                                     const HighExpr &Operand) const;
   void collectDeferredUnknowns(const HighFunc &Func);
   bool writeDeferredUnknownCopy(const HighStmt &Stmt, int Indent);
+  /// Record whether \p Flag was just printed as the constant 1.
+  void noteDeferredFlag(const std::string &Flag, llvm::StringRef Available);
+  /// Drop proved flags this region assigns, so a later path cannot keep a 1
+  /// that this region may have cleared.
+  void forgetProvedFlagsWrittenIn(const std::vector<HighStmt> &Stmts);
   void collectCtorSourceNames(const HighFunc &Func);
   bool isUnknownCallOperand(const HighExpr *Op) const;
+  bool isDeferredUnknownInput(const HighExpr *Op) const;
   bool isCtorSourceExpr(const HighExpr *Op) const;
+  /// isUnknownCallOperand, asking \p UnknownOnly whether a name is in
+  /// UnknownOnlyNames: the one name its answer reads that set for.
+  template <typename UnknownOnlyFn>
+  bool unknownCallOperand(const HighExpr *Op,
+                          UnknownOnlyFn &&UnknownOnly) const;
+  /// isCtorSourceExpr, asking \p CtorSource whether a name is in
+  /// CtorSourceNames: each name its answer reads that set for.
+  template <typename CtorSourceFn>
+  bool ctorSourceExpr(const HighExpr *Op, CtorSourceFn &&CtorSource) const;
   bool isCtorDisplayOperand(const HighExpr *Op) const;
   TypeRef knownCallReturnType(const HighExpr &E) const;
   /// A call whose prototype returns nothing: TPI or the C library tables say
@@ -883,10 +979,10 @@ public:
   /// value; null where a view drops bytes.
   const HighExpr *floatBitsSource(const HighExpr &Bits,
                                   const TypeRef &Float) const;
-  /// The call whose result \p Bits are (floatBitsSource), rendered as
-  /// \p Float when its known return and actual carrier allow it; else nullopt.
-  std::optional<std::string> floatCallResultText(const HighExpr &Bits,
-                                                 const TypeRef &Float);
+  /// A source-typed local, field, stack argument or call whose result
+  /// \p Bits carry, rendered directly as \p Float when their types agree.
+  std::optional<std::string> floatSourceText(const HighExpr &Bits,
+                                             const TypeRef &Float);
   /// The value of type \p Float whose bits \p Bits are (floatBitsSource), or
   /// null.
   const HighExpr *floatBitsValue(const HighExpr &Bits,
@@ -941,15 +1037,17 @@ public:
   /// Prefer more TPI params / a typed or sret return when two decorations
   /// collapse to one C identifier. Display-only; does not invent call args.
   int debugSymRichness(const FunctionSym &FS) const;
-  static TypeRef cDisplayType(const TypeRef &Ty);
   /// A signed frame offset, with no overflowing step. Storage projections
   /// require a known root; display-only queries may retain the SSA-0 heuristic.
   std::optional<int64_t> frameDisplacement(const HighExpr &E,
                                            bool RequireKnownRoot = false) const;
   /// Whether the \p Bytes bytes at \p A and those at \p B cannot overlap:
-  /// both lie in the frame, or both are constant addresses, that far apart.
+  /// both lie in the frame, are constant addresses, or share an unchanged
+  /// full-width base with disjoint constant byte offsets.
   bool disjointMemory(const HighExpr &A, const HighExpr &B,
                       uint64_t Bytes) const;
+  bool disjointMemory(const HighExpr &A, const HighExpr &B, uint64_t ABytes,
+                      uint64_t BBytes) const;
   std::optional<int64_t>
   certifiedFrameStorageDisplacement(const HighExpr &E) const;
   /// Whether the alignment precondition \p Call always holds in C: its
@@ -1111,6 +1209,7 @@ public:
   std::string formatInplaceAnd(const std::string &Dest, uint64_t Mask,
                                unsigned Size) const;
   bool isInplaceAndStore(const HighStmt &S, uint64_t &Mask) const;
+  bool stmtSuppressedAsDead(const HighStmt &Stmt) const;
   bool stmtHiddenFromC(const HighStmt &Stmt) const;
   bool stmtsEffectivelyEmpty(const std::vector<HighStmt> &Stmts) const;
   void markHiddenControlDead(const std::vector<HighStmt> &Stmts,
@@ -1377,6 +1476,8 @@ public:
   /// The helper of each x86 saturating lane operation and lane width
   /// (X86SaturatingLanes.def).
   std::map<std::pair<Intrinsic, unsigned>, std::string> SaturatingLaneHelpers;
+  /// Compact calls retain the original memory word in a shared C definition.
+  std::map<uint32_t, std::string> AArch64MemoryHelpers;
   /// The scalar LSE builtins of NeverD's Clang the output calls, each given
   /// a definition for other compilers (ScalarLSEFallbacks.def).
   std::set<Intrinsic> ScalarLSEBuiltins;
@@ -1400,6 +1501,9 @@ public:
 
   HighCAnalysisState Analysis;
   bool InferredVoid = false;
+  /// Address of the statement whose text is being written. A nested
+  /// statement with no address keeps the enclosing one.
+  va_t EmittingAddr = 0;
   TypeRef FuncReturnType;
   const PreparedPortableX87Function *PortableInterface = nullptr;
   std::string renderPortableX87Call(const HighExpr &Expr);
@@ -1460,6 +1564,11 @@ public:
     unsigned MinStoreSize = 0;
   };
   std::map<int64_t, NamedFrameSlot> FrameSlots;
+  // Valid between slot-name mutations. Offsets preserve the original lookup
+  // order when two slots have the same display name.
+  std::optional<llvm::StringMap<llvm::SmallVector<int64_t, 1>>>
+      FrameSlotOffsetsByName;
+  void indexFrameSlotNames();
   /// A frame address escapes: it is a value the function computes with,
   /// stores or passes, or a run-time choice picks frame bytes.  The frame is
   /// then one object, and a pointer derived from that address may reach
@@ -1619,9 +1728,31 @@ public:
   /// Destinations whose only assignments are Undef / unknown copies of those.
   /// Assigns are hidden; observable uses diagnose missing state.
   std::set<std::string> UnknownOnlyNames;
+  /// AArch64 entry-GPR offsets named as the architectural register. Empty
+  /// unless collectCapturedEntryRegisters proved a context save.
+  std::set<uint64_t> CapturedEntryRegisters;
+  /// Peeled entry-Q nodes that are the value of a store or a store intrinsic.
+  std::unordered_set<const HighExpr *> EntryVectorSpills;
   /// Availability of mixed known/unknown integer PHIs and their copies.
   std::map<std::string, std::string> DeferredUnknownFlags;
+  /// Flags of DeferredUnknownFlags printed as the constant 1 on the path
+  /// being written. The observation prints the value. A join, a loop-carried
+  /// write, and a handler entry drop the fact.
+  std::set<std::string> DeferredFlagsProvedOne;
   bool ReadingDeferredPayload = false;
+  /// Only writeStmt establishes an observation point. Expressions moved by
+  /// a statement-list rewrite must not borrow an enclosing statement's facts.
+  const HighStmt *EmittingStmt = nullptr;
+  struct DeferredAssignment {
+    c_availability::FlagWrite Availability;
+    std::string Source;
+  };
+  DeferredAssignment deferredAssignment(const HighExpr &Value) const;
+  void buildAvailabilityFlow(const HighFunc &Func);
+  bool deferredValueAvailable(llvm::StringRef Name);
+  std::optional<c_availability::Graph> AvailabilityFlow;
+  llvm::DenseMap<const HighStmt *, c_availability::Point> AvailabilityPoints;
+  llvm::StringMap<c_availability::Value> AvailabilityValues;
   /// Names that appear as assign destinations in this function.
   std::set<std::string> AssignedNames;
   /// Temps assigned a pointer/string/frame address (copy/string ctor src).
@@ -1656,6 +1787,7 @@ public:
     /// the comment that declares it; empty when the name is the symbol.
     std::string Readable;
     TypeRef Type;
+    TypeRef DebugType;
     std::set<uint16_t> MemoryWidths;
     /// The code stores to it.
     bool Written = false;
@@ -1709,7 +1841,11 @@ public:
   /// one width the emitted code accesses it with.  None names it unknown.
   std::optional<uint64_t> dataNameWidth(va_t Addr,
                                         const ImageObject &Obj) const;
-  std::map<va_t, DataSymbolBinding> DataSymbolBindings;
+  /// Bindings for this emission. The emitter's map when it prepared this
+  /// image; otherwise OwnedDataSymbolBindings, filled on collection.
+  std::map<va_t, DataSymbolBinding> OwnedDataSymbolBindings;
+  const std::map<va_t, DataSymbolBinding> *DataSymbolBindings =
+      &OwnedDataSymbolBindings;
   std::set<va_t> UsedDataBindings;
   std::map<std::string, std::string> ExternalDataNames;
   std::optional<std::string> dataSymbolAddress(va_t Slot) const;
@@ -1790,6 +1926,17 @@ public:
   /// reads: those the emitter prepared for the image when it did, else the
   /// writer's own, read at the first address it asks about.
   const HighCImageFunctionSymbols *SharedFunctionSymbols;
+  /// C names of the image's function symbols, when the emitter prepared
+  /// them for this image, format and architecture. Otherwise the writer
+  /// builds ImageFunctionLinkNames on the first query.
+  const llvm::StringSet<> *SharedFunctionLinkNames;
+  /// Loader bindings of this image's data-pointer slots, when the emitter
+  /// prepared them. Otherwise collectImageObjects builds the writer's own.
+  const std::map<va_t, DataSymbolBinding> *SharedDataSymbolBindings;
+  /// The image-wide name index the emitter prepared (symbol and function
+  /// names); null when the writer resolves names itself.
+  const HighCImageNameIndex *SharedNameIndex;
+  const RelocationProvenanceIndex *SharedRelocations;
   std::optional<HighCImageFunctionSymbols> OwnFunctionSymbols;
   /// Keep the source identity until declarations have allocated their final
   /// C identifiers. An earlier spelling can later belong to an image object.
@@ -1805,13 +1952,12 @@ public:
   functionAddressIdentifier(const FunctionAddressTarget &Target) const;
   /// Linker function names cannot also name definitions of reconstructed data.
   /// The image's function link names: the emitter's prepared ones, or read
-  /// on the first query (imageFunctionOwnsLinkIdentifier).
-  const std::unordered_set<std::string_view> *SharedFunctionLinkNames;
-  std::optional<std::unordered_set<std::string_view>> ImageFunctionLinkNames;
+  /// on the first query (imageFunctionOwnsLinkIdentifier). StringSet owns
+  /// the link spellings independently of the source symbol strings.
+  std::optional<llvm::StringSet<>> ImageFunctionLinkNames;
   /// The image's name lookups by address, which the emitter prepared for
   /// the image, or null: a unit written alone scans the image for the few
   /// names it asks.
-  const HighCImageNameIndex *SharedNameIndex;
   bool imageFunctionOwnsLinkIdentifier(llvm::StringRef Name);
   /// The symbols of those functions this output does not define, declared as
   /// the functions it calls are.
@@ -1896,6 +2042,15 @@ public:
   /// symbols and relocations.
   std::optional<std::string> stringLiteral(va_t Addr) const;
   mutable std::unordered_map<va_t, std::optional<std::string>> StringLiterals;
+  /// The string literalInterior() finds an address inside: where it starts,
+  /// its literal, and its array's bytes, the terminator included.
+  struct InteriorLiteral {
+    va_t Start;
+    std::string Literal;
+    uint64_t ArrayBytes;
+  };
+  mutable std::unordered_map<va_t, std::optional<InteriorLiteral>>
+      InteriorLiterals;
   /// The constants a call passes to a narrow string parameter, which print
   /// as narrow literals (imageStringLiteral's Narrow) where the image's
   /// bytes read as wide ones too.

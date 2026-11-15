@@ -15,6 +15,7 @@ add_custom_command(
   VERBATIM)
 
 add_neverd_component_library(NeverDLoader
+  ItaniumVTable.cpp
   COFF/COFFLoader.cpp
   COFF/ControlFlowEntries.cpp
   COFF/COFFLoaderUtils.cpp
@@ -85,6 +86,7 @@ add_neverd_component_library(NeverDLoader
   ELF/ELFLoader.cpp
   ELF/ELFMIPSProfile.cpp
   ELF/ELFMIPSDynamic.cpp
+  ELF/EmbeddedELF.cpp
   ELF/ELFLoaderExterns.cpp
   ELF/ELFLoaderRelocations.cpp
   ELF/ELFLoaderSections.cpp

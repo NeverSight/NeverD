@@ -28,6 +28,8 @@
 #include <limits>
 #include <optional>
 
+class QLabel;
+
 namespace neverd::gui {
 
 class AddressSpace;
@@ -346,6 +348,8 @@ private:
   int arrowsWidth_ = 0, prefixChars_ = 0;
   quint64 styleStamp_ = 1;
   QTimer scrollJump_;
+  QLabel *loadingLabel_ = nullptr;
+  void updateLoadingLabel();
   Address pendingScrollAddress_ = 0;
   bool updatingScrollBar_ = false;
   std::optional<Address> lastEmitted_;

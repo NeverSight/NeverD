@@ -66,6 +66,7 @@ public:
   Language language() const { return Lang; }
   /// The spelling of the type named \p Name.
   std::string type(llvm::StringRef Name) const;
+  std::string sourceType(llvm::StringRef Identifier) const;
   /// The spelling of \p Enum's enumerator \p Index.
   std::string enumerator(const EnumDef &Enum, size_t Index) const;
   /// The spelling of a member, a parameter or an accessor named \p Name.
@@ -96,6 +97,7 @@ private:
   /// Map entries share the table's lifetime; returned spellings own their
   /// bytes.
   llvm::StringMap<std::string, llvm::BumpPtrAllocator> Types;
+  llvm::StringMap<std::string, llvm::BumpPtrAllocator> OriginalTypes;
   std::map<const EnumDef *, std::vector<std::string>> Enumerators;
   std::vector<std::pair<std::string, std::string>> Renamed;
 };
@@ -271,10 +273,12 @@ private:
 
 /// The renderers of each language.
 std::string renderC(const TypeLibrary &Library, const LocalType &Type,
-                    const RenderOptions &Options);
+                    const RenderOptions &Options,
+                    const NameSpelling *Shared = nullptr);
 std::string renderCHeader(const TypeLibrary &Library,
                           llvm::ArrayRef<const LocalType *> Types,
-                          const RenderOptions &Options);
+                          const RenderOptions &Options,
+                          const NameSpelling *Shared = nullptr);
 /// \p Spelled, when given, is the library's C spelling (CppToo false), which
 /// the call then reads instead of spelling every name again.
 EmbeddedC renderEmbeddedC(const TypeLibrary &Library,

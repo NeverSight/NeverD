@@ -491,12 +491,12 @@ TEST_F(LibraryRecognitionTest, LLVMCMapsOptimizedAndUnoptimizedOriginalText) {
       COptions.TheArch = Image.Arch;
       COptions.Format = Image.Format;
       COptions.Image = &Image;
+      COptions.LLVMSources = Result.LLVMSources.get();
       std::string Ordinary, Mapped;
       llvm::raw_string_ostream OrdinaryOS(Ordinary), MappedOS(Mapped);
       ASSERT_TRUE(Emitter.emit(*Result.LlvmModule, OrdinaryOS, COptions));
       CSourceMap Map;
       Map.Recognitions = &Result.LibraryRecognitions;
-      Map.LLVMSources = Result.LLVMSources.get();
       COptions.SourceMap = &Map;
       ASSERT_TRUE(Emitter.emit(*Result.LlvmModule, MappedOS, COptions));
       EXPECT_EQ(Ordinary, Mapped);
@@ -548,8 +548,8 @@ TEST_F(LibraryRecognitionTest, LLVMShardsKeepOnlyLiveSourceHandles) {
   EXPECT_EQ(Function->getParent(), Result.LlvmModule.get());
   CSourceMap Map;
   Map.Recognitions = &Result.LibraryRecognitions;
-  Map.LLVMSources = Result.LLVMSources.get();
   CEmitterOptions COptions;
+  COptions.LLVMSources = Result.LLVMSources.get();
   COptions.TheArch = Image.Arch;
   COptions.Format = Image.Format;
   COptions.Image = &Image;

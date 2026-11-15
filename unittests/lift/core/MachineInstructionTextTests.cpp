@@ -19,6 +19,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/backend/LLVMControlFlowFailure.h"
 #include "neverd/backend/c/CEmitterOptions.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
@@ -27,12 +28,15 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/IntrinsicInstructionText.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -647,7 +651,8 @@ TEST(MachineInstructionText, HighCPrintsTheInstruction) {
 }
 
 /// HighC of one AArch64 function returning \p ReturnType with \p Body.
-std::string highCOf(HighStmt Body, TypeRef ReturnType) {
+std::string highCOf(HighStmt Body, TypeRef ReturnType,
+                    const BinaryImage *Image = nullptr) {
   HighFunc Func;
   Func.Name = "f";
   Func.ReturnType = std::move(ReturnType);
@@ -657,6 +662,7 @@ std::string highCOf(HighStmt Body, TypeRef ReturnType) {
   llvm::raw_string_ostream OS(C);
   CEmitterOptions Options;
   Options.TheArch = Arch::AArch64;
+  Options.Image = Image;
   EXPECT_TRUE(HighCEmitter().emit({Func}, OS, Options));
   return C;
 }
@@ -732,6 +738,32 @@ TEST(MachineInstructionText, HighCPrintsSystemInstructions) {
       << C;
 }
 
+TEST(MachineInstructionText, SystemRegisterEncodingDoesNotBecomeImageString) {
+  const LowOp Op = liftA64(0xd53bd040); // mrs x0, tpidr_el0
+  ASSERT_EQ(Op.Opcode, NdOp::INTRINSIC);
+  ASSERT_EQ(Op.NumInputs, 2);
+  const auto &Field = Op.Inputs[1];
+  EXPECT_EQ(Field.Provenance, ConstantAddressProvenance::Scalar);
+  BinaryImage Image;
+  Image.Arch = Arch::AArch64;
+  Image.Bits = Bitness::Bits64;
+  Segment Data;
+  Data.VA = Field.Offset;
+  Data.Data = {'9', 0, 0, 0, 0, 0, 0, 0};
+  Data.Size = Data.FileSz = Data.Data.size();
+  Data.Flags = SegmentFlags::Readable;
+  Image.Segments.push_back(std::move(Data));
+  HighStmt Read;
+  Read.Kind = StmtKind::Return;
+  Read.RetVal = intrinsicCall(
+      Intrinsic::Mrs,
+      {HighExpr::makeConst(Field.Offset, Field.Size, Field.Provenance)},
+      NdType::makeInt(8, false));
+  const auto C = highCOf(std::move(Read), NdType::makeInt(8, false), &Image);
+  EXPECT_NE(C.find("__arm_rsr64(\"tpidr_el0\")"), std::string::npos) << C;
+  EXPECT_EQ(C.find("L\"9\""), std::string::npos) << C;
+}
+
 // LDR and STR of a whole Z or P register scale their offset by a length C
 // cannot name: they run as the instruction, with the base the C computes.
 TEST(MachineInstructionText, AArch64KeepsWholeSVERegisterTransfers) {
@@ -772,6 +804,82 @@ std::string llvmC(const char *IR, Arch TheArch) {
   Options.TheArch = TheArch;
   EXPECT_TRUE(LLVMCEmitter().emit(*Module, OS, Options));
   return C;
+}
+
+TEST(MachineInstructionText, ControlFlowFailureSitesSurviveOptimization) {
+  for (bool Optimize : {false, true}) {
+    SCOPED_TRACE(Optimize);
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Diagnostic;
+    auto Module = llvm::parseAssemblyString(R"(
+declare void @llvm.trap()
+define void @two_failures(i1 %choice) {
+entry:
+  br i1 %choice, label %first, label %second
+first:
+  call void @llvm.trap() [ "neverd.control-flow.failure"(i32 1, i64 4660) ]
+  unreachable
+second:
+  call void @llvm.trap() [ "neverd.control-flow.failure"(i32 2, i64 22136) ]
+  unreachable
+}
+)",
+                                            Diagnostic, Context);
+    ASSERT_TRUE(Module) << Diagnostic.getMessage().str();
+    ASSERT_FALSE(llvm::verifyModule(*Module));
+    if (Optimize) {
+      llvm::LoopAnalysisManager Loops;
+      llvm::FunctionAnalysisManager Functions;
+      llvm::CGSCCAnalysisManager CallGraph;
+      llvm::ModuleAnalysisManager Modules;
+      llvm::PassBuilder Passes;
+      Passes.registerLoopAnalyses(Loops);
+      Passes.registerFunctionAnalyses(Functions);
+      Passes.registerCGSCCAnalyses(CallGraph);
+      Passes.registerModuleAnalyses(Modules);
+      Passes.crossRegisterProxies(Loops, Functions, CallGraph, Modules);
+      auto Pipeline =
+          Passes.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O2);
+      Pipeline.run(*Module, Modules);
+      ASSERT_FALSE(llvm::verifyModule(*Module));
+    }
+    for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+      CEmitterOptions Options;
+      Options.TheArch = Architecture;
+      std::string Source;
+      llvm::raw_string_ostream Out(Source);
+      ASSERT_TRUE(LLVMCEmitter().emit(*Module, Out, Options));
+      EXPECT_NE(Source.find("__builtin_trap(); /* indirect targets not proved "
+                            "at 0x1234 */"),
+                std::string::npos)
+          << Source;
+      EXPECT_NE(Source.find("__builtin_trap(); /* jump-table default outside "
+                            "proved cases at 0x5678 */"),
+                std::string::npos)
+          << Source;
+      EXPECT_NE(Source.find("__builtin_unreachable();"), std::string::npos)
+          << Source;
+    }
+  }
+}
+
+TEST(MachineInstructionText, MalformedControlFlowFailureSitesAreRejected) {
+  for (const char *Inputs :
+       {"", "i32 1", "i32 0, i64 4660", "i32 3, i64 4660", "i16 1, i64 4660",
+        "i32 1, i32 4660", "i32 1, i64 undef", "i32 1, i64 4660, i32 0"}) {
+    SCOPED_TRACE(Inputs);
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Diagnostic;
+    const std::string IR =
+        "declare void @llvm.trap()\ndefine void @failed() {\n"
+        "call void @llvm.trap() [ \"neverd.control-flow.failure\"(" +
+        std::string(Inputs) + ") ]\nunreachable\n}\n";
+    auto Module = llvm::parseAssemblyString(IR, Diagnostic, Context);
+    ASSERT_TRUE(Module) << Diagnostic.getMessage().str();
+    const auto &Call = llvm::cast<llvm::CallBase>(
+        Module->getFunction("failed")->getEntryBlock().front());
+    EXPECT_THROW(llvm_control_flow_failure::get(Call), std::invalid_argument);
+  }
 }
 
 TEST(MachineInstructionText, LLVMCPrintsTheInstruction) {

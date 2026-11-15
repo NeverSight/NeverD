@@ -22,6 +22,7 @@
 #include "../StdcallImportPops.h"
 #include "../UnalignedMemory.h"
 #include "../VariadicImportStub.h"
+#include "../dialect/CSyntax.h"
 #include "../pass/LLVMC/LLVMCBitTests.h"
 #include "../pass/LLVMC/LLVMCCommonBranches.h"
 #include "../pass/LLVMC/LLVMCLoopPhases.h"
@@ -61,6 +62,7 @@
 #include "neverd/backend/MIPS/MIPSSourceCompiler.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/FloatingPointContract.h"
+#include "neverd/backend/c/render/AArch64/AArch64AddressMemoryC.h"
 #include "neverd/backend/c/render/AArch64/AArch64PAuthC.h"
 #include "neverd/backend/c/render/AArch64/AArch64ReturnProtectionC.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
@@ -114,6 +116,7 @@
 #include "llvm/Transforms/Scalar/ScalarizeMaskedMemIntrin.h"
 #include "llvm/Transforms/Scalar/Scalarizer.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
@@ -309,6 +312,7 @@ void LLVMCWriter::prepareFunctionIdentifiers(llvm::Module &Mod) {
   FunctionSources.clear();
   HelperIntrinsics.clear();
   ExternalDataIdentifiers.clear();
+  CallableGlobalDeclarations.clear();
   const std::set<std::string> ImportCNames =
       Img ? peImportCNames(*Img) : std::set<std::string>{};
   for (llvm::Function &Fn : Mod) {
@@ -458,19 +462,19 @@ void LLVMCWriter::prepareFunctionIdentifiers(llvm::Module &Mod) {
             .first;
     FunctionIdentifierNames.insert(Entry->second);
   }
-  std::set<const llvm::GlobalVariable *> CallableGlobals;
   for (const auto &Function : Mod)
     for (const auto &Block : Function)
       for (const auto &Instruction : Block)
         if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction))
           if (const auto *Global = llvm::dyn_cast<llvm::GlobalVariable>(
                   Call->getCalledOperand()->stripPointerCasts()))
-            CallableGlobals.insert(Global);
+            CallableGlobalDeclarations.insert(Global);
   for (const auto &Global : Mod.globals())
     if (isImageBaseDeclaration(Global))
       allocateImageBaseIdentifier(Global);
     else if (Global.isDeclaration() && !Global.getName().empty() &&
-             data_symbol::isMarked(Global) && !CallableGlobals.count(&Global) &&
+             data_symbol::isMarked(Global) &&
+             !CallableGlobalDeclarations.count(&Global) &&
              !parseNdDataSymbol(Global.getName()) &&
              !parseNdCodePtrSymbol(Global.getName()) &&
              !Global.getName().starts_with("__imp_") &&
@@ -530,6 +534,10 @@ bool spellsInt128Keyword(llvm::StringRef Text) {
 } // namespace
 
 void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
+  const auto TypeName = [this](llvm::StringRef Name) {
+    return Opts.RecordTypeName ? Opts.RecordTypeName(Name) : std::string();
+  };
+  CRecordNameSpelling Names(TypeName);
   c_memory::applyMIPSVectorAlignment(Opts, Img ? Img : Opts.Image);
   OnlyFunction = Only;
   SelectedFunctions = llvmc::SourceFunctions(Only);
@@ -684,27 +692,31 @@ void LLVMCWriter::writeRecordDefinitions(std::string &Text) {
     DeclareIncomplete({});
     return;
   }
-  // Every identifier the text spells: a record's or an enumerator's name
-  // among them.
+  // Only C identifiers can name records or enumerators. Display comments
+  // and string/character literals must not request unrelated definitions.
+  // Private mapping renders contain recorder delimiters, which are not C.
+  // Inventory the recorder's ordinary view without changing its marked text.
+  std::string Storage;
+  const llvm::StringRef Plain = SourceRecorder
+                                    ? SourceRecorder->plain(Text, Storage)
+                                    : llvm::StringRef(Text);
   std::set<std::string> Words;
-  for (size_t I = 0; I < Text.size();) {
-    if (!llvm::isAlpha(Text[I]) && Text[I] != '_') {
-      ++I;
-      continue;
-    }
-    size_t End = I + 1;
-    while (End < Text.size() && (llvm::isAlnum(Text[End]) || Text[End] == '_'))
-      ++End;
-    if (I == 0 || (!llvm::isAlnum(Text[I - 1]) && Text[I - 1] != '_'))
-      Words.insert(Text.substr(I, End - I));
-    I = End;
-  }
+  if (auto Error =
+          csyntax::forEachToken(Plain, [&](const csyntax::Token &Token) {
+            if (Token.Kind == csyntax::TokenKind::Identifier)
+              Words.insert(Token.Text.str());
+          }))
+    throw std::runtime_error(llvm::toString(std::move(Error)));
   std::vector<TypeRef> Named;
   Named.reserve(Words.size());
   for (const std::string &Word : Words)
     if (!HeaderCallRecords.count(Word)) {
-      TypeRef Type = NdType::makeNamedRecord(Word, 0);
-      if (RecordPointerTags.count(Word) && !MemberRecords.count(Word))
+      std::string Source =
+          Opts.RecordSourceName ? Opts.RecordSourceName(Word) : "";
+      if (Source.empty())
+        Source = Word;
+      TypeRef Type = NdType::makeNamedRecord(Source, 0);
+      if (RecordPointerTags.count(Word) && !MemberRecords.count(Source))
         Type = NdType::makePtr(Type);
       Named.push_back(std::move(Type));
     }
@@ -747,7 +759,9 @@ void LLVMCWriter::writeRecordDefinitions(std::string &Text) {
                   Definitions.HeaderTypedefs.end());
   DeclareIncomplete(Typedefs);
   for (const std::string &Name : Spelled)
-    if (!llvm::is_contained(Definitions.HeaderTypedefs, Name))
+    if (libc::isKnownFunction(Name) || libc::headerOfDataObject(Name))
+      spellTagUses(Text, Name, Definitions.Tags[Name] ? "union" : "struct");
+    else if (!llvm::is_contained(Definitions.HeaderTypedefs, Name))
       OS << "typedef " << (Definitions.Tags[Name] ? "union " : "struct ")
          << Name << " " << Name << ";\n";
   if (!Definitions.Text.empty())
@@ -957,8 +971,10 @@ void LLVMCWriter::recordSourceNames(const llvm::Module &Mod) {
     Names.push_back(std::move(Name));
   if (Opts.SourceNames)
     *Opts.SourceNames = Names;
-  if (Opts.SourceMap)
+  if (Opts.SourceMap) {
     Opts.SourceMap->Names = std::move(Names);
+    Opts.SourceMap->VirtualCalls.clear();
+  }
 }
 
 void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
@@ -1019,6 +1035,7 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
   std::map<std::string, ScalarIntegerThreeWay> IntegerThreeWays;
   std::map<std::string, ScalarUnary> ScalarUnaries;
   FPStateHelperNames.clear();
+  AArch64MemoryHelpers.clear();
   SyscallHelperNames.clear();
   // The image's copy of an object a C library header declares (optarg, by
   // its copy relocation) is the header's, as HighC's is (ImageObject::
@@ -1054,6 +1071,18 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
       Headers.insert("excpt.h");
     for (auto &BB : Fn) {
       for (auto &Inst : BB) {
+        if (const auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst);
+            Call && validateAArch64AddressMemoryCall(Opts.TheArch, *Call)) {
+          const auto *Word = llvm::cast<llvm::ConstantInt>(
+              Call->getArgOperand(kAddressMemoryWordOperand));
+          const auto Instruction =
+              *aarch64AddressMemoryInstruction(Word->getZExtValue());
+          auto [It, Inserted] =
+              AArch64MemoryHelpers.try_emplace(Instruction.scratchWord());
+          if (Inserted)
+            It->second = GlobalIdentifierAllocator.allocate(
+                aarch64AddressMemoryCHelperName(Instruction), "nd_memory");
+        }
         NoteWideInteger(Inst.getType());
         // Opaque pointer results do not describe the declared local storage.
         if (NeedsWideCarrierAlias)
@@ -1512,6 +1541,9 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
                               FPToIntegerPolicy::Saturate});
   }
   writeX86FPScalarValueCHelpers(OS, FPStateHelperNames);
+  for (const auto &[Word, Name] : AArch64MemoryHelpers)
+    writeAArch64AddressMemoryCHelper(
+        OS.stream(), *aarch64AddressMemoryInstruction(Word), Name);
   for (const auto &[Id, Name] : SyscallHelperNames)
     if (const SyscallConvention *Syscall = modeledSyscallConvention(Id))
       OS << linuxSyscallHelperDefinition(*Syscall, Name);
@@ -1568,14 +1600,25 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     OS << "}\n\n";
   }
   for (const auto &[Name, Shape] : IntegerThreeWays) {
-    auto Carrier = [](unsigned Bits) {
-      return Bits == 128 ? std::string("__uint128_t")
-                         : "uint" + std::to_string(Bits) + "_t";
+    auto Carrier = [&](unsigned Bits) {
+      return typeToCLLVM(llvm::IntegerType::get(Mod.getContext(), Bits));
+    };
+    auto Mask = [](unsigned Bits, const std::string &Type) {
+      const unsigned CarrierBits = Bits <= 8    ? 8
+                                   : Bits <= 16 ? 16
+                                   : Bits <= 32 ? 32
+                                   : Bits <= 64 ? 64
+                                                : 128;
+      return Bits == CarrierBits ? std::string()
+                                 : "(((" + Type + ")~(" + Type + ")0) >> " +
+                                       std::to_string(CarrierBits - Bits) + ")";
     };
     const std::string Type = Carrier(Shape.OperandBits);
     const std::string Result = Carrier(Shape.ResultBits);
     OS << "static inline " << Result << " " << Name << "(" << Type << " a, "
        << Type << " b) {\n";
+    if (const auto Bits = Mask(Shape.OperandBits, Type); !Bits.empty())
+      OS << "    a &= " << Bits << ";\n    b &= " << Bits << ";\n";
     // Flipping the sign bit maps two's-complement signed order to unsigned
     // order, as the minimum and maximum above do.
     if (Shape.Signed)
@@ -1583,7 +1626,10 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
          << Shape.OperandBits - 1 << ";\n"
          << "    a ^= sign;\n    b ^= sign;\n";
     // Less is every bit set: -1 in the result's width.
-    OS << "    return (" << Result << ")((a > b) - (a < b));\n}\n\n";
+    OS << "    return (" << Result << ")((a > b) - (a < b))";
+    if (const auto Bits = Mask(Shape.ResultBits, Result); !Bits.empty())
+      OS << " & " << Bits;
+    OS << ";\n}\n\n";
   }
   for (const auto &[Name, Shape] : FunnelShifts) {
     const auto [Width, Left] = Shape;
@@ -1690,6 +1736,9 @@ void LLVMCWriter::writeImageByteArray(const llvm::GlobalVariable &Global,
                                       llvm::StringRef Name) {
   const auto *Array = llvm::cast<llvm::ArrayType>(Global.getValueType());
   if (!Global.hasInitializer()) {
+    OS << llvmc::storageAlignment(Global.getValueType(),
+                                  Global.getParent()->getDataLayout(),
+                                  Global.getAlign().valueOrOne());
     OS << "extern uint8_t " << Name << "[" << Array->getNumElements() << "];\n";
     return;
   }
@@ -1787,12 +1836,11 @@ void LLVMCWriter::writeLabelTables(const llvm::Function &Fn) {
          << Array->getNumElements() << "] = {";
       for (uint64_t I = 0; I < Array->getNumElements(); ++I)
         OS << (I ? ", " : "")
-           << constStr(Init->getAggregateElement(unsigned(I)),
-                       /*AllowImageAddress=*/false);
+           << constStr(Init->getAggregateElement(unsigned(I)));
       OS << "};\n";
     } else {
       OS << typeToCLLVM(Global.getValueType()) << " " << Name << " = "
-         << constStr(Init, /*AllowImageAddress=*/false) << ";\n";
+         << constStr(Init) << ";\n";
     }
     LabelTableOwner = nullptr;
   }
@@ -1922,10 +1970,17 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
       continue;
     if (!GV.hasInitializer() && EmittedGlobalNames.count(globalNameStr(&GV)))
       continue;
+    if (GV.isDeclaration() && CallableGlobalDeclarations.count(&GV))
+      continue;
     if (llvm_original_image::isMarked(GV)) {
       declareOriginalImage(GV);
       continue;
     }
+    // Normalization removes dead address calculations in the private clone.
+    // Their now-unused declarations need no C spelling; actual storage and
+    // objects named by surviving constant expressions retain their identity.
+    if (GV.isDeclaration() && GV.use_empty())
+      continue;
     // IAT/import slots are callable names at call sites, not C objects.
     // Printing `__imp_??1?$CStringT@...` as `extern uint64_t` is not C.
     if (!GV.hasInitializer()) {
@@ -2006,7 +2061,17 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
       continue;
     }
 
-    if (!GV.hasInitializer() || sourceStringOnlyCalledByValue(GV))
+    if (!GV.hasInitializer()) {
+      // Ordinary external objects can be reached through a constant
+      // expression too. Their missing initializer means declaration, not
+      // absence of storage. Keep the same type and name used by expressions.
+      const std::string DeclaredName = globalNameStr(&GV);
+      if (!headerDeclaresObject(DeclaredName))
+        declare(GV);
+      EmittedGlobalNames.insert(DeclaredName);
+      continue;
+    }
+    if (sourceStringOnlyCalledByValue(GV))
       continue;
 
     // The image's storage stays the image's in one function's output, which
@@ -2069,8 +2134,7 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
         for (uint64_t I = 0; I < Array->getNumElements(); ++I) {
           if (I)
             Elements += ", ";
-          Elements += constStr(Init->getAggregateElement(unsigned(I)),
-                               /*AllowImageAddress=*/false);
+          Elements += constStr(Init->getAggregateElement(unsigned(I)));
         }
       OS << wrapInitializer(std::move(Elements)) << "};\n";
       continue;
@@ -2082,8 +2146,7 @@ void LLVMCWriter::writeGlobals(llvm::Module &Mod) {
       OS << "const ";
     OS << typeToCLLVM(GV.getValueType()) << " " << Name;
     if (!llvm::isa<llvm::ConstantAggregateZero>(Init))
-      OS << " = "
-         << wrapInitializer(constStr(Init, /*AllowImageAddress=*/false));
+      OS << " = " << wrapInitializer(constStr(Init));
     OS << ";\n";
   }
 }
@@ -2281,7 +2344,7 @@ void LLVMCWriter::prepareSourceImportPrototypes(llvm::Module &Mod) {
            (Floating || Type->Kind == NdTypeKind::Int ||
             Type->Kind == NdTypeKind::Ptr ||
             (Type->Kind == NdTypeKind::Struct && Type->IsEnum)) &&
-           hasCSpelling(cDisplayType(Type));
+           hasCSpelling(Type);
   };
   for (const auto &Fn : Mod) {
     if (Fn.isDeclaration() || !SelectedFunctions.contains(Fn))
@@ -2301,8 +2364,11 @@ void LLVMCWriter::prepareSourceImportPrototypes(llvm::Module &Mod) {
         const auto Source = Dbg->resolvePrototype(
             Direct ? cNameOfGlobal(Direct->getName(), true)
                    : importCalleeCName(Call->getCalledOperand()));
-        if (!Source || Source->PrototypeLibrary.empty() ||
-            Source->PrototypeFromCLibrary)
+        // A selected C library header can know routines absent from the
+        // compact builtin registry. Its exact scalar ABI is the same source
+        // contract used for other imported prototypes; keep the carrier
+        // checks below before replacing a machine declaration or argument.
+        if (!Source || Source->PrototypeLibrary.empty())
           continue;
         bool Fits =
             Source->PlatformConvention &&
@@ -2431,8 +2497,7 @@ std::string LLVMCWriter::sourceImportDeclaration(const FunctionSym &Function,
     if (!Params.empty())
       Params += ", ";
     NotePointers(Type);
-    Params +=
-        declarationToC(cDisplayType(Type), Names.allocate(ParamName, "arg"));
+    Params += declarationToC(Type, Names.allocate(ParamName, "arg"));
   }
   if (Function.IsVariadic)
     Params += Params.empty() ? "..." : ", ...";
@@ -2448,7 +2513,7 @@ std::string LLVMCWriter::sourceImportDeclaration(const FunctionSym &Function,
   // This convention belongs to the imported function. Keeping it inside
   // the return declarator would attach it to a returned callback instead.
   return Convention +
-         declarationToC(cDisplayType(Function.ReturnType),
+         declarationToC(Function.ReturnType,
                         Name.str() + "(" + (Params.empty() ? "void" : Params) +
                             ")");
 }
@@ -3474,8 +3539,8 @@ bool LLVMCEmitter::emit(llvm::Module &Mod, llvm::raw_ostream &Out,
                     llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
                         llvm::Type::getInt64Ty(Mod.getContext()), *Base))));
   std::optional<LLVMSourceMap> Sources;
-  if (Opts.SourceMap && Opts.SourceMap->LLVMSources) {
-    Sources = *Opts.SourceMap->LLVMSources;
+  if (Opts.LLVMSources) {
+    Sources = *Opts.LLVMSources;
     Sources->remap([&](llvm::Value *Value) { return ValueMap.lookup(Value); });
   }
   const llvm::Function *ProjectionOnly = nullptr;
@@ -3492,6 +3557,13 @@ bool LLVMCEmitter::emit(llvm::Module &Mod, llvm::raw_ostream &Out,
     lowerPackedVectorBitcasts(*Projection);
   }
   const llvmc::SourceFunctions ProjectionFunctions(ProjectionOnly);
+  // SSA promotion can leave poison storage in unreachable blocks, including
+  // disconnected cleanup cycles. Those blocks have no execution in this
+  // function. DCE alone preserves their stores and prints spurious missing
+  // machine-state observations; discard them only in the source clone.
+  for (auto &Function : *Projection)
+    if (!Function.isDeclaration() && ProjectionFunctions.contains(Function))
+      llvm::removeUnreachableBlocks(Function);
   if (ProjectionOnly)
     for (const auto *Function : ProjectionFunctions.selected())
       llvmc::lowerCStackAllocations(*Projection, Function);
@@ -3653,20 +3725,43 @@ bool LLVMCEmitter::emit(llvm::Module &Mod, llvm::raw_ostream &Out,
       throw std::runtime_error(
           "The private variable storage projection failed verification");
   }
+  // Resolve surviving direct observations once for all renderings. Distinct
+  // machine addresses merged into one instruction have no unique diagnostic
+  // address. Expression ancestry alone is not a consuming operation's origin.
+  LLVMCInstructionAddresses SourceAddresses;
+  if (Sources)
+    for (const auto &Observation : Sources->Observations) {
+      if (Observation.ExpressionDerived)
+        continue;
+      const auto *Instruction =
+          llvm::dyn_cast_or_null<llvm::Instruction>(Observation.Value);
+      if (!Instruction)
+        continue;
+      const auto Function = Sources->Functions.find(Observation.Function);
+      if (Function == Sources->Functions.end() ||
+          Function->second != Instruction->getFunction())
+        continue;
+      const auto [At, Added] = SourceAddresses.try_emplace(
+          Instruction, Observation.Occurrence.Address);
+      if (!Added && At->second != Observation.Occurrence.Address)
+        At->second.reset();
+    }
   if (!Opts.SourceMap) {
-    LLVMCWriter W(Out, EditedOpts, Dbg, Img);
+    LLVMCWriter W(Out, EditedOpts, Dbg, Img, true, nullptr, &SourceAddresses);
     W.writeModule(*Projection, ProjectionOnly);
     return true;
   }
   std::string Ordinary, Annotated;
   llvm::raw_string_ostream OrdinaryOS(Ordinary), AnnotatedOS(Annotated);
-  LLVMCWriter Plain(OrdinaryOS, EditedOpts, Dbg, Img);
+  LLVMCWriter Plain(OrdinaryOS, EditedOpts, Dbg, Img, true, nullptr,
+                    &SourceAddresses);
   Plain.writeModule(*Projection, ProjectionOnly);
   CSourceRecorder Recorder(*Opts.SourceMap, Ordinary);
   try {
     if (Sources)
       Recorder.prepareLLVMSources(*Sources);
-    LLVMCWriter Marked(AnnotatedOS, EditedOpts, Dbg, Img, true, &Recorder);
+    LLVMCWriter Marked(AnnotatedOS, EditedOpts, Dbg, Img, true, &Recorder,
+                       &SourceAddresses);
     Marked.writeModule(*Projection, ProjectionOnly);
     Recorder.finish(Annotated, Ordinary);
   } catch (const std::exception &) {
@@ -3680,7 +3775,8 @@ bool LLVMCEmitter::emit(llvm::Module &Mod, llvm::raw_ostream &Out,
       Instructions.prepareLLVMSources(*Sources);
     std::string Annotated;
     llvm::raw_string_ostream OS(Annotated);
-    LLVMCWriter Marked(OS, EditedOpts, Dbg, Img, true, &Instructions);
+    LLVMCWriter Marked(OS, EditedOpts, Dbg, Img, true, &Instructions,
+                       &SourceAddresses);
     Marked.writeModule(*Projection, ProjectionOnly);
     Instructions.finish(Annotated, Ordinary);
   } catch (const std::exception &) {

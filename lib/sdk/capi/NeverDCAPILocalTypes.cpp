@@ -695,6 +695,9 @@ bool spellsIdentifier(llvm::StringRef Text, llvm::StringRef Name) {
 bool Session::typesChanged(const types::TypeLibrary &Library,
                            llvm::ArrayRef<std::string> Changed,
                            bool Prototypes) {
+  LocalTypeList.reset();
+  LocalTypeRenderer.reset();
+  LocalTypeSpeller.reset();
   // Prototypes reach the analysis with the types they name: a change to
   // either takes the analysis that read them.
   const llvm::StringSet<> Prototyped = prototypeTypeNames(Library);
@@ -818,6 +821,11 @@ bool Session::takeUnreadTypes(const types::TypeLibrary &Library,
       return false;
   }
   // No prototype reaches the new names (Facts.Prototyped, checked above).
+  // The source analyses remain valid, but the catalogue and its renderers
+  // must include the newly declared types on their next read.
+  LocalTypeList.reset();
+  LocalTypeRenderer.reset();
+  LocalTypeSpeller.reset();
   if (LocalTypesDbg)
     LocalTypesDbg->takeNewTypes(Library, Names, OwnNames,
                                 /*Prototyped=*/false);
@@ -954,6 +962,44 @@ const char *neverd_local_types_json(neverd_session_t Sess,
   std::optional<llvm::json::Object> Options = options(*S, OptionsJson);
   if (!Options)
     return nullptr;
+  const bool Paged =
+      Options->get("offset") || Options->get("limit") || Options->get("locate");
+  int64_t Offset = 0, Limit = sdk::kMaxLocalTypePageRows;
+  int64_t DiagnosticsOffset = 0;
+  for (auto [Key, Destination] :
+       {std::pair{"offset", &Offset}, std::pair{"limit", &Limit},
+        std::pair{"diagnostics_offset", &DiagnosticsOffset}}) {
+    if (const auto *Value = Options->get(Key)) {
+      const auto Number = Value->getAsInteger();
+      if (!Number || *Number < 0 ||
+          (llvm::StringRef(Key) == "limit" &&
+           (!*Number || *Number > sdk::kMaxLocalTypePageRows))) {
+        S->setError(std::string(Key) + " is outside the supported page range");
+        return nullptr;
+      }
+      *Destination = *Number;
+    }
+  }
+  std::string Sort = "ordinal", Locate;
+  for (auto [Key, Destination] :
+       {std::pair{"sort", &Sort}, std::pair{"locate", &Locate}}) {
+    if (const auto *Value = Options->get(Key)) {
+      const auto Text = Value->getAsString();
+      if (!Text) {
+        S->setError(std::string(Key) + " must be text");
+        return nullptr;
+      }
+      *Destination = Text->str();
+    }
+  }
+  if (Sort != "ordinal" && Sort != "name" && Sort != "kind" && Sort != "size" &&
+      Sort != "members") {
+    S->setError("sort must be ordinal, name, kind, size or members");
+    return nullptr;
+  }
+  bool Descending = false;
+  if (!readFlag(*Options, "descending", Descending, S->LastError))
+    return nullptr;
   std::string Filter;
   if (const llvm::json::Value *Value = Options->get("filter")) {
     std::optional<llvm::StringRef> Text = Value->getAsString();
@@ -990,33 +1036,124 @@ const char *neverd_local_types_json(neverd_session_t Sess,
   if (!Library)
     return nullptr;
 
+  auto &Index = S->LocalTypeList;
+  if (!Index || Index->Filter != Filter || Index->Origin != Origin ||
+      Index->Sort != Sort || Index->Descending != Descending) {
+    Index.emplace();
+    Index->Filter = Filter;
+    Index->Origin = Origin;
+    Index->Sort = Sort;
+    Index->Descending = Descending;
+    Index->Rows.reserve(Library->size());
+    for (const types::LocalType *Type : Library->types()) {
+      const llvm::StringRef From = types::originName(Type->Origin);
+      ++Index->Origins[From];
+      if ((Origin.empty() || Origin == From) &&
+          llvm::StringRef(Type->Name).contains_insensitive(Filter))
+        Index->Rows.push_back(Type);
+    }
+    if (Sort != "ordinal") {
+      llvm::DenseMap<const types::LocalType *, int64_t> Numbers;
+      if (Sort == "size" || Sort == "members")
+        for (const auto *Type : Index->Rows)
+          Numbers[Type] = types::typeBriefJSON(*Library, *Type)
+                              .getInteger(Sort)
+                              .value_or(-1);
+      llvm::sort(Index->Rows, [&](const auto *A, const auto *B) {
+        int Order = 0;
+        if (Sort == "name")
+          Order = llvm::StringRef(A->Name).compare_insensitive(B->Name);
+        else if (Sort == "kind")
+          Order = types::kindName(A->Kind).compare(types::kindName(B->Kind));
+        else
+          Order = (Numbers[A] > Numbers[B]) - (Numbers[A] < Numbers[B]);
+        return Order ? Order < 0 : A->Ordinal < B->Ordinal;
+      });
+    }
+    if (Descending)
+      std::reverse(Index->Rows.begin(), Index->Rows.end());
+  }
+  std::optional<int64_t> Located;
+  if (!Locate.empty()) {
+    const auto *Target = Library->find(Locate);
+    const auto Found = llvm::find(Index->Rows, Target);
+    if (Found != Index->Rows.end()) {
+      Located = Found - Index->Rows.begin();
+      Offset = *Located / Limit * Limit;
+    }
+  }
+  const int64_t Total = static_cast<int64_t>(Index->Rows.size());
+  Offset = std::min(Offset, Total);
+  int64_t Next = Offset;
   llvm::json::Array Types;
-  llvm::StringMap<int64_t> Origins;
-  for (llvm::json::Value &Entry : types::typeListJSON(*Library)) {
-    const llvm::json::Object *Object = Entry.getAsObject();
-    if (!Object)
-      continue;
-    const llvm::StringRef From = Object->getString("origin").value_or("");
-    ++Origins[From];
-    if (!Origin.empty() && From != Origin)
-      continue;
-    if (!Filter.empty())
-      if (std::optional<llvm::StringRef> Name = Object->getString("name"))
-        if (!Name->contains_insensitive(Filter))
-          continue;
-    Types.push_back(std::move(Entry));
+  const auto fillPage = [&] {
+    const int64_t End =
+        Paged ? Offset + std::min(Limit, Total - Offset) : Total;
+    size_t Bytes = 0;
+    for (; Next < End; ++Next) {
+      llvm::json::Value Entry =
+          types::typeBriefJSON(*Library, *Index->Rows[Next]);
+      if (Paged) {
+        const size_t RowBytes = jsonToString(Entry).size();
+        if (RowBytes > sdk::kMaxLocalTypePageBytes) {
+          S->setError("a local type summary exceeds the page byte limit");
+          return false;
+        }
+        if (Bytes + RowBytes > sdk::kMaxLocalTypePageBytes)
+          break;
+        Bytes += RowBytes;
+      }
+      Types.push_back(std::move(Entry));
+    }
+    return true;
+  };
+  if (!fillPage())
+    return nullptr;
+  if (Located && *Located >= Next) {
+    // A byte-limited page can end before the requested row even though its
+    // row-count window includes it. Start at that row so locate always
+    // returns the requested type, or its explicit oversized-row error.
+    Offset = Next = *Located;
+    Types.clear();
+    if (!fillPage())
+      return nullptr;
   }
   llvm::json::Object ByOrigin;
-  for (const auto &Entry : Origins)
+  for (const auto &Entry : Index->Origins)
     ByOrigin[Entry.first()] = Entry.second;
-  llvm::json::Array Mismatches;
-  for (const std::string &Name : S->LocalTypeStats.NestingMismatches)
-    Mismatches.push_back(jsonSafeText(Name));
-  llvm::json::Array Skipped, Conflicts;
-  for (const std::string &Entry : S->LocalTypeSkipped)
-    Skipped.push_back(jsonSafeText(Entry));
-  for (const std::string &Name : S->LocalTypeConflicts)
-    Conflicts.push_back(jsonSafeText(Name));
+  llvm::json::Object Diagnostics;
+  bool DiagnosticTooLarge = false;
+  const auto diagnosticPage = [&](llvm::StringRef Key, const auto &Entries) {
+    llvm::json::Array Page;
+    const int64_t Count = static_cast<int64_t>(Entries.size());
+    const int64_t Begin = Paged ? std::min(DiagnosticsOffset, Count) : 0;
+    int64_t At = Begin;
+    size_t Bytes = 0;
+    for (; At < Count && (!Paged || At - Begin < Limit); ++At) {
+      std::string Text = jsonSafeText(Entries[At]);
+      const size_t Size = jsonToString(llvm::json::Value(Text)).size();
+      if (Paged && Size > sdk::kMaxLocalTypeDiagnosticBytes) {
+        DiagnosticTooLarge = true;
+        break;
+      }
+      if (Paged && Bytes + Size > sdk::kMaxLocalTypeDiagnosticBytes)
+        break;
+      Bytes += Size;
+      Page.push_back(std::move(Text));
+    }
+    if (Paged)
+      Diagnostics[Key] = llvm::json::Object{
+          {"total", Count}, {"offset", Begin}, {"next_offset", At}};
+    return Page;
+  };
+  auto Mismatches =
+      diagnosticPage("nestingMismatches", S->LocalTypeStats.NestingMismatches);
+  auto Skipped = diagnosticPage("skipped", S->LocalTypeSkipped);
+  auto Conflicts = diagnosticPage("conflicts", S->LocalTypeConflicts);
+  if (DiagnosticTooLarge) {
+    S->setError("a local type diagnostic exceeds the page byte limit");
+    return nullptr;
+  }
   llvm::json::Object Result{
       {"source", S->LocalTypesSource},
       {"dataModel", types::dataModelName(Library->dataModel())},
@@ -1033,6 +1170,14 @@ const char *neverd_local_types_json(neverd_session_t Sess,
                           {"conflicts", std::move(Conflicts)},
                           {"origins", std::move(ByOrigin)}}},
       {"types", std::move(Types)}};
+  if (Paged) {
+    Result["offset"] = Offset;
+    Result["next_offset"] = Next;
+    Result["total"] = Total;
+    Result["diagnostics"] = std::move(Diagnostics);
+    if (Located)
+      Result["index"] = *Located;
+  }
   if (!S->LocalTypeHeaders.empty()) {
     llvm::json::Array Headers;
     for (const Session::JoinedHeaders &Joined : S->LocalTypeHeaders) {
@@ -1064,9 +1209,14 @@ const char *neverd_local_types_json(neverd_session_t Sess,
   }
   if (Lang) {
     llvm::json::Array Renamed;
+    llvm::StringSet<> Listed;
+    if (Paged)
+      for (int64_t At = Offset; At < Next; ++At)
+        Listed.insert(Index->Rows[At]->Name);
     for (const auto &[Name, Spelled] : types::renamedNames(*Library, *Lang))
-      Renamed.push_back(
-          llvm::json::Array{jsonSafeText(Name), jsonSafeText(Spelled)});
+      if (!Paged || Listed.contains(Name))
+        Renamed.push_back(
+            llvm::json::Array{jsonSafeText(Name), jsonSafeText(Spelled)});
     Result["renamed"] = std::move(Renamed);
   }
   return dupStr(jsonToString(llvm::json::Value(std::move(Result))));
@@ -1104,9 +1254,17 @@ const char *neverd_local_type_json(neverd_session_t Sess, const char *Name,
     S->setError(std::string("no local type named ") + jsonSafeText(Name));
     return nullptr;
   }
-  return dupStr(jsonToString(llvm::json::Value(types::typeJSON(
-      *Library, *Type,
-      Spelling.value_or(types::defaultSpelling(types::Language::C))))));
+  const auto Chosen =
+      Spelling.value_or(types::defaultSpelling(types::Language::C));
+  if (!S->LocalTypeSpeller || S->LocalTypeSpelling != Chosen) {
+    types::RenderOptions Render;
+    Render.Spelling = Chosen;
+    S->LocalTypeSpeller =
+        std::make_unique<types::TypeSpeller>(*Library, Render);
+    S->LocalTypeSpelling = Chosen;
+  }
+  return dupStr(jsonToString(llvm::json::Value(
+      types::typeJSON(*Library, *Type, Chosen, S->LocalTypeSpeller.get()))));
 }
 
 const char *neverd_local_types_source(neverd_session_t Sess,
@@ -1143,6 +1301,14 @@ const char *neverd_local_types_source(neverd_session_t Sess,
   if (!readRoots(*Options, *Library, Roots, Error)) {
     S->setError(Error);
     return nullptr;
+  }
+  if (Render.Lang == types::Language::C ||
+      Render.Lang == types::Language::Cpp) {
+    if (!S->LocalTypeRenderer ||
+        S->LocalTypeRenderer->language() != Render.Lang)
+      S->LocalTypeRenderer =
+          std::make_unique<types::CTypeRenderer>(*Library, Render.Lang);
+    return dupStr(S->LocalTypeRenderer->render(Roots, Render, Dependencies));
   }
   return dupStr(renderSource(*Library, Roots, Render, Dependencies));
 }

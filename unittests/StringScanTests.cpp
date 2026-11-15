@@ -90,6 +90,39 @@ TEST(StringScan, RejectsMalformedControlAndUnterminatedText) {
                   .empty());
 }
 
+TEST(StringScan, UTF8JoinsASCIIWordsWithEastAsianText) {
+  for (const char *Text :
+       {"DVD光驱", "USB接口", "RGB颜色", "disk中文", "中文USB接口"}) {
+    SCOPED_TRACE(Text);
+    std::vector<uint8_t> Data(Text,
+                              Text + std::char_traits<char>::length(Text));
+    Data.push_back(0);
+    for (bool UTF8Only : {false, true}) {
+      ScanOptions Options;
+      if (UTF8Only)
+        Options.Encodings = encodingBit(Encoding::UTF8);
+      const auto At = scanAt(Data, Options);
+      ASSERT_TRUE(At);
+      EXPECT_EQ(At->Kind, Encoding::UTF8);
+      EXPECT_EQ(At->Text, Text);
+      EXPECT_EQ(At->Bytes, Data.size() - 1);
+      const auto All = scanAll(Data, Options);
+      ASSERT_EQ(All.size(), 1u);
+      EXPECT_EQ(All[0].Offset, 0u);
+      EXPECT_EQ(All[0].Text, Text);
+    }
+    Data.pop_back();
+    EXPECT_FALSE(scanAt(Data, {}));
+  }
+  // The exception is for UTF-8 East Asian words, not arbitrary script mixing
+  // or malformed encodings. Wide-data heuristics retain their own evidence.
+  EXPECT_FALSE(scanAt(bytes("DVDРусский\0"), {}));
+  EXPECT_FALSE(scanAt(bytes("USB\xe6\x8e\0"), {}));
+  ScanOptions WideOnly;
+  WideOnly.Encodings = encodingBit(Encoding::UTF16LE);
+  EXPECT_FALSE(scanAt(wide(U"DVD光驱", 2, false), WideOnly));
+}
+
 TEST(StringScan, FindsWideStringsAtTheirAlignment) {
   ScanOptions Options;
   Options.Encodings = Everything;

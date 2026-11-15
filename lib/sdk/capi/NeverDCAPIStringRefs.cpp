@@ -10,6 +10,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "EmbeddedObjects.h"
 #include "ImageStrings.h"
 #include "InstructionFlow.h"
 #include "JSONText.h"
@@ -19,38 +20,6 @@
 
 using namespace neverd;
 using namespace neverd::sdk;
-
-namespace {
-
-/// The text a reference to \p Address reads: the string holding it and
-/// where the text from its first whole character on begins in the string's
-/// UTF-8 text, while at least \p MinLength display columns remain there.
-struct ReferredText {
-  const ImageString *String = nullptr;
-  uint64_t TextOffset = 0;
-};
-
-std::optional<ReferredText>
-referredText(const BinaryImage &Img, const std::vector<ImageString> &Strings,
-             unsigned MinLength, va_t Address) {
-  const ImageString *String = stringHolding(Strings, Address);
-  if (!String)
-    return std::nullopt;
-  // The whole string was found with its own minimum length.
-  if (Address == String->Address)
-    return ReferredText{String, 0};
-  const uint8_t *Bytes = Img.readVA(String->Address, String->Bytes);
-  if (!Bytes)
-    return std::nullopt;
-  const auto Start =
-      strings::textFrom(llvm::ArrayRef<uint8_t>(Bytes, String->Bytes),
-                        String->Kind, Address - String->Address);
-  if (!Start || Start->Columns < MinLength)
-    return std::nullopt;
-  return ReferredText{String, Start->UTF8};
-}
-
-} // namespace
 
 const char *neverd_string_refs_json(neverd_session_t Sess,
                                     const char *OptionsJson,
@@ -80,7 +49,7 @@ const char *neverd_string_refs_json(neverd_session_t Sess,
   const FunctionPage Page = functionPage(*S, FirstEntry, MaxFunctions);
   struct Row {
     va_t From, To;
-    ReferredText Text;
+    ReferredImageText Text;
     llvm::StringRef Kind;
     std::optional<va_t> Via;
     std::string Instruction;
@@ -88,24 +57,17 @@ const char *neverd_string_refs_json(neverd_session_t Sess,
   // Each function's rows, merged in entry order.
   std::vector<std::vector<Row>> Slots(Page.Functions.size());
   const BinaryImage &Img = S->Img;
-  const bool Decoded = decodeFunctions(
-      Img, Page,
-      [&](size_t Index, Decoder &Dec, const DecodedInsn &DI,
-          InstructionFlowScratch &Scratch) {
-        const InstructionFlow Flow = Scratch.summarize(Img, Dec, DI);
-        // The instruction as neverd_disasm_json() spells it.
-        const auto instruction = [&] {
-          std::string Text = DI.Raw ? DI.Raw->mnemonic : "";
-          if (DI.Raw && *DI.Raw->op_str)
-            Text += std::string(" ") + DI.Raw->op_str;
-          return Text;
-        };
+  const bool Decoded = decodeFunctionReferences(
+      *S, Page,
+      [&](size_t Index, va_t Address, llvm::StringRef Instruction,
+          const InstructionFlow &Flow, unsigned, InstructionMode) {
         for (const InstructionRef &Ref : Flow.Refs) {
           const va_t To = Ref.To;
           const llvm::StringRef Kind = Ref.Kind;
-          if (const auto Text = referredText(Img, Strings, MinLength, To)) {
+          if (const auto Text =
+                  referredImageText(Img, Strings, MinLength, To)) {
             Slots[Index].push_back(
-                {DI.Addr, To, *Text, Kind, std::nullopt, instruction()});
+                {Address, To, *Text, Kind, std::nullopt, Instruction.str()});
             continue;
           }
           // A slot the loader relocated holds a pointer for certain.
@@ -114,9 +76,9 @@ const char *neverd_string_refs_json(neverd_session_t Sess,
             continue;
           if (const auto Target = relocatedPointer(Img, To))
             if (const auto Text =
-                    referredText(Img, Strings, MinLength, *Target))
+                    referredImageText(Img, Strings, MinLength, *Target))
               Slots[Index].push_back(
-                  {DI.Addr, *Target, *Text, Kind, To, instruction()});
+                  {Address, *Target, *Text, Kind, To, Instruction.str()});
         }
       });
   if (!Decoded) {
@@ -124,6 +86,27 @@ const char *neverd_string_refs_json(neverd_session_t Sess,
     return nullptr;
   }
   llvm::json::Array Refs;
+  // The outer function cursor does not enumerate contained objects. Publish
+  // their references once, on the first page, preserving original coordinates.
+  if (FirstEntry == 0) {
+    auto Objects = embeddedObjects(*S);
+    if (!Objects) {
+      S->setError(llvm::toString(Objects.takeError()));
+      return nullptr;
+    }
+    for (const auto &Object : *Objects)
+      for (const auto &R : Object.References) {
+        const auto From = Img.fileOffsetToVA(Object.Offset + R.From);
+        const auto To = Img.fileOffsetToVA(Object.Offset + R.To);
+        if (From == InvalidVA || To == InvalidVA)
+          continue;
+        if (const auto Text = referredImageText(Img, Strings, MinLength, To))
+          Refs.push_back(llvm::json::Array{
+              vaHex(From), vaHex(To), vaHex(Text->String->Address),
+              static_cast<int64_t>(Text->TextOffset), "embedded_offset",
+              nullptr, jsonSafeText(embeddedReferenceText(Object, R))});
+      }
+  }
   for (const auto &Slot : Slots)
     for (const Row &R : Slot)
       Refs.push_back(llvm::json::Array{

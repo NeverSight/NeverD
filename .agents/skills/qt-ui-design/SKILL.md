@@ -5,10 +5,10 @@ description: >-
 license: LicenseRef-Qt-Commercial OR BSD-3-Clause
 metadata:
   author: qt-ai-skills
-  version: "1.6"
+  version: "1.12"
   qt-version: "6.x"
   category: conceptual
-  changelog: "Added a one-page summary of NeverD's style to the desktop profile: color roles, type, sizes and the rules every window keeps"
+  changelog: "Section 1.9: a floating panel opens at the golden section on the side lines start from, goes with the person into a focus mode, and lays out a conversation as VS Code's chat view"
 ---
 # Qt UI Design
 
@@ -318,6 +318,28 @@ A polished main screen says little about the rest. Defects collect in the window
 - A check that expects no dialog to open must not hang where the dialog would be a native one; make the toolkit use its own for the length of the check.
 - A check that presses a key in a window waits until that window is the active one. A window is visible, and the modal one, before it is active; until then the key belongs to the window behind it and can run that window's shortcut instead. Such a check passes on a quiet machine and fails on a busy one.
 - Run the whole suite, not the one new test by name, before saying it passes, and get the other platforms' verdict from their own machines before the change reaches the shared branch.
+
+### 1.9 Floating panels and conversations (desktop/web)
+
+A panel that floats over a workbench (a chat, a quick input, a palette) is placed by the application the first time and by the person afterwards. Both places need a rule, and a conversation inside such a panel reads best in the shape people know from their editor's chat.
+
+**Open it at the golden section, on the side lines start from.**
+- Across, put the smaller golden part (0.382, that is 2 − φ) of the free room before the panel: left of the middle in a left-to-right language, right of it in a right-to-left one. The dead middle reads as stiff and the corner beside the panel's button as an afterthought; the golden section is where a reader's eye begins (Golden Ratio and Rule of Thirds, section 1). Take the share of the free room, not of the window, so a panel that nearly fills the window still fits and one that fills little still stands off the middle.
+- Down, check where the middle of the whole window falls. Toolbars along the top already put it above the middle of the panes below them, near the optical center; a golden section down the whole window would then press the panel against the toolbars.
+- Keep the person's place as a share of the room the panel moves in, so the panel holds its relative place while the window resizes. Snap it back to where it opens when it is let go a short distance away (20 pixels, as VS Code snaps its quick input to the horizontal center), and put it back there, at its first size, on a double click on its title.
+
+**Take floating views along wherever the person works.**
+- A focus mode, a full-screen view or a detached workspace that covers the main window takes the floating entry point and its panel with it, at the same corner and share, and its window takes their shortcuts. A button left under a covering window reads as a feature that switched itself off. They come back with the main window.
+- In Qt, move such views by reparenting. A new parent hides a widget, so record whether each was hidden and restore that. A view that places itself as a share of its parent places itself again on `QEvent::ParentChange`. A window shortcut belongs to the windows its action was added to: add the actions to the covering window while it holds the views and remove them after.
+- When something else may destroy the covering window, such as a docking library closing a floating window, take the views back from its `destroyed()` signal: `QWidget` emits it before it deletes its children. Return them explicitly before your own code tears the window down, and keep the signal as the safety net.
+
+**Lay out a conversation as an editor's chat view.** Visual Studio Code's chat view, measured from its sources, sets the layout; the last two rules come from reviewing a panel built on it.
+- An empty conversation says what the view does in the middle of the panel: the view's mark at about 40 pixels in the secondary text color, a heading a step larger than the panel's title, and a short message centered at a measure of about 40 average characters. A welcome anchored to the top left a dead band under it.
+- Offer first questions as compact chips as wide as their words, just above the composer, outlined at a tenth of white on a dark theme and of black on a light one (VS Code's `chat.requestBorder`), and in the theme's border color in high contrast. Full-width outlined rows read as a form.
+- Make the composer one box in the input fill, outlined in the focus color while the prompt has focus: the prompt, then what the question takes along, then the send button. Show that context once, as one chip whose cross leaves it out and which then turns dashed and italic with a plus that takes it back. A context line above the conversation and an "attach selection" check box below the prompt said the same thing twice.
+- When the view cannot send yet, say why in the context chip's place, beside a send button that waits. A placeholder alone leaves the waiting button unexplained once typing hides it.
+- Type prose in the interface font, as VS Code's chat input does, even where the application types its text fields in a code font. Grow the prompt with its lines, two to eight, then scroll; measure the laid-out lines, because a line mixing scripts (Chinese among Latin) is taller than the font's line.
+- Keep the window's one accent on the send button: the mark, the chips and the entry toggle stay gray.
 ---
 
 ## 2. Accessibility (WCAG 2.2)
@@ -453,6 +475,8 @@ Apply section 4 constraints first if the target is embedded.
 - [ ] High contrast: in the high contrast themes, does each state still read by its outline, is text at least 7:1 and every line at least 3:1, and does selected or highlighted text keep a colour of its own?
 - [ ] Localisation: do all user-visible strings use locale-aware formatting? Are containers able to expand 30–40% for translated text?
 - [ ] Languages: does every window fit its texts in every bundled language, does a live language switch reword every pane, and do layouts placed by hand mirror right to left?
+- [ ] Floating panels: does each open at the golden section on the side lines start from rather than in the dead middle or a corner, snap back to that place, and stay with the person, shortcuts included, in every mode that covers the main window?
+- [ ] Conversations: does an empty one say what it does in the middle, are first questions compact chips above one composer box, is the context said once, is prose in the interface font, and is the send button the only accent?
 - [ ] AI features: are latency patterns, uncertainty, and consent handled per section 3?
 ---
 

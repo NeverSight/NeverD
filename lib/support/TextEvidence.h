@@ -66,13 +66,15 @@ enum class Source : uint8_t { UTF8, Wide, DoubleByte, SingleByte };
 /// Whether \p Codes read as text rather than numbers that decode:
 ///  - its letters beyond ASCII come from one writing system (ideographs go
 ///    with Chinese, Japanese or Korean); a word does not mix ASCII letters
-///    with them, except accented Latin; and a word holding cased letters
-///    beyond ASCII is lowercase, Capitalized or uppercase;
+///    with them, except accented Latin and, in UTF-8, East Asian text
+///    ("DVD光驱"); and a word holding cased letters beyond ASCII is
+///    lowercase, Capitalized or uppercase;
 ///  - no character beyond ASCII makes up half of them, as fill bytes do,
 ///    and in a longer string beyond ASCII no character fills two in five
 ///    positions, as a table of pairs does;
 ///  - its ideographs are common ones, all of them in a short string and
-///    nine in ten in a long one (random values rarely are);
+///    nine in ten in a long one (random values rarely are), or half of them
+///    in UTF-8, which random bytes rarely decode as at all;
 ///  - East Asian text has two such characters, and other text three
 ///    letters, four from a single-byte code page or outside Latin, its
 ///    letters beyond ASCII inside words and, in a Latin script, at most three

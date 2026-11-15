@@ -202,6 +202,317 @@ TEST(HighCIntegerConversion, FloatingCallKeepsAConstantBitCast) {
   }
 }
 
+TEST(HighCIntegerConversion, TypedFloatingFieldsKeepMachineBits) {
+  for (uint16_t Bytes : {4, 8}) {
+    SCOPED_TRACE(Bytes);
+    const TypeRef Bits = integer(Bytes, false);
+    const TypeRef Float = NdType::makeFloat(Bytes);
+    auto Record = NdType::makeNamedRecord("SAMPLE", 2 * Bytes);
+    Record->FieldDisplayNames = {"padding", "value"};
+    Record->FieldDisplayOffsets = {0, Bytes};
+    Record->FieldDisplayTypes = {Bits, Float};
+    auto Address = [&] {
+      return op(NdOp::INT_ADD, input(), constant(Bytes), integer(8, false));
+    };
+    auto Load = [&] { return HighExpr::makeLoad(Address(), Bits); };
+    auto Direct = function("direct_bits", Bits, {result(Load())});
+    auto Forward = function(
+        "forward_bits", Bits,
+        {assign(local(1, Bits), Load()),
+         result(op(NdOp::INT_XOR, local(1, Bits), constant(1, Bytes), Bits))});
+    auto Floating =
+        function("floating_value", Float,
+                 {assign(local(2, Bits), Load()),
+                  result(HighExpr::makeBitCast(local(2, Bits), Float))});
+    for (HighFunc *F : {&Direct, &Forward, &Floating})
+      F->Params = {{"arg0", NdType::makePtr(Record)}};
+    CEmitterOptions Options;
+    Options.TheArch = Arch::AArch64;
+    Options.RecordDefinitions = [Bytes](const std::vector<TypeRef> &) {
+      CRecordDefinitions Definitions;
+      Definitions.Text = Bytes == 4
+                             ? "typedef struct SAMPLE { uint32_t padding; "
+                               "float value; } SAMPLE;\n"
+                             : "typedef struct SAMPLE { uint64_t padding; "
+                               "double value; } SAMPLE;\n";
+      Definitions.Records = {{"SAMPLE", false}};
+      Definitions.Tags = {{"SAMPLE", false}};
+      return Definitions;
+    };
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    ASSERT_TRUE(HighCEmitter().emit({Direct, Forward, Floating}, Out, Options));
+    EXPECT_NE(Source.find("->value"), std::string::npos) << Source;
+    compileAndRun(Source + R"(
+int main(void) {
+  const uint64_t inputs[] = {
+    0, 0x80000000, 0x3fa00000, 0xbfe00000, 0x7f800000, 0x7fc12345,
+    0x8000000000000000ull, 0x3ff4000000000000ull,
+    0xbffc000000000000ull, 0x7ff0000000000000ull, 0x7ff8123456789abcull
+  };
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
+    SAMPLE record = {0};
+    __typeof__(record.padding) expected = inputs[i];
+    __builtin_memcpy(&record.value, &expected, sizeof(expected));
+    if (direct_bits(&record) != expected) return 1;
+    if (forward_bits(&record) != (expected ^ 1)) return 2;
+    __typeof__(record.value) value = floating_value(&record);
+    __typeof__(expected) actual;
+    __builtin_memcpy(&actual, &value, sizeof(actual));
+    if (actual != expected) return 3;
+  }
+  return 0;
+}
+)");
+  }
+}
+
+TEST(HighCIntegerConversion, TypedFloatingStoresKeepMachineBits) {
+  const TypeRef Bits = integer(4, false);
+  auto Record = NdType::makeNamedRecord("SAMPLE", 8);
+  Record->FieldDisplayNames = {"padding", "value"};
+  Record->FieldDisplayOffsets = {0, 4};
+  Record->FieldDisplayTypes = {Bits, NdType::makeFloat(4)};
+  auto Value = local(0, Bits);
+  Value->Var.Kind = MedVar::Param;
+  Value->Var.Id = 1;
+  HighStmt Store;
+  Store.Kind = StmtKind::Store;
+  Store.StoreAddr = op(NdOp::INT_ADD, input(), constant(4), integer(8, false));
+  Store.StoreVal = Value;
+  auto F = function("store_bits", NdType::makeVoid(), {Store});
+  F.Params = {{"arg0", NdType::makePtr(Record)}, {"arg1", Bits}};
+  CEmitterOptions Options;
+  Options.TheArch = Arch::AArch64;
+  Options.RecordDefinitions = [](const std::vector<TypeRef> &) {
+    CRecordDefinitions Definitions;
+    Definitions.Text = "typedef struct SAMPLE { uint32_t padding; float value; "
+                       "} SAMPLE;\n";
+    Definitions.Records = {{"SAMPLE", false}};
+    Definitions.Tags = {{"SAMPLE", false}};
+    return Definitions;
+  };
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(HighCEmitter().emit({F}, Out, Options));
+  compileAndRun(Source + R"(
+int main(void) {
+  const uint32_t inputs[] = {0, 0x80000000, 0x3fa00000, 0xbfe00000,
+                             0x7f800000, 0x7fc12345};
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
+    SAMPLE record = {0x12345678, 0};
+    store_bits(&record, inputs[i]);
+    uint32_t actual;
+    __builtin_memcpy(&actual, &record.value, sizeof(actual));
+    if (actual != inputs[i] || record.padding != 0x12345678) return 1;
+  }
+  return 0;
+}
+
+)");
+}
+
+TEST(HighCIntegerConversion, SharedFloatingComputationSurvivesRegisterViews) {
+  MedFunc F;
+  F.Name = "shared_fma";
+  F.Entry = 0x1000;
+  F.ReturnType = integer(4, false);
+  auto Var = [](int Id, uint16_t Bytes = 4) {
+    MedVar V;
+    V.Kind = Id < 3 ? MedVar::Param : MedVar::Temp;
+    V.Id = Id;
+    V.Size = Bytes;
+    V.TheArch = Arch::AArch64;
+    if (Id == 8) {
+      V.Kind = MedVar::Reg;
+      V.RegOff = getTargetRegInfo(Arch::AArch64).IntReturnReg;
+      V.SSAVer = 1;
+    }
+    return V;
+  };
+  F.Params = {Var(0), Var(1), Var(2)};
+  auto Operation = [](NdOp Opcode, MedVar Dst,
+                      std::initializer_list<MedVar> Inputs) {
+    MedOp Op;
+    Op.Opcode = Opcode;
+    Op.Output = Dst;
+    for (const MedVar &Input : Inputs)
+      Op.addInput(Input);
+    return Op;
+  };
+  MedBlock B;
+  B.Id = 0;
+  B.StartAddr = F.Entry;
+  B.EndAddr = F.Entry + 32;
+  const auto Zero = MedVar::makeConst(0, 4);
+  B.Ops = {Operation(NdOp::FLOAT_FMA, Var(3), {Var(0), Var(1), Var(2)}),
+           Operation(NdOp::INT_ZEXT, Var(4, 16), {Var(3)}),
+           Operation(NdOp::SUBBYTES, Var(5), {Var(4, 16), Zero}),
+           Operation(NdOp::SUBBYTES, Var(6), {Var(4, 16), Zero}),
+           Operation(NdOp::FLOAT_ADD, Var(7), {Var(5), Var(0)}),
+           Operation(NdOp::FLOAT_MULT, Var(8), {Var(6), Var(7)}),
+           Operation(NdOp::RETURN, MedVar{}, {Var(8)})};
+  F.Blocks = {B};
+  const auto High = MedToHighConverter().convert(F, Arch::AArch64);
+  const std::string Source = emit(High);
+  const size_t First = Source.find("__builtin_fmaf(");
+  ASSERT_NE(First, std::string::npos) << Source;
+  EXPECT_EQ(Source.find("__builtin_fmaf(", First + 1), std::string::npos)
+      << Source;
+  compileAndRun(Source + R"(
+int main(void) {
+  const float inputs[][3] = {{1.25f, -0.75f, 0.125f}, {-0.0f, 1.0f, -0.0f},
+                             {0x1.000002p0f, 0x1.fffffep-1f, -1.0f}};
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
+    float a = inputs[i][0], b = inputs[i][1], c = inputs[i][2];
+    float f = __builtin_fmaf(a, b, c);
+    float expected = f * (f + a);
+    uint32_t actual = shared_fma(__builtin_bit_cast(uint32_t, a),
+                                  __builtin_bit_cast(uint32_t, b),
+                                  __builtin_bit_cast(uint32_t, c));
+    if (actual != __builtin_bit_cast(uint32_t, expected)) return 1;
+  }
+  return 0;
+}
+)");
+}
+
+TEST(HighCIntegerConversion, FloatingLocalsPreserveIntegerUsesAndConstants) {
+  const TypeRef Bits = integer(4, false), Float = NdType::makeFloat(4);
+  auto Set = assign(local(1, Bits), constant(0x3FA00000, 4));
+  Set.KeepsName = true;
+  auto Compare = op(
+      NdOp::FLOAT_LESS, HighExpr::makeBitCast(local(1, Bits), Float),
+      HighExpr::makeBitCast(constant(0x40000000, 4), Float), integer(1, false));
+  HighStmt If;
+  If.Kind = StmtKind::If;
+  If.Cond = Compare;
+  If.Body = {result(op(NdOp::INT_XOR, local(1, Bits), constant(1, 4), Bits))};
+  auto F = function("constant_bits", Bits, {Set, If, result(constant(0, 4))});
+  F.Params.clear();
+  const std::string Source = emit(F);
+  EXPECT_NE(Source.find("float t1;"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("t1 = 1.25f;"), std::string::npos) << Source;
+  compileAndRun(Source +
+                "\nint main(void) { return constant_bits() != 0x3fa00001; }\n");
+}
+
+TEST(HighCIntegerConversion, FloatingParametersKeepMachineBits) {
+  for (bool SourceBound : {false, true}) {
+    SCOPED_TRACE(SourceBound);
+    const TypeRef Bits = integer(4, false), Float = NdType::makeFloat(4);
+    auto Parameter = [&] {
+      auto E = local(0, Bits);
+      E->Var.Kind = MedVar::Param;
+      return E;
+    };
+    auto Raw = function("parameter_bits", Bits, {result(Parameter())});
+    auto Value = function("parameter_value", Float,
+                          {result(HighExpr::makeBitCast(Parameter(), Float))});
+    auto Mixed = function(
+        "parameter_mixed", Bits,
+        {assign(local(1, Bits), Parameter()),
+         result(op(NdOp::INT_XOR, local(1, Bits), constant(1, 4), Bits))});
+    Value.Entry += 0x100;
+    Mixed.Entry += 0x200;
+    for (HighFunc *F : {&Raw, &Value, &Mixed}) {
+      F->Params = {{"scale", Float}};
+      if (SourceBound) {
+        SourceFunctionTypeHint Hint;
+        Hint.ReturnType = F->ReturnType;
+        Hint.Parameters = {{"scale", Float}};
+        F->SourceTypeHint = Hint;
+      }
+    }
+    CEmitterOptions Options;
+    Options.TheArch = Arch::AArch64;
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    ASSERT_TRUE(HighCEmitter().emit({Raw, Value, Mixed}, Out, Options));
+    compileAndRun(Source + R"(
+int main(void) {
+  const uint32_t inputs[] = {0, 0x80000000, 0x3fa00000, 0xbfe00000,
+                             0x7f800000, 0x7fc12345};
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
+    float value = __builtin_bit_cast(float, inputs[i]);
+    if (parameter_bits(value) != inputs[i]) return 1;
+    if (__builtin_bit_cast(uint32_t, parameter_value(value)) != inputs[i])
+      return 2;
+    if (parameter_mixed(value) != (inputs[i] ^ 1)) return 3;
+  }
+  return 0;
+}
+)");
+  }
+}
+
+TEST(HighCIntegerConversion, FloatingConstantSelectionKeepsItsCondition) {
+  auto Select = std::make_shared<HighExpr>();
+  Select->Kind = ExprKind::BinOp;
+  Select->Op = NdOp::SELECT;
+  Select->Type = integer(4, false);
+  Select->Operands = {input(), constant(0xbf000000, 4),
+                      constant(0x3f000000, 4)};
+  auto F =
+      function("select_value", NdType::makeFloat(4),
+               {result(HighExpr::makeBitCast(Select, NdType::makeFloat(4)))});
+  const std::string Source = emit(F);
+  EXPECT_NE(Source.find("? -0.5f : 0.5f"), std::string::npos) << Source;
+  compileAndRun(Source + R"(
+int main(void) {
+  if (__builtin_bit_cast(uint32_t, select_value(0)) != 0x3f000000) return 1;
+  if (__builtin_bit_cast(uint32_t, select_value(1)) != 0xbf000000) return 2;
+  if (__builtin_bit_cast(uint32_t, select_value(0x8000000000000000ull)) !=
+      0xbf000000) return 3;
+  return 0;
+}
+)");
+}
+
+TEST(HighCIntegerConversion, RecoveredFloatingCallOverridesUnplacedDebug) {
+  const TypeRef Bits = integer(4, false), Float = NdType::makeFloat(4);
+  auto Parameter = local(0, Bits);
+  Parameter->Var.Kind = MedVar::Param;
+  auto Call = HighExpr::makeCall("consume", 0x2000, {constant(7), Parameter});
+  Call->Type = integer(8, false);
+  Call->SourceCalleeType =
+      NdType::makeFunc(Call->Type, {integer(8, false), Float});
+  auto F = function("pass_bits", Call->Type, {result(Call)});
+  F.Params = {{"arg0", Bits}};
+  class UnplacedDebug final : public NullDebugContext {
+  public:
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      if (Address != 0x2000)
+        return std::nullopt;
+      FunctionSym F;
+      F.Addr = Address;
+      F.Name = "consume";
+      F.ReturnType = integer(8, false);
+      F.PlatformConvention = false;
+      F.Params = {{"source_record", NdType::makeNamedRecord("Record", 12)}};
+      return F;
+    }
+  } Debug;
+  CEmitterOptions Options;
+  Options.TheArch = Arch::AArch64;
+  Options.Format = BinaryFormat::ELF;
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(HighCEmitter().emit({F}, Out, Options, &Debug));
+  compileAndRun(Source + R"(
+uint64_t consume(uint64_t tag, float value) {
+  return tag == 7 ? __builtin_bit_cast(uint32_t, value) : 0xffffffffffffffffull;
+}
+int main(void) {
+  const uint32_t inputs[] = {0, 0x80000000, 0x3fa00000, 0xbfe00000,
+                             0x7f800000, 0x7fc12345};
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i)
+    if (pass_bits(inputs[i]) != inputs[i]) return 1;
+  return 0;
+}
+)");
+}
+
 TEST(HighCIntegerConversion, NarrowCopyKeepsLowBytesThroughSourceProjection) {
   for (const auto Architecture : {Arch::X86, Arch::X64, Arch::AArch64}) {
     SCOPED_TRACE(static_cast<unsigned>(Architecture));

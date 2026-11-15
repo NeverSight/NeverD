@@ -17,6 +17,7 @@
 #include "FuncDetectorDetail.h"
 
 #include "neverd/Limits.h"
+#include "neverd/ir/Limits.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/NoReturnLoadedTarget.h"
@@ -195,6 +196,48 @@ va_t forwardingJumpTarget(const BinaryImage &Img, Decoder &Dec, va_t Entry) {
 /// one, as a relocatable object.
 bool hasEntryPoint(const BinaryImage &Img) {
   return Img.Entry != 0 || Img.Format == BinaryFormat::Raw;
+}
+
+/// Whether the AArch64 instruction before \p Addr runs into it: it decodes
+/// and is neither a block end nor a call, after which a function may begin.
+/// A call to such an address names no function unless an entry marker is
+/// there: a data word that reads as BL, as in an executable section's
+/// constants, lands within other code.  The frame push also follows PACIASP
+/// and a shadow stack push within a function's prologue, so a call names it
+/// only after the end of the function before.
+bool runsIntoAArch64(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
+  const uint8_t *Bytes = Addr >= 4 ? Img.readVA(Addr - 4, 8) : nullptr;
+  if (!Bytes)
+    return false;
+  const uint32_t Before = readLE<uint32_t>(Bytes);
+  const uint32_t At = readLE<uint32_t>(Bytes + 4);
+  if (isAArch64BlockEndWord(Before) || isAArch64CallWord(Before) ||
+      (isFunctionEntryMarkerWordAArch64(At) &&
+       (!isAArch64FramePushWord(At) ||
+        func_detect_detail::aarch64MarkedEntryAfterFunctionEnd(Img, Addr))))
+    return false;
+  // Alignment NOPs do not end a block themselves. Skip only those words
+  // when an actual terminator before them proves the padding is unreachable.
+  if (Before == 0xD503201F) {
+    va_t Previous = Addr - 4;
+    for (size_t Words = 0;
+         Words < limits::ir::kAArch64EntryFillerWords && Previous >= 4;
+         ++Words) {
+      Previous -= 4;
+      if (!Img.hasExecutableCodeOwnerRange(Previous, 4))
+        break;
+      const uint8_t *PreviousBytes = Img.readVA(Previous, 4);
+      if (!PreviousBytes)
+        break;
+      const uint32_t Word = readLE<uint32_t>(PreviousBytes);
+      if (isAArch64BlockEndWord(Word))
+        return false;
+      if (Word != 0xD503201F)
+        break;
+    }
+  }
+  DecodedInsn Insn;
+  return Dec.decodeOne(Bytes, 4, Addr - 4, Insn) == 4;
 }
 
 } // namespace
@@ -541,7 +584,8 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
   if (hasEntryPoint(Img) && !RelocationsOnly) {
     scanCallTargets(Img, Dec, DirectCallTargets, CodeNamedByCode);
     std::erase_if(DirectCallTargets, [&](va_t Addr) {
-      return !Img.isFunctionEntryCandidateAt(Addr);
+      return !Img.isFunctionEntryCandidateAt(Addr) ||
+             (Img.Arch == Arch::AArch64 && runsIntoAArch64(Img, Dec, Addr));
     });
     MarkedEntries = MarkedAArch64Entries;
     Entries.insert(DirectCallTargets.begin(), DirectCallTargets.end());
@@ -1063,6 +1107,12 @@ bool FuncDetector::verifyFunctionDecode(const BinaryImage &Img, Decoder &Dec,
   const auto *Seg = Img.getSegmentFor(Addr);
   if (!Seg || !Img.hasExecutableCodeOwnerAt(Addr))
     return false;
+  // No AArch64 function begins with UDF: a word that reads as one is a zero
+  // or small constant, or padding.
+  if (Img.Arch == Arch::AArch64)
+    if (const uint8_t *Bytes = Img.readVA(Addr, 4);
+        Bytes && (readLE<uint32_t>(Bytes) & 0xFFFF0000) == 0)
+      return false;
 
   va_t Cur = Addr;
   std::optional<InstructionMode> PathMode = Img.instructionModeAt(Addr);

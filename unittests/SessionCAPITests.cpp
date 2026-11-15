@@ -2670,6 +2670,661 @@ TEST_F(SessionCAPITest, StringReferencesReadTextFromTheReferencedCharacter) {
             nullptr);
 }
 
+TEST_F(SessionCAPITest, ComputedStringReferencesFollowAgreedNativePaths) {
+  struct Case {
+    const char *Name;
+    std::vector<uint32_t> Words;
+    std::vector<std::pair<unsigned, unsigned>> Reads;
+    unsigned OtherEntry = 0;
+    bool Unsized = false;
+    unsigned EntryIndex = 0;
+  };
+  // Code starts in page 0x400000; the text is at 0x401021. ADRP x9
+  // and ADD x10, x9, #0x21 are separate instructions, never relocations.
+  constexpr uint32_t Page = 0xb0000009, Add = 0x9100852a;
+  constexpr uint32_t Nop = 0xd503201f, Ret = 0xd65f03c0;
+  constexpr uint32_t Read = 0xf9400141; // ldr x1, [x10]
+  std::vector<Case> Cases{
+      {"separated",
+       {Page, Nop, Add, Nop, Read, 0x3dc00142, Ret},
+       {{4, 8}, {5, 16}}}, // ldr q2, [x10]
+      {"same-join",
+       {Page, Add, 0xb4000060, Nop, 0x14000001, Read, Ret},
+       {{5, 8}}},
+      {"conflicting-join",
+       {Page, Add, 0xb4000060, 0xaa0103ea, 0x14000001, Read, Ret},
+       {}},
+      {"entry-bypass", {0xb4000060, Page, Add, Read, Ret}, {}},
+      {"loop-invariant", {Page, Add, Read, 0xb5ffffe0, Ret}, {{2, 8}}},
+      {"loop-changes", {Page, Add, Read, 0x9100054a, 0xb5ffffc0, Ret}, {}},
+      {"call-clobber", {Page, Add, 0x94000040, Read, Ret}, {}},
+      {"partial-write", {Page, Add, 0x2a0203ea, Read, Ret}, {}},
+      {"loaded-value", {Page, Add, 0xf940016a, Read, Ret}, {}},
+      {"unknown-jump", {Page, Add, 0xd61f0160, Read, Ret}, {}},
+      {"unsupported", {Page, Add, 0xffffffff, Read, Ret}, {}},
+      {"other-entry", {Page, Add, Read, Ret}, {}, 2},
+      {"unsized-gap",
+       {Page, 0x14000002, Nop, Add, Read, Ret},
+       {{4, 8}},
+       0,
+       true},
+      {"unsized-backward",
+       {Add, Read, Ret, Page, 0x17fffffcu},
+       {{1, 8}},
+       0,
+       true,
+       3},
+  };
+  Case Long{"long-chain", {Page}, {{514, 8}}};
+  Long.Words.insert(Long.Words.end(), 512, Nop);
+  Long.Words.insert(Long.Words.end(), {Add, Read, Ret});
+  Cases.push_back(std::move(Long));
+  for (const auto &C : Cases) {
+    SCOPED_TRACE(C.Name);
+    std::string Code;
+    for (uint32_t Word : C.Words)
+      for (unsigned Byte = 0; Byte < 4; ++Byte)
+        Code += static_cast<char>(Word >> (Byte * 8));
+    const std::string Data =
+        std::string(0x21, '\0') + "independent viewport text" + '\0';
+    std::string Image = makeDataELF(Data, Code);
+    llvm::support::endian::write16le(Image.data() + 18, llvm::ELF::EM_AARCH64);
+    const auto Input = write(std::string(C.Name) + ".elf", Image);
+    ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+    auto &State = *neverd::sdk::toSession(Session);
+    const auto Entry = DataELFEntry + 4 * C.EntryIndex;
+    State.Img.Entry = Entry;
+    State.Img.Symbols = {
+        neverd::Symbol::makeFunc(Entry, C.Unsized ? 0 : Code.size())};
+    if (C.OtherEntry)
+      State.Img.Symbols.push_back(neverd::Symbol::makeFunc(
+          DataELFEntry + 4 * C.OtherEntry, Code.size() - 4 * C.OtherEntry));
+    neverd::sdk::SessionTestAccess::resetFunctions(State);
+    ASSERT_FALSE(State.PipeRan);
+    std::vector<std::pair<uint64_t, unsigned>> Expected;
+    for (const auto &[Index, Width] : C.Reads)
+      Expected.emplace_back(DataELFEntry + 4 * Index, Width);
+    for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+      const auto Text = takeString(neverd_code_refs_json(Session, Entry, 1));
+      auto Parsed = llvm::json::parse(Text);
+      ASSERT_TRUE(static_cast<bool>(Parsed)) << Text;
+      const auto *Rows = Parsed->getAsObject()->getArray("refs");
+      ASSERT_TRUE(Rows) << Text;
+      std::vector<std::pair<uint64_t, unsigned>> Actual;
+      for (const auto &Value : *Rows) {
+        const auto &Row = *Value.getAsArray();
+        if (Row[2].getAsString() != "read")
+          continue;
+        ASSERT_EQ(Row.size(), 4u) << Text;
+        EXPECT_EQ(std::stoull(Row[1].getAsString()->str(), nullptr, 16),
+                  DataELFData + 0x21)
+            << Text;
+        Actual.emplace_back(
+            std::stoull(Row[0].getAsString()->str(), nullptr, 16),
+            *Row[3].getAsInteger());
+      }
+      EXPECT_EQ(Actual, Expected) << Text;
+      const auto Strings =
+          takeString(neverd_string_refs_json(Session, nullptr, Entry, 1));
+      auto StringPage = llvm::json::parse(Strings);
+      ASSERT_TRUE(static_cast<bool>(StringPage)) << Strings;
+      const auto *StringRows = StringPage->getAsObject()->getArray("refs");
+      ASSERT_TRUE(StringRows) << Strings;
+      size_t StringReads = 0;
+      for (size_t I = 0; I < StringRows->size(); ++I) {
+        const auto &Row = *(*StringRows)[I].getAsArray();
+        if (Row[4].getAsString() != "read")
+          continue;
+        ++StringReads;
+        EXPECT_EQ(std::stoull(Row[2].getAsString()->str(), nullptr, 16),
+                  DataELFData + 0x21)
+            << Strings;
+      }
+      EXPECT_EQ(StringReads, Expected.size()) << Strings;
+      EXPECT_FALSE(State.PipeRan);
+    }
+  }
+}
+
+TEST_F(SessionCAPITest, MaterializedAddressesRetainXrefsAcrossLaterClobbers) {
+  for (unsigned Variant = 0; Variant < 3; ++Variant) {
+    SCOPED_TRACE(Variant);
+    // The first form builds page+0x21 before a call that invalidates x10.
+    // The second can bypass ADRP; the third makes the same integer entirely
+    // with scalar moves. Neither one establishes the address materialization.
+    const std::vector<uint32_t> Words =
+        Variant == 0 ? std::vector<uint32_t>{0xb0000009, 0xd503201f, 0x9100852a,
+                                             0x94000040, 0xf9400141, 0xd65f03c0}
+        : Variant == 1 ? std::vector<uint32_t>{0xb4000040, 0xb0000009,
+                                               0x9100852a, 0xd65f03c0}
+                       : std::vector<uint32_t>{0xd2820009, 0xf2a00809,
+                                               0x9100852a, 0xd65f03c0};
+    std::string Code;
+    for (uint32_t Word : Words)
+      for (unsigned Byte = 0; Byte < 4; ++Byte)
+        Code += static_cast<char>(Word >> (Byte * 8));
+    std::string Image = makeDataELF(
+        std::string(0x21, '\0') + "independent offset text" + '\0', Code);
+    llvm::support::endian::write16le(Image.data() + 18, llvm::ELF::EM_AARCH64);
+    const auto Input = write("formed-address.elf", Image);
+    ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+    auto &State = *neverd::sdk::toSession(Session);
+    State.Img.Symbols = {neverd::Symbol::makeFunc(DataELFEntry, Code.size())};
+    neverd::sdk::SessionTestAccess::resetFunctions(State);
+    const auto Text =
+        takeString(neverd_string_refs_json(Session, nullptr, 0, 1));
+    auto Parsed = llvm::json::parse(Text);
+    ASSERT_TRUE(static_cast<bool>(Parsed)) << Text;
+    const auto *Rows = Parsed->getAsObject()->getArray("refs");
+    ASSERT_TRUE(Rows);
+    ASSERT_EQ(Rows->size(), Variant == 0 ? 1u : 0u) << Text;
+    if (Variant == 0) {
+      const auto &Row = *(*Rows)[0].getAsArray();
+      EXPECT_EQ(std::stoull(Row[0].getAsString()->str(), nullptr, 16),
+                DataELFEntry + 8);
+      EXPECT_EQ(std::stoull(Row[1].getAsString()->str(), nullptr, 16),
+                DataELFData + 0x21);
+      EXPECT_EQ(Row[4].getAsString(), "offset");
+    }
+    EXPECT_FALSE(State.PipeRan);
+    // A recovered listing page must retain the same function-level facts,
+    // even when the page starts after the address-producing predecessor.
+    const auto Disassembly = takeString(neverd_function_disasm_json(
+        Session, DataELFEntry, DataELFEntry + 8, 1, NEVERD_DISASM_FLOW));
+    auto Page = llvm::json::parse(Disassembly);
+    ASSERT_TRUE(static_cast<bool>(Page)) << Disassembly;
+    const auto *Instructions = Page->getAsObject()->getArray("instructions");
+    ASSERT_TRUE(Instructions) << Disassembly;
+    ASSERT_EQ(Instructions->size(), 1u) << Disassembly;
+    const auto *Refs = (*Instructions)[0].getAsObject()->getArray("refs");
+    unsigned Offsets = 0;
+    if (Refs)
+      for (const auto &Value : *Refs) {
+        const auto &Ref = *Value.getAsObject();
+        if (Ref.getString("kind") == "offset" &&
+            std::stoull(Ref.getString("to")->str(), nullptr, 16) ==
+                DataELFData + 0x21)
+          ++Offsets;
+      }
+    EXPECT_EQ(Offsets, Variant == 0 ? 1u : 0u) << Disassembly;
+    ASSERT_FALSE(takeString(neverd_function_disasm_json(Session, DataELFEntry,
+                                                        DataELFEntry, 2,
+                                                        NEVERD_DISASM_FLOW))
+                     .empty());
+    EXPECT_EQ(takeString(neverd_function_disasm_json(Session, DataELFEntry,
+                                                     DataELFEntry + 8, 1,
+                                                     NEVERD_DISASM_FLOW)),
+              Disassembly);
+  }
+}
+
+TEST_F(SessionCAPITest,
+       ComputedStringReferencesRespectX64RegisterAndSegmentState) {
+  for (unsigned Variant = 0; Variant != 4; ++Variant) {
+    SCOPED_TRACE(Variant);
+    // lea r10, [rip+text]; mov r11, r10; nop; optional mov r11d, edi;
+    // mov rax, [r11] (optionally FS-relative); ret.
+    std::string Code("\x4c\x8d\x15", 3);
+    const uint32_t Delta = DataELFData - (DataELFEntry + 7);
+    for (unsigned Byte = 0; Byte < 4; ++Byte)
+      Code += static_cast<char>(Delta >> (Byte * 8));
+    Code += std::string("\x4d\x89\xd3\x90", 4);
+    if (Variant == 1)
+      Code += std::string("\x41\x89\xfb", 3);
+    const auto ReadAddress = DataELFEntry + Code.size();
+    if (Variant == 2)
+      Code += '\x64';
+    Code += std::string("\x49\x8b\x03\xc3", 4);
+    const auto Input =
+        write("computed-x64.elf",
+              makeDataELF(std::string("independent text\0", 17), Code));
+    ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+    auto &State = *neverd::sdk::toSession(Session);
+    State.Img.Symbols = {neverd::Symbol::makeFunc(DataELFEntry, Code.size())};
+    if (Variant == 3)
+      State.Img.Symbols.push_back(neverd::Symbol::makeFunc(
+          DataELFEntry + 8, Code.size() - 8)); // inside the first MOV encoding
+    neverd::sdk::SessionTestAccess::resetFunctions(State);
+    const auto Text =
+        takeString(neverd_code_refs_json(Session, DataELFEntry, 1));
+    auto Parsed = llvm::json::parse(Text);
+    ASSERT_TRUE(static_cast<bool>(Parsed)) << Text;
+    const auto *Rows = Parsed->getAsObject()->getArray("refs");
+    ASSERT_TRUE(Rows) << Text;
+    unsigned Reads = 0;
+    for (const auto &Value : *Rows) {
+      const auto &Row = *Value.getAsArray();
+      if (Row[2].getAsString() != "read")
+        continue;
+      ++Reads;
+      EXPECT_EQ(std::stoull(Row[0].getAsString()->str(), nullptr, 16),
+                ReadAddress);
+      EXPECT_EQ(std::stoull(Row[1].getAsString()->str(), nullptr, 16),
+                DataELFData);
+      EXPECT_EQ(Row[3].getAsInteger(), 8);
+    }
+    EXPECT_EQ(Reads, Variant == 0 ? 1u : 0u) << Text;
+    const auto Strings =
+        takeString(neverd_string_refs_json(Session, nullptr, DataELFEntry, 1));
+    auto StringPage = llvm::json::parse(Strings);
+    ASSERT_TRUE(static_cast<bool>(StringPage)) << Strings;
+    const auto *StringRows = StringPage->getAsObject()->getArray("refs");
+    ASSERT_TRUE(StringRows) << Strings;
+    unsigned StringReads = 0;
+    for (const auto &Value : *StringRows) {
+      const auto &Row = *Value.getAsArray();
+      if (Row[4].getAsString() != "read")
+        continue;
+      ++StringReads;
+      EXPECT_EQ(std::stoull(Row[0].getAsString()->str(), nullptr, 16),
+                ReadAddress);
+      EXPECT_EQ(std::stoull(Row[2].getAsString()->str(), nullptr, 16),
+                DataELFData);
+    }
+    EXPECT_EQ(StringReads, Reads);
+    EXPECT_FALSE(State.PipeRan);
+    const auto Recovered = takeString(neverd_function_disasm_json(
+        Session, DataELFEntry, ReadAddress, 1, NEVERD_DISASM_FLOW));
+    auto RecoveredPage = llvm::json::parse(Recovered);
+    ASSERT_TRUE(static_cast<bool>(RecoveredPage)) << Recovered;
+    const auto *Instructions =
+        RecoveredPage->getAsObject()->getArray("instructions");
+    ASSERT_TRUE(Instructions) << Recovered;
+    ASSERT_EQ(Instructions->size(), 1u) << Recovered;
+    const auto *Refs = (*Instructions)[0].getAsObject()->getArray("refs");
+    unsigned RecoveredReads = 0;
+    if (Refs)
+      for (const auto &Value : *Refs) {
+        const auto &Ref = *Value.getAsObject();
+        if (Ref.getString("kind") == "read") {
+          ++RecoveredReads;
+          EXPECT_EQ(Ref.getInteger("size"), 8);
+          EXPECT_EQ(std::stoull(Ref.getString("to")->str(), nullptr, 16),
+                    DataELFData);
+        }
+      }
+    EXPECT_EQ(RecoveredReads, Reads) << Recovered;
+  }
+}
+
+TEST_F(SessionCAPITest, ComputedStringReferencesForgetUndefinedX64Results) {
+  for (unsigned Variant = 0; Variant < 8; ++Variant) {
+    SCOPED_TRACE(Variant);
+    // lea r10, [rip+text]; mov eax,0; test eax,eax;
+    // optional bt eax,0 (SF becomes architecturally undefined), a shift
+    // that preserves/defines SF, or a TEST that replaces the arbitrary SF;
+    // sets dl/dh; movzx edx,dl/dh; add r10,rdx; mov rax,[r10]; ret.
+    // The incoming RDX is unknown. Reading only the written byte can be
+    // exact; omitting MOVZX must not invent the preserved bytes.
+    std::string Code("\x4c\x8d\x15", 3);
+    const uint32_t Delta = DataELFData - (DataELFEntry + 7);
+    for (unsigned Byte = 0; Byte < 4; ++Byte)
+      Code += static_cast<char>(Delta >> (Byte * 8));
+    Code += Variant == 7 ? std::string("\xb8\x00\x00\x00\x80\x85\xc0", 7)
+                         : std::string("\xb8\x00\x00\x00\x00\x85\xc0", 7);
+    if (Variant == 1 || Variant == 4)
+      Code += std::string("\x0f\xba\xe0\x00", 4);
+    if (Variant == 2)
+      Code += std::string("\xc1\xe0\x00", 3);
+    if (Variant == 3)
+      Code += std::string("\xc1\xe0\x01", 3);
+    if (Variant == 4)
+      Code += std::string("\x85\xc0", 2);
+    Code += Variant == 6 ? std::string("\x0f\x98\xc6", 3)
+                         : std::string("\x0f\x98\xc2", 3);
+    if (Variant != 5)
+      Code += Variant == 6 ? std::string("\x0f\xb6\xd6", 3)
+                           : std::string("\x0f\xb6\xd2", 3);
+    Code += std::string("\x49\x01\xd2", 3);
+    const uint64_t ReadAddress = DataELFEntry + Code.size();
+    Code += std::string("\x49\x8b\x02\xc3", 4);
+    const auto Input =
+        write("undefined-reference.elf",
+              makeDataELF(std::string("arbitrary sign text\0", 20), Code));
+    ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+    auto &State = *neverd::sdk::toSession(Session);
+    State.Img.Symbols = {neverd::Symbol::makeFunc(DataELFEntry, Code.size())};
+    neverd::sdk::SessionTestAccess::resetFunctions(State);
+    const auto Text =
+        takeString(neverd_code_refs_json(Session, DataELFEntry, 1));
+    auto Parsed = llvm::json::parse(Text);
+    ASSERT_TRUE(static_cast<bool>(Parsed)) << Text;
+    const auto *Rows = Parsed->getAsObject()->getArray("refs");
+    ASSERT_TRUE(Rows) << Text;
+    unsigned Reads = 0;
+    for (const auto &Value : *Rows) {
+      const auto &Row = *Value.getAsArray();
+      if (Row[2].getAsString() != "read")
+        continue;
+      ++Reads;
+      EXPECT_EQ(std::stoull(Row[0].getAsString()->str(), nullptr, 16),
+                ReadAddress);
+      EXPECT_EQ(std::stoull(Row[1].getAsString()->str(), nullptr, 16),
+                DataELFData + (Variant == 7 ? 1 : 0));
+      EXPECT_EQ(Row[3].getAsInteger(), 8);
+    }
+    EXPECT_EQ(Reads, Variant == 1 || Variant == 5 ? 0u : 1u) << Text;
+    EXPECT_FALSE(State.PipeRan);
+  }
+}
+
+TEST_F(SessionCAPITest,
+       ComputedStringReferencesRespectExceptionAndPointerRoots) {
+  for (unsigned Variant = 0; Variant < 13; ++Variant) {
+    SCOPED_TRACE(Variant);
+    std::string Code;
+    for (uint32_t Word : {0xb0000009u, 0x9100852au, 0xf9400141u, 0xd65f03c0u})
+      for (unsigned Byte = 0; Byte < 4; ++Byte)
+        Code += static_cast<char>(Word >> (Byte * 8));
+    const std::string Data =
+        std::string(0x21, '\0') + "separate entry text" + '\0';
+    std::string Image = makeDataELF(Data, Code);
+    llvm::support::endian::write16le(Image.data() + 18, llvm::ELF::EM_AARCH64);
+    const auto Input = write("exception-roots.elf", Image);
+    ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+    auto &State = *neverd::sdk::toSession(Session);
+    State.Img.Symbols = {neverd::Symbol::makeFunc(DataELFEntry, Code.size())};
+    if ((Variant >= 1 && Variant <= 8) || Variant >= 11) {
+      neverd::ExceptionFunction F;
+      F.CodeRange = {DataELFEntry, DataELFEntry + Code.size()};
+      F.Encoding = neverd::ExceptionEncoding::DwarfFDE;
+      auto &Provenance = F.establishDecodeProvenance();
+      if (Variant >= 2 && Variant != 12) {
+        F.Personality = neverd::ExceptionPersonality::GxxPersonalityV0;
+        F.Itanium.emplace();
+        neverd::ItaniumCallSite Site;
+        Site.GuardedRange = {DataELFEntry, DataELFEntry + 8};
+        Site.LandingPadVA = DataELFEntry + (Variant == 3    ? 8
+                                            : Variant == 11 ? 4
+                                                            : 12);
+        F.Itanium->CallSites.push_back(Site);
+      }
+      if (Variant == 4) {
+        F.Personality = neverd::ExceptionPersonality::Unknown;
+        Provenance.Language.ParseStatus = neverd::ExceptionParseStatus::Partial;
+      } else if (Variant == 5) {
+        F.Itanium->ParseStatus = neverd::ExceptionParseStatus::Partial;
+        Provenance.Language.ParseStatus = neverd::ExceptionParseStatus::Partial;
+      } else if (Variant == 6) {
+        Provenance.Structural.ParseStatus =
+            neverd::ExceptionParseStatus::Partial;
+      } else if (Variant == 7) {
+        Provenance.Language.ParseStatus =
+            neverd::ExceptionParseStatus::Malformed;
+      } else if (Variant == 8) {
+        F.Itanium->IsCallSiteAddressForm = false;
+      } else if (Variant == 12) {
+        F.Personality = neverd::ExceptionPersonality::Unknown;
+        F.HandlerDataVA = DataELFData;
+      }
+      F.rebuildParseSummary();
+      State.Img.ExceptionMetadata.Functions.push_back(std::move(F));
+      State.Img.ExceptionMetadata.rebuildIndex();
+    } else if (Variant == 9 || Variant == 10) {
+      auto &Segment = State.Img.Segments.back();
+      ASSERT_EQ(Segment.VA, DataELFData);
+      llvm::support::endian::write64le(Segment.Data.data(),
+                                       DataELFEntry + (Variant == 9 ? 8 : 0));
+      State.Img.CodePtrRelocSlots.insert(DataELFData);
+    }
+    neverd::sdk::SessionTestAccess::resetFunctions(State);
+    const auto Text =
+        takeString(neverd_code_refs_json(Session, DataELFEntry, 1));
+    auto Parsed = llvm::json::parse(Text);
+    ASSERT_TRUE(static_cast<bool>(Parsed)) << Text;
+    const auto *Rows = Parsed->getAsObject()->getArray("refs");
+    ASSERT_TRUE(Rows) << Text;
+    unsigned Reads = 0;
+    for (const auto &Value : *Rows) {
+      const auto &Row = *Value.getAsArray();
+      if (Row[2].getAsString() != "read")
+        continue;
+      ++Reads;
+      EXPECT_EQ(std::stoull(Row[0].getAsString()->str(), nullptr, 16),
+                DataELFEntry + 8);
+      EXPECT_EQ(std::stoull(Row[1].getAsString()->str(), nullptr, 16),
+                DataELFData + 0x21);
+    }
+    const bool Known = Variant <= 2 || Variant == 4 || Variant == 10;
+    EXPECT_EQ(Reads, Known ? 1u : 0u) << Text;
+    if (Variant == 4)
+      EXPECT_EQ(State.Img.ExceptionMetadata.Functions.back().ParseStatus,
+                neverd::ExceptionParseStatus::Partial);
+    EXPECT_FALSE(State.PipeRan);
+  }
+}
+
+TEST_F(SessionCAPITest, ReferencePagesReuseImageFactsAndObserveChangedRoots) {
+  std::string Code;
+  for (uint32_t Word : {0xb0000009u, 0x9100852au, 0xf9400141u, 0xd65f03c0u})
+    for (unsigned Byte = 0; Byte < 4; ++Byte)
+      Code += static_cast<char>(Word >> (Byte * 8));
+  std::string Image = makeDataELF(std::string(64, '\0'), Code);
+  llvm::support::endian::write16le(Image.data() + 18, llvm::ELF::EM_AARCH64);
+  const auto Input = write("reference-pages.elf", Image);
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  auto &State = *neverd::sdk::toSession(Session);
+  State.Img.Symbols = {neverd::Symbol::makeFunc(DataELFEntry, Code.size())};
+  neverd::sdk::SessionTestAccess::resetFunctions(State);
+  const auto Reads = [&] {
+    const auto Text =
+        takeString(neverd_code_refs_json(Session, DataELFEntry, 1));
+    auto Parsed = llvm::json::parse(Text);
+    EXPECT_TRUE(static_cast<bool>(Parsed)) << Text;
+    std::vector<uint64_t> Result;
+    if (Parsed)
+      for (const auto &Value : *Parsed->getAsObject()->getArray("refs")) {
+        const auto &Row = *Value.getAsArray();
+        if (Row[2].getAsString() == "read")
+          Result.push_back(
+              std::stoull(Row[1].getAsString()->str(), nullptr, 16));
+      }
+    return Result;
+  };
+  const std::vector<uint64_t> Expected{DataELFData + 0x21};
+  EXPECT_EQ(Reads(), Expected);
+  const auto Original = State.ReferenceImage;
+  EXPECT_EQ(Reads(), Expected);
+  EXPECT_EQ(State.ReferenceImage, Original);
+
+  // A new independently callable entry cannot inherit the preceding ADRP.
+  State.Functions.push_back({DataELFEntry + 4, 12, "independent"});
+  State.functionListChanged();
+  EXPECT_TRUE(Reads().empty());
+  EXPECT_EQ(State.ReferenceImage, Original);
+  State.Functions.pop_back();
+  State.functionListChanged();
+  EXPECT_EQ(Reads(), Expected);
+
+  // A relocated pointer becomes an independent root too. Image mutation
+  // retires its index; the same session must not keep the earlier reference.
+  auto &Data = State.Img.Segments.back();
+  ASSERT_EQ(Data.VA, DataELFData);
+  llvm::support::endian::write64le(Data.Data.data(), DataELFEntry + 4);
+  State.Img.CodePtrRelocSlots.insert(DataELFData);
+  neverd::sdk::SessionTestAccess::clearPipeline(State);
+  EXPECT_TRUE(Reads().empty());
+  EXPECT_NE(State.ReferenceImage, Original);
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  State.Img.Symbols = {neverd::Symbol::makeFunc(DataELFEntry, Code.size())};
+  neverd::sdk::SessionTestAccess::resetFunctions(State);
+  EXPECT_EQ(Reads(), Expected);
+}
+
+TEST(InstructionFlow, UnsizedReferenceTraversalReachesThePhysicalEnd) {
+  // More instructions than the former traversal cap, with the only memory
+  // reference after the long chain. Its limit is the image and visited PCs.
+  constexpr size_t Nops = 65536;
+  neverd::BinaryImage Image;
+  Image.Arch = neverd::Arch::AArch64;
+  Image.Bits = neverd::Bitness::Bits64;
+  Image.Format = neverd::BinaryFormat::ELF;
+  neverd::Segment Text;
+  Text.VA = 0x1000;
+  Text.Flags =
+      neverd::SegmentFlags::Readable | neverd::SegmentFlags::Executable;
+  const auto Word = [&](uint32_t Value) {
+    for (unsigned Byte = 0; Byte < 4; ++Byte)
+      Text.Data.push_back(static_cast<uint8_t>(Value >> (8 * Byte)));
+  };
+  Word(0xd2a0100a); // mov x10, #0x800000
+  for (size_t I = 0; I < Nops; ++I)
+    Word(0xd503201f);
+  const uint64_t ReadAddress = Text.VA + Text.Data.size();
+  Word(0xf9400141); // ldr x1, [x10]
+  Word(0xd65f03c0);
+  Text.Size = Text.FileSz = Text.Data.size();
+  Image.Segments.push_back(std::move(Text));
+  neverd::Segment Data;
+  Data.VA = 0x800000;
+  Data.Flags = neverd::SegmentFlags::Readable;
+  Data.Data.assign(32, 0);
+  Data.Size = Data.FileSz = Data.Data.size();
+  Image.Segments.push_back(std::move(Data));
+  neverd::sdk::FuncInfo Function{};
+  Function.Entry = 0x1000;
+  const auto Page = neverd::sdk::functionPage(
+      llvm::ArrayRef<neverd::sdk::FuncInfo>(Function), 0, 1);
+  size_t Instructions = 0, Reads = 0;
+  ASSERT_TRUE(neverd::sdk::decodeFunctionReferences(
+      Image, Page,
+      [&](size_t, neverd::va_t Address, llvm::StringRef,
+          const neverd::sdk::InstructionFlow &Flow, unsigned,
+          neverd::InstructionMode) {
+        ++Instructions;
+        for (const auto &Ref : Flow.Refs)
+          if (Ref.Kind == "read") {
+            ++Reads;
+            EXPECT_EQ(Address, ReadAddress);
+            EXPECT_EQ(Ref.To, 0x800000u);
+            EXPECT_EQ(Ref.Bytes, 8u);
+          }
+      }));
+  EXPECT_EQ(Instructions, Nops + 3);
+  EXPECT_EQ(Reads, 1u);
+}
+
+TEST_F(SessionCAPITest, DefinesUTF8TextJoinedToASCIIWords) {
+  const std::string Text = "USB接口";
+  const auto Input = write("joined-utf8.elf", makeDataELF(Text + '\0'));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  for (const char *Options :
+       {static_cast<const char *>(nullptr), R"({"encodings":["utf-8"]})"}) {
+    const auto Raw =
+        takeString(neverd_string_at(Session, DataELFData, Options));
+    auto Parsed = llvm::json::parse(Raw);
+    ASSERT_TRUE(static_cast<bool>(Parsed))
+        << Raw << takeString(neverd_last_error(Session));
+    const auto *Row = Parsed->getAsObject();
+    ASSERT_NE(Row, nullptr);
+    EXPECT_EQ(Row->getString("value"), Text);
+    EXPECT_EQ(Row->getString("encoding"), "utf-8");
+    EXPECT_EQ(Row->getInteger("length"), static_cast<int64_t>(Text.size()));
+    EXPECT_EQ(Row->getInteger("unit"), 1);
+    const auto Definition =
+        "{\"kind\":\"string\",\"encoding\":\"utf-8\",\"size\":" +
+        std::to_string(Text.size() + 1) + "}";
+    EXPECT_EQ(neverd_item_set(Session, DataELFData, Definition.c_str()), 0)
+        << takeString(neverd_last_error(Session));
+  }
+  EXPECT_EQ(
+      neverd_string_at(Session, DataELFData, R"({"encodings":["ascii"]})"),
+      nullptr);
+}
+
+TEST_F(SessionCAPITest, ComputedStringsRetainNativeEntryConditions) {
+  // Independent AArch64 bytes initialize GNN\0, then a separate block XORs
+  // all four bytes with 0x00212121 and stores foo\0 elsewhere. The image
+  // initially contains zeroes, so the output is conditional analysis evidence.
+  const uint32_t Words[] = {0xb0000009, // adrp x9, 0x401000
+                            0x52800008u | (0x4e47u << 5),
+                            0x72a00008u | (0x004eu << 5),
+                            0xb9000128, // str w8, [x9]
+                            0x14000002, // b decode
+                            0xd503201f, // unreachable nop
+                            0xb9400128, // decode: ldr w8, [x9]
+                            0x5280000au | (0x2121u << 5),
+                            0x72a0000au | (0x0021u << 5),
+                            0x4a0a0108, // eor w8, w8, w10
+                            0xb9002128, // str w8, [x9, #0x20]
+                            0xd65f03c0};
+  std::string Code;
+  for (uint32_t Word : Words)
+    for (unsigned Byte = 0; Byte < 4; ++Byte)
+      Code += static_cast<char>(Word >> (Byte * 8));
+  std::string Image = makeDataELF(std::string(64, '\0'), Code, true);
+  llvm::support::endian::write16le(Image.data() + 18, llvm::ELF::EM_AARCH64);
+  const auto Input = write("conditional-text.elf", Image);
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  auto &State = *neverd::sdk::toSession(Session);
+  State.Img.Symbols = {neverd::Symbol::makeFunc(DataELFEntry, Code.size())};
+  neverd::sdk::SessionTestAccess::resetFunctions(State);
+  ASSERT_FALSE(State.PipeRan);
+
+  const auto Query =
+      takeString(neverd_computed_strings_json(Session, DataELFEntry));
+  auto Parsed = llvm::json::parse(Query);
+  ASSERT_TRUE(static_cast<bool>(Parsed))
+      << Query << takeString(neverd_last_error(Session));
+  const auto *Object = Parsed->getAsObject();
+  ASSERT_TRUE(Object);
+  EXPECT_EQ(Object->getString("function"), "0x4000B0");
+  EXPECT_EQ(Object->getBoolean("complete"), true);
+  const auto *Rows = Object->getArray("strings");
+  ASSERT_TRUE(Rows);
+  unsigned Found = 0;
+  for (const auto &Item : *Rows) {
+    const auto &Row = *Item.getAsObject();
+    if (Row.getString("text") != "foo")
+      continue;
+    ++Found;
+    EXPECT_EQ(Row.getString("block"), "0x4000C8");
+    // Observations describe the state after the completed original suffix,
+    // including RET here, rather than the last STORE's address.
+    EXPECT_EQ(Row.getString("instruction"), "0x4000DC");
+    EXPECT_EQ(Row.getString("address"), "0x401020");
+    EXPECT_EQ(Row.getString("bytes"), "666f6f00");
+    EXPECT_EQ(Row.getString("encoding"), "ascii");
+    const auto *Inputs = Row.getArray("inputs");
+    ASSERT_TRUE(Inputs);
+    ASSERT_EQ(Inputs->size(), 4u);
+    const unsigned Required[] = {0x47, 0x4e, 0x4e, 0};
+    for (unsigned I = 0; I < 4; ++I) {
+      const auto &Byte = *(*Inputs)[I].getAsObject();
+      EXPECT_EQ(std::stoull(Byte.getString("address")->str(), nullptr, 16),
+                DataELFData + I);
+      EXPECT_EQ(Byte.getInteger("value"), Required[I]);
+      EXPECT_EQ(Byte.getString("initializer"), "0x4000BC");
+    }
+    const auto *Registers = Row.getArray("entry_registers");
+    ASSERT_TRUE(Registers);
+    ASSERT_EQ(Registers->size(), 1u);
+    const auto &Register = *Registers->front().getAsObject();
+    EXPECT_EQ(Register.getString("offset"), "0x48");
+    EXPECT_EQ(Register.getInteger("bytes"), 8);
+    EXPECT_EQ(Register.getString("value"), "0x401000");
+  }
+  EXPECT_EQ(Found, 1u) << Query;
+  EXPECT_TRUE(State.PipeRan);
+  EXPECT_TRUE(State.PipeResult.HighIRDeferred);
+  EXPECT_TRUE(State.PipeResult.HighFuncs.empty());
+  EXPECT_FALSE(State.PipeResult.LlvmModule);
+  EXPECT_TRUE(State.FunctionSources.empty());
+  EXPECT_EQ(takeString(neverd_computed_strings_json(Session, DataELFEntry)),
+            Query);
+  const auto *Bytes = State.Img.readVA(DataELFData, 64);
+  ASSERT_TRUE(Bytes);
+  EXPECT_TRUE(
+      std::all_of(Bytes, Bytes + 64, [](uint8_t Byte) { return Byte == 0; }));
+  EXPECT_EQ(neverd_string_at(Session, DataELFData + 0x20, nullptr), nullptr);
+}
+
+TEST_F(SessionCAPITest, ComputedStringsReportMissingInput) {
+  EXPECT_EQ(neverd_computed_strings_json(nullptr, DataELFEntry), nullptr);
+  EXPECT_EQ(neverd_computed_strings_json(Session, DataELFEntry), nullptr);
+  EXPECT_EQ(takeString(neverd_last_error(Session)), "no binary loaded");
+}
+
 // A 32-bit PE image based at 0x400000 running \p Code at 0x401000, with
 // \p Data at 0x402000 and, when \p Relocated lists any, base relocations
 // (HIGHLOW) for the code bytes at those offsets.
@@ -3055,6 +3710,63 @@ makeSymbolsELF(std::string_view Body,
   return Bytes;
 }
 
+TEST_F(SessionCAPITest, UnmappedSectionsCannotRescanAZeroBasedCodeSegment) {
+  using ELF = llvm::object::ELF64LE;
+  using namespace llvm::ELF;
+  std::string Code(64, '\0');
+  Code[0] = '\xc3';
+  Code.replace(1, 13, "NOT_A_LITERAL");
+  Code.replace(32, 11, "MAPPED_TEXT");
+  std::string Bytes = makeNativeELF(false, 0, {}, Code);
+  ELF::Ehdr Header;
+  std::memcpy(&Header, Bytes.data(), sizeof(Header));
+  std::array<ELF::Shdr, 5> Sections{};
+  Sections[1].sh_name = 1;
+  Sections[1].sh_type = SHT_PROGBITS;
+  Sections[1].sh_flags = SHF_ALLOC | SHF_EXECINSTR;
+  Sections[1].sh_addr = Header.e_entry;
+  Sections[1].sh_offset = Header.e_entry;
+  Sections[1].sh_size = Code.size();
+  Sections[1].sh_addralign = 1;
+  Sections[2].sh_name = 7;
+  Sections[2].sh_type = SHT_PROGBITS;
+  Sections[2].sh_flags = SHF_ALLOC;
+  Sections[2].sh_addr = Header.e_entry + 32;
+  Sections[2].sh_offset = Header.e_entry + 32;
+  Sections[2].sh_size = 12;
+  Sections[2].sh_addralign = 1;
+  Sections[3].sh_name = 15;
+  Sections[3].sh_type = SHT_PROGBITS;
+  Sections[3].sh_offset = Bytes.size();
+  Sections[3].sh_size = 2048;
+  Sections[3].sh_addralign = 1;
+  Bytes.append(2048, '\0');
+  constexpr char Names[] = "\0.text\0.rodata\0.debug_str\0.shstrtab";
+  Sections[4].sh_name = 26;
+  Sections[4].sh_type = SHT_STRTAB;
+  Sections[4].sh_offset = Bytes.size();
+  Sections[4].sh_size = sizeof(Names);
+  Sections[4].sh_addralign = 1;
+  Bytes.append(Names, sizeof(Names));
+  Bytes.resize((Bytes.size() + 7) & ~size_t(7), '\0');
+  Header.e_shoff = Bytes.size();
+  Header.e_shnum = Sections.size();
+  Header.e_shstrndx = 4;
+  Bytes.append(reinterpret_cast<const char *>(Sections.data()),
+               sizeof(Sections));
+  std::memcpy(Bytes.data(), &Header, sizeof(Header));
+  const auto Input = write("nonallocated-sections.elf", Bytes);
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  const auto Text =
+      takeString(neverd_strings_ex_json(Session, R"({"encodings":["ascii"]})"));
+  auto Parsed = llvm::json::parse(Text);
+  ASSERT_TRUE(static_cast<bool>(Parsed)) << Text;
+  const auto *Rows = Parsed->getAsArray();
+  ASSERT_TRUE(Rows);
+  ASSERT_EQ(Rows->size(), 1u) << Text;
+  EXPECT_EQ(Rows->front().getAsObject()->getString("value"), "MAPPED_TEXT");
+}
+
 TEST_F(SessionCAPITest, StringsTakeTheLiteralsSymbolsSpell) {
   // A return, then L"SA" and "%d\n" among the code under the names MSVC
   // gives them, as ntoskrnl keeps its literals in PAGE and INIT.
@@ -3101,6 +3813,88 @@ TEST_F(SessionCAPITest, StringsTakeTheLiteralsSymbolsSpell) {
                 .find("{\"addr\":\"" + Hex(Entry + Wide) +
                       "\",\"name\":\"kWide\",\"size\":0}"),
             std::string::npos);
+}
+
+TEST_F(SessionCAPITest, DataSymbolPagesMatchTheFullList) {
+  // Paging is the list neverd_data_symbols_json returns, one row at a time,
+  // including a rename. A cursor past the end is an empty exhausted page.
+  std::string Code("\xc3", 1);
+  const uint64_t Wide = Code.size();
+  Code += std::string("S\0A\0\0\0", 6);
+  const uint64_t Narrow = Code.size();
+  Code += std::string("%d\n\0", 4);
+  const auto Input =
+      write("literals-paged.elf",
+            makeSymbolsELF(Code, {{"??_C@_15OHIPBLFN@?$AAS?$AAA@", Wide},
+                                  {"??_C@_03HMFOOINA@?$CFd?6@", Narrow}}));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1)
+      << takeString(neverd_last_error(Session));
+  const auto compare = [&] {
+    llvm::json::Array Rows;
+    uint64_t Cursor = 0;
+    bool Ended = false;
+    for (int Guard = 0; Guard < 16 && !Ended; ++Guard) {
+      const auto Text =
+          takeString(neverd_data_symbols_page_json(Session, Cursor, 1));
+      if (Text.empty()) {
+        ADD_FAILURE() << takeString(neverd_last_error(Session));
+        return;
+      }
+      auto Parsed = llvm::json::parse(Text);
+      if (!Parsed) {
+        ADD_FAILURE() << Text;
+        return;
+      }
+      const auto *Page = Parsed->getAsObject();
+      const auto *Symbols = Page ? Page->getArray("symbols") : nullptr;
+      const auto *Next = Page ? Page->get("next") : nullptr;
+      if (!Symbols || !Next || Symbols->size() > 1) {
+        ADD_FAILURE() << Text;
+        return;
+      }
+      for (const auto &Row : *Symbols)
+        Rows.push_back(Row);
+      if (Next->kind() == llvm::json::Value::Null) {
+        Ended = true;
+        break;
+      }
+      const auto Advanced = Next->getAsUINT64();
+      if (!Advanced || *Advanced <= Cursor) {
+        ADD_FAILURE() << Text;
+        return;
+      }
+      Cursor = *Advanced;
+    }
+    if (!Ended) {
+      ADD_FAILURE() << "data symbol pages did not end";
+      return;
+    }
+    auto Full =
+        llvm::json::parse(takeString(neverd_data_symbols_json(Session)));
+    if (!Full) {
+      ADD_FAILURE() << "data symbol list did not parse";
+      return;
+    }
+    EXPECT_EQ(llvm::json::Value(std::move(Rows)), *Full);
+  };
+  compare();
+  const uint64_t Entry = 0x400000 + sizeof(llvm::object::ELF64LE::Ehdr) +
+                         sizeof(llvm::object::ELF64LE::Phdr);
+  ASSERT_EQ(neverd_rename_addr(Session, Entry + Wide, "kWide"), 0)
+      << takeString(neverd_last_error(Session));
+  compare();
+  const auto Past =
+      takeString(neverd_data_symbols_page_json(Session, 1000000, 1));
+  auto Exhausted = llvm::json::parse(Past);
+  ASSERT_TRUE(static_cast<bool>(Exhausted)) << Past;
+  const auto *Page = Exhausted->getAsObject();
+  ASSERT_NE(Page, nullptr);
+  const auto *Symbols = Page->getArray("symbols");
+  ASSERT_NE(Symbols, nullptr);
+  EXPECT_TRUE(Symbols->empty());
+  const auto *Next = Page->get("next");
+  ASSERT_NE(Next, nullptr);
+  EXPECT_EQ(Next->kind(), llvm::json::Value::Null);
 }
 
 TEST_F(SessionCAPITest, SwitchTablesComeFromWholeProgramAnalysis) {
@@ -4512,12 +5306,11 @@ TEST_F(SessionCAPITest, WarmingScansTheDataAccessWidthsTheFirstViewReads) {
   EXPECT_EQ(&*State.AccessWidths->begin(), Storage);
 }
 
-TEST_F(SessionCAPITest, PreparedCallSummariesReplaceEachAnalysisClosure) {
+TEST_F(SessionCAPITest, PreparedCallSummariesAgreeWithEachAnalysisClosure) {
   // caller -> f1 -> ... -> fN, each passing its argument registers on, and
-  // fN reads RDX: one call deeper than an analysis summarizes callees.  Once
-  // the session holds the image's summaries, the caller passes that
-  // argument, and the analysis kept from before is dropped.
-  constexpr unsigned Chain = neverd::limits::kMaxCallEffectCalleeDepth + 1;
+  // fN reads RDX, beyond the former four-call cutoff. Both the selected
+  // closure and the image-wide summaries must reach that argument read.
+  constexpr unsigned Chain = 9;
   constexpr unsigned Stride = 0x20;
   std::string Code((Chain + 1) * Stride, '\xcc');
   // sub rsp, 8; call next; add rsp, 8; ret
@@ -4553,7 +5346,7 @@ TEST_F(SessionCAPITest, PreparedCallSummariesReplaceEachAnalysisClosure) {
   EXPECT_FALSE(State.PipeRan);
   const std::string Prepared = takeString(neverd_decompile(Session, Entry));
   ASSERT_FALSE(Prepared.empty());
-  EXPECT_NE(Prepared, Closure);
+  EXPECT_EQ(Prepared, Closure);
   // Another session that prepares them first prints the same.
   neverd_session_t Fresh = neverd_session_create();
   const auto Destroy =
@@ -4569,9 +5362,9 @@ TEST_F(SessionCAPITest, PreparedCallSummariesReplaceEachAnalysisClosure) {
 }
 
 TEST_F(SessionCAPITest, PrefilledCalleesLeaveEachAnalysisAsItWas) {
-  // The chain of PreparedCallSummariesReplaceEachAnalysisClosure: each
+  // The chain of PreparedCallSummariesAgreeWithEachAnalysisClosure: each
   // function calls the next, which the image's summaries list as callees.
-  constexpr unsigned Chain = neverd::limits::kMaxCallEffectCalleeDepth + 1;
+  constexpr unsigned Chain = 9;
   constexpr unsigned Stride = 0x20;
   std::string Code((Chain + 1) * Stride, '\xcc');
   static constexpr char Forward[] =
@@ -4631,7 +5424,7 @@ TEST_F(SessionCAPITest, SolvedCalleeSignaturesLeaveEachAnalysisAsItWas) {
   // PrefilledCalleesLeaveEachAnalysisAsItWas on an x64 COFF image, whose
   // prefill goes on to solve the signatures of the bodies it read image-wide
   // (stepGlobalCalleeSignatures) before its cursor ends.
-  constexpr unsigned Chain = neverd::limits::kMaxCallEffectCalleeDepth + 1;
+  constexpr unsigned Chain = 9;
   constexpr unsigned Stride = 0x20;
   std::string Code((Chain + 1) * Stride, '\xcc');
   static constexpr char Forward[] =
@@ -4879,7 +5672,7 @@ TEST_F(SessionCAPITest, PrefilledSourceStacksLeaveEachAnalysisAsItWas) {
   // home slot, save RBX, read the argument back and pass it to the next:
   // bodies source stack preparation may follow, which the prefill prepares as
   // it reads them.
-  constexpr unsigned Chain = neverd::limits::kMaxCallEffectCalleeDepth + 1;
+  constexpr unsigned Chain = 9;
   constexpr unsigned Stride = 0x20;
   std::string Code((Chain + 1) * Stride, '\xcc');
   // mov [rsp+8],rcx; push rbx; sub rsp,0x20; mov rbx,[rsp+0x30];
@@ -6326,6 +7119,36 @@ TEST_F(SessionCAPITest, LocalTypesComeFromThePDB) {
   EXPECT_EQ((*List.getArray("types"))[0].getAsObject()->getString("name"),
             "_THREAD_LIKE");
   EXPECT_EQ(List.getObject("stats")->getArray("nestingMismatches")->size(), 0u);
+  // Pages cover the exact legacy inventory, including an ordinal gap, and
+  // locate/sort/filter act on all rows rather than only the first page.
+  const auto allPdb =
+      parse(neverd_local_types_json(Session, R"({"origin":"pdb"})"));
+  llvm::json::Array Paged;
+  int64_t Offset = 0;
+  do {
+    const std::string Query =
+        "{\"origin\":\"pdb\",\"limit\":2,\"offset\":" + std::to_string(Offset) +
+        "}";
+    auto Page = parse(neverd_local_types_json(Session, Query.c_str()));
+    ASSERT_EQ(Page.getInteger("offset"), Offset);
+    ASSERT_EQ(Page.getInteger("total"), allPdb.getArray("types")->size());
+    for (const auto &Row : *Page.getArray("types"))
+      Paged.push_back(Row);
+    const int64_t Next = *Page.getInteger("next_offset");
+    ASSERT_GT(Next, Offset);
+    Offset = Next;
+  } while (Offset < static_cast<int64_t>(allPdb.getArray("types")->size()));
+  EXPECT_EQ(Paged, *allPdb.getArray("types"));
+  const auto Located = parse(neverd_local_types_json(
+      Session,
+      R"({"origin":"pdb","limit":1,"locate":"_THREAD_LIKE","sort":"name","descending":true})"));
+  ASSERT_TRUE(Located.getInteger("index"));
+  EXPECT_EQ(Located.getArray("types")->front().getAsObject()->getString("name"),
+            "_THREAD_LIKE");
+  for (const char *Bad :
+       {R"({"limit":0})", R"({"offset":-1})", R"({"limit":513})",
+        R"({"limit":true})", R"({"sort":"missing"})", R"({"descending":1})"})
+    EXPECT_EQ(neverd_local_types_json(Session, Bad), nullptr) << Bad;
   // A console program joins the user mode headers after its PDB, then the
   // kernel's for the few native routines only it declares.  phnt's native
   // API declares KUSER_SHARED_DATA in user mode, so the kernel's, laid out
@@ -6601,6 +7424,71 @@ TEST_F(SessionCAPITest, NamesReadAheadLeaveNameChecksAsTheyRead) {
   EXPECT_EQ(answer(Session, named("main")).rfind("0 ", 0), 0u);
   neverd_session_destroy(Plain);
   EXPECT_EQ(neverd_names_prepare(nullptr), 0);
+}
+
+TEST_F(SessionCAPITest, LocalTypePagesAndRenderersRefreshAfterEdits) {
+  const auto Input = write("types.elf", makeNativeELF(false));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  const auto parse = [&](const char *Raw) {
+    auto Parsed = llvm::json::parse(takeString(Raw));
+    EXPECT_TRUE(static_cast<bool>(Parsed));
+    return Parsed && Parsed->getAsObject() ? *Parsed->getAsObject()
+                                           : llvm::json::Object();
+  };
+  const auto list = [&] {
+    return parse(
+        neverd_local_types_json(Session, R"({"origin":"user","limit":2})"));
+  };
+  const auto layout = [&] {
+    return parse(neverd_local_type_json(Session, "Editable", nullptr));
+  };
+  const auto source = [&] {
+    return takeString(neverd_local_types_source(
+        Session,
+        R"({"types":["Editable"],"dependencies":false,"language":"c"})"));
+  };
+  EXPECT_EQ(list().getInteger("total"), 0);
+  parse(neverd_local_types_declare(Session, "struct Editable { int Small; };",
+                                   nullptr));
+  EXPECT_EQ(list().getInteger("total"), 1);
+  EXPECT_EQ(layout().getInteger("size"), 4);
+  EXPECT_NE(source().find("int32_t Small;"), std::string::npos);
+  parse(neverd_local_types_declare(
+      Session, "struct Editable { long long Large; };", nullptr));
+  EXPECT_EQ(list().getArray("types")->front().getAsObject()->getInteger("size"),
+            8);
+  EXPECT_EQ(layout().getInteger("size"), 8);
+  EXPECT_NE(source().find("int64_t Large;"), std::string::npos);
+  parse(neverd_local_types_forget(Session, R"(["Editable"])"));
+  EXPECT_EQ(list().getInteger("total"), 0);
+  EXPECT_EQ(neverd_local_type_json(Session, "Editable", nullptr), nullptr);
+}
+
+TEST_F(SessionCAPITest, LocalTypeLocateSurvivesAByteLimitedPage) {
+  const auto Input = write("types.elf", makeNativeELF(false));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  // Each row fits, but 512 long identifiers exceed the response byte limit.
+  std::string Declarations, Last;
+  for (unsigned I = 0; I < 512; ++I) {
+    Last = "LongType" + std::to_string(I) + std::string(4096, 'x');
+    Declarations += "typedef int " + Last + ";\n";
+  }
+  auto Declared = llvm::json::parse(takeString(
+      neverd_local_types_declare(Session, Declarations.c_str(), nullptr)));
+  ASSERT_TRUE(static_cast<bool>(Declared));
+  ASSERT_TRUE(Declared->getAsObject());
+  ASSERT_TRUE(Declared->getAsObject()->getArray("problems")->empty());
+  const std::string Query =
+      "{\"origin\":\"user\",\"limit\":512,\"locate\":\"" + Last + "\"}";
+  auto Page = llvm::json::parse(
+      takeString(neverd_local_types_json(Session, Query.c_str())));
+  ASSERT_TRUE(static_cast<bool>(Page));
+  ASSERT_TRUE(Page->getAsObject());
+  const auto *Rows = Page->getAsObject()->getArray("types");
+  ASSERT_TRUE(Rows && !Rows->empty());
+  EXPECT_EQ(Page->getAsObject()->getInteger("index"), 511);
+  EXPECT_EQ(Page->getAsObject()->getInteger("offset"), 511);
+  EXPECT_EQ(Rows->front().getAsObject()->getString("name"), Last);
 }
 
 TEST_F(SessionCAPITest, DeclaredTypesJoinThePDBsAndStayWithTheProject) {
@@ -9043,9 +9931,11 @@ TEST_F(SessionCAPITest, UefiApplicationsJoinTheirFirmwaresLibrary) {
     // slot. Its address escapes to an external body, so the signature alone
     // cannot prove that the saved bytes are unobserved. Keep that diagnostic
     // instead of dropping a real store or inventing an initial value.
-    EXPECT_EQ(HighC.find("unknown register") != std::string::npos,
+    EXPECT_EQ(HighC.find("incoming register has no definition") !=
+                  std::string::npos,
               std::string_view(P.File) == "uefi_calls_x86.efi")
         << HighC;
+    EXPECT_EQ(HighC.find("unknown register"), std::string::npos) << HighC;
     const std::string LLVMC = takeString(
         neverd_decompile_llvm(Uefi, neverd_session_entry_addr(Uefi)));
     EXPECT_NE(LLVMC.find(OutputCall), std::string::npos) << LLVMC;
@@ -10113,9 +11003,16 @@ TEST_F(SessionCAPITest,
       size_t Offset = 0, Anchors = 0;
       std::string Reassembled;
       std::set<std::string> ObjectIds;
+      std::shared_ptr<const neverd::sdk::IRFunctionView> Kept;
       for (;;) {
         auto Page =
             takeView(neverd_ir_view_json(Session, Entry, Stage, Offset, 2));
+        const auto &View = neverd::sdk::toSession(Session)->IRView;
+        ASSERT_NE(View, nullptr);
+        if (Kept)
+          EXPECT_EQ(View, Kept);
+        else
+          Kept = View;
         ASSERT_EQ(Page.getString("mapping_status"), "instruction_anchors");
         EXPECT_EQ(Page.getBoolean("provenance_complete"), false);
         ASSERT_TRUE(Page.getString("text"));
@@ -10161,6 +11058,16 @@ TEST_F(SessionCAPITest,
       EXPECT_EQ(Beyond.getString("text"), "");
       EXPECT_TRUE(Beyond.getBoolean("complete").value_or(false));
       EXPECT_TRUE(Beyond.getArray("rows")->empty());
+      auto First = takeView(neverd_ir_view_json(Session, Entry, Stage, 0, 2));
+      EXPECT_EQ(neverd::sdk::toSession(Session)->IRView, Kept);
+      EXPECT_TRUE(llvm::StringRef(Reassembled)
+                      .starts_with(First.getString("text").value_or("")));
+      neverd::sdk::SessionTestAccess::clearPipeline(
+          *neverd::sdk::toSession(Session));
+      EXPECT_EQ(neverd::sdk::toSession(Session)->IRView, nullptr);
+      auto Rebuilt = takeView(neverd_ir_view_json(Session, Entry, Stage, 0, 2));
+      EXPECT_NE(neverd::sdk::toSession(Session)->IRView, Kept);
+      EXPECT_EQ(Rebuilt.getString("text"), First.getString("text"));
     }
   }
 }
@@ -10214,6 +11121,481 @@ TEST_F(SessionCAPITest, CSourcePagesRetainCanonicalReturnAnchors) {
       EXPECT_EQ(Text, Original);
       EXPECT_GT(Mapped, 0u);
     }
+  }
+}
+
+TEST_F(SessionCAPITest, CSourcePagePublishesSpanOccurrencesOnTheOpeningLine) {
+  // One anchor covers every line. Its occurrences belong on the line that
+  // holds the span's first byte; every later line keeps that anchor's first
+  // address. Repeating the set made a page the 32 MiB adapter rejects, which
+  // is all the pseudocode view then shows. A page this small still publishes
+  // its library region.
+  std::string Code;
+  for (int I = 0; I < 40; ++I)
+    Code.append("\x83\xc0\x01", 3);
+  Code.push_back('\xc3');
+  const auto Path =
+      write("wide-span.elf", makeNativeELF(false, 0x400000, {}, Code));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1)
+      << takeString(neverd_last_error(Session));
+  const auto Entry = neverd_session_entry_addr(Session);
+  ASSERT_FALSE(
+      takeString(neverd_ir_view_json(Session, Entry, "c", 0, 2048)).empty())
+      << takeString(neverd_last_error(Session));
+  auto &State = *neverd::sdk::toSession(Session);
+  auto *Kept = State.findFunctionSource(
+      Entry, neverd::sdk::Session::SourceRoute::PlainC);
+  ASSERT_NE(Kept, nullptr);
+  ASSERT_TRUE(Kept->Map);
+  const neverd::LowFunc *Low = State.findLowFunc(Entry);
+  ASSERT_NE(Low, nullptr);
+  std::vector<neverd::sigs::LibraryOccurrence> Occurrences;
+  std::vector<neverd::va_t> Addresses;
+  std::set<neverd::va_t> Seen;
+  for (const auto &Block : Low->Blocks)
+    for (const auto &Boundary : Block.InstructionBoundaries) {
+      if (Boundary.FirstOp > Block.Ops.size() ||
+          Boundary.OpCount > Block.Ops.size() - Boundary.FirstOp)
+        continue;
+      for (uint64_t I = Boundary.FirstOp;
+           I < Boundary.FirstOp + Boundary.OpCount; ++I) {
+        const auto &Op = Block.Ops[I];
+        if (Op.Seq < 0 || Op.Addr != Boundary.Address || Boundary.Size == 0)
+          continue;
+        Occurrences.push_back({Op.Addr, Op.Seq});
+        if (Seen.insert(Op.Addr).second)
+          Addresses.push_back(Op.Addr);
+      }
+    }
+  ASSERT_GT(Addresses.size(), 1u);
+  std::string Text;
+  for (neverd::va_t Address : Addresses)
+    Text += "v = v + 1; // " + llvm::utohexstr(Address) + "\n";
+  const auto PreviousView = Kept->View;
+  ASSERT_TRUE(PreviousView);
+  Kept->Map->Anchors = {{Entry, {0, Text.size()}, Occurrences}};
+  neverd::sigs::LibraryRecognition Match;
+  Match.Function = Entry;
+  Match.Pack = "wide-span";
+  Match.Rule = "opening-line";
+  Match.Isolated = true;
+  Match.Scope = neverd::sigs::LibraryFeatureScope::InlineExpression;
+  Match.Occurrences = Occurrences;
+  State.PipeResult.LibraryRecognitions.push_back(std::move(Match));
+  neverd::CSourceRegion Region;
+  Region.Recognition = State.PipeResult.LibraryRecognitions.size() - 1;
+  Region.Mapped = true;
+  Region.Spans = {{0, Text.size()}};
+  Kept->Map->Regions = {std::move(Region)};
+  // Replace the synthetic emission through its owner, which invalidates the
+  // physical rows and serialized metadata cached by the first page above.
+  const auto Map = *Kept->Map;
+  State.rememberFunctionSource(Entry, neverd::sdk::Session::SourceRoute::PlainC,
+                               Text, &Map);
+  ASSERT_FALSE(Kept->View);
+
+  const std::string Owned =
+      takeString(neverd_ir_view_json(Session, Entry, "c", 0, 2048));
+  ASSERT_FALSE(Owned.empty()) << takeString(neverd_last_error(Session));
+  ASSERT_TRUE(Kept->View);
+  EXPECT_NE(Kept->View, PreviousView);
+  EXPECT_LE(Owned.size(), static_cast<size_t>(32 * 1024 * 1024));
+  auto Parsed = llvm::json::parse(Owned);
+  ASSERT_TRUE(static_cast<bool>(Parsed)) << Owned;
+  const auto *Page = Parsed->getAsObject();
+  ASSERT_NE(Page, nullptr);
+  EXPECT_EQ(Page->getString("text"), Text);
+  const auto *Regions = Page->getArray("library_regions");
+  ASSERT_NE(Regions, nullptr);
+  EXPECT_EQ(Regions->size(), 1u);
+  const auto *Rows = Page->getArray("rows");
+  ASSERT_NE(Rows, nullptr);
+  ASSERT_EQ(Rows->size(), Addresses.size());
+  const auto addressesOf = [](const llvm::json::Value &Value) {
+    std::vector<uint64_t> Result;
+    const auto *Row = Value.getAsObject();
+    if (!Row)
+      return Result;
+    const auto *List = Row->getArray("addresses");
+    if (!List)
+      return Result;
+    for (const auto &Item : *List)
+      if (const auto Hex = Item.getAsString())
+        Result.push_back(std::stoull(Hex->str(), nullptr, 16));
+    return Result;
+  };
+  const auto First = addressesOf(Rows->front());
+  ASSERT_EQ(First.size(), Addresses.size());
+  EXPECT_EQ(First.front(), Occurrences.front().Address);
+  EXPECT_EQ(std::set<uint64_t>(First.begin(), First.end()),
+            std::set<uint64_t>(Addresses.begin(), Addresses.end()));
+  for (size_t I = 1; I < Rows->size(); ++I) {
+    const auto Later = addressesOf((*Rows)[I]);
+    ASSERT_EQ(Later.size(), 1u) << I;
+    EXPECT_EQ(Later.front(), Occurrences.front().Address);
+    EXPECT_EQ((*Rows)[I].getAsObject()->getString("mapping_status"),
+              "instruction_anchor");
+  }
+
+  // A newly recovered inner computation refines navigation on its own line.
+  // The enclosing statement's anchor is retained, but its first address must
+  // not crowd out the more precise computation or leak onto that inner row.
+  const size_t InnerBegin = Text.find('\n') + 1;
+  const size_t InnerEnd = Text.find('\n', InnerBegin) + 1;
+  const auto Inner =
+      std::find_if(Occurrences.begin(), Occurrences.end(),
+                   [&](const auto &O) { return O.Address == Addresses[1]; });
+  ASSERT_NE(Inner, Occurrences.end());
+  auto NestedMap = *Kept->Map;
+  NestedMap.Anchors.push_back({Entry, {InnerBegin, InnerEnd}, {*Inner}});
+  State.rememberFunctionSource(Entry, neverd::sdk::Session::SourceRoute::PlainC,
+                               Text, &NestedMap);
+  auto Nested = takeView(neverd_ir_view_json(Session, Entry, "c", 0, 2048));
+  const auto *NestedRows = Nested.getArray("rows");
+  ASSERT_NE(NestedRows, nullptr);
+  ASSERT_EQ(NestedRows->size(), Rows->size());
+  EXPECT_EQ(addressesOf(NestedRows->front()), First);
+  EXPECT_EQ(addressesOf((*NestedRows)[1]), std::vector<uint64_t>{Addresses[1]});
+  for (size_t I = 2; I < NestedRows->size(); ++I)
+    EXPECT_EQ(addressesOf((*NestedRows)[I]), addressesOf((*Rows)[I]));
+  ASSERT_EQ(Kept->Map->Anchors.size(), 2u);
+  EXPECT_EQ(Kept->Map->Anchors.front().Occurrences, Occurrences);
+}
+
+// One RX segment and one writable table. `leaf` calls `sink` (`ret`) under a
+// frame, so the call is not a tail call and `leaf` returns nothing. `caller`
+// is not void: eax enters as arg0, one path returns that void call, and the
+// other returns arg0. `dispatch` stores into its own table and then jumps
+// through it, which cannot be published as a switch.
+std::string makePhraseProbeELF() {
+  using ELF = llvm::object::ELF64LE;
+  using namespace llvm::ELF;
+  constexpr uint64_t Base = 0x400000;
+  constexpr uint64_t DataOff = 0x2000;
+  const size_t HeaderBytes = sizeof(ELF::Ehdr) + 2 * sizeof(ELF::Phdr);
+  const uint64_t CodeVA = Base + HeaderBytes;
+  const uint64_t DataVA = Base + DataOff;
+
+  std::vector<uint8_t> Code;
+  struct Reloc {
+    size_t At = 0;
+    uint64_t Target = 0;
+  };
+  std::vector<Reloc> Relocs;
+  auto Byte = [&](uint8_t Value) { Code.push_back(Value); };
+  auto Imm32 = [&](uint32_t Value) {
+    for (int I = 0; I < 4; ++I)
+      Code.push_back(static_cast<uint8_t>(Value >> (8 * I)));
+  };
+  auto Rel32 = [&](uint64_t Target) {
+    Relocs.push_back({Code.size(), Target});
+    Imm32(0);
+  };
+
+  // sink is only `ret`. leaf's frame keeps the call from becoming a tail
+  // call, and leaf writes no result. caller copies arg0 into eax, then one
+  // path returns the void call and the other returns that arg0.
+  const size_t Sink = Code.size();
+  Byte(0xC3);
+  const size_t Leaf = Code.size();
+  Byte(0x55);
+  Byte(0x48);
+  Byte(0x89);
+  Byte(0xE5);
+  Byte(0xE8);
+  Rel32(CodeVA + Sink);
+  Byte(0x5D);
+  Byte(0xC3);
+  const size_t Caller = Code.size();
+  Byte(0x89);
+  Byte(0xF8);
+  Byte(0x83);
+  Byte(0xFE);
+  Byte(0x01);
+  Byte(0x75);
+  Byte(0x05);
+  Byte(0xE8);
+  Rel32(CodeVA + Leaf);
+  Byte(0xC3);
+  const size_t Dispatch = Code.size();
+  Byte(0x4C);
+  Byte(0x8B);
+  Byte(0x1D);
+  Rel32(DataVA + 8);
+  Byte(0x4C);
+  Byte(0x89);
+  Byte(0x1D);
+  Rel32(DataVA);
+  Byte(0x41);
+  Byte(0x89);
+  Byte(0xFA);
+  Byte(0x41);
+  Byte(0x83);
+  Byte(0xE2);
+  Byte(0x01);
+  Byte(0x48);
+  Byte(0x8D);
+  Byte(0x05);
+  Rel32(DataVA);
+  Byte(0x42);
+  Byte(0xFF);
+  Byte(0x24);
+  Byte(0xD0);
+  const size_t Case0 = Code.size();
+  Byte(0xB8);
+  Imm32(1);
+  Byte(0xC3);
+  const size_t Case1 = Code.size();
+  Byte(0xB8);
+  Imm32(2);
+  Byte(0xC3);
+  for (const Reloc &Rel : Relocs) {
+    const int32_t Disp =
+        static_cast<int32_t>(Rel.Target - (CodeVA + Rel.At + 4));
+    for (int I = 0; I < 4; ++I)
+      Code[Rel.At + I] =
+          static_cast<uint8_t>(static_cast<uint32_t>(Disp) >> (8 * I));
+  }
+
+  std::string Bytes(DataOff + 24, '\0');
+  std::memcpy(Bytes.data() + HeaderBytes, Code.data(), Code.size());
+  auto Write64 = [&](size_t At, uint64_t Value) {
+    for (int I = 0; I < 8; ++I)
+      Bytes[At + I] = static_cast<char>(static_cast<uint8_t>(Value >> (8 * I)));
+  };
+  Write64(DataOff, CodeVA + Case0);
+  Write64(DataOff + 8, CodeVA + Case1);
+
+  ELF::Ehdr Header{};
+  std::memcpy(Header.e_ident, ElfMagic, sizeof(ElfMagic) - 1);
+  Header.e_ident[EI_CLASS] = ELFCLASS64;
+  Header.e_ident[EI_DATA] = ELFDATA2LSB;
+  Header.e_ident[EI_VERSION] = EV_CURRENT;
+  Header.e_type = ET_EXEC;
+  Header.e_machine = EM_X86_64;
+  Header.e_version = EV_CURRENT;
+  Header.e_entry = CodeVA + Dispatch;
+  Header.e_phoff = sizeof(ELF::Ehdr);
+  Header.e_ehsize = sizeof(ELF::Ehdr);
+  Header.e_phentsize = sizeof(ELF::Phdr);
+  Header.e_phnum = 2;
+  Header.e_shentsize = sizeof(ELF::Shdr);
+  ELF::Phdr Segments[2]{};
+  Segments[0].p_type = PT_LOAD;
+  Segments[0].p_flags = PF_R | PF_X;
+  Segments[0].p_vaddr = Base;
+  Segments[0].p_paddr = Base;
+  Segments[0].p_filesz = HeaderBytes + Code.size();
+  Segments[0].p_memsz = Segments[0].p_filesz;
+  Segments[0].p_align = 0x1000;
+  Segments[1].p_type = PT_LOAD;
+  Segments[1].p_flags = PF_R | PF_W;
+  Segments[1].p_offset = DataOff;
+  Segments[1].p_vaddr = DataVA;
+  Segments[1].p_paddr = DataVA;
+  Segments[1].p_filesz = 24;
+  Segments[1].p_memsz = 24;
+  Segments[1].p_align = 0x1000;
+  std::memcpy(Bytes.data(), &Header, sizeof(Header));
+  std::memcpy(Bytes.data() + sizeof(Header), Segments, sizeof(Segments));
+
+  Bytes.resize((Bytes.size() + 7) & ~size_t(7), '\0');
+  constexpr char NameBytes[] = "\0sink\0leaf\0caller\0dispatch";
+  const std::string Names(NameBytes, sizeof(NameBytes));
+  std::array<ELF::Sym, 5> Symbols{};
+  auto Bind = [&](size_t Index, uint32_t Name, size_t Start, size_t End) {
+    Symbols[Index].st_name = Name;
+    Symbols[Index].setBindingAndType(STB_GLOBAL, STT_FUNC);
+    Symbols[Index].st_shndx = 1;
+    Symbols[Index].st_value = CodeVA + Start;
+    Symbols[Index].st_size = End - Start;
+  };
+  Bind(1, 1, Sink, Leaf);
+  Bind(2, 6, Leaf, Caller);
+  Bind(3, 11, Caller, Dispatch);
+  Bind(4, 18, Dispatch, Code.size());
+  std::array<ELF::Shdr, 6> Sections{};
+  Sections[1].sh_name = 1;
+  Sections[1].sh_type = SHT_PROGBITS;
+  Sections[1].sh_flags = SHF_ALLOC | SHF_EXECINSTR;
+  Sections[1].sh_addr = CodeVA;
+  Sections[1].sh_offset = HeaderBytes;
+  Sections[1].sh_size = Code.size();
+  Sections[1].sh_addralign = 1;
+  Sections[2].sh_name = 7;
+  Sections[2].sh_type = SHT_PROGBITS;
+  Sections[2].sh_flags = SHF_ALLOC | SHF_WRITE;
+  Sections[2].sh_addr = DataVA;
+  Sections[2].sh_offset = DataOff;
+  Sections[2].sh_size = 24;
+  Sections[2].sh_addralign = 8;
+  Sections[3].sh_name = 13;
+  Sections[3].sh_type = SHT_SYMTAB;
+  Sections[3].sh_offset = Bytes.size();
+  Sections[3].sh_size = sizeof(Symbols);
+  Sections[3].sh_link = 4;
+  Sections[3].sh_info = 1;
+  Sections[3].sh_addralign = 8;
+  Sections[3].sh_entsize = sizeof(ELF::Sym);
+  Bytes.append(reinterpret_cast<const char *>(Symbols.data()), sizeof(Symbols));
+  Sections[4].sh_name = 21;
+  Sections[4].sh_type = SHT_STRTAB;
+  Sections[4].sh_offset = Bytes.size();
+  Sections[4].sh_size = Names.size();
+  Sections[4].sh_addralign = 1;
+  Bytes += Names;
+  constexpr char SectionNames[] = "\0.text\0.data\0.symtab\0.strtab\0.shstrtab";
+  Sections[5].sh_name = 29;
+  Sections[5].sh_type = SHT_STRTAB;
+  Sections[5].sh_offset = Bytes.size();
+  Sections[5].sh_size = sizeof(SectionNames);
+  Sections[5].sh_addralign = 1;
+  Bytes.append(SectionNames, sizeof(SectionNames));
+  Bytes.resize((Bytes.size() + 7) & ~size_t(7), '\0');
+  Header.e_shoff = Bytes.size();
+  Header.e_shnum = Sections.size();
+  Header.e_shstrndx = 5;
+  Bytes.append(reinterpret_cast<const char *>(Sections.data()),
+               sizeof(Sections));
+  std::memcpy(Bytes.data(), &Header, sizeof(Header));
+  return Bytes;
+}
+
+TEST_F(SessionCAPITest, DecompiledPageOmitsUnknownAndUnresolved) {
+  // The page the pseudocode view paints. A plain return has source text and
+  // none of the decompiler's unknown or unresolved errors.
+  const auto Path = write("plain-return.elf", makeNativeELF(false));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1)
+      << takeString(neverd_last_error(Session));
+  const auto Entry = neverd_session_entry_addr(Session);
+  const auto Owned =
+      takeString(neverd_ir_view_json(Session, Entry, "c", 0, 256));
+  ASSERT_FALSE(Owned.empty()) << takeString(neverd_last_error(Session));
+  auto Parsed = llvm::json::parse(Owned);
+  ASSERT_TRUE(static_cast<bool>(Parsed)) << Owned;
+  const auto Text = Parsed->getAsObject()->getString("text");
+  ASSERT_TRUE(Text && !Text->empty()) << Owned;
+  for (const char *Phrase :
+       {"unknown register", "unknown value", "unknown return value",
+        "unresolved indirect branch",
+        "Engine result exceeds the 32 MiB adapter budget",
+        "Engine result exceeds the adapter budget"})
+    EXPECT_EQ(Owned.find(Phrase), std::string::npos) << Phrase << "\n" << Owned;
+}
+
+TEST_F(SessionCAPITest, VoidReturnAndUnprovedBranchOmitThePhrases) {
+  // The page path, on a void callee returned from a non-void function and on
+  // an indirect branch whose targets are not published.
+  const auto Path = write("phrase-probe.elf", makePhraseProbeELF());
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1)
+      << takeString(neverd_last_error(Session));
+  const auto PageOf = [&](const char *Name) {
+    const int Index = neverd_func_find_by_name(Session, Name);
+    EXPECT_GE(Index, 0) << Name << "\n"
+                        << takeString(neverd_last_error(Session));
+    if (Index < 0)
+      return std::string();
+    const auto Owned = takeString(neverd_ir_view_json(
+        Session, neverd_func_entry(Session, Index), "c", 0, 2048));
+    EXPECT_FALSE(Owned.empty()) << Name << "\n"
+                                << takeString(neverd_last_error(Session));
+    return Owned;
+  };
+  const std::string LeafPage = PageOf("leaf");
+  const std::string Caller = PageOf("caller");
+  const std::string Dispatch = PageOf("dispatch");
+  for (const char *Phrase :
+       {"unknown register", "unknown value", "unknown return value",
+        "unresolved indirect branch",
+        "Engine result exceeds the 32 MiB adapter budget",
+        "Engine result exceeds the adapter budget"}) {
+    EXPECT_EQ(LeafPage.find(Phrase), std::string::npos) << Phrase << "\n"
+                                                        << LeafPage;
+    EXPECT_EQ(Caller.find(Phrase), std::string::npos) << Phrase << "\n"
+                                                      << Caller;
+    EXPECT_EQ(Dispatch.find(Phrase), std::string::npos) << Phrase << "\n"
+                                                        << Dispatch;
+  }
+  auto ParsedLeaf = llvm::json::parse(LeafPage);
+  auto ParsedCaller = llvm::json::parse(Caller);
+  auto ParsedDispatch = llvm::json::parse(Dispatch);
+  ASSERT_TRUE(static_cast<bool>(ParsedLeaf)) << LeafPage;
+  ASSERT_TRUE(static_cast<bool>(ParsedCaller)) << Caller;
+  ASSERT_TRUE(static_cast<bool>(ParsedDispatch)) << Dispatch;
+  const auto LeafText = ParsedLeaf->getAsObject()->getString("text");
+  const auto CallerText = ParsedCaller->getAsObject()->getString("text");
+  const auto DispatchText = ParsedDispatch->getAsObject()->getString("text");
+  ASSERT_TRUE(LeafText && !LeafText->empty()) << LeafPage;
+  ASSERT_TRUE(CallerText && !CallerText->empty()) << Caller;
+  ASSERT_TRUE(DispatchText && !DispatchText->empty()) << Dispatch;
+  // leaf returns nothing. caller is a non-void function and returns that
+  // call. An assignment of the call, or a fail-closed trap in its place,
+  // does not count.
+  EXPECT_NE(LeafText->find("void leaf("), llvm::StringRef::npos)
+      << LeafText->str();
+  EXPECT_EQ(CallerText->find("void caller("), llvm::StringRef::npos)
+      << CallerText->str();
+  EXPECT_NE(CallerText->find("return leaf("), llvm::StringRef::npos)
+      << CallerText->str();
+  EXPECT_NE(DispatchText->find("indirect targets not proved at 0x"),
+            llvm::StringRef::npos)
+      << DispatchText->str();
+}
+
+TEST_F(SessionCAPITest, WholeProgramCDecompileEmitsEveryLoadedFunction) {
+  // Fresh session, default C, one body for each function the loader listed.
+  const auto Path = write("all-funcs.elf", makePhraseProbeELF());
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1)
+      << takeString(neverd_last_error(Session));
+  const int Count = neverd_func_count(Session);
+  ASSERT_GT(Count, 1);
+  std::vector<std::pair<std::string, uint64_t>> Functions;
+  Functions.reserve(static_cast<size_t>(Count));
+  for (int Index = 0; Index < Count; ++Index) {
+    const uint64_t Entry = neverd_func_entry(Session, Index);
+    std::string Name = takeString(neverd_func_name(Session, Index));
+    if (Name.empty())
+      Name = "sub_" + llvm::utohexstr(Entry);
+    Functions.emplace_back(std::move(Name), Entry);
+  }
+  const std::string Source = takeString(
+      neverd_decompile_all(Session, Path.c_str(), /*UseLlvmRoute=*/0, 0, 0));
+  ASSERT_FALSE(Source.empty()) << takeString(neverd_last_error(Session));
+  for (const char *Phrase :
+       {"unknown register", "unknown value", "unknown return value",
+        "unresolved indirect branch", "0 /* unknown */",
+        "Engine result exceeds the 32 MiB adapter budget",
+        "Engine result exceeds the adapter budget", "neverd.not-decompiled"})
+    EXPECT_EQ(Source.find(Phrase), std::string::npos) << Phrase << "\n"
+                                                      << Source;
+  const auto BodyOf = [&](llvm::StringRef Name) {
+    const std::string Token = (Name + "(").str();
+    size_t At = 0;
+    int Bodies = 0;
+    while ((At = Source.find(Token, At)) != std::string::npos) {
+      const size_t Line = Source.rfind('\n', At) == std::string::npos
+                              ? 0
+                              : Source.rfind('\n', At) + 1;
+      const size_t LineEnd = Source.find('\n', At);
+      const llvm::StringRef Header(
+          Source.data() + At,
+          (LineEnd == std::string::npos ? Source.size() : LineEnd) - At);
+      const bool OpensHere = Header.contains("{");
+      const bool OpensNext =
+          !OpensHere && LineEnd != std::string::npos &&
+          llvm::StringRef(Source.data() + LineEnd, Source.size() - LineEnd)
+              .ltrim("\r\n \t")
+              .starts_with("{");
+      if (At - Line < 80 && (OpensHere || OpensNext))
+        ++Bodies;
+      At += Token.size();
+    }
+    return Bodies;
+  };
+  for (const auto &[Name, Entry] : Functions) {
+    EXPECT_EQ(BodyOf(Name), 1)
+        << Name << " at 0x" << llvm::utohexstr(Entry) << "\n"
+        << Source;
   }
 }
 
@@ -10741,11 +12123,14 @@ TEST_F(SessionCAPITest,
     neverd::sdk::SessionTestAccess::selectFunction(State, Entry);
     EXPECT_EQ(takeString(neverd_cfg_json(Session, Entry)), AnalysisViews[2]);
     EXPECT_TRUE(State.PipeResult.MedIRDeferred);
+    EXPECT_TRUE(State.PipeResult.PendingCallEffects);
+    EXPECT_TRUE(State.PipeResult.CallMayWriteGPRs.empty());
     EXPECT_TRUE(State.PipeResult.MedFuncs.empty());
     EXPECT_TRUE(State.PipeResult.HighFuncs.empty());
     const auto *Low = State.findLowFunc(Entry);
     ASSERT_FALSE(takeString(neverd_ir_high(Session, Entry)).empty());
     EXPECT_FALSE(State.PipeResult.MedIRDeferred);
+    EXPECT_FALSE(State.PipeResult.PendingCallEffects);
     EXPECT_FALSE(State.PipeResult.HighIRDeferred);
     EXPECT_FALSE(State.PipeResult.HighFuncs.empty());
     EXPECT_EQ(State.findLowFunc(Entry), Low);
@@ -11243,9 +12628,12 @@ TEST_F(SessionCAPITest, PEAnalysisCacheRetiresOnlyWhenHandlersGrowMetadata) {
   ASSERT_NE(Facts, nullptr);
   const auto Source = takeString(neverd_decompile(Session, Entries[0]));
   ASSERT_FALSE(Source.empty()) << takeString(neverd_last_error(Session));
+  (void)State.referenceImageIndex();
+  const auto ReferenceFacts = State.ReferenceImage;
   ASSERT_EQ(neverd_prepare_function(Session, Entries[1]), 1);
   EXPECT_EQ(neverd::PipelineTestPeer::analysisFacts(State.AnalysisCache),
             Facts);
+  EXPECT_EQ(State.ReferenceImage, ReferenceFacts);
   // A record left to materialize leaves discovery work too.
   neverd::BinaryImage Focused = State.Img;
   Focused.COFFPDataRecords.push_back({0x1000, 0x1010, 0x2000, 0x3000});
@@ -11258,6 +12646,7 @@ TEST_F(SessionCAPITest, PEAnalysisCacheRetiresOnlyWhenHandlersGrowMetadata) {
   // Only a load leaves records undecoded, and it clears the flag too.
   State.ExceptionHandlersSettled = false;
   ASSERT_EQ(neverd_prepare_function(Session, Entries[2]), 1);
+  EXPECT_FALSE(State.ReferenceImage);
   EXPECT_TRUE(State.Img.ExceptionMetadata.findFunction(Entries[2])
                   ->LanguageTablesResolved);
   EXPECT_NE(neverd::PipelineTestPeer::analysisFacts(State.AnalysisCache),
@@ -11384,6 +12773,38 @@ TEST_F(SessionCAPITest, PrepareFunctionKeepsAnalysisWithoutEmittingSource) {
   EXPECT_TRUE(State.OnlyFunctionEntries.empty());
   EXPECT_EQ(State.findLowFunc(Entry), Whole);
   EXPECT_TRUE(State.FunctionSources.empty());
+}
+
+TEST_F(SessionCAPITest, ExplicitFunctionRefreshRetiresEmittedViewsOnly) {
+  EXPECT_EQ(neverd_forget_function_analysis(nullptr, 0), 0);
+  EXPECT_EQ(neverd_forget_function_analysis(Session, 0), 0);
+  EXPECT_NE(takeString(neverd_last_error(Session)).find("no binary loaded"),
+            std::string::npos);
+  for (bool AArch64 : {false, true}) {
+    const auto Code = AArch64
+                          ? std::string("\x20\x01\x80\x52\xc0\x03\x5f\xd6", 8)
+                          : std::string("\xb8\x09\x00\x00\x00\xc3", 6);
+    const auto Path = write(AArch64 ? "refresh-a64.elf" : "refresh-x64.elf",
+                            makeNativeELF(AArch64, 0x400000, Code));
+    ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+    const auto Entry = neverd_session_entry_addr(Session);
+    const auto Before = takeString(neverd_decompile(Session, Entry));
+    ASSERT_FALSE(Before.empty());
+    auto &State = *neverd::sdk::toSession(Session);
+    const auto Raw = State.Img.Raw;
+    const auto Count = neverd_func_count(Session);
+    auto *Kept = State.findFunctionSource(
+        Entry, neverd::sdk::Session::SourceRoute::PlainC);
+    ASSERT_NE(Kept, nullptr);
+    Kept->Text = "/* stale test document */\n";
+    ASSERT_EQ(neverd_forget_function_analysis(Session, Entry), 1);
+    EXPECT_FALSE(State.PipeRan);
+    EXPECT_TRUE(State.FunctionSources.empty());
+    EXPECT_EQ(State.OnlyFunctionEntries, std::set<neverd::va_t>{Entry});
+    EXPECT_EQ(neverd_func_count(Session), Count);
+    EXPECT_EQ(State.Img.Raw, Raw);
+    EXPECT_EQ(takeString(neverd_decompile(Session, Entry)), Before);
+  }
 }
 
 TEST_F(SessionCAPITest, PrepareFunctionRejectsMissingInputAndUnknownARMMode) {
@@ -11944,11 +13365,19 @@ TEST_F(SessionCAPITest, SourcePagesReadTheFunctionsKeptEmission) {
     EXPECT_EQ(Kept->Text, Original);
     EXPECT_FALSE(Kept->Map);
     std::string Assembled;
+    std::shared_ptr<const neverd::sdk::SourceFunctionView> Indexed;
     for (size_t Offset = 0;;) {
       auto Page =
           takeView(neverd_ir_view_json(Session, Entry, Stage, Offset, 2));
       ASSERT_TRUE(Page.getString("text"));
       Assembled += Page.getString("text")->str();
+      Kept = State.findFunctionSource(Entry, Kind);
+      ASSERT_NE(Kept, nullptr);
+      ASSERT_NE(Kept->View, nullptr);
+      if (Indexed)
+        EXPECT_EQ(Kept->View, Indexed);
+      else
+        Indexed = Kept->View;
       if (Page.getBoolean("complete").value_or(false))
         break;
       ASSERT_TRUE(Page.getInteger("next_offset"));
@@ -11962,6 +13391,7 @@ TEST_F(SessionCAPITest, SourcePagesReadTheFunctionsKeptEmission) {
     // Later pages and decompiles read the kept text instead of emitting the
     // function again.
     Kept->Text = "/* kept */\n";
+    Kept->View.reset();
     EXPECT_EQ(takeView(neverd_ir_view_json(Session, Entry, Stage, 0, 2))
                   .getString("text"),
               "/* kept */\n");

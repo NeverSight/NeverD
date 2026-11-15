@@ -60,7 +60,7 @@ inline void verifyLibrarySource(const neverd::BinaryImage &Image,
     CSourceMap Map;
     Map.Recognitions = &Result.LibraryRecognitions;
     Map.HighSources = &Result.HighSources;
-    Map.LLVMSources = Result.LLVMSources.get();
+    COptions.LLVMSources = Result.LLVMSources.get();
     std::string Ordinary, Mapped;
     llvm::raw_string_ostream OrdinaryOS(Ordinary), MappedOS(Mapped);
     if (LLVM) {

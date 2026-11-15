@@ -40,13 +40,29 @@ size_t namedMembers(const RecordDef &Record) {
 
 class Builder {
 public:
-  Builder(const TypeLibrary &Library, BuiltinSpelling Spelling)
-      : Library(Library), Speller(Library, options(Spelling)) {}
+  Builder(const TypeLibrary &Library, BuiltinSpelling Spelling,
+          const TypeSpeller *Shared = nullptr)
+      : Library(Library),
+        Own(Shared ? std::nullopt
+                   : std::optional<TypeSpeller>(std::in_place, Library,
+                                                options(Spelling))),
+        Speller(Shared ? *Shared : *Own) {}
 
   llvm::json::Array members(const RecordDef &Record, uint64_t Base) const;
   std::string spell(const TypeExpr &Type,
                     const std::string &Declarator = std::string()) const {
-    return Speller.declare(Type, Declarator);
+    return Speller.spell(Type, Declarator);
+  }
+  void memberPointer(llvm::json::Object &Out, const RecordDef &Record) const {
+    if (!Record.MemberPointer)
+      return;
+    const auto &Identity = *Record.MemberPointer;
+    Out["memberPointer"] =
+        llvm::json::Object{{"owner", text(spell(*Identity.Owner))},
+                           {"target", text(spell(*Identity.Target))},
+                           {"function", Identity.Function}};
+    Out["comment"] = "C++ member pointer ABI storage; its words are encoded, "
+                     "not ordinary pointers";
   }
 
 private:
@@ -64,7 +80,8 @@ private:
   }
 
   const TypeLibrary &Library;
-  render::CSpeller Speller;
+  std::optional<TypeSpeller> Own;
+  const TypeSpeller &Speller;
 };
 
 llvm::json::Array Builder::members(const RecordDef &Record,
@@ -78,7 +95,11 @@ llvm::json::Array Builder::members(const RecordDef &Record,
     if (!Field.Type)
       continue;
     const uint64_t Bit = Base + Field.BitOffset;
-    const uint64_t Size = Library.sizeOf(*Field.Type).value_or(0);
+    uint64_t Size = Library.sizeOf(*Field.Type).value_or(0);
+    if (Field.isBitfield())
+      Size = std::max(
+          Size,
+          (Field.BitOffset - Field.StorageBitOffset + Field.BitWidth + 7) / 8);
     const uint64_t Byte =
         Field.isBitfield() ? (Base + Field.StorageBitOffset) / 8 : Bit / 8;
     if (!Record.Union && Byte > End)
@@ -98,6 +119,7 @@ llvm::json::Array Builder::members(const RecordDef &Record,
       Entry["type"] =
           std::string(Element.Record->Union ? "union" : "struct") + Bound;
       Entry["members"] = members(*Element.Record, Bit);
+      memberPointer(Entry, *Element.Record);
     } else if (Field.isBitfield()) {
       Entry["kind"] = "bitfield";
       Entry["bitWidth"] = Field.BitWidth;
@@ -185,28 +207,33 @@ std::optional<RecordABI> recordABINamed(llvm::StringRef Name) {
 
 llvm::json::Array typeListJSON(const TypeLibrary &Library) {
   llvm::json::Array Out;
-  for (const LocalType *Type : Library.types()) {
-    llvm::json::Object Entry{{"ordinal", Type->Ordinal},
-                             {"name", text(Type->Name)},
-                             {"kind", kindName(Type->Kind)},
-                             {"origin", originName(Type->Origin)}};
-    TypeExpr Self;
-    Self.Kind = TypeExprKind::Named;
-    Self.Name = Type->Name;
-    if (std::optional<uint64_t> Size = Library.sizeOf(Self))
-      Entry["size"] = *Size;
-    if (Type->Record)
-      Entry["members"] = namedMembers(*Type->Record);
-    else if (Type->Enum)
-      Entry["members"] = Type->Enum->Values.size();
-    Out.push_back(std::move(Entry));
-  }
+  for (const LocalType *Type : Library.types())
+    Out.push_back(typeBriefJSON(Library, *Type));
   return Out;
 }
 
+llvm::json::Object typeBriefJSON(const TypeLibrary &Library,
+                                 const LocalType &Type) {
+  llvm::json::Object Entry{{"ordinal", Type.Ordinal},
+                           {"name", text(Type.Name)},
+                           {"kind", kindName(Type.Kind)},
+                           {"origin", originName(Type.Origin)}};
+  TypeExpr Self;
+  Self.Kind = TypeExprKind::Named;
+  Self.Name = Type.Name;
+  if (std::optional<uint64_t> Size = Library.sizeOf(Self))
+    Entry["size"] = *Size;
+  if (Type.Record)
+    Entry["members"] = namedMembers(*Type.Record);
+  else if (Type.Enum)
+    Entry["members"] = Type.Enum->Values.size();
+  return Entry;
+}
+
 llvm::json::Object typeJSON(const TypeLibrary &Library, const LocalType &Type,
-                            BuiltinSpelling Spelling) {
-  Builder Build(Library, Spelling);
+                            BuiltinSpelling Spelling,
+                            const TypeSpeller *Shared) {
+  Builder Build(Library, Spelling, Shared);
   llvm::json::Object Out{{"ordinal", Type.Ordinal},
                          {"name", text(Type.Name)},
                          {"kind", kindName(Type.Kind)},
@@ -216,6 +243,7 @@ llvm::json::Object typeJSON(const TypeLibrary &Library, const LocalType &Type,
   if (Type.Record) {
     const RecordDef &Record = *Type.Record;
     Out["defined"] = Record.Defined;
+    Build.memberPointer(Out, Record);
     if (Record.Defined) {
       Out["size"] = Record.Size;
       Out["alignment"] = Library.alignOf(Record);

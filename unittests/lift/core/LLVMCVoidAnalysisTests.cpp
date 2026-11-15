@@ -201,7 +201,7 @@ int main(void) {
     std::string Demanded;
     llvm::raw_string_ostream DemandedOut(Demanded);
     ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, DemandedOut, Options));
-    EXPECT_NE(Demanded.find("unknown machine state"), std::string::npos)
+    EXPECT_NE(Demanded.find("no recovered machine state"), std::string::npos)
         << Demanded;
   }
 }
@@ -609,6 +609,96 @@ TEST(LLVMCVoidAnalysis, FreezeOfIntegerCallRejectsUnprovedOperands) {
   }
 }
 
+TEST(LLVMCVoidAnalysis, FreezeOfModeledSupervisorCallsKeepsOneRegisterResult) {
+  for (auto Architecture : {neverd::Arch::AArch64, neverd::Arch::ARM})
+    for (unsigned Case = 0; Case < 4; ++Case) {
+      SCOPED_TRACE(Case);
+      const bool A64 = Architecture == neverd::Arch::AArch64;
+      llvm::LLVMContext Context;
+      llvm::Module Module("freeze-supervisor", Context);
+      Module.setDataLayout(A64 ? "e-p:64:64" : "e-p:32:32");
+      llvm::IRBuilder<> B(Context);
+      auto *Word = B.getIntNTy(A64 ? 64 : 32);
+      auto *Fn = llvm::Function::Create(
+          llvm::FunctionType::get(Word, {Word, B.getPtrTy()}, false),
+          llvm::GlobalValue::ExternalLinkage, "freeze_supervisor", Module);
+      B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+      llvm::SmallVector<llvm::Value *, 8> Args(A64 ? 7 : 8,
+                                               llvm::ConstantInt::get(Word, 0));
+      Args[0] = llvm::ConstantInt::get(Word, A64 ? 64 : 4);
+      Args[1] = Fn->getArg(0);
+      if (Case == 2)
+        Args[1] = llvm::UndefValue::get(Word);
+      else if (Case == 3)
+        Args[1] = llvm::PoisonValue::get(Word);
+      llvm::SmallVector<llvm::Type *, 8> Types(Args.size(), Word);
+      auto *Asm = llvm::InlineAsm::get(
+          llvm::FunctionType::get(Word, Types, false),
+          Case == 1 ? "svc #0\n\tnop" : "svc #0",
+          A64 ? "={x0},{x8},0,{x1},{x2},{x3},{x4},{x5},~{memory}"
+              : "={r0},{r7},0,{r1},{r2},{r3},{r4},{r5},{r6},~{memory}",
+          true);
+      auto *Frozen = B.CreateFreeze(B.CreateCall(Asm, Args), "captured");
+      B.CreateStore(Frozen, Fn->getArg(1));
+      B.CreateRet(Frozen);
+      std::string Text;
+      llvm::raw_string_ostream OS(Text);
+      neverd::CEmitterOptions Options;
+      Options.TheArch = Architecture;
+      Options.Format = neverd::BinaryFormat::ELF;
+      if (Case) {
+        EXPECT_THROW(neverd::LLVMCEmitter().emit(Module, OS, Options),
+                     std::runtime_error);
+      } else {
+        ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, OS, Options));
+        const auto Name =
+            A64 ? "neverd_a64_linux_syscall(" : "neverd_arm_linux_syscall(";
+        // One declaration and one invocation; the store and return reuse it.
+        EXPECT_EQ(llvm::StringRef(Text).count(Name), 2u) << Text;
+        EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+      }
+    }
+}
+
+TEST(LLVMCVoidAnalysis, FreezeChecksCountedAllocationBounds) {
+  for (unsigned Bits : {32u, 64u})
+    for (int64_t Offset : {-1, 8, 16, 17}) {
+      SCOPED_TRACE(Bits);
+      SCOPED_TRACE(Offset);
+      llvm::LLVMContext Context;
+      llvm::Module Module("freeze-counted-allocation", Context);
+      Module.setDataLayout(Bits == 64 ? "e-p:64:64" : "e-p:32:32");
+      llvm::IRBuilder<> B(Context);
+      auto *Word = B.getIntNTy(Bits);
+      auto *Fn = llvm::Function::Create(llvm::FunctionType::get(Word, false),
+                                        llvm::GlobalValue::ExternalLinkage,
+                                        "allocation_distance", Module);
+      B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+      auto *Base = B.CreateAlloca(B.getInt8Ty(), B.getInt32(16));
+      auto *At = B.CreateInBoundsGEP(
+          B.getInt8Ty(), Base, llvm::ConstantInt::getSigned(Word, Offset));
+      B.CreateRet(B.CreateSub(B.CreatePtrToInt(B.CreateFreeze(At), Word),
+                              B.CreatePtrToInt(Base, Word)));
+      std::string Source;
+      llvm::raw_string_ostream OS(Source);
+      neverd::CEmitterOptions Options;
+      Options.TheArch = Bits == 64 ? neverd::Arch::X64 : neverd::Arch::X86;
+      if (Offset < 0 || Offset > 16) {
+        EXPECT_THROW(neverd::LLVMCEmitter().emit(Module, OS, Options),
+                     std::runtime_error);
+      } else {
+        ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, OS, Options));
+        if (Bits == 64) {
+          Source += "\nint main(void) { return allocation_distance() != " +
+                    std::to_string(Offset) + "; }\n";
+          for (const char *Level : {"-O0", "-O2"})
+            compileAndRun(Source, {Level, "-fsanitize=address,undefined",
+                                   "-fsanitize-trap=undefined"});
+        }
+      }
+    }
+}
+
 TEST(LLVMCVoidAnalysis, FreezeCapturesIndirectCallsAndAtomicUpdatesOnce) {
   llvm::LLVMContext Context;
   llvm::Module Module("freeze-observable-effects", Context);
@@ -799,6 +889,63 @@ int main(void) {
 }
 )");
     }
+  }
+}
+
+TEST(LLVMCVoidAnalysis, NoreturnContractsTerminateEveryCPath) {
+  for (unsigned Contract = 0; Contract != 3; ++Contract) {
+    SCOPED_TRACE(Contract);
+    llvm::LLVMContext Context;
+    llvm::Module Module("noreturn-source-path", Context);
+    Module.setDataLayout("e-p:64:64");
+    llvm::IRBuilder<> B(Context);
+    auto *ServiceType = llvm::FunctionType::get(B.getVoidTy(), false);
+    auto *Service = llvm::Function::Create(
+        ServiceType, llvm::GlobalValue::ExternalLinkage, "finish_path", Module);
+    if (Contract == 0)
+      Service->addFnAttr(llvm::Attribute::NoReturn);
+    auto *Fn = llvm::Function::Create(
+        llvm::FunctionType::get(B.getInt64Ty(), {B.getInt1Ty(), B.getPtrTy()},
+                                false),
+        llvm::GlobalValue::ExternalLinkage, "choose_path", Module);
+    auto *Entry = llvm::BasicBlock::Create(Context, "entry", Fn);
+    auto *Return = llvm::BasicBlock::Create(Context, "return", Fn);
+    auto *Exit = llvm::BasicBlock::Create(Context, "exit", Fn);
+    B.SetInsertPoint(Entry);
+    B.CreateCondBr(Fn->getArg(0), Exit, Return);
+    B.SetInsertPoint(Return);
+    B.CreateRet(B.getInt64(17));
+    B.SetInsertPoint(Exit);
+    llvm::Value *Target =
+        Contract == 2 ? static_cast<llvm::Value *>(Fn->getArg(1)) : Service;
+    auto *Call = B.CreateCall(ServiceType, Target);
+    if (Contract != 0)
+      Call->addFnAttr(llvm::Attribute::NoReturn);
+    B.CreateUnreachable();
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    neverd::CEmitterOptions Options;
+    Options.PreserveLLVMFunctionTypes = true;
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, OS, Options));
+    EXPECT_NE(Source.find("__builtin_unreachable();"), std::string::npos)
+        << Source;
+    Source += R"(
+#include <setjmp.h>
+static jmp_buf destination;
+static unsigned calls;
+void finish_path(void) { ++calls; longjmp(destination, 1); }
+int main(void) {
+  if (choose_path(0, (void *)finish_path) != 17 || calls) return 1;
+  if (!setjmp(destination)) {
+    choose_path(1, (void *)finish_path);
+    return 2;
+  }
+  return calls != 1;
+}
+)";
+    for (const char *Level : {"-O0", "-O2"})
+      compileAndRun(Source,
+                    {Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
   }
 }
 

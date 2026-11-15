@@ -235,6 +235,37 @@ llvm::json::Object nativeInstructionRow(Session *S, const DecodedInsn &DI,
   return Obj;
 }
 
+bool prepareFunctionReferences(Session &S, va_t Entry) {
+  if (S.FunctionReferences && S.FunctionReferences->Entry == Entry &&
+      S.FunctionReferences->Revision == S.FunctionListRevision)
+    return true;
+  const FunctionPage Page = functionPage(S, Entry, 1);
+  Session::FunctionReferenceIndex Index{Entry, S.FunctionListRevision, {}};
+  if (!Page.Functions.empty() && Page.Functions.front()->Entry == Entry) {
+    if (!decodeFunctionReferences(
+            S, Page,
+            [&](size_t, va_t Address, llvm::StringRef,
+                const InstructionFlow &Flow, unsigned Size,
+                InstructionMode Mode) {
+              Session::FunctionReferenceIndex::Instruction Row{
+                  Address, Size, Mode, {}};
+              visitInstructionReferences(
+                  S.Img, Flow,
+                  [&](const InstructionRef &Ref) { Row.Refs.push_back(Ref); });
+              if (!Row.Refs.empty())
+                Index.Instructions.push_back(std::move(Row));
+            })) {
+      S.setError("failed to initialize a decoder for function references");
+      return false;
+    }
+    llvm::stable_sort(Index.Instructions, [](const auto &A, const auto &B) {
+      return A.Address < B.Address;
+    });
+  }
+  S.FunctionReferences = std::move(Index);
+  return true;
+}
+
 } // namespace
 
 // ===--------------------------------------------------------------------===//
@@ -392,6 +423,8 @@ const char *neverd_function_disasm_json(neverd_session_t Sess,
     S->setError("no recovered native function at " + vaHex(Entry));
     return nullptr;
   }
+  if ((Options & NEVERD_DISASM_FLOW) && !prepareFunctionReferences(*S, Entry))
+    return nullptr;
   struct PhysicalInstruction {
     const LowInstructionBoundary *Owner;
     uint16_t Size;
@@ -434,6 +467,31 @@ const char *neverd_function_disasm_json(neverd_session_t Sess,
     }
     auto Row =
         nativeInstructionRow(S, Instruction, Bytes, Size, Options, Scratch);
+    if (Options & NEVERD_DISASM_FLOW) {
+      // Recovered coverage can replace the raw listing, but it must not
+      // replace settled function-level address facts with isolated lifts.
+      // Keep the recovered control transfer below; these are memory/address
+      // references for the same original encoding and instruction mode.
+      const auto &Facts = S->FunctionReferences->Instructions;
+      auto Ref = std::lower_bound(Facts.begin(), Facts.end(), Address,
+                                  [](const auto &Fact, va_t Address) {
+                                    return Fact.Address < Address;
+                                  });
+      for (; Ref != Facts.end() && Ref->Address == Address; ++Ref) {
+        if (Ref->Size != Size || Ref->Mode != Boundary.Mode)
+          continue;
+        llvm::json::Array Refs;
+        for (const auto &Fact : Ref->Refs) {
+          llvm::json::Object Item{{"to", vaHex(Fact.To)},
+                                  {"kind", Fact.Kind.str()}};
+          if (Fact.Bytes)
+            Item["size"] = static_cast<int64_t>(Fact.Bytes);
+          Refs.push_back(std::move(Item));
+        }
+        Row["refs"] = std::move(Refs);
+        break;
+      }
+    }
     if (Address == Boundary.Address && (Options & NEVERD_DISASM_FLOW) &&
         Boundary.Control == LowInstructionControl::Branch &&
         Boundary.Immediate &&
@@ -481,17 +539,16 @@ const char *neverd_code_refs_json(neverd_session_t Sess, neverd_va_t FirstEntry,
   };
   // Each function's references, merged in entry order.
   std::vector<std::vector<Ref>> Slots(Page.Functions.size());
-  const bool Decoded = decodeFunctions(
-      S->Img, Page,
-      [&](size_t Index, Decoder &Dec, const DecodedInsn &DI,
-          InstructionFlowScratch &Scratch) {
+  const bool Decoded = decodeFunctionReferences(
+      *S, Page,
+      [&](size_t Index, va_t Address, llvm::StringRef,
+          const InstructionFlow &Flow, unsigned, InstructionMode) {
         auto &Out = Slots[Index];
-        const InstructionFlow Flow = Scratch.summarize(S->Img, Dec, DI);
         if (Flow.Target != InvalidVA && !Flow.Kind.empty() &&
             Flow.Kind != UnliftedFlow)
-          Out.push_back({DI.Addr, Flow.Target, Flow.Kind});
+          Out.push_back({Address, Flow.Target, Flow.Kind});
         visitInstructionReferences(S->Img, Flow, [&](const InstructionRef &R) {
-          Out.push_back({DI.Addr, R.To, R.Kind, R.Bytes});
+          Out.push_back({Address, R.To, R.Kind, R.Bytes});
         });
       });
   if (!Decoded) {

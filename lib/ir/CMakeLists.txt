@@ -22,6 +22,7 @@ add_neverd_component_library(NeverDIR
   low/InternalNoReturn.cpp
   low/SourceFrameAnalysis.cpp
   low/SourceFrameBytes.cpp
+  low/SourceImageBytes.cpp
   low/ImportCallee.cpp
   TargetRegInfo.cpp
   AArch64/TargetRegInfoAArch64.cpp

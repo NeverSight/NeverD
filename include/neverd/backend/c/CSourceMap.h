@@ -17,8 +17,6 @@
 
 namespace neverd {
 
-class LLVMSourceMap;
-
 struct CSourceSpan {
   /// Half-open UTF-8 byte offsets in the exact, complete emitted C text.
   size_t Begin = 0;
@@ -80,13 +78,26 @@ struct CSourceAnchor {
   std::vector<sigs::LibraryOccurrence> Occurrences;
 };
 
+/// A virtual call's declaration under its receiver's static type. The native
+/// call still loads its runtime target; this is not a proven direct edge.
+struct CSourceVirtualCall {
+  va_t Function = 0;
+  va_t CallSite = 0;
+  va_t Table = 0;
+  va_t Slot = 0;
+  uint64_t SlotOffset = 0;
+  va_t Target = 0;
+  std::string Symbol;
+  std::string ReceiverType;
+  bool operator==(const CSourceVirtualCall &) const = default;
+};
+
 /// Per-emission inputs and output, separate from lifted IR and from C text.
 /// Input snapshots must outlive emission. Regions is replaced on every emit;
 /// absence of a surviving, complete mapping leaves a region unfolded.
 struct CSourceMap {
   const std::vector<sigs::LibraryRecognition> *Recognitions = nullptr;
   const HighSourceMap *HighSources = nullptr;
-  const LLVMSourceMap *LLVMSources = nullptr;
   /// Opt-in exact call-expression anchors for evidence views, including calls
   /// inlined into a return or argument. Ordinary navigation is unchanged.
   bool RecordCallExpressions = false;
@@ -100,6 +111,8 @@ struct CSourceMap {
   /// The functions and objects the text names, in identifier order, replaced
   /// on every emit.
   std::vector<CSourceName> Names;
+  /// Replaced on emission; shared evidence for annotations and xrefs.
+  std::vector<CSourceVirtualCall> VirtualCalls;
   /// The local types the text defines, replaced on every emit.
   std::optional<CSourceLocalTypes> LocalTypes;
   /// Emitter-owned variable identities, independently of presentation edits.

@@ -18,6 +18,7 @@
 #include "neverd/debug/DebugContext.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceFrameBytes.h"
+#include "neverd/ir/SourceImageBytes.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64SVEVector.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
@@ -26,6 +27,7 @@
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/StringScan.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Type.h"
@@ -135,6 +137,55 @@ bool appendLiteralCharacter(uint32_t Ch, std::string &Out) {
   }
 }
 
+/// Whether a guessed literal shows \p Ch, past ASCII, as text: a character
+/// of the scripts, punctuation and symbols text commonly holds. Controls,
+/// marks with nothing to combine with, characters that hide or reorder text,
+/// private use and noncharacters are not text.
+bool isShownTextCharacter(uint32_t Ch) {
+  static constexpr std::pair<uint32_t, uint32_t> Shown[] = {
+      {0x00A1, 0x00AC},  {0x00AE, 0x024F},   {0x0370, 0x03FF},
+      {0x0400, 0x052F},  {0x0E00, 0x0E7F},   {0x1100, 0x11FF},
+      {0x1E00, 0x1FFF},  {0x2010, 0x2027},   {0x2030, 0x205E},
+      {0x2070, 0x20CF},  {0x2100, 0x27BF},   {0x2E80, 0x2FDF},
+      {0x3000, 0x33FF},  {0x3400, 0x4DBF},   {0x4E00, 0x9FFF},
+      {0xAC00, 0xD7A3},  {0xF900, 0xFAFF},   {0xFE30, 0xFE4F},
+      {0xFF01, 0xFFEF},  {0x1F300, 0x1FAFF}, {0x20000, 0x2FA1F},
+      {0x30000, 0x3134F}};
+  return llvm::any_of(Shown, [&](const auto &Range) {
+    return Ch >= Range.first && Ch <= Range.second;
+  });
+}
+
+/// Appends the UTF-8 character \p Bytes begin with to a literal's text, as
+/// its own bytes: how many it takes, or 0 for an ill-formed sequence or a
+/// character a literal does not show.
+size_t appendUTF8Character(const uint8_t *Bytes, size_t Size,
+                           std::string &Out) {
+  const uint8_t Lead = Bytes[0];
+  size_t Length;
+  uint32_t Ch, Least;
+  if (Lead >= 0xC2 && Lead <= 0xDF) {
+    Length = 2, Ch = Lead & 0x1F, Least = 0x80;
+  } else if (Lead >= 0xE0 && Lead <= 0xEF) {
+    Length = 3, Ch = Lead & 0x0F, Least = 0x800;
+  } else if (Lead >= 0xF0 && Lead <= 0xF4) {
+    Length = 4, Ch = Lead & 0x07, Least = 0x10000;
+  } else {
+    return 0;
+  }
+  if (Size < Length)
+    return 0;
+  for (size_t I = 1; I < Length; ++I) {
+    if ((Bytes[I] & 0xC0) != 0x80)
+      return 0;
+    Ch = (Ch << 6) | (Bytes[I] & 0x3F);
+  }
+  if (Ch < Least || !isShownTextCharacter(Ch))
+    return 0;
+  Out.append(reinterpret_cast<const char *>(Bytes), Length);
+  return Length;
+}
+
 /// UTF-16 surrogates: a high one then a low one write a character past the
 /// Basic Multilingual Plane, and C names neither alone.
 constexpr uint32_t HighSurrogateFirst = 0xD800, HighSurrogateLast = 0xDBFF;
@@ -170,8 +221,9 @@ bool appendStatedLiteralCharacter(uint32_t Ch, std::string &Out) {
 }
 } // namespace
 
-std::optional<std::string> imageStringLiteral(const BinaryImage *Img, va_t Addr,
-                                              bool AllowEmpty, bool Narrow) {
+std::optional<std::string>
+imageStringLiteral(const BinaryImage *Img, va_t Addr, bool AllowEmpty,
+                   bool Narrow, const RelocationProvenanceIndex *Relocations) {
   // The image's own headers describe the image that runs, not this file:
   // none of their bytes is a literal (BinaryImage::imageBaseOffset).
   if (!Img || Addr == 0 || Addr == InvalidVA || Img->imageBaseOffset(Addr))
@@ -224,7 +276,7 @@ std::optional<std::string> imageStringLiteral(const BinaryImage *Img, va_t Addr,
     const uint32_t PointerBytes = Img->getPointerSize();
     const va_t Reach = PointerBytes ? PointerBytes - 1 : 7;
     const va_t First = Addr >= Reach ? Addr - Reach : 0;
-    return !hasRelocationProvenanceIn(*Img, First, Addr + Extent);
+    return !hasRelocationProvenanceIn(*Img, First, Addr + Extent, Relocations);
   };
   if (!Narrow && Remain >= 2 && Base[1] == 0) {
     std::string Body;
@@ -243,9 +295,11 @@ std::optional<std::string> imageStringLiteral(const BinaryImage *Img, va_t Addr,
         return std::nullopt;
     }
   }
+  // UTF-8 text keeps its bytes: the narrow execution character set C
+  // compilers default to spells them as the source does.
   std::string Body;
   unsigned N = 0;
-  for (size_t I = 0; I < Remain; ++I, ++N) {
+  for (size_t I = 0; I < Remain; ++N) {
     const uint8_t Ch = Base[I];
     if (Ch == 0) {
       if (!HasStableBytes(I + 1))
@@ -254,16 +308,25 @@ std::optional<std::string> imageStringLiteral(const BinaryImage *Img, va_t Addr,
         return AllowEmpty ? std::optional<std::string>("\"\"") : std::nullopt;
       return "\"" + Body + "\"";
     }
+    if (Ch >= 0x80) {
+      const size_t Length = appendUTF8Character(Base + I, Remain - I, Body);
+      if (!Length)
+        return std::nullopt;
+      I += Length;
+      continue;
+    }
     if (!Escape(Ch, Body))
       return std::nullopt;
+    ++I;
   }
   return std::nullopt;
 }
 
-std::optional<std::string> stringLiteralAt(const BinaryImage *Img,
-                                           const DebugContext *Dbg, va_t Addr,
-                                           bool AllowEmpty) {
-  if (auto Literal = imageStringLiteral(Img, Addr, AllowEmpty))
+std::optional<std::string>
+stringLiteralAt(const BinaryImage *Img, const DebugContext *Dbg, va_t Addr,
+                bool AllowEmpty, const RelocationProvenanceIndex *Relocations) {
+  if (auto Literal =
+          imageStringLiteral(Img, Addr, AllowEmpty, false, Relocations))
     return Literal;
   if (!Img || Addr == 0 || Addr == InvalidVA)
     return std::nullopt;
@@ -326,18 +389,20 @@ namespace {
 /// How a comment beside code reads a string: its encoding's name unless that
 /// is ASCII or UTF-8 (`GBK "你好"`), then its text in quotes with controls
 /// escaped, `*` and `/` kept apart and long text cut.
-std::string quotedStringText(strings::Encoding Kind, llvm::StringRef Text) {
+std::string
+quotedStringText(strings::Encoding Kind, llvm::StringRef Text,
+                 size_t MaxCharacters =
+                     ::neverd::limits::backend::kCTypeFormatMaxCharacters) {
   std::string Comment;
   if (Kind != strings::Encoding::UTF8)
     if (const llvm::StringRef Name = strings::encodingSpelling(Kind);
         !Name.empty())
       Comment += Name.str() + " ";
   Comment += '"';
-  unsigned Characters = 0;
+  size_t Characters = 0;
   for (size_t I = 0; I < Text.size(); ++I) {
     const unsigned char Ch = Text[I];
-    if ((Ch & 0xC0) != 0x80 &&
-        Characters++ == ::neverd::limits::backend::kCTypeFormatMaxCharacters) {
+    if ((Ch & 0xC0) != 0x80 && Characters++ == MaxCharacters) {
       Comment += "\xE2\x80\xA6"; // U+2026, the ellipsis, in UTF-8
       break;
     }
@@ -392,7 +457,7 @@ readableDataBytes(const BinaryImage *Img, va_t Addr, size_t Window) {
   if (!Img || Addr == 0 || Addr == InvalidVA)
     return std::nullopt;
   const Segment *Seg = Img->getSegmentFor(Addr);
-  if (!Seg || !Seg->isReadable() || Seg->isExecutable() || Addr < Seg->VA)
+  if (!Seg || !Seg->isReadable() || Addr < Seg->VA)
     return std::nullopt;
   // A file header or an alignment gap is mapped but holds no program data: a
   // small integer in an image loaded at zero lands there.
@@ -401,6 +466,11 @@ readableDataBytes(const BinaryImage *Img, va_t Addr, size_t Window) {
   const uint64_t Off = Addr - Seg->VA;
   if (Off >= Seg->Data.size())
     return std::nullopt;
+  // Data sections can share an RX mapping with code. The format's data
+  // provenance, rather than the mapping's permissions, owns that distinction.
+  // Do not borrow a terminator from the next section or an alignment gap.
+  if (const Section *Sec = Img->getSectionFor(Addr))
+    Window = std::min<uint64_t>(Window, Sec->Size - (Addr - Sec->VA));
   return llvm::ArrayRef<uint8_t>(
       Seg->Data.data() + Off,
       std::min<size_t>(Window, Seg->Data.size() - static_cast<size_t>(Off)));
@@ -500,7 +570,37 @@ sourceFrameStringComment(const SourceFrameBytes &Value) {
               : std::nullopt;
 }
 
-std::optional<ImageCString> imageCString(const BinaryImage *Img, va_t Addr) {
+void writeSourceImageStringComments(llvm::raw_ostream &OS,
+                                    const SourceImageByteObservations &Values) {
+  for (const auto &Value : Values.Values) {
+    strings::ScanOptions Options;
+    Options.MinLength = 1;
+    const auto String = stringAtStart(Value.Bytes, Options);
+    if (!String)
+      continue;
+    // Show the complete recovered text through its actual terminator. The
+    // image-reference preview window does not bound transformed strings.
+    OS << "    /* conditional text after 0x"
+       << llvm::utohexstr(Value.Instruction) << " at 0x"
+       << llvm::utohexstr(Value.Address) << ": "
+       << quotedStringText(String->Kind, String->Text, String->Text.size())
+       << "; requires at block 0x" << llvm::utohexstr(Value.Block) << " entry:";
+    for (const auto &Input : Value.Inputs)
+      OS << " [0x" << llvm::utohexstr(Input.Address) << "]=0x"
+         << llvm::utohexstr(Input.Value) << " (initializer 0x"
+         << llvm::utohexstr(Input.Initializer) << ")";
+    for (const auto &Input : Value.EntryRegisters)
+      OS << " reg[0x" << llvm::utohexstr(Input.Offset) << ":" << Input.Bytes
+         << "]=0x" << llvm::utohexstr(Input.Value);
+    OS << " */\n";
+  }
+  if (!Values.Complete)
+    OS << "    /* image text observations incomplete */\n";
+}
+
+std::optional<ImageCString>
+imageCString(const BinaryImage *Img, va_t Addr,
+             const RelocationProvenanceIndex *Relocations) {
   if (Img && (Img->findImportAt(Addr) || !terminatesStrings(*Img)))
     return std::nullopt;
   const auto Bytes = readableDataBytes(
@@ -522,7 +622,7 @@ std::optional<ImageCString> imageCString(const BinaryImage *Img, va_t Addr) {
     return std::nullopt;
   // Bytes a relocation writes are an address, not text.
   if (hasRelocationProvenanceIn(*Img, Addr >= 7 ? Addr - 7 : 0,
-                                Addr + Result.Bytes))
+                                Addr + Result.Bytes, Relocations))
     return std::nullopt;
   const llvm::ArrayRef<uint8_t> Text = Bytes->take_front(First->Bytes);
   std::string Body;
@@ -593,29 +693,54 @@ std::string extendedIntegerType(unsigned Bytes, bool Signed) {
          std::to_string(Bytes * 8) + ")";
 }
 
-/// Whether \p Type, which holds a function, spells as a C declarator: each
-/// function returns what C can and takes what C passes.  A pointer of any
-/// width spells alike, an i386 callback's four-byte ones too; every other
-/// part is a type a source signature holds (equalSourceTypes).
+/// A fixed compiler vector has scalar lanes and power-of-two storage. Its
+/// declaration is not evidence that the source call ABI accepts that vector.
+bool spellsAsVector(const TypeRef &Type) {
+  if (!Type->ElemType || !llvm::isPowerOf2_64(Type->ArrayCount) ||
+      uint64_t(Type->ArrayCount) * Type->ElemType->Size != Type->Size)
+    return false;
+  const auto &Element = Type->ElemType;
+  return (Element->Kind == NdTypeKind::Int &&
+          (Element->Size == 1 || Element->Size == 2 || Element->Size == 4 ||
+           Element->Size == 8)) ||
+         (Element->Kind == NdTypeKind::Float &&
+          (Element->Size == 2 || Element->Size == 4 || Element->Size == 8));
+}
+
+/// Whether \p Type spells as a compound C declarator: each
+/// function returns what C can and takes what C passes. A named record can
+/// appear in a prototype without its layout; this declaration evidence does
+/// not authorize a by-value call ABI. Unnamed types need a source layout.
 bool spellsAsDeclarator(const TypeRef &Type, unsigned Depth,
                         unsigned &Remaining) {
   if (!Remaining || !Type || Depth > limits::kMaxCPointerNesting)
     return false;
   --Remaining;
   switch (Type->Kind) {
+  case NdTypeKind::Int:
+    return Type->Size && Type->Size <= limits::kMaxCSourceIntegerBytes;
+  case NdTypeKind::Float:
+#define NEVERD_C_FLOAT_TYPE(Bytes, Spelling, FusedMultiplyAdd, ComputesWider)  \
+  if (Type->Size == Bytes)                                                     \
+    return true;
+#include "neverd/backend/c/render/CFloatTypes.def"
+    return false;
+  case NdTypeKind::Struct:
+    return !Type->SourceName.empty() || equalSourceTypes(Type, Type);
+  case NdTypeKind::Vector:
+    return spellsAsVector(Type);
   case NdTypeKind::Ptr:
-    // A callback may borrow a named, incomplete record. Its declaration
-    // needs the tag, not a by-value ABI layout of that record; in particular
-    // recursive SDK structures must not recurse through their members here.
-    if ((Type->Size == 4 || Type->Size == 8) && Type->Pointee &&
-        Type->Pointee->Kind == NdTypeKind::Struct && !Type->Pointee->IsEnum &&
-        !Type->Pointee->SourceName.empty())
-      return true;
     return (Type->Size == 4 || Type->Size == 8) &&
            spellsAsDeclarator(Type->Pointee, Depth + 1, Remaining);
+  case NdTypeKind::Array:
+    return Type->ElemType && Type->ElemType->Kind != NdTypeKind::Void &&
+           Type->ElemType->Kind != NdTypeKind::Func &&
+           spellsAsDeclarator(Type->ElemType, Depth + 1, Remaining);
   case NdTypeKind::Func:
     if (!Type->FunctionConvention || Type->Size != 0 || !Type->RetType ||
         Type->RetType->Kind == NdTypeKind::Func ||
+        Type->RetType->Kind == NdTypeKind::Array ||
+        (Type->FunctionVariadic && Type->ParamTypes.empty()) ||
         !spellsAsDeclarator(Type->RetType, Depth + 1, Remaining))
       return false;
     for (const TypeRef &Param : Type->ParamTypes)
@@ -652,11 +777,11 @@ std::string functionConventionSpelling(types::CallingConvention Convention) {
       "C callback has an unsupported calling convention");
 }
 
-bool containsFunction(const TypeRef &Type) {
+bool needsCompoundDeclarator(const TypeRef &Type) {
   auto Current = Type;
   for (unsigned Depth = 0; Current && Depth <= limits::kMaxCPointerNesting;
        ++Depth) {
-    if (Current->Kind == NdTypeKind::Func)
+    if (Current->Kind == NdTypeKind::Func || Current->Kind == NdTypeKind::Array)
       return true;
     if (Current->Kind != NdTypeKind::Ptr)
       return false;
@@ -667,18 +792,15 @@ bool containsFunction(const TypeRef &Type) {
   return false;
 }
 std::string declarationToCImpl(const TypeRef &Ty, llvm::StringRef Declarator,
-                               bool ConventionPlaced) {
+                               bool ConventionPlaced, bool SourceNames) {
   if (Ty && Ty->Kind == NdTypeKind::Array && Ty->ElemType) {
     std::string Inner = Declarator.str();
     Inner += Ty->ArrayCount ? "[" + std::to_string(Ty->ArrayCount) + "]" : "[]";
-    return declarationToCImpl(Ty->ElemType, Inner, false);
+    return declarationToCImpl(Ty->ElemType, Inner, false, SourceNames);
   }
-  if (!containsFunction(Ty))
-    return typeToC(Ty) + (Declarator.empty() ? "" : " " + Declarator.str());
-  unsigned Remaining =
-      ::neverd::limits::backend::kCTypeFormatDeclarationToCRemaining;
-  if (!spellsAsDeclarator(Ty, 0, Remaining))
-    throw std::invalid_argument("C callback type has no supported signature");
+  if (!needsCompoundDeclarator(Ty))
+    return typeToC(Ty, SourceNames) +
+           (Declarator.empty() ? "" : " " + Declarator.str());
   if (Ty->Kind == NdTypeKind::Ptr) {
     std::string Pointer = "*" + Declarator.str();
     const bool Function = Ty->Pointee->Kind == NdTypeKind::Func;
@@ -686,7 +808,9 @@ std::string declarationToCImpl(const TypeRef &Ty, llvm::StringRef Declarator,
       Pointer = "(" +
                 functionConventionSpelling(*Ty->Pointee->FunctionConvention) +
                 Pointer + ")";
-    return declarationToCImpl(Ty->Pointee, Pointer, Function);
+    else if (Ty->Pointee->Kind == NdTypeKind::Array)
+      Pointer = "(" + Pointer + ")";
+    return declarationToCImpl(Ty->Pointee, Pointer, Function, SourceNames);
   }
   std::string Function =
       (ConventionPlaced ? ""
@@ -695,16 +819,27 @@ std::string declarationToCImpl(const TypeRef &Ty, llvm::StringRef Declarator,
   for (size_t I = 0; I < Ty->ParamTypes.size(); ++I) {
     if (I)
       Function += ", ";
-    Function += typeToC(Ty->ParamTypes[I]);
+    Function += typeToC(Ty->ParamTypes[I], SourceNames);
   }
+  if (Ty->FunctionVariadic)
+    Function += ", ...";
   if (Ty->ParamTypes.empty())
     Function += "void";
-  return declarationToCImpl(Ty->RetType, Function + ")", false);
+  return declarationToCImpl(Ty->RetType, Function + ")", false, SourceNames);
 }
 } // namespace
 
-std::string declarationToC(const TypeRef &Ty, llvm::StringRef Declarator) {
-  return declarationToCImpl(Ty, Declarator, false);
+std::string declarationToC(const TypeRef &Ty, llvm::StringRef Declarator,
+                           bool SourceNames) {
+  // Validate once before descending, including an outer array. Recursive
+  // array graphs must fail here rather than recurse before the function leaf.
+  if (needsCompoundDeclarator(Ty)) {
+    unsigned Remaining =
+        ::neverd::limits::backend::kCTypeFormatDeclarationToCRemaining;
+    if (!spellsAsDeclarator(Ty, 0, Remaining))
+      throw std::invalid_argument("C callback type has no supported signature");
+  }
+  return declarationToCImpl(Ty, Declarator, false, SourceNames);
 }
 
 namespace {
@@ -715,6 +850,7 @@ namespace {
 /// The keywords of the records the unit being written spells by their tags
 /// (CRecordTagSpelling).
 thread_local llvm::function_ref<const char *(llvm::StringRef)> RecordTags;
+thread_local llvm::function_ref<std::string(llvm::StringRef)> RecordNames;
 
 /// The C spelling of source name \p Name: a scoped or template C++ name is
 /// the identifier the unit declares its record or typedef under, as
@@ -723,11 +859,25 @@ thread_local llvm::function_ref<const char *(llvm::StringRef)> RecordTags;
 /// Any other name is C's own spelling (`size_t`, `unsigned int`,
 /// `uint8_t __attribute__((vector_size(16)))`).
 std::string sourceNameToC(llvm::StringRef Name) {
+  if (std::string Mapped = mappedCRecordName(Name); !Mapped.empty())
+    return Mapped;
   return Name.contains("::") || Name.contains('<') ? cNamedTypeSpelling(Name)
                                                    : Name.str();
 }
 
 } // namespace
+
+CRecordNameSpelling::CRecordNameSpelling(
+    llvm::function_ref<std::string(llvm::StringRef)> Name)
+    : Outer(RecordNames) {
+  RecordNames = Name;
+}
+
+CRecordNameSpelling::~CRecordNameSpelling() { RecordNames = Outer; }
+
+std::string mappedCRecordName(llvm::StringRef SourceName) {
+  return RecordNames ? RecordNames(SourceName) : std::string();
+}
 
 CRecordTagSpelling::CRecordTagSpelling(
     llvm::function_ref<const char *(llvm::StringRef)> Keyword)
@@ -737,17 +887,21 @@ CRecordTagSpelling::CRecordTagSpelling(
 
 CRecordTagSpelling::~CRecordTagSpelling() { RecordTags = Outer; }
 
-std::string typeToC(const TypeRef &Ty) {
+std::string typeToC(const TypeRef &Ty, bool SourceNames) {
   if (!Ty)
     return "uint32_t";
-  if (containsFunction(Ty))
-    return declarationToC(Ty, {});
+  // A type used as a parameter decays an array once. Its element may itself
+  // be a function pointer or another array, which needs a full declarator.
+  if (Ty->Kind == NdTypeKind::Array)
+    return declarationToC(NdType::makePtr(Ty->ElemType), {}, SourceNames);
+  if (needsCompoundDeclarator(Ty))
+    return declarationToC(Ty, {}, SourceNames);
   switch (Ty->Kind) {
   case NdTypeKind::Void:
     return "void";
   case NdTypeKind::Int:
     if (!Ty->SourceName.empty())
-      return sourceNameToC(Ty->SourceName);
+      return SourceNames ? Ty->SourceName : sourceNameToC(Ty->SourceName);
     if (Ty->IsSigned) {
       switch (Ty->Size) {
       case 1:
@@ -781,7 +935,7 @@ std::string typeToC(const TypeRef &Ty) {
     }
   case NdTypeKind::Float:
     if (!Ty->SourceName.empty())
-      return sourceNameToC(Ty->SourceName);
+      return SourceNames ? Ty->SourceName : sourceNameToC(Ty->SourceName);
 #define NEVERD_C_FLOAT_TYPE(Bytes, Spelling, FusedMultiplyAdd, ComputesWider)  \
   if (Ty->Size == Bytes)                                                       \
     return Spelling;
@@ -790,9 +944,11 @@ std::string typeToC(const TypeRef &Ty) {
   case NdTypeKind::Ptr:
     if (!Ty->Pointee || Ty->Pointee->Kind == NdTypeKind::Void)
       return "void*";
-    return typeToC(Ty->Pointee) + "*";
+    return typeToC(Ty->Pointee, SourceNames) + "*";
   case NdTypeKind::Struct: {
     if (!Ty->SourceName.empty()) {
+      if (SourceNames)
+        return Ty->SourceName;
       const std::string Name = sourceNameToC(Ty->SourceName);
       if (Name.find(' ') != std::string::npos)
         return Name;
@@ -844,8 +1000,13 @@ std::string typeToC(const TypeRef &Ty) {
     };
     return "struct nd_record_" + Code(Ty);
   }
+  case NdTypeKind::Vector:
+    if (!spellsAsVector(Ty))
+      throw std::invalid_argument("C vector has unsupported lanes or extent");
+    return typeToC(Ty->ElemType, SourceNames) + " __attribute__((vector_size(" +
+           std::to_string(Ty->Size) + ")))";
   case NdTypeKind::Array:
-    return typeToC(Ty->ElemType) + "*";
+    llvm_unreachable("array declarations are handled before scalar types");
   case NdTypeKind::Unknown:
     if (Ty->Size > 0) {
       switch (Ty->Size) {

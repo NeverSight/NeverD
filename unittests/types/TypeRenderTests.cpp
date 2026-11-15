@@ -114,6 +114,28 @@ bool contains(const std::string &Text, llvm::StringRef Part) {
 
 } // namespace
 
+TEST(TypeRender, CallbackReferencesUsePointersOnlyInC) {
+  TypeLibrary Library(DataModel::LP64);
+  const auto Record = makeNamed("Item", TypeKind::Struct);
+  auto Function = std::make_shared<FunctionDef>();
+  Function->Return = makePointer(qualified(Record, true, false), 8, true);
+  Function->Params.push_back({"value", makePointer(Record, 8, true)});
+  const auto Callback = makePointer(makeFunction(Function), 8);
+  for (bool Editor : {false, true})
+    for (const auto Lang : {Language::C, Language::Cpp}) {
+      RenderOptions Options = in(Lang);
+      Options.SourceTypeNames = Editor;
+      const auto Text =
+          TypeSpeller(Library, Options).spell(*Callback, "transform");
+      EXPECT_EQ(Text.find('&') != std::string::npos,
+                Editor || Lang == Language::Cpp)
+          << Text;
+      EXPECT_NE(Text.find("const "), std::string::npos) << Text;
+      if (!Editor && Lang == Language::C)
+        EXPECT_EQ(Text, "const struct Item *(*transform)(struct Item *value)");
+    }
+}
+
 TEST(TypeRender, NamesItsLanguages) {
   for (Language Lang :
        {Language::C, Language::Cpp, Language::Rust, Language::Go})
@@ -1137,6 +1159,40 @@ TEST(TypeRender, ScalarSpellingsPreserveLaterNameCollisions) {
         renderType(Library, *Library.find("Choices"), Options);
     EXPECT_TRUE(contains(Definition, "Choices_Scope__Item = 0"));
     EXPECT_TRUE(contains(Definition, "Choices_Scope__Item_2 = 1"));
+  }
+}
+
+TEST(TypeRender, ReusedNameMappingsKeepCollisionsAndRequestOptions) {
+  TypeLibrary Library(DataModel::LP64);
+  for (const char *Name : {"Box<int>", "Box_int_", "class", "Root"})
+    Library.define(structure(
+        Name, 8,
+        {member("next", makePointer(makeNamed("Root", TypeKind::Struct), 8),
+                0)}));
+  for (auto Lang : {Language::C, Language::Cpp}) {
+    CTypeRenderer Renderer(Library, Lang);
+    for (const auto *Type : Library.types()) {
+      for (bool Dependencies : {false, true}) {
+        for (auto Spelling :
+             {BuiltinSpelling::Portable, BuiltinSpelling::Windows,
+              BuiltinSpelling::Keywords}) {
+          RenderOptions Options;
+          Options.Lang = Lang;
+          Options.Spelling = Spelling;
+          Options.HexOffsets = Dependencies;
+          const std::vector<const LocalType *> Roots{Type};
+          const auto Expected = Dependencies
+                                    ? renderTypes(Library, Roots, Options)
+                                    : renderType(Library, *Type, Options);
+          EXPECT_EQ(Renderer.render(Roots, Options, Dependencies), Expected);
+          EXPECT_EQ(Renderer.render(Roots, Options, Dependencies), Expected);
+        }
+      }
+    }
+    RenderOptions Options;
+    Options.Lang = Lang;
+    EXPECT_EQ(Renderer.render({}, Options, true),
+              renderTypes(Library, {}, Options));
   }
 }
 

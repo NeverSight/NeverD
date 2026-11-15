@@ -1841,6 +1841,26 @@ TEST(HighControlFlowSemantics, AMergedCallKeepsAnInstructionOnlyIfItHadOne) {
   EXPECT_EQ(withMergedCallSites(Plain, local(1)), Plain);
 }
 
+TEST(HighControlFlowSemantics,
+     OptionalCallTypesKeepAbsentAndConflictingDistinct) {
+  const auto Left = HighExpr::makeCall("callee", 0x4000, {local(0)});
+  const auto Right = HighExpr::makeCall("callee", 0x4000, {local(0)});
+  EXPECT_TRUE(Left->structuralEq(*Right));
+  Left->SourceCalleeType =
+      NdType::makeFunc(NdType::makeInt(8), {NdType::makeInt(8)});
+  EXPECT_FALSE(Left->structuralEq(*Right));
+  EXPECT_FALSE(Right->structuralEq(*Left));
+  Right->SourceCalleeType =
+      NdType::makeFunc(NdType::makeInt(8), {NdType::makeInt(8)});
+  EXPECT_TRUE(Left->structuralEq(*Right));
+  Right->SourceCalleeType =
+      NdType::makeFunc(NdType::makeFloat(8), {NdType::makeInt(8)});
+  EXPECT_FALSE(Left->structuralEq(*Right));
+  Right->SourceCalleeType =
+      NdType::makeFunc(NdType::makeInt(8), {NdType::makeFloat(8)});
+  EXPECT_FALSE(Left->structuralEq(*Right));
+}
+
 TEST(HighControlFlowSemantics, AShiftByZeroIsItsOperand) {
   // AArch64's `tbz w0, #0, L` tests bit 0 as `(w0 >> 0) & 1`.
   for (const NdOp Shift : {NdOp::INT_LEFT, NdOp::INT_RIGHT, NdOp::INT_ASHR}) {

@@ -17,6 +17,8 @@
 #include "MedLLVMDispatchTargets.h"
 
 #include "neverd/Common.h"
+#include "neverd/backend/LLVMControlFlowFailure.h"
+#include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedDispatchSlots.h"
@@ -466,8 +468,12 @@ bool MedLLVMEmitter::emitJumpTableSwitch(
   // unreachable; LLVM may eliminate it only after proving that fact itself.
   auto *DefaultBB = llvm::BasicBlock::Create(*Ctx, "jt.default.trap", CurFunc);
   llvm::IRBuilder<> DefaultBuilder(DefaultBB);
-  DefaultBuilder.CreateIntrinsic(llvm::Type::getVoidTy(*Ctx),
-                                 llvm::Intrinsic::trap, {});
+  auto *Failure = llvm_control_flow_failure::create(
+      DefaultBuilder, llvm_control_flow_failure::Reason::SwitchDefault,
+      BrOp.Addr);
+  if (SourceMap && BrOp.Addr != InvalidVA && BrOp.OriginSeq >= 0)
+    SourceMap->Observations.push_back(
+        {CurMedFunc->Entry, {BrOp.Addr, BrOp.OriginSeq}, Failure});
   DefaultBuilder.CreateUnreachable();
   auto *SW = Builder.CreateSwitch(Index, DefaultBB,
                                   static_cast<unsigned>(CaseBlocks.size()));

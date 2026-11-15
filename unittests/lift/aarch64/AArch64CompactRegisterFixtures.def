@@ -18,6 +18,8 @@ SAVED_TEXT(kCompactFlag, "-DTEST_COMPACT_PAIRS=")
 SAVED_TEXT(kExtraStackFlag, "-DTEST_EXTRA_STACK")
 SAVED_TEXT(kCoalescedFlag, "-DTEST_COALESCED")
 SAVED_TEXT(kFramelessFlag, "-DTEST_FRAMELESS")
+SAVED_TEXT(kLanguageFlag, "-DTEST_LANGUAGE_FRAME")
+SAVED_TEXT(kCXXRuntime, "-lc++")
 SAVED_TEXT(kPAuthLRFlag, "-DTEST_PAUTH_LR=")
 SAVED_TEXT(kPAuthLRImages, "structural_pauth_lr_images")
 SAVED_TEXT(kPAuthLRMCUnavailable,
@@ -127,6 +129,7 @@ SAVED_TEXT(kCompactBody, R"asm(
 .globl \name
 .p2align 2
 \name:
+Lbegin\@:
 #ifdef TEST_PAUTH_LR
   .rept TEST_PAUTH_LR/4
   mov x16, x16
@@ -135,6 +138,10 @@ Lsign\@:
   .inst 0xdac1a7fe
 #else
 .cfi_startproc
+#ifdef TEST_LANGUAGE_FRAME
+.cfi_personality 155, ___gxx_personality_v0
+.cfi_lsda 16, Lexception\@
+#endif
   pacibsp
 #endif
   sub sp, sp, #176
@@ -207,7 +214,9 @@ save 2048, d14, d15
   movi v14.16b, #14
   movi v15.16b, #15
 .endif
+Lprotected\@:
   \operation x0, x0, x1
+Lprotected_end\@:
   mov x17, x0
 #ifdef TEST_SIGNAL
   mov w9, #1
@@ -240,7 +249,29 @@ Lend\@:
 .text
 #else
   retab
+#ifdef TEST_LANGUAGE_FRAME
+// A leaf has no throwing call. Retain its cleanup region and personality for
+// system walks; live-LR exception delivery needs a separate validated bridge.
+Lcleanup\@:
+  restore
+  autibsp
+  b __Unwind_Resume
+#endif
 .cfi_endproc
+#ifdef TEST_LANGUAGE_FRAME
+.pushsection __TEXT,__gcc_except_tab
+.p2align 2
+Lexception\@:
+.byte 255, 255, 1
+.uleb128 Lsites_end\@-Lsites\@
+Lsites\@:
+.uleb128 Lprotected\@-Lbegin\@
+.uleb128 Lprotected_end\@-Lprotected\@
+.uleb128 Lcleanup\@-Lbegin\@
+.byte 0
+Lsites_end\@:
+.popsection
+#endif
 #endif
 .endm
 function _leaf_sum, add

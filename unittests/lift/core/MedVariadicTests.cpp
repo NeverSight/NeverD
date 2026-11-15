@@ -525,6 +525,22 @@ struct AAPCS64VaStart {
   }
 };
 
+TEST(MedVariadic, NamedScalarSpillsAreNotAnAAPCS64VariadicSaveArea) {
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  for (const uint16_t Bytes : {uint16_t(4), uint16_t(8)}) {
+    AAPCS64VaStart V;
+    // A fixed function homes scalar parameters or homogeneous aggregates.
+    // Even a va_list-shaped collection of unrelated pointers cannot make
+    // those S/D stores into the ABI's complete Q-register save area.
+    for (auto &Op : V.F.Blocks[0].Ops)
+      if (Op.Opcode == NdOp::STORE && TRI.isFPArgReg(Op.Inputs[1].RegOff))
+        Op.Inputs[1].Size = Bytes;
+    detectVariadic(V.F, TRI, Arch::AArch64, BinaryFormat::ELF);
+    EXPECT_FALSE(V.F.IsVariadic);
+    EXPECT_EQ(V.vectorSpills(), TRI.FPParamRegs.size());
+  }
+}
+
 TEST(MedVariadic, IntegerOnlyVaListMustNameItsOwnSpillChain) {
   const auto &TRI = getTargetRegInfo(Arch::AArch64);
   for (bool DetachedTop : {false, true}) {

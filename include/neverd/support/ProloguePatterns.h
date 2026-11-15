@@ -376,15 +376,20 @@ inline bool isStrictPrologueWordAArch64(uint32_t W) {
   return false;
 }
 
+/// Whether \p W is the frame push `stp x29, x30, [sp, #negative]!`.
+inline bool isAArch64FramePushWord(uint32_t W) {
+  return (W & 0xFFE07FFF) == 0xA9A07BFD;
+}
+
 /// Whether \p W is a candidate function-entry marker: PACIASP or PACIBSP, which
 /// sign the return address on entry, BTI c, the landing pad of an indirect
 /// call, or the frame push `stp x29, x30, [sp, #negative]!`. Shrink wrapping
 /// can also put these inside a function; the marker alone proves no boundary.
 inline bool isFunctionEntryMarkerWordAArch64(uint32_t W) {
-  return W == 0xD503233F ||              // paciasp
-         W == 0xD503237F ||              // pacibsp
-         W == 0xD503245F ||              // bti c
-         (W & 0xFFE07FFF) == 0xA9A07BFD; // stp x29, x30, [sp, #negative]!
+  return W == 0xD503233F || // paciasp
+         W == 0xD503237F || // pacibsp
+         W == 0xD503245F || // bti c
+         isAArch64FramePushWord(W);
 }
 
 /// Whether \p W ends a basic block unconditionally, so the word after it can
@@ -434,6 +439,13 @@ inline bool isAArch64DataPage(const uint8_t *Bytes, size_t Size) {
     DataWords += isAArch64UnallocatedWord(W) || (W != 0 && (W >> 16) == 0);
   }
   return DataWords >= limits::support::kAArch64DataWordsPerPage;
+}
+
+/// Whether \p W is a call: BL, BLR, or an authenticating BLRAA[Z]/BLRAB[Z].
+inline bool isAArch64CallWord(uint32_t W) {
+  return branch::A64BranchLink.matches(W) ||
+         (W & 0xFFFFFC1F) == 0xD63F0000 || // blr Xn
+         (W & 0xFEFFF800) == 0xD63F0800;   // blraa[z] / blrab[z]
 }
 
 // ===--------------------------------------------------------------------===//

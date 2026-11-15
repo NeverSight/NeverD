@@ -339,6 +339,21 @@ ASYNC_FRAME_TEXT(kSignalNonCallDriver, "-DNEVERD_NONCALL_SCOPE")
 ASYNC_FRAME_TEXT(kSignalNonCallSource, "noncall.S")
 ASYNC_FRAME_TEXT(kSignalObjCPersonality, "-DNEVERD_OBJC_PERSONALITY")
 ASYNC_FRAME_TEXT(kSignalCompactFrame, "-DNEVERD_COMPACT_FRAME")
+ASYNC_FRAME_TEXT(kSignalLiveLR, "-DNEVERD_LIVE_LR")
+ASYNC_FRAME_TEXT(kSignalLocalCatch, "-DNEVERD_LOCAL_CATCH")
+ASYNC_FRAME_TEXT(kSignalLiveLRBridge, "_ndDarwinArm64eLiveLRBridge")
+ASYNC_FRAME_TEXT(kSignalLiveLRResume, "_ndDarwinArm64eLiveLRResume")
+ASYNC_FRAME_TEXT(kSignalFramelessFrame, "-DNEVERD_FRAMELESS_FRAME")
+ASYNC_FRAME_TEXT(kSignalEntryPad, "-DNEVERD_ENTRY_LANDING_PAD")
+ASYNC_FRAME_TEXT(kSignalGeneratedExplicitLSDA,
+                 "Lneverd_lsda_${:uid}:\n.byte 27\n")
+ASYNC_FRAME_VALUE(unsigned, kSignalTypeCount, 2)
+ASYNC_FRAME_VALUE(unsigned, kSignalActionCount, 3)
+ASYNC_FRAME_VALUE(uint64_t, kSignalSpecType, 2)
+ASYNC_FRAME_TEXT(kSignalTypedLSDA, "-DNEVERD_TYPED_LSDA")
+ASYNC_FRAME_TEXT(kSignalExplicitLPStart, "-DNEVERD_EXPLICIT_LPSTART")
+ASYNC_FRAME_TEXT(kSignalGeneratedLSDA, "Lneverd_lsda_${:uid}:\n.byte 255\n")
+ASYNC_FRAME_TEXT(kSignalInvalidLSDA, "Lneverd_lsda_${:uid}:\n.byte 0\n")
 ASYNC_FRAME_TEXT(kSignalNonCallExceptions, "native_noncall_language_cleanups")
 ASYNC_FRAME_TEXT(kSignalNonCallObjCExceptions, "native_noncall_objc_cleanups")
 ASYNC_FRAME_TEXT(kSignalNonCallBody, R"asm(
@@ -359,7 +374,19 @@ Lfunc_begin:
  nop
 #endif
  pacibsp
-#ifdef NEVERD_COMPACT_FRAME
+#ifdef NEVERD_LIVE_LR
+ stp x20, x19, [sp, #-32]!
+ .cfi_def_cfa_offset 32
+ .cfi_offset x20, -32
+ .cfi_offset x19, -24
+ mov x9, #0x5a
+ stur x9, [sp, #-8]
+#elif defined(NEVERD_FRAMELESS_FRAME)
+ stp x19, x30, [sp, #-32]!
+ .cfi_def_cfa_offset 32
+ .cfi_offset x19, -32
+ .cfi_offset x30, -24
+#elif defined(NEVERD_COMPACT_FRAME)
  stp x20, x19, [sp, #-32]!
  stp x29, x30, [sp, #16]
  add x29, sp, #16
@@ -380,6 +407,9 @@ Lfunc_begin:
  .cfi_def_cfa_register x29
 #endif
  mov x19, x0
+#ifdef NEVERD_LOCAL_CATCH
+ mov x20, x2
+#endif
 #ifndef NEVERD_COMPACT_FRAME
  .cfi_escape 0x2e, 0
 #endif
@@ -388,6 +418,15 @@ Lprotected:
 Lprotected_end:
  b Lprotected
 Lcleanup:
+#ifdef NEVERD_LIVE_LR
+ // The caller return is live at the protected instruction. The cleanup now
+ // calls _Unwind_Resume, so its own CFI must describe this later LR spill.
+ str x30, [sp, #16]
+ .cfi_offset x30, -16
+ ldur x9, [sp, #-8]
+ sub x9, x9, #0x5a
+ cbnz x9, Lresume_end
+#endif
  ldr w9, [x19]
  mov w10, #10
  madd w9, w9, w10, wzr
@@ -398,9 +437,34 @@ Lcleanup:
 #endif
  str w9, [x19]
 Lresume:
+#ifdef NEVERD_LOCAL_CATCH
+#ifdef NEVERD_OBJC_PERSONALITY
+ bl _objc_begin_catch
+#else
+ bl ___cxa_begin_catch
+#endif
+ cmp x0, x20
+ b.ne Lresume_end
+#ifdef NEVERD_OBJC_PERSONALITY
+ bl _objc_end_catch
+#else
+ bl ___cxa_end_catch
+#endif
+ ldr x30, [sp, #16]
+ .cfi_restore x30
+ ldp x20, x19, [sp], #32
+ .cfi_restore x20
+ .cfi_restore x19
+ .cfi_def_cfa_offset 0
+ retab
+#elif defined(NEVERD_ENTRY_LANDING_PAD)
+ b Lprotected
+#else
  bl __Unwind_Resume
+#endif
 Lresume_end:
  brk #1
+Lfunction_end:
  .cfi_endproc
  .globl _signal_tick
  .p2align 2
@@ -411,22 +475,97 @@ _signal_tick:
  .section __TEXT,__gcc_except_tab
  .p2align 2
 Lexception:
+#ifdef NEVERD_EXPLICIT_LPSTART
+ // LPStart deliberately differs from the function start. Call-site ranges
+ // remain function-relative; only landing-pad offsets use this base.
+ .byte 27
+#ifdef NEVERD_ENTRY_LANDING_PAD
+ .long Lfunc_begin-4-.
+#else
+ .long Lfunc_begin+4-.
+#endif
+#else
  .byte 255
+#endif
+#if defined(NEVERD_TYPED_LSDA) || defined(NEVERD_LOCAL_CATCH)
+#if defined(NEVERD_LOCAL_CATCH) && !defined(NEVERD_OBJC_PERSONALITY)
+ .byte 0
+#else
+ .byte 155
+#endif
+ .uleb128 Ltypes_end-Ltypes_offset
+Ltypes_offset:
+#else
  .byte 255
+#endif
  .byte 1
  .uleb128 Ltable_end-Ltable
 Ltable:
  .uleb128 Lprotected-Lfunc_begin
  .uleb128 Lprotected_end-Lprotected
+#ifdef NEVERD_ENTRY_LANDING_PAD
+ .uleb128 4
+#elif defined(NEVERD_EXPLICIT_LPSTART)
+ .uleb128 Lcleanup-Lfunc_begin-4
+#else
  .uleb128 Lcleanup-Lfunc_begin
+#endif
+#if defined(NEVERD_TYPED_LSDA) || defined(NEVERD_LOCAL_CATCH)
+ .byte 1
+#else
  .byte 0
+#endif
  // Resuming the exception has no local cleanup. Without this entry the
  // personality treats the second-phase return edge as a missing call site.
  .uleb128 Lresume-Lfunc_begin
  .uleb128 Lresume_end-Lresume
  .byte 0
  .byte 0
+#ifdef NEVERD_TYPED_LSDA
+ // The unreachable trap checks an exception-specification-only type index.
+ .uleb128 Lresume_end-Lfunc_begin
+ .uleb128 Lfunction_end-Lresume_end
+ .uleb128 Lcleanup-Lfunc_begin-4
+ .byte 5
+#endif
 Ltable_end:
+#ifdef NEVERD_LOCAL_CATCH
+ // A catch-all selects this frame in phase one and returns normally after
+ // checking that begin_catch exposes the original exception object.
+ .sleb128 1
+ .sleb128 0
+#ifdef NEVERD_OBJC_PERSONALITY
+ // Objective-C @catch(id) must request the runtime's object adjustment.
+ // A C++ catch-all's null type instead exposes the exception wrapper.
+ .p2align 2
+ .long _OBJC_EHTYPE_id@GOT-.
+Ltypes_end:
+#else
+ .p2align 3
+ .quad 0
+Ltypes_end:
+#endif
+#elif defined(NEVERD_TYPED_LSDA)
+ // A nonmatching catch(int), followed by the active cleanup.
+ .sleb128 1
+ .sleb128 1
+ .sleb128 0
+ .sleb128 0
+ .sleb128 -1
+ .sleb128 0
+ .p2align 2
+ .long Lchar_type-.
+ .long Lint_type-.
+Ltypes_end:
+ .uleb128 2
+ .uleb128 0
+ .section __DATA,__data
+ .p2align 3
+Lint_type:
+ .quad __ZTIi
+Lchar_type:
+ .quad __ZTIPKc
+#endif
  .subsections_via_symbols
 )asm")
 
@@ -452,7 +591,11 @@ struct SignalMarker {
   int value;
 };
 using Tick = void (*)();
+#ifdef NEVERD_LOCAL_CATCH
+using Scope = void (*)(int *, Tick, void *);
+#else
 using Scope = void (*)(int *, Tick);
+#endif
 static NDDarwinArm64eExceptionSite site;
 static NDDarwinArm64eUnwindRow row;
 static NDDarwinArm64eVectorSaves vectors;
@@ -471,6 +614,62 @@ static_assert(std::atomic<bool>::is_always_lock_free);
 static sigset_t beforeMask;
 static int trace;
 static volatile sig_atomic_t signalRaised;
+static volatile sig_atomic_t resumeObserved;
+static NDDarwinArm64eCursor interrupted, caller;
+static uintptr_t callerRegisters[NDArm64ePreservedGPRCount];
+
+static void inspectLandingResume(ucontext_t *uc) {
+  unw_context_t context;
+  unw_cursor_t cursor;
+  if (unw_getcontext(&context) || unw_init_local(&cursor, &context))
+    _exit(22);
+  const auto &state = uc->uc_mcontext->__ss;
+  for (unsigned reg = 0; reg < 29; ++reg)
+    if (unw_set_reg(&cursor, UNW_ARM64_X0 + reg, state.__x[reg]))
+      _exit(23);
+  const auto sp = arm_thread_state64_get_sp(state);
+  // Both resume instructions share one row. An interior PC selects that row
+  // with either signal-PC or return-PC lookup, without crossing either FDE
+  // boundary when the second instruction is interrupted.
+  const auto pc = (uintptr_t)ptrauth_strip(
+      &ndDarwinArm64eLiveLRResume, ptrauth_key_function_pointer) +
+      NDArm64eInstructionAlignment;
+  const auto signedPC = (uintptr_t)ptrauth_sign_unauthenticated(
+      (void *)pc, ptrauth_key_return_address, sp);
+  if (unw_set_reg(&cursor, UNW_ARM64_FP, arm_thread_state64_get_fp(state)) ||
+      unw_set_reg(&cursor, UNW_ARM64_LR, arm_thread_state64_get_lr(state)) ||
+      unw_set_reg(&cursor, UNW_REG_SP, sp) ||
+      unw_set_reg(&cursor, UNW_REG_IP, signedPC) ||
+      unw_set_reg(&cursor, UNW_REG_SP, sp) || unw_step(&cursor) <= 0)
+    _exit(24);
+  unw_word_t value;
+  const auto virtualReturn = site.ProtectedReturn ? site.ProtectedReturn : site.End;
+  if (unw_get_reg(&cursor, UNW_REG_IP, &value) ||
+      (uintptr_t)ptrauth_strip((void *)value, ptrauth_key_return_address) !=
+          virtualReturn ||
+      unw_get_reg(&cursor, UNW_REG_SP, &value) || value != interrupted.SP ||
+      unw_get_reg(&cursor, UNW_ARM64_LR, &value) || value != interrupted.LR ||
+      unw_step(&cursor) <= 0 ||
+      unw_get_reg(&cursor, UNW_REG_IP, &value) ||
+      (uintptr_t)ptrauth_strip((void *)value, ptrauth_key_return_address) !=
+          caller.PC ||
+      unw_get_reg(&cursor, UNW_REG_SP, &value) || value != caller.SP ||
+      unw_get_reg(&cursor, UNW_ARM64_FP, &value) || value != caller.FP)
+    _exit(25);
+  for (unsigned reg = 0; reg < NDArm64ePreservedGPRCount; ++reg)
+    if (unw_get_reg(&cursor, NDArm64eFirstPreservedGPR + reg, &value) ||
+        value != callerRegisters[reg])
+      _exit(26);
+  arm_debug_state64_t debug{};
+  auto thread = mach_thread_self();
+  auto result = thread_set_state(thread, ARM_DEBUG_STATE64,
+                                 reinterpret_cast<thread_state_t>(&debug),
+                                 ARM_DEBUG_STATE64_COUNT);
+  mach_port_deallocate(mach_task_self(), thread);
+  if (result != KERN_SUCCESS)
+    _exit(27);
+  resumeObserved = 1;
+}
 
 [[noreturn]] static void deliver(void *payload) {
   sigset_t mask;
@@ -489,6 +688,13 @@ static volatile sig_atomic_t signalRaised;
 static void observe(int, siginfo_t *, void *ctx) {
   auto *uc = static_cast<ucontext_t *>(ctx);
   auto pc = arm_thread_state64_get_pc(uc->uc_mcontext->__ss);
+  const auto resume = (uintptr_t)ptrauth_strip(
+      &ndDarwinArm64eLiveLRResume, ptrauth_key_function_pointer);
+  if (site.AtProtectedCall && !row.SavedLR &&
+      pc == resume + (alternate ? NDArm64eInstructionAlignment : 0)) {
+    inspectLandingResume(uc);
+    return;
+  }
   if (!active.load() || pc < site.Begin || pc >= site.End)
     return;
   auto address = reinterpret_cast<uintptr_t>(&ctx);
@@ -502,6 +708,19 @@ static void observe(int, siginfo_t *, void *ctx) {
                                            &exception) ||
       memcmp(&before, uc->uc_mcontext, sizeof(before)))
     _exit(12);
+  if (site.AtProtectedCall && !row.SavedLR) {
+    interrupted = ndDarwinArm64eSignalCursor(uc);
+    if (!ndDarwinArm64eReadCaller(uc, row, saved, savedCount, low, high,
+                                  false, &caller, callerRegisters))
+      _exit(28);
+    const auto sp = arm_thread_state64_get_sp(uc->uc_mcontext->__ss);
+    const auto tightLow = sp - NDArm64eLiveLRBridgeBytes + NDArm64eStackAlignment;
+    if (ndDarwinArm64eDeliverSignalException(
+            uc, site, row, saved, savedCount, &vectors, tightLow, high, false,
+            deliver, &exception) ||
+        memcmp(&before, uc->uc_mcontext, sizeof(before)))
+      _exit(20);
+  }
   // This synchronous breakpoint or managed checkpoint interrupts only the
   // tight test loop. Exercise a language throw raised and caught *inside*
   // the handler; retain its identity across the kernel's signal return.
@@ -529,6 +748,12 @@ static void observe(int, siginfo_t *, void *ctx) {
                                             &vectors, low, high, false, deliver,
                                             &exception))
     _exit(13);
+  if (site.AtProtectedCall && !row.SavedLR &&
+      (arm_thread_state64_get_sp(before.__ss) !=
+           arm_thread_state64_get_sp(uc->uc_mcontext->__ss) ||
+       arm_thread_state64_get_lr(before.__ss) !=
+           arm_thread_state64_get_lr(uc->uc_mcontext->__ss)))
+    _exit(21);
   active.store(false);
   handled.store(true);
 }
@@ -615,6 +840,12 @@ int main(int argc, char **argv) {
     debug.__bvr[0] = site.Begin;
     // DBGBCR: enable, EL0 match, all four instruction bytes.
     debug.__bcr[0] = (0xfu << 5) | (2u << 1) | 1u;
+    if (!row.SavedLR) {
+      debug.__bvr[1] = (uintptr_t)ptrauth_strip(
+          &ndDarwinArm64eLiveLRResume, ptrauth_key_function_pointer) +
+          (alternate ? NDArm64eInstructionAlignment : 0);
+      debug.__bcr[1] = debug.__bcr[0];
+    }
     auto thread = mach_thread_self();
     auto result = thread_set_state(thread, ARM_DEBUG_STATE64,
                                    reinterpret_cast<thread_state_t>(&debug),
@@ -624,6 +855,27 @@ int main(int argc, char **argv) {
       return 7;
   } else if (pthread_create(&monitor, nullptr, interrupt, nullptr))
     return 7;
+#ifdef NEVERD_LOCAL_CATCH
+  void *expectedObject;
+#ifdef __OBJC__
+  expectedObject = exception;
+#else
+  try {
+    std::rethrow_exception(exception);
+  } catch (const SignalMarker &m) {
+    expectedObject = const_cast<SignalMarker *>(&m);
+  }
+#endif
+  {
+    Outer outer;
+    active.store(true);
+    scope(&trace, tick, expectedObject);
+    if (trace != expected)
+      return 15;
+  }
+  if (trace != expected * 10 + 2)
+    return 16;
+#else
 #ifdef __OBJC__
   @try {
     Outer outer;
@@ -659,8 +911,11 @@ int main(int argc, char **argv) {
       return 16;
   }
 #endif
+#endif
   if (!signalRaised)
     return 17;
+  if (site.AtProtectedCall && !row.SavedLR && !resumeObserved)
+    return 29;
   return (!site.AtProtectedCall && pthread_join(monitor, nullptr)) ||
          !handled.load() || dlclose(image);
 }

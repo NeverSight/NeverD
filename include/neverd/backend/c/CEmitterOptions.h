@@ -73,6 +73,7 @@ struct CSourceName;
 struct SourceVariableTypes;
 struct SourceCallTypeHint;
 class DataAccessWidths;
+class LLVMSourceMap;
 struct NdType;
 
 /// What a unit holds of the program's own definitions of the records it
@@ -197,6 +198,10 @@ struct CEmitterOptions {
   }
   /// Optional source-map sink. Recording never changes the emitted C text.
   CSourceMap *SourceMap = nullptr;
+  /// LLVM source observations, independent of the optional output map. They
+  /// locate missing-state diagnostics as well as navigation anchors. The
+  /// snapshot must outlive emission; missing or ambiguous origins stay unknown.
+  const LLVMSourceMap *LLVMSources = nullptr;
   /// HighC-only helper names and the original bodies they specialize. These
   /// functions have no native entry ABI. Suppress native-variable editing
   /// identities for them rather than inventing addresses for generated code.
@@ -229,6 +234,10 @@ struct CEmitterOptions {
   std::function<CRecordDefinitions(
       const std::vector<std::shared_ptr<NdType>> &)>
       RecordDefinitions;
+  /// The local-type renderer owns collision-free record identifiers. These
+  /// directions keep emitted C and source/catalog identities distinct.
+  std::function<std::string(llvm::StringRef)> RecordTypeName;
+  std::function<std::string(llvm::StringRef)> RecordSourceName;
   /// Analyst declarations for source interpretation only. They supply no
   /// native ABI, memory extent, code ownership or rewriting authority.
   const SourceVariableTypes *VariableTypes = nullptr;

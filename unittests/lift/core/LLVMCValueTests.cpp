@@ -6241,6 +6241,77 @@ int main(void) {
   }
 }
 
+TEST(LLVMCValues, BoundedLibraryVarargsKeepTheirDeclaredCarrierTypes) {
+  for (unsigned Case = 0; Case != 4; ++Case) {
+    const bool Unsigned = Case & 1;
+    const bool Pointer = Case & 2;
+    SCOPED_TRACE(Case);
+    llvm::LLVMContext Context;
+    llvm::Module Module("bounded-library-varargs", Context);
+    Module.setDataLayout("e-p:64:64");
+    llvm::IRBuilder<> Builder(Context);
+    const std::string Name = Unsigned ? "prctl" : "syscall";
+    auto *Fixed = Unsigned ? Builder.getInt32Ty() : Builder.getInt64Ty();
+    auto *Imported = llvm::Function::Create(
+        llvm::FunctionType::get(Fixed, {Fixed}, true),
+        llvm::GlobalValue::ExternalLinkage, Name, Module);
+    auto *Caller = llvm::Function::Create(
+        llvm::FunctionType::get(
+            Builder.getInt64Ty(),
+            {Pointer ? static_cast<llvm::Type *>(Builder.getPtrTy())
+                     : Builder.getInt64Ty()},
+            false),
+        llvm::GlobalValue::ExternalLinkage, "bounded_call", Module);
+    Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Caller));
+    auto *Call = Builder.CreateCall(
+        Imported,
+        {llvm::ConstantInt::get(Fixed, 1), Builder.getInt64(11),
+         Builder.getInt64(UINT64_MAX),
+         Builder.getInt64(UINT64_C(0x8000000000000002)), Caller->getArg(0)});
+    Builder.CreateRet(Unsigned ? Builder.CreateZExt(Call, Builder.getInt64Ty())
+                               : Call);
+    ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+    neverd::CEmitterOptions Options;
+    Options.TheArch = neverd::Arch::AArch64;
+    Options.Format = neverd::BinaryFormat::ELF;
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, Options));
+    const auto Definition = Source.rfind("uint64_t bounded_call(");
+    ASSERT_NE(Definition, std::string::npos) << Source;
+    // Compile the unmodified caller with an independent typed provider.
+    // The macro checks the actual C expression types before any conversion;
+    // successful execution alone may hide a wrong va_arg carrier on a host.
+    const std::string Type = Unsigned ? "uint64_t" : "int64_t";
+    const std::string Program =
+        "#include <stdint.h>\n#include <stdarg.h>\ntypedef " + Type +
+        " word;\nstatic " + (Unsigned ? "int32_t" : "int64_t") + " observed(" +
+        (Unsigned ? "int32_t" : "int64_t") + R"( number, ...) {
+  va_list ap;
+  va_start(ap, number);
+  uint64_t a = (uint64_t)va_arg(ap, word);
+  uint64_t b = (uint64_t)va_arg(ap, word);
+  uint64_t c = (uint64_t)va_arg(ap, word);
+  uint64_t d = (uint64_t)va_arg(ap, word);
+  va_end(ap);
+  return number == 1 && a == 11 && b == UINT64_MAX &&
+      c == UINT64_C(0x8000000000000002) && d == UINT64_C(0xfedcba9876543210)
+      ? 17 : 0;
+}
+#define EXACT(x) ((void)sizeof(char[_Generic((x), word: 1, default: -1)]), (x))
+)" + "#define " +
+        Name + "(n,a,b,c,d) observed(n,EXACT(a),EXACT(b),EXACT(c),EXACT(d))\n" +
+        Source.substr(Definition) + "\nint main(void) { return bounded_call(" +
+        (Pointer ? "(void *)(uintptr_t)" : "") +
+        "UINT64_C(0xfedcba9876543210)) "
+        "!= 17; }\n";
+    for (const char *Optimization : {"-O0", "-O2"})
+      source_call_execution_test::compileAndRun(
+          Program, {Optimization, "-fsanitize=undefined",
+                    "-fno-sanitize-recover=undefined"});
+  }
+}
+
 TEST(LLVMCValues, PreservedIndirectVariadicCallKeepsFixedPrototype) {
   llvm::LLVMContext C;
   llvm::Module M("indirect-variadic-call", C);
@@ -6615,6 +6686,24 @@ TEST(LLVMCValues, UnsupportedConstantExpressionCannotBecomeZero) {
   ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
   std::string Source;
   llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, {}));
+  // XOR now has a source spelling. Its operand must be the relocated
+  // object's address, rather than a guessed original address or zero.
+  for (const char *Optimization : {"-O0", "-O2"})
+    compileAndRun(Source + R"(
+int main(void) {
+  return address_bits() != ((uint64_t)(uintptr_t)&cell ^ UINT64_C(17));
+}
+)",
+                  Optimization);
+  // A non-default address-space conversion still has no C projection. Keep
+  // the refusal check on an unsupported expression instead of rejecting XOR.
+  auto *Return = llvm::cast<llvm::ReturnInst>(Function->back().getTerminator());
+  Return->setOperand(0, llvm::ConstantExpr::getPtrToInt(
+                            llvm::ConstantExpr::getAddrSpaceCast(
+                                Global, llvm::PointerType::get(Context, 1)),
+                            Word));
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
   EXPECT_THROW(neverd::LLVMCEmitter().emit(Module, Out, {}),
                std::runtime_error);
 }
@@ -7523,6 +7612,424 @@ TEST(LLVMCValues, BitProjectionRetainsOpaqueValuesAndHonorsWorkBounds) {
   }
 }
 
+TEST(LLVMCValues, AvailabilityGuardsUseAllReachingIntegerComparisons) {
+  using namespace llvm;
+  for (unsigned Width : {8u, 32u, 64u})
+    for (unsigned Mode = 0; Mode != 14; ++Mode) {
+      SCOPED_TRACE(testing::Message() << Width << ':' << Mode);
+      LLVMContext Context;
+      Module Module("availability-paths", Context);
+      Module.setDataLayout("e-p:64:64");
+      auto *Word = IntegerType::get(Context, Width);
+      auto *F = Function::Create(
+          FunctionType::get(Type::getInt32Ty(Context), {Word, Word}, false),
+          GlobalValue::ExternalLinkage, "observed", Module);
+      auto *Entry = BasicBlock::Create(Context, "entry", F);
+      auto *Known = BasicBlock::Create(Context, "known", F);
+      auto *Unknown = BasicBlock::Create(Context, "unknown", F);
+      auto *Join = BasicBlock::Create(Context, "join", F);
+      auto *Distinct = BasicBlock::Create(Context, "distinct", F);
+      auto *Observe = BasicBlock::Create(Context, "observe", F);
+      auto *End = BasicBlock::Create(Context, "end", F);
+      IRBuilder<> B(Entry);
+      auto *Missing = neverd::llvm_source_unknown::createEntrySeed(B, Word);
+      auto *Left = F->getArg(0);
+      auto *Right = F->getArg(1);
+      B.CreateCondBr(B.CreateICmpULT(Left, Right), Known, Unknown);
+      B.SetInsertPoint(Known);
+      auto *Sum = B.CreateAdd(Left, Right);
+      B.CreateBr(Join);
+      B.SetInsertPoint(Unknown);
+      Value *UnknownLeft = Left;
+      if (Mode == 9)
+        UnknownLeft = B.CreateAdd(Left, ConstantInt::get(Word, 1));
+      B.CreateBr(Join);
+      B.SetInsertPoint(Join);
+      auto *Payload = B.CreatePHI(Word, 2, "payload");
+      Payload->addIncoming(Sum, Known);
+      Payload->addIncoming(Missing, Unknown);
+      if (Mode == 8 || Mode == 9) {
+        auto *ComparedLeft = B.CreatePHI(Word, 2);
+        ComparedLeft->addIncoming(Left, Known);
+        ComparedLeft->addIncoming(UnknownLeft, Unknown);
+        auto *ComparedRight = B.CreatePHI(Word, 2);
+        ComparedRight->addIncoming(Right, Known);
+        ComparedRight->addIncoming(Right, Unknown);
+        B.CreateCondBr(B.CreateICmpNE(ComparedLeft, ComparedRight), Distinct,
+                       End);
+      } else if (Mode >= 10) {
+        Value *Boolean = Mode == 12 ? B.CreateTrunc(Left, B.getInt1Ty())
+                                    : B.CreateICmpEQ(Left, Right);
+        if (Mode == 13)
+          Boolean = B.CreateICmpNE(B.CreateZExt(Boolean, Word),
+                                   ConstantInt::get(Word, 0));
+        auto *Extended = Mode == 11 ? B.CreateSExt(Boolean, Word)
+                                    : B.CreateZExt(Boolean, Word);
+        auto *Zero = ConstantInt::get(Word, 0);
+        auto *Different = Mode == 12   ? B.CreateICmpNE(Extended, Zero)
+                          : Mode == 11 ? B.CreateICmpEQ(Zero, Extended)
+                                       : B.CreateICmpEQ(Extended, Zero);
+        B.CreateCondBr(Different, Distinct, End);
+      } else if (Mode == 1)
+        B.CreateBr(Distinct); // Equality can now observe the unknown arm.
+      else if (Mode >= 5) {
+        Value *Difference = Mode == 5   ? B.CreateSub(Left, Right)
+                            : Mode == 6 ? B.CreateXor(Left, Right)
+                                        : B.CreateAdd(Left, Right);
+        auto *Zero = ConstantInt::get(Word, 0);
+        auto *Different = Mode == 6 ? B.CreateICmpNE(Zero, Difference)
+                                    : B.CreateICmpNE(Difference, Zero);
+        B.CreateCondBr(Different, Distinct, End);
+      } else
+        B.CreateCondBr(B.CreateICmpNE(Left, Right), Distinct, End);
+      B.SetInsertPoint(Distinct);
+      if (Mode == 2)
+        B.CreateBr(Observe); // Greater-than can now observe that arm.
+      else {
+        Value *Compared = Left;
+        if (Mode == 4)
+          Compared = B.CreateAdd(Left, ConstantInt::get(Word, 1));
+        auto *Condition = Mode == 3 ? B.CreateICmpSLE(Compared, Right)
+                                    : B.CreateICmpULE(Compared, Right);
+        B.CreateCondBr(Condition, Observe, End);
+      }
+      B.SetInsertPoint(Observe);
+      auto *Byte = B.CreateZExtOrTrunc(Payload, B.getInt8Ty());
+      B.CreateRet(
+          B.CreateOr(B.CreateZExt(Byte, B.getInt32Ty()), B.getInt32(65536)));
+      B.SetInsertPoint(End);
+      B.CreateRet(B.getInt32(0));
+      ASSERT_FALSE(verifyModule(Module, &errs()));
+      std::string Before, After;
+      raw_string_ostream BeforeOS(Before), AfterOS(After);
+      Module.print(BeforeOS, nullptr);
+      neverd::CEmitterOptions Options;
+      Options.PreserveLLVMFunctionTypes = true;
+      std::string Source;
+      raw_string_ostream OS(Source);
+      ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, OS, Options));
+      const bool MustKeepGuard = Mode != 0 && Mode != 5 && Mode != 6 &&
+                                 Mode != 8 && Mode != 10 && Mode != 11 &&
+                                 Mode != 13;
+      EXPECT_EQ(Source.find("no recovered machine state") != std::string::npos,
+                MustKeepGuard)
+          << Source;
+      Module.print(AfterOS, nullptr);
+      EXPECT_EQ(Before, After);
+      if (MustKeepGuard) {
+        const uint64_t Maximum =
+            Width == 64 ? UINT64_MAX : (UINT64_C(1) << Width) - 1;
+        const uint64_t X = Mode == 1 || Mode == 7 || Mode == 9 || Mode == 12 ? 7
+                           : Mode == 2                                       ? 8
+                           : Mode == 3 ? UINT64_C(1) << (Width - 1)
+                                       : Maximum;
+        const uint64_t Y =
+            Mode < 3 || Mode == 7 || Mode == 9 || Mode == 12 ? 7 : 0;
+        Source += "\n#define BAD_X UINT64_C(" + std::to_string(X) + ")\n";
+        Source += "#define BAD_Y UINT64_C(" + std::to_string(Y) + ")\n";
+        Source += R"c(
+#include <signal.h>
+#include <stdlib.h>
+static void expected_unknown(int code) { (void)code; _Exit(0); }
+int main(void) {
+  if (observed(1, 2) != 65539u) return 1;
+  if (signal(SIGILL, expected_unknown) == SIG_ERR) return 2;
+#ifdef SIGTRAP
+  if (signal(SIGTRAP, expected_unknown) == SIG_ERR) return 2;
+#endif
+  (void)observed(BAD_X, BAD_Y);
+  return 3;
+}
+)c";
+      } else
+        Source += R"c(
+int main(void) {
+  for (unsigned x = 0; x != 256; ++x)
+    for (unsigned y = 0; y != 256; ++y) {
+      unsigned expected = x < y ? 65536u | ((x + y) & 255u) : 0;
+      if (observed(x, y) != expected) return 1;
+    }
+  return 0;
+}
+)c";
+      for (StringRef Level : {"-O0", "-O2"})
+        compileAndRun(Source, Level, {}, true);
+    }
+}
+
+TEST(LLVMCValues, AvailabilityProofsIgnoreUnrelatedLivePhiTraffic) {
+  using namespace llvm;
+  for (bool DeferredRecords : {false, true}) {
+    SCOPED_TRACE(DeferredRecords);
+    LLVMContext Context;
+    Module Module("availability-unrelated-phis", Context);
+    Module.setDataLayout("e-p:64:64");
+    auto *Word = Type::getInt32Ty(Context);
+    auto *F =
+        Function::Create(FunctionType::get(Word, {Word, Word}, false),
+                         GlobalValue::ExternalLinkage, "observed", Module);
+    auto *Record = Function::Create(
+        FunctionType::get(Type::getVoidTy(Context), {Word}, false),
+        GlobalValue::ExternalLinkage, "record", Module);
+    auto *Consume =
+        Function::Create(Record->getFunctionType(),
+                         GlobalValue::ExternalLinkage, "consume", Module);
+    auto *Entry = BasicBlock::Create(Context, "entry", F);
+    auto *Known = BasicBlock::Create(Context, "known", F);
+    auto *Unknown = BasicBlock::Create(Context, "unknown", F);
+    auto *Join = BasicBlock::Create(Context, "join", F);
+    auto *Distinct = BasicBlock::Create(Context, "distinct", F);
+    auto *Observe = BasicBlock::Create(Context, "observe", F);
+    auto *End = BasicBlock::Create(Context, "end", F);
+    IRBuilder<> B(Entry);
+    auto *Missing = neverd::llvm_source_unknown::createEntrySeed(B, Word);
+    auto *Left = F->getArg(0);
+    auto *Right = F->getArg(1);
+    B.CreateCondBr(B.CreateICmpULT(Left, Right), Known, Unknown);
+    B.SetInsertPoint(Known);
+    auto *Sum = B.CreateAdd(Left, Right);
+    SmallVector<Value *> KnownValues, UnknownValues;
+    for (unsigned I = 0; I != 2048; ++I)
+      KnownValues.push_back(B.CreateAdd(Left, B.getInt32(I)));
+    B.CreateBr(Join);
+    B.SetInsertPoint(Unknown);
+    for (unsigned I = 0; I != 2048; ++I)
+      UnknownValues.push_back(B.CreateAdd(Right, B.getInt32(2 * I)));
+    B.CreateBr(Join);
+    B.SetInsertPoint(Join);
+    auto *Payload = B.CreatePHI(Word, 2, "payload");
+    Payload->addIncoming(Sum, Known);
+    Payload->addIncoming(Missing, Unknown);
+    SmallVector<Value *> Merged;
+    for (unsigned I = 0; I != KnownValues.size(); ++I) {
+      auto *Phi = B.CreatePHI(Word, 2);
+      Phi->addIncoming(KnownValues[I], Known);
+      Phi->addIncoming(DeferredRecords ? Missing : UnknownValues[I], Unknown);
+      Merged.push_back(Phi);
+    }
+    // Every value is live, but each observation needs only its own PHI copy.
+    // The first variant also exercises unrelated non-deferred scalar writes.
+    if (!DeferredRecords)
+      for (auto *Phi : Merged)
+        B.CreateCall(Record, {Phi});
+    B.CreateCondBr(B.CreateICmpNE(Left, Right), Distinct, End);
+    B.SetInsertPoint(Distinct);
+    B.CreateCondBr(B.CreateICmpULE(Left, Right), Observe, End);
+    B.SetInsertPoint(Observe);
+    if (DeferredRecords)
+      for (auto *Phi : Merged)
+        B.CreateCall(Record, {Phi});
+    for (unsigned I = 0; I != 256; ++I)
+      B.CreateCall(Consume, {Payload});
+    B.CreateRet(B.getInt32(1));
+    B.SetInsertPoint(End);
+    B.CreateRet(B.getInt32(0));
+    ASSERT_FALSE(verifyModule(Module, &errs()));
+    neverd::CEmitterOptions Options;
+    Options.PreserveLLVMFunctionTypes = true;
+    std::string Source;
+    raw_string_ostream OS(Source);
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, OS, Options));
+    ASSERT_EQ(Source.find("no recovered machine state"), std::string::npos);
+    Source += std::string("\n#define DEFERRED_RECORDS ") +
+              (DeferredRecords ? "1\n" : "0\n");
+    Source += R"c(
+static uint32_t records, consumed;
+void record(uint32_t value) { records += value; }
+void consume(uint32_t value) { consumed += value; }
+int main(void) {
+  for (unsigned x = 0; x != 16; ++x)
+    for (unsigned y = 0; y != 16; ++y) {
+      records = consumed = 0;
+      if (observed(x, y) != (x < y)) return 1;
+      unsigned expected = x < y ? 2048u * x + 2047u * 1024u
+                               : DEFERRED_RECORDS ? 0
+                                                  : 2048u * y + 2047u * 2048u;
+      if (records != expected) return 2;
+      if (consumed != (x < y ? 256u * (x + y) : 0)) return 3;
+    }
+  return 0;
+}
+)c";
+    for (StringRef Level : {"-O0", "-O2"})
+      compileAndRun(Source, Level, {}, true);
+  }
+}
+
+TEST(LLVMCValues, AvailabilityProofsDoNotLeakThroughCachedExpressions) {
+  using namespace llvm;
+  LLVMContext Context;
+  SMDiagnostic Diagnostic;
+  auto Module = parseAssemblyString(R"(
+declare i32 @missing() "neverd.source.unknown-value"
+declare i32 @consume(i32)
+define i32 @observed(i32 %left, i32 %right, i1 %force) {
+entry:
+  %absent = call i32 @missing()
+  %lt = icmp ult i32 %left, %right
+  br i1 %lt, label %known, label %unknown
+known:
+  %sum = add i32 %left, %right
+  br label %join
+unknown:
+  br label %join
+join:
+  %payload = phi i32 [%sum, %known], [%absent, %unknown]
+  %expression = add i32 %payload, 7
+  %ne = icmp ne i32 %left, %right
+  br i1 %ne, label %distinct, label %end
+distinct:
+  %le = icmp ule i32 %left, %right
+  br i1 %le, label %safe, label %end
+safe:
+  %first = call i32 @consume(i32 %expression)
+  ret i32 %first
+end:
+  br i1 %force, label %unsafe, label %ignored
+unsafe:
+  %second = call i32 @consume(i32 %expression)
+  ret i32 %second
+ignored:
+  ret i32 0
+}
+)",
+                                    Diagnostic, Context);
+  ASSERT_TRUE(Module) << Diagnostic.getMessage().str();
+  ASSERT_FALSE(verifyModule(*Module, &errs()));
+  neverd::CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  std::string Source;
+  raw_string_ostream OS(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
+  EXPECT_NE(Source.find("no recovered machine state"), std::string::npos)
+      << Source;
+  Source += R"c(
+#include <signal.h>
+#include <stdlib.h>
+uint32_t consume(uint32_t value) { return value; }
+static void expected_unknown(int code) { (void)code; _Exit(0); }
+int main(void) {
+  if (observed(1, 2, 0) != 10) return 1;
+  if (observed(1, 2, 1) != 10) return 2;
+  if (signal(SIGILL, expected_unknown) == SIG_ERR) return 3;
+#ifdef SIGTRAP
+  if (signal(SIGTRAP, expected_unknown) == SIG_ERR) return 3;
+#endif
+  (void)observed(3, 1, 1);
+  return 4;
+}
+)c";
+  for (StringRef Level : {"-O0", "-O2"})
+    compileAndRun(Source, Level, {}, true);
+}
+
+TEST(LLVMCValues, AvailabilityPhiSwapsKeepUnknownIterationsGuarded) {
+  using namespace llvm;
+  LLVMContext Context;
+  SMDiagnostic Diagnostic;
+  auto Module = parseAssemblyString(R"(
+declare i32 @missing() "neverd.source.unknown-value"
+define i32 @alternating(i32 %count) {
+entry:
+  %absent = call i32 @missing()
+  br label %loop
+loop:
+  %left = phi i32 [23, %entry], [%right, %again]
+  %right = phi i32 [%absent, %entry], [%left, %again]
+  %remaining = phi i32 [%count, %entry], [%next, %again]
+  %done = icmp eq i32 %remaining, 0
+  br i1 %done, label %exit, label %again
+again:
+  %next = sub i32 %remaining, 1
+  br label %loop
+exit:
+  ret i32 %left
+}
+)",
+                                    Diagnostic, Context);
+  ASSERT_TRUE(Module) << Diagnostic.getMessage().str();
+  ASSERT_FALSE(verifyModule(*Module, &errs()));
+  neverd::CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  std::string Source;
+  raw_string_ostream OS(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
+  EXPECT_NE(Source.find("no recovered machine state"), std::string::npos)
+      << Source;
+  Source += R"c(
+#include <signal.h>
+#include <stdlib.h>
+static void expected_unknown(int code) { (void)code; _Exit(0); }
+int main(void) {
+  for (unsigned i = 0; i != 32; i += 2)
+    if (alternating(i) != 23) return 1;
+  if (signal(SIGILL, expected_unknown) == SIG_ERR) return 2;
+#ifdef SIGTRAP
+  if (signal(SIGTRAP, expected_unknown) == SIG_ERR) return 2;
+#endif
+  (void)alternating(1);
+  return 3;
+}
+)c";
+  for (StringRef Level : {"-O0", "-O2"})
+    compileAndRun(Source, Level, {}, true);
+}
+
+TEST(LLVMCValues, AvailabilityNarrowZeroTestCannotEquateWholeWords) {
+  using namespace llvm;
+  LLVMContext Context;
+  SMDiagnostic Diagnostic;
+  auto Module = parseAssemblyString(R"(
+declare i32 @missing() "neverd.source.unknown-value"
+define i32 @observed(i32 %left, i32 %right) {
+entry:
+  %absent = call i32 @missing()
+  %same = icmp eq i32 %left, %right
+  br i1 %same, label %known, label %unknown
+known:
+  br label %join
+unknown:
+  br label %join
+join:
+  %payload = phi i32 [17, %known], [%absent, %unknown]
+  %difference = sub i32 %left, %right
+  %byte = trunc i32 %difference to i8
+  %zero = icmp eq i8 %byte, 0
+  br i1 %zero, label %observe, label %ignore
+observe:
+  ret i32 %payload
+ignore:
+  ret i32 0
+}
+)",
+                                    Diagnostic, Context);
+  ASSERT_TRUE(Module) << Diagnostic.getMessage().str();
+  ASSERT_FALSE(verifyModule(*Module, &errs()));
+  neverd::CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  std::string Source;
+  raw_string_ostream OS(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
+  EXPECT_NE(Source.find("no recovered machine state"), std::string::npos)
+      << Source;
+  Source += R"c(
+#include <signal.h>
+#include <stdlib.h>
+static void expected_unknown(int code) { (void)code; _Exit(0); }
+int main(void) {
+  if (observed(7, 7) != 17 || observed(7, 8) != 0) return 1;
+  if (signal(SIGILL, expected_unknown) == SIG_ERR) return 2;
+#ifdef SIGTRAP
+  if (signal(SIGTRAP, expected_unknown) == SIG_ERR) return 2;
+#endif
+  (void)observed(256, 0);
+  return 3;
+}
+)c";
+  for (StringRef Level : {"-O0", "-O2"})
+    compileAndRun(Source, Level, {}, true);
+}
+
 TEST(LLVMCValues, IntegerSlicesRetainFreezeAndPoisonPromises) {
   using namespace llvm;
   for (unsigned Case = 0; Case != 6; ++Case) {
@@ -7604,7 +8111,8 @@ TEST(LLVMCValues, IntegerSlicesFollowWideProducersWithoutObservingUpperState) {
             std::string Source;
             raw_string_ostream OS(Source);
             ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, OS, Options));
-            EXPECT_EQ(Source.find("unknown machine state") != std::string::npos,
+            EXPECT_EQ(Source.find("no recovered machine state") !=
+                          std::string::npos,
                       ObserveUnknown);
             if (ObserveUnknown)
               continue;

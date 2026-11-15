@@ -21,6 +21,7 @@
 #include "neverd/loader/DataSymbolBinding.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringRef.h"
 
 #include <map>
 #include <optional>
@@ -31,6 +32,14 @@
 namespace neverd {
 
 int regToArgIdx(uint64_t RegOff, Arch TheArch);
+
+/// Maximum scalar arguments read by an authenticated bounded libc import.
+/// A known first argument refines Linux syscall's bound using the shared
+/// kernel contract. Unknown selectors keep the library's maximum. Callers
+/// must exclude patched callees and explicit prototype overrides first.
+std::optional<size_t>
+boundedLibcArgumentCount(const BinaryImage *Image, llvm::StringRef Name,
+                         std::optional<uint64_t> FirstArgument = std::nullopt);
 
 /// Validate the complete integer operand sequence retained from before SSA.
 bool hasBoundIntegerCallArguments(const MedOp &Op);
@@ -46,6 +55,18 @@ boundFloatingCallArguments(const MedOp &Op, Arch A, BinaryFormat F);
 std::optional<FloatingCallArguments>
 recoveredFloatingCallArguments(const MedOp &Op, const MedCallInfo &Call, Arch A,
                                BinaryFormat F);
+
+/// A full SIMD-register carrier in an unnamed argument of a convention with
+/// independent variadic register banks. Preserve every byte, without claiming
+/// a scalar type or a format-string consumption proof. Position, not the
+/// reaching value's register identity, owns the bank after copy propagation.
+bool recoveredVariadicVectorArgument(const MedCallInfo &Call, size_t Index,
+                                     Arch A, BinaryFormat F);
+
+/// The same carrier in a source call whose complete register operands were
+/// bound before SSA. Input includes the call target at position zero.
+bool recoveredVariadicVectorArgument(const MedOp &Call, unsigned Input, Arch A,
+                                     BinaryFormat F);
 
 /// Entries whose leaf bodies only write below their own entry stack pointer.
 /// Compute before ABI recovery mutates the functions. Unknown effects fail

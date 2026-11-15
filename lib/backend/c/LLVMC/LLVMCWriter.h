@@ -16,6 +16,7 @@
 
 #include "../CIdentifier.h"
 #include "../CSourceRecorder.h"
+#include "../CValueAvailability.h"
 #include "../DebugParamBinding.h"
 #include "LLVMCSourceFunctions.h"
 
@@ -59,6 +60,9 @@
 
 namespace neverd {
 
+using LLVMCInstructionAddresses =
+    llvm::DenseMap<const llvm::Instruction *, std::optional<va_t>>;
+
 /// Retargetable stream so one function can be buffered, then filtered,
 /// before it is written to the caller's ostream.
 class LLVMCOut {
@@ -82,10 +86,11 @@ public:
   LLVMCWriter(llvm::raw_ostream &OS, const CEmitterOptions &Opts,
               DebugContext *Dbg, const BinaryImage *Img = nullptr,
               bool GuardAnalysisOnlyFunctions = true,
-              CSourceRecorder *Recorder = nullptr)
+              CSourceRecorder *Recorder = nullptr,
+              const LLVMCInstructionAddresses *SourceAddresses = nullptr)
       : OS(OS), Opts(Opts), Dbg(Dbg), Img(Img),
         GuardAnalysisOnlyFunctions(GuardAnalysisOnlyFunctions),
-        SourceRecorder(Recorder) {
+        SourceRecorder(Recorder), SourceAddresses(SourceAddresses) {
     if (Img && importNamesAreCNames(Opts.Format))
       for (const Import &Imp : Img->Imports)
         if (!Imp.Name.empty())
@@ -210,6 +215,7 @@ public:
   void scanReferencedBlocks(llvm::Function &Fn);
   void writeBlockLabel(const llvm::BasicBlock &BB);
   void planExpressionMaterialization(llvm::Function &Fn);
+  void collectVectorGathers(llvm::Function &Fn);
   void markInlinable(llvm::Function &Fn);
   static bool isFloatingPointBitcast(const llvm::Instruction &Inst);
   static bool isNativeVectorIntrinsic(const llvm::CallBase &Call, Arch TheArch);
@@ -662,7 +668,6 @@ public:
   bool valueFeedsPrintedUse(const llvm::Value *V);
   bool loadOnlyUsedAsCallArgs(const llvm::Value *V) const;
   bool isResultParamValue(const llvm::Value *V) const;
-  TypeRef cDisplayType(const TypeRef &Ty) const;
   bool isReservedFrameName(llvm::StringRef Name) const;
   std::optional<VariableSym> debugFrameVariable(int64_t Disp) const;
   void markIndirectCalleeChains(llvm::Function &Fn);
@@ -670,12 +675,21 @@ public:
   bool usersAreDeadCopies(const llvm::Value *V) const;
   void collectOmittedUnknowns(llvm::Function &Fn);
   void collectDeferredUnknowns(llvm::Function &Fn);
+  c_availability::Assignment
+  deferredPhiAssignment(const llvm::PHINode &Phi,
+                        const llvm::Value *Incoming) const;
+  std::optional<c_availability::Assignment>
+  deferredInstructionAssignment(const llvm::Instruction &Inst) const;
+  void buildAvailabilityFlow(const llvm::Function &Fn);
+  bool deferredValueAvailable(const llvm::Value *Value);
+  static std::optional<unsigned>
+  deferredUnknownLowBit(const llvm::Value *Value);
   static bool isDeferredUnknownInput(const llvm::Value *Value);
   bool writeDeferredUnknownCopy(llvm::Instruction &Inst, int Indent);
   void collectOmittedInlinedImmediates(llvm::Function &Fn);
 
-  /// Omit ABI clobber placeholders and unused copies of them. Uses print
-  /// `0 /* unknown */` so RaiseException successors stay readable.
+  /// Omit ABI clobber placeholders and unused copies of them. A use that
+  /// remains prints an addressed fail-closed value.
   bool isUnusedCallClobber(const llvm::Instruction &Inst) const {
     return OmittedUnknowns.count(&Inst) != 0 ||
            OmittedInlined.count(&Inst) != 0;
@@ -802,10 +816,6 @@ public:
   /// The address among the code that \p CI holds, which the LLVM emitter
   /// keeps as a number: it gives only data sections globals to point into.
   std::optional<va_t> codeSectionAddress(const llvm::ConstantInt &CI) const;
-  /// \p CI as the literal or the debug information's data object at its
-  /// address among the code, as HighC spells it.
-  std::optional<std::string>
-  codeSectionAddressText(const llvm::ConstantInt &CI) const;
   std::optional<va_t>
   uniqueAllocaImageImmediate(const llvm::AllocaInst *Slot) const;
   std::string namedImageObject(va_t Addr) const;
@@ -852,10 +862,11 @@ public:
   /// vector's first element for the element lvalue `(v)[i]`.
   std::string bitCastSourceStr(const llvm::Value *V);
   std::string globalNameStr(const llvm::GlobalValue *Global);
-  /// Storage and aggregate integer constants retain their literal bits;
-  /// expression uses may additionally carry an image-address spelling.
-  std::string constStr(const llvm::Constant *C, bool AllowImageAddress = true,
+  /// Integer constants retain their literal bits. Pointer constants carry
+  /// their address interpretation explicitly.
+  std::string constStr(const llvm::Constant *C,
                        bool *PointerSpelling = nullptr);
+  std::string selectExpr(const llvm::SelectInst &Select);
   std::string blockLabel(const llvm::BasicBlock *BB);
   std::string binopStr(unsigned Opcode, const std::string &LHS,
                        const std::string &RHS, llvm::Type *Ty);
@@ -884,6 +895,7 @@ public:
   bool operandIsUnsignedWidth(const llvm::Value *V, unsigned Bits) const;
   std::string unsignedCompareOperand(const llvm::Value *V, std::string Text);
   std::string renderInline(const llvm::Instruction &Inst);
+  std::string unknownValueText(llvm::StringRef Reason) const;
   std::string renderInlineImpl(const llvm::Instruction &Inst);
   std::optional<std::string> unknownBitwiseText(const llvm::BinaryOperator &Op);
   /// \p Call as C; as a \p Statement, whose value nothing reads.
@@ -914,6 +926,15 @@ public:
   const llvm::Module *CurMod = nullptr;
   bool GuardAnalysisOnlyFunctions;
   CSourceRecorder *SourceRecorder = nullptr;
+  const LLVMCInstructionAddresses *SourceAddresses = nullptr;
+  /// The operation currently consuming an unavailable value. Inline rendering
+  /// establishes its own context, so cached expressions never inherit a
+  /// caller's address or the unknown seed's definition site.
+  const llvm::Instruction *EmittingInstruction = nullptr;
+  /// A complete vector assembly observes scalar lanes at this consumer.
+  /// Only diagnostic attribution uses it; availability proofs retain the
+  /// scalar instruction's own context, and lane spellings are not cached.
+  const llvm::Instruction *VectorGatherConsumer = nullptr;
   const llvm::Function *OnlyFunction = nullptr;
   llvmc::SourceFunctions SelectedFunctions;
   std::set<const llvm::GlobalValue *> SelectedGlobals;
@@ -927,6 +948,7 @@ public:
   CProjectionIdentifierAllocator GlobalIdentifierAllocator;
   std::string Win64CallABI;
   std::map<std::pair<Intrinsic, unsigned>, std::string> FPStateHelperNames;
+  std::map<uint32_t, std::string> AArch64MemoryHelpers;
   /// The helper each modeled supervisor call in the unit prints through.
   std::map<Intrinsic, std::string> SyscallHelperNames;
   std::map<const llvm::Function *, std::string> FunctionIdentifiers;
@@ -948,6 +970,8 @@ public:
   /// include source presentation choices such as inferred void and sret.
   std::map<const llvm::Function *, std::string> DefinitionDeclarations;
   std::map<const llvm::GlobalVariable *, std::string> ExternalDataIdentifiers;
+  /// Global declarations called as code addresses, never data objects.
+  std::set<const llvm::GlobalVariable *> CallableGlobalDeclarations;
   /// The C name each function's symbol spells, for its definition's comment.
   std::map<const llvm::Function *, std::string> FunctionSymbolNames;
   /// Each function's symbol as the image spells it (CSourceName::Symbol).
@@ -1253,7 +1277,18 @@ public:
   std::set<const llvm::Value *> OmittedUnknowns;
   /// Availability of mixed known/unknown integer PHIs and their copies.
   std::map<const llvm::Value *, std::string> DeferredUnknownFlags;
+  /// Complete lane assemblies are pure transports. Spell their scalar
+  /// elements at each consumer, preserving any deferred availability guards.
+  llvm::DenseMap<const llvm::InsertElementInst *,
+                 llvm::SmallVector<const llvm::Value *, 4>>
+      VectorGathers;
   bool ReadingDeferredPayload = false;
+  /// Built once, on the first observed deferred value, after normalization
+  /// and flag materialization. Query contexts are original LLVM instruction
+  /// points, including inside cached inline expressions.
+  std::optional<c_availability::Graph> AvailabilityFlow;
+  llvm::DenseMap<const llvm::Instruction *, c_availability::Point>
+      AvailabilityPoints;
   std::set<const llvm::Value *> OmittedInlined;
   std::set<const llvm::StoreInst *> OmittedLeftoverNarrow;
   std::map<const llvm::StoreInst *, const llvm::CallBase *> LeftoverSiblingFill;

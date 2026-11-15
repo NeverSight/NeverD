@@ -634,6 +634,26 @@ const char *neverd_sections_json(neverd_session_t Sess) {
   return dupStr(jsonToString(llvm::json::Value(std::move(Arr))));
 }
 
+/// One symbol row, in the key order a json::Object prints. A user's name
+/// replaces the symbol's. \p Literal marks a name that spells a string
+/// literal rather than an object.
+static void writeSymbolRow(llvm::json::OStream &J, va_t Addr,
+                           llvm::StringRef Name, uint64_t Size, bool Literal) {
+  J.object([&] {
+    J.attribute("addr", vaHex(Addr));
+    if (Literal)
+      J.attribute("literal", true);
+    J.attribute("name", jsonSafeText(Name));
+    J.attribute("size", static_cast<int64_t>(Size));
+  });
+}
+
+/// Bytes one symbol row adds. jsonSafeText can escape every byte, so the
+/// estimate is the expanded spelling plus the fixed keys.
+static size_t symbolRowBytes(llvm::StringRef Name, bool Literal) {
+  return Name.size() * 6 + (Literal ? 80 : 64);
+}
+
 /// The symbols as rows, streamed in the sorted key order a json::Object
 /// prints (building an object tree per symbol costs more than reading the
 /// symbols).  The user's names replace the symbols' and name, in a row of
@@ -642,17 +662,6 @@ static const char *symbolRows(Session &S, bool Data) {
   std::string Buf;
   llvm::raw_string_ostream OS(Buf);
   llvm::json::OStream J(OS);
-  // A user's name is a name even where the symbol's spells a literal.
-  const auto Row = [&](va_t Addr, llvm::StringRef Name, uint64_t Size,
-                       bool Literal) {
-    J.object([&] {
-      J.attribute("addr", vaHex(Addr));
-      if (Literal)
-        J.attribute("literal", true);
-      J.attribute("name", jsonSafeText(Name));
-      J.attribute("size", static_cast<int64_t>(Size));
-    });
-  };
   std::set<va_t> Renamed;
   J.array([&] {
     for (const auto &Sym : S.Img.Symbols) {
@@ -661,11 +670,12 @@ static const char *symbolRows(Session &S, bool Data) {
         continue;
       const auto Rename = S.Renames.find(Sym.Addr);
       if (Rename == S.Renames.end()) {
-        Row(Sym.Addr, Sym.Name, Sym.Size, isStringLiteralName(Sym.Name));
+        writeSymbolRow(J, Sym.Addr, Sym.Name, Sym.Size,
+                       isStringLiteralName(Sym.Name));
         continue;
       }
       Renamed.insert(Sym.Addr);
-      Row(Sym.Addr, Rename->second, Sym.Size, false);
+      writeSymbolRow(J, Sym.Addr, Rename->second, Sym.Size, false);
     }
     for (const auto &[Addr, Name] : S.Renames) {
       if (Renamed.count(Addr) ||
@@ -673,11 +683,21 @@ static const char *symbolRows(Session &S, bool Data) {
              return F.Entry == Addr;
            })))
         continue;
-      Row(Addr, Name, 0, false);
+      writeSymbolRow(J, Addr, Name, 0, false);
     }
   });
   OS.flush();
   return dupStr(Buf);
+}
+
+/// A rename neverd_data_symbols_json lists on its own: no data symbol
+/// carries it, and it does not name a function.
+static bool dataRenameStandsAlone(const Session &S, va_t Addr) {
+  for (const auto &Sym : S.Img.Symbols)
+    if (Sym.Addr == Addr && !Sym.IsSection && !Sym.IsFunc)
+      return false;
+  return llvm::none_of(S.Functions,
+                       [&](const auto &F) { return F.Entry == Addr; });
 }
 
 const char *neverd_symbols_json(neverd_session_t Sess) {
@@ -692,6 +712,99 @@ const char *neverd_data_symbols_json(neverd_session_t Sess) {
   if (!S->Loaded)
     return dupStr("[]");
   return symbolRows(*S, true);
+}
+
+const char *neverd_data_symbols_page_json(neverd_session_t Sess, uint64_t First,
+                                          int MaxRows) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return nullptr;
+  S->clearError();
+  if (!S->Loaded)
+    return dupStr("{\"next\":null,\"symbols\":[]}");
+  const size_t Limit =
+      static_cast<size_t>(std::clamp(MaxRows, 1, kMaxDataSymbolRowsPerPage));
+  const size_t SymbolCount = S->Img.Symbols.size();
+  // A cursor below the symbol count is a symbol index. At or past it, the
+  // distance is how many standalone renames earlier pages already listed.
+  uint64_t Index = First;
+  size_t Emitted = 0;
+  size_t Used = 2;
+  std::string Symbols;
+  llvm::raw_string_ostream SymbolOS(Symbols);
+  llvm::json::OStream J(SymbolOS);
+  bool Stopped = false;
+  uint64_t Next = 0;
+  const auto Accept = [&](va_t Addr, llvm::StringRef Name, uint64_t Size,
+                          bool Literal) {
+    const size_t Bytes = symbolRowBytes(Name, Literal);
+    if (Bytes > kMaxDataSymbolPageBytes) {
+      S->setError("data symbol exceeds the page budget");
+      return false;
+    }
+    if (Emitted && Used + Bytes > kMaxDataSymbolPageBytes)
+      return false;
+    writeSymbolRow(J, Addr, Name, Size, Literal);
+    Used += Bytes;
+    ++Emitted;
+    return true;
+  };
+  const auto StopAt = [&](uint64_t Cursor) {
+    Stopped = true;
+    Next = Cursor;
+  };
+  J.array([&] {
+    while (Index < SymbolCount && Emitted < Limit) {
+      const auto &Sym = S->Img.Symbols[static_cast<size_t>(Index)];
+      if (Sym.IsSection || Sym.IsFunc) {
+        ++Index;
+        continue;
+      }
+      const auto Rename = S->Renames.find(Sym.Addr);
+      const bool Renamed = Rename != S->Renames.end();
+      if (!Accept(Sym.Addr,
+                  Renamed ? llvm::StringRef(Rename->second) : Sym.Name,
+                  Sym.Size, Renamed ? false : isStringLiteralName(Sym.Name))) {
+        StopAt(Index);
+        return;
+      }
+      ++Index;
+    }
+    if (!S->LastError.empty())
+      return;
+    if (Emitted >= Limit) {
+      if (Index < SymbolCount || !S->Renames.empty())
+        StopAt(Index);
+      return;
+    }
+    if (S->Renames.empty())
+      return;
+    const size_t Skip =
+        Index > SymbolCount ? static_cast<size_t>(Index - SymbolCount) : 0;
+    size_t Ordinal = 0;
+    for (const auto &[Addr, Name] : S->Renames) {
+      if (!dataRenameStandsAlone(*S, Addr))
+        continue;
+      if (Ordinal < Skip) {
+        ++Ordinal;
+        continue;
+      }
+      if (Emitted >= Limit || !Accept(Addr, Name, 0, false)) {
+        StopAt(SymbolCount + Ordinal);
+        return;
+      }
+      ++Ordinal;
+    }
+  });
+  SymbolOS.flush();
+  if (!S->LastError.empty())
+    return nullptr;
+  std::string Page = "{\"next\":";
+  Page += Stopped ? std::to_string(Next) : "null";
+  Page += ",\"symbols\":";
+  Page += Symbols;
+  Page += '}';
+  return dupStr(Page);
 }
 
 const char *neverd_relocs_json(neverd_session_t Sess) {

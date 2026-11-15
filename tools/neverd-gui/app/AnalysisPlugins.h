@@ -18,6 +18,7 @@
 #include <QHash>
 #include <QJsonObject>
 #include <QList>
+#include <QPointer>
 #include <QSet>
 #include <QString>
 #include <QStringList>
@@ -36,6 +37,7 @@ class QTreeWidgetItem;
 
 namespace neverd::gui {
 class ActionRegistry;
+class GuiPluginUiHost;
 class Session;
 class PluginServices;
 
@@ -45,7 +47,9 @@ class AnalysisPlugins final : public QWidget {
   Q_OBJECT
 public:
   AnalysisPlugins(Session &session, ActionRegistry &actions,
-                  QWidget *parent = nullptr);
+                  QWidget *parent = nullptr,
+                  const QString &bundledAgentManifest = {},
+                  GuiPluginUiHost *nativeUi = nullptr);
   PluginJobs &jobs() { return jobs_; }
   /// Register a manifest and remember it for subsequent workbench launches.
   bool installPlugin(const QString &path, QString &error);
@@ -63,7 +67,6 @@ signals:
   void message(const QString &text, int level);
 
 private:
-  void restorePlugins();
   void refreshContext();
   void updateActions();
   void rebuildActions();
@@ -79,6 +82,7 @@ private:
   ActionRegistry &actions_;
   PluginServices &services_;
   PluginJobs &jobs_;
+  QPointer<GuiPluginUiHost> nativeUi_;
   QMenu *menu_;
   QTreeWidget *tasks_;
   QTabWidget *views_;

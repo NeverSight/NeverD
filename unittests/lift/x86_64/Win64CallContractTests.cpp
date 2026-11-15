@@ -492,7 +492,7 @@ TEST(CallExitRegisters, SourceEntryRegistersRemainDistinctUnknownValues) {
     std::string Source;
     llvm::raw_string_ostream Out(Source);
     ASSERT_TRUE(LLVMCEmitter().emit(*Module, Out, {}));
-    EXPECT_NE(Source.find("unknown machine state"), std::string::npos)
+    EXPECT_NE(Source.find("no recovered machine state"), std::string::npos)
         << Source;
     EXPECT_EQ(Source.find("return 0;"), std::string::npos) << Source;
   }
@@ -5740,21 +5740,20 @@ TEST(Win64CallContract, AGuardedBsrCalleeReadsNoDestinationRegister) {
   EXPECT_EQ(Reads.at(Callee)[family(x86reg::R8)], 0u);
 }
 
-TEST(Win64CallContract, PreparedSummariesReadCalleesPastTheRunsDepth) {
+TEST(Win64CallContract, SelectedAndPreparedSummariesReadTheCompleteChain) {
   // caller -> f1 -> ... -> fN, each passing its argument registers on, and
-  // fN reads R9: one call deeper than a run summarizes callees.  The run of
-  // the caller leaves fN unread, so f1 seems to read nothing.  A session's
-  // image summaries read every function, as a whole-image run does.
-  constexpr size_t Chain = limits::kMaxCallEffectCalleeDepth + 1;
+  // fN reads R9. A selected run must reach that read without prior warming,
+  // through a chain deeper than the former four-call cutoff.
+  constexpr size_t Chain = 17;
   constexpr va_t Stride = 0x20;
   std::vector<uint8_t> Code((Chain + 1) * Stride, 0xCC);
   std::vector<std::pair<va_t, const char *>> Functions;
-  static const char *const Names[] = {"caller", "f1", "f2", "f3",
-                                      "f4",     "f5", "f6", "f7"};
-  static_assert(Chain < std::size(Names));
+  std::vector<std::string> Names;
+  Names.reserve(Chain + 1);
   for (size_t I = 0; I <= Chain; ++I) {
     const va_t At = Text + I * Stride;
-    Functions.emplace_back(At, Names[I]);
+    Names.push_back("chain_" + std::to_string(I));
+    Functions.emplace_back(At, Names.back().c_str());
     if (I == Chain) {
       // mov rax, r9; ret
       put(Code, At, {0x4C, 0x89, 0xC8, 0xC3});
@@ -5774,13 +5773,11 @@ TEST(Win64CallContract, PreparedSummariesReadCalleesPastTheRunsDepth) {
   Opts.EmitDumpOutput = false;
   Opts.OnlyFunctionEntries = {Text};
   Opts.AnalysisCache = &Cache;
-  {
-    const PipelineResult Closure = Pipeline().run(Img, Ctx, Opts);
-    ASSERT_TRUE(Closure.Success) << Closure.Error;
-    EXPECT_FALSE(Closure.CallEntryReadGPRs.count(Last));
-    ASSERT_TRUE(Closure.CallEntryReadGPRs.count(First));
-    EXPECT_EQ(Closure.CallEntryReadGPRs.at(First)[family(x86reg::R9)], 0u);
-  }
+  const PipelineResult Closure = Pipeline().run(Img, Ctx, Opts);
+  ASSERT_TRUE(Closure.Success) << Closure.Error;
+  ASSERT_TRUE(Closure.CallEntryReadGPRs.count(Last));
+  ASSERT_TRUE(Closure.CallEntryReadGPRs.count(First));
+  EXPECT_EQ(Closure.CallEntryReadGPRs.at(First)[family(x86reg::R9)], 8u);
   ASSERT_TRUE(Pipeline().prepareCallSummaries(Img, Opts, nullptr));
   const PipelineResult Prepared = Pipeline().run(Img, Ctx, Opts);
   ASSERT_TRUE(Prepared.Success) << Prepared.Error;
@@ -5798,6 +5795,16 @@ TEST(Win64CallContract, PreparedSummariesReadCalleesPastTheRunsDepth) {
               Whole.CallEntryReadGPRs.at(Entry));
     EXPECT_EQ(Prepared.CallMayWriteGPRs.at(Entry),
               Whole.CallMayWriteGPRs.at(Entry));
+    EXPECT_EQ(Closure.CallEntryReadGPRs.at(Entry),
+              Whole.CallEntryReadGPRs.at(Entry));
+    EXPECT_EQ(Closure.CallMayWriteGPRs.at(Entry),
+              Whole.CallMayWriteGPRs.at(Entry));
+    ASSERT_TRUE(Closure.CallBodyMayWriteGPRs.contains(Entry));
+    EXPECT_EQ(Closure.CallBodyMayWriteGPRs.at(Entry), 0xFFFF0011u);
+    EXPECT_EQ(Prepared.CallBodyMayWriteGPRs.at(Entry),
+              Closure.CallBodyMayWriteGPRs.at(Entry));
+    EXPECT_EQ(Whole.CallBodyMayWriteGPRs.at(Entry),
+              Closure.CallBodyMayWriteGPRs.at(Entry));
   }
 }
 

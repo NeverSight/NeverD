@@ -15,6 +15,76 @@
 
 #if defined(__APPLE__) && defined(__arm64e__)
 #include <libunwind.h>
+#include <unwind.h>
+
+#define NEVERD_SYSTEM_UNWIND_BRIDGE(Name, Symbol, Assembly)                    \
+  void Name(void) __asm__(Symbol);                                             \
+  __asm__(Assembly);
+#define NEVERD_SYSTEM_UNWIND_PERSONALITY(Name, Symbol)                         \
+  _Unwind_Reason_Code Name(                                                    \
+      int, _Unwind_Action, uint64_t, struct _Unwind_Exception *,               \
+      struct _Unwind_Context *) __asm__(Symbol) __attribute__((weak));
+#include "neverd/runtime/DarwinArm64eSystemUnwind.def"
+
+// Darwin's level-one unwinder passes its public cursor as _Unwind_Context.
+// Advance the artificial bridge before consulting the original personality,
+// retaining the real language frame and its exception argument registers.
+_Unwind_Reason_Code ndDarwinArm64eLiveLRPersonality(
+    int Version, _Unwind_Action Actions, uint64_t ExceptionClass,
+    struct _Unwind_Exception *Exception, struct _Unwind_Context *Context) {
+  unw_cursor_t *System = (unw_cursor_t *)Context;
+  const _Unwind_Reason_Code Failure = Actions & _UA_SEARCH_PHASE
+                                          ? _URC_FATAL_PHASE1_ERROR
+                                          : _URC_FATAL_PHASE2_ERROR;
+  unw_word_t BridgeSP, BridgePC, CallerLR, InterruptedSP, VirtualReturn;
+  if (unw_get_reg(System, UNW_REG_SP, &BridgeSP) ||
+      unw_get_reg(System, UNW_REG_IP, &BridgePC) || unw_step(System) <= 0 ||
+      unw_get_reg(System, UNW_ARM64_LR, &CallerLR) ||
+      unw_get_reg(System, UNW_REG_SP, &InterruptedSP) ||
+      unw_get_reg(System, UNW_REG_IP, &VirtualReturn))
+    return Failure;
+  unw_proc_info_t Info;
+  if (unw_get_proc_info(System, &Info) || !Info.handler)
+    return Failure;
+  // Reading the SDK's restricted integer authenticates the handler field.
+  // Supply the ordinary function-pointer schema without an integer cast to
+  // a function pointer, whose signature conversion differs between Clangs.
+  const uintptr_t Handler = (uintptr_t)ptrauth_sign_unauthenticated(
+      (void *)(uintptr_t)Info.handler, ptrauth_key_function_pointer, 0);
+  _Unwind_Personality_Fn Personality;
+  memcpy(&Personality, &Handler, sizeof(Personality));
+  const _Unwind_Reason_Code Result =
+      Personality(Version, Actions, ExceptionClass, Exception, Context);
+  if (Result == _URC_HANDLER_FOUND) {
+    // Phase one records this SP after the callback; phase two compares it
+    // before the callback. Keep the bridge identity for a local catch.
+    if (unw_set_reg(System, UNW_REG_SP, BridgeSP) ||
+        unw_set_reg(System, UNW_REG_IP, BridgePC) ||
+        unw_set_reg(System, UNW_REG_SP, BridgeSP))
+      return Failure;
+  } else if (Result == _URC_INSTALL_CONTEXT) {
+    const uintptr_t LandingPad = _Unwind_GetIP(Context);
+    unw_word_t SP;
+    if (unw_get_reg(System, UNW_REG_SP, &SP))
+      return Failure;
+    _Unwind_SetGR(Context, NDArm64eCallerLRRegister, CallerLR);
+    _Unwind_SetGR(Context, NDArm64eInterruptedSPRegister, InterruptedSP);
+    _Unwind_SetGR(Context, NDArm64eResumeReturnRegister, VirtualReturn);
+    _Unwind_SetGR(Context, NDArm64eLandingPadRegister,
+                  (uintptr_t)ptrauth_sign_unauthenticated(
+                      (void *)LandingPad, ptrauth_key_function_pointer, 0));
+    void *Resume = ptrauth_strip((void *)&ndDarwinArm64eLiveLRResume,
+                                 ptrauth_key_function_pointer);
+    const uintptr_t PC = (uintptr_t)ptrauth_sign_unauthenticated(
+        Resume, ptrauth_key_return_address, SP);
+    // Setting IP can apply GNU argument-size adjustment again. The original
+    // personality has already selected the landing pad's exact stack state.
+    if (unw_set_reg(System, UNW_REG_IP, PC) ||
+        unw_set_reg(System, UNW_REG_SP, SP))
+      return Failure;
+  }
+  return Result;
+}
 
 // Recover from the interrupted stack before changing either native consumer.
 static inline bool
@@ -130,17 +200,33 @@ static inline bool ndDarwinArm64eDeliverSignalException(
   if (PC < Site.Begin || PC >= Site.End || PC % NDArm64eInstructionAlignment)
     return false;
   if (Site.AtProtectedCall) {
-    // The interrupted frame keeps its original signed return in its spill.
-    // The thunk can therefore use LR without destroying that frame's caller.
     NDDarwinArm64eCursor Caller = ndDarwinArm64eSignalCursor(Context);
+    const uintptr_t InterruptedSP = Caller.SP;
     if ((Site.ProtectedReturn &&
          Site.ProtectedReturn % NDArm64eInstructionAlignment) ||
-        !Row.SavedLR || Site.Begin != PC ||
-        Site.End - PC != NDArm64eInstructionAlignment || Caller.SP < Low ||
-        Caller.SP > High || Caller.SP % NDArm64eStackAlignment ||
+        Site.Begin != PC || Site.End - PC != NDArm64eInstructionAlignment ||
+        Caller.SP < Low || Caller.SP > High ||
+        Caller.SP % NDArm64eStackAlignment ||
+        (!Row.SavedLR && (Row.Signing != NDArm64eSignedIBWithCFA ||
+                          Caller.SP - Low < NDArm64eLiveLRBridgeBytes)) ||
         !ndDarwinArm64eStepFrameWithPAuthLR(&Caller, Row, Low, High,
                                             HasPAuthLR))
       return false;
+    if (!Row.SavedLR) {
+      // Preserve the genuine LR and SP in the signal context. The bridge
+      // allocates its frame after sigreturn and restores LR independently of
+      // the virtual protected edge. Nothing writes below interrupted SP here.
+      State->__x[NDArm64eDeliveryRegister] = (uintptr_t)Deliver;
+      State->__x[NDArm64eVirtualReturnRegister] =
+          (uintptr_t)ptrauth_sign_unauthenticated(
+              (void *)(Site.ProtectedReturn ? Site.ProtectedReturn : Site.End),
+              ptrauth_key_return_address, InterruptedSP);
+      State->__x[0] = (uintptr_t)Payload;
+      arm_thread_state64_set_pc_fptr(*State,
+                                     (void *)&ndDarwinArm64eLiveLRBridge);
+      return true;
+    }
+    // A spilled original return lets the thunk use LR directly.
     void *Return = ptrauth_sign_unauthenticated(
         (void *)(Site.ProtectedReturn ? Site.ProtectedReturn : Site.End),
         ptrauth_key_function_pointer, 0);

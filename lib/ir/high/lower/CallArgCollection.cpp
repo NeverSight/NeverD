@@ -1015,6 +1015,11 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
           HighExpr::makeBinop(NdOp::SUBBYTES, Value, HighExpr::makeConst(0, 4));
       Value->Type = NdType::makeInt(Width, false);
     }
+    if (recoveredVariadicVectorArgument(Call, Input, TargetArch, Format)) {
+      auto Carrier = NdType::makeInt(16, false);
+      Carrier->SourceName = kSourceAArch64Vector128CType;
+      Value = HighExpr::makeBitCast(std::move(Value), std::move(Carrier));
+    }
     return Value;
   };
   // A summarized callee published exactly the register arguments it reads
@@ -1220,11 +1225,27 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
   Scan.TheArch = TargetArch;
   Scan.Convention = Convention;
   Scan.MaxArgs = MaxArgs;
+  std::string BoundedImport;
   if (CallIdx < Ops.size() && !Ops[CallIdx].SourceCallHint) {
     const MedOp &Call = Ops[CallIdx];
     Scan.CalleeRegisterArgs = Call.CalleeRegisterArgs;
     Scan.CalleeStackArgs = Call.CalleeStackArgs;
     Scan.HeaderVariadic = Call.CalleeVariadicFrom >= 0;
+    // A bounded libc vararg contract also keeps the stack tail open. Its
+    // register-bank summary is not a complete fixed prototype; the shared
+    // consumption bound applies only after collecting the stack slots.
+    const va_t ImportKey = Call.NumInputs && Call.Inputs[0].isConst()
+                               ? Call.Inputs[0].ConstVal
+                               : ResolvedSlot;
+    if (Image && !Image->functionHasBytePatch(ImportKey) &&
+        (!PrototypeArgumentCallees ||
+         !PrototypeArgumentCallees->count(ImportKey))) {
+      const auto Import = importCalleeName(*Image, ImportKey);
+      if (!Import.empty() && boundedLibcArgumentCount(Image, Import)) {
+        Scan.HeaderVariadic = true;
+        BoundedImport = Import;
+      }
+    }
     Scan.CalleeInImage =
         Call.Opcode == NdOp::CALL && Call.NumInputs >= 1 &&
         Call.Inputs[0].isConst() &&
@@ -1483,6 +1504,15 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
             Info && PrototypeArgumentCallees->count(Info->TargetAddr))
           return Collected;
     }
+    if (!BoundedImport.empty()) {
+      const auto First = !Collected.empty() && Collected.front() &&
+                                 Collected.front()->Kind == ExprKind::Const
+                             ? std::optional(Collected.front()->ConstVal)
+                             : std::nullopt;
+      const auto Count = boundedLibcArgumentCount(Image, BoundedImport, First);
+      Collected.resize(std::min(Collected.size(), *Count));
+      return Collected;
+    }
     std::string Name;
     if (Call.SourceCallHint && !Call.SourceCallHint->TargetName.empty())
       Name = Call.SourceCallHint->TargetName;
@@ -1604,6 +1634,8 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
                : !CI->Args.empty())) {
         std::vector<ExprPtr> FromABI;
         FromABI.reserve(Recovered);
+        const auto FloatingSignature =
+            recoveredFloatingCallArguments(Call, *CI, TargetArch, Format);
         for (size_t K = 0; K < Recovered; ++K) {
           ExprPtr Arg = medvarToExpr(CI->Args[K]);
           // The callee reads only the low lane's scalar.
@@ -1620,8 +1652,9 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
               K - CI->IntegerRegisterArgCount <
                   static_cast<size_t>(
                       std::max(0, CI->FloatingRegisterArgCount));
-          if (Read && FloatingLane && Ops[CallIdx].CalleeFloatReturnBytes &&
-              Arg && Arg->Type && Arg->Type->Kind == NdTypeKind::Int &&
+          if (Read && FloatingLane &&
+              (Call.CalleeFloatReturnBytes || FloatingSignature) && Arg &&
+              Arg->Type && Arg->Type->Kind == NdTypeKind::Int &&
               Arg->Type->Size == Read)
             Arg =
                 HighExpr::makeBitCast(std::move(Arg), NdType::makeFloat(Read));
@@ -1629,6 +1662,12 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
               Arg && Arg->Type && Arg->Type->Size == 10 &&
               Arg->Type->Kind != NdTypeKind::Float)
             Arg = HighExpr::makeBitCast(std::move(Arg), NdType::makeFloat(10));
+          if (recoveredVariadicVectorArgument(*CI, K, TargetArch, Format) &&
+              Arg && Arg->Type && Arg->Type->Size == 16) {
+            auto Carrier = NdType::makeInt(16, false);
+            Carrier->SourceName = kSourceAArch64Vector128CType;
+            Arg = HighExpr::makeBitCast(std::move(Arg), std::move(Carrier));
+          }
           FromABI.push_back(std::move(Arg));
         }
         // The register that holds an indirect call's target is no argument
