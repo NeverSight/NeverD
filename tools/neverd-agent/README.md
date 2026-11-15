@@ -24,7 +24,7 @@ With the GUI enabled, build `neverd-desktop` and install that build once. See th
 applications, worker, MCP and plugin-host CLI together. The standalone build
 below remains available for work that only changes Agent.
 
-Requires Qt 6.8+ Core, Gui, Quick, QuickControls2, Svg, Concurrent and Network, a C++20
+Requires Qt 6.12+ Core, Gui, Quick, QuickControls2, Svg, Concurrent and Network, a C++20
 compiler, and CMake 3.24+. Tests additionally require Qt Test. The application
 can be built independently of LLVM and the engine. Use a developer shell on
 Windows and set `CMAKE_PREFIX_PATH` to the desired Qt installation.

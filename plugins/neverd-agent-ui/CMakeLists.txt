@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   project(NeverDAgentUi LANGUAGES CXX)
-  find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets LinguistTools)
+  find_package(Qt6 6.12 REQUIRED COMPONENTS Widgets LinguistTools)
 endif()
 
 set(agent_dir "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/neverd-agent")

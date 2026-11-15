@@ -5,9 +5,9 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   include(CTest)
 endif()
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Svg Concurrent Network
+find_package(Qt6 6.12 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Svg Concurrent Network
   LinguistTools)
-qt_standard_project_setup(REQUIRES 6.8)
+qt_standard_project_setup(REQUIRES 6.12)
 
 if(NOT TARGET neverd_tools)
   add_subdirectory("../../lib/tools" nd-tools)
@@ -85,7 +85,7 @@ elseif(APPLE)
   target_link_libraries(neverd-agent PRIVATE "-framework AppKit")
 else()
   if(NOT TARGET Qt6::GuiPrivate)
-    find_package(Qt6 6.8 REQUIRED COMPONENTS GuiPrivate)
+    find_package(Qt6 6.12 REQUIRED COMPONENTS GuiPrivate)
   endif()
   target_sources(neverd-agent PRIVATE ../neverd-gui/app/platform/WindowFrameUnix.cpp
     ../neverd-gui/app/platform/DesktopContrastUnix.cpp)
@@ -146,7 +146,7 @@ qt_generate_deploy_qml_app_script(TARGET neverd-agent
 install(SCRIPT ${_agent_deploy_script})
 
 if(BUILD_TESTING)
-  find_package(Qt6 6.8 REQUIRED COMPONENTS Test)
+  find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
   qt_add_executable(NeverDAgentFixtureMcp tests/FixtureMcp.cpp)
   target_link_libraries(NeverDAgentFixtureMcp PRIVATE Qt6::Core)
   qt_add_executable(NeverDAgentChangeReviewTests tests/ChangeReviewTests.cpp)
