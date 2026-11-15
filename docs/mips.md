@@ -1303,6 +1303,11 @@ target assembly and reuse the scalar ABI and byte-provenance checks described
 below. No host floating-point evaluation substitutes for the target's FCSR.
 The pinned Unicorn includes [the scalar legacy ABS/NEG exception fix](https://github.com/NeverSight/unicorn/pull/28)
 and [the paired-single sign/exception fix](https://github.com/NeverSight/unicorn/pull/29).
+Its [MSVC target configuration fix](https://github.com/NeverSight/unicorn/pull/34)
+also restores the natural-alignment checks already enabled by Unix builds.
+The [native Windows receipt](evidence/mips-msvc-reference-alignment-2026-11-15.json)
+records the failing previous reference, three passing corrected runs and the
+R6 unaligned-memory control.
 The independent sign tests distinguish pre-R6 arithmetic NaN behavior from R6
 bit operations, including enabled Invalid exceptions and preserved destinations.
 The rules follow [MIPS64 Volume II, revision 2.50](https://0x04.net/~mwk/doc/mips/MD00087-2B-MIPS64BIS-AFP-02.50.pdf).

@@ -1,0 +1,56 @@
+{
+  "fork_pr": "https://github.com/NeverSight/unicorn/pull/34",
+  "merge_commit": "7efa71088d7a4057e87a50dd443d786002f97fa6",
+  "tested_commit": "5a3941482f7087d4c82d0b98755a73119a019333",
+  "tested_and_merged_trees_identical": true,
+  "previous_reference": "0b976580a5447dff2fd6822f07b4683c33392d78",
+  "correction": "Restore TARGET_ALIGNED_ONLY in all four checked-in MSVC MIPS target configurations; Unix generated configurations already define it.",
+  "native_run": "https://github.com/NeverSight/NeverD/actions/runs/43719050944",
+  "native_host": "Windows x64, MSVC 19.51.36260.0, Release, static Unicorn, MIPS-only, /MD",
+  "negative_control": "The same independent alignment test fails against the previous reference on native Windows. Its R6 unaligned-memory control passes.",
+  "native_repeats": [
+    {
+      "iteration": 1,
+      "passed": 18
+    },
+    {
+      "iteration": 2,
+      "passed": 18
+    },
+    {
+      "iteration": 3,
+      "passed": 18
+    }
+  ],
+  "native_test_binary_sha256": "92b6464da52b45c59e964c9e44906dcc29cb87eef9028922c39d471d7cfea29d",
+  "local_host": "macOS arm64, Release",
+  "local_mips_tests_passed": 18,
+  "new_memory_profile_address_combinations": 576,
+  "coverage": [
+    "MIPS32 FR=0 and FR=1; MIPS64 FR=1",
+    "Both byte orders and all eight low address offsets",
+    "Ordinary and indexed scalar FP memory, LUXC1/SUXC1 low-address-bit behavior",
+    "Memory and FPR preservation on alignment faults; unchanged FCSR",
+    "R6 ordinary scalar FP unaligned-memory control"
+  ],
+  "native_report_sha256": {
+    "after-1.log": "94829deef8bccecfa67ca400306fff858fbcad9a2460f81b2eae9b4f6492bbe8",
+    "after-2.log": "94829deef8bccecfa67ca400306fff858fbcad9a2460f81b2eae9b4f6492bbe8",
+    "after-3.log": "94829deef8bccecfa67ca400306fff858fbcad9a2460f81b2eae9b4f6492bbe8",
+    "hash-after.txt": "b454f95dd05ef2182c80925e1c9c33d6b1f9bc28bf1d11c64ba2eba285c88494",
+    "build-after.log": "0161476e4a5c82a9dc1646498f54e36ad6709beb5707f271de3d1cdb8ee31737",
+    "before-r6-control.log": "e5db350a9cbd89041db8212cfa53f5c6a065120e21e88e2b2c67c248a9f2d636",
+    "configure-before.log": "6328f01a50e76b230c01ab0c53401993b8d29adea8873af549e5b702b22cd9d1",
+    "configure-after.log": "b1fb0c7a20f95171c875f1349b6c5c071929bb0c99688edac139a17e987b498f",
+    "build-before.log": "1627280f1ea1db1b0dbe3bd5739ca721fa155c6685bf1cd5dd0b2828c990d7df",
+    "hash-before.txt": "1e993d7df1555dcbdd45ae7ed011602c5d425ef627acd5ae047eab91ce1e70ff",
+    "candidate.txt": "9b0b8898b86f6b3c72f096e415d5450658e85609e2a15b9e5a40be18ac70a3d7",
+    "before-alignment.log": "8b094082e8c6c4b39d429c16d86372a84e3df9638ebcee7e5babb94b3a58a98b",
+    "cmake-cache.txt": "761dfa18d2fe11af3542ceffac6b1fc0fcaa2a6be3e64b7b111c7745c04b7c27"
+  },
+  "limits": [
+    "This is a reference-engine correction, not new NeverD instruction semantics.",
+    "The native run isolates the reference owner; final-head NeverD three-platform CI is a separate gate.",
+    "Existing call-matrix and performance receipts retain their original source and binary identities; they were not rerun for this MSVC-only configuration change."
+  ]
+}

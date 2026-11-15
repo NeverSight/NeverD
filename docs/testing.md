@@ -24335,6 +24335,11 @@ all eight low address offsets. The loader test rejects inconsistent FP ABI and
 CPR1 width evidence. `MIPSFR0` compares physical even/odd word pairs,
 alignment faults and untouched FPR words in both byte orders. Odd doubles,
 long formats, PS and unaligned indexed transfers are rejected under FR=0.
+The pinned Unicorn MSVC MIPS target snapshots enable the same default memory
+alignment as Unix builds. Its independent `test_mips_fp_memory_alignment` and
+`test_mips_r6_fp_unaligned_memory` cover 576 profile/address combinations.
+The native Windows negative control fails with the previous reference; the
+fixed reference passes all 18 MIPS tests in three consecutive Release runs.
 Paired-single tests cover both lanes' exception flags, all even FCC pairs,
 conditional moves, packing, overlapping registers and defined/undefined ALNV
 offsets. The reference CPU supplies PS even for MIPS32 LowIR; this does not
