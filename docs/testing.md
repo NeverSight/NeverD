@@ -8503,6 +8503,10 @@ rendered size and offset check must hold.
 `TypeFit.*` lands accesses on members (union alternatives, bitfield units,
 array elements, padding and bytes outside a record) and ranks records by
 them, a pointer into a record and quick-open matching included.
+`TypeJSONFixture.SharedSpellerMatchesOwnedLayouts` compares complete layout
+JSON with shared and per-request type spelling in both library orders and
+both builtin spelling modes. It belongs to `NeverDTypesTests`, whose native
+Windows build also checks construction of the noncopyable spelling state.
 `NeverDMedPointerAccessesTests` gathers the accesses through one pointer from
 hand-built MedIR, through copies and constant additions.
 `SessionCAPITest.LocalTypesFitWhatTheCodeDoesThroughAPointer` ranks the

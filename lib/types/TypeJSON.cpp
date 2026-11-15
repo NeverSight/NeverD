@@ -43,7 +43,7 @@ public:
   Builder(const TypeLibrary &Library, BuiltinSpelling Spelling,
           const TypeSpeller *Shared = nullptr)
       : Library(Library),
-        Own(Shared ? std::nullopt
+        Own(Shared ? std::optional<TypeSpeller>()
                    : std::optional<TypeSpeller>(std::in_place, Library,
                                                 options(Spelling))),
         Speller(Shared ? *Shared : *Own) {}

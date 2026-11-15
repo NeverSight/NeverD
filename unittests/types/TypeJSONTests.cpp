@@ -6,7 +6,9 @@
 
 #include "neverd/types/PDBTypeImport.h"
 #include "neverd/types/TypeJSON.h"
+#include "neverd/types/TypeRender.h"
 
+#include <algorithm>
 #include <gtest/gtest.h>
 
 using namespace neverd::types;
@@ -53,6 +55,29 @@ std::string shape(const llvm::json::Array &Members) {
 }
 
 } // namespace
+
+TEST_F(TypeJSONFixture, SharedSpellerMatchesOwnedLayouts) {
+  for (BuiltinSpelling Spelling :
+       {BuiltinSpelling::Portable, BuiltinSpelling::Windows}) {
+    SCOPED_TRACE(static_cast<unsigned>(Spelling));
+    RenderOptions Options;
+    Options.Spelling = Spelling;
+    TypeSpeller Shared(*Library, Options);
+    auto Types = Library->types();
+    ASSERT_FALSE(Types.empty());
+    for (bool Reversed : {false, true}) {
+      SCOPED_TRACE(Reversed);
+      if (Reversed)
+        std::reverse(Types.begin(), Types.end());
+      for (const LocalType *Type : Types) {
+        SCOPED_TRACE(Type->Name);
+        EXPECT_EQ(
+            llvm::json::Value(typeJSON(*Library, *Type, Spelling, &Shared)),
+            llvm::json::Value(typeJSON(*Library, *Type, Spelling)));
+      }
+    }
+  }
+}
 
 TEST_F(TypeJSONFixture, LaysARecordOutWithPaddingAndBits) {
   const llvm::json::Object Thread = json("_THREAD_LIKE");
