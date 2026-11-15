@@ -10,6 +10,7 @@
 #include "neverd/loader/ELF/ELFImageMetadata.h"
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/loader/SourceUnwind.h"
+#include "neverd/support/DwarfEH.h"
 
 #include "llvm/BinaryFormat/ELF.h"
 
@@ -20,6 +21,74 @@ namespace {
 using namespace neverd;
 using namespace neverd::dwarf_eh;
 using namespace neverd::language_eh_test;
+
+#define ITANIUM_LSDA_VALUE(Name, Value) constexpr va_t Name = Value;
+#include "LanguageEHItaniumFixtures.def"
+
+TEST(ItaniumLSDA, ExplicitLPStartKeepsCallSitesFunctionRelative) {
+  for (Arch Architecture : {Arch::X64, Arch::AArch64}) {
+    for (BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::MachO}) {
+      for (bool ZeroBase : {false, true}) {
+        BinaryImage Img = makeImage();
+        Img.Arch = Architecture;
+        Img.Format = Format;
+        const va_t Function = kTextVA + kFunctionOffset;
+        const va_t LSDA = kDataVA + kLSDAOffset;
+        const va_t Base = ZeroBase ? 0 : Function + kExplicitBaseOffset;
+        ByteBuilder Table, Sites;
+        Table.u8(dweh::Absptr);
+        Table.u64(Base);
+        Table.u8(dweh::Omit);
+        Table.u8(dweh::Uleb128);
+        Sites.uleb(kGuardedOffset);
+        Sites.uleb(kGuardedSize);
+        Sites.uleb(Function + kLandingPadOffset - Base);
+        Sites.uleb(0);
+        Table.uleb(Sites.size());
+        Table.data().insert(Table.data().end(), Sites.data().begin(),
+                            Sites.data().end());
+        writeData(Img, LSDA, Table.data());
+        LSDAParseRequest Req;
+        Req.LSDAVA = LSDA;
+        Req.FunctionStart = Function;
+        Req.FunctionEnd = Function + kFunctionSize;
+        Req.Personality = ExceptionPersonality::GxxPersonalityV0;
+        auto Result = parseLSDA(Img, Req, PointerBases{});
+        ASSERT_EQ(Result.ParseStatus, ExceptionParseStatus::Complete);
+        ASSERT_TRUE(Result.Info);
+        EXPECT_EQ(Result.Info->LandingPadBase, Base);
+        ASSERT_EQ(Result.Info->CallSites.size(), 1u);
+        const auto &Site = Result.Info->CallSites.front();
+        EXPECT_EQ(Site.GuardedRange.Begin, Function + kGuardedOffset);
+        EXPECT_EQ(Site.GuardedRange.End,
+                  Function + kGuardedOffset + kGuardedSize);
+        EXPECT_EQ(Site.LandingPadVA, Function + kLandingPadOffset);
+      }
+    }
+  }
+}
+
+TEST(ItaniumLSDA, ExplicitLPStartCannotHideCallSiteOverflow) {
+  BinaryImage Img = makeImage();
+  ByteBuilder Table, Sites;
+  Table.u8(dweh::Absptr);
+  Table.u64(kTextVA);
+  Table.u8(dweh::Omit);
+  Table.u8(dweh::Uleb128);
+  Sites.uleb(kGuardedOffset);
+  Sites.uleb(kGuardedSize);
+  Sites.uleb(0);
+  Sites.uleb(0);
+  Table.uleb(Sites.size());
+  Table.data().insert(Table.data().end(), Sites.data().begin(),
+                      Sites.data().end());
+  LSDAParseRequest Req;
+  Req.LSDAVA = kDataVA + kLSDAOffset;
+  Req.FunctionStart = InvalidVA - kGuardedOffset;
+  writeData(Img, Req.LSDAVA, Table.data());
+  EXPECT_EQ(parseLSDA(Img, Req, PointerBases{}).ParseStatus,
+            ExceptionParseStatus::Malformed);
+}
 
 //===----------------------------------------------------------------------===//
 // Itanium LSDA
