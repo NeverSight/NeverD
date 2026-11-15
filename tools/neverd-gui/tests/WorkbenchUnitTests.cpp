@@ -25,6 +25,7 @@
 #include "LoadFileDialog.h"
 #include "ModelessDialog.h"
 #include "NativeWindowStates.h"
+#include "PaintCheck.h"
 #include "PatchMenu.h"
 #include "ProjectDatabase.h"
 #include "RenamedPages.h"
@@ -61,6 +62,7 @@
 #include <QMessageBox>
 #include <QMetaEnum>
 #include <QMouseEvent>
+#include <QPaintEvent>
 #include <QPainter>
 #include <QPlainTextEdit>
 #include <QPointer>
@@ -100,6 +102,7 @@
 #include <limits>
 #include <memory>
 #include <qpa/qwindowsysteminterface.h>
+#include <utility>
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
 #endif
@@ -218,6 +221,59 @@ class WorkbenchUnitTests : public QObject {
 public:
   static void initMain() { WindowFrame::prepareNativeWindows(); }
 private slots:
+  void paintCheckFollowsOpaqueChildExposure() {
+    class PaintedWidget final : public QWidget {
+    public:
+      QColor color = Qt::red;
+      PaintCheck::Picture picture;
+      QWidget *hideDuringPaint = nullptr;
+
+    protected:
+      void paintEvent(QPaintEvent *event) override {
+        if (auto *child = std::exchange(hideDuringPaint, nullptr))
+          child->hide();
+        QPainter painter(this);
+        const auto paint = [this](QPainter &target, const QRegion &, bool) {
+          target.fillRect(rect(), color);
+        };
+        paint(painter, event->region(), false);
+        PaintCheck::painted(*this, painter, event->region(), true, picture,
+                            paint);
+      }
+    } widget;
+    PaintCheck::setEnabled(true);
+    const auto restore = qScopeGuard([] { PaintCheck::setEnabled(false); });
+    widget.resize(80, 80);
+    widget.show();
+    QTRY_VERIFY(PaintCheck::checks() > 0);
+    QCOMPARE(PaintCheck::stalePaints(), 0u);
+    QWidget overlay(&widget);
+    overlay.setGeometry(40, 0, 40, 80);
+    overlay.setAutoFillBackground(true);
+    overlay.show();
+    QTRY_VERIFY(!widget.visibleRegion().contains(QPoint(60, 40)));
+    auto checks = PaintCheck::checks();
+    widget.color = Qt::green;
+    widget.update();
+    QTRY_VERIFY(PaintCheck::checks() > checks);
+    QCOMPARE(PaintCheck::stalePaints(), 0u);
+    checks = PaintCheck::checks();
+    // Exposure can be queued behind an unrelated partial parent paint.
+    widget.hideDuringPaint = &overlay;
+    widget.update(0, 0, 10, 10);
+    QTRY_VERIFY(PaintCheck::checks() > checks);
+    QTRY_VERIFY(widget.visibleRegion().contains(QPoint(60, 40)));
+    QCoreApplication::processEvents();
+    QCOMPARE(PaintCheck::stalePaints(), 0u);
+
+    // A visible half left unchanged still exposes a real missing repaint.
+    QTest::ignoreMessage(QtCriticalMsg,
+                         QRegularExpression("PaintCheck: .*stale row.*"));
+    widget.color = Qt::blue;
+    widget.update(0, 0, 40, 80);
+    QTRY_COMPARE(PaintCheck::stalePaints(), 1u);
+  }
+
   void computedStringDetailsRetainConditionsAndNavigate() {
     Session session(QString{});
     AddressSpace space;
