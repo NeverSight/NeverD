@@ -18,6 +18,8 @@
 #include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/ADT/APFloat.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
@@ -95,6 +97,57 @@ TEST(MicroMIPSPipelineSource, N32RetainsNativeWideRecordTypes) {
     EXPECT_EQ(Text.find("#define __int128 _BitInt(128)") != std::string::npos,
               !isMIPS64(Target))
         << Text;
+  }
+}
+
+TEST(MicroMIPSPipelineSource, GCCBitCastPreludeFollowsTheSelectedBody) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("selected-bit-copy", Context);
+  llvm::IRBuilder<> IR(Context);
+  auto *PlainType =
+      llvm::FunctionType::get(IR.getInt32Ty(), {IR.getInt32Ty()}, false);
+  auto *Plain = llvm::Function::Create(
+      PlainType, llvm::Function::ExternalLinkage, "integer_identity", Module);
+  IR.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Plain));
+  IR.CreateRet(Plain->getArg(0));
+  auto *BitsType = llvm::FunctionType::get(IR.getFloatTy(), false);
+  auto *Bits = llvm::Function::Create(BitsType, llvm::Function::ExternalLinkage,
+                                      "nan_payload", Module);
+  IR.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Bits));
+  // Ordinary LLVM bitcast instructions use memcpy. A nonfinite constant
+  // needs the compiler bit-cast expression to retain its exact payload.
+  IR.CreateRet(llvm::ConstantFP::get(
+      Context,
+      llvm::APFloat(llvm::APFloat::IEEEsingle(), llvm::APInt(32, 0x7fc12345))));
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64,
+                      Arch::MIPS64EL, Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(Target));
+    CEmitterOptions Options;
+    Options.TheArch = Target;
+    Options.Format = BinaryFormat::ELF;
+    Options.PreserveLLVMFunctionTypes = true;
+    for (bool Micro : {false, true}) {
+      SCOPED_TRACE(Micro);
+      if (Micro) {
+        Plain->addFnAttr("micromips");
+        Bits->addFnAttr("micromips");
+      } else {
+        Plain->removeFnAttr("micromips");
+        Bits->removeFnAttr("micromips");
+      }
+      for (const llvm::Function *Selected : {Plain, Bits}) {
+        std::string Text;
+        llvm::raw_string_ostream Out(Text);
+        ASSERT_TRUE(LLVMCEmitter().emit(Module, Out, Options, nullptr, nullptr,
+                                        Selected));
+        EXPECT_EQ(Text.find("#define __builtin_bit_cast") != std::string::npos,
+                  Selected == Bits)
+            << Text;
+        EXPECT_EQ(Text.find("__builtin_bit_cast(float,") != std::string::npos,
+                  Selected == Bits)
+            << Text;
+      }
+    }
   }
 }
 

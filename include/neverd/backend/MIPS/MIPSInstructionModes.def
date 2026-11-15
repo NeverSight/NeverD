@@ -28,6 +28,7 @@ MIPS_SOURCE_TEXT(
     "#endif\n\n")
 // GCC also compiles classic functions participating in mixed-mode calls.
 // Preserve raw bits and single evaluation independently of instruction mode.
+MIPS_SOURCE_TEXT(BitCastCallPrefix, "__builtin_bit_cast(")
 MIPS_SOURCE_TEXT(
     BitCastCPrelude,
     "#if defined(__GNUC__) && !defined(__clang__) && "

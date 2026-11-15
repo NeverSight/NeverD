@@ -571,8 +571,6 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
   }
   if (UsesMicroMIPSAttribute)
     OS << mips::MicroModeCPrelude;
-  if (isMIPS(Opts.TheArch))
-    OS << mips::BitCastCPrelude;
   std::string Records;
   {
     llvm::raw_string_ostream RecordsOS(Records);
@@ -580,6 +578,12 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
     OS.retarget(&RecordsOS);
     writeRecordDefinitions(Rest);
   }
+  // The bodies already exist here. Pure integer requests need no GCC bit
+  // copy helper; keep their cached source payload as small as before.
+  if (isMIPS(Opts.TheArch) &&
+      (llvm::StringRef(Rest).contains(mips::BitCastCallPrefix) ||
+       llvm::StringRef(Records).contains(mips::BitCastCallPrefix)))
+    OS << mips::BitCastCPrelude;
   // A 16-byte integer spelled by its type, as a frame record's member is, is
   // `__int128`. Targets without that compiler type use C23 _BitInt, as in
   // HighC. Pointer width alone cannot distinguish n32 from a 32-bit ISA.
