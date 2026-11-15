@@ -15,6 +15,7 @@
 
 #include <map>
 namespace neverd {
+struct MachOChainedFixups;
 struct MachOExportLayout {
   uint64_t Flags = 0, Address = 0, Resolver = 0, Ordinal = 0;
   std::string ImportName;
@@ -25,9 +26,15 @@ llvm::Expected<MachOExportMap>
 readMachOExportLayout(llvm::ArrayRef<uint8_t> Bytes);
 llvm::Expected<std::vector<uint8_t>>
 writeMachOExportLayout(const MachOExportMap &Exports);
-// Canonical absolute-address identities; the distinguished executable header
+// Canonical absolute-address identities; the distinguished linker header
 // follows the real header rather than pretending to be ordinary code/data.
 llvm::Expected<std::vector<uint8_t>>
-machOExportIdentities(llvm::ArrayRef<uint8_t> Bytes, uint64_t HeaderVA);
+machOExportIdentities(llvm::ArrayRef<uint8_t> Bytes, uint64_t HeaderVA,
+                      uint32_t FileType, MachOChainedFixups *Chained);
+/// Append strong TLV exports to the strictly decoded trie. Existing symbols
+/// keep their absolute identities. Input is the unsigned publication candidate.
+llvm::Error
+installMachOThreadLocalExports(std::vector<uint8_t> &Binary,
+                               const std::map<std::string, uint64_t> &New);
 } // namespace neverd
 #endif

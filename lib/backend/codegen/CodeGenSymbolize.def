@@ -1,0 +1,16 @@
+//===- CodeGenSymbolize.def - Patch symbolization names --------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Metadata and diagnostics for final-image address symbolization.
+//===----------------------------------------------------------------------===//
+
+CODEGEN_SYMBOLIZE_TEXT(kFinalImageDirectSymbol,
+                       "neverd.final_image_direct_symbol")
+CODEGEN_SYMBOLIZE_TEXT(kDumpPatchIR, "NEVERD_DUMP_PATCH_IR")
+CODEGEN_SYMBOLIZE_TEXT(kPostSymbolizationIR,
+                       "; ==== NEVERD patch-mode IR (post-symbolize) ====\n")
+
+#undef CODEGEN_SYMBOLIZE_TEXT

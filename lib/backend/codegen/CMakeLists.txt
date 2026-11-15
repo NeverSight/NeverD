@@ -82,6 +82,9 @@ add_neverd_component_library(NeverDCodeGen
   MachO/MachOLayoutGrowth.cpp
   MachO/MachOPatch.cpp
   MachO/MachOPatchObject.cpp
+  MachO/MachOTLSRuntime.cpp
+  MachO/MachOLiftedLeaf.cpp
+  MachO/MachORegisterResults.cpp
   MachO/MachOReloc.cpp
   MachO/MachOSigner.cpp
   MachO/MachOSignaturePolicy.cpp
@@ -101,6 +104,7 @@ add_neverd_component_library(NeverDCodeGen
   rewrite/InplaceRewriter.cpp
 
   LINK_COMPONENTS
+  LLVMMemoryAnalysis
   IR
   Loader
   WindowsEHMetadata

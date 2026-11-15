@@ -29,6 +29,7 @@ NEVERD_UNWIND_UI_TEXT(kEnd, "end")
 NEVERD_UNWIND_UI_TEXT(kReturnAddress, "return_address")
 NEVERD_UNWIND_UI_TEXT(kQueryPC, "query_pc")
 NEVERD_UNWIND_UI_TEXT(kDwarfState, "dwarf_state_at_pc")
+NEVERD_UNWIND_UI_TEXT(kInstructionState, "instruction_state_at_pc")
 NEVERD_UNWIND_UI_TEXT(kCompactRecipe, "compact_recipe")
 NEVERD_UNWIND_UI_TEXT(kKind, "kind")
 NEVERD_UNWIND_UI_TEXT(kKey, "key")
@@ -39,12 +40,18 @@ NEVERD_UNWIND_UI_TEXT(kKnown, "known")
 NEVERD_UNWIND_UI_TEXT(kDialogObject, "unwindInformation")
 NEVERD_UNWIND_UI_TEXT(kStatusObject, "unwindStatus")
 NEVERD_UNWIND_UI_TEXT(kDwarfObject, "unwindDwarfState")
+NEVERD_UNWIND_UI_TEXT(kInstructionObject, "unwindInstructionState")
 NEVERD_UNWIND_UI_TEXT(kCompactObject, "unwindCompactRecipe")
 NEVERD_UNWIND_UI_TEXT(kRefreshObject, "unwindRefresh")
 NEVERD_UNWIND_UI_TEXT(kIcon, "view_details")
 NEVERD_UNWIND_UI_TEXT(kLineSeparator, "\n")
 NEVERD_UNWIND_UI_TEXT(kTitle, QT_TRANSLATE_NOOP("UnwindInfoDialog",
                                                 "Unwind information at %1"))
+NEVERD_UNWIND_UI_TEXT(
+    kInstructionTitle,
+    QT_TRANSLATE_NOOP(
+        "UnwindInfoDialog",
+        "Signing state recovered from instructions at the selected PC"))
 NEVERD_UNWIND_UI_TEXT(kDwarfTitle,
                       QT_TRANSLATE_NOOP("UnwindInfoDialog",
                                         "DWARF state at the selected PC"))

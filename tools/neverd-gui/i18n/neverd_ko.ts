@@ -10731,6 +10731,10 @@ Your previous graph is still available.</source>
         <translation>선택한 PC의 DWARF 상태</translation>
     </message>
     <message>
+        <source>Signing state recovered from instructions at the selected PC</source>
+        <translation>명령어에서 복원한 선택한 PC의 서명 상태</translation>
+    </message>
+    <message>
         <source>Compact unwind: completed-prologue recipe</source>
         <translation>컴팩트 언와인드: 프롤로그 완료 후 레시피</translation>
     </message>

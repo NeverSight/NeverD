@@ -42,7 +42,7 @@ bool sameDebug(const std::optional<X86LegacyDebugState> &A,
 
 struct X86LegacyTransferContinuation {
   struct Access {
-    uint32_t Address;
+    uint64_t Address;
     uint64_t Value;
     uint8_t Bytes;
     bool Write;
@@ -63,6 +63,7 @@ struct X86LegacyTransferContinuation {
   std::optional<X86LegacyDebugProfile> DebugProfile;
   std::optional<X86LegacyVM86Profile> Virtual8086;
   uint8_t DataBreakpoints = 0;
+  std::optional<X86Non64ModeBinding> Mode;
 
   X86LegacyTransferContinuation(const X86LegacyExecutionState &S,
                                 const X86PagedMemory &M,
@@ -76,7 +77,7 @@ struct X86LegacyTransferContinuation {
         Instruction(Bytes.begin(), Bytes.end()),
         Alignment(O.Segments.AlignmentPriority),
         FullLimit(O.Segments.FullLimitChoice), DebugProfile(O.Debug),
-        Virtual8086(O.Virtual8086) {}
+        Virtual8086(O.Virtual8086), Mode(O.Non64Mode) {}
 
   bool matches(const X86LegacyExecutionState &S, const X86PagedMemory &M,
                const X86LegacyExecutionOptions &O) const {
@@ -94,7 +95,7 @@ struct X86LegacyTransferContinuation {
            Features == M.features() && sameDebug(Debug, S.Debug) &&
            Alignment == O.Segments.AlignmentPriority &&
            FullLimit == O.Segments.FullLimitChoice && DebugProfile == O.Debug &&
-           Virtual8086 == O.Virtual8086;
+           Virtual8086 == O.Virtual8086 && Mode == O.Non64Mode;
   }
 };
 
@@ -111,7 +112,7 @@ X86LegacyTransferJournal::X86LegacyTransferJournal(
                          S, M, O, Instruction, Kind);
 }
 
-llvm::Expected<bool> X86LegacyTransferJournal::replay(uint32_t Address,
+llvm::Expected<bool> X86LegacyTransferJournal::replay(uint64_t Address,
                                                       unsigned Bytes,
                                                       bool Write,
                                                       uint64_t &Value) {
@@ -127,7 +128,7 @@ llvm::Expected<bool> X86LegacyTransferJournal::replay(uint32_t Address,
   return true;
 }
 
-void X86LegacyTransferJournal::record(uint32_t Address, unsigned Bytes,
+void X86LegacyTransferJournal::record(uint64_t Address, unsigned Bytes,
                                       bool Write, uint64_t Value) {
   if (Progress) {
     Progress->Accesses.push_back({Address, Value, uint8_t(Bytes), Write});

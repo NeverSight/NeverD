@@ -9,10 +9,12 @@
 
 #include "MachODependencyState.h"
 
+#include "MachOArm64eABI.h"
 #include "MachOExportLayout.h"
 #include "MachOStrictLayout.h"
 
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/codegen/MachO/MachOAuthenticatedFixups.h"
 #include "neverd/backend/codegen/MachO/MachOLayoutGrowth.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
@@ -153,8 +155,7 @@ struct Reader {
     State.CPUType = readLE<uint32_t>(B.data() + offsetof(mach_header, cputype));
     State.CPUSubtype =
         readLE<uint32_t>(B.data() + offsetof(mach_header, cpusubtype));
-    const auto Flags = readLE<uint32_t>(B.data() + 24),
-               Type = readLE<uint32_t>(B.data() + 12);
+    const auto Flags = H.Flags, Type = H.FileType;
     if (!(Flags & MH_DYLDLINK) || !(Flags & MH_TWOLEVEL) ||
         (Flags & MH_FORCE_FLAT) ||
         (Type != MH_EXECUTE && Type != MH_DYLIB && Type != MH_BUNDLE))
@@ -310,8 +311,9 @@ struct Reader {
       number(Row, readLE<uint16_t>(N.data() + 6));
       const auto Value = H.Is64 ? readLE<uint64_t>(N.data() + 8)
                                 : readLE<uint32_t>(N.data() + 8);
-      number(Row,
-             Name == "__mh_execute_header" && Value == HeaderVA ? 0 : Value);
+      number(Row, isMachOHeaderSymbol(Name, H.FileType) && Value == HeaderVA
+                      ? 0
+                      : Value);
       State.Symbols.push_back(Row);
       if (I >= Dyn->iundefsym) {
         if ((N[4] & (N_STAB | N_TYPE | N_EXT)) != (N_UNDF | N_EXT))
@@ -714,6 +716,7 @@ struct Reader {
       if (Chained) {
         Chained->Segments[I].PointerFormat = Format;
         Chained->Segments[I].PageSize = Page;
+        Chained->Segments[I].StartsFileOffset = uint64_t(Chain->dataoff) + O;
       }
       number(Digest, Format);
       number(Digest, Page);
@@ -822,6 +825,20 @@ struct Reader {
 };
 } // namespace
 
+std::map<std::string, std::optional<MachOChainedFixups::Provider>>
+MachOChainedFixups::uniqueImportProviders() const {
+  std::map<std::string, std::optional<Provider>> Providers;
+  for (const auto &Import : Imports) {
+    const Provider Identity{
+        Import.Ordinal,
+        bool(Import.Flags & llvm::MachO::BIND_SYMBOL_FLAGS_WEAK_IMPORT)};
+    auto [It, Added] = Providers.emplace(Import.Name, Identity);
+    if (!Added && It->second != Identity)
+      It->second.reset();
+  }
+  return Providers;
+}
+
 llvm::Expected<MachODependencyState>
 readMachODependencyState(llvm::ArrayRef<uint8_t> B,
                          MachOChainedFixups *Chained) {
@@ -856,7 +873,7 @@ readMachODependencyState(llvm::ArrayRef<uint8_t> B,
     auto V = R.payload(D.export_off, D.export_size);
     if (!V)
       return V.takeError();
-    auto Facts = machOExportIdentities(*V, R.HeaderVA);
+    auto Facts = machOExportIdentities(*V, R.HeaderVA, R.H.FileType, R.Chained);
     if (!Facts)
       return Facts.takeError();
     // An empty export stream and an absent export command describe the same
@@ -869,7 +886,7 @@ readMachODependencyState(llvm::ArrayRef<uint8_t> B,
     auto V = R.payload(R.Export->dataoff, R.Export->datasize);
     if (!V)
       return V.takeError();
-    auto Facts = machOExportIdentities(*V, R.HeaderVA);
+    auto Facts = machOExportIdentities(*V, R.HeaderVA, R.H.FileType, R.Chained);
     if (!Facts)
       return Facts.takeError();
     if (!Facts->empty())
@@ -889,9 +906,53 @@ readMachODependencyState(llvm::ArrayRef<uint8_t> B,
 }
 llvm::Error preserveMachODependencyState(const MachODependencyState &Before,
                                          const MachODependencyState &After) {
+  return preserveMachODependencyState(Before, After, {});
+}
+llvm::Error
+preserveMachODependencyState(const MachODependencyState &Before,
+                             const MachODependencyState &After,
+                             const std::map<std::string, uint64_t> &AddedTLS,
+                             llvm::ArrayRef<MachOAuthenticatedFixup> Fixups) {
   if (Before.CPUType != After.CPUType || Before.CPUSubtype != After.CPUSubtype)
     return fail(kChangedCPUABI);
+  std::set<uint64_t> Resolvers;
+  for (const auto &F : Fixups) {
+    if (!F.ReplacesTLVBootstrap)
+      continue;
+    const auto &R = F.Recipe;
+    if (!F.Authenticated || R.Key || R.Diversity || R.AddressDiversity ||
+        !R.Symbol.empty() || R.Target == InvalidVA ||
+        !Resolvers.insert(F.Address).second)
+      return fail(kThreadResolverChange);
+    const auto Old = Before.Slots.find({F.Address, kBindPhase});
+    const auto New = After.Slots.find({F.Address, kRebasePhase});
+    if (Old == Before.Slots.end() || Old->second.size() < sizeof(uint64_t) ||
+        New == After.Slots.end() ||
+        After.Slots.contains({F.Address, kBindPhase}))
+      return fail(kThreadResolverChange);
+    const auto Ordinal = readLE<uint64_t>(Old->second.data());
+    // The install owner checks the actual library install name. Verify both
+    // exact canonical rows as well, across each outer publication transaction.
+    if (!Ordinal || Ordinal > Before.Libraries.size())
+      return fail(kThreadResolverChange);
+    Bytes Bind, Rebase;
+    number(Bind, Ordinal);
+    text(Bind, macho_arm64e_abi::kTLVBootstrap);
+    number(Bind, 0); // addend
+    number(Bind, 0); // flags
+    number(Rebase, false);
+    number(Rebase, R.Target);
+    for (Bytes *Row : {&Bind, &Rebase}) {
+      number(*Row, 0); // IA key
+      number(*Row, 0); // discriminator
+      number(*Row, false);
+    }
+    if (Old->second != Bind || New->second != Rebase)
+      return fail(kThreadResolverChange);
+  }
   for (const auto &[Key, Value] : Before.Slots) {
+    if (Key.second == kBindPhase && Resolvers.contains(Key.first))
+      continue;
     auto I = After.Slots.find(Key);
     if (I == After.Slots.end() || I->second != Value)
       return fail("old exact-slot binding or rebase changed");
@@ -899,9 +960,35 @@ llvm::Error preserveMachODependencyState(const MachODependencyState &Before,
   auto Prefix = [](const auto &A, const auto &B) {
     return A.size() <= B.size() && std::equal(A.begin(), A.end(), B.begin());
   };
+  std::optional<Bytes> ExpectedExports;
+  if (!AddedTLS.empty()) {
+    // Exports holds length-prefixed canonical absolute-address tries. A TLS
+    // publication owns one trie and adds only the declared descriptor names.
+    llvm::ArrayRef<uint8_t> Trie(Before.Exports);
+    if (!Trie.empty()) {
+      if (Trie.size() < sizeof(uint64_t) ||
+          readLE<uint64_t>(Trie.data()) != Trie.size() - sizeof(uint64_t))
+        return fail(kTLSExport);
+      Trie = Trie.drop_front(sizeof(uint64_t));
+    }
+    auto Exports = readMachOExportLayout(Trie);
+    if (!Exports)
+      return Exports.takeError();
+    for (const auto &[Name, VA] : AddedTLS)
+      if (!Exports
+               ->emplace(
+                   Name,
+                   MachOExportLayout{EXPORT_SYMBOL_FLAGS_KIND_THREAD_LOCAL, VA})
+               .second)
+        return fail(kTLSExport);
+    auto Expected = writeMachOExportLayout(*Exports);
+    if (!Expected)
+      return Expected.takeError();
+    bytes(ExpectedExports.emplace(), *Expected);
+  }
   if (!Prefix(Before.Libraries, After.Libraries) ||
       !Prefix(Before.Indirect, After.Indirect) ||
-      Before.Exports != After.Exports)
+      (ExpectedExports ? *ExpectedExports : Before.Exports) != After.Exports)
     return fail("old library, indirect symbol or export identity changed");
   // Callback definitions may be inserted before the undefined partition.
   auto At = After.Symbols.begin();

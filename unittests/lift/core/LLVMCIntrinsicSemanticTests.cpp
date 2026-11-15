@@ -17,6 +17,7 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Intrinsics.h"
@@ -28,6 +29,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/ModRef.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/Triple.h"
 
@@ -1372,6 +1374,622 @@ TEST(LLVMCIntrinsicSemantics,
     llvm::raw_string_ostream Output(Text);
     EXPECT_THROW(LLVMCEmitter().emit(Module, Output, {}), std::runtime_error);
   }
+}
+
+TEST(LLVMCIntrinsicSemantics, SignedSaturationClampsAtBothBounds) {
+  // A signed sum or difference outside its width's range gives the nearest
+  // bound; the helper works on the unsigned carriers the values have.
+  llvm::LLVMContext Context;
+  llvm::Module Module("signed-saturation", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<llvm::NoFolder> Builder(Context);
+  auto *Wide = Builder.getInt128Ty();
+  const llvm::Intrinsic::ID Kinds[] = {llvm::Intrinsic::sadd_sat,
+                                       llvm::Intrinsic::ssub_sat};
+  std::string Table;
+  for (unsigned Bits : {1u, 8u, 16u, 32u, 64u, 128u})
+    for (unsigned Kind = 0; Kind != 2; ++Kind) {
+      const std::string Name =
+          "signed_" + std::to_string(Bits) + "_" + std::to_string(Kind);
+      Table += Name + ",";
+      auto *Function = llvm::Function::Create(
+          llvm::FunctionType::get(Wide, {Wide, Wide}, false),
+          llvm::GlobalValue::ExternalLinkage, Name, Module);
+      Builder.SetInsertPoint(
+          llvm::BasicBlock::Create(Context, "entry", Function));
+      auto *Integer = Builder.getIntNTy(Bits);
+      auto *Intrinsic = llvm::Intrinsic::getOrInsertDeclaration(
+          &Module, Kinds[Kind], {Integer});
+      auto *Result = Builder.CreateCall(
+          Intrinsic,
+          {Builder.CreateTruncOrBitCast(Function->getArg(0), Integer),
+           Builder.CreateTruncOrBitCast(Function->getArg(1), Integer)});
+      Builder.CreateRet(Builder.CreateZExtOrBitCast(Result, Wide));
+    }
+  const std::string Text = emit(Module);
+  EXPECT_NE(Text.find("neverd_llvm_sadd_sat_i8("), std::string::npos) << Text;
+  EXPECT_NE(Text.find("neverd_llvm_ssub_sat_i128("), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("llvm_x2E_"), std::string::npos) << Text;
+  const std::string Source = "#include <stdint.h>\n#include <stdbool.h>\n" +
+                             Text + R"(
+typedef unsigned __int128 U128;
+typedef __int128 I128;
+static U128 reference(unsigned bits, int subtract, U128 left, U128 right) {
+  const U128 mask = ~(U128)0 >> (128 - bits);
+  const I128 a = (I128)(left << (128 - bits)) >> (128 - bits);
+  const I128 b = (I128)(right << (128 - bits)) >> (128 - bits);
+  const U128 sign = (U128)1 << (bits - 1);
+  I128 exact;
+  const int wrapped = subtract ? __builtin_sub_overflow(a, b, &exact)
+                               : __builtin_add_overflow(a, b, &exact);
+  U128 result = (U128)exact & mask;
+  /* The exact value is outside the width when it wrapped at 128 bits or
+     does not sign-extend from the width. */
+  if (wrapped || ((I128)(result << (128 - bits)) >> (128 - bits)) != exact)
+    result = a < 0 ? sign : sign - 1;
+  return result & mask;
+}
+int main(void) {
+  U128 (*functions[])(U128, U128) = {)" +
+                             Table + R"(};
+  const unsigned widths[] = {1, 8, 16, 32, 64, 128};
+  for (unsigned width = 0; width < 6; ++width) {
+    const unsigned bits = widths[width];
+    const U128 mask = ~(U128)0 >> (128 - bits);
+    const U128 sign = (U128)1 << (bits - 1);
+    const U128 values[] = {0, 1, 2, sign - 2, sign - 1, sign, sign + 1,
+                          mask - 1, mask, ((U128)0x5a5a << 100) | 0xabcdef};
+    for (unsigned a = 0; a < 10; ++a)
+      for (unsigned b = 0; b < 10; ++b)
+        for (unsigned kind = 0; kind < 2; ++kind)
+          if (functions[width * 2 + kind](values[a], values[b]) !=
+              reference(bits, kind, values[a] & mask, values[b] & mask))
+            return 1 + width * 2 + kind;
+  }
+  /* Every pair of bytes. */
+  for (unsigned a = 0; a < 256; ++a)
+    for (unsigned b = 0; b < 256; ++b)
+      for (unsigned kind = 0; kind < 2; ++kind)
+        if (functions[2 + kind](a, b) != reference(8, kind, a, b)) return 20;
+  return 0;
+}
+)";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndCheck(Source, false, {}, Optimization, true);
+}
+
+TEST(LLVMCIntrinsicSemantics, ThreeWayComparisonsOrderSignedAndUnsigned) {
+  // scmp and ucmp give -1, 0 or 1 in the result's width for operands of
+  // another width.
+  llvm::LLVMContext Context;
+  llvm::Module Module("three-way", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<llvm::NoFolder> Builder(Context);
+  auto *Wide = Builder.getInt128Ty();
+  const llvm::Intrinsic::ID Kinds[] = {llvm::Intrinsic::scmp,
+                                       llvm::Intrinsic::ucmp};
+  std::string Table;
+  for (unsigned Bits : {8u, 16u, 32u, 64u, 128u})
+    for (unsigned ResultBits : {8u, 32u})
+      for (unsigned Kind = 0; Kind != 2; ++Kind) {
+        const std::string Name = "order_" + std::to_string(Bits) + "_" +
+                                 std::to_string(ResultBits) + "_" +
+                                 std::to_string(Kind);
+        Table += Name + ",";
+        auto *Function = llvm::Function::Create(
+            llvm::FunctionType::get(Wide, {Wide, Wide}, false),
+            llvm::GlobalValue::ExternalLinkage, Name, Module);
+        Builder.SetInsertPoint(
+            llvm::BasicBlock::Create(Context, "entry", Function));
+        auto *Integer = Builder.getIntNTy(Bits);
+        auto *Intrinsic = llvm::Intrinsic::getOrInsertDeclaration(
+            &Module, Kinds[Kind], {Builder.getIntNTy(ResultBits), Integer});
+        auto *Result = Builder.CreateCall(
+            Intrinsic,
+            {Builder.CreateTruncOrBitCast(Function->getArg(0), Integer),
+             Builder.CreateTruncOrBitCast(Function->getArg(1), Integer)});
+        Builder.CreateRet(Builder.CreateZExt(Result, Wide));
+      }
+  const std::string Text = emit(Module);
+  EXPECT_NE(Text.find("neverd_llvm_scmp_i32_i64("), std::string::npos) << Text;
+  EXPECT_NE(Text.find("neverd_llvm_ucmp_i8_i128("), std::string::npos) << Text;
+  const std::string Source = "#include <stdint.h>\n#include <stdbool.h>\n" +
+                             Text + R"(
+typedef unsigned __int128 U128;
+typedef __int128 I128;
+int main(void) {
+  U128 (*functions[])(U128, U128) = {)" +
+                             Table + R"(};
+  const unsigned widths[] = {8, 16, 32, 64, 128};
+  const unsigned results[] = {8, 32};
+  for (unsigned width = 0; width < 5; ++width) {
+    const unsigned bits = widths[width];
+    const U128 mask = ~(U128)0 >> (128 - bits);
+    const U128 sign = (U128)1 << (bits - 1);
+    const U128 values[] = {0, 1, sign - 1, sign, sign + 1, mask,
+                          ((U128)0x5a5a << 100) | 0xabcdef};
+    for (unsigned a = 0; a < 7; ++a)
+      for (unsigned b = 0; b < 7; ++b)
+        for (unsigned result = 0; result < 2; ++result)
+          for (unsigned kind = 0; kind < 2; ++kind) {
+            const U128 left = values[a] & mask, right = values[b] & mask;
+            const I128 sl = (I128)(left << (128 - bits)) >> (128 - bits);
+            const I128 sr = (I128)(right << (128 - bits)) >> (128 - bits);
+            const int order = kind ? (left > right) - (left < right)
+                                   : (sl > sr) - (sl < sr);
+            const U128 expected =
+                (U128)(I128)order & (~(U128)0 >> (128 - results[result]));
+            if (functions[width * 4 + result * 2 + kind](
+                    values[a], values[b]) != expected)
+              return 1 + width * 4 + result * 2 + kind;
+          }
+  }
+  return 0;
+}
+)";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndCheck(Source, false, {}, Optimization, true);
+}
+
+TEST(LLVMCIntrinsicSemantics, ThreeWayComparisonRejectsUncarriedWidths) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("odd-three-way", Context);
+  llvm::IRBuilder<> Builder(Context);
+  auto *Function = llvm::Function::Create(
+      llvm::FunctionType::get(Builder.getIntNTy(2),
+                              {Builder.getInt32Ty(), Builder.getInt32Ty()},
+                              false),
+      llvm::GlobalValue::ExternalLinkage, "odd_order", Module);
+  auto *Intrinsic = llvm::Intrinsic::getOrInsertDeclaration(
+      &Module, llvm::Intrinsic::scmp,
+      {Builder.getIntNTy(2), Builder.getInt32Ty()});
+  Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Function));
+  Builder.CreateRet(Builder.CreateCall(
+      Intrinsic, {Function->getArg(0), Function->getArg(1)}));
+  std::string Text;
+  llvm::raw_string_ostream Output(Text);
+  EXPECT_THROW(LLVMCEmitter().emit(Module, Output, {}), std::runtime_error);
+}
+
+TEST(LLVMCIntrinsicSemantics, OverflowArithmeticGivesTheWrappedResultAndFlag) {
+  // Each of the six gives the result wrapped to its width and whether the
+  // exact one, signed or unsigned, was outside it.
+  llvm::LLVMContext Context;
+  llvm::Module Module("overflow-arithmetic", Context);
+  // The result pairs are laid out as the host lays out the C records.
+  Module.setDataLayout("e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-"
+                       "i128:128-f80:128-n8:16:32:64-S128");
+  llvm::IRBuilder<llvm::NoFolder> Builder(Context);
+  auto *Wide = Builder.getInt64Ty();
+  const llvm::Intrinsic::ID Kinds[] = {
+      llvm::Intrinsic::uadd_with_overflow, llvm::Intrinsic::usub_with_overflow,
+      llvm::Intrinsic::umul_with_overflow, llvm::Intrinsic::sadd_with_overflow,
+      llvm::Intrinsic::ssub_with_overflow, llvm::Intrinsic::smul_with_overflow};
+  std::string Table;
+  for (unsigned Bits : {8u, 16u, 32u, 64u})
+    for (unsigned Kind = 0; Kind != 6; ++Kind) {
+      const std::string Name =
+          "overflow_" + std::to_string(Bits) + "_" + std::to_string(Kind);
+      Table += Name + ",";
+      auto *Function = llvm::Function::Create(
+          llvm::FunctionType::get(Wide, {Wide, Wide, Builder.getPtrTy()},
+                                  false),
+          llvm::GlobalValue::ExternalLinkage, Name, Module);
+      Builder.SetInsertPoint(
+          llvm::BasicBlock::Create(Context, "entry", Function));
+      auto *Integer = Builder.getIntNTy(Bits);
+      auto *Intrinsic = llvm::Intrinsic::getOrInsertDeclaration(
+          &Module, Kinds[Kind], {Integer});
+      auto *Pair = Builder.CreateCall(
+          Intrinsic,
+          {Builder.CreateTruncOrBitCast(Function->getArg(0), Integer),
+           Builder.CreateTruncOrBitCast(Function->getArg(1), Integer)});
+      Builder.CreateStore(
+          Builder.CreateZExt(Builder.CreateExtractValue(Pair, 1),
+                             Builder.getInt8Ty()),
+          Function->getArg(2));
+      Builder.CreateRet(Builder.CreateZExtOrBitCast(
+          Builder.CreateExtractValue(Pair, 0), Wide));
+    }
+  const std::string Text = emit(Module);
+  EXPECT_NE(Text.find("__builtin_mul_overflow("), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("llvm_"), std::string::npos) << Text;
+  const std::string Source = "#include <stdint.h>\n#include <stdbool.h>\n" +
+                             Text + R"(
+typedef unsigned __int128 U128;
+typedef __int128 I128;
+int main(void) {
+  uint64_t (*functions[])(uint64_t, uint64_t, void *) = {)" +
+                             Table + R"(};
+  const unsigned widths[] = {8, 16, 32, 64};
+  for (unsigned width = 0; width < 4; ++width) {
+    const unsigned bits = widths[width];
+    const uint64_t mask = ~(uint64_t)0 >> (64 - bits);
+    const uint64_t sign = (uint64_t)1 << (bits - 1);
+    const uint64_t values[] = {0, 1, 2, 3, sign - 1, sign, sign + 1, mask - 1,
+                               mask, 0x123456789abcdef1 & mask};
+    for (unsigned a = 0; a < 10; ++a)
+      for (unsigned b = 0; b < 10; ++b)
+        for (unsigned kind = 0; kind < 6; ++kind) {
+          const int is_signed = kind >= 3;
+          const unsigned operation = kind % 3;
+          /* Exact in 128 bits: no operand is wider than 64. An unsigned
+             product may need all 128 of them. */
+          uint64_t wrapped;
+          int expected;
+          if (!is_signed && operation == 2) {
+            const U128 exact = (U128)values[a] * values[b];
+            wrapped = (uint64_t)exact & mask;
+            expected = exact > mask;
+          } else {
+            const I128 left = is_signed
+                ? (I128)((int64_t)(values[a] << (64 - bits)) >> (64 - bits))
+                : (I128)values[a];
+            const I128 right = is_signed
+                ? (I128)((int64_t)(values[b] << (64 - bits)) >> (64 - bits))
+                : (I128)values[b];
+            const I128 exact = operation == 0 ? left + right
+                               : operation == 1 ? left - right : left * right;
+            wrapped = (uint64_t)exact & mask;
+            const I128 back = is_signed
+                ? (I128)((int64_t)(wrapped << (64 - bits)) >> (64 - bits))
+                : (I128)wrapped;
+            expected = back != exact;
+          }
+          uint8_t overflow = 0xff;
+          if (functions[width * 6 + kind](values[a], values[b], &overflow) !=
+              wrapped)
+            return 1 + width * 6 + kind;
+          if (overflow != expected) return 40 + width * 6 + kind;
+        }
+  }
+  return 0;
+}
+)";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndCheck(Source, false, {}, Optimization, true);
+}
+
+TEST(LLVMCIntrinsicSemantics, FloatingPointIntrinsicsAreCompilerBuiltins) {
+  // Each floating-point intrinsic prints as the elementwise builtin that is
+  // the same intrinsic for its operands' width: no C library header, no errno
+  // from a square root, and the fused multiply-add, the four minimum and
+  // maximum rules and the rounding modes each keep their own.
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"ir(
+declare double @llvm.fma.f64(double, double, double)
+declare float @llvm.fma.f32(float, float, float)
+declare double @llvm.minimum.f64(double, double)
+declare double @llvm.maximum.f64(double, double)
+declare double @llvm.minnum.f64(double, double)
+declare double @llvm.maxnum.f64(double, double)
+declare double @llvm.copysign.f64(double, double)
+declare double @llvm.roundeven.f64(double)
+declare double @llvm.trunc.f64(double)
+declare double @llvm.fabs.f64(double)
+declare double @llvm.sqrt.f64(double)
+declare double @llvm.floor.f64(double)
+declare double @llvm.ceil.f64(double)
+declare half @llvm.fma.f16(half, half, half)
+declare half @llvm.maximum.f16(half, half)
+define half @fused_half(half %a, half %b) {
+  %r = call half @llvm.fma.f16(half %a, half %b, half 0xH3E00)
+  %m = call half @llvm.maximum.f16(half %r, half 0xH4000)
+  ret half %m
+}
+define double @fused(double %a, double %b, double %c) {
+  %r = call double @llvm.fma.f64(double %a, double %b, double %c)
+  ret double %r
+}
+define float @fused_single(float %a, float %b, float %c) {
+  %r = call float @llvm.fma.f32(float %a, float %b, float %c)
+  ret float %r
+}
+define double @least(double %a, double %b) {
+  %r = call double @llvm.minimum.f64(double %a, double %b)
+  ret double %r
+}
+define double @greatest(double %a, double %b) {
+  %r = call double @llvm.maximum.f64(double %a, double %b)
+  ret double %r
+}
+define double @least_number(double %a, double %b) {
+  %r = call double @llvm.minnum.f64(double %a, double %b)
+  ret double %r
+}
+define double @greatest_number(double %a, double %b) {
+  %r = call double @llvm.maxnum.f64(double %a, double %b)
+  ret double %r
+}
+define double @signed_as(double %a, double %b) {
+  %r = call double @llvm.copysign.f64(double %a, double %b)
+  ret double %r
+}
+define double @to_even(double %a) {
+  %r = call double @llvm.roundeven.f64(double %a)
+  ret double %r
+}
+define double @toward_zero(double %a) {
+  %r = call double @llvm.trunc.f64(double %a)
+  ret double %r
+}
+define double @magnitude_root(double %a) {
+  %m = call double @llvm.fabs.f64(double %a)
+  %r = call double @llvm.sqrt.f64(double %m)
+  ret double %r
+}
+define double @between(double %a) {
+  %f = call double @llvm.floor.f64(double %a)
+  %c = call double @llvm.ceil.f64(double %a)
+  %r = fadd double %f, %c
+  ret double %r
+}
+)ir",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  ASSERT_TRUE(LLVMCEmitter().emit(*Module, OS, Options));
+  for (llvm::StringRef Spelling :
+       {"__builtin_elementwise_fma(", "__builtin_elementwise_minimum(",
+        "__builtin_elementwise_maximum(", "__builtin_elementwise_minnum(",
+        "__builtin_elementwise_maxnum(", "__builtin_elementwise_copysign(",
+        "__builtin_elementwise_roundeven(", "__builtin_elementwise_trunc(",
+        "__builtin_elementwise_abs(", "__builtin_elementwise_sqrt(",
+        "__builtin_elementwise_floor(", "__builtin_elementwise_ceil("})
+    EXPECT_NE(Text.find(Spelling.str()), std::string::npos)
+        << Spelling.str() << "\n"
+        << Text;
+  EXPECT_EQ(Text.find("llvm_"), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("math.h"), std::string::npos) << Text;
+  const std::string Source = Text + R"(
+static uint64_t bits(double value) {
+  uint64_t out;
+  __builtin_memcpy(&out, &value, 8);
+  return out;
+}
+int main(void) {
+  /* The product 1 + 2^-26 + 2^-54 rounds to 1 + 2^-26 before the sum unless
+     the two are fused. */
+  volatile double a = 1.0 + 0x1p-27, c = -(1.0 + 0x1p-26);
+  if (fused(a, a, c) != 0x1p-54) return 1;
+  volatile float fa = 1.0f + 0x1p-12f, fc = -(1.0f + 0x1p-11f);
+  if (fused_single(fa, fa, fc) != 0x1p-24f) return 2;
+  volatile double nan = __builtin_nan(""), one = 1.0, zero = 0.0;
+  const double negative_zero = -zero;
+  /* minimum and maximum order the zeros and keep a NaN. */
+  if (bits(least(zero, negative_zero)) != bits(-0.0)) return 3;
+  if (bits(least(negative_zero, zero)) != bits(-0.0)) return 4;
+  if (bits(greatest(negative_zero, zero)) != bits(0.0)) return 5;
+  if (least(nan, one) == least(nan, one)) return 6;
+  if (greatest(one, nan) == greatest(one, nan)) return 7;
+  /* minnum and maxnum give the number. */
+  if (least_number(nan, one) != 1.0 || least_number(one, nan) != 1.0) return 8;
+  if (greatest_number(nan, one) != 1.0) return 9;
+  if (bits(signed_as(one, negative_zero)) != bits(-1.0)) return 10;
+  volatile double half = 2.5, odd = 3.5, down = -2.5;
+  if (to_even(half) != 2.0 || to_even(odd) != 4.0 || to_even(down) != -2.0)
+    return 11;
+  if (toward_zero(down) != -2.0 || toward_zero(half) != 2.0) return 12;
+  volatile double minus_nine = -9.0;
+  if (magnitude_root(minus_nine) != 3.0) return 13;
+  if (between(half) != 5.0) return 14;
+  /* A half constant is a half: 1.5 * 2 + 1.5, then the greater of it and 2. */
+  volatile _Float16 small = 1.5f16, two = 2.0f16;
+  if (fused_half(small, two) != 4.5f16) return 15;
+  return 0;
+}
+)";
+  // An older compiler lacks some of these builtins, and one without the
+  // half type cannot build the half operands.
+  const auto Compiler = llvm::sys::findProgramByName("clang");
+  if (!Compiler ||
+      !neverd::test::compilerAccepts(
+          *Compiler, "c",
+          "double f(double a, double b) {\n"
+          "  return __builtin_elementwise_minimum(\n"
+          "      __builtin_elementwise_fma(a, b, a),\n"
+          "      __builtin_elementwise_roundeven(b));\n"
+          "}\n"
+          "_Float16 h(_Float16 a) { return __builtin_elementwise_sqrt(a); }\n",
+          {}))
+    GTEST_SKIP() << "this Clang lacks the elementwise builtins the C spells";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndCheck(Source, false, {}, Optimization, false, {}, {"-lm"});
+}
+
+TEST(LLVMCIntrinsicSemantics, AnUnknownOperandOfATypeGenericBuiltinHasItsType) {
+  // An undefined value prints as the integer zero whatever its type. A
+  // type-generic builtin takes operands of one type, so each is cast to the
+  // type the intrinsic takes, as the C library routine converted it.
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"ir(
+declare double @llvm.sqrt.f64(double)
+declare double @llvm.fma.f64(double, double, double)
+declare float @llvm.minimum.f32(float, float)
+define double @root_of_nothing() {
+  %r = call double @llvm.sqrt.f64(double undef)
+  ret double %r
+}
+define double @fused_with_nothing(double %a) {
+  %r = call double @llvm.fma.f64(double %a, double undef, double 1.5)
+  ret double %r
+}
+define float @least_of_one(float %a) {
+  %r = call float @llvm.minimum.f32(float %a, float undef)
+  ret float %r
+}
+)ir",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  ASSERT_TRUE(LLVMCEmitter().emit(*Module, OS, Options));
+  EXPECT_NE(Text.find("__builtin_elementwise_sqrt((double)("),
+            std::string::npos)
+      << Text;
+  EXPECT_NE(Text.find("__builtin_elementwise_minimum((float)("),
+            std::string::npos)
+      << Text;
+  const auto Compiler = llvm::sys::findProgramByName("clang");
+  if (!Compiler ||
+      !neverd::test::compilerAccepts(
+          *Compiler, "c",
+          "float f(float a) { return __builtin_elementwise_minimum(a, a); }\n",
+          {}))
+    GTEST_SKIP() << "this Clang lacks the elementwise builtins the C spells";
+  compileAndCheck(Text + "\nint main(void) { return 0; }\n", false, {}, "-O1",
+                  false, {}, {"-lm"});
+}
+
+TEST(LLVMCIntrinsicSemantics,
+     TargetOperationsPrintAsTheirBuiltinsAndIntrinsics) {
+  // What an architecture's own intrinsic prints as: the compiler builtin
+  // that makes the instruction, or the header intrinsic that names it.
+  struct Case {
+    Arch Architecture;
+    const char *Triple;
+    const char *IR;
+    std::vector<const char *> Spellings;
+  };
+  const Case Cases[] = {
+      {Arch::AArch64,
+       "aarch64-linux-gnu",
+       R"ir(
+declare i64 @llvm.aarch64.get.fpsr()
+declare void @llvm.aarch64.set.fpsr(i64)
+declare i64 @llvm.aarch64.get.fpcr()
+declare void @llvm.aarch64.set.fpcr(i64)
+declare i32 @llvm.aarch64.fjcvtzs(double)
+declare i32 @llvm.aarch64.crc32b(i32, i32)
+declare i32 @llvm.aarch64.crc32cx(i32, i64)
+declare i32 @llvm.aarch64.crypto.sha1h(i32)
+define i64 @state(i64 %v, double %d, i32 %c) {
+  %s = call i64 @llvm.aarch64.get.fpsr()
+  call void @llvm.aarch64.set.fpsr(i64 %v)
+  %m = call i64 @llvm.aarch64.get.fpcr()
+  call void @llvm.aarch64.set.fpcr(i64 %s)
+  %j = call i32 @llvm.aarch64.fjcvtzs(double %d)
+  %b = call i32 @llvm.aarch64.crc32b(i32 %c, i32 %j)
+  %x = call i32 @llvm.aarch64.crc32cx(i32 %b, i64 %m)
+  %h = call i32 @llvm.aarch64.crypto.sha1h(i32 %x)
+  %w = zext i32 %h to i64
+  ret i64 %w
+}
+)ir",
+       {"__builtin_arm_rsr64(\"fpsr\")", "__builtin_arm_wsr64(\"fpsr\", ",
+        "__builtin_arm_rsr64(\"fpcr\")", "__builtin_arm_wsr64(\"fpcr\", ",
+        "__builtin_arm_jcvt(", "__builtin_arm_crc32b(",
+        "__builtin_arm_crc32cd(", "vsha1h_u32("}},
+      {Arch::ARM,
+       "armv7-linux-gnueabi",
+       R"ir(
+declare i32 @llvm.arm.crc32h(i32, i32)
+declare i32 @llvm.arm.crc32cw(i32, i32)
+declare i32 @llvm.arm.neon.sha1h(i32)
+define i32 @steps(i32 %c, i32 %d) {
+  call void asm sideeffect "clrex", "~{memory}"()
+  %a = call i32 @llvm.arm.crc32h(i32 %c, i32 %d)
+  %b = call i32 @llvm.arm.crc32cw(i32 %a, i32 %d)
+  %h = call i32 @llvm.arm.neon.sha1h(i32 %b)
+  ret i32 %h
+}
+)ir",
+       {"__builtin_arm_clrex()", "__builtin_arm_crc32h(",
+        "__builtin_arm_crc32cw(", "vsha1h_u32("}},
+      {Arch::X64,
+       "x86_64-linux-gnu",
+       R"ir(
+declare i32 @llvm.x86.sse42.crc32.32.8(i32, i8)
+declare i64 @llvm.x86.sse42.crc32.64.64(i64, i64)
+define i64 @steps(i32 %c, i8 %d, i64 %q) {
+  %a = call i32 @llvm.x86.sse42.crc32.32.8(i32 %c, i8 %d)
+  %w = zext i32 %a to i64
+  %b = call i64 @llvm.x86.sse42.crc32.64.64(i64 %w, i64 %q)
+  ret i64 %b
+}
+)ir",
+       {"_mm_crc32_u8(", "_mm_crc32_u64("}}};
+  for (const Case &Target : Cases) {
+    SCOPED_TRACE(Target.Triple);
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Error;
+    auto Module = llvm::parseAssemblyString(Target.IR, Error, Context);
+    ASSERT_TRUE(Module) << Error.getMessage().str();
+    Module->setTargetTriple(llvm::Triple(Target.Triple));
+    CEmitterOptions Options;
+    Options.TheArch = Target.Architecture;
+    Options.EmitIncludes = false;
+    std::vector<CEmitterOptions::RefusedDefinition> Refused;
+    Options.RefusedDefinitions = &Refused;
+    std::string Text;
+    llvm::raw_string_ostream OS(Text);
+    ASSERT_TRUE(LLVMCEmitter().emit(*Module, OS, Options));
+    EXPECT_TRUE(Refused.empty()) << Refused.front().Reason;
+    for (const char *Spelling : Target.Spellings)
+      EXPECT_NE(Text.find(Spelling), std::string::npos) << Spelling << "\n"
+                                                        << Text;
+    EXPECT_EQ(Text.find("llvm_"), std::string::npos) << Text;
+  }
+}
+
+TEST(LLVMCIntrinsicSemantics, AnIntrinsicWithNoCSpellingRefusesItsFunction) {
+  // The sanitized name of an LLVM intrinsic declares nothing, so a call to
+  // it would not compile. The function that needs it is left out by name,
+  // whether the call is a statement or part of an expression.
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"ir(
+declare double @llvm.exp.f64(double)
+declare void @llvm.pseudoprobe(i64, i64, i32, i64)
+define i64 @kept(i64 %x) {
+  %r = add i64 %x, 1
+  ret i64 %r
+}
+define double @unspelled(double %x) {
+  %r = call double @llvm.exp.f64(double %x)
+  ret double %r
+}
+define double @unspelled_twice(double %x, ptr %out) {
+  %r = call double @llvm.exp.f64(double %x)
+  store double %r, ptr %out
+  ret double %r
+}
+)ir",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.EmitIncludes = false;
+  std::vector<CEmitterOptions::RefusedDefinition> Refused;
+  Options.RefusedDefinitions = &Refused;
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  ASSERT_TRUE(LLVMCEmitter().emit(*Module, OS, Options));
+  ASSERT_EQ(Refused.size(), 2u) << Text;
+  for (const auto &Definition : Refused)
+    EXPECT_EQ(Definition.Reason,
+              "LLVM intrinsic has no C spelling: llvm.exp.f64");
+  EXPECT_EQ(Text.find("llvm_exp"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("kept("), std::string::npos) << Text;
+  // Text that cannot name what it leaves out is read, not built, and names
+  // the intrinsic instead: a unit without the list, and one function alone.
+  Options.RefusedDefinitions = nullptr;
+  std::string Unit;
+  llvm::raw_string_ostream UnitOS(Unit);
+  ASSERT_TRUE(LLVMCEmitter().emit(*Module, UnitOS, Options));
+  EXPECT_NE(Unit.find("llvm_exp_f64("), std::string::npos) << Unit;
+  std::string Shown;
+  llvm::raw_string_ostream ShownOS(Shown);
+  ASSERT_TRUE(LLVMCEmitter().emit(*Module, ShownOS, Options, nullptr, nullptr,
+                                  Module->getFunction("unspelled")));
+  EXPECT_NE(Shown.find("llvm_exp_f64("), std::string::npos) << Shown;
 }
 
 TEST(LLVMCIntrinsicSemantics, UnsignedSaturationRejectsMismatchedOperands) {
@@ -2902,74 +3520,217 @@ int main(void) {
   }
 }
 
+// Windows x64 exposes GS reads alone, with a 32-bit offset, so only a constant
+// GS offset in COFF output takes an intrinsic. Every other read is native
+// assembly that reads the offset the code computes.
+std::string emitSegmentReads(llvm::Module &M, BinaryFormat Format,
+                             bool PreserveTypes = false) {
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = Format;
+  Options.EmitIncludes = false;
+  Options.PreserveLLVMFunctionTypes = PreserveTypes;
+  EXPECT_TRUE(LLVMCEmitter().emit(M, OS, Options));
+  return Text;
+}
+
+size_t occurrences(llvm::StringRef Text, llvm::StringRef Needle) {
+  size_t Count = 0;
+  for (size_t At = Text.find(Needle); At != llvm::StringRef::npos;
+       At = Text.find(Needle, At + Needle.size()))
+    ++Count;
+  return Count;
+}
+
+#if defined(__x86_64__) && defined(__linux__)
+constexpr bool kNativeSegmentReads = true;
+#else
+constexpr bool kNativeSegmentReads = false;
+#endif
+
+// Native reads run against a guard page in the process's own segment. Each
+// read faults: the handler records its segment offset and shows it the next
+// value of a sequence (values[0], then values[1]), and one single step later
+// re-arms the page and counts the read. Neither base changes, so thread-local
+// storage and the signal machinery keep working.
+std::string nativeSegmentHarness(bool GS) {
+  return std::string(R"(#define _GNU_SOURCE 1
+#include <asm/prctl.h>
+#include <signal.h>
+#include <stdint.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/syscall.h>
+#include <ucontext.h>
+#include <unistd.h>
+static unsigned char *page;
+static uintptr_t base;
+static volatile unsigned reads;
+static volatile uint64_t addresses[3];
+static uint64_t values[2] = {UINT64_C(0xfedcba9876543210),
+                             UINT64_C(0x80000000abcdef71)};
+static void on_fault(int signal, siginfo_t *info, void *context) {
+  const uintptr_t at = (uintptr_t)info->si_addr;
+  (void)signal;
+  if (at < (uintptr_t)page || at > (uintptr_t)page + 4096 - 8 ||
+      mprotect(page, 4096, PROT_READ | PROT_WRITE))
+    _exit(90);
+  if (reads < 3)
+    addresses[reads] = at - base;
+  memcpy((void *)at, &values[reads == 0 ? 0 : 1], 8);
+  ((ucontext_t *)context)->uc_mcontext.gregs[REG_EFL] |= 0x100;
+}
+static void on_step(int signal, siginfo_t *info, void *context) {
+  (void)signal;
+  (void)info;
+  ((ucontext_t *)context)->uc_mcontext.gregs[REG_EFL] &= ~0x100;
+  if (mprotect(page, 4096, PROT_NONE))
+    _exit(91);
+  ++reads;
+}
+static uint64_t segment_offset(uint64_t displacement) {
+  return (uintptr_t)page + displacement - base;
+}
+static void segment_setup(void) {
+  struct sigaction action;
+  memset(&action, 0, sizeof action);
+  action.sa_flags = SA_SIGINFO;
+  action.sa_sigaction = on_fault;
+  if (sigaction(SIGSEGV, &action, 0))
+    _exit(92);
+  action.sa_sigaction = on_step;
+  if (sigaction(SIGTRAP, &action, 0))
+    _exit(93);
+  page = mmap(0, 4096, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (page == MAP_FAILED ||
+      syscall(SYS_arch_prctl, )") +
+         (GS ? "ARCH_GET_GS" : "ARCH_GET_FS") + R"(, &base))
+    _exit(94);
+}
+)";
+}
+
+std::string replaceAll(std::string Text, llvm::StringRef From,
+                       llvm::StringRef To) {
+  for (size_t At = 0; (At = Text.find(From.str(), At)) != std::string::npos;
+       At += To.size())
+    Text.replace(At, From.size(), To.str());
+  return Text;
+}
+
 TEST(LLVMCIntrinsicSemantics, VolatileSegmentLoadsKeepDefinitionsAndReadOrder) {
   for (bool GS : {false, true}) {
     for (unsigned Bits : {8u, 16u, 32u, 64u}) {
-      SCOPED_TRACE(GS);
-      SCOPED_TRACE(Bits);
-      llvm::LLVMContext C;
-      llvm::Module M("volatile-segment-loads", C);
-      M.setDataLayout("e-p:64:64");
-      llvm::IRBuilder<llvm::NoFolder> B(C);
-      const unsigned AS = GS ? kLLVMX86GSAddressSpace : kLLVMX86FSAddressSpace;
-      auto *Fn = llvm::Function::Create(
-          llvm::FunctionType::get(B.getInt64Ty(), {B.getInt64Ty()}, false),
-          llvm::GlobalValue::ExternalLinkage, "read_segment_twice", M);
-      B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", Fn));
-      auto *Pointer = B.CreateIntToPtr(Fn->getArg(0), B.getPtrTy(AS));
-      auto *First = B.CreateLoad(B.getIntNTy(Bits), Pointer, "first");
-      First->setVolatile(true);
-      auto *Second = B.CreateLoad(B.getIntNTy(Bits), Pointer, "second");
-      Second->setVolatile(true);
-      B.CreateRet(
-          B.CreateXor(B.CreateZExtOrTrunc(First, B.getInt64Ty()),
-                      B.CreateShl(B.CreateZExtOrTrunc(Second, B.getInt64Ty()),
-                                  B.getInt64(1))));
-      auto *Unused = llvm::Function::Create(
-          llvm::FunctionType::get(B.getVoidTy(), {B.getInt64Ty()}, false),
-          llvm::GlobalValue::ExternalLinkage, "read_segment_unused", M);
-      B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", Unused));
-      auto *UnusedLoad =
-          B.CreateLoad(B.getIntNTy(Bits),
-                       B.CreateIntToPtr(Unused->getArg(0), B.getPtrTy(AS)));
-      UnusedLoad->setVolatile(true);
-      B.CreateRetVoid();
-      ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
-      const auto Text = emit(M);
-      const char *Suffix = Bits == 8    ? "byte"
-                           : Bits == 16 ? "word"
-                           : Bits == 32 ? "dword"
-                                        : "qword";
-      const std::string Intrinsic =
-          std::string("__read") + (GS ? "gs" : "fs") + Suffix;
-      EXPECT_NE(Text.find(Intrinsic + "("), std::string::npos) << Text;
-      // A declared segment environment permits execution on every host without
-      // reading the host's thread or kernel structures. Each read produces a
-      // distinct value, records its address and advances an observable counter.
-      const std::string Program =
-          "#include <stdint.h>\nstatic unsigned reads;\n"
-          "static uint64_t addresses[3];\nstatic uint64_t observe(uint64_t p) "
-          "{\n"
-          "  if (reads < 3) addresses[reads] = p; return (++reads == 1 ? "
-          "UINT64_C(0xfedcba9876543210) : UINT64_C(0x80000000abcdef71));\n}\n"
-          "#define " +
-          Intrinsic + "(p) ((uint" + std::to_string(Bits) + "_t)observe(p))\n" +
-          Text + R"(
+      for (bool Intrinsic : {false, true}) {
+        if (Intrinsic && !GS)
+          continue;
+        SCOPED_TRACE(GS);
+        SCOPED_TRACE(Bits);
+        SCOPED_TRACE(Intrinsic);
+        llvm::LLVMContext C;
+        llvm::Module M("volatile-segment-loads", C);
+        M.setDataLayout("e-p:64:64");
+        llvm::IRBuilder<llvm::NoFolder> B(C);
+        const unsigned AS =
+            GS ? kLLVMX86GSAddressSpace : kLLVMX86FSAddressSpace;
+        auto *Fn = llvm::Function::Create(
+            llvm::FunctionType::get(B.getInt64Ty(), {B.getInt64Ty()}, false),
+            llvm::GlobalValue::ExternalLinkage, "read_segment_twice", M);
+        B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", Fn));
+        auto *Pointer = B.CreateIntToPtr(
+            Intrinsic ? static_cast<llvm::Value *>(B.getInt64(0x188))
+                      : Fn->getArg(0),
+            B.getPtrTy(AS));
+        auto *First = B.CreateLoad(B.getIntNTy(Bits), Pointer, "first");
+        First->setVolatile(true);
+        auto *Second = B.CreateLoad(B.getIntNTy(Bits), Pointer, "second");
+        Second->setVolatile(true);
+        B.CreateRet(
+            B.CreateXor(B.CreateZExtOrTrunc(First, B.getInt64Ty()),
+                        B.CreateShl(B.CreateZExtOrTrunc(Second, B.getInt64Ty()),
+                                    B.getInt64(1))));
+        auto *Unused = llvm::Function::Create(
+            llvm::FunctionType::get(B.getVoidTy(), {B.getInt64Ty()}, false),
+            llvm::GlobalValue::ExternalLinkage, "read_segment_unused", M);
+        B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", Unused));
+        auto *UnusedLoad = B.CreateLoad(
+            B.getIntNTy(Bits),
+            B.CreateIntToPtr(Intrinsic
+                                 ? static_cast<llvm::Value *>(B.getInt64(0x1a0))
+                                 : Unused->getArg(0),
+                             B.getPtrTy(AS)));
+        UnusedLoad->setVolatile(true);
+        B.CreateRetVoid();
+        ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+        const auto Text = emitSegmentReads(M, Intrinsic ? BinaryFormat::COFF
+                                                        : BinaryFormat::ELF);
+        const char *Suffix = Bits == 8    ? "byte"
+                             : Bits == 16 ? "word"
+                             : Bits == 32 ? "dword"
+                                          : "qword";
+        const std::string Name = std::string("__readgs") + Suffix;
+        const char *Opcode = Bits == 8    ? "movb"
+                             : Bits == 16 ? "movw"
+                             : Bits == 32 ? "movl"
+                                          : "movq";
+        const std::string Native =
+            std::string(Opcode) + " %%" + (GS ? "gs" : "fs") + ":(%1), %0";
+        // Both reads of the first function and the unused read of the
+        // second keep their definitions, in order.
+        if (Intrinsic) {
+          EXPECT_EQ(occurrences(Text, Name + "(0x188)"), 2u) << Text;
+          EXPECT_EQ(occurrences(Text, Name + "(0x1A0)"), 1u) << Text;
+          EXPECT_EQ(occurrences(Text, "__asm__"), 0u) << Text;
+        } else {
+          EXPECT_EQ(occurrences(Text, Native), 3u) << Text;
+          EXPECT_EQ(occurrences(Text, "__read"), 0u) << Text;
+        }
+        // Each read produces a distinct value, records its address and
+        // advances an observable counter: an intrinsic through a declared
+        // segment environment on every host, native assembly through real
+        // segment memory on Linux x86-64.
+        std::string Program;
+        if (Intrinsic) {
+          Program = "#include <stdint.h>\nstatic unsigned reads;\n"
+                    "static uint64_t addresses[3];\n"
+                    "static uint64_t observe(uint64_t p) {\n"
+                    "  if (reads < 3) addresses[reads] = p;\n"
+                    "  return ++reads == 1 ? UINT64_C(0xfedcba9876543210)\n"
+                    "                      : UINT64_C(0x80000000abcdef71);\n"
+                    "}\n#define " +
+                    Name + "(p) ((uintBITS_t)observe(p))\n" + Text + R"(
 int main(void) {
   uint64_t first = (uintBITS_t)UINT64_C(0xfedcba9876543210);
   uint64_t second = (uintBITS_t)UINT64_C(0x80000000abcdef71);
-  if (read_segment_twice(0x188) != (first ^ (second << 1)) ||
-      reads != 2 || addresses[0] != 0x188 || addresses[1] != 0x188) return 1;
-  read_segment_unused(0x1a0);
+  if (read_segment_twice(0) != (first ^ (second << 1)) || reads != 2 ||
+      addresses[0] != 0x188 || addresses[1] != 0x188) return 1;
+  read_segment_unused(0);
   return reads != 3 || addresses[2] != 0x1a0;
 }
 )";
-      std::string Executable = Program;
-      for (size_t At = 0;
-           (At = Executable.find("BITS", At)) != std::string::npos;)
-        Executable.replace(At, 4, std::to_string(Bits));
-      for (const char *Level : {"-O0", "-O2"})
-        compileAndCheck(Executable, false, {}, Level);
+        } else {
+          if (!kNativeSegmentReads)
+            continue;
+          Program = nativeSegmentHarness(GS) + Text + R"(
+int main(void) {
+  uint64_t first = (uintBITS_t)UINT64_C(0xfedcba9876543210);
+  uint64_t second = (uintBITS_t)UINT64_C(0x80000000abcdef71);
+  segment_setup();
+  const uint64_t twice = segment_offset(0x188);
+  const uint64_t unused = segment_offset(0x1a0);
+  if (read_segment_twice(twice) != (first ^ (second << 1)) || reads != 2 ||
+      addresses[0] != twice || addresses[1] != twice) return 1;
+  read_segment_unused(unused);
+  return reads != 3 || addresses[2] != unused;
+}
+)";
+        }
+        Program = replaceAll(Program, "BITS", std::to_string(Bits));
+        for (const char *Level : {"-O0", "-O2"})
+          compileAndCheck(Program, false, {}, Level);
+      }
     }
   }
 }
@@ -2998,73 +3759,124 @@ TEST(LLVMCIntrinsicSemantics, AtomicSegmentLoadsFailClearly) {
 
 TEST(LLVMCIntrinsicSemantics, VolatileSegmentPointerLoadKeepsItsPointerType) {
   for (bool GS : {false, true}) {
-    SCOPED_TRACE(GS);
-    llvm::LLVMContext C;
-    llvm::Module M("volatile-segment-pointer", C);
-    M.setDataLayout("e-p:64:64");
-    llvm::IRBuilder<> B(C);
-    auto *Fn = llvm::Function::Create(
-        llvm::FunctionType::get(B.getPtrTy(), {B.getInt64Ty()}, false),
-        llvm::GlobalValue::ExternalLinkage, "read_segment_pointer", M);
-    B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", Fn));
-    const unsigned AS = GS ? kLLVMX86GSAddressSpace : kLLVMX86FSAddressSpace;
-    auto *Load = B.CreateLoad(B.getPtrTy(),
-                              B.CreateIntToPtr(Fn->getArg(0), B.getPtrTy(AS)));
-    Load->setVolatile(true);
-    B.CreateRet(Load);
-    ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
-    CEmitterOptions Options;
-    Options.TheArch = Arch::X64;
-    Options.EmitIncludes = false;
-    Options.PreserveLLVMFunctionTypes = true;
-    std::string Text;
-    llvm::raw_string_ostream OS(Text);
-    ASSERT_TRUE(LLVMCEmitter().emit(M, OS, Options));
-    const auto Program = std::string(R"(
+    for (bool Intrinsic : {false, true}) {
+      if (Intrinsic && !GS)
+        continue;
+      SCOPED_TRACE(GS);
+      SCOPED_TRACE(Intrinsic);
+      llvm::LLVMContext C;
+      llvm::Module M("volatile-segment-pointer", C);
+      M.setDataLayout("e-p:64:64");
+      llvm::IRBuilder<llvm::NoFolder> B(C);
+      auto *Fn = llvm::Function::Create(
+          llvm::FunctionType::get(B.getPtrTy(), {B.getInt64Ty()}, false),
+          llvm::GlobalValue::ExternalLinkage, "read_segment_pointer", M);
+      B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", Fn));
+      const unsigned AS = GS ? kLLVMX86GSAddressSpace : kLLVMX86FSAddressSpace;
+      auto *Load = B.CreateLoad(
+          B.getPtrTy(), B.CreateIntToPtr(Intrinsic ? static_cast<llvm::Value *>(
+                                                         B.getInt64(0x188))
+                                                   : Fn->getArg(0),
+                                         B.getPtrTy(AS)));
+      Load->setVolatile(true);
+      B.CreateRet(Load);
+      ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+      const auto Text = emitSegmentReads(
+          M, Intrinsic ? BinaryFormat::COFF : BinaryFormat::ELF,
+          /*PreserveTypes=*/true);
+      EXPECT_EQ(occurrences(Text, Intrinsic ? "__readgsqword(0x188)"
+                                            : (GS ? "movq %%gs:(%1), %0"
+                                                  : "movq %%fs:(%1), %0")),
+                1u)
+          << Text;
+      // -Werror=int-conversion rejects a pointer result returned as an
+      // integer.
+      std::string Program;
+      if (Intrinsic) {
+        Program = std::string(R"(
 #include <stdint.h>
 static uint64_t cell, address;
 static unsigned reads;
 static uint64_t observe(uint64_t offset) {
   ++reads; address = offset; return (uintptr_t)&cell;
 }
-)") + "#define __read" + (GS ? "gs" : "fs") +
-                         "qword(p) observe(p)\n" + Text + R"(
+#define __readgsqword(p) observe(p)
+)") + Text + R"(
 int main(void) {
-  return read_segment_pointer(0x188) != &cell || reads != 1 || address != 0x188;
+  return read_segment_pointer(0) != &cell || reads != 1 || address != 0x188;
 }
 )";
-    for (const char *Level : {"-O0", "-O2"})
-      compileAndCheck(Program, false, {}, Level);
+      } else {
+        if (!kNativeSegmentReads)
+          continue;
+        Program = nativeSegmentHarness(GS) + "static uint64_t cell;\n" + Text +
+                  R"(
+int main(void) {
+  segment_setup();
+  values[0] = (uintptr_t)&cell;
+  const uint64_t offset = segment_offset(0x188);
+  return read_segment_pointer(offset) != &cell || reads != 1 ||
+         addresses[0] != offset;
+}
+)";
+      }
+      for (const char *Level : {"-O0", "-O2"})
+        compileAndCheck(Program, false, {}, Level);
+    }
   }
 }
 
 TEST(LLVMCIntrinsicSemantics, OrdinarySegmentLoadKeepsItsExistingProjection) {
   for (bool GS : {false, true}) {
-    SCOPED_TRACE(GS);
-    llvm::LLVMContext C;
-    llvm::Module M("ordinary-segment-load", C);
-    M.setDataLayout("e-p:64:64");
-    llvm::IRBuilder<llvm::NoFolder> B(C);
-    auto *Fn = llvm::Function::Create(
-        llvm::FunctionType::get(B.getInt64Ty(), {B.getInt64Ty()}, false),
-        llvm::GlobalValue::ExternalLinkage, "read_ordinary_segment", M);
-    B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", Fn));
-    const unsigned AS = GS ? kLLVMX86GSAddressSpace : kLLVMX86FSAddressSpace;
-    auto *Load = B.CreateLoad(B.getInt64Ty(),
-                              B.CreateIntToPtr(Fn->getArg(0), B.getPtrTy(AS)));
-    B.CreateRet(B.CreateXor(Load, B.CreateShl(Load, B.getInt64(1))));
-    ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
-    const auto Text = emit(M);
-    const auto Program = std::string("#include <stdint.h>\n#define __read") +
-                         (GS ? "gs" : "fs") +
-                         "qword(p) UINT64_C(0xfedcba9876543210)\n" + Text + R"(
+    for (bool Intrinsic : {false, true}) {
+      if (Intrinsic && !GS)
+        continue;
+      SCOPED_TRACE(GS);
+      SCOPED_TRACE(Intrinsic);
+      llvm::LLVMContext C;
+      llvm::Module M("ordinary-segment-load", C);
+      M.setDataLayout("e-p:64:64");
+      llvm::IRBuilder<llvm::NoFolder> B(C);
+      auto *Fn = llvm::Function::Create(
+          llvm::FunctionType::get(B.getInt64Ty(), {B.getInt64Ty()}, false),
+          llvm::GlobalValue::ExternalLinkage, "read_ordinary_segment", M);
+      B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", Fn));
+      const unsigned AS = GS ? kLLVMX86GSAddressSpace : kLLVMX86FSAddressSpace;
+      auto *Load = B.CreateLoad(
+          B.getInt64Ty(),
+          B.CreateIntToPtr(Intrinsic
+                               ? static_cast<llvm::Value *>(B.getInt64(0x188))
+                               : Fn->getArg(0),
+                           B.getPtrTy(AS)));
+      B.CreateRet(B.CreateXor(Load, B.CreateShl(Load, B.getInt64(1))));
+      ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+      const auto Text = emitSegmentReads(M, Intrinsic ? BinaryFormat::COFF
+                                                      : BinaryFormat::ELF);
+      // Both uses take one value; how often C reads it is not pinned.
+      std::string Program;
+      if (Intrinsic) {
+        Program = "#include <stdint.h>\n"
+                  "#define __readgsqword(p) UINT64_C(0xfedcba9876543210)\n" +
+                  Text;
+      } else {
+        if (!kNativeSegmentReads)
+          continue;
+        Program = nativeSegmentHarness(GS) + Text;
+      }
+      Program +=
+          std::string(R"(
 int main(void) {
   const uint64_t value = UINT64_C(0xfedcba9876543210);
-  return read_ordinary_segment(0x188) != (value ^ (value << 1));
+)") +
+          (Intrinsic ? "  const uint64_t offset = 0;\n"
+                     : "  segment_setup();\n  values[1] = value;\n"
+                       "  const uint64_t offset = segment_offset(0x188);\n") +
+          R"(  return read_ordinary_segment(offset) != (value ^ (value << 1));
 }
 )";
-    for (const char *Level : {"-O0", "-O2"})
-      compileAndCheck(Program, false, {}, Level);
+      for (const char *Level : {"-O0", "-O2"})
+        compileAndCheck(Program, false, {}, Level);
+    }
   }
 }
 
@@ -3701,6 +4513,441 @@ TEST(LLVMCIntrinsicSemantics, NativeExchangeRejectsChangedContracts) {
 
 TEST(LLVMCIntrinsicSemantics, NativeAdditionRejectsChangedContracts) {
   checkNativeRmwContract(NdOp::ATOMIC_ADD);
+}
+
+/// The C of \p IR for \p Architecture as one unit that names what it leaves
+/// out, with \p Refused taking those names.
+std::string emitUnit(const char *IR, Arch Architecture, const char *Triple,
+                     std::vector<CEmitterOptions::RefusedDefinition> &Refused,
+                     bool Includes = false) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(IR, Error, Context);
+  EXPECT_TRUE(Module) << Error.getMessage().str();
+  if (!Module)
+    return {};
+  Module->setTargetTriple(llvm::Triple(Triple));
+  CEmitterOptions Options;
+  Options.TheArch = Architecture;
+  Options.EmitIncludes = Includes;
+  Options.RefusedDefinitions = &Refused;
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  EXPECT_TRUE(LLVMCEmitter().emit(*Module, OS, Options));
+  return Text;
+}
+
+/// Whether \p Compiler builds the C \p Source to an object with
+/// \p Arguments, its diagnostics in \p Diagnostics when it does not.
+bool buildsObject(llvm::StringRef Compiler,
+                  llvm::ArrayRef<llvm::StringRef> Arguments,
+                  llvm::StringRef Source, std::string &Diagnostics) {
+  llvm::SmallString<128> Input, Output, Errors;
+  if (llvm::sys::fs::createTemporaryFile("neverd-unit", "c", Input) ||
+      llvm::sys::fs::createTemporaryFile("neverd-unit", "o", Output) ||
+      llvm::sys::fs::createTemporaryFile("neverd-unit", "err", Errors))
+    return false;
+  llvm::FileRemover RemoveInput(Input), RemoveOutput(Output),
+      RemoveErrors(Errors);
+  {
+    std::error_code EC;
+    llvm::raw_fd_ostream OS(Input, EC);
+    if (EC)
+      return false;
+    OS << Source;
+  }
+  std::vector<llvm::StringRef> Command = {Compiler};
+  Command.insert(Command.end(), Arguments.begin(), Arguments.end());
+  Command.insert(Command.end(), {"-w", "-c", Input, "-o", Output});
+  const std::optional<llvm::StringRef> Redirects[] = {
+      llvm::StringRef(), llvm::StringRef(), Errors.str()};
+  const int Status =
+      llvm::sys::ExecuteAndWait(Compiler, Command, std::nullopt, Redirects, 60);
+  if (auto Log = llvm::MemoryBuffer::getFile(Errors))
+    Diagnostics = (*Log)->getBuffer().str();
+  return Status == 0;
+}
+
+TEST(LLVMCIntrinsicSemantics, HeaderScalarIntrinsicsNameTheirTargetFeature) {
+  // The header defines PDEP, PEXT and the CRC32 steps inline, for a caller
+  // that has the feature. The function that calls one names it, so the unit
+  // builds with no option.
+  std::vector<CEmitterOptions::RefusedDefinition> Refused;
+  const std::string Text =
+      emitUnit(R"ir(
+declare i64 @llvm.x86.bmi.pdep.64(i64, i64)
+declare i32 @llvm.x86.bmi.pext.32(i32, i32)
+declare i32 @llvm.x86.sse42.crc32.32.8(i32, i8)
+define i64 @deposit(i64 %value, i64 %mask) {
+  %r = call i64 @llvm.x86.bmi.pdep.64(i64 %value, i64 %mask)
+  ret i64 %r
+}
+define i32 @extract(i32 %value, i32 %mask) {
+  %r = call i32 @llvm.x86.bmi.pext.32(i32 %value, i32 %mask)
+  ret i32 %r
+}
+define i32 @checksum(i32 %sum, i8 %byte) {
+  %r = call i32 @llvm.x86.sse42.crc32.32.8(i32 %sum, i8 %byte)
+  ret i32 %r
+}
+define i32 @plain(i32 %a) {
+  %r = add i32 %a, 1
+  ret i32 %r
+}
+)ir",
+               Arch::X64, "x86_64-linux-gnu", Refused, true);
+  EXPECT_TRUE(Refused.empty()) << Refused.front().Reason;
+  EXPECT_NE(Text.find("target(\"bmi2\")"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("target(\"crc32\")"), std::string::npos) << Text;
+  const size_t Plain = Text.rfind("plain(");
+  ASSERT_NE(Plain, std::string::npos) << Text;
+  const size_t Line = Text.rfind('\n', Text.rfind('\n', Plain) - 1);
+  EXPECT_EQ(Text.substr(Line, Plain - Line).find("target("), std::string::npos)
+      << Text;
+  const auto Compiler = llvm::sys::findProgramByName("clang");
+  std::string Diagnostics;
+  if (Compiler && neverd::test::hostRunsX86())
+    EXPECT_TRUE(buildsObject(*Compiler, {}, Text, Diagnostics))
+        << Diagnostics << "\n"
+        << Text;
+}
+
+TEST(LLVMCIntrinsicSemantics, VectorOperationsPrintAsTheirHeaderIntrinsics) {
+  // Scalarizing leaves a target vector intrinsic whole. It prints as the
+  // header's intrinsic of its lane type, each vector operand converted to
+  // the header's type and an immediate as the constant the header takes.
+  struct Case {
+    Arch Architecture;
+    const char *Triple;
+    std::vector<llvm::StringRef> Build;
+    const char *IR;
+    std::vector<const char *> Spellings;
+  };
+  const Case Cases[] = {
+      {Arch::AArch64,
+       "aarch64-linux-gnu",
+       {"-target", "aarch64-linux-gnu",
+        "-march=armv8.4-a+aes+sha2+sha3+sm4+fp16"},
+       R"ir(
+declare <4 x i32> @llvm.aarch64.neon.sqshl.v4i32(<4 x i32>, <4 x i32>)
+declare <4 x i32> @llvm.aarch64.neon.uqrshl.v4i32(<4 x i32>, <4 x i32>)
+declare <4 x i32> @llvm.aarch64.neon.sqshlu.v4i32(<4 x i32>, <4 x i32>)
+declare <4 x i16> @llvm.aarch64.neon.sqrshrn.v4i16(<4 x i32>, i32)
+declare <8 x i8> @llvm.aarch64.neon.sqshrun.v8i8(<8 x i16>, i32)
+declare <16 x i8> @llvm.aarch64.crypto.aese(<16 x i8>, <16 x i8>)
+declare <4 x i32> @llvm.aarch64.crypto.sha1c(<4 x i32>, i32, <4 x i32>)
+declare <4 x i32> @llvm.aarch64.crypto.sm3tt2a(<4 x i32>, <4 x i32>, <4 x i32>, i64)
+declare <16 x i8> @llvm.aarch64.neon.pmull64(i64, i64)
+declare <8 x i16> @llvm.aarch64.neon.pmull.v8i16(<8 x i8>, <8 x i8>)
+declare <4 x float> @llvm.aarch64.neon.fmulx.v4f32(<4 x float>, <4 x float>)
+declare <2 x float> @llvm.aarch64.neon.fcvtxn.v2f32.v2f64(<2 x double>)
+declare <2 x i32> @llvm.aarch64.neon.urecpe.v2i32(<2 x i32>)
+define <4 x i32> @shifts(<4 x i32> %a, <4 x i32> %b) {
+  %s = call <4 x i32> @llvm.aarch64.neon.sqshl.v4i32(<4 x i32> %a, <4 x i32> %b)
+  %u = call <4 x i32> @llvm.aarch64.neon.uqrshl.v4i32(<4 x i32> %s, <4 x i32> %b)
+  %l = call <4 x i32> @llvm.aarch64.neon.sqshlu.v4i32(<4 x i32> %u, <4 x i32> splat (i32 3))
+  ret <4 x i32> %l
+}
+define <4 x i16> @narrow(<4 x i32> %a) {
+  %n = call <4 x i16> @llvm.aarch64.neon.sqrshrn.v4i16(<4 x i32> %a, i32 10)
+  ret <4 x i16> %n
+}
+define <8 x i8> @narrow_unsigned(<8 x i16> %a) {
+  %n = call <8 x i8> @llvm.aarch64.neon.sqshrun.v8i8(<8 x i16> %a, i32 3)
+  ret <8 x i8> %n
+}
+define <16 x i8> @cipher(<16 x i8> %data, <16 x i8> %key) {
+  %r = call <16 x i8> @llvm.aarch64.crypto.aese(<16 x i8> %data, <16 x i8> %key)
+  ret <16 x i8> %r
+}
+define <4 x i32> @hash(<4 x i32> %a, i32 %e, <4 x i32> %w) {
+  %c = call <4 x i32> @llvm.aarch64.crypto.sha1c(<4 x i32> %a, i32 %e, <4 x i32> %w)
+  %t = call <4 x i32> @llvm.aarch64.crypto.sm3tt2a(<4 x i32> %c, <4 x i32> %a, <4 x i32> %w, i64 2)
+  ret <4 x i32> %t
+}
+define <16 x i8> @carryless(i64 %a, i64 %b) {
+  %p = call <16 x i8> @llvm.aarch64.neon.pmull64(i64 %a, i64 %b)
+  ret <16 x i8> %p
+}
+define <8 x i16> @carryless_bytes(<8 x i8> %a, <8 x i8> %b) {
+  %p = call <8 x i16> @llvm.aarch64.neon.pmull.v8i16(<8 x i8> %a, <8 x i8> %b)
+  ret <8 x i16> %p
+}
+define <4 x i32> @extended(<4 x i32> %a, <4 x i32> %b) {
+  %x = bitcast <4 x i32> %a to <4 x float>
+  %y = bitcast <4 x i32> %b to <4 x float>
+  %m = call <4 x float> @llvm.aarch64.neon.fmulx.v4f32(<4 x float> %x, <4 x float> %y)
+  %r = bitcast <4 x float> %m to <4 x i32>
+  ret <4 x i32> %r
+}
+define <2 x i32> @narrow_odd(<2 x i64> %a) {
+  %d = bitcast <2 x i64> %a to <2 x double>
+  %f = call <2 x float> @llvm.aarch64.neon.fcvtxn.v2f32.v2f64(<2 x double> %d)
+  %r = bitcast <2 x float> %f to <2 x i32>
+  %e = call <2 x i32> @llvm.aarch64.neon.urecpe.v2i32(<2 x i32> %r)
+  ret <2 x i32> %e
+}
+)ir",
+       {"vqshlq_s32((int32x4_t)(", "vqrshlq_u32((uint32x4_t)(",
+        "vqshluq_n_s32((int32x4_t)(", ", 3)", "vqrshrn_n_s32((int32x4_t)(",
+        ", 10)", "vqshrun_n_s16((int16x8_t)(", "vaeseq_u8((uint8x16_t)(",
+        "vsha1cq_u32((uint32x4_t)(", "(uint32_t)(",
+        "vsm3tt2aq_u32((uint32x4_t)(", ", 2)",
+        "vreinterpretq_u8_p128(vmull_p64((poly64_t)(", "vmull_p8((poly8x8_t)(",
+        "vmulxq_f32((float32x4_t)(", "vcvtx_f32_f64((float64x2_t)(",
+        "vrecpe_u32((uint32x2_t)("}},
+      {Arch::ARM,
+       "armv8-linux-gnueabihf",
+       {"-target", "armv8-linux-gnueabihf", "-mfpu=crypto-neon-fp-armv8"},
+       R"ir(
+declare <4 x i16> @llvm.arm.neon.vqshiftns.v4i16(<4 x i32>, <4 x i32>)
+declare <4 x i32> @llvm.arm.neon.vqshiftu.v4i32(<4 x i32>, <4 x i32>)
+declare <4 x i32> @llvm.arm.neon.vqdmull.v4i32(<4 x i16>, <4 x i16>)
+declare <8 x i16> @llvm.arm.neon.vqrdmulh.v8i16(<8 x i16>, <8 x i16>)
+declare <8 x i16> @llvm.arm.neon.vmullp.v8i16(<8 x i8>, <8 x i8>)
+declare <16 x i8> @llvm.arm.neon.aesmc(<16 x i8>)
+define <4 x i16> @narrow(<4 x i32> %a) {
+  %n = call <4 x i16> @llvm.arm.neon.vqshiftns.v4i16(<4 x i32> %a, <4 x i32> splat (i32 -5))
+  ret <4 x i16> %n
+}
+define <4 x i32> @shift(<4 x i32> %a, <4 x i32> %b) {
+  %s = call <4 x i32> @llvm.arm.neon.vqshiftu.v4i32(<4 x i32> %a, <4 x i32> %b)
+  ret <4 x i32> %s
+}
+define <4 x i32> @doubling(<4 x i16> %a, <4 x i16> %b) {
+  %d = call <4 x i32> @llvm.arm.neon.vqdmull.v4i32(<4 x i16> %a, <4 x i16> %b)
+  ret <4 x i32> %d
+}
+define <8 x i16> @rounding(<8 x i16> %a, <8 x i16> %b) {
+  %d = call <8 x i16> @llvm.arm.neon.vqrdmulh.v8i16(<8 x i16> %a, <8 x i16> %b)
+  ret <8 x i16> %d
+}
+define <8 x i16> @carryless(<8 x i8> %a, <8 x i8> %b) {
+  %p = call <8 x i16> @llvm.arm.neon.vmullp.v8i16(<8 x i8> %a, <8 x i8> %b)
+  ret <8 x i16> %p
+}
+define <16 x i8> @mix(<16 x i8> %a) {
+  %m = call <16 x i8> @llvm.arm.neon.aesmc(<16 x i8> %a)
+  ret <16 x i8> %m
+}
+)ir",
+       {"vqshrn_n_s32((int32x4_t)(", ", 5)", "vqshlq_u32((uint32x4_t)(",
+        "(int32x4_t)(", "vqdmull_s16((int16x4_t)(",
+        "vqrdmulhq_s16((int16x8_t)(", "vmull_p8((poly8x8_t)(",
+        "vaesmcq_u8((uint8x16_t)("}},
+      {Arch::X64,
+       "x86_64-linux-gnu",
+       {},
+       R"ir(
+declare i32 @llvm.x86.sse42.pcmpistri128(<16 x i8>, <16 x i8>, i8)
+declare i32 @llvm.x86.sse42.pcmpestric128(<16 x i8>, i32, <16 x i8>, i32, i8)
+declare <16 x i8> @llvm.x86.sse42.pcmpistrm128(<16 x i8>, <16 x i8>, i8)
+declare <8 x i16> @llvm.x86.sse41.mpsadbw(<16 x i8>, <16 x i8>, i8)
+declare <2 x i64> @llvm.x86.pclmulqdq(<2 x i64>, <2 x i64>, i8)
+declare <8 x i32> @llvm.x86.avx2.permd(<8 x i32>, <8 x i32>)
+declare <4 x i32> @llvm.x86.sha1rnds4(<4 x i32>, <4 x i32>, i8)
+define i32 @strings(<16 x i8> %a, <16 x i8> %b, i32 %la, i32 %lb) {
+  %i = call i32 @llvm.x86.sse42.pcmpistri128(<16 x i8> %a, <16 x i8> %b, i8 12)
+  %c = call i32 @llvm.x86.sse42.pcmpestric128(<16 x i8> %a, i32 %la, <16 x i8> %b, i32 %lb, i8 8)
+  %r = add i32 %i, %c
+  ret i32 %r
+}
+define <16 x i8> @mask(<16 x i8> %a, <16 x i8> %b) {
+  %m = call <16 x i8> @llvm.x86.sse42.pcmpistrm128(<16 x i8> %a, <16 x i8> %b, i8 72)
+  ret <16 x i8> %m
+}
+define <8 x i16> @sad(<16 x i8> %a, <16 x i8> %b) {
+  %s = call <8 x i16> @llvm.x86.sse41.mpsadbw(<16 x i8> %a, <16 x i8> %b, i8 5)
+  ret <8 x i16> %s
+}
+define <2 x i64> @carryless(<2 x i64> %a, <2 x i64> %b) {
+  %p = call <2 x i64> @llvm.x86.pclmulqdq(<2 x i64> %a, <2 x i64> %b, i8 17)
+  ret <2 x i64> %p
+}
+define <8 x i32> @permute(<8 x i32> %a, <8 x i32> %index) {
+  %p = call <8 x i32> @llvm.x86.avx2.permd(<8 x i32> %a, <8 x i32> %index)
+  ret <8 x i32> %p
+}
+define <4 x i32> @rounds(<4 x i32> %a, <4 x i32> %b) {
+  %r = call <4 x i32> @llvm.x86.sha1rnds4(<4 x i32> %a, <4 x i32> %b, i8 6)
+  ret <4 x i32> %r
+}
+)ir",
+       // The instruction reads two bits of SHA1RNDS4's immediate, and the
+       // header takes no more.
+       {"_mm_cmpistri((__m128i)(", ", 12)", "_mm_cmpestrc((__m128i)(", "(int)(",
+        "_mm_cmpistrm((__m128i)(", ", 72)", "_mm_mpsadbw_epu8((__m128i)(",
+        "_mm_clmulepi64_si128((__m128i)(", ", 17)",
+        "_mm256_permutevar8x32_epi32((__m256i)(",
+        "_mm_sha1rnds4_epu32((__m128i)(", ", 2)", "sse4.2", "sse4.1", "pclmul",
+        "avx2", "sha"}}};
+  const auto Compiler = llvm::sys::findProgramByName("clang");
+  for (const Case &Target : Cases) {
+    SCOPED_TRACE(Target.Triple);
+    std::vector<CEmitterOptions::RefusedDefinition> Refused;
+    const std::string Text =
+        emitUnit(Target.IR, Target.Architecture, Target.Triple, Refused, true);
+    EXPECT_TRUE(Refused.empty()) << Refused.front().Reason;
+    for (const char *Spelling : Target.Spellings)
+      EXPECT_NE(Text.find(Spelling), std::string::npos) << Spelling << "\n"
+                                                        << Text;
+    EXPECT_EQ(Text.find("llvm_"), std::string::npos) << Text;
+    // The x86 unit builds with no option: each function names the features
+    // its header intrinsics need. The ARM units build for a processor that
+    // has the instructions. A host without the target's headers, or of
+    // another architecture for the x86 unit, cannot say whether the C builds.
+    std::string Diagnostics;
+    if (!Compiler || !buildsObject(*Compiler, Target.Build,
+                                   Target.Architecture == Arch::X64
+                                       ? "#include <immintrin.h>\n"
+                                       : "#include <arm_neon.h>\n",
+                                   Diagnostics))
+      continue;
+    EXPECT_TRUE(buildsObject(*Compiler, Target.Build, Text, Diagnostics))
+        << Diagnostics << "\n"
+        << Text;
+  }
+}
+
+TEST(LLVMCIntrinsicSemantics, AVectorOperationTheHeaderCannotTakeIsRefused) {
+  // The header takes these counts as constants in a range. A count that is
+  // not one, or lies outside it, has no header spelling, and neither has an
+  // intrinsic of another architecture: the unit is refused, not guessed.
+  struct Case {
+    Arch Architecture;
+    const char *Triple;
+    const char *IR;
+  };
+  const Case Cases[] = {{Arch::AArch64, "aarch64-linux-gnu", R"ir(
+declare <4 x i32> @llvm.aarch64.neon.sqshlu.v4i32(<4 x i32>, <4 x i32>)
+define <4 x i32> @variable(<4 x i32> %a, <4 x i32> %count) {
+  %l = call <4 x i32> @llvm.aarch64.neon.sqshlu.v4i32(<4 x i32> %a, <4 x i32> %count)
+  ret <4 x i32> %l
+}
+)ir"},
+                        {Arch::AArch64, "aarch64-linux-gnu", R"ir(
+declare <4 x i32> @llvm.aarch64.neon.sqshlu.v4i32(<4 x i32>, <4 x i32>)
+define <4 x i32> @too_far(<4 x i32> %a) {
+  %l = call <4 x i32> @llvm.aarch64.neon.sqshlu.v4i32(<4 x i32> %a, <4 x i32> splat (i32 32))
+  ret <4 x i32> %l
+}
+)ir"},
+                        {Arch::ARM, "armv8-linux-gnueabihf", R"ir(
+declare <4 x i16> @llvm.arm.neon.vqshiftns.v4i16(<4 x i32>, <4 x i32>)
+define <4 x i16> @left(<4 x i32> %a) {
+  %n = call <4 x i16> @llvm.arm.neon.vqshiftns.v4i16(<4 x i32> %a, <4 x i32> splat (i32 3))
+  ret <4 x i16> %n
+}
+)ir"},
+                        {Arch::X64, "x86_64-linux-gnu", R"ir(
+declare <16 x i8> @llvm.aarch64.crypto.aese(<16 x i8>, <16 x i8>)
+define <16 x i8> @foreign(<16 x i8> %data, <16 x i8> %key) {
+  %r = call <16 x i8> @llvm.aarch64.crypto.aese(<16 x i8> %data, <16 x i8> %key)
+  ret <16 x i8> %r
+}
+)ir"}};
+  for (const Case &Target : Cases) {
+    SCOPED_TRACE(Target.IR);
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Error;
+    auto Module = llvm::parseAssemblyString(Target.IR, Error, Context);
+    ASSERT_TRUE(Module) << Error.getMessage().str();
+    Module->setTargetTriple(llvm::Triple(Target.Triple));
+    CEmitterOptions Options;
+    Options.TheArch = Target.Architecture;
+    std::string Text;
+    llvm::raw_string_ostream OS(Text);
+    try {
+      (void)LLVMCEmitter().emit(*Module, OS, Options);
+      FAIL() << "a vector operation with no header spelling printed: " << Text;
+    } catch (const std::runtime_error &Refusal) {
+      EXPECT_NE(std::string(Refusal.what())
+                    .find("retains an unsupported vector instruction"),
+                std::string::npos)
+          << Refusal.what();
+    }
+  }
+}
+
+TEST(LLVMCIntrinsicSemantics, HalfPrecisionConversionsKeepEveryFractionBit) {
+  // A half converts to float exactly, so a saturating conversion of one is
+  // the float's. The fixed-point conversions take up to 64 fraction bits,
+  // more than arm_fp16.h's intrinsics do, and print as the instruction.
+  std::vector<CEmitterOptions::RefusedDefinition> Refused;
+  const std::string Text =
+      emitUnit(R"ir(
+declare i32 @llvm.fptosi.sat.i32.f16(half)
+declare i64 @llvm.fptoui.sat.i64.f16(half)
+declare half @llvm.aarch64.scvtf.fixed.i64(i64, i32)
+declare half @llvm.aarch64.ucvtf.fixed.i32(i32, i32)
+declare i32 @llvm.aarch64.fcvtzs.fixed.i32(half, i32)
+declare i64 @llvm.aarch64.fcvtzu.fixed.i64(half, i32)
+declare half @llvm.aarch64.neon.fmulx.f16(half, half)
+declare float @llvm.aarch64.neon.frecpx.f32(float)
+declare float @llvm.aarch64.sisd.fcvtxn(double)
+define i32 @saturated(half %h) {
+  %r = call i32 @llvm.fptosi.sat.i32.f16(half %h)
+  ret i32 %r
+}
+define i64 @saturated_unsigned(half %h) {
+  %r = call i64 @llvm.fptoui.sat.i64.f16(half %h)
+  ret i64 %r
+}
+define half @from_fixed(i64 %x, i32 %y) {
+  %a = call half @llvm.aarch64.scvtf.fixed.i64(i64 %x, i32 64)
+  %b = call half @llvm.aarch64.ucvtf.fixed.i32(i32 %y, i32 16)
+  %m = call half @llvm.aarch64.neon.fmulx.f16(half %a, half %b)
+  ret half %m
+}
+define i64 @to_fixed(half %h) {
+  %a = call i32 @llvm.aarch64.fcvtzs.fixed.i32(half %h, i32 16)
+  %b = call i64 @llvm.aarch64.fcvtzu.fixed.i64(half %h, i32 40)
+  %w = zext i32 %a to i64
+  %r = add i64 %w, %b
+  ret i64 %r
+}
+define float @scalar_forms(float %f, double %d) {
+  %x = call float @llvm.aarch64.neon.frecpx.f32(float %f)
+  %n = call float @llvm.aarch64.sisd.fcvtxn(double %d)
+  %r = fadd float %x, %n
+  ret float %r
+}
+)ir",
+               Arch::AArch64, "aarch64-linux-gnu", Refused, true);
+  EXPECT_TRUE(Refused.empty()) << Refused.front().Reason;
+  for (const char *Spelling :
+       {"neverd_llvm_fptosi_sat_i32_f16(", "neverd_llvm_fptoui_sat_i64_f16(",
+        "scvtf %h0, %x1, #64", "ucvtf %h0, %w1, #16", "fcvtzs %w0, %h1, #16",
+        "fcvtzu %x0, %h1, #40", "vmulxh_f16(", "vrecpxs_f32(",
+        "vcvtxd_f32_f64("})
+    EXPECT_NE(Text.find(Spelling), std::string::npos) << Spelling << "\n"
+                                                      << Text;
+  const auto Compiler = llvm::sys::findProgramByName("clang");
+  const std::vector<llvm::StringRef> Build = {"-target", "aarch64-linux-gnu",
+                                              "-march=armv8.2-a+fp16"};
+  std::string Diagnostics;
+  if (Compiler &&
+      buildsObject(*Compiler, Build, "#include <arm_fp16.h>\n", Diagnostics))
+    EXPECT_TRUE(buildsObject(*Compiler, Build, Text, Diagnostics))
+        << Diagnostics << "\n"
+        << Text;
+  // The instruction takes 1 to the integer's width of fraction bits.
+  for (const char *Count : {"0", "33"}) {
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Error;
+    const std::string IR =
+        std::string("declare i32 @llvm.aarch64.fcvtzs.fixed.i32(half, i32)\n"
+                    "define i32 @out_of_range(half %h) {\n"
+                    "  %r = call i32 @llvm.aarch64.fcvtzs.fixed.i32(half %h, "
+                    "i32 ") +
+        Count + ")\n  ret i32 %r\n}\n";
+    std::vector<CEmitterOptions::RefusedDefinition> Left;
+    const std::string Out =
+        emitUnit(IR.c_str(), Arch::AArch64, "aarch64-linux-gnu", Left);
+    ASSERT_EQ(Left.size(), 1u) << Out;
+    EXPECT_EQ(Left.front().Reason,
+              "unsupported AArch64 half-precision fixed-point conversion");
+  }
 }
 
 } // namespace

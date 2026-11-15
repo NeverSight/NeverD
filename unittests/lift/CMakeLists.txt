@@ -35,10 +35,15 @@ add_neverd_unittest(NeverDMIPSIntegerTests
   mips/MIPS16MemoryTests.cpp
   mips/MIPS16FrameTests.cpp
   mips/MIPS16E2Tests.cpp
+  mips/MIPSHistoricalTests.cpp
   mips/MIPSDSPTests.cpp
   mips/MIPSMSATests.cpp
   mips/MicroMIPSIntegerTests.cpp
   mips/MIPSBitfieldTests.cpp
+  mips/MIPSRelease6Tests.cpp
+  mips/MIPSLegacyFPTests.cpp
+  mips/MicroMIPSSequenceTests.cpp
+  mips/MicroMIPSRelease6Tests.cpp
   mips/MIPSIntegerTests.cpp
   mips/MIPSScalarTests.cpp
   LINK_COMPONENTS IRLow Lift Decode)
@@ -46,6 +51,13 @@ if(NEVERD_ENABLE_SEMANTIC_TESTS AND NOT TARGET unicorn)
   neverd_require_unicorn()
 endif()
 if(TARGET unicorn)
+  if(TARGET NeverDEmulationUnicorn AND NEVERD_EMULATION_BACKEND_UNICORN)
+    target_link_libraries(NeverDMIPSIntegerTests PRIVATE NeverDEmulationUnicorn)
+  else()
+    target_sources(NeverDMIPSIntegerTests PRIVATE
+      ${PROJECT_SOURCE_DIR}/lib/emulation/backends/unicorn/P5600MSA.cpp
+      ${PROJECT_SOURCE_DIR}/lib/emulation/backends/unicorn/ScalarFP.cpp)
+  endif()
   target_link_libraries(NeverDMIPSIntegerTests PRIVATE unicorn)
   target_compile_definitions(NeverDMIPSIntegerTests PRIVATE
     NEVERD_MIPS_UNICORN_REFERENCE=1)
@@ -546,6 +558,7 @@ add_neverd_unittest(NeverDLiftTests
   core/SourceCallReturnTests.cpp
   core/SourceCallIntegerViewTests.cpp
   core/HighSSADefinitionTests.cpp
+  core/HighEntryScratchStoreTests.cpp
   core/HighEntryStackOffsetsTests.cpp
   core/HighSourceRangeTests.cpp
   core/ObjCCallHintTests.cpp
@@ -627,6 +640,8 @@ add_neverd_unittest(NeverDLiftTests
   format/ELFFunctionListingTests.cpp
   format/ELFWithoutSectionsTests.cpp
   format/ELFARM32ModeTests.cpp
+  core/PathLeavesImageTests.cpp
+  format/ELFObjectBranchRelocationTests.cpp
   format/COFFFunctionListingTests.cpp
   format/RegistrationFunctionSelectionTests.cpp
   format/MachOLLVMNameBoundaryTests.cpp
@@ -1924,6 +1939,7 @@ add_neverd_unittest(NeverDHighControlFlowTests
   core/HighValueForwardTests.cpp
   core/HighCIntegerConversionTests.cpp
   core/HighSSADefinitionTests.cpp
+  core/HighEntryScratchStoreTests.cpp
   core/HighEntryStackOffsetsTests.cpp
   core/HighSourceRangeTests.cpp
   core/HighFrameTemporaryTests.cpp
@@ -2438,6 +2454,21 @@ add_neverd_unittest(NeverDDyldSharedCacheTests
   LINK_COMPONENTS Loader Support
 )
 
+add_neverd_unittest(NeverDArm64eUnwindRecoveryTests
+  aarch64/AArch64UnwindRecoveryTests.cpp
+  LINK_COMPONENTS AArch64UnwindRecovery
+)
+
+add_neverd_unittest(NeverDArm64eLiftedImageTests
+  aarch64/AArch64AsyncUnwindTests.cpp
+  aarch64/AArch64LiftedLeafTests.cpp
+  aarch64/AArch64SavedRegisterTests.cpp
+  LINK_COMPONENTS CodeGen Pipeline AArch64UnwindRecovery
+)
+
+set(NEVERD_ARM64E_TEST_CLANG_EXECUTABLE
+  "${NEVERD_TEST_CLANG_EXECUTABLE}" CACHE FILEPATH
+  "Clang frontend for Darwin arm64e pointer authentication fixtures")
 add_neverd_unittest(NeverDArm64eAnalysisTests
   aarch64/AArch64EntryABITests.cpp
   aarch64/AArch64AddressMemoryTests.cpp
@@ -2459,6 +2490,11 @@ target_compile_definitions(NeverDArm64eAnalysisTests PRIVATE
 if(NEVERD_TEST_CLANG_EXECUTABLE)
   target_compile_definitions(NeverDArm64eAnalysisTests PRIVATE
     NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")
+endif()
+if(NEVERD_ARM64E_TEST_CLANG_EXECUTABLE)
+  set_property(SOURCE aarch64/AArch64PAuthSemanticTests.cpp APPEND
+    PROPERTY COMPILE_DEFINITIONS
+      NEVERD_PAUTH_TEST_CLANG="${NEVERD_ARM64E_TEST_CLANG_EXECUTABLE}")
 endif()
 
 add_neverd_unittest(NeverDAArch64SVEPredicateTests
@@ -2853,9 +2889,9 @@ add_neverd_unittest(NeverDAArch64AuthenticatedCallTests
 )
 target_compile_definitions(NeverDAArch64AuthenticatedCallTests PRIVATE
   NEVERD_ARM64E_TEST_HEADERS="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arm64e")
-if(NEVERD_TEST_CLANG_EXECUTABLE)
+if(NEVERD_ARM64E_TEST_CLANG_EXECUTABLE)
   target_compile_definitions(NeverDAArch64AuthenticatedCallTests PRIVATE
-    NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")
+    NEVERD_TEST_CLANG="${NEVERD_ARM64E_TEST_CLANG_EXECUTABLE}")
 endif()
 add_neverd_unittest(NeverDCallRegisterUnreadTests
   core/CallRegisterUnreadTests.cpp
@@ -3472,6 +3508,7 @@ set(X86_32_TEST_SOURCES
   x86_32/test_i386_direct_gotoff_group.s
   x86_32/test_i386_gotpc_model.s
   x86_32/test_i386_gotoff_stage_abort.s
+  x86_32/test_i386_gotoff_unproved_base.s
   x86_32/test_i386_gotpc_thunk.s
   x86_32/test_i386_gotoff_forcepeel.s
   x86_32/test_i386_gotoff_stack_group.s
@@ -3515,10 +3552,13 @@ set(AARCH64_TEST_SOURCES
   aarch64/test_smccc_a64.s
   aarch64/test_trap_ends_flow_a64.s
   aarch64/test_jumptable_index_identity_a64.s
+  aarch64/test_jumptable_sibling_checked_a64.s
   aarch64/test_jumptable_gcc_compact_a64.s
   aarch64/test_jumptable_inflate_gcc_a64.s
   aarch64/test_jumptable_byte_loop_a64.s
   aarch64/test_jumptable_masked_lane_a64.s
+  aarch64/test_jumptable_twotable_select_a64.s
+  aarch64/test_jumptable_twotable_select_open_a64.s
   aarch64/test_pageoff_wrong_base_a64.s
   aarch64/test_pageoff_reaching_a64.s
   aarch64/test_pageoff_alternatives_a64.s
@@ -3679,10 +3719,6 @@ if(APPLE)
       "${CMAKE_CURRENT_SOURCE_DIR}/aarch64/test_call_abi_a64_macho.c")
   set(call_abi_a64_macho_provider_src
       "${CMAKE_CURRENT_SOURCE_DIR}/aarch64/test_call_abi_provider_a64_macho.c")
-  set(call_abi_a64_macho_dylib
-      "${CMAKE_CURRENT_BINARY_DIR}/libtest_call_abi_a64_macho.dylib")
-  set(call_abi_a64_macho_exe
-      "${CMAKE_CURRENT_BINARY_DIR}/test_call_abi_a64_macho")
   set(call_arg_phi_a64_macho_src
       "${CMAKE_CURRENT_SOURCE_DIR}/aarch64/test_call_arg_phi_a64_macho.s")
   set(call_arg_phi_a64_macho_exe
@@ -3707,22 +3743,30 @@ if(APPLE)
       "${CMAKE_CURRENT_SOURCE_DIR}/format/test_writable_pointer_table_induction_x64_macho.s")
   set(writable_pointer_induction_x64_macho_exe
       "${CMAKE_CURRENT_BINARY_DIR}/test_writable_pointer_table_induction_x64_macho")
-  add_custom_command(
-    OUTPUT ${call_abi_a64_macho_dylib}
-    COMMAND /usr/bin/clang -target arm64-apple-macos14 -dynamiclib
-            -fno-stack-protector ${call_abi_a64_macho_provider_src}
-            -Wl,-install_name,@rpath/libtest_call_abi_a64_macho.dylib
-            -o ${call_abi_a64_macho_dylib}
-    DEPENDS ${call_abi_a64_macho_provider_src}
-    COMMENT "Linking AArch64 Mach-O call-ABI provider dylib")
-  add_custom_command(
-    OUTPUT ${call_abi_a64_macho_exe}
-    COMMAND /usr/bin/clang -target arm64-apple-macos14
-            -fno-stack-protector ${call_abi_a64_macho_src}
-            ${call_abi_a64_macho_dylib} -Wl,-e,_indirect_double_call
-            -o ${call_abi_a64_macho_exe}
-    DEPENDS ${call_abi_a64_macho_src} ${call_abi_a64_macho_dylib}
-    COMMENT "Linking AArch64 Mach-O call-ABI fixture")
+  foreach(slice IN ITEMS arm64 arm64e)
+    get_filename_component(call_abi_name "${call_abi_a64_macho_src}" NAME_WE)
+    if(slice STREQUAL arm64e)
+      string(APPEND call_abi_name "_arm64e")
+    endif()
+    set(call_abi_provider "lib${call_abi_name}.dylib")
+    set(call_abi_dylib "${CMAKE_CURRENT_BINARY_DIR}/${call_abi_provider}")
+    set(call_abi_exe "${CMAKE_CURRENT_BINARY_DIR}/${call_abi_name}")
+    add_custom_command(
+      OUTPUT ${call_abi_dylib}
+      COMMAND /usr/bin/clang -target ${slice}-apple-macos14 -dynamiclib
+              -fno-stack-protector ${call_abi_a64_macho_provider_src}
+              -Wl,-install_name,@rpath/${call_abi_provider} -o ${call_abi_dylib}
+      DEPENDS ${call_abi_a64_macho_provider_src}
+      COMMENT "Linking ${slice} Mach-O call-ABI provider")
+    add_custom_command(
+      OUTPUT ${call_abi_exe}
+      COMMAND /usr/bin/clang -target ${slice}-apple-macos14 -fno-stack-protector
+              ${call_abi_a64_macho_src} ${call_abi_dylib}
+              -Wl,-e,_indirect_double_call -o ${call_abi_exe}
+      DEPENDS ${call_abi_a64_macho_src} ${call_abi_dylib}
+      COMMENT "Linking ${slice} Mach-O call-ABI fixture")
+    list(APPEND TEST_OBJECTS ${call_abi_exe})
+  endforeach()
   add_custom_command(
     OUTPUT ${call_arg_phi_a64_macho_exe}
     COMMAND /usr/bin/clang -target arm64-apple-macos14
@@ -3764,8 +3808,7 @@ if(APPLE)
             -o ${writable_pointer_induction_x64_macho_exe}
     DEPENDS ${writable_pointer_induction_x64_macho_src}
     COMMENT "Linking x64 Mach-O writable pointer-table induction fixture")
-  list(APPEND TEST_OBJECTS ${call_abi_a64_macho_exe}
-                           ${call_arg_phi_a64_macho_exe}
+  list(APPEND TEST_OBJECTS ${call_arg_phi_a64_macho_exe}
                            ${reentrant_feasible_phi_a64_macho_exe}
                            ${bounded_mixed_pointer_table_a64_macho_exe}
                            ${scalar_index_cycle_a64_macho_exe}
@@ -3976,6 +4019,20 @@ foreach(ring_mask 15 31)
     DEPENDS ${i386_ring_spill_src}
     COMMENT "Assembling the i386 GOT spill beside a ring of mask ${ring_mask}")
   list(APPEND TEST_OBJECTS ${i386_ring_spill_obj})
+  # The same ring behind an aligned vector clear: 1 before the spill, where a
+  # peeled first iteration has it, 2 in the loop between spill and reload.
+  foreach(aligned_clear 1 2)
+    set(i386_ring_clear_obj
+        "${CMAKE_CURRENT_BINARY_DIR}/test_i386_ring_spill_${ring_mask}_clear${aligned_clear}.o")
+    add_custom_command(
+      OUTPUT ${i386_ring_clear_obj}
+      COMMAND ${CLANG_EXEC} -target i386-linux-gnu -nostdlib -nostdlibinc -c
+              -DRING_MASK=${ring_mask} -DALIGNED_CLEAR=${aligned_clear}
+              ${i386_ring_spill_src} -o ${i386_ring_clear_obj}
+      DEPENDS ${i386_ring_spill_src}
+      COMMENT "Assembling the i386 GOT spill beside a cleared ring of mask ${ring_mask}, form ${aligned_clear}")
+    list(APPEND TEST_OBJECTS ${i386_ring_clear_obj})
+  endforeach()
 endforeach()
 
 set(i386_adjacent_function_pointer_src

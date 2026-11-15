@@ -31,6 +31,15 @@ MACHO_OBJECT_TEXT(kDataConstSegment, "__DATA_CONST")
 MACHO_OBJECT_TEXT(kAuthConstSegment, "__AUTH_CONST")
 MACHO_OBJECT_TEXT(kConstSection, "__const")
 MACHO_OBJECT_TEXT(kNativeImage, "native-object-image")
+MACHO_OBJECT_TEXT(kThreadSectionPrefix, "__thread")
+MACHO_OBJECT_TEXT(kBitcodeSegment, "__LLVM")
+MACHO_OBJECT_TEXT(kModuleInitSection, "__mod_init_func")
+MACHO_OBJECT_TEXT(kModuleTermSection, "__mod_term_func")
+MACHO_OBJECT_TEXT(kUnsupportedRuntimeSection,
+                  "unsupported runtime initialization, TLS or bitcode section")
+MACHO_OBJECT_TEXT(kThreadInitPointers,
+                  "invalid thread-local initializer pointer or relocation")
+MACHO_OBJECT_TEXT(kPlacementOverflow, "native placement overflows")
 MACHO_OBJECT_TEXT(kNativeStorage,
                   "native authenticated object requires a linked arm64e image")
 MACHO_OBJECT_TEXT(kNativePlacement,
@@ -47,6 +56,44 @@ MACHO_OBJECT_VALUE(bool, kPersonalityAddressDiversity, true)
 MACHO_OBJECT_TEXT(kNativeGOT, "__nd_got")
 MACHO_OBJECT_TEXT(kGOTRelocation,
                   "invalid native GOT or personality relocation")
+MACHO_OBJECT_TEXT(kTLVDescriptor,
+                  "thread-local access requires a strong descriptor export "
+                  "or a sealed descriptor import")
+// RX, RELRO and RW segments; two TLS spans plus the distinct initializer span.
+MACHO_OBJECT_VALUE(unsigned, kRuntimeSegmentCount, 3)
+MACHO_OBJECT_VALUE(unsigned, kTLVSectionCount, 2)
+MACHO_OBJECT_TEXT(kFunctionAlias,
+                  "aliased native function entries have no shared unwind range")
+MACHO_OBJECT_TEXT(
+    kInitializerStorage,
+    "initializer requires one local function relocation per pointer")
+MACHO_OBJECT_TEXT(kInitializerOffsets, "__init_offsets")
+MACHO_OBJECT_TEXT(kTLVStorage,
+                  "invalid native thread-local template or descriptor")
+MACHO_OBJECT_TEXT(kThreadResolver, "__nd_tlv_access")
+MACHO_OBJECT_TEXT(kThreadConfig, "__nd_tlv_config")
+MACHO_OBJECT_TEXT(kThreadAnchor, "__nd_tlv_anchor")
+MACHO_OBJECT_TEXT(kThreadGuard, "__nd_tlv_guard")
+MACHO_OBJECT_VALUE(unsigned, kThreadConfigWords, 5)
+MACHO_OBJECT_VALUE(unsigned, kThreadFieldCountOffset, 3 * sizeof(uint64_t))
+MACHO_OBJECT_VALUE(unsigned, kThreadCallbackCountOffset, 4 * sizeof(uint64_t))
+MACHO_OBJECT_VALUE(unsigned, kThreadFieldWords, 2)
+MACHO_OBJECT_VALUE(unsigned, kThreadKeyShift, 16)
+MACHO_OBJECT_TEXT(kTLVTemplatePrefix, "__nd_tls_prefix")
+MACHO_OBJECT_TEXT(kTLVAtExit, "_tlv_atexit")
+MACHO_OBJECT_TEXT(kTLVAtExitThunk, "__nd_tlv_atexit")
+MACHO_OBJECT_VALUE(uint32_t, kBranchAuthZeroX16, 0xd61f0a1f)
+MACHO_OBJECT_TEXT(kDSOHandle, "__dso_handle")
+MACHO_OBJECT_VALUE(unsigned, kTLVOffsetField, 2 * sizeof(uint64_t))
+MACHO_OBJECT_TEXT(kTLVSymbolPrefix, "_")
+MACHO_OBJECT_VALUE(uint8_t, kDefaultFunctionPointerKey,
+                   0) // IA, zero discriminator.
+MACHO_OBJECT_VALUE(unsigned, kTLVDescriptorBytes, 3 * sizeof(uint64_t))
+MACHO_OBJECT_VALUE(uint32_t, kTLVDescriptorAddress, 0x91000000)
+MACHO_OBJECT_TEXT(kTLVInstruction, "thread-local descriptor reference requires "
+                                   "an unadjusted ADRP or pointer-sized LDR")
+MACHO_OBJECT_VALUE(uint32_t, kTLVLoadRegisters, 0x3ff)
+MACHO_OBJECT_VALUE(uint32_t, kTLVDescriptorLoad, 0xf9400000)
 MACHO_OBJECT_TEXT(kGOTRange, "native GOT displacement overflows")
 MACHO_OBJECT_TEXT(kOrdinaryStorage,
                   "ordinary pointer lacks writable native pointer storage")
@@ -62,6 +109,20 @@ MACHO_OBJECT_TEXT(kLanguagePointer,
 MACHO_OBJECT_TEXT(kLanguageReplay,
                   "installed native language metadata failed semantic replay")
 
+MACHO_OBJECT_TEXT(kMutableDataSection, "__data")
+MACHO_OBJECT_TEXT(kObjCImageInfo, "__objc_imageinfo")
+MACHO_OBJECT_VALUE(size_t, kObjCImageInfoBytes, 2 * sizeof(uint32_t))
+MACHO_OBJECT_VALUE(uint32_t, kObjCImageInfoVersion, 0)
+MACHO_OBJECT_TEXT(
+    kObjCFlags,
+    "native Objective-C image flags differ or lack an installed declaration")
+MACHO_OBJECT_TEXT(kWeakDataAtom,
+                  "weak data requires an independently owned regular data atom")
+MACHO_OBJECT_TEXT(
+    kWeakDataFallback,
+    "weak data lacks an exported fallback and sealed coalescing GOT slot")
+MACHO_OBJECT_TEXT(kWeakDataReference,
+                  "weak data reference bypasses its coalescing GOT")
 MACHO_OBJECT_TEXT(kPrivateWeak,
                   "native private weak data requires a coalescing contract")
 MACHO_OBJECT_TEXT(kSharedCache,

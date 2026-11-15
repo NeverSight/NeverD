@@ -330,6 +330,11 @@ jobs:
         shell: pwsh
         run: choco install ninja --yes --no-progress
 
+      - name: Install Clang for Darwin arm64e fixtures
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/Install-WindowsFixtureClang.ps1
+
       - name: Enable the MSVC x64 toolchain
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
@@ -450,6 +455,9 @@ jobs:
             "$source_patch_clang" --version
             source_patch_compiler_args+=(
               "-DNEVERD_SOURCE_PATCH_TEST_CLANG_EXECUTABLE=$source_patch_clang")
+          elif [ "$RUNNER_OS" = "Windows" ]; then
+            source_patch_compiler_args+=(
+              "-DNEVERD_ARM64E_TEST_CLANG_EXECUTABLE=$(cygpath -m "$NEVERD_SOURCE_CLANG")")
           fi
           cmake -E make_directory build-ci/.cmake/api/v1/query
           cmake -E touch build-ci/.cmake/api/v1/query/codemodel-v2

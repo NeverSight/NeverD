@@ -13,9 +13,13 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/MIPS/MIPSControlTarget.h"
+#include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/LowToMedError.h"
+#include "neverd/lift/MIPS/MIPSLifter.h"
+#include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/MIPSCodeMode.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include <vector>
 
@@ -23,9 +27,66 @@ using namespace neverd;
 
 namespace {
 
-TEST(MicroMIPSDecode, EncodingModesRequireTheAdmittedMIPS32Target) {
-  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64,
-                      Arch::MIPS64, Arch::MIPS64EL}) {
+TEST(MicroMIPSDelaySlots, AllFirstHalfwordsAndPhysicalWidths) {
+  for (Arch Target :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    const auto Order = archLittleEndian(Target) ? llvm::endianness::little
+                                                : llvm::endianness::big;
+    cs_insn Insn{};
+    MIPSLifter Base(Target, InstructionMode::MicroMIPS, 2);
+    MIPSLifter DSP(Target, InstructionMode::MicroMIPS, 2);
+    DSP.setDSPEnabled(true);
+    MIPSLifter MSA(Target, InstructionMode::MicroMIPS, 5);
+    MSA.setMSAEnabled(true);
+    MIPSLifter R6(Target, InstructionMode::MicroMIPS, 6);
+    for (unsigned First = 0; First <= 0xffff; ++First) {
+      llvm::support::endian::write16(Insn.bytes, First, Order);
+      const auto Major = First >> 10;
+      for (unsigned Second : {0u, 0x0f3cu, 0x4f3cu}) {
+        llvm::support::endian::write16(Insn.bytes + 2, Second, Order);
+        for (unsigned Size : {2u, 4u}) {
+          Insn.size = Size;
+          unsigned Expected = 0;
+          if (Size == 2) {
+            if (First >= 0x4580 && First < 0x45a0)
+              Expected = 1;
+            if (First >= 0x45c0 && First < 0x45e0)
+              Expected = 4;
+            if (First >= 0x45e0 && First < 0x4600)
+              Expected = 2;
+            if (Major == 0x23 || Major == 0x2b || Major == 0x33)
+              Expected = 1;
+          } else {
+            if (Major == 0x25 || Major == 0x2d || Major == 0x35)
+              Expected = 1;
+            if (Major == 0x1d)
+              Expected = 2;
+            if (Major == 0x3c || Major == 0x3d)
+              Expected = 4;
+            if (Major == 0 && Second != 0)
+              Expected = Second == 0x0f3c ? 4 : 2;
+            // BC1F/T: every FCC selector, with two reserved low bits clear.
+            if (First >= 0x4380 && First < 0x43c0 && !(First & 3))
+              Expected = 1;
+          }
+          const unsigned Selector = (First >> 5) & 31;
+          const bool VBranch =
+              Size == 4 && Major == 0x20 &&
+              (Selector == 11 || Selector == 15 || Selector >= 24);
+          ASSERT_EQ(Base.delaySlotBytes(Insn), Expected)
+              << First << " " << Second;
+          ASSERT_EQ(DSP.delaySlotBytes(Insn),
+                    Size == 4 && First == 0x4360 ? 1u : Expected);
+          ASSERT_EQ(MSA.delaySlotBytes(Insn), VBranch ? 1u : Expected);
+          ASSERT_EQ(R6.delaySlotBytes(Insn), 0u);
+        }
+      }
+    }
+  }
+}
+
+TEST(MicroMIPSDecode, EncodingModesRequireAMIPSTarget) {
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
     Decoder Decode;
     EXPECT_FALSE(Decode.init(Target, InstructionMode::MicroMIPS));
     EXPECT_FALSE(Decode.init(Target, InstructionMode::MIPSClassic));
@@ -62,7 +123,282 @@ LowFunc buildMicro(const BinaryImage &Image) {
   return Builder.build(Image, Decode, Image.Entry, "micro_test");
 }
 
+TEST(MicroMIPS64, FullWidthTargetsRegistersAndScalarMemory) {
+  for (Arch Target : {Arch::MIPS64, Arch::MIPS64EL}) {
+    // MOVE16 v0,a0; DADDIU v0,v0,-8; SD v0,0(a1); LD v1,0(a1); JRC ra.
+    auto Image = microImage(
+        Target, {0x0c44, 0x5c42, 0xfff8, 0xd845, 0, 0xdc65, 0, 0x45bf});
+    constexpr va_t PC = 0x100001000, VA = 0x220002000;
+    Image.Bits = Bitness::Bits64;
+    Image.MIPS->ABI = MIPSABI::N64;
+    auto &Code = Image.Segments.front();
+    const auto Size = Code.Size;
+    Code.VA = Image.Entry = PC;
+    Image.MIPS->CodeModeEntries.clear();
+    Image.MIPS->CodeModeEntries.emplace(PC, InstructionMode::MicroMIPS);
+    Image.MIPS->CodeRegions = {{PC, PC + Size, InstructionMode::MicroMIPS}};
+    Image.Symbols = {Symbol::makeFunc(PC, Size)};
+    Segment Data;
+    Data.VA = VA;
+    Data.Size = Data.FileSz = 8;
+    Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Data.Data.resize(8);
+    Image.Segments.push_back(std::move(Data));
+    EXPECT_EQ(mips::serializedCodeTarget(Image, PC | 1), PC);
+    EXPECT_FALSE(mips::serializedCodeTarget(Image, PC));
+    EXPECT_EQ(Image.instructionModeAt(PC), InstructionMode::MicroMIPS);
+    auto Canonical = canonicalizeLowControlTarget(
+        PC | 1, InstructionMode::MicroMIPS,
+        LowInstructionTargetMode::FromTargetBit0, Image.getPointerSize());
+    ASSERT_TRUE(bool(Canonical)) << llvm::toString(Canonical.takeError());
+    EXPECT_EQ(Canonical->Address, PC);
+    EXPECT_EQ(Canonical->Mode, InstructionMode::MicroMIPS);
+    EXPECT_EQ(qualifiedMIPSControlTarget(
+                  Image, InstructionMode::MicroMIPS,
+                  LowInstructionTargetMode::FromTargetBit0, PC | 1),
+              PC);
+    auto Func = buildMicro(Image);
+    ASSERT_TRUE(Func.hasCompleteLiftCoverage());
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Image));
+    NdOpEmulator E(Image);
+    E.setStrictMode(true);
+    constexpr uint64_t Value = 0xdeadbeef80010009;
+    E.setRegister(mipsreg::A0, Value);
+    E.setRegister(mipsreg::A1, VA);
+    E.setRegister(mipsreg::RA, PC | 1);
+    for (unsigned Offset = 0; Offset < Size - 2;) {
+      const auto *Bytes = Image.readVA(PC + Offset, Size - Offset);
+      ASSERT_TRUE(Bytes);
+      DecodedExecutionUnit U;
+      const auto N =
+          Decode.decodeUnitForLift(Bytes, Size - Offset, PC + Offset, U);
+      ASSERT_GT(N, 0);
+      std::vector<LowOp> Ops;
+      Decode.liftUnitToLow(U, Ops);
+      for (const auto &Op : Ops)
+        ASSERT_TRUE(E.step(Op)) << Offset;
+      Offset += N;
+    }
+    EXPECT_EQ(E.getRegister(mipsreg::V0), Value - 8);
+    EXPECT_EQ(E.getRegister(mipsreg::V1), Value - 8);
+  }
+}
+
+TEST(MicroMIPS64, DoublewordMergeStoresKeepPhysicalBytesAndSignedDisplacement) {
+  // GNU as -mips64r2, including the two signed 12-bit displacement limits.
+  constexpr struct {
+    uint16_t Half;
+    uint32_t Classic;
+    unsigned Id;
+    int Disp;
+  } Cases[] = {{0xc800, 0xb085f800, MIPS_INS_SDL, -2048},
+               {0xcfff, 0xb085ffff, MIPS_INS_SDL, -1},
+               {0xd006, 0xb4850006, MIPS_INS_SDR, 6},
+               {0xd7ff, 0xb48507ff, MIPS_INS_SDR, 2047}};
+  for (const auto Target :
+       {Arch::MIPS64, Arch::MIPS64EL, Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    const auto Order = archLittleEndian(Target) ? llvm::endianness::little
+                                                : llvm::endianness::big;
+    Decoder Micro, Classic;
+    ASSERT_TRUE(Micro.init(Target, InstructionMode::MicroMIPS));
+    ASSERT_TRUE(Classic.init(Target));
+    for (const auto &Case : Cases) {
+      uint8_t Bytes[4], Reference[4];
+      llvm::support::endian::write16(Bytes, 0x60a4, Order);
+      llvm::support::endian::write16(Bytes + 2, Case.Half, Order);
+      llvm::support::endian::write32(Reference, Case.Classic, Order);
+      DecodedInsn Insn{};
+      ASSERT_EQ(Micro.decodeOne(Bytes, 4, 0x1000, Insn), 4);
+      ASSERT_EQ(Insn.Id, Case.Id);
+      EXPECT_TRUE(std::equal(Bytes, Bytes + 4, Insn.Raw->bytes));
+      ASSERT_NE(Insn.Raw->detail, nullptr);
+      const auto &Detail = Insn.Raw->detail->mips;
+      ASSERT_EQ(Detail.op_count, 2u);
+      EXPECT_EQ(Detail.operands[0].reg, MIPS_REG_A1);
+      EXPECT_EQ(Detail.operands[1].mem.base, MIPS_REG_A0);
+      EXPECT_EQ(Detail.operands[1].mem.disp, Case.Disp);
+      std::vector<LowOp> Ops, ReferenceOps;
+      ASSERT_EQ(Micro.decodeOneForLift(Bytes, 4, 0x1000, Insn), 4);
+      Micro.liftToLow(Insn, Ops);
+      ASSERT_EQ(Classic.decodeOneForLift(Reference, 4, 0x1000, Insn), 4);
+      Classic.liftToLow(Insn, ReferenceOps);
+      ASSERT_FALSE(Ops.empty());
+      EXPECT_EQ(Ops, ReferenceOps);
+    }
+  }
+}
+
+TEST(MicroMIPS64, DoublewordMergeStoresAreRestrictedToPreR6WideGPRs) {
+  for (const auto Target :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    const auto Order = archLittleEndian(Target) ? llvm::endianness::little
+                                                : llvm::endianness::big;
+    for (unsigned Revision : {2u, 6u}) {
+      if (Revision == 2 && isMIPS64(Target))
+        continue;
+      for (auto Mode :
+           {InstructionMode::MicroMIPS, InstructionMode::MIPSClassic}) {
+        MIPSLifter Lifter(Target, Mode, Revision);
+        for (bool Left : {false, true}) {
+          cs_insn Insn{};
+          Insn.size = 4;
+          if (Mode == InstructionMode::MicroMIPS) {
+            llvm::support::endian::write16(Insn.bytes, 0x60a4, Order);
+            llvm::support::endian::write16(Insn.bytes + 2,
+                                           Left ? 0xcfff : 0xd006, Order);
+          } else {
+            llvm::support::endian::write32(
+                Insn.bytes, Left ? 0xb085ffff : 0xb4850006, Order);
+          }
+          std::vector<LowOp> Ops;
+          EXPECT_THROW(Lifter.lift(Insn, Ops), UnliftedInstruction);
+          EXPECT_TRUE(Ops.empty());
+        }
+      }
+    }
+  }
+}
+
 class MicroMIPSFlow : public ::testing::TestWithParam<Arch> {};
+
+TEST(MIPS64Divide, PhysicalEncodingsProduceFullWidthHIAndLO) {
+  constexpr uint64_t Min = UINT64_C(1) << 63;
+  constexpr uint64_t Cases[][4] = {
+      {10, 3, 3, 1},
+      {uint64_t(-10), 3, uint64_t(-3), uint64_t(-1)},
+      {10, uint64_t(-3), uint64_t(-3), 1},
+      {Min, UINT64_MAX, Min, 0},
+      {Min, 3, UINT64_C(0xd555555555555556), uint64_t(-2)},
+      {Min - 1, Min, 0, Min - 1},
+      {0x100000002, 0x100000001, 1, 1},
+      {0, UINT64_MAX, 0, 0}};
+  for (Arch Target :
+       {Arch::MIPS64, Arch::MIPS64EL, Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    const auto Order = archLittleEndian(Target) ? llvm::endianness::little
+                                                : llvm::endianness::big;
+    BinaryImage Image;
+    Image.Arch = Target;
+    for (bool Micro : {false, true}) {
+      Decoder Decode;
+      ASSERT_TRUE(Decode.init(Target, Micro ? InstructionMode::MicroMIPS
+                                            : InstructionMode::MIPSClassic));
+      const auto Lift = [&](uint32_t Classic, uint32_t Compressed, unsigned ID,
+                            std::vector<LowOp> &Ops) {
+        uint8_t Bytes[4];
+        if (Micro) {
+          llvm::support::endian::write16(Bytes, Compressed >> 16, Order);
+          llvm::support::endian::write16(Bytes + 2, Compressed, Order);
+        } else {
+          llvm::support::endian::write32(Bytes, Classic, Order);
+        }
+        DecodedInsn Insn;
+        ASSERT_EQ(Decode.decodeOne(Bytes, 4, 0x1000, Insn), 4);
+        EXPECT_EQ(Insn.Id, ID);
+        EXPECT_TRUE(std::equal(Bytes, Bytes + 4, Insn.Raw->bytes));
+        ASSERT_EQ(Decode.decodeOneForLift(Bytes, 4, 0x1000, Insn), 4);
+        Decode.liftToLow(Insn, Ops);
+        ASSERT_FALSE(Ops.empty());
+      };
+      std::vector<LowOp> MFHI, MFLO;
+      Lift(0x00001010, 0x00020d7c, MIPS_INS_MFHI, MFHI);
+      Lift(0x00001812, 0x00031d7c, MIPS_INS_MFLO, MFLO);
+      for (bool Signed : {false, true}) {
+        if (Micro) {
+          std::vector<LowOp> WordDiv;
+          Lift(Signed ? 0x0085001a : 0x0085001b,
+               Signed ? 0x00a4ab3c : 0x00a4bb3c,
+               Signed ? MIPS_INS_DIV : MIPS_INS_DIVU, WordDiv);
+          NdOpEmulator WordState(Image);
+          WordState.setStrictMode(true);
+          WordState.setRegister(mipsreg::A0, uint64_t(-10));
+          WordState.setRegister(mipsreg::A1, 3);
+          for (const auto &Op : WordDiv)
+            ASSERT_TRUE(WordState.step(Op));
+          EXPECT_EQ(WordState.getRegister(mipsreg::LO),
+                    Signed ? uint64_t(-3) : 0x55555552u);
+          EXPECT_EQ(WordState.getRegister(mipsreg::HI),
+                    Signed ? UINT64_MAX : 0u);
+          WordState.setRegister(mipsreg::A0, 0x100000000);
+          EXPECT_FALSE(llvm::all_of(
+              WordDiv, [&](const LowOp &Op) { return WordState.step(Op); }));
+        }
+        std::vector<LowOp> Div;
+        Lift(Signed ? 0x0085001e : 0x0085001f, Signed ? 0x58a4ab3c : 0x58a4bb3c,
+             Signed ? MIPS_INS_DDIV : MIPS_INS_DDIVU, Div);
+        NdOpEmulator E(Image);
+        E.setStrictMode(true);
+        const auto Run = [&](const std::vector<LowOp> &Ops) {
+          return llvm::all_of(Ops, [&](const LowOp &Op) { return E.step(Op); });
+        };
+        for (const auto &C : Cases) {
+          E.setRegister(mipsreg::A0, C[0]);
+          E.setRegister(mipsreg::A1, C[1]);
+          ASSERT_TRUE(Run(Div));
+          EXPECT_EQ(E.getRegister(mipsreg::AC0Pending), 1u);
+          ASSERT_TRUE(Run(MFHI));
+          ASSERT_TRUE(Run(MFLO));
+          EXPECT_EQ(E.getRegister(mipsreg::V0), Signed ? C[3] : C[0] % C[1]);
+          EXPECT_EQ(E.getRegister(mipsreg::V1), Signed ? C[2] : C[0] / C[1]);
+          EXPECT_EQ(E.getRegister(mipsreg::AC0Pending), 0u);
+          E.setRegister(mipsreg::A1, 0);
+          ASSERT_TRUE(Run(Div));
+          ASSERT_TRUE(Run(MFHI));
+          ASSERT_TRUE(Run(MFLO));
+          EXPECT_FALSE(E.getRegister(mipsreg::V0));
+          EXPECT_FALSE(E.getRegister(mipsreg::V1));
+        }
+        for (unsigned Input : {mipsreg::A0, mipsreg::A1}) {
+          NdOpEmulator Incomplete(Image);
+          Incomplete.setStrictMode(true);
+          Incomplete.setRegister(Input, 7);
+          Incomplete.setRegister(mipsreg::HI, 11);
+          Incomplete.setRegister(mipsreg::LO, 22);
+          EXPECT_FALSE(llvm::all_of(
+              Div, [&](const LowOp &Op) { return Incomplete.step(Op); }));
+          EXPECT_EQ(Incomplete.getRegister(mipsreg::HI), 11u);
+          EXPECT_EQ(Incomplete.getRegister(mipsreg::LO), 22u);
+        }
+      }
+    }
+  }
+}
+
+TEST(MIPS64Divide, RejectsReservedFieldsWidthsAndRevisions) {
+  for (Arch Target :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    const auto Order = archLittleEndian(Target) ? llvm::endianness::little
+                                                : llvm::endianness::big;
+    for (unsigned Revision : {2u, 6u}) {
+      for (bool Micro : {false, true}) {
+        MIPSLifter Lifter(Target,
+                          Micro ? InstructionMode::MicroMIPS
+                                : InstructionMode::MIPSClassic,
+                          Revision);
+        for (unsigned Fn : {30u, 31u}) {
+          for (unsigned Reserved : {0u, 1u << 6, 1u << 11}) {
+            if ((!Reserved && isMIPS64(Target) && Revision == 2) ||
+                (Micro && Reserved))
+              continue;
+            cs_insn Insn{};
+            Insn.size = 4;
+            if (Micro) {
+              llvm::support::endian::write16(Insn.bytes, 0x58a4, Order);
+              llvm::support::endian::write16(Insn.bytes + 2,
+                                             Fn == 30 ? 0xab3c : 0xbb3c, Order);
+            } else {
+              llvm::support::endian::write32(Insn.bytes,
+                                             0x00850000 | Reserved | Fn, Order);
+            }
+            std::vector<LowOp> Ops;
+            EXPECT_THROW(Lifter.lift(Insn, Ops), UnliftedInstruction);
+            EXPECT_TRUE(Ops.empty());
+          }
+        }
+      }
+    }
+  }
+}
 
 TEST_P(MicroMIPSFlow, BranchUsesHalfwordDisplacementAndRealSlotSpan) {
   // b16 target; move v0,a0; unreachable move; target: jrc ra

@@ -135,6 +135,12 @@ public:
   /// (CSourceMap::Names), as HighC does, from the ordinary render.
   void recordSourceNames(const llvm::Module &Mod);
   std::string functionIdentifier(const llvm::Function &Fn) const;
+  /// Throws, in a unit that leaves out and names the definitions it cannot
+  /// write, for an LLVM intrinsic that C spells neither by a name of its own
+  /// nor by a helper of the unit: its sanitized name declares nothing, and a
+  /// call to it would fail the unit's build. Any other text, as one function
+  /// shown alone, keeps that name, which says what the code does.
+  void requireCSpelling(const llvm::Function &Callee) const;
   std::string sourceScalarType(llvm::Type *Type, bool Signed) const;
   /// \p Fn's C declaration of \p Declarator; with \p Params, of its first
   /// that many parameters only.
@@ -162,6 +168,12 @@ public:
   std::string aggregateMemberPath(llvm::Type *Ty,
                                   llvm::ArrayRef<unsigned> Indices);
   void writeGlobals(llvm::Module &Mod);
+  /// Finds the globals that hold addresses of one function's blocks and that
+  /// only that function uses. C names a label inside its function alone, so
+  /// each is defined there, as a static object (writeLabelTables), where its
+  /// initializer spells a block's address as `&&label`.
+  void collectLabelTables(const llvm::Module &Mod);
+  void writeLabelTables(const llvm::Function &Fn);
   void writeImageByteArray(const llvm::GlobalVariable &Global,
                            llvm::StringRef Name);
   /// Declare the image objects \p Fns read or write, and those whose
@@ -171,6 +183,7 @@ public:
                                    llvm::StringRef Text,
                                    llvm::StringRef Globals);
   void writeForwardDecls(llvm::Module &Mod);
+  const char *mipsModeAttribute(const llvm::Function &Function);
 
   //--- PE image headers (COFF/LLVMCImageBase.cpp) ---
   /// Whether \p Global is the linker's `__ImageBase`, through which the
@@ -835,6 +848,9 @@ public:
   std::map<const llvm::Value *, std::string> SourceValueIds;
   std::string freshVar(const std::string &Hint = "v");
   std::string valueStr(const llvm::Value *V, bool *PointerSpelling = nullptr);
+  /// valueStr as a value `__builtin_bit_cast` may take: Clang 21-23 read a
+  /// vector's first element for the element lvalue `(v)[i]`.
+  std::string bitCastSourceStr(const llvm::Value *V);
   std::string globalNameStr(const llvm::GlobalValue *Global);
   /// Storage and aggregate integer constants retain their literal bits;
   /// expression uses may additionally carry an image-address spelling.
@@ -852,8 +868,10 @@ public:
   std::string castStr(unsigned Opcode, const std::string &Src,
                       llvm::Type *SrcTy, llvm::Type *DstTy);
   /// The text \p Cast reads as where its operand reads as \p Text: the
-  /// same, unless the cast moves between an integer and a pointer, whose C
-  /// types differ.
+  /// same for a pointer cast, and the conversion the cast makes between an
+  /// integer and a pointer or to, from and between floating-point numbers.
+  /// Empty where no text states the cast's value, as for the bits of a number
+  /// read as another type.
   std::string castOfText(const llvm::CastInst &Cast, const std::string &Text);
   std::string cmpStr(llvm::CmpInst::Predicate Pred, const std::string &LHS,
                      const std::string &RHS, bool IsFP,
@@ -873,6 +891,13 @@ public:
   /// The C function-pointer type of \p Call's callee, from the call's own
   /// type and convention.  \p Strict refuses what shown C may approximate.
   std::string indirectCalleeType(const llvm::CallBase &Call, bool Strict);
+  /// Whether \p Call, through a pointer, takes its two pointer-sized integer
+  /// results from the register pair that a C integer of twice the width
+  /// returns in (r0:r1, EDX:EAX, v0:v1). A C record of the two returns
+  /// through memory there, so the call is typed as returning that integer,
+  /// whose bytes are the pair's in either byte order. A callee with a
+  /// declaration of its own, an import or an analyst's signature, keeps it.
+  bool returnsIntegerRegisterPair(const llvm::CallBase &Call) const;
   /// The parameters an indirect \p Call's callee takes where it loads the
   /// callee from a typed record's member that points to a function, as
   /// SystemTable->ConOut->OutputString does; none otherwise.
@@ -905,6 +930,12 @@ public:
   /// The helper each modeled supervisor call in the unit prints through.
   std::map<Intrinsic, std::string> SyscallHelperNames;
   std::map<const llvm::Function *, std::string> FunctionIdentifiers;
+  /// The LLVM intrinsics a helper this unit defines stands for.
+  std::set<const llvm::Function *> HelperIntrinsics;
+  /// Whether this unit leaves out each definition whose C throws, and names
+  /// it (CEmitterOptions::RefusedDefinitions), where nothing follows one
+  /// pass's text.
+  bool LeavesOutRefusedDefinitions = false;
   /// The identifiers FunctionIdentifiers gives the module's functions.
   std::set<std::string> FunctionIdentifierNames;
   /// The identifier each routine the user declares, called through its
@@ -939,10 +970,27 @@ public:
   std::map<const llvm::BasicBlock *, std::string> BlockLabels;
   std::map<const llvm::BasicBlock *, size_t> DeferredBlockLabels;
   std::set<const llvm::BasicBlock *> ReferencedBlocks;
+  /// The function each label table is defined in (collectLabelTables).
+  llvm::DenseMap<const llvm::GlobalVariable *, const llvm::Function *>
+      LabelTables;
+  /// The function whose label tables are being written: only there is a
+  /// block's address a constant C can spell.
+  const llvm::Function *LabelTableOwner = nullptr;
+  /// The blocks of the function being written whose address a label table
+  /// takes. Each keeps a label wherever its code is laid out.
+  llvm::SmallPtrSet<const llvm::BasicBlock *, 8> AddressLabelBlocks;
+  /// Notes that \p Block's code starts at the text written next, when a
+  /// label table takes its address: its own statements, or the copies and
+  /// jump of its edge when it has none.
+  void noteLabelPlace(const llvm::BasicBlock *Block) {
+    if (!AddressLabelBlocks.empty() && AddressLabelBlocks.count(Block))
+      DeferredBlockLabels.try_emplace(Block, OS.stream().tell());
+  }
   /// LLVM block order is immutable during one function projection. Rebuild
   /// once in setupFunction so regional layout queries need no function scan.
   llvm::DenseMap<const llvm::BasicBlock *, size_t> BlockLayout;
   bool HasCIntrinsics = false;
+  bool UsesMicroMIPSAttribute = false;
   /// A simple load or store has a type with an aligned(1), may_alias alias,
   /// so the aliases are declared when UseUnalignedPointers is set.
   bool NeedsUnalignedTypes = false;

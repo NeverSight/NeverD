@@ -36,11 +36,13 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <initializer_list>
 #include <optional>
 #include <set>
 
@@ -55,6 +57,59 @@ static std::string llvmFunctionBody(const std::string &IR,
   std::string::size_type End = IR.find("\n}", Begin);
   return End == std::string::npos ? IR.substr(Begin)
                                   : IR.substr(Begin, End + 2 - Begin);
+}
+
+/// How many switches of the LLVM text \p Body recover a table.  A dispatch by
+/// value compares the jump's target with the labels it may reach and traps on
+/// any other value; the emitter marks its switch after the case list.
+static size_t recoveredSwitchCount(const std::string &Body) {
+  size_t Count = 0;
+  for (std::string::size_type At = Body.find("switch i");
+       At != std::string::npos; At = Body.find("switch i", At + 1)) {
+    const std::string::size_type Close = Body.find(']', At);
+    const std::string::size_type End =
+        Close == std::string::npos ? Close : Body.find('\n', Close);
+    if (Close == std::string::npos ||
+        Body.substr(Close, End == std::string::npos ? End : End - Close)
+                .find("!neverd.value-dispatch") == std::string::npos)
+      ++Count;
+  }
+  return Count;
+}
+
+/// The same for the HighIR text \p Body, where a dispatch by value has the
+/// jump to no address as its default.
+static size_t recoveredHighSwitchCount(const std::string &Body) {
+  static constexpr char Default[] = "default:";
+  static constexpr char NoAddress[] = "goto 0xFFFFFFFFFFFFFFFF;";
+  size_t Count = 0;
+  for (std::string::size_type At = Body.find("switch");
+       At != std::string::npos;) {
+    const std::string::size_type Next = Body.find("switch", At + 1);
+    const std::string Text =
+        Body.substr(At, Next == std::string::npos ? Next : Next - At);
+    std::string::size_type Arm = Text.find(Default);
+    if (Arm != std::string::npos)
+      Arm = Text.find_first_not_of(" \t\r\n", Arm + sizeof(Default) - 1);
+    if (Arm == std::string::npos ||
+        Text.compare(Arm, sizeof(NoAddress) - 1, NoAddress) != 0)
+      ++Count;
+    At = Next;
+  }
+  return Count;
+}
+
+/// Whether no table proved a successor of \p Block: it has none, or the jump
+/// that ends it is a dispatch by value.
+static bool hasNoProvedSuccessor(const neverd::LowFunc &Low,
+                                 const neverd::LowBlock &Block) {
+  if (Block.Succs.empty())
+    return true;
+  return !Block.Ops.empty() &&
+         std::any_of(Low.ValueDispatches.begin(), Low.ValueDispatches.end(),
+                     [&](const neverd::JumpTable &Dispatch) {
+                       return Dispatch.InsnAddr == Block.Ops.back().Addr;
+                     });
 }
 
 struct DirectPipelineRun {
@@ -689,6 +744,55 @@ TEST_F(JTE_X86_32, WiderRingStoreMayOverwriteTheSpilledGOTBase) {
   // proves the GOT base and the dispatch stays unresolved.
   const neverd::LowFunc Low = buildI386RingSpill(31);
   EXPECT_TRUE(Low.JumpTables.empty());
+}
+
+static neverd::LowFunc buildI386RingSpill(unsigned RingMask,
+                                          unsigned AlignedClear) {
+  auto ImageOrErr =
+      neverd::loadBinary(fs::path(TEST_OBJ_DIR) /
+                         ("test_i386_ring_spill_" + std::to_string(RingMask) +
+                          "_clear" + std::to_string(AlignedClear) + ".o"));
+  if (!ImageOrErr) {
+    ADD_FAILURE() << llvm::toString(ImageOrErr.takeError());
+    return {};
+  }
+  const neverd::Symbol *Function = ImageOrErr->findSymbol("i386_ring_spill");
+  neverd::Decoder Decoder;
+  if (!Function || !Decoder.init(ImageOrErr->Arch, ImageOrErr->Mode)) {
+    ADD_FAILURE() << "i386_ring_spill cannot be decoded";
+    return {};
+  }
+  neverd::CFGBuilder Builder;
+  return Builder.build(*ImageOrErr, Decoder, Function->Addr, Function->Name);
+}
+
+TEST_F(JTE_X86_32, AlignmentCheckBeforeAPeeledRingStoreKeepsItsIndexBound) {
+  // `and $15, %edx; movaps %xmm0, 0x10(%esp); mov %esi, 0x20(%esp);
+  // movb %bl, 0x10(%esp,%edx,1)`: the movaps only checks its address, so the
+  // index it follows still reaches the ring store masked, and the store
+  // misses the GOT base spilled at 0x20 (x86o64_megamix's entry block).
+  const neverd::LowFunc Low = buildI386RingSpill(15, 1);
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().Targets.size(), 4u);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+}
+
+TEST_F(JTE_X86_32, AlignmentCheckBetweenASpillAndItsReloadWritesNoFrameCell) {
+  // The loop clears the ring with `movaps %xmm0, 0x10(%esp)` between the
+  // spill of the GOT base and each reload.  The check stores nothing.
+  const neverd::LowFunc Low = buildI386RingSpill(15, 2);
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().Targets.size(), 4u);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
+TEST_F(JTE_X86_32, AlignmentChecksDoNotNarrowAWiderRingStore) {
+  // With edx = x & 31 the ring store may still cover the spill at 0x20.
+  for (unsigned AlignedClear : {1u, 2u}) {
+    SCOPED_TRACE(AlignedClear);
+    EXPECT_TRUE(buildI386RingSpill(31, AlignedClear).JumpTables.empty());
+  }
 }
 
 static neverd::LowFunc buildI386ForeignStore(const char *Name) {
@@ -1657,11 +1761,14 @@ TEST_F(JTE_X86_32, GOTOFFSwitchRequiresExactCallPopAndDataFieldOccurrences) {
   const neverd::LowFunc Unauthenticated = Recover(*Negative);
   EXPECT_TRUE(Unauthenticated.JumpTables.empty())
       << "a numerically equal absolute seed is not an exact GOTPC producer";
-  EXPECT_TRUE(lowFunctionHasOpcode(Unauthenticated, neverd::NdOp::INDIR_CALL));
-  EXPECT_FALSE(lowFunctionHasOpcode(Unauthenticated, neverd::NdOp::INDIR_BR))
-      << "missing model provenance alone must not be mistaken for a scoped "
-         "multiply-owned-field tombstone";
-  EXPECT_TRUE(Unauthenticated.UnsafeIndirectBranchAddresses.empty());
+  // The jump still reads labels of its own function through the exact
+  // field.  A call through the table could reach none of them, so it stays a
+  // branch no proof gives a target, and goes to the label its value names.
+  EXPECT_FALSE(lowFunctionHasOpcode(Unauthenticated, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(lowFunctionHasOpcode(Unauthenticated, neverd::NdOp::INDIR_BR));
+  EXPECT_EQ(Unauthenticated.UnsafeIndirectBranchAddresses.size(), 1u);
+  ASSERT_EQ(Unauthenticated.ValueDispatches.size(), 1u);
+  EXPECT_FALSE(Unauthenticated.ValueDispatches.front().Targets.empty());
 
   std::vector<neverd::va_t> MatchingFields;
   for (const auto &[FieldVA, Field] : Image.DataAddressRelocOperands)
@@ -2766,6 +2873,47 @@ TEST_F(JTE_X86_32, GOTOFFModuloPrefixReplaysEveryDispatchArm) {
   }
 }
 
+TEST_F(JTE_X86_32, DenseMaskGroupProvesAMemberThatReusesTheGOTRegister) {
+  // jt_i386_mask_reused_base spills the GOT base, overwrites its register
+  // between the second dispatch's `add %ecx, %ebx` and its `jmp *%ebx`, and
+  // reloads it in the loop (x86o233_nestsw's inner dispatches).  Read as a
+  // successor of every owner slot, the second dispatch's block would be
+  // entered with that register overwritten; over its own table the group
+  // proves all three members, and the two later rounds repeat the result.
+  auto ImageOrErr = neverd::loadBinary(
+      (fs::path(TEST_OBJ_DIR) / "test_i386_direct_gotoff_group.o").string());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const auto &Image = *ImageOrErr;
+  const auto *Function = Image.findSymbol("jt_i386_mask_reused_base");
+  const auto *First = Image.findSymbol("jt_i386_mask_reused_base_first_table");
+  const auto *Second =
+      Image.findSymbol("jt_i386_mask_reused_base_second_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(First, nullptr);
+  ASSERT_NE(Second, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const auto Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), 3u);
+  EXPECT_EQ(
+      Builder.jumpTableGroupLifecycleStateForTesting().PublishedMemberCount,
+      3u);
+  unsigned FirstConsumers = 0, SecondConsumers = 0;
+  for (const auto &Table : Low.JumpTables) {
+    (Table.BaseAddr == First->Addr ? FirstConsumers : SecondConsumers) += 1;
+    EXPECT_TRUE(Table.BaseAddr == First->Addr ||
+                Table.BaseAddr == Second->Addr);
+    EXPECT_EQ(Table.Targets.size(), 4u);
+  }
+  EXPECT_EQ(FirstConsumers, 2u);
+  EXPECT_EQ(SecondConsumers, 1u);
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
 TEST_F(JTE_X86_32, GOTOFFPrivateFrameSpillSurvivesOnlyNonEscapingCalls) {
   auto ImageOrErr = neverd::loadBinary(i386GOTPCModelObj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
@@ -2955,9 +3103,11 @@ TEST_F(JTE_X86_32, GOTOFFPrivateSpillRejectsMemoryWritingStringIntrinsic) {
   EXPECT_FALSE(Builder.i386GOTOFFGraphQueryBudgetExhaustedForTesting());
   EXPECT_TRUE(Low.EverPublishedJumpTableBranchAddresses.empty());
   EXPECT_TRUE(Low.JumpTables.empty());
-  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
-  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
-  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  // The jump reads labels of its own function, which no call could reach: it
+  // stays a branch without a proved target.
+  EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.size(), 1u);
 }
 
 TEST_F(JTE_X86_32, TLSDescWriterFootprintInvalidatesOnlyOverlappingGOTPCField) {
@@ -3016,14 +3166,18 @@ TEST_F(JTE_X86_32, TLSDescWriterFootprintInvalidatesOnlyOverlappingGOTPCField) {
     return false;
   };
 
+  // The descriptor's word is the immediate of the add that forms the GOT
+  // base, and the loader applies no descriptor: the add is reported as it
+  // stands and the dispatch behind it is not reached.
   const neverd::LowFunc Ambiguous = Recover(*Overlap);
   EXPECT_TRUE(Ambiguous.JumpTables.empty());
-  EXPECT_TRUE(
-      HasOpcodeAt(Ambiguous, OverlapBranch->Addr, neverd::NdOp::INDIR_BR));
+  EXPECT_EQ(Image.UnappliedCodeRelocations.count(OverlapField->Addr), 1u);
+  EXPECT_TRUE(std::find(Ambiguous.UnsupportedInstructionAddresses.begin(),
+                        Ambiguous.UnsupportedInstructionAddresses.end(),
+                        OverlapField->Addr - 2) !=
+              Ambiguous.UnsupportedInstructionAddresses.end());
   EXPECT_FALSE(
       HasOpcodeAt(Ambiguous, OverlapBranch->Addr, neverd::NdOp::INDIR_CALL));
-  EXPECT_EQ(Ambiguous.UnsafeIndirectBranchAddresses.count(OverlapBranch->Addr),
-            1u);
   EXPECT_EQ(Ambiguous.EverPublishedJumpTableBranchAddresses.count(
                 OverlapBranch->Addr),
             0u);
@@ -3342,6 +3496,136 @@ TEST_F(JTE_X86_32,
       LookupExhaustedHasOpcodeAt(Branch->Addr, neverd::NdOp::INDIR_CALL));
   EXPECT_EQ(LookupExhausted.UnsafeIndirectBranchAddresses.count(Branch->Addr),
             1u);
+}
+
+static fs::path i386GOTOFFUnprovedBaseObj() {
+  return fs::path(TEST_OBJ_DIR) / "test_i386_gotoff_unproved_base.o";
+}
+
+/// The labels the four-byte words \p Slots of the table at \p Table hold, in
+/// address order.
+static std::vector<neverd::va_t>
+labelsHeldAt(const neverd::BinaryImage &Image, neverd::va_t Table,
+             std::initializer_list<unsigned> Slots) {
+  std::vector<neverd::va_t> Labels;
+  for (unsigned Slot : Slots) {
+    uint32_t Word = 0;
+    if (const uint8_t *Bytes = Image.readVA(Table + Slot * 4, sizeof(Word)))
+      std::memcpy(&Word, Bytes, sizeof(Word));
+    Labels.push_back(Word);
+  }
+  std::sort(Labels.begin(), Labels.end());
+  return Labels;
+}
+
+// A dispatch over this function's own `case@GOTOFF` words keeps its indirect
+// branch when the GOT base proof is lost for good, and a function-pointer table
+// read the same way still tail calls.
+TEST_F(JTE_X86_32, UnprovedI386GOTOFFDispatchOverOwnLabelsIsNoTailCall) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTOFFUnprovedBaseObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_i386_gotoff_spilled_base");
+  const neverd::Symbol *Branch =
+      Image.findSymbol("jt_i386_gotoff_spilled_base_branch");
+  const neverd::Symbol *Callback =
+      Image.findSymbol("jt_i386_gotoff_callback_tail");
+  const neverd::Symbol *CallbackBranch =
+      Image.findSymbol("jt_i386_gotoff_callback_tail_branch");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Branch, nullptr);
+  ASSERT_NE(Callback, nullptr);
+  ASSERT_NE(CallbackBranch, nullptr);
+
+  auto HasOpcodeAt = [](const neverd::LowFunc &Low, neverd::va_t Addr,
+                        neverd::NdOp Opcode) {
+    for (const neverd::LowBlock &Block : Low.Blocks)
+      for (const neverd::LowOp &Op : Block.Ops)
+        if (Op.Addr == Addr && Op.Opcode == Opcode)
+          return true;
+    return false;
+  };
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(neverd::Arch::X86));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Switch =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  // The store through an unbounded index can write the spilled GOT base, so
+  // no table is recovered ...
+  EXPECT_TRUE(Switch.JumpTables.empty());
+  // ... and the jump among this function's labels is not called through: it
+  // goes to the label its value names.
+  EXPECT_TRUE(HasOpcodeAt(Switch, Branch->Addr, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(HasOpcodeAt(Switch, Branch->Addr, neverd::NdOp::INDIR_CALL));
+  const neverd::Symbol *Table =
+      Image.findSymbol("jt_i386_gotoff_spilled_table");
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Switch.ValueDispatches.size(), 1u);
+  const neverd::JumpTable &Dispatch = Switch.ValueDispatches.front();
+  EXPECT_TRUE(Dispatch.ValueDispatch);
+  EXPECT_TRUE(Dispatch.MutatedUnsafe);
+  EXPECT_FALSE(Dispatch.HasBaseAddr);
+  EXPECT_EQ(Dispatch.InsnAddr, Branch->Addr);
+  EXPECT_EQ(Dispatch.Targets, labelsHeldAt(Image, Table->Addr, {0, 1, 2, 3}));
+  ASSERT_EQ(Dispatch.CaseLabels.size(), Dispatch.Targets.size());
+  for (size_t Case = 0; Case < Dispatch.Targets.size(); ++Case)
+    EXPECT_EQ(static_cast<neverd::va_t>(Dispatch.CaseLabels[Case]),
+              Dispatch.Targets[Case]);
+
+  const neverd::LowFunc Tail =
+      Builder.build(Image, Decoder, Callback->Addr, Callback->Name);
+  EXPECT_TRUE(
+      HasOpcodeAt(Tail, CallbackBranch->Addr, neverd::NdOp::INDIR_CALL));
+  EXPECT_FALSE(HasOpcodeAt(Tail, CallbackBranch->Addr, neverd::NdOp::INDIR_BR));
+  EXPECT_TRUE(Tail.UnsafeIndirectBranchAddresses.empty());
+  EXPECT_TRUE(Tail.ValueDispatches.empty());
+}
+
+// Every label is a candidate of a dispatch by value, but a jump reads one
+// table and cannot continue where the code reads a register its caller keeps
+// and no path to the jump has written.
+TEST_F(JTE_X86_32, ADispatchByValueKeepsTheLabelsItsJumpCanTake) {
+  auto ImageOrErr = neverd::loadBinary(i386GOTOFFUnprovedBaseObj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  const neverd::Symbol *Function =
+      Image.findSymbol("jt_i386_gotoff_two_tables");
+  const neverd::Symbol *First =
+      Image.findSymbol("jt_i386_gotoff_two_tables_first");
+  const neverd::Symbol *Second =
+      Image.findSymbol("jt_i386_gotoff_two_tables_second");
+  const neverd::Symbol *FirstTable =
+      Image.findSymbol("jt_i386_gotoff_two_tables_first_table");
+  const neverd::Symbol *SecondTable =
+      Image.findSymbol("jt_i386_gotoff_two_tables_second_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(First, nullptr);
+  ASSERT_NE(Second, nullptr);
+  ASSERT_NE(FirstTable, nullptr);
+  ASSERT_NE(SecondTable, nullptr);
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(neverd::Arch::X86));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  EXPECT_TRUE(Low.JumpTables.empty());
+  ASSERT_EQ(Low.ValueDispatches.size(), 2u);
+  for (const neverd::JumpTable &Dispatch : Low.ValueDispatches) {
+    ASSERT_TRUE(Dispatch.InsnAddr == First->Addr ||
+                Dispatch.InsnAddr == Second->Addr);
+    if (Dispatch.InsnAddr == First->Addr)
+      // The word between names the top of the loop, which adds %ebx.
+      EXPECT_EQ(Dispatch.Targets,
+                labelsHeldAt(Image, FirstTable->Addr, {0, 2}));
+    else
+      EXPECT_EQ(Dispatch.Targets,
+                labelsHeldAt(Image, SecondTable->Addr, {0, 1}));
+  }
 }
 
 TEST_F(JTE_X86_32, I386GOTPCReplayRetiresOnlyTheExactQueryKey) {
@@ -3850,8 +4134,12 @@ TEST_F(JTE_X86_32, StageAbortKeepsAnUnreachedTableShapeOpaque) {
     return false;
   };
 
+  // A completed stage rejects the second dispatch as a table.  Its jump
+  // reads labels of its own function all the same and is no call through
+  // them.
   const neverd::LowFunc Completed = Build(/*AbortAfterFirst=*/false);
-  EXPECT_TRUE(HasOpcodeAt(Completed, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(HasOpcodeAt(Completed, neverd::NdOp::INDIR_BR));
+  EXPECT_FALSE(HasOpcodeAt(Completed, neverd::NdOp::INDIR_CALL));
 
   const neverd::LowFunc Aborted = Build(/*AbortAfterFirst=*/true);
   EXPECT_TRUE(HasOpcodeAt(Aborted, neverd::NdOp::INDIR_BR));
@@ -5630,8 +5918,18 @@ expectIndirectDispatchHasNoStaticSuccessors(const std::string &Body) {
   const std::string::size_type HeaderEnd = Body.find('\n', Block + 1);
   ASSERT_NE(HeaderEnd, std::string::npos) << Body;
   const std::string Header = Body.substr(Block, HeaderEnd - Block);
-  EXPECT_NE(Header.find("succs=[]"), std::string::npos) << Header << '\n'
-                                                        << Body;
+  if (Header.find("succs=[]") != std::string::npos)
+    return;
+  // Successors no table proved: the dump lists the jump as a dispatch by
+  // value, which goes to the label its target names and traps on any other.
+  const std::string::size_type Address = Body.rfind("[0x", Indirect);
+  ASSERT_NE(Address, std::string::npos) << Body;
+  const std::string::size_type AddressEnd = Body.find('.', Address);
+  ASSERT_NE(AddressEnd, std::string::npos) << Body;
+  const std::string ByValue =
+      "dispatch-by-value: " +
+      Body.substr(Address + 1, AddressEnd - Address - 1) + " ";
+  EXPECT_NE(Body.find(ByValue), std::string::npos) << Header << '\n' << Body;
 }
 
 #define JUMP_TABLE_ENTRY_OBSERVATION_TEXT(Name, Text)                          \
@@ -6745,7 +7043,7 @@ TEST_F(JTE_X86_64, FreshBuilderRetainsPreviouslyPublishedOpaqueBranchIdentity) {
   const std::string Body = llvmFunctionBody(IR, Function->Name);
   ASSERT_FALSE(Body.empty()) << IR;
   EXPECT_NE(Body.find("llvm.trap"), std::string::npos) << Body;
-  EXPECT_EQ(Body.find("switch i"), std::string::npos) << Body;
+  EXPECT_EQ(recoveredSwitchCount(Body), 0u) << Body;
 
   DirectPipelineRun PipelineRun = runPipelineWithEvidenceBudget(Image, 256);
   ASSERT_TRUE(PipelineRun.Result.Success) << PipelineRun.Result.Error;
@@ -6762,7 +7060,7 @@ TEST_F(JTE_X86_64, FreshBuilderRetainsPreviouslyPublishedOpaqueBranchIdentity) {
       llvmFunctionBody(PipelineRun.LLVMIR, Function->Name);
   ASSERT_FALSE(PipelineBody.empty()) << PipelineRun.LLVMIR;
   EXPECT_NE(PipelineBody.find("llvm.trap"), std::string::npos) << PipelineBody;
-  EXPECT_EQ(PipelineBody.find("switch i"), std::string::npos) << PipelineBody;
+  EXPECT_EQ(recoveredSwitchCount(PipelineBody), 0u) << PipelineBody;
 }
 
 TEST_F(JTE_X86_64, IndexIdentityRejectsAtomicFrameOverwrite) {
@@ -7249,14 +7547,14 @@ TEST_F(JTE_X86_64, ModuloBoundRejectsIndependentQuotientRoot) {
   const std::string LLVMBody =
       llvmFunctionBody(LLVM.out, "jt_modulo_independent_quotient");
   ASSERT_FALSE(LLVMBody.empty()) << LLVM.out;
-  EXPECT_EQ(LLVMBody.find("switch i"), std::string::npos) << LLVMBody;
+  EXPECT_EQ(recoveredSwitchCount(LLVMBody), 0u) << LLVMBody;
 
   auto High = liftToHighIR(moduloDomainObj());
   ASSERT_EQ(High.exitCode, 0) << High.err;
   const std::string HighBody =
       lowFunctionBody(High.out, "jt_modulo_independent_quotient");
   ASSERT_FALSE(HighBody.empty()) << High.out;
-  EXPECT_EQ(HighBody.find("switch"), std::string::npos) << HighBody;
+  EXPECT_EQ(recoveredHighSwitchCount(HighBody), 0u) << HighBody;
 }
 
 TEST_F(JTE_X86_64, ModuloRejectedSizedMixedSelfEntryTableStaysOpaque) {
@@ -7632,14 +7930,14 @@ TEST_F(JTE_X86_64, ModuloBoundKeepsIndependentLinearRootsDistinct) {
   const std::string LLVMBody =
       llvmFunctionBody(LLVM.out, "jt_modulo_mixed_roots");
   ASSERT_FALSE(LLVMBody.empty()) << LLVM.out;
-  EXPECT_EQ(LLVMBody.find("switch i"), std::string::npos) << LLVMBody;
+  EXPECT_EQ(recoveredSwitchCount(LLVMBody), 0u) << LLVMBody;
 
   auto High = liftToHighIR(moduloDomainObj());
   ASSERT_EQ(High.exitCode, 0) << High.err;
   const std::string HighBody =
       lowFunctionBody(High.out, "jt_modulo_mixed_roots");
   ASSERT_FALSE(HighBody.empty()) << High.out;
-  EXPECT_EQ(HighBody.find("switch"), std::string::npos) << HighBody;
+  EXPECT_EQ(recoveredHighSwitchCount(HighBody), 0u) << HighBody;
 }
 
 TEST_F(JTE_X86_64, ModuloBoundRejectsSignedRemainderAsUnsignedDomain) {
@@ -7683,14 +7981,14 @@ TEST_F(JTE_X86_64, ModuloBoundRejectsWrongUnsignedDivisionMagic) {
   const std::string LLVMBody =
       llvmFunctionBody(LLVM.out, "jt_modulo_wrong_magic");
   ASSERT_FALSE(LLVMBody.empty()) << LLVM.out;
-  EXPECT_EQ(LLVMBody.find("switch i"), std::string::npos) << LLVMBody;
+  EXPECT_EQ(recoveredSwitchCount(LLVMBody), 0u) << LLVMBody;
 
   auto High = liftToHighIR(moduloDomainObj());
   ASSERT_EQ(High.exitCode, 0) << High.err;
   const std::string HighBody =
       lowFunctionBody(High.out, "jt_modulo_wrong_magic");
   ASSERT_FALSE(HighBody.empty()) << High.out;
-  EXPECT_EQ(HighBody.find("switch"), std::string::npos) << HighBody;
+  EXPECT_EQ(recoveredHighSwitchCount(HighBody), 0u) << HighBody;
 }
 
 TEST_F(JTE_X86_64, ModuloBoundRejectsWrongUnsignedDivisionPostShift) {
@@ -7706,14 +8004,14 @@ TEST_F(JTE_X86_64, ModuloBoundRejectsWrongUnsignedDivisionPostShift) {
   const std::string LLVMBody =
       llvmFunctionBody(LLVM.out, "jt_modulo_wrong_postshift");
   ASSERT_FALSE(LLVMBody.empty()) << LLVM.out;
-  EXPECT_EQ(LLVMBody.find("switch i"), std::string::npos) << LLVMBody;
+  EXPECT_EQ(recoveredSwitchCount(LLVMBody), 0u) << LLVMBody;
 
   auto High = liftToHighIR(moduloDomainObj());
   ASSERT_EQ(High.exitCode, 0) << High.err;
   const std::string HighBody =
       lowFunctionBody(High.out, "jt_modulo_wrong_postshift");
   ASSERT_FALSE(HighBody.empty()) << High.out;
-  EXPECT_EQ(HighBody.find("switch"), std::string::npos) << HighBody;
+  EXPECT_EQ(recoveredHighSwitchCount(HighBody), 0u) << HighBody;
 }
 
 TEST_F(JTE_X86_64, ModuloBoundAcceptsExactFactorizedSixBackMultiply) {
@@ -7903,7 +8201,7 @@ TEST_F(JTE_X86_64, ModuloBoundRejectsInexactFactorizedSixRecipes) {
   for (const char *Name : Names) {
     const std::string Body = llvmFunctionBody(LLVM.out, Name);
     ASSERT_FALSE(Body.empty()) << Name << '\n' << LLVM.out;
-    EXPECT_EQ(Body.find("switch i"), std::string::npos) << Body;
+    EXPECT_EQ(recoveredSwitchCount(Body), 0u) << Body;
   }
 
   auto High = liftToHighIR(moduloDomainObj());
@@ -7911,7 +8209,7 @@ TEST_F(JTE_X86_64, ModuloBoundRejectsInexactFactorizedSixRecipes) {
   for (const char *Name : Names) {
     const std::string Body = lowFunctionBody(High.out, Name);
     ASSERT_FALSE(Body.empty()) << Name << '\n' << High.out;
-    EXPECT_EQ(Body.find("switch"), std::string::npos) << Body;
+    EXPECT_EQ(recoveredHighSwitchCount(Body), 0u) << Body;
   }
 }
 
@@ -7954,7 +8252,7 @@ TEST_F(JTE_X86_64, ModuloBoundRejectsInexactConstantShiftRecipes) {
   for (const char *Name : Names) {
     const std::string Body = llvmFunctionBody(LLVM.out, Name);
     ASSERT_FALSE(Body.empty()) << Name << '\n' << LLVM.out;
-    EXPECT_EQ(Body.find("switch i"), std::string::npos) << Body;
+    EXPECT_EQ(recoveredSwitchCount(Body), 0u) << Body;
   }
 }
 
@@ -8013,7 +8311,7 @@ TEST_F(JTE_X86_64,
        }) {
     const std::string Body = llvmFunctionBody(LLVM.out, Name);
     ASSERT_FALSE(Body.empty()) << Name << "\n" << LLVM.out;
-    EXPECT_EQ(Body.find("switch i"), std::string::npos) << Name << "\n" << Body;
+    EXPECT_EQ(recoveredSwitchCount(Body), 0u) << Name << "\n" << Body;
   }
 }
 
@@ -8427,14 +8725,14 @@ TEST_F(JTE_X86_64, GuardDomainReplaysAfterForeignRootIsRestored) {
   const std::string LLVMBody =
       llvmFunctionBody(LLVM.out, "jt_guard_domain_replays_after_root_restore");
   ASSERT_FALSE(LLVMBody.empty()) << LLVM.out;
-  EXPECT_EQ(LLVMBody.find("switch i"), std::string::npos) << LLVMBody;
+  EXPECT_EQ(recoveredSwitchCount(LLVMBody), 0u) << LLVMBody;
 
   auto High = liftToHighIR(moduloDomainObj());
   ASSERT_EQ(High.exitCode, 0) << High.err;
   const std::string HighBody =
       lowFunctionBody(High.out, "jt_guard_domain_replays_after_root_restore");
   ASSERT_FALSE(HighBody.empty()) << High.out;
-  EXPECT_EQ(HighBody.find("switch"), std::string::npos) << HighBody;
+  EXPECT_EQ(recoveredHighSwitchCount(HighBody), 0u) << HighBody;
 }
 
 TEST_F(JTE_X86_64,
@@ -8451,14 +8749,14 @@ TEST_F(JTE_X86_64,
   const std::string LLVMBody =
       llvmFunctionBody(LLVM.out, "jt_raw_absolute_capacity");
   ASSERT_FALSE(LLVMBody.empty()) << LLVM.out;
-  EXPECT_EQ(LLVMBody.find("switch i"), std::string::npos) << LLVMBody;
+  EXPECT_EQ(recoveredSwitchCount(LLVMBody), 0u) << LLVMBody;
 
   auto High = liftToHighIR(moduloDomainObj());
   ASSERT_EQ(High.exitCode, 0) << High.err;
   const std::string HighBody =
       lowFunctionBody(High.out, "jt_raw_absolute_capacity");
   ASSERT_FALSE(HighBody.empty()) << High.out;
-  EXPECT_EQ(HighBody.find("switch"), std::string::npos) << HighBody;
+  EXPECT_EQ(recoveredHighSwitchCount(HighBody), 0u) << HighBody;
 }
 
 TEST_F(JTE_X86_64,
@@ -8875,7 +9173,7 @@ TEST_F(JTE_X86_64, MaskFixedPointRejectsSelfBootstrappedCaseMasks) {
   ASSERT_TRUE(SawMask7)
       << "the case-local x&7 producer must be present in LowIR";
   ASSERT_NE(Dispatch, nullptr);
-  EXPECT_TRUE(Dispatch->Succs.empty());
+  EXPECT_TRUE(hasNoProvedSuccessor(Low, *Dispatch));
   EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(DispatchAddr), 1u);
   EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
   EXPECT_TRUE(Low.JumpTables.empty());
@@ -8929,7 +9227,7 @@ TEST_F(JTE_X86_64, MaskFixedPointRejectsLateOutOfDomainSelector) {
   ASSERT_TRUE(SawLiteral15)
       << "case seven must expose the late out-of-domain selector";
   ASSERT_NE(Dispatch, nullptr);
-  EXPECT_TRUE(Dispatch->Succs.empty());
+  EXPECT_TRUE(hasNoProvedSuccessor(Low, *Dispatch));
   EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(DispatchAddr), 1u);
   EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
   EXPECT_TRUE(Low.JumpTables.empty());
@@ -8983,7 +9281,7 @@ TEST_F(JTE_X86_64, MaskFixedPointReplaysCompleteEntryDomain) {
   ASSERT_TRUE(SawLiteral15)
       << "case seven must expose the post-edge out-of-domain selector";
   ASSERT_NE(Dispatch, nullptr);
-  EXPECT_TRUE(Dispatch->Succs.empty());
+  EXPECT_TRUE(hasNoProvedSuccessor(Low, *Dispatch));
   EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(DispatchAddr), 1u);
   EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
   EXPECT_TRUE(Low.JumpTables.empty());
@@ -11148,6 +11446,132 @@ TEST_F(JTE_AArch64, MaskedLaneGuardBoundsAWideMaskIndex) {
   EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
 }
 
+static fs::path twoTableSelectA64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_twotable_select_a64.o";
+}
+
+static fs::path twoTableSelectOpenA64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_twotable_select_open_a64.o";
+}
+
+// `tb = (w1 & 1) ? A : B; goto *tb[idx]` reads its table with one original
+// register-offset load, which scales the raw index itself.  The merged switch
+// dispatches on that slot index: positions 0..3 are the lower table, 4..7 the
+// higher one, and the higher table adds its distance in slots, not bytes.
+TEST_F(JTE_AArch64, TwoTableSelectThroughAnOriginalLoadMergesBothTables) {
+  auto ImageOrErr = neverd::loadBinary(twoTableSelectA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  struct Form {
+    const char *Name;
+    // The SELECT's true input is the higher table.
+    bool HigherIsTrue;
+    uint16_t IndexBytes;
+  };
+  for (const Form &F : {Form{"twotable_select_uxtw", false, 4},
+                        Form{"twotable_select_sxtw", false, 4},
+                        Form{"twotable_select_xlsl", false, 8},
+                        Form{"twotable_select_swapped", true, 4}}) {
+    SCOPED_TRACE(F.Name);
+    const neverd::Symbol *Function = Image.findSymbol(F.Name);
+    ASSERT_NE(Function, nullptr);
+    neverd::CFGBuilder Builder;
+    const neverd::LowFunc Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    ASSERT_EQ(Low.JumpTables.size(), 1u);
+    const neverd::JumpTable &Table = Low.JumpTables.front();
+    EXPECT_TRUE(Table.TwoTableSelect);
+    EXPECT_FALSE(Table.PreScaledIndex);
+    EXPECT_EQ(Table.EntrySize, 8u);
+    EXPECT_EQ(Table.TwoTableOffset, 4u);
+    EXPECT_EQ(Table.TwoTableHiPositive, F.HigherIsTrue);
+    ASSERT_EQ(Table.StorageRanges.size(), 2u);
+    EXPECT_EQ(Table.StorageRanges[0].PhysicalSlotCount, 4u);
+    EXPECT_EQ(Table.StorageRanges[1].PhysicalSlotCount, 4u);
+    EXPECT_EQ(Table.StorageRanges[1].BaseAddr,
+              Table.StorageRanges[0].BaseAddr + 4 * 8);
+    // The dispatch is nine instructions; the eight two-instruction case
+    // bodies follow it in table order, the lower table's four first.
+    ASSERT_EQ(Table.Targets.size(), 8u);
+    EXPECT_EQ(Table.Targets.front(), Function->Addr + 9 * 4);
+    for (size_t K = 1; K < Table.Targets.size(); ++K)
+      EXPECT_EQ(Table.Targets[K], Table.Targets[K - 1] + 8);
+    // Positional labels: the selector is a slot index.
+    EXPECT_TRUE(Table.CaseLabels.empty());
+    ASSERT_TRUE(Table.CompositeSelectorUseRef.has_value());
+    const neverd::JumpTableCompositeSelectorUseRef &Recipe =
+        *Table.CompositeSelectorUseRef;
+    EXPECT_EQ(Recipe.ByteIndex.ExpectedOpcode, neverd::NdOp::INTRINSIC);
+    EXPECT_EQ(Recipe.ByteIndex.Role,
+              neverd::JumpTableSelectorUseRef::ValueRole::Input);
+    EXPECT_EQ(Recipe.ByteIndex.ExpectedSize, F.IndexBytes);
+    EXPECT_EQ(Recipe.ResultSize, F.IndexBytes);
+    EXPECT_EQ(Recipe.Condition.ExpectedOpcode, neverd::NdOp::SELECT);
+    EXPECT_EQ(Recipe.TrueOffset, F.HigherIsTrue ? 4u : 0u);
+    EXPECT_EQ(Recipe.FalseOffset, F.HigherIsTrue ? 0u : 4u);
+    EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+    EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  }
+}
+
+// Each of these forms misses one proof the merged switch needs: a selector
+// domain no mask proves, a mask wider than either table, a SELECT input that
+// is no table, a base that is not the SELECT's result, and a load that does
+// not scale its index by the entry width.  The indirect branch stays
+// unresolved; no half of the dispatch is published as a single table.
+TEST_F(JTE_AArch64, TwoTableSelectThroughAnOriginalLoadKeepsUnprovedFormsOpen) {
+  auto ImageOrErr = neverd::loadBinary(twoTableSelectOpenA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::BinaryImage &Image = *ImageOrErr;
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  for (const char *Name :
+       {"twotable_select_shift_bound", "twotable_select_wide_mask",
+        "twotable_select_runtime_arm", "twotable_select_moved_base",
+        "twotable_select_unscaled"}) {
+    SCOPED_TRACE(Name);
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    ASSERT_NE(Function, nullptr);
+    neverd::CFGBuilder Builder;
+    const neverd::LowFunc Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    EXPECT_TRUE(Low.JumpTables.empty());
+    EXPECT_TRUE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_BR));
+    EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  }
+}
+
+// The lifted switch has one case per slot of the merged run and adds the
+// higher table's four slots through the SELECT's own condition.
+TEST_F(JTE_AArch64, TwoTableSelectThroughAnOriginalLoadLiftsToOneSwitch) {
+  auto LLVM = liftToLLVMIRUnopt(twoTableSelectA64Obj());
+  ASSERT_EQ(LLVM.exitCode, 0) << LLVM.err;
+  for (const char *Name : {"twotable_select_uxtw", "twotable_select_sxtw",
+                           "twotable_select_xlsl", "twotable_select_swapped"}) {
+    SCOPED_TRACE(Name);
+    const std::string Body = llvmFunctionBody(LLVM.out, Name);
+    ASSERT_FALSE(Body.empty()) << LLVM.out;
+    const auto Condition = llvmSwitchConditionToken(Body);
+    ASSERT_TRUE(Condition) << Body;
+    EXPECT_TRUE(llvmSSAValueDependsOn(Body, *Condition, "%arg0"))
+        << "the merged selector keeps the load's raw index\n"
+        << Body;
+    EXPECT_TRUE(llvmSSAValueDependsOn(Body, *Condition, "%arg1"))
+        << "the merged selector keeps the table-select condition\n"
+        << Body;
+    for (unsigned Case = 0; Case < 8; ++Case)
+      EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+    EXPECT_FALSE(llvmHasSwitchCase(Body, 8)) << Body;
+    EXPECT_FALSE(llvmHasSwitchCase(Body, 32))
+        << "a byte offset is not this selector's coordinate\n"
+        << Body;
+  }
+}
+
 TEST_F(JTE_AArch64, CompactModuloDropsOlderReusedZeroExtension) {
   auto ImageOrErr = neverd::loadBinary(indexIdentityA64Obj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
@@ -11356,6 +11780,173 @@ TEST_F(JTE_AArch64, CheckedIndexedLoadsKeepReadAndEscapeEffectsDistinct) {
     EXPECT_TRUE(Unsafe.AnalysisComplete) << Mutation;
     EXPECT_TRUE(Unsafe.UnsafeBranches.count(Table.InsnAddr)) << Mutation;
   }
+}
+
+static fs::path siblingCheckedA64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_sibling_checked_a64.o";
+}
+
+// Checks that the dispatch whose INDIR_BR lies in [BeginName, EndName)
+// publishes exactly its own retained table load and the index input of that
+// load.
+static void expectOwnCheckedLoadOccurrences(
+    const neverd::BinaryImage &Image, const neverd::LowFunc &Low,
+    const char *BeginName, const char *EndName, neverd::va_t TableBase,
+    const std::vector<neverd::va_t> &Targets,
+    std::set<std::pair<neverd::va_t, int>> &LoadOccurrences) {
+  const neverd::Symbol *Begin = Image.findSymbol(BeginName);
+  const neverd::Symbol *End = Image.findSymbol(EndName);
+  ASSERT_NE(Begin, nullptr) << BeginName;
+  ASSERT_NE(End, nullptr) << EndName;
+  const neverd::JumpTable *JT = nullptr;
+  for (const neverd::JumpTable &Candidate : Low.JumpTables)
+    if (Candidate.InsnAddr >= Begin->Addr && Candidate.InsnAddr < End->Addr) {
+      ASSERT_EQ(JT, nullptr) << BeginName;
+      JT = &Candidate;
+    }
+  ASSERT_NE(JT, nullptr) << BeginName;
+
+  EXPECT_TRUE(JT->HasBaseAddr);
+  EXPECT_EQ(JT->BaseAddr, TableBase);
+  EXPECT_EQ(JT->Targets, Targets) << BeginName;
+
+  ASSERT_EQ(JT->AuthenticatedTableLoads.size(), 1u)
+      << "another read of the table is not a read of this dispatch";
+  const neverd::JumpTableOpOccurrence &Load =
+      JT->AuthenticatedTableLoads.front();
+  EXPECT_GE(Load.Addr, Begin->Addr);
+  EXPECT_LT(Load.Addr, End->Addr);
+  const neverd::LowOp *LoadOp =
+      findExactLowOp(Low, Load.Addr, Load.Seq, neverd::NdOp::INTRINSIC);
+  ASSERT_NE(LoadOp, nullptr);
+  ASSERT_TRUE(neverd::originalAArch64TableLoad(*LoadOp).has_value());
+  EXPECT_TRUE(LoadOccurrences.insert({Load.Addr, Load.Seq}).second);
+
+  ASSERT_EQ(JT->SelectorUseRefs.size(), 1u)
+      << "another read's index is not a selector of this dispatch";
+  const neverd::JumpTableSelectorUseRef &Selector = JT->SelectorUseRefs.front();
+  EXPECT_EQ(Selector.Addr, Load.Addr)
+      << "the selector is the index input of the dispatch's own load";
+  EXPECT_EQ(Selector.Seq, Load.Seq);
+  EXPECT_EQ(Selector.ExpectedOpcode, neverd::NdOp::INTRINSIC);
+  EXPECT_EQ(Selector.Role, neverd::JumpTableSelectorUseRef::ValueRole::Input);
+  EXPECT_EQ(Selector.InputNo, neverd::kAddressMemoryIndexOperand + 1);
+  EXPECT_EQ(Selector.ExpectedSize, neverd::kAddressMemoryNarrowIndexBytes);
+}
+
+static size_t llvmSwitchCount(const std::string &Body) {
+  size_t Count = 0;
+  for (std::string::size_type At = Body.find("  switch i");
+       At != std::string::npos; At = Body.find("  switch i", At + 1))
+    ++Count;
+  return Count;
+}
+
+// The AArch64 form of
+// JTE_X86_64.SiblingCandidatesPublishFromOneStageSnapshotWithOwnOccurrences.
+// Every tail-duplicated dispatch reads the shared table with its own retained
+// register-offset load, so the constant-base strategy recovers each branch and
+// inventories the others for the consumer group.  A sibling's load is a group
+// member only: each branch publishes its own load and the exact index input of
+// that load.  The entry overwrites its index register before the branch and
+// the target bodies load the entry over their index, so a register read at
+// the branch would name the wrong value.
+TEST_F(JTE_AArch64, CheckedLoadSiblingsPublishOwnOccurrences) {
+  auto ImageOrErr = neverd::loadBinary(siblingCheckedA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+
+  const neverd::Symbol *Function =
+      Image.findSymbol("a64_sibling_checked_loads");
+  const neverd::Symbol *Table = Image.findSymbol("a64_sibling_checked_table");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 4u * 8u);
+
+  struct Sibling {
+    const char *BeginName;
+    const char *EndName;
+  };
+  const std::array<Sibling, 5> Siblings = {{
+      {"a64_sibling_checked_entry_begin", "a64_sibling_checked_entry_end"},
+      {"a64_sibling_checked_t0_begin", "a64_sibling_checked_t0_end"},
+      {"a64_sibling_checked_t1_begin", "a64_sibling_checked_t1_end"},
+      {"a64_sibling_checked_t2_begin", "a64_sibling_checked_t2_end"},
+      {"a64_sibling_checked_t3_begin", "a64_sibling_checked_t3_end"},
+  }};
+  std::vector<neverd::va_t> Targets;
+  for (size_t I = 1; I < Siblings.size(); ++I) {
+    const neverd::Symbol *Target = Image.findSymbol(Siblings[I].BeginName);
+    ASSERT_NE(Target, nullptr) << Siblings[I].BeginName;
+    Targets.push_back(Target->Addr);
+  }
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), Siblings.size())
+      << "the entry and all four target bodies dispatch through the table";
+  EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+
+  std::set<std::pair<neverd::va_t, int>> LoadOccurrences;
+  for (const Sibling &Expected : Siblings)
+    expectOwnCheckedLoadOccurrences(Image, Low, Expected.BeginName,
+                                    Expected.EndName, Table->Addr, Targets,
+                                    LoadOccurrences);
+
+  // One selector per dispatch is what lets every consumer bind it: all five
+  // branches lower to a switch on the index their own load read.
+  auto R = liftToLLVMIRUnopt(siblingCheckedA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body = llvmFunctionBody(R.out, "a64_sibling_checked_loads");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  EXPECT_EQ(llvmSwitchCount(Body), Siblings.size()) << Body;
+  EXPECT_NE(Body.find("neverd.address.load"), std::string::npos) << Body;
+}
+
+// A read of the table in a predecessor block feeds no branch.  The dispatch
+// has its own same-block load, so that read is not one of its roles either.
+TEST_F(JTE_AArch64, CheckedDispatchIgnoresUnrelatedTableRead) {
+  auto ImageOrErr = neverd::loadBinary(siblingCheckedA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+
+  const neverd::Symbol *Function =
+      Image.findSymbol("a64_checked_load_beside_dispatch");
+  const neverd::Symbol *Table = Image.findSymbol("a64_beside_dispatch_table");
+  const neverd::Symbol *End = Image.findSymbol("a64_beside_dispatch_end");
+  ASSERT_NE(Function, nullptr);
+  ASSERT_NE(Table, nullptr);
+  ASSERT_NE(End, nullptr);
+  // The four two-instruction target bodies follow the dispatch in table order.
+  const std::vector<neverd::va_t> Targets = {End->Addr, End->Addr + 8,
+                                             End->Addr + 16, End->Addr + 24};
+
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  std::set<std::pair<neverd::va_t, int>> LoadOccurrences;
+  expectOwnCheckedLoadOccurrences(Image, Low, "a64_beside_dispatch_begin",
+                                  "a64_beside_dispatch_end", Table->Addr,
+                                  Targets, LoadOccurrences);
+
+  auto R = liftToLLVMIRUnopt(siblingCheckedA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_checked_load_beside_dispatch");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  EXPECT_EQ(llvmSwitchCount(Body), 1u) << Body;
+  for (int Case = 0; Case < 4; ++Case)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Body;
 }
 
 TEST_F(JTE_AArch64, WSelfCopyPreservesWritableTableArgumentEscape) {
@@ -12693,7 +13284,7 @@ TEST_F(JTE_X86_64, MaskKnownOneFixedPointRejectsSelfBootstrappedProducer) {
       << "case two must contain the complete (x|1)&7; -1 producer";
 
   ASSERT_NE(Dispatch, nullptr);
-  EXPECT_TRUE(Dispatch->Succs.empty());
+  EXPECT_TRUE(hasNoProvedSuccessor(Low, *Dispatch));
   EXPECT_EQ(Low.UnsafeIndirectBranchAddresses.count(DispatchAddr), 1u);
   EXPECT_FALSE(lowFunctionHasOpcode(Low, neverd::NdOp::INDIR_CALL));
   EXPECT_TRUE(Low.JumpTables.empty())

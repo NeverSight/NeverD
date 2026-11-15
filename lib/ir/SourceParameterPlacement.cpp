@@ -119,9 +119,12 @@ SourceParameterPiece source_placement::stackPiece(int64_t EntryOffset,
 
 std::optional<SourceParameterPlacement>
 neverd::placeSourceParameters(Arch A, BinaryFormat F, const TypeRef &ReturnType,
-                              llvm::ArrayRef<TypeRef> ParamTypes,
-                              bool Variadic) {
-  if (Variadic && (A != Arch::AArch64 || F != BinaryFormat::COFF))
+                              llvm::ArrayRef<TypeRef> ParamTypes, bool Variadic,
+                              std::optional<unsigned> FixedCount) {
+  if (FixedCount && (!Variadic || !isMIPS(A) || !*FixedCount ||
+                     *FixedCount > ParamTypes.size()))
+    return std::nullopt;
+  if (Variadic && !isMIPS(A) && (A != Arch::AArch64 || F != BinaryFormat::COFF))
     return std::nullopt;
   const TargetRegInfo &TRI = getTargetRegInfo(A);
   switch (A) {
@@ -133,8 +136,13 @@ neverd::placeSourceParameters(Arch A, BinaryFormat F, const TypeRef &ReturnType,
   case Arch::MIPS32:
   case Arch::MIPS32EL:
   case Arch::MIPS64:
+  case Arch::MIPS64N32:
+  case Arch::MIPS64N32EL:
   case Arch::MIPS64EL:
-    return placeMIPS(TRI, F, ReturnType, ParamTypes);
+    return placeMIPS(TRI, F, ReturnType, ParamTypes,
+                     Variadic ? std::optional<unsigned>(
+                                    FixedCount.value_or(ParamTypes.size()))
+                              : std::nullopt);
   case Arch::X86:
     return placeI386(TRI, F, ReturnType, ParamTypes);
   default:

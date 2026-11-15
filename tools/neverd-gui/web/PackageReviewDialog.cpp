@@ -15,7 +15,6 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QFileDialog>
-#include <QFontInfo>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHeaderView>
@@ -68,9 +67,6 @@ PackageReviewDialog::PackageReviewDialog(const QString &WorkerPath,
   setAttribute(Qt::WA_DeleteOnClose);
   resize(1100, 780);
   setMinimumSize(640, 480);
-  auto Font = font();
-  Font.setPointSizeF(qMax(12.0, QFontInfo(Font).pointSizeF()));
-  setFont(Font);
   auto *Layout = new QVBoxLayout(this);
   Coverage =
       new QLabel(tr("Evidence coverage is partial. Analyst dispositions are "
@@ -85,6 +81,10 @@ PackageReviewDialog::PackageReviewDialog(const QString &WorkerPath,
 
   auto *Capture = new QHBoxLayout;
   CaptureFile = new QPushButton(tr("Preview file…"), this);
+  // The step every review starts with wears the accent of a window's main
+  // action.  The property is the one the application's showAsMainAction()
+  // sets, which this library cannot include; no button here is a default.
+  CaptureFile->setProperty("mainAction", true);
   CaptureDirectory = new QPushButton(tr("Preview directory…"), this);
   Commit = new QPushButton(tr("Capture preview"), this);
   for (auto *Button : {CaptureFile, CaptureDirectory, Commit})
@@ -150,6 +150,9 @@ PackageReviewDialog::PackageReviewDialog(const QString &WorkerPath,
   Registry->setObjectName(QStringLiteral("packageRegistry"));
   Registry->setCheckable(true);
   Registry->setChecked(false);
+  // A rule beside the title, no frame: unchecked, the box shows no fields
+  // for a frame to hold.
+  Registry->setFlat(true);
   auto *RegistryOuter = new QVBoxLayout(Registry);
   auto *RegistryFields = new QWidget(Registry);
   RegistryOuter->addWidget(RegistryFields);
@@ -276,6 +279,11 @@ PackageReviewDialog::PackageReviewDialog(const QString &WorkerPath,
           &PackageReviewDialog::fillMembers);
   connect(&Session, &PackageSession::assessmentReady, this,
           &PackageReviewDialog::showAssessment);
+  // Left to Qt, "Preview file…" was the default as the first push button,
+  // and Return in the filter opened its chooser.  It keeps the accent, as
+  // the step every review starts with, and gives up the key.
+  for (auto *Button : findChildren<QPushButton *>())
+    Button->setAutoDefault(false);
   updateState();
 }
 

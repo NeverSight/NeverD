@@ -22,7 +22,7 @@ struct RegisterNames {
 };
 
 constexpr auto Names = [] {
-  std::array<RegisterNames, mipsreg::DSPControl / mipsreg::SlotBytes + 1>
+  std::array<RegisterNames, mipsreg::AC0Pending / mipsreg::SlotBytes + 1>
       Result{};
 #define NEVERD_MIPS_REGISTER(Name, Index, O32, N64) Result[Index] = {O32, N64};
 #include "neverd/lift/MIPS/MIPSRegisters.def"
@@ -55,7 +55,7 @@ const char *vectorName(uint64_t Offset, uint16_t Size) {
 const char *getMIPS32RegName(uint64_t Offset, uint16_t Size) {
   if (mipsreg::isVector(Offset))
     return vectorName(Offset, Size);
-  return Offset % mipsreg::SlotBytes == 0 && Offset <= mipsreg::DSPControl &&
+  return Offset % mipsreg::SlotBytes == 0 && Offset <= mipsreg::AC0Pending &&
                  Size <= 4
              ? Names[Offset / mipsreg::SlotBytes].O32
              : UnknownRegister;
@@ -66,7 +66,8 @@ const char *getMIPS64RegName(uint64_t Offset, uint16_t Size) {
     return vectorName(Offset, Size);
   return Offset % mipsreg::SlotBytes == 0 &&
                  ((Offset <= mipsreg::PC && Size <= 8) ||
-                  (Offset == mipsreg::DSPControl && Size <= 4))
+                  (Offset == mipsreg::DSPControl && Size <= 4) ||
+                  (Offset == mipsreg::AC0Pending && Size == 1))
              ? Names[Offset / mipsreg::SlotBytes].N64
              : UnknownRegister;
 }

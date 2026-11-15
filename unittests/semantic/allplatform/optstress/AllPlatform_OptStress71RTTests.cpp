@@ -23,6 +23,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64OptStress71RT : public SemanticRoundTripFixture,
                          public ::testing::WithParamInterface<RoundTripTC> {};
@@ -93,12 +94,24 @@ static std::vector<RoundTripTC> makeOptStress71TC(const char *prefix, const char
 }
 // clang-format on
 
-static const std::vector<RoundTripTC> kX64 = makeOptStress71TC("x64o71", "long");
+static const std::vector<RoundTripTC> kX64 =
+    makeOptStress71TC("x64o71", "long");
 static const std::vector<RoundTripTC> kX86 = makeOptStress71TC("x86o71", "int");
-static const std::vector<RoundTripTC> kA64 = makeOptStress71TC("a64o71", "long");
+static const std::vector<RoundTripTC> kA64 =
+    makeOptStress71TC("a64o71", "long");
 static const std::vector<RoundTripTC> kARM = makeOptStress71TC("armo71", "int");
 
-INSTANTIATE_TEST_SUITE_P(OptStress71, X64OptStress71RT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress71, X86OptStress71RT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress71, A64OptStress71RT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress71, ARM32OptStress71RT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress71, X64OptStress71RT,
+                         ::testing::ValuesIn(kX64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress71, X86OptStress71RT,
+                         ::testing::ValuesIn(kX86), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress71, A64OptStress71RT,
+                         ::testing::ValuesIn(kA64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress71, ARM32OptStress71RT,
+                         ::testing::ValuesIn(kARM), rtTCName);
+
+// An i386 routine that fills its caller's record leaves a scalar in XMM0,
+// merged into what the register held at entry. The LLVM route returned the
+// whole register, unknown bytes included: the C is checked by execution.
+INSTANTIATE_TEST_SUITE_P(OptStress71LLVMC, X86OptStress71RT,
+                         ::testing::ValuesIn(onLLVMC(kX86)), rtTCName);

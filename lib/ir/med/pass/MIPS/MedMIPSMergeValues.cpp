@@ -53,11 +53,13 @@ std::optional<mips::MergeTransfer> mergeLoad(const MedOp &Op) {
 const LowOp *physicalMerge(const LowBlock &Block,
                            const LowInstructionBoundary &Boundary,
                            Arch Target) {
+  const bool CompressedMerge =
+      Boundary.Mode == InstructionMode::MicroMIPS ||
+      (Boundary.Mode == InstructionMode::MIPS16 && !isMIPS64(Target));
   if (Boundary.Control != LowInstructionControl::None || Boundary.DelaySlot ||
       (Boundary.Mode != InstructionMode::Default &&
        Boundary.Mode != InstructionMode::MIPSClassic &&
-       !(Boundary.Mode == InstructionMode::MIPS16 && !isMIPS64(Target) &&
-         Boundary.Size == 4)))
+       !(CompressedMerge && Boundary.Size == 4)))
     return nullptr;
   const LowOp *Found = nullptr;
   for (uint64_t I = Boundary.FirstOp; I < Boundary.FirstOp + Boundary.OpCount;
@@ -94,14 +96,20 @@ unsigned discardUnobservedMIPSMergeInputs(MedFunc &Function,
   llvm::SmallVector<std::pair<const LowOp *, const LowOp *>, 4> Candidates;
   const LowOp *Previous = nullptr;
   va_t PreviousEnd = InvalidVA;
+  auto PreviousMode = InstructionMode::Default;
   for (const auto &Boundary : Low.InstructionBoundaries) {
     if (Boundary.Control != LowInstructionControl::None &&
         Boundary.Control != LowInstructionControl::Return)
       return 0;
     const LowOp *Current = physicalMerge(Low, Boundary, Target);
-    if (Previous && Current && PreviousEnd == Boundary.Address)
+    const auto Mode = Boundary.Mode == InstructionMode::Default
+                          ? InstructionMode::MIPSClassic
+                          : Boundary.Mode;
+    if (Previous && Current && PreviousEnd == Boundary.Address &&
+        PreviousMode == Mode)
       Candidates.push_back({Previous, Current});
     Previous = Current;
+    PreviousMode = Mode;
     PreviousEnd = Boundary.Address + Boundary.Size;
   }
   if (Candidates.empty())

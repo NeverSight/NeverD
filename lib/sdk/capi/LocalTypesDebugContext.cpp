@@ -763,14 +763,17 @@ bool LocalTypesDebugContext::takeDeclarations(
 
 void LocalTypesDebugContext::takeNewTypes(const types::TypeLibrary &Library,
                                           llvm::ArrayRef<std::string> Names,
-                                          bool NamesHold) {
+                                          bool NamesHold, bool Prototyped) {
   std::lock_guard<std::mutex> Guard(Mutex);
   for (const std::string &Name : Names)
     if (const types::LocalType *Type = Library.find(Name))
       Types->define(*Type);
   // A previously opaque pointee may now have members, even when its C name
   // stays the same. An ABI-only read must not freeze that earlier layout.
-  ABISignatures.clear();
+  // A signature converted from a prototype reaches only what the prototype
+  // reaches, so names no prototype reaches leave every one as it is.
+  if (Prototyped)
+    ABISignatures.clear();
   // These read every name of the library they were made of.  A name their
   // tables lack they spell as it is, as a library that gives it no other
   // spelling does; what they rendered names none of the new types.

@@ -85,9 +85,10 @@ struct FunctionSym {
   /// The prototype comes from a selected platform header library, including
   /// Windows SDK/WDK headers that are rendered without a host header include.
   bool PrototypeFromHeader = false;
-  /// The library is a C library's headers (glibc's, bionic's, musl's,
-  /// libSystem's), which a unit's C includes: a definition of the name in
-  /// the image is a copy of the routine they declare, not that routine.
+  /// The declaration belongs to a C library: a selected header (glibc's,
+  /// bionic's, musl's, libSystem's) or a curated runtime prototype. A
+  /// definition of the name in the image is a copy of the declared routine,
+  /// not that routine.
   bool PrototypeFromCLibrary = false;
   /// The function never returns, as its declaration says (`_Noreturn`).
   bool NoReturn = false;

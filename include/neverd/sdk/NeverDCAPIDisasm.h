@@ -464,6 +464,8 @@ NEVERD_API const char *neverd_ir_llvm(neverd_session_t Sess,
 /// Native views prepare the requested function in fresh/restricted sessions,
 /// as neverd_prepare_function_view does; completed whole-image analyses remain
 /// available. No prior preparation or decompile call is required.
+/// The call_sites representation returns original LowIR call IDs and their
+/// snapshot, including when a missing prototype prevents source emission.
 NEVERD_API const char *neverd_ir_view_json(neverd_session_t Sess,
                                            neverd_va_t FuncEntry,
                                            const char *Representation,

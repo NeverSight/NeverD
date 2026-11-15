@@ -149,13 +149,23 @@ private:
     const LinuxDatagramConnection *Datagram = nullptr;
     uint64_t Sent = 0, Received = 0;
     size_t ReceiveEvent = 0;
+    // Absolute end of a quiet interval specified relative to TCP connect.
+    std::optional<uint64_t> ConnectQuietEnd = std::nullopt;
     bool Failed = false;
     int64_t ReceiveTimeoutSeconds = 0, SendTimeoutSeconds = 0;
+  };
+  struct ReadinessFailure {
+    const char *Reason = nullptr;
+    // Static interest name and bound contract index for unknown TCP readiness.
+    const char *TCPInterest = nullptr;
+    size_t ConnectionIndex = 0;
+    explicit operator bool() const { return Reason != nullptr; }
+    std::optional<uint64_t> stop(ProcessResult &Result) const;
   };
   struct Readiness {
     unsigned Available = 0;
     std::optional<uint64_t> Wake;
-    const char *Unknown = nullptr;
+    ReadinessFailure Unknown;
   };
   Readiness socketReadiness(const OpenSocket &Socket, unsigned Wanted) const;
   class SelectWait;

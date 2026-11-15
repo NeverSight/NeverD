@@ -72,6 +72,7 @@ void CFGBuilder::convertIndirectTailCalls(LowFunc &Func) {
         EverPublishedJumpTableBranches.count(Addr) ||
         LostValidatedJumpTableBranches.count(Addr) ||
         StackTableEvidenceIncompleteBranches.count(Addr) ||
+        FrameLabelTableSources.count(Addr) ||
         IndexDomainEvidenceIncompleteBranches.count(Addr) ||
         IncompleteBranchMarkerEvidenceIncomplete ||
         ((finiteGOTOFFGroupClaimed() || finiteAbsoluteGroupClaimed()) &&

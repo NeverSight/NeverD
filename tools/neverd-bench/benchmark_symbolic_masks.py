@@ -1092,6 +1092,343 @@ def residue_subgroup_corpus(width, count):
     return rows
 
 
+def upper_perturbation_corpus(width, count):
+    """Products whose independent high-word disturbances can overlap."""
+    rows = []
+    sources = ("(x^y)", "(y|z)", "(z&w)", "(x+(w^y))", "((x&z)*(y|w))", "(~(w|x))")
+    for case in range(count):
+        rng = random.Random(0x4AF9288 + 1009 * width + case)
+        degree = (4, 9, 17, 33, 49, 65)[case % 6]
+        observed = max(7, width - width // 4) if case % 3 else width
+        scale = 3 << (width - observed) if case % 3 else 1
+        shifts = [(observed + 1) // 2 + rng.randrange(max(1, min(4, observed // 4)))
+                  for _ in range(degree)]
+        if case % 4 == 1:
+            shifts[0] = (observed - 1) // 2
+            shifts[1:] = [max(s, observed - shifts[0]) for s in shifts[1:]]
+        elif case % 4 == 2:
+            shifts = [0] + [observed] * (degree - 1)
+        factors = []
+        for i, shift in enumerate(shifts):
+            offset = ((2 * i + 1) % 15 or 1) if case % 3 else 1
+            if case % 5 == 4 and i % 7 == 0:
+                offset += 1
+            weight = (2 * i + 3 if i % 3 else -(2 * i + 1)) << shift
+            source = sources[(i + case) % len(sources)]
+            factors.append(f"({offset}+({weight})*{source})")
+        rng.shuffle(factors)
+        rows.append(f"({scale}*" + "*".join(factors) + ")+(x^y)+2*(x&y)")
+    return rows
+
+
+def masked_perturbation_corpus(width, count):
+    """Unequal masks on shared arithmetic words with noninvertible offsets."""
+    rows = []
+    sources = ("(x|y)", "(y^w)", "(z+(x&w))", "((w^x)*(y|z))")
+    for case in range(count):
+        rng = random.Random(0xA084959 + 73 * width + case)
+        degree = (7, 12, 21, 37)[case % 4]
+        observed = width - 2 - case % 3
+        scale = (3 if case % 2 == 0 else 5) << (width - observed)
+        factors = []
+        for i in range(degree):
+            zeros = (observed + 1) // 2 + i % 2
+            if case % 4 == 3:
+                low = observed // 2 - 1
+                zeros = low if i == 0 else max(zeros, observed - low)
+            mask = (rng.getrandbits(width) & -(1 << zeros)) | (1 << zeros)
+            source = sources[i % len(sources)]
+            weight = (rng.randrange(-17, 18) | 1) << zeros
+            delta = f"({source}&{mask})" if i % 3 else f"({weight}*{source})"
+            offset = rng.randrange(1, 256) | 1
+            if case % 5 == 0 and i == 2:
+                offset += 1
+            if case % 2 and i % 3 == 1:
+                offset = -offset
+            factors.append(f"({offset}+{delta})")
+        rng.shuffle(factors)
+        rows.append(f"({scale}*" + "*".join(factors) + ")+(x|y)+(x&y)+(z^w)+2*(z&w)")
+    return rows
+
+
+
+def mixed_perturbation_corpus(width, count):
+    """High disturbances with one to four low factors whose cross terms survive."""
+    rows = []
+    sources = ("(x^y)", "(z|w)", "(x+(w^y))", "((x&z)*(y|w))", "(~(w|x))", "(z&w)")
+    for case in range(count):
+        rng = random.Random(0xB7F3461 + width * 13541 + case * 7937)
+        degree = (9, 13, 17, 33, 49, 65)[case % 6]
+        low_factors = 1 + (case // 2) % 4
+        lost = width // 5 if case % 3 else 0
+        observed = width - lost
+        scale = 3 << lost if case % 3 else 1
+        factors = []
+        for i in range(degree):
+            offset = 2 * rng.randrange(1, 16) + 1
+            if case % 7 == 2 and i % 8 == 3:
+                offset += 1
+            span = max(1, observed // 5)
+            if i < low_factors:
+                shift = (i + case) % span
+            else:
+                shift = min(observed - 1, (observed + 1) // 2 + rng.randrange(min(4, span)))
+            source = sources[(i + case) % len(sources)]
+            weight = ((rng.getrandbits(6) | 1) << shift) & ((1 << width) - 1)
+            if case % 3 == 1 and i >= low_factors and i % 2:
+                mask = (rng.getrandbits(width - shift) | 1) << shift
+                delta = f"({source}&{mask})"
+            else:
+                delta = f"({weight}*{source})"
+            factors.append(f"({offset}+{delta})")
+        rng.shuffle(factors)
+        rows.append(f"({scale}*" + "*".join(factors) + ")+(x^y)+2*(x&y)")
+    return rows
+
+
+
+def truncated_product_corpus(width, count):
+    """Repeated bitwise words with nonvanishing quadratic and higher cross terms."""
+    words = ("(x^y)", "((x&z)^(y|w))", "((x+y)^(z&w))", "(~(x|z))", "((x^w)|(y&z))")
+    tails = ("(x^y)+2*(x&y)", "((z^w)*(x|y))", "x+(w&z)", "(x+y)")
+    rows = []
+    for case in range(count):
+        rng = random.Random(15837013 + width * 1411 + case * 19)
+        observed = width - (width // 5 if case % 4 == 1 else 0)
+        scale = 1 if observed == width else 3 << (width - observed)
+        degree = (11, 19, 29, 41, 67, 89)[case % 6]
+        order = 2 + (case // 2) % 4
+        shift = (observed + order) // (order + 1)
+        groups = 1 + case % 3
+        factors = []
+        for j in range(degree):
+            word = words[((j + case) % groups + case) % len(words)]
+            weight = (rng.randrange(-31, 32) | 1) << (shift + j % 3)
+            offset = rng.randrange(-31, 32) | 1
+            if case % 6 == 5 and j in (0, degree // 2):
+                offset = (offset + 1) or 2
+            factors.append(f"({offset}+({weight}*{word}))")
+        rng.shuffle(factors)
+        rows.append(f"({scale}*" + "*".join(factors) + ")+" + tails[case % 4])
+    return rows
+
+
+
+def residue_view_corpus(width, count):
+    """High-bit changes disguise repeated coordinates in modular products."""
+    axes = ("(x^y)", "((x&z)^(y|w))", "((x+y)^(z&w))")
+    mask = (1 << width) - 1
+    observed = min(width, max(4, width * 2 // 3))
+    rows = []
+    for case in range(count):
+        rng = random.Random(0x49280 + width * 773 + case * 1069)
+        degree = (23, 47, 89, 137)[case % 4]
+        shift = max(1, observed // (3 + case % 4))
+        factors = []
+        for i in range(degree):
+            word = axes[(i + case) % (1 + case % 3)]
+            zeros = shift + i % 2
+            bits = max(1, observed - zeros)
+            high = ((rng.getrandbits(width - bits) | 1) << bits) & mask
+            low = (1 << bits) - 1
+            view = (f"({word}&{low | high})", f"({word}|{high})",
+                    f"({word}^{high})", f"(({word}&{low})|{high})",
+                    f"(({word}+({1 << bits})*(z^w)))")[(i + case) % 5]
+            offset = rng.randrange(-31, 32) | 1
+            weight = (rng.randrange(-31, 32) | 1) << zeros
+            factors.append(f"({offset}+({weight})*{view})")
+        tail = ("(x|y)+(x&y)+(z^w)", "3*x+5*y+7*(z^w)",
+                "(z^w)*(x|y)")[case % 3]
+        rows.append(f"({3 << (width - observed)}*" + "*".join(factors) + f")+({tail})")
+    return rows
+
+
+def dynamic_lane_corpus(width, count):
+    """Nonconstant masks whose lowest set bit may just reach the result."""
+    axes = ("(x^y)", "((x+y)^(z&w))", "((x&z)^(y|w))")
+    observed = min(width, max(6, width * 2 // 3))
+    scale = 3 << (width - observed)
+    rows = []
+    for case in range(count):
+        # Every run of twelve cases contains eight freely varying masks and
+        # four with a fixed low literal that must survive on the same word.
+        fixed = case % 12 >= 8
+        index = case - 8 if fixed else case
+        rng = random.Random((61417 + width * 337 + index * 591) if fixed else
+                            (0x73D91 + width * 239 + index * 387))
+        degree = ((31, 53, 79, 101) if fixed else (19, 37, 73, 113))[index % 4]
+        shift = max(1, observed // (3 + index % (2 if fixed else 3)))
+        factors = []
+        for i in range(degree):
+            word = axes[(i + index) % (1 + index % 3)]
+            zeros = shift + i % 2
+            live = index % (4 if fixed else 8) >= (2 if fixed else 4)
+            lane = max(0, observed - zeros - int(live and i == degree // 2))
+            high = (rng.getrandbits(width - lane) | 1) << lane
+            if fixed:
+                op = ("^", "|", "&")[(i + index) % 3]
+                literal = 5 if op == "^" else 9 if op == "|" else ((1 << width) - 1) ^ 2
+                hidden = f"((z+{2 * i + 1})&{high})"
+                if op == "&":
+                    hidden = "~" + hidden
+                view = f"(({literal}{op}{word}){op}{hidden})"
+                offset = rng.randrange(-29, 30) | 1
+            else:
+                hidden = f"(({rng.randrange(1, 200, 2)}+w*y)&{high})"
+                view = (f"({word}^{hidden})", f"({word}|{hidden})",
+                        f"({word}&~{hidden})", f"(({word}^({high}*z))|{hidden})")[(i + index) % 4]
+                offset = rng.randrange(-35, 36) | 1
+            weight = (rng.randrange(-27, 28) | 1) << zeros
+            factors.append(f"({offset}+({weight})*{view})")
+        rows.append(f"({scale}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(z^w)")
+    return rows
+
+
+def spliced_word_corpus(width, count):
+    """Repeated low words under unrelated high lanes and signed extensions."""
+    axes = ("(x^y)", "((x|z)^(y&w))", "((x+y)^(z*w))")
+    observed = min(width - 2, max(9, (width + 1) * 2 // 3))
+    scale = 3 << (width - observed)
+    rows = []
+    for case in range(count):
+        rng = random.Random(741421 + 1031 * width + 1723 * case)
+        degree = (41, 79, 127, 181)[case % 4]
+        shift = max(2, observed // (3 + case % 2))
+        factors = []
+        for i in range(degree):
+            axis = axes[(i + case) % (1 + case % 3)]
+            zeros = shift + i % 2
+            bits = observed - zeros
+            live = case % 12 >= 6 and i == degree // 2
+            low = bits - 1 if live else bits + i % 4
+            noise = f"(({rng.randrange(7, 200, 2)}+z*y)^(x+w))"
+            prefix = f"extract({axis},0,{low})"
+            high = width - low
+            kind = (case + i) % 4
+            if kind == 1:
+                view = f"sext({prefix},{width})"
+            elif kind == 2:
+                view = f"zext({prefix},{width})"
+            elif kind == 3 and high >= 2:
+                first = high // 2
+                view = (f"concat(extract({noise},{width-first},{first}),"
+                        f"extract((z^x),{low},{high-first}),{prefix})")
+            else:
+                view = f"concat(extract({noise},{low},{high}),{prefix})"
+            if case % 2:
+                offset = rng.randrange(-29, 30) | 1
+                weight = rng.randrange(-15, 16) | 1
+                view = f"({offset}+({weight})*{view})"
+            offset = rng.randrange(-27, 28) | 1
+            weight = (rng.randrange(-19, 20) | 1) << zeros
+            factors.append(f"({offset}+({weight})*{view})")
+        rows.append(f"({scale}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(z^w)")
+    return rows
+
+
+def rotating_window_corpus(width, count):
+    """High-degree products of affine windows, including wraparound and a live high bit."""
+    axes = ("(x^y)", "((x+u)^(z*w))", "((x|v)^(y&w))", "((x^z)*(u+(v|w)))")
+    positions = (0, 1 + width // 5, width - 3, 1 + width // 3)
+    rows = []
+    for case in range(count):
+        rng = random.Random(0xc17e5 + width * 1297 + case * 1993)
+        degree = (71, 127, 193, 257)[case % 4]
+        observed = min(width - 4, max(10, width * 3 // 8 + case % 3))
+        scale = 3 << (width - observed)
+        shift = max(1, (observed + 2) // (3 + case % 2))
+        factors = []
+        for i in range(degree):
+            axis = (i + case) % (2 + case % 3)
+            zeros = shift + i % 2
+            bits = observed - zeros
+            live = case % 14 >= 7 and i == degree // 2
+            size = bits - 1 if live else min(width - 2, bits + i % 4)
+            start = 1 + rng.randrange(width - size)
+            turn = (start - positions[axis]) % width
+            if (i + case) % 2:
+                source = f"rol({axes[axis]},{turn})"
+            else:
+                source = f"ror({axes[axis]},{-turn % width})"
+            if (i + case) % 3:
+                back = rng.randrange(1, width)
+                source = f"rol(ror({source},{back}),{back + width})"
+            field = f"extract({source},{start},{size})"
+            noise = f"(({rng.randrange(1, 128, 2)}+v*y)^(x+u*w))"
+            kind = (i + case) % 4
+            if kind == 0:
+                word = f"zext({field},{width})"
+            elif kind == 1:
+                word = f"sext({field},{width})"
+            elif kind == 2:
+                word = f"concat(extract({noise},{size},{width - size}),{field})"
+            else:
+                high = width - size
+                top = max(1, high // 2)
+                word = (f"concat(extract({noise},{width - top},{top}),"
+                        f"extract((w^u),{size},{high - top}),{field})")
+            if (case + i) % 3:
+                offset = rng.randrange(-23, 24) | 1
+                weight = rng.randrange(-17, 18) | 1
+                word = f"({offset}+({weight})*{word})"
+            offset = rng.randrange(-31, 32) | 1
+            weight = (rng.randrange(-17, 18) | 1) << zeros
+            factors.append(f"({offset}+({weight})*{word})")
+        tail = "(x^y)+2*(x&y)+(z^w)+(u&v)"
+        rows.append(f"({scale}*" + "*".join(factors) + ")+" + tail)
+    return rows
+
+
+def affine_product_corpus(width, count):
+    """Repeated words hidden under up to three affine coordinate changes."""
+    axes = ("(x^y)", "((x&z)^(y|w))", "((x+y)^(z&w))")
+    rows = []
+    for case in range(count):
+        rng = random.Random(0x9318A + width * 5191 + case * 177)
+        observed = width if width <= 97 else width // 3
+        degree = (23, 47, 89, 137)[case % 4]
+        order = 2 + 2 * (case % 4)
+        shift = max(1, (observed + order) // (order + 1))
+        scale = 3 << (width - observed)
+        factors = []
+        for j in range(degree):
+            word = axes[(j + case) % (1 + case % 3)]
+            for _ in range(1 + case % 3):
+                offset = rng.randrange(-21, 22)
+                weight = rng.randrange(-15, 16) | 1
+                word = f"({offset}+({weight})*{word})"
+            offset = rng.randrange(-31, 32) | 1
+            weight = (rng.randrange(-31, 32) | 1) << (shift + j % 2)
+            factors.append(f"({offset}+({weight})*{word})")
+        tail = ("(x|y)+(x&y)+(z^w)", "3*x+5*y+7*(z^w)",
+                "(z^w)*(x|y)")[case % 3]
+        rows.append(f"({scale}*" + "*".join(factors) + ")+(" + tail + ")")
+    return rows
+
+
+def integer_product_corpus(width, count):
+    """Neighboring precisions on either side of a falling-factorial divisor."""
+    words = ("(x^y)", "((x&z)^(y|w))", "((x+y)^(z&w))", "(~(x|z))", "((x^w)|(y&z))")
+    rows = []
+    for case in range(count):
+        degree = 3 + case % 6
+        factorial_bits = degree - degree.bit_count() + (case // 6) % 2
+        shift = max(1, (width - factorial_bits) // degree)
+        observed = min(width, shift * degree + factorial_bits)
+        word = words[(width + case) % len(words)]
+        length = (1 << (degree.bit_length() + 1 + case % 2)) - 1
+        rng = random.Random(1070021 + width * 193 + case)
+        factors = []
+        for _ in range(length):
+            offset = rng.randrange(-61, 62) | 1
+            weight = (rng.randrange(-31, 32) | 1) << shift
+            factors.append(f"({offset}+({weight}*{word}))")
+        rng.shuffle(factors)
+        rows.append(f"(({3 << (width - observed)})*" + "*".join(factors) + ")+(x&y)+(x|y)")
+    return rows
+
+
+
 def sparse_linear_mixed_degree_corpus(width, count):
     """Degree-4–18 products with disjoint constant, linear and perturbed tails.
 
@@ -1171,6 +1508,18 @@ def check_semantics(expressions, results, width):
                         return value.value & ((1 << bits.value) - 1), bits.value
                     if isinstance(value, ast.Name) and value.id in values:
                         return values[value.id] & ((1 << bits.value) - 1), bits.value
+            if name in ("rol", "ror") and len(node.args) == 2:
+                value, bits = evaluated[node.args[0]]
+                count = evaluated[node.args[1]][0] % bits
+                left = count if name == "rol" else (-count) % bits
+                return ((value << left) | (value >> (bits - left))) & ((1 << bits) - 1), bits
+            if name == "concat" and node.args:
+                result = bits = 0
+                for arg in node.args:
+                    value, arg_bits = evaluated[arg]
+                    result = (result << arg_bits) | value
+                    bits += arg_bits
+                return result, bits
             if name == "extract" and len(node.args) == 3:
                 value, _ = evaluated[node.args[0]]
                 offset, bits = node.args[1:]
@@ -1203,6 +1552,9 @@ def check_semantics(expressions, results, width):
                 pending.extend(((current.right, False), (current.left, False)))
             elif isinstance(current, ast.UnaryOp):
                 pending.append((current.operand, False))
+            elif (isinstance(current, ast.Call) and isinstance(current.func, ast.Name)
+                  and current.func.id in ("concat", "rol", "ror")):
+                pending.extend((arg, False) for arg in reversed(current.args))
             elif (isinstance(current, ast.Call)
                   and isinstance(current.func, ast.Name)
                   and current.func.id in ("extract", "zext", "sext", "trunc")
@@ -1221,7 +1573,7 @@ def check_semantics(expressions, results, width):
     names = sorted({
         node.id for expression in [*expressions, *(r["output"] for r in results)]
         for node in ast.walk(parse(expression))
-        if isinstance(node, ast.Name) and node.id not in ("word", "extract", "zext", "sext", "trunc")
+        if isinstance(node, ast.Name) and node.id not in ("word", "extract", "zext", "sext", "trunc", "concat", "rol", "ror")
     })
     assignments = [
         {name: (x if index % 2 == 0 else y)
@@ -1290,7 +1642,9 @@ def main():
                  "permuted-carry-product", "complemented-carry-product",
                  "narrow-product-cross-terms", "masked-product-window",
                  "residue-power", "residue-quotient", "residue-subgroup",
-                 "sparse-linear-mixed-degree"),
+                 "sparse-linear-mixed-degree", "upper-perturbation", "masked-perturbation",
+                 "mixed-perturbation", "truncated-product", "integer-product", "affine-product",
+                 "residue-view", "dynamic-lane", "spliced-word", "rotating-window"),
         default="complement",
     )
     args = parser.parse_args()
@@ -1307,7 +1661,19 @@ def main():
     }
     with tempfile.TemporaryDirectory(prefix="neverd-mask-bench-") as directory:
         path = Path(directory) / "expressions.txt"
-        for width in (8, 16, 32, 64):
+        widths = {
+            "truncated-product": (8, 16, 32, 63, 65, 129, 257),
+            "integer-product": (8, 16, 31, 64, 97, 193, 257),
+            "mixed-perturbation": (8, 16, 32, 64, 65, 129, 257),
+            "residue-view": (9, 16, 32, 65, 97, 257, 513),
+            "rotating-window": (17, 24, 32, 64, 97, 193, 257, 513),
+            "spliced-word": (17, 24, 32, 64, 97, 193, 257, 513),
+            "dynamic-lane": (9, 16, 32, 65, 97, 257, 513),
+            "affine-product": (8, 9, 16, 32, 65, 97, 257, 513),
+            "upper-perturbation": (8, 16, 32, 64, 65, 97, 129, 257),
+            "masked-perturbation": (9, 24, 63, 127, 256),
+        }.get(args.family, (8, 16, 32, 64))
+        for width in widths:
             generate = {
                 "complement": corpus, "weighted": weighted_corpus,
                 "bitwise": bitwise_corpus, "interleaved": interleaved_corpus,
@@ -1336,6 +1702,16 @@ def main():
                 "residue-quotient": residue_quotient_corpus,
                 "residue-subgroup": residue_subgroup_corpus,
                 "sparse-linear-mixed-degree": sparse_linear_mixed_degree_corpus,
+                "upper-perturbation": upper_perturbation_corpus,
+                "masked-perturbation": masked_perturbation_corpus,
+                "mixed-perturbation": mixed_perturbation_corpus,
+                "affine-product": affine_product_corpus,
+                "residue-view": residue_view_corpus,
+                "dynamic-lane": dynamic_lane_corpus,
+                "spliced-word": spliced_word_corpus,
+                "rotating-window": rotating_window_corpus,
+                "truncated-product": truncated_product_corpus,
+                "integer-product": integer_product_corpus,
             }[args.family]
             expressions = generate(width, args.count)
             path.write_text("\n".join(expressions) + "\n", encoding="utf-8")

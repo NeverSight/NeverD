@@ -3809,20 +3809,6 @@ ImportPrototypeArguments importPrototypeArguments(
                                              ExportStarts->end(), Addr)
                         : Img.findExportAt(Addr) != nullptr;
   };
-  // A routine the image exports, whose name binds a prototype
-  // (LocalTypesDebugContext), takes what that prototype declares from every
-  // caller: its export binds the convention, which a compiler keeps for the
-  // callers within the image too, as a Windows system call stub's callers
-  // pass the parameters its dispatcher reads from the stack.  A body that
-  // reads more keeps it.  Only a convention of register summaries reads it.
-  auto ExportedArguments = [&](va_t Addr) -> std::optional<Arguments> {
-    if (!Dbg || !RegisterArguments || !Exported(Addr))
-      return std::nullopt;
-    const std::optional<FunctionSym> Function = Dbg->resolveFunction(Addr);
-    if (!Function || Function->PrototypeLibrary.empty())
-      return std::nullopt;
-    return SignatureArguments(*Function);
-  };
   // A runtime's own prototype names its routine exactly, where stripping
   // leading underscores for the arity tables could reach another runtime's.
   auto RoutineArguments = [&](const std::string &Name,
@@ -3960,7 +3946,10 @@ ImportPrototypeArguments importPrototypeArguments(
     if (!Name.empty()) {
       // Every adapter reads this same declaration. Convert its type graph
       // once, including a missing declaration, before classifying its parts.
-      const std::optional<FunctionSym> Function = Declared(Name);
+      std::optional<FunctionSym> Function = Declared(Name);
+      if (!Function)
+        Function =
+            libc::runtimeVariadicPrototype(Name, Img.Arch, Img.abiFormat());
       // The base AAPCS returns a routine's floating value in the integer
       // registers the call already writes: the floating bank holds none of it.
       const bool ReturnsInCoreRegisters =
@@ -3989,7 +3978,8 @@ ImportPrototypeArguments importPrototypeArguments(
       Routine = UserArguments(Function);
       UserDeclared = Routine.has_value();
       PrototypeOwnsArguments = Routine.has_value();
-      // A variadic header declares a minimum prefix, never an exact arity.
+      // A variadic declaration supplies a minimum prefix, never an exact
+      // arity. A selected declaration keeps precedence over a runtime table.
       if (!Routine)
         if (Function)
           if (auto Prefix = libc::variadicCallArguments(*Function, Img.Arch,
@@ -4043,7 +4033,29 @@ ImportPrototypeArguments importPrototypeArguments(
       if (!Routine)
         Routine = DecoratedArguments(Addr);
     } else {
-      Routine = ExportedArguments(Addr);
+      // Both scalar and floating calls use the same exported declaration.
+      // Look it up once; a stripped internal target has neither contract.
+      if (!Dbg || !RegisterArguments || !Exported(Addr))
+        return;
+      const auto Function = Dbg->resolveFunction(Addr);
+      if (!Function)
+        return;
+      if (isMIPS(Img.Arch) && Convention &&
+          (Convention->ArgumentsFromCallSetup ||
+           Convention->RegisterArgumentsFromCalleeSummary))
+        if (auto Floating = libc::floatingCallArguments(*Function, Img.Arch,
+                                                        Img.abiFormat())) {
+          if (Floating->ReturnKind == NdTypeKind::Float)
+            Result.FloatReturns[Addr] = Floating->ReturnBytes;
+          Result.FloatingArguments.emplace(Addr, std::move(*Floating));
+          Result.PrototypeDeclared.insert(Addr);
+          if (Function->PrototypeLibrary == UserPrototypeLibrary)
+            Result.UserDeclared.insert(Addr);
+          return;
+        }
+      if (Function->PrototypeLibrary.empty())
+        return;
+      Routine = SignatureArguments(*Function);
       if (!Routine)
         return;
       Joins = Effects.count(Addr) != 0;
@@ -4276,48 +4288,53 @@ static LocalRegisterEffect summarizeRecoveredCallRegisters(
   std::optional<CallRegisterBody> Projection;
   size_t Work = limits::ir::kSourceFrameAnalysisRemaining;
   std::optional<std::map<SourceCallOccurrenceKey, va_t>> ScalarTargets;
-  if (!Img.IsRelocatable)
-    for (size_t B = 0; B < Body.Blocks.size(); ++B) {
-      auto Targets =
-          resolveLowBlockCallTargets(Body.Blocks[B], Img.Arch, &Work);
-      for (size_t I = 0; I < Body.Blocks[B].Ops.size(); ++I)
-        if (const auto &Call = Body.Blocks[B].Ops[I];
-            !Targets.count(I) && Call.Opcode == NdOp::INDIR_CALL &&
-            Call.NumInputs == 1 && !Call.Inputs[0].isConst()) {
-          const auto Site = sourceCallOccurrenceKey(Call);
-          if (!Site)
-            continue;
-          if (!ScalarTargets)
-            ScalarTargets = constantRegisterCallTargets(Body);
-          if (const auto Found = ScalarTargets->find(*Site);
-              Found != ScalarTargets->end())
-            Targets.try_emplace(I, MedCallTarget{Found->second, false});
-        }
-      for (const auto &[Index, Target] : Targets) {
-        const auto CodeTarget =
-            Target.ThroughSlot ? std::optional<va_t>(Target.Address)
-                               : qualifiedMIPSCallTarget(Img, Body.Blocks[B],
-                                                         Index, Target.Address);
-        if (!CodeTarget)
+  // A relocatable object's call becomes a call to its own routine only
+  // where lifting makes it one (LowToMedConverter::convert): through a
+  // pointer that is an address of the object's own, never a scalar that
+  // equals one, a slot, or a register constant.
+  for (size_t B = 0; B < Body.Blocks.size(); ++B) {
+    auto Targets = resolveLowBlockCallTargets(Body.Blocks[B], Img.Arch, &Work);
+    for (size_t I = 0; !Img.IsRelocatable && I < Body.Blocks[B].Ops.size(); ++I)
+      if (const auto &Call = Body.Blocks[B].Ops[I];
+          !Targets.count(I) && Call.Opcode == NdOp::INDIR_CALL &&
+          Call.NumInputs == 1 && !Call.Inputs[0].isConst()) {
+        const auto Site = sourceCallOccurrenceKey(Call);
+        if (!Site)
           continue;
-        if (Target.ThroughSlot ? importCalleeName(Img, Target.Address).empty()
-                               : !Img.hasExecutableCodeOwnerAt(*CodeTarget))
-          continue;
-        if (!Projection) {
-          Projection.emplace();
-          Projection->Blocks.assign(Body.Blocks.begin(), Body.Blocks.end());
-          Projection->Complete = Body.Complete;
-          Projection->UnsafeIndirectBranches = Body.UnsafeIndirectBranches;
-          Projection->HasIndependentRoots = Body.HasIndependentRoots;
-        }
-        auto &Call = Projection->Blocks[B].Ops[Index];
-        // This private view must also expose an import's register reads.
-        // A caller forwarding RCX still owns that incoming parameter even
-        // when the callable was transported through a frame slot.
-        Call.Opcode = Target.ThroughSlot ? NdOp::INDIR_CALL : NdOp::CALL;
-        Call.Inputs[0] = NdVar::cst(*CodeTarget, Call.Inputs[0].Size);
+        if (!ScalarTargets)
+          ScalarTargets = constantRegisterCallTargets(Body);
+        if (const auto Found = ScalarTargets->find(*Site);
+            Found != ScalarTargets->end())
+          Targets.try_emplace(I, MedCallTarget{Found->second, false});
       }
+    for (const auto &[Index, Target] : Targets) {
+      if (Img.IsRelocatable &&
+          (Target.ThroughSlot || !Target.addressesImage(true)))
+        continue;
+      const auto CodeTarget =
+          Target.ThroughSlot ? std::optional<va_t>(Target.Address)
+                             : qualifiedMIPSCallTarget(Img, Body.Blocks[B],
+                                                       Index, Target.Address);
+      if (!CodeTarget)
+        continue;
+      if (Target.ThroughSlot ? importCalleeName(Img, Target.Address).empty()
+                             : !Img.hasExecutableCodeOwnerAt(*CodeTarget))
+        continue;
+      if (!Projection) {
+        Projection.emplace();
+        Projection->Blocks.assign(Body.Blocks.begin(), Body.Blocks.end());
+        Projection->Complete = Body.Complete;
+        Projection->UnsafeIndirectBranches = Body.UnsafeIndirectBranches;
+        Projection->HasIndependentRoots = Body.HasIndependentRoots;
+      }
+      auto &Call = Projection->Blocks[B].Ops[Index];
+      // This private view must also expose an import's register reads.
+      // A caller forwarding RCX still owns that incoming parameter even
+      // when the callable was transported through a frame slot.
+      Call.Opcode = Target.ThroughSlot ? NdOp::INDIR_CALL : NdOp::CALL;
+      Call.Inputs[0] = NdVar::cst(*CodeTarget, Call.Inputs[0].Size);
     }
+  }
   return localRegisterEffect(
       Img, Projection ? CallRegisterBodyView(*Projection) : Body,
       &NoReturnTargets, &FixedCallReads, &ArgumentSources, &StackProbes);

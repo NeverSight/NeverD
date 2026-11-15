@@ -34,4 +34,16 @@ NEVERD_MIPS_DSP_SOURCE_TEXT(
     MalformedDSPSource,
     "invalid original-machine MIPS DSPControl source transfer")
 
+// AC3 has no partial HI/LO producer hazard. Save its halves around the
+// POS-only MTHLIP so native source observes the issuing CPU's undefined POS.
+NEVERD_MIPS_DSP_SOURCE_TEXT(
+    DSPPositionAsm,
+    ".set push\n.set dsp\nmfhi $$8,$$ac3\nmflo $$9,$$ac3\nmthlip "
+    "$$zero,$$ac3\nmthi $$8,$$ac3\nmtlo $$9,$$ac3\n.set pop")
+NEVERD_MIPS_DSP_SOURCE_TEXT(
+    DSPPositionCAsm,
+    "\".set push\\n.set dsp\\nmfhi $8,$ac3\\nmflo $9,$ac3\\nmthlip "
+    "$zero,$ac3\\nmthi $8,$ac3\\nmtlo $9,$ac3\\n.set pop\"")
+NEVERD_MIPS_DSP_SOURCE_TEXT(DSPPositionConstraints, "~{$8},~{$9},~{memory}")
+NEVERD_MIPS_DSP_SOURCE_TEXT(DSPCompareConstraints, "r,r,~{memory}")
 #undef NEVERD_MIPS_DSP_SOURCE_TEXT

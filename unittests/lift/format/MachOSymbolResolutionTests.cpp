@@ -347,6 +347,39 @@ TEST(MachOSymbolResolution,
   EXPECT_EQ(Preserved->getOpcode(), llvm::Instruction::IntToPtr);
 }
 
+TEST(MachOSymbolResolution, LowMappedImageRequiresPointerEvidence) {
+  BinaryImage Image = makePageZeroImage();
+  Image.Segments.erase(Image.Segments.begin());
+  Image.Segments.front().VA = 0;
+
+  llvm::LLVMContext Context;
+  llvm::Module Module({}, Context);
+  llvm::IRBuilder<> Builder(Context);
+  auto *Ptr = Builder.getPtrTy();
+  auto *I64 = Builder.getInt64Ty();
+  auto *Type = llvm::FunctionType::get(I64, {Ptr}, false);
+  auto *F = llvm::Function::Create(Type, llvm::GlobalValue::ExternalLinkage, {},
+                                   Module);
+  Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, {}, F));
+  constexpr uint64_t Offset = sizeof(va_t);
+  auto *Address = llvm::cast<llvm::GetElementPtrInst>(Builder.CreateGEP(
+      Builder.getInt8Ty(), F->getArg(0), Builder.getInt64(-Offset)));
+  auto *Store = Builder.CreateStore(Builder.getInt64(Offset), Address);
+  auto *Pointer =
+      llvm::ConstantExpr::getIntToPtr(Builder.getInt64(Offset), Ptr);
+  auto *Load = Builder.CreateLoad(I64, Pointer);
+  auto *Return = Builder.CreateRet(Builder.getInt64(Offset));
+
+  symbolizeImageAbsolutePointers(Module, Image);
+
+  EXPECT_EQ(Address->getOperand(1), Builder.getInt64(-Offset));
+  EXPECT_EQ(Store->getValueOperand(), Builder.getInt64(Offset));
+  EXPECT_EQ(Return->getReturnValue(), Builder.getInt64(Offset));
+  ASSERT_NE(Module.getNamedGlobal(makeNdDataSymbol(Offset)), nullptr);
+  EXPECT_EQ(Load->getPointerOperand(),
+            Module.getNamedGlobal(makeNdDataSymbol(Offset)));
+}
+
 TEST(MachOSymbolResolution, PatchSymbolizationCancelsSelectedFrameReloadBase) {
   constexpr uint64_t ImageBase = 0x100000000ULL;
   constexpr uint64_t FirstString = ImageBase + 0x100;

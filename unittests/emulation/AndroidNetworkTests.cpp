@@ -151,8 +151,11 @@ TEST_P(AndroidNetwork, TCPConnectFailuresShareRawNamedDynamicAndVariadicCalls) {
                                             : "closed before reuse"),
                 std::string::npos);
       if (Mode == 1)
-        EXPECT_NE(R.Diagnostic.find("after 4 supplied failures"),
-                  std::string::npos);
+        EXPECT_NE(
+            R.Diagnostic.find("after 4 supplied failures "
+                              "(attempt 6 has no supplied result), "
+                              "peer_hex=0200232b7f0000010000000000000000"),
+            std::string::npos);
       ASSERT_FALSE(R.NativeCalls.empty());
       EXPECT_EQ(R.NativeCalls.back().Name, "connect");
       EXPECT_FALSE(R.NativeCalls.back().Result);
@@ -473,6 +476,26 @@ TEST_P(AndroidNetwork, MismatchKeepsConnectionIdentityAcrossFDReuse) {
                   : "outgoing TCP bytes differ from the offline contract at "
                     "stream offset 1 (buffer offset 1): expected 0x00, actual "
                     "0xff (connection index 2)");
+  }
+}
+TEST_P(AndroidNetwork, ExhaustedSendKeepsNamedAndRawResultsPending) {
+  Options.Android->ObserveMemoryOnFailure = true;
+  Options.LinuxNetwork->Connections.front().ExpectedSend.resize(4);
+  for (unsigned Raw : {0, 1}) {
+    SCOPED_TRACE(Raw);
+    auto R = run("network_stream", Raw);
+    EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(
+        R.Diagnostic,
+        "outgoing TCP stream exceeds its offline contract at stream "
+        "offset 4 (request size 1, size after max_send 1, bytes remaining "
+        "0, connection index 0)");
+    ASSERT_FALSE(R.NativeCalls.empty());
+    EXPECT_EQ(R.NativeCalls.back().Name, Raw ? "syscall" : "send");
+    EXPECT_FALSE(R.NativeCalls.back().Result);
+    EXPECT_EQ(word(R, 2), 2u);
+    EXPECT_EQ(word(R, 3), 2u);
+    EXPECT_EQ(word(R, 4), 0xa5a5a5a5a5a5a5a5ULL);
   }
 }
 TEST_P(AndroidNetwork, DynamicResolverUsesTheSameOwner) {

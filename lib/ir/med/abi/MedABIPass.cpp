@@ -15,6 +15,7 @@
 #include "MedABIPassDetail.h"
 #include "MedStackDeltaCache.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceCallABI.h"
@@ -514,7 +515,7 @@ sourceCallStackPointers(const MedFunc &Func, Arch Architecture,
           !Op.Dead) {
         if (!LocalStack)
           InheritedCalls[I].push_back(&Op);
-        else if (LocalStack->Size == TRI.PointerSize)
+        else if (LocalStack->Size == TRI.addressRegisterBytes())
           Result.emplace(&Op, *LocalStack);
       }
       // A local definition owns subsequent calls independently of incoming
@@ -583,7 +584,7 @@ sourceCallStackPointers(const MedFunc &Func, Arch Architecture,
     if (!Charge(InheritedCalls[B].size()))
       return {};
     if (Entries[B].State == Basis::Exact &&
-        Entries[B].Value.Size == TRI.PointerSize) {
+        Entries[B].Value.Size == TRI.addressRegisterBytes()) {
       BlockEntries.emplace(Func.Blocks[B].Id, Entries[B].Value);
       for (const MedOp *Call : InheritedCalls[B])
         Result.emplace(Call, Entries[B].Value);
@@ -618,7 +619,10 @@ std::optional<FloatingCallArguments>
 boundFloatingCallArguments(const MedOp &Op, Arch A, BinaryFormat F) {
   const auto &Registers = getTargetRegInfo(A);
   if ((Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL) ||
-      !Op.ScalarCallSignature || Op.SourceCallHint ||
+      !Op.ScalarCallSignature ||
+      (Op.SourceCallHint && (!Op.SourceCallHint->Signature.MIPSScalars ||
+                             *Op.SourceCallHint->Signature.MIPSScalars !=
+                                 *Op.ScalarCallSignature)) ||
       Op.CalleeVariadicFrom >= 0 ||
       Op.NumInputs != Op.ScalarCallSignature->Scalars.size() + 1)
     return std::nullopt;
@@ -629,7 +633,17 @@ boundFloatingCallArguments(const MedOp &Op, Arch A, BinaryFormat F) {
         Op.Output.Size != Signature.ReturnBytes ||
         Signature.ReturnElements > Registers.FPReturnRegs.size())
       return std::nullopt;
-  } else if ((A != Arch::X86 && Signature.Scalars.empty()) ||
+  } else if (Signature.ReturnKind != NdTypeKind::Float) {
+    if (!isMIPS(A) || Op.CalleeFloatReturnBytes ||
+        (Signature.ReturnKind == NdTypeKind::Void
+             ? Op.Output.Size != 0
+             : Op.Output.Size != Signature.ReturnBytes ||
+                   (Signature.ReturnBytes != Registers.FullRegWidth
+                        ? Op.Output.Kind != MedVar::Temp
+                        : Op.Output.Kind != MedVar::Reg ||
+                              Op.Output.RegOff != Registers.IntReturnReg)))
+      return std::nullopt;
+  } else if ((A != Arch::X86 && !isMIPS(A) && Signature.Scalars.empty()) ||
              Op.CalleeFloatReturnBytes != Signature.ReturnBytes ||
              Op.Output.Kind != MedVar::Reg ||
              (A == Arch::X86 ? (!Registers.isX87StackReg(Op.Output.RegOff) ||
@@ -650,7 +664,9 @@ recoveredFloatingCallArguments(const MedOp &Op, const MedCallInfo &Call, Arch A,
                                BinaryFormat F) {
   if (Op.ScalarCallSignature) {
     const auto Bound = boundFloatingCallArguments(Op, A, F);
-    if (!Bound || Call.VarArgFixedCount >= 0 ||
+    if (!Bound ||
+        Call.VarArgFixedCount !=
+            (Bound->FixedCount ? int(*Bound->FixedCount) : -1) ||
         Call.Args.size() != Bound->Scalars.size() ||
         Call.ArgReadBytes.size() != Call.Args.size())
       return std::nullopt;
@@ -701,7 +717,7 @@ bool promoteFloatCallResult(MedFunc &Func, MedBlock &Blk, size_t OI,
   // reads, so accept either half or both; the temp must have no other reader,
   // or the split is a real wide result.
   size_t SyntheticWideHalves = 0;
-  if (TRI.PointerSize == 4 && TRI.IntReturnReg2 != 0 &&
+  if (TRI.integerReturnWordBytes() == 4 && TRI.IntReturnReg2 != 0 &&
       ExistingOutput.Kind == MedVar::Temp &&
       ExistingOutput.Size == 2 * TRI.PointerSize) {
     auto isHalf = [&](const MedOp &Half, uint64_t RegOff, uint64_t Offset) {
@@ -1135,6 +1151,9 @@ void recoverCallAbi(
             Op.NumInputs ==
                 Count + 1 + unsigned(sourceCallRetainsResultStorage(Hint))) {
           CI.SourceCallHint = Op.SourceCallHint;
+          if (Hint.Signature.MIPSScalars)
+            for (const auto &P : Hint.Signature.MIPSScalars->Scalars)
+              CI.ArgReadBytes.push_back(P.Bytes);
           if (Hint.CallKind == SourceCallTypeHint::Kind::Analyst)
             CI.VarArgFixedCount = Hint.AnalystFixedCount;
           CI.TargetAddr = Hint.TargetAddress;
@@ -4029,7 +4048,7 @@ void recoverCallAbi(
 }
 
 void finalizeVariadicCallees(std::vector<MedFunc> &Funcs, Arch TheArch,
-                             BinaryFormat Fmt) {
+                             BinaryFormat Fmt, llvm::ArrayRef<Export> Exports) {
   const auto &TRI = getTargetRegInfo(TheArch);
   // Darwin AArch64 passes EVERY variadic argument on the stack (no register
   // save area, no register-passed overflow): the callee's va_start points its
@@ -4052,6 +4071,10 @@ void finalizeVariadicCallees(std::vector<MedFunc> &Funcs, Arch TheArch,
   const CallArgumentConvention *Convention =
       callArgumentConvention(TheArch, Fmt);
   if (Convention && Convention->VariadicArgumentsOnStack) {
+    // Clients can obtain an exported entry through dyld even when every use
+    // of its address within this image is a direct call.
+    for (const auto &Export : Exports)
+      AddressTakenVariadic.insert(Export.Addr);
     std::set<va_t> FuncEntries;
     for (const auto &MF : Funcs)
       FuncEntries.insert(MF.Entry);

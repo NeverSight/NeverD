@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -65,11 +66,11 @@ class EntryQualificationTests(unittest.TestCase):
 
     def test_complete_matrix_cleanup_and_qualified_producer_scope(self):
         contract = entry.native.fixture_contract()
-        for compile_only, fail, backend, publish in (
-                (False, False, False, False), (True, False, False, False),
-                (False, True, False, False), (False, False, True, False),
-                (False, False, True, True), (True, False, True, True),
-                (False, True, True, True)):
+        for compile_only, fail, backend, publish, zero_base in (
+                (False, False, False, False, False), (True, False, False, False, False),
+                (False, True, False, False, False), (False, False, True, False, False),
+                (False, False, True, True, False), (True, False, True, True, False),
+                (False, True, True, True, False), (False, False, True, True, True)):
             producer = entry.POLICY["backend_producer"] if backend else entry.POLICY["producers"][0]
             with self.subTest(compile_only=compile_only, fail=fail, backend=backend, publish=publish), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
@@ -85,10 +86,10 @@ class EntryQualificationTests(unittest.TestCase):
                 def command(products, directory, label, argv, timeout, env=None):
                     stdout, code = CASES["compiler_version"], 0
                     if argv[0] == str(binary):
-                        if entry.POLICY["unreserved_filter"] in argv:
+                        if entry.POLICY["occupied_filter"] in argv:
                             self.assertTrue(publish)
                             self.assertTrue(Path(env[entry.POLICY["publication_input_environment"]]).exists())
-                            xml = CASES["export_xml"].replace(entry.POLICY["export_case"], entry.POLICY["unreserved_case"])
+                            xml = CASES["export_xml"].replace(entry.POLICY["export_case"], entry.POLICY["occupied_case"])
                             Path(argv[-1].removeprefix(entry.POLICY["export_xml_option"])).write_text(xml)
                         elif entry.POLICY["publication_filter"] in argv:
                             self.assertTrue(publish)
@@ -108,13 +109,21 @@ class EntryQualificationTests(unittest.TestCase):
                     elif entry.POLICY["output_option"] in argv:
                         self.assertIn(entry.POLICY["sysroot_option"], argv)
                         self.assertEqual(argv[argv.index(entry.POLICY["sysroot_option"]) + 1], CASES["sdk_path"])
+                        if label.endswith(entry.POLICY["baseline_suffix"] + entry.native.POLICY["compile_suffix"]):
+                            dwarf = CASES["dwarf_name_fragment"] in label
+                            layout = entry.publication_layout(
+                                next(opt for opt in entry.POLICY["optimizations"] if opt in argv), dwarf, zero_base)
+                            for argument in layout["header_args"]:
+                                self.assertIn(argument, argv)
                         Path(argv[-1]).write_text(CASES["binary_bytes"])
                     elif label == entry.POLICY["sdk_label"]:
                         stdout = CASES["sdk_path"]
                     elif label.endswith(entry.native.POLICY["disassembly_suffix"]):
                         stdout = (CASES["inspection_assembly"] if entry.POLICY["inspection_suffix"] in label else CASES["assembly"])
                     elif label.endswith(entry.POLICY["sections_suffix"]):
-                        stdout = CASES["sections_dwarf"] if CASES["dwarf_name_fragment"] in label else CASES["sections_compact"]
+                        original = label.endswith(entry.POLICY["baseline_suffix"] + entry.POLICY["sections_suffix"])
+                        stdout = CASES["nonzero_text_base"] if original and not zero_base else CASES["text_base"]
+                        stdout += CASES["sections_dwarf"] if CASES["dwarf_name_fragment"] in label else CASES["sections_compact"]
                     elif label.endswith(entry.POLICY["unwind_suffix"]):
                         stdout = CASES["unwind_dwarf"] if CASES["dwarf_name_fragment"] in label else CASES["unwind_compact"]
                     elif argv[0] == str(output / entry.POLICY["loader_binary"]):
@@ -137,19 +146,36 @@ class EntryQualificationTests(unittest.TestCase):
                         mock.patch.object(entry.native, "command", side_effect=command):
                     if fail:
                         with self.assertRaises(subprocess.CalledProcessError):
-                            entry.run(output, binary, compiler, probe, producer=producer, publish=publish)
+                            entry.run(output, binary, compiler, probe, producer=producer, publish=publish, zero_base=zero_base)
                     else:
                         entry.run(output, binary, compiler, None if compile_only else probe,
-                                  compile_only=compile_only, producer=producer, publish=publish)
+                                  compile_only=compile_only, producer=producer, publish=publish, zero_base=zero_base)
                 report = json.loads((output / entry.POLICY["report_name"]).read_text())
                 self.assertEqual(report["native_reconstructed_entry_qualified"], not compile_only and not fail)
                 self.assertEqual(report["neverd_codegen_qualified"], backend and not compile_only and not fail)
                 self.assertEqual(report["reconstructed_entry_publication_qualified"], publish and not compile_only and not fail)
                 self.assertFalse(report["native_apple_cpta_qualified"])
                 self.assertFalse(report["whole_image_publication_qualified"])
+                for row in report["cases"]:
+                    layout = entry.publication_layout(row["optimization"], row["dwarf"], zero_base)
+                    self.assertEqual(row["publication_layout"], layout if publish else None)
+                    original_opt = entry.POLICY["zero_base_original_optimization"] if zero_base else row["optimization"]
+                    self.assertEqual(row["original_entry_optimization"], original_opt if publish else None)
                 self.assertEqual(len(executed), 0 if compile_only else 1 if fail else CASES["case_count"])
                 for path in output.iterdir():
                     self.assertNotIn(path.suffix, (".out", ".o", ".dylib"))
+
+    def test_unwind_index_uses_the_mach_header_address(self):
+        base = entry.image_base(CASES["nonzero_text_base"])
+        text = CASES["unwind_regular_dwarf"]
+        shifted = {name: base + int(address, entry.POLICY["hex_radix"])
+                   for address, name in re.findall(entry.POLICY["symbol_pattern"], text, re.MULTILINE)}
+        entry.check_unwind(text, True, shifted, base)
+        with self.assertRaises(ValueError):
+            entry.check_unwind(text, True, shifted)
+        for invalid in ("", CASES["text_base"] + CASES["nonzero_text_base"]):
+            with self.assertRaises(ValueError):
+                entry.image_base(invalid)
 
     def test_receipt_cannot_omit_duplicate_or_alias_entries(self):
         entry.check_receipt(CASES["receipt"])
@@ -170,6 +196,28 @@ class EntryQualificationTests(unittest.TestCase):
         for receipt in variants:
             with self.subTest(receipt=receipt), self.assertRaises(ValueError):
                 entry.check_receipt(receipt)
+
+    def test_dense_receipt_authenticates_original_and_output_entries(self):
+        receipt = json.loads(json.dumps(CASES["receipt"]))
+        slide = receipt["text"]["address"]
+        with self.assertRaises(ValueError):
+            entry.check_receipt(receipt, require_slide=True)
+        receipt[entry.POLICY["slide_field"]] = slide
+        for row in receipt["entries"]:
+            row[entry.POLICY["trampoline_field"]] = row["original"] + slide
+        entry.check_receipt(receipt, require_slide=True)
+        row = receipt["entries"][-1]
+        row[entry.POLICY["trampoline_field"]] = row["original"]
+        with self.assertRaises(ValueError):
+            entry.check_receipt(receipt, require_slide=True)
+
+    def test_independent_fixups_preserve_slots_targets_and_signing(self):
+        original, installed = CASES["original_fixups"], CASES["installed_fixups"]
+        counts = entry.check_slid_fixups(original, installed, CASES["fixup_slide"])
+        self.assertEqual(counts, dict.fromkeys(entry.POLICY["dense_fixup_kinds"], 1))
+        for old, new in CASES["bad_fixup_replacements"]:
+            with self.subTest(old=old), self.assertRaises(ValueError):
+                entry.check_slid_fixups(original, installed.replace(old, new), CASES["fixup_slide"])
 
     def test_installed_frames_require_the_receipt_addresses(self):
         functions = entry.check_receipt(CASES["receipt"])

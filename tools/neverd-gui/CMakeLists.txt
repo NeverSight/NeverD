@@ -20,17 +20,17 @@ if(NOT TARGET neverd-plugin-host)
     "${CMAKE_CURRENT_BINARY_DIR}/plugin-cli")
 endif()
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets Network LinguistTools Svg
+find_package(Qt6 6.12 REQUIRED COMPONENTS Core Gui Widgets Network LinguistTools Svg
   Sql Concurrent)
-# Qt 6.8 exports private targets from the public module packages. Newer Qt
-# releases ship separate private packages; KDDockWidgets needs the matching
-# private headers in either layout.
+# Resolve the matching private packages when the public module packages do
+# not export their targets. KDDockWidgets and the Wayland integration require
+# private headers from the exact Qt build shipped with the application.
 foreach(_neverd_private_module Gui Widgets)
   if(NOT TARGET Qt6::${_neverd_private_module}Private)
-    find_package(Qt6 6.8 REQUIRED COMPONENTS ${_neverd_private_module}Private)
+    find_package(Qt6 6.12 REQUIRED COMPONENTS ${_neverd_private_module}Private)
   endif()
 endforeach()
-qt_standard_project_setup(REQUIRES 6.8)
+qt_standard_project_setup(REQUIRES 6.12)
 include(FetchContent)
 set(KDDockWidgets_FRONTENDS "qtwidgets" CACHE STRING "" FORCE)
 set(KDDockWidgets_QT6 ON CACHE BOOL "" FORCE)
@@ -176,7 +176,7 @@ if(BUILD_TESTING)
       -o "${_neverd_gui_ci_log_dir}/units.txt,txt"
       -o "-,txt")
   endif()
-  find_package(Qt6 6.8 REQUIRED COMPONENTS Test)
+  find_package(Qt6 6.12 REQUIRED COMPONENTS Test)
   if(NEVERD_WORKER_REAL_ENGINE_TESTS)
     qt_add_executable(neverd-gui-lineage-tests tests/LineageTests.cpp)
     target_link_libraries(neverd-gui-lineage-tests PRIVATE neverd_gui_app Qt6::Test)
@@ -378,6 +378,18 @@ if(BUILD_TESTING)
     # bounded operation deadlines; this limit only ends a hung run.
     set_tests_properties(NeverDGuiController PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 1800)
+    # A view that repaints the rows a change reaches relies on a row keeping
+    # to itself where the display's scale is no whole number and its edges
+    # round: the same tests at such a scale.
+    add_test(NAME NeverDGuiPaintedRowsScaled COMMAND neverd-gui-tests
+      aChangePaintsTheRowsItReachesAndNoOther
+      aBracketsPartnerIsPaintedAgainInItsOwnRow
+      aRowIsPaintedAgainForItsNumberItsMarkOrItsPlaceAlone
+      aChangeToTheListingPaintsTheRowsItReachesAndNoOther
+      aPatchedItemsRowIsPaintedOnceItsPatchIsKnown
+      theViewsThatShowAnEditGoAheadOfTheOthersAtItsRevision)
+    set_tests_properties(NeverDGuiPaintedRowsScaled PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1.25" TIMEOUT 180)
     qt_add_executable(neverd-gui-patch-tests tests/PatchTests.cpp)
     target_link_libraries(neverd-gui-patch-tests PRIVATE neverd_gui_app Qt6::Test)
     target_compile_definitions(neverd-gui-patch-tests PRIVATE

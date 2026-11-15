@@ -1484,6 +1484,62 @@ SymRef detail::completeComplementarySums(SymContext &Ctx, SymRef Root,
 
 namespace {
 
+// For one pair of inputs the 01 and 10 rows of AND, OR and XOR agree.
+// Their weighted sum is X + Y when each one-set row weighs one and the
+// both-set row weighs two. Each column then has the same contribution at
+// full word width, including carries. Disjoint pairs can be added directly.
+SymRef independentPairSum(SymContext &Ctx, llvm::ArrayRef<SymRef> Terms,
+                          llvm::ArrayRef<SymRef> Inputs, size_t Words,
+                          WorkBudget &Budget) {
+  if (Inputs.size() < 2 || (Inputs.size() & 1) || Inputs.size() > Terms.size())
+    return {};
+  struct PairWeights {
+    SymRef X, Y;
+    llvm::APInt One, Both;
+  };
+  llvm::SmallVector<PairWeights, 4> Pairs;
+  const unsigned Width = Ctx.width(Inputs.front());
+  for (auto T : Terms) {
+    // The tail collector admitted only unscaled terms or one literal
+    // coefficient multiplying a single bitwise term.
+    const bool Scaled = Ctx.op(T) == SymOp::Mul;
+    auto B = Scaled ? Ctx.operand(T, 1) : T;
+    const auto Op = Ctx.op(B);
+    if ((Op != SymOp::And && Op != SymOp::Or && Op != SymOp::Xor) ||
+        Ctx.numOperands(B) != 2)
+      return {};
+    auto X = Ctx.operand(B, 0), Y = Ctx.operand(B, 1);
+    if (!Ctx.isVar(X) || !Ctx.isVar(Y) ||
+        !Budget.consume(Pairs.size() + 2 * Words + 1))
+      return {};
+    if (Y < X)
+      std::swap(X, Y);
+    auto P = llvm::find_if(Pairs, [&](const PairWeights &Row) {
+      return Row.X == X && Row.Y == Y;
+    });
+    if (P == Pairs.end()) {
+      // At most one accumulator per input fits the tail's word storage.
+      if (Pairs.size() == Inputs.size() / 2)
+        return {};
+      Pairs.push_back({X, Y, llvm::APInt(Width, 0), llvm::APInt(Width, 0)});
+      P = std::prev(Pairs.end());
+    }
+    auto C = Scaled ? Ctx.constValue(Ctx.operand(T, 0)) : llvm::APInt(Width, 1);
+    if (Op != SymOp::And)
+      P->One += C;
+    if (Op != SymOp::Xor)
+      P->Both += C;
+  }
+  // Every input occurs in a pair. Two distinct input slots per pair
+  // therefore also proves that no input occurs in a second pair.
+  if (Pairs.size() * 2 != Inputs.size() ||
+      !llvm::all_of(Pairs, [](const PairWeights &P) {
+        return P.One.isOne() && P.Both == 2;
+      }))
+    return {};
+  return Ctx.mkAdd(Inputs);
+}
+
 // Read a small linear tail separately from a large product frontier. Those
 // summands remain additive even when the nonlinear terms use the same inputs.
 // This is a decomposition of the sum, not an independence assumption.
@@ -1533,34 +1589,50 @@ SymRef simplifyLinearTail(
     return Root;
   // Own every reference before interning the reduced tail can grow the arena.
   llvm::SmallVector<SymRef, 8> Linear, Other, Pending;
-  for (SymRef Term : Ctx.operands(Root)) {
-    SymRef Body = Unscaled(Term);
-    if (Ctx.op(Body) == SymOp::Mul)
-      Other.push_back(Term);
-    else {
-      Linear.push_back(Term);
-      Pending.push_back(Body);
-    }
-  }
   llvm::SmallVector<SymRef, 4> Inputs;
-  while (!Pending.empty()) {
-    SymRef R = Pending.pop_back_val();
-    if (Ctx.isConst(R))
-      continue;
-    if (Ctx.isVar(R)) {
-      if (!llvm::is_contained(Inputs, R))
-        Inputs.push_back(R);
-      continue;
+  auto CollectBitwise = [&](SymRef Body) {
+    Pending.clear();
+    Pending.push_back(Body);
+    while (!Pending.empty()) {
+      const SymRef R = Pending.pop_back_val();
+      if (Ctx.isConst(R))
+        continue;
+      if (Ctx.isVar(R)) {
+        if (!llvm::is_contained(Inputs, R))
+          Inputs.push_back(R);
+        continue;
+      }
+      const auto Op = Ctx.op(R);
+      if (Op != SymOp::And && Op != SymOp::Or && Op != SymOp::Xor &&
+          Op != SymOp::Not)
+        return false;
+      Pending.append(Ctx.operands(R).begin(), Ctx.operands(R).end());
     }
-    auto Op = Ctx.op(R);
-    if (Op != SymOp::And && Op != SymOp::Or && Op != SymOp::Xor &&
-        Op != SymOp::Not)
-      return Root;
-    Pending.append(Ctx.operands(R).begin(), Ctx.operands(R).end());
+    return true;
+  };
+  for (SymRef Term : Ctx.operands(Root)) {
+    const SymRef Body = Unscaled(Term);
+    const size_t Before = Inputs.size();
+    if (Ctx.op(Body) != SymOp::Mul && CollectBitwise(Body)) {
+      Linear.push_back(Term);
+    } else {
+      // A compound arithmetic word is an exact additive remainder. Its
+      // variables do not belong to the bitwise sum being simplified.
+      Inputs.resize(Before);
+      Other.push_back(Term);
+    }
   }
-  auto Tail = Ctx.mkAdd(Linear);
+  if (Linear.size() < detail::limits::kMinLinearTailSummands)
+    return Root;
   MBAOptions Inner = Opts;
   Inner.MaxTableBytes -= Storage;
+  if (Ctx.width(Root) > 64 && resolveLimits(Inner).MaxAtoms >= 2) {
+    if (auto Sum = independentPairSum(Ctx, Linear, Inputs, Words, Budget)) {
+      Other.push_back(Sum);
+      Rep.NumAtoms = std::max(Rep.NumAtoms, 2u);
+      return Ctx.mkAdd(Other);
+    }
+  }
   SolveReport Report;
   if (Inputs.size() > detail::limits::kMaxLinearTailInputs) {
     // Preserve the per-region arity bound, but let disjoint small kernels
@@ -1568,6 +1640,7 @@ SymRef simplifyLinearTail(
     Inner.MaxAtoms = std::min(resolveLimits(Inner).MaxAtoms,
                               detail::limits::kMaxLinearTailInputs);
   }
+  auto Tail = Ctx.mkAdd(Linear);
   const SymRef Reduced = solveOneRegion(Ctx, Tail, Inner, Budget, Report);
   Rep.BudgetExhausted |= Report.BudgetExhausted;
   Rep.NumAtoms = std::max(Rep.NumAtoms, Report.NumAtoms);
@@ -1575,6 +1648,56 @@ SymRef simplifyLinearTail(
     return Root;
   Other.push_back(Reduced);
   auto Candidate = Ctx.mkAdd(Other);
+  return readingScore(Ctx, Candidate) < readingScore(Ctx, Root) ? Candidate
+                                                                : Root;
+}
+
+// At every bit, OR and AND count the two input bits exactly once each.
+// Replace matched binary views even when unrelated summands share the root.
+SymRef collectDualSummands(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
+                           size_t Storage) {
+  if (Ctx.op(Root) != SymOp::Add)
+    return Root;
+  const size_t N = Ctx.numOperands(Root);
+  if (N > limits::kMaxResidueBaseTerms || N * 2 * sizeof(SymRef) > Storage)
+    return Root;
+  const auto Terms = Ctx.operands(Root);
+  if (!llvm::any_of(Terms, [&](SymRef T) {
+        return Ctx.op(T) == SymOp::Or && Ctx.numOperands(T) == 2;
+      }))
+    return Root;
+  llvm::SmallVector<SymRef, limits::kMaxResidueBaseTerms> Combined(Terms);
+  const size_t MaxEdges = Storage / (2 * sizeof(SymRef)) - N;
+  size_t ExtraEdges = 0;
+  bool Changed = false;
+  for (auto &A : Combined) {
+    if (Ctx.op(A) != SymOp::And || Ctx.numOperands(A) != 2)
+      continue;
+    if (!Budget.canConsume(N))
+      break;
+    Budget.consume(N);
+    const auto B = llvm::find_if(Combined, [&](SymRef R) {
+      return Ctx.op(R) == SymOp::Or && Ctx.operands(R) == Ctx.operands(A);
+    });
+    if (B != Combined.end()) {
+      const auto Args = Ctx.operands(A);
+      for (auto Operand : Args) {
+        if (Ctx.op(Operand) != SymOp::Add)
+          continue;
+        const size_t Edges = Ctx.numOperands(Operand);
+        if (Edges > MaxEdges - ExtraEdges)
+          return Root;
+        ExtraEdges += Edges;
+      }
+      A = Args.front();
+      *B = Args.back();
+      Changed = true;
+    }
+  }
+  if (!Changed || !Budget.canConsume(ExtraEdges))
+    return Root;
+  Budget.consume(ExtraEdges);
+  const auto Candidate = Ctx.mkAdd(Combined);
   return readingScore(Ctx, Candidate) < readingScore(Ctx, Root) ? Candidate
                                                                 : Root;
 }
@@ -1984,8 +2107,10 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
                          /*SingleProductOnly=*/true);
   SymRef Prepared =
       foldProductValuations(Ctx, EarlyTail, Budget, ValuationStorage);
-  if (EarlyTail == E && Budget.MultipleResidueAttempts != ResidueAttempts &&
-      !Budget.exhausted()) {
+  if (EarlyTail == E && !Budget.exhausted() &&
+      (Budget.MultipleResidueAttempts != ResidueAttempts ||
+       (Prepared != E &&
+        hasCompletedResidueReading(Ctx, Prepared, Budget, true)))) {
     // Retain the cheap linear tail before walking a newly synthesized product
     // reading. Its generated bit selectors may no longer expose the original
     // high-degree boundary used to recognize that independent tail.
@@ -2229,6 +2354,13 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
         Rebuilt = Ctx.rebuild(R, NewOps);
     }
 
+    // Rebuilding a proved product after shortening its children preserves
+    // its full value. Keep its residue proof available to the parent sum.
+    if (Rebuilt != R && Ctx.op(R) == SymOp::Mul &&
+        Ctx.op(Rebuilt) == SymOp::Mul &&
+        isReconstructedProgression(Ctx, R, Budget))
+      recordReconstructedProgression(Ctx, Rebuilt, Budget, RefinementStorage);
+
     RebuiltInput = Rebuilt;
     if (hasCompletedResidueReading(Ctx, R, Budget, true)) {
       // These nodes were just emitted from an exact observed-word proof.
@@ -2387,6 +2519,15 @@ MBAResult detail::MBADeepSimplifier::run(SymContext &Ctx, SymRef E,
     SymRef Finished = finishLocalReadings(Ctx, Out, Budget, RefinementStorage);
     if (doesNotGrow(Ctx, Finished, Out))
       Out = Finished;
+  }
+  if (!Budget.exhausted())
+    Out = collectDualSummands(Ctx, Out, Budget, RefinementStorage);
+  if (Prepared != EarlyTail && !Budget.exhausted()) {
+    SolveReport Parity;
+    Out =
+        foldResidueParitySum(Ctx, Out, Opts, Budget, RefinementStorage, Parity);
+    Result.NumAtoms = std::max(Result.NumAtoms, Parity.NumAtoms);
+    Skipped |= Parity.BudgetExhausted;
   }
   Result.Work = Budget.used() - WorkStart;
 

@@ -53,6 +53,12 @@
 
 namespace neverd {
 
+namespace c_stack {
+#define C_STACK_TEXT(Name, Text)                                               \
+  inline constexpr llvm::StringLiteral Name = Text;
+#include "neverd/backend/c/render/CStackIntrinsic.def"
+} // namespace c_stack
+
 /// The attribute that spells \p CC on a declaration, empty for none.
 llvm::StringRef debugCallConvAttribute(DebugCallConv CC);
 
@@ -1291,7 +1297,7 @@ public:
   std::map<std::tuple<Intrinsic, uint32_t, NdMemoryAddressSpace>, std::string>
       X87ContextHelperNames;
   std::map<std::pair<Intrinsic, unsigned>, std::string> X86FPStateHelpers;
-  std::map<Intrinsic, std::string> MIPSScalarHelpers;
+  std::map<std::pair<Intrinsic, unsigned>, std::string> MIPSScalarHelpers;
   bool UsesX87Extended = false;
   /// Checked addition of the dynamic frame's outgoing call storage.
   std::string StackAllocationSizeHelper;
@@ -1300,6 +1306,12 @@ public:
   /// narrower than its storage on a little-endian target, none when only
   /// the byte-order-aware helper reads it.
   std::optional<unsigned> inlineMemoryBytes(llvm::StringRef Type) const;
+  /// Whether plain accesses of the C memory type \p Type go through its load
+  /// and store helpers, which copy with memcpy: when no access copies it
+  /// inline (inlineMemoryBytes).
+  bool accessesThroughHelpers(llvm::StringRef Type) const {
+    return !inlineMemoryBytes(Type);
+  }
   /// An x87 extended value: what `long double` holds.
   static bool isX87Value(const HighExpr &E);
   /// The x87 helper \p E prints through, if any.

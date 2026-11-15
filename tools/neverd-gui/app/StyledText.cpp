@@ -20,6 +20,23 @@ bool isWideCharacter(char32_t code) {
 #include "neverd/support/WideCharacters.def"
   return false;
 }
+
+/// The character format that colors text \p color: one object for all the
+/// spans of a color, which share it, where each span built its own.
+const QTextCharFormat &formatOf(const QColor &color) {
+  // The few colors of the themes in use; a view lays lines out on the GUI
+  // thread alone.
+  static QVector<std::pair<QColor, QTextCharFormat>> formats;
+  for (const auto &[held, format] : std::as_const(formats))
+    if (held == color)
+      return format;
+  if (formats.size() >= ::neverd::limits::gui_config::kStyledTextFormatsKept)
+    formats.clear();
+  QTextCharFormat format;
+  format.setForeground(color);
+  formats.append({color, format});
+  return formats.back().second;
+}
 } // namespace
 
 bool isTokenCharacter(QChar c) {
@@ -101,6 +118,14 @@ QString StyledLine::tokenAt(int position, TokenDots dots) const {
   return text.mid(begin, end - begin);
 }
 
+bool StyledLine::adoptLayout(StyledLine &other) {
+  if (!other.layout_ || text != other.text || spans != other.spans)
+    return false;
+  layout_ = std::move(other.layout_);
+  stamp_ = other.stamp_;
+  return true;
+}
+
 QTextLayout &StyledLine::layout(const QFont &font, quint64 stamp,
                                 const ColorOf &colorOf) const {
   if (layout_ && stamp_ == stamp)
@@ -109,18 +134,9 @@ QTextLayout &StyledLine::layout(const QFont &font, quint64 stamp,
   layout_->setCacheEnabled(true);
   QList<QTextLayout::FormatRange> formats;
   formats.reserve(spans.size() + 1);
-  QTextLayout::FormatRange base;
-  base.start = 0;
-  base.length = text.size();
-  base.format.setForeground(colorOf(0));
-  formats.append(base);
-  for (const auto &span : spans) {
-    QTextLayout::FormatRange range;
-    range.start = span.start;
-    range.length = span.length;
-    range.format.setForeground(colorOf(span.role));
-    formats.append(range);
-  }
+  formats.append({0, int(text.size()), formatOf(colorOf(0))});
+  for (const auto &span : spans)
+    formats.append({span.start, span.length, formatOf(colorOf(span.role))});
   layout_->setFormats(formats);
   QTextOption option;
   option.setWrapMode(QTextOption::NoWrap);

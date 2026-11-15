@@ -42,11 +42,11 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
   if (Header.e_type != ET_EXEC && Header.e_type != ET_DYN)
     return profileError("only linked ET_EXEC/ET_DYN files are supported");
   const uint32_t Flags = Header.e_flags;
-  if (Flags & EF_MIPS_ABI2)
-    return profileError("n32 ABI is not supported");
-  if (ELFT::Is64Bits && (Flags & EF_MIPS_MICROMIPS))
-    return profileError("microMIPS64 encoding is not supported");
-  if (ELFT::Is64Bits && (Flags & EF_MIPS_ARCH_ASE_M16))
+  const bool N32 = Flags & EF_MIPS_ABI2;
+  if (N32 && (ELFT::Is64Bits || (Flags & (EF_MIPS_ABI | EF_MIPS_32BITMODE))))
+    return profileError("n32 requires ELF32 with 64-bit registers and ABI2");
+  const bool Wide = ELFT::Is64Bits || N32;
+  if (Wide && (Flags & EF_MIPS_ARCH_ASE_M16))
     return profileError("MIPS16 64-bit encoding is not supported");
   if ((Flags & EF_MIPS_MICROMIPS) && (Flags & EF_MIPS_ARCH_ASE_M16))
     return profileError("conflicting microMIPS and MIPS16 capabilities");
@@ -55,24 +55,36 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
        EF_MIPS_MACH))
     return profileError("vendor/ASE profile is not supported");
   const uint32_t ISA = Flags & EF_MIPS_ARCH;
-  if (ISA != (ELFT::Is64Bits ? EF_MIPS_ARCH_64R2 : EF_MIPS_ARCH_32R2))
-    return profileError("requires matching ELF32/MIPS32r2 or ELF64/MIPS64r2");
-  if ((Flags & EF_MIPS_ABI) != (ELFT::Is64Bits ? 0u : EF_MIPS_ABI_O32) ||
+  const unsigned Historical = ISA <= EF_MIPS_ARCH_5 ? (ISA >> 28) + 1 : 0;
+  const bool R6 = ISA == (Wide ? EF_MIPS_ARCH_64R6 : EF_MIPS_ARCH_32R6);
+  if (Historical &&
+      (Historical < 4 || !Wide ||
+       (Flags & (EF_MIPS_MICROMIPS | EF_MIPS_ARCH_ASE_M16 | EF_MIPS_NAN2008))))
+    return profileError("historical ISA requires classic MIPS IV/V n32/n64");
+  if (!Historical && !R6 &&
+      ISA != (Wide ? EF_MIPS_ARCH_64R2 : EF_MIPS_ARCH_32R2))
+    return profileError(
+        "requires matching ELF class and MIPS32/MIPS64 r2 or r6");
+  if ((Flags & EF_MIPS_ABI) != (Wide ? 0u : EF_MIPS_ABI_O32) ||
       (Flags & EF_MIPS_32BITMODE))
-    return profileError("requires ELF32/o32 or ELF64/n64 ABI");
-  constexpr uint32_t KnownFlags = EF_MIPS_NOREORDER | EF_MIPS_PIC |
-                                  EF_MIPS_CPIC | EF_MIPS_ABI | EF_MIPS_FP64 |
-                                  EF_MIPS_NAN2008 | EF_MIPS_ARCH |
-                                  EF_MIPS_MICROMIPS | EF_MIPS_ARCH_ASE_M16;
+    return profileError("requires ELF32/o32, ELF32/n32 or ELF64/n64 ABI");
+  constexpr uint32_t KnownFlags =
+      EF_MIPS_NOREORDER | EF_MIPS_PIC | EF_MIPS_CPIC | EF_MIPS_ABI2 |
+      EF_MIPS_ABI | EF_MIPS_FP64 | EF_MIPS_NAN2008 | EF_MIPS_ARCH |
+      EF_MIPS_MICROMIPS | EF_MIPS_ARCH_ASE_M16;
   if (Flags & ~KnownFlags)
     return profileError("unrecognized ELF flags");
 
   MIPSImageMetadata Profile;
-  Profile.ABI = ELFT::Is64Bits ? MIPSABI::N64 : MIPSABI::O32;
+  Profile.ABI = N32 ? MIPSABI::N32 : Wide ? MIPSABI::N64 : MIPSABI::O32;
   Profile.ELFFlags = Flags;
+  Profile.ISARevision = Historical ? 0 : R6 ? 6 : 2;
+  Profile.HistoricalISA = Historical;
   Profile.HasMicroMIPS = Flags & EF_MIPS_MICROMIPS;
   Profile.HasMIPS16 = Flags & EF_MIPS_ARCH_ASE_M16;
   const bool Compressed = Profile.HasMicroMIPS || Profile.HasMIPS16;
+  if (R6 && Profile.HasMIPS16)
+    return profileError("Release 6 compressed profile is unsupported");
   const auto CompressedMode =
       Profile.HasMIPS16 ? InstructionMode::MIPS16 : InstructionMode::MicroMIPS;
   const auto AddEntry = [&](uint64_t Address,
@@ -219,30 +231,54 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
     if (llvm::support::endian::read16<ELFT::Endianness>(Bytes.data()) != 0)
       return profileError("unsupported .MIPS.abiflags version");
     const uint32_t ASE = Read32(12);
+    if (Historical && ASE)
+      return profileError(
+          "historical ISA does not admit release-based extensions");
     Profile.HasMIPS16E2 = ASE & kMIPS16E2ASE;
     if (Profile.HasMIPS16E2 && !Profile.HasMIPS16)
       return profileError("MIPS16e2 requires MIPS16 encoding capability");
+    Profile.HasMT = ASE & llvm::Mips::AFL_ASE_MT;
+    if (Profile.HasMT && (!Profile.HasMIPS16E2 || Wide))
+      return profileError("MT currently requires MIPS16e2/o32");
+    Profile.HasDSPR2 = ASE & llvm::Mips::AFL_ASE_DSPR2;
+    Profile.HasDSP = Profile.HasDSPR2 || (ASE & llvm::Mips::AFL_ASE_DSP);
     Profile.HasMSA = ASE & llvm::Mips::AFL_ASE_MSA;
+    const uint32_t AllowedXPA = R6 ? uint32_t(llvm::Mips::AFL_ASE_XPA) : 0u;
+    if (R6 && (ASE & ~(AllowedXPA | llvm::Mips::AFL_ASE_MICROMIPS)))
+      return profileError("unsupported Release 6 extension profile");
     if (Profile.HasMSA &&
-        (ELFT::Is64Bits || Compressed || (ASE & llvm::Mips::AFL_ASE_DSP) ||
-         Bytes[3] != 5 || Bytes[5] != 3 || Bytes[7] != 6))
-      return profileError("MSA requires classic MIPS32r5/o32 FP64 profile");
-    if (Bytes[2] != (ELFT::Is64Bits ? 64 : 32) ||
-        Bytes[3] != (Profile.HasMSA ? 5 : 2) ||
-        Bytes[4] != (ELFT::Is64Bits ? 2 : 1))
+        (Profile.HasMIPS16 || Profile.HasDSP || Bytes[3] != 5 ||
+         Bytes[5] != 3 || Bytes[7] != (Wide ? 1 : 6)))
+      return profileError("MSA requires r5 with 128-bit CPR1 and o32 FP64 or "
+                          "n32/n64 hard double");
+    if (Bytes[7] == (Wide ? 1 : 6) && Bytes[5] != (Profile.HasMSA ? 3 : 2))
+      return profileError("FP64 hard-float ABI requires matching CPR1 width");
+    if (!Wide && Bytes[7] == 1 &&
+        (R6 || Bytes[5] != 1 || (Flags & EF_MIPS_FP64)))
+      return profileError(
+          "FP32 hard-float ABI requires pre-R6 and 32-bit CPR1");
+    if (Bytes[2] != (Historical ? Historical
+                     : Wide     ? 64
+                                : 32) ||
+        Bytes[3] != (Historical       ? 0
+                     : R6             ? 6
+                     : Profile.HasMSA ? 5
+                                      : 2) ||
+        Bytes[4] != (Wide ? 2 : 1))
       return profileError("ABI flags conflict with the admitted GPR profile");
     if (Bytes[5] > (Profile.HasMSA ? 3 : 2) || Bytes[6] != 0 || Bytes[7] > 7 ||
         Read32(8) != 0 ||
-        (ASE &
-         ~(llvm::Mips::AFL_ASE_DSP | llvm::Mips::AFL_ASE_MSA | kMIPS16E2ASE)) !=
+        (ASE & ~(llvm::Mips::AFL_ASE_DSP | llvm::Mips::AFL_ASE_DSPR2 |
+                 llvm::Mips::AFL_ASE_MSA | llvm::Mips::AFL_ASE_MT |
+                 kMIPS16E2ASE | AllowedXPA)) !=
             (Profile.HasMicroMIPS ? llvm::Mips::AFL_ASE_MICROMIPS
              : Profile.HasMIPS16  ? llvm::Mips::AFL_ASE_MIPS16
                                   : 0u) ||
         (Read32(16) & ~1u) != 0 || Read32(20) != 0)
       return profileError("unsupported ABI flags or instruction extensions");
-    Profile.HasDSP = ASE & llvm::Mips::AFL_ASE_DSP;
-    if (Profile.HasDSP && (ELFT::Is64Bits || Compressed))
-      return profileError("DSP currently requires classic MIPS32r2/o32");
+
+    if (Profile.HasDSP && Profile.HasMIPS16)
+      return profileError("DSP is unavailable in MIPS16 mode");
     Profile.ISARevision = Bytes[3];
     Profile.HasABIFlags = true;
     Profile.FPABI = Bytes[7];

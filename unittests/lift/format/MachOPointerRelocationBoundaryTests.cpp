@@ -27902,6 +27902,163 @@ TEST(LLVMDataPointerInvariantBoundary,
         }
 }
 
+TEST(LLVMDataPointerInvariantBoundary,
+     FrameDomainAdmitsOnlyFaultChecksOfFrameAddresses) {
+  // A runtime-indexed scalar store may alias an exact frame slot, so the reload
+  // of that slot is proved by the frame-domain audit.  A check that only
+  // faults on a frame address (the alignment precondition of
+  // `movaps %xmm0, -0x18(%rsp)`) writes no memory and passes the address
+  // nowhere, so it leaves the domain pure.  An intrinsic that writes through a
+  // frame address, a fault check that defines a value, and a pointer stored
+  // into the domain keep it unproved.
+  enum class Scenario {
+    NoIntrinsic,
+    AlignmentCheck,
+    GuardedAlignmentCheck,
+    DynamicSlotAlignmentCheck,
+    AlignmentCheckWithOutput,
+    NonEnumIdentifier,
+    WritingIntrinsic,
+    AlignmentCheckAndPointerStore,
+  };
+  auto makeLookup = [](Arch TargetArch, Scenario Case) {
+    const TargetRegInfo &TRI = getTargetRegInfo(TargetArch);
+    const uint16_t PointerSize = static_cast<uint16_t>(TRI.PointerSize);
+    auto makeVar = [&](MedVar::VarKind Kind, int Id, uint16_t Size) {
+      MedVar V;
+      V.Kind = Kind;
+      V.TheArch = TargetArch;
+      V.Id = Id;
+      V.SSAVer = Kind == MedVar::Param ? 0 : 1;
+      V.Size = Size;
+      return V;
+    };
+
+    MedFunc Func;
+    Func.Entry = CallerVA;
+    Func.Name = "frame_domain_fault_only_check";
+    Func.ReturnType = NdType::makeVoid();
+    Func.FrameSize = 16;
+
+    MedVar Index = makeVar(MedVar::Param, 0, PointerSize);
+    Index.RegOff = TRI.IntParamRegs[0];
+    MedVar Byte = makeVar(MedVar::Param, 1, 1);
+    Byte.RegOff = TRI.IntParamRegs[1];
+    Func.Params = {Index, Byte};
+
+    MedVar SP = makeVar(MedVar::Reg, 100, PointerSize);
+    SP.SSAVer = 0;
+    SP.RegOff = TRI.StackPointer;
+    MedVar ExactSlot = makeVar(MedVar::Temp, 1, PointerSize);
+    MedVar DynamicSlot = makeVar(MedVar::Temp, 2, PointerSize);
+    MedVar Reloaded = makeVar(MedVar::Temp, 3, 1);
+
+    MedBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = CallerVA;
+    Block.EndAddr = CallerVA + 0x18;
+    MedOp FormExactSlot;
+    FormExactSlot.Opcode = NdOp::INT_ADD;
+    FormExactSlot.Output = ExactSlot;
+    FormExactSlot.addInput(SP);
+    FormExactSlot.addInput(MedVar::makeConst(
+        uint64_t(-8), PointerSize, ConstantAddressProvenance::Scalar));
+    Block.Ops.push_back(std::move(FormExactSlot));
+
+    MedOp FormDynamicSlot;
+    FormDynamicSlot.Opcode = NdOp::INT_ADD;
+    FormDynamicSlot.Output = DynamicSlot;
+    FormDynamicSlot.addInput(ExactSlot);
+    FormDynamicSlot.addInput(Index);
+    Block.Ops.push_back(std::move(FormDynamicSlot));
+
+    if (Case != Scenario::NoIntrinsic) {
+      MedOp Check;
+      Check.Opcode = NdOp::INTRINSIC;
+      Intrinsic Id = Intrinsic::RequireAligned;
+      if (Case == Scenario::WritingIntrinsic)
+        Id = Intrinsic::Fxsave;
+      // An identifier outside the 16-bit enumeration is not this intrinsic,
+      // whatever its low bits are.
+      const uint64_t Encoded =
+          static_cast<uint64_t>(Id) |
+          (Case == Scenario::NonEnumIdentifier ? uint64_t{1} << 32 : 0);
+      Check.addInput(MedVar::makeConst(
+          Encoded, Case == Scenario::NonEnumIdentifier ? 8 : 2,
+          ConstantAddressProvenance::Scalar));
+      Check.addInput(Case == Scenario::DynamicSlotAlignmentCheck ? DynamicSlot
+                                                                 : ExactSlot);
+      if (Case != Scenario::WritingIntrinsic)
+        Check.addInput(
+            MedVar::makeConst(16, 8, ConstantAddressProvenance::Scalar));
+      if (Case == Scenario::GuardedAlignmentCheck)
+        Check.addInput(Byte);
+      if (Case == Scenario::AlignmentCheckWithOutput)
+        Check.Output = makeVar(MedVar::Temp, 5, 1);
+      Block.Ops.push_back(std::move(Check));
+    }
+
+    MedOp Reload;
+    Reload.Opcode = NdOp::LOAD;
+    Reload.Output = Reloaded;
+    Reload.addInput(ExactSlot);
+    Block.Ops.push_back(std::move(Reload));
+
+    MedOp Store;
+    Store.Opcode = NdOp::STORE;
+    Store.addInput(DynamicSlot);
+    Store.addInput(
+        Case == Scenario::AlignmentCheckAndPointerStore
+            ? MedVar::makeConst(TextVA, 1,
+                                ConstantAddressProvenance::AddressFragment)
+            : Byte);
+    Block.Ops.push_back(std::move(Store));
+
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Block.Ops.push_back(std::move(Return));
+    Func.Blocks.push_back(std::move(Block));
+    return Func;
+  };
+
+  for (BinaryFormat Format :
+       {BinaryFormat::MachO, BinaryFormat::ELF, BinaryFormat::COFF})
+    for (Arch TargetArch : {Arch::AArch64, Arch::X64})
+      for (Scenario Case :
+           {Scenario::NoIntrinsic, Scenario::AlignmentCheck,
+            Scenario::GuardedAlignmentCheck,
+            Scenario::DynamicSlotAlignmentCheck,
+            Scenario::AlignmentCheckWithOutput, Scenario::NonEnumIdentifier,
+            Scenario::WritingIntrinsic,
+            Scenario::AlignmentCheckAndPointerStore}) {
+        SCOPED_TRACE(formatTraceName(Format));
+        SCOPED_TRACE(TargetArch == Arch::AArch64 ? "arm64" : "x86_64");
+        SCOPED_TRACE(static_cast<int>(Case));
+        BinaryImage Image = makeSpilledConstTableImage(TargetArch, Format);
+        MedFunc Func = makeLookup(TargetArch, Case);
+        const MedOp *Reload = nullptr;
+        for (const MedOp &Op : Func.Blocks.front().Ops)
+          if (Op.Opcode == NdOp::LOAD)
+            Reload = &Op;
+        ASSERT_NE(Reload, nullptr);
+
+        MedLLVMEmitter Emitter;
+        MedLLVMProvenanceTestPeer::prepareFreshAnalysis(Emitter, Func, Image,
+                                                        TargetArch, Format);
+        // The exact reaching-store proof stays unavailable in every scenario:
+        // the runtime-indexed store may overwrite the slot.
+        std::vector<MedVar> Sources;
+        EXPECT_FALSE(MedLLVMProvenanceTestPeer::collectFrameReloadSources(
+            Emitter, Func, TargetArch, *Reload, Sources));
+        EXPECT_EQ(MedLLVMProvenanceTestPeer::stableOffset(
+                      Emitter, Reload->Output, nullptr),
+                  Case == Scenario::NoIntrinsic ||
+                      Case == Scenario::AlignmentCheck ||
+                      Case == Scenario::GuardedAlignmentCheck ||
+                      Case == Scenario::DynamicSlotAlignmentCheck);
+      }
+}
+
 } // namespace
 
 TEST(LLVMDataPointerInvariantBoundary, LowMappedScalarStoresKeepTheirBits) {

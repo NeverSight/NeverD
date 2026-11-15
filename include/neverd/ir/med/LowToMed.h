@@ -395,6 +395,8 @@ private:
   /// its result.  Runs before buildSsa.
   void liftRuntimeRoutineCalls(MedFunc &Func);
   /// Record which GPRs a direct call's callee never writes.
+  void bindScalarCall(MedBlock &Block, MedOp &MOp, const LowOp &LOp,
+                      const FloatingCallArguments &Signature, bool TailCall);
   void applyCallRegisterEffect(MedBlock &Block, MedOp &MOp, const LowOp &LOp,
                                bool TailCall);
   /// The fixed parameters of the variadic C library routine the import a

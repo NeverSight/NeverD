@@ -219,6 +219,9 @@ void PluginJobs::setContext(QJsonObject context) {
   const bool changed =
       context.value("epoch") != context_.value("epoch") ||
       context.value("project_id") != context_.value("project_id");
+  // The host holds the context it was given last, and takes one equal to it
+  // as no change (HostServices::setContext): it is not written out for it.
+  const bool same = context == context_;
   context_ = std::move(context);
   for (const auto &record : jobs_)
     if (!record.terminal() && !current(record))
@@ -233,7 +236,7 @@ void PluginJobs::setContext(QJsonObject context) {
       throw std::logic_error(error.Message);
     catalog_->setProject(projectOwner_);
     retireOwner(previous);
-  } else
+  } else if (!same)
     capabilities_->setContext(projectOwner_, native(context_));
   emit jobsChanged();
 }

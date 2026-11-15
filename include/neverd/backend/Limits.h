@@ -203,6 +203,9 @@ inline constexpr unsigned kMaxRuntimeOffsetSourceDepth = 32;
 inline constexpr size_t kMaxFrameRuntimeSourceWork = 1048576;
 inline constexpr unsigned
     kMedLLVMAddrResolveMedLLVMEmitterValueIsGuardedScalarOffsetBudget = 256;
+/// Values one certified model-zero join (PHIs and copies of an i386 GOT base
+/// and its reloads) may visit; a larger join is unproved.
+inline constexpr unsigned kMaxModelZeroJoinValues = 32;
 inline constexpr int kMedLLVMAddrResolveScalarRecurrenceHasInitializerBudget =
     8192;
 inline constexpr int kMedLLVMAddrResolveProveClosedScalarGraphBudget = 8192;

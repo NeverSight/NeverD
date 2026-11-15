@@ -273,6 +273,49 @@ TEST(SymMBAResidualBudget, IndependentLinearTailsKeepCompleteWordSemantics) {
       }
 }
 
+TEST(SymMBAResidualBudget, WidePairTailsPreserveCarriesAndOverlappingInputs) {
+  std::mt19937_64 Random(0x6361727279726f77);
+  for (unsigned W : {65u, 257u})
+    for (bool Overlap : {false, true})
+      for (bool Perturbed : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << W << ' ' << Overlap << ' ' << Perturbed);
+        SymContext C;
+        llvm::SmallVector<SymRef, 8> V;
+        for (unsigned I = 0; I != 8; ++I)
+          V.push_back(C.mkVar("v" + std::to_string(I), W));
+        const auto A = llvm::APInt::getSignMask(W) + 5;
+        const auto B = 1 - A, D = 1 + A;
+        const auto Delta =
+            Perturbed ? llvm::APInt::getSignMask(W) : llvm::APInt(W, 0);
+        const unsigned K = Overlap ? 1 : 2;
+        const auto Product = C.mkMul(V);
+        const auto Input =
+            C.mkAdd({Product, C.mkMul(C.mkConst(A), C.mkXor(V[0], V[1])),
+                     C.mkMul(C.mkConst(B), C.mkOr(V[0], V[1])),
+                     C.mkMul(C.mkConst(D + Delta), C.mkAnd(V[0], V[1])),
+                     C.mkOr(V[K], V[3]), C.mkAnd(V[K], V[3])});
+        const auto Result = simplifyMBADeep(C, Input);
+        if (!Overlap && !Perturbed)
+          EXPECT_EQ(Result.Expr, C.mkAdd({Product, V[0], V[1], V[2], V[3]}));
+        for (unsigned I = 0; I < 64; ++I) {
+          llvm::SmallVector<llvm::APInt, 8> Values;
+          llvm::APInt P(W, 1);
+          for (unsigned J = 0; J != V.size(); ++J) {
+            std::array<uint64_t, 5> Limbs;
+            for (auto &Limb : Limbs)
+              Limb = Random();
+            Values.emplace_back(W, Limbs);
+            P *= Values.back();
+          }
+          const auto Expected = P + Values[0] + Values[1] + Values[K] +
+                                Values[3] + Delta * (Values[0] & Values[1]);
+          EXPECT_EQ(C.eval(Input, Values), Expected);
+          EXPECT_EQ(C.eval(Result.Expr, Values), Expected);
+        }
+      }
+}
+
 TEST(SymMBAResidualBudget, RetainsLinearTailInCompletedCandidate) {
   for (unsigned Width : {3u, 8u, 32u, 64u, 257u}) {
     SymContext C;

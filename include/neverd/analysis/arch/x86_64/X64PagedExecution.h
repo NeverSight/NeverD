@@ -105,6 +105,10 @@ struct X64PagedExecutionResult {
   /// This call continued a previously fetched instruction. Attempted reports
   /// only a new charge; completion/fault can occur without another charge.
   bool InstructionResumed = false;
+  /// Successful instruction effects for a persistent mixed-mode scheduler.
+  /// Event acceptance supersedes these shadows before handler execution.
+  bool StartsSSShadow = false;
+  bool StartsSTIShadow = false;
   std::optional<X64PagedTransfer> Transfer;
   /// One irreversible device transfer, also retained on an INS guest fault.
   bool DeviceTransferCompleted = false;
@@ -113,6 +117,9 @@ struct X64PagedExecutionResult {
   std::optional<translate::X86MemoryException> Exception;
   std::optional<translate::GuestMemoryFault> BackingFault;
   std::optional<X64PagedEventResult> Delivery;
+  /// Retained at a post-instruction event-owner refusal, before a delivery
+  /// continuation exists. The full mode owner preserves the paid instruction.
+  std::optional<X64ContinuationEventV1> RequestedEvent;
 };
 
 /// One confined CPU and owned ordinary RAM, without external writes while a

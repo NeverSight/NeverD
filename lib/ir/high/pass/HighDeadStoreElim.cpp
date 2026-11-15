@@ -19,6 +19,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "HighDCEDetail.h"
+#include "HighFlowGraph.h"
 #include "HighFrameAddress.h"
 
 #include "neverd/Limits.h"
@@ -26,6 +27,7 @@
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/HighIR.h"
+#include "neverd/ir/intrinsics/IntrinsicValueEffects.h"
 #include "neverd/ir/med/MedCallConvention.h"
 
 #include "llvm/Support/MathExtras.h"
@@ -33,6 +35,7 @@
 #include <algorithm>
 #include <functional>
 #include <set>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace neverd {
@@ -1125,10 +1128,12 @@ void narrowUnreadRegisterBytes(HighFunc &Func, Arch Architecture) {
 
 /// The frame addresses that a contiguous entry prefix of single-definition
 /// pointer-width assignments names (`v0 = RSP - 32`). \p Statements receives
-/// those assignments.
+/// those assignments. With \p PastStores the prefix also runs over plain
+/// stores, which assign no variable (`*(v0 - 4) = EAX; t1 = v0 - 4`).
 static VarKeyMap<ExprPtr>
 entryFrameAliases(const HighFunc &Func, Arch Architecture, size_t &Budget,
-                  std::unordered_set<const HighStmt *> *Statements = nullptr) {
+                  std::unordered_set<const HighStmt *> *Statements = nullptr,
+                  bool PastStores = false) {
   const auto &TRI = getTargetRegInfo(Architecture);
   VarKeyMap<unsigned> Definitions;
   walkStmts(Func.Body, [&](const HighStmt &S) {
@@ -1144,6 +1149,10 @@ entryFrameAliases(const HighFunc &Func, Arch Architecture, size_t &Budget,
   VarKeyMap<ExprPtr> Aliases;
   for (const auto &S : Func.Body) {
     if (high_detail::isEmptyBlockAnchor(S))
+      continue;
+    if (PastStores && S.Kind == StmtKind::Store && S.Body.empty() &&
+        S.ElseBody.empty() && S.Cases.empty() && S.DefaultBody.empty() &&
+        S.EHClauseBodies.empty())
       continue;
     if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val ||
         S.Dst->Kind != ExprKind::Var || !S.Dst->Type ||
@@ -1315,6 +1324,365 @@ void elimUnreadPrivateFrameStores(HighFunc &Func, Arch Architecture) {
   }
 }
 
+namespace {
+
+/// Whether anything can observe the value a private frame store writes before
+/// the function overwrites it: the control-flow form of "the function reads
+/// the bytes back". A read that every path reaches only after an overwrite
+/// sees the overwriting value, never the stored one.
+///
+/// The walk follows statement flow from the store with the bytes that still
+/// hold its value. A plain store at a proven frame offset ends its bytes. A
+/// load of a pending byte observes it, and so does any use that may read the
+/// frame where the proof cannot say: a load through a frame address it cannot
+/// place, and a call, intrinsic or atomic operation that receives one. Frame
+/// addresses are the stack pointer's values and what assignments compute from
+/// them. A function that stores one to memory may reload it under a name this
+/// propagation never sees, and proves nothing.
+class FrameStoreObservers {
+public:
+  FrameStoreObservers(const HighFunc &Func, Arch Architecture)
+      : Func(Func), Architecture(Architecture),
+        TRI(getTargetRegInfo(Architecture)),
+        // Every statement continues: a path too many only adds observers.
+        Graph(Func.Body, [](const HighStmt &) { return false; }) {
+    // An unwinder enters a handler, and a handler its parent's continuation,
+    // along no edge of the graph; a jump it cannot resolve leaves it
+    // incomplete.
+    Usable = Graph.Complete && Func.CxxContinuationTargets.empty() &&
+             Func.SEHHandlerUnwindTargets.empty() &&
+             Func.SEHLocalUnwindExits.empty() && !Func.HasUnresolvedSEHFrame;
+    walkStmts(Func.Body, [&](const HighStmt &S) {
+      Usable &= S.Kind != StmtKind::SEHTry && S.Kind != StmtKind::CxxTry &&
+                S.Kind != StmtKind::ItaniumTry && S.EHClauses.empty() &&
+                S.EHClauseBodies.empty() &&
+                S.CxxContinuationReturnTargets.empty();
+    });
+    if (!Usable)
+      return;
+    Aliases = entryFrameAliases(Func, Architecture, Budget, nullptr,
+                                /*PastStores=*/true);
+    collectFrameAddresses();
+  }
+
+  /// Whether nothing observes the value \p Store writes to the \p Bytes
+  /// frame bytes at \p Offset. With \p NoValue the calling convention gives
+  /// the stored register no value: only a read by this function, or through
+  /// a frame address it hands on, counts. Any other value may be a real one.
+  /// The proof then also requires that no call runs before the bytes are
+  /// overwritten, nor before the store: a callee may read a stack slot no
+  /// operand of its call names, and a function that has made no call has no
+  /// place where a later fault or jump could resume it (setjmp).
+  bool unobserved(const HighStmt &Store, int64_t Offset, uint16_t Bytes,
+                  bool NoValue) {
+    const auto Start = Graph.NodeOf.find(&Store);
+    if (!Usable || !Bytes || Bytes > 64 || Start == Graph.NodeOf.end())
+      return false;
+    const auto Observes = [&](const Effects &E) {
+      return E.Opaque || (!NoValue && E.Calls);
+    };
+    // A frame address handed on before the store could be read through while
+    // the bytes are pending.
+    for (const size_t Node : nodesBefore(Start->second)) {
+      if (!Budget)
+        return false;
+      --Budget;
+      if (Observes(effectsOf(Node)))
+        return false;
+    }
+    const auto Mask = [&](const std::pair<int64_t, int64_t> &Range) {
+      uint64_t Bits = 0;
+      for (int64_t Byte = std::max(Range.first, Offset);
+           Byte < std::min(Range.second, Offset + int64_t(Bytes)); ++Byte)
+        Bits |= uint64_t{1} << (Byte - Offset);
+      return Bits;
+    };
+    const uint64_t All =
+        Bytes == 64 ? ~uint64_t{0} : (uint64_t{1} << Bytes) - 1;
+    std::vector<std::pair<size_t, uint64_t>> Work;
+    for (const size_t Next : Graph.Nodes[Start->second].Successors)
+      Work.emplace_back(Next, All);
+    std::unordered_map<size_t, uint64_t> Visited;
+    while (!Work.empty()) {
+      auto [Node, Pending] = Work.back();
+      Work.pop_back();
+      // The frame ends with the function.
+      if (Node == 0)
+        continue;
+      uint64_t &Seen = Visited[Node];
+      Pending &= ~Seen;
+      if (!Pending)
+        continue;
+      Seen |= Pending;
+      if (!Budget)
+        return false;
+      --Budget;
+      const Effects &E = effectsOf(Node);
+      if (Observes(E))
+        return false;
+      for (const auto &Read : E.Reads)
+        if (Pending & Mask(Read))
+          return false;
+      if (E.Write)
+        Pending &= ~Mask(*E.Write);
+      if (!Pending)
+        continue;
+      for (const size_t Next : Graph.Nodes[Node].Successors)
+        Work.emplace_back(Next, Pending);
+    }
+    return Budget != 0;
+  }
+
+private:
+  /// What running one statement's own expressions does to the frame.
+  struct Effects {
+    /// The frame bytes its loads read, as entry-stack offsets.
+    std::vector<std::pair<int64_t, int64_t>> Reads;
+    /// The frame bytes its plain store writes, after those reads.
+    std::optional<std::pair<int64_t, int64_t>> Write;
+    /// It may read frame bytes the proof cannot name, or hands a frame
+    /// address to code that may.
+    bool Opaque = false;
+    /// It makes a call, which may also come back a second time.
+    bool Calls = false;
+  };
+  using Memo = std::unordered_map<const HighExpr *, bool>;
+
+  const HighFunc &Func;
+  Arch Architecture;
+  const TargetRegInfo &TRI;
+  HighFlowGraph Graph;
+  size_t Budget =
+      ::neverd::limits::ir::kHighDeadStoreElimFrameStoreObserversBudget;
+  bool Usable = false;
+  VarKeyMap<ExprPtr> Aliases;
+  /// Variables some assignment gives a value computed from a frame address.
+  VarKeySet Derived;
+  std::unordered_map<size_t, Effects> Cache;
+  std::vector<std::vector<size_t>> Predecessors;
+
+  bool frameAddressVar(const MedVar &V) const {
+    return (V.Kind == MedVar::Reg && TRI.isStackPointer(V.RegOff)) ||
+           Aliases.count(varKey(V)) || Derived.count(varKey(V));
+  }
+
+  /// An operation whose result is computed from its operands' bits alone, so
+  /// a frame address among them may be one again in the result.
+  static bool carriesAddress(const HighExpr &E) {
+    if (E.MemoryOrdering != NdMemoryOrdering::None ||
+        E.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+        E.IntrinsicId != Intrinsic::None || !E.IntrinsicOutputs.empty() ||
+        E.IndirectTarget)
+      return false;
+    switch (E.Kind) {
+    case ExprKind::Cast:
+    case ExprKind::BitCast:
+      return true;
+    case ExprKind::UnaryOp:
+      return isTrapFreeIntegerUnaryOp(E.Op);
+    case ExprKind::BinOp:
+      return isTrapFreeIntegerBinOp(E.Op) || E.Op == NdOp::SELECT ||
+             E.Op == NdOp::CONCAT || E.Op == NdOp::SUBBYTES;
+    default:
+      return false;
+    }
+  }
+
+  /// Records in \p Out what evaluating \p E reads of the frame, and returns
+  /// whether its value may be a frame address.
+  bool scan(const ExprPtr &E, Effects &Out, Memo &Seen, unsigned Depth = 0) {
+    if (!E)
+      return false;
+    if (const auto Known = Seen.find(E.get()); Known != Seen.end())
+      return Known->second;
+    if (!Budget || Depth >
+                       ::neverd::limits::ir::
+                           kHighDeadStoreElimFrameStoreObserversDepthLimit) {
+      Budget = 0;
+      Out.Opaque = true;
+      return true;
+    }
+    --Budget;
+    const auto Operands = [&] {
+      bool Any = false;
+      E->forEachChildExpr(
+          [&](const ExprPtr &C) { Any |= scan(C, Out, Seen, Depth + 1); });
+      return Any;
+    };
+    bool Address = false;
+    switch (E->Kind) {
+    case ExprKind::Const:
+    case ExprKind::Undef:
+      break;
+    case ExprKind::IncomingStack:
+      Address = true;
+      break;
+    case ExprKind::EntryRegister:
+      Address = E->Var.Kind == MedVar::Reg && TRI.isStackPointer(E->Var.RegOff);
+      break;
+    case ExprKind::Var:
+      if (E->Var.Kind != MedVar::Stack) {
+        Address = frameAddressVar(E->Var);
+      } else if (E->Var.StackOff < 0) {
+        // The slot's contents, which no store here made a frame address.
+        const int64_t Size =
+            std::max<int64_t>(E->Var.Size, E->Type ? E->Type->Size : 0);
+        Out.Reads.emplace_back(E->Var.StackOff, E->Var.StackOff + Size);
+      }
+      break;
+    case ExprKind::Phi:
+      Address = frameAddressVar(E->Var);
+      Address |= Operands();
+      break;
+    case ExprKind::Addr:
+      Address = E->Operands.size() == 1 && E->Operands[0] &&
+                E->Operands[0]->Kind == ExprKind::Var &&
+                E->Operands[0]->Var.Kind == MedVar::Stack;
+      if (!Address)
+        Address = Operands();
+      break;
+    case ExprKind::Load: {
+      std::optional<int64_t> At;
+      if (E->Operands.size() == 1 && E->Type && E->Type->Size &&
+          E->MemoryOrdering == NdMemoryOrdering::None &&
+          E->MemoryAddressSpace == NdMemoryAddressSpace::Default)
+        At = high_detail::frameAddressOffset(E->Operands[0], Func, Architecture,
+                                             Budget, 0, &Aliases);
+      if (At)
+        Out.Reads.emplace_back(*At, *At + int64_t(E->Type->Size));
+      else
+        Out.Opaque |= Operands();
+      break;
+    }
+    case ExprKind::Call: {
+      const bool Receives = Operands();
+      // A fault check tests the address itself and reads nothing through it.
+      Out.Opaque |= Receives && !(E->IntrinsicId != Intrinsic::None &&
+                                  onlyChecksForAFault(E->IntrinsicId));
+      Out.Calls |= E->IntrinsicId == Intrinsic::None ||
+                   intrinsicReturnsSystemCallResult(E->IntrinsicId) ||
+                   intrinsicReturnsSmcccResults(E->IntrinsicId);
+      break;
+    }
+    case ExprKind::Cast:
+    case ExprKind::BitCast:
+    case ExprKind::UnaryOp:
+    case ExprKind::BinOp:
+      if (Operands()) {
+        Address = carriesAddress(*E);
+        Out.Opaque |= !Address;
+      }
+      break;
+    default:
+      Out.Opaque |= Operands();
+      break;
+    }
+    Seen.emplace(E.get(), Address);
+    return Address;
+  }
+
+  bool holdsFrameAddress(const ExprPtr &E) {
+    Effects Ignored;
+    Memo Seen;
+    return scan(E, Ignored, Seen);
+  }
+
+  void collectFrameAddresses() {
+    // A stack slot is memory; any other variable is a name for its value.
+    const auto Names = [](const HighStmt &S) {
+      return S.Kind == StmtKind::Assign && S.Dst &&
+             S.Dst->Kind == ExprKind::Var && S.Dst->Var.Kind != MedVar::Stack;
+    };
+    for (bool Changed = true; Changed && Budget;) {
+      Changed = false;
+      walkStmts(Func.Body, [&](const HighStmt &S) {
+        if (!Names(S) || Derived.count(varKey(S.Dst->Var)) ||
+            !holdsFrameAddress(S.Val))
+          return;
+        Derived.insert(varKey(S.Dst->Var));
+        Changed = true;
+      });
+    }
+    walkStmts(Func.Body, [&](const HighStmt &S) {
+      if (!Usable)
+        return;
+      if (S.Kind == StmtKind::Store)
+        Usable = !holdsFrameAddress(S.StoreVal);
+      else if (S.Kind == StmtKind::Assign && !Names(S))
+        Usable = !holdsFrameAddress(S.Val);
+    });
+    Usable &= Budget != 0;
+  }
+
+  const Effects &effectsOf(size_t Node) {
+    const auto [It, Added] = Cache.try_emplace(Node);
+    Effects &Out = It->second;
+    if (!Added)
+      return Out;
+    const HighStmt &S = *Graph.Nodes[Node].Statement;
+    Memo Seen;
+    switch (S.Kind) {
+    case StmtKind::Store: {
+      const uint16_t Bytes =
+          S.StoreVal && S.StoreVal->Type ? S.StoreVal->Type->Size : 0;
+      std::optional<int64_t> At;
+      if (Bytes && S.StoreAddr && S.MemoryOrdering == NdMemoryOrdering::None &&
+          S.MemoryAddressSpace == NdMemoryAddressSpace::Default)
+        At = high_detail::frameAddressOffset(S.StoreAddr, Func, Architecture,
+                                             Budget, 0, &Aliases);
+      // A write the proof cannot place reads nothing: only what computing
+      // its address reads counts.
+      if (At)
+        Out.Write = std::pair{*At, *At + int64_t(Bytes)};
+      else
+        scan(S.StoreAddr, Out, Seen);
+      scan(S.StoreVal, Out, Seen);
+      break;
+    }
+    case StmtKind::Assign:
+      if (S.Dst && S.Dst->Kind != ExprKind::Var) {
+        bool Through = false;
+        S.Dst->forEachChildExpr(
+            [&](const ExprPtr &C) { Through |= scan(C, Out, Seen); });
+        Out.Opaque |= Through;
+      }
+      scan(S.Val, Out, Seen);
+      break;
+    default:
+      forEachExpr(S, [&](const ExprPtr &Root) { scan(Root, Out, Seen); });
+      break;
+    }
+    Out.Opaque |= Budget == 0;
+    return Out;
+  }
+
+  /// The statements that may run before \p Node does.
+  std::vector<size_t> nodesBefore(size_t Node) {
+    if (Predecessors.empty()) {
+      Predecessors.resize(Graph.Nodes.size());
+      for (size_t From = 1; From < Graph.Nodes.size(); ++From)
+        for (const size_t To : Graph.Nodes[From].Successors)
+          Predecessors[To].push_back(From);
+    }
+    std::vector<size_t> Before;
+    std::vector<bool> Reached(Graph.Nodes.size());
+    std::vector<size_t> Work{Node};
+    while (!Work.empty()) {
+      const size_t At = Work.back();
+      Work.pop_back();
+      for (const size_t From : Predecessors[At])
+        if (!Reached[From]) {
+          Reached[From] = true;
+          Before.push_back(From);
+          Work.push_back(From);
+        }
+    }
+    return Before;
+  }
+};
+
+} // namespace
+
 void elimUndefinedEntryScratchStores(HighFunc &Func, Arch Architecture,
                                      BinaryFormat Format) {
   // A variadic prologue spills what its caller passed in argument registers,
@@ -1322,13 +1690,22 @@ void elimUndefinedEntryScratchStores(HighFunc &Func, Arch Architecture,
   if (Func.FrameSize <= 0 || Func.IsVariadic ||
       Func.StructuredExceptionRegions || Func.UnstructuredExceptionRegions)
     return;
-  const CallArgumentConvention *Convention =
-      callArgumentConvention(Architecture, Format);
-  if (!Convention || !Convention->UndefinedIncomingScratchRegisters)
-    return;
   const auto &TRI = getTargetRegInfo(Architecture);
   if (TRI.PointerSize != 4 && TRI.PointerSize != 8)
     return;
+  // Only a store of a register's incoming value can go: most functions have
+  // none, and need nothing more than this look.
+  bool StoresEntryRegister = false;
+  walkStmts(Func.Body, [&](const HighStmt &S) {
+    StoresEntryRegister |= S.Kind == StmtKind::Store && S.StoreVal &&
+                           S.StoreVal->Kind == ExprKind::Var &&
+                           S.StoreVal->Var.Kind == MedVar::Reg &&
+                           S.StoreVal->Var.SSAVer == 0;
+  });
+  if (!StoresEntryRegister)
+    return;
+  const CallArgumentConvention *Convention =
+      callArgumentConvention(Architecture, Format);
   const IntegerArgumentLayout Arguments = TRI.integerArgumentLayout(Format);
   size_t Budget = ::neverd::limits::ir::
       kHighDeadStoreElimElimUndefinedEntryScratchStoresBudget;
@@ -1341,12 +1718,30 @@ void elimUndefinedEntryScratchStores(HighFunc &Func, Arch Architecture,
     if (S.Dst && S.Dst->Kind == ExprKind::Var)
       Assigned.insert(varKey(S.Dst->Var));
   });
+  // The incoming value of a scratch register the function takes no parameter
+  // in: one C can only print as unknown, wherever the convention may still
+  // give it a value (i386 EAX, which a regparm caller sets).
+  const auto UnknownScratch = [&](const MedVar &V) {
+    return V.Kind == MedVar::Reg && V.SSAVer == 0 && V.RenameTag < 0 &&
+           TRI.isGeneralReg(V.RegOff) && !TRI.isStackPointer(V.RegOff) &&
+           !TRI.isLinkRegister(V.RegOff) &&
+           !TRI.isPlatformRegister(V.RegOff, Format) &&
+           !TRI.callPreservedPrefixSize(V.RegOff, V.Size, Format) &&
+           llvm::none_of(
+               Func.Params,
+               [&](const HighParam &Param) {
+                 return Param.RegOff == V.RegOff;
+               });
+  };
   struct Candidate {
     HighStmt *Statement;
     int64_t Offset;
     uint16_t Bytes;
+    /// The convention gives the stored register no value at entry.
+    bool Undefined;
   };
-  std::vector<Candidate> Undefined;
+  std::vector<Candidate> Candidates;
+  bool AnyUndefined = false;
   walkStmts(Func.Body, [&](HighStmt &S) {
     if (!Budget || S.Kind != StmtKind::Store || !S.StoreAddr || !S.StoreVal ||
         S.StoreVal->Kind != ExprKind::Var || !S.StoreVal->Type ||
@@ -1355,22 +1750,26 @@ void elimUndefinedEntryScratchStores(HighFunc &Func, Arch Architecture,
         S.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
         !S.Body.empty() || !S.ElseBody.empty() || !S.Cases.empty() ||
         !S.DefaultBody.empty() || !S.EHClauseBodies.empty() ||
-        !isUndefinedIncomingScratch(TRI, Architecture, Convention,
-                                    Arguments.Registers, S.StoreVal->Var) ||
         Assigned.count(varKey(S.StoreVal->Var)))
       return;
+    const bool Undefined = isUndefinedIncomingScratch(
+        TRI, Architecture, Convention, Arguments.Registers, S.StoreVal->Var);
+    if (!Undefined && !UnknownScratch(S.StoreVal->Var))
+      return;
     --Budget;
-    // The convention gives the stored bits no value: the function's own
-    // frame bytes below the entry stack pointer held none before the store
-    // and hold none after it.
+    // Where the convention gives the stored bits no value, the function's
+    // own frame bytes below the entry stack pointer held none before the
+    // store and hold none after it.
     const uint16_t Bytes = S.StoreVal->Type->Size;
     const auto At = high_detail::frameAddressOffset(
         S.StoreAddr, Func, Architecture, Budget, 0, &Aliases);
     if (At && Bytes && *At >= -Func.FrameSize && *At < 0 &&
-        uint64_t(Bytes) <= uint64_t(-*At))
-      Undefined.push_back({&S, *At, Bytes});
+        uint64_t(Bytes) <= uint64_t(-*At)) {
+      Candidates.push_back({&S, *At, Bytes, Undefined});
+      AnyUndefined |= Undefined;
+    }
   });
-  if (Undefined.empty() || !Budget)
+  if (Candidates.empty() || !Budget)
     return;
   // A read of those bytes must still fail where it uses the value, rather
   // than read a slot nothing wrote: keep each store the function reads back.
@@ -1385,45 +1784,59 @@ void elimUndefinedEntryScratchStores(HighFunc &Func, Arch Architecture,
       ReadBytes.insert(At + int64_t(I));
   };
   HighExprSet Seen;
-  walkStmts(Func.Body, [&](const HighStmt &S) {
-    forEachExpr(S, [&](const ExprPtr &Root) {
-      std::vector<const HighExpr *> Pending{Root.get()};
-      if (S.Kind == StmtKind::Store && &Root == &S.StoreAddr &&
-          high_detail::frameAddressOffset(S.StoreAddr, Func, Architecture,
-                                          Budget, 0, &Aliases))
-        Pending.clear();
-      while (!Pending.empty() && Budget) {
-        const HighExpr *E = Pending.back();
-        Pending.pop_back();
-        if (!E || !Seen.insert(E).second)
-          continue;
-        --Budget;
-        if (E->Kind == ExprKind::Load && E->Type && E->Operands.size() == 1)
-          if (const auto At = high_detail::frameAddressOffset(
-                  E->Operands[0], Func, Architecture, Budget, 0, &Aliases)) {
-            RecordRead(*At, E->Type->Size);
+  if (AnyUndefined)
+    walkStmts(Func.Body, [&](const HighStmt &S) {
+      forEachExpr(S, [&](const ExprPtr &Root) {
+        std::vector<const HighExpr *> Pending{Root.get()};
+        if (S.Kind == StmtKind::Store && &Root == &S.StoreAddr &&
+            high_detail::frameAddressOffset(S.StoreAddr, Func, Architecture,
+                                            Budget, 0, &Aliases))
+          Pending.clear();
+        while (!Pending.empty() && Budget) {
+          const HighExpr *E = Pending.back();
+          Pending.pop_back();
+          if (!E || !Seen.insert(E).second)
+            continue;
+          --Budget;
+          if (E->Kind == ExprKind::Load && E->Type && E->Operands.size() == 1)
+            if (const auto At = high_detail::frameAddressOffset(
+                    E->Operands[0], Func, Architecture, Budget, 0, &Aliases)) {
+              RecordRead(*At, E->Type->Size);
+              continue;
+            }
+          // A stack slot's value, or its address, which may be read through.
+          const HighExpr *Slot =
+              E->Kind == ExprKind::Addr && E->Operands.size() == 1
+                  ? E->Operands[0].get()
+                  : E;
+          if (Slot && Slot->Kind == ExprKind::Var &&
+              Slot->Var.Kind == MedVar::Stack && Slot->Var.StackOff < 0) {
+            RecordRead(Slot->Var.StackOff, Slot->Var.Size);
             continue;
           }
-        // A stack slot's value, or its address, which may be read through.
-        const HighExpr *Slot =
-            E->Kind == ExprKind::Addr && E->Operands.size() == 1
-                ? E->Operands[0].get()
-                : E;
-        if (Slot && Slot->Kind == ExprKind::Var &&
-            Slot->Var.Kind == MedVar::Stack && Slot->Var.StackOff < 0) {
-          RecordRead(Slot->Var.StackOff, Slot->Var.Size);
-          continue;
+          for (const auto &Operand : E->Operands)
+            Pending.push_back(Operand.get());
         }
-        for (const auto &Operand : E->Operands)
-          Pending.push_back(Operand.get());
-      }
+      });
     });
-  });
   if (!Budget)
     return;
-  for (const auto &[S, At, Bytes] : Undefined) {
-    if (ReadBytes.lower_bound(At) != ReadBytes.lower_bound(At + Bytes))
-      continue;
+  // Only a read that can still see the stored value reads it back: one that
+  // every path reaches after an overwrite does not. Every proof reads the
+  // function as it is, so the stores go together afterwards.
+  std::optional<FrameStoreObservers> Observers;
+  std::vector<HighStmt *> Unobserved;
+  for (const auto &[S, At, Bytes, Undefined] : Candidates) {
+    if (!Undefined ||
+        ReadBytes.lower_bound(At) != ReadBytes.lower_bound(At + Bytes)) {
+      if (!Observers)
+        Observers.emplace(Func, Architecture);
+      if (!Observers->unobserved(*S, At, Bytes, Undefined))
+        continue;
+    }
+    Unobserved.push_back(S);
+  }
+  for (HighStmt *S : Unobserved) {
     // Preserve a possible branch destination at the eliminated write.
     const va_t Address = S->Addr;
     *S = HighStmt{};

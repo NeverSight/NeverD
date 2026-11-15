@@ -1,0 +1,26 @@
+//===- MIPSReservation.def - MIPS load-linked/store-conditional pairs -----===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// Release 6 SPECIAL3 low seven bits for each load, register width, paired
+/// flag, and the stable load/store intrinsic identities and assembler names.
+/// The corresponding store clears bit four of the load's function code.
+//===----------------------------------------------------------------------===//
+
+NEVERD_MIPS_RESERVATION(0x36, 4, false, MIPSLoadLinkedWord, 16015, ll,
+                        MIPSStoreConditionalWord, 16016, sc, MIPS_INS_LL,
+                        MIPS_INS_SC)
+NEVERD_MIPS_RESERVATION(0x37, 8, false, MIPSLoadLinkedDouble, 16039, lld,
+                        MIPSStoreConditionalDouble, 16040, scd, MIPS_INS_LLD,
+                        MIPS_INS_SCD)
+NEVERD_MIPS_RESERVATION(0x76, 4, true, MIPSLoadLinkedWordPair, 16041, llwp,
+                        MIPSStoreConditionalWordPair, 16042, scwp,
+                        MIPS_INS_LLWP, MIPS_INS_SCWP)
+NEVERD_MIPS_RESERVATION(0x77, 8, true, MIPSLoadLinkedDoublePair, 16043, lldp,
+                        MIPSStoreConditionalDoublePair, 16044, scdp,
+                        MIPSLifter::LoadLinkedDoublePairID,
+                        MIPSLifter::StoreConditionalDoublePairID)
+
+#undef NEVERD_MIPS_RESERVATION

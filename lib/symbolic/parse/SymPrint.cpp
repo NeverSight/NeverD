@@ -22,9 +22,13 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 
+#include <algorithm>
+#include <limits>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace neverd::symbolic {
@@ -81,16 +85,21 @@ public:
       : Ctx(Ctx), Ambient(Ambient) {}
 
   std::string run(SymRef Root);
+  std::pair<std::string, std::string> runPair(SymRef Before, SymRef After);
 
 private:
-  const Fragment &frag(SymRef R) const {
-    return Fragments[Memo.find(R.index())->second];
+  void prepare(llvm::ArrayRef<SymRef> Roots);
+
+  uint32_t slot(SymRef R) const {
+    return Direct.empty() ? Memo.find(R.index())->second : Direct[R.index()];
   }
+  const Fragment &frag(SymRef R) const { return Fragments[slot(R)]; }
   /// A child in a comma-separated argument list, which never needs brackets.
   const std::string &arg(SymRef R) const { return frag(R).Text; }
   std::string sub(SymRef R, int Need) const { return wrap(frag(R), Need); }
 
-  std::string join(llvm::ArrayRef<SymRef> Ops, const char *Sep, int Need) const;
+  std::string join(llvm::ArrayRef<SymRef> Ops, std::string_view Sep,
+                   int Need) const;
   std::string call(const char *Name, llvm::ArrayRef<SymRef> Ops) const;
 
   Fragment leaf(std::string Text, uint32_t W) const {
@@ -131,10 +140,11 @@ private:
   llvm::SmallDenseMap<uint64_t, uint32_t,
                       limits::symbolic::kSymExprTraversalInlineBuckets>
       Memo;
+  llvm::SmallVector<uint32_t, 0> Direct;
   llvm::SmallVector<Fragment, 32> Fragments;
 };
 
-std::string Printer::join(llvm::ArrayRef<SymRef> Ops, const char *Sep,
+std::string Printer::join(llvm::ArrayRef<SymRef> Ops, std::string_view Sep,
                           int Need) const {
   std::string T;
   for (unsigned I = 0, E = Ops.size(); I < E; ++I) {
@@ -345,10 +355,7 @@ Fragment Printer::render(SymRef R) const {
   llvm_unreachable("unhandled SymOp in render");
 }
 
-std::string Printer::run(SymRef Root) {
-  if (Ctx.operands(Root).empty())
-    return render(Root).Text;
-
+void Printer::prepare(llvm::ArrayRef<SymRef> Roots) {
   // Visit operands before completing their parent. Interned nodes form a DAG,
   // so an already visited operand is complete, never an active ancestor.
   // Iterative postorder avoids both recursion on deep expressions and sorting
@@ -358,28 +365,75 @@ std::string Printer::run(SymRef Root) {
     SymRef Ref;
     bool Expanded;
   };
-  llvm::SmallVector<Frame, 64> Work{{Root, false}};
+  llvm::SmallVector<Frame, 64> Work;
+  for (SymRef R : llvm::reverse(Roots))
+    Work.push_back({R, false});
+  const size_t Span = size_t(llvm::max_element(Roots)->index()) + 1;
+  constexpr size_t SlotsPerEntry =
+      sizeof(decltype(Memo)::value_type) / sizeof(uint32_t);
+  const size_t DenseAfter =
+      std::max<size_t>(limits::symbolic::kSymExprTraversalInlineBuckets + 1,
+                       llvm::divideCeil(Span, SlotsPerEntry));
+  constexpr auto Unseen = std::numeric_limits<uint32_t>::max();
+  uint32_t Seen = 0;
   while (!Work.empty()) {
     auto [R, Expanded] = Work.pop_back_val();
     if (Expanded) {
       Order.push_back(R.index());
       continue;
     }
-    if (!Memo.try_emplace(R.index(), uint32_t(Memo.size())).second)
-      continue;
+    if (!Direct.empty()) {
+      auto &Position = Direct[R.index()];
+      if (Position != Unseen)
+        continue;
+      Position = Seen++;
+    } else {
+      if (!Memo.try_emplace(R.index(), Seen).second)
+        continue;
+      if (++Seen == DenseAfter) {
+        // Once the actually visited set pays for this index, the rest of
+        // discovery and all fragment lookups can bypass the hash table.
+        Direct.assign(Span, Unseen);
+        for (const auto &[Id, Position] : Memo)
+          Direct[Id] = Position;
+      }
+    }
     Work.push_back({R, true});
     for (SymRef C : Ctx.operands(R))
       Work.push_back({C, false});
   }
 
   Fragments.resize(Order.size());
-  for (uint32_t I : Order)
-    Fragments[Memo.find(I)->second] = render(SymRef(I));
-  // The root is discovered first and completed last.
+  for (auto I : Order)
+    Fragments[slot(SymRef(I))] = render(SymRef(I));
+}
+
+std::pair<std::string, std::string> Printer::runPair(SymRef Before,
+                                                     SymRef After) {
+  if (Before == After) {
+    auto Text = run(Before);
+    return {Text, std::move(Text)};
+  }
+  prepare({Before, After});
+  return {std::move(Fragments.front().Text),
+          std::move(Fragments[slot(After)].Text)};
+}
+
+std::string Printer::run(SymRef Root) {
+  if (Ctx.operands(Root).empty())
+    return render(Root).Text;
+  prepare({Root});
   return std::move(Fragments.front().Text);
 }
 
 } // namespace
+
+std::pair<std::string, std::string>
+printSymExprPair(const SymContext &Ctx, SymRef Before, SymRef After) {
+  if (!Before || !After || Ctx.width(Before) != Ctx.width(After))
+    return {Ctx.toString(Before), Ctx.toString(After)};
+  return Printer(Ctx, Ctx.width(Before)).runPair(Before, After);
+}
 
 std::string SymContext::toString(SymRef R) const {
   if (!R.isValid())

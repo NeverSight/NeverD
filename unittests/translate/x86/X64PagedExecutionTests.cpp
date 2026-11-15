@@ -14,6 +14,7 @@
 #include "X86PortDevice.h"
 
 #include "neverd/analysis/arch/x86_64/X64PagedExecution.h"
+#include "neverd/analysis/arch/x86_64/X86ModeExecution.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/X64ContinuationExport.h"
@@ -991,5 +992,7 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 // These cases reuse the debug/watchpoint fixtures above.
 #include "X64PagedBranchDebugTests.inc"
 #include "X64PagedDebugFunctionTests.inc"
+#include "X86ModeExecutionTests.inc"
+#include "X86ModeInterruptTests.inc"
 
 } // namespace

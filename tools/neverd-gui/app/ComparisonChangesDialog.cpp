@@ -13,6 +13,7 @@
 #include "../ResourceLimits.h"
 #include "ComparisonModel.h"
 #include "ComparisonSession.h"
+#include "DialogReturnKey.h"
 #include "Icons.h"
 #include "Theme.h"
 
@@ -62,6 +63,9 @@ ComparisonChangesDialog::ComparisonChangesDialog(ComparisonSession &S,
                                                  QWidget *Parent)
     : QDialog(Parent), Session(S), Revision(S.revision()) {
   setObjectName("comparisonChangesDialog");
+  // Refresh review was the default by Qt's choice of the first push button
+  // and ran again for Return on a row.
+  leaveWithoutDefaultButton(*this);
   setWindowTitle(tr("Change review — NeverD"));
   setWindowIcon(icon("compare"));
   resize(::neverd::limits::gui::kComparisonChangesInitialWidth,
@@ -131,6 +135,9 @@ ComparisonChangesDialog::ComparisonChangesDialog(ComparisonSession &S,
   SliceSide->addItem(tr("Secondary input"), "secondary");
   Inspect = new QPushButton(tr("Inspect function"), this);
   Inspect->setObjectName("changesInspect");
+  // What a reviewer does with the chosen change, as OK does with a chooser's
+  // row: the window's main action.
+  showAsMainAction(*Inspect);
   Calls = new QPushButton(tr("Call paths…"), this);
   Calls->setObjectName("changesCalls");
   Backward = new QPushButton(tr("Trace inputs"), this);

@@ -515,6 +515,39 @@ TEST(MedStackAlignment, BoundedDynamicOffsetsAreNotExactOffsets) {
     }
 }
 
+TEST(MedStackAlignment, N32StackAddressesUseTheCompleteMachineRegister) {
+  for (Arch Architecture : {Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    auto Func = frameWithEntrySP(Architecture);
+    auto &Ops = Func.Blocks.front().Ops;
+    auto Entry = reg(0, Architecture);
+    auto Frame = reg(1, Architecture);
+    Entry.Size = Frame.Size = 8;
+    Ops.front() = op(NdOp::COPY, Entry, Entry);
+    Ops.push_back(op(NdOp::INT_SUB, Frame, Entry, MedVar::makeConst(96, 8)));
+    EXPECT_EQ(entryStackOffset(Func, Frame, Architecture, BinaryFormat::ELF),
+              -96);
+    auto Word = temp(40, Architecture);
+    auto Adjusted = temp(41, Architecture);
+    Ops.push_back(op(NdOp::SUBBYTES, Word, Frame, MedVar::makeConst(0, 4)));
+    Ops.push_back(op(NdOp::INT_ADD, Adjusted, Word, MedVar::makeConst(32, 4)));
+    auto Restored = reg(2, Architecture);
+    Restored.Size = 8;
+    Ops.push_back(op(NdOp::INT_SEXT, Restored, Adjusted));
+    EXPECT_EQ(entryStackOffset(Func, Restored, Architecture, BinaryFormat::ELF),
+              -64);
+    Ops.back().Opcode = NdOp::INT_ZEXT;
+    EXPECT_FALSE(
+        entryStackOffset(Func, Restored, Architecture, BinaryFormat::ELF));
+    Ops.back().Opcode = NdOp::INT_SEXT;
+    Ops[2].Inputs[1] = MedVar::makeConst(4, 4);
+    EXPECT_FALSE(
+        entryStackOffset(Func, Restored, Architecture, BinaryFormat::ELF));
+    Frame.Size = 4;
+    EXPECT_FALSE(
+        entryStackOffset(Func, Frame, Architecture, BinaryFormat::ELF));
+  }
+}
+
 TEST(MedStackAlignment, LinearChainsKeepTheirOffsetPastTheDepthLimit) {
   // A long run of pushes and pops is one chain of displacements, not nested
   // proofs, so its offset is proved however long the run is.

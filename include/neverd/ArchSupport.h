@@ -39,7 +39,7 @@ constexpr bool archHasSingleInstructionMode(Arch A) { return A != Arch::ARM; }
 constexpr bool archLittleEndian(Arch A) {
   return A == Arch::X64 || A == Arch::AArch64 || A == Arch::X86 ||
          A == Arch::ARM || A == Arch::SBF || A == Arch::MIPS32EL ||
-         A == Arch::MIPS64EL;
+         A == Arch::MIPS64EL || A == Arch::MIPS64N32EL;
 }
 
 inline bool archMachOPatchSupported(Arch A) { return archCodegenSupported(A); }
@@ -149,14 +149,10 @@ inline const char *getTriple(Arch A, BinaryFormat Fmt) {
     return "aarch64-unknown-linux-gnu";
   case Arch::ARM:
     return "arm-unknown-linux-gnueabihf";
-  case Arch::MIPS32:
-    return "mips-unknown-linux-gnu";
-  case Arch::MIPS32EL:
-    return "mipsel-unknown-linux-gnu";
-  case Arch::MIPS64:
-    return "mips64-unknown-linux-gnuabi64";
-  case Arch::MIPS64EL:
-    return "mips64el-unknown-linux-gnuabi64";
+#define NEVERD_MIPS_TARGET(Name, Spelling, Triple)                             \
+  case Arch::Name:                                                             \
+    return Triple;
+#include "neverd/MIPSTargets.def"
   default:
     return nullptr;
   }

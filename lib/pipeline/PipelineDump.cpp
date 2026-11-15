@@ -97,6 +97,9 @@ void Pipeline::dumpLowIR(const std::vector<LowFunc> &Funcs,
     for (va_t Address : LF.UnsupportedInstructionAddresses)
       OS << "  native-semantics-unproven: 0x" << llvm::utohexstr(Address)
          << "\n";
+    for (const JumpTable &Dispatch : LF.ValueDispatches)
+      OS << "  dispatch-by-value: 0x" << llvm::utohexstr(Dispatch.InsnAddr)
+         << " among " << Dispatch.Targets.size() << " labels\n";
     dumpExceptionSummary(LF.ExceptionMetadata, OS, "  ");
     for (auto &Blk : LF.Blocks) {
       OS << "  block " << Blk.Id << " [0x" << llvm::utohexstr(Blk.StartAddr)

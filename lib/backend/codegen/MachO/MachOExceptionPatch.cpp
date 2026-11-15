@@ -458,11 +458,21 @@ findMachOEHFrameRegion(llvm::ArrayRef<uint8_t> Binary) {
       });
   if (Ambiguous || EHFrameSectionCount != 1)
     return std::nullopt;
-  if (Found)
+  if (Found) {
     for (const MachOFileRange &Range : SectionRanges)
       if (Range.HeaderOff != Found->SectionHeaderOff &&
           Found->AppendFileOff < Range.End && Range.Begin < Found->LimitFileOff)
         return std::nullopt;
+    // A load command may own zero bytes in the apparent append space.
+    // Keep the existing FDEs readable even when further growth is unproved.
+    std::vector<MachOFileRange> Payloads;
+    if (!macho_patch_detail::collectMachOPayloadRanges(Binary, Payloads))
+      Found->LimitFileOff = Found->AppendFileOff;
+    for (const auto &Range : Payloads)
+      if (Range.End > Found->AppendFileOff)
+        Found->LimitFileOff = std::min(
+            Found->LimitFileOff, std::max(Found->AppendFileOff, Range.Begin));
+  }
   return Found;
 }
 

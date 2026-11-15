@@ -5,10 +5,10 @@ description: >-
 license: LicenseRef-Qt-Commercial OR BSD-3-Clause
 metadata:
   author: qt-ai-skills
-  version: "1.3"
+  version: "1.6"
   qt-version: "6.x"
   category: conceptual
-  changelog: "Added Windows native-handle transparency ordering and desktop shadow verification"
+  changelog: "Added a one-page summary of NeverD's style to the desktop profile: color roles, type, sizes and the rules every window keeps"
 ---
 # Qt UI Design
 
@@ -17,7 +17,10 @@ metadata:
 For NeverD screens, read [the NeverD desktop profile](references/neverd-desktop.md)
 before designing or auditing. It records the product's established visual
 direction, workbench chrome, content hierarchy, resizing behavior, and Qt
-rendering checks. Apply its desktop density and layout guidance in place of
+rendering checks. Start with its "Style at a glance" section, which gathers
+the color roles, type, sizes and the rules every window keeps on one page,
+each pointing to the section with its reasons.
+Apply its desktop density and layout guidance in place of
 the generic sizing defaults below; preserve accessibility requirements and the
 user's current instructions.
 For other products, use the general guidance without importing NeverD's palette
@@ -221,6 +224,100 @@ Thin lines show their full colour only where they cover whole pixels. A 1 px lin
 - **In paint code**, fill hairlines as integer rectangles or offset 1 px pens by 0.5. Round a computed position before drawing a thin line with antialiasing on. In QML, place thin items and icons at whole-pixel positions (for example with `Math.round`), and draw icons at their native size or a whole multiple of it.
 - **Choose thin-stroke colours by how they render.** On dark surfaces, a thin icon needs a lighter tone than text of the same hue. Visual Studio Code, for example, uses `#75BEFF` for coloured icons and `#4DAAFC` for links.
 - **Verify at 100% scale** in a capture of the real UI, because 100% is common on desktop monitors. Then check 125%, 150% and 200%. At a fractional scale a toolkit can place a widget at a fraction of a device pixel, so a 1 px border drawn at that position spreads over two pixels. Paint chrome borders and hairlines in device pixels instead: round each side to the nearest device pixel and give a 1 px line one device pixel, as browsers snap border widths. Icons and text cannot be snapped everywhere; keep them no worse.
+### 1.7 Quiet states, command rows and gutters (desktop/web)
+
+A screen looks calm when each part is only as loud as its job. It looks wrong, and users say "ugly" without naming a cause, when parts that cannot act or that only divide are as loud as the parts that matter. Measure loudness instead of judging it by eye: take the WCAG contrast ratio of each part (fill, edge, label) against what lies directly behind it, after compositing any transparency. 1.00:1 is invisible; an enabled button's face usually stands at 1.1–1.4:1 on its surface.
+
+**A state is the same control turned up or down, never another drawing.**
+- A control that cannot act keeps the shape of the enabled one and recedes. Its fill fades and its label dims to about 2–3:1. Visual Studio Code fades the whole button to 40%; Windows 11 keeps a fill of about 4% white (30% of the fill in its light theme) inside an edge of 6–7%.
+- Nothing about a disabled control should stand out from the surface by more than about 1.25:1, and all of it must stay quieter than the enabled control beside it.
+- Two failures bracket the target. A full-strength fill behind a gray label reads as a dead block. An outline alone at the enabled border's strength reads as an empty frame, and a row of them as wire: the outline is as loud as the fill it replaced, around nothing.
+- Keep the fill where the enabled control has one. A transparent box with an outline is what several systems draw for an *enabled* secondary button, so it cannot also mean "cannot act".
+- Add an edge to a receded fill only where the fill alone would be lost, which is usually the light theme (a 40% fill can sit within 1.05:1 of a light surface). On a dark surface an edge that faint glows more than it helps.
+- A primary (accent) control that cannot act keeps a faint accent, so the screen's next step stays recognizable.
+
+**Measure a design system; do not quote it.**
+- Before writing "as Windows 11 draws it" or "as Visual Studio Code does", read the source of the values (theme resource files, CSS, token files), composite them over that system's own surface, and compare the numbers with yours, per theme. A claim can hold in the light theme and fail in the dark one.
+- Note what each system composites an edge over: the surface, the fill, or half of each. The same alpha gives a different edge.
+- Record the numbers beside the rule, so the next change is checked against them and not against memory.
+
+**Count before restyling.**
+- When a window shows many controls that cannot act at once, no disabled style makes it look right; the count is the problem. Hide by mode, disable by selection: commands that cannot apply in the window's current mode (nothing loaded, nothing compared yet) stay away as a group and appear with the content they act on. From then on single commands disable in place, so positions stay stable.
+- A reveal that coincides with the content arriving does not read as a jumping layout.
+
+**One accent, on the main action; the key is a separate decision.**
+- Give a window one filled accent button: the action the window is for. In a dialog that asks one thing it is the accept. In a window of tools it is the command that brings the content in or produces it (import, connect, trace), or the accept of a form inside it. In a window that only shows things it is the way on (Close, OK). A window with buttons and no accent looks unfinished beside every window that has one; users say it has "only one color".
+- At most one. While the main action cannot act yet, keep its accent, faint, so the way forward stays recognizable. Where pressing it again would only redo finished work (a comparison that is already shown), take the Return key away from it and keep the accent: the window still needs its one. Do not move the accent from button to button with a window's state unless the window is built as a sequence of steps and each step is tested. One case is not a move but a fallback: a main action must be on show, so where it sits on a page of tabs, a command that stays visible takes the accent while that page is hidden.
+- Choose the button from evidence, not taste: the window's own line of help names it, Return in a field already runs it, it is the window's only command, or the window does nothing but show. Where nothing names it, take the command that acts on what is selected, as OK does in a chooser, or the first step of a sequence. Never leave a window without one: shown renders of candidates for four windows left bare, the user answered that every window keeps at least one, on its key action.
+- The accent is a look and the default is a key: decide them separately. A toolkit ties them together and then chooses for you. Qt makes a dialog's first push button its default and then each button that takes focus, which puts the accent on an arbitrary button and binds Return to it. Where that key does harm, take the key away and keep the look: give the style a state it draws exactly like the default (a property on the button) without making the button the default.
+- Decide what Return does in each kind of place, and test each. On a focused button it presses that button. In an input that feeds the main action it runs that action, but only where the input changed what would run, so the key cannot throw finished work away, and again after a run that failed. In a filter, a table or a toggle it starts nothing.
+- A window that owns child windows needs its own Return handling once it has no default: Qt's dialog looks for a default button among all its descendants and presses one in a child window.
+
+**Command rows.**
+- Group commands by what they act on, in the order of use. Keep a group close and leave a wider gap between groups. Prefer the gap to a separator line.
+- In a row of many commands, let each take its natural width and let the row wrap, a group whole. A grid that stretches a row of commands to its columns scatters them and hides the grouping; a row that cannot wrap is clipped by a long translation or a narrow window.
+- One command, or a small block of them, at the foot of a list may span the list. It reads as the list's foot, as a footer button does; cut down to its label it leaves the pane looking empty. Leave such a layout as its window has it.
+- Keyboard order follows the visual order.
+- Flat (borderless) commands suit a row that has icons or stands on a band of its own. Text-only flat commands read as labels; keep their faces until they have icons.
+
+**Gutters, dividers and alignment.**
+- No control touches a divider or the next pane. Leave at least the layout's spacing on either side of a dividing line.
+- A divider is a hairline in the middle of its room. Its grab area may be wider than the line, but is never painted whole: a band beside a field, in the field's own gray, merges with the field.
+- Neighbors of one color merge. Check every seam for two shapes of the same color meeting.
+- Line up what adjacent panes show first: their first rows share a text line, and the rows below start level. Rows that miss each other by a few pixels read as clutter even when every control is drawn well.
+
+**Judge on the user's screen.**
+- Render the real UI with the user's font size, scale and window size before judging spacing or wrapping. A headless platform's default font can be two points smaller than the desktop's, and everything then looks roomier than it is.
+- Compare variants in place: same size, same position, switched back and forth. Side by side, the eye compares two layouts; switched in place, it sees the one thing that changed.
+- Check both themes, 125%, the minimum window size, the longest bundled language and a right-to-left one before settling a layout.
+- Turn each rule into a test with a number in it (a contrast bound, a count of pixels across a seam, two tops that must be equal), and plant the old behavior once to see the test fail.
+- Find out which build a screenshot came from before reasoning from its details. A window left open for days shows an older binary.
+
+### 1.8 Auditing every window (desktop/web)
+
+A polished main screen says little about the rest. Defects collect in the windows that were added later and are opened rarely, and each of them breaks a rule the main screen already keeps. When asked to look at everything, work from the code, measure before judging, and keep a baseline.
+
+**Take the inventory from the code.**
+- List every dialog class, every dialog built inline in a function, every pane, every menu and context menu, and every prompt that only a file or a state can raise. A walk through the menus misses the windows a button inside another window opens, those a selection enables, and those shown while a file loads.
+- Keep one table of window against capture. An empty cell is a window nobody looked at; the report says so.
+- Capture each window as it first opens and again holding content. Complaints are about first sight as often as about a busy state, and some commands only appear with content.
+- Run the commands from each kind of place they act on (a listing line, a source line that calls, a function with a frame), and record what a command said when it opened nothing, so "nothing to show here" stays apart from "missed".
+
+**Capture what the user sees.**
+- Match the user's interface font (family and size), code font, scale, theme and screen before the first capture. Find out where the application takes its font from: one that bundles a family and reads only the size from the desktop shows neither the desktop's family nor a headless platform's size.
+- Put that font in place before the first widget exists. A font set later leaves widgets built at startup with sizes they computed under the old one, and those stale sizes then look like defects of the product.
+- Make captures repeatable: stop the caret blinking, keep input paths the same from run to run, wait for lists to fill. Then capture the untouched build twice and compare. What still differs (a clock, free disk space, a list of open windows) is the noise to ignore later.
+- Read captures at their own size. A sheet scaled to fit loses hairlines and offsets of a few pixels, which are what the audit is for.
+
+**Measure, then look.**
+- Save each window's widget tree beside its picture: class, name, rectangle, text, enabled, default, font, alignment, layout margins. A question about every window is then a query: which button is the default as each window opens, which buttons are wider than their labels need, which headings are centered, which windows set a font of their own, which controls on one row differ in height, whose margins are the outliers.
+- Numbers find candidates and the picture decides. A measured outlier can be deliberate, so read the code, its comments and the tests that pin a layout before changing it.
+- Group findings by cause. Where one cause explains many windows (a toolkit default, a style rule), fix it once in the shared layer and name the windows it changes.
+
+**What the numbers usually find.**
+- *A default nobody chose.* The first push button of a window: Refresh, Reload, Close, Reset or a file chooser's opener draws the accent and takes Return from every field and list. List each window's default at first show and ask two things of it: is this the window's main action, and should Return press it from a field or a list? A window of tools leaves Return with the focused control; a command that discards work (Reset) never takes the key.
+- *An accident that did two jobs.* Before removing what a toolkit put there by accident, ask what it was doing. The accidental default bound a key, which did harm, and gave the window its one colored button, which did not. An audit that removed both left fourteen windows in one color, and the user asked for the color back. Fix the job that fails and keep the other on purpose (section 1.7).
+- *One thing drawn two ways.* Headings centered in one list and left in the next, or bold only while a row is selected; a list inset in one chooser and edge to edge in another. Toolkits give each widget class its own defaults, so two classes that show the same kind of table disagree until the style sets one.
+- *An outlier that is a design.* A measurement that stands out is a question, not a finding. A lone button as wide as the list above it measured 835 pixels and read, on a sheet of numbers, as a band; cut down to its label it left the pane empty, and the user wanted it back: "the earlier design was fine". Before changing a layout that is consistent within its window, look at the whole window with and without the change, and prefer what was there unless something in it fails.
+- *A window with a font of its own.* A size set in one constructor makes that window larger than every other.
+- *A frame around nothing.* A group whose fields show only while it is checked draws an empty box when it is not. A flat group, a rule beside its title, frames nothing.
+- *Forms that miss each other.* Two forms stacked in one column each size their own label column, so their fields start on two edges; give them one. A label beside a group of boxes belongs level with the first box. A box without a title keeps no room for one above its frame.
+- *Panes on a hairline.* A second pane whose title or tabs start on the dividing line (section 1.7).
+- *Text that fits only at the test font.* A one-line label written at a headless platform's size ends mid-word at the desktop's. Wrap what can outgrow its window.
+
+**Change against a baseline.**
+- Save every capture before the first edit, in every theme. After the edits compare all of them again: every window that changed must be one you meant to change, and the shared-layer fixes must have changed the windows you named and no others.
+- For anything that changes behavior, write the test first and watch it fail on the old code with the harm in the failure (the request sent twice, the chooser that opened, the setting that flipped), not only a property that differs.
+- A layout that looks arbitrary may be holding something up: a margin that keeps a control inside a right-to-left pane, a grid that keeps two rows of commands inside the narrowest window. Run the window's own tests, at its minimum size and in the longest and the right-to-left languages, before and after; when one fails, find what the old layout was protecting and keep that.
+- Land what applies a rule the user has already confirmed. Show without landing, as renders, what needs a new judgment: commands renamed or removed, new colors, a size that would move every window.
+
+**Keep it true on the other platforms.**
+- A fix proven on one desktop is a claim about one desktop. Change shared code, not a platform's branch, and ask of each change what differs elsewhere: the interface font and its size, the display scale, which keys press a focused button, native dialogs in place of the toolkit's own, window frames that take room inside the client area.
+- A size measured before a window shows is an estimate on another platform. Let the window correct itself once it shows (grow to what its layout needs) instead of trusting the number.
+- Write each check so it holds on a native screen at 150% and 200%: draw into an image at a scale the check names, count device pixels in proportion to that scale, and never compare two pictures taken on either side of the moment a real window becomes active.
+- A check that expects no dialog to open must not hang where the dialog would be a native one; make the toolkit use its own for the length of the check.
+- A check that presses a key in a window waits until that window is the active one. A window is visible, and the modal one, before it is active; until then the key belongs to the window behind it and can run that window's shortcut instead. Such a check passes on a quiet machine and fails on a busy one.
+- Run the whole suite, not the one new test by name, before saying it passes, and get the other platforms' verdict from their own machines before the change reaches the shared branch.
 ---
 
 ## 2. Accessibility (WCAG 2.2)
@@ -344,6 +441,15 @@ Apply section 4 constraints first if the target is embedded.
 - [ ] Colour: are all colours token-based or semantically named? Is colour paired with a second cue for all state changes?
 - [ ] Crispness: at 100% scale, do straight icon strokes and 1 px lines cover whole pixels, so thin elements show their real colour? At 125%, does each border and hairline still take one whole device pixel?
 - [ ] States: does every control read differently at rest, under the pointer, pressed, with keyboard focus, checked and disabled, in every theme, and does a disabled control stay legible rather than vanish or look enabled?
+- [ ] Disabled look: is a control that cannot act its enabled self turned down (same shape, its fill kept and faded, nothing louder than about 1.25:1 on the surface), not a dead block and not an empty outline?
+- [ ] Command load: does the window show only the commands that can apply in its current mode, one accent on its main action, and its commands in groups by what they act on, a group wrapping whole?
+- [ ] Return key: does Return press the focused button, run the main action only from that action's own inputs, and start nothing from a filter, a table or a child window's default?
+- [ ] Seams: does any control touch a divider or the next pane, is any divider wider than a hairline painted whole, and do adjacent panes' first rows share a line?
+- [ ] Every window: is each window, pane, menu and prompt of the application in an inventory taken from its code, captured at the user's font and theme, and looked at; which were not?
+- [ ] Default at open: for each window, which button is the default as it first shows, and should Return press it from a field or a list? Does Return in every field and list of a window without a default start nothing?
+- [ ] One accent per window: does every window with buttons show exactly one in the accent, chosen where the window is built, and is each exception on a list with its reason?
+- [ ] One drawing per thing: do all lists align and weight their headings alike, all windows take the application's font, and no frame stand around nothing?
+- [ ] What worked stays: for each layout changed, is there a failure it fixes, beyond a number that looked unusual? Does the window look as full and as finished as before?
 - [ ] High contrast: in the high contrast themes, does each state still read by its outline, is text at least 7:1 and every line at least 3:1, and does selected or highlighted text keep a colour of its own?
 - [ ] Localisation: do all user-visible strings use locale-aware formatting? Are containers able to expand 30–40% for translated text?
 - [ ] Languages: does every window fit its texts in every bundled language, does a live language switch reword every pane, and do layouts placed by hand mirror right to left?
@@ -359,5 +465,9 @@ Apply section 4 constraints first if the target is embedded.
 - Apple Human Interface Guidelines: https://developer.apple.com/design/human-interface-guidelines
 - Microsoft Fluent 2 Design Principles: https://fluent2.microsoft.design/design-principles
 - Google Material Design 3 Foundations: https://m3.material.io/foundations
+- Windows UX Guide — disabling or removing controls: https://learn.microsoft.com/en-us/windows/win32/uxguide/win-dialog-box#disabling-or-removing-controls-vs-giving-error-messages
+- WinUI theme resources (the values behind each control state): https://github.com/microsoft/microsoft-ui-xaml/tree/main/controls/dev/CommonStyles
+- Visual Studio Code button states: https://github.com/microsoft/vscode/blob/main/src/vs/base/browser/ui/button/button.css
+- Visual Studio Code UX Guidelines: https://code.visualstudio.com/api/ux-guidelines/overview
 - Qt QLocale (localisation API): https://doc.qt.io/qt-6/qlocale.html
 - Qt LayoutMirroring (RTL): https://doc.qt.io/qt-6/qml-qtquick-layoutmirroring.html

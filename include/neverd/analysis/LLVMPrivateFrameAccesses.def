@@ -1,0 +1,21 @@
+//===- LLVMPrivateFrameAccesses.def - Synthetic frame operands -----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef LLVM_FRAME_VALUE
+#define LLVM_FRAME_VALUE(Name, Value)
+#endif
+#ifndef LLVM_FRAME_NAME
+#define LLVM_FRAME_NAME(Name, Text)
+#endif
+
+LLVM_FRAME_VALUE(kMaxFrameAddressSteps, 1024)
+LLVM_FRAME_VALUE(kMaxReturnVisited, 512)
+LLVM_FRAME_VALUE(kMaxReturnWork, 512)
+LLVM_FRAME_NAME(kFrameObject, "frame")
+LLVM_FRAME_NAME(kFrameEnd, "frame_end")
+LLVM_FRAME_NAME(kFrameSlot, "frame_slot")
+#undef LLVM_FRAME_NAME
+#undef LLVM_FRAME_VALUE

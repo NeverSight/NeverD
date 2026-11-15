@@ -1,10 +1,16 @@
 add_subdirectory(core)
 add_subdirectory(bytecode)
 
+add_neverd_component_library(NeverDAArch64UnwindRecovery
+  arch/aarch64/AArch64UnwindRecovery.cpp
+  LINK_COMPONENTS Decode LibC Loader
+)
+
 add_neverd_component_library(NeverDLLVMMemoryAnalysis
   llvm/LLVMMemoryAnalysis.cpp
   llvm/LLVMPrivateFrameProjection.cpp
-  LLVM_COMPONENTS Analysis Core Support
+  llvm/LLVMPrivateFrameAccesses.cpp
+  LLVM_COMPONENTS Analysis Core Support TransformUtils
 )
 
 add_neverd_component_library(NeverDBinaryInterpreterSpecialization
@@ -17,6 +23,7 @@ add_neverd_component_library(NeverDBinaryInterpreterSpecialization
 add_neverd_component_library(NeverDX64PagedEventDelivery
   arch/x86_64/X64PagedEventDelivery.cpp
   arch/x86_64/X64PagedExecution.cpp
+  arch/x86_64/X86ModeExecution.cpp
   arch/x86_64/X64PagedPortIO.cpp
   LINK_COMPONENTS BinaryInterpreterSpecialization Translate
 )

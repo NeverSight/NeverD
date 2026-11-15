@@ -506,7 +506,13 @@ inline constexpr std::int64_t kEngineReplicaAwaitWritePollMilliseconds = 2;
 inline constexpr std::size_t kEngineMaxPageEtagBytes = 128;
 /// Documents a view had before it was built again, kept for the pages clients
 /// keep of them (page_delta): how many, and how many bytes in all.
-inline constexpr std::size_t kEngineMaxPreviousViews = 8;
+inline constexpr std::size_t kEngineMaxPreviousViews = 32;
+/// Views an edit reaches that are read ahead of the client's reads after its
+/// reply (Engine::prepareFollowingViews).
+inline constexpr std::size_t kEngineMaxPreparedViews = 2;
+/// Listing pages kept for the clients that name them (if_none_match), whose
+/// next read of the same lines is answered with what changed of them.
+inline constexpr std::size_t kEngineMaxKeptListingPages = 8;
 inline constexpr std::size_t kEngineMaxPreviousViewBytes = 32 * 1024 * 1024;
 /// A delta up to this size goes without weighing it against its page; a larger
 /// one goes only where it is under half the page.
@@ -591,6 +597,14 @@ inline constexpr int
 
 // tools/neverd-worker/main.cpp
 inline constexpr int kMainIdleGracePeriodMilliseconds = 150;
+/// The reads a request may carry to follow it ("then"), and the bytes each
+/// answer may take in its reply.
+inline constexpr std::size_t kMainThenReads = 4;
+inline constexpr std::size_t kMainThenReadBytes = 1024 * 1024;
+/// The lines of the listing one such read may ask for: those a client shows,
+/// which hold the request's reply back by little.  A page of the listing is
+/// read by itself.
+inline constexpr std::size_t kMainThenListingLines = 256;
 inline constexpr int kMainExecuteLoopMilliseconds = 10;
 inline constexpr int kMainMainHeartbeatSeconds = 1;
 inline constexpr int kMainMainHelloCancelTargetRequestIdStringFieldMax = 128;

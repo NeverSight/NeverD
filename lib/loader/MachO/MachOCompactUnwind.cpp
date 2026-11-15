@@ -12,6 +12,7 @@
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/BinaryFormat/MachO.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/raw_ostream.h"
@@ -731,6 +732,30 @@ ParseResult parseCompactUnwind(const BinaryImage &Img) {
       partial("__unwind_info code range is empty after mode normalization");
       continue;
     }
+    // Some Apple linkers include the first byte past __text in the final
+    // lookup range. When a publisher appends code, a no-unwind gap retains
+    // that boundary. In both layouts the instruction extent ends at __text.
+    const bool EndsLookup = I + 1 == Raw.size()
+                                ? End == SentinelOffset
+                                : End == Raw[I + 1].FunctionOffset &&
+                                      Raw[I + 1].Encoding == kARM64ModeNone;
+    if (Img.Arch == Arch::AArch64 && EndsLookup &&
+        Entry.CodeRange.End % kARM64InstructionBytes ==
+            kARM64TerminalLookupByte) {
+      const va_t TextEnd = Entry.CodeRange.End - kARM64TerminalLookupByte;
+      const Section *Text = Img.getSectionFor(Entry.CodeRange.Begin);
+      const Section *Next = Img.getSectionFor(TextEnd);
+      const bool StartsStubs = Next && Next->VA == TextEnd &&
+                               (Next->Type & llvm::MachO::SECTION_TYPE) ==
+                                   llvm::MachO::S_SYMBOL_STUBS;
+      if (Text && TextEnd > Entry.CodeRange.Begin &&
+          TextEnd - Text->VA == Text->Size &&
+          Entry.CodeRange.Begin % kARM64InstructionBytes == 0 &&
+          Img.isCodeRange(Entry.CodeRange.Begin,
+                          TextEnd - Entry.CodeRange.Begin) &&
+          (StartsStubs || !Img.isCodeAddress(TextEnd)))
+        Entry.CodeRange.End = TextEnd;
+    }
     Entry.NativeEncoding = Raw[I].Encoding;
     if (!decodeEncoding(Img.Arch, Raw[I].Encoding, Entry)) {
       if (Entry.Kind != CompactUnwindKind::Unknown)
@@ -756,9 +781,10 @@ ParseResult parseCompactUnwind(const BinaryImage &Img) {
     const uint32_t PersonalityIndex =
         (Raw[I].Encoding & kPersonalityMask) >> kPersonalityShift;
     if (PersonalityIndex != 0) {
-      if (PersonalityIndex <= Result.Personalities.size())
+      if (PersonalityIndex <= Result.Personalities.size()) {
         Entry.PersonalityVA = Result.Personalities[PersonalityIndex - 1];
-      else
+        Entry.PersonalitySlotVA = Result.PersonalitySlots[PersonalityIndex - 1];
+      } else
         partial("__unwind_info entry names a missing personality");
     }
 

@@ -5,8 +5,9 @@ description: >
   reviewing code on a hot path (loaders, decode/lift, Low/Med/High IR passes,
   signature matching, symbolic/MBA proofs, emulation, worker/GUI latency),
   choosing a container or index, adding a parallel loop, SIMD, cache, arena or
-  threshold, evaluating a performance library, or claiming or reviewing a
-  speedup or regression. Use when the user runs /neverd-performance.
+  threshold, evaluating a performance library, optimizing a request toward a
+  stated bar or against another tool, or claiming or reviewing a speedup or
+  regression. Use when the user runs /neverd-performance.
 ---
 
 # NeverD performance
@@ -15,9 +16,10 @@ NeverD is semantics-first and must also be fast. A fast path computes exactly
 what the portable path computes, and every speed claim is measured.
 
 Basis: `origin/dev` 159588db82 for the inventory and 92b7f8dab1 for the
-profiles (2026-10-27). `dev` moves quickly; re-check a path before relying on
-a line number.
+profiles (2026-10-27); the method is from the work up to 2026-11-12. `dev`
+moves quickly; re-check a path before relying on a line number.
 
+- How to take a goal to a landed change: [references/methodology.md](references/methodology.md)
 - What exists today: [references/current-state.md](references/current-state.md)
 - What to do next, and what was rejected: [references/remaining-work.md](references/remaining-work.md)
 
@@ -31,6 +33,34 @@ This skill routes; these documents own the rules:
 | Acceleration and allocator validation | `docs/testing.md` § Acceleration libraries, § Allocator validation |
 | No just-in-case machinery | `docs/development-principles.md` § Speculative defenses |
 | Library evaluation example | `docs/bbtree-evaluation.md` |
+| Decoder comparison with Zydis, XED and iced | `tools/neverd-bench/decoder-comparison/README.md` |
+
+## Method
+
+Read [references/methodology.md](references/methodology.md) before optimizing
+a request. It gives the case behind each line.
+
+1. **Fix the bar**: the request, the input, the statistic and the opponent.
+   Report every statistic, not only the one that improved.
+2. **Trust the instrument first**: calibrated windows, balanced order with a
+   control group, at least six alternating pairs inside one run, and the
+   library you mean to measure.
+3. **Rank by what the request waits for**: by phase and by population, CPU and
+   serial wall, first use apart from steady state.
+4. **Look for growth before constants**: work repeated per item, the cost per
+   item as the input scales, caches that are reset.
+5. **Price the lever**: measure its ceiling, experiment with a private library
+   in minutes, and record the levers that failed.
+6. **Prove exactness**: identity over a corpus in both orders, a disable switch
+   for every memo, planted defects the tests must catch.
+7. **Compare with another tool on equal work**, and report where NeverD loses.
+8. **On latency paths** measure the real client and count the serial round
+   trips of one user action.
+9. **Land one cause per commit**. After a rebase, read the other side's diff of
+   every file both sides changed, clean merge or not.
+10. **Before changing the Capstone fork**, measure it against iced with
+    `tools/neverd-bench/decoder-comparison`; the method's section 10 quotes
+    what the user asked on 2026-11-12 and to whom.
 
 ## Rules for new code
 
@@ -169,6 +199,11 @@ Primitive benchmarks are opt-in (`EXCLUDE_FROM_ALL`) targets:
 - `neverd-viewport-bench` and `pseudocode_latency_bench.py` in
   `tools/neverd-gui/benchmarks`.
 
+`tools/neverd-bench/decoder-comparison` is a standalone experiment outside the
+product build: Capstone, Zydis, XED and iced through their public APIs, with
+`measure.py` for paired timings and `decoder-snapshot` for field equality. Its
+README owns the build and reporting rules.
+
 Correctness owners are `NeverDAccelerationTests`, plus the owners listed in
 `docs/testing.md` § Acceleration libraries.
 
@@ -178,12 +213,15 @@ Push follow-up fixes when the merge regresses.
 
 ## Review checklist
 
+- [ ] The bar names the request, input, statistic and opponent; statistics that did not improve are reported.
 - [ ] The profile names the hotspot; the A/B uses the same base; output hashes match.
+- [ ] The A/B alternates in balanced order inside one run, with a control group and at least six pairs.
 - [ ] No per-query scan or per-call rebuild inside loops over functions, blocks or calls.
 - [ ] No new whole-image or whole-selection work on the caller's thread; the serial wall share did not grow.
 - [ ] The scalar/portable path remains and is tested with acceleration off; SIMD covers every Highway target and inaccessible tails.
 - [ ] Every new threshold or budget lives in its owning limits definition, with a reason.
 - [ ] Output is identical across thread counts; hashed and parallel results are ordered before emission.
 - [ ] Each cache is keyed on all its inputs, invalidated on mutation, and has bounded retention in limits.
+- [ ] Each memo was run disabled and in reverse order with identical output, and a planted defect in the fast path fails a test.
 - [ ] No speculative caches, prefetches, retries or fallbacks.
 - [ ] A new library or primitive has an evaluation document, a NeverSight fork if vendored, notices, and a `NEVERD_ENABLE_*` opt-out.

@@ -22,6 +22,7 @@
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
+#include "neverd/backend/llvm/AArch64/LLVMEntryABI.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/X86/X86RepAddresses.h"
@@ -1368,6 +1369,12 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
       if (PIt != ParamArgs.end())
         ArgVal = PIt->second;
     }
+    if (!ArgVal && V.Kind == MedVar::Reg && Img && Img->isArm64e() && V.Size &&
+        V.Size <= getTargetRegInfo(TargetArch).PointerSize) {
+      ArgVal = readDarwinAArch64EntryRegister(*CurFunc, V.RegOff);
+      if (ArgVal)
+        ParamRegoffMap.emplace(V.RegOff, ArgVal);
+    }
     if (ArgVal) {
       unsigned WantBits = V.Size > 0 ? V.Size * 8 : 64;
       auto *WantTy = llvm::IntegerType::get(*Ctx, WantBits);
@@ -1525,7 +1532,7 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
   if (V.Kind == MedVar::Reg && V.SSAVer == 0) {
     const auto &TRI = getTargetRegInfo(TargetArch);
     if (TRI.isLinkRegister(V.RegOff) && TRI.PointerSize > 0 &&
-        V.Size == TRI.PointerSize) {
+        V.Size == TRI.addressRegisterBytes()) {
       // `llvm.returnaddress` returns `llvm_anyptr_ty` (overloaded on the result
       // pointer type, matching upstream LLVM), so the concrete `ptr` must be
       // supplied as the overload type — `@llvm.returnaddress.p0(i32 0)`.
@@ -1534,7 +1541,9 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
           llvm::Intrinsic::returnaddress, {PtrTy},
           {llvm::ConstantInt::get(llvm::Type::getInt32Ty(*Ctx), 0)});
       llvm_value_provenance::markSemanticProducer(*RA);
-      return Builder.CreatePtrToInt(RA, sizeToType(V.Size), "retaddr");
+      auto *Address =
+          Builder.CreatePtrToInt(RA, sizeToType(TRI.PointerSize), "retaddr");
+      return Builder.CreateSExtOrTrunc(Address, sizeToType(V.Size));
     }
   }
 

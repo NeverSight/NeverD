@@ -763,6 +763,36 @@ struct Listing::Impl {
   /// What the last full build read that names and the user's items do not
   /// change: the string scan, and the import, import slot and export rows.
   std::vector<StringItem> scannedStrings;
+  /// The scan's strings in address order, and the furthest byte after each
+  /// that it or one before it reaches: what a span shares with a string reads
+  /// in one search (scannedStringsCover).
+  std::vector<std::uint64_t> scannedStringAddresses, scannedStringReach;
+  void indexScannedStrings() {
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> spans;
+    spans.reserve(scannedStrings.size());
+    for (const auto &string : scannedStrings)
+      spans.emplace_back(string.address,
+                         string.address + string.length + string.unit);
+    std::sort(spans.begin(), spans.end());
+    scannedStringAddresses.clear();
+    scannedStringReach.clear();
+    scannedStringAddresses.reserve(spans.size());
+    scannedStringReach.reserve(spans.size());
+    std::uint64_t reach = 0;
+    for (const auto &[address, end] : spans) {
+      reach = std::max(reach, end);
+      scannedStringAddresses.push_back(address);
+      scannedStringReach.push_back(reach);
+    }
+  }
+  /// Whether a string of the scan shares a byte with [\p address, \p end).
+  bool scannedStringsCover(std::uint64_t address, std::uint64_t end) const {
+    const auto before = static_cast<std::size_t>(
+        std::lower_bound(scannedStringAddresses.begin(),
+                         scannedStringAddresses.end(), end) -
+        scannedStringAddresses.begin());
+    return before && scannedStringReach[before - 1] > address;
+  }
   Json importRows, importSlotRows, exportRows;
   std::uint64_t generation = 1;
   std::vector<Region> regions;
@@ -1904,8 +1934,10 @@ struct Listing::Impl {
       for (const auto &row : rows)
         addString(row);
     }
-    if (Rescan)
+    if (Rescan) {
       scannedStrings = strings;
+      indexScannedStrings();
+    }
     loadUserItems();
     loadNumberFormats();
     std::sort(strings.begin(), strings.end(),
@@ -5768,12 +5800,7 @@ bool Listing::dataItemsChanged(const Json *rows) {
     const int region = d.regionIndex(address);
     if (region < 0 || d.regions[region].exec)
       return false;
-    return std::none_of(d.scannedStrings.begin(), d.scannedStrings.end(),
-                        [&](const auto &string) {
-                          return string.address < address + item.size &&
-                                 address < string.address + string.length +
-                                               string.unit;
-                        });
+    return !d.scannedStringsCover(address, address + item.size);
   };
   for (const auto &[address, item] : before)
     if (const auto now = d.userItems.find(address);
@@ -5983,6 +6010,11 @@ bool Listing::hasIdleWork() const {
          impl_->indexState == Impl::IndexState::Building;
 }
 
+bool Listing::indexing() const {
+  return impl_->discoveryListingPending ||
+         impl_->indexState == Impl::IndexState::Building;
+}
+
 bool Listing::idleStep() {
   // Function discovery comes first, so the reference index covers its
   // functions.
@@ -6059,16 +6091,98 @@ Json Listing::page(const Json &payload,
   return result;
 }
 
+struct Listing::PageWindow {
+  std::vector<Line> reversed, forward;
+  bool atStart = true, atEnd = true;
+};
+
 Json Listing::uncachedPage(const Json &payload,
                            std::shared_ptr<const EncodedJson> *encoded) {
   auto &d = *impl_;
-  d.build();
-  if (d.regions.empty())
+  PageWindow window;
+  if (!pageWindow(payload, window))
     return {{"lines", Json::array()},
             {"anchor", 0},
             {"at_start", true},
             {"at_end", true},
             {"generation", std::to_string(d.generation)}};
+  const auto &reversed = window.reversed;
+  const auto &forward = window.forward;
+  const bool atStart = window.atStart, atEnd = window.atEnd;
+  if (encoded) {
+    // Its rows cost several times more built as a document than written as
+    // the text a document prints.
+    JsonWriter out;
+    out.beginObject();
+    out.key("anchor");
+    out.number(std::uint64_t(reversed.size()));
+    out.key("at_end");
+    out.boolean(atEnd);
+    out.key("at_start");
+    out.boolean(atStart);
+    out.key("generation");
+    out.string(std::to_string(d.generation));
+    out.key("index");
+    out.value(indexState());
+    out.key("lines");
+    out.beginArray();
+    for (auto it = reversed.rbegin(); it != reversed.rend(); ++it)
+      d.lineText(out, *it);
+    for (const auto &line : forward)
+      d.lineText(out, line);
+    out.endArray();
+    out.endObject();
+    *encoded = std::make_shared<const EncodedJson>(std::move(out));
+    return Json(nullptr);
+  }
+  Json lines = Json::array();
+  for (auto it = reversed.rbegin(); it != reversed.rend(); ++it)
+    lines.push_back(d.lineJson(*it));
+  const auto anchorIndex = lines.size();
+  for (const auto &line : forward)
+    lines.push_back(d.lineJson(line));
+  return {{"lines", std::move(lines)},
+          {"anchor", anchorIndex},
+          {"at_start", atStart},
+          {"at_end", atEnd},
+          {"generation", std::to_string(d.generation)},
+          {"index", indexState()}};
+}
+
+std::optional<ListingPage> Listing::pageLines(const Json &payload) {
+  auto &d = *impl_;
+  // The loader's first viewport, which page() keeps before the browsing index
+  // is whole, answers that one read.
+  if (d.initialPage && !d.discovered && d.decoded.empty() &&
+      d.recoveredReferences.empty())
+    return std::nullopt;
+  PageWindow window;
+  if (!pageWindow(payload, window))
+    return std::nullopt;
+  ListingPage page;
+  page.anchor = window.reversed.size();
+  page.atStart = window.atStart;
+  page.atEnd = window.atEnd;
+  page.generation = std::to_string(d.generation);
+  page.index = indexState();
+  page.lines.reserve(window.reversed.size() + window.forward.size());
+  const auto add = [&](const Line &line) {
+    JsonWriter out;
+    d.lineText(out, line);
+    page.lines.push_back(std::make_shared<const EncodedJson>(std::move(out)));
+  };
+  for (auto it = window.reversed.rbegin(); it != window.reversed.rend(); ++it)
+    add(*it);
+  for (const auto &line : window.forward)
+    add(line);
+  return page;
+}
+
+bool Listing::pageWindow(const Json &payload, PageWindow &window) {
+  auto &d = *impl_;
+  d.build();
+  if (d.regions.empty())
+    return false;
   d.opcodeBytes = static_cast<int>(
       sizeField(payload, "opcode_bytes", 0,
                 ::neverd::limits::worker::kListingMaxOpcodeBytes));
@@ -6177,44 +6291,11 @@ Json Listing::uncachedPage(const Json &payload,
     reversed.resize(before);
   if (forward.size() > after)
     forward.resize(after);
-  if (encoded) {
-    // Its rows cost several times more built as a document than written as
-    // the text a document prints.
-    JsonWriter out;
-    out.beginObject();
-    out.key("anchor");
-    out.number(std::uint64_t(reversed.size()));
-    out.key("at_end");
-    out.boolean(atEnd);
-    out.key("at_start");
-    out.boolean(atStart);
-    out.key("generation");
-    out.string(std::to_string(d.generation));
-    out.key("index");
-    out.value(indexState());
-    out.key("lines");
-    out.beginArray();
-    for (auto it = reversed.rbegin(); it != reversed.rend(); ++it)
-      d.lineText(out, *it);
-    for (const auto &line : forward)
-      d.lineText(out, line);
-    out.endArray();
-    out.endObject();
-    *encoded = std::make_shared<const EncodedJson>(std::move(out));
-    return Json(nullptr);
-  }
-  Json lines = Json::array();
-  for (auto it = reversed.rbegin(); it != reversed.rend(); ++it)
-    lines.push_back(d.lineJson(*it));
-  const auto anchorIndex = lines.size();
-  for (const auto &line : forward)
-    lines.push_back(d.lineJson(line));
-  return {{"lines", std::move(lines)},
-          {"anchor", anchorIndex},
-          {"at_start", atStart},
-          {"at_end", atEnd},
-          {"generation", std::to_string(d.generation)},
-          {"index", indexState()}};
+  window.reversed = std::move(reversed);
+  window.forward = std::move(forward);
+  window.atStart = atStart;
+  window.atEnd = atEnd;
+  return true;
 }
 
 Json Listing::overview(const Json &payload) {
@@ -6818,6 +6899,11 @@ const Json &Listing::uncachedFunctionRows() {
 }
 
 void Listing::build() { impl_->build(); }
+bool Listing::standing() const {
+  const auto &d = *impl_;
+  return d.built && !d.namesStale &&
+         neverd_func_count(d.session) == d.builtFunctionCount;
+}
 
 const std::unordered_map<std::string, std::string> &Listing::functionAliases() {
   impl_->build();

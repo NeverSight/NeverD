@@ -38,6 +38,8 @@ inline VaListABI vaListABI(Arch TheArch, BinaryFormat Format) {
   case Arch::MIPS32:
   case Arch::MIPS32EL:
   case Arch::MIPS64:
+  case Arch::MIPS64N32:
+  case Arch::MIPS64N32EL:
   case Arch::MIPS64EL:
     return VaListABI::Pointer;
   default:

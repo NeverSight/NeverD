@@ -10767,6 +10767,10 @@ Ihr vorheriger Graph ist weiterhin verfügbar.</translation>
         <translation>DWARF-Zustand am ausgewählten PC</translation>
     </message>
     <message>
+        <source>Signing state recovered from instructions at the selected PC</source>
+        <translation>Aus den Anweisungen am ausgewählten PC ermittelter Signaturzustand</translation>
+    </message>
+    <message>
         <source>Compact unwind: completed-prologue recipe</source>
         <translation>Compact Unwind: Rezept für den abgeschlossenen Prolog</translation>
     </message>

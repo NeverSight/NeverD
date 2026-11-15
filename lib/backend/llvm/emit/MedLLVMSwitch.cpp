@@ -33,6 +33,7 @@
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/WithColor.h"
@@ -111,6 +112,51 @@ MedLLVMEmitter::synthesizeTwoTableSelector(const JumpTable &JT, int BlockId,
       Condition, llvm::ConstantInt::get(Ty, Plan.TrueOffset),
       llvm::ConstantInt::get(Ty, Plan.FalseOffset), "twotbl.offset");
   return Builder.CreateAdd(Index, Offset, "twotbl.idx");
+}
+
+bool MedLLVMEmitter::emitValueDispatch(const MedBlock &Blk, const MedOp &BrOp,
+                                       std::map<int, llvm::BasicBlock *> &BBMap,
+                                       llvm::IRBuilder<> &Builder) {
+  if (!CurMedFunc || BrOp.NumInputs < 1 || BrOp.Inputs[0].isConst())
+    return false;
+  const JumpTable *JT = nullptr;
+  for (const JumpTable &Table : CurMedFunc->JumpTables)
+    if (Table.InsnAddr == BrOp.Addr && !Table.Targets.empty()) {
+      JT = &Table;
+      break;
+    }
+  if (!JT || !JT->ValueDispatch || JT->CaseLabels.size() != JT->Targets.size())
+    return false;
+  const auto CaseBlocks =
+      dispatchTargetBlocks(*CurMedFunc, Blk, JT->Targets, BBMap);
+  if (CaseBlocks.empty())
+    return false;
+  llvm::Value *Target = getVar(BrOp.Inputs[0], Builder);
+  if (!Target || !Target->getType()->isIntegerTy())
+    return false;
+  auto *Ty = llvm::cast<llvm::IntegerType>(Target->getType());
+  const unsigned PtrBits = getTargetRegInfo(TargetArch).PointerSize * 8;
+  if (Ty->getBitWidth() > PtrBits) {
+    Ty = llvm::IntegerType::get(*Ctx, PtrBits);
+    Target = Builder.CreateTrunc(Target, Ty, "vd.target");
+  }
+  // The image's slots hold each label as the address it had there, which
+  // names the label and is no address in this module: a jump to any other
+  // value has nowhere to go.
+  auto *DefaultBB = llvm::BasicBlock::Create(*Ctx, "vd.default.trap", CurFunc);
+  llvm::IRBuilder<> DefaultBuilder(DefaultBB);
+  DefaultBuilder.CreateIntrinsic(llvm::Type::getVoidTy(*Ctx),
+                                 llvm::Intrinsic::trap, {});
+  DefaultBuilder.CreateUnreachable();
+  auto *SW = Builder.CreateSwitch(Target, DefaultBB,
+                                  static_cast<unsigned>(CaseBlocks.size()));
+  // Tell this switch from one over a recovered table's index.
+  SW->setMetadata("neverd.value-dispatch", llvm::MDNode::get(*Ctx, {}));
+  std::set<uint64_t> Seen;
+  for (size_t K = 0; K < CaseBlocks.size(); ++K)
+    if (Seen.insert(JT->Targets[K]).second)
+      SW->addCase(llvm::ConstantInt::get(Ty, JT->Targets[K]), CaseBlocks[K]);
+  return true;
 }
 
 bool MedLLVMEmitter::emitJumpTableSwitch(

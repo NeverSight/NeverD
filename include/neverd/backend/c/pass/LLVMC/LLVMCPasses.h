@@ -34,8 +34,19 @@ struct LLVMCAnalysisState {
   std::map<const llvm::Value *, std::pair<const llvm::AllocaInst *, int64_t>>
       FramePointerLocations;
   /// Frame offsets reached through an ambiguous carrier stay in the backing
-  /// array so named C locals cannot split stores from later pointer reads.
+  /// array so named C locals cannot split a store from a read of its bytes
+  /// when one of the two goes through the pointer.
   std::set<std::pair<const llvm::AllocaInst *, int64_t>> RawFrameLocations;
+  /// The bytes from each raw location that such an access covers, at least
+  /// one: no named local may hold any of them.
+  std::map<std::pair<const llvm::AllocaInst *, int64_t>, uint64_t>
+      RawFrameExtents;
+  /// The raw locations a frame record leaves unnamed too: those a read
+  /// through the pointer takes. A record lays its members out as the frame
+  /// does, so a write through the pointer and the place a join points at
+  /// reach its named members where they are; only separate locals lose them.
+  std::set<std::pair<const llvm::AllocaInst *, int64_t>>
+      RawFrameLocationsInRecord;
   /// Memory inline asm can observe a span beyond a single argument offset.
   /// Keep the complete allocation as one object, including indexed accesses.
   std::set<const llvm::AllocaInst *> RawFrameAllocas;

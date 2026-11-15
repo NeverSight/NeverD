@@ -67,8 +67,13 @@ void eliminateLoopAliases(std::vector<HighStmt> &Stmts);
 
 void elimConsecutiveDeadStores(std::vector<HighStmt> &Stmts);
 void elimUnreadPrivateFrameStores(HighFunc &Func, Arch Architecture);
-/// Drop each private frame store of a scratch register's incoming value,
-/// which \p Format's convention leaves undefined (an alignment `push rax`).
+/// Drop each private frame store of a scratch register's incoming value that
+/// nothing observes. Where \p Format's convention leaves the value undefined
+/// (an alignment `push rax`), the store goes unless the function reads one of
+/// its bytes back before it overwrites it. A scratch register the function
+/// takes no parameter in may still hold a value (i386 `push eax`): its store
+/// goes only if the function also makes no call and hands no frame address on
+/// before it has overwritten every byte it reads.
 void elimUndefinedEntryScratchStores(HighFunc &Func, Arch Architecture,
                                      BinaryFormat Format);
 void forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture);

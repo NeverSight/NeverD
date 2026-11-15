@@ -8,6 +8,7 @@
 /// order. Complete temporaries capture aliased inputs before a vector write.
 //===----------------------------------------------------------------------===//
 
+#include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
@@ -16,9 +17,131 @@
 
 namespace neverd {
 
+unsigned MIPSLifter::msaElementBytes(unsigned Tag) {
+  // ELM reserves all tags outside 00nnnn, 100nnn, 1100nn and 11100n.
+  if (Tag < 16)
+    return 1;
+  if ((Tag & 56) == 32)
+    return 2;
+  if ((Tag & 60) == 48)
+    return 4;
+  return (Tag & 62) == 56 ? 8 : 0;
+}
+
+NdVar MIPSLifter::State::vectorElement(unsigned Reg, unsigned Index,
+                                       uint16_t Bytes) {
+  auto Value = makeTemp(Bytes);
+  emit(NdOp::SUBBYTES, Value,
+       {NdVar::reg(mipsreg::w(Reg), 16), NdVar::cst(Index * Bytes, 4)});
+  return Value;
+}
+
+void MIPSLifter::State::writeVector(unsigned Reg,
+                                    llvm::MutableArrayRef<NdVar> Elements) {
+  for (unsigned Count = Elements.size(); Count > 1; Count /= 2)
+    for (unsigned I = 0; I != Count / 2; ++I)
+      Elements[I] = binary(NdOp::CONCAT, Elements[I * 2 + 1], Elements[I * 2],
+                           Elements[I * 2].Size * 2);
+  emit(NdOp::COPY, NdVar::reg(mipsreg::w(Reg), 16), {Elements[0]});
+}
+
+NdVar MIPSLifter::State::floatClass(NdVar X) {
+  const auto Bytes = X.Size;
+  const uint64_t ExpMask =
+      Bytes == 4 ? UINT32_C(0x7f800000) : UINT64_C(0x7ff0000000000000);
+  const uint64_t Fraction =
+      Bytes == 4 ? UINT32_C(0x7fffff) : UINT64_C(0x000fffffffffffff);
+  const auto Exp = binary(NdOp::INT_AND, X, NdVar::cst(ExpMask, Bytes));
+  const auto Frac = binary(NdOp::INT_AND, X, NdVar::cst(Fraction, Bytes));
+  const auto Z = NdVar::cst(0, Bytes);
+  const auto HasFrac = binary(NdOp::INT_NOTEQUAL, Frac, Z, 1);
+  const auto Special =
+      binary(NdOp::INT_EQUAL, Exp, NdVar::cst(ExpMask, Bytes), 1);
+  const auto SubOrZero =
+      select(HasFrac, NdVar::cst(16, Bytes), NdVar::cst(32, Bytes));
+  const auto Finite = select(binary(NdOp::INT_EQUAL, Exp, Z, 1), SubOrZero,
+                             NdVar::cst(8, Bytes));
+  const auto Class = select(Special, NdVar::cst(4, Bytes), Finite);
+  const auto Signed =
+      select(binary(NdOp::INT_SLESS, X, Z, 1), Class,
+             binary(NdOp::INT_LEFT, Class, NdVar::cst(4, Bytes)));
+  const auto Quiet =
+      binary(NdOp::INT_AND, Frac, NdVar::cst((Fraction + 1) / 2, Bytes));
+  return select(binary(NdOp::BOOL_AND, Special, HasFrac, 1),
+                select(binary(NdOp::INT_NOTEQUAL, Quiet, Z, 1),
+                       NdVar::cst(2, Bytes), NdVar::cst(1, Bytes)),
+                Signed);
+}
+
 bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
-  if (!HasMSA || S.Width != 4 || isMIPSCompressedMode(Mode))
+  if (!HasMSA || Mode == InstructionMode::MIPS16)
     return false;
+  const unsigned WD = (Word >> 6) & 31, WS = (Word >> 11) & 31,
+                 WT = (Word >> 16) & 31;
+  const unsigned Fn = Word & 63;
+  const unsigned Unary = (Word >> 17) & 0x1ff;
+  if (Fn == 26 || Fn == 27 || Fn == 28 || (Fn == 30 && Unary >= 0x190)) {
+    const auto Encoding = Word & (Fn == 30 ? 0xffff003fu : 0xffe0003fu);
+    Intrinsic Id;
+    switch (Encoding) {
+#define NEVERD_MSA_FLOAT(Name, Value, Encoding, Arity, Mnemonic)               \
+  case Encoding:                                                               \
+    Id = Intrinsic::MIPSMSA##Name;                                             \
+    break;
+#include "neverd/ir/intrinsics/MIPS/MIPSMSAFloat.def"
+    default:
+      return liftMSAAdditional(S, Word);
+    }
+    if (Id == Intrinsic::MIPSMSAFCLASS_W || Id == Intrinsic::MIPSMSAFCLASS_D) {
+      const uint16_t Bytes = Id == Intrinsic::MIPSMSAFCLASS_W ? 4 : 8;
+      std::array<NdVar, 4> Lanes;
+      for (unsigned I = 0; I < 16u / Bytes; ++I)
+        Lanes[I] = S.floatClass(S.vectorElement(WS, I, Bytes));
+      S.writeVector(WD, llvm::MutableArrayRef(Lanes).take_front(16u / Bytes));
+      return true;
+    }
+    const auto D = NdVar::reg(mipsreg::w(WD), 16),
+               A = NdVar::reg(mipsreg::w(WS), 16),
+               B = NdVar::reg(mipsreg::w(WT), 16);
+    switch (mips::msaNativeOperation(Id).Arity) {
+    case 1:
+      S.emitIntrinsic(Id, D, {A});
+      break;
+    case 2:
+      S.emitIntrinsic(Id, D, {A, B});
+      break;
+    case 3:
+      S.emitIntrinsic(Id, D, {D, A, B});
+      break;
+    }
+    return true;
+  }
+  if ((Word & 0xffff003f) == 0x787e0019) {
+    const auto Value = S.makeTemp(4);
+    S.emitIntrinsic(Intrinsic::MIPSReadMSAControl, Value, {NdVar::cst(WS, 1)});
+    S.write(WD, Value);
+    return true;
+  }
+  if ((Word & 0xffff003f) == 0x783e0019) {
+    S.emitIntrinsic(Intrinsic::MIPSWriteMSAControl, {},
+                    {NdVar::cst(WD, 1), S.read(WS, 4)});
+    return true;
+  }
+  switch (Word & 63) {
+  case 2:
+  case 20:
+    return liftMSAPermutation(S, Word);
+  case 21:
+    if (((Word >> 23) & 7) == 0)
+      return liftMSAPermutation(S, Word);
+    break;
+  case 25:
+    if (((Word >> 22) & 15) == 0 || ((Word >> 22) & 15) == 1 ||
+        ((Word >> 22) & 15) == 5)
+      if (liftMSAPermutation(S, Word))
+        return true;
+    break;
+  }
   enum class Instruction {
 #define NEVERD_MIPS_MSA(Name, Mask, Value) Name,
 #include "neverd/lift/MIPS/MIPSMSA.def"
@@ -29,16 +152,10 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
     Kind = Instruction::Name;
 #include "neverd/lift/MIPS/MIPSMSA.def"
   if (!Kind)
-    return false;
-  const unsigned WD = (Word >> 6) & 31;
-  const unsigned WS = (Word >> 11) & 31;
-  const unsigned WT = (Word >> 16) & 31;
+    return liftMSAAdditional(S, Word);
   const unsigned Index = WT & 3;
   const auto Lane = [&](unsigned Reg, unsigned I, uint16_t Bytes = 4) {
-    const auto Value = S.makeTemp(Bytes);
-    S.emit(NdOp::SUBBYTES, Value,
-           {NdVar::reg(mipsreg::w(Reg), 16), NdVar::cst(I * Bytes, 4)});
-    return Value;
+    return S.vectorElement(Reg, I, Bytes);
   };
   if (*Kind == Instruction::CopyWord) {
     // No scalar destination also means no lane is observed in the enabled
@@ -205,8 +322,17 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
   const bool AbsoluteDifference =
       *Kind == Instruction::AbsoluteDifferenceSigned ||
       *Kind == Instruction::AbsoluteDifferenceUnsigned;
+  const bool RoundShift = *Kind == Instruction::RoundShiftSignedVector ||
+                          *Kind == Instruction::RoundShiftUnsignedVector ||
+                          *Kind == Instruction::RoundShiftSignedImmediate ||
+                          *Kind == Instruction::RoundShiftUnsignedImmediate;
+  const bool InsertBits = *Kind == Instruction::InsertLeftVector ||
+                          *Kind == Instruction::InsertRightVector ||
+                          *Kind == Instruction::InsertLeftImmediate ||
+                          *Kind == Instruction::InsertRightImmediate;
   const bool ImmediateBit =
-      ((Shift || Bit) && (Word & 63) == 9) || SaturateImmediate;
+      ((Shift || Bit || InsertBits) && (Word & 63) == 9) ||
+      (RoundShift && (Word & 63) == 10) || SaturateImmediate;
   const bool CountBits = *Kind == Instruction::PopulationCount ||
                          *Kind == Instruction::LeadingZeroCount ||
                          *Kind == Instruction::LeadingOneCount;
@@ -225,9 +351,9 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
   std::array<NdVar, 16> Values;
   for (unsigned I = 0; I != 16u / Bytes; ++I) {
     if (*Kind == Instruction::FillWord)
-      Values[I] = S.read(WS);
+      Values[I] = S.read(WS, 4);
     else if (*Kind == Instruction::InsertWord)
-      Values[I] = I == Index ? S.read(WS) : Lane(WD, I);
+      Values[I] = I == Index ? S.read(WS, 4) : Lane(WD, I);
     else if (CountBits) {
       auto Input = Lane(WS, I, Bytes);
       if (*Kind == Instruction::LeadingOneCount) {
@@ -270,6 +396,48 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
       S.emit(
           NdOp::SELECT, Values[I],
           {Less, S.binary(NdOp::INT_SUB, B, A), S.binary(NdOp::INT_SUB, A, B)});
+    } else if (RoundShift || InsertBits) {
+      const auto A = Lane(WS, I, Bytes);
+      if (InsertBits && ImmediateBit &&
+          (Field & (Bytes * 8 - 1)) == Bytes * 8 - 1) {
+        // A full-lane immediate insertion does not observe the old WD.
+        Values[I] = A;
+        continue;
+      }
+      const auto Limit = NdVar::cst(Bytes * 8 - 1, Bytes);
+      const auto Count =
+          ImmediateBit ? NdVar::cst(Field & (Bytes * 8 - 1), Bytes)
+                       : S.binary(NdOp::INT_AND, Lane(WT, I, Bytes), Limit);
+      if (RoundShift) {
+        const bool Signed = *Kind == Instruction::RoundShiftSignedVector ||
+                            *Kind == Instruction::RoundShiftSignedImmediate;
+        const auto Shifted =
+            S.binary(Signed ? NdOp::INT_ASHR : NdOp::INT_RIGHT, A, Count);
+        // Mask before shifting: count zero must never evaluate a negative or
+        // full-width shift, even if a later select discards the result.
+        const auto Previous = S.binary(
+            NdOp::INT_AND, S.binary(NdOp::INT_SUB, Count, NdVar::cst(1, Bytes)),
+            Limit);
+        const auto Round =
+            S.binary(NdOp::INT_AND, S.binary(NdOp::INT_RIGHT, A, Previous),
+                     NdVar::cst(1, Bytes));
+        const auto Nonzero =
+            S.binary(NdOp::INT_NOTEQUAL, Count, NdVar::cst(0, Bytes), 1);
+        Values[I] =
+            S.binary(NdOp::INT_ADD, Shifted,
+                     S.binary(NdOp::INT_MULT, Round, S.resize(Nonzero, Bytes)));
+      } else {
+        const bool Left = *Kind == Instruction::InsertLeftVector ||
+                          *Kind == Instruction::InsertLeftImmediate;
+        const auto Complement = S.binary(NdOp::INT_SUB, Limit, Count);
+        const auto Mask = S.binary(Left ? NdOp::INT_LEFT : NdOp::INT_RIGHT,
+                                   NdVar::cst(UINT64_MAX, Bytes), Complement);
+        const auto Inverse = S.makeTemp(Bytes);
+        S.emit(NdOp::INT_NOT, Inverse, {Mask});
+        Values[I] =
+            S.binary(NdOp::INT_OR, S.binary(NdOp::INT_AND, A, Mask),
+                     S.binary(NdOp::INT_AND, Lane(WD, I, Bytes), Inverse));
+      }
     } else if (Shift || Bit) {
       const auto A = Lane(WS, I, Bytes);
       const auto Count = ImmediateBit
@@ -389,11 +557,7 @@ bool MIPSLifter::liftMSA(State &S, uint32_t Word) const {
                                : NdOp::INT_ADD,
                            Lane(WS, I, Bytes), Right(I, Bytes));
   }
-  for (unsigned Count = 16u / Bytes; Count > 1; Count /= 2)
-    for (unsigned I = 0; I != Count / 2; ++I)
-      Values[I] = S.binary(NdOp::CONCAT, Values[I * 2 + 1], Values[I * 2],
-                           Values[I * 2].Size * 2);
-  S.emit(NdOp::COPY, NdVar::reg(mipsreg::w(WD), 16), {Values[0]});
+  S.writeVector(WD, llvm::MutableArrayRef(Values).take_front(16u / Bytes));
   return true;
 }
 

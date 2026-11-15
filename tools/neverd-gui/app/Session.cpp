@@ -213,6 +213,14 @@ Session::Session(QString workerPath, QObject *parent)
   connect(&queries_, &QueryService::contextChanged, this, [this] {
     if (sessionEpoch_ != queries_.sessionEpoch())
       sessionEpoch_ = queries_.sessionEpoch();
+    // The views that show a reader the content ask for it again; what they
+    // ask of the worker goes at once; they take what is there already, the
+    // view worked in and those with the change still to show before the
+    // others; and then everyone else hears of the revision.
+    emit shownRevisionChanged();
+    queries_.sendAhead();
+    emit shownRevisionAsked();
+    emit shownRevisionTaken();
     emit revisionChanged();
     emit stateChanged();
   });
@@ -468,7 +476,8 @@ QString Session::heldMessage(const QString &path, const QString &reason) {
 }
 
 void Session::command(const QString &operation, const QJsonObject &payload,
-                      Callback done, Failure failed, QString expectedRevision) {
+                      Callback done, Failure failed, QString expectedRevision,
+                      bool leaves) {
   // Only edits and their saving make the project dirty while in flight; an
   // open, reload or analysis does not.
   const bool edit = isEdit(operation);
@@ -529,7 +538,7 @@ void Session::command(const QString &operation, const QJsonObject &payload,
         }
         emit stateChanged();
       },
-      std::move(expectedRevision));
+      std::move(expectedRevision), leaves);
 }
 
 void Session::resetState() {
@@ -548,6 +557,8 @@ void Session::resetState() {
   databaseIdentity_.clear();
   metadata_ = {};
   history_ = {};
+  historyReads_ = 0;
+  stepWanted_ = Step::None;
   background_ = {};
   BackgroundSequence.reset();
   generation_.clear();
@@ -1082,14 +1093,27 @@ void Session::finishTransition() {
 void Session::refreshHistory() {
   if (!loaded_)
     return;
-  read(
+  ++historyReads_;
+  // A step asked for while this read was on its way is taken now that the
+  // history says whether there is one.
+  const auto read = [this] {
+    if (historyReads_ <= 0 || --historyReads_ > 0)
+      return;
+    const auto wanted = std::exchange(stepWanted_, Step::None);
+    if (wanted == Step::Undo)
+      undo();
+    else if (wanted == Step::Redo)
+      redo();
+  };
+  this->read(
       QStringLiteral("history"), {{"limit", 1}}, &reads_,
-      [this](const QJsonObject &payload) {
+      [this, read](const QJsonObject &payload) {
         history_ = payload;
         emit historyChanged();
         emit stateChanged();
+        read();
       },
-      [](const QString &, const QString &) {});
+      [read](const QString &, const QString &) { read(); });
 }
 
 void Session::save() {
@@ -1606,17 +1630,29 @@ void Session::rename(Address function, const QString &name,
   // commit them first so the rename never discards or blocks on them.
   if (commentsStaged())
     commitComments();
-  command(QStringLiteral("rename"),
-          {{"address", hexAddress(function)}, {"name", name.trimmed()}},
-          [this, function, name, then = std::move(then)](const QJsonObject &) {
-            refreshHistory();
-            emit renamed(function, name.trimmed());
-            emit message(tr("Renamed %1 to %2")
-                             .arg(displayAddress(function), name.trimmed()),
-                         0);
-            if (then)
-              then();
-          });
+  // A rename no command waits ahead of leaves as it is enqueued, and the
+  // views hear of it while the worker reads it.
+  const bool leaves = !queries_.hasCommands();
+  Failure refused;
+  if (leaves)
+    refused = [this, function, name](const QString &, const QString &) {
+      emit renameRefused(function, name.trimmed());
+    };
+  command(
+      QStringLiteral("rename"),
+      {{"address", hexAddress(function)}, {"name", name.trimmed()}},
+      [this, function, name, then = std::move(then)](const QJsonObject &) {
+        refreshHistory();
+        emit renamed(function, name.trimmed());
+        emit message(tr("Renamed %1 to %2")
+                         .arg(displayAddress(function), name.trimmed()),
+                     0);
+        if (then)
+          then();
+      },
+      std::move(refused), {}, leaves);
+  if (leaves)
+    emit renaming(function, name.trimmed());
 }
 
 void Session::prepareCodeName(const QJsonObject &edit, quint64 epoch) {
@@ -1655,8 +1691,12 @@ void Session::setComment(Address address, const QString &text,
 }
 
 void Session::undo() {
-  if (!canUndo())
+  if (!canUndo()) {
+    // The history of an edit just made is still being read.
+    stepWanted_ = historyReads_ > 0 ? Step::Undo : Step::None;
     return;
+  }
+  stepWanted_ = Step::None;
   // A step past staged comments commits them first, as an edit does.
   command(
       QStringLiteral("undo"), {{"commit_staged", true}, {"limit", 1}},
@@ -1670,8 +1710,11 @@ void Session::undo() {
 }
 
 void Session::redo() {
-  if (!canRedo())
+  if (!canRedo()) {
+    stepWanted_ = historyReads_ > 0 ? Step::Redo : Step::None;
     return;
+  }
+  stepWanted_ = Step::None;
   command(
       QStringLiteral("redo"), {{"commit_staged", true}, {"limit", 1}},
       [this](const QJsonObject &payload) {

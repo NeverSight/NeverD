@@ -1,0 +1,892 @@
+#!/usr/bin/env python3
+"""Recompile HighC/LLVMC for historical, DSP, microMIPS and Release 6 profiles."""
+
+import argparse
+from pathlib import Path
+import runpy
+import subprocess
+
+from elftools.elf.elffile import ELFFile
+from unicorn import UcError
+from unicorn import mips_const as mips
+
+import roundtrip
+from mips_validation_artifacts import MIPSValidationArtifacts, digest
+
+ASE = runpy.run_path(str(Path(__file__).with_name("ase-roundtrip.py")))
+
+DSP64_BOUNDARIES = {
+    f"mips64boundary_{op.replace('.', '_')}_{str(count).replace('-', 'n')}_{pos}_{half}":
+        (op, count, pos, half)
+    for op, count, pos, half in (
+        [(op, 1, 0, "value") for op in ("dextr.w", "dextr.l")]
+        + [(op, count, 0, "value") for op in ("dextrv.w", "dextrv.l")
+           for count in (0, 1, 32, 63)]
+        + [(op, 31, pos, "value") for op in ("dextp", "dextpdp")
+           for pos in (31, 95)]
+        + [(op, 63, pos, "value") for op in ("dextpv", "dextpdpv")
+           for pos in (63, 94, 127)]
+        + [(op, -64, 0, half) for op in ("dshilo", "dshilov")
+           for half in ("hi", "lo")]
+    )
+}
+
+
+def kernels():
+    # The n64 r2 reference core implements PS; the 32-bit 74Kf does not.
+    setup = "dmtc1 $4,$f0\ndmtc1 $5,$f2\n"
+    for op in ("add", "sub", "mul", "abs", "neg", "mov", "pll", "plu", "pul", "puu"):
+        operands = "$f4,$f0" if op in ("abs", "neg", "mov") else "$f4,$f0,$f2"
+        yield f"mips64ps_{op}", "mips64r2", "ps", setup + f"{op}.ps {operands}\ndmfc1 $2,$f4"
+    for op in ("madd", "msub", "nmadd", "nmsub"):
+        yield f"mips64ps_{op}", "mips64r2", "ps", setup + f"{op}.ps $f4,$f0,$f0,$f2\ndmfc1 $2,$f4"
+    for op in ("f", "un", "eq", "ueq", "olt", "ult", "ole", "ule", "sf", "ngle", "seq", "ngl", "lt", "nge", "le", "ngt"):
+        for cc in (0, 6):
+            yield f"mips64ps_c_{op}_{cc}", "mips64r2", "ps", setup + f"c.{op}.ps $fcc{cc},$f0,$f2\ncfc1 $2,$25"
+    for op in ("movf", "movt"):
+        for cc in (0, 6):
+            yield f"mips64ps_{op}_{cc}", "mips64r2", "ps", (setup +
+                f"c.ult.ps $fcc{cc},$f0,$f2\nmov.ps $f4,$f2\n{op}.ps $f4,$f0,$fcc{cc}\ndmfc1 $2,$f4")
+    for op in ("movz", "movn"):
+        yield f"mips64ps_{op}", "mips64r2", "ps", setup + f"mov.ps $f4,$f2\n{op}.ps $f4,$f0,$5\ndmfc1 $2,$f4"
+    yield "mips64ps_pack", "mips64r2", "ps", "mtc1 $4,$f0\nmtc1 $5,$f2\ncvt.ps.s $f4,$f0,$f2\ndmfc1 $2,$f4"
+    for half in ("pl", "pu"):
+        yield f"mips64ps_unpack_{half}", "mips64r2", "ps", setup + f"cvt.s.{half} $f4,$f0\nmfc1 $2,$f4"
+    for offset in (0, 4, 8, 12):
+        yield f"mips64ps_align_{offset}", "mips64r2", "ps", setup + f"ori $6,$0,{offset}\nalnv.ps $f4,$f0,$f2,$6\ndmfc1 $2,$f4"
+    # Scalar FR=1 Release 2 uses legacy NaNs and pre-R6 FCSR behavior.
+    for bits in (32, 64):
+        fmt = "s" if bits == 32 else "d"
+        transfer, move = ("mtc1", "mfc1") if bits == 32 else ("dmtc1", "dmfc1")
+        for operation in ("add", "sub", "mul", "div", "sqrt", "recip", "rsqrt", "abs", "neg"):
+            operands = "$f4,$f0,$f2" if operation in ("add", "sub", "mul", "div") else "$f4,$f0"
+            yield (f"mips{bits}r2fp_{operation}", f"mips{bits}r2", "fp",
+                   f"{transfer} $4,$f0\n{transfer} $5,$f2\n"
+                   f"{operation}.{fmt} {operands}\n{move} $2,$f4")
+        for operation in ("madd", "msub", "nmadd", "nmsub"):
+            yield (f"mips{bits}r2fp_{operation}", f"mips{bits}r2", "fp",
+                   f"{transfer} $4,$f0\n{transfer} $5,$f2\n"
+                   f"{operation}.{fmt} $f4,$f0,$f0,$f2\n{move} $2,$f4")
+        for cc in range(8):
+            yield (f"mips{bits}r2fp_cc{cc}", f"mips{bits}r2", "fp",
+                   f"{transfer} $4,$f0\n{transfer} $5,$f2\n"
+                   f"c.ule.{fmt} $fcc{cc},$f0,$f2\ncfc1 $2,$25")
+        for operation in ("movf", "movt", "movz", "movn"):
+            predicate = "$fcc7" if operation in ("movf", "movt") else "$5"
+            yield (f"mips{bits}r2fp_{operation}", f"mips{bits}r2", "fp",
+                   f"{transfer} $4,$f0\n{transfer} $5,$f2\n{transfer} $5,$f4\n"
+                   f"c.eq.{fmt} $fcc7,$f0,$f2\n{operation}.{fmt} $f4,$f0,{predicate}\n{move} $2,$f4")
+        yield (f"mips{bits}r2fp_branch", f"mips{bits}r2", "fp",
+               f"{transfer} $4,$f0\n{transfer} $5,$f2\nc.ule.{fmt} $fcc3,$f0,$f2\n"
+               "ori $2,$0,1\nbc1tl $fcc3,1f\nori $2,$0,2\n1:")
+        for operation in ("round", "trunc", "ceil", "floor", "cvt"):
+            dest = "w" if bits == 32 else "l"
+            yield (f"mips{bits}r2fp_{operation}", f"mips{bits}r2", "fp",
+                   f"{transfer} $4,$f0\n{operation}.{dest}.{fmt} $f4,$f0\n{move} $2,$f4")
+        for operation in ("lwc1", "ldc1", "swc1", "sdc1", "lwxc1", "ldxc1",
+                          "swxc1", "sdxc1", "luxc1", "suxc1"):
+            address = "$5($4)" if "x" in operation else "0($4)"
+            setup = "ldc1 $f2,0($4)\n" if operation.startswith("s") else ""
+            yield (f"mips{bits}r2fp_memory_{operation}", f"mips{bits}r2", "fp",
+                   f"{setup}{operation} $f2,{address}\n"
+                   f"{'dmfc1' if bits == 64 and operation[1] != 'w' else 'mfc1'} $2,$f2")
+    for bank in range(4):
+        for op in ("dextp", "dextpv", "dextpdp", "dextpdpv"):
+            operand = "$4" if op.endswith("v") else "7"
+            yield (f"mips64discard{bank}_{op}", "mips64r2", "dsp",
+                   f"wrdsp $5,1\n{op} $0,$ac{bank},{operand}\nrddsp $2,63")
+    for bank in range(1, 4):
+        setup = f"mthi $4,$ac{bank}\nmtlo $5,$ac{bank}\n"
+        for form in ("hi", "lo", "extract", "position", "shift_hi", "shift_lo"):
+            if form in ("hi", "lo"):
+                operation = f"mf{form} $2,$ac{bank}"
+            elif form == "extract":
+                operation = f"ori $6,$0,1\ndextrv.l $2,$ac{bank},$6"
+            elif form == "position":
+                operation = ("ori $6,$0,95\nwrdsp $6,1\nori $6,$0,63\n"
+                             f"dextpv $2,$ac{bank},$6")
+            else:
+                operation = f"dshilo $ac{bank},-64\nmf{form[-2:]} $2,$ac{bank}"
+            yield f"mips64bank{bank}_{form}", "mips64r2", "dsp", setup + operation
+    for name, (op, count, pos, half) in DSP64_BOUNDARIES.items():
+        setup = f"mthi $4\nmtlo $5\ndaddiu $6,$0,{count}\n"
+        if op.startswith("dextp"):
+            setup += f"ori $7,$0,{pos}\nwrdsp $7,1\n"
+        operand = "$6" if "v" in op else str(count)
+        operation = (f"{op} $ac0,{operand}\nmf{half} $2" if half != "value" else
+                     f"{op} $2,$ac0,{operand}")
+        yield name, "mips64r2", "dsp", setup + operation
+    for name, cpu in (("mips64", "mips64r2"), ("micromips", "mips32r2")):
+        yield name + "dsp", cpu, "dsp", "subu.qb $2,$4,$5"
+        yield name + "dspr2", cpu, "dspr2", "adduh_r.qb $2,$4,$5"
+    yield "mips64dspindex", "mips64r2", "dsp", "ldx $2,$5($4)"
+    yield "mips64dspcompare", "mips64r2", "dsp", "cmp.lt.ph $4,$5\nrddsp $2,63"
+    yield (
+        "micromipsmsa",
+        "mips32r5",
+        "msa",
+        "fill.w $w0,$4\nfill.w $w1,$5\naddv.w $w2,$w0,$w1\ncopy_s.w $2,$w2[0]",
+    )
+    yield (
+        "mips64msa", "mips64r5", "msa",
+        "fill.d $w0,$4\ninsert.d $w0[1],$5\nsplati.d $w1,$w0[1]\n"
+        "addv.d $w2,$w0,$w1\ncopy_s.d $2,$w2[0]",
+    )
+    yield (
+        "mips64msafloat", "mips64r5", "msa",
+        "fill.d $w0,$4\nfill.d $w1,$5\nfadd.d $w2,$w0,$w1\ncopy_s.d $2,$w2[0]",
+    )
+    for instruction in (
+        "dpau.h.obl dpau.h.obr dpsu.h.obl dpsu.h.obr dpaq_s.w.qh dpsq_s.w.qh "
+        "mulsaq_s.w.qh dpaq_sa.l.pw dpsq_sa.l.pw mulsaq_s.l.pw "
+        "maq_sa.w.qhll maq_sa.w.qhlr maq_sa.w.qhrl maq_sa.w.qhrr "
+        "maq_s.w.qhll maq_s.w.qhlr maq_s.w.qhrl maq_s.w.qhrr "
+        "maq_s.l.pwl maq_s.l.pwr"
+    ).split():
+        yield (
+            "mips64acc_" + instruction.replace(".", "_"), "mips64r2", "dsp",
+            "mthi $0\nmtlo $0\n" + instruction + " $ac0,$4,$5\nmflo $2",
+        )
+    for instruction in ("dmaddu", "dmsubu"):
+        for half in ("hi", "lo"):
+            yield (
+                f"mips64acc_{instruction}_{half}", "mips64r2", "dsp",
+                f"mthi $4\nmtlo $5\n{instruction} $ac0,$4,$5\nmf{half} $2",
+            )
+    for instruction in ("dextr.w", "dextrv.w", "dextr.l", "dextrv.l",
+                        "dextp", "dextpv", "dextpdp", "dextpdpv"):
+        variable = "v" in instruction
+        setup = "mthi $4\nmtlo $5\nori $6,$0,17\nori $7,$0,63\nwrdsp $7,1\n"
+        yield (
+            "mips64extract_" + instruction.replace(".", "_"), "mips64r2", "dsp",
+            setup + instruction + " $2,$ac0," + ("$6" if variable else "17"),
+        )
+    for instruction in ("dshilo", "dshilov", "dmthlip"):
+        for half in ("hi", "lo"):
+            operation = (f"{instruction} $4,$ac0" if instruction == "dmthlip" else
+                         f"{instruction} $ac0," + ("$6" if instruction == "dshilov" else "-17"))
+            yield (
+                f"mips64extract_{instruction}_{half}", "mips64r2", "dsp",
+                "mthi $4\nmtlo $5\ndaddiu $6,$0,-17\n" + operation + f"\nmf{half} $2",
+            )
+    yield (
+        "mips64extract_mixed", "mips64r2", "dsp",
+        "mthi $4\nmtlo $5\nori $6,$0,63\nwrdsp $6,1\nori $7,$0,47\n"
+        "extp $3,$ac0,15\ndextpv $2,$ac0,$7\nxor $2,$2,$3",
+    )
+    yield (
+        "mips64extract_dinsv", "mips64r2", "dsp",
+        "ori $6,$0,2207\nwrdsp $6,3\nor $2,$5,$0\ndinsv $2,$4",
+    )
+    # The R6 generic core executes the original microMIPS ELF directly.
+    yield "micromips32r6", "mips32r6", "", "mul $2,$4,$5\nbitswap $2,$2\njrc16 $ra"
+    yield (
+        "micromips32r6branch",
+        "mips32r6",
+        "",
+        "or $2,$4,$0\n.2byte 0x74a4,2\n.2byte 0x5040,7\njrc16 $ra",
+    )  # BEQC over ORI
+    # ADDIUSP -16, SWSP16 s0/ra into successive words, MOVE16 s0,a0 and v0,s0,
+    # LWM16 s0,ra,0(sp), JRCADDIUSP 16.
+    yield (
+        "micromips32r6frame",
+        "mips32r6",
+        "",
+        ".2byte 0x4ff9,0xca00,0xcbe1\nmove16 $16,$4\n.2byte 0x0c50,0x4402,0x4493",
+    )
+    for bits, multiply in ((32, "mul"), (64, "dmulu")):
+        cpu = f"mips{bits}r6"
+        d = "d" if bits == 64 else ""
+        transfer = "dmtc1" if bits == 64 else "mtc1"
+        move = "dmfc1" if bits == 64 else "mfc1"
+        fmt = "d" if bits == 64 else "s"
+        yield (
+            cpu + "fp", cpu, "",
+            f"{transfer} $4,$f0\n{transfer} $5,$f2\n"
+            f"add.{fmt} $f4,$f0,$f2\n{move} $2,$f4",
+        )
+        yield (
+            cpu + "fpcompare", cpu, "",
+            f"{transfer} $4,$f0\n{transfer} $5,$f2\n"
+            f"cmp.une.{fmt} $f4,$f0,$f2\n{move} $2,$f4",
+        )
+        yield (
+            cpu + "fpround", cpu, "",
+            f"{transfer} $4,$f0\nrint.{fmt} $f4,$f0\n{move} $2,$f4",
+        )
+        yield cpu, cpu, "", f"{multiply} $2,$4,$5\n{d}bitswap $2,$2"
+        yield cpu + "div", cpu, "", f"{d}div $2,$4,$5"
+        yield cpu + "branch", cpu, "", "or $2,$4,$0\nbgec $4,$5,1f\nori $2,$0,7\n1:"
+        yield cpu + "nal", cpu, "", "or $3,$31,$0\nnal\nor $2,$31,$0\nor $31,$3,$0"
+
+
+def historical_integer_kernels():
+    rows = {
+        "history_add": "daddu $2,$4,$5",
+        "history_shift": "dsllv $2,$4,$5",
+        "history_mul_lo": "dmult $4,$5\nmflo $2",
+        "history_mul_hi": "dmult $4,$5\nmfhi $2",
+        "history_div_lo": "ddiv $0,$4,$5\nmflo $2",
+        "history_div_hi": "ddiv $0,$4,$5\nmfhi $2",
+        "history_branch": "or $2,$4,$0\nbeql $4,$5,1f\ndaddiu $2,$2,7\n1:",
+        "history_merge": "ldl $2,7($4)\nldr $2,0($4)",
+    }
+    for name, body in rows.items():
+        # Hard-float metadata also lets the runner compare the unchanged FCSR.
+        yield name, "mips4", "fp", body
+
+
+def verify_historical_image(path, level, abi, little):
+    with path.open("rb") as stream:
+        image = ELFFile(stream)
+        record = image.get_section_by_name(".MIPS.abiflags")
+        if (
+            image.header.e_flags >> 28 != level - 1
+            or image.elfclass != (32 if abi == "n32" else 64)
+            or bool(image.header.e_flags & 0x20) != (abi == "n32")
+            or image.little_endian != little
+            or record is None
+            or record.data()[2:5] != bytes((level, 0, 2))
+        ):
+            raise ValueError(f"{path}: historical ISA/ABI/byte-order evidence changed")
+
+
+def inputs(name, bits):
+    pairs = [
+        (a, b)
+        for a in (0, 1, -1, 0x11223344, 0x8000000000000001)
+        for b in (0, 7, -1, 0xA5A533FF)
+    ]
+    if name.startswith(("mips64extract_", "mips64boundary_", "mips64bank", "mips64discard")):
+        values = (0, 1, 0x123456789abcdef0, (1 << 63) - 1, 1 << 63, (1 << 64) - 1)
+        return [(a, b) for a in values for b in values]
+    if name.startswith("mips64acc_"):
+        vectors = [
+            (a, b)
+            for a in (0, 1, 2, 0x0001000200030004, 0xFFFF00010002FFFF)
+            for b in (0, 5, 6, 0x0005000600070008, 0xFFFF00020001FFFF)
+        ]
+        if name.startswith(("mips64acc_dmaddu_", "mips64acc_dmsubu_")):
+            vectors.extend([(0x10000, 0x10000), (0xffffffff, 0xffffffff),
+                            (0xffffffff00000000, 0xffffffff),
+                            (0xffffffffffffffff, 0xffffffffffffffff)])
+        return vectors
+    if name.startswith("mips64ps_"):
+        values = (0, 0x800000003fc00000, 0x3fc00000bf800000,
+                  0x7fc000003f800000, 0x3f8000007f800001,
+                  0x7f8000017fc00000, 0x8000000000000001)
+        return [(a, b) for a in values for b in values]
+    if name == "history_merge":
+        return [(roundtrip.DATA + offset, 0) for offset in range(8)]
+    if name.startswith("history_div_"):
+        return [(a, b) for a, b in pairs if b] + [(-(1 << 63), -1), (-17, 3), (17, -3)]
+    if "fp_memory_" in name:
+        stride = 1 if "uxc1" in name else 4 if "wc1" in name or "wxc1" in name else 8
+        return [(roundtrip.DATA + base, offset - base)
+                for base in (0, 8, 16) for offset in range(0, 32, stride)]
+    if "fp" in name:
+        values = (
+            (0, 0x80000000, 0x3FC00000, 0xBF800000, 0x7FC00000, 0x7F800001, 1)
+            if bits == 32 else
+            (0, 0x8000000000000000, 0x3FF8000000000000, 0xBFF0000000000000,
+             0x7FF8000000000000, 0x7FF0000000000001, 1)
+        )
+        return [(a, b) for a in values for b in values]
+    if name.endswith("div"):
+        return [(a, b) for a, b in pairs if b] + [
+            (-(1 << (bits - 1)), -1),
+            (-17, 3),
+            (17, -3),
+        ]
+    if name.endswith("index"):
+        return [
+            (roundtrip.DATA + base, offset - base)
+            for base in (0, 8, 16, 24)
+            for offset in (0, 8, 16, 24)
+        ]
+    return pairs
+
+
+def reference_model(bits, feature, micro_fp=False):
+    if micro_fp:
+        return (mips.UC_CPU_MIPS64_MICROMIPS64R2_GENERIC if bits == 64 else
+                mips.UC_CPU_MIPS32_MICROMIPS32R2_GENERIC)
+    if feature in ("fp", "ps"):
+        return mips.UC_CPU_MIPS64_MIPS64R2_GENERIC if bits == 64 else mips.UC_CPU_MIPS32_74KF
+    if not feature:
+        return (
+            mips.UC_CPU_MIPS64_I6400
+            if bits == 64
+            else mips.UC_CPU_MIPS32_MIPS32R6_GENERIC
+        )
+    if bits == 64:
+        return mips.UC_CPU_MIPS64_I6400 if feature == "msa" else mips.UC_CPU_MIPS64_MIPS64DSPR2
+    return mips.UC_CPU_MIPS32_P5600 if feature == "msa" else mips.UC_CPU_MIPS32_74KF
+
+
+def observe(elf, bits, little, feature, cases, micro_fp=False):
+    if micro_fp:
+        with elf.open("rb") as stream:
+            image = ELFFile(stream)
+            symbol = image.get_section_by_name(".symtab").get_symbol_by_name("kernel")[0]
+            if not image["e_flags"] & 0x02000000 or not symbol["st_other"]["local"] & 4:
+                raise ValueError(f"{elf}: floating kernel lost its microMIPS mode")
+    uc, entry = roundtrip.emulator(
+        elf, bits, little, "kernel", cpu_model=reference_model(bits, feature, micro_fp)
+    )
+    order = "little" if little else "big"
+
+    def execute(address, words):
+        uc.mem_write(address, b"".join(w.to_bytes(4, order) for w in words))
+        uc.emu_start(address, address + len(words) * 4, count=len(words))
+
+    if feature and feature not in ("fp", "ps"):
+        execute(
+            roundtrip.STOP + 0x200,
+            ASE["ENABLE_MSA" if feature == "msa" else "ENABLE_DSP"],
+        )
+    if not feature or feature in ("fp", "ps"):
+        status = uc.reg_read(mips.UC_MIPS_REG_CP0_STATUS) | 0x24000000
+        uc.reg_write(mips.UC_MIPS_REG_CP0_STATUS, status)
+    uc.mem_write(roundtrip.DATA, bytes((0x87 + 29 * i) & 255 for i in range(64)))
+    observations = []
+    for i, pair in enumerate(cases):
+        if not feature or feature in ("fp", "ps"):
+            uc.reg_write(mips.UC_MIPS_REG_FCSR, (0x1000000 if feature in ("fp", "ps") else 0xC0000) | (i & 3))
+        if feature and feature not in ("fp", "ps"):
+            uc.reg_write(
+                mips.UC_MIPS_REG_A0, 0x01004005 if feature != "msa" and i % 2 else 0
+            )
+            execute(
+                roundtrip.STOP + 0x300, [0x783E2059 if feature == "msa" else 0x7C81FCF8]
+            )
+        try:
+            value = roundtrip.invoke(uc, entry, bits, little, pair)[0]
+        except UcError as error:
+            raise RuntimeError(
+                f"{elf}: input {pair}, PC {uc.reg_read(mips.UC_MIPS_REG_PC):#x}: {error}"
+            ) from error
+        control = uc.reg_read(mips.UC_MIPS_REG_FCSR) if not feature or feature in ("fp", "ps") else None
+        if feature and feature not in ("fp", "ps"):
+            execute(
+                roundtrip.STOP + 0x400, [0x787E0A19 if feature == "msa" else 0x7C3F44B8]
+            )
+            control = uc.reg_read(mips.UC_MIPS_REG_8) & 0xFFFFFFFF
+        observation = (value, control)
+        if feature in ("fp", "ps"):
+            observation += (bytes(uc.mem_read(roundtrip.DATA, 64)).hex(),)
+        observations.append(observation)
+    return observations
+
+
+def verify_micro(
+    args, artifacts, obj, rebuilt, command, log, feature, little, cases, wanted
+):
+    # The ASE-capable Unicorn cores only execute classic code. The emitted C
+    # retains its microMIPS function attribute, including mixed-mode helpers.
+    directory = obj.parent
+    source, driver = directory / "driver.s", directory / "driver.o"
+    asm = [
+        ".text",
+        ".set noreorder",
+        ".set micromips",
+        ".set insn32",
+        ".globl _start",
+        ".ent _start",
+        "_start:",
+        "la $sp,stack_top",
+    ]
+    for i, ((a, b), (value, control)) in enumerate(zip(cases, wanted, strict=True)):
+        if feature in ("dsp", "dspr2"):
+            asm.extend([f"li $4,{0x01004005 if i % 2 else 0}", "wrdsp $4,63"])
+        asm.extend(
+            [
+                f"li $4,{a & 0xFFFFFFFF}",
+                f"li $5,{b & 0xFFFFFFFF}",
+                "jal kernel",
+                "nop",
+                f"li $8,{value}",
+                f"bne $2,$8,failed_{i}",
+                "nop",
+            ]
+        )
+        if feature in ("dsp", "dspr2"):
+            asm.extend(
+                ["rddsp $9,63", f"li $8,{control}", f"bne $9,$8,failed_{i}", "nop"]
+            )
+    success = 211
+    asm.extend([f"li $4,{success}", "break 0x3ff"])
+    for i in range(len(cases)):
+        asm.extend([f"failed_{i}:", f"li $4,{i + 1}", "break 0x3ff"])
+    asm.extend(
+        [".end _start", ".bss", ".balign 16", ".space 8192", "stack_top:", ".space 32"]
+    )
+    source.write_text("\n".join(asm) + "\n")
+    cpu = "mips32r5" if feature == "msa" else "mips32r2"
+    command(
+        [
+            args.assembler,
+            "-" + cpu,
+            "-32",
+            "-EL" if little else "-EB",
+            *(["-m" + feature] if feature else []),
+            *(["-mfp64"] if feature == "msa" else []),
+            "-o",
+            driver,
+            source,
+        ]
+    )
+    command(
+        [
+            args.linker,
+            "-m",
+            "elf32" + ("l" if little else "b") + "tsmip",
+            "-N",
+            "-Ttext",
+            "0x80010000",
+            "-e",
+            "_start",
+            "-o",
+            rebuilt,
+            driver,
+            obj,
+        ]
+    )
+    with artifacts.process(
+        [args.simulator, "--endian", "little" if little else "big", rebuilt], log
+    ) as (process, _):
+        process.wait(timeout=30)
+    if process.returncode != success:
+        index = process.returncode - 1
+        case = cases[index] if 0 <= index < len(cases) else None
+        raise ValueError(
+            f"{directory.name} simulator exit {process.returncode}, input {case}: {log.read_text()[-1024:]}"
+        )
+    artifacts.discard(source, driver)
+
+
+def run(args, artifacts):
+    root = artifacts.work
+    headers = root / "headers"
+    headers.mkdir()
+    (headers / "string.h").write_text(
+        "#include <stddef.h>\nvoid *memcpy(void *, const void *, size_t);\n"
+    )
+    resource = subprocess.check_output(
+        [args.clang, "-print-resource-dir"], text=True
+    ).strip()
+    report = {"complete": False, "builds": [], "neverd_sha256": digest(args.neverd)}
+    selected = list(kernels())
+    if args.historical_isa:
+        selected.extend(historical_integer_kernels())
+    for name, cpu, feature, body in selected:
+        if args.profile and name not in args.profile:
+            continue
+        if args.micro_fp:
+            if feature not in ("fp", "ps"):
+                continue
+            # microMIPS has ordinary BC1T/F, without the classic likely forms.
+            if name.endswith("_branch"):
+                body = body.replace("bc1tl", "bc1t").replace(
+                    "ori $2,$0,2\n1:", "ori $2,$0,2\nori $2,$0,3\n1:")
+        if args.historical_isa:
+            if feature not in ("fp", "ps") or (
+                args.historical_isa == 4 and (feature == "ps" or "uxc1" in name)
+            ):
+                continue
+            cpu = "mips" + str(args.historical_isa)
+            # FCCR/FEXR/FENR were introduced in MIPS V. Observe the complete
+            # legacy FCSR on IV; both source views must preserve it exactly.
+            if args.historical_isa == 4:
+                body = body.replace("cfc1 $2,$25", "cfc1 $2,$31")
+        bits = 64 if args.historical_isa or "64" in cpu else 32
+        gcc = args.micro_fp and bits == 64
+        if gcc and not args.micro64_cc:
+            raise ValueError("microMIPS64 source validation requires --micro64-cc (GCC)")
+        compiler = args.micro64_cc if gcc else args.clang
+        includes = (subprocess.check_output(
+            [compiler, "-print-file-name=include"], text=True).strip()
+            if gcc else resource + "/include")
+        micro = args.micro_fp or name.startswith("micro")
+        micro_r6 = micro and cpu.endswith("r6")
+        # Clang 22's microR6 backend emits legacy LUI and JRC16 in its
+        # prologue/epilogue. Keep the original R6 ISA and tagged entry, then
+        # execute the unedited C on the GNU sim microMIPS32r2/o32 target.
+        rebuild_cpu = "mips32r2" if micro_r6 else cpu
+        if args.historical_isa == 5:
+            # Clang 22 has no MIPS V code generator. Its MIPS IV scalar code
+            # is valid on V; the semantic helpers retain the original PS words.
+            # Record both ISAs rather than silently compiling for MIPS64r2.
+            rebuild_cpu = "mips4"
+        # The pinned I6400 implements MSA and n64, with the Release 6
+        # return encoding. The original uses JALR zero,ra, valid in r5 and r6.
+        if bits == 64 and feature == "msa":
+            rebuild_cpu = "mips64r6"
+        cases = inputs(name, 32 if args.historical_isa and name.startswith("mips32r2fp") else bits)
+        extra = (["-mfp64"] if feature in ("fp", "ps") else ["-m" + feature] if feature else []) + (
+            ["-mfp64"] if feature == "msa" else []
+        )
+        for little in (False, True):
+            target = ("mips64" if bits == 64 else "mips") + ("el" if little else "")
+            if name == "history_merge":
+                body = "ldl $2,7($4)\nldr $2,0($4)" if little else "ldl $2,0($4)\nldr $2,7($4)"
+            n32 = args.historical_isa and args.historical_abi == "n32"
+            emulation = (f"elf32{'l' if little else 'b'}tsmipn32" if n32 else
+                         f"elf{bits}{'l' if little else 'b'}tsmip")
+            directory = root / (name + ("el" if little else ""))
+            directory.mkdir()
+            log = directory / "command.log"
+            obj = directory / "kernel.o"
+
+            def command(argv):
+                roundtrip.run_command(artifacts, argv, log)
+
+            def assemble(path, compressed):
+                source = directory / "kernel.s"
+                source.write_text(
+                    ".text\n.set noreorder\n.set noat\n"
+                    + (
+                        ".set micromips\n"
+                        if micro_r6
+                        else ".set micromips\n.set insn32\n" if compressed else ""
+                    )
+                    + ".globl kernel\n.type kernel,@function\n.ent kernel\nkernel:\n"
+                    + body
+                    + ("" if micro_r6 else "\njalr $0,$31\nnop" if bits == 64 and feature == "msa" else "\njr $ra\nnop" if feature else "\njrc $ra")
+                    + "\n.end kernel\n.size kernel,.-kernel\n"
+                )
+                if micro_r6:
+                    # GNU as 2.47 does not emit microMIPS Release 6.
+                    command(
+                        [
+                            args.clang,
+                            "-target",
+                            target + "-linux-gnu",
+                            "-march=" + cpu,
+                            "-mabi=o32",
+                            "-mmicromips",
+                            "-mno-abicalls",
+                            "-fno-pic",
+                            "-c",
+                            source,
+                            "-o",
+                            obj,
+                        ]
+                    )
+                else:
+                    command(
+                        [
+                            args.assembler,
+                            "-" + cpu,
+                            "-EL" if little else "-EB",
+                            "-n32" if n32 else "-" + str(bits),
+                            *extra,
+                            "-o",
+                            obj,
+                            source,
+                        ]
+                    )
+                command(
+                    [
+                        args.linker,
+                        "-m",
+                        emulation,
+                        "-Ttext",
+                        "0x10000",
+                        "-e",
+                        "kernel",
+                        "-o",
+                        path,
+                        obj,
+                    ]
+                )
+                artifacts.discard(source, obj)
+
+            original = directory / "original.elf"
+            assemble(original, micro)
+            if args.historical_isa:
+                verify_historical_image(
+                    original, args.historical_isa, args.historical_abi, little
+                )
+            oracle = original
+            if micro and not micro_r6 and not args.micro_fp:
+                # The reference cores with DSP/MSA expose the classic encoding.
+                # NeverD receives the separately assembled physical micro ELF.
+                oracle = directory / "classic.elf"
+                assemble(oracle, False)
+            wanted = observe(oracle, bits, little, feature, cases, args.micro_fp)
+            if name.startswith("mips64discard"):
+                op = name.split("_", 1)[1]
+                for i, ((a, b), actual) in enumerate(zip(cases, wanted, strict=True)):
+                    count, pos = a & 63 if op.endswith("v") else 7, b & 127
+                    control = (0x01004005 if i % 2 else 0) & ~127 | pos
+                    if pos < count:
+                        control |= 0x4000
+                    else:
+                        control &= ~0x4000
+                        if "dp" in op:
+                            control = (control & ~127) | ((pos - count - 1) & 127)
+                    if actual != (control, control):
+                        raise ValueError(f"{name}: original {actual}, independent {(control, control)}")
+            if name.startswith("mips64bank"):
+                form = name.split("_", 1)[1]
+                mask = (1 << 64) - 1
+                for i, ((a, b), actual) in enumerate(zip(cases, wanted, strict=True)):
+                    control = 0x01004005 if i % 2 else 0
+                    if form in ("hi", "lo"):
+                        value = a if form == "hi" else b
+                    elif form == "extract":
+                        value = (((a << 64) | b) >> 1) & mask
+                    elif form == "position":
+                        value = (((a << 64) | b) >> 32) & mask
+                        control = (control & ~0x407f) | 95
+                    else:
+                        value = b if form == "shift_hi" else 0
+                    if actual != (value, control):
+                        raise ValueError(f"{name}: original {actual}, independent {(value, control)}")
+            if name in DSP64_BOUNDARIES:
+                op, count, pos, half = DSP64_BOUNDARIES[name]
+                mask = (1 << 64) - 1
+                for i, ((a, b), actual) in enumerate(zip(cases, wanted, strict=True)):
+                    acc = (a << 64) | b
+                    control = 0x01004005 if i % 2 else 0
+                    if op.startswith("dextr"):
+                        value = (acc >> count) & mask
+                        if op.endswith(".w"):
+                            value &= 0xffffffff
+                            if value & (1 << 31):
+                                value |= mask ^ 0xffffffff
+                    elif op.startswith("dextp"):
+                        value = (acc >> (pos - count)) & ((1 << (count + 1)) - 1)
+                        control = (control & ~0x407f) | (
+                            (pos - count - 1) & 127 if "dp" in op else pos)
+                    else:
+                        shifted = acc >> count if count >= 0 else acc << -count
+                        value = (shifted >> (64 if half == "hi" else 0)) & mask
+                    if actual != (value, control):
+                        raise ValueError(f"{name}: original {actual}, independent {(value, control)}")
+            if name.startswith("mips64extract_"):
+                mask = (1 << 64) - 1
+                instruction = name.removeprefix("mips64extract_")
+                for i, ((a, b), actual) in enumerate(zip(cases, wanted, strict=True)):
+                    acc = (a << 64) | b
+                    control = 0x01004005 if i % 2 else 0
+                    if instruction.startswith("dextr"):
+                        value = (acc >> 17) & mask
+                        if instruction.endswith("_w"):
+                            value &= 0xffffffff
+                            if value & (1 << 31):
+                                value |= mask ^ 0xffffffff
+                        control = (control & ~127) | 63
+                    elif instruction.startswith("dextp"):
+                        value = (acc >> 46) & ((1 << 18) - 1)
+                        control = (control & ~0x407f) | (45 if "dp" in instruction else 63)
+                    elif instruction.startswith("dshilo"):
+                        value = ((acc << 17) >> (64 if instruction.endswith("_hi") else 0)) & mask
+                    elif instruction.startswith("dmthlip"):
+                        value = b if instruction.endswith("_hi") else a
+                        control += 64
+                    elif instruction == "dinsv":
+                        field = ((1 << 17) - 1) << 31
+                        value = (b & ~field) | ((a << 31) & field)
+                        control = (control & ~0x1fff) | 2207
+                    else:
+                        word_acc = ((a & 0xffffffff) << 32) | (b & 0xffffffff)
+                        value = ((acc >> 16) & ((1 << 48) - 1)) ^ ((word_acc >> 48) & 0xffff)
+                        control = (control & ~0x407f) | 63
+                    if actual != (value, control):
+                        raise ValueError(f"{name}: original {actual}, independent {(value, control)}")
+            if name.startswith(("mips64acc_dmaddu_", "mips64acc_dmsubu_")):
+                word = (1 << 32) - 1
+                mask = (1 << 64) - 1
+                for (a, b), (value, _) in zip(cases, wanted, strict=True):
+                    dot = (a >> 32) * (b >> 32) + (a & word) * (b & word)
+                    result = ((a << 64) | b) + (-dot if "dmsubu" in name else dot)
+                    expected = (result >> (64 if name.endswith("_hi") else 0)) & mask
+                    if value != expected:
+                        raise ValueError(f"{name}: original returned {value:#x}, expected {expected:#x}")
+            for view in ("highc", "llvmc"):
+                source = directory / (view + ".c")
+                command(
+                    [
+                        args.neverd,
+                        "decompile",
+                        "--func",
+                        "kernel",
+                        *(["--llvm"] if view == "llvmc" else []),
+                        original,
+                        "-o",
+                        source,
+                    ]
+                )
+                try:
+                    for opt in ("-O0", "-O2"):
+                        obj = directory / f"{view}{opt}.o"
+                        rebuilt = directory / f"{view}{opt}.elf"
+                        command(
+                            [
+                                compiler,
+                                *(["-EL" if little else "-EB", "-minterlink-compressed"]
+                                  if gcc else [f"--target={target}-linux-gnu"]),
+                                "-march=" + rebuild_cpu,
+                                "-mabi=n32" if n32 else f"-mabi={bits}",
+                                "-mno-abicalls",
+                                "-fno-pic",
+                                "-G0",
+                                "-ffreestanding",
+                                "-fno-strict-aliasing",
+                                "-nostdinc",
+                                "-isystem",
+                                includes,
+                                "-I",
+                                headers,
+                                *extra,
+                                opt,
+                                *(["-S", "-fno-addrsig"]
+                                  if args.historical_isa == 5 else ["-c"]),
+                                source,
+                                "-o",
+                                (obj.with_suffix(".s")
+                                 if args.historical_isa == 5 else obj),
+                            ]
+                        )
+                        if args.historical_isa == 5:
+                            # Assemble the compiler's IV scalar code and the
+                            # original PS words as V, preserving the ELF ISA
+                            # declaration as well as the physical instructions.
+                            assembly = obj.with_suffix(".s")
+                            command([
+                                args.assembler, "-mips5", "-mfp64",
+                                "-EL" if little else "-EB",
+                                "-n32" if n32 else "-64",
+                                assembly, "-o", obj,
+                            ])
+                            artifacts.discard(assembly)
+                        if micro and not args.micro_fp:
+                            verify_micro(
+                                args,
+                                artifacts,
+                                obj,
+                                rebuilt,
+                                command,
+                                log,
+                                feature,
+                                little,
+                                cases,
+                                wanted,
+                            )
+                        else:
+                            command(
+                                [
+                                    args.linker,
+                                    "-m",
+                                    emulation,
+                                    "-Ttext",
+                                    "0x30000",
+                                    "-e",
+                                    "kernel",
+                                    "-o",
+                                    rebuilt,
+                                    obj,
+                                ]
+                            )
+                            if args.historical_isa:
+                                verify_historical_image(
+                                    rebuilt, args.historical_isa,
+                                    args.historical_abi, little
+                                )
+                            got = observe(rebuilt, bits, little, feature, cases, args.micro_fp)
+                            for pair, actual, expected in zip(
+                                cases, got, wanted, strict=True
+                            ):
+                                if actual != expected:
+                                    raise ValueError(
+                                        f"{directory.name} {view} {opt} {pair}: {actual} != {expected}"
+                                    )
+                        report["builds"].append(
+                            {
+                                "profile": directory.name,
+                                "source_isa": cpu,
+                                "encoding": "micro" if micro else "classic",
+                                "abi": "n32" if n32 else str(bits),
+                                "codegen_isa": rebuild_cpu,
+                                "compiler": str(compiler),
+                                "rebuilt_isa": (cpu if args.historical_isa == 5
+                                                else rebuild_cpu),
+                                "view": view,
+                                "opt": opt,
+                                "cases": len(cases),
+                                "source_sha256": digest(source),
+                                "elf_sha256": digest(rebuilt),
+                            }
+                        )
+                        artifacts.discard(obj, rebuilt)
+                except Exception:
+                    artifacts.keep_source(source)
+                    raise
+                artifacts.discard(source)
+            artifacts.discard(original, log)
+            if micro and not micro_r6 and not args.micro_fp:
+                artifacts.discard(oracle)
+            artifacts.write("results.json", report)
+    report["complete"] = True
+    artifacts.write("results.json", report)
+    print(
+        len(report["builds"]),
+        "source builds,",
+        sum(row["cases"] for row in report["builds"]),
+        "executions passed",
+    )
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    for option in ("assembler", "linker", "neverd", "clang", "output"):
+        parser.add_argument(
+            "--" + option, type=lambda s: Path(s).absolute(), required=True
+        )
+    parser.add_argument("--historical-isa", type=int, choices=(4, 5))
+    parser.add_argument("--micro-fp", action="store_true",
+                        help="execute physical pre-R6 microMIPS FP originals and rebuilt C")
+    parser.add_argument("--micro64-cc", type=lambda s: Path(s).absolute(),
+                        help="GNU C compiler for physical microMIPS64 rebuilt functions")
+    parser.add_argument("--historical-abi", choices=("n32", "n64"), default="n64")
+    parser.add_argument("--simulator", type=lambda s: Path(s).absolute())
+    parser.add_argument("--profile", action="append", choices=[k[0] for k in kernels()] + [k[0] for k in historical_integer_kernels()])
+    args = parser.parse_args()
+    if args.micro_fp and args.historical_isa:
+        parser.error("historical MIPS has no microMIPS encoding")
+    if args.micro_fp and args.profile:
+        available = {name for name, _, feature, _ in kernels() if feature in ("fp", "ps")}
+        if not set(args.profile) <= available:
+            parser.error("--micro-fp requires pre-R6 floating profiles")
+    if args.profile and not args.historical_isa and any(
+        p.startswith("history_") for p in args.profile
+    ):
+        parser.error("historical integer profiles require --historical-isa")
+    if args.historical_isa and args.profile:
+        available = {
+            name
+            for name, _, feature, _ in (*kernels(), *historical_integer_kernels())
+            if feature in ("fp", "ps")
+            and not (args.historical_isa == 4 and (feature == "ps" or "uxc1" in name))
+        }
+        if not set(args.profile) <= available:
+            parser.error("selected profiles are unavailable in the historical ISA")
+    if not args.simulator and not args.historical_isa and not args.micro_fp and (
+        not args.profile or any(p.startswith("micro") for p in args.profile)
+    ):
+        parser.error("--simulator is required to execute rebuilt microMIPS kernels")
+    with MIPSValidationArtifacts(
+        args.output,
+        "mips-profile-roundtrip",
+        (
+            args.assembler,
+            args.linker,
+            args.neverd,
+            args.clang,
+            *([args.micro64_cc] if args.micro64_cc else []),
+            *([args.simulator] if args.simulator else []),
+        ),
+    ) as artifacts:
+        run(args, artifacts)

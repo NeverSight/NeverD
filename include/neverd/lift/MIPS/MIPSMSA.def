@@ -86,4 +86,13 @@ NEVERD_MIPS_MSA(UnsignedMaximumImmediate, 0xff80003f, 0x79800006)
 NEVERD_MIPS_MSA(SignedMinimumImmediate, 0xff80003f, 0x7a000006)
 NEVERD_MIPS_MSA(UnsignedMinimumImmediate, 0xff80003f, 0x7a800006)
 
+NEVERD_MIPS_MSA(RoundShiftSignedVector, 0xff80003f, 0x78800015)
+NEVERD_MIPS_MSA(RoundShiftUnsignedVector, 0xff80003f, 0x79000015)
+NEVERD_MIPS_MSA(RoundShiftSignedImmediate, 0xff80003f, 0x7900000a)
+NEVERD_MIPS_MSA(RoundShiftUnsignedImmediate, 0xff80003f, 0x7980000a)
+NEVERD_MIPS_MSA(InsertLeftVector, 0xff80003f, 0x7b00000d)
+NEVERD_MIPS_MSA(InsertRightVector, 0xff80003f, 0x7b80000d)
+NEVERD_MIPS_MSA(InsertLeftImmediate, 0xff80003f, 0x7b000009)
+NEVERD_MIPS_MSA(InsertRightImmediate, 0xff80003f, 0x7b800009)
+
 #undef NEVERD_MIPS_MSA

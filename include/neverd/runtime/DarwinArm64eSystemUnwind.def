@@ -1,0 +1,19 @@
+//===- DarwinArm64eSystemUnwind.def - System cursor ABI --------*- C -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_SYSTEM_UNWIND_VALUE
+#define NEVERD_SYSTEM_UNWIND_VALUE(Name, Value)
+#endif
+
+NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eFirstPreservedGPR, 19)
+NEVERD_SYSTEM_UNWIND_VALUE(NDArm64ePreservedGPRCount, 10)
+NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eFrameRecordWords, 2)
+NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eFirstPreservedD, 8)
+NEVERD_SYSTEM_UNWIND_VALUE(NDArm64ePreservedDCount, 8)
+NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eStackAlignment, 16)
+NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eInstructionAlignment, 4)
+
+#undef NEVERD_SYSTEM_UNWIND_VALUE

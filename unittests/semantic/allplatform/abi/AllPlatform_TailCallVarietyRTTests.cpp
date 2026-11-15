@@ -17,6 +17,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64TailVarietyRT : public SemanticRoundTripFixture,
                          public ::testing::WithParamInterface<RoundTripTC> {};
@@ -129,7 +130,17 @@ static const std::vector<RoundTripTC> kX86 = makeTailVarietyTC("x86tv", "int");
 static const std::vector<RoundTripTC> kA64 = makeTailVarietyTC("a64tv", "long");
 static const std::vector<RoundTripTC> kARM = makeTailVarietyTC("armtv", "int");
 
-INSTANTIATE_TEST_SUITE_P(TailVar, X64TailVarietyRT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(TailVar, X86TailVarietyRT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(TailVar, A64TailVarietyRT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(TailVar, ARM32TailVarietyRT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(TailVar, X64TailVarietyRT, ::testing::ValuesIn(kX64),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(TailVar, X86TailVarietyRT, ::testing::ValuesIn(kX86),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(TailVar, A64TailVarietyRT, ::testing::ValuesIn(kA64),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(TailVar, ARM32TailVarietyRT, ::testing::ValuesIn(kARM),
+                         rtTCName);
+
+// A folded temporary kept its read in an indirect callee: the C is checked
+// by building and running it.
+INSTANTIATE_TEST_SUITE_P(TailVarHighC, A64TailVarietyRT,
+                         ::testing::ValuesIn(onHighC(kA64, {"_fpcond"})),
+                         rtTCName);

@@ -89,6 +89,10 @@ struct DecodedInsn {
   /// Raw identity and operand availability captured by the producing decoder.
   /// Native decoding can supply complete detail without rendered text.
   std::optional<AArch64DecodeOccurrence> AArch64Occurrence = std::nullopt;
+  /// A Release 6 conditional compact branch with a CTI at PC+4 faults only
+  /// on the fallthrough path. An absent value means the follower was outside
+  /// the supplied byte window. Disassembly still returns the physical head.
+  std::optional<bool> MIPSForbiddenFollower;
 };
 
 /// A semantic unit with truthful physical-instruction identities. MIPS delayed
@@ -292,6 +296,17 @@ public:
   /// not a direct call.  Dispatches to the active architecture lifter.
   va_t directCallTarget(const DecodedInsn &Insn) const;
 
+  /// Classify a contiguous prefix for a textless, detailless x86 sweep.
+  /// Each word holds the physical instruction ID above its low length byte.
+  /// Stops at the first rejected input or when Output fills. A rejection may
+  /// still have a NeverD-specific decode in decodeOneLight().
+  size_t classifyX86Prefix(llvm::ArrayRef<uint8_t> Bytes, va_t Addr,
+                           llvm::MutableArrayRef<uint32_t> Output) const;
+
+  /// Resolve one complete x86 near CALL without touching the borrowed decode.
+  /// Returns InvalidVA for indirect calls, incomplete or surplus bytes.
+  va_t directX86CallTarget(llvm::ArrayRef<uint8_t> Bytes, va_t Addr) const;
+
   /// Encoded return-pop immediate, including an explicitly encoded zero.
   /// Empty for ordinary returns and non-x86 instructions.
   std::optional<uint64_t> returnImmediate(const DecodedInsn &Insn) const;
@@ -339,6 +354,16 @@ private:
   static uint64_t nextAArch64DecodeIdentity();
 
   /// Apply the active architecture's fallback when Capstone rejects bytes.
+  bool decodePhysical(const uint8_t *Bytes, size_t Len, va_t Addr);
+  bool decodeMIPSEquivalent(const uint8_t *Bytes, uint32_t Classic, va_t Addr,
+                            bool HalfwordBranch = false);
+  bool decodeR6FloatCompare(const uint8_t *Bytes, uint32_t Classic, va_t Addr);
+  bool decodeR6HardwareRegister(const uint8_t *Bytes, uint32_t Word, va_t Addr);
+  bool decodeMicroMIPSRelease6(const uint8_t *Bytes, size_t Len, va_t Addr);
+  bool decodeMIPSReservation(const uint8_t *Bytes, uint32_t Word, va_t Addr);
+  bool decodeMIPSPairedSingle(const uint8_t *Bytes, uint32_t Physical,
+                              va_t Addr);
+  bool decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr);
   bool decodeArchitectureFallback(const uint8_t *Bytes, size_t Len, va_t Addr);
 
   /// Use the AArch64 native decoder, returning zero when it declines.
@@ -355,8 +380,8 @@ private:
 
   /// Select an authenticated initial mode for a mixed ARM/Thumb image.
   bool initARMImageMode(const BinaryImage &Img);
-  bool initWithMIPSRevision(Arch Target, InstructionMode Mode,
-                            uint8_t Revision);
+  bool initWithMIPSRevision(Arch Target, InstructionMode Mode, uint8_t Revision,
+                            uint8_t Historical = 0);
 
   /// Configure the x86 platform ABI and x87 ownership, when active.
   void configureX86For(const BinaryImage &Img);
@@ -379,25 +404,21 @@ private:
   /// ignored 67H in long mode. Shared by full and lightweight decoding.
   void fixupX86MpxDetail(cs_insn *I) const;
 
-  /// Both full and lightweight decodes use the same x86 metadata profile.
-  void fixupX86DecodeMetadata(cs_insn *I) const;
-
-  /// Correct a known long-mode disp32 width misreport only when the complete
-  /// encoded field agrees with the decoded displacement and memory operands.
-  /// Shared by full and lightweight decodes with operand detail enabled.
-  void fixupX86DisplacementDetail(cs_insn *I) const;
-
   /// Correct capstone decode-id quirks on \p I, dispatching to the active
   /// architecture lifter's fixup.
   void fixupDecodedInsn(cs_insn *I) const;
 
   csh Handle = 0;
+  csh MicroASEHandle = 0;
   cs_insn *InsnBuf = nullptr;
   const uint64_t AArch64DecodeIdentity;
   uint64_t AArch64DecodeGeneration = 0;
+  va_t MIPSInvalidAddressBits = 0;
   Arch TargetArch = Arch::Unknown;
   InstructionMode CurrentMode = InstructionMode::Default;
   uint8_t MIPSISARevision = 2;
+  uint8_t MIPSHistoricalISA = 0;
+  bool MIPSNeedsDecodeGuard = false;
   bool Strict = true;
   bool Detail = true;
   bool Text = true;

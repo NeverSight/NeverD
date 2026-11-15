@@ -8,6 +8,8 @@
 
 #include "X86/LLVMHostX87Fixture.h"
 
+#include "neverd/backend/llvm/X86/LLVMX86DivRem.h"
+
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/AsmParser/LLLexer.h"
 #include "llvm/IR/IRBuilder.h"
@@ -128,6 +130,28 @@ inline void lowerHostConversionAnnotations(llvm::Instruction &Instruction) {
   Instruction.eraseFromParent();
 }
 
+inline void lowerHostWideDivRem(llvm::CallBase &Call) {
+  const auto *Function = Call.getCalledFunction();
+  if (!Function || !Function->getName().starts_with("llvm.x86."))
+    return;
+  const auto Target = Call.getModule()->getTargetTriple().getArch();
+  if (Target != llvm::Triple::x86 && Target != llvm::Triple::x86_64)
+    return;
+  const Arch Mode = Target == llvm::Triple::x86 ? Arch::X86 : Arch::X64;
+  const auto Divide = classifyX86DivRemNative(Call, Mode);
+  if (!Divide || (Divide->Bits != 32 && Divide->Bits != 64))
+    return;
+
+  // Use the emitter's assembly fallback for double-width DIV/IDIV. Both
+  // register results and the processor's divide-error behavior are observable.
+  Call.setCalledOperand(llvm::InlineAsm::get(Call.getFunctionType(),
+                                             x86DivRemAssembly(*Divide),
+                                             X86DivRemAsmConstraints, true));
+  Call.setDoesNotThrow();
+  Call.setConvergent();
+  Call.setCannotDuplicate();
+}
+
 inline void printHostCompilerFixture(const llvm::Module &Module,
                                      llvm::raw_ostream &Out) {
   // The embedded LLVM can be newer than the host Clang used to compile an
@@ -154,8 +178,10 @@ inline void printHostCompilerFixture(const llvm::Module &Module,
         // source-oracle fixtures retain the instructions in this clone.
         if (lowerHostX87State(Instruction))
           continue;
-        if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction))
+        if (auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction)) {
+          lowerHostWideDivRem(*Call);
           RemoveNewAnnotations(*Call, Call->arg_size());
+        }
         lowerHostConversionAnnotations(Instruction);
       }
   }

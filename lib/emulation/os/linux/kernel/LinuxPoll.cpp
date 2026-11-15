@@ -27,7 +27,7 @@ public:
     std::vector<uint16_t> Events;
     uint64_t Count = 0;
     std::optional<uint64_t> Wake;
-    const char *Unknown = nullptr;
+    ReadinessFailure Unknown;
   };
   Observation observe() const {
     Observation O;
@@ -42,7 +42,7 @@ public:
       } else {
         const auto I = Files.Descriptors.find(E.FD);
         if (I == Files.Descriptors.end() || I->second != E.Owner) {
-          O.Unknown = "poll descriptor changed while waiting";
+          O.Unknown = {"poll descriptor changed while waiting"};
           return O;
         }
         R = Files.descriptorReadiness(*E.Owner, E.Events);
@@ -92,7 +92,7 @@ public:
   resume(ProcessResult &Result) override {
     const auto O = observe();
     if (O.Unknown)
-      return unsupported(Result, O.Unknown);
+      return O.Unknown.stop(Result);
     if (!O.Count && !Immediate &&
         (!Deadline || Files.Clock->elapsed() < *Deadline))
       return std::optional<uint64_t>(); // Another consumer won; rearm.

@@ -37,20 +37,68 @@ NEVERD_MIPS_SCALAR_INTRINSIC(MIPSDivUnsignedWord, 16010,
                              "neverd_mips_div_unsigned_word")
 NEVERD_MIPS_MERGE_STORE(MIPSSwl, 16011, 0x2a, 4, true, "neverd_mips_swl")
 NEVERD_MIPS_MERGE_STORE(MIPSSwr, 16012, 0x2e, 4, false, "neverd_mips_swr")
+NEVERD_MIPS_MERGE_STORE(MIPSSdl, 16050, 0x2c, 8, true, "neverd_mips_sdl")
+NEVERD_MIPS_MERGE_STORE(MIPSSdr, 16051, 0x2d, 8, false, "neverd_mips_sdr")
 
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSExecutionHazardBarrier, 16013,
                              "neverd_mips_ehb")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSSync, 16014, "neverd_mips_sync")
 
-NEVERD_MIPS_SCALAR_INTRINSIC(MIPSLoadLinkedWord, 16015, "neverd_mips_ll")
-NEVERD_MIPS_SCALAR_INTRINSIC(MIPSStoreConditionalWord, 16016, "neverd_mips_sc")
+#define NEVERD_MIPS_RESERVATION(Code, Width, Paired, Load, LID, LM, Store,     \
+                                SID, SM, CSLoad, CSStore)                      \
+  NEVERD_MIPS_SCALAR_INTRINSIC(Load, LID, "neverd_mips_" #LM)                  \
+  NEVERD_MIPS_SCALAR_INTRINSIC(Store, SID, "neverd_mips_" #SM)
+#include "neverd/ir/intrinsics/MIPS/MIPSReservation.def"
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSReadHardwareRegister, 16017,
                              "neverd_mips_rdhwr")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSDisableInterrupts, 16018, "neverd_mips_di")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSEnableInterrupts, 16019, "neverd_mips_ei")
-NEVERD_MIPS_SCALAR_INTRINSIC(MIPSReadCP0Word, 16020, "neverd_mips_mfc0")
-NEVERD_MIPS_SCALAR_INTRINSIC(MIPSWriteCP0Word, 16021, "neverd_mips_mtc0")
+#define NEVERD_MIPS_CP0_TRANSFER(RS, Bytes, Write, Name, Value, Mnemonic)      \
+  NEVERD_MIPS_SCALAR_INTRINSIC(Name, Value, "neverd_mips_" #Mnemonic)
+#include "neverd/ir/intrinsics/MIPS/MIPSCP0Transfer.def"
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSReadR6HardwareRegister, 16049,
+                             "neverd_mips_r6_rdhwr")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSPause, 16022, "neverd_mips_pause")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSDisableMT, 16023, "neverd_mips_dmt")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSEnableMT, 16024, "neverd_mips_emt")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSDisableVPE, 16025, "neverd_mips_dvpe")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSEnableVPE, 16026, "neverd_mips_evpe")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSCache, 16027, "neverd_mips_cache")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSPrefetch, 16028, "neverd_mips_pref")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSAccumulatorAfterWrite, 16029,
+                             "neverd_mips_accumulator_after_write")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSReadMSAControl, 16030, "neverd_mips_cfcmsa")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSWriteMSAControl, 16031, "neverd_mips_ctcmsa")
+#define NEVERD_DSP_COMPARE(Name, Value, Helper, Mnemonic)                      \
+  NEVERD_MIPS_SCALAR_INTRINSIC(Name, Value, Helper)
+#include "neverd/ir/intrinsics/MIPS/MIPSDSPControlEffects.def"
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSMthlipPosition, 16036,
+                             "neverd_mips_mthlip_pos")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSRelease6DivideResult, 16037,
+                             "neverd_mips_r6_divide_result")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSRequireTakenBranch, 16038,
+                             "neverd_mips_r6_forbidden_slot")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSExtractResult, 16032,
+                             "neverd_mips_extract_result")
+#define NEVERD_MSA_FLOAT(Name, Value, Encoding, Arity, Mnemonic)               \
+  NEVERD_MIPS_SCALAR_INTRINSIC(MIPSMSA##Name, Value, "neverd_msa_" #Name)
+#include "neverd/ir/intrinsics/MIPS/MIPSMSAFloat.def"
+#define NEVERD_MSA_DIVISION(Name, Value, Encoding, Mnemonic)                   \
+  NEVERD_MIPS_SCALAR_INTRINSIC(MIPSMSA##Name, Value, "neverd_msa_" #Name)
+#include "neverd/ir/intrinsics/MIPS/MIPSMSADivision.def"
+
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSReadFPControl, 16498, "neverd_mips_cfc1")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSWriteFPControl, 16499, "neverd_mips_ctc1")
+#define NEVERD_MIPS_R6_FLOAT(Name, Id, Key, Arity, In, Out, Text)              \
+  NEVERD_MIPS_SCALAR_INTRINSIC(MIPSFP##Name, Id, "neverd_mips_fp_" #Name)
+#include "neverd/ir/intrinsics/MIPS/MIPSR6Float.def"
+#define NEVERD_MIPS_R6_FLOAT(Name, Id, Key, Arity, In, Out, Text)              \
+  NEVERD_MIPS_SCALAR_INTRINSIC(MIPSFP##Name, Id, "neverd_mips_fp_" #Name)
+#include "neverd/ir/intrinsics/MIPS/MIPSLegacyFloat.def"
+
+NEVERD_MIPS_SCALAR_TEXT(
+    kAccumulatorHistoryUnknown,
+    "MIPS partial accumulator write requires proven producer history")
 NEVERD_MIPS_SCALAR_TEXT(
     kStatefulSourceUnsupported,
     "MIPS system/reservation state requires an authenticated execution "

@@ -7,7 +7,23 @@
 #include "../../arch/x86_64/X64Machine.h"
 #include "../../core/ExecutionDiagnostics.h"
 #include "../MachineFactories.h"
+
+#include "neverd/emulation/arch/mips/P5600MSA.h"
+#include "neverd/emulation/arch/mips/ScalarFP.h"
 namespace neverd::emulation {
+llvm::Expected<std::unique_ptr<MIPSMSAExecutor>> createP5600MSAExecutor(Arch) {
+  return diagnostic::unavailable(diagnostic::UnicornDisabled,
+                                 BackendAvailability::BuildDisabled);
+}
+llvm::Expected<std::unique_ptr<MIPSScalarFPExecutor>>
+createScalarFPExecutor(Arch, unsigned) {
+  return diagnostic::unavailable(diagnostic::UnicornDisabled,
+                                 BackendAvailability::BuildDisabled);
+}
+llvm::Expected<std::unique_ptr<MIPSMSAExecutor>> createI6400MSAExecutor(Arch) {
+  return diagnostic::unavailable(diagnostic::UnicornDisabled,
+                                 BackendAvailability::BuildDisabled);
+}
 llvm::Expected<std::unique_ptr<X64Machine>>
 createUnicornX64Machine(MemoryProjection &, bool) {
   return diagnostic::unavailable(diagnostic::UnicornDisabled,

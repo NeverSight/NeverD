@@ -121,17 +121,19 @@ bool parseFPEncoding(const cs_insn *Insn, const cs_x86 &X86, Arch Target,
     } else {
       if (Insn->bytes[Offset++] != 0x0f)
         return false;
-      OpcodeDetail[0] = 0x0f;
+      // The decoder's detail of a legacy instruction holds every opcode
+      // byte: 0F, the 38/3A escape of a three-byte map, the final opcode.
+      unsigned Count = 0;
+      OpcodeDetail[Count++] = 0x0f;
       if (Map != 1) {
         const uint8_t Escape = Map == 2 ? 0x38 : 0x3a;
         if (Offset >= Insn->size || Insn->bytes[Offset++] != Escape)
           return false;
+        OpcodeDetail[Count++] = Escape;
       }
       if (Offset >= Insn->size)
         return false;
-      // Generated legacy Capstone detail retains 0F and the final opcode,
-      // omitting the 38/3A escape. The bytes above authenticate that map.
-      OpcodeDetail[1] = Insn->bytes[Offset];
+      OpcodeDetail[Count] = Insn->bytes[Offset];
     }
     E.W = (RegisterBits & 8) != 0;
     E.RegExtension |= (RegisterBits & 4) ? 8 : 0;

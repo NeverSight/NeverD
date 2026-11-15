@@ -21,10 +21,10 @@ namespace neverd {
 llvm::Error completeMachOChainedSegmentTable(std::vector<uint8_t> &Binary,
                                              Arch Architecture);
 
-/// Grow command storage by extending a checked 64-bit PIE header mapping into
-/// its PAGEZERO guard. Original code/data VAs stay fixed; all admitted relative
-/// loader metadata are relocated transactionally. Explicit header-address code
-/// references are refused unless the original mapping remains unchanged.
+/// Grow the header into a PIE guard or an available prefix of a nonzero-base
+/// dylib or bundle. Original code, data and fixup slots retain their addresses.
+/// Relocate supported loader metadata transactionally and reject instruction
+/// references into the moving header.
 llvm::Expected<bool> reserveMachOHeaderStorage(std::vector<uint8_t> &Binary,
                                                Arch Architecture,
                                                uint64_t AdditionalCommandBytes);
@@ -49,6 +49,12 @@ struct MachOUnwindRelocationLimits {
   uint64_t MaxRAStateWork = limits::backend::kMachOFrameRAComparisonWork;
 };
 
+/// Upper bounds on imported compact recipes and their LSDA index entries.
+struct MachOUnwindFunctionCounts {
+  uint64_t Functions;
+  uint64_t LSDAs;
+};
+
 /// Reserve native unwind storage without moving the Mach header or original
 /// code/data. Existing metadata is copied and its encoded references rebased.
 /// Compact tables can reuse zero-filled TEXT capacity after all section and
@@ -59,6 +65,11 @@ llvm::Expected<bool>
 reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch Architecture,
                          uint64_t AdditionalEHBytes,
                          uint64_t AdditionalFunctions,
+                         const MachOUnwindRelocationLimits &Limits = {});
+llvm::Expected<bool>
+reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch Architecture,
+                         uint64_t AdditionalEHBytes,
+                         MachOUnwindFunctionCounts Additional,
                          const MachOUnwindRelocationLimits &Limits = {});
 
 /// Reserve from a real emitted object before new RX/RW segments can occupy the

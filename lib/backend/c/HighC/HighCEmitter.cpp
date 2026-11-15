@@ -720,10 +720,14 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
     if (E.Kind == ExprKind::Call && mips::isScalarIntrinsic(E.IntrinsicId)) {
       if (!mipsScalarHighShapeIsValid(E, Opts.TheArch))
         throw std::runtime_error(mips::kMalformedScalar);
-      auto [It, Inserted] = MIPSScalarHelpers.try_emplace(E.IntrinsicId);
-      if (Inserted)
-        It->second = GlobalIdentifierAllocator.allocate(
-            intrinsicCName(E.IntrinsicId), "nd_mips");
+      const auto Key = mipsScalarHelperKey(E);
+      auto [It, Inserted] = MIPSScalarHelpers.try_emplace(Key);
+      if (Inserted) {
+        std::string Name = intrinsicCName(E.IntrinsicId);
+        if (mips::isMSAControl(E.IntrinsicId))
+          Name += "_" + std::to_string(Key.second);
+        It->second = GlobalIdentifierAllocator.allocate(Name, "nd_mips");
+      }
     }
     if (const auto Bits = x86SaturatingLaneBits(E)) {
       auto [It, Inserted] =
@@ -929,8 +933,7 @@ void HighCWriter::writeMemoryHelpers() {
     // Plain accesses of other types, and of a bit-precise integer a
     // little-endian target copies inline, need no helper.
     if (AddressSpace == NdMemoryAddressSpace::Default &&
-        (!PartialIntegerBytes.count(Type) ||
-         inlineMemoryBytes(Type).value_or(0)))
+        !accessesThroughHelpers(Type))
       return;
     const auto ReadPtr =
         AddressSpace == NdMemoryAddressSpace::Default
@@ -1782,6 +1785,9 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
   // private type, so provide only the incomplete name needed for pointer
   // declarations and casts in a standalone translation unit.
   bool NeedsBlockObject = false;
+  const bool HasMicroModes = isMIPS(Opts.TheArch) && Opts.Image &&
+                             hasCompressedMIPSCode(Opts.Image->Mode);
+  bool NeedsMicroMode = false;
   bool NeedsBool = false;
   bool HasFloatingArithmetic = false;
   bool NeedsAArch64RawCall = false;
@@ -1834,6 +1840,9 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
       CheckExpr(Operand);
   };
   for (const auto &Function : Funcs) {
+    if (HasMicroModes && !NeedsMicroMode)
+      NeedsMicroMode = Opts.Image->instructionModeAt(Function.Entry) ==
+                       InstructionMode::MicroMIPS;
     CheckType(Function.ReturnType);
     for (const auto &Parameter : Function.Params)
       CheckType(Parameter.Type);
@@ -1856,6 +1865,8 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
   };
   if (HasFloatingArithmetic)
     c_float::writeContractionPolicy(OS);
+  if (NeedsMicroMode)
+    OS << mips::MicroModeCPrelude;
   if (Opts.TheArch == Arch::AArch64 && NeedsAArch64RawCall)
     OS << kAArch64PAuthCRawCallHeader;
   if (NeedsAArch64ResultStorageCall)
@@ -1895,7 +1906,11 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
       }
   if (NeedsBool)
     Headers.insert("stdbool.h");
-  if (!MemoryTypes.empty())
+  // Only the helpers of a value narrower than its storage call memcpy; every
+  // other access is spelled in place, a copy through __builtin_memcpy.
+  if (llvm::any_of(MemoryTypes, [&](const std::string &Type) {
+        return accessesThroughHelpers(Type);
+      }))
     Headers.insert("string.h");
   // The objects a C library header declares, which the unit reaches as it
   // declares them, or as bytes at their addresses.
@@ -2048,8 +2063,8 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
     if (isMIPS(Opts.TheArch))
       OS << mips::sourceCompilerCAttribute(
           Opts.TheArch, Opts.Image,
-          MIPSScalarHelpers.count(Intrinsic::MIPSReadDSPControl) ||
-              MIPSScalarHelpers.count(Intrinsic::MIPSWriteDSPControl));
+          MIPSScalarHelpers.count({Intrinsic::MIPSReadDSPControl, 0}) ||
+              MIPSScalarHelpers.count({Intrinsic::MIPSWriteDSPControl, 0}));
     if (Opts.Image && isMIPS(Opts.TheArch))
       if (const auto Mode = Opts.Image->instructionModeAt(Function.Entry))
         OS << mips::instructionModeCAttribute(*Mode);
@@ -2263,7 +2278,8 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
               ? sourceParameterType(Function.SourceTypeHint->Parameters[I])
               : declaredAs(emittedParamTypeAt(Function, I), "");
     }
-    if (vaStartForwarder(Function) && ParamCount)
+    if ((vaStartForwarder(Function) || Function.UsesNativeVariadicStack) &&
+        ParamCount)
       Declarator += ", ...";
     if (ParamCount == 0)
       Declarator += "void";
@@ -2286,7 +2302,8 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
               ? sourceParameterType(Function->SourceTypeHint->Parameters[I])
               : declaredAs(emittedParamTypeAt(*Function, I), "");
     }
-    if (vaStartForwarder(*Function) && ParamCount)
+    if ((vaStartForwarder(*Function) || Function->UsesNativeVariadicStack) &&
+        ParamCount)
       Declarator += ", ...";
     if (ParamCount == 0)
       Declarator += "void";
@@ -2325,7 +2342,8 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
               ? sourceParameterType(Function->SourceTypeHint->Parameters[I])
               : declaredAs(emittedParamTypeAt(*Function, I), "");
     }
-    if (vaStartForwarder(*Function) && ParamCount)
+    if ((vaStartForwarder(*Function) || Function->UsesNativeVariadicStack) &&
+        ParamCount)
       Declarator += ", ...";
     if (ParamCount == 0)
       Declarator += "void";
@@ -3673,6 +3691,11 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   // guard comes before the access that declares the object, so the
   // alignment applies once the walk is done.
   std::map<va_t, uint16_t> GuardedAlignments;
+  // The same for an address the code adds a base to (i386 PIC code keeps
+  // the GOT register in its frame and adds the object's offset): the guard
+  // tests that sum, which is as aligned in C as in the image when the
+  // object keeps its address's residue.
+  std::map<va_t, uint16_t> GuardedBaseAlignments;
   auto NoteAlignmentGuard = [&](const HighExpr &Call) {
     if (Call.Kind != ExprKind::Call ||
         Call.IntrinsicId != Intrinsic::RequireAligned ||
@@ -3682,10 +3705,14 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
       return;
     NoteAccessAddress(Call.Operands[0]);
     const uint64_t Bytes = Call.Operands[1]->ConstVal;
-    if (auto VA = constAddress(*Call.Operands[0]);
-        VA && Bytes > 1 && Bytes <= UINT16_MAX)
+    if (Bytes <= 1 || Bytes > UINT16_MAX)
+      return;
+    if (auto VA = constAddress(*Call.Operands[0]))
       GuardedAlignments[*VA] = std::max<uint16_t>(GuardedAlignments[*VA],
                                                   static_cast<uint16_t>(Bytes));
+    else if (const HighExpr *Base = indexedImageBase(*Call.Operands[0]))
+      GuardedBaseAlignments[Base->ConstVal] = std::max<uint16_t>(
+          GuardedBaseAlignments[Base->ConstVal], static_cast<uint16_t>(Bytes));
   };
   std::optional<AArch64ImmediateHighBases> ImageMemoryBases;
   std::function<void(const HighExpr &)> Visit = [&](const HighExpr &E) {
@@ -4187,6 +4214,19 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
       noteImageAddress(VA);
     if (auto It = ImageObjects.find(VA); It != ImageObjects.end())
       It->second.AlignedBytes = std::max(It->second.AlignedBytes, Bytes);
+  }
+  // The access the guard precedes declared the object that holds the base,
+  // whole: that object carries the alignment, wherever in it the base lies.
+  for (const auto &[VA, Bytes] : GuardedBaseAlignments) {
+    auto It = ImageObjects.upper_bound(VA);
+    if (It == ImageObjects.begin())
+      continue;
+    ImageObject &Obj = std::prev(It)->second;
+    const uint64_t Extent = std::max<uint64_t>(
+        Obj.IndexedBytes,
+        Obj.String ? Obj.ArrayBytes : (Obj.Type ? Obj.Type->Size : 0));
+    if (VA - std::prev(It)->first < Extent)
+      Obj.AlignedBytes = std::max(Obj.AlignedBytes, Bytes);
   }
 
   // A table the code keeps only the address of, through a variable it
@@ -5159,6 +5199,7 @@ void HighCWriter::writeX64WindowsSyscallHelper() {
 }
 
 void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
+  c_memory::applyMIPSVectorAlignment(Opts, Opts.Image);
   // The unit spells the records it declares no typedef of, as a function or
   // an object has the name, by their tags.
   const auto TagKeyword = [this](llvm::StringRef Name) {
@@ -5176,8 +5217,8 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
   const bool PreserveDSPControl =
       isMIPS(Opts.TheArch) &&
       (mips::sourcePreservesDSPControl(Opts.TheArch, Opts.Image) ||
-       MIPSScalarHelpers.count(Intrinsic::MIPSReadDSPControl) ||
-       MIPSScalarHelpers.count(Intrinsic::MIPSWriteDSPControl));
+       MIPSScalarHelpers.count({Intrinsic::MIPSReadDSPControl, 0}) ||
+       MIPSScalarHelpers.count({Intrinsic::MIPSWriteDSPControl, 0}));
   const bool AvoidMSA = mips::sourceAvoidsMSA(Opts.TheArch, Opts.Image);
   if (isMIPS(Opts.TheArch))
     OS << mips::sourceCompilerCBegin(Opts.TheArch, Opts.Image,

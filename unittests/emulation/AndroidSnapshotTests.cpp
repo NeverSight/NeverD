@@ -135,6 +135,66 @@ TEST_P(AndroidSnapshots, DeferredReadObservesGuestCreatedBytes) {
   snapshots(*R);
 }
 
+TEST_P(AndroidSnapshots, FinalRegisterReadsUseTheLivePointerAndKeepTheStop) {
+  const auto Baseline = llvm::cantFail(run());
+  auto &A = *Options.Android;
+  A.ReadRegisterMemory = {{0, INT64_MIN, 1}, {0, -1, 1}, {0, 13, 32}};
+  auto R = llvm::cantFail(run());
+  ASSERT_EQ(R.MemorySnapshots.size(), 5u);
+  const auto &Overflow = R.MemorySnapshots[2];
+  EXPECT_FALSE(Overflow.AddressResolved);
+  EXPECT_TRUE(Overflow.Bytes.empty());
+  EXPECT_FALSE(Overflow.Diagnostic.empty());
+  const auto &Unmapped = R.MemorySnapshots[3];
+  EXPECT_TRUE(Unmapped.AddressResolved);
+  EXPECT_EQ(Unmapped.Address, Dynamic - 1);
+  EXPECT_TRUE(Unmapped.Bytes.empty());
+  EXPECT_FALSE(Unmapped.Diagnostic.empty());
+  const auto &Live = R.MemorySnapshots[4];
+  EXPECT_TRUE(Live.AddressResolved);
+  EXPECT_EQ(Live.Address, Dynamic + 13);
+  EXPECT_TRUE(Live.Diagnostic.empty());
+  const auto &Full = Baseline.MemorySnapshots[1].Bytes;
+  ASSERT_EQ(Full.size(), 64u);
+  EXPECT_EQ(Live.Bytes,
+            std::vector<uint8_t>(Full.begin() + 13, Full.begin() + 45));
+  R.MemorySnapshots.resize(2);
+  EXPECT_EQ(processResultJSON(R), processResultJSON(Baseline));
+
+  A.ReadRegisterMemory.clear();
+  const auto Fault = llvm::cantFail(run(4));
+  ASSERT_EQ(Fault.Stop, ProcessStopReason::CPUFailure);
+  A.ReadRegisterMemory = {{31, 0, 8}};
+  auto Observed = llvm::cantFail(run(4));
+  ASSERT_EQ(Observed.MemorySnapshots.size(), 1u);
+  EXPECT_EQ(Observed.MemorySnapshots[0].Bytes.size(), 8u);
+  EXPECT_TRUE(Observed.MemorySnapshots[0].Diagnostic.empty());
+  Observed.MemorySnapshots.clear();
+  EXPECT_EQ(processResultJSON(Observed), processResultJSON(Fault));
+}
+
+TEST_P(AndroidSnapshots, TerminalRegisterReadsShareTheFinalOutputBudget) {
+  auto &A = *Options.Android;
+  A.ReadMemory = {{Initial, 8}};
+  A.ReadRegisterMemory = {{0, 13, 16}};
+  Options.OutputLimit =
+      8 + 16 +
+      ::neverd::limits::emulation::kAndroidFailureMemoryDiagnosticBytes - 1;
+  auto Short = run();
+  ASSERT_FALSE(bool(Short));
+  llvm::consumeError(Short.takeError());
+  ++Options.OutputLimit;
+  auto Exact = llvm::cantFail(run());
+  ASSERT_EQ(Exact.MemorySnapshots.size(), 2u);
+  EXPECT_EQ(Exact.MemorySnapshots.back().Bytes.size(), 16u);
+  for (const auto &Read : {NativeRegisterMemoryRead{32, 0, 16}, {0, 0, 0}}) {
+    A.ReadRegisterMemory = {Read};
+    auto Invalid = run();
+    ASSERT_FALSE(bool(Invalid));
+    llvm::consumeError(Invalid.takeError());
+  }
+}
+
 TEST_P(AndroidSnapshots, UnmappingAndPermissionsStillFailAtTheFinalStop) {
   for (unsigned Mode : {1, 2}) {
     auto R = run(Mode);

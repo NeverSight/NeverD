@@ -139,10 +139,15 @@ bool SymContext::containsVariable(SymRef R, uint32_t VarIdx) const {
 
 void SymContext::collectVars(SymRef R,
                              llvm::SmallVectorImpl<uint32_t> &Out) const {
+  collectVars(llvm::ArrayRef<SymRef>(R), Out);
+}
+
+void SymContext::collectVars(llvm::ArrayRef<SymRef> Roots,
+                             llvm::SmallVectorImpl<uint32_t> &Out) const {
   llvm::SmallDenseSet<uint32_t,
                       limits::symbolic::kSymExprTraversalInlineBuckets>
       Seen;
-  llvm::SmallVector<SymRef, 32> Work{R};
+  llvm::SmallVector<SymRef, 32> Work(Roots);
   while (!Work.empty()) {
     SymRef Cur = Work.pop_back_val();
     if (!Seen.insert(Cur.index()).second)

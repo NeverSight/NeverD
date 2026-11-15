@@ -8,7 +8,10 @@
 
 #include "neverd/ir/SourceABI.h"
 
+#include "MIPS/SourceScalarResult.h"
+
 #include "neverd/Limits.h"
+#include "neverd/ir/FloatingCallArguments.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceParameterPlacement.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -426,7 +429,9 @@ bool swiftFixedShape(const SourceFunctionTypeHint &Hint, Arch Architecture) {
 
 bool equalSourceABIs(const SourceFunctionTypeHint &Left,
                      const SourceFunctionTypeHint &Right) {
-  if (Left.Origin != Right.Origin || Left.Convention != Right.Convention ||
+  if (bool(Left.MIPSScalars) != bool(Right.MIPSScalars) ||
+      (Left.MIPSScalars && *Left.MIPSScalars != *Right.MIPSScalars) ||
+      Left.Origin != Right.Origin || Left.Convention != Right.Convention ||
       Left.Architecture != Right.Architecture ||
       Left.HasExplicitABI != Right.HasExplicitABI ||
       (Left.HasExplicitABI &&
@@ -652,7 +657,8 @@ TypeRef sourceABICallResultType(const SourceFunctionTypeHint &Hint) {
   std::string Error;
   if (!validateSourceABI(Hint, Error))
     return nullptr;
-  if (Hint.ReturnType->Kind == NdTypeKind::Void ||
+  if ((Hint.MIPSScalars && Hint.ReturnType->Kind == NdTypeKind::Float) ||
+      Hint.ReturnType->Kind == NdTypeKind::Void ||
       Hint.ReturnType->Kind == NdTypeKind::Struct)
     return Hint.ReturnType;
   return NdType::makeInt(Hint.ReturnType->Size, false);
@@ -661,6 +667,36 @@ TypeRef sourceABICallResultType(const SourceFunctionTypeHint &Hint) {
 bool validateSourceABI(const SourceFunctionTypeHint &Hint,
                        std::string &Diagnostic) {
   Diagnostic.clear();
+  if (Hint.MIPSScalars) {
+    const auto &S = *Hint.MIPSScalars;
+    if (!isMIPS(Hint.Architecture) || !Hint.HasExplicitABI ||
+        Hint.Origin != SourceFunctionTypeHint::OriginKind::ExplicitSource ||
+        Hint.Convention != SourceFunctionTypeHint::ConventionKind::C ||
+        Hint.Parameters.size() != S.Scalars.size())
+      return fail(Diagnostic, "Invalid MIPS scalar call ABI");
+    std::vector<TypeRef> Types;
+    for (const auto &P : Hint.Parameters) {
+      const auto &A = S.Scalars[Types.size()];
+      if (P.TheRole != SourceParameterTypeHint::Role::Ordinary ||
+          P.IndirectByValue || !P.Components.empty() ||
+          !sameLocation(P.Location,
+                        {A.Kind, A.Register, A.StackOffset, A.Bytes}))
+        return fail(Diagnostic, "Invalid MIPS scalar argument carrier");
+      Types.push_back(P.Type);
+    }
+    const auto Expected =
+        floatingCallArguments(Hint.Architecture, BinaryFormat::ELF,
+                              Hint.ReturnType, Types, S.FixedCount);
+    SourceABIValueLocation Return;
+    std::vector<SourceABIValueLocation> Pieces;
+    mips::placeScalarResult(getTargetRegInfo(Hint.Architecture), S, Return,
+                            Pieces);
+    return (Expected && *Expected == S &&
+            sameLocation(Return, Hint.ReturnLocation) &&
+            std::ranges::equal(Pieces, Hint.ReturnComponents, sameLocation)) ||
+           fail(Diagnostic,
+                "MIPS scalar types disagree with their ABI carriers");
+  }
   if ((Hint.Convention != SourceFunctionTypeHint::ConventionKind::C &&
        Hint.Convention != SourceFunctionTypeHint::ConventionKind::Swift) ||
       !Hint.HasExplicitABI ||

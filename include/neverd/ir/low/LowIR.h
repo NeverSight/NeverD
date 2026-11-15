@@ -770,7 +770,8 @@ struct LowControlTarget {
 /// target-mode contract, address width, or alignment is inconsistent.
 inline llvm::Expected<LowControlTarget>
 canonicalizeLowControlTarget(uint64_t RawTarget, InstructionMode SourceMode,
-                             LowInstructionTargetMode TargetMode) {
+                             LowInstructionTargetMode TargetMode,
+                             uint16_t AddressBytes = 4) {
   const auto Invalid =
       [](const char *Message) -> llvm::Expected<LowControlTarget> {
     return llvm::createStringError(llvm::errc::invalid_argument, "%s", Message);
@@ -794,7 +795,11 @@ canonicalizeLowControlTarget(uint64_t RawTarget, InstructionMode SourceMode,
                           isMIPSCompressedMode(SourceMode);
   if (RawTarget == InvalidVA)
     return Invalid("control target uses the invalid address");
-  if ((IsAArch32 || IsMIPSMode) &&
+  if ((IsAArch32 ||
+       (IsMIPSMode &&
+        (AddressBytes != 8 || SourceMode == InstructionMode::MIPS16 ||
+         TargetMode == LowInstructionTargetMode::MIPS16 ||
+         TargetMode == LowInstructionTargetMode::FromMIPS16TargetBit0))) &&
       RawTarget > std::numeric_limits<uint32_t>::max())
     return Invalid("32-bit control target exceeds its address width");
 
@@ -1219,10 +1224,12 @@ struct JumpTableSelectorUseRef {
 };
 
 /// Exact public recipe for a runtime-selected two-table switch condition.
-/// ByteIndex names the already-scaled dynamic operand of the authenticated
-/// table-address ADD.  Condition names the boolean value whose true/false arm
-/// selected the physical table base.  Backends concatenate the two physical
-/// runs in one selector coordinate as
+/// ByteIndex names the dynamic operand of the authenticated table address:
+/// the already-scaled operand of the table-address ADD, or the raw slot index
+/// of an AArch64 original indexed load, which scales it in the instruction
+/// and leaves no byte offset to name.  Condition names the boolean value
+/// whose true/false arm selected the physical table base.  Backends
+/// concatenate the two physical runs in that operand's coordinate as
 /// `ByteIndex + (Condition ? TrueOffset : FalseOffset)`.
 struct JumpTableCompositeSelectorUseRef {
   enum class Kind : uint8_t { SelectOffset };
@@ -1322,14 +1329,15 @@ struct JumpTable {
   /// loads from `(cond ? A : B)[idx]` where A and B are two adjacent
   /// code-pointer tables.  The resolver merges them into one table at BaseAddr
   /// = min(A,B) with the combined entry count, and the emitter synthesizes the
-  /// switch selector (a byte offset into the merged table) as `idx_bytes + (D
-  /// when the higher table is selected)`, turning the runtime base select into
-  /// a single switch.
+  /// switch selector (an offset into the merged table, see TwoTableOffset) as
+  /// `idx + (D when the higher table is selected)`, turning the runtime base
+  /// select into a single switch.
   bool TwoTableSelect = false;
 
-  /// Byte distance between the two tables (entries(lo) * EntrySize); the
-  /// emitter adds it to the index byte offset when the higher table is
-  /// selected.
+  /// Distance between the two tables in the selector's coordinate: entries(lo)
+  /// * EntrySize for a byte-offset selector (PreScaledIndex), entries(lo) for
+  /// the slot index of an AArch64 original indexed load.  The emitter adds it
+  /// to the selector when the higher table is selected.
   uint32_t TwoTableOffset = 0;
 
   /// True when the higher table (BaseAddr + TwoTableOffset) is selected by the
@@ -1366,6 +1374,17 @@ struct JumpTable {
   /// separate, documented gap).  Targets are still populated so the dispatch
   /// keeps its successors (the trap path needs them).
   bool MutatedUnsafe = false;
+
+  /// Set for the dispatch of an indirect jump that kept its branch identity
+  /// with no proved target (CFGBuilder::dispatchUnprovedBranchesByValue).
+  /// Targets are labels of the function whose addresses the image's
+  /// relocated pointers hold, CaseLabels those addresses, and the one selector
+  /// occurrence the value the jump takes: the jump goes to the label its
+  /// value names and traps on any other.  There is no table and no index, so
+  /// MutatedUnsafe is set as well and every consumer of an index mapping
+  /// leaves the dispatch alone.  The image's slots of these labels keep the
+  /// original addresses as plain numbers, which the comparison reads.
+  bool ValueDispatch = false;
 
   std::vector<va_t> Targets;
 
@@ -1497,6 +1516,12 @@ struct LowFunc {
   uint32_t SourceLine = 0;
   std::vector<LowBlock> Blocks;
   std::vector<JumpTable> JumpTables;
+  /// The dispatches by value (JumpTable::ValueDispatch), one per indirect
+  /// jump that reaches its function's labels by comparing its target with
+  /// them.  They recover no table and stay out of JumpTables, which lists what
+  /// the resolver proved; MedIR lists both, since each gives a jump its
+  /// successors.
+  std::vector<JumpTable> ValueDispatches;
   /// Every returning path consumes one incoming x87 value, with no access
   /// to the caller's lower stack entries. This value is a typed parameter.
   bool ConsumesX87Argument = false;

@@ -67,6 +67,9 @@ struct ParseResult {
   std::vector<std::string> Diagnostics;
 };
 
+/// Compare a decoded instruction and its function-relative rule boundary.
+bool sameCFIInstruction(const CFIInstruction &A, const CFIInstruction &B);
+
 /// Decode every CIE and FDE in \p Sec.
 ///
 /// \p Img supplies the target byte order, resolves `DW_EH_PE_indirect`

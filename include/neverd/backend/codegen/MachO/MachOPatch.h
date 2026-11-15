@@ -33,6 +33,18 @@ struct MachOPatchOptions : PatchOptionsBase {
   MachOPatchOptions() { SectionName = kNdTextSectionMachO.str(); }
 };
 
+/// Final dyld registration spans. Initializer offsets use read-only storage.
+/// TLS descriptors and the combined template occupy the writable segment.
+struct MachORuntimeSections {
+  struct Span {
+    uint64_t VA = 0, Size = 0, Alignment = 1;
+  };
+  Span Descriptors, Template, InitializerOffsets;
+  /// Only the private anchor is registered with dyld. Public descriptor
+  /// addresses keep their variable offsets and dispatch through the resolver.
+  bool UsesThreadResolver = false;
+};
+
 class MachOPatcher : public BinaryPatcher {
 public:
   PatchResult patch(const std::filesystem::path &InputPath,
@@ -60,9 +72,14 @@ public:
   llvm::Error appendReplacementImage(
       std::vector<uint8_t> &Binary, const CompiledImage &Image,
       llvm::ArrayRef<MachOAuthenticatedFixup> AuthenticatedFixups = {},
-      llvm::ArrayRef<SourcePatchDependency> Dependencies = {});
+      llvm::ArrayRef<SourcePatchDependency> Dependencies = {},
+      const MachORuntimeSections *Runtime = nullptr);
 
 private:
+  llvm::Expected<PatchResult>
+  installLiftedLeaves(llvm::Module &Module, const BinaryImage &Image,
+                      const std::filesystem::path &Output);
+
   struct PatchLayout : PatchLayoutBase {
     uint32_t NCmds = 0;
     uint32_t SizeOfCmds = 0;
@@ -95,6 +112,7 @@ private:
     uint64_t SegmentFileSize = 0;
     uint32_t SegmentNSects = 0;
     uint64_t WritableSize = 0;
+    uint32_t WritableSections = 0;
     uint64_t RelroSize = 0;
     uint64_t LinkeditVA = 0;
     uint64_t LinkeditVMSize = 0;
@@ -112,7 +130,8 @@ private:
                                  llvm::StringRef SegName, Arch TargetArch,
                                  ExecSegmentInstallReceipt *Receipt,
                                  uint64_t WritableOffset = 0,
-                                 uint64_t RelroSize = 0);
+                                 uint64_t RelroSize = 0,
+                                 const MachORuntimeSections *Runtime = nullptr);
   bool validateExecSegmentInstall(const std::vector<uint8_t> &Binary,
                                   Arch TargetArch,
                                   const ExecSegmentInstallReceipt &Receipt);

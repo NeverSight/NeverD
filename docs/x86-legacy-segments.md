@@ -34,8 +34,8 @@ represent explicitly selected compatibility operands, retaining four/five-level
 paging and using low-32-bit segment-cache views. The mode owner retains the
 complete architectural FS/GS bases; it must not truncate the stored bank or
 implicit system-table addresses. An explicit EFLAGS.VM selects the VM86 cache
-contract below and requires CPL3 and no EFER.LMA. Real-mode execution and
-mixed-mode instruction dispatch remain separate. Alignment,
+contract below and requires CPL3 and no EFER.LMA. Real-mode execution remains separate; continuous protected/compatibility/code64
+dispatch uses the explicit [full-width mode owner](x86-mode-execution.md). Alignment,
 instruction commit, event delivery and partial-progress instruction policy
 remain separate owners.
 

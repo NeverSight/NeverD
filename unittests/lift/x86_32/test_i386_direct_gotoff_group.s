@@ -126,6 +126,9 @@ prefix_modulo jt_i386_prefix_bad_arm, 0xaaaaaaab, 1
 // A peeled dispatch and a loop dispatch share one table, followed by a
 // second table. There are no selector comparison guards. The first selector
 // can be only 1 or 3, while the mask still proves the universal [0,4) envelope.
+// Mode 9 spills the GOT base, reuses its register between the second
+// dispatch's target sum and its jump, and reloads it in the loop: the second
+// dispatch reads the base only as its real predecessors leave it.
 .macro dense_mask_group name, mode
 .text
 .p2align 2
@@ -142,6 +145,10 @@ prefix_modulo jt_i386_prefix_bad_arm, 0xaaaaaaab, 1
 .L\name\()_gotpc:
   .long .L\name\()_gotpc - .L\name\()_pc
   .reloc .L\name\()_gotpc, R_386_GOTPC, _GLOBAL_OFFSET_TABLE_
+.if \mode == 9
+  subl $4, %esp
+  movl %ecx, (%esp)
+.endif
   movl $80, %esi
   orl $1, %eax
 .if \mode == 1
@@ -173,6 +180,9 @@ prefix_modulo jt_i386_prefix_bad_arm, 0xaaaaaaab, 1
 .L\name\()_repeat:
   decl %esi
   jz .L\name\()_done
+.if \mode == 9
+  movl (%esp), %ecx
+.endif
   movl %eax, %edx
   andl $3, %edx
   movl \name\()_first_table@GOTOFF(%ecx,%edx,4), %ebx
@@ -189,6 +199,9 @@ prefix_modulo jt_i386_prefix_bad_arm, 0xaaaaaaab, 1
   andl $3, %edx
   movl \name\()_second_table@GOTOFF(%ecx,%edx,4), %ebx
   addl %ecx, %ebx
+.if \mode == 9
+  movl %eax, %ecx
+.endif
   jmp *%ebx
 .irp n,0,1,2
 .L\name\()_last\n:
@@ -204,6 +217,9 @@ prefix_modulo jt_i386_prefix_bad_arm, 0xaaaaaaab, 1
   jmp .L\name\()_repeat
 .endif
 .L\name\()_done:
+.if \mode == 9
+  addl $4, %esp
+.endif
   popl %esi
   popl %ebx
   ret
@@ -234,5 +250,6 @@ dense_mask_group jt_i386_mask_decrement, 5
 dense_mask_group jt_i386_mask_partial_mask, 6
 dense_mask_group jt_i386_mask_extra_slot, 7
 dense_mask_group jt_i386_mask_independent_reader, 8
+dense_mask_group jt_i386_mask_reused_base, 9
 
 .section .note.GNU-stack,"",@progbits

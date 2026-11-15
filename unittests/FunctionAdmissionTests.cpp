@@ -10,8 +10,10 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../lib/ir/low/FuncDetectorDetail.h"
 #include "gtest/gtest.h"
 
+#include "neverd/decode/Decoder.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExceptionInfo.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -41,6 +43,72 @@ BinaryImage makeCodeFixture(va_t Entry, std::vector<uint8_t> Bytes) {
   Seg.Data = std::move(Bytes);
   Img.Segments.push_back(std::move(Seg));
   return Img;
+}
+
+TEST(FunctionAdmission, CompactCallQueryUsesOnlyTheExactInstruction) {
+  const uint8_t Call[] = {0xe8, 0xfb, 0xff, 0xff, 0xff, 0x90};
+  const uint8_t Indirect[] = {0xff, 0xd0};
+  constexpr va_t Address = 0xfffffffd;
+  Decoder Dec;
+  for (Arch A : {Arch::X86, Arch::X64}) {
+    ASSERT_TRUE(Dec.init(A));
+    DecodedInsn Original;
+    ASSERT_EQ(Dec.decodeOneLight(Call, sizeof(Call), Address, Original), 5);
+    const va_t Target = Dec.directCallTarget(Original);
+    ASSERT_EQ(Target, Address);
+    for (bool Detail : {false, true}) {
+      Dec.setDetail(Detail);
+      for (bool Text : {false, true}) {
+        Dec.setText(Text);
+        for (size_t Size = 0; Size <= sizeof(Call); ++Size)
+          EXPECT_EQ(Dec.directX86CallTarget({Call, Size}, Address),
+                    Size == 5 ? Target : InvalidVA);
+        EXPECT_EQ(Dec.directX86CallTarget(Indirect, Address), InvalidVA);
+        EXPECT_EQ(Dec.detailEnabled(), Detail);
+        EXPECT_EQ(Dec.textEnabled(), Text);
+        EXPECT_EQ(Dec.directCallTarget(Original), Target);
+      }
+    }
+  }
+}
+
+TEST(FunctionAdmission, CallScanResumesAtTheRequestedBoundary) {
+  constexpr va_t Base = 0x140001000;
+  // The MOV immediate contains the start of another valid near CALL.
+  BinaryImage Img =
+      makeCodeFixture(Base, {0x90, 0xe8, 0, 0, 0, 0, 0x66, 0x0f, 0xae, 0xe8,
+                             0xb8, 0xe8, 0, 0, 0, 0, 0xc3});
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Img));
+  Dec.setText(false);
+  Dec.setDetail(false);
+  const Segment &Seg = Img.Segments.front();
+  func_detect_detail::X86CallScan Scan(Img, Dec, Seg, Base, Base + Seg.Size);
+  const auto Check = [&](unsigned Offset, unsigned Size, va_t Target) {
+    const auto Step = Scan.step(Base + Offset);
+    ASSERT_TRUE(Step);
+    EXPECT_EQ(Step->Next, Base + Offset + Size);
+    EXPECT_EQ(Step->Target, Target);
+  };
+  Check(0, 1, InvalidVA);
+  // A caller requesting detail must get the CALL's actual immediate.
+  Dec.setText(true);
+  Dec.setDetail(true);
+  Check(1, 5, Base + 6);
+  Dec.setText(false);
+  Dec.setDetail(false);
+  Check(6, 4, InvalidVA);
+  Check(10, 5, InvalidVA);
+  Check(11, 5, Base + 16);
+  Check(16, 1, InvalidVA);
+
+  func_detect_detail::X86CallScan Truncated(Img, Dec, Seg, Base, Base + 4);
+  const auto Step = Truncated.step(Base + 1);
+  ASSERT_TRUE(Step);
+  EXPECT_EQ(Step->Next, Base + 2);
+  EXPECT_EQ(Step->Target, InvalidVA);
+  EXPECT_FALSE(Truncated.step(Base + 4));
+  EXPECT_FALSE(Truncated.step(Base + 5));
 }
 
 TEST(FunctionAdmission, UnwindlessNonLeafCandidateRemainsAFunction) {

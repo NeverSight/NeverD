@@ -605,6 +605,95 @@ TEST(SymMBAHigherProduct, ExtremalScaleRejectionKeepsGeneralExpansionExact) {
     }
 }
 
+TEST(SymMBAHigherProduct, MintermSelectionsKeepEveryBoundaryCorner) {
+  for (unsigned Atoms : {0u, 1u, 3u, 6u, 7u, 8u}) {
+    SCOPED_TRACE(Atoms);
+    const auto Corners = size_t(1) << Atoms;
+    EXPECT_TRUE(detail::selectedMinterms(TruthTable::zero(Atoms)).empty());
+    llvm::SmallVector<detail::MintermIndex, 8> All;
+    for (size_t M = 0; M != Corners; ++M) {
+      const auto Corner = static_cast<detail::MintermIndex>(M);
+      All.push_back(Corner);
+      auto One = TruthTable::zero(Atoms);
+      One.set(M);
+      EXPECT_EQ(detail::selectedMinterms(One),
+                (llvm::SmallVector<detail::MintermIndex, 8>{Corner}));
+    }
+    EXPECT_EQ(detail::selectedMinterms(TruthTable::ones(Atoms)), All);
+  }
+}
+
+TEST(SymMBAHigherProduct, MixedDegreeExpansionPreservesIndependentWordValues) {
+  for (unsigned Width : {2u, 8u, 64u, 257u})
+    for (bool SingleTerm : {false, true}) {
+      SCOPED_TRACE(Width);
+      SCOPED_TRACE(SingleTerm);
+      SymContext C;
+      auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+      auto Z = C.mkVar("z", Width);
+      llvm::SmallVector<uint32_t, 3> Ids;
+      C.collectVars({X, Y, Z}, Ids);
+      const auto K =
+          llvm::APInt(Width, 5, false, true) | llvm::APInt::getSignMask(Width);
+      const auto Three = llvm::APInt(Width, 3, false, true);
+      const auto Seven = llvm::APInt(Width, 7, false, true);
+      const auto Nine = llvm::APInt(Width, 9, false, true);
+      const auto Eleven = llvm::APInt(Width, 11, false, true);
+      llvm::SmallVector<detail::PolyTerm, 8> Terms;
+      auto XY = C.mkOr(X, Y), NotZ = C.mkNot(Z), XZ = C.mkXor(X, Z);
+      if (!SingleTerm)
+        Terms.push_back({Three, {XY, NotZ, XZ}});
+      Terms.push_back({Eleven, {}});
+      Terms.push_back({K, {XY, X}});
+      if (!SingleTerm) {
+        Terms.push_back({Seven, {Y}});
+        Terms.push_back({-Three, {XY, NotZ, XZ}});
+        Terms.push_back({Nine, {C.mkAnd(X, Y), C.mkOr(Y, Z)}});
+        Terms.push_back({Three, {XY, C.mkZero(Width), XZ}});
+      }
+      detail::WorkBudget Budget(65536);
+      auto Form = detail::expandOverMinterms(C, Terms, Ids, Width, Budget);
+      ASSERT_TRUE(Form);
+      ASSERT_GT(Budget.used(), 0u);
+      detail::WorkBudget Short(Budget.used() - 1);
+      EXPECT_FALSE(detail::expandOverMinterms(C, Terms, Ids, Width, Short));
+
+      std::mt19937_64 Random(0x53454C454354);
+      const unsigned Samples = Width == 2 ? 64 : 256;
+      for (unsigned Sample = 0; Sample != Samples; ++Sample) {
+        std::array<llvm::APInt, 3> Values;
+        for (unsigned I = 0; I != 3; ++I) {
+          Values[I] = llvm::APInt(Width, 0);
+          if (Width == 2) {
+            Values[I] = llvm::APInt(Width, (Sample >> (2 * I)) & 3);
+          } else {
+            for (unsigned Bit = 0; Bit < Width; Bit += 64)
+              Values[I] |= llvm::APInt(Width, Random(), false, true).shl(Bit);
+          }
+        }
+        auto Want = K * (Values[0] | Values[1]) * Values[0] + Eleven;
+        if (!SingleTerm)
+          Want += Seven * Values[1] +
+                  Nine * (Values[0] & Values[1]) * (Values[1] | Values[2]);
+        std::array<llvm::APInt, 8> Minterms;
+        llvm::APInt Actual(Width, 0);
+        for (unsigned M = 0; M != Minterms.size(); ++M) {
+          Minterms[M] = llvm::APInt::getAllOnes(Width);
+          for (unsigned I = 0; I != Values.size(); ++I)
+            Minterms[M] &= M & (1u << I) ? Values[I] : ~Values[I];
+          Actual += Form->Linear[M] * Minterms[M];
+        }
+        for (const auto &[Key, Coefficient] : Form->Higher) {
+          auto Product = Coefficient;
+          for (auto M : Key)
+            Product *= Minterms[M];
+          Actual += Product;
+        }
+        EXPECT_EQ(Actual, Want);
+      }
+    }
+}
+
 TEST(SymMBAHigherProduct, AvoidsExpandingTheTwoSlowMixedDegreeTails) {
   for (unsigned Width : {3u, 8u, 16u, 32u, 64u, 257u})
     for (bool FifthDegree : {false, true}) {

@@ -89,6 +89,7 @@ LineageReleaseView::LineageReleaseView(LineageSession &S, QWidget *Owner)
                    "parent_count", "child_count"},
                   "lineageReleases", Upper);
   UL->addWidget(Releases, 1);
+  // Two rows of two across the page, under the list they act on.
   auto *Actions = new QGridLayout;
   Add = button(tr("&Add release…"), "lineageReleaseAdd", Upper);
   Edit = button(tr("&Edit release…"), "lineageReleaseEdit", Upper);

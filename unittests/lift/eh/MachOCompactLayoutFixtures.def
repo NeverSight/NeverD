@@ -1,0 +1,30 @@
+//===- MachOCompactLayoutFixtures.def - Compact size boundaries -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef MACHO_COMPACT_LAYOUT_CASE
+#define MACHO_COMPACT_LAYOUT_CASE(Records, Bytes)
+#endif
+#ifndef MACHO_COMPACT_INVALID_COUNTS
+#define MACHO_COMPACT_INVALID_COUNTS(Records, Personalities, LSDAs)
+#endif
+
+// Independent wire-size expectations: 28-byte header, 12-byte index rows
+// including the sentinel, and 8-byte page headers and regular entries.
+MACHO_COMPACT_LAYOUT_CASE(1, 68)
+MACHO_COMPACT_LAYOUT_CASE(510, 4140)
+MACHO_COMPACT_LAYOUT_CASE(511, 4148)
+MACHO_COMPACT_LAYOUT_CASE(512, 4176)
+MACHO_COMPACT_LAYOUT_CASE(513, 4184)
+MACHO_COMPACT_LAYOUT_CASE(1022, 8256)
+MACHO_COMPACT_LAYOUT_CASE(1023, 8284)
+
+MACHO_COMPACT_INVALID_COUNTS(0, 0, 0)
+MACHO_COMPACT_INVALID_COUNTS(1, 4, 0)
+MACHO_COMPACT_INVALID_COUNTS(1, 0, 2)
+MACHO_COMPACT_INVALID_COUNTS(UINT64_MAX, 0, 0)
+
+#undef MACHO_COMPACT_LAYOUT_CASE
+#undef MACHO_COMPACT_INVALID_COUNTS

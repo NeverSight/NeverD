@@ -12,6 +12,7 @@
 #include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/SourceParameterPlacement.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
 
@@ -53,6 +54,43 @@ TEST(SourceCallABI, PlacesFixedScalarArgumentsByPlatform) {
       Windows.Signature.Parameters[1].Location.RegisterOffset,
       getTargetRegInfo(Arch::X64).floatingParamRegs(BinaryFormat::COFF)[1]);
 }
+TEST(SourceCallABI, MIPSCallContractsRejectChangedCarriersAndVariadicTypes) {
+  const auto Double = NdType::makeFloat(8);
+  for (auto A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                 Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    const auto &TRI = getTargetRegInfo(A);
+    auto H = contract({Double, Double}, 1);
+    H.Signature.ReturnType = NdType::makeInt(2 * TRI.FullRegWidth, false);
+    std::string Error;
+    ASSERT_TRUE(assignAnalystCallABI(H, A, BinaryFormat::ELF, Error)) << Error;
+    ASSERT_TRUE(H.Signature.MIPSScalars);
+    EXPECT_EQ(H.Signature.ReturnLocation.Kind, SourceABICarrierKind::None);
+    ASSERT_EQ(H.Signature.ReturnComponents.size(), 2u);
+    for (size_t I = 0; I < 2; ++I) {
+      const auto &Part = H.Signature.ReturnComponents[I];
+      EXPECT_EQ(Part.Kind, SourceABICarrierKind::IntegerRegister);
+      EXPECT_EQ(Part.RegisterOffset, TRI.IntReturnRegs[I]);
+      EXPECT_EQ(Part.ValueBytes, TRI.FullRegWidth);
+    }
+    auto Swapped = H.Signature;
+    std::swap(Swapped.ReturnComponents[0], Swapped.ReturnComponents[1]);
+    EXPECT_FALSE(validateSourceABI(Swapped, Error));
+    EXPECT_EQ(H.Signature.Parameters[0].Location.Kind,
+              isMIPS64(A) ? SourceABICarrierKind::FloatingRegister
+                          : SourceABICarrierKind::IntegerRegister);
+    EXPECT_EQ(H.Signature.Parameters[1].Location.Kind,
+              SourceABICarrierKind::IntegerRegister);
+    auto Altered = H.Signature;
+    Altered.ReturnLocation.ValueBytes = TRI.FullRegWidth;
+    EXPECT_FALSE(validateSourceABI(Altered, Error));
+    Altered = H.Signature;
+    ++Altered.Parameters[1].Location.RegisterOffset;
+    EXPECT_FALSE(validateSourceABI(Altered, Error));
+    H.Signature.Parameters[1].Type = NdType::makeFloat(4);
+    EXPECT_FALSE(assignAnalystCallABI(H, A, BinaryFormat::ELF, Error));
+  }
+}
+
 TEST(SourceCallABI, DarwinWidePrototypeKeepsBothWordsAndOddRegisters) {
   const auto &TRI = getTargetRegInfo(Arch::AArch64);
   for (bool Signed : {false, true})
@@ -625,6 +663,52 @@ TEST(SourceCallABI, RequiresCompleteSameBlockOutgoingStackBytes) {
   F.Blocks[0].Ops.insert(F.Blocks[0].Ops.end() - 1, Earlier);
   EXPECT_FALSE(sourceCallStackArgumentsDefined(F, H, Arch::X64, 8, Error));
 }
+TEST(SourceCallABI, AlignmentGuardPreservesOutgoingStackBytesAndAddresses) {
+  for (auto A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL,
+                 Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    const auto &TRI = getTargetRegInfo(A);
+    const auto Width = TRI.addressRegisterBytes();
+    auto Hint = contract(
+        std::vector<TypeRef>(Width == 8 ? 9 : 3, NdType::makeFloat(8)));
+    std::string Error;
+    ASSERT_TRUE(assignAnalystCallABI(Hint, A, BinaryFormat::ELF, Error));
+    const auto &Last = Hint.Signature.Parameters.back().Location;
+    ASSERT_EQ(Last.Kind, SourceABICarrierKind::Stack);
+    const auto SP = NdVar::reg(TRI.StackPointer, Width);
+    const auto Address = NdVar::tmp(7, Width);
+    LowBlock Block;
+    Block.Ops = {op(NdOp::INT_ADD, Address,
+                    {SP, NdVar::cst(Last.EntryStackOffset, Width)})};
+    auto CheckAddress = Address;
+    if (Width == 4) {
+      CheckAddress = NdVar::tmp(16, 8);
+      Block.Ops.push_back(op(NdOp::INT_ZEXT, CheckAddress, {Address}));
+    }
+    const auto Guard = op(NdOp::INTRINSIC, {},
+                          {NdVar::cst(uint64_t(Intrinsic::RequireAligned), 2),
+                           CheckAddress, NdVar::cst(8, 8)});
+    const size_t GuardIndex = Block.Ops.size();
+    Block.Ops.push_back(Guard);
+    Block.Ops.push_back(op(NdOp::STORE, {}, {Address, NdVar::cst(17, 8)}));
+    Block.Ops.push_back(Guard);
+    Block.Ops.push_back(op(NdOp::CALL, {}, {NdVar::cst(0x2000, Width)}));
+    Block.Ops.back().Addr = 0x1000;
+    Block.Ops.back().Seq = 3;
+    LowFunc Function;
+    Function.Blocks = {Block};
+    ASSERT_TRUE(sourceCallStackArgumentsDefined(Function, Hint, A, 0, Error))
+        << Error;
+    // Neither a malformed guard nor an opaque effect may preserve evidence.
+    Function.Blocks[0].Ops[GuardIndex].Inputs[2] = NdVar::cst(3, 8);
+    EXPECT_FALSE(sourceCallStackArgumentsDefined(Function, Hint, A, 0, Error));
+    Function.Blocks[0] = Block;
+    Function.Blocks[0].Ops[GuardIndex + 2] =
+        op(NdOp::INTRINSIC, {},
+           {NdVar::cst(uint64_t(Intrinsic::MIPSSync), 2), NdVar::cst(0, 1)});
+    EXPECT_FALSE(sourceCallStackArgumentsDefined(Function, Hint, A, 0, Error));
+  }
+}
+
 TEST(SourceCallABI, VariadicCountCannotSurviveExpiredTempsOrOpaqueEffects) {
   auto Hint = contract({NdType::makeInt(4), NdType::makeFloat(8)}, 1);
   std::string Error;

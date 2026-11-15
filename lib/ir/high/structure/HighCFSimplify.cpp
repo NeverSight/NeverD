@@ -689,6 +689,7 @@ static bool exprMayFault(const HighExpr *E) {
   case ExprKind::Phi:
   case ExprKind::Const:
   case ExprKind::Undef:
+  case ExprKind::IncomingStack:
   case ExprKind::EntryRegister:
   case ExprKind::Addr:
     break;
@@ -1728,6 +1729,9 @@ bool foldTempsInReturnTails(std::vector<HighStmt> &Body) {
     auto Copy = std::make_shared<HighExpr>(*E);
     for (ExprPtr &Op : Copy->Operands)
       Op = Replace(Op, K, With);
+    // An indirect callee is a child the read counts cover as well: a read
+    // left in it would lose its definition with the fold.
+    Copy->IndirectTarget = Replace(Copy->IndirectTarget, K, With);
     return Copy;
   };
   auto ReadOf = [](HighStmt &S) -> ExprPtr * {

@@ -1371,6 +1371,7 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   EverPublishedJumpTableBranches.clear();
   LostValidatedJumpTableBranches.clear();
   StackTableEvidenceIncompleteBranches.clear();
+  FrameLabelTableSources.clear();
   IndexDomainEvidenceIncompleteBranches.clear();
   ShapeClaimedBranches.clear();
   ValidatedPhysicalJumpTableBranches.clear();
@@ -1670,6 +1671,7 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   if (ScalarTailCalls)
     rebuildBlocks(Func);
   convertIndirectTailCalls(Func);
+  dispatchUnprovedBranchesByValue(Img, Func);
   closeRegistrationCxxContinuations(Img, Dec, Func);
 
   std::set<va_t> ReachableInsnAddrs;
@@ -2281,6 +2283,11 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   PublishFailures(UnsupportedInstructionAddresses,
                   Func.UnsupportedInstructionAddresses);
   PublishFailures(TruncatedPathAddresses, Func.TruncatedPathAddresses);
+  // A dispatch by value proves no target: its jump stays among the unproved
+  // ones, which every reader of that set treats with the same care as before.
+  auto hasNoProvedTarget = [](const InsnRecord &Rec) {
+    return Rec.JumpTableTargets.empty() || Rec.ValueDispatch;
+  };
   for (const auto &[Addr, Rec] : Insns)
     if ((Rec.RejectedScalarBranch || Rec.RejectedComputedTargets) &&
         ReachableInsnAddrs.count(Addr))
@@ -2296,13 +2303,13 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
     for (size_t I = 0; I < GuardedGroupIdentity->MemberCount; ++I) {
       const va_t Addr = GuardedGroupIdentity->Members[I];
       if (auto It = Insns.find(Addr);
-          It != Insns.end() && It->second.JumpTableTargets.empty())
+          It != Insns.end() && hasNoProvedTarget(It->second))
         Func.UnsafeIndirectBranchAddresses.insert(Addr);
     }
   if (PreservePotentialJumpTableBranches)
     for (va_t Addr : PotentialJumpTableBranches) {
       auto It = Insns.find(Addr);
-      if (It != Insns.end() && It->second.JumpTableTargets.empty())
+      if (It != Insns.end() && hasNoProvedTarget(It->second))
         Func.UnsafeIndirectBranchAddresses.insert(Addr);
     }
   Func.EverPublishedJumpTableBranchAddresses.insert(
@@ -2314,17 +2321,21 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
   for (va_t Addr : StackTableEvidenceIncompleteBranches)
     if (Insns.count(Addr))
       Func.UnsafeIndirectBranchAddresses.insert(Addr);
+  for (const auto &[Addr, Source] : FrameLabelTableSources)
+    if (auto It = Insns.find(Addr);
+        It != Insns.end() && hasNoProvedTarget(It->second))
+      Func.UnsafeIndirectBranchAddresses.insert(Addr);
   for (va_t Addr : IndexDomainEvidenceIncompleteBranches)
     if (Insns.count(Addr))
       Func.UnsafeIndirectBranchAddresses.insert(Addr);
   if (IncompleteBranchMarkerEvidenceIncomplete)
     for (const auto &[Addr, Rec] : Insns)
       if (Rec.IsBranch && Rec.IsIndirect && !Rec.IsCall && !Rec.IsRet &&
-          !Rec.IsCond && Rec.JumpTableTargets.empty())
+          !Rec.IsCond && hasNoProvedTarget(Rec))
         Func.UnsafeIndirectBranchAddresses.insert(Addr);
   for (va_t Addr : ValidatedPhysicalJumpTableBranches)
     if (auto It = Insns.find(Addr);
-        It != Insns.end() && It->second.JumpTableTargets.empty())
+        It != Insns.end() && hasNoProvedTarget(It->second))
       Func.UnsafeIndirectBranchAddresses.insert(Addr);
   for (va_t Addr : AmbiguousI386GOTPCBranches)
     if (Insns.count(Addr))
@@ -2643,11 +2654,19 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       // Fallthrough or a queued edge into another function's entry belongs to
       // that function.  Following it here fuses callees into a multi-hundred-
       // thousand-op CFG and leaves the real PDB symbol as an empty HighC stub.
-      if (Cur != CurrentFuncEntry && isKnownFunctionEntry(Cur) &&
-          !isCurrentExceptionalEntry(Cur) && !isCurrentOwnedFragment(Cur) &&
-          (!SourceBranch ||
-           !isBackwardSharedEpilogue(Img, CurrentFuncEntry, *SourceBranch, Cur,
-                                     KnownFuncEntries))) {
+      // A relocatable object's undefined function has an identity and no
+      // bytes: an edge to it can only be a tail call, as isTailCallTarget
+      // says of an unconditional branch there, and exploring it would find no
+      // code and drop the edge.
+      const bool ExternEntry =
+          Img.IsRelocatable && Img.ObjectExternFunctionEntries.count(Cur);
+      if (Cur != CurrentFuncEntry &&
+          (ExternEntry ||
+           (isKnownFunctionEntry(Cur) && !isCurrentExceptionalEntry(Cur) &&
+            !isCurrentOwnedFragment(Cur) &&
+            (!SourceBranch ||
+             !isBackwardSharedEpilogue(Img, CurrentFuncEntry, *SourceBranch,
+                                       Cur, KnownFuncEntries))))) {
         // Reaching it is a tail call, whether by a conditional branch or by
         // falling through (see the stubs after this walk).  A disposable
         // proof snapshot keeps its decode-only accounting.
@@ -2722,6 +2741,12 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
         break;
       }
       const va_t Next = Cur + InsnSize;
+      // A relocation the loader left unapplied was to fill a field of this
+      // instruction, whose bytes are still the assembler's placeholder.
+      if (Img.hasUnappliedCodeRelocation(Cur, InsnSize)) {
+        UnsupportedInstructionAddresses.insert(Cur);
+        break;
+      }
 
       InsnRecord Rec;
       Rec.Addr = Cur;
@@ -3017,7 +3042,12 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
   for (const auto &[Entry, IncomingMode] : TailCallEntries) {
     if (Insns.count(Entry))
       continue;
-    const auto Mode = Img.instructionModeAt(Entry, IncomingMode);
+    // An undefined function has no bytes whose mode the image could state.
+    // Its stub is the edge, in the mode of the branch that takes it.
+    const bool NoBytes = IncomingMode && Img.IsRelocatable &&
+                         Img.ObjectExternFunctionEntries.count(Entry);
+    const auto Mode =
+        NoBytes ? IncomingMode : Img.instructionModeAt(Entry, IncomingMode);
     if (!Mode) {
       DecodeFailureAddresses.insert(Entry);
       continue;

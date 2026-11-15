@@ -28,7 +28,7 @@ void LowToMedConverter::modelKnownWideCallReturns(MedFunc &Func) {
   if (!HaveDirect && !HaveIndirect)
     return;
   const auto &TRI = getTargetRegInfo(TargetArch);
-  if (TRI.PointerSize != 4 || TRI.IntReturnReg2 == 0)
+  if (TRI.integerReturnWordBytes() != 4 || TRI.IntReturnReg2 == 0)
     return;
   const uint64_t LoReg = TRI.IntReturnReg;
   const uint64_t HiReg = TRI.IntReturnReg2;
@@ -111,7 +111,7 @@ void modelCallWideIntReturn(MedFunc &Func, Arch TheArch,
   // high-half register (IntReturnReg2), so a post-call read of the high half
   // resolves to the pre-call (clobbered) value and the result's upper 32 bits
   // are lost.  Mirrors modelCallFPReturn for the integer register pair.
-  if (TRI.PointerSize != 4 || TRI.IntReturnReg2 == 0)
+  if (TRI.integerReturnWordBytes() != 4 || TRI.IntReturnReg2 == 0)
     return;
   const uint64_t LoReg = TRI.IntReturnReg;
   const uint64_t HiReg = TRI.IntReturnReg2;

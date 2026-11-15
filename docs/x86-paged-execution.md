@@ -699,7 +699,9 @@ handler boundary. Tests compose these calls through IRQ/NMI entry, generated
 IRET and resumed code, and execute a generated #PF handler that repairs the
 page table, removes the error code, returns to the faulting IRET and retries it.
 Returning to compatibility mode produces the correct state and explicit exit;
-it does not add a legacy-mode instruction dispatcher. Restored TF remains an
+this V6 scheduler stops at that boundary. The explicit
+[full-width mode owner](x86-mode-execution.md) can continue an admitted
+compatibility stream and later return to code64. Restored TF remains an
 explicit boundary unless the instruction-region export binds `paged_debug`.
 
 The IRET CPU matrix compares CS/SS caches, data selectors, unusable bits,

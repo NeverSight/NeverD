@@ -33,7 +33,7 @@ struct SourceCallOccurrenceKey {
 std::optional<SourceCallOccurrenceKey>
 sourceCallOccurrenceKey(const LowOp &Operation);
 
-/// Additionally require the complete pointer width of the target architecture.
+/// Additionally require the complete machine call-target width.
 std::optional<SourceCallOccurrenceKey>
 sourceCallOccurrenceKey(const LowOp &Operation, Arch Architecture);
 } // namespace neverd

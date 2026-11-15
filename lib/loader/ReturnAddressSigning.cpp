@@ -60,7 +60,8 @@ AArch64RAQueryResult compactRecipe(const CompactUnwindEntry &Entry,
 
 AArch64RAQueryResult dwarfState(const BinaryImage &Image,
                                 const ExceptionFunction &Function, va_t PC,
-                                const AArch64UnwindSigningLimits &Limits) {
+                                const AArch64UnwindSigningLimits &Limits,
+                                bool &Implicit) {
   using Status = AArch64RAQueryStatus;
   const auto &FDE = *Function.Dwarf;
   const auto Range = ExceptionAddressRange::fromStartAndSize(
@@ -79,8 +80,15 @@ AArch64RAQueryResult dwarfState(const BinaryImage &Image,
   }
   if (!CIE)
     return fail(Status::Malformed, kInvalidCIE);
-  return dwarf_eh::evaluateAArch64ReturnAddressState(Image.Arch, *CIE, FDE, PC,
-                                                     Limits.Dwarf);
+  bool HasExplicitRule;
+  auto State = dwarf_eh::evaluateAArch64ReturnAddressState(
+      Image.Arch, *CIE, FDE, PC, Limits.Dwarf, HasExplicitRule);
+  if (State.Status == Status::Known && CIE->UsesArm64eReturnAddressABI &&
+      !HasExplicitRule) {
+    Implicit = true;
+    return fail(Status::Unknown, kImplicitDarwinState);
+  }
+  return State;
 }
 
 } // namespace
@@ -122,7 +130,8 @@ queryAArch64UnwindSigning(const BinaryImage &Image,
                       : Status::Unsupported,
                   kIncompleteOwner);
   if (Function.Dwarf)
-    Result.DwarfStateAtPC = dwarfState(Image, Function, PC, Limits);
+    Result.DwarfStateAtPC = dwarfState(Image, Function, PC, Limits,
+                                       Result.HasImplicitDarwinSigning);
   if (Function.Compact)
     Result.CompactRecipe = compactRecipe(*Function.Compact, Function, PC);
   return Result;

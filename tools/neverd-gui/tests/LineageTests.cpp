@@ -8,6 +8,7 @@
 /// Authored machine code is analyzed, never executed.
 //===----------------------------------------------------------------------===//
 
+#include "../ResourceLimits.h"
 #include "ComparisonSession.h"
 #include "Language.h"
 #include "LineageDialog.h"
@@ -21,6 +22,7 @@
 #include <QClipboard>
 #include <QCryptographicHash>
 #include <QDateTimeEdit>
+#include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
@@ -49,6 +51,8 @@
 #include <QTimer>
 #include <QToolButton>
 #include <QTranslator>
+#include <QVBoxLayout>
+#include <tuple>
 
 using namespace neverd::gui;
 namespace {
@@ -136,6 +140,89 @@ private slots:
       QTRY_VERIFY_WITH_TIMEOUT(Saved, Timeout);
       Reports.append(Path);
     }
+  }
+  void panesStandApartAndReturnStaysInTheWindow() {
+    // The pages' tabs stood on the line between the panes, and the snapshot
+    // list was set in from the commands above it.  The window has no default
+    // button, but QDialog presses the default of any window open inside it:
+    // with a member list open, Return in the function filter pressed that
+    // list's button.
+    LineageDialog View(TEST_LINEAGE_WORKER);
+    View.setAttribute(Qt::WA_DeleteOnClose, false);
+    View.resize(1180, 780);
+    View.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&View));
+    QDialog Child(&View);
+    auto *ChildLayout = new QVBoxLayout(&Child);
+    auto *Close = new QPushButton("Close", &Child);
+    ChildLayout->addWidget(Close);
+    Close->setDefault(true);
+    int Clicks = 0;
+    connect(Close, &QPushButton::clicked, &Child, [&Clicks] { ++Clicks; });
+    Child.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&Child));
+    auto *Search = View.findChild<QLineEdit *>("lineageSearch");
+    QVERIFY(Search);
+    Search->setFocus();
+    QTest::keyClick(Search, Qt::Key_Return);
+    QCOMPARE(Clicks, 0);
+    Child.hide();
+
+    auto *Tabs = View.findChild<QTabWidget *>("lineageTabs");
+    auto *Versions = View.findChild<LineagePageView *>("lineageVersions");
+    auto *Add = View.findChild<QPushButton *>("lineageAdd");
+    QVERIFY(Tabs && Versions && Add);
+    const auto Left = [&View](const QWidget *W) {
+      return W->mapTo(&View, QPoint()).x();
+    };
+    // From the snapshot list to the pages: the gutter, and nothing of
+    // either pane inside it.
+    QCOMPARE(Left(Tabs) - (Left(Versions) + Versions->width()),
+             ::neverd::limits::gui::kPaneGutter);
+    QCOMPARE(Left(Versions), Left(Add));
+    // Adding comparisons is what the window asks for first and the one
+    // command that wears the accent; none is the default.
+    for (const auto *Button : View.findChildren<QPushButton *>())
+      if (Button->window() == &View) {
+        QVERIFY2(!Button->isDefault(), qPrintable(Button->text()));
+        QCOMPARE(Button->property("mainAction").toBool(), Button == Add);
+      }
+    // The command at the foot of a list spans the list, and the releases'
+    // four commands fill its width in two columns.  An audit once gave them
+    // their own widths; the panes then looked empty, and the user asked for
+    // this layout back.
+    const auto Spans = [&View](const char *Command, const char *List) {
+      const auto *Button = View.findChild<QPushButton *>(Command);
+      const auto *Above = View.findChild<QWidget *>(List);
+      return Button && Above && Button->isVisible() &&
+             Button->mapTo(&View, QPoint()).x() ==
+                 Above->mapTo(&View, QPoint()).x() &&
+             Button->width() == Above->width();
+    };
+    QVERIFY(Spans("lineageMetadata", "lineageVersions"));
+    for (const auto &[Title, Command, List] :
+         {std::tuple{"Functions", "lineageTrace", "lineageFunctions"},
+          std::tuple{"Conflicts", "lineageConflictMembers",
+                     "lineageConflicts"}}) {
+      for (int Page = 0; Page < Tabs->count(); ++Page)
+        if (Tabs->tabText(Page) == QLatin1String(Title))
+          Tabs->setCurrentIndex(Page);
+      QCoreApplication::processEvents();
+      QVERIFY2(Spans(Command, List), Command);
+    }
+    for (int Page = 0; Page < Tabs->count(); ++Page)
+      if (Tabs->tabText(Page) == QLatin1String("Releases"))
+        Tabs->setCurrentIndex(Page);
+    QCoreApplication::processEvents();
+    const auto *Releases = View.findChild<QWidget *>("lineageReleases");
+    const auto *First = View.findChild<QPushButton *>("lineageReleaseAdd");
+    const auto *Second = View.findChild<QPushButton *>("lineageReleaseEdit");
+    QVERIFY(Releases && First && Second && First->isVisible());
+    QCOMPARE(First->mapTo(&View, QPoint()).x(),
+             Releases->mapTo(&View, QPoint()).x());
+    QCOMPARE(Second->mapTo(&View, QPoint()).x() + Second->width(),
+             Releases->mapTo(&View, QPoint()).x() + Releases->width());
+    QVERIFY(qAbs(First->width() - Second->width()) <= 1);
   }
 
   void referenceUncertaintySurvivesLineageTrace_data() {

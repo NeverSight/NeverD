@@ -12,11 +12,13 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -28,16 +30,56 @@ namespace {
 
 class MicroMIPSPipeline : public ::testing::TestWithParam<Arch> {};
 
-TEST_P(MicroMIPSPipeline, HalfwordAlignedALUReachesBothSourcesWithMode) {
-  mips_test::ELFBytes File(GetParam());
-  File.put(36, 0x72001000, 4);
-  File.put(24, 0x10101, 4);
-  // move v0,a0; addiu v0,v0,1; jrc ra.
-  for (auto [Offset, Half] : {std::pair{0x100, 0x0c44},
-                              {0x102, 0x3042},
-                              {0x104, 0x0001},
-                              {0x106, 0x45bf}})
-    File.put(Offset, Half, 2);
+TEST(MicroMIPSPipelineSource, LLVMCModePreludeFollowsEmittedSignatures) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("mixed", Context);
+  llvm::IRBuilder<> IR(Context);
+  auto *Type = llvm::FunctionType::get(IR.getInt32Ty(), false);
+  auto *Micro = llvm::Function::Create(Type, llvm::Function::ExternalLinkage,
+                                       "micro_target", Module);
+  Micro->addFnAttr("micromips");
+  IR.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Micro));
+  IR.CreateRet(IR.getInt32(7));
+  CEmitterOptions Options;
+  Options.TheArch = Arch::MIPS64;
+  Options.Format = BinaryFormat::ELF;
+  for (bool CallsMicro : {false, true}) {
+    auto *Classic =
+        llvm::Function::Create(Type, llvm::Function::ExternalLinkage,
+                               CallsMicro ? "calls_micro" : "leaf", Module);
+    IR.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Classic));
+    if (CallsMicro)
+      IR.CreateRet(IR.CreateCall(Micro));
+    else
+      IR.CreateRet(IR.getInt32(42));
+    std::string Text;
+    llvm::raw_string_ostream Out(Text);
+    ASSERT_TRUE(
+        LLVMCEmitter().emit(Module, Out, Options, nullptr, nullptr, Classic));
+    EXPECT_EQ(Text.find("#define NEVERD_MICROMIPS") != std::string::npos,
+              CallsMicro)
+        << Text;
+  }
+}
+
+void checkHalfwordAlignedALUSources(Arch Target, unsigned Revision) {
+  mips_test::ELFBytes File(Target);
+  const bool R6 = Revision == 6;
+  if (File.Is64) {
+    constexpr va_t Base = 0x100010000;
+    File.put(48, R6 ? 0xa2000000u : 0x82000000u, 4);
+    File.put(64 + 16, Base, 8);
+    File.put(64 + 24, Base, 8);
+    File.put(24, Base + 0x101, 8);
+  } else {
+    File.put(36, R6 ? 0x92001000u : 0x72001000u, 4);
+    File.put(24, 0x10101, 4);
+  }
+  // MOVE16 v0,a0; [D]ADDIU v0,v0,1 at a halfword boundary; JRC[16] ra.
+  File.put(0x100, 0x0c44, 2);
+  File.put(0x102, File.Is64 ? 0x5c42 : 0x3042, 2);
+  File.put(0x104, 1, 2);
+  File.put(0x106, R6 ? 0x47e3 : 0x45bf, 2);
   ELFLoader Loader;
   auto Image = Loader.loadBuffer(File.buffer());
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
@@ -56,25 +98,44 @@ TEST_P(MicroMIPSPipeline, HalfwordAlignedALUReachesBothSourcesWithMode) {
     ASSERT_EQ(Result.MedFuncs.size(), 1u);
     EXPECT_EQ(Result.MedFuncs.front().Params.size(), 1u);
     EXPECT_EQ(Result.MedIRVerifierFailures, 0u);
+    CEmitterOptions Emit;
+    Emit.TheArch = Target;
+    Emit.Format = BinaryFormat::ELF;
+    Emit.Image = &*Image;
+    std::string Text;
+    llvm::raw_string_ostream Output(Text);
     if (LLVM) {
       ASSERT_TRUE(Result.LlvmModule);
       EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
       const auto *Body = Result.LlvmModule->getFunction("micro_increment");
       ASSERT_NE(Body, nullptr);
       EXPECT_TRUE(Body->hasFnAttribute("micromips"));
+      ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Output, Emit));
     } else {
-      CEmitterOptions Emit;
-      Emit.TheArch = GetParam();
-      Emit.Format = BinaryFormat::ELF;
-      Emit.Image = &*Image;
-      std::string Text;
-      llvm::raw_string_ostream Output(Text);
       ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Output, Emit));
-      EXPECT_NE(Text.find("__attribute__((micromips,nomips16))"),
-                std::string::npos)
-          << Text;
     }
+    EXPECT_NE(Text.find("__attribute__((micromips,nomips16))"),
+              std::string::npos)
+        << Text;
+    EXPECT_NE(Text.find("__attribute__((micromips))"), std::string::npos);
+    const auto PreludeEnd = Text.find("#endif\n\n");
+    ASSERT_NE(PreludeEnd, std::string::npos);
+    EXPECT_NE(Text.find("NEVERD_MICROMIPS ", PreludeEnd), std::string::npos);
   }
+}
+
+TEST_P(MicroMIPSPipeline, HalfwordAlignedALUReachesBothSourcesWithMode) {
+  checkHalfwordAlignedALUSources(GetParam(), 2);
+  checkHalfwordAlignedALUSources(GetParam(), 6);
+}
+
+TEST(MicroMIPS64Pipeline, HighELFEntryReachesBothSources) {
+  for (Arch Target : {Arch::MIPS64, Arch::MIPS64EL})
+    for (unsigned Revision : {2, 6}) {
+      SCOPED_TRACE(::testing::Message()
+                   << static_cast<int>(Target) << " r" << Revision);
+      checkHalfwordAlignedALUSources(Target, Revision);
+    }
 }
 
 BinaryImage mixedImage(Arch Target) {

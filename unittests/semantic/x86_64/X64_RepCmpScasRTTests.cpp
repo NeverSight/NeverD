@@ -23,6 +23,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64RepCmpScasRT : public SemanticRoundTripFixture,
                         public ::testing::WithParamInterface<RoundTripTC> {};
@@ -286,3 +287,11 @@ static const std::vector<RoundTripTC> kX86 = {
 
 INSTANTIATE_TEST_SUITE_P(RepCmpScas, X86RepCmpScasRT, ::testing::ValuesIn(kX86),
                          rtTCName);
+
+// A compare REP whose flags nothing reads evaluated the unknown flags it
+// would return for a zero count: the C is checked by execution.
+INSTANTIATE_TEST_SUITE_P(
+    RepCmpScasHighC, X64RepCmpScasRT,
+    ::testing::ValuesIn(onHighC(kX64, {"repe_cmpsb_zero_count",
+                                       "repne_scasb_zero_count"})),
+    rtTCName);

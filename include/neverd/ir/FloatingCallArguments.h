@@ -41,12 +41,22 @@ struct FloatingCallArguments {
     uint16_t Bytes = 0;
     bool Floating = false;
     bool Pointer = false;
+    /// MIPS narrow integer arguments are extended by the caller.
+    bool Signed = false;
     bool operator==(const ScalarParameter &) const = default;
   };
   /// A mixed scalar signature, in source order. Empty retains the consecutive
   /// floating-register representation above. Locations come exclusively from
   /// SourceParameterPlacement, including the entry-SP bias of stack values.
+  /// An o32 double in a GPR pair occupies one logical entry at its first word.
   std::vector<ScalarParameter> Scalars;
+  /// MIPS integer and pointer results use v0 or the ordered v0/v1 pair.
+  /// A void call has no result. HFA descriptors keep
+  /// their existing ReturnElements and floating element convention.
+  NdTypeKind ReturnKind = NdTypeKind::Float;
+  bool SignedResult = false;
+  /// For a variadic occurrence Scalars includes all promoted actual arguments.
+  std::optional<unsigned> FixedCount;
   bool operator==(const FloatingCallArguments &) const = default;
 };
 
@@ -57,7 +67,8 @@ struct FloatingCallArguments {
 /// conventions need other adapters. The caller establishes the fixed C ABI.
 std::optional<FloatingCallArguments>
 floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
-                      llvm::ArrayRef<TypeRef> Parameters);
+                      llvm::ArrayRef<TypeRef> Parameters,
+                      std::optional<unsigned> FixedCount = std::nullopt);
 
 struct FloatingCallTypes {
   TypeRef Result;

@@ -738,6 +738,7 @@ bool CFGBuilder::tryCrossInstrRelativeTable(
     if (StackTableEvidenceIncompleteBranches.count(Rec.Addr))
       return false;
     if (StackSrc != InvalidVA) {
+      FrameLabelTableSources.insert_or_assign(Rec.Addr, StackSrc);
       TableAddr = StackSrc;
       if (AddressOccurrence.Value.Size == 0 ||
           AddressOccurrence.Addr == InvalidVA || AddressOccurrence.Seq < 0 ||

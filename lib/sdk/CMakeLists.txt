@@ -134,6 +134,7 @@ target_link_libraries(neverd_shared PRIVATE
     NeverDBackendLLVM
     NeverDCodeGen
     NeverDDecode
+    NeverDAArch64UnwindRecovery
     NeverDLift
     NeverDLoader
     NeverDSupport

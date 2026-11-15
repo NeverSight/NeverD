@@ -32,6 +32,7 @@ struct MachOHeaderInfo {
   uint32_t HeaderSize = 0;
   uint32_t Flags = 0;
   bool Is64 = false;
+  uint32_t FileType = 0;
 };
 
 inline MachOHeaderInfo parseMachOHeader(const uint8_t *Data, size_t Size) {
@@ -49,12 +50,14 @@ inline MachOHeaderInfo parseMachOHeader(const uint8_t *Data, size_t Size) {
     Info.NCmds = Hdr->ncmds;
     Info.SizeOfCmds = Hdr->sizeofcmds;
     Info.Flags = Hdr->flags;
+    Info.FileType = Hdr->filetype;
     Info.HeaderSize = sizeof(mach_header_64);
   } else if (Magic == MH_MAGIC) {
     auto *Hdr = reinterpret_cast<const mach_header *>(Data);
     Info.NCmds = Hdr->ncmds;
     Info.SizeOfCmds = Hdr->sizeofcmds;
     Info.Flags = Hdr->flags;
+    Info.FileType = Hdr->filetype;
     Info.HeaderSize = sizeof(mach_header);
   }
   return Info;
@@ -375,13 +378,24 @@ constexpr uint32_t kDroppableLinkEditCmds[] = {
 /// Commands only tools read: dyld needs none of them to run an image.
 /// Apple's linker can leave less room after the commands than one new segment
 /// takes, and a DATA segment normally sits between __TEXT and __LINKEDIT. A
-/// whole-image rewrite therefore gives these up when it must, in this order and
-/// no further than it has to. A source patch keeps them.
+/// native installation therefore gives these up when it must, in this order and
+/// no further than it has to. Symbol, dependency and unwind tables stay live.
 constexpr uint32_t kToolOnlyLoadCmds[] = {
-    llvm::MachO::LC_SOURCE_VERSION,
-    llvm::MachO::LC_DATA_IN_CODE,
-    llvm::MachO::LC_FUNCTION_STARTS,
+#define MACHO_TOOL_ONLY_COMMAND(Command) Command,
+#include "neverd/object/MachOLayout.def"
 };
+
+/// The linker's distinguished N_SECT header symbol depends on the file type.
+inline bool isMachOHeaderSymbol(llvm::StringRef Name, uint32_t FileType) {
+  switch (FileType) {
+#define MACHO_HEADER_SYMBOL(Type, Symbol)                                      \
+  case Type:                                                                   \
+    return Name == Symbol;
+#include "neverd/object/MachOLayout.def"
+  default:
+    return false;
+  }
+}
 
 inline bool shouldDropLoadCommand(uint32_t Cmd) {
   for (uint32_t C : kDroppableLinkEditCmds)

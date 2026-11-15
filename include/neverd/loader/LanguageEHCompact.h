@@ -128,6 +128,9 @@ struct CompactUnwindEntry {
   /// analysis, but rewrite paths must reject them.
   CompactUnwindSemanticStatus SemanticStatus =
       CompactUnwindSemanticStatus::Complete;
+  /// The image pointer slot selected by the compact personality index. Keep
+  /// its identity even when dyld supplies the routine only at runtime.
+  va_t PersonalitySlotVA = 0;
 };
 
 } // namespace neverd

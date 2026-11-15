@@ -150,7 +150,7 @@ x86FourSourceCallPlan(Arch A, const llvm::CallInst &Call) {
   const auto *Asm = llvm::dyn_cast<llvm::InlineAsm>(Call.getCalledOperand());
   std::optional<X86FourSourcePlan> P;
   if (F)
-    P = x86FourSourceNativeName(F->getName().str());
+    P = x86FourSourceNativeName(F->getName());
   if (P) {
     const auto ID = llvm::Intrinsic::lookupIntrinsicID(F->getName());
     if (!ID || !F->isDeclaration() || F->getIntrinsicID() != ID ||

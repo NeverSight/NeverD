@@ -4,6 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "neverd/loader/MachO/MachORelocations.h"
+
 #include "MachOObjectExterns.h"
 #include "MachORelocationsDetail.h"
 
@@ -523,6 +525,21 @@ void synchronizeObjectSectionData(BinaryImage &Img) {
 
 } // namespace
 
+std::optional<int64_t>
+detail::decodeARM64AddendPair(const llvm::object::MachOObjectFile &Object,
+                              const llvm::object::RelocationRef &Prefix,
+                              const llvm::object::RelocationRef &Consumer) {
+  const auto Addend = relocationMetadata(Object, Prefix);
+  const auto Target = relocationMetadata(Object, Consumer);
+  if (Addend.Type != llvm::MachO::ARM64_RELOC_ADDEND ||
+      !hasValidARM64AddendMetadata(Addend) ||
+      !isARM64InstructionRelocation(Target.Type) ||
+      !hasValidARM64InstructionMetadata(Target) ||
+      Addend.Address != Target.Address)
+    return std::nullopt;
+  return llvm::SignExtend64<kARM64AddendBits>(Addend.SymbolNumber);
+}
+
 llvm::Error applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
                                    BinaryImage &Img) {
   using namespace llvm::MachO;
@@ -563,28 +580,16 @@ llvm::Error applyObjectRelocations(const llvm::object::MachOObjectFile &Obj,
       int64_t ARM64Addend = 0;
 
       if (Img.Arch == Arch::AArch64 && Info.Type == ARM64_RELOC_ADDEND) {
-        size_t RunEnd = I + 1;
-        while (RunEnd < Relocations.size() &&
-               relocationMetadata(Obj, Relocations[RunEnd]).Type ==
-                   ARM64_RELOC_ADDEND)
-          ++RunEnd;
-        const bool HasTarget = RunEnd < Relocations.size();
-        RelocationMetadata TargetInfo;
-        if (HasTarget)
-          TargetInfo = relocationMetadata(Obj, Relocations[RunEnd]);
-        const bool IsValidPair =
-            RunEnd == I + 1 && HasTarget && hasValidARM64AddendMetadata(Info) &&
-            isARM64InstructionRelocation(TargetInfo.Type) &&
-            hasValidARM64InstructionMetadata(TargetInfo) &&
-            Info.Address == TargetInfo.Address;
-        if (!IsValidPair) {
-          return relocationError("malformed ARM64 ADDEND pair", SecAddr,
+        const auto Addend = I + 1 < Relocations.size()
+                                ? detail::decodeARM64AddendPair(
+                                      Obj, Relocations[I], Relocations[I + 1])
+                                : std::nullopt;
+        if (!Addend)
+          return relocationError(detail::kMalformedARM64Addend, SecAddr,
                                  Info.Address);
-        }
-        ARM64Addend = llvm::SignExtend64<24>(Info.SymbolNumber);
-        RelocationIndex = RunEnd;
-        Info = TargetInfo;
-        I = RunEnd;
+        ARM64Addend = *Addend;
+        RelocationIndex = ++I;
+        Info = relocationMetadata(Obj, Relocations[I]);
       }
 
       if (isSubtractorType(Img.Arch, Info.Type)) {

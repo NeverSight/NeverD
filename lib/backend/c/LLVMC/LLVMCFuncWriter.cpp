@@ -62,6 +62,7 @@
 #include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/GlobalIFunc.h"
 #include "llvm/IR/InlineAsm.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Metadata.h"
@@ -85,9 +86,29 @@
 namespace neverd {
 
 namespace {
+#define C_STACK_TEXT(Name, Text) constexpr llvm::StringLiteral Name = Text;
+#include "neverd/backend/c/render/CStackIntrinsic.def"
 
 /// Holds the frame record's place until the body has named its members.
 constexpr llvm::StringLiteral kFrameRecordMarker = "/*@neverd-frame-record@*/";
+
+/// Whether the C compiler for the original target lets a definition assume
+/// that its callers extended a char or short argument to a full int, as Clang
+/// does for AAPCS, i386, x86-64 System V, MIPS and Apple arm64 (`zeroext`).
+/// Win64 and AAPCS64 make the callee extend it.
+bool cCallersExtendNarrowArguments(Arch TheArch, BinaryFormat Format) {
+  switch (TheArch) {
+  case Arch::X86:
+  case Arch::ARM:
+    return true;
+  case Arch::X64:
+    return Format != BinaryFormat::COFF;
+  case Arch::AArch64:
+    return Format == BinaryFormat::MachO;
+  default:
+    return isMIPS(TheArch);
+  }
+}
 
 /// Whether \p Signature declares main as a hosted C program's runtime calls
 /// it: `int main(int argc, char **argv)`, and envp after argv where it
@@ -2753,6 +2774,7 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
   BlockLabels.clear();
   DeferredBlockLabels.clear();
   ReferencedBlocks.clear();
+  AddressLabelBlocks.clear();
   KnownImmediates.clear();
   AllocaImmediates.clear();
   UnknownPlaceholderCache.clear();
@@ -3529,10 +3551,9 @@ bool LLVMCWriter::isResultParamValue(const llvm::Value *V) const {
 unsigned LLVMCWriter::printedCallArgLimit(const llvm::CallBase &Call,
                                           llvm::StringRef CalleeName) const {
   const unsigned Have = Call.arg_size();
-  // Inline assembly has an exact input contract, not an inferred C call ABI.
-  // A trailing input loaded from a cross-block snapshot is still required;
-  // dropping its producers leaves the assembly using an uninitialized local.
-  if (Call.isInlineAsm())
+  // Both render every operand. Even a trailing load used only by a variadic
+  // occurrence must stay live when its target's declaration has fewer inputs.
+  if (Call.isInlineAsm() || Call.getMetadata("neverd.source.analyst-call"))
     return Have;
   const MsvcCallee *Msvc = msvcCallee(CalleeName, Opts.Format);
   auto Clamp = [&](size_t Limit) {
@@ -3996,7 +4017,9 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
           continue;
         if (auto Text = ValueTexts.find(Inst.getOperand(0));
             Text != ValueTexts.end() && !Text->second.empty())
-          ValueTexts[&Inst] = castOfText(*Cast, Text->second);
+          if (std::string Converted = castOfText(*Cast, Text->second);
+              !Converted.empty())
+            ValueTexts[&Inst] = std::move(Converted);
         continue;
       }
       if (auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst)) {
@@ -4147,7 +4170,9 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
         continue;
       if (auto Text = ValueTexts.find(Inst.getOperand(0));
           Text != ValueTexts.end() && !Text->second.empty())
-        ValueTexts[&Inst] = castOfText(*Cast, Text->second);
+        if (std::string Converted = castOfText(*Cast, Text->second);
+            !Converted.empty())
+          ValueTexts[&Inst] = std::move(Converted);
     }
   }
 
@@ -4404,10 +4429,12 @@ void LLVMCWriter::markComposedPrints(llvm::Function &Fn) {
         if (llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst>(&Inst))
           continue;
         if (auto Text = ValueTexts.find(Inst.getOperand(0));
-            Text != ValueTexts.end() && !Text->second.empty()) {
-          ValueTexts[&Inst] = castOfText(*Cast, Text->second);
-          Mark(Inst);
-        }
+            Text != ValueTexts.end() && !Text->second.empty())
+          if (std::string Converted = castOfText(*Cast, Text->second);
+              !Converted.empty()) {
+            ValueTexts[&Inst] = std::move(Converted);
+            Mark(Inst);
+          }
       }
       if (isComposedRemValue(&Inst) || isRedundantFlagAnd(Inst) ||
           (llvm::isa<llvm::ICmpInst>(&Inst) && !Inst.use_empty()))
@@ -9048,6 +9075,7 @@ void LLVMCWriter::writeGoto(const llvm::BasicBlock *From,
                             bool EmitGoto) {
   if (!From || !To)
     return;
+  noteLabelPlace(From);
   std::set<const llvm::BasicBlock *> Seen;
   const llvm::BasicBlock *CurFrom = From;
   const llvm::BasicBlock *CurTo = To;
@@ -10323,6 +10351,9 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
       return {};
     return cNamedTypeSpelling(Ty->TypedefName);
   };
+  // The char and short arguments the definition takes as whole words, and the
+  // word each one arrives in.
+  std::vector<std::pair<const llvm::Argument *, std::string>> NarrowedArguments;
   auto ParamDecl = [&](llvm::Argument &Arg, unsigned ParamIdx) {
     if (ParamIdx < DefinitionTypes.Parameters.size()) {
       const auto &Pointer = DefinitionTypes.Parameters[ParamIdx];
@@ -10351,6 +10382,26 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
         return Name + " " + BindParam(Arg, ParamIdx);
       }
     }
+    // A char or short argument with no extension attribute arrives with
+    // whatever bits its caller left above it: the code reads its low bits
+    // only, so an int argument the original declared passes it too. C would
+    // let the definition rely on an extension the original never did, so it
+    // takes the whole word and narrows it itself. A declared narrow type is
+    // one its callers extend, and keeps its spelling.
+    if (!Sret && !DebugIdx && !Opts.PreserveLLVMFunctionTypes &&
+        cCallersExtendNarrowArguments(Opts.TheArch, Opts.Format) &&
+        (Arg.getType()->isIntegerTy(8) || Arg.getType()->isIntegerTy(16)) &&
+        !Arg.hasZExtAttr() && !Arg.hasSExtAttr() &&
+        !Fn.hasFnAttribute("neverd.x64_dispatch_frame")) {
+      const std::string Name = BindParam(Arg, ParamIdx);
+      if (Arg.use_empty())
+        return "uint32_t " + Name;
+      std::string Word = Name + "_word";
+      if (!UsedNames.insert(Word).second)
+        Word = freshVar(Word);
+      NarrowedArguments.emplace_back(&Arg, Word);
+      return "uint32_t " + Word;
+    }
     return ParamTypeStr(Arg, ParamIdx) + " " + BindParam(Arg, ParamIdx);
   };
 
@@ -10364,7 +10415,10 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
     }
     auto *FuncTy = Fn.getFunctionType();
     std::string RetStr =
-        InferredVoid ? "void" : typeToCLLVM(FuncTy->getReturnType());
+        InferredVoid
+            ? "void"
+            : sourceScalarType(FuncTy->getReturnType(),
+                               Fn.hasFnAttribute(LLVMSourceSignedResult));
     if (std::string Ty = IndirectReturnTypeStr(); !Ty.empty())
       RetStr = std::move(Ty);
     else if (!InferredVoid && DefinitionTypes.Result.Type) {
@@ -10391,6 +10445,13 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
     llvm::raw_string_ostream SignatureOS(Signature);
     if (Fn.hasFnAttribute(LLVMSourceBody))
       SignatureOS << "static ";
+    // An inlined entry-SP read would see the caller's own argument area.
+    if (Fn.hasFnAttribute(llvm::Attribute::NoInline) &&
+        llvm::any_of(llvm::instructions(Fn), [](const auto &I) {
+          const auto *Call = llvm::dyn_cast<llvm::IntrinsicInst>(&I);
+          return Call && Call->getIntrinsicID() == llvm::Intrinsic::sponentry;
+        }))
+      SignatureOS << kRetainStackFrame;
     if (isMIPS(Opts.TheArch)) {
       if (Fn.hasFnAttribute(mips::BarrierSourceMarker))
         SignatureOS << mips::BarrierNoInlineC;
@@ -10398,8 +10459,7 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
           Opts.TheArch, Img ? Img : Opts.Image,
           Fn.hasFnAttribute(mips::DSPSourceMarker),
           Fn.hasFnAttribute(mips::NoMSAMarker));
-      SignatureOS << mips::instructionModeCAttribute(
-          mips::instructionModeFromLLVM(Fn));
+      SignatureOS << mipsModeAttribute(Fn);
     }
     SignatureOS << RetStr << " " << FName << "(";
 
@@ -10456,6 +10516,12 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
       OS << Buffered;
       return;
     }
+    for (const auto &[Arg, Word] : NarrowedArguments) {
+      const std::string Type = typeToCLLVM(Arg->getType());
+      emitIndent(1);
+      OS << Type << " " << getName(Arg) << " = (" << Type << ")" << Word
+         << ";\n";
+    }
   } else {
     unsigned ParamIdx = 0;
     for (auto &Arg : Fn.args()) {
@@ -10490,6 +10556,7 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
   BufOS.flush();
   const size_t DeclInsertPos = Buffered.size();
   emitFunctionDecls(Fn);
+  writeLabelTables(Fn);
   {
     llvm::SmallPtrSet<const llvm::AllocaInst *, 8> Seen;
     for (const llvm::BasicBlock &BB : Fn) {
@@ -10609,10 +10676,11 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
     // Every localaddress in this LLVM function names its parent's local area,
     // not a newly outlined C helper's frame. Capture it once before outlining;
     // frameaddress(0) can name a different base after stack realignment.
-    const std::string LocalAddress = freshVar("llvm_localaddress");
+    const std::string LocalAddress = freshVar(kLocalAddressName.str());
     emitIndent(1);
-    OS << "extern void *" << LocalAddress
-       << "(void) __asm__(\"llvm.localaddress\");\n";
+    OS << llvm::formatv(
+        kStackIntrinsicDecl.data(), LocalAddress,
+        llvm::Intrinsic::getBaseName(llvm::Intrinsic::localaddress));
     emitIndent(1);
     OS << "void *" << SEHParentFrameName << " = " << LocalAddress << "();\n";
   }
@@ -11472,7 +11540,7 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
   // a later region will actually inline. Retain the destination's rendered
   // position and reconcile late references before publishing the function.
   llvm::StringSet<> PrintedGotos, PrintedLabels;
-  if (!DeferredBlockLabels.empty()) {
+  if (!DeferredBlockLabels.empty() || !AddressLabelBlocks.empty()) {
     const llvm::StringRef Text(Buffered);
     for (size_t Pos = 0; (Pos = Text.find("goto ", Pos)) != Text.npos;) {
       const size_t Start = Pos + 5;
@@ -11492,6 +11560,9 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
       Start = End + 1;
     }
   }
+  // A label table names its blocks as a goto does.
+  for (const llvm::BasicBlock *Block : AddressLabelBlocks)
+    PrintedGotos.insert(blockLabel(Block));
   std::vector<std::pair<size_t, std::string>> MissingLabels;
   for (const auto &[Block, Position] : DeferredBlockLabels) {
     const std::string Name = blockLabel(Block);
@@ -11503,6 +11574,11 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
     if (!PrintedLabels.contains(Name))
       MissingLabels.emplace_back(Position, Label);
   }
+  for (const llvm::BasicBlock *Block : AddressLabelBlocks)
+    if (!PrintedLabels.contains(blockLabel(Block)) &&
+        !DeferredBlockLabels.count(Block))
+      throw std::runtime_error(
+          "a label table names a block that prints no statement");
   if (!MissingLabels.empty()) {
     std::sort(MissingLabels.begin(), MissingLabels.end());
     std::string WithLabels;

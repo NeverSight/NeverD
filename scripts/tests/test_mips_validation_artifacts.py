@@ -237,6 +237,12 @@ else:
         for _ in range(3):
             result = subprocess.run(command, capture_output=True, text=True, timeout=60)
             self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads((self.output / "summary.json").read_text())
+            self.assertEqual(
+                {row["job"].split("-")[0] for row in summary["summaries"]
+                 if not row["job"].startswith("ubus-")},
+                {"mips", "mipsel", "mips64", "mips64el"},
+            )
             self.assertFalse((self.output / "work").exists())
             sizes.append(inventory(self.output))
         self.assertTrue(all(s["files"] == sizes[0]["files"] for s in sizes), sizes)

@@ -8,6 +8,7 @@
 
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/med/MedMutableSource.h"
 
@@ -174,14 +175,14 @@ lowerMedMutableToHigh(const MedFunc &Med, Arch Architecture,
       switch (Op.Opcode) {
       case NdOp::BRANCH:
         S.Kind = StmtKind::Goto;
-        S.GotoTarget = Op.Inputs[0].ConstVal;
+        aimDirectBranch(S, Med, Op);
         break;
       case NdOp::COND_BR: {
         S.Kind = StmtKind::If;
         S.Cond = storage(Op.Inputs[1]);
         HighStmt Taken;
         Taken.Kind = StmtKind::Goto;
-        Taken.GotoTarget = Op.Inputs[0].ConstVal;
+        aimDirectBranch(Taken, Med, Op);
         S.Body.push_back(std::move(Taken));
         break;
       }

@@ -30,6 +30,9 @@ using namespace neverd::sdk;
 
 namespace {
 
+#define NEVERD_SOURCE_PATCH_FIELD(Name, Text) constexpr char Name[] = Text;
+#include "SourcePatchReport.def"
+
 void saveReport(Session &S, llvm::json::Object Report) {
   S.LastSourcePatchReport.clear();
   llvm::raw_string_ostream OS(S.LastSourcePatchReport);
@@ -204,7 +207,12 @@ int patchSource(Session &S, const void *Input, size_t InputSize,
     const bool Callbacks = llvm::any_of(Bindings, [](const auto &Binding) {
       return Binding.Kind == SourcePatchBindingKind::OriginalFunction;
     });
-    if (!Callbacks && Dependencies.empty() && !S.Img.isMachO())
+    // The final object installer knows the actual frame and entry counts.
+    // A zero-base dylib may need to move its sections together. Preparing
+    // addresses here would pin imports to their input locations.
+    if (!Callbacks && Dependencies.empty() &&
+        (!S.Img.isMachO() ||
+         (S.Img.isArm64e() && S.Img.MachOIsDylib && !S.Img.Base)))
       return llvm::Error::success();
     std::optional<BinaryImage> Reserved;
     if (S.Img.isMachO()) {
@@ -278,6 +286,7 @@ int patchSource(Session &S, const void *Input, size_t InputSize,
   std::string SuccessText;
   auto PrepareReceipt = [&](const PatchResult &Result) {
     llvm::json::Object SuccessReport = Report;
+    SuccessReport[kOriginalSectionSlide] = Result.OriginalSectionSlide;
     llvm::json::Array Mappings;
     for (const auto &Mapping : Result.PatchedFunctions)
       Mappings.push_back(

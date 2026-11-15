@@ -73,6 +73,9 @@ struct X86LegacyEventContinuation {
   uint8_t DataBreakpoints = 0;
   bool SoftwareCompleted = false;
   llvm::SmallVector<Access> CompletedAccesses;
+  bool CR2Written = false;
+  bool SegmentsWritten = false;
+  std::optional<std::array<uint64_t, 4>> DebugAddresses;
 };
 
 /// PUSHA/POPA/ENTER progress across a physical-backing stop. Retain this
@@ -225,6 +228,17 @@ inline constexpr uint32_t kX86LegacyOtherCR4FeatureMask = 0x1a8f6fcf;
 /// refuse instead of inventing #GP. No real/IA-32e transfer is implied.
 struct X86LegacyControlRegisterBinding {
   uint32_t OtherCR4Features = 0;
+};
+
+/// Full-width system-table addresses supplied by the mixed-mode owner. Its
+/// non-64-bit view owns no persistent copy of these banks. Intel EFER.SCE is
+/// explicitly bound; LME/NXE capabilities come from X86PagingFeatures.
+struct X86Non64ModeBinding {
+  uint64_t GDTRBase = 0;
+  uint64_t LDTRBase = 0;
+  std::array<uint64_t, 4> DebugAddresses{};
+  bool EFERSystemCall = false;
+  bool operator==(const X86Non64ModeBinding &) const = default;
 };
 
 /// One ordinary-RAM element per step, with destination-first CMPS reads.
@@ -395,6 +409,9 @@ struct X86LegacyExecutionOptions {
   std::optional<X86LegacyControlRegisterBinding> ControlRegisters;
   std::optional<X86LegacyMpxProfile> MpxMemory;
   std::optional<X86LegacyVM86Profile> Virtual8086;
+  /// Only executeX86Non64Instruction accepts this binding. That boundary
+  /// returns events to the full-width owner before any IDT access.
+  std::optional<X86Non64ModeBinding> Non64Mode;
 };
 
 enum class X86LegacyExecutionStatus : uint8_t {
@@ -434,6 +451,15 @@ struct X86LegacyExecutionResult {
   std::optional<X86MemoryException> Exception;
   std::optional<GuestMemoryFault> BackingFault;
   std::vector<SelfModificationExit> SelfModifications;
+  /// Only the mixed-mode boundary returns a request. SavedEIP is distinct
+  /// from the original instruction PC for software INT. The instruction
+  /// receipt and all effects above remain owned while delivery is pending.
+  std::optional<X86LegacyEvent> RequestedEvent;
+  /// Explicit bank-write receipts; adapters must not infer writes by comparing
+  /// low halves, which can be equal while their full-width result changes.
+  bool CR2Written = false;
+  bool CSWritten = false;
+  bool SSWritten = false;
 };
 
 /// Authenticate a complete instruction extent with the executor's own byte
@@ -451,7 +477,8 @@ validateX86LegacyInstructionEncoding(llvm::ArrayRef<uint8_t> Instruction,
 llvm::Expected<X86LegacyExecutionResult>
 deliverX86LegacyEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                       const X86LegacyEvent &Event,
-                      const X86LegacyExecutionOptions &Options);
+                      const X86LegacyExecutionOptions &Options,
+                      const std::array<uint64_t, 4> *DebugAddresses = nullptr);
 
 /// Resume a previously accepted event without refetching or repeating its
 /// triggering instruction/device effects. The result counts only this call's
@@ -529,6 +556,19 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
                             X86PagedMemory &Memory,
                             llvm::ArrayRef<uint8_t> Instruction,
                             const X86LegacyExecutionOptions &Options);
+
+/// Mixed-mode instruction boundary. Shares original-byte authentication,
+/// scalar semantics and retained-attempt accounting with the legacy entry.
+/// It admits protected/compatibility scalar execution, MOV-CR, EFER MSR
+/// access and direct far JMP. Mode-specific task, selector, fast-system,
+/// call-gate and return owners remain separate. Events are returned without
+/// entering either IDT; the caller must commit its full-width view, retain the
+/// request and receipts, then select the owner from the committed LMA.
+llvm::Expected<X86LegacyExecutionResult>
+executeX86Non64Instruction(X86LegacyExecutionState &State,
+                           X86PagedMemory &Memory,
+                           llvm::ArrayRef<uint8_t> Instruction,
+                           const X86LegacyExecutionOptions &Options);
 
 } // namespace neverd::translate
 

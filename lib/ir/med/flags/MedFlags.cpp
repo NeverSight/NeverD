@@ -31,8 +31,14 @@
 #include "llvm/ADT/StringMap.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <map>
+#include <set>
 #include <string>
+#include <tuple>
+#include <vector>
 
 namespace neverd {
 
@@ -542,6 +548,221 @@ bool condFlagsComeFromCmp(const std::vector<MedOp> &Ops, int ConsumerIdx,
   return true;
 }
 
+using SelectedValueKey = std::tuple<int, int, int>;
+
+SelectedValueKey selectedValueKey(const MedVar &V) {
+  return {static_cast<int>(V.Kind), V.Id, V.SSAVer};
+}
+
+/// Whether \p Op only computes its output from its inputs and cannot fault,
+/// so that its result matters only where an operation reads it.
+bool computesValueOnly(const MedOp &Op) {
+  if (Op.Dead || !Op.Output.Size ||
+      Op.RegistrationRoot != MedOp::RegistrationRootKind::None ||
+      Op.SourceCallHint || !Op.IntrinsicOutputs.empty() ||
+      Op.MemoryOrdering != NdMemoryOrdering::None ||
+      Op.MemoryAddressSpace != NdMemoryAddressSpace::Default)
+    return false;
+  switch (Op.Opcode) {
+  case NdOp::COPY:
+  case NdOp::INT_ADD:
+  case NdOp::INT_SUB:
+  case NdOp::INT_AND:
+  case NdOp::INT_OR:
+  case NdOp::INT_XOR:
+  case NdOp::INT_LEFT:
+  case NdOp::INT_RIGHT:
+  case NdOp::INT_ASHR:
+  case NdOp::INT_MULT:
+  case NdOp::INT_EQUAL:
+  case NdOp::INT_NOTEQUAL:
+  case NdOp::INT_LESS:
+  case NdOp::INT_SLESS:
+  case NdOp::INT_LESSEQUAL:
+  case NdOp::INT_SLESSEQUAL:
+  case NdOp::INT_ZEXT:
+  case NdOp::INT_SEXT:
+  case NdOp::INT_NEGATE:
+  case NdOp::INT_NEG2:
+  case NdOp::INT_NOT:
+  case NdOp::INT_CARRY:
+  case NdOp::INT_SOVF:
+  case NdOp::INT_SBOR:
+  case NdOp::BOOL_AND:
+  case NdOp::BOOL_OR:
+  case NdOp::BOOL_XOR:
+  case NdOp::BOOL_NOT:
+  case NdOp::CONCAT:
+  case NdOp::SUBBYTES:
+  case NdOp::POPCOUNT:
+  case NdOp::LZCOUNT:
+  case NdOp::SELECT:
+    return true;
+  default:
+    return false;
+  }
+}
+
+/// A selection on a variable condition, by the arm index it reads when the
+/// condition holds (1) and when it does not (2).
+bool selectsOnVariable(const MedOp &Op) {
+  return Op.Opcode == NdOp::SELECT && Op.NumInputs == 3 &&
+         !Op.Inputs[0].isConst() && Op.Inputs[0].Size && computesValueOnly(Op);
+}
+
+/// Predicated instructions select each of their results on one condition.
+/// Where a later one reads the result of an earlier one, what it computes is
+/// read only where the condition holds, and there the earlier result is the
+/// arm the condition chose: `lsreq r9, r1, r10; tsteq r9, #1` tests the
+/// shifted value, whatever r9 held before.  Reading the chosen arm keeps the
+/// other one, which may be a value no instruction defined, out of a result
+/// that never observed it.
+///
+/// An arm of SELECT(c, t, f) that is itself a selection on c reads that
+/// selection's same arm.  An operand SELECT(c, a, b) of a temporary's
+/// defining operation reads `a` when every use of the temporary reaches only
+/// taken arms of selections on c, through temporaries of operations that
+/// compute a value and cannot fault, and `b` likewise for the other arms.
+/// A use by a join or by any other operation observes the value on every
+/// path and keeps the selection.  Runs once the selections of a predicated
+/// run read one condition (eliminateFlags).
+void readSelectedArms(MedFunc &Func) {
+  if (Func.SkippedSSA)
+    return;
+  size_t Work = limits::ir::kMedFlagsSelectedArmWork;
+  const auto sameValue = [](const MedVar &A, const MedVar &B) {
+    return !A.isConst() && !B.isConst() &&
+           selectedValueKey(A) == selectedValueKey(B);
+  };
+  for (unsigned Round = 0; Round < limits::ir::kMedFlagsSelectedArmRounds;
+       ++Round) {
+    std::map<SelectedValueKey, const MedOp *> Selections;
+    for (const MedBlock &Block : Func.Blocks)
+      for (const MedOp &Op : Block.Ops)
+        if (selectsOnVariable(Op) && Op.Output.Id >= 0)
+          Selections.emplace(selectedValueKey(Op.Output), &Op);
+    if (Selections.size() < 2)
+      return;
+    const auto selectionOf = [&](const MedVar &V) -> const MedOp * {
+      if (V.isConst() || V.Id < 0)
+        return nullptr;
+      const auto At = Selections.find(selectedValueKey(V));
+      return At == Selections.end() ? nullptr : At->second;
+    };
+    // The chosen arm takes the operand's place only as the same bytes, and
+    // a constant only where an operand may be one.
+    const auto replaces = [](const MedOp &Reader, unsigned Index,
+                             const MedVar &Arm) {
+      return Arm.Size == Reader.Inputs[Index].Size &&
+             (!Arm.isConst() ||
+              canPropagateConstantToOperand(Reader.Opcode, Index));
+    };
+    struct Reader {
+      MedOp *Op;
+      uint8_t Index;
+      const MedOp *Selection;
+    };
+    std::vector<Reader> Readers;
+    bool Changed = false;
+    for (MedBlock &Block : Func.Blocks)
+      for (MedOp &Op : Block.Ops) {
+        if (Work < Op.NumInputs + 1u)
+          return;
+        Work -= Op.NumInputs + 1u;
+        if (selectsOnVariable(Op)) {
+          for (const unsigned Arm : {1u, 2u})
+            if (const MedOp *Inner = selectionOf(Op.Inputs[Arm]);
+                Inner && Inner != &Op &&
+                sameValue(Inner->Inputs[0], Op.Inputs[0]) &&
+                replaces(Op, Arm, Inner->Inputs[Arm])) {
+              Op.Inputs[Arm] = Inner->Inputs[Arm];
+              Changed = true;
+            }
+          continue;
+        }
+        if (!computesValueOnly(Op) || Op.Output.Kind != MedVar::Temp ||
+            Op.Output.Id < 0)
+          continue;
+        for (uint8_t K = 0; K < Op.NumInputs; ++K)
+          if (const MedOp *Inner = selectionOf(Op.Inputs[K]))
+            Readers.push_back({&Op, K, Inner});
+      }
+    if (!Readers.empty()) {
+      // Every reader of each value: its operations, and whether a join or
+      // an operation that is no plain value computation reads it too.
+      std::map<SelectedValueKey, std::vector<const MedOp *>> Users;
+      std::set<SelectedValueKey> Joined;
+      for (const MedBlock &Block : Func.Blocks) {
+        if (Work < Block.Phis.size() + Block.Ops.size())
+          return;
+        Work -= Block.Phis.size() + Block.Ops.size();
+        for (const PhiNode &Phi : Block.Phis) {
+          for (const auto &[Pred, Incoming] : Phi.Args)
+            if (!Incoming.isConst())
+              Joined.insert(selectedValueKey(Incoming));
+          if (Phi.ExceptionalEntry && !Phi.ExceptionalEntry->isConst())
+            Joined.insert(selectedValueKey(*Phi.ExceptionalEntry));
+        }
+        for (const MedOp &Op : Block.Ops)
+          for (uint8_t K = 0; K < Op.NumInputs; ++K)
+            if (!Op.Inputs[K].isConst()) {
+              auto &Of = Users[selectedValueKey(Op.Inputs[K])];
+              if (Of.empty() || Of.back() != &Op)
+                Of.push_back(&Op);
+            }
+      }
+      // Whether every use of \p V reaches only arm \p Arm of selections on
+      // \p Condition.
+      std::function<bool(const MedVar &, const MedVar &, unsigned, unsigned)>
+          ReadOnlyUnder = [&](const MedVar &V, const MedVar &Condition,
+                              unsigned Arm, unsigned Depth) {
+            if (Depth > limits::ir::kMedFlagsSelectedArmUseDepth ||
+                Joined.count(selectedValueKey(V)))
+              return false;
+            // A value nothing reads is observed nowhere; the reader itself
+            // needs a use for the rewrite to matter.
+            const auto Of = Users.find(selectedValueKey(V));
+            if (Of == Users.end() || Of->second.empty())
+              return Depth != 0;
+            for (const MedOp *User : Of->second) {
+              if (!Work)
+                return false;
+              --Work;
+              if (selectsOnVariable(*User) &&
+                  sameValue(User->Inputs[0], Condition)) {
+                if (!sameValue(User->Inputs[Arm], V) ||
+                    sameValue(User->Inputs[3 - Arm], V))
+                  return false;
+                continue;
+              }
+              if (!computesValueOnly(*User) ||
+                  User->Output.Kind != MedVar::Temp || User->Output.Id < 0 ||
+                  !ReadOnlyUnder(User->Output, Condition, Arm, Depth + 1))
+                return false;
+            }
+            return true;
+          };
+      for (const Reader &R : Readers) {
+        const MedOp &Inner = *R.Selection;
+        // An earlier rewrite of this round may have replaced the operand.
+        if (selectionOf(R.Op->Inputs[R.Index]) != &Inner)
+          continue;
+        for (const unsigned Arm : {1u, 2u})
+          if (replaces(*R.Op, R.Index, Inner.Inputs[Arm]) &&
+              ReadOnlyUnder(R.Op->Output, Inner.Inputs[0], Arm, 0)) {
+            R.Op->Inputs[R.Index] = Inner.Inputs[Arm];
+            if (!Inner.Inputs[Arm].isConst())
+              Users[selectedValueKey(Inner.Inputs[Arm])].push_back(R.Op);
+            Changed = true;
+            break;
+          }
+      }
+    }
+    if (!Changed)
+      return;
+  }
+}
+
 } // anonymous namespace
 
 //===----------------------------------------------------------------------===//
@@ -877,6 +1098,7 @@ void LowToMedConverter::eliminateFlags(MedFunc &Func) {
                                  [](const MedOp &Op) { return Op.Dead; }),
                   Blk.Ops.end());
   }
+  readSelectedArms(Func);
 }
 
 } // namespace neverd

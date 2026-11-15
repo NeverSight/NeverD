@@ -92,6 +92,7 @@ struct Transaction {
     std::optional<X64NullSegmentBasePolicy> NullBasePolicy;
   };
   std::optional<SegmentLoad> FarPointer, SegmentMove;
+  bool SetsInterruptFlag = false;
   std::optional<X86PagedMemory::PreparedStore> Store;
   std::vector<uint8_t> Bytes;
 
@@ -216,6 +217,7 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
     return 1;
   }
   if (Kind == X64PagedAccess::InterruptFlagMask) {
+    T.SetsInterruptFlag = Address != 0;
     const auto &Controls = T.Memory.controls();
     const auto IOPL = (Controls.RFlags >> 12) & 3;
     const bool Virtual = T.CPL > IOPL && T.CPL == 3 && (Controls.CR4 & 2);
@@ -376,6 +378,7 @@ X64PagedExecution::validate(X64ContinuationStateV6 &State, uint64_t Address,
 llvm::Error X64PagedExecution::deliverEvent(
     X64ContinuationStateV6 &State, const X64ContinuationEventV1 &Event,
     uint32_t MXCSRMask, const X64PagedEventContinuation *Continuation) {
+  Last.RequestedEvent = Event;
   auto Delivered =
       Continuation
           ? resumeX64PagedEvent(State, Memory, *Continuation, MXCSRMask,
@@ -386,6 +389,9 @@ llvm::Error X64PagedExecution::deliverEvent(
   if (!Delivered)
     return Delivered.takeError();
   Last.Delivery = *Delivered;
+  if (Delivered->Status != X64PagedEventStatus::InvalidState &&
+      !Delivered->Continuation)
+    Last.RequestedEvent.reset();
   Last.BackingFault = Delivered->BackingFault;
   switch (Delivered->Status) {
   case X64PagedEventStatus::Delivered:
@@ -760,6 +766,9 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
     return std::move(Failure);
   Last.InstructionAttempted = true;
   Last.InstructionCompleted = !Partial;
+  Last.StartsSTIShadow = !Partial && T.SetsInterruptFlag &&
+                         !(EntryFlags & 0x200) &&
+                         (State.Core.Core.Core.Core.RFlags & 0x200);
   Last.Exit = Exit;
   if (!Partial && (Exit == uint64_t(X64ContinuationExitV1::Call) ||
                    Exit == uint64_t(X64ContinuationExitV1::Return))) {
@@ -774,6 +783,7 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
                   Move->SegmentRegister == X86SegmentRegister::SS &&
                   !*DebugSSBlocked;
   }
+  Last.StartsSSShadow = NewSSShadow;
   const bool Taken = T.TakenBranch ||
                      Exit == uint64_t(X64ContinuationExitV1::Call) ||
                      Exit == uint64_t(X64ContinuationExitV1::Return);

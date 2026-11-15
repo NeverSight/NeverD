@@ -23,6 +23,7 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 
 #include "../../AArch64ImmediateMemoryBase.h"
+#include "../MIPS/LLVMIntegerResult.h"
 
 #include "neverd/Common.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
@@ -680,10 +681,11 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
     // through the integer registers instead.
     if (P.RegOff != kNoParamReg && TRI.isFPArgReg(P.RegOff, TargetFormat)) {
       const auto Scalar = Func.FPParamScalarBytes.find(P.RegOff);
-      ParamTypes.push_back(fpAbiType(
-          TargetArch == Arch::AArch64 && Scalar != Func.FPParamScalarBytes.end()
-              ? Scalar->second
-              : P.Size));
+      ParamTypes.push_back(
+          fpAbiType((TargetArch == Arch::AArch64 || isMIPS(TargetArch)) &&
+                            Scalar != Func.FPParamScalarBytes.end()
+                        ? Scalar->second
+                        : P.Size));
       continue;
     }
     if (HaveTypes)
@@ -745,6 +747,11 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
   auto *FuncTy = llvm::FunctionType::get(RetType, ParamTypes, Func.IsVariadic);
   auto *LLVMFunc = llvm::Function::Create(
       FuncTy, llvm::GlobalValue::ExternalLinkage, EmittedName, Mod);
+  if (Func.HasDeclaredMIPSIntegerResult &&
+      RetType->isIntegerTy(Func.ReturnType->Size * 8))
+    LLVMFunc->setAttributes(mips::integerResultAttributes(
+        *Ctx, LLVMFunc->getAttributes(), Func.ReturnType->Size,
+        Func.ReturnType->IsSigned, TargetArch));
   if (mips::imagePreservesDSPControl(Img))
     mips::applyDSPSourceAttributes(*LLVMFunc);
   if (mips::sourceAvoidsMSA(TargetArch, Img))
@@ -1054,6 +1061,11 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   GlobalDataCache.clear();
   ModuleJumpTableStorageRanges.clear();
   ModuleSuppressibleJumpTableRelocationSlots.clear();
+  ModuleValueDispatchLabels.clear();
+  for (const MedFunc &Func : Funcs)
+    for (const JumpTable &JT : Func.JumpTables)
+      if (JT.ValueDispatch)
+        ModuleValueDispatchLabels.insert(JT.Targets.begin(), JT.Targets.end());
   for (const MedFunc &Func : Funcs)
     for (const JumpTable &JT : Func.JumpTables) {
       ModuleJumpTableStorageRanges.insert(ModuleJumpTableStorageRanges.end(),

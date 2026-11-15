@@ -19,6 +19,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64VectorAlgo33RT : public SemanticRoundTripFixture,
                           public ::testing::WithParamInterface<RoundTripTC> {};
@@ -29,8 +30,16 @@ class A64VectorAlgo33RT : public SemanticRoundTripFixture,
 TEST_P(A64VectorAlgo33RT, Verify) { roundTripAArch64(GetParam()); }
 
 class ARM32VectorAlgo33RT : public SemanticRoundTripFixture,
-                            public ::testing::WithParamInterface<RoundTripTC> {};
+                            public ::testing::WithParamInterface<RoundTripTC> {
+};
 TEST_P(ARM32VectorAlgo33RT, Verify) { roundTripARM32(GetParam()); }
+
+// The AArch64 absdiff restores d8-d15 through register views its vector code
+// wrote whole; the LLVM C route failed at the saves.
+class A64VectorAlgo33LLVMCRT
+    : public SemanticRoundTripFixture,
+      public ::testing::WithParamInterface<RoundTripTC> {};
+TEST_P(A64VectorAlgo33LLVMCRT, Verify) { roundTripAArch64(GetParam()); }
 
 // clang-format off
 
@@ -137,3 +146,6 @@ INSTANTIATE_TEST_SUITE_P(VectorAlgo33, A64VectorAlgo33RT,
                          ::testing::ValuesIn(kA64Vec33), rtTCName);
 INSTANTIATE_TEST_SUITE_P(VectorAlgo33, ARM32VectorAlgo33RT,
                          ::testing::ValuesIn(kARM32Vec33), rtTCName);
+INSTANTIATE_TEST_SUITE_P(VectorAlgo33LLVMC, A64VectorAlgo33LLVMCRT,
+                         ::testing::ValuesIn(onLLVMC(kA64Vec33, {"_absdiff"})),
+                         rtTCName);

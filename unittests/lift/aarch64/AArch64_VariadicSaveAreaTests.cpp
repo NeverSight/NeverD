@@ -102,6 +102,45 @@ std::string readText(const fs::path &Path) {
   return std::string(std::istreambuf_iterator<char>(Input), {});
 }
 
+// Four ints, counted by a constant only this file's caller passes.  Clang
+// propagates the count into the static routine and unrolls the walk: it
+// keeps __gr_top and __stack in registers rather than reload them from the
+// va_list, reads each saved register with a register-offset load whose index
+// is a constant in a register (`ldr w9, [x11, x12]`), and joins the
+// addresses of the next argument in either area.
+constexpr char kUnrolledIntegerKernel[] = R"C(
+static int vfour(int n, ...) __attribute__((noinline));
+int vfour_e(int x) {
+  unsigned u = (unsigned)x;
+  return vfour(4, (int)u, (int)(u * 3u + 1u), (int)(u ^ 0x55u), (int)(u + 7u));
+}
+static int vfour(int n, ...) {
+  __builtin_va_list ap;
+  __builtin_va_start(ap, n);
+  int s = 0;
+  for (int i = 0; i < n; i++)
+    s = s * 31 + __builtin_va_arg(ap, int);
+  __builtin_va_end(ap);
+  return s;
+}
+)C";
+
+// The same shape reading doubles: the unrolled walk loads __vr_offs and reads
+// the vector half through a register-offset load from __vr_top.
+constexpr char kUnrolledFloatingKernel[] = R"C(
+static double vthree(int n, ...) __attribute__((noinline));
+int vthree_e(int x) { return (int)vthree(3, (double)x, x + 1.0, x * 2.0); }
+static double vthree(int n, ...) {
+  __builtin_va_list ap;
+  __builtin_va_start(ap, n);
+  double s = 0;
+  for (int i = 0; i < n; i++)
+    s = s * 3 + __builtin_va_arg(ap, double);
+  __builtin_va_end(ap);
+  return s;
+}
+)C";
+
 } // namespace
 
 class AArch64_VariadicSaveArea : public NeverDLiftTest {
@@ -219,6 +258,55 @@ TEST_F(AArch64_VariadicSaveArea, AnIntegerWalkLeavesTheVectorHalfUnread) {
   ASSERT_EQ(LLVMC.find("unknown"), std::string::npos) << LLVMC;
   expectRunsLikeKernel(LLVMC, kIntegerKernel, "vmany_e", {"vmany_e", "vmany"},
                        {0, 1, -1, 0x15, 0x27, 0x3F, 0x12345678});
+}
+
+// An unrolled walk keeps __gr_top and __stack in registers.  Its loads are
+// still at offsets the frame fixes: a register-offset load at __gr_top plus
+// a constant, and loads through a join of the addresses the walk may have
+// reached.  None reads the vector half, which neither C route writes.
+TEST_F(AArch64_VariadicSaveArea,
+       AnUnrolledIntegerWalkLeavesTheVectorHalfUnread) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target compilation requires Clang";
+  const auto Object =
+      compile("aarch64-linux-gnu", kUnrolledIntegerKernel, "unrolled_ints");
+  const std::string Body = medFunction(Object, "vfour");
+  ASSERT_FALSE(Body.empty());
+  // The shape this test is for: a register-offset load kept as its
+  // instruction, from a frame address.
+  ASSERT_NE(Body.find("INTRINSIC"), std::string::npos) << Body;
+  EXPECT_EQ(spills(Body, "Q[0-7]"), 0u) << Body;
+  EXPECT_EQ(spills(Body, "X[1-7]"), 7u) << Body;
+
+  const auto High = decompileToHighC(Object);
+  ASSERT_EQ(High.exitCode, 0) << High.err;
+  const std::string HighC = readText(tmpFile("decompiled_high.c"));
+  EXPECT_EQ(HighC.find("unknown"), std::string::npos) << HighC;
+
+  // Both C routes keep the register-offset loads as their instructions, so
+  // neither runs on another host (expectRunsLikeKernel would skip): the
+  // semantic round trips VariadicAbi/A64VariadicAbiRT run this shape.
+  const auto Low = decompileToC(Object);
+  ASSERT_EQ(Low.exitCode, 0) << Low.err;
+  const std::string LLVMC = readText(tmpFile("decompiled.c"));
+  EXPECT_EQ(LLVMC.find("unknown"), std::string::npos) << LLVMC;
+}
+
+// The unrolled walk of doubles reads __vr_offs and the saved vector
+// registers, the latter through a register-offset load from __vr_top: the
+// vector half stays, and the C still fails where it stores it.
+TEST_F(AArch64_VariadicSaveArea, AnUnrolledFloatingWalkKeepsTheVectorHalf) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target compilation requires Clang";
+  const auto Object =
+      compile("aarch64-linux-gnu", kUnrolledFloatingKernel, "unrolled_floats");
+  const std::string Body = medFunction(Object, "vthree");
+  ASSERT_FALSE(Body.empty());
+  EXPECT_EQ(spills(Body, "Q[0-7]"), 8u) << Body;
+  const auto High = decompileToHighC(Object);
+  ASSERT_EQ(High.exitCode, 0) << High.err;
+  EXPECT_NE(readText(tmpFile("decompiled_high.c")).find("unknown register"),
+            std::string::npos);
 }
 
 // With no vector half, the integer save area and the va_list that addresses

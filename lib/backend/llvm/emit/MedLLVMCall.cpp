@@ -10,6 +10,9 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../MIPS/LLVMIntegerResult.h"
+
+#include "neverd/ArchSupport.h"
 #include "neverd/Common.h"
 #include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/LLVMValueProvenance.h"
@@ -92,6 +95,31 @@ bool floatingHeaderCall(const FunctionSym &Function, Arch Architecture,
         !(Call.Args[I] == Op.Inputs[I + 1]))
       return false;
   return true;
+}
+
+// LLVM integer types have no signedness. Preserve the source spelling as well
+// as the actual MIPS ABI extension on the declaration and every call site.
+static llvm::AttributeList
+mipsFloatingCallAttributes(llvm::LLVMContext &C, llvm::AttributeList Attrs,
+                           const FloatingCallArguments &Signature, Arch A) {
+  if (Signature.ReturnKind == NdTypeKind::Int)
+    Attrs = mips::integerResultAttributes(C, Attrs, Signature.ReturnBytes,
+                                          Signature.SignedResult, A);
+  for (unsigned I = 0; I != Signature.Scalars.size(); ++I) {
+    const auto &P = Signature.Scalars[I];
+    if (P.Floating || P.Pointer)
+      continue;
+    if (P.Signed)
+      Attrs = Attrs.addParamAttribute(C, I, LLVMSourceSignedParameter);
+    // Both signed and unsigned 32-bit arguments are sign-extended on n64.
+    // At smaller widths the declared integer type selects the extension.
+    if (P.Bytes <= 4)
+      Attrs = Attrs.addParamAttribute(C, I,
+                                      P.Signed || P.Bytes == 4
+                                          ? llvm::Attribute::SExt
+                                          : llvm::Attribute::ZExt);
+  }
+  return Attrs;
 }
 
 llvm::GlobalValue *constantCallIdentity(llvm::Value *Value,
@@ -618,7 +646,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     FatalCodePointerResolution = true;
     return;
   }
-  if (Op.ScalarCallSignature && Dbg && Img) {
+  if (Op.ScalarCallSignature && !Op.SourceCallHint && Dbg && Img) {
     const std::string Name = importCalleeName(*Img, CI->TargetAddr);
     if (!Name.empty())
       if (const auto Header = Dbg->resolvePrototype(Name);
@@ -834,11 +862,13 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   std::string IndirectImportName;
   bool PreserveHeaderTarget = Authentication != nullptr;
   std::optional<FunctionSym> VariadicHeader;
-  if (Op.CalleeVariadicFrom >= 0 && Img && CI && Dbg) {
+  if (Op.CalleeVariadicFrom >= 0 && Img && CI) {
     const std::string Name = importCalleeName(*Img, CI->TargetAddr);
-    if (!Name.empty())
-      if (auto Header = Dbg->resolvePrototype(Name);
-          Header &&
+    if (!Name.empty()) {
+      auto Header = Dbg ? Dbg->resolvePrototype(Name) : std::nullopt;
+      if (!Header)
+        Header = libc::runtimeVariadicPrototype(Name, TargetArch, TargetFormat);
+      if (Header &&
           libc::variadicCallArguments(*Header, TargetArch, TargetFormat) &&
           Header->Params.size() == static_cast<size_t>(Op.CalleeVariadicFrom) &&
           CI->VarArgFixedCount == Op.CalleeVariadicFrom &&
@@ -847,6 +877,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         IndirectImportName = Name;
         PreserveHeaderTarget = Target && !KnownTarget;
       }
+    }
     if (!VariadicHeader) {
       syncError() << "med_llvm_emitter: variadic header call lost its checked "
                      "fixed prefix\n";
@@ -997,8 +1028,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     std::vector<llvm::Value *> Values;
     const auto Bindings = sourceABIParameters(Hint.Signature);
     std::vector<llvm::Value *> Carriers;
-    const auto Bits = [](llvm::Type *T) -> unsigned {
-      return T->isPointerTy() ? kSourceCallWordBytes * kSourceCallByteBits
+    const auto Bits = [&](llvm::Type *T) -> unsigned {
+      return T->isPointerTy() ? Mod->getDataLayout().getPointerSizeInBits()
                               : T->getPrimitiveSizeInBits().getFixedValue();
     };
     if (RetainResultStorage &&
@@ -1230,6 +1261,10 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Call->addParamAttr(I, Parameter.Type->IsSigned ? llvm::Attribute::SExt
                                                        : llvm::Attribute::ZExt);
     }
+    if (Hint.Signature.MIPSScalars)
+      Call->setAttributes(
+          mipsFloatingCallAttributes(*Ctx, Call->getAttributes(),
+                                     *Hint.Signature.MIPSScalars, TargetArch));
     if (Analyst && !MachineCall)
       Call->setMetadata(
           "neverd.source.analyst-call",
@@ -2046,6 +2081,30 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         CalleeTy, Callable, CoercedArgs, AuthenticationBundles,
         CalleeTy->getReturnType()->isVoidTy() ? "" : "call");
     Call->setCallingConv(Callee->getCallingConv());
+    if (isMIPS(TargetArch) && Op.ScalarCallSignature) {
+      const auto &Signature = *Op.ScalarCallSignature;
+      if (CalleeTy != floatingCallType(*Ctx, Signature)) {
+        syncError() << "med_llvm_emitter: MIPS floating call disagrees with "
+                       "its declared LLVM carriers\n";
+        FatalCodePointerResolution = true;
+        return;
+      }
+      Callee->setAttributes(mipsFloatingCallAttributes(
+          *Ctx, Callee->getAttributes(), Signature, TargetArch));
+      Call->setAttributes(mipsFloatingCallAttributes(
+          *Ctx, Call->getAttributes(), Signature, TargetArch));
+    }
+    // A direct arm64e tail transfer forwards the caller's LR. Mark direct
+    // argument forwarding so instruction selection can preserve that jump.
+    // Restrict it to incoming values, which cannot refer to this frame.
+    if (Op.IsTailCall && Img && Img->isArm64e() && Callable == Callee &&
+        !CalleeTy->isVarArg() && !Call->hasOperandBundles() &&
+        CalleeTy == Call->getFunction()->getFunctionType() &&
+        Call->getCallingConv() == Call->getFunction()->getCallingConv() &&
+        llvm::all_of(Call->args(), [](const llvm::Use &Arg) {
+          return llvm::isa<llvm::Argument>(Arg.get());
+        }))
+      Call->setTailCallKind(llvm::CallInst::TCK_Tail);
     if (CookieCheck)
       Call->addParamAttr(0, llvm::Attribute::InReg);
     Result = Call;

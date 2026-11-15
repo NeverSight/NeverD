@@ -867,3 +867,155 @@ int main(void) {
       }
     }
 }
+
+namespace {
+
+struct ReturnWidthShape {
+  const char *Name;
+  std::vector<uint8_t> Code;
+  /// What `Name(a, b)` returns, or null where that is an address of the
+  /// image, which the compiled HighC places elsewhere.
+  const char *Reference;
+};
+
+/// Lift each of \p Shapes, the code of an x86-64 function of two arguments,
+/// with and without optimization.  Its result is to have \p Bytes, and its
+/// HighC is to return what the reference does, both read as \p Read.
+void expectReturnWidth(llvm::ArrayRef<ReturnWidthShape> Shapes, unsigned Bytes,
+                       const char *Read) {
+  for (const ReturnWidthShape &S : Shapes)
+    for (bool NoOpt : {false, true}) {
+      SCOPED_TRACE(testing::Message() << S.Name << " " << NoOpt);
+      BinaryImage Image;
+      Image.Arch = Arch::X64;
+      Image.Format = BinaryFormat::ELF;
+      Image.Bits = Bitness::Bits64;
+      Image.Base = Image.Entry = CalleeEntry;
+      Segment Code;
+      Code.VA = CalleeEntry;
+      Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+      Code.Data = S.Code;
+      Code.Size = Code.FileSz = Code.Data.size();
+      auto FunctionSymbol = Symbol::makeFunc(CalleeEntry, Code.Size);
+      FunctionSymbol.Name = S.Name;
+      Image.Symbols.push_back(std::move(FunctionSymbol));
+      Image.Segments.push_back(std::move(Code));
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.NoOpt = NoOpt;
+      Options.OnlyFunctionEntries = {CalleeEntry};
+      llvm::LLVMContext Context;
+      auto Result = Pipeline().run(Image, Context, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      std::string Dump;
+      llvm::raw_string_ostream OS(Dump);
+      Pipeline::dumpMedIR(Result.MedFuncs, OS);
+      Pipeline::dumpHighIR(Result.HighFuncs, OS);
+      SCOPED_TRACE(Dump);
+      ASSERT_EQ(Result.MedFuncs.size(), 1u);
+      ASSERT_TRUE(Result.MedFuncs.front().ReturnType);
+      EXPECT_EQ(Result.MedFuncs.front().ReturnType->Size, Bytes);
+      ASSERT_EQ(Result.HighFuncs.size(), 1u);
+      ASSERT_TRUE(Result.HighFuncs.front().ReturnType);
+      EXPECT_EQ(Result.HighFuncs.front().ReturnType->Size, Bytes);
+      if (!S.Reference)
+        continue;
+      CEmitterOptions COptions;
+      COptions.TheArch = Image.Arch;
+      COptions.Format = Image.Format;
+      COptions.Image = &Image;
+      std::string Source;
+      llvm::raw_string_ostream SourceOS(Source);
+      ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, SourceOS, COptions));
+      SourceOS.flush();
+      Source += std::string(R"(
+int main(void) {
+  uint64_t b = UINT64_C(0x800012345678ffff);
+  for (unsigned i = 0; i != 4096; ++i) {
+    const uint64_t a = i & 1 ? b >> 7 : 0;
+    if (()") + Read +
+                ")" + S.Name + "(a, b) != (" + Read + ")(" + S.Reference +
+                R"()) return 1;
+    b ^= b << 13; b ^= b >> 7; b ^= b << 17;
+  }
+  return 0;
+}
+)";
+      for (const char *Optimization : {"-O0", "-O2"})
+        source_call_execution_test::compileAndRun(
+            Source, {Optimization, "-Werror=int-conversion"});
+    }
+}
+
+} // namespace
+
+TEST(ReturnContract, TheWidestReturnPathTypesAnInferredResult) {
+  // One path returns a zero-extended 32-bit value and another all of RAX.
+  // Whichever block comes first, the function returns the register: typing
+  // it by the 32-bit path truncates the other, in the function and again in
+  // every caller that extends the declared result.
+  expectReturnWidth(
+      {
+          // test rdi,rdi; je +3; mov eax,esi; ret; mov rax,rsi; ret
+          {"narrow_then_wide",
+           {0x48, 0x85, 0xff, 0x74, 0x03, 0x89, 0xf0, 0xc3, 0x48, 0x89, 0xf0,
+            0xc3},
+           "a ? (uint64_t)(uint32_t)b : b"},
+          // test rdi,rdi; je +4; mov rax,rsi; ret; mov eax,esi; ret
+          {"wide_then_narrow",
+           {0x48, 0x85, 0xff, 0x74, 0x04, 0x48, 0x89, 0xf0, 0xc3, 0x89, 0xf0,
+            0xc3},
+           "a ? b : (uint64_t)(uint32_t)b"},
+          // lea rax,[rdi+rsi*2]; test rdi,rdi; je +3; mov eax,esi; ret; nop;
+          // ret: the second return takes what the entry block left in RAX.
+          {"narrow_then_earlier",
+           {0x48, 0x8d, 0x04, 0x77, 0x48, 0x85, 0xff, 0x74, 0x03, 0x89, 0xf0,
+            0xc3, 0x90, 0xc3},
+           "a ? (uint64_t)(uint32_t)b : a + b * 2"},
+      },
+      8, "uint64_t");
+}
+
+TEST(ReturnContract, AnAddressOneReturnPathLeavesIsAPointer) {
+  // The address is a small number in this image, and one a 32-bit move can
+  // write.  It is a pointer all the same: relinked, it need not fit 32 bits.
+  expectReturnWidth(
+      {
+          // test rdi,rdi; jne +3; mov eax,esi; ret; lea rax,[rip+1]; ret;
+          // then the quadword the address is of
+          {"narrow_then_address",
+           {0x48, 0x85, 0xff, 0x75, 0x03, 0x89, 0xf0, 0xc3,
+            0x48, 0x8d, 0x05, 0x01, 0x00, 0x00, 0x00, 0xc3,
+            0,    0,    0,    0,    0,    0,    0,    0},
+           nullptr},
+      },
+      8, "uint64_t");
+}
+
+TEST(ReturnContract, ANarrowWriteThatReachesAReturnKeepsTheResultNarrow) {
+  // A return without a write of its own takes the register as the blocks
+  // before it left it.  That alone widens nothing: the write that reaches it
+  // is a zero-extended 32-bit one here, directly, under a byte `sete` merges
+  // in, and under a 16-bit rotate.  These results keep the width they had.
+  expectReturnWidth(
+      {
+          // mov eax,esi; test rdi,rdi; je +1; ret; mov eax,edi; ret
+          {"earlier_narrow",
+           {0x89, 0xf0, 0x48, 0x85, 0xff, 0x74, 0x01, 0xc3, 0x89, 0xf8, 0xc3},
+           "a ? b : a"},
+          // test rdi,rdi; je +12; mov eax,esi; cmp rdi,rsi; sete al; je +1;
+          // nop; ret; mov eax,edi; ret
+          {"merged_low_byte",
+           {0x48, 0x85, 0xff, 0x74, 0x0c, 0x89, 0xf0, 0x48, 0x39, 0xf7,
+            0x0f, 0x94, 0xc0, 0x74, 0x01, 0x90, 0xc3, 0x89, 0xf8, 0xc3},
+           "a ? ((uint32_t)b & 0xffffff00u) | (a == b) : a"},
+          // test rdi,rdi; je +14; movzx eax,si; rol ax,8; test rsi,rsi;
+          // je +1; nop; ret; movzx eax,si; ret
+          {"rotated_word",
+           {0x48, 0x85, 0xff, 0x74, 0x0e, 0x0f, 0xb7, 0xc6,
+            0x66, 0xc1, 0xc0, 0x08, 0x48, 0x85, 0xf6, 0x74,
+            0x01, 0x90, 0xc3, 0x0f, 0xb7, 0xc6, 0xc3},
+           "a ? (uint16_t)((uint16_t)b << 8 | (uint16_t)b >> 8) : (uint16_t)b"},
+      },
+      4, "uint32_t");
+}

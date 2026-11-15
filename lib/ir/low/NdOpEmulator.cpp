@@ -120,7 +120,7 @@ predicatedInstructionEnd(llvm::ArrayRef<LowOp> Ops,
 
 void NdOpEmulator::reset() {
   MIPSReservationKnown = false;
-  MIPSReservationAddress.reset();
+  MIPSReservation.reset();
   UnknownBits.clear();
   Registers.clear();
   WideRegisters.clear();
@@ -487,13 +487,14 @@ bool NdOpEmulator::storeMemoryBytes(uint64_t Addr,
   std::memcpy(&Low, Value.data(), std::min<size_t>(Value.size(), sizeof(Low)));
   // All committed ordinary writes share this owner, including partial and
   // vector stores. Comparing the granule rather than the old word detects ABA.
-  if (MIPSReservationAddress) {
-    const uint64_t Block = uint64_t(*MIPSReservationAddress) &
-                           ~(uint64_t(*MIPSReservationGranule) - 1);
+  if (MIPSReservation) {
+    const uint64_t Span =
+        std::max<uint64_t>(*MIPSReservationGranule, MIPSReservation->Bytes);
+    const uint64_t Block = MIPSReservation->Address & ~(Span - 1);
     for (uint16_t I = 0; I < Size; ++I) {
       const uint64_t Byte = Wrap32 ? uint32_t(Addr + I) : Addr + I;
-      if (Byte >= Block && Byte - Block < *MIPSReservationGranule) {
-        MIPSReservationAddress.reset();
+      if (Byte >= Block && Byte - Block < Span) {
+        MIPSReservation.reset();
         break;
       }
     }
@@ -523,7 +524,7 @@ void NdOpEmulator::setCallPreservedRegisters(std::vector<uint64_t> Regs) {
 
 void NdOpEmulator::clobberVolatileRegisters() {
   MIPSReservationKnown = false;
-  MIPSReservationAddress.reset();
+  MIPSReservation.reset();
   // An unknown callee may change MXCSR status. Do not publish the stale word
   // as an authenticated input to an explicit FP state operation.
   MXCSRKnown = false;
@@ -599,6 +600,21 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
           mips::isScalarIntrinsic(static_cast<Intrinsic>(Op.Inputs[0].Offset)))
         return executeMIPSScalar(Op);
       switch (Op.Opcode) {
+      case NdOp::INT_AND:
+      case NdOp::INT_OR: {
+        const auto &A = Op.Inputs[0], &B = Op.Inputs[1];
+        if (Op.NumInputs != 2 || !A.Size || A.Size > 8 || B.Size != A.Size ||
+            Op.Output.Size != A.Size || !availableOperandBytes(A, 0, A.Size) ||
+            !availableOperandBytes(B, 0, B.Size))
+          return false;
+        const uint64_t X = readOperand(A), Y = readOperand(B);
+        const uint64_t U = unknownOperandBits(A), V = unknownOperandBits(B);
+        const bool And = Op.Opcode == NdOp::INT_AND;
+        const uint64_t Unknown = And ? (U & (Y | V)) | (V & (X | U))
+                                     : (U & (~Y | V)) | (V & (~X | U));
+        writeOutput(Op.Output, And ? X & Y : X | Y, Unknown);
+        return true;
+      }
       case NdOp::SELECT:
         return executeMisc(Op);
       case NdOp::COPY:
@@ -1061,7 +1077,7 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
     if (StrictMode)
       return false;
     MIPSReservationKnown = false;
-    MIPSReservationAddress.reset();
+    MIPSReservation.reset();
     ++Skips.ApproximatedOps;
     if (Op.Output.isReg() || Op.Output.isTemp()) {
       Registers.erase(Op.Output.Offset);
@@ -1242,7 +1258,7 @@ bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
     ++Skips.UnsupportedOps;
     if (!StrictMode) {
       MIPSReservationKnown = false;
-      MIPSReservationAddress.reset();
+      MIPSReservation.reset();
     }
     return !StrictMode;
   }
@@ -1338,7 +1354,7 @@ NdOpEmulator::computeTarget(const LowBlock &Block, uint64_t IndexRegOff,
   if (!RawTarget || !ReachedSourceMode || !ReachedTargetMode)
     return std::nullopt;
   llvm::Expected<LowControlTarget> Target = canonicalizeLowControlTarget(
-      *RawTarget, *ReachedSourceMode, *ReachedTargetMode);
+      *RawTarget, *ReachedSourceMode, *ReachedTargetMode, Img.getPointerSize());
   if (!Target) {
     llvm::consumeError(Target.takeError());
     return std::nullopt;

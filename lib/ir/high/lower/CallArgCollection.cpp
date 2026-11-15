@@ -348,6 +348,47 @@ void collectFullBankStackArgs(const CallArgScan &Scan,
 
 } // namespace call_args_detail
 
+int MedToHighConverter::forwardedParameterCount(
+    size_t CallIdx, const std::vector<MedOp> &Ops,
+    llvm::ArrayRef<uint64_t> ParamRegs) const {
+  if (!Image || !CurMed || CurMed->SkippedSSA || CallIdx >= Ops.size())
+    return 0;
+  const CallArgumentConvention *Convention =
+      callArgumentConvention(TargetArch, Image->abiFormat());
+  if (Convention && Convention->ArgumentsFromCallSetup)
+    return 0;
+  // A jump, by its own provenance: a call a return follows sets what it
+  // passes.
+  const MedOp &Call = Ops[CallIdx];
+  if (Call.Opcode != NdOp::CALL || !Call.IsTailCall || Call.NumInputs < 1 ||
+      !Call.Inputs[0].isConst() || Call.CalleeRegisterArgs >= 0 ||
+      Call.SourceCallHint || Call.IntegerCallSignature ||
+      Call.ScalarCallSignature)
+    return 0;
+  // No summary, binding or declaration says what the callee reads, and the
+  // C library's tables do not know its name.
+  const va_t Target = Call.Inputs[0].ConstVal;
+  if (PrototypeArgumentCallees && PrototypeArgumentCallees->count(Target))
+    return 0;
+  const std::string Import = importCalleeName(*Image, Target);
+  if (Import.empty())
+    return 0;
+  const std::string Name =
+      cNameOfStatedName(Import, Image->Format, Image->Arch).str();
+  if (libc::libcPrototype(Name, Image->abiFormat()) ||
+      libc::isKnownFunction(Name))
+    return 0;
+  int Count = 0;
+  while (Count < static_cast<int>(ParamRegs.size()) &&
+         llvm::any_of(
+             CurMed->Params,
+             [&](const MedVar &Parameter) {
+               return Parameter.RegOff == ParamRegs[Count];
+             }))
+    ++Count;
+  return Count;
+}
+
 unsigned MedToHighConverter::importFixedArgCount(size_t CallIdx,
                                                  const std::vector<MedOp> &Ops,
                                                  va_t ResolvedSlot) const {
@@ -904,6 +945,31 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
           std::max(FillLast, std::min(static_cast<int>(Fixed),
                                       static_cast<int>(ParamRegs.size())) -
                                  1);
+    // A jump to an import nothing describes hands it the registers as they
+    // are.  The leading register parameters of this function that still hold
+    // their incoming value there are passed on, in order from the first, as
+    // MedIR's call recovery passes them (MedABIPass) and LLVM C prints them.
+    // A call that returns sets what it passes; a convention whose arguments
+    // come from that recovery, or that fills unwritten positions by its own
+    // rule, keeps them.
+    const int Forwarded =
+        Fixed || (Policy && Policy->FillUnwrittenParams)
+            ? 0
+            : forwardedParameterCount(CallIdx, Ops, ParamRegs);
+    FillLast = std::max(FillLast, std::min(Forwarded, MaxArgs) - 1);
+    // Whether \p Value is what the register at \p RegOff held when this
+    // function was entered: its parameter, or the copy of it the entry makes.
+    auto HoldsIncoming = [&](const MedVar &Value, uint64_t RegOff) {
+      if (Value.Kind == MedVar::Param)
+        return Value.RegOff == RegOff;
+      if (Value.Kind != MedVar::Reg || Value.RegOff != RegOff ||
+          PhiOutputVars.count(varKey(Value)))
+        return false;
+      const MedOp *Def = uniqueMedDefinition(Value);
+      return Def ? Def->Opcode == NdOp::COPY && Def->NumInputs >= 1 &&
+                       Def->Inputs[0] == Def->Output
+                 : Value.SSAVer == 0;
+    };
     for (int K = 0; K <= FillLast && K < static_cast<int>(ParamRegs.size());
          ++K) {
       if (Found[K])
@@ -911,14 +977,23 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
       // An import's fixed argument may be a parameter this function only
       // passes on, which its entry holds no copy of (`open(path, 0)` with
       // RDI untouched).
+      const bool PassedOn = K > MaxRegArg && K < Forwarded;
       MedVar LiveIn;
       if (!ReachingAtCall(ParamRegs[K], LiveIn,
-                          /*ParameterAtEntry=*/K < static_cast<int>(Fixed)))
+                          /*ParameterAtEntry=*/K < static_cast<int>(Fixed) ||
+                              K < Forwarded)) {
+        // Past what the block sets, the first register without one value on
+        // every path ends what is passed on.
+        if (PassedOn)
+          break;
         continue;
+      }
       // The arguments end before such a join, and past the fixed ones an
-      // import reads, before what earlier calls left.
+      // import reads, before what earlier calls left.  A parameter passed on
+      // is one only while nothing else has been in its register.
       if (EntryJoin(LiveIn) ||
-          (K >= static_cast<int>(Fixed) && LeftByCall(LiveIn, ParamRegs[K]))) {
+          (K >= static_cast<int>(Fixed) && LeftByCall(LiveIn, ParamRegs[K])) ||
+          (PassedOn && !HoldsIncoming(LiveIn, ParamRegs[K]))) {
         std::fill(Found.begin() + K, Found.end(), nullptr);
         break;
       }
@@ -1589,6 +1664,80 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
             FromABI[I] = Found[I];
         if (CI->ArgumentsFromPrototype)
           return FromABI;
+        // Recovery lists an indirect call's register runs and then the values
+        // it stores for the stack, where a C call gives its leading integer
+        // arguments to every argument register before the stack.  A stored
+        // value keeps its place only after all of them, so each register
+        // recovery left out passes what the machine has in it at the call.
+        // The one recovery stopped at because it holds the call's target
+        // passes that target (AAPCS skips r3 before a 64-bit stack argument,
+        // which frees it for `blx r3`).  Any other passes the value reaching
+        // the call in it, a parameter the body only passes on included, or
+        // zero where the function has none to name: one it never set and
+        // does not take, or one an earlier call left.
+        //
+        // The stored values are recovery's upper bound, a local at the stack
+        // pointer among them, and a conforming call stores an integer for
+        // the stack only once the registers are used up.  One register may
+        // go unused before it, the bank's last, which an alignment or a
+        // composite that does not fit skips; a floating overflow leaves the
+        // integer registers alone.  So the stored values are arguments, and
+        // take their places, only where every register left out before the
+        // last carries a value, or every floating register is taken.  A call
+        // that leaves more of them without one keeps its list: its stored
+        // values are locals no callee of that convention reads.
+        if (CI->IsIndirect && !CI->ArgumentsInCalleeRegisterOrder &&
+            CI->IntegerRegisterArgCount >= 0 && CI->VarArgFixedCount < 0 &&
+            !(Convention && Convention->StackArgumentsFollowUsedRegisters)) {
+          const size_t Integers =
+              static_cast<size_t>(CI->IntegerRegisterArgCount);
+          const size_t Floating =
+              static_cast<size_t>(std::max(0, CI->FloatingRegisterArgCount));
+          auto ReachingValue = [&](size_t K) -> ExprPtr {
+            MedVar LiveIn;
+            JoinsSeen.clear();
+            if (ReachingAtCall(ParamRegs[K], LiveIn,
+                               /*ParameterAtEntry=*/true) &&
+                SetInFunction(LiveIn) && !LeftByCall(LiveIn, ParamRegs[K]))
+              if (ExprPtr Value = medvarToExpr(LiveIn);
+                  Value && Value->Kind != ExprKind::Undef)
+                return Value;
+            return nullptr;
+          };
+          if (Integers < ParamRegs.size() && Integers + Floating < Recovered &&
+              Integers <= FromABI.size()) {
+            std::vector<ExprPtr> Unset;
+            bool OnlyTheLastIsUnused = true;
+            for (size_t K = Integers; K < ParamRegs.size(); ++K) {
+              ExprPtr Value;
+              bool Unused = false;
+              if (CI->TargetRegisterArgIdx >= 0 &&
+                  K == static_cast<size_t>(CI->TargetRegisterArgIdx) &&
+                  !Target.isConst()) {
+                Value = medvarToExpr(Target);
+                Unused = true;
+              } else if (FoundSource[K] && Found[K] &&
+                         Found[K]->Kind != ExprKind::Undef) {
+                Value = Found[K];
+              } else if (!(Value = ReachingValue(K))) {
+                Value = HighExpr::makeConst(0, TRI.PointerSize);
+                Unused = true;
+              }
+              if (Unused && K + 1 != ParamRegs.size())
+                OnlyTheLastIsUnused = false;
+              Unset.push_back(std::move(Value));
+            }
+            const size_t FloatingBank =
+                TRI.floatingParamRegs(Image ? Image->abiFormat()
+                                            : BinaryFormat::Unknown)
+                    .size();
+            if (OnlyTheLastIsUnused ||
+                (FloatingBank && Floating >= FloatingBank))
+              FromABI.insert(FromABI.begin() +
+                                 static_cast<std::ptrdiff_t>(Integers),
+                             Unset.begin(), Unset.end());
+          }
+        }
         return BoundKnownCalleeArity(std::move(FromABI));
       }
     }

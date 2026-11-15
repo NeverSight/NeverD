@@ -24,6 +24,7 @@
 #include <cassert>
 #include <cstddef>
 #include <limits>
+#include <tuple>
 #include <utility>
 
 namespace neverd::symbolic {
@@ -35,9 +36,25 @@ bool preservesLowBits(SymOp Op) {
          Op == SymOp::Or || Op == SymOp::Xor || Op == SymOp::Not;
 }
 
+// A sum of two scaled words retains their common low zero bits. Its
+// complete value is still needed as one factor of the outer product.
+unsigned sumScaleZeros(const SymContext &Ctx, SymRef S) {
+  if (Ctx.op(S) != SymOp::Add || Ctx.numOperands(S) != 2)
+    return 0;
+  unsigned Zeros = Ctx.width(S);
+  for (SymRef T : Ctx.operands(S)) {
+    if (Ctx.op(T) == SymOp::Mul)
+      T = Ctx.operand(T, 0);
+    if (!Ctx.isConst(T))
+      return 0;
+    Zeros = std::min(Zeros, Ctx.constValue(T).countr_zero());
+  }
+  return Zeros;
+}
+
 // All prefix consumers share this demand propagation. An operation outside
 // the modular prefix algebra retains every bit of its original operands.
-template <typename Step, typename Visitor>
+template <bool Wide = false, typename Step, typename Visitor>
 llvm::SmallVector<unsigned, 64>
 visitRequiredPrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
                       size_t NumSlots, llvm::MutableArrayRef<Step> Steps,
@@ -50,17 +67,30 @@ visitRequiredPrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
     unsigned Zeros = 0;
     if (St.Op == SymOp::Mul && Ctx.isConst(Operands.front()))
       Zeros = Ctx.constValue(Operands.front()).countr_zero();
-    Visit(St, Demand, Zeros);
+    unsigned Coefficient = 0;
+    if constexpr (Wide) {
+      if (St.Op == SymOp::Mul && Demand > 64 && Zeros < Demand - 64) {
+        for (unsigned I = 0; I < Operands.size(); ++I) {
+          unsigned Candidate = sumScaleZeros(Ctx, Operands[I]);
+          if (Candidate >= Demand - 64) {
+            Zeros = Candidate;
+            Coefficient = I;
+            break;
+          }
+        }
+      }
+    }
     for (size_t I = 0; I < Operands.size(); ++I) {
       unsigned Bits = Ctx.width(Operands[I]);
       if (preservesLowBits(St.Op)) {
         Bits = Demand;
-        if (Zeros && !Ctx.isConst(Operands[I]))
+        if (Zeros && I != Coefficient)
           Bits -= std::min(Bits - 1, Zeros);
       }
       auto &Required = Needed[Args[St.FirstArg + I]];
       Required = std::max(Required, Bits);
     }
+    Visit(St, Demand, Zeros, Coefficient);
   }
   return Needed;
 }
@@ -73,9 +103,20 @@ template <typename Step>
 LLVM_ATTRIBUTE_NOINLINE size_t prepareNativeResidues(
     const SymContext &Ctx, SymRef Root, uint32_t &RootSlot, size_t NumSlots,
     llvm::MutableArrayRef<Step> Steps, llvm::MutableArrayRef<uint32_t> Args) {
-  const auto Needed =
-      visitRequiredPrefixes(Ctx, Root, RootSlot, NumSlots, Steps, Args,
-                            [](const Step &, unsigned, unsigned) {});
+  unsigned ProductBits = 0;
+  const auto Needed = visitRequiredPrefixes(
+      Ctx, Root, RootSlot, NumSlots, Steps, Args,
+      [&](const Step &St, unsigned Demand, unsigned Zeros, unsigned) {
+        if (!Zeros || Zeros >= Demand)
+          return;
+        const unsigned Bits = Demand - Zeros;
+        // More factors than distinct residues makes repeated prefixes likely.
+        // NumArgs is 32 bits, so no modulus of 2^32 or larger can qualify.
+        if (Bits < 32 && St.NumArgs - 1 > (uint32_t(1) << Bits))
+          ProductBits = std::max(ProductBits, Bits);
+      });
+  using ResidueKey = std::tuple<unsigned, unsigned, uint32_t, uint32_t>;
+  llvm::DenseMap<ResidueKey, uint32_t> Residues;
   llvm::SmallVector<uint32_t, 64> Aliases;
   Aliases.reserve(NumSlots);
   for (size_t I = 0; I < NumSlots; ++I)
@@ -98,6 +139,26 @@ LLVM_ATTRIBUTE_NOINLINE size_t prepareNativeResidues(
         continue;
       }
     }
+    // Each consumer observes at most Needed[slot] bits. Two binary words
+    // with identical projected inputs and operation can share that slot,
+    // even when different constants made them distinct full-width nodes.
+    unsigned Bits = Needed[St.OutputSlot];
+    if (Bits <= ProductBits && St.NumArgs == 2 && preservesLowBits(St.Op)) {
+      const auto First = Ctx.operand(St.Node, 0);
+      const bool Constant = Ctx.isConst(First);
+      uint32_t L = Args[St.FirstArg], R = Args[St.FirstArg + 1];
+      if (Constant)
+        L = Ctx.node(First).Aux & ((uint32_t(1) << Bits) - 1);
+      else if (L > R)
+        std::swap(L, R);
+      auto [It, Inserted] = Residues.try_emplace(
+          ResidueKey{2 * unsigned(St.Op) + Constant, Bits, L, R},
+          St.OutputSlot);
+      if (!Inserted) {
+        Aliases[St.OutputSlot] = It->second;
+        continue;
+      }
+    }
     Steps[Out++] = St;
   }
   RootSlot = Aliases[RootSlot];
@@ -111,18 +172,21 @@ template <typename Step>
 LLVM_ATTRIBUTE_NOINLINE void
 prepareWidePrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
                     size_t NumSlots, llvm::MutableArrayRef<Step> Steps,
-                    llvm::ArrayRef<uint32_t> ArgSlots) {
-  visitRequiredPrefixes(Ctx, Root, RootSlot, NumSlots, Steps, ArgSlots,
-                        [](Step &St, unsigned Demand, unsigned Zeros) {
-                          if (preservesLowBits(St.Op) && Demand <= 64)
-                            St.Width = Demand;
-                          if (Zeros && Demand > 64) {
-                            const unsigned FactorBits =
-                                Demand - std::min(Demand - 1, Zeros);
-                            if (FactorBits <= 64)
-                              St.Aux = ~uint64_t(0) >> (64 - FactorBits);
-                          }
-                        });
+                    llvm::MutableArrayRef<uint32_t> ArgSlots) {
+  visitRequiredPrefixes<true>(
+      Ctx, Root, RootSlot, NumSlots, Steps, ArgSlots,
+      [&](Step &St, unsigned Demand, unsigned Zeros, unsigned Coefficient) {
+        if (preservesLowBits(St.Op) && Demand <= 64)
+          St.Width = Demand;
+        if (Zeros && Demand > 64) {
+          const unsigned FactorBits = Demand - std::min(Demand - 1, Zeros);
+          if (FactorBits <= 64) {
+            St.Aux = ~uint64_t(0) >> (64 - FactorBits);
+            std::swap(ArgSlots[St.FirstArg],
+                      ArgSlots[St.FirstArg + Coefficient]);
+          }
+        }
+      });
 }
 
 } // namespace

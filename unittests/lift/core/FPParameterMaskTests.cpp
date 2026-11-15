@@ -238,3 +238,36 @@ TEST(FPParameterMask, SwappedArgumentsReachTheirOtherReturnRegisters) {
   EXPECT_EQ(F.Params[0].RegOff, a64reg::V(0));
   EXPECT_EQ(F.Params[1].RegOff, a64reg::V(1));
 }
+
+TEST(FPParameterMask, NarrowScalarViewRequiresUnobservedUpperBytes) {
+  for (bool ReadHigh : {false, true}) {
+    SCOPED_TRACE(ReadHigh);
+    MedFunc F;
+    F.Blocks.emplace_back();
+    auto &B = F.Blocks.front();
+    B.Id = 0;
+    const auto Incoming = value(MedVar::Reg, 1, 8, armreg::D(4));
+    const auto Add = [&](NdOp Opcode, MedVar Output,
+                         std::initializer_list<MedVar> Inputs) {
+      MedOp Op;
+      Op.Opcode = Opcode;
+      Op.Output = Output;
+      for (const auto &Input : Inputs)
+        Op.addInput(Input);
+      B.Ops.push_back(Op);
+    };
+    Add(NdOp::COPY, Incoming, {Incoming});
+    const auto Low = value(MedVar::Temp, 2, 4);
+    Add(NdOp::SUBBYTES, Low, {Incoming, MedVar::makeConst(0, 4)});
+    Add(NdOp::STORE, {}, {MedVar::makeConst(0x1000, 4), Low});
+    const auto High = value(MedVar::Temp, 3, 4);
+    Add(NdOp::SUBBYTES, High, {Incoming, MedVar::makeConst(4, 4)});
+    if (ReadHigh)
+      Add(NdOp::STORE, {}, {MedVar::makeConst(0x1004, 4), High});
+    detectFPParams(F, B, getTargetRegInfo(Arch::ARM),
+                   {{{armreg::D(4), 8}, Incoming.Id}}, Arch::ARM,
+                   BinaryFormat::ELF);
+    ASSERT_EQ(F.Params.size(), 1u);
+    EXPECT_EQ(F.FPParamScalarBytes.at(armreg::D(4)), ReadHigh ? 8u : 4u);
+  }
+}

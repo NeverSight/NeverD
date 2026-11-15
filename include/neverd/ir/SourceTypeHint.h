@@ -4,6 +4,7 @@
 #include "neverd/ir/NdTypes.h"
 
 namespace neverd {
+struct FloatingCallArguments;
 
 enum class SourceABICarrierKind : uint8_t {
   None,
@@ -102,6 +103,9 @@ struct SourceFunctionTypeHint {
   /// An integer pair or a supported record returned in multiple registers,
   /// ordered by source byte offset. ReturnLocation is empty in this case.
   std::vector<SourceABIValueLocation> ReturnComponents;
+  /// Logical MIPS scalars may span an o32 GPR pair. Their descriptor records
+  /// the first carrier, the complete value width and the variadic boundary.
+  std::shared_ptr<const FloatingCallArguments> MIPSScalars;
 };
 
 } // namespace neverd

@@ -59,8 +59,7 @@ TEST_P(X86LegacyDebugNativeTest, OriginalIntegerExtensionReadWatchpoints) {
   // Query the same feature bank installed on the KVM CPU. Clang 18 does not
   // accept every required extension name in __builtin_cpu_supports.
   X86LegacyIntegerExtensions Features;
-  const auto *CPUID =
-      reinterpret_cast<const kvm_cpuid2 *>(CPUIDStorage.data());
+  const auto *CPUID = reinterpret_cast<const kvm_cpuid2 *>(CPUIDStorage.data());
   for (unsigned I = 0; I != CPUID->nent; ++I) {
     const auto &E = CPUID->entries[I];
     if (E.function == 1)

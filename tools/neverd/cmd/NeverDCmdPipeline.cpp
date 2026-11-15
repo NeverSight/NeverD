@@ -952,7 +952,6 @@ int runDecompile(neverd_session_t Sess) {
     if (FuncRef.consume_front("0x") || FuncRef.consume_front("0X")) {
       if (!FuncRef.empty() && !FuncRef.getAsInteger(16, DirectAddr)) {
         HaveDirectAddr = true;
-        FuncIdx = neverd_func_find_by_addr(Sess, DirectAddr);
       }
     } else {
       FuncIdx = neverd_func_find_by_name(Sess, ExportFunc.c_str());
@@ -965,7 +964,6 @@ int runDecompile(neverd_session_t Sess) {
       if (FuncIdx < 0 && !HaveDirectAddr && !FuncRef.empty() &&
           !FuncRef.getAsInteger(16, DirectAddr)) {
         HaveDirectAddr = true;
-        FuncIdx = neverd_func_find_by_addr(Sess, DirectAddr);
       }
     }
     if (FuncIdx < 0 && !HaveDirectAddr) {

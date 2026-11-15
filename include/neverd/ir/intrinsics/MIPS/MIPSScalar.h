@@ -13,6 +13,7 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/MIPS/MIPSScalarFPOperations.h"
 
 #include <cstdint>
 #include <optional>
@@ -77,9 +78,47 @@ constexpr std::optional<MergeTransfer> mergeMemory(Intrinsic Id) {
   return Load ? Load : mergeStore(Id);
 }
 
+constexpr bool isDSPHalfCompare(Intrinsic Id) {
+  return Id >= Intrinsic::MIPSCmpEqPH && Id <= Intrinsic::MIPSCmpLePH;
+}
+constexpr bool isDSPPartialControl(Intrinsic Id) {
+  return isDSPHalfCompare(Id) || Id == Intrinsic::MIPSMthlipPosition;
+}
 constexpr bool isDSPControlIntrinsic(Intrinsic Id) {
   return Id == Intrinsic::MIPSReadDSPControl ||
-         Id == Intrinsic::MIPSWriteDSPControl;
+         Id == Intrinsic::MIPSWriteDSPControl || isDSPPartialControl(Id);
+}
+
+constexpr bool isMSAControl(Intrinsic Id) {
+  return Id == Intrinsic::MIPSReadMSAControl ||
+         Id == Intrinsic::MIPSWriteMSAControl;
+}
+
+constexpr bool isMSAFloat(Intrinsic Id) {
+  return Id >= Intrinsic::MIPSMSAFADD_W && Id <= Intrinsic::MIPSMSAFTRUNC_U_D;
+}
+
+constexpr bool isMSADivision(Intrinsic Id) {
+  return Id >= Intrinsic::MIPSMSADIV_S_B && Id <= Intrinsic::MIPSMSAMOD_U_D;
+}
+constexpr bool isMSANativeVector(Intrinsic Id) {
+  return isMSAFloat(Id) || isMSADivision(Id);
+}
+struct MSANativeOperation {
+  uint32_t Encoding;
+  unsigned Arity;
+  const char *Mnemonic;
+};
+inline constexpr MSANativeOperation MSANativeOperations[] = {
+#define NEVERD_MSA_FLOAT(Name, Value, Encoding, Arity, Mnemonic)               \
+  {Encoding, Arity, Mnemonic},
+#include "neverd/ir/intrinsics/MIPS/MIPSMSAFloat.def"
+#define NEVERD_MSA_DIVISION(Name, Value, Encoding, Mnemonic)                   \
+  {Encoding, 2, Mnemonic},
+#include "neverd/ir/intrinsics/MIPS/MIPSMSADivision.def"
+};
+constexpr const MSANativeOperation &msaNativeOperation(Intrinsic Id) {
+  return MSANativeOperations[unsigned(Id) - unsigned(Intrinsic::MIPSMSAFADD_W)];
 }
 
 constexpr bool isWordDivision(Intrinsic Id) {
@@ -90,7 +129,9 @@ constexpr bool isWordDivision(Intrinsic Id) {
 /// CSE-able.
 constexpr bool isPureScalarValue(Intrinsic Id) {
   return Id == Intrinsic::MIPSUnpredictable || Id == Intrinsic::MIPSLwrUpper ||
-         isWordDivision(Id);
+         isWordDivision(Id) || Id == Intrinsic::MIPSAccumulatorAfterWrite ||
+         Id == Intrinsic::MIPSExtractResult ||
+         Id == Intrinsic::MIPSRelease6DivideResult;
 }
 
 /// Ordering effects remain observable, but neither operation writes data.
@@ -100,43 +141,134 @@ constexpr bool isBarrier(Intrinsic Id) {
          Id == Intrinsic::MIPSSync;
 }
 
-constexpr bool isReservationIntrinsic(Intrinsic Id) {
-  return Id == Intrinsic::MIPSLoadLinkedWord ||
-         Id == Intrinsic::MIPSStoreConditionalWord;
+struct ReservationTransfer {
+  Intrinsic Id;
+  uint16_t ElementBytes;
+  bool Paired;
+  bool Store;
+  constexpr uint16_t bytes() const {
+    return Paired ? 2 * ElementBytes : ElementBytes;
+  }
+};
+
+constexpr std::optional<ReservationTransfer> reservationTransfer(Intrinsic Id) {
+  switch (Id) {
+#define NEVERD_MIPS_RESERVATION(Code, Width, Pair, Load, LID, LM, Store, SID,  \
+                                SM, CSLoad, CSStore)                           \
+  case Intrinsic::Load:                                                        \
+    return ReservationTransfer{Id, Width, Pair, false};                        \
+  case Intrinsic::Store:                                                       \
+    return ReservationTransfer{Id, Width, Pair, true};
+#include "neverd/ir/intrinsics/MIPS/MIPSReservation.def"
+  default:
+    return std::nullopt;
+  }
 }
+
+constexpr std::optional<ReservationTransfer> r6Reservation(uint32_t Word) {
+  if ((Word >> 26) != 31 || ((Word & 64) && (Word & 0x780)))
+    return std::nullopt;
+  switch (Word & 127) {
+#define NEVERD_MIPS_RESERVATION(Code, Width, Pair, Load, LID, LM, Store, SID,  \
+                                SM, CSLoad, CSStore)                           \
+  case Code:                                                                   \
+    return ReservationTransfer{Intrinsic::Load, Width, Pair, false};           \
+  case Code ^ 16:                                                              \
+    return ReservationTransfer{Intrinsic::Store, Width, Pair, true};
+#include "neverd/ir/intrinsics/MIPS/MIPSReservation.def"
+  default:
+    return std::nullopt;
+  }
+}
+constexpr bool isMTIntrinsic(Intrinsic Id) {
+  return Id == Intrinsic::MIPSDisableMT || Id == Intrinsic::MIPSEnableMT ||
+         Id == Intrinsic::MIPSDisableVPE || Id == Intrinsic::MIPSEnableVPE;
+}
+constexpr bool isCacheIntrinsic(Intrinsic Id) {
+  return Id == Intrinsic::MIPSCache || Id == Intrinsic::MIPSPrefetch;
+}
+struct CP0Transfer {
+  Intrinsic Id;
+  unsigned RS;
+  uint16_t Bytes;
+  bool Write;
+};
+
+constexpr std::optional<CP0Transfer> cp0Transfer(Intrinsic Id) {
+  switch (Id) {
+#define NEVERD_MIPS_CP0_TRANSFER(RS, Bytes, Write, Name, Value, Mnemonic)      \
+  case Intrinsic::Name:                                                        \
+    return CP0Transfer{Id, RS, Bytes, Write};
+#include "neverd/ir/intrinsics/MIPS/MIPSCP0Transfer.def"
+  default:
+    return std::nullopt;
+  }
+}
+
+constexpr std::optional<CP0Transfer> cp0TransferEncoding(unsigned Rs) {
+  switch (Rs) {
+#define NEVERD_MIPS_CP0_TRANSFER(RS, Bytes, Write, Name, Value, Mnemonic)      \
+  case RS:                                                                     \
+    return CP0Transfer{Intrinsic::Name, RS, Bytes, Write};
+#include "neverd/ir/intrinsics/MIPS/MIPSCP0Transfer.def"
+  default:
+    return std::nullopt;
+  }
+}
+
 constexpr bool isSystemIntrinsic(Intrinsic Id) {
   return Id == Intrinsic::MIPSReadHardwareRegister ||
          Id == Intrinsic::MIPSDisableInterrupts ||
          Id == Intrinsic::MIPSEnableInterrupts ||
-         Id == Intrinsic::MIPSReadCP0Word || Id == Intrinsic::MIPSWriteCP0Word;
+         Id == Intrinsic::MIPSReadR6HardwareRegister ||
+         cp0Transfer(Id).has_value() || isMTIntrinsic(Id);
 }
 constexpr bool scalarMayWriteMemory(Intrinsic Id) {
-  return mergeStore(Id).has_value() ||
-         Id == Intrinsic::MIPSStoreConditionalWord;
+  if (const auto R = reservationTransfer(Id))
+    return R->Store;
+  return mergeStore(Id).has_value() || isCacheIntrinsic(Id);
 }
 constexpr bool isStatefulScalar(Intrinsic Id) {
-  return isReservationIntrinsic(Id) || isSystemIntrinsic(Id) ||
-         Id == Intrinsic::MIPSPause;
+  return isScalarFPArithmetic(Id) || isScalarFPControl(Id) ||
+         reservationTransfer(Id).has_value() || isSystemIntrinsic(Id) ||
+         Id == Intrinsic::MIPSPause || isCacheIntrinsic(Id);
 }
-constexpr bool supportedCP0Word(uint64_t Index, bool Write) {
+constexpr bool localCP0Word(uint64_t Index, bool Write) {
   switch (Index) {
-#define NEVERD_MIPS_CP0(Index, Name, Writable)                                 \
-  case Index:                                                                  \
+#define NEVERD_MIPS_CP0(Index, Selector, Name, Writable)                       \
+  case ((Selector << 5) | Index):                                              \
     return !Write || Writable;
 #include "neverd/ir/intrinsics/MIPS/MIPSCP0.def"
   default:
     return false;
   }
 }
+constexpr bool cp0RequiresMT(uint64_t Key) {
+  const unsigned Reg = Key & 31, Sel = Key >> 5;
+  // MVP, VPE, TC and TCOpt views in MT Volume IV-f, Table 6.1.
+  return (Reg == 0 && Sel >= 1 && Sel <= 3) ||
+         ((Reg == 1 || Reg == 2) && Sel >= 1 && Sel <= 7) ||
+         (Reg == 3 && Sel == 7);
+}
 constexpr bool supportedHardwareRegister(uint64_t Index) {
-  return Index < 4 || Index == 29;
+  return Index < 4 || (Index >= 29 && Index <= 31);
+}
+
+constexpr bool supportedR6HardwareRegister(uint64_t Key) {
+  return Key <= UINT8_MAX &&
+         ((Key & 31) == 4 || Key == 5 || supportedHardwareRegister(Key));
 }
 
 constexpr bool isScalarIntrinsic(Intrinsic Id) {
   return mergeMemory(Id).has_value() || Id == Intrinsic::MIPSUnpredictable ||
-         Id == Intrinsic::MIPSRequireWord || Id == Intrinsic::MIPSLwrUpper ||
-         isDSPControlIntrinsic(Id) || isWordDivision(Id) || isBarrier(Id) ||
-         isStatefulScalar(Id);
+         Id == Intrinsic::MIPSRequireWord ||
+         Id == Intrinsic::MIPSRequireTakenBranch ||
+         Id == Intrinsic::MIPSLwrUpper || isDSPControlIntrinsic(Id) ||
+         isMSAControl(Id) || isMSANativeVector(Id) || isWordDivision(Id) ||
+         isBarrier(Id) || isStatefulScalar(Id) ||
+         Id == Intrinsic::MIPSAccumulatorAfterWrite ||
+         Id == Intrinsic::MIPSExtractResult ||
+         Id == Intrinsic::MIPSRelease6DivideResult;
 }
 
 struct ScalarShape {
@@ -156,24 +288,78 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
   if (!S.IdIsValid || !S.Ordinary ||
       (S.Target != Arch::Unknown && !isMIPS(S.Target)))
     return false;
-  if (isStatefulScalar(Id)) {
-    if (isMIPS64(S.Target))
+  if (isScalarFPControl(Id)) {
+    const bool Write = Id == Intrinsic::MIPSWriteFPControl;
+    return S.FirstBytes == 1 && S.FirstConstant && *S.FirstConstant < 32 &&
+           scalarFPControlSelector(*S.FirstConstant, Write) &&
+           (Write ? S.Inputs == 3 && S.SecondBytes == 4 && !S.OutputBytes
+                  : S.Inputs == 2 && S.OutputWritable && S.OutputBytes == 4);
+  }
+  if (isScalarFPArithmetic(Id)) {
+    const auto &F = scalarFPOperation(Id);
+    if (F.writesCondition())
+      return !S.OutputBytes && S.Inputs == 4 && S.FirstBytes == 1 &&
+             S.FirstConstant && *S.FirstConstant < 8 &&
+             (!F.isPairedSingle() || !(*S.FirstConstant & 1)) &&
+             S.SecondBytes == F.InputBytes && S.ThirdBytes == F.InputBytes;
+    return S.OutputWritable && S.OutputBytes == F.OutputBytes &&
+           S.Inputs == F.Arity + 1 && S.FirstBytes == F.InputBytes &&
+           (F.Arity < 2 || S.SecondBytes == F.InputBytes) &&
+           (F.Arity < 3 || S.ThirdBytes == F.InputBytes);
+  }
+  if (isMSANativeVector(Id)) {
+    const unsigned N = msaNativeOperation(Id).Arity;
+    return S.OutputWritable && S.OutputBytes == 16 && S.Inputs == N + 1 &&
+           S.FirstBytes == 16 && (N < 2 || S.SecondBytes == 16) &&
+           (N < 3 || S.ThirdBytes == 16);
+  }
+  if (isMSAControl(Id)) {
+    if (!S.FirstConstant || *S.FirstConstant >= 32 || S.FirstBytes != 1)
       return false;
+    return Id == Intrinsic::MIPSReadMSAControl
+               ? S.Inputs == 2 && S.OutputWritable && S.OutputBytes == 4
+               : S.Inputs == 3 && S.SecondBytes == 4 && !S.OutputBytes;
+  }
+  if (const auto R = reservationTransfer(Id)) {
+    const auto GPR = S.FirstBytes;
+    if ((GPR != 4 && GPR != 8) || GPR < R->ElementBytes ||
+        (S.Target != Arch::Unknown && GPR != (isMIPS64(S.Target) ? 8 : 4)) ||
+        !S.OutputWritable)
+      return false;
+    if (!R->Store)
+      return S.Inputs == 2 && S.OutputBytes == R->bytes();
+    return S.Inputs == (R->Paired ? 4 : 3) && S.OutputBytes == 4 &&
+           S.SecondBytes == GPR && (!R->Paired || S.ThirdBytes == GPR);
+  }
+  if (isStatefulScalar(Id)) {
+    if (isCacheIntrinsic(Id))
+      return S.Inputs == 3 && !S.OutputBytes && S.FirstBytes == 1 &&
+             (S.SecondBytes == 4 || S.SecondBytes == 8) &&
+             (S.Target == Arch::Unknown ||
+              S.SecondBytes == (isMIPS64(S.Target) ? 8 : 4)) &&
+             S.FirstConstant && *S.FirstConstant < 32;
     if (Id == Intrinsic::MIPSPause)
       return S.Inputs == 1 && !S.OutputBytes;
-    if (Id == Intrinsic::MIPSWriteCP0Word)
-      return S.Inputs == 3 && !S.OutputBytes && S.FirstBytes == 1 &&
-             S.SecondBytes == 4 && S.FirstConstant &&
-             supportedCP0Word(*S.FirstConstant, true);
-    if (!S.OutputWritable || S.OutputBytes != 4)
+    if (const auto C = cp0Transfer(Id)) {
+      if (!S.FirstConstant || *S.FirstConstant > UINT8_MAX ||
+          S.FirstBytes != 1 ||
+          (C->Bytes == 8 && S.Target != Arch::Unknown && !isMIPS64(S.Target)))
+        return false;
+      return C->Write
+                 ? S.Inputs == 3 && !S.OutputBytes && S.SecondBytes == C->Bytes
+                 : S.Inputs == 2 && S.OutputWritable &&
+                       S.OutputBytes == C->Bytes;
+    }
+    if (Id == Intrinsic::MIPSReadR6HardwareRegister)
+      return S.Inputs == 2 && S.OutputWritable && S.FirstBytes == 1 &&
+             S.FirstConstant && supportedR6HardwareRegister(*S.FirstConstant) &&
+             (S.OutputBytes == 4 || S.OutputBytes == 8) &&
+             (S.Target == Arch::Unknown ||
+              S.OutputBytes == (isMIPS64(S.Target) ? 8 : 4));
+    if (!S.OutputWritable || S.OutputBytes != 4 ||
+        (isMIPS64(S.Target) && Id != Intrinsic::MIPSDisableInterrupts &&
+         Id != Intrinsic::MIPSEnableInterrupts))
       return false;
-    if (Id == Intrinsic::MIPSLoadLinkedWord)
-      return S.Inputs == 2 && S.FirstBytes == 4;
-    if (Id == Intrinsic::MIPSStoreConditionalWord)
-      return S.Inputs == 3 && S.FirstBytes == 4 && S.SecondBytes == 4;
-    if (Id == Intrinsic::MIPSReadCP0Word)
-      return S.Inputs == 2 && S.FirstBytes == 1 && S.FirstConstant &&
-             supportedCP0Word(*S.FirstConstant, false);
     if (Id == Intrinsic::MIPSReadHardwareRegister)
       return S.Inputs == 2 && S.FirstBytes == 1 && S.FirstConstant &&
              supportedHardwareRegister(*S.FirstConstant);
@@ -184,22 +370,41 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
   if (Id == Intrinsic::MIPSSync)
     return S.Inputs == 2 && !S.OutputBytes && S.FirstBytes == 1 &&
            S.FirstConstant && *S.FirstConstant < 32;
+  if (Id == Intrinsic::MIPSRequireTakenBranch)
+    return S.Inputs == 2 && !S.OutputBytes && S.FirstBytes == 1;
   if (Id == Intrinsic::MIPSRequireWord)
     return S.Inputs == 2 && !S.OutputBytes && S.FirstBytes == 8 &&
            (S.Target == Arch::Unknown || isMIPS64(S.Target));
+  if (isDSPPartialControl(Id))
+    return !S.OutputBytes &&
+           (isDSPHalfCompare(Id)
+                ? S.Inputs == 3 && S.FirstBytes == 4 && S.SecondBytes == 4
+                : S.Inputs == 1);
   if (Id == Intrinsic::MIPSWriteDSPControl)
-    return S.Inputs == 2 && !S.OutputBytes && S.FirstBytes == 4 &&
-           !isMIPS64(S.Target);
+    return S.Inputs == 2 && !S.OutputBytes && S.FirstBytes == 4;
   if (Id == Intrinsic::MIPSReadDSPControl)
-    return S.Inputs == 1 && S.OutputWritable && S.OutputBytes == 4 &&
-           !isMIPS64(S.Target);
+    return S.Inputs == 1 && S.OutputWritable && S.OutputBytes == 4;
   if (const auto Store = mergeStore(Id))
     return S.Inputs == 3 && !S.OutputBytes && S.SecondBytes == Store->Bytes &&
            (S.FirstBytes == 4 || S.FirstBytes == 8) &&
+           S.FirstBytes >= Store->Bytes &&
            (S.Target == Arch::Unknown ||
             S.FirstBytes == (isMIPS64(S.Target) ? 8 : 4));
   if (!S.OutputWritable || (S.OutputBytes != 4 && S.OutputBytes != 8))
     return false;
+  if (Id == Intrinsic::MIPSRelease6DivideResult)
+    return S.Inputs == 3 && S.OutputBytes == 8 && S.FirstBytes == 1 &&
+           S.SecondBytes == 8;
+  if (Id == Intrinsic::MIPSExtractResult)
+    return S.Inputs == 3 && S.FirstBytes == 1 &&
+           S.SecondBytes == S.OutputBytes &&
+           (S.OutputBytes == 4 || S.Target == Arch::Unknown ||
+            isMIPS64(S.Target));
+  if (Id == Intrinsic::MIPSAccumulatorAfterWrite)
+    return S.Inputs == 3 && S.FirstBytes == 1 &&
+           S.SecondBytes == S.OutputBytes &&
+           (S.Target == Arch::Unknown ||
+            S.OutputBytes == (isMIPS64(S.Target) ? 8 : 4));
   if (Id == Intrinsic::MIPSUnpredictable)
     return S.Inputs == 1 && (S.Target == Arch::Unknown ||
                              S.OutputBytes == (isMIPS64(S.Target) ? 8 : 4));

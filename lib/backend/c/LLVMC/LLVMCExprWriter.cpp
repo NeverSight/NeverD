@@ -725,8 +725,16 @@ LLVMCWriter::declaredImageDataVA(const llvm::Value *V) const {
   // with runtime-filled slots, such as an i386 GOT run and the data after
   // it), which it does not define.
   // Taking an integer view of a pointer does not transfer its storage to
-  // a separate object or a string literal.
+  // a separate object or a string literal, and neither does the constant sum
+  // imageDataVA follows (`&mirror + 268`): it is an offset into that object.
   const llvm::Value *Pointer = V;
+  while (const auto *Sum = llvm::dyn_cast<llvm::ConstantExpr>(Pointer)) {
+    if ((Sum->getOpcode() != llvm::Instruction::Add &&
+         Sum->getOpcode() != llvm::Instruction::Sub) ||
+        !llvm::isa<llvm::ConstantInt>(Sum->getOperand(1)))
+      break;
+    Pointer = Sum->getOperand(0);
+  }
   if (const auto *Cast = llvm::dyn_cast<llvm::PtrToIntOperator>(Pointer))
     Pointer = Cast->getPointerOperand();
   if (!OnlyFunction && Pointer->getType()->isPointerTy())
@@ -940,7 +948,8 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C,
   }
 
   if (auto *CF = llvm::dyn_cast<llvm::ConstantFP>(C)) {
-    if ((C->getType()->isFloatTy() || C->getType()->isDoubleTy()) &&
+    if ((C->getType()->isHalfTy() || C->getType()->isFloatTy() ||
+         C->getType()->isDoubleTy()) &&
         !CF->getValueAPF().isFinite()) {
       // Decimal NaN/Inf spellings are not C literals, and a generic NAN
       // would discard payload and sign. This also covers aggregate members.
@@ -954,6 +963,10 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C,
     auto S = std::string(Buf.str());
     if (C->getType()->isFloatTy())
       S += "f";
+    else if (C->getType()->isHalfTy())
+      // The literal has its own type: a type-generic builtin takes operands
+      // of one type, and an unsuffixed literal is a double.
+      S += "f16";
     else if (C->getType()->isX86_FP80Ty())
       // An unsuffixed literal rounds as binary64 before any surrounding
       // long-double expression can use its extra precision or exponent range.
@@ -1100,8 +1113,17 @@ std::string LLVMCWriter::constStr(const llvm::Constant *C,
   if (llvm::isa<llvm::ConstantAggregateZero>(C))
     return "{0}";
 
-  // In particular, a BlockAddress is a control destination that portable C
-  // cannot carry without a separately proved continuation model. An unknown
+  // A block's address is a label's, which C names inside the label's function
+  // alone: in a label table that function defines (writeLabelTables).
+  if (const auto *Address = llvm::dyn_cast<llvm::BlockAddress>(C);
+      Address && LabelTableOwner && Address->getFunction() == LabelTableOwner) {
+    ReferencedBlocks.insert(Address->getBasicBlock());
+    AddressLabelBlocks.insert(Address->getBasicBlock());
+    return "&&" + blockLabel(Address->getBasicBlock());
+  }
+
+  // Anywhere else a BlockAddress is a control destination that C cannot
+  // carry without a separately proved continuation model. An unknown
   // constant is never authority to substitute a null pointer or integer zero.
   std::string Detail;
   llvm::raw_string_ostream Stream(Detail);
@@ -1804,12 +1826,23 @@ LLVMCWriter::frameSlotAccess(const llvm::Value *Ptr, uint16_t AccessSize,
   if (!Peeled || Peeled->first != SyntheticFrame)
     return std::nullopt;
   const uint64_t Off = Peeled->second;
+  // Whether [Begin, Begin + Size) shares a byte with those an ambiguous
+  // access covers from a raw location. A frame record's members lie where
+  // the frame's bytes do, so there only the place a read through the pointer
+  // starts at stays unnamed.
   auto RawTouches = [&](uint64_t Begin, uint64_t Size) {
-    for (const auto &[Frame, Offset] : Analysis.RawFrameLocations) {
-      if (Frame != SyntheticFrame || Offset < 0)
+    for (const auto &Location : Analysis.RawFrameLocations) {
+      const auto &[Frame, Offset] = Location;
+      if (Frame != SyntheticFrame || Offset < 0 ||
+          (FrameRecord && !Analysis.RawFrameLocationsInRecord.count(Location)))
         continue;
       const uint64_t Raw = static_cast<uint64_t>(Offset);
-      if (Raw >= Begin && Raw - Begin < Size)
+      const auto Covered = Analysis.RawFrameExtents.find(Location);
+      const uint64_t Extent =
+          FrameRecord || Covered == Analysis.RawFrameExtents.end()
+              ? 1
+              : Covered->second;
+      if (Raw >= Begin ? Raw - Begin < Size : Begin - Raw < Extent)
         return true;
     }
     return false;
@@ -3272,6 +3305,16 @@ std::string LLVMCWriter::memberAsAccessed(const llvm::LoadInst &Load,
   return Text;
 }
 
+std::string LLVMCWriter::bitCastSourceStr(const llvm::Value *V) {
+  std::string Text = valueStr(V);
+  // A scalar spelled as a subscript may be a vector element: its own type's
+  // cast makes it the value rather than the lvalue Clang misreads.
+  if (!Text.empty() && Text.back() == ']' && !V->getType()->isVectorTy() &&
+      !V->getType()->isAggregateType())
+    Text = "(" + typeToCLLVM(V->getType()) + ")(" + Text + ")";
+  return Text;
+}
+
 std::string LLVMCWriter::valueStr(const llvm::Value *V, bool *PointerSpelling) {
   if (PointerSpelling)
     *PointerSpelling = false;
@@ -3806,10 +3849,30 @@ std::string LLVMCWriter::castStr(unsigned Opcode, const std::string &Src,
 
 std::string LLVMCWriter::castOfText(const llvm::CastInst &Cast,
                                     const std::string &Text) {
-  if (!llvm::isa<llvm::IntToPtrInst, llvm::PtrToIntInst>(&Cast))
-    return Text;
-  return castStr(Cast.getOpcode(), "(" + Text + ")", Cast.getSrcTy(),
-                 Cast.getDestTy());
+  switch (Cast.getOpcode()) {
+  case llvm::Instruction::BitCast:
+  case llvm::Instruction::AddrSpaceCast:
+    // Only a pointer keeps its value, and so its operand's text. The bits of
+    // a number read as another type are copied (isFloatingPointBitcast).
+    return Cast.getSrcTy()->isPointerTy() && Cast.getDestTy()->isPointerTy()
+               ? Text
+               : std::string();
+  case llvm::Instruction::IntToPtr:
+  case llvm::Instruction::PtrToInt:
+  // A conversion between an integer and a floating-point number, or between
+  // two floating-point widths, changes the value: the text converts as the
+  // instruction does, signed or unsigned, whatever C type the text has.
+  case llvm::Instruction::SIToFP:
+  case llvm::Instruction::UIToFP:
+  case llvm::Instruction::FPToSI:
+  case llvm::Instruction::FPToUI:
+  case llvm::Instruction::FPExt:
+  case llvm::Instruction::FPTrunc:
+    return castStr(Cast.getOpcode(), "(" + Text + ")", Cast.getSrcTy(),
+                   Cast.getDestTy());
+  default:
+    return {};
+  }
 }
 
 bool LLVMCWriter::operandIsUnsignedWidth(const llvm::Value *V,

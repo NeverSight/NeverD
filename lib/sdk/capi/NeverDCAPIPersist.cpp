@@ -723,12 +723,17 @@ static bool readFunctionAttributes(const llvm::json::Object &Row,
   return true;
 }
 
-static llvm::json::Array functionEditRows(const Session *S) {
+/// The rows of the edits at entries from \p Begin, before \p End where given.
+static llvm::json::Array functionEditRows(const Session *S, va_t Begin = 0,
+                                          std::optional<va_t> End = {}) {
   std::set<va_t> Entries;
-  for (const auto &[Entry, Created] : S->FunctionEdits)
-    Entries.insert(Entry);
-  for (const auto &[Entry, Attributes] : S->FunctionAttributeEdits)
-    Entries.insert(Entry);
+  for (auto It = S->FunctionEdits.lower_bound(Begin);
+       It != S->FunctionEdits.end() && (!End || It->first < *End); ++It)
+    Entries.insert(It->first);
+  for (auto It = S->FunctionAttributeEdits.lower_bound(Begin);
+       It != S->FunctionAttributeEdits.end() && (!End || It->first < *End);
+       ++It)
+    Entries.insert(It->first);
   llvm::json::Array Rows;
   for (const va_t Entry : Entries) {
     llvm::json::Object Row{{"addr", vaHex(Entry)}};
@@ -825,6 +830,15 @@ const char *neverd_functions_json(neverd_session_t Sess) {
   if (!S)
     return nullptr;
   return dupStr(jsonToString(llvm::json::Value(functionEditRows(S))));
+}
+
+const char *neverd_functions_range_json(neverd_session_t Sess,
+                                        neverd_va_t Begin, neverd_va_t End) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return nullptr;
+  return dupStr(jsonToString(llvm::json::Value(
+      Begin < End ? functionEditRows(S, Begin, End) : llvm::json::Array())));
 }
 
 int neverd_functions_save(neverd_session_t Sess) {

@@ -80,8 +80,12 @@ inline constexpr auto kWindowsCRTPrototypes = std::to_array<LibCPrototype>({
     windowsCRTPrototype("??_U@YAPAXI@Z", "void *", {"uint32_t"}),
     windowsCRTPrototype("??3@YAXPAX@Z", "void", {"void *"}),
     windowsCRTPrototype("??_V@YAXPAX@Z", "void", {"void *"}),
-    // The SEH-aware longjmp entry retains the buffer/value cdecl signature.
-    windowsCRTPrototype("_longjmpex", "void", {"void *", "int"}),
+    // i386 _setjmp3(jmp_buf, count, ...) receives count additional DWORDs.
+    // Its jmp_buf decays to int *, not a second context pointer. See
+    // https://learn.microsoft.com/en-us/cpp/c-runtime-library/setjmp3
+    windowsCRTPrototype("_setjmp3", "int", {"int *", "int", "..."}),
+    // The i386 SEH-aware longjmp entry takes the same jump buffer.
+    windowsCRTPrototype("_longjmpex", "void", {"int *", "int"}),
     // msvcrt.dll start-up and exit.
     windowsCRTPrototype("__getmainargs", "int",
                         {"int *", "char ***", "char ***", "int", "void *"}),

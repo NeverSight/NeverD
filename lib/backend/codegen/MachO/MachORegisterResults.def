@@ -1,0 +1,102 @@
+//===- MachORegisterResults.def - Darwin native register lowering ------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef MACHO_REGISTER_TEXT
+#define MACHO_REGISTER_TEXT(Name, Text)
+#endif
+#ifndef MACHO_REGISTER_VALUE
+#define MACHO_REGISTER_VALUE(Type, Name, Value)
+#endif
+#ifndef MACHO_REGISTER_ALU
+#define MACHO_REGISTER_ALU(Name)
+#endif
+#ifndef MACHO_REGISTER_MEMORY
+#define MACHO_REGISTER_MEMORY(Name)
+#endif
+
+#ifndef MACHO_REGISTER_EXTEND
+#define MACHO_REGISTER_EXTEND(Name, Spelling)
+#endif
+MACHO_REGISTER_EXTEND(UXTW, ", uxtw")
+MACHO_REGISTER_EXTEND(SXTW, ", sxtw")
+MACHO_REGISTER_EXTEND(SXTX, ", sxtx")
+MACHO_REGISTER_TEXT(kShiftAmount, " #")
+MACHO_REGISTER_TEXT(kRegisterBody, "neverd.arm64e.register-results")
+MACHO_REGISTER_TEXT(kInvalidBody,
+                    "arm64e native register body disagrees with its source "
+                    "registers, branches or unwind rows")
+MACHO_REGISTER_TEXT(kLocal, "Lneverd_reg_${:uid}_")
+MACHO_REGISTER_TEXT(kCall, "bl ")
+MACHO_REGISTER_TEXT(kTail, "b ")
+MACHO_REGISTER_TEXT(kInstructionWord, ".inst ")
+MACHO_REGISTER_TEXT(kOperandStart, "${")
+MACHO_REGISTER_TEXT(kOperandEnd, ":c}")
+MACHO_REGISTER_TEXT(kSymbolConstraint, "s,")
+MACHO_REGISTER_TEXT(kImmediateConstraint, "i,")
+MACHO_REGISTER_TEXT(kShiftLeft, ", lsl #")
+MACHO_REGISTER_TEXT(kEffects, "~{memory},~{cc}")
+MACHO_REGISTER_TEXT(kCFAOffset, ".cfi_def_cfa_offset ")
+MACHO_REGISTER_TEXT(kCFA, ".cfi_def_cfa ")
+MACHO_REGISTER_TEXT(kCFARegister, ".cfi_def_cfa_register ")
+MACHO_REGISTER_TEXT(kSpill, ".cfi_offset ")
+MACHO_REGISTER_TEXT(kRestore, ".cfi_restore ")
+MACHO_REGISTER_TEXT(kSameValue, ".cfi_same_value ")
+MACHO_REGISTER_TEXT(kRememberState, ".cfi_remember_state\n")
+MACHO_REGISTER_TEXT(kRestoreState, ".cfi_restore_state\n")
+MACHO_REGISTER_TEXT(kEscape, ".cfi_escape ")
+MACHO_REGISTER_TEXT(kPersonality, ".cfi_personality ")
+MACHO_REGISTER_TEXT(kLSDA, ".cfi_lsda ")
+MACHO_REGISTER_TEXT(kGxxPersonality, "___gxx_personality_v0")
+MACHO_REGISTER_TEXT(kObjCPersonality, "___objc_personality_v0")
+MACHO_REGISTER_TEXT(kBKeyFrame, ".cfi_b_key_frame\n")
+MACHO_REGISTER_TEXT(kSignWithPC, ".cfi_negate_ra_state_with_pc\n")
+MACHO_REGISTER_TEXT(kClear, "orr ")
+MACHO_REGISTER_TEXT(kXZero, ", xzr, xzr")
+MACHO_REGISTER_TEXT(kWZero, ", wzr, wzr")
+MACHO_REGISTER_TEXT(kEntryBlock, "entry")
+MACHO_REGISTER_TEXT(kSeparator, ", ")
+MACHO_REGISTER_TEXT(kEndLabel, ":\n")
+MACHO_REGISTER_VALUE(unsigned, kScratchX8, 1)
+MACHO_REGISTER_VALUE(unsigned, kScratchX9, 2)
+MACHO_REGISTER_VALUE(unsigned, kDwarfFP, 29)
+MACHO_REGISTER_VALUE(unsigned, kDwarfLR, 30)
+MACHO_REGISTER_VALUE(unsigned, kDwarfSP, 31)
+// A64 top-level op1[28:25] = x111: scalar FP and Advanced SIMD data processing.
+// Memory, branches, PC-relative addresses, SVE and SME use separate classes.
+MACHO_REGISTER_VALUE(uint32_t, kSIMDDataMask, 0x0e000000)
+MACHO_REGISTER_VALUE(uint32_t, kSIMDDataClass, 0x0e000000)
+
+// These register/immediate operations have no PC-relative operand.
+MACHO_REGISTER_ALU(ADD)
+MACHO_REGISTER_ALU(SUB)
+MACHO_REGISTER_ALU(SUBS)
+MACHO_REGISTER_ALU(AND)
+MACHO_REGISTER_ALU(ORR)
+MACHO_REGISTER_ALU(EOR)
+MACHO_REGISTER_ALU(MOV)
+MACHO_REGISTER_ALU(MOVZ)
+MACHO_REGISTER_ALU(MOVN)
+MACHO_REGISTER_ALU(MOVK)
+MACHO_REGISTER_ALU(MUL)
+MACHO_REGISTER_ALU(MADD)
+MACHO_REGISTER_MEMORY(LDR)
+MACHO_REGISTER_MEMORY(LDRB)
+MACHO_REGISTER_MEMORY(LDRH)
+MACHO_REGISTER_MEMORY(LDRSB)
+MACHO_REGISTER_MEMORY(LDRSH)
+MACHO_REGISTER_MEMORY(LDRSW)
+MACHO_REGISTER_MEMORY(STR)
+MACHO_REGISTER_MEMORY(STRB)
+MACHO_REGISTER_MEMORY(STRH)
+MACHO_REGISTER_MEMORY(LDP)
+MACHO_REGISTER_MEMORY(LDPSW)
+MACHO_REGISTER_MEMORY(STP)
+
+#undef MACHO_REGISTER_VALUE
+#undef MACHO_REGISTER_TEXT
+#undef MACHO_REGISTER_EXTEND
+#undef MACHO_REGISTER_ALU
+#undef MACHO_REGISTER_MEMORY

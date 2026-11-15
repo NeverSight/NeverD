@@ -1128,3 +1128,164 @@ int entry(int x) { return twice(x, 1) + twice(x + 3, x); }
 )C",
                             "entry", {"entry", "twice"}, {0, 1, -1, 7, 1000});
 }
+
+// A jump to an import that nothing describes hands it the registers as they
+// are: `cmp rdi, 6; jl outside` and `...; jmp outside` pass on both
+// parameters.  HighC printed `outside()` for either jump, which compiles
+// against the `outside()` it declares and reads right on x86-64 only because
+// nothing touched the registers.  The import's real prototype goes in front
+// of the C here, so a call with fewer arguments does not build.
+TEST_F(X86_64_CallAbi, AJumpToAnUndescribedImportPassesOnItsParameters) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target compilation requires Clang";
+  const auto Assembly = tmpFile("jumps.s");
+  const auto Object = tmpFile("jumps.o");
+  std::ofstream(Assembly) << R"(
+        .text
+        .globl  cond_tail
+        .type   cond_tail, @function
+cond_tail:
+        cmpq    $6, %rdi
+        jl      outside
+        leaq    1(%rsi), %rax
+        ret
+        .size   cond_tail, .-cond_tail
+
+        .globl  read_then_tail
+        .type   read_then_tail, @function
+read_then_tail:
+        movq    %rdi, %rax
+        xorq    %rsi, %rax
+        addq    %rax, tally(%rip)
+        jmp     outside
+        .size   read_then_tail, .-read_then_tail
+
+        .bss
+        .globl  tally
+        .type   tally, @object
+        .p2align 3
+tally:
+        .quad   0
+        .size   tally, 8
+)";
+  const auto Assembled =
+      exec(NEVERD_TEST_CLANG, {"-target", "x86_64-linux-gnu", "-c",
+                               Assembly.string(), "-o", Object.string()});
+  ASSERT_EQ(Assembled.exitCode, 0) << Assembled.err;
+
+  auto Text = [&](bool LLVMRoute) {
+    const auto Decompiled =
+        LLVMRoute ? decompileToC(Object) : decompileToHighC(Object);
+    EXPECT_EQ(Decompiled.exitCode, 0) << Decompiled.err;
+    std::ifstream Input(
+        tmpFile(LLVMRoute ? "decompiled.c" : "decompiled_high.c"));
+    return std::string((std::istreambuf_iterator<char>(Input)),
+                       std::istreambuf_iterator<char>());
+  };
+  const std::string C = Text(false);
+  // Both jumps pass both; a call that passes less does not build below.
+  const std::regex PassesBoth("outside\\(arg0, arg1\\)");
+  EXPECT_EQ(std::distance(std::sregex_iterator(C.begin(), C.end(), PassesBoth),
+                          std::sregex_iterator()),
+            2)
+      << C;
+  // The LLVM route passes the same two.
+  const std::string LLVMRouteC = Text(true);
+  EXPECT_NE(LLVMRouteC.find("outside(arg0, arg1)"), std::string::npos)
+      << LLVMRouteC;
+
+  if (const auto Reason = neverd::test::cannotRunX86C(C))
+    GTEST_SKIP() << *Reason;
+  const auto Host = tmpFile("jumps-host.c");
+  const auto Callee = tmpFile("jumps-callee.c");
+  const auto Program = tmpFile("jumps-host.exe");
+  std::ofstream(Host) << "#include <stdint.h>\n"
+                         "int64_t outside(int64_t, int64_t);\n"
+                      << C << R"C(
+static int64_t ref_tally;
+static int64_t ref_cond_tail(int64_t a, int64_t b) {
+  if (a > 5)
+    return b + 1;
+  return outside(a, b);
+}
+static int64_t ref_read_then_tail(int64_t a, int64_t b) {
+  ref_tally += a ^ b;
+  return outside(a, b);
+}
+int main(void) {
+  static const int64_t Values[] = {-9, 0, 5, 6, 77, INT64_C(0x123456789)};
+  for (unsigned I = 0; I != sizeof(Values) / sizeof(*Values); ++I)
+    for (unsigned J = 0; J != sizeof(Values) / sizeof(*Values); ++J) {
+      const int64_t A = Values[I], B = Values[J];
+      if (cond_tail(A, B) != ref_cond_tail(A, B))
+        return 1;
+      if (read_then_tail(A, B) != ref_read_then_tail(A, B))
+        return 2;
+    }
+  return tally == ref_tally ? 0 : 3;
+}
+)C";
+  // The import lives in a unit of its own: nothing the compiler sees of the
+  // C can tell it what the import reads.
+  std::ofstream(Callee) << "#include <stdint.h>\n"
+                           "int64_t outside(int64_t a, int64_t b) {\n"
+                           "  return a * 31 + b * 7 + 3;\n"
+                           "}\n";
+  std::vector<std::string> HostArgs = {"-std=gnu11", "-O2",
+                                       "-fno-strict-aliasing"};
+  HostArgs.insert(HostArgs.end(), HostFlags.begin(), HostFlags.end());
+  HostArgs.insert(HostArgs.end(),
+                  {Host.string(), Callee.string(), "-o", Program.string()});
+  const auto Built = exec(NEVERD_TEST_CLANG, HostArgs);
+  ASSERT_EQ(Built.exitCode, 0) << Built.err << "\n" << C;
+  EXPECT_EQ(exec(Program.string(), {}).exitCode, 0) << C;
+}
+
+// After a call the registers hold what the callee left, and a jump then
+// passes on no parameter of this function.  An import the C library's tables
+// describe takes what they say, as before.
+TEST_F(X86_64_CallAbi, AJumpPassesOnNoParameterACallMayHaveChanged) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target compilation requires Clang";
+  const auto Assembly = tmpFile("after.s");
+  const auto Object = tmpFile("after.o");
+  std::ofstream(Assembly) << R"(
+        .text
+        .globl  after_call
+        .type   after_call, @function
+after_call:
+        pushq   %rax
+        addq    %rdi, tally(%rip)
+        call    side
+        popq    %rcx
+        jmp     outside
+        .size   after_call, .-after_call
+
+        .globl  fills
+        .type   fills, @function
+fills:
+        addq    %rdx, tally(%rip)
+        jmp     memset
+        .size   fills, .-fills
+
+        .bss
+        .globl  tally
+        .type   tally, @object
+        .p2align 3
+tally:
+        .quad   0
+        .size   tally, 8
+)";
+  const auto Assembled =
+      exec(NEVERD_TEST_CLANG, {"-target", "x86_64-linux-gnu", "-c",
+                               Assembly.string(), "-o", Object.string()});
+  ASSERT_EQ(Assembled.exitCode, 0) << Assembled.err;
+  const auto Decompiled = decompileToHighC(Object);
+  ASSERT_EQ(Decompiled.exitCode, 0) << Decompiled.err;
+  std::ifstream Input(tmpFile("decompiled_high.c"));
+  const std::string C((std::istreambuf_iterator<char>(Input)),
+                      std::istreambuf_iterator<char>());
+  EXPECT_NE(C.find("outside()"), std::string::npos) << C;
+  EXPECT_EQ(C.find("outside(arg"), std::string::npos) << C;
+  EXPECT_NE(C.find("memset(arg0, arg1, arg2)"), std::string::npos) << C;
+}

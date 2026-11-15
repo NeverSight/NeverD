@@ -16,6 +16,10 @@
 // pure definitions reuse integer bit projection. Observed unknown bits, calls,
 // loads and possible traps retain their evaluation.
 //
+// A compare REP (CMPS, SCAS) takes the arithmetic flags only to return them
+// unchanged when it runs no element: its flags result alone shows them, so
+// they are demanded as that result is.
+//
 //===----------------------------------------------------------------------===//
 
 #include "HighDCEDetail.h"
@@ -24,6 +28,7 @@
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/ir/high/HighIntegerProjection.h"
 #include "neverd/ir/high/HighSourceFlow.h"
+#include "neverd/ir/intrinsics/X86/X86RepState.h"
 #include "neverd/ir/intrinsics/X86/X86VectorLaneReads.h"
 
 #include "llvm/ADT/APInt.h"
@@ -47,9 +52,9 @@ namespace {
 using BitMask = llvm::APInt;
 constexpr unsigned kDemandBits = 64 * 8;
 
-BitMask allBytes(uint16_t Bytes) {
-  return BitMask::getLowBitsSet(kDemandBits, !Bytes || Bytes >= 64 ? kDemandBits
-                                                                   : Bytes * 8);
+BitMask allBytes(uint16_t Bytes, unsigned Width) {
+  return BitMask::getLowBitsSet(
+      Width, !Bytes ? Width : std::min<unsigned>(Width, Bytes * 8));
 }
 
 uint16_t exprBytes(const HighExpr &E) {
@@ -61,19 +66,20 @@ uint16_t exprBytes(const HighExpr &E) {
 /// The bits at or below the highest demanded one: a sum, difference,
 /// product or negation carries only upward.
 BitMask carryFill(const BitMask &Demand) {
-  return BitMask::getLowBitsSet(kDemandBits, Demand.getActiveBits());
+  return BitMask::getLowBitsSet(Demand.getBitWidth(), Demand.getActiveBits());
 }
 
 /// The nonzero bits of \p Value, in a \p Bytes wide operand.
-BitMask nonzeroBytes(uint64_t Value, uint16_t Bytes) {
-  return BitMask(kDemandBits, Value) & allBytes(Bytes);
+BitMask nonzeroBytes(uint64_t Value, uint16_t Bytes, unsigned Width) {
+  return BitMask(Width, Value) & allBytes(Bytes, Width);
 }
 
 /// The operand bits a left shift by \p Bits reads for the result bits in
 /// \p Demand: result bit b is operand bit b - Bits.
 BitMask leftShiftSource(const BitMask &Demand, uint64_t Bits, uint16_t Bytes) {
-  return Bits >= kDemandBits ? BitMask(kDemandBits, 0)
-                             : Demand.lshr(Bits) & allBytes(Bytes);
+  const unsigned Width = Demand.getBitWidth();
+  return Bits >= Width ? BitMask(Width, 0)
+                       : Demand.lshr(Bits) & allBytes(Bytes, Width);
 }
 
 /// The operand bits a right shift by \p Bits reads for the result bits in
@@ -81,14 +87,15 @@ BitMask leftShiftSource(const BitMask &Demand, uint64_t Bits, uint16_t Bytes) {
 /// arithmetic shift past the top.
 BitMask rightShiftSource(const BitMask &Demand, uint64_t Bits, uint16_t Bytes,
                          bool Arithmetic) {
-  BitMask Source(kDemandBits, 0);
+  const unsigned Width = Demand.getBitWidth();
+  BitMask Source(Width, 0);
   const uint64_t Top = uint64_t(Bytes) * 8;
-  if (Bits < kDemandBits)
-    Source = Demand.shl(Bits) & allBytes(Bytes);
-  if (Arithmetic && Top && Top <= kDemandBits &&
+  if (Bits < Width)
+    Source = Demand.shl(Bits) & allBytes(Bytes, Width);
+  if (Arithmetic && Top && Top <= Width &&
       (Bits >= Top ? !Demand.isZero() : Demand.getActiveBits() > Top - Bits))
     Source.setBit(Top - 1);
-  return Source & allBytes(Bytes);
+  return Source & allBytes(Bytes, Width);
 }
 
 class DemandedBits {
@@ -113,6 +120,13 @@ public:
 private:
   HighFunc &Func;
   Arch Architecture;
+  // LLVM APInt stores a 64-bit mask inline. Keep the full vector domain when
+  // any expression has a wide or unknown extent; otherwise scalar masks need
+  // no heap allocation. Selection finishes before the first demand is seeded.
+  unsigned MaskWidth = 64;
+  BitMask allBytes(uint16_t Bytes) const {
+    return ::neverd::allBytes(Bytes, MaskWidth);
+  }
   size_t Budget = ::neverd::limits::ir::kHighDemandedBytesVisitBudget;
   std::unordered_map<const HighExpr *, BitMask> NodeDemand;
   std::map<HighSourceLocalIdentity, BitMask> VarDemand;
@@ -121,6 +135,10 @@ private:
   /// Variables a join copy assigns: their definitions need not cover every
   /// path that reaches a use.
   std::set<HighSourceLocalIdentity> JoinCopied;
+  /// The status operands of the compare REPs met so far, by the variable
+  /// each returns its flags in.
+  std::map<HighSourceLocalIdentity, std::vector<const HighExpr *>>
+      RepStatusByFlags;
   std::vector<const HighExpr *> Pending;
 
   /// A register, flag or temporary, which only its uses read.  A stack slot
@@ -132,7 +150,38 @@ private:
 
   /// Each variable's assigned values, which its uses' demand reaches.
   void collectDefinitions() {
+    HighExprSet Seen;
     walkStmts(Func.Body, [&](HighStmt &S) {
+      if (MaskWidth == 64)
+        forEachExpr(S, [&](const ExprPtr &Root) {
+          llvm::SmallVector<const HighExpr *, 16> Work;
+          if (Root)
+            Work.push_back(Root.get());
+          while (!Work.empty() && MaskWidth == 64) {
+            const auto *E = Work.pop_back_val();
+            if (!Seen.insert(E).second)
+              continue;
+            const bool VoidEffect = E->Type &&
+                                    E->Type->Kind == NdTypeKind::Void &&
+                                    observableEvaluation(*E);
+            if (exprBytes(*E) > 8 || (!exprBytes(*E) && !VoidEffect)) {
+              MaskWidth = kDemandBits;
+              break;
+            }
+            E->forEachChildExpr([&](const ExprPtr &Child) {
+              if (Child)
+                Work.push_back(Child.get());
+            });
+          }
+        });
+      // A call assigns its intrinsic's further outputs as well.
+      const HighExpr *Call =
+          S.Kind == StmtKind::Call ? S.CallExpr.get() : S.Val.get();
+      if (Call && Call->Kind == ExprKind::Call)
+        for (const MedVar &Output : Call->IntrinsicOutputs)
+          Assigned.insert(highSourceLocalIdentity(Output));
+      if (S.Kind == StmtKind::Assign && S.Dst && S.Dst->Kind == ExprKind::Phi)
+        Assigned.insert(highSourceLocalIdentity(S.Dst->Var));
       if (S.Kind != StmtKind::Assign || !S.Dst || S.Dst->Kind != ExprKind::Var)
         return;
       Assigned.insert(highSourceLocalIdentity(S.Dst->Var));
@@ -152,7 +201,7 @@ private:
     if (Depth > ::neverd::limits::ir::kHighDemandedBytesMaxConstantMaskDepth)
       return std::nullopt;
     if (E.Kind == ExprKind::Const)
-      return nonzeroBytes(E.ConstVal, exprBytes(E));
+      return nonzeroBytes(E.ConstVal, exprBytes(E), MaskWidth);
     if (E.Kind == ExprKind::BinOp && E.Op == NdOp::CONCAT &&
         E.Operands.size() == 2 && E.Operands[0] && E.Operands[1]) {
       const uint16_t LowBytes = exprBytes(*E.Operands[1]);
@@ -182,7 +231,7 @@ private:
     if (!E || Mask.isZero() || !Budget)
       return;
     --Budget;
-    auto &Current = NodeDemand.try_emplace(E, kDemandBits, 0).first->second;
+    auto &Current = NodeDemand.try_emplace(E, MaskWidth, 0).first->second;
     if ((Current | Mask) == Current)
       return;
     Current |= Mask;
@@ -265,15 +314,48 @@ private:
     });
   }
 
+  /// The status bits a compare REP reads for the bits read of its flags
+  /// result \p Flags: the direction, and each flag it may return unchanged.
+  BitMask repStatusDemand(const HighSourceLocalIdentity &Flags) const {
+    BitMask Bits = BitMask::getOneBitSet(MaskWidth, X86RepDirectionShift);
+    if (const auto Read = VarDemand.find(Flags); Read != VarDemand.end())
+      Bits |= Read->second & BitMask(MaskWidth, X86RepFlagsMask);
+    return Bits;
+  }
+
+  /// The status operand of \p E, a compare REP, which then joins those a
+  /// later read of its flags result reaches.
+  const HighExpr *repStatusOf(const HighExpr &E) {
+    const auto Rep = x86RepContract(E.IntrinsicId);
+    if (E.Kind != ExprKind::Call || !Rep || !Rep->Compare ||
+        E.Operands.size() != 5 ||
+        E.IntrinsicOutputs.size() != Rep->auxiliaryOutputs() ||
+        !E.Operands[3] || exprBytes(*E.Operands[3]) != X86RepStatusBytes)
+      return nullptr;
+    const HighExpr *Status = E.Operands[3].get();
+    auto &Known =
+        RepStatusByFlags[highSourceLocalIdentity(E.IntrinsicOutputs.back())];
+    if (std::find(Known.begin(), Known.end(), Status) == Known.end())
+      Known.push_back(Status);
+    return Status;
+  }
+
   /// Demand what observable \p E reads of each operand: every byte, except
-  /// where an intrinsic reads only some bytes of its vector operands.
+  /// where an intrinsic reads only some bytes of its vector operands or a
+  /// compare REP only some bits of its status.
   void demandOperandsOf(const HighExpr &E) {
+    const HighExpr *RepStatus = repStatusOf(E);
     E.forEachChildExpr([&](const ExprPtr &C) {
+      if (C && C.get() == RepStatus) {
+        demand(C.get(), repStatusDemand(highSourceLocalIdentity(
+                            E.IntrinsicOutputs.back())));
+        return;
+      }
       if (C && E.Kind == ExprKind::Call && E.IntrinsicId != Intrinsic::None)
         if (const auto Read =
                 x86VectorOperandReadBytes(E.IntrinsicId, exprBytes(*C))) {
-          BitMask Bits(kDemandBits, 0);
-          for (unsigned I = 0; I != 64; ++I)
+          BitMask Bits(MaskWidth, 0);
+          for (unsigned I = 0; I != MaskWidth / 8; ++I)
             if ((*Read >> I) & 1)
               Bits.setBits(I * 8, (I + 1) * 8);
           demand(C.get(), std::move(Bits));
@@ -326,7 +408,7 @@ private:
       [[fallthrough]];
     case ExprKind::Var: {
       auto &Current =
-          VarDemand.try_emplace(highSourceLocalIdentity(E.Var), kDemandBits, 0)
+          VarDemand.try_emplace(highSourceLocalIdentity(E.Var), MaskWidth, 0)
               .first->second;
       if ((Current | D) == Current)
         return;
@@ -335,10 +417,17 @@ private:
       if (It != Definitions.end())
         for (const HighExpr *Value : It->second)
           demand(Value, Current);
+      // A compare REP that returns its flags here reads them in its status.
+      if (const auto Rep =
+              RepStatusByFlags.find(highSourceLocalIdentity(E.Var));
+          Rep != RepStatusByFlags.end())
+        for (const HighExpr *Status : Rep->second)
+          demand(Status, repStatusDemand(Rep->first));
       return;
     }
     case ExprKind::Const:
     case ExprKind::Undef:
+    case ExprKind::IncomingStack:
     case ExprKind::EntryRegister:
       return;
     case ExprKind::UnaryOp:
@@ -436,7 +525,10 @@ private:
     switch (E.Op) {
     case NdOp::SUBBYTES:
       if (Constant(R) && R->ConstVal < 64) {
-        demand(L.get(), (D << (R->ConstVal * 8)) & allBytes(Bytes));
+        demand(L.get(),
+               (R->ConstVal * 8 >= MaskWidth ? BitMask(MaskWidth, 0)
+                                             : D << (R->ConstVal * 8)) &
+                   allBytes(Bytes));
         return;
       }
       break;
@@ -446,8 +538,8 @@ private:
       if (!Low || !integer(R))
         break;
       demand(R.get(), D & allBytes(Low));
-      demand(L.get(), Low < 64 ? D.lshr(Low * 8) & allBytes(Bytes)
-                               : BitMask(kDemandBits, 0));
+      demand(L.get(), Low * 8 < MaskWidth ? D.lshr(Low * 8) & allBytes(Bytes)
+                                          : BitMask(MaskWidth, 0));
       return;
     }
     case NdOp::INT_AND:
@@ -473,6 +565,16 @@ private:
       demand(L.get(), D & allBytes(Bytes));
       demand(R.get(), D & allBytes(exprBytes(*R)));
       return;
+    case NdOp::INT_EQUAL:
+    case NdOp::INT_NOTEQUAL:
+    case NdOp::INT_LESS:
+    case NdOp::INT_LESSEQUAL:
+    case NdOp::INT_SLESS:
+    case NdOp::INT_SLESSEQUAL:
+      // A comparison is zero or one: only its lowest bit reads its operands.
+      if (!D[0])
+        return;
+      break;
     case NdOp::INT_MULT:
       // An exact same-width power-of-two product is a left shift. General
       // carry demand would keep every lower predicate bit alive even when
@@ -485,7 +587,8 @@ private:
             exprBytes(*Factor) != exprBytes(E) ||
             exprBytes(*Value) != exprBytes(E))
           continue;
-        const BitMask Scale = nonzeroBytes(Factor->ConstVal, exprBytes(E));
+        const BitMask Scale =
+            nonzeroBytes(Factor->ConstVal, exprBytes(E), MaskWidth);
         if (!Scale.isPowerOf2())
           continue;
         demand(Value.get(),
@@ -506,7 +609,7 @@ private:
       llvm::SmallVector<uint64_t, 2> Amounts;
       if (!shiftAmounts(*R, Amounts, 0))
         break;
-      BitMask Source(kDemandBits, 0);
+      BitMask Source(MaskWidth, 0);
       for (const uint64_t Amount : Amounts)
         Source |=
             E.Op == NdOp::INT_LEFT
@@ -559,12 +662,16 @@ private:
   }
 
   /// An entry value of a register or flag the function neither receives as
-  /// a parameter nor ever assigns, which the C prints as unknown.
+  /// a parameter nor ever assigns, which the C prints as unknown.  So is a
+  /// temporary nothing assigns: the bytes of an incoming register a partial
+  /// write keeps where the register is no parameter (i386 `mov cx, imm`
+  /// before any write of ECX), whose entry marker lowering drops.
   bool unknownLeaf(const HighExpr &E) const {
     if (E.Kind == ExprKind::Undef)
       return true;
     if (E.Kind != ExprKind::Var ||
-        (E.Var.Kind != MedVar::Reg && E.Var.Kind != MedVar::Flag) ||
+        (E.Var.Kind != MedVar::Reg && E.Var.Kind != MedVar::Flag &&
+         E.Var.Kind != MedVar::Temp) ||
         E.Var.SSAVer != 0 || E.Var.Id < 0 ||
         Assigned.count(highSourceLocalIdentity(E.Var)) ||
         isSyntheticEntryStackPointer(E.Var, Func, Architecture))

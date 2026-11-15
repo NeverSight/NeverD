@@ -40,6 +40,7 @@
 
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -5297,6 +5298,19 @@ HighCWriter::emittedParamIndices(const HighFunc &Func) const {
       All[I] = I;
     EmittedParamIndices[Key] = All;
     return All;
+  } else if (Opts.TheArch == Arch::AArch64 &&
+             Opts.Format == BinaryFormat::MachO) {
+    // A recovered stack parameter needs all the preceding ABI positions.
+    // Removing an unread register or stack slot changes where C reads it.
+    for (size_t I = N; I != 0; --I) {
+      const HighParam &Param = Func.Params[I - 1];
+      if (Param.RegOff != kNoParamReg || Param.MedIndex < 0 ||
+          !Used.count(static_cast<int>(I - 1)))
+        continue;
+      for (size_t J = 0; J < I; ++J)
+        Used.insert(static_cast<int>(J));
+      break;
+    }
   }
   size_t Unused = 0;
   for (size_t I = 0; I < N; ++I)
@@ -6398,8 +6412,8 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     if (isMIPS(Opts.TheArch))
       OS << mips::sourceCompilerCAttribute(
           Opts.TheArch, Opts.Image,
-          MIPSScalarHelpers.count(Intrinsic::MIPSReadDSPControl) ||
-              MIPSScalarHelpers.count(Intrinsic::MIPSWriteDSPControl));
+          MIPSScalarHelpers.count({Intrinsic::MIPSReadDSPControl, 0}) ||
+              MIPSScalarHelpers.count({Intrinsic::MIPSWriteDSPControl, 0}));
     if (Opts.Image && isMIPS(Opts.TheArch))
       if (const auto Mode = Opts.Image->instructionModeAt(Func.Entry))
         OS << mips::instructionModeCAttribute(*Mode);
@@ -6420,6 +6434,8 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     if (!TargetFeatures.empty())
       OS << "__attribute__((target(\"" << TargetFeatures << "\")))\n";
 
+    if (Func.UsesNativeVariadicStack)
+      OS << c_stack::kRetainStackFrame;
     if (Func.DoesNotReturn)
       OS << "_Noreturn ";
     if (Func.SourceTypeHint)
@@ -6511,11 +6527,17 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
       emitParam(unreadDeclaredParamType(Func, Index),
                 Name.empty() ? "unread" + std::to_string(Index) : Name);
     }
-    if (currentVaStart() && Emitted > 0)
+    if ((currentVaStart() || Func.UsesNativeVariadicStack) && Emitted > 0)
       Declarator += ", ...";
     if (Emitted == 0)
       Declarator += "void";
     OS << declaredAs(ReturnType, Declarator + ")") << " {\n";
+    if (Func.UsesNativeVariadicStack) {
+      emitIndent(1);
+      OS << llvm::formatv(
+          c_stack::kStackIntrinsicDecl.data(), c_stack::kNativeEntrySPName,
+          llvm::Intrinsic::getBaseName(llvm::Intrinsic::sponentry));
+    }
     if (Opts.Image && !Func.SourceTypeHint)
       if (const auto &Frame = dispatchFrame(Func.Entry)) {
         c_stub::writeDispatchFrameBody(OS, x64DispatchFrameAssembly(*Frame));
@@ -6574,13 +6596,16 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     uint64_t FrameBaseOffset = checkedStackAdd(LowerSize, EntryResidue);
     uint64_t StorageSize = checkedStackAdd(FrameBaseOffset, UpperSize);
     collectFrameRecordMembers(Func, FrameBaseOffset, StorageSize);
+    const std::string FrameBaseInit =
+        isMIPSN32(Opts.TheArch)
+            ? "const int64_t frame_base = (int64_t)(intptr_t)"
+            : "const uintptr_t frame_base = (uintptr_t)";
     emitIndent(1);
     if (FrameRecordMembers.empty()) {
       OS << "_Alignas(" << kSyntheticStackAlignment << ") uint8_t "
          << kFrameStorageName << "[" << StorageSize << "];\n";
-      FrameBaseDeclaration = "const uintptr_t frame_base = (uintptr_t)(" +
-                             kFrameStorageName.str() + " + " +
-                             std::to_string(FrameBaseOffset) + ")";
+      FrameBaseDeclaration = FrameBaseInit + "(" + kFrameStorageName.str() +
+                             " + " + std::to_string(FrameBaseOffset) + ")";
     } else {
       // The members at their byte offsets, the gaps named by offset as IDA
       // names a structure's gaps. The tag is the function's own: the C++,
@@ -6609,10 +6634,9 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
       Gap(StorageSize);
       emitIndent(1);
       OS << "} " << kFrameStorageName << ";\n";
-      FrameBaseDeclaration =
-          "const uintptr_t frame_base = (uintptr_t)((uint8_t *)&" +
-          kFrameStorageName.str() + " + " + std::to_string(FrameBaseOffset) +
-          ")";
+      FrameBaseDeclaration = FrameBaseInit + "((uint8_t *)&" +
+                             kFrameStorageName.str() + " + " +
+                             std::to_string(FrameBaseOffset) + ")";
     }
     // The rebuilt storage has the host's pointer width, which a 64-bit
     // target's source is compiled with: frame arithmetic is uint64_t already.

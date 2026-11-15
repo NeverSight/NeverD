@@ -798,15 +798,28 @@ void checkNativeObjectInstallation(
     ASSERT_TRUE(bool(Compact)) << llvm::toString(Compact.takeError());
     const auto Region = findMachOEHFrameRegion(Bytes);
     ASSERT_TRUE(Region);
-    // Exceed the original gap by one pointer to require a real section move.
+    // Block in-place extension without making the request larger than
+    // every other gap in the linked image. Keep the original terminator.
+    const auto *Section = reinterpret_cast<const llvm::MachO::section_64 *>(
+        Bytes.data() + Region->SectionHeaderOff);
+    const uint64_t SectionEnd = Region->SectionFileOff + Section->size;
+    ASSERT_LE(Region->AppendFileOff, SectionEnd);
+    ASSERT_LE(SectionEnd, Region->LimitFileOff);
+    const bool BlockTail = SectionEnd < Region->LimitFileOff;
+    if (BlockTail) {
+      ASSERT_EQ(Bytes[SectionEnd], 0u);
+      Bytes[SectionEnd] = kOccupiedMetadataPadding;
+    }
     auto Moved = reserveMachOSourceUnwind(
         Bytes, Arch::AArch64,
-        Region->LimitFileOff - Region->AppendFileOff + kPointerBytes, 0);
+        SectionEnd - Region->AppendFileOff + kPointerBytes, 0);
     ASSERT_TRUE(bool(Moved)) << llvm::toString(Moved.takeError());
     ASSERT_TRUE(*Moved);
     const auto NewRegion = findMachOEHFrameRegion(Bytes);
     ASSERT_TRUE(NewRegion);
     ASSERT_NE(NewRegion->SectionVA, Region->SectionVA);
+    if (BlockTail)
+      EXPECT_EQ(Bytes[SectionEnd], kOccupiedMetadataPadding);
   }
   std::vector<SourcePatchDependency> Dependencies = {
       {kProviderLibrary, kProviderFunction,
@@ -865,6 +878,15 @@ void checkNativeObjectInstallation(
     ASSERT_TRUE(llvm::all_of(llvm::ArrayRef(Bytes).slice(Tail, TextEnd - Tail),
                              [](uint8_t Byte) { return Byte == 0; }));
     const auto RejectReservation = [&](std::vector<uint8_t> Candidate) {
+      // This linker profile reserves header padding. Occupying only the TEXT
+      // tail leaves a valid, independent location for the compact registry.
+      const auto Header = parseMachOHeader(Candidate.data(), Candidate.size());
+      const auto End = Header.HeaderSize + Header.SizeOfCmds;
+      const auto First =
+          findFirstMachODataOffset(Candidate.data(), Candidate.size());
+      ASSERT_LE(End, First);
+      std::fill(Candidate.begin() + End, Candidate.begin() + First,
+                kOccupiedMetadataPadding);
       const auto Snapshot = Candidate;
       auto Grown = reserveMachOSourceUnwind(Candidate, Arch::AArch64, 0,
                                             kObjectFunctionCount);
@@ -1186,8 +1208,12 @@ void checkNativeObjectInstallation(
   EXPECT_EQ(
       llvm::count_if(*Recipes, [](const auto &R) { return R.Authenticated; }),
       kKeyCount + unsigned(FreshPersonality));
-  EXPECT_EQ(Recipes->size(),
-            kKeyCount + kOrdinaryPointerCount + unsigned(FreshPersonality));
+  const auto TypeBinds = llvm::count_if(*Recipes, [](const auto &R) {
+    return !R.Authenticated && R.Recipe.Symbol == kTypeInfo;
+  });
+  EXPECT_LE(TypeBinds, 1);
+  EXPECT_EQ(Recipes->size(), kKeyCount + kOrdinaryObjectPointers + TypeBinds +
+                                 unsigned(FreshPersonality));
   const char *Slots[] = {kObjectLocalCode, kObjectExternalCode,
                          kObjectLocalData, kObjectExternalData};
   for (unsigned Key = 0; Key != kKeyCount; ++Key) {
@@ -1499,10 +1525,23 @@ void checkNativeObjectInstallation(
           kDwarfLSDAPrefix +
           Address(Function->HandlerDataVA, kDwarfAddressDigits)));
     }
-    if (llvm::StringRef(Name) == kObjectCatch)
-      EXPECT_TRUE(llvm::any_of(Function->Itanium->TypeTable, [](const auto &T) {
-        return T.TypeName == kTypeInfo;
-      }));
+    if (llvm::StringRef(Name) == kObjectCatch) {
+      const auto &Types = Function->Itanium->TypeTable;
+      const auto Type = llvm::find_if(
+          Types, [](const auto &T) { return T.TypeName == kTypeInfo; });
+      ASSERT_NE(Type, Types.end());
+      if (TypeBinds) {
+        EXPECT_TRUE(llvm::any_of(*Recipes, [&](const auto &R) {
+          return R.Address == Type->TypeInfoSlotVA && !R.Authenticated &&
+                 R.Recipe.Symbol == kTypeInfo;
+        }));
+      } else {
+        const auto Existing = Before->DyldBindSlots.find(Type->TypeInfoSlotVA);
+        ASSERT_NE(Existing, Before->DyldBindSlots.end());
+        EXPECT_EQ(Existing->second.Name, kTypeInfo);
+        EXPECT_EQ(Existing->second.Addend, 0);
+      }
+    }
   }
   if (ExecuteNative) {
     auto Anchor = llvm::find_if(Parsed->Symbols, [&](const auto &Symbol) {

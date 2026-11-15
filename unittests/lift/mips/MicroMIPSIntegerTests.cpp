@@ -96,6 +96,42 @@ std::array<uint8_t, 32> storedBytes(const Memory &Case, Arch Target) {
 
 class MicroMIPSInteger : public ::testing::TestWithParam<Arch> {};
 
+TEST_P(MicroMIPSInteger, MSAPhysicalIdentityAndHalfwordBranchTarget) {
+  BinaryImage Image;
+  Image.Arch = GetParam();
+  Image.Bits = Bitness::Bits32;
+  Image.Mode = InstructionMode::MicroMIPS;
+  Image.MIPS.emplace();
+  Image.MIPS->HasMSA = true;
+  Image.MIPS->HasMicroMIPS = true;
+  Image.MIPS->ISARevision = 5;
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  DecodedInsn Insn{};
+  const auto Add = bytes(0x5801, 0x00aa, 4, GetParam()); // ADDV.B w2,w0,w1
+  ASSERT_EQ(D.decodeOne(Add.data(), Add.size(), 0x10002, Insn), 4);
+  EXPECT_EQ(Insn.Id, unsigned(MIPS_INS_ADDV_B));
+  EXPECT_STREQ(Insn.Raw->mnemonic, "addv.b");
+  EXPECT_EQ(Insn.Raw->address, 0x10002u);
+  EXPECT_TRUE(std::equal(Add.begin(), Add.end(), Insn.Raw->bytes));
+  const auto Branch = bytes(0x8301, 0xfffd, 4, GetParam()); // BZ.B w1, PC+4-6
+  ASSERT_EQ(D.decodeOneLight(Branch.data(), Branch.size(), 0x10002, Insn), 4);
+  EXPECT_EQ(Insn.Id, unsigned(MIPS_INS_BZ_B));
+  ASSERT_NE(Insn.Raw->detail, nullptr);
+  const auto &Detail = Insn.Raw->detail->mips;
+  ASSERT_EQ(Detail.op_count, 2u);
+  EXPECT_EQ(Detail.operands[1].imm, 0x10000);
+  EXPECT_TRUE(std::equal(Branch.begin(), Branch.end(), Insn.Raw->bytes));
+  // Feature changes on a reused handle cannot grant MSA semantics to the next
+  // image.
+  Image.MIPS->HasMSA = false;
+  D.configureFor(Image);
+  if (D.decodeOneForLift(Add.data(), Add.size(), 0x10002, Insn)) {
+    std::vector<LowOp> Ops;
+    EXPECT_THROW(D.liftToLow(Insn, Ops), UnliftedInstruction);
+  }
+}
+
 TEST_P(MicroMIPSInteger,
        LiteralEncodingsHaveIndependentArithmeticExpectations) {
   Decoder Decode;

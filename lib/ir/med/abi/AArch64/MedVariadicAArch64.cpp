@@ -14,7 +14,12 @@
 
 #include "../MedVariadicDetail.h"
 
+#include "neverd/ir/Limits.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
+#include "neverd/ir/med/IntrinsicShapes.h"
+
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 
 #include <map>
 #include <optional>
@@ -73,16 +78,28 @@ bool computesFromInputs(NdOp Opcode) {
   }
 }
 
+/// A constant the function's integer arithmetic computes.
+struct ComputedConstant {
+  uint64_t Value = 0;
+  /// Whether it is a number alone.  An address of the image among its
+  /// operands makes it one the image's placement decides.
+  bool Scalar = true;
+};
+
+using ComputedConstants = std::map<VariadicValueIndex::Key, ComputedConstant>;
+
 /// The constants the function's integer arithmetic computes, by value: what
 /// va_start stores in __gr_offs and __vr_offs, which an AArch64 MOVK builds
 /// from an AND and an OR of earlier constants, and -O0 stores as the low
 /// bytes of a register, before propagation folds them.
-std::map<VariadicValueIndex::Key, uint64_t> constantValues(VariadicScan &S) {
+ComputedConstants constantValues(VariadicScan &S) {
   const VariadicValueIndex &Index = S.values();
-  std::map<VariadicValueIndex::Key, uint64_t> Known;
-  const auto ValueOf = [&](const MedVar &V) -> std::optional<uint64_t> {
+  ComputedConstants Known;
+  const auto ValueOf = [&](const MedVar &V) -> std::optional<ComputedConstant> {
     if (V.isConst())
-      return V.ConstVal;
+      return ComputedConstant{
+          V.ConstVal, V.Provenance == ConstantAddressProvenance::Unknown ||
+                          V.Provenance == ConstantAddressProvenance::Scalar};
     const auto It = Known.find(VariadicValueIndex::keyOf(V));
     if (It == Known.end())
       return std::nullopt;
@@ -104,44 +121,54 @@ std::map<VariadicValueIndex::Key, uint64_t> constantValues(VariadicScan &S) {
           continue;
         const auto A = ValueOf(Op.Inputs[0]);
         const auto B = Op.NumInputs > 1 ? ValueOf(Op.Inputs[1])
-                                        : std::optional<uint64_t>();
+                                        : std::optional<ComputedConstant>();
         std::optional<uint64_t> Result;
         switch (Op.Opcode) {
         case NdOp::COPY:
-          if (Op.NumInputs == 1)
-            Result = A;
+          if (Op.NumInputs == 1 && A)
+            Result = A->Value;
           break;
         case NdOp::INT_ZEXT:
           if (Op.NumInputs == 1 && A && Op.Inputs[0].Size > 0 &&
               Op.Inputs[0].Size < sizeof(uint64_t))
-            Result = *A & ((uint64_t{1} << (8 * Op.Inputs[0].Size)) - 1);
-          else if (Op.NumInputs == 1)
-            Result = A;
+            Result = A->Value & ((uint64_t{1} << (8 * Op.Inputs[0].Size)) - 1);
+          else if (Op.NumInputs == 1 && A)
+            Result = A->Value;
+          break;
+        case NdOp::INT_SEXT:
+          // The index a register-offset access extends from a W register.
+          if (Op.NumInputs == 1 && A && Op.Inputs[0].Size > 0 &&
+              Op.Inputs[0].Size < sizeof(uint64_t)) {
+            const uint64_t Sign = uint64_t{1} << (8 * Op.Inputs[0].Size - 1);
+            Result = ((A->Value & (2 * Sign - 1)) ^ Sign) - Sign;
+          } else if (Op.NumInputs == 1 && A) {
+            Result = A->Value;
+          }
           break;
         case NdOp::INT_AND:
           if (A && B)
-            Result = *A & *B;
+            Result = A->Value & B->Value;
           break;
         case NdOp::INT_OR:
           if (A && B)
-            Result = *A | *B;
+            Result = A->Value | B->Value;
           break;
         case NdOp::INT_XOR:
           if (A && B)
-            Result = *A ^ *B;
+            Result = A->Value ^ B->Value;
           break;
         case NdOp::INT_ADD:
           if (A && B)
-            Result = *A + *B;
+            Result = A->Value + B->Value;
           break;
         case NdOp::INT_SUB:
           if (A && B)
-            Result = *A - *B;
+            Result = A->Value - B->Value;
           break;
         case NdOp::SUBBYTES:
           // -O0 stores a W register, the low bytes of the X one MOV wrote.
-          if (A && B && *B < sizeof(uint64_t))
-            Result = *A >> (8 * *B);
+          if (A && B && B->Value < sizeof(uint64_t))
+            Result = A->Value >> (8 * B->Value);
           break;
         default:
           break;
@@ -150,12 +177,142 @@ std::map<VariadicValueIndex::Key, uint64_t> constantValues(VariadicScan &S) {
           continue;
         if (Op.Output.Size < sizeof(uint64_t))
           *Result &= (uint64_t{1} << (8 * Op.Output.Size)) - 1;
-        Known.emplace(Key, *Result);
+        Known.emplace(
+            Key, ComputedConstant{*Result, A->Scalar && (!B || B->Scalar)});
         Grew = true;
       }
   }
   return Known;
 }
+
+/// The number \p V is, where it is a constant no address of the image is
+/// part of.
+std::optional<uint64_t> scalarConstant(const ComputedConstants &Constants,
+                                       const MedVar &V) {
+  if (V.isConst()) {
+    if (V.Provenance != ConstantAddressProvenance::Unknown &&
+        V.Provenance != ConstantAddressProvenance::Scalar)
+      return std::nullopt;
+    return V.ConstVal;
+  }
+  const auto It = Constants.find(VariadicValueIndex::keyOf(V));
+  if (It == Constants.end() || !It->second.Scalar)
+    return std::nullopt;
+  return It->second.Value;
+}
+
+/// The offsets from the entry stack pointer a frame address may have.  Its
+/// definitions fix one (entrySpDelta), or it is a join of addresses that
+/// differ, which has each of its arms' offsets: the pointer an unrolled
+/// va_arg steps up the incoming arguments, or the address of the next
+/// argument in either area.  An addition may take its constant from a
+/// register that holds one.  Nothing for a join in a loop, for more offsets
+/// than kMedVariadicAArch64FrameOffsetsMaxChoices, or for any other
+/// arithmetic.
+class FrameOffsets {
+public:
+  using Offsets = llvm::SmallVector<int64_t, 2>;
+
+  FrameOffsets(VariadicScan &S, const ComputedConstants &Constants)
+      : S(S), Constants(Constants) {}
+
+  std::optional<Offsets> of(const MedVar &V) { return evaluate(V, 0); }
+
+private:
+  using Key = VariadicValueIndex::Key;
+
+  VariadicScan &S;
+  const ComputedConstants &Constants;
+  std::map<Key, std::optional<Offsets>> Known;
+  std::set<Key> Active;
+
+  std::optional<Offsets> evaluate(const MedVar &V, int Depth) {
+    if (V.isConst() || (V.Kind != MedVar::Reg && V.Kind != MedVar::Temp))
+      return std::nullopt;
+    if (const auto Fixed = entrySpDelta(S, V, 0))
+      return Offsets{*Fixed};
+    const Key K = VariadicValueIndex::keyOf(V);
+    if (const auto It = Known.find(K); It != Known.end())
+      return It->second;
+    const VariadicValueIndex &Index = S.values();
+    if (Depth >=
+            ::neverd::limits::ir::kMedVariadicAArch64FrameOffsetsDepthLimit ||
+        Index.AmbiguousDefinitions.count(K) || Index.AmbiguousPhis.count(K) ||
+        !Active.insert(K).second)
+      return std::nullopt;
+    std::optional<Offsets> Result = compute(V, K, Depth);
+    Active.erase(K);
+    Known.emplace(K, Result);
+    return Result;
+  }
+
+  std::optional<Offsets> compute(const MedVar &V, const Key &K, int Depth) {
+    // Only a whole pointer has an offset its joins and sums keep.
+    if (V.Size != S.TRI.PointerSize)
+      return std::nullopt;
+    const VariadicValueIndex &Index = S.values();
+    if (const auto Phi = Index.Phis.find(K); Phi != Index.Phis.end()) {
+      Offsets Joined;
+      for (const auto &[Pred, Arg] : Phi->second->Args) {
+        (void)Pred;
+        const auto Arm = evaluate(Arg, Depth + 1);
+        if (!Arm)
+          return std::nullopt;
+        for (int64_t Offset : *Arm)
+          if (!llvm::is_contained(Joined, Offset))
+            Joined.push_back(Offset);
+        if (Joined.size() >
+            ::neverd::limits::ir::kMedVariadicAArch64FrameOffsetsMaxChoices)
+          return std::nullopt;
+      }
+      if (Joined.empty())
+        return std::nullopt;
+      llvm::sort(Joined);
+      return Joined;
+    }
+    const auto Definition = Index.Definitions.find(K);
+    if (Definition == Index.Definitions.end())
+      return std::nullopt;
+    const MedOp &Op = *Definition->second;
+    // A literal amount is the whole offset, as entrySpDelta reads it; a
+    // register holds one only at the address's width.
+    const auto Moved = [&](const MedVar &Address, const MedVar &Amount,
+                           bool Subtract) -> std::optional<Offsets> {
+      if (Address.Size != V.Size ||
+          (!Amount.isConst() && Amount.Size != V.Size))
+        return std::nullopt;
+      const auto Bytes = scalarConstant(Constants, Amount);
+      if (!Bytes)
+        return std::nullopt;
+      auto Base = evaluate(Address, Depth + 1);
+      if (!Base)
+        return std::nullopt;
+      for (int64_t &Offset : *Base) {
+        const auto From = static_cast<uint64_t>(Offset);
+        Offset = static_cast<int64_t>(Subtract ? From - *Bytes : From + *Bytes);
+      }
+      return Base;
+    };
+    switch (Op.Opcode) {
+    case NdOp::COPY:
+      if (Op.NumInputs == 1 && Op.Inputs[0].Size == V.Size)
+        return evaluate(Op.Inputs[0], Depth + 1);
+      return std::nullopt;
+    case NdOp::INT_ADD:
+    case NdOp::INT_SUB:
+      if (Op.NumInputs != 2)
+        return std::nullopt;
+      if (auto Result =
+              Moved(Op.Inputs[0], Op.Inputs[1], Op.Opcode == NdOp::INT_SUB))
+        return Result;
+      if (Op.Opcode == NdOp::INT_ADD)
+        return Moved(Op.Inputs[1], Op.Inputs[0], false);
+      return std::nullopt;
+    default:
+      return std::nullopt;
+    }
+  }
+};
 
 /// The vector half of an AAPCS64 register save area: each of q(First)
 /// through q7 spilled whole, once, with its entry value, to consecutive
@@ -237,7 +394,8 @@ bool isVaStartPointer(const VectorSaveArea &Area, int64_t VaList,
 /// that also points __stack into the incoming arguments and __gr_top past
 /// the integer half, and sets both offsets.
 std::optional<int64_t> vaListOver(VariadicScan &S, const VectorSaveArea &Area,
-                                  int FirstVariadicRegister) {
+                                  int FirstVariadicRegister,
+                                  const ComputedConstants &Constants) {
   const MedFunc &Func = S.Func;
   const int64_t PointerSize = S.TRI.PointerSize;
   std::map<int64_t, std::vector<const MedOp *>> StoresAt;
@@ -278,14 +436,13 @@ std::optional<int64_t> vaListOver(VariadicScan &S, const VectorSaveArea &Area,
   if (!StoresPointer(VaList + kVaListStack) ||
       !StoresPointer(VaList + kVaListGrTop))
     return std::nullopt;
-  const auto Constants = constantValues(S);
   const auto ConstantOf = [&](const MedVar &V) -> std::optional<uint64_t> {
     if (V.isConst())
       return V.ConstVal;
     const auto It = Constants.find(VariadicValueIndex::keyOf(V));
     if (It == Constants.end())
       return std::nullopt;
-    return It->second;
+    return It->second.Value;
   };
   // Each offset is minus the bytes of its half's saved registers: one
   // 4-byte store, or one 8-byte store of both words.
@@ -318,14 +475,18 @@ std::optional<int64_t> vaListOver(VariadicScan &S, const VectorSaveArea &Area,
 
 /// Whether no frame address can reach \p Area, __vr_top or __vr_offs other
 /// than as va_start's own pointers: every value computed from the entry
-/// stack pointer is used only as the fixed address of a load that reads
-/// none of them, as an address stored to, as one of va_start's pointers, in
-/// arithmetic and in branches, and is in no argument register a call or a
-/// return reads, nor in a vector register.  A load ends the chain: what
-/// va_arg reads from __stack and __gr_top it uses within the overflow and
-/// integer areas, as the va_list convention keeps it.
+/// stack pointer is used only as the address of a load that reads none of
+/// them at any offset the address may have (FrameOffsets), as an address
+/// stored to, as one of va_start's pointers, in arithmetic and in branches,
+/// and is in no argument register a call or a return reads, nor in a vector
+/// register.  A register-offset access keeps its instruction
+/// (AArch64AddressMemory.h): it is such a load where its index is a
+/// constant, and such a store where it stores no frame address.  A load ends
+/// the chain: what va_arg reads from __stack and __gr_top it uses within the
+/// overflow and integer areas, as the va_list convention keeps it.
 bool frameStaysPrivate(VariadicScan &S, const VectorSaveArea &Area,
-                       int64_t VaList, int FirstVariadicRegister) {
+                       int64_t VaList, int FirstVariadicRegister,
+                       const ComputedConstants &Constants) {
   using Key = VariadicValueIndex::Key;
   const MedFunc &Func = S.Func;
   const TargetRegInfo &TRI = S.TRI;
@@ -377,12 +538,19 @@ bool frameStaysPrivate(VariadicScan &S, const VectorSaveArea &Area,
     return !V.isConst() && Frame.count(VariadicValueIndex::keyOf(V)) != 0;
   };
 
-  const auto ReadsVectorState = [&](int64_t Begin, int64_t End) {
-    return overlaps(Begin, End, Area.Begin, Area.End) ||
-           overlaps(Begin, End, VaList + kVaListVrTop,
-                    VaList + kVaListVrTop + PointerSize) ||
-           overlaps(Begin, End, VaList + kVaListVrOffs,
-                    VaList + kVaListVrOffs + kVaListOffsBytes);
+  FrameOffsets Offsets(S, Constants);
+  // Whether a read of \p Bytes at each of \p At reads none of the vector
+  // state.
+  const auto ReadsNoVectorState = [&](const FrameOffsets::Offsets &At,
+                                      uint64_t Bytes) {
+    return llvm::none_of(At, [&](int64_t Begin) {
+      const auto End = static_cast<int64_t>(Begin + Bytes);
+      return End <= Begin || overlaps(Begin, End, Area.Begin, Area.End) ||
+             overlaps(Begin, End, VaList + kVaListVrTop,
+                      VaList + kVaListVrTop + PointerSize) ||
+             overlaps(Begin, End, VaList + kVaListVrOffs,
+                      VaList + kVaListVrOffs + kVaListOffsBytes);
+    });
   };
   for (const MedBlock &Block : Func.Blocks)
     for (const MedOp &Op : Block.Ops) {
@@ -394,10 +562,10 @@ bool frameStaysPrivate(VariadicScan &S, const VectorSaveArea &Area,
         continue;
       switch (Op.Opcode) {
       case NdOp::LOAD: {
-        const auto At = entrySpDelta(S, Op.Inputs[0], 0);
+        const auto At = Offsets.of(Op.Inputs[0]);
         if (Operand || !At || Op.Output.Size == 0 ||
             Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
-            ReadsVectorState(*At, *At + Op.Output.Size))
+            !ReadsNoVectorState(*At, Op.Output.Size))
           return false;
         break;
       }
@@ -408,9 +576,38 @@ bool frameStaysPrivate(VariadicScan &S, const VectorSaveArea &Area,
         if (!Operand)
           break;
         const auto At = entrySpDelta(S, Op.Inputs[0], 0);
-        const auto Value = entrySpDelta(S, Op.Inputs[1], 0);
-        if (!At || !Value || Op.Inputs[1].Size != PointerSize ||
-            !isVaStartPointer(Area, VaList, IntegerHalf, *At, *Value))
+        const auto Values = Offsets.of(Op.Inputs[1]);
+        if (!At || !Values || Op.Inputs[1].Size != PointerSize ||
+            !llvm::all_of(*Values, [&](int64_t Value) {
+              return isVaStartPointer(Area, VaList, IntegerHalf, *At, Value);
+            }))
+          return false;
+        break;
+      }
+      case NdOp::INTRINSIC: {
+        if (!aarch64AddressMemoryMedShapeIsValid(Op))
+          return false;
+        const auto Instruction = *aarch64AddressMemoryInstruction(
+            Op.Inputs[kAddressMemoryWordOperand + 1].ConstVal);
+        if (!Instruction.isLoad()) {
+          // It reads nothing, and may store any value but a frame address.
+          if (IsFrame(Op.Inputs[kAddressMemoryDataOperand + 1]))
+            return false;
+          break;
+        }
+        // Its base and a constant index fix the bytes it reads, as a
+        // LOAD's address does: va_arg of the next saved integer register,
+        // at __gr_top plus the offset an unrolled va_arg left in a register.
+        const auto Base = Offsets.of(Op.Inputs[kAddressMemoryBaseOperand + 1]);
+        const auto Index = scalarConstant(
+            Constants, Op.Inputs[kAddressMemoryIndexOperand + 1]);
+        if (!Base || !Index)
+          return false;
+        FrameOffsets::Offsets At = *Base;
+        for (int64_t &Begin : At)
+          Begin = static_cast<int64_t>(static_cast<uint64_t>(Begin) +
+                                       Instruction.addressOffset(*Index));
+        if (!ReadsNoVectorState(At, Instruction.accessBytes()))
           return false;
         break;
       }
@@ -555,7 +752,7 @@ std::optional<int> aapcs64IntegerVariadicRegister(VariadicScan &S) {
     const auto It = Constants.find(VariadicValueIndex::keyOf(V));
     if (It == Constants.end())
       return std::nullopt;
-    return It->second;
+    return It->second.Value;
   };
   // __gr_offs is minus the bytes of the saved registers: one 4-byte store,
   // or the low word of one 8-byte store of both offsets.
@@ -616,8 +813,10 @@ unreadAAPCS64VectorSpills(VariadicScan &S, int FirstVariadicRegister) {
   const auto Area = vectorSaveArea(S);
   if (!Area)
     return {};
-  const auto VaList = vaListOver(S, *Area, FirstVariadicRegister);
-  if (!VaList || !frameStaysPrivate(S, *Area, *VaList, FirstVariadicRegister))
+  const ComputedConstants Constants = constantValues(S);
+  const auto VaList = vaListOver(S, *Area, FirstVariadicRegister, Constants);
+  if (!VaList ||
+      !frameStaysPrivate(S, *Area, *VaList, FirstVariadicRegister, Constants))
     return {};
   return Area->Spills;
 }

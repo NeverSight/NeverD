@@ -1590,29 +1590,12 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
     const va_t Bound = Next == Bases.end() ? End : *Next;
     Capacities.emplace(*Base, (Bound - *Base) / 4);
   }
-  bool FiniteJointGOTOFF = false;
-  std::map<va_t, va_t> FiniteBranchBases;
-  if (Key.Kind == GuardedJumpTableGroupKind::FiniteAdjacentGOTOFF) {
-    bool CompletePartition =
-        Bases.size() * 2 == Candidates.size() && *Bases.begin() == Section.VA;
-    for (const auto &[Base, Capacity] : Capacities) {
-      if (!Budget.products({{Img.Symbols.size(), 2}}))
-        return Incomplete();
-      CompletePartition &= Capacity >= limits::kMinJumpTableEntries &&
-                           Capacity <= 64 && Img.dataObjectSizeAt(Base) == 0;
-    }
-    if (!CompletePartition) {
-      GuardedGroupRejected = true;
-      return false;
-    }
-    // Claim the complete multi-run owner before inspecting its anchors.
-    // A damaged consumer vetoes every sibling instead of falling through
-    // to an ordinary per-branch proposal after the group rejects.
-    Key.Kind = GuardedJumpTableGroupKind::FiniteAdjacentGOTOFF;
-    if (GuardedGroupIdentity && Key != *GuardedGroupIdentity)
-      return false;
-    GuardedGroupIdentity = Key;
-    FiniteJointGOTOFF = true;
+  // Binds each member to the table its own indexed LOAD names: the one exact
+  // GOTOFF field of this owner that the member's block decodes before its
+  // jump.  False when any field that names a base is damaged, feeds no member
+  // or shares its member with another field; nullopt when evidence ran out.
+  auto BindMembersToBases =
+      [&](std::map<va_t, va_t> &BranchBases) -> std::optional<bool> {
     size_t PerOccurrenceWork = 64;
     if (!detail::addLinearComparisonWork(PerOccurrenceWork, Insns.size(), 12) ||
         !detail::addLinearComparisonWork(PerOccurrenceWork, Img.Symbols.size(),
@@ -1630,9 +1613,8 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
             {{RelocatedInstructionAddressOccurrences.size(), PerOccurrenceWork},
              {Candidates.size(), 32},
              {Img.DataAddressRelocOperands.size(), 8}}))
-      return Incomplete();
+      return std::nullopt;
     const std::set<va_t> CandidateSet(Candidates.begin(), Candidates.end());
-    bool Exact = true;
     for (const RelocatedInstructionAddressOccurrence &Occurrence :
          RelocatedInstructionAddressOccurrences) {
       if (!Bases.count(Occurrence.TargetVA))
@@ -1648,19 +1630,15 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
           Field->second.TargetVA != Occurrence.TargetVA ||
           Field->second.TargetOwnerVA != Occurrence.TargetOwnerVA ||
           !Img.relocatedI386GOTOFFTargetBelongsToOwner(
-              Field->second.TargetVA, Field->second.TargetOwnerVA)) {
-        Exact = false;
-        break;
-      }
+              Field->second.TargetVA, Field->second.TargetOwnerVA))
+        return false;
       const auto Source = Insns.find(Occurrence.InstructionAddr);
       if (Source == Insns.end() || Source->second.IsInstructionGuard ||
           Source->second.Size == 0 ||
           Source->second.Size > InvalidVA - Source->first ||
           Occurrence.FieldVA < Source->first ||
-          Occurrence.FieldVA >= Source->first + Source->second.Size) {
-        Exact = false;
-        break;
-      }
+          Occurrence.FieldVA >= Source->first + Source->second.Size)
+        return false;
       va_t BlockEnd = CurrentFuncRange ? CurrentFuncRange->second : InvalidVA;
       if (!PublishedBlockStarts.empty()) {
         const auto Next =
@@ -1685,11 +1663,37 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
         }
       }
       if (!CandidateSet.count(Branch) ||
-          !FiniteBranchBases.emplace(Branch, Occurrence.TargetVA).second) {
-        Exact = false;
-        break;
-      }
+          !BranchBases.emplace(Branch, Occurrence.TargetVA).second)
+        return false;
     }
+    return BranchBases.size() == Candidates.size();
+  };
+  bool FiniteJointGOTOFF = false;
+  std::map<va_t, va_t> FiniteBranchBases;
+  if (Key.Kind == GuardedJumpTableGroupKind::FiniteAdjacentGOTOFF) {
+    bool CompletePartition =
+        Bases.size() * 2 == Candidates.size() && *Bases.begin() == Section.VA;
+    for (const auto &[Base, Capacity] : Capacities) {
+      if (!Budget.products({{Img.Symbols.size(), 2}}))
+        return Incomplete();
+      CompletePartition &= Capacity >= limits::kMinJumpTableEntries &&
+                           Capacity <= 64 && Img.dataObjectSizeAt(Base) == 0;
+    }
+    if (!CompletePartition) {
+      GuardedGroupRejected = true;
+      return false;
+    }
+    // Claim the complete multi-run owner before inspecting its anchors.
+    // A damaged consumer vetoes every sibling instead of falling through
+    // to an ordinary per-branch proposal after the group rejects.
+    Key.Kind = GuardedJumpTableGroupKind::FiniteAdjacentGOTOFF;
+    if (GuardedGroupIdentity && Key != *GuardedGroupIdentity)
+      return false;
+    GuardedGroupIdentity = Key;
+    FiniteJointGOTOFF = true;
+    const std::optional<bool> Bound = BindMembersToBases(FiniteBranchBases);
+    if (!Bound)
+      return Incomplete();
     std::map<va_t, size_t> ConsumersPerBase;
     for (const auto &[Branch, Base] : FiniteBranchBases) {
       (void)Branch;
@@ -1699,8 +1703,7 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
         ConsumersPerBase.size() == Bases.size() &&
         std::all_of(ConsumersPerBase.begin(), ConsumersPerBase.end(),
                     [](const auto &Entry) { return Entry.second == 2; });
-    if (!Exact || FiniteBranchBases.size() != Candidates.size() ||
-        !CompleteConsumers) {
+    if (!*Bound || !CompleteConsumers) {
       GuardedGroupRejected = true;
       return false;
     }
@@ -1744,10 +1747,23 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
     Context.EmptyEdges.emplace(Branch, std::vector<va_t>{});
   }
   std::map<va_t, JumpTableInfo> PreviousInfos;
+  // A dense group's bootstrap first lets every member jump to every slot of
+  // the owner.  That is more than a member whose table register is reused
+  // after the jump was formed can bear: read as a successor of an inner
+  // dispatch, its own block would be entered with that register overwritten
+  // (`mov tab@GOTOFF(%ecx,%eax,4), %ebx; add %ecx, %ebx; mov %ebp, %ecx;
+  // jmp *%ebx`).  Such a bootstrap runs once more over the narrower
+  // hypothesis that each member reaches only its own table, which the
+  // members' own LOADs name (OwnTableBases).  A hypothesis only proposes
+  // edges: the two rounds after it prove every member again over exactly the
+  // edges the round before certified, and publish only what they repeat.
+  std::map<va_t, va_t> OwnTableBases;
+  bool RepeatBootstrap = false;
   // Bootstrap every member without sibling exemptions, then prove the entire
   // consumer set twice with an immutable preceding-phase role universe. A
   // phase never observes an already processed prefix of its own members.
-  for (unsigned Round = 0; Round < 3; ++Round) {
+  for (unsigned Round = 0; Round < 3; Round += RepeatBootstrap ? 0 : 1) {
+    RepeatBootstrap = false;
     FiniteJumpTableRoundCertificate RoundCertificate;
     if (FiniteJointGOTOFF) {
       if (!Budget.products({{Candidates.size(), 64}, {SlotCount, 16}}))
@@ -1879,6 +1895,16 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
                     Slot < Info.BaseAddr + uint64_t{4} * Capacity->second &&
                     (Slot - Info.BaseAddr) % 4 == 0;
       }
+      // A member proved over its own table's successors certifies that table
+      // or nothing: the edges it was given and the edges it returns are one
+      // set.
+      if (Round == 0 && !OwnTableBases.empty()) {
+        if (!Budget.take(lookupWork(OwnTableBases.size())))
+          return Incomplete();
+        const auto Own = OwnTableBases.find(Branch);
+        Passed &= Own != OwnTableBases.end() && Info.HasBaseAddr &&
+                  Info.BaseAddr == Own->second;
+      }
       if (!Passed) {
         AllPassed = false;
         break;
@@ -1892,6 +1918,25 @@ bool CFGBuilder::recoverGuardedJumpTableGroup(const BinaryImage &Img,
       RuntimeInfos.emplace(Branch, std::move(InfoIt->second));
     }
     if (!AllPassed) {
+      if (Round == 0 && !FiniteJointGOTOFF && OwnTableBases.empty()) {
+        const std::optional<bool> Bound = BindMembersToBases(OwnTableBases);
+        if (!Bound)
+          return Incomplete();
+        if (*Bound) {
+          if (!Budget.products({{Candidates.size(), 32 + 3 * SlotCount}}))
+            return Incomplete();
+          Context.Edges.clear();
+          for (const auto &[Branch, Base] : OwnTableBases) {
+            const size_t Start = static_cast<size_t>((Base - Section.VA) / 4);
+            const size_t Capacity = Capacities.at(Base);
+            Context.Edges.emplace(
+                Branch, std::vector<va_t>(Targets.begin() + Start,
+                                          Targets.begin() + Start + Capacity));
+          }
+          RepeatBootstrap = true;
+          continue;
+        }
+      }
       GuardedGroupRejected = true;
       return false;
     }

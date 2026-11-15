@@ -1,0 +1,24 @@
+//===- MIPSMSADivision.def - MSA integer division encodings --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+NEVERD_MSA_DIVISION(DIV_S_B, 16202, 0x7a000012, "div_s.b")
+NEVERD_MSA_DIVISION(DIV_S_H, 16203, 0x7a200012, "div_s.h")
+NEVERD_MSA_DIVISION(DIV_S_W, 16204, 0x7a400012, "div_s.w")
+NEVERD_MSA_DIVISION(DIV_S_D, 16205, 0x7a600012, "div_s.d")
+NEVERD_MSA_DIVISION(DIV_U_B, 16206, 0x7a800012, "div_u.b")
+NEVERD_MSA_DIVISION(DIV_U_H, 16207, 0x7aa00012, "div_u.h")
+NEVERD_MSA_DIVISION(DIV_U_W, 16208, 0x7ac00012, "div_u.w")
+NEVERD_MSA_DIVISION(DIV_U_D, 16209, 0x7ae00012, "div_u.d")
+NEVERD_MSA_DIVISION(MOD_S_B, 16210, 0x7b000012, "mod_s.b")
+NEVERD_MSA_DIVISION(MOD_S_H, 16211, 0x7b200012, "mod_s.h")
+NEVERD_MSA_DIVISION(MOD_S_W, 16212, 0x7b400012, "mod_s.w")
+NEVERD_MSA_DIVISION(MOD_S_D, 16213, 0x7b600012, "mod_s.d")
+NEVERD_MSA_DIVISION(MOD_U_B, 16214, 0x7b800012, "mod_u.b")
+NEVERD_MSA_DIVISION(MOD_U_H, 16215, 0x7ba00012, "mod_u.h")
+NEVERD_MSA_DIVISION(MOD_U_W, 16216, 0x7bc00012, "mod_u.w")
+NEVERD_MSA_DIVISION(MOD_U_D, 16217, 0x7be00012, "mod_u.d")
+
+#undef NEVERD_MSA_DIVISION

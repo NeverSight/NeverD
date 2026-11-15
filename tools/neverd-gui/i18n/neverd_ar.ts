@@ -10911,6 +10911,10 @@ Your previous graph is still available.</source>
         <translation>حالة DWARF عند PC المحدد</translation>
     </message>
     <message>
+        <source>Signing state recovered from instructions at the selected PC</source>
+        <translation>حالة التوقيع المستنتجة من التعليمات عند عدّاد البرنامج المحدد</translation>
+    </message>
+    <message>
         <source>Compact unwind: completed-prologue recipe</source>
         <translation>فك المكدس المضغوط: وصفة المقدمة المكتملة</translation>
     </message>

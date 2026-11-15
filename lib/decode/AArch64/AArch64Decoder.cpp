@@ -40,15 +40,6 @@ bool Decoder::advanceAArch64DecodeGeneration() {
   return AArch64DecodeIdentity && AArch64DecodeGeneration != Exhausted;
 }
 
-bool Decoder::beginDecode(DecodedInsn &Out) {
-  Out.AArch64Prefix.reset();
-  Out.AArch64Occurrence.reset();
-  if (!AArch64)
-    return true;
-  Out.Raw = nullptr;
-  return advanceAArch64DecodeGeneration();
-}
-
 void Decoder::recordAArch64Decode(const uint8_t *Bytes, size_t Len,
                                   DecodedInsn &Out,
                                   bool HasOperandDetail) const {

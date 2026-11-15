@@ -11,7 +11,9 @@
 
 #include "../ResourceLimits.h"
 #include "ComparisonSession.h"
+#include "DialogReturnKey.h"
 #include "Icons.h"
+#include "Theme.h"
 
 #include "neverd/analysis/Limits.h"
 
@@ -31,6 +33,9 @@ ComparisonValidationDialog::ComparisonValidationDialog(ComparisonSession &S,
     : QDialog(Parent), Session(S), Revision(S.revision()) {
   namespace Limits = ::neverd::limits::gui;
   setObjectName("comparisonValidationDialog");
+  // Check again was the default by Qt's choice of the first push button; it
+  // is the window's one command and keeps the accent without the key.
+  leaveWithoutDefaultButton(*this);
   setWindowTitle(tr("Validate scalar returns — NeverD"));
   setWindowIcon(icon("compare"));
   resize(Limits::kComparisonValidationInitialWidth,
@@ -63,6 +68,7 @@ ComparisonValidationDialog::ComparisonValidationDialog(ComparisonSession &S,
   Actions->addStretch();
   Run = new QPushButton(tr("Check again"), this);
   Run->setObjectName("validationRun");
+  showAsMainAction(*Run);
   Cancel = new QPushButton(tr("Cancel"), this);
   Cancel->setObjectName("validationCancel");
   Actions->addWidget(Run);
@@ -103,6 +109,9 @@ ComparisonValidationDialog::ComparisonValidationDialog(ComparisonSession &S,
   Report = new QPlainTextEdit(Tabs);
   Report->setObjectName("validationReport");
   Report->setReadOnly(true);
+  // The report is JSON; it reads in the code font as the other windows'
+  // evidence does.
+  Report->setFont(Theme::instance().codeFont());
   Tabs->addTab(Evidence, tr("Result and assumptions"));
   Tabs->addTab(Report, tr("Full report"));
   Root->addWidget(Tabs, 1);

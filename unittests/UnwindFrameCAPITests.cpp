@@ -160,6 +160,25 @@ TEST_F(UnwindFrameCAPI, AbsentDwarfAndOrdinaryCompactDoNotInventUnsignedState) {
   EXPECT_EQ(Dwarf->getString(kStatus), kKnown);
 }
 
+TEST_F(UnwindFrameCAPI, ImplicitDarwinSigningRetainsIndependentProvenance) {
+  ImageOptions Options;
+  Options.ImplicitBody = Options.DwarfFallback = true;
+  ASSERT_NO_FATAL_FAILURE(load(kStackCFA, Options));
+  for (const auto &[Offset, Kind] : {std::pair(uint64_t(0), kUnsigned),
+                                     std::pair(uint64_t(kCodeAlign), kSP)}) {
+    const auto Result = query(Offset);
+    const auto *Report = signing(Result);
+    ASSERT_NE(Report, nullptr);
+    const auto *Dwarf = Report->getObject(kDwarfState);
+    const auto *Instruction = Report->getObject(kInstructionState);
+    ASSERT_TRUE(Dwarf && Instruction);
+    EXPECT_EQ(Dwarf->getString(kStatus), kUnknown);
+    EXPECT_FALSE(Dwarf->get(kKind));
+    EXPECT_EQ(Instruction->getString(kStatus), kKnown);
+    EXPECT_EQ(Instruction->getString(kKind), Kind);
+  }
+}
+
 TEST_F(UnwindFrameCAPI, AZeroSigningPCRemainsAPresentHexadecimalAddress) {
   const auto Program = absoluteState(
       kSignedWithPC, -int64_t((kImageBase + kCodeOffset) / kCodeAlign));

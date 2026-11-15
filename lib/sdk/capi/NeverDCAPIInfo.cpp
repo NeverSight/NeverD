@@ -298,7 +298,7 @@ const char *neverd_unwind_frame_json(neverd_session_t Sess,
     Obj["personality"] = jsonSafeText(F->PersonalityName);
   if (S->Img.Arch == Arch::AArch64)
     Obj[unwind_json::kReturnAddress] =
-        unwindSigningJSON(queryAArch64UnwindSigning(S->Img, *F, Address));
+        unwindSigningJSON(analyzeAArch64UnwindSigning(S->Img, *F, Address));
   return dupStr(jsonToString(llvm::json::Value(std::move(Obj))));
 }
 

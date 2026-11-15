@@ -583,9 +583,14 @@ private:
   std::string Detail;
 };
 
+/// Measure the exact regular encoding using the writer's checked layout.
+/// Counts include explicit gap records; a final partial page has no padding.
+llvm::Expected<uint64_t> measureMachOCompactUnwindRegular(
+    uint64_t RecordCount, uint64_t PersonalityCount, uint64_t LSDAEntryCount);
+
 /// Encode one normalized merge result as final `__TEXT,__unwind_info` bytes.
-/// This initial writer deliberately emits only canonical 4-KiB regular
-/// second-level pages.  The header, personality array, first-level index,
+/// Regular second-level pages contain at most 4 KiB, with no unused tail in
+/// the final page. The header, personality array, first-level index,
 /// per-page LSDA slices, and terminal sentinel are emitted in one stable
 /// little-endian layout.
 ///

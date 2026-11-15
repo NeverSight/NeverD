@@ -2938,8 +2938,11 @@ TEST(LLVMCPointerAddresses, DataOnlyAddressedIsDeclared) {
       << Source;
 }
 
-/// Expect \p Source to be C a compiler accepts.
-void expectCSyntax(const std::string &Source, llvm::StringRef Target = {}) {
+/// Expect \p Source to be C a compiler accepts, for \p Target when one is
+/// given.  \p WithoutLibraryHeaders searches the compiler's own headers only,
+/// as a host without the target's C library builds it.
+void expectCSyntax(const std::string &Source, llvm::StringRef Target = {},
+                   bool WithoutLibraryHeaders = false) {
 #ifdef NEVERD_TEST_CLANG
   const std::string Compiler = NEVERD_TEST_CLANG;
 #else
@@ -2964,6 +2967,8 @@ void expectCSyntax(const std::string &Source, llvm::StringRef Target = {}) {
                                                   "-fsyntax-only", SourcePath};
   if (!Target.empty())
     Arguments.append({"-target", Target, "-ffreestanding"});
+  if (WithoutLibraryHeaders)
+    Arguments.push_back("-nostdlibinc");
   const std::optional<llvm::StringRef> Redirects[] = {
       std::nullopt, std::nullopt, ErrorPath.str()};
   std::string Error;
@@ -3086,7 +3091,10 @@ TEST(LLVMCPointerAddresses, AModuleNamesTheDataOfAMirrorItsEnvironmentHolds) {
   EXPECT_NE(Source.find("/* completed.0 */\nextern uint8_t completed_0;"),
             std::string::npos)
       << Source;
-  EXPECT_NE(Source.find("completed_0 = 1;"), std::string::npos) << Source;
+  // The flag's store is volatile, as its load is, and keeps the qualifier.
+  EXPECT_NE(Source.find("*(volatile uint8_t*)(&completed_0) = 1;"),
+            std::string::npos)
+      << Source;
   EXPECT_NE(Source.find(" __nd_codeptr_140C00000;\n"), std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("140BFFFFF"), std::string::npos) << Source;
@@ -11294,15 +11302,19 @@ TEST(HighCPointerAddresses, X86UnmatchedSubStoreBeforeCallStays) {
   Func.Name = "keep_store";
   Func.Entry = 0x401040;
   Func.ReturnType = NdType::makeVoid();
+  // The address is a value the function receives: a temporary nothing
+  // assigns would be an unknown value, not a name.
+  Func.Params = {{"arg0", NdType::makeInt(4)}};
   MedVar P;
-  P.Kind = MedVar::Temp;
-  P.Id = 7;
+  P.Kind = MedVar::Param;
+  P.Id = 0;
   P.Size = 4;
   P.TheArch = Arch::X86;
   HighStmt Store;
   Store.Kind = StmtKind::Store;
-  Store.StoreAddr = HighExpr::makeBinop(NdOp::INT_SUB, HighExpr::makeVar(P),
-                                        HighExpr::makeConst(4, 4));
+  Store.StoreAddr = HighExpr::makeBinop(
+      NdOp::INT_SUB, HighExpr::makeVar(P, NdType::makeInt(4)),
+      HighExpr::makeConst(4, 4));
   Store.StoreVal = HighExpr::makeConst(41, 4);
   HighStmt Call;
   Call.Kind = StmtKind::Call;
@@ -11310,7 +11322,8 @@ TEST(HighCPointerAddresses, X86UnmatchedSubStoreBeforeCallStays) {
       HighExpr::makeCall("use", 0x401200, {HighExpr::makeConst(7, 4)});
   Func.Body = {Store, Call};
   const std::string Source = emitFunctions({Func}, Arch::X86);
-  expectPortableStore(Source, "uint32_t", "t7) - 4", "0x29");
+  expectPortableStore(Source, "uint32_t", "arg0", "0x29");
+  EXPECT_NE(Source.find(" - 4) = 0x29"), std::string::npos) << Source;
   EXPECT_NE(Source.find("use(7)"), std::string::npos) << Source;
 }
 
@@ -48462,6 +48475,48 @@ struct FILEFUNC_LIKE {
   EXPECT_NE(Source.find("(uintptr_t)(funcs->opaque)"), std::string::npos)
       << Source;
   expectCSyntax("#include <stdint.h>\n" + Source);
+}
+
+TEST(HighCPointerAddresses, OnlyAHelperThatCallsMemcpyIncludesItsHeader) {
+  // An access at a machine address is spelled in place, through a pointer
+  // cast or __builtin_memcpy, so it takes no C library header: the unit
+  // builds where the target's headers are missing, as a macOS or Windows
+  // host builds C decompiled from x86-64 Linux.
+  HighFunc Peek;
+  Peek.Name = "peek";
+  Peek.Entry = 0x401000;
+  Peek.ReturnType = NdType::makeInt(8);
+  Peek.Params = {{"arg0", NdType::makeInt(8, false)}};
+  returnValue(Peek, HighExpr::makeLoad(parameter(0, NdType::makeInt(8, false)),
+                                       NdType::makeInt(8)));
+  for (const bool Portable : {false, true}) {
+    SCOPED_TRACE(Portable);
+    const std::string Source =
+        emitFunctions({Peek}, Arch::X64, /*Image=*/nullptr, Portable);
+    EXPECT_EQ(Source.find("#include <string.h>"), std::string::npos) << Source;
+    expectCSyntax(Source, "x86_64-linux-gnu", /*WithoutLibraryHeaders=*/true);
+  }
+  // A value narrower than its storage on a big-endian target is read from
+  // its exact bytes by a helper, which calls memcpy.
+  HighFunc Narrow;
+  Narrow.Name = "peek3";
+  Narrow.Entry = 0x401000;
+  Narrow.ReturnType = NdType::makeInt(4);
+  Narrow.Params = {{"arg0", NdType::makeInt(4, false)}};
+  MedVar Address;
+  Address.Kind = MedVar::Param;
+  Address.Id = 0;
+  Address.Size = 4;
+  Address.TheArch = Arch::MIPS32;
+  auto Extended = HighExpr::makeUnary(
+      NdOp::INT_ZEXT,
+      HighExpr::makeLoad(HighExpr::makeVar(Address, NdType::makeInt(4, false)),
+                         NdType::makeInt(3, false)));
+  Extended->Type = NdType::makeInt(4, false);
+  returnValue(Narrow, std::move(Extended));
+  const std::string Source = emitFunctions({Narrow}, Arch::MIPS32);
+  EXPECT_NE(Source.find("#include <string.h>"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("    memcpy("), std::string::npos) << Source;
 }
 
 TEST(HighCPointerAddresses, TrapsUseTheBuiltinsTheirHeadersDeclare) {

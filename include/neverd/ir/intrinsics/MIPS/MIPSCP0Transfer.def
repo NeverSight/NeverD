@@ -1,0 +1,17 @@
+//===- MIPSCP0Transfer.def - COP0 architectural transfer views -----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// rs selector, operand width, transfer direction, stable ID, and spelling.
+//===----------------------------------------------------------------------===//
+
+NEVERD_MIPS_CP0_TRANSFER(0, 4, false, MIPSReadCP0Word, 16020, mfc0)
+NEVERD_MIPS_CP0_TRANSFER(4, 4, true, MIPSWriteCP0Word, 16021, mtc0)
+NEVERD_MIPS_CP0_TRANSFER(1, 8, false, MIPSReadCP0Double, 16045, dmfc0)
+NEVERD_MIPS_CP0_TRANSFER(5, 8, true, MIPSWriteCP0Double, 16046, dmtc0)
+NEVERD_MIPS_CP0_TRANSFER(2, 4, false, MIPSReadCP0High, 16047, mfhc0)
+NEVERD_MIPS_CP0_TRANSFER(6, 4, true, MIPSWriteCP0High, 16048, mthc0)
+
+#undef NEVERD_MIPS_CP0_TRANSFER

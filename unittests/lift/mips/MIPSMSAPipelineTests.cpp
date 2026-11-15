@@ -42,30 +42,48 @@ namespace {
 mips_test::ELFBytes msaFile(Arch Target, llvm::ArrayRef<uint32_t> Words) {
   mips_test::ELFBytes File(Target);
   File.Bytes.resize(0x200);
-  File.put(52 + 16, File.Bytes.size(), 4);
-  File.put(52 + 20, File.Bytes.size(), 4);
+  File.put(File.Is64 ? 64 + 32 : 52 + 16, File.Bytes.size(), File.Is64 ? 8 : 4);
+  File.put(File.Is64 ? 64 + 40 : 52 + 20, File.Bytes.size(), File.Is64 ? 8 : 4);
   File.abiFlags();
   File.Bytes[0xe3] = 5;
   File.Bytes[0xe5] = 3;
-  File.Bytes[0xe7] = 6;
+  File.Bytes[0xe7] = File.Is64 ? 1 : 6;
   File.put(0xec, 0x200, 4);
   for (unsigned I = 0; I < Words.size(); ++I)
     File.put(0x100 + I * 4, Words[I], 4);
   return File;
 }
 
-TEST(MIPSMSAPipeline, InitializedIntegerLeavesEmitBothSourceRoutes) {
+TEST(MIPSMSAPipeline, N64Requires128BitCPR1WithHardDoubleABI) {
+  for (const auto Target : {Arch::MIPS64, Arch::MIPS64EL}) {
+    auto File = msaFile(Target, {0x7b03205e, 0x78b90899, 0x03e00008, 0});
+    ELFLoader L;
+    auto Image = L.loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    EXPECT_TRUE(Image->MIPS->HasMSA);
+    EXPECT_EQ(Image->MIPS->ABI, MIPSABI::N64);
+    EXPECT_EQ(Image->MIPS->FPABI, 1u);
+    for (auto Profile : {std::pair{3, 6}, std::pair{2, 1}}) {
+      File.Bytes[0xe5] = Profile.first;
+      File.Bytes[0xe7] = Profile.second;
+      auto Bad = L.loadBuffer(File.buffer());
+      ASSERT_FALSE(bool(Bad));
+      llvm::consumeError(Bad.takeError());
+    }
+  }
+}
+
+void checkMSALeafSource(llvm::ArrayRef<uint32_t> Words, bool HasDivision,
+                        llvm::StringRef RequiredText = {}) {
   for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL})
     for (bool LLVM : {false, true}) {
-      const uint32_t Words[] = {0x7b02201e, 0x79312819, 0x7840004e,
-                                0x78b10899, 0x03e00008, 0};
       auto File = msaFile(Target, Words);
       ELFLoader Loader;
       auto Image = Loader.loadBuffer(File.buffer());
       ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
       ASSERT_TRUE(Image->MIPS->HasMSA);
       EXPECT_EQ(Image->MIPS->ISARevision, 5);
-      auto Symbol = Symbol::makeFunc(Image->Entry, sizeof(Words));
+      auto Symbol = Symbol::makeFunc(Image->Entry, Words.size() * 4);
       Symbol.Name = "msa_leaf";
       Image->Symbols.push_back(std::move(Symbol));
       llvm::LLVMContext Context;
@@ -98,6 +116,9 @@ TEST(MIPSMSAPipeline, InitializedIntegerLeavesEmitBothSourceRoutes) {
       } else {
         ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Stream, Emit));
       }
+      EXPECT_EQ(Text.find("fdiv.w") != std::string::npos, HasDivision) << Text;
+      if (!RequiredText.empty())
+        EXPECT_TRUE(llvm::StringRef(Text).contains(RequiredText)) << Text;
       EXPECT_NE(Text.find("msa_leaf"), std::string::npos) << Text;
       EXPECT_EQ(Text.find(mips::NoMSACBegin) != std::string::npos,
                 Target == Arch::MIPS32)
@@ -106,6 +127,24 @@ TEST(MIPSMSAPipeline, InitializedIntegerLeavesEmitBothSourceRoutes) {
                 Target == Arch::MIPS32)
           << Text;
     }
+}
+
+TEST(MIPSMSAPipeline, InitializedIntegerLeavesEmitBothSourceRoutes) {
+  checkMSALeafSource(
+      {0x7b02201e, 0x79312819, 0x7840004e, 0x78b10899, 0x03e00008, 0}, false);
+}
+
+TEST(MIPSMSAPipeline,
+     DeadFloatingDestinationPreservesStatusAndEnabledExceptions) {
+  // FILL.W w0,a0 / FILL.W w1,a1 / FDIV.W w2,w0,w1 / v0=7 / JR ra.
+  checkMSALeafSource(
+      {0x7b02201e, 0x7b02285e, 0x78c1009b, 0x24020007, 0x03e00008, 0}, true);
+}
+
+TEST(MIPSMSAPipeline, UnalignedVectorLoadKeepsByteAlignmentInBothCViews) {
+  // ADDIU a0,a0,1 / LD.W w2,0(a0) / COPY_S.W v0,w2[0] / JR ra.
+  checkMSALeafSource({0x24840001, 0x780020a2, 0x78b01099, 0x03e00008, 0}, false,
+                     "aligned(1), may_alias");
 }
 
 TEST(MIPSMSAPipeline, MissingImageCannotBypassVectorAndReturnQualification) {
@@ -142,10 +181,36 @@ TEST(MIPSMSAPipeline, MissingImageCannotBypassVectorAndReturnQualification) {
     }
 }
 
+TEST(MIPSMSAPipeline, BranchJoinRequiresEveryReachingVectorDefinition) {
+  LowFunc F;
+  F.Blocks.resize(4);
+  for (unsigned I = 0; I != 4; ++I)
+    F.Blocks[I].Id = I;
+  F.Blocks[0].Succs = {1, 2};
+  F.Blocks[1].Succs = F.Blocks[2].Succs = {3};
+  LowOp Write;
+  Write.Opcode = NdOp::COPY;
+  Write.Output = NdVar::reg(mipsreg::w(1), 16);
+  Write.Inputs[0] = NdVar::cst(0, 16);
+  Write.NumInputs = 1;
+  LowOp Read = Write;
+  Read.Inputs[0] = Write.Output;
+  Read.Output = NdVar::reg(mipsreg::w(0), 16);
+  F.Blocks[1].Ops.push_back(Write);
+  F.Blocks[3].Ops.push_back(Read);
+  EXPECT_THROW(requireMIPSSourceVectors(F, Arch::MIPS32, nullptr),
+               LowToMedConversionError);
+  F.Blocks[2].Ops.push_back(Write);
+  EXPECT_NO_THROW(requireMIPSSourceVectors(F, Arch::MIPS32, nullptr));
+  F.Blocks[0].Ops.push_back(Read);
+  F.Blocks[3].Succs = {0};
+  EXPECT_THROW(requireMIPSSourceVectors(F, Arch::MIPS32, nullptr),
+               LowToMedConversionError);
+}
 TEST(MIPSMSAPipeline, StandaloneArchitectureAndFPABIHaveDistinctSaveViews) {
   for (Arch Target :
        {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL})
-    for (unsigned Reg : {19u, 20u, 21u, 31u}) {
+    for (unsigned Reg : {19u, 20u, 21u, 23u, 24u, 31u}) {
       LowFunc Function;
       Function.Blocks.emplace_back();
       LowOp Write;
@@ -154,7 +219,7 @@ TEST(MIPSMSAPipeline, StandaloneArchitectureAndFPABIHaveDistinctSaveViews) {
       Write.Inputs[0] = NdVar::cst(0, 16);
       Write.NumInputs = 1;
       Function.Blocks[0].Ops.push_back(Write);
-      if (!isMIPS64(Target) && Reg < 20)
+      if (Reg < (isMIPS64(Target) ? 24u : 20u))
         EXPECT_NO_THROW(requireMIPSSourceVectors(Function, Target, nullptr));
       else
         EXPECT_THROW(requireMIPSSourceVectors(Function, Target, nullptr),
@@ -166,8 +231,8 @@ TEST(MIPSMSAPipeline, StandaloneArchitectureAndFPABIHaveDistinctSaveViews) {
       Image.MIPS.emplace();
       Image.MIPS->ISARevision = 5;
       Image.MIPS->HasMSA = true;
-      Image.MIPS->FPABI = 6;
-      if (!isMIPS64(Target) && Reg != 20)
+      Image.MIPS->FPABI = isMIPS64(Target) ? 1 : 6;
+      if (isMIPS64(Target) ? Reg < 24 : (Reg < 20 || Reg % 2))
         EXPECT_NO_THROW(requireMIPSSourceVectors(Function, Target, &Image));
       else
         EXPECT_THROW(requireMIPSSourceVectors(Function, Target, &Image),

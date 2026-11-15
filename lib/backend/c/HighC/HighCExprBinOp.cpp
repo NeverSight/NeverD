@@ -1190,6 +1190,11 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
           Inner = Cur->Operands[0].get();
         if (!Inner)
           break;
+        // The cast below converts the peeled operand's value.  A floating
+        // value's view is its bits (BitCast) or its own conversion (Cast),
+        // neither of which a C integer cast of the floating text is.
+        if (Inner->Type && Inner->Type->Kind == NdTypeKind::Float)
+          break;
         const uint16_t InnerSize =
             Inner->Type ? Inner->Type->Size
                         : (Inner->Kind == ExprKind::Var ? Inner->Var.Size : 0);

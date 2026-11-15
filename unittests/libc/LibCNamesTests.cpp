@@ -684,7 +684,10 @@ void expectWellFormed(const std::array<LibCPrototype, N> &Prototypes) {
     EXPECT_FALSE(isKnownFunction(stripLeadingUnderscores(Prototype.Name)));
     EXPECT_EQ(libcPrototype(Prototype.Name, BinaryFormat::COFF), &Prototype);
     // The vararg traits read the same fixed parameters.
-    EXPECT_EQ(varArgFixedCount(Prototype.Name, LibCVariant::GNU),
+    const auto Variant = Prototype.Format == BinaryFormat::COFF
+                             ? LibCVariant::Windows
+                             : LibCVariant::GNU;
+    EXPECT_EQ(varArgFixedCount(Prototype.Name, Variant),
               Prototype.Variadic ? Prototype.ParamCount : 0u);
   }
 }
@@ -745,13 +748,36 @@ TEST(LibCPrototype, WindowsLongJumpHasTwoParametersAndNoResult) {
   ASSERT_NE(Prototype, nullptr);
   EXPECT_EQ(Prototype->Return, "void");
   EXPECT_EQ(Prototype->ParamCount, 2u);
-  EXPECT_EQ(Prototype->Params[0], "void *");
+  EXPECT_EQ(Prototype->Params[0], "int *");
   EXPECT_EQ(Prototype->Params[1], "int");
   EXPECT_FALSE(Prototype->Variadic);
   EXPECT_FALSE(Prototype->Winapi);
   EXPECT_EQ(libcResult("_longjmpex", LibCVariant::Windows), LibCResult::Void);
   EXPECT_EQ(libcPrototype("_longjmpex", BinaryFormat::ELF), nullptr);
   EXPECT_EQ(libcPrototype("_longjmpex", BinaryFormat::MachO), nullptr);
+}
+
+TEST(LibCPrototype, WindowsSetjmpKeepsItsCountedVariadicTail) {
+  const auto *Prototype = libcPrototype("_setjmp3", BinaryFormat::COFF);
+  ASSERT_NE(Prototype, nullptr);
+  EXPECT_EQ(Prototype->Return, "int");
+  EXPECT_EQ(Prototype->ParamCount, 2u);
+  EXPECT_EQ(Prototype->Params[0], "int *");
+  EXPECT_EQ(Prototype->Params[1], "int");
+  EXPECT_TRUE(Prototype->Variadic);
+  EXPECT_FALSE(Prototype->Winapi);
+  EXPECT_EQ(libcPrototype("_setjmp3", BinaryFormat::ELF), nullptr);
+  EXPECT_EQ(libcPrototype("_setjmp3", BinaryFormat::MachO), nullptr);
+  EXPECT_EQ(varArgFixedCount("_setjmp3", LibCVariant::Windows), 2u);
+  EXPECT_EQ(varArgFixedParamKind("_setjmp3", 0, LibCVariant::Windows),
+            VarArgFixedParamKind::Pointer);
+  EXPECT_EQ(varArgFixedParamKind("_setjmp3", 1, LibCVariant::Windows),
+            VarArgFixedParamKind::Integer);
+  EXPECT_EQ(varArgFixedParamKind("_setjmp3", 2, LibCVariant::Windows),
+            VarArgFixedParamKind::Unknown);
+  EXPECT_FALSE(libcArity("_setjmp3", LibCVariant::Windows));
+  EXPECT_EQ(varArgFixedCount("_setjmp3", LibCVariant::GNU), 0u);
+  EXPECT_EQ(varArgFixedCount("_setjmp3", LibCVariant::Darwin), 0u);
 }
 
 TEST(LibCPrototype, WindowsDriverCRTUsesExactFixedParameters) {

@@ -10,8 +10,10 @@
 
 #include "ComparisonFlowDialog.h"
 
+#include "../ResourceLimits.h"
 #include "ComparisonModel.h"
 #include "ComparisonSession.h"
+#include "DialogReturnKey.h"
 #include "Icons.h"
 
 #include "neverd/diff/Limits.h"
@@ -71,6 +73,9 @@ ComparisonFlowDialog::ComparisonFlowDialog(ComparisonSession &S,
   Root->addWidget(Summary);
   auto *Split = new QSplitter(Qt::Horizontal, this);
   Split->setChildrenCollapsible(false);
+  // The operations' title stood against the side's list of choices; a
+  // gutter parts the panes.
+  Split->setHandleWidth(::neverd::limits::gui::kPaneGutter);
   Root->addWidget(Split, 1);
   auto *Left = new QWidget(Split);
   auto *LeftLayout = new QVBoxLayout(Left);
@@ -96,6 +101,9 @@ ComparisonFlowDialog::ComparisonFlowDialog(ComparisonSession &S,
   FunctionStatus =
       label(Top, tr("Select a function to inspect its SSA operations."));
   FunctionStatus->setObjectName("flowFunctionStatus");
+  // The operations' title takes the row of the side's list, so the two
+  // tables below start level.
+  FunctionStatus->setMinimumHeight(Side->sizeHint().height());
   TopLayout->addWidget(FunctionStatus);
   Nodes = new ComparisonModel(Session, ComparisonModel::Kind::FlowNodes, this);
   NodeTable = table(Top, Nodes, "flowNodes");
@@ -157,6 +165,9 @@ ComparisonFlowDialog::ComparisonFlowDialog(ComparisonSession &S,
   // Enter activates the selected evidence row, without also tracing a slice.
   for (auto *Button : {Backward, Forward, ArgumentAccesses, Cancel, Inspect})
     Button->setAutoDefault(false);
+  // Tracing is what the window's own line asks for once an operation is
+  // chosen, inputs first: its main action, faint until then.
+  showAsMainAction(*Backward);
   BottomLayout->addWidget(Inspect, 0, Qt::AlignLeft);
   Split->setStretchFactor(0, 1);
   Split->setStretchFactor(1, 3);

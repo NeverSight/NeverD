@@ -343,6 +343,37 @@ int main(void) {
     compileAndRun(Source, Level, {}, true);
 }
 
+TEST(LLVMCValues, RepeatedVolatileByteStoresStayObservable) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("volatile_bytes", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<> B(Context);
+  auto *F = llvm::Function::Create(
+      llvm::FunctionType::get(B.getVoidTy(), {B.getPtrTy()}, false),
+      llvm::GlobalValue::ExternalLinkage, "write_byte", Module);
+  B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", F));
+  for (unsigned Value : {0x12, 0xfe})
+    B.CreateStore(B.getInt8(Value), F->getArg(0), true);
+  B.CreateRetVoid();
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  neverd::CEmitterOptions Options;
+  Options.TheArch = neverd::Arch::X64;
+  std::string Source;
+  llvm::raw_string_ostream Stream(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Stream, Options));
+  EXPECT_EQ(llvm::StringRef(Source).count("*(volatile uint8_t*)"), 2u)
+      << Source;
+  Source += R"(
+int main(void) {
+  uint8_t bytes[] = {1, 2, 3};
+  write_byte(bytes + 1);
+  return bytes[0] != 1 || bytes[1] != 0xfe || bytes[2] != 3;
+}
+)";
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    compileAndRun(Source, Level, {}, true);
+}
+
 TEST(LLVMCValues, PrefetchRejectsChangedAssemblyContracts) {
   for (unsigned Mutation = 0; Mutation != 6; ++Mutation) {
     SCOPED_TRACE(Mutation);
@@ -4935,6 +4966,78 @@ int main(void) {
   compileAndRun(Source, "-O0");
 }
 
+TEST(LLVMCValues, RuntimeVariadicFramePointersTakeTheirDeclaredPointee) {
+  using namespace neverd;
+  for (unsigned Offset : {0u, 4u}) {
+    SCOPED_TRACE(Offset);
+    llvm::LLVMContext Context;
+    llvm::Module Module("runtime_frame_pointer", Context);
+    Module.setDataLayout("e-p:32:32");
+    llvm::IRBuilder<> B(Context);
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(B.getInt32Ty(), false),
+        llvm::GlobalValue::ExternalLinkage, "observe_jump_buffer", Module);
+    B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Function));
+    auto *Frame = B.CreateAlloca(llvm::ArrayType::get(B.getInt8Ty(), 96),
+                                 nullptr, "frame");
+    auto *End = B.CreateGEP(B.getInt8Ty(), Frame, B.getInt32(80), "frame_end");
+    auto *Member = B.CreateGEP(B.getInt8Ty(), End, B.getInt32(-72));
+    B.CreateStore(B.getInt64(0), Member);
+    auto *Buffer = B.CreateGEP(B.getInt8Ty(), Member, B.getInt32(Offset));
+    auto *Last = B.CreateGEP(B.getInt8Ty(), Buffer, B.getInt32(60));
+    B.CreateStore(B.getInt32(0), Last);
+    auto Runtime = Module.getOrInsertFunction(
+        "_setjmp3", llvm::FunctionType::get(
+                        B.getInt32Ty(), {B.getPtrTy(), B.getInt32Ty()}, true));
+    auto *Result = B.CreateCall(Runtime, {Buffer, B.getInt32(0)});
+    auto *FirstValue = Offset
+                           ? B.CreateLoad(B.getInt32Ty(), Buffer)
+                           : B.CreateTrunc(B.CreateLoad(B.getInt64Ty(), Buffer),
+                                           B.getInt32Ty());
+    auto *LastValue = B.CreateLoad(B.getInt32Ty(), Last);
+    B.CreateRet(B.CreateAdd(Result, B.CreateAdd(FirstValue, LastValue)));
+    ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+    BinaryImage Image;
+    Image.Arch = Arch::X86;
+    Image.Bits = Bitness::Bits32;
+    Image.Format = BinaryFormat::COFF;
+    Import Entry;
+    Entry.Name = "_setjmp3";
+    Image.Imports.push_back(Entry);
+    CEmitterOptions Options;
+    Options.TheArch = Image.Arch;
+    Options.Format = Image.Format;
+    Options.EmitIncludes = false;
+    std::string Source;
+    llvm::raw_string_ostream Output(Source);
+    ASSERT_TRUE(LLVMCEmitter().emit(Module, Output, Options, nullptr, &Image));
+    const std::string Standalone =
+        "#include <stdint.h>\ntypedef int jmp_buf[16];\n"
+        "int _setjmp3(jmp_buf, int, ...);\n" +
+        Source;
+    source_call_execution_test::checkSyntax(
+        Standalone,
+        {"--target=i686-pc-windows-msvc", "-ffreestanding", "-Werror"});
+#if defined(__linux__) && (defined(__i386__) || defined(__x86_64__))
+    const std::string Oracle = R"(
+int _setjmp3(int *env, int count, ...) {
+  if (count != 0) __builtin_trap();
+  env[0] = 23;
+  env[15] = 31;
+  return -19;
+}
+int main(void) { return observe_jump_buffer() != 35; }
+)";
+    for (llvm::StringRef Level : {"-O0", "-O2"})
+      source_call_execution_test::compileAndRun(
+          Standalone + Oracle,
+          {"-m32", Level, "-fsanitize=undefined", "-fsanitize-trap=all"});
+#else
+    RecordProperty("native_i386_execution", "requires Linux x86");
+#endif
+  }
+}
+
 TEST(LLVMCValues, ARuntimeRoutineCalledDirectlyTakesItsPrototype) {
   // A routine the module declares and calls directly takes the runtime
   // tables' prototype, as one called through its import does, and the
@@ -8737,4 +8840,370 @@ int main(void) {
 #else
   GTEST_SKIP() << "native GS-base execution requires Linux x86-64";
 #endif
+}
+
+TEST(LLVMCValues, AnOffsetIntoAnOwnedImageObjectIsNoStringLiteral) {
+  // A whole module defines the image bytes it reads. A table's address taken
+  // as an integer and moved by a constant is still an offset into that
+  // object: the zero word there is an entry, not an empty wide string whose
+  // literal the index would then run past.
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  auto Module = llvm::parseAssemblyString(R"(
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+@__nd_data_5000 = internal constant [20 x i8] c"\00\00\80\3F\07\00\00\00\00\00\00\00\05\00\00\00\09\00\00\00", align 16
+define i32 @entry_after(i64 %index) {
+  %scaled = shl i64 %index, 2
+  %address = add i64 %scaled, add (i64 ptrtoint (ptr getelementptr inbounds (i8, ptr @__nd_data_5000, i64 4) to i64), i64 4)
+  %pointer = inttoptr i64 %address to ptr
+  %value = load i32, ptr %pointer, align 4
+  ret i32 %value
+}
+define i32 @entry_before(i64 %index) {
+  %scaled = shl i64 %index, 2
+  %address = add i64 %scaled, sub (i64 ptrtoint (ptr getelementptr inbounds (i8, ptr @__nd_data_5000, i64 12) to i64), i64 4)
+  %pointer = inttoptr i64 %address to ptr
+  %value = load i32, ptr %pointer, align 4
+  ret i32 %value
+}
+)",
+                                          Diagnostic, Context);
+  ASSERT_TRUE(Module) << Diagnostic.getMessage().str();
+  neverd::BinaryImage Img;
+  Img.Arch = neverd::Arch::X64;
+  Img.Bits = neverd::Bitness::Bits64;
+  Img.Format = neverd::BinaryFormat::ELF;
+  neverd::Segment Data;
+  Data.Name = ".rodata";
+  Data.VA = 0x5000;
+  Data.Size = 20;
+  Data.Flags = neverd::SegmentFlags::Readable;
+  Data.Data = {0, 0, 0x80, 0x3F, 7, 0, 0, 0, 0, 0,
+               0, 0, 5,    0,    0, 0, 9, 0, 0, 0};
+  Img.Segments.push_back(std::move(Data));
+  // The bytes at 0x5008 read alone as an empty wide string.
+  ASSERT_TRUE(neverd::stringLiteralAt(&Img, nullptr, 0x5008,
+                                      /*AllowEmpty=*/true));
+  neverd::CEmitterOptions Options;
+  Options.Format = neverd::BinaryFormat::ELF;
+  Options.TheArch = neverd::Arch::X64;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options, nullptr, &Img));
+  EXPECT_EQ(Source.find("\"\""), std::string::npos) << Source;
+  Source += R"c(
+int main(void) {
+  if (entry_after(0) != 0 || entry_after(1) != 5 || entry_after(2) != 9)
+    return 1;
+  return entry_before(0) == 0 && entry_before(-1) == 7 && entry_before(1) == 5
+             ? 0
+             : 2;
+}
+)c";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndRun(Source, Optimization);
+}
+
+TEST(LLVMCValues, AConversionOfANamedLoadConvertsAsItsInstruction) {
+  // A load that reads as its own name lends that name to a cast of it only
+  // where the cast keeps the value. A conversion to or from floating point
+  // states its signedness: C would convert the unsigned carrier as unsigned.
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  auto Module = llvm::parseAssemblyString(R"(
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+define i64 @conversions(ptr %word, ptr %real, ptr %out) {
+  %bits = load volatile i32, ptr %word, align 4
+  %signed = sitofp i32 %bits to float
+  %signed_bits = bitcast float %signed to i32
+  %unsigned = uitofp i32 %bits to float
+  %unsigned_bits = bitcast float %unsigned to i32
+  %wide = sitofp i32 %bits to double
+  %wide_bits = bitcast double %wide to i64
+  %number = load volatile double, ptr %real, align 8
+  %to_signed = fptosi double %number to i32
+  %narrow = fptrunc double %number to float
+  %narrow_bits = bitcast float %narrow to i32
+  store i32 %signed_bits, ptr %out, align 4
+  %second = getelementptr inbounds i8, ptr %out, i64 4
+  store i32 %unsigned_bits, ptr %second, align 4
+  %third = getelementptr inbounds i8, ptr %out, i64 8
+  store i32 %to_signed, ptr %third, align 4
+  %fourth = getelementptr inbounds i8, ptr %out, i64 12
+  store i32 %narrow_bits, ptr %fourth, align 4
+  ret i64 %wide_bits
+}
+)",
+                                          Diagnostic, Context);
+  ASSERT_TRUE(Module) << Diagnostic.getMessage().str();
+  neverd::CEmitterOptions Options;
+  Options.Format = neverd::BinaryFormat::ELF;
+  Options.TheArch = neverd::Arch::X64;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
+  Source += R"c(
+static uint32_t float_bits(float value) {
+  uint32_t bits;
+  __builtin_memcpy(&bits, &value, 4);
+  return bits;
+}
+static uint64_t double_bits(double value) {
+  uint64_t bits;
+  __builtin_memcpy(&bits, &value, 8);
+  return bits;
+}
+int main(void) {
+  const uint32_t words[] = {0, 1, 0x7FFFFFFFu, 0x80000000u, 0xFFFFFFFFu,
+                            0x01000001u, 0xA5A5A5A5u};
+  const double reals[] = {0.0, -1.5, 2147483520.0, -2147483648.0, 1e-3,
+                          16777217.0, -3.999};
+  for (unsigned i = 0; i < 7; ++i) {
+    volatile uint32_t word = words[i];
+    volatile double real = reals[i];
+    uint32_t out[4];
+    const uint64_t wide = conversions((void *)&word, (void *)&real, out);
+    if (out[0] != float_bits((float)(int32_t)words[i])) return 1 + i * 8;
+    if (out[1] != float_bits((float)words[i])) return 2 + i * 8;
+    if (wide != double_bits((double)(int32_t)words[i])) return 3 + i * 8;
+    if (out[2] != (uint32_t)(int32_t)reals[i]) return 4 + i * 8;
+    if (out[3] != float_bits((float)reals[i])) return 5 + i * 8;
+  }
+  return 0;
+}
+)c";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndRun(Source, Optimization);
+}
+
+TEST(LLVMCValues,
+     AStoreThroughAJoinedFramePointerReachesTheSlotsDirectReadsTake) {
+  // A sorting network picks one of two stack elements and writes both of its
+  // words through the pointer: the second by an offset added after the pick.
+  // The direct reads that follow take those same bytes, so the elements stay
+  // in the frame's own storage, where the word after one is the next.
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  auto Module = llvm::parseAssemblyString(R"(
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+define i64 @place(i64 %choose, i32 %low, i32 %high) {
+entry:
+  %frame = alloca [64 x i8], align 16
+  %frame_end = getelementptr inbounds i8, ptr %frame, i64 48
+  %first = getelementptr inbounds i8, ptr %frame, i64 8
+  %first_high = getelementptr inbounds i8, ptr %frame, i64 12
+  %second = getelementptr inbounds i8, ptr %frame, i64 16
+  %second_high = getelementptr inbounds i8, ptr %frame, i64 20
+  store i32 1, ptr %first, align 4
+  store i32 2, ptr %first_high, align 4
+  store i32 3, ptr %second, align 4
+  store i32 4, ptr %second_high, align 4
+  %first_address = ptrtoint ptr %first to i64
+  %second_address = ptrtoint ptr %second to i64
+  %is_first = icmp eq i64 %choose, 0
+  br i1 %is_first, label %join, label %other
+other:
+  br label %join
+join:
+  %target = phi i64 [ %first_address, %entry ], [ %second_address, %other ]
+  %target_pointer = inttoptr i64 %target to ptr
+  store i32 %low, ptr %target_pointer, align 4
+  %after = add i64 %target, 4
+  %after_pointer = inttoptr i64 %after to ptr
+  store i32 %high, ptr %after_pointer, align 4
+  %a = load i32, ptr %first, align 4
+  %b = load i32, ptr %first_high, align 4
+  %c = load i32, ptr %second, align 4
+  %d = load i32, ptr %second_high, align 4
+  %a64 = zext i32 %a to i64
+  %b64 = zext i32 %b to i64
+  %c64 = zext i32 %c to i64
+  %d64 = zext i32 %d to i64
+  %b_shifted = shl i64 %b64, 16
+  %c_shifted = shl i64 %c64, 32
+  %d_shifted = shl i64 %d64, 48
+  %ab = or i64 %a64, %b_shifted
+  %cd = or i64 %c_shifted, %d_shifted
+  %all = or i64 %ab, %cd
+  ret i64 %all
+}
+)",
+                                          Diagnostic, Context);
+  ASSERT_TRUE(Module) << Diagnostic.getMessage().str();
+  neverd::CEmitterOptions Options;
+  Options.Format = neverd::BinaryFormat::ELF;
+  Options.TheArch = neverd::Arch::X64;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
+  Source += R"c(
+int main(void) {
+  if (place(0, 7, 8) != 0x0004000300080007ull) return 1;
+  if (place(1, 7, 8) != 0x0008000700020001ull) return 2;
+  return 0;
+}
+)c";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndRun(Source, Optimization);
+}
+
+TEST(LLVMCValues, ACallThroughAPointerTakesItsRegisterPairAsOneInteger) {
+  // The code may read both result registers of a callee it reaches through a
+  // pointer, EDX:EAX on i386. A C record of two words returns through a hidden
+  // pointer there, which would shift every argument: the call is typed as
+  // returning the 64-bit integer that occupies the pair, and its halves are
+  // the two results. A callee that returns one word still calls correctly.
+#if !defined(__linux__) || !defined(__x86_64__)
+  GTEST_SKIP() << "requires native Linux i386 execution";
+#else
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"ir(
+define i32 @both(ptr %callee, i32 %a, i32 %b) {
+  %pair = call { i32, i32 } %callee(i32 %a, i32 %b)
+  %low = extractvalue { i32, i32 } %pair, 0
+  %high = extractvalue { i32, i32 } %pair, 1
+  %mixed = mul i32 %high, 31
+  %sum = add i32 %low, %mixed
+  ret i32 %sum
+}
+define i32 @first(ptr %callee, i32 %a, i32 %b) {
+  %pair = call { i32, i32 } %callee(i32 %a, i32 %b)
+  %low = extractvalue { i32, i32 } %pair, 0
+  ret i32 %low
+}
+)ir",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  Module->setTargetTriple(llvm::Triple("i386-linux-gnu"));
+  Module->setDataLayout("e-m:e-p:32:32-p270:32:32-p271:32:32-p272:64:64-"
+                        "i128:128-f64:32:64-f80:32-n8:16:32-S128");
+  ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+  neverd::CEmitterOptions Options;
+  Options.TheArch = neverd::Arch::X86;
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Out, Options));
+  EXPECT_NE(Source.find("uint64_t (*)(uint32_t, uint32_t)"), std::string::npos)
+      << Source;
+  Source += R"c(
+__attribute__((noinline)) static unsigned long long wide(unsigned a,
+                                                         unsigned b) {
+  return ((unsigned long long)(a ^ b) << 32) | (a + b);
+}
+__attribute__((noinline)) static unsigned narrow(unsigned a, unsigned b) {
+  return a * 3u - b;
+}
+int main(void) {
+  void *volatile callee = (void *)wide;
+  if (both(callee, 7, 9) != 16u + (7u ^ 9u) * 31u) return 1;
+  if (first(callee, 0x80000000u, 5) != 0x80000005u) return 2;
+  callee = (void *)narrow;
+  return first(callee, 7, 9) != 12u ? 3 : 0;
+}
+)c";
+  for (const char *Opt : {"-O0", "-O2"})
+    compileAndRun(Source, Opt, {}, false, /*NativeI386=*/true);
+  // The same rule types the call on 32-bit ARM, whose pair is r0:r1; a
+  // 64-bit target returns such a record in its registers already.
+  for (const auto &[Architecture, Triple, Layout, Pair] :
+       {std::tuple{neverd::Arch::ARM, "armv7-linux-gnueabi",
+                   "e-m:e-p:32:32-Fi8-i64:64-v128:64:128-a:0:32-n32-S64", true},
+        // o32 returns the pair in v0:v1 in either byte order; the integer's
+        // bytes are the two words in memory order on both.
+        std::tuple{neverd::Arch::MIPS32, "mips-linux-gnu",
+                   "E-m:m-p:32:32-i8:8:32-i16:16:32-i64:64-n32-S64", true},
+        std::tuple{neverd::Arch::MIPS32EL, "mipsel-linux-gnu",
+                   "e-m:m-p:32:32-i8:8:32-i16:16:32-i64:64-n32-S64", true},
+        std::tuple{neverd::Arch::X64, "x86_64-linux-gnu",
+                   "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-"
+                   "f80:128-n8:16:32:64-S128",
+                   false}}) {
+    Module->setTargetTriple(llvm::Triple(Triple));
+    Module->setDataLayout(Layout);
+    Options.TheArch = Architecture;
+    std::string Text;
+    llvm::raw_string_ostream TextOut(Text);
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, TextOut, Options));
+    EXPECT_EQ(Text.find("uint64_t (*)(uint32_t, uint32_t)") !=
+                  std::string::npos,
+              Pair)
+        << Text;
+  }
+#endif
+}
+
+TEST(LLVMCValues, UnextendedNarrowArgumentsArriveAsWholeWords) {
+  // The code reads only the low byte and the low half of its first two
+  // arguments, as code an int was declared to take may: its callers leave the
+  // upper bits as they are. Where C would let the definition assume them
+  // zero, the definition takes whole words and narrows them itself. The
+  // third argument says its callers extend it, and keeps its narrow type.
+  llvm::LLVMContext Context;
+  llvm::Module Module("narrow-arguments", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<> B(Context);
+  auto *Fn = llvm::Function::Create(
+      llvm::FunctionType::get(B.getInt32Ty(),
+                              {B.getInt8Ty(), B.getInt16Ty(), B.getInt8Ty()},
+                              false),
+      llvm::GlobalValue::ExternalLinkage, "spread", Module);
+  Fn->getArg(2)->addAttr(llvm::Attribute::ZExt);
+  B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+  auto *Bytes = B.CreateMul(B.CreateZExt(Fn->getArg(0), B.getInt32Ty()),
+                            B.getInt32(0x01010101));
+  auto *Half = B.CreateShl(B.CreateZExt(Fn->getArg(1), B.getInt32Ty()), 3);
+  B.CreateRet(B.CreateAdd(
+      B.CreateXor(Bytes, Half),
+      B.CreateMul(B.CreateZExt(Fn->getArg(2), B.getInt32Ty()), B.getInt32(7))));
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  using neverd::Arch;
+  using neverd::BinaryFormat;
+  for (const auto &[TheArch, Format, Widened] :
+       {std::tuple{Arch::ARM, BinaryFormat::ELF, true},
+        std::tuple{Arch::X86, BinaryFormat::COFF, true},
+        std::tuple{Arch::X64, BinaryFormat::ELF, true},
+        std::tuple{Arch::X64, BinaryFormat::MachO, true},
+        std::tuple{Arch::AArch64, BinaryFormat::MachO, true},
+        std::tuple{Arch::MIPS32, BinaryFormat::ELF, true},
+        std::tuple{Arch::X64, BinaryFormat::COFF, false},
+        std::tuple{Arch::AArch64, BinaryFormat::ELF, false}}) {
+    SCOPED_TRACE(static_cast<unsigned>(TheArch));
+    SCOPED_TRACE(static_cast<unsigned>(Format));
+    neverd::CEmitterOptions Options;
+    Options.TheArch = TheArch;
+    Options.Format = Format;
+    Options.EmitIncludes = false;
+    std::string Source;
+    llvm::raw_string_ostream Stream(Source);
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Stream, Options));
+    const bool Words =
+        Source.find("uint32_t spread(uint32_t arg0_word, uint32_t arg1_word, "
+                    "uint8_t arg2)") != std::string::npos;
+    EXPECT_EQ(Words, Widened) << Source;
+    EXPECT_EQ(Source.find("uint8_t arg0 = (uint8_t)arg0_word;") !=
+                  std::string::npos,
+              Widened)
+        << Source;
+    EXPECT_EQ(Source.find("uint16_t arg1 = (uint16_t)arg1_word;") !=
+                  std::string::npos,
+              Widened)
+        << Source;
+    if (TheArch != Arch::X64 || Format != BinaryFormat::ELF)
+      continue;
+    // A caller of the original's int prototype passes bits above the byte
+    // and the half, through no C conversion; the result is the one their low
+    // bits give. A volatile pointer keeps the compiler from seeing the callee.
+    for (llvm::StringRef Level : {"-O0", "-O2"})
+      source_call_execution_test::compileAndRun("#include <stdint.h>\n" +
+                                                    Source + R"(
+typedef uint32_t (*int_prototype)(uint32_t, uint32_t, uint8_t);
+static int_prototype volatile call_as_int = (int_prototype)spread;
+int main(void) {
+  return call_as_int(0x4455667u, 0x12340005u, 1) !=
+         ((0x67u * 0x01010101u) ^ (5u << 3)) + 7u;
+}
+)",
+                                                {Level});
+  }
 }

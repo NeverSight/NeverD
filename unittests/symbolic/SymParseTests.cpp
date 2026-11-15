@@ -571,6 +571,40 @@ private:
   std::mt19937_64 Rng;
 };
 
+TEST(SymParse, PairedPrintingRetainsBothRootsAndTheirAmbientWidths) {
+  SymContext Ctx;
+  const auto Shared = parseSymExpr(Ctx, "(x + y) ^ (x & y)", 32).Root;
+  ASSERT_TRUE(Shared);
+  const auto Left = Ctx.mkNot(Shared);
+  const auto Right = Ctx.mkSub(Ctx.mkConst(32, 3), Shared);
+  const auto Narrow = Ctx.mkExtract(Shared, 3, 8);
+  const SymRef Roots[] = {Shared, Left, Right, Narrow, Ctx.mkConst(32, 5), {}};
+  for (auto A : Roots)
+    for (auto B : Roots) {
+      const auto [First, Second] = printSymExprPair(Ctx, A, B);
+      EXPECT_EQ(First, Ctx.toString(A));
+      EXPECT_EQ(Second, Ctx.toString(B));
+    }
+}
+
+TEST(SymParse, PairedPrintingPreservesSharedFragmentsAcrossDenseAndSparseIDs) {
+  for (const unsigned Padding : {0u, 2048u}) {
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", 32), Y = Ctx.mkVar("y", 32);
+    for (unsigned I = 0; I < Padding; ++I)
+      Ctx.mkConst(32, 4096 + I);
+    auto Shared = X;
+    for (unsigned I = 1; I <= 64; ++I)
+      Shared = Ctx.mkXor(Ctx.mkAdd(Shared, Ctx.mkConst(32, I)), Y);
+    const auto Outer = Ctx.mkAnd(Shared, Ctx.mkAdd(X, Y));
+    for (auto [A, B] : {std::pair{Outer, Shared}, std::pair{Shared, Outer}}) {
+      const auto [Left, Right] = printSymExprPair(Ctx, A, B);
+      EXPECT_EQ(parseSymExpr(Ctx, Left, 32).Root, A);
+      EXPECT_EQ(parseSymExpr(Ctx, Right, 32).Root, B);
+    }
+  }
+}
+
 TEST(SymParse, RandomExpressionsSurviveTheRoundTrip) {
   for (uint32_t Width : {1u, 8u, 32u, 64u, 256u}) {
     SymContext Ctx;

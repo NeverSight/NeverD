@@ -93,6 +93,21 @@ For a real save, compile projected bank initializers at O0/O2,
 inspect constant bytes, and keep hypothetical register transitions distinct
 from captured observations. No guest, handler or device callback need run.
 
+The `X86ModeInterruptTest.*` subset checks selected IRQ/NMI input in all five
+protected/compatibility/64-bit modes, deferred/refused inputs without effects,
+NMI-under-STI choices, high-half stack witnesses, suspended frame/event-budget
+work, zero-budget authentication, task refusal and terminal shutdown. KVM
+streams use one initial SREGS write, original mode transitions and STI/HLT wake;
+HighC/LLVM-to-C IRETQ handlers accept a second NMI without host state rewrites.
+
+The `X86ModeExecutionTest.*` subset in `NeverDX64PagedExecutionTests` checks
+continuous original protected/compatibility/code64 streams, complete register
+banks, mode-specific fault delivery and paid continuation. Its KVM fixtures set
+SREGS once and use original instructions for every later mode change. Keep
+Clang/NeverC source compilation on the x64 host. Pair this subset with the
+paging/control/event, legacy source and existing paged source suites when
+changing the shared boundary; record P/E-core profile choices explicitly.
+
 `NeverDX64PagedExecutionTests` compiles actual paged HighC/LLVM-to-C exports
 through Clang and optional `NEVERD_TEST_NEVERC`, at O0/O2, and compares their
 scalar instruction completion and faults with independent original KVM CPU
@@ -1893,7 +1908,93 @@ work across multiple FDEs. Callback code relocation still rejects these new
 recipes. `AppleSignedCallbacks/SourcePatchPAuthLRCallbackMatrix`
 in `NeverDSourcePatchMatrixTests` rejects exact and interior original callbacks
 whose compact recipe requires PAuth_LR, leaving image and output unchanged.
-These tests do not execute native signed exception unwinding.
+
+`NeverDArm64eLiftedImageTests` also runs indexed C++/Objective-C language frames
+through automatic whole-image lifting and publication. The explicitly protected
+non-call fixtures check original LSDA reuse, authenticated personality slots,
+direct `_Unwind_Resume` calls, bare-RET result preservation and refusal of a
+changed LSDA operand. With `NEVERD_ARM64E_ASYNC_NATIVE=1`, native replay checks
+both cleanup levels, exception identity and signal-mask restoration on ordinary
+and alternate stacks at O0/O2. These tests require complete declared lifetimes;
+they do not infer asynchronous cleanup scopes absent from the input LSDA.
+
+`NeverDArm64eLiftedImageTests` checks register-result publication with FP/SP
+CFA changes, explicit B-key augmentation, remembered states and two epilogues.
+It compares the final linked CFI with the original and rejects altered source
+spill rules. Native replay exercises both exits over an integer input matrix.
+`AArch64SavedRegisters` adds complete lifted-image publication with all
+X19-X28 and V8-V15 saves. It checks offset, restore and same-value DWARF rules,
+rejects altered GPR/vector spill locations, and compares both epilogues against
+independent register seeds. Separate D and Q fixtures check the low lanes and
+full saved vectors. With `NEVERD_ARM64E_LIFTED_NATIVE=1`, their signal cases
+interrupt the published body and resume the authenticated caller from the
+recovered rows, checking every saved register after returning through the
+system signal frame.
+`AArch64CompactRegisters` exercises classic frame-pointer compact encodings:
+each of the nine saved GPR/D pairs, all pairs, sparse masks, a frame with no
+additional saved pair, and extra SP allocation below the established FP. The
+published image must retain the original compact word without a DWARF fallback;
+altering any declared spill is refused. Independent callers check original and
+published normal returns, both signed epilogues, preserved registers, and
+signal-driven caller resumption. Unselected vector upper lanes must remain
+unchanged. Coalesced fixtures assert that two source functions really share
+one compact record, then recover each function independently. Frameless
+variants retain the live signed LR and cover every saved pair, full/sparse
+masks, additional stack allocation and coalescing. They validate NeverD's
+instruction-derived caller resumption; they do not independently qualify the
+system unwinder's frameless saved-pair implementation.
+
+Two PAuth_LR cases independently encode final mode-5 image records and check
+complete publication with zero/nonzero signing-PC offsets, full/sparse saves
+and both PC-relative epilogues. The fixtures write their one validated encoding
+slot in an unsigned structural input after Apple linking: Xcode 27
+canonicalizes the raw nonzero object record to ordinary FP mode. The linker
+word is recorded before fixture construction.
+A contradictory ordinary-FP input and removal of the signing CFI must both
+refuse publication.
+They report `structural_pauth_lr_images` and zero native executions: these
+cases do not run PAuth_LR instructions on older CPUs. The updated LLVM fork's
+MC producer is required; the unchanged r6 prebuilt explicitly skips these
+two cases. LLVM MC tests separately check offset limits, fixed fragment
+boundaries, ordinary-arm64 rejection and DWARF fallback for unrepresentable
+rules. Ordinary relocatable objects retain DWARF for a nonzero signing offset;
+only the provenance-bound final-image writer and explicit native object
+installer consume that compact payload directly.
+`InstructionAddressRecipesUseTheActualSigningPC` compiles the public Darwin
+signal cursor and an independent SP/PC signing oracle as C11 and C++20 at
+O0/O2. Set `NEVERD_ARM64E_ASYNC_NATIVE=1` only in a qualified arm64e process
+environment to execute it. Separate properties count PACM and explicit
+PAuth_LR profiles; an unavailable explicit instruction is not counted.
+`verify_arm64e_native.py probe-cursor` additionally records whether the PC
+modifier changes signatures, rather than treating old-CPU PACM hint fallback
+as full PC-signing qualification. See the
+[native qualification record](arm64e-native-validation.md#instruction-address-signal-recipes-and-remembered-frames).
+The same test host separately exercises signed language unwinding. With
+`NEVERD_ARM64E_ASYNC_NATIVE=1`, the signal cleanup cases compare the original
+and published code at O0 and O2, on the ordinary and alternate stacks. They
+check object identity, cleanup order and the restored signal mask. Set
+`NEVERD_ARM64E_LIFTED_NATIVE=1` to execute the TLS lifecycle and lifted
+arithmetic controls. The TLS cases compare against a compiler-linked dylib,
+including a pre-existing TLS template and thread-exit callbacks.
+`RunsLegacyThreadInitializersWithPerInstancePAC` compares a compiler-linked
+per-thread reference with the published dylib at O0 and O2. Three threads
+exercise old and new descriptors, recursive initializers, all four PAC keys
+and the TLV calling convention. The signal tests also interrupt a proved
+path back to a protected call on both ordinary and alternate stacks. See the
+[publication and signal-delivery checks](arm64e-native-validation.md#signal-delivery-language-cleanup-and-new-thread-local-storage).
+
+`NeverDArm64eUnwindRecoveryTests` runs without Apple hardware. It checks
+implicit signing at exact instruction boundaries, including conflicting
+paths, live and spilled LR, stale stack slots, missing preserved registers,
+relocated signing instructions and analysis limits. The lifted-image suite
+also checks independent entry states, direct calls/tail transfers and crossed
+boundaries in coalesced compact ranges. Typed symbols from Mach-O function
+starts are admitted; local labels, boundary guesses and continuations are
+excluded. A DWARF frame or explicit compact signing-PC recipe cannot be
+reinterpreted relative to each of several function entries. The suite
+also compiles a compact-only Apple Clang dylib. With native replay enabled,
+it checks both that dylib and the system cursor's next frame after crossing
+the real signal trampoline. See the [system signal qualification](arm64e-native-validation.md#system-signal-trampoline-and-implicit-signing-rows).
 
 `AArch64LinkedUnwind` assembles and links real arm64e dylibs with the host
 Apple toolchain, then loads them through the public Mach-O loader. Its explicit
@@ -2271,8 +2372,10 @@ provenance, exact PCs, source scopes and bounded CIE lookup.
 `NeverDUnwindFrameCAPITests` loads independent Mach-O fixtures through the
 public session API and covers all six query statuses, unsigned and absent
 sources, a shorter FDE than compact range, half-open boundaries and signing
-address zero. `NeverDUnwindFrameCLITests` compares complete CLI JSON against
-that same public API without adding dependencies to the C API suite.
+address zero. For an implicit arm64e frame the C API tests check that an
+unknown DWARF result coexists with a known instruction result at the queried
+PC. `NeverDUnwindFrameCLITests` compares complete CLI JSON against that same
+public API without adding dependencies to the C API suite.
 `pluginsdk/python/tests/test_unwind_query.py` checks the Python adapter's
 ownership, integer validation and complete JSON retention.
 `NeverDLinkedUnwindQuery` rebuilds the three Apple-linked fixtures and compares
@@ -3133,6 +3236,23 @@ These host C tests do not qualify native Windows execution or arbitrary FP,
 record or split-width variadic tails. `check_windows_ucrt_calls.py --function
 UseCRTVarargs` separately compiles the actual `_wopen` output against the
 retained original Microsoft UCRT declarations on x86, x64 and ARM64.
+
+`I386CallContract.RuntimeVariadicImportsKeepTheirStackPrefixAndTail` checks
+the curated `_setjmp3` declaration without a supplied debug prototype. Both
+C routes, whole and selected units, and optimized/unoptimized pipelines keep
+zero, one and three additional DWORDs through direct IAT calls, loaded slots
+and import veneers. Recompiled i386 C at O0/O2 is compared with the original
+instructions using an independent provider that checks the buffer pointer,
+each high-bit argument, writes and return value. The paired
+`NonlocalJumpBufferAgreesWithItsRuntimeHeader` case checks `_longjmpex` against
+an independent i386 `jmp_buf` declaration. These are call-transport and source
+type checks, not native Windows unwind execution.
+`LLVMCValues.RuntimeVariadicFramePointersTakeTheirDeclaredPointee` additionally
+compiles frame-member and interior-byte addresses against that independent
+declaration and executes buffer writes and the return value at O0/O2.
+Older MinGW headers that
+declare `_setjmp3` with two fixed parameters do not describe the
+[documented runtime signature](https://learn.microsoft.com/en-us/cpp/c-runtime-library/setjmp3).
 
 `Win64CallContract.HeaderPointerQualifiersAgreeWithIndependentDefinitions`
 executes both C routes against independent definitions with const return and
@@ -4129,6 +4249,71 @@ Keep both the older corpus and `residue-power` as regression controls. The
 independent benchmark oracle evaluates a postorder expression walk so these
 deep products retain semantic checks within Python's default recursion limit.
 
+The high-word perturbation regressions cover products with even offsets, masked
+and multiplied disturbances, and pairs whose interaction survives by one bit.
+Independent full-width evaluation checks both the rewritten product and the
+original. A separate shared-use case checks that a full-width consumer prevents
+narrowing a repeated residue. A 33-factor executable exercises the CLI and
+GUI worker source paths at O0 and O2. Use `--family upper-perturbation --count 32`
+to reproduce 256 scaled products and `--family masked-perturbation --count 32`
+for 160 mixed-mask controls, including non-native widths up to 257 bits.
+Use `--family mixed-perturbation --count 24` for 168 products of 9 to 65
+factors with one to four low disturbances. The native tests exhaust the
+five-bit input pair and check mixed products with independent full-width Z3
+proofs at 16, 65 and 257 bits. A 49-factor executable retains three low
+factors through the CLI and worker source routes.
+Use `--family truncated-product --count 18` for 126 products of 11 to 89
+factors with surviving higher powers, and `--family integer-product --count 12`
+for 84 cases on both sides of a falling-factorial precision boundary. A
+63-factor x64 fixture exercises the CLI and worker source routes. The native
+tests also exhaust the six-bit input pair and prove overlapping products
+equivalent at 16, 65 and 257 bits with Z3.
+Use `--family affine-product --count 12` for 96 products of 23 to 137
+factors with nested affine coordinates, scaled XOR tails and widths through
+513 bits. The native regressions preserve even weights, zero content and
+limited work/storage, exhaust a six-bit input pair, and prove nested
+coordinates at full width with Z3. An additional 63-factor x64 fixture
+exercises two affine layers through both CLI and GUI worker source paths.
+Use `--family residue-view --count 12` for 84 products with 23 to 137 factors
+at widths from 9 to 513 bits. Masks and high addends disguise the coordinates.
+Native tests change a single observed bit, exhaust a six-bit input pair and
+check full-width equivalence with Z3. Both an outer scale and a scale already
+multiplied into one factor must preserve the same observations. A 63-factor executable uses these masks
+through CLI and GUI worker source paths. The 32-bit top-column regression
+requires at most 15 nodes at both the 256-unit work limit and the usual
+limit. The printed result round-trips at the same cost and Z3 checks
+full-width equality. The HighIR test replays the same product and checks
+the sign-column expression against its original full-word arithmetic.
+Use `--family dynamic-lane --count 12` for 84 products with masks that depend
+on runtime inputs. Half the cases leave one more low bit observable, and
+28 also have a fixed low literal that must stay in the output. The
+native test checks the whole seven-bit input space and wider words with Z3.
+A 63-factor x64 fixture exercises both CLI and GUI worker source paths.
+Use `--family spliced-word --count 12` for 96 products of 41 to 181 factors
+at 17 through 513 bits. They mix sign extension, zero extension and two-
+or three-piece concatenation. In half the products a replacement high lane
+reaches one observable bit. A 97-factor x64 fixture uses partial-register
+writes and both extensions through the CLI and GUI worker source paths.
+Use `--family rotating-window --count 14` for 112 products of 71 to 257 factors
+at the same widths. Nested rotations move a source window across bit zero.
+Half the products retain a live bit in an extension or high piece.
+A 127-factor x64 fixture reads CH after rotating ECX and checks signed and
+unsigned byte extensions through the CLI and GUI worker source paths.
+The LLVM pass also checks sign extension lowered to an exact right shift,
+signed and unsigned factor bounds, and neighboring shifts or coefficients
+that can produce poison.
+For latency comparisons, retain per-run and pooled per-input P95, separate
+thread CPU from wall time, and include same-binary A/A controls. Pooling input
+medians can change the sample at the 95th percentile and reverse the apparent
+direction of individual runs. Keep raw timings and paired intervals when
+interpreting small changes.
+The LLVM
+translator checks scaled offsets against exhaustive byte domains, including
+overlap and no-wrap flags that can make the input poison.
+Additional regressions combine a masked product with a compound arithmetic
+summand and recover a quadratic product beside twelve independently weighted
+inputs within a fixed work allowance.
+
 Dominant-prefix regressions add degree-511–514 products with disturbed factors
 and multiple residual multipliers. Complete-word APInt oracles cover 8–257 bits,
 both selector branches and residual zero/even values; exact and one-short work
@@ -4334,6 +4519,31 @@ blocks of degree 15/23/31 retain unpaired source words and low-bit disturbances.
 Tests exhaust all three six-bit inputs for a degree-15 block, check complete
 8–257-bit words and retain every factor under short work/storage allowances.
 A degree-23 machine-code fixture executes all six source routes at O0/O2.
+`SymMBASparseUnits` requires a reordered 64-factor product to complete its
+residue proof and reduce cofactor cost by more than half at 8/16/32/64 bits.
+Its independent oracle enumerates every observed byte pair, including populated
+high bits. Short-prefix powers check correlated bits through an entire unit
+period, including its neighboring exponents.
+`SymMBASample.LongChecksRetainEveryOriginalRandomAssignment` pins the original
+counterexample points around 312 and 624 generator words with dense/sparse IDs
+and 8/64/65/257-bit inputs. Independent standard-engine comparisons cover all
+8192 cached words, the cache boundary and large dense/sparse input unions.
+`SymExpr.CollectVarsUnionsSharedRootsAndExistingSparseIds` checks overlapping
+roots, unused wide inputs and the union with previously collected variables.
+Degree-23 fixtures cover disturbed neighbors, 8–257-bit inputs, cumulative
+work/storage refusals and independent full-width Z3 proofs at 8 and 64 bits.
+The existing 31-factor byte cases check all 16,777,216 input triples for each
+observation-width and parity-neighbor configuration. This complete finite-domain
+proof avoids relying on the runtime of a high-degree SMT query.
+Degree-49 and permuted degree-64 machine-code fixtures execute all six
+HighC/LLVMC CLI and worker source routes at O0/O2.
+Recursive square retention checks degrees 25/31/49/63 with full 8–257-bit
+arithmetic and parity neighbors. Native-width degree-49/63 cases must reduce
+cost within the default allowance; wider cases may decline while preserving
+every original bit. Degree 49 enumerates all seven-bit input
+triples, with populated high bits; degree 25 remains a preservation case without
+claiming a completed reduction. A degree-33 single-pair boundary must keep the
+original global work allowance below exhaustion.
 Reassociated complemented blocks check XOR identity reuse with independent
 8–257-bit arithmetic and an exhaustive three-input six-bit oracle. Degree-192
 mixed products at both mask precisions must preserve their independent linear
@@ -7069,7 +7279,118 @@ checks that a replica's dispatcher names the page it kept after its owner's chan
 starts its read context anew, and names none of another project's.
 `WorkbenchTests::ownerAnswersForItsPagesWhileAReplicaIsReady` checks that the owner
 still answers for the page it gave after a note, with a replica ready, and that a
-graph is still the replica's.
+graph is still the replica's. `WorkbenchTests::aPageAReplicaGaveReadsFromTheReplicaAfterANote`
+checks that, with part of the store rendered, a page a replica gave is read again from the
+replica after a note, the note showing, without asking the owner
+(`Session::analysisOwnerReads`). `WorkbenchUnitTests::analysisReadsGoAheadOfTheOwnersOrdinaryReads`
+checks that a view's kept read and `kept_renders` go to the owner ahead of ordinary reads
+queued before them, and `aPageTheOwnerGaveStartsNoReplicaAfterAChange` that, with part of
+the store rendered, a page the owner gave is asked of the owner after a change with no
+snapshot for a replica first. `QueryServiceTests::aCachedReadTakesNoTurnBehindRunningReads`
+checks that a cached page is answered while another read runs, and that one behind an
+accepted command waits for it and reads what it left;
+`aCarriedAnswerIsGivenWhileAnotherReadIsOnItsWay` that, of a listing's read and a view's
+both waiting behind an edit, the view takes the answer the edit's reply carried while the
+listing's is sent, `theNextReadIsSentBeforeAnAnswerIsTakenInAgain` that the read that
+waits is sent in the turn a reply is delivered in, and `aReplyWeighsWhatItCameIn` that the
+cache weighs a reply by the bytes its transport says, a subscriber being told them.
+`QueryServiceTests::aListingsOwnPageReadsWhatChangedOfIt` checks that a listing's visible
+page is named when read again and that what changed of it is applied, a scrolled page
+naming none; `WorkbenchTests::anEditRefreshesTheListingOnce` that the refresh after a second
+rename reads only what changed of the page (`metadata.listing_page_deltas`), and
+`NeverDWorkerListingPages` that a listing page a client names reads `unchanged` while it
+stands, that what changed of it after a rename applies to the page a read naming none
+gets, and that a page the worker did not give, or a changed one asked for without
+`page_delta`, reads whole.
+`WorkbenchTests::ownerReadsWhatChangedOfThePageItGave`
+comments on the function a page the owner gave shows and reads it again through the
+analysis queries: the owner's dispatcher names the page it kept, and the comment carries
+that read, whose answer the view's read takes (`metadata.following_reads`), the comment
+showing. `QueryServiceTests::anEditCarriesTheReadsOfThePagesItsViewsShow` checks that
+an edit carries the read of a page read at its revision and that the answer serves the
+view's next read with nothing sent, and `aCarriedReadTheWorkerRefusedIsMadeAgain` that a
+refused one is read again naming the page kept. `NeverDWorkerViewEdits` answers a
+comment's carried read as a whole read gets it without reading that page again behind the
+reply, leaves a page of no document it holds to the client (`later`), answers unchanged a
+page an edit reaches none of, refuses a read that is no page's alone, and answers none for
+a refused edit or for more than four.
+A code view paints again the rows a change reaches and leaves the others as its
+window keeps them. `WorkbenchTests::aChangePaintsTheRowsItReachesAndNoOther`,
+`aBracketsPartnerIsPaintedAgainInItsOwnRow` and
+`aRowIsPaintedAgainForItsNumberItsMarkOrItsPlaceAlone` change what a view shows in
+each way it changes (the cursor's line, a selection, a highlighted, locked or searched
+word, a bracket's partner lines away, a fold, the focus, a row another row of its
+instruction marks, a line's number, a scroll either way, another style, and a
+highlight no code of the view's sets) and compare, after each, what the window's
+backing store keeps of the view with the view painted whole; a change that reaches
+few rows may paint few. What it paints is counted as what the view asks its viewport to
+paint: a window paints more for reasons of its own, as when the dock that holds the view
+lays itself out again. `theViewsThatShowAnEditGoAheadOfTheOthersAtItsRevision` holds
+an edit's page to the line the edit reaches, painted before the others hear of the
+revision. `NeverDGuiPaintedRowsScaled` runs the four at `QT_SCALE_FACTOR=1.25`, where
+the edges of a row round. `NeverDGuiController`, `NeverDGuiPatchKeys` and
+`NeverDGuiSourceVariableTypes` turn `PaintCheck` on: every paint of a code view is
+painted again into a picture of what its paints add up to, which is compared with the
+view painted afresh, and a test after which the two differ fails.
+The listing paints the same way: the rows a change reaches, and the gutter of branch
+arrows where an arrow changed. `WorkbenchTests::aChangeToTheListingPaintsTheRowsItReachesAndNoOther`
+moves the cursor by lines and columns, onto and off a line an arrow leaves, with the focus
+and without it, selects by key and as another view's search does, locks and searches
+words, scrolls both ways, drops the address prefixes and changes the style, comparing
+after each what the window keeps of the listing with the listing painted whole. It reads
+the listing's page again as it was, which paints nothing and keeps every line read from
+it, and then with one thing changed at a time: a row under another name, painted within
+the call that takes the page; a name as long, where the text alone differs; a name in
+another color or leading elsewhere, where the spans alone do and what the text had laid
+out is not kept; an address of another class; rows that say another function without
+showing it, of which none is painted; a jump turned conditional in a row that reads as it
+did, which the gutter alone paints; and a longer address prefix, which moves every row.
+A highlight and an arrow that no code of the view's set are found as it paints anything.
+A page with one arrow then moves where the arrow leaves, where it lands and whether it
+is the cursor's, each without the others.
+`aPatchedItemsRowIsPaintedOnceItsPatchIsKnown` patches a byte the listing shows and takes
+the patch back: the lines are read again first, and the row is painted once more when the
+session has read which bytes are patched. `NeverDGuiPaintedRowsScaled` runs both at
+`QT_SCALE_FACTOR=1.25` with the others, and the tests that turn `PaintCheck` on check
+every paint of the listing as they check a code view's.
+An edit carries the read of the lines the listing shows, and the listing takes the
+answer ahead of the lines around them. `QueryServiceTests::anEditCarriesTheReadAViewSaysItMakesNext`
+has a view say that read: the edit carries it naming no page, then the page the first
+answer gave; the read made as the edit's revision is said takes the answer with nothing
+sent, a second read of the same lines asks the worker, a `later` answers none, and a view
+that shows nothing, is gone or says no read has the edit carry none.
+`aReadTakesTheAnswerCarriedForItThoughACommandWaits` has a command accepted while the edit
+is with the worker, as the project's files are read again a moment after an edit wrote
+them: the read takes the carried answer as the revision is said all the same, the command
+leaves next, and an answer no read took is gone once a command has left. Where the command
+that waits is another edit, the read waits for that edit's reply and takes its lines.
+`WorkbenchTests::anEditBringsTheLinesTheListingShows` renames a function the listing
+shows: as the revision is said the row reads its new name while the listing's rows are
+not yet current, one refresh follows, and the worker answered one read with the edit.
+It then comments a line three times: with the pseudocode the view worked in the edit
+carries nothing, so that the pseudocode's page waits for no line of the listing, and the
+listing reads its lines itself ahead of the refresh; with the listing worked in the edit
+carries them; and so it does where the comment is made through the listing's own dialog,
+which may still hold the focus as the edit leaves.
+`theViewWorkedInShowsAnEditBeforeTheOther` holds the two turns in which the views take
+what an edit's reply carried: the listing takes its lines in the first where it is the
+view worked in and in the second where it is not, and a pseudocode view that has the
+change still to show (a note, which nothing reads ahead) takes its page in the first.
+`editsInABurstLeaveTheListingAsTheLastSays` renames a function the listing shows twice,
+the second rename accepted while the first is with the worker: the listing ends with the
+last name and has read no line it took ahead otherwise.
+`theLinesInViewAreReadAheadWhereTheyStandForTheLinesHeld` gives the listing such lines by
+hand: they are taken where each stands at the place of the line it replaces, and left to
+the refresh where a line was added in view, the view scrolled since it asked, fewer lines
+came than were asked for short of the listing's end, they begin above the view, or the
+refresh has landed; and a refresh that reads a line taken ahead otherwise is counted,
+which the other tests hold at none. `anEditLeavesThePagesKeptInTheOrderTheyWereRead`
+keeps as many pages as a dispatcher keeps, the last a page a view shows, and has one more
+kept after an edit looked at them all: the page read longest ago goes, and no other.
+`NeverDWorkerListingPages` carries the lines a view shows with a rename, naming the page
+kept and naming none, and has more lines than a view shows, a read that may look for an
+owner, and the lines after an edit that leaves the listing its functions to read again
+left to the client.
 `NeverDWorkerListingFacts` runs that job over a real PE: the owner of the same
 session takes up what the replica keeps of a function's first look, a later session
 lists what asking the engine lists, a new name of a function or of data keeps the
@@ -7095,7 +7416,8 @@ replica restores from and a save each find what was queued, a save written behin
 reply (`save.write_behind`, a boolean) makes staged comments the step before the edit
 that follows and both reach the files and undo in order, a kill at any moment leaves
 a project that opens and takes edits, a write that fails fails a later edit and goes
-through once it can, a data item refused right behind one whose write fails and
+through once it can (the history and the byte patches answering meanwhile), a data
+item refused right behind one whose write fails and
 function edits and operand formats taken before a failed write is found stay in the
 session and reach the files once they take writes again, a local's new name is taken
 while the project's folder takes no write and reaches the files afterwards, an undo past
@@ -7103,16 +7425,44 @@ a staged comment's step is refused unless it commits the comments first
 (`commit_staged`), its reply lists as many history entries as `limit` asks, and files changed behind the worker stop the next edit.
 `NeverDSessionCAPITests` lists the user's data items of a span with
 `neverd_items_range_json`: those sharing a byte with it, one reaching in from before
-included, none past them, and none for an empty or reversed span.
+included, none past them, and none for an empty or reversed span; and the function
+edits of an entry or a span with `neverd_functions_range_json`, created, deleted and
+stated ones as `neverd_functions_json` lists them. Its
+`DeclaredTypesJoinThePDBsAndStayWithTheProject` lists a span of the declarations with
+`neverd_type_declarations_range_json` as the list says it, and none for an empty or
+reversed span. `NewTypesKeepTheImportPrototypesTheyDoNotReach` decompiles a driver whose calls read
+the kernel's prototypes, declares a type none reaches and then the process one returns,
+and reads the driver as a session that declared the same types first, byte for byte.
+`LocalTypesDebugContext.NewTypesNoPrototypeReachesKeepABISignatures` keeps a converted
+signature, the same nodes, through a type no prototype reaches.
 `NeverDWorkerViewEdits` also undoes a local's name, data items and names of data step by
-step and redoes them, each step reading as a new reader of the project does. The
+step and redoes them, each step reading as a new reader of the project does, and a
+comment on a page a client keeps is read behind the edit's reply and given to the read
+that asks for it (`metadata.prepared_views_given`), the page it applies to reading as a
+read naming none gets. The
 workbench's `undoTakesBackANameAfterAComment` undoes a comment and then the name before
-it, with no refusal on the way. The
+it, with no refusal on the way, and `anUndoAskedBeforeTheHistoryIsReadWaitsForIt` asks for
+Undo as a rename is taken, before the session has read the history that holds it: the
+step waits for that read and takes the name back. The
 workbench's `commentsCommittedAheadOfAnEditAreNotASave` renames while a comment is
 still on its way: the comment is committed first, the files hold both without the
 project being reported saved, and Save still answers once the files hold it.
 `NeverDWorkerViewEdits` also checks a prepared function, a page named as kept, and a
 replica taking a function's and data's names in one update without reading names again.
+A new type's declaration there has the stores' names read behind its reply
+(`metadata.store_keeps_settled`), every view then reading from what is kept as before.
+It reads each view as a client that keeps its pages does, whole and three lines a page,
+through comments written, changed and taken away, a function's longer and shorter name,
+a data's name and two edits with no read between: each page named for what changed of it,
+with that applied, is the page a client that keeps none reads, the patch's own account
+answers (`metadata.named_view_changes_said`), and a read an edit carries has its patch
+written into the document (`metadata.named_view_documents_taken`), whose other pages
+read what it says. `NeverDWorkerViewEditsChecked` runs the same with
+`open.check_view_changes`, where the worker compares the documents for every such page.
+`NeverDWorkerCodeEdits` checks what each patch says it wrote (`saidChanges`): for every
+run of lines of a view, the account applied to the page before a comment, a function's
+name spelled twice on a line or a data's name gives the page after, with source names,
+library spans and a prelude it moves.
 `NeverDWorkerViewEdits` reads every view after each edit an owner takes while keeping
 documents, a function's name, a comment, a colour, a new type and undoing them, and each
 must read field for field as a session that has just opened the project's files.
@@ -7125,7 +7475,8 @@ there keeps what leads to it until a type something read moves on.
 `NeverDWorkerNamesRebuild` also renames functions, exported and not, and data, and
 defines data items, without the names being read again, and each page, table and
 resolved name then reads as after a reload. A name inside an automatic item and an
-item over a string's bytes do read them again.
+item over a string's bytes do read them again. The exports list reads the image's own
+names in either order and as filtered, and the same after an exported function's rename.
 
 `NeverDMedStackDeltaTests` checks shared stack-offset queries through PHI joins,
 the original depth boundary in both query orders, definition invalidation and
@@ -8843,8 +9194,10 @@ call and AArch64 strtof/strtod execution tests when changing this admission.
 `FloatCallsDefineOnlyTheirDeclaredScalarWidth` checks mixed float/double
 carriers in both input orders, using both call-site and callee-summary types.
 The shared HighC host fixture reports native `-m32` execution unavailable on
-macOS, where a 64-bit build would truncate the kernels' addresses. Linux and
-Windows retain the actual 32-bit differential. Native x87 IR inputs use
+macOS, where a 64-bit build would truncate the kernels' addresses, and on any
+other non-Linux host whose test Clang builds no runnable `-m32` program: the
+Windows CI's MSVC environment, set up for x64, links none. Linux retains the
+actual 32-bit differential, and a failed 32-bit build there stays a failure. Native x87 IR inputs use
 `LLVMHostFixture.h` at both host compiler boundaries; the original verified
 module and semantic proofs remain unchanged. The compiler copy lowers
 whole-object lifetime markers to the older `(i64 size, ptr)` signature, using
@@ -9685,6 +10038,14 @@ ctest --test-dir build-release \
   -L '^NeverD(CMemoryCopy|LLVMCValue|LLVMCFrameMemory|HighCStoreForwarding)Tests$' \
   --output-on-failure
 ```
+
+`HighCStoreForwarding.SharedVariableWalkKeepsFirstTypeAndCallBounds` checks
+shared and cyclic expressions, intrinsic outputs, indirect targets, and the
+first type recorded for a name under bounded and complete call arguments.
+`SharedMemoryWalkKeepsOrderAndRefreshesItsAddresses` checks address visitation
+order and fresh results after changing the indirect target. Both exceed the
+inline traversal storage; visitation order comes from operands, never from the
+membership set.
 
 ## LLVM C object storage
 
@@ -10643,6 +11004,32 @@ formula at `-O0` and `-O2`, preserving the high-bit remainder and toggle/cache
 isolation.
 
 ## Modular MBA simplification
+
+`SymMBAHigherProduct.MintermSelectionsKeepEveryBoundaryCorner` checks empty,
+singleton and complete tables across the 64-entry storage boundary.
+`MixedDegreeExpansionPreservesIndependentWordValues` checks changing factor
+counts, repeated and replaced factors, constants, cancellation and zero products
+against an independent word oracle. It exhausts two-bit triples and populates
+all limbs through 257 bits, including single-term expansion and budget refusal.
+
+The isolated-column tests compare the packed proof with exhaustive scalar
+truth tables at four precisions, including perturbed offsets and short budgets.
+A 64-factor machine-code fixture checks both CLI and worker source modes against
+the original product at O0 and O2. Paired expression printing must reproduce
+both individual strings for shared roots, ancestors and different widths.
+Product-progression tests exhaust every five-bit input triple and compare
+shuffled intervals, holes, parity changes and resource limits with independent
+full-width products through 257 bits. Independent Z3 checks prove shuffled
+full, half, and incomplete products for all 65-bit inputs. The wide-pair
+masked-product proof partitions the full input by the eight low-three-bit
+values of one operand, with the other operands unrestricted. The source-route
+fixtures also execute 64-factor and 126-factor windows through CLI and worker.
+Wide-product tests compare dynamic coefficients and shared consumers with full
+multiplication through 257 bits. Mixed-width verification crosses the cached
+random-word boundary in both directions. Independent word arithmetic checks
+weighted Boolean tails, overlapping inputs, and a changed high coefficient. A shuffled
+127-factor interval with an interior hole checks that rebuilding its children
+under a parent sum stays within the default work allowance.
 
 `SymMBALinearProofMemo` checks successful full-width proof reuse, alternating
 queries with the same difference, context isolation, incomplete proofs and
@@ -20700,6 +21087,10 @@ index after a declared failure, rejected admission, another connection, FD reuse
 and `dup3` replacement, including unchanged cursors after mismatches. Android's
 `MismatchKeepsConnectionIdentityAcrossFDReuse` exercises the same owner through
 named sends and variadic raw writes at O0/O2 with all relocation variants.
+`ExhaustedSendKeepsNamedAndRawResultsPending` checks both wrappers when a
+short write consumes the last supplied bytes. Linux tests also check a request
+with one byte remaining, retrying that byte and reporting the bound connection
+through a descriptor alias.
 
 The network fixtures also exercise TCP failure followed by connected UDP,
 IPv4/IPv6, named/raw/dynamic calls, FD reuse, packet truncation, peek, empty
@@ -20727,6 +21118,9 @@ ONESHOT rearming, timeout copyback, and original libc callers over all six
 O0/O2 ordinary/APS2/RELR fixtures and available checked ARM64 backends. Buffered
 cases assert partial objects, newline/read-ahead, multiple suspensions, EOF,
 per-read timeout, thread-local errno and incomplete imports at unknown input.
+TCP quiet-duration cases cover a delayed connect, duplicate and reused descriptors,
+the first unknown nanosecond, and a schedule that becomes valid on a later
+connect attempt. Android callers exercise libc `poll` and raw `ppoll`.
 Run affected Linux and Android owner suites before review; unavailable backend
 skips do not count as executed coverage. All fixtures use explicit offline data.
 
@@ -21225,6 +21619,10 @@ adapters: stock Clang does not register the fork's native state APIs. The
 original module remains unchanged, and native-intrinsic qualification uses
 the fork directly. `HostFixtureKeepsStateInAnIndependentClone` checks that
 separation and compiles all 15 state interfaces for i386/x64 at O0/O2.
+The cloned fixture also uses the emitter's DIV/IDIV assembly contract for
+32-bit and 64-bit quotient/remainder pairs. The x87 call-loop replay links
+that IR with a stock Clang and checks the result against original machine code
+at O0 and O2.
 
 ### Bounded ENCLU/GETSEC state
 
@@ -21517,9 +21915,12 @@ exercise named, dynamic, variadic and raw ARM64 connect calls with independent
 errno and guarded-memory expectations. Run both Linux and Android network owners
 after changing connection admission. All transport tests are offline.
 
-`ProcessPublic.AndroidConnectionFailuresMatchSDKAndCLI` compares ten complete
-SDK/CLI reports and guarded memory across O0/O2 callers, large finite counts,
-exhausted providers and failed-description reuse.
+`LinuxNetwork.TCPConnectFailuresResumeAtTheNextExactPeer` checks both sides
+of a positioned failure run, including rejected peers and stream reads on the
+subsequent connection. `ProcessPublic.AndroidConnectionFailuresMatchSDKAndCLI`
+compares complete SDK/CLI reports and guarded memory across O0/O2 callers,
+large finite counts, recovery at an exact IPv6 peer, exhausted inputs and
+failed-description reuse.
 
 `ProcessPublic.AndroidApplicationValuesMatchSDKAndCLI` compares 84 complete
 SDK/CLI reports across O0/O2 JNI callers. Resolver identity, UTF-16 builders,
@@ -23425,6 +23826,11 @@ the completed child's one-unit reuse and the unfinished sibling's remaining work
 
 ## MIPS ELF analysis and source roundtrips
 
+The optional [Archer C7 V5 handler comparison](firmware/archer-c7-v5.md#reproduce-selected-views)
+runs the original `ubus call` at `0x4012d0` and both recompiled C views against
+five modeled PLT imports. Its input is the locally extracted, hash-checked
+firmware executable. The repository-owned source matrices run independently.
+
 The experimental [MIPS analysis](mips.md) path has focused targets
 `NeverDMIPSTests` (ELF admission, endian data, GOT/PLT and unwind records),
 `NeverDMIPSIntegerTests` (integer semantics and pinned Unicorn),
@@ -23453,6 +23859,21 @@ readonly/writable globals, image pointers, MUL, both word-merge orders,
 doubleword merges and a merge read in an indirect call's slot. Uninitialized
 merge destinations cover both orders, all offsets, fixed and seeded random
 machine values, independent expected bytes and fault order at both page edges.
+For n64, the runner also checks isolated `SDL`, isolated `SDR` and a paired
+store followed by a paired reload. It compares the returned 64 bits and all
+16 bytes around the destination against an independent byte-array splice at
+each of the eight alignments, in both byte orders.
+The four `mips_ddiv*` kernels return the quotient or remainder of a signed
+or unsigned doubleword division. Their edge cases include MIN64/-1, operands
+with significant high words, and signed remainders of both signs. The classic
+n64 runner also checks seeded random inputs against Python integer arithmetic.
+For physical microMIPS64, run `micro64-merge-store-roundtrip.py` from the same
+directory with `--neverd`, `--cc` (MIPS64 GNU C), `--assembler`, `--linker` and
+`--simulator` (GNU sim for `mipsisa64r2-mti-elf`). It checks the function tags
+in the rebuilt objects and executes both C backends at `-O0` and `-O2` for
+n32 and n64. Add `--suite division` to execute the corresponding doubleword
+division kernels, including their physical HI/LO reads. The default suite
+executes the merge-store kernels.
 An invalid-memory branch-likely slot is tested both annulled and executed.
 Bitfield and shuffle kernels cover all 13 classic SPECIAL3 forms and full-width
 fields with independent bit/lane expectations. MIPS64 invalid word inputs are
@@ -23642,9 +24063,131 @@ reference also fixes discarded packed-DSP/shift results: helpers still update
 DSPControl and enforce DSP enablement. The source runner permits no original
 zero-destination mismatch; see the [DSP reference boundary](mips.md#classic-mips32-dsp-state-and-packed-arithmetic).
 Reports identify the source revision and actual loaded native-library hash.
+
+The ASE runner accepts `dsp` for extraction, `dsp-extra` for banked and
+partial-control operations, `dspr2` for all 46 revision-two instructions,
+`msa` for permutation, floating-point and control transfers, and `msa-int`
+for the remaining integer, transfer, memory and branch cases. Give each group
+a separate output directory. Use a MIPS-enabled shared build of the pinned
+Unicorn fork. The runner assembles
+both byte orders, recompiles HighC and LLVMC at `-O0` and `-O2`, and compares
+registers, output bytes, control state and enabled FP traps with the original.
+
+```bash
+LIBUNICORN_PATH=/path/to/pinned-unicorn-library-directory \
+PYTHONPATH="$PWD/third_party/unicorn/bindings/python" \
+python3 unittests/lift/mips/ase-roundtrip.py --group msa \
+  --neverd build-mips/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld \
+  --output build-mips/roundtrip-msa-ase
+```
+
+For the complete encoding check, build `neverd-mips-bench` and run
+`python3 unittests/lift/mips/ase-encoding-coverage.py --bench build-mips/bin/neverd-mips-bench`
+with `llvm-mc` and `llvm-objcopy` on the path. The fixture covers 113 classic
+DSP and 46 DSPR2 forms and 526 MIPS32 MSA mnemonic/format combinations.
+It checks distinct physical encodings and compares both byte orders. Its
+assembler objects and raw binaries are removed on exit. The execution tests
+above check register, memory and control effects for individual operations.
+
+For microMIPS32 DSP/DSPR2 and MSA, MIPS64r2 DSP/DSPR2 and classic MIPS32r6
+and MIPS64r6, use GNU binutils with all four MIPS ELF linker emulations:
+
+```bash
+python3 unittests/lift/mips/profile-encoding-coverage.py \
+  --assembler /path/to/mips-as --linker /path/to/mips-ld \
+  --bench build-mips/bin/neverd-mips-bench
+```
+
+The fixture links local branch relocations, checks physical lengths and compares
+the lifted operations across byte orders and across classic/micro ASE encodings.
+The parameterized `MIPSRelease6` and `MIPSDSPRegisterWidth` tests in
+`NeverDMIPSIntegerTests` check register values, control flow and full-width
+indexed addresses. The R6 fixtures include scalar and paired linked loads and
+conditional stores, selected hardware registers, CP0 word/high/doubleword
+transfers and cache requests. The tests check permission and alignment
+failures, partial-register aliases, interference, an inactive Config5.XNP
+feature, and n64 addresses above 4 GiB. The reference CPU test also runs
+ordinary R6 word and doubleword LL/SC sequences and compares their memory.
+
+Use `profile-roundtrip.py` in the same directory to recompile both emitted C
+views at `-O0` and `-O2`. Pass `--assembler`, `--linker`, `--neverd`,
+`--clang` and an empty `--output` directory, with the pinned Unicorn Python
+bindings and library configured as above. The fixture compares return values
+and DSPControl/MSACSR where applicable. For microMIPS ASEs it feeds the
+physical micro ELF to NeverD and the same independently assembled classic
+kernel to the 74Kf or P5600 reference core. Supply `--simulator` for these
+profiles. GNU sim executes the recompiled microMIPS functions with their
+original mode attributes. The driver checks each return value and, for DSP
+and DSPR2, the final DSPControl bits. The selected micro MSA integer kernel
+recompiles to scalar microMIPS. Its original vector instructions are checked
+against the classic encoding and the P5600.
+
+The `mips64extract_*` selections cover classic DSP64 extraction, insertion,
+signed accumulator shifts and DMTHLIP in both byte orders. The `mixed`
+selection retains both word and doubleword extraction helpers in one function.
+Each original return and DSPControl value must match independent integer
+arithmetic before the two C outputs are compiled at O0/O2. The
+`mips64boundary_*` selections additionally cover zero/one/32/63 extraction
+counts, full-width and HI-only fields, and the signed -64 shift. Both groups
+include negative LO values and use the corrected pinned Unicorn helper.
+`MIPSDSP64.*` separately tests all encoded counts, positions, banks, overlaps
+and unpredictable results with APInt expectations. The fork's
+`test_mips64_dsp_extract` exercises all register counts and all positions in
+all four banks with independent bit-at-a-time expectations in both byte
+orders. It also checks DSP-disabled MFHI/MFLO with discarded results on o32
+and n64. The `mips64bank*` source profiles preserve full-width AC1–AC3
+transfers, extraction and accumulator shifts through both C views. The
+`mips64discard*` profiles check success/failure EFI and POS updates with a
+zero destination and no observed accumulator input. Their source returns
+the resulting DSPControl value. Native zero-result regressions additionally
+check DSP-disabled exceptions and an unchanged zero register. These checks
+do not qualify hardware execution.
+
+Run `micro-dsp-simulator.py` with `--assembler`, `--linker`, `--bench` and
+`--simulator` to execute the physical microMIPS DSP and DSPR2 instructions.
+Use a GNU MIPS simulator built for `mipsisa32r2-unknown-elf`. It compares two
+sets of inputs for each of the 159 forms in each byte order against the 74Kf
+classic instruction, including the two sides of BPOSGE32, indexed memory,
+DSPControl and both halves of AC2. The driver also compares NeverD LowIR for
+each classic and micro encoding of all 159 DSP/DSPR2 and 526 MSA forms in
+both byte orders.
+
+For n64, pass `--bits 64` and a GNU simulator configured for
+`mipsisa64r2-mti-elf`. The fixture executes physical microMIPS64 code in
+both byte orders and checks each full-width result against the DSP 3.02
+word result and its required sign extension. Use the pinned Unicorn build
+for the 74Kf word calculations. Its older MIPS64DSPR2 model uses different
+accumulator and condition-code widths. `MicroMIPSRelease6` executes the
+physical o32 compact arithmetic and branches on the R6 generic core,
+including taken and fallthrough paths, the returned PC and the link register.
+The compact sequence differential test executes every MOVEP selector,
+LWM16/SWM16 list and offset, and return stack increment on M14Kc and the R6
+generic core in both byte orders. It compares all GPRs and the PC. The pinned
+Unicorn SWM helper writes only halfwords. The test checks stored bytes against
+the full architectural words. To reproduce the independent memory check on
+Linux, assemble `unittests/lift/mips/micro-swm.S` with Clang for
+`-target mips-linux-gnu -march=mips32r2 -mabi=32 -msoft-float -mno-abicalls
+-fno-pic -G0`, link with GNU ld `-m elf32btsmip -e _start`, and execute with
+`qemu-mips -cpu M14Kc`. For little endian use `mipsel-linux-gnu`,
+`elf32ltsmip` and `qemu-mipsel`. For R6 select `mips32r6` and
+`mips32r6-generic`. QEMU linux-user 11.1.3 passes all four combinations,
+including the untouched bytes around all 64 legal stores per combination.
+The `micromips32r6` source profiles assemble the original with Clang
+and run it on the R6 generic core. They compile the emitted C unchanged
+for microMIPS32r2/o32 and compare the results under GNU sim. Clang 22's
+microR6 backend can emit legacy LUI and JRC16 in a function marked R6.
+The n64 compact R6 test compares 31 physical doubleword encodings with
+GNU-assembled classic R6 equivalents in both endiannesses. It checks
+disassembly, operand order and LowIR at a 64-bit PC. The n64 compact R6
+words have no native execution reference in the pinned emulator.
+
 Ordinary pair padding, predecessor memory barriers,
 single-sided barriers at joins, depth/work exhaustion and non-entry analysis
 roots or exceptional/disconnected paths have separate call-recovery regressions.
+
+microMIPS delay-slot tests enumerate all 65,536 first halfwords, both physical
+widths and both byte orders, including the DSP and MSA branch selectors. R6
+compact transfers always consume just the head.
 
 MIPS16 delay-slot classification exhausts all 65,536 halfwords, both byte orders
 and physical sizes. A shared jump normalizer avoids full scalar normalization
@@ -23708,7 +24251,127 @@ helpers, for the composed negative feature attributes. These compiler probes
 complement 24 standalone execution groups; checking the source spelling alone
 would miss Clang's declaration-versus-pragma attribute replacement.
 
+The MT/cache/accumulator follow-up tests CP0 selector keys, explicit MT ABI
+admission, master/non-master EVP updates, old control words, no-result forms,
+unknown bound state and EHB hazards. CACHE/PREF tests retain all operands and
+effects while refusing unmodeled execution/source; call setup tests invalidate
+stored fifth arguments while preserving register arguments. DSP tests cover
+all four banks, full-width dot carries and sticky OU16+AC. AC0 history cases
+cover unread producers, zero-destination consumption, consecutive half writes,
+unknown-bit transport and source joins. MSA rounded shifts/inserts exhaust every
+count at every width with APInt expectations, aliases and reserved prefixes;
+source fixtures execute zero/mid/full immediate counts on both byte orders.
+
+### MIPS scalar floating-point and ABI roundtrips
+
+The hard-float call tests assemble original callers and callees and bind explicit declarations.
+
+```sh
+PYTHONPATH=third_party/unicorn/bindings/python LIBUNICORN_PATH=/path/to/unicorn-build \
+  python3 unittests/lift/mips/floating-abi-roundtrip.py \
+  --neverd build-mips/bin/neverd --assembler /path/to/mips-as \
+  --linker /path/to/mips-ld --clang /path/to/clang \
+  --output build-mips/floating-abi-roundtrip
+```
+
+The runner defaults to Release 6. Add `--revision 2` for classic FR=1 Release 2
+with legacy NaNs, delayed JAL/JALR calls and the 74Kf/MIPS64R2 reference CPUs.
+Add `--revision 2 --fr 0 --abi 32` for o32 physical register pairs, including
+single/double entry and call results, variadic/indirect calls and preserved
+f20–f31 words. `--abi` and `--layout` narrow a diagnostic rerun; omitting them
+runs all cases for the selected mode.
+`SourceCallABI.AlignmentGuardPreservesOutgoingStackBytesAndAddresses` checks
+the reaching-store proof in all six MIPS ABI/byte-order profiles, with malformed
+alignment and opaque-effect controls that must still fail qualification.
+The runner compares original machine code with recompiled HighC and LLVMC at
+O0/O2 for o32, n32 and n64 in both byte orders, including float/double
+mixed entry arguments and nine-argument FP overflow. The SDK fixture obtains
+original call IDs and applies fixed or variadic declarations, including a
+single-precision named argument followed by a promoted double, and a double
+on the stack after the last argument register. Indirect calls
+alternate between two runtime callback targets. Callee results include float,
+double, signed and unsigned narrow integers, v0/v1 integer pairs, pointers
+and void. The original caller consumes both halves of each n32/n64 return
+register. Distinct high and low words and the FCSR inexact flag distinguish
+the return carriers. The original assembly callers also execute recompiled
+signed-byte, unsigned-halfword and paired integer callees. A mixed
+call checks each narrow integer at the full width supplied to the callee. The runner
+also checks SP, return target and ABI-preserved FPRs. `NeverDMIPSPipelineTests`
+rejects escaped frame pointers, callee-owned link spills and reads of volatile
+FP state (including f0 after a declared non-floating call).
+`NeverDMIPSFlowTests` covers delayed snapshots with detail disabled and poisoned
+operand counts. `NeverDLLVMCAllocaTests` executes floating/integer storage views
+against original LLVM, including negative zero and NaN payloads.
+
+`MIPSLegacyFP` in `NeverDMIPSIntegerTests` covers classic FR=1 pre-R6 arithmetic,
+conversions, sign operations, COP1X multiply-add and all 32 S/D predicates at
+every FCC selector. Literal machine encodings are independent of the lifter's
+operation catalog. Original MIPS64R2_GENERIC FP execution is compared
+with LowIR for result bits, FCSR and destination suppression, in both byte
+orders and GPR widths. Separate cases check conditional moves, a slot that
+changes the branch's condition, likely-slot annulment and ten memory forms at
+all eight low address offsets. The loader test rejects inconsistent FP ABI and
+CPR1 width evidence. `MIPSFR0` compares physical even/odd word pairs,
+alignment faults and untouched FPR words in both byte orders. Odd doubles,
+long formats, PS and unaligned indexed transfers are rejected under FR=0.
+Paired-single tests cover both lanes' exception flags, all even FCC pairs,
+conditional moves, packing, overlapping registers and defined/undefined ALNV
+offsets. The reference CPU supplies PS even for MIPS32 LowIR; this does not
+claim original-byte execution on a 32-bit PS CPU. Historical ISA profiles
+remain outside these checks.
+
+`MIPSPipeline.PairedFR0EntryAndResultFollowO32ABI` checks scalar/double
+source signatures in both backends. `FR0ScratchPairDoesNotConsumeAnIncomingArgument`
+checks scratch pairing through straight-line code and a diamond.
+`FPParameterMask.NarrowScalarViewRequiresUnobservedUpperBytes` checks that
+reading a scalar register in two words cannot narrow the incoming double.
+
+`MIPSPipeline.DoubleResultDiscardsOnlyOverwrittenUnknownFPRWords` checks that
+MTC1 followed by CVT.D.W may return a defined double after replacing the
+unpredictable high word. ADD.D must still refuse that unknown input. Both
+source paths, ISA revisions and byte orders participate in the check.
+
+`profile-roundtrip.py` accepts `mips32r2fp_*` and `mips64r2fp_*` selections for
+82 scalar pre-R6 source profiles. The `mips64ps_*` selections add 59 PS
+profiles, including all predicates at FCC0/FCC6, sign exceptions, ternary
+arithmetic, moves, packing and ALNV offsets. They use n64 integer carriers
+and do not establish a PS vector call ABI. Examples are `mips32r2fp_abs`, `mips64r2fp_madd`,
+`mips32r2fp_cc7`, `mips64r2fp_branch` and `mips64r2fp_memory_suxc1`.
+Use its existing GNU assembler/linker, NeverD, Clang and output arguments;
+repeat `--profile` to select more than one. The runner assembles explicit
+`-mfp64` input, recompiles HighC/LLVMC at O0/O2 in both byte orders, and checks
+return bits, FCSR and output memory against the original target program.
+The optional Unicorn reference must be built from the pinned fork. Generated
+products are deleted on success or failure after results are recorded.
+
+Add `--micro-fp` to execute the original physical pre-R6 microMIPS floating
+kernels and both regenerated C views with the pinned generic micro FPU CPUs.
+The same scalar/PS profile names select the kernels. For n64, supply
+`--micro64-cc /path/to/mips64-linux-gnuabi64-gcc`; Clang cannot generate
+microMIPS64. The GNU C path uses `-minterlink-compressed` and the emitted
+function mode attribute. Both paths use `-fno-strict-aliasing`, verify the
+micro ELF flag and function tag, and compare return bits, FCSR and all 64
+observed data bytes. These tests execute micro originals directly, without
+re-encoding them into classic instructions for the reference CPU. Use a GNU
+MIPS linker for these fixed-address fixtures.
+
+`MIPSMicroLegacyFP` compares literal physical arithmetic, conversions and FCC
+predicates against LowIR in both GPR widths and endians. It also tests memory
+alignment, invalid fields, doubleword transfers refused on MIPS32, revision
+reuse and FCC capture before either slot width. `MIPSMicroFR0` compares
+physical paired registers and memory in both endians. The exhaustive
+`MicroMIPSDelaySlots.AllFirstHalfwordsAndPhysicalWidths` includes BC1F/T and
+their reserved selector bits for MIPS32 and MIPS64. These instruction tests
+do not claim compressed floating-call ABI coverage.
+
 ### MIPS decode/lift and firmware performance
+
+The opt-in `neverd-mips-request-bench` target repeatedly decompiles one loaded
+SDK session and checks that every request produces identical source.
+Run `neverd-mips-request-bench IMAGE REPEATS OUTPUT [HEX_ENTRY] [--llvm]`.
+An entry selects one function. The default backend is HighC and `--llvm`
+selects LLVMC. The JSON reports wall time, CPU time and output size. The
+paired CLI runner below also measures fresh processes.
 
 `neverd-mips-bench` is an opt-in target, excluded from the default build:
 
@@ -23719,10 +24382,13 @@ build-mips/bin/neverd-mips-bench mips64el lift /path/to/owned-code.bin 100000
 
 Profiles are `mips`, `mipsel`, `mips64`, `mips64el`, `micromips`,
 `micromipsel`, `mips16`, `mips16el`, `mips16e2`, `mips16e2el`, `mipsdsp`,
-`mipsdspel`, `mipsmsa` and `mipsmsael`. The e2 profiles add explicit MIPS16e2
-feature evidence to MIPS16 encoding. The DSP profiles explicitly select the admitted classic32 DSP
-capability; MSA profiles select classic32 r5/o32 FP64 with the admitted integer
-vector instructions.
+`mipsdspel`, `mipsdspr2`, `mipsdspr2el`, `mipsmsa` and `mipsmsael`. The e2
+profiles enable MIPS16e2 encoding. The DSP profiles select the named revision
+of the classic MIPS32 DSP ASE. MSA profiles select classic32 r5/o32 FP64 for the admitted integer,
+permutation, floating-point and control-transfer instructions.
+`mips32r2fp`, `mips32r2fpel`, `mips64r2fp` and `mips64r2fpel` select classic
+pre-R6 FR=1 profiles. Newly admitted instructions have no successful baseline
+lift; report their throughput separately from comparisons of unchanged work.
 Stages are `capstone`
 (direct physical decoding), `decode` (NeverD physical decoding) and `lift`
 (decoding plus LowIR, including delay slots). Both decode paths request the same
@@ -23751,6 +24417,16 @@ handler and discovered functions (limited to 250), with one/default threads and
 both C backends. New instruction coverage and additional strict checks are
 different work and require separate reporting, not same-output speedup claims.
 This small corpus and a shared host do not establish a cross-tool ranking.
+
+To reproduce the compact o32 corpora and compare LowIR and SLEIGH P-code,
+run `tools/neverd-bench/mips-compressed.py` with Python 3.12 or newer,
+pypcode 4.1.0, pyelftools, `--assembler PATH/TO/mips-as` and
+`--bench build-mips/bin/neverd-mips-bench`. The optional `--save-inputs DIR`
+writes the four full byte streams for `mips-paired.py`. The cross-tool run
+compares decoded and translated physical spans, including delay slots, before
+timing nine alternating pairs. It records excluded functions. With pypcode
+4.1.0, the four-byte delay slot in `mips_stack` produces two halfword source
+marks. That function still participates in the NeverD baseline comparison.
 
 Both MIPS Python drivers reuse their `--output` directory through
 `scripts/mips_validation_artifacts.py`. A new output must be empty; older,
@@ -23791,3 +24467,26 @@ child readers, preserved inputs and the actual paired-measurement entry point
 with tiny fake commands. The roundtrip compiler-failure entry check uses the
 local pinned Unicorn bindings when available. These are artifact lifecycle
 checks, not performance or ISA qualification measurements.
+
+### Historical MIPS IV/V qualification
+
+`MIPSHistoricalLoader.*` checks both byte orders, n32/n64, missing and matching
+ABI records and conflicting historical levels. `MIPSHistorical.*` distinguishes
+I–V instruction introductions, release-only words, invalid direct-lift profiles,
+decoder/architecture reuse and all eight FCSR condition bits.
+`MIPSHistoricalFP.*` executes 84 IV and 109 V scalar/paired arithmetic forms
+against compatible original machine instructions, including rounding, FCSR and
+faulting write suppression.
+The older I–III timing profiles remain rejected rather than silently using r2.
+
+Run `unittests/lift/mips/profile-roundtrip.py` with `--historical-isa 4` or `5`
+and `--historical-abi n32` or `n64`, plus the ordinary assembler, linker,
+NeverD, Clang and output arguments. This exercises original historical ELF
+admission, both C views, both byte orders and O0/O2. It preserves the original
+PS instruction in V helpers while compiling scalar code with Clang's MIPS IV
+backend, since Clang 22 rejects MIPS V code generation. GNU as assembles that
+unedited compiler output as V. Original and rebuilt ELF headers and ABI records
+must retain the selected historical ISA, ABI and byte order. Receipts record
+source, code-generation and rebuilt ISA; no physical historical CPU is claimed.
+The same artifact owner records failed source/commands and removes generated
+ELFs, objects and superseded source after each attempt.

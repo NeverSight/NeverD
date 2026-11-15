@@ -849,7 +849,8 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
       // Most targets classify the initial linear probe from the instruction id
       // alone.  ARM PC-writing loads, register lists, and data-processing
       // instructions require operand detail to distinguish a real terminator
-      // from (for example) `pop {r4}`.
+      // from (for example) `pop {r4}`. MIPS verifies complete lifted units
+      // from their physical bytes and does not need Capstone operand detail.
       const bool PrevDetail = Dec.detailEnabled();
       Dec.setDetail(Img.Arch == Arch::ARM);
       for (size_t I : NeedVerify)
@@ -1519,12 +1520,11 @@ void FuncDetector::scanCallTargets(
       const size_t Job = NextJob.fetch_add(1, std::memory_order_relaxed);
       if (Job < PieceJobs.size()) {
         const PieceJob &Piece = PieceJobs[Job];
-        func_detect_detail::CodeInterval Known =
-            func_detect_detail::codeIntervalAround(Img, Piece.Start);
+        func_detect_detail::X86CallScan Scan(Img, LocalDec, *Piece.Seg,
+                                             Piece.Start, Piece.RangeEnd);
         for (va_t Cur = Piece.Start; Cur < Piece.End;) {
           func_detect_detail::checkCancellation(Cancellation);
-          const auto Step = func_detect_detail::stepCallsX86(
-              Img, LocalDec, Piece.Seg, Cur, Piece.RangeEnd, Known);
+          const auto Step = Scan.step(Cur);
           if (!Step)
             break;
           PieceSteps[Job].Ends.push_back(Step->Next);
@@ -1583,8 +1583,8 @@ void FuncDetector::scanCallTargets(
       PieceStepCount += PieceSteps[Piece].Ends.size();
     Taken.reserve(PieceStepCount);
     va_t Pos = Range.Start;
-    func_detect_detail::CodeInterval Known =
-        func_detect_detail::codeIntervalAround(Img, Pos);
+    func_detect_detail::X86CallScan Repair(Img, Dec, *Range.Seg, Pos,
+                                           Range.End);
     for (size_t Piece = Range.FirstPiece;
          Piece < Range.FirstPiece + Range.Pieces; ++Piece) {
       func_detect_detail::checkCancellation(Cancellation);
@@ -1603,8 +1603,7 @@ void FuncDetector::scanCallTargets(
       while (Pos < PieceJobs[Piece].End &&
              (It == Steps.end() || AddressOf() != Pos)) {
         func_detect_detail::checkCancellation(Cancellation);
-        const auto Step = func_detect_detail::stepCallsX86(
-            Img, Dec, Range.Seg, Pos, Range.End, Known);
+        const auto Step = Repair.step(Pos);
         if (!Step) {
           Pos = Range.End;
           break;

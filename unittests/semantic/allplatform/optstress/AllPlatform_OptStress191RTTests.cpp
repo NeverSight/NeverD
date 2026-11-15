@@ -5,23 +5,28 @@
 //===----------------------------------------------------------------------===//
 //
 // Green guardrails for three more rodata access SHAPES.  Each reads its rodata
-// through plain forward base+index copies (symbol always referenced at offset 0)
-// and folds a result that depends only on the bytes + control flow (never an
+// through plain forward base+index copies (symbol always referenced at offset
+// 0) and folds a result that depends only on the bytes + control flow (never an
 // absolute VA), so nothing touches the deferred i386/ARM32 PIC rodata
 // *interior*-pointer model (#477/#487); every probe runs on all four targets.
 //
-//   * matchain - matrix-chain multiplication order DP: dp[i][j] minimises over a
+//   * matchain - matrix-chain multiplication order DP: dp[i][j] minimises over
+//   a
 //                split point k the cost dp[i][k]+dp[k+1][j]+p[i-1]*p[k]*p[j].
 //                Pins a triangular DP with an inner SPLIT loop (the O(n^3)
-//                interval recurrence, distinct from the 1-D rolling knapsack/coin
-//                /edit/LCS/LIS DPs and the 2-D grid DPs elsewhere).
-//   * eggdrop  - egg-drop trials DP: dp[e][f]=1+min_x max(dp[e-1][x-1],dp[e][f-x]).
-//                Pins a min-of-max interval recurrence (distinct from matchain's
-//                additive split and from every pure-min/pure-max DP).
+//                interval recurrence, distinct from the 1-D rolling
+//                knapsack/coin /edit/LCS/LIS DPs and the 2-D grid DPs
+//                elsewhere).
+//   * eggdrop  - egg-drop trials DP: dp[e][f]=1+min_x
+//   max(dp[e-1][x-1],dp[e][f-x]).
+//                Pins a min-of-max interval recurrence (distinct from
+//                matchain's additive split and from every pure-min/pure-max
+//                DP).
 //   * palinsub - longest palindromic SUBSEQUENCE DP over a rodata string: equal
 //                ends extend the inner interval by two, else take the better
-//                shrink.  Pins an expand/shrink triangular DP (distinct from the
-//                Manacher palindrome-SUBSTRING radii #151 and from LCS #126/#146).
+//                shrink.  Pins an expand/shrink triangular DP (distinct from
+//                the Manacher palindrome-SUBSTRING radii #151 and from LCS
+//                #126/#146).
 //
 // Triangular DPs fill only cells with i<=j and read shorter intervals already
 // written, so the scratch tables need no full zero-init (only the diagonal /
@@ -45,8 +50,16 @@ class A64OptStress191RT : public SemanticRoundTripFixture,
                           public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(A64OptStress191RT, Verify) { roundTripAArch64(GetParam()); }
 class ARM32OptStress191RT : public SemanticRoundTripFixture,
-                            public ::testing::WithParamInterface<RoundTripTC> {};
+                            public ::testing::WithParamInterface<RoundTripTC> {
+};
 TEST_P(ARM32OptStress191RT, Verify) { roundTripARM32(GetParam()); }
+
+// Its code reads r4's save area past an array's end on a path that never
+// runs; only that read may hold the caller's unknown register.
+class ARM32OptStress191LLVMCRT
+    : public SemanticRoundTripFixture,
+      public ::testing::WithParamInterface<RoundTripTC> {};
+TEST_P(ARM32OptStress191LLVMCRT, Verify) { roundTripARM32(GetParam()); }
 
 // clang-format off
 static std::vector<RoundTripTC> makeOptStress191TC(const char *prefix, const char *T) {
@@ -108,12 +121,28 @@ static std::vector<RoundTripTC> makeOptStress191TC(const char *prefix, const cha
 }
 // clang-format on
 
-static const std::vector<RoundTripTC> kX64 = makeOptStress191TC("x64o191", "long");
-static const std::vector<RoundTripTC> kX86 = makeOptStress191TC("x86o191", "int");
-static const std::vector<RoundTripTC> kA64 = makeOptStress191TC("a64o191", "long");
-static const std::vector<RoundTripTC> kARM = makeOptStress191TC("armo191", "int");
+static const std::vector<RoundTripTC> kX64 =
+    makeOptStress191TC("x64o191", "long");
+static const std::vector<RoundTripTC> kX86 =
+    makeOptStress191TC("x86o191", "int");
+static const std::vector<RoundTripTC> kA64 =
+    makeOptStress191TC("a64o191", "long");
+static const std::vector<RoundTripTC> kARM =
+    makeOptStress191TC("armo191", "int");
 
-INSTANTIATE_TEST_SUITE_P(OptStress191, X64OptStress191RT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress191, X86OptStress191RT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress191, A64OptStress191RT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress191, ARM32OptStress191RT, ::testing::ValuesIn(kARM), rtTCName);
+static std::vector<RoundTripTC> llvmCRoute(std::vector<RoundTripTC> Cases) {
+  for (RoundTripTC &Case : Cases)
+    Case.SourceRoute = true;
+  return Cases;
+}
+
+INSTANTIATE_TEST_SUITE_P(OptStress191, X64OptStress191RT,
+                         ::testing::ValuesIn(kX64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress191, X86OptStress191RT,
+                         ::testing::ValuesIn(kX86), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress191, A64OptStress191RT,
+                         ::testing::ValuesIn(kA64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress191, ARM32OptStress191RT,
+                         ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress191LLVMC, ARM32OptStress191LLVMCRT,
+                         ::testing::ValuesIn(llvmCRoute(kARM)), rtTCName);

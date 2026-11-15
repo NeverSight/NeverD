@@ -66,7 +66,7 @@ bool Engine::keptRenderHolds(RenderStore &store, const std::string &key) {
   return !first || renderReadsHold(*first);
 }
 
-Json Engine::renderStoreIdentity() {
+Json Engine::renderStoreIdentity(const Json *declared) {
   // What it reads of the user's facts alone, which may be thousands of names
   // and comments.  What the code edits, comments, operand formats and data
   // items say reaches a listing, not a render.
@@ -89,7 +89,7 @@ Json Engine::renderStoreIdentity() {
   // The state above says those that stay, whether or not their files have been
   // written yet (ProjectHistory::persistLater), as it says the declared types.
   auto identity = browseCacheIdentity(
-      analysisSnapshot(std::move(state)),
+      analysisSnapshot(std::move(state), declared),
       {project_files::File::Code, project_files::File::Annotations,
        project_files::File::Renames, project_files::File::Operands,
        project_files::File::Functions, project_files::File::Items,
@@ -199,16 +199,30 @@ bool Engine::keptPageReadsCurrentNames(const Json &page) const {
   return current;
 }
 
-void Engine::currentNamesInView(Json &view) const {
+bool Engine::currentNamesInView(Json &view) const {
   const auto &names = imageFacts().names;
   if (names.empty())
-    return;
+    return false;
+  bool stated = false;
   eachStatedFunction(view, [&](std::uint64_t address, Json &identity) {
     if (const auto name = names.find(address); name != names.end()) {
+      for (const auto &[field, said] :
+           {std::pair<const char *, const std::string &>{"name", name->second},
+            {"display_name", name->second}}) {
+        const auto held = identity.find(field);
+        stated = stated || held == identity.end() || !held->is_string() ||
+                 held->get_ref<const std::string &>() != said;
+      }
+      for (const char *field : {"name_origin", "display_origin"}) {
+        const auto held = identity.find(field);
+        stated = stated || held == identity.end() || !held->is_string() ||
+                 held->get_ref<const std::string &>() != "user";
+      }
       identity["name"] = identity["display_name"] = name->second;
       identity["name_origin"] = identity["display_origin"] = "user";
     }
   });
+  return stated;
 }
 
 Engine::StoreNames Engine::storeNames() {
@@ -216,12 +230,43 @@ Engine::StoreNames Engine::storeNames() {
   return identity ? storeNames(std::move(*identity)) : StoreNames{};
 }
 
-std::optional<Json> Engine::storeIdentity() {
-  const auto project = projectJson();
-  if (!browseCacheEnabled_ || !project.is_object() ||
-      !project.contains("folder"))
+std::optional<Json> Engine::storeIdentity(const Json *declared) {
+  // What a declaration left to be read comes first: the names it gives the
+  // stores are those this identity is read against.
+  settleStoreKeep();
+  if (!browseCacheEnabled_ || projectFolder().empty())
     return std::nullopt;
-  return renderStoreIdentity();
+  return renderStoreIdentity(declared);
+}
+
+void Engine::settleStoreKeep() {
+  if (!storeKeepWaiting_)
+    return;
+  const auto waiting = *std::exchange(storeKeepWaiting_, std::nullopt);
+  ++storeKeepsSettled_;
+  StoreNames before, after;
+  try {
+    if (waiting.after) {
+      // Of what the stores are kept under, only the declarations moved
+      // (analysisSnapshot's declared_types): the names before read the rest
+      // as the names after do.
+      if (auto identity = storeIdentity(waiting.after.get())) {
+        after = storeNames(*identity);
+        (*identity)["declared_types"] = *waiting.before;
+        before = storeNames(std::move(*identity));
+      }
+    } else {
+      // The history took no row: its declarations are those before, and the
+      // Session says what they are now.
+      if (auto identity = storeIdentity(waiting.before.get()))
+        before = storeNames(std::move(*identity));
+      after = storeNames();
+    }
+  } catch (const std::exception &) {
+    // Later sessions render again.
+    before = after = StoreNames{};
+  }
+  keepStoresFor(before, after);
 }
 
 Engine::StoreNames Engine::storeNames(Json identity) {
@@ -229,15 +274,17 @@ Engine::StoreNames Engine::storeNames(Json identity) {
   StoreNames names;
   names.renders = BrowseCache::digest(runtime + identity.dump());
   // What a look asks the engine spells no name of data either.
-  identity.at("state").erase("renames");
-  names.facts = BrowseCache::digest(runtime + identity.dump());
+  names.facts = identity.at("state").erase("renames")
+                    ? BrowseCache::digest(runtime + identity.dump())
+                    : names.renders;
   return names;
 }
 
 namespace {
-std::filesystem::path projectLocalFolder(const Json &project,
+std::filesystem::path projectLocalFolder(const std::string &root,
                                          const char *folder) {
-  const auto &root = project.at("folder").get_ref<const std::string &>();
+  if (root.empty())
+    throw Error("cache_unavailable", "The project has no folder");
   return std::filesystem::path(std::u8string(
              reinterpret_cast<const char8_t *>(root.data()), root.size())) /
          "local" / folder;
@@ -245,6 +292,7 @@ std::filesystem::path projectLocalFolder(const Json &project,
 } // namespace
 
 void Engine::openRenderStore(const std::string &mode) {
+  writeStoreKeeps();
   renderStore_.reset();
   renderStoreStale_ = false;
   summariesDeferred_ = false;
@@ -257,7 +305,7 @@ void Engine::openRenderStore(const std::string &mode) {
     if (names.renders.empty())
       return;
     renderStore_ = std::make_unique<RenderStore>(
-        projectLocalFolder(projectJson(), "render-ahead"), names.renders,
+        projectLocalFolder(projectFolder(), "render-ahead"), names.renders,
         mode == "write");
     if (names.facts != factsStoreName_)
       openFactsStore(names.facts, mode == "write");
@@ -267,6 +315,21 @@ void Engine::openRenderStore(const std::string &mode) {
     return;
   }
   summariesDeferred_ = summaryJob_ && renderStore_->contains(CompleteKey);
+}
+
+void Engine::writeStoreKeeps() noexcept {
+  try {
+    settleStoreKeep();
+  } catch (const std::exception &) {
+    // Later sessions render again.
+  }
+  for (const auto &keep : storeKeeps_)
+    try {
+      RenderStore::keepFor(keep.folder, keep.from, keep.to);
+    } catch (const std::exception &) {
+      // Later sessions render again.
+    }
+  storeKeeps_.clear();
 }
 
 void Engine::keepStoresFor(const StoreNames &before) {
@@ -283,17 +346,20 @@ void Engine::keepStoresFor(const StoreNames &before, const StoreNames &after) {
   rendersStoreRead_ = false;
   factsStoreRead_ = false;
   try {
-    const auto project = projectJson();
+    const auto &project = projectFolder();
+    // What an earlier relabel says reads first; this one is written once the
+    // reply is sent.
+    writeStoreKeeps();
     if (!before.renders.empty() && !after.renders.empty()) {
-      RenderStore::keepFor(projectLocalFolder(project, "render-ahead"),
-                           before.renders, after.renders);
+      storeKeeps_.push_back({projectLocalFolder(project, "render-ahead"),
+                             before.renders, after.renders});
       // What is open holds for them too.
       if (rendersStoreName_ == before.renders)
         rendersStoreName_ = after.renders;
     }
     if (!before.facts.empty() && !after.facts.empty()) {
-      RenderStore::keepFor(projectLocalFolder(project, "listing-facts"),
-                           before.facts, after.facts);
+      storeKeeps_.push_back({projectLocalFolder(project, "listing-facts"),
+                             before.facts, after.facts});
       if (factsStoreName_ == before.facts)
         factsStoreName_ = after.facts;
     }
@@ -331,7 +397,7 @@ RenderStore *Engine::storeOfViews() {
         rendersStoreName_.clear();
       } else if (name != rendersStoreName_) {
         renderStore_ = std::make_unique<RenderStore>(
-            projectLocalFolder(projectJson(), "render-ahead"), name, false);
+            projectLocalFolder(projectFolder(), "render-ahead"), name, false);
         rendersStoreName_ = name;
       }
     } catch (const std::exception &) {
@@ -349,8 +415,9 @@ Json Engine::keptRendersJson() {
 }
 
 void Engine::openFactsStore(const std::string &name, bool writable) {
+  writeStoreKeeps();
   factsStore_ = std::make_unique<RenderStore>(
-      projectLocalFolder(projectJson(), "listing-facts"), name, writable);
+      projectLocalFolder(projectFolder(), "listing-facts"), name, writable);
   factsStoreName_ = name;
 }
 

@@ -23,6 +23,7 @@
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/low/SourceFrameBytes.h"
+#include "neverd/ir/med/MIPS/MIPSSourceVectors.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedTypePass.h"
@@ -186,6 +187,7 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
   propagateStructReturnForwarderShapes(Img, Result);
   recoverStructReturnFromBody(Img, Result, StructReturnEvidence::Callers);
   recoverVectorReturnFromCallers(Img, Result);
+  recoverPackedScalarReturnFromCallers(Img, Result);
   materializeKnownStructReturnCallSites(Img, Result);
   bindFloatCallResults(Img, Result);
   settleReturnContracts(Img, Result, Dbg);
@@ -216,7 +218,8 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
     // A variadic callee takes its call sites' overflow arguments as trailing
     // stack parameters, which MedToHigh seeds where its va_arg walk reads
     // them, as lift mode does for the LLVM emitter.
-    finalizeVariadicCallees(Result.MedFuncs, Img.Arch, Img.abiFormat());
+    finalizeVariadicCallees(Result.MedFuncs, Img.Arch, Img.abiFormat(),
+                            Img.Exports);
   } else {
     // A convention whose calls take their arguments from callee summaries
     // recovers no call arguments here: a System V variadic callee's overflow
@@ -261,6 +264,8 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
       Found->second = nullptr;
   }
   for (auto &Function : Result.MedFuncs) {
+    discardUnobservedMIPSFPUpperBits(
+        Function, Img, Result.CallEntryFloatingArguments.get(), Dbg);
     Function.FrameBytes.clear();
     if (const auto Original = OriginalFunctions.find(Function.Entry);
         !Function.AnalystStackFrame && Original != OriginalFunctions.end() &&

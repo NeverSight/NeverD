@@ -1,0 +1,220 @@
+{
+  "date": "2026-11-11",
+  "configuration": "Release",
+  "source_revision": "9fdcc51c3d70f4816dc2bd1745ba9cf1534ffdc8",
+  "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+  "runner_cold_build": false,
+  "analysis_host_sha256": "223a9ad6dd678df3c2d40b293b8218b8abebf5dd7f0a1d6094985f966d5c9df1",
+  "lifted_host_sha256": "ab9b41736f207d0be90950b99dc67cbf10817c4017938610900c98b27f1014ec",
+  "archive_sha256": "9c6f143a9787dac257bc2526562788eb130508620bf95d2f2223c58de7e97dd1",
+  "build_receipt_sha256": "3ed6170fb90213344e6638c184760b0728a57d19da7774ca8b499dc475b1f77e",
+  "workflow_revision": "5b721b1ad15731d183549cd6d39d78f8639986a6",
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43029704710",
+  "source_contract": "Direct Swift error-result call, with a signed compact X29/X30 record or a signed LR spill indexed through DWARF. Independent callers exercise all 25 incoming and outgoing pointer pairs.",
+  "arbitrary_lifted_image_publication_qualified": false,
+  "system_signal_trampoline_walk_qualified": false,
+  "native_apple_cpta_qualified": false,
+  "runners": {
+    "macos-26": {
+      "cpu": "Apple M1 (Virtual)",
+      "platform": "macOS-26.7.2-arm64-arm-64bit-Mach-O",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "compiler_sha256": "d2e4bf622758eee1bf7267c060497fb2c41e098d37b0fca8be73898dc7e14eda",
+      "sdk": "MacOSX26.5.sdk",
+      "artifact_id": 13861211873,
+      "artifact_digest": "sha256:608ace1a942188ac96aefcf687b467db57202c5a671bc9c98205115e1ebc3726",
+      "tests": 19,
+      "dense_fixture_images": 8,
+      "interrupted_frame_samples": 10,
+      "authenticated_parent_returns": 10,
+      "lifted_xml_sha256": "4c097fcdc1f81019d61ab0fd3d34befe5f84aefb4a412760a210b701084b34d5",
+      "dense_report_sha256": "51910374bad4362f65e8879ffc051d1da892aed3c84c32b9a2dc5a71d8be6f4a",
+      "swift": {
+        "swift_tail": {
+          "baseline_sha256": "4d178c29aa078dc1f9e5933e9cf1996f6c07ded5338dc2ac2df510070dd44c6b",
+          "published_sha256": "4c6721804b77f63e34f0867dab4f5aa82c9a467d11733d854988dbbb88806f40",
+          "native_images": 2,
+          "caller_authenticated_call_sites": 10
+        },
+        "swift_framed": {
+          "baseline_sha256": "5ffce30f12525d4029bb0a7bba6ded2f1c92c3d82c1dd59795ca9b3364c0a39c",
+          "published_sha256": "b518f7648bb49ae95a0e858761780fc98654b67bc2c8d5000cf58b31fab47fc0",
+          "native_images": 2,
+          "caller_authenticated_call_sites": 10
+        },
+        "swift_indexed": {
+          "baseline_sha256": "bcb5e3f5e3d275d3afb95971ffaf641b5769e78c2d372550cc7c495dab09668d",
+          "published_sha256": "9fb848162ac5b0c7565402b352b94b8e9025e7aefdb02ce3c025effaa18d8b8a",
+          "native_images": 2,
+          "caller_authenticated_call_sites": 10
+        },
+        "swift_async": {
+          "baseline_sha256": "f0bcb0138e78c27c219532bcba910c41bc9d17e066b157dca1d2fe004c7fe694",
+          "published_sha256": "4efa44fb397b462f613bc7ff88a6da6cbccc031cab10bc0e0bcdd814d66b4ef4",
+          "native_images": 2,
+          "caller_authenticated_call_sites": 10,
+          "restored_lr_offset": 16
+        }
+      }
+    },
+    "xcode-27": {
+      "cpu": "Apple M1 (Virtual)",
+      "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "compiler_sha256": "06e3d64f541c65a93acd176690bdaae13a3d7db092c8b98b392d4c6d0d03f176",
+      "sdk": "MacOSX27.0.sdk",
+      "artifact_id": 13860852064,
+      "artifact_digest": "sha256:315b3e63860336cc30c009318964868a13ca7626d9a00f74639ab122458b7b27",
+      "tests": 19,
+      "dense_fixture_images": 8,
+      "interrupted_frame_samples": 10,
+      "authenticated_parent_returns": 10,
+      "lifted_xml_sha256": "24e42cbb571f0087544621998d60b59983f40b2ca37d040a0b51ee5c55b4c2bd",
+      "dense_report_sha256": "247726c9200b92632c854c0a3839fabf87ba2bc186e49f50c301adcd1cf5d628",
+      "swift": {
+        "swift_tail": {
+          "baseline_sha256": "1c61cc9c8d9d6ee42e7e23ea1baab5828e966f9ed53226477264d65c82faa462",
+          "published_sha256": "d26cbe7c3ff43c7a41b6fab60e58b573a19cc837b648d6aa7cb2a6aa3f6281f5",
+          "native_images": 2,
+          "caller_authenticated_call_sites": 10
+        },
+        "swift_framed": {
+          "baseline_sha256": "c76bc37d6e99e51314928035d51116cb8d9a8b1e23ade99da982a44e7400ac68",
+          "published_sha256": "e59158d4402a35072c93518a0b18d076154325a29bff27a24cf2b76a66fbcfaf",
+          "native_images": 2,
+          "caller_authenticated_call_sites": 10
+        },
+        "swift_indexed": {
+          "baseline_sha256": "c71a19261d3e4676004a47fab62bb477619580ec026df3a8ce92a8d5a6ba4d83",
+          "published_sha256": "fea76d03aeda25ce2793c8c22e18dd2fb18489efce04dd8f0e24735bd76d9bdd",
+          "native_images": 2,
+          "caller_authenticated_call_sites": 10
+        },
+        "swift_async": {
+          "baseline_sha256": "6a70397e25575e13a3fa637095140e96100945753a4de6c740b9a936fff70868",
+          "published_sha256": "17e39d02677525f68d08597fb2d3617f6e23088c406d87c75bf6c7c849d40847",
+          "native_images": 2,
+          "caller_authenticated_call_sites": 10,
+          "restored_lr_offset": 16
+        }
+      }
+    }
+  },
+  "local_suites": {
+    "contract": {
+      "passed": 297,
+      "xml_sha256": "c492b94365358e2a874a25d86c2bf22bc11b18d33df0d0720bb1847c6b12fe0f"
+    },
+    "layout": {
+      "passed": 14,
+      "xml_sha256": "e007285c8da63a7989bd35a7e566bd13df4018d4c1a6b2203de3195db738d540"
+    },
+    "leaves": {
+      "passed": 19,
+      "xml_sha256": "7388ecedc421cbc4233191c492c95bd852076beebf3c2f84dbc92684e340a886"
+    },
+    "language": {
+      "passed": 314,
+      "xml_sha256": "2b0190749c3f2e12cb21fe541afac8b982bffca54047574c491611c970f58b9a"
+    },
+    "relocations": {
+      "passed": 19,
+      "xml_sha256": "2381c5df17206fec1ba3dd9ad50188406777b81d4dceef9ef86f9c747797dfed"
+    },
+    "private-frame": {
+      "passed": 1,
+      "xml_sha256": "469b380f961264b549df717ba497451165a35fa638cb07d93092933ec57ceeb4"
+    }
+  },
+  "arm64e_analysis": {
+    "cases": 769,
+    "passed": 723,
+    "skipped": 46,
+    "first_attempt_failures": [
+      "AArch64WritebackMemory.BothCProjectionsAndLLVMExecuteEveryWritebackFamily",
+      "AllBatches/AArch64StructureMemoryProjection.BothCProjectionsAndLLVMExecuteCompleteResults/Batch6",
+      "AllBatches/AArch64StructureMemoryProjection.BothCProjectionsAndLLVMExecuteCompleteResults/Batch7",
+      "AllBatches/AArch64StructureMemoryProjection.BothCProjectionsAndLLVMExecuteCompleteResults/Batch20",
+      "AllBatches/AArch64StructureMemoryProjection.ImageContextRetainsRuntimePostIndexAndVectorResults/Batch1",
+      "AllBatches/AArch64StructureMemoryProjection.ImageContextRetainsRuntimePostIndexAndVectorResults/Batch13",
+      "AllBatches/AArch64StructureMemoryProjection.RawSPKeepsCompleteResultsAndHostStack/Batch12"
+    ],
+    "real_text_words": 138671,
+    "real_text_sha256": "11b82a7d642384b9a129eb031b84717813520ad7125103ac6300ce9d8d1c3fbb"
+  },
+  "prebuilt_r6": {
+    "release": "neverd-llvm-v23.0.0-r6",
+    "llvm_revision": "06788fb19109851e6a6b9f109a2b8027a606f0c6",
+    "source_fix": "https://github.com/NeverSight/llvm-project/commit/8b74c310a8140953b96df2464b8d091b46bd4fd8",
+    "cli_sha256": "45d75eabd3f6b9de93675532ef0387c096af885e7ede2e983936934f7e5e3416",
+    "sdk_sha256": "530d3f4118116a540897eae363beb9b8db4f6f8be77d78b654a2450795adc5af",
+    "build_receipt_sha256": "08615b228567ea919041323218c203705b824b898fd2ebe86e261878f1db39d4",
+    "results": {
+      "compact": {
+        "status": "refused",
+        "original_sha256": "01af150621a5c21f21c68f1adbcac7d280f8a6fd3ed10b964cb1780275ba2106",
+        "output_exists": false,
+        "input_unchanged": true,
+        "diagnostics": [
+          "error: Mach-O patch object: native DWARF requires a registered original eh_frame section",
+          "error: patch failed: patch failed"
+        ],
+        "attempts": 2,
+        "backend_object_sha256": "bb6d5ea0247b26331e0c0a3b00fb0d7fa2a95999f5716c41da7b6d59a2188246",
+        "backend_cfi": [
+          "DW_CFA_def_cfa: WSP +0",
+          "DW_CFA_advance_loc: 4 to 0x74",
+          "DW_CFA_AARCH64_negate_ra_state:",
+          "DW_CFA_advance_loc: 12 to 0x80",
+          "DW_CFA_def_cfa: W29 +16",
+          "DW_CFA_offset: W30 -8",
+          "DW_CFA_offset: W29 -16"
+        ]
+      },
+      "indexed": {
+        "status": "refused",
+        "original_sha256": "709b97c452246d52f4ceb435ca4a507b36b876aafe1611a1f7b28d85fe247dad",
+        "output_exists": false,
+        "input_unchanged": true,
+        "diagnostics": [
+          "error: arm64e lifted leaf requires a matching native frame record and unwind encoding",
+          "error: patch failed: patch failed"
+        ],
+        "attempts": 2,
+        "backend_object_sha256": "08b483d80b88a2f1ad05b26c4e805d84067ff67ddcaf74302c2815cf94ffea60",
+        "backend_cfi": [
+          "DW_CFA_def_cfa: WSP +0",
+          "DW_CFA_advance_loc: 4 to 0x6c",
+          "DW_CFA_AARCH64_negate_ra_state:",
+          "DW_CFA_advance_loc: 4 to 0x70",
+          "DW_CFA_def_cfa_offset: +16",
+          "DW_CFA_offset: W30 -16"
+        ]
+      },
+      "async": {
+        "status": "refused",
+        "original_sha256": "4e5501da642349f63cac5d1f89071550135e71b33056fe4dfe04f4f9a62f20f5",
+        "output_exists": false,
+        "input_unchanged": true,
+        "diagnostics": [
+          "error: arm64e lifted leaf requires a matching native frame record and unwind encoding",
+          "error: patch failed: patch failed"
+        ],
+        "attempts": 2,
+        "backend_object_sha256": "50925113833c9cc3575c165af4879106f2ec99032cd477a2a0cd56fb0a70f340",
+        "backend_cfi": [
+          "DW_CFA_def_cfa: WSP +0",
+          "DW_CFA_advance_loc: 4 to 0x6c",
+          "DW_CFA_AARCH64_negate_ra_state:",
+          "DW_CFA_advance_loc: 4 to 0x70",
+          "DW_CFA_def_cfa_offset: +16",
+          "DW_CFA_offset: W30 -16",
+          "DW_CFA_advance_loc: 8 to 0x78",
+          "DW_CFA_def_cfa_offset: +0",
+          "DW_CFA_restore: W30"
+        ]
+      }
+    }
+  },
+  "local_verifier_tests": 40
+}

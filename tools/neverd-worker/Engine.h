@@ -60,6 +60,33 @@ public:
   std::string revision() const { return std::to_string(revision_); }
   std::string projectId() const { return projectId_; }
   bool analyzed() const { return analyzed_; }
+  /// After an edit's reply: the views it reaches that a client was last given
+  /// a page of are read again, as that client will ask for them, until
+  /// \p requestWaiting says a request waits.  The read that asks the same
+  /// takes the answer while nothing has changed since.
+  void prepareFollowingViews(const std::function<bool()> &requestWaiting);
+  /// What follows a reply before the next request: the stores' relabels the
+  /// request made are written (writeStoreKeeps), then its views read ahead
+  /// (prepareFollowingViews).
+  void afterReply(const std::function<bool()> &requestWaiting);
+  /// A read that follows the request just answered, in its reply ("then"):
+  /// the reply a read made right after it gets, from the document the page
+  /// \p payload names (if_none_match) while this worker holds it, or nothing
+  /// where it does not, for the client to read itself.  What the request
+  /// changed stays its own (prepareFollowingViews), and the stores' relabels
+  /// wait for the reply (afterReply).
+  std::optional<Reply> followingRead(const Json &payload);
+  /// The lines of the listing a client shows, read to follow the request
+  /// just answered: what a `listing` read made right after it gets, the page
+  /// \p payload names (if_none_match) standing or changed as that read would
+  /// find it.  Nothing for more lines than a view shows
+  /// (kMainThenListingLines), for a read that may look for an address's
+  /// owner, or while the listing has names or functions to read again or
+  /// its index is being built: those the client reads itself.
+  std::optional<Reply> followingListing(const Json &payload);
+  /// A read that followed a request was answered in its reply
+  /// (metadata.following_reads).
+  void noteFollowingRead() { ++followingReads_; }
   /// Background work (the reference index) runs between requests.
   bool hasIdleWork() const;
   bool idleStep();
@@ -124,6 +151,8 @@ public:
   /// call_tree).
   static bool findsCallPaths();
 
+  Json originalCallSites(std::uint64_t address);
+
 private:
   Json executeImpl(const std::string &operation, const Json &payload,
                    EncodedPayload *encoded);
@@ -163,8 +192,9 @@ private:
   /// A read-only replica is checked against the owner's loaded input and
   /// committed sidecars before any expensive operation is admitted.
   Json analysisSnapshot();
-  /// analysisSnapshot, stating \p state of the user's facts.
-  Json analysisSnapshot(Json state);
+  /// analysisSnapshot, stating \p state of the user's facts and \p declared
+  /// as the declared types where given (typeDeclarationRows otherwise).
+  Json analysisSnapshot(Json state, const Json *declared = nullptr);
   Json browseCacheIdentity();
   /// \p identity, a snapshot, with what else says what a cached page read: the
   /// project's files but for \p unread.
@@ -360,8 +390,8 @@ private:
   };
   StoreNames storeNames();
   /// What the stores are kept under (renderStoreIdentity), or none where this
-  /// session keeps no stores.
-  std::optional<Json> storeIdentity();
+  /// session keeps no stores; \p declared as renderStoreIdentity's.
+  std::optional<Json> storeIdentity(const Json *declared = nullptr);
   /// The names of the stores kept under \p identity.
   static StoreNames storeNames(Json identity);
   /// What the render just made read of what the user states, kept as the first
@@ -388,6 +418,37 @@ private:
   /// whose stores are named \p after where the caller knows them.
   void keepStoresFor(const StoreNames &before);
   void keepStoresFor(const StoreNames &before, const StoreNames &after);
+  /// What keepStoresFor says on the stores' folders, written once the reply is
+  /// sent (afterReply) and before anything reads those folders again: the
+  /// next request, an idle step, a store opened.
+  struct StoreKeep {
+    std::filesystem::path folder;
+    std::string from, to;
+  };
+  std::vector<StoreKeep> storeKeeps_;
+  void writeStoreKeeps() noexcept;
+  /// A declaration of types nothing had read, taken by the request being
+  /// answered: of what the stores are kept under only the declarations moved,
+  /// from \p before to \p after (none where the history took no row), and
+  /// the names the stores have before and after it are read once its reply is
+  /// sent (afterReply), or before anything else reads what they are kept
+  /// under.  Until then the stores that are open answer as they did.
+  struct StoreKeepWaiting {
+    std::shared_ptr<const Json> before, after;
+  };
+  std::optional<StoreKeepWaiting> storeKeepWaiting_;
+  void settleStoreKeep();
+  /// metadata.store_keeps_settled: how many were read so.
+  std::uint64_t storeKeepsSettled_ = 0;
+  /// The debug files the session's headers say it read, for the debug inputs
+  /// it loaded (pdbInput_, dwarfInput_, mapInput_, symbolsInput_).
+  std::optional<Json> debugInfo_;
+  /// The exports list's rows in the order the last read sorted them, under the
+  /// project and order they were read for: the image's export table and entry
+  /// points, which no edit changes, stand while its project does.
+  std::string exportOrderKey_;
+  Json exportRows_;
+  std::string debugInfoInputs_;
   void openFactsStore(const std::string &name, bool writable);
   std::vector<std::string> keptListingFacts(const std::string &key);
   void keepListingFact(const std::string &key, std::string bytes);
@@ -395,8 +456,9 @@ private:
   void keepListingFacts(std::uint64_t address);
   std::string renderStoreMode_;
   /// What renders depend on: browseCacheIdentity without what a view's
-  /// decoration reads, local and function names and comments.
-  Json renderStoreIdentity();
+  /// decoration reads, local and function names and comments.  \p declared,
+  /// where given, are the declared types it states (analysisSnapshot's).
+  Json renderStoreIdentity(const Json *declared = nullptr);
   /// A view's key in the store: its source key without the generation, which
   /// counts this session's listing builds.
   std::string renderStoreKey(std::uint64_t address,
@@ -460,6 +522,10 @@ private:
   std::uint64_t namedViewsEpoch_ = 1;
   /// open.write_behind: an edit's reply need not wait for its write.
   bool writeBehind_ = false;
+  /// open.check_view_changes: a page a patch's own account answers is also
+  /// made by comparing the documents, which must agree, and no patch is
+  /// written into the document it is made of.
+  bool checkViewChanges_ = false;
   /// Persists an edit that changes \p table alone, whose rows after it are
   /// \p rows (ProjectHistory::persistTable), behind the reply with
   /// write_behind.
@@ -481,10 +547,13 @@ private:
   /// take them in place (namedViewsTakeRevision).
   const CodeEdits::ImageFacts &imageFacts() const;
   mutable CodeEdits::ImageFacts imageFacts_;
+  /// projectFolder() once read; reset with the session.
+  mutable std::optional<std::string> projectFolder_;
   mutable std::optional<std::uint64_t> imageFactsRevision_;
   bool imageFactsHeld_ = false;
-  /// States the names of \p view's functions as they are named now.
-  void currentNamesInView(Json &view) const;
+  /// States the names of \p view's functions as they are named now: whether
+  /// one of them read otherwise.
+  bool currentNamesInView(Json &view) const;
   /// When the last request was answered.
   std::chrono::steady_clock::time_point lastRequest_{};
   /// Whether idle time reads, for a later declaration of local types, the
@@ -581,8 +650,16 @@ private:
     /// Its engine pages spell a name of data it has taken since: it never
     /// builds again from them, but from what is kept.
     bool pagesRenamed = false;
+    /// How it reads against the document it was patched from, where one patch
+    /// made it: a page of that document, named by a client that keeps it,
+    /// reads what the patch wrote, without the two being compared.
+    std::shared_ptr<const DocumentChange> change;
     /// Of the edits views have kept through, how many it has read.
     mutable std::uint64_t viewEditsRead = 0;
+    /// The read a client last made of it with kept_only, naming the page it
+    /// was given (if_none_match) as its next read will, and when.
+    mutable Json nextRead;
+    mutable std::uint64_t servedAt = 0, servedRevision = 0;
     /// Hashes of the identifiers its text spells, sorted, once an edit's names
     /// are first looked for in it.
     mutable std::vector<std::uint64_t> spelled;
@@ -658,11 +735,64 @@ private:
                                     const Json &options = Json::object(),
                                     EncodedPayload *encoded = nullptr,
                                     const std::string *ifNoneMatch = nullptr,
-                                    bool pageDelta = false);
+                                    bool pageDelta = false,
+                                    const Json *request = nullptr);
   std::uint64_t namedViewIds_ = 0;
+  /// The page the last view read gave, of which document, and the read that
+  /// follows it: kept on the document once the page reaches the client.
+  struct ServedPage {
+    std::shared_ptr<const NamedView> document;
+    Json next;
+  };
+  std::optional<ServedPage> served_;
+  std::uint64_t servedPages_ = 0;
+  void keepServed(ServedPage served);
+  /// Answers prepareFollowingViews made, for the request each answers, while
+  /// the revision and the listing's view generation are those they read.
+  struct PreparedView {
+    std::string request;
+    Json reply;
+    std::optional<ServedPage> served;
+  };
+  std::vector<PreparedView> preparedViews_;
+  std::uint64_t preparedRevision_ = 0, preparedGeneration_ = 0;
+  std::uint64_t viewEditsAtRequest_ = 0, requestRevision_ = 0;
+  /// Lets answers no read took go off the request thread.
+  void forgetPreparedViews();
+  /// The answer prepareFollowingViews made for \p operation's \p payload, while
+  /// the state it read stands; answers made for another state are let go.
+  std::optional<Reply> preparedAnswer(const std::string &operation,
+                                      const Json &payload);
+  /// The documents prepareFollowingViews reads after the request's reply: those
+  /// the request's view edits reach that a client was given a page of with
+  /// kept_only before them and reads again, the last given first.
+  std::vector<std::shared_ptr<const NamedView>> viewsReadAhead() const;
+  /// metadata.prepared_views: answers made and given.
+  std::uint64_t preparedMade_ = 0, preparedGiven_ = 0, followingReads_ = 0;
+  /// Listing pages given to clients that keep them, newest last, each under
+  /// the name it was given by; metadata counts the reads they answered.
+  struct KeptListingPage {
+    std::string etag;
+    ListingPage page;
+  };
+  std::deque<KeptListingPage> keptListingPages_;
+  std::uint64_t listingPageIds_ = 0, listingPagesUnchanged_ = 0,
+                listingPageDeltas_ = 0;
+  /// A listing page for a client that names the one it keeps (\p known):
+  /// that it stands, what changed of it (\p deltas) or the page whole, under
+  /// a name it keeps it by.
+  Json listingReply(ListingPage page, const std::string &known, bool deltas,
+                    EncodedPayload *encoded);
   /// Documents written from another with its comments, functions' names or
   /// data's names taken (takeComments, takeFunctionNames, takeDataNames).
   std::uint64_t commentPatches_ = 0, namePatches_ = 0, dataNamePatches_ = 0;
+  /// metadata.named_view_changes_said: pages a patch's own account answered,
+  /// and named_view_documents_taken: patches written into the document they
+  /// were made of, no page of which another read could name.
+  std::uint64_t changesSaid_ = 0, documentsTaken_ = 0;
+  /// The document whose page the read being answered names, which a patch may
+  /// write into where no one else holds it.
+  std::optional<std::uint64_t> clientDocument_;
   /// Documents the engine rendered for, rather than built from kept pages.
   std::uint64_t namedViewRenders_ = 0;
   /// The times an owner's views read which store they are kept under
@@ -700,6 +830,22 @@ private:
   /// The page a client names with \p etag, where this worker still has the
   /// document it came from, read in place from that document.
   std::optional<PageSource> keptClientPage(const std::string &etag) const;
+  /// The document \p etag names a page of and the page's lines [start, end),
+  /// as namedViewPage names a page, among the documents views have, or also
+  /// among those they had before (\p previous).
+  struct NamedPage {
+    const NamedView *document;
+    std::uint64_t start, end;
+  };
+  /// The document's id and the lines \p etag names, as namedViewPage names a
+  /// page, whether or not this worker has the document.
+  std::optional<std::array<std::uint64_t, 3>>
+  pageName(const std::string &etag) const;
+  std::optional<NamedPage> namedPage(const std::string &etag,
+                                     bool previous) const;
+  /// Whether a read naming \p etag is one of a document held: the document
+  /// the page is of, or one a patch made of it that says what it wrote.
+  bool holdsPageOf(const std::string &etag) const;
   /// Function-list order (indices into Listing::functionRows) for the last
   /// filter, sort and listing generation.
   std::string functionOrderKey_;
@@ -726,15 +872,23 @@ private:
   /// The Session's type declarations as the history's rows, each at its
   /// place in the order made; none from an engine that keeps none.
   Json typeDeclarationRows() const;
+  /// The rows after a declaration added one: \p committed, which were the
+  /// Session's, and the one it added (neverd_type_declarations_range_json);
+  /// every row where the Session holds other than one more.
+  Json typeDeclarationRowsAfter(const Json &committed) const;
   /// Read the type declarations again where the history's differ from the
   /// Session's: true when they agree or loaded.  Changed declarations let
   /// the analysis go, as declaring does.
   bool reloadTypeDeclarations();
   /// Record which build of the input the project's files describe, after
-  /// the worker wrote one of them.
-  void recordProject();
+  /// the worker wrote one of them: true once recorded, or when the engine
+  /// keeps no record.
+  bool recordProject();
   /// neverd_project_json, or null from an older engine.
   Json projectJson() const;
+  /// The project's folder, as neverd_project_json gives it: read once a
+  /// session has one, which it keeps with its input; empty without one.
+  const std::string &projectFolder() const;
   /// Read the function edits sidecar: true when it loaded or the engine keeps
   /// no function edits.  A changed function list restarts its analysis.
   bool reloadFunctionEdits();

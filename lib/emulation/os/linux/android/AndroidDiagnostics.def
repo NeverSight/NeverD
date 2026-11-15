@@ -148,6 +148,8 @@ NEVERD_ANDROID_DIAGNOSTIC(ExecutionLimits,
                           "invalid native execution limits or layout")
 NEVERD_ANDROID_DIAGNOSTIC(SnapshotLimits,
                           "invalid memory snapshot extent or output budget")
+NEVERD_ANDROID_DIAGNOSTIC(SnapshotAddressOverflow,
+                          "register-relative snapshot address overflows")
 NEVERD_ANDROID_DIAGNOSTIC(
     ObservationOptions,
     "execution observations require unique aligned PCs and a positive limit")

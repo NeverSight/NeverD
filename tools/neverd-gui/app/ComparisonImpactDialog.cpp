@@ -13,6 +13,7 @@
 #include "../ResourceLimits.h"
 #include "ComparisonModel.h"
 #include "ComparisonSession.h"
+#include "DialogReturnKey.h"
 #include "Icons.h"
 
 #include "neverd/diff/Limits.h"
@@ -67,6 +68,9 @@ ComparisonImpactDialog::ComparisonImpactDialog(ComparisonSession &S,
                                                QWidget *Parent)
     : QDialog(Parent), Session(S), Revision(S.revision()) {
   setObjectName("comparisonImpactDialog");
+  // Return in the address traces from it; as the first push button, Trace
+  // was also the default and took the key from the lists.
+  leaveWithoutDefaultButton(*this);
   setWindowTitle(tr("Call paths and possible impact — NeverD"));
   setWindowIcon(icon("compare"));
   resize(::neverd::limits::gui::kComparisonImpactInitialWidth,
@@ -95,6 +99,7 @@ ComparisonImpactDialog::ComparisonImpactDialog(ComparisonSession &S,
   DepthLabel->setBuddy(Depth);
   Trace = new QPushButton(tr("Trace"), this);
   Trace->setObjectName("impactTrace");
+  showAsMainAction(*Trace);
   Cancel = new QPushButton(tr("Cancel"), this);
   Cancel->setObjectName("impactCancel");
   Options->addWidget(Side, 0, 0);

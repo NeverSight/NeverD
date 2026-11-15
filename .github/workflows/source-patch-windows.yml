@@ -6,6 +6,8 @@ on:
     branches: [dev, codex/native-source-patching]
     paths:
       - '.github/workflows/source-patch-windows.yml'
+      - 'scripts/ci/Install-WindowsFixtureClang.ps1'
+      - 'scripts/ci/WindowsFixtureClang.def'
       - 'scripts/run_gtest_qualification.py'
       - 'scripts/run_lift_qualification.py'
       - 'scripts/tests/test_run_gtest_qualification.py'
@@ -46,6 +48,8 @@ on:
   pull_request:
     paths:
       - '.github/workflows/source-patch-windows.yml'
+      - 'scripts/ci/Install-WindowsFixtureClang.ps1'
+      - 'scripts/ci/WindowsFixtureClang.def'
       - 'scripts/run_gtest_qualification.py'
       - 'scripts/run_lift_qualification.py'
       - 'scripts/tests/test_run_gtest_qualification.py'
@@ -118,17 +122,7 @@ jobs:
       - name: Install the checked source producer
         shell: pwsh
         run: |
-          $installer = Join-Path $env:RUNNER_TEMP 'LLVM-22.1.6-win64.exe'
-          Invoke-WebRequest 'https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.6/LLVM-22.1.6-win64.exe' -OutFile $installer
-          $expected = 'e2d9a6855ff22c0acf3adc87ff1e1ad9705b8b6fc5bab2542aefc3315fc24cf7'
-          if ((Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
-            throw 'Clang 22.1.6 installer digest mismatch'
-          }
-          $install = Join-Path $env:RUNNER_TEMP 'source-patch-clang'
-          $process = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$install") -PassThru -Wait
-          if ($process.ExitCode -ne 0) { throw "Clang installer failed: $($process.ExitCode)" }
-          "$install\bin" >> $env:GITHUB_PATH
-          "NEVERD_SOURCE_CLANG=$install\bin\clang.exe" >> $env:GITHUB_ENV
+          ./scripts/ci/Install-WindowsFixtureClang.ps1 -AddToPath
           choco install ninja --yes --no-progress
           if ($LASTEXITCODE -ne 0) { throw 'Ninja installation failed' }
 

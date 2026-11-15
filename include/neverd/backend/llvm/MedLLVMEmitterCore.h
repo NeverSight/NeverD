@@ -622,6 +622,12 @@ private:
   /// Lower an INDIR_BR with a resolved jump table into an LLVM switch on the
   /// table index.  Returns false when no matching table is found so the
   /// caller can fall back to a plain branch.
+  /// Emit the indirect jump of a value dispatch (JumpTable::ValueDispatch):
+  /// a switch on the value it jumps to, with a case for the original address
+  /// of each label and a trap for any other value.
+  bool emitValueDispatch(const MedBlock &Blk, const MedOp &BrOp,
+                         std::map<int, llvm::BasicBlock *> &BBMap,
+                         llvm::IRBuilder<> &Builder);
   bool emitJumpTableSwitch(const MedBlock &Blk, const MedOp &BrOp,
                            std::map<int, llvm::BasicBlock *> &BBMap,
                            llvm::IRBuilder<> &Builder);
@@ -2426,6 +2432,11 @@ private:
   mutable std::map<va_t, std::string> ExternalFunctionPointerSlots;
   std::vector<JumpTableStorageRange> ModuleJumpTableStorageRanges;
   std::set<va_t> ModuleSuppressibleJumpTableRelocationSlots;
+  /// The labels the module's value dispatches reach (JumpTable::ValueDispatch).
+  /// A relocated slot of the image that holds one mirrors it as the address it
+  /// had there, a plain number: that is what the dispatch compares, and a
+  /// label has no address a function of this module could take.
+  std::set<va_t> ModuleValueDispatchLabels;
   Arch TargetArch = Arch::X64;
   BinaryFormat TargetFormat = BinaryFormat::Unknown;
   /// The C library whose declarations the program's calls follow.

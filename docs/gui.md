@@ -20,7 +20,7 @@ The normal engine/CLI configuration is unchanged. Qt is optional and is searched
 only when `NEVERD_BUILD_GUI=ON`. To add the workbench to an engine build, use:
 
 ```sh
-cmake -S . -B build -DNEVERD_BUILD_GUI=ON -DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/platform
+cmake -S . -B build -DNEVERD_BUILD_GUI=ON -DCMAKE_PREFIX_PATH=/path/to/Qt/6.12.0/platform
 cmake --build build --target neverd-gui
 ```
 
@@ -29,19 +29,21 @@ For fast desktop development, build against a matching existing shared engine:
 ```sh
 cmake -S tools/neverd-gui -B build-gui -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/platform \
+  -DCMAKE_PREFIX_PATH=/path/to/Qt/6.12.0/platform \
   -DNEVERD_ENGINE_LIBRARY=/path/to/libneverd.so
 cmake --build build-gui
 ctest --test-dir build-gui --output-on-failure
 build-gui/bin/neverd-gui /absolute/path/to/binary
 ```
 
-Requires C++20, CMake 3.24+, Qt 6.8+ Core, Gui, Widgets, Network, Svg, Sql
+Requires C++20, CMake 3.24+, Qt 6.12+ Core, Gui, Widgets, Network, Svg, Sql
 (with its SQLite driver), Concurrent and LinguistTools, the GuiPrivate and
 WidgetsPrivate headers for the pinned KDDockWidgets frontend (Qt Test for
 tests), and Python 3.10+ for tests and the MCP adapter. The first configure
 downloads nlohmann/json 3.11.3 and KDDockWidgets 2.4.1 using pinned SHA-256
-digests. Ship the exact Qt build used to compile its private headers. On Windows
+digests. Desktop CI pins Qt 6.12.0. See the [packaging guide](../tools/neverd-gui/PACKAGING.md#qt-baseline)
+for the required security patches and matching license catalog before distribution.
+Ship the exact Qt build used to compile its private headers. On Windows
 set `NEVERD_ENGINE_LIBRARY` to the runtime DLL and `NEVERD_ENGINE_IMPLIB` to its
 matching import `.lib`; make runtime dependencies available alongside the
 worker.
@@ -825,6 +827,17 @@ letter work either way. In a dialog, Return presses the default button, usually
 **OK**, from a check box or radio button too, as in IDA and on Windows, where
 GNOME would toggle the box; Space toggles it. Alt+P, Alt+O, Return thus states
 that a function does not return.
+A window of tools has no default button, because Return there belongs to
+the field or list it is typed in: MCP connections, the plugin manager, the
+shortcut list, x87 support, Unwind information, Offline package review, the
+version comparison graph and Binary comparison's review windows. Return acts in
+the control that holds the focus and presses a button only while that button
+holds it. The button in the accent color is the window's main action, as the
+default button is a dialog's (**Import plugin…**, **Connect**, **Trace**,
+**Close** where a window only shows things); in these windows the color marks
+it and Return does not press it from elsewhere. A dialog that states a
+correction (Change stack pointer, Stack variables, Set call type) applies it on
+Return; **Reset** always takes a click.
 
 A command IDA also has takes IDA's default key: the legacy scheme of IDA's
 `cfg/idagui.cfg`, and the decompiler's F5, Tab and Ctrl+F5.
@@ -1387,6 +1400,20 @@ although the listing, which jumps by name, refuses it. Names are kept in
 the project folder's `renames.json`, which the command line reads and writes too
 (`neverd rename <input> --addr <address> --to <name>`, `--clear`).
 
+Pseudocode that shows a function's name reads the new one at once, before the
+engine has answered: the name stands in each place the text links the function,
+as the engine writes it there. The engine's answer is read when it comes, and
+where the engine refuses the name, because another address has it, the text
+reads again as it did and Output says why. A name the text already spells as a
+word, data's name and a local variable's show when the engine has answered.
+
+After an edit the listing reads the lines in view ahead of the lines beyond
+it. Where the listing is the view worked in, or the edit renames a function
+those lines show, they come with the engine's answer itself; elsewhere they are
+read right behind it, so that the pseudocode's page waits for none of them. The
+view worked in is the last analysis view to take the keyboard; a dialog that a
+command asks with leaves it so.
+
 **Edit → Code** (C) defines native instructions from the selected byte through
 one basic block, ending at a branch, return, unmodelled control transfer or
 existing code. It uses the image's processor and instruction mode, validates
@@ -1690,7 +1717,7 @@ development bundle with:
 ```sh
 python3 tools/neverd-gui/package_macos.py --build-dir build-gui \
   --engine /absolute/path/to/libneverd.dylib \
-  --qt-dir /path/to/Qt/6.8.3/macos --output dist/NeverD.app
+  --qt-dir /path/to/Qt/6.12.0/macos --output dist/NeverD.app
 ```
 
 This produces an ad-hoc signed development application, not a notarized

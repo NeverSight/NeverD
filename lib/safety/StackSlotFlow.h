@@ -16,6 +16,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <type_traits>
 #include <vector>
 
 namespace neverd::safety::detail {
@@ -287,12 +288,14 @@ bool aliasesWholeFrame(const MedVar &Root, uint64_t StackPointerReg,
 }
 
 template <typename ResolveOffset, typename MayBeFrameAddress,
-          typename MayAliasWholeFrame>
+          typename MayAliasWholeFrame,
+          typename CallPreservesSlot = std::nullptr_t>
 ReachingStackValues reachingStackValues(
     const MedFunc &F, int LoadBlockId, int LoadOpIdx, int64_t TargetOffset,
     uint16_t LoadSize, ResolveOffset Resolve, MayBeFrameAddress MayBeFrame,
     MayAliasWholeFrame AliasesWholeFrame, bool RequireMemoryRead = true,
-    bool InvalidateEscapedAddresses = true) {
+    bool InvalidateEscapedAddresses = true,
+    CallPreservesSlot PreservesCall = nullptr) {
   ReachingStackValues Result;
   if (LoadOpIdx < 0 || LoadSize == 0)
     return Result;
@@ -395,6 +398,13 @@ ReachingStackValues reachingStackValues(
   auto transferOp = [&](const MedBlock &Block, size_t I, State &S) {
     const MedOp &Op = Block.Ops[I];
     if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+      if constexpr (!std::is_same_v<CallPreservesSlot, std::nullptr_t>) {
+        // A pre-ABI client may supply an exact call/slot proof, including
+        // its outgoing argument area. Unknown calls must return false.
+        if (!PreservesCall(Op, TargetOffset, LoadSize))
+          invalidate(S);
+        return;
+      }
       if (const MedCallInfo *CI = F.findCall(Block.Id, static_cast<int>(I))) {
         for (const MedVar &Arg : CI->Args) {
           const std::optional<int64_t> Off = Resolve(Arg);

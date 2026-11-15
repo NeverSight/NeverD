@@ -1,0 +1,110 @@
+{
+  "neverd_revision": "7991be5e74e7c671ce0e30b5fdfba002df64f72b",
+  "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43581342838",
+  "ci_revision": "259e2a13eeb7eb90b705419ce4e0a5d314a9bc32",
+  "windows_frontend_job": "https://github.com/gmh5225/test_mac_intel/actions/runs/43581342838/job/132406521569",
+  "local": {
+    "publication_cases": 57,
+    "analysis_passed": 722,
+    "analysis_skipped": 47,
+    "final_abi_format_passed": 137,
+    "final_abi_format_skipped": 42
+  },
+  "hosts": {
+    "cursor-macos-26": {
+      "hardware": {
+        "exit": 0,
+        "text": "Apple M1 (Virtual)"
+      },
+      "os": {
+        "exit": 0,
+        "text": "ProductName:\t\tmacOS\nProductVersion:\t\t26.7.2\nBuildVersion:\t\t25G332"
+      },
+      "cpa": {
+        "exit": 1,
+        "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA'"
+      },
+      "cpa2": {
+        "exit": 1,
+        "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA2'"
+      },
+      "host_sha256": "457d34909857ecdb40d09537ba9aac92c057bf2f39253d8dfc9332849405b7cb",
+      "test_cases": 57,
+      "executed_native_images": 94,
+      "added_cases": {
+        "BranchWritesKillBothScratchResultsBeforeUse": 0,
+        "DirectCallResultsSurviveForwardAndBackwardBranches": 2,
+        "PublishesLoopsWithPostIndexedMemory": 2,
+        "PublishesPostIndexedScalarAndPairMemory": 2,
+        "PublishesPreIndexedScalarAndPairMemory": 2,
+        "PublishesSIMD128SingleAndPairWritebackLoops": 2,
+        "PublishesSIMDByteWritebackLoops": 2,
+        "PublishesSIMDDoubleAndPairWritebackLoops": 2,
+        "PublishesSIMDHalfWritebackLoops": 2,
+        "PublishesSIMDWordAndPairWritebackLoops": 2,
+        "PublishesScaledAndSignedRegisterOffsets": 2
+      },
+      "signal_and_tls": {
+        "native_signal_language_cleanups": 24,
+        "native_objc_signal_cleanups": 24,
+        "native_thread_resolver_lifecycles": 8,
+        "native_new_tls_lifecycles": 8,
+        "native_signal_caller_resumptions": 8
+      },
+      "cpta_probe": {
+        "status": "unavailable",
+        "native_el0_cpta_observed": false,
+        "x1_el0_cpta_qualified": false,
+        "x1_el0_checked_writeback_qualified": false
+      }
+    },
+    "cursor-xcode-27": {
+      "hardware": {
+        "exit": 0,
+        "text": "Apple M1 (Virtual)"
+      },
+      "os": {
+        "exit": 0,
+        "text": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434"
+      },
+      "cpa": {
+        "exit": 0,
+        "text": "0"
+      },
+      "cpa2": {
+        "exit": 0,
+        "text": "0"
+      },
+      "host_sha256": "457d34909857ecdb40d09537ba9aac92c057bf2f39253d8dfc9332849405b7cb",
+      "test_cases": 57,
+      "executed_native_images": 94,
+      "added_cases": {
+        "BranchWritesKillBothScratchResultsBeforeUse": 0,
+        "DirectCallResultsSurviveForwardAndBackwardBranches": 2,
+        "PublishesLoopsWithPostIndexedMemory": 2,
+        "PublishesPostIndexedScalarAndPairMemory": 2,
+        "PublishesPreIndexedScalarAndPairMemory": 2,
+        "PublishesSIMD128SingleAndPairWritebackLoops": 2,
+        "PublishesSIMDByteWritebackLoops": 2,
+        "PublishesSIMDDoubleAndPairWritebackLoops": 2,
+        "PublishesSIMDHalfWritebackLoops": 2,
+        "PublishesSIMDWordAndPairWritebackLoops": 2,
+        "PublishesScaledAndSignedRegisterOffsets": 2
+      },
+      "signal_and_tls": {
+        "native_signal_language_cleanups": 24,
+        "native_objc_signal_cleanups": 24,
+        "native_thread_resolver_lifecycles": 8,
+        "native_new_tls_lifecycles": 8,
+        "native_signal_caller_resumptions": 8
+      },
+      "cpta_probe": {
+        "status": "unavailable",
+        "native_el0_cpta_observed": false,
+        "x1_el0_cpta_qualified": false,
+        "x1_el0_checked_writeback_qualified": false
+      }
+    }
+  }
+}

@@ -22,6 +22,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64OptStress69RT : public SemanticRoundTripFixture,
                          public ::testing::WithParamInterface<RoundTripTC> {};
@@ -96,12 +97,25 @@ static std::vector<RoundTripTC> makeOptStress69TC(const char *prefix, const char
 }
 // clang-format on
 
-static const std::vector<RoundTripTC> kX64 = makeOptStress69TC("x64o69", "long");
+static const std::vector<RoundTripTC> kX64 =
+    makeOptStress69TC("x64o69", "long");
 static const std::vector<RoundTripTC> kX86 = makeOptStress69TC("x86o69", "int");
-static const std::vector<RoundTripTC> kA64 = makeOptStress69TC("a64o69", "long");
+static const std::vector<RoundTripTC> kA64 =
+    makeOptStress69TC("a64o69", "long");
 static const std::vector<RoundTripTC> kARM = makeOptStress69TC("armo69", "int");
 
-INSTANTIATE_TEST_SUITE_P(OptStress69, X64OptStress69RT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress69, X86OptStress69RT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress69, A64OptStress69RT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress69, ARM32OptStress69RT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress69, X64OptStress69RT,
+                         ::testing::ValuesIn(kX64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress69, X86OptStress69RT,
+                         ::testing::ValuesIn(kX86), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress69, A64OptStress69RT,
+                         ::testing::ValuesIn(kA64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress69, ARM32OptStress69RT,
+                         ::testing::ValuesIn(kARM), rtTCName);
+
+// The slot of an alignment push, reused for a float and read back after a
+// call, printed the pushed register as unknown: the C is checked by execution.
+INSTANTIATE_TEST_SUITE_P(
+    OptStress69HighC, X64OptStress69RT,
+    ::testing::ValuesIn(onHighC(kX64, {"_f32acc", "_f32rec", "_f32tern"})),
+    rtTCName);

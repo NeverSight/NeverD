@@ -197,6 +197,23 @@ SymRef SymContext::mkAnd(llvm::ArrayRef<SymRef> Ops) {
   assert(!Ops.empty());
   uint32_t W = width(Ops[0]);
 
+  if (W > 64 && Ops.size() == 2) {
+    auto Mask = Ops[0], Data = Ops[1];
+    if (!isConst(Mask))
+      std::swap(Mask, Data);
+    if (isConst(Mask) && (isVar(Data) || op(Data) == SymOp::Add)) {
+      assert(width(Data) == width(Mask));
+      const auto &Value = WideConsts[node(Mask).Aux];
+      if (Value.isZero())
+        return Mask;
+      if (Value.isAllOnes())
+        return Data;
+      // Only low contiguous masks can rewrite the addition itself.
+      if (isVar(Data) || !Value.isMask())
+        return intern(SymOp::And, W, {Mask, Data}, 0);
+    }
+  }
+
   llvm::APInt Acc = llvm::APInt::getAllOnes(W);
   llvm::SmallVector<SymRef, 8> Rest;
   llvm::SmallVector<SymRef, 8> Work(Ops.begin(), Ops.end());

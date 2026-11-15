@@ -14,6 +14,8 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 
+#include "llvm/ADT/SmallVector.h"
+
 #include <algorithm>
 #include <limits>
 #include <map>
@@ -59,8 +61,8 @@ public:
 
 template <typename Visitor>
 void walkExprNodes(const HighExpr &Root, Visitor &&Visit) {
-  std::set<const HighExpr *> Seen;
-  std::vector<const HighExpr *> Work{&Root};
+  HighExprSet Seen;
+  llvm::SmallVector<const HighExpr *> Work{&Root};
   while (!Work.empty()) {
     const HighExpr *Expr = Work.back();
     Work.pop_back();

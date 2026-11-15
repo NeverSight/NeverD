@@ -105,6 +105,19 @@ TEST_P(AndroidPoll, OriginalImportsAndRawWrappersWaitForSharedReadiness) {
     EXPECT_EQ(Calls, 1u);
   }
 }
+TEST_P(AndroidPoll, MissingReadinessIdentifiesTheTCPConnection) {
+  Options.LinuxNetwork->Connections[0].ReceiveEvents.clear();
+  for (uint64_t Route = 0; Route != 6; ++Route) {
+    SCOPED_TRACE(Route);
+    auto R = run(Route, 0);
+    EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
+    EXPECT_EQ(R.Diagnostic, "socket readiness has no offline observation "
+                            "(TCP connection index 0, read readiness)");
+    ASSERT_FALSE(R.NativeCalls.empty());
+    EXPECT_FALSE(R.NativeCalls.back().Result);
+  }
+}
+
 TEST_P(AndroidPoll, TimeoutsPreserveLibcTimespecAndUseVirtualMilliseconds) {
   auto &C = Options.LinuxNetwork->Connections[0];
   C.ReceiveEvents.clear();
@@ -125,6 +138,26 @@ TEST_P(AndroidPoll, EpollFailuresConvertErrnoInTheCallingThread) {
     EXPECT_EQ(word(R, 0), UINT64_MAX);
     EXPECT_EQ(word(R, 1), 9u);
   }
+}
+TEST_P(AndroidPoll, ConnectRelativeSilenceExpiresAtTheGuestDeadline) {
+  auto &C = Options.LinuxNetwork->Connections[0];
+  C.ReceiveEvents.clear();
+  C.ReceiveQuietAfterConnectNS = 1000000;
+  for (uint64_t Route : {0u, 4u}) {
+    auto R = run(Route, 0);
+    completed(R);
+    EXPECT_EQ(word(R, 0), 0u);
+    EXPECT_EQ(word(R, 3), 1000000u);
+    EXPECT_EQ(word(R, 4), 0u);
+    EXPECT_EQ(word(R, 7), Route == 4 ? 0u : 1000000u);
+  }
+  Options.LinuxTime->AdvanceOnIdle = false;
+  auto MissingClock =
+      emulateProcess(Path, ProcessProfile::AndroidNativeAArch64, Options);
+  ASSERT_FALSE(bool(MissingClock));
+  EXPECT_NE(llvm::toString(MissingClock.takeError())
+                .find("linux_time.advance_on_idle"),
+            std::string::npos);
 }
 INSTANTIATE_TEST_SUITE_P(
     Backends, AndroidPoll,

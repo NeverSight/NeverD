@@ -10,7 +10,9 @@
 
 #include "ActionRegistry.h"
 #include "DevicePixels.h"
+#include "DialogReturnKey.h"
 #include "Docking.h"
+#include "FunctionEditDialog.h"
 #include "GnomeModalDialogs.h"
 #include "HighlightLocks.h"
 #include "Language.h"
@@ -40,6 +42,7 @@
 #include <QImage>
 #include <QInputDialog>
 #include <QItemSelectionModel>
+#include <QJsonObject>
 #include <QKeySequence>
 #include <QLineEdit>
 #include <QMenu>
@@ -53,12 +56,14 @@
 #include <QScreen>
 #include <QSettings>
 #include <QSignalSpy>
+#include <QSplitter>
 #include <QStandardItemModel>
 #include <QStyle>
 #include <QStyleHints>
 #include <QStyleOption>
 #include <QSvgRenderer>
 #include <QTabBar>
+#include <QTableView>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTextLayout>
@@ -107,7 +112,7 @@ qreal contrast(const QColor &ink, const QColor &surface) {
 }
 
 /// Whether \p a and \p b differ by at most \p tolerance in every channel.
-bool near(const QColor &a, const QColor &b, int tolerance) {
+bool withinTolerance(const QColor &a, const QColor &b, int tolerance) {
   return std::abs(a.red() - b.red()) <= tolerance &&
          std::abs(a.green() - b.green()) <= tolerance &&
          std::abs(a.blue() - b.blue()) <= tolerance;
@@ -876,7 +881,7 @@ private slots:
       const int middle = row.top() + row.height() / 2;
       QCOMPARE(at(row.left(), middle), outline);
       QCOMPARE(at(row.right(), middle), outline);
-      QVERIFY(near(at(row.left() + 2, middle), tint, 1));
+      QVERIFY(withinTolerance(at(row.left() + 2, middle), tint, 1));
       // Its text stays legible on the tint.
       qreal best = 1;
       for (int y = row.top() + 3; y <= row.bottom() - 3; ++y)
@@ -1169,6 +1174,405 @@ private slots:
                                 .arg(middleX)
                                 .arg(y)));
     }
+  }
+
+  void controlsThatCannotActRecede_data() {
+    QTest::addColumn<int>("mode");
+    QTest::addColumn<QString>("kind");
+    QTest::addColumn<qreal>("scale");
+    for (const auto mode :
+         {Theme::Mode::Dark, Theme::Mode::Light, Theme::Mode::HighContrastDark,
+          Theme::Mode::HighContrastLight})
+      for (const char *kind : {"button", "field"})
+        for (const qreal scale : {1.0, 1.25})
+          QTest::newRow(qPrintable(QStringLiteral("%1-%2-%3x")
+                                       .arg(int(mode))
+                                       .arg(QLatin1String(kind))
+                                       .arg(scale)))
+              << int(mode) << QString::fromLatin1(kind) << scale;
+  }
+
+  void controlsThatCannotActRecede() {
+    QFETCH(int, mode);
+    QFETCH(QString, kind);
+    QFETCH(qreal, scale);
+    Theme &theme = Theme::instance();
+    const auto restore = qScopeGuard([&] { theme.setMode(Theme::Mode::Dark); });
+    theme.setMode(Theme::Mode(mode));
+    theme.apply();
+    const QColor surface = theme.chrome("Window");
+    QWidget window;
+    window.setAttribute(Qt::WA_StyledBackground);
+    window.setStyleSheet(QStringLiteral("QWidget#surface { background: %1; }")
+                             .arg(surface.name()));
+    window.setObjectName(QStringLiteral("surface"));
+    window.resize(220, 120);
+    QWidget *control = kind == QLatin1String("field")
+                           ? static_cast<QWidget *>(new QLineEdit(&window))
+                           : new QPushButton(&window);
+    control->setEnabled(false);
+    control->setGeometry(13, 17, 150, 60);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QImage image(QSize(240, 140) * scale, QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(scale);
+    image.fill(surface);
+    window.render(&image);
+    // What the box may show: the surface, its plate, and its edge, which lies
+    // on half the plate since a box fills to the middle of its border.
+    const QColor fill = theme.chrome("ControlDisabled");
+    const QColor line = theme.chrome("ControlDisabledBorder");
+    const QColor plate = over(fill, surface);
+    QColor half = fill;
+    half.setAlphaF(fill.alphaF() / 2);
+    const QColor edge = line.alpha() ? over(line, over(half, surface)) : plate;
+    const QRect box = control->geometry();
+    const QRect device(
+        QPoint(qFloor(box.left() * scale) - 2, qFloor(box.top() * scale) - 2),
+        QPoint(qCeil((box.right() + 1) * scale) + 1,
+               qCeil((box.bottom() + 1) * scale) + 1));
+    const QPoint middle = device.center();
+    // Its lines lie on whole device pixels: no pixel across it is a blend.
+    const auto known = [&](QPoint pixel) {
+      const QColor color = image.pixelColor(pixel);
+      return withinTolerance(color, surface, 1) ||
+             withinTolerance(color, plate, 1) ||
+             withinTolerance(color, edge, 1);
+    };
+    for (int x = device.left(); x <= device.right(); ++x)
+      QVERIFY2(known({x, middle.y()}),
+               qPrintable(QStringLiteral("%1 at (%2, %3)")
+                              .arg(image.pixelColor(x, middle.y()).name())
+                              .arg(x)
+                              .arg(middle.y())));
+    for (int y = device.top(); y <= device.bottom(); ++y)
+      QVERIFY2(known({middle.x(), y}),
+               qPrintable(QStringLiteral("%1 at (%2, %3)")
+                              .arg(image.pixelColor(middle.x(), y).name())
+                              .arg(middle.x())
+                              .arg(y)));
+    QVERIFY2(withinTolerance(image.pixelColor(middle), plate, 1),
+             qPrintable(image.pixelColor(middle).name()));
+    // The edge, where the theme draws one, is the first pixel of the box.
+    int first = device.left();
+    while (first < middle.x() &&
+           withinTolerance(image.pixelColor(first, middle.y()), surface, 0))
+      ++first;
+    QVERIFY(first < middle.x());
+    QVERIFY2(withinTolerance(image.pixelColor(first, middle.y()), edge, 1),
+             qPrintable(image.pixelColor(first, middle.y()).name()));
+    if (theme.highContrast()) {
+      // An outline alone, at the 3:1 of non-text contrast.
+      QCOMPARE(plate, surface);
+      QVERIFY(contrast(edge, surface) >= 3.0);
+      return;
+    }
+    // A plate that is there, with nothing about the box a quarter louder than
+    // the surface, and quieter than the face of a button that can act.  An
+    // outline alone, as loud as that face, read as an empty frame.
+    QVERIFY2(contrast(plate, surface) >= 1.04,
+             qPrintable(QString::number(contrast(plate, surface))));
+    for (const QColor &part : {plate, edge})
+      QVERIFY2(contrast(part, surface) <= 1.25,
+               qPrintable(QString::number(contrast(part, surface))));
+    QVERIFY(contrast(plate, surface) <
+            contrast(theme.chrome("Button"), surface));
+  }
+
+  void editFunctionStartsItsFieldsAndItsFlagsLevel() {
+    // Two forms stood one above the other, each with a label column of its
+    // own width, so the frame sizes' fields started 17 pixels to the right
+    // of the name's.  And the box of flags, which has no title, kept the
+    // room of one above its frame, whose top then stood 8 pixels below the
+    // first field's.
+    Theme::instance().setMode(Theme::Mode::Dark);
+    Theme::instance().apply();
+    FunctionEditDialog dialog(QJsonObject{{"name", "sub_401000"}},
+                              QStringLiteral(".text:0000000000401000"),
+                              QStringLiteral(".text:0000000000401040"));
+    dialog.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+    const auto at = [&dialog](const QWidget *widget) {
+      return widget->mapTo(&dialog, QPoint());
+    };
+    const auto fields = dialog.findChildren<QLineEdit *>();
+    QVERIFY(fields.size() >= 7);
+    const auto *name = dialog.findChild<QLineEdit *>(QStringLiteral("name"));
+    const auto *color =
+        dialog.findChild<QPushButton *>(QStringLiteral("color"));
+    QVERIFY(name && color);
+    for (const QLineEdit *field : fields)
+      QCOMPARE(at(field).x(), at(name).x());
+    QCOMPARE(at(color).x(), at(name).x());
+    auto *flags = dialog.findChild<QGroupBox *>();
+    QVERIFY(flags && flags->title().isEmpty());
+    QStyleOptionGroupBox box;
+    box.initFrom(flags);
+    box.subControls = QStyle::SC_GroupBoxFrame;
+    box.lineWidth = 1;
+    const QRect frame = flags->style()->subControlRect(
+        QStyle::CC_GroupBox, &box, QStyle::SC_GroupBoxFrame, flags);
+    QCOMPARE(at(flags).y() + frame.top(), at(name).y());
+    // A box with a title still keeps its room.
+    QGroupBox titled(QStringLiteral("Options"));
+    titled.resize(160, 80);
+    titled.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&titled));
+    QStyleOptionGroupBox other;
+    other.initFrom(&titled);
+    other.text = titled.title();
+    other.subControls = QStyle::SC_GroupBoxFrame | QStyle::SC_GroupBoxLabel;
+    other.lineWidth = 1;
+    QVERIFY(titled.style()
+                ->subControlRect(QStyle::CC_GroupBox, &other,
+                                 QStyle::SC_GroupBoxFrame, &titled)
+                .top() > 0);
+  }
+
+  void aMainActionWearsTheAccentOfADefault_data() {
+    QTest::addColumn<int>("mode");
+    QTest::addColumn<bool>("enabled");
+    QTest::addColumn<qreal>("scale");
+    for (const auto mode :
+         {Theme::Mode::Dark, Theme::Mode::Light, Theme::Mode::HighContrastDark,
+          Theme::Mode::HighContrastLight})
+      for (const bool enabled : {true, false})
+        for (const qreal scale : {1.0, 1.25})
+          QTest::newRow(qPrintable(QStringLiteral("%1-%2-%3x")
+                                       .arg(int(mode))
+                                       .arg(enabled ? "can-act" : "cannot-act")
+                                       .arg(scale)))
+              << int(mode) << enabled << scale;
+  }
+
+  void aMainActionWearsTheAccentOfADefault() {
+    // A window of tools has no default button, since Return in its filter
+    // must press nothing.  For a while its main action had no accent either:
+    // the plugin manager showed "Import plugin…" in the gray of every other
+    // command, and the user asked that no window be left in one color.  The
+    // main action wears what a dialog's default wears, to the pixel, and is
+    // not the default.
+    QFETCH(int, mode);
+    QFETCH(bool, enabled);
+    QFETCH(qreal, scale);
+    Theme &theme = Theme::instance();
+    const auto restore = qScopeGuard([&] { theme.setMode(Theme::Mode::Dark); });
+    theme.setMode(Theme::Mode(mode));
+    theme.apply();
+    const QColor surface = theme.chrome("Window");
+    QWidget window;
+    window.setAttribute(Qt::WA_StyledBackground);
+    window.setStyleSheet(QStringLiteral("QWidget#surface { background: %1; }")
+                             .arg(surface.name()));
+    window.setObjectName(QStringLiteral("surface"));
+    window.resize(400, 70);
+    auto *accept = new QPushButton(QStringLiteral("Import plugin…"), &window);
+    auto *main = new QPushButton(QStringLiteral("Import plugin…"), &window);
+    auto *plain = new QPushButton(QStringLiteral("Import plugin…"), &window);
+    accept->setDefault(true);
+    showAsMainAction(*main);
+    int left = 13;
+    for (QPushButton *button : {accept, main, plain}) {
+      button->setEnabled(enabled);
+      // Neither the pointer of a real screen nor the focus a window gives its
+      // first control may tell the three apart.
+      button->setFocusPolicy(Qt::NoFocus);
+      button->setAttribute(Qt::WA_TransparentForMouseEvents);
+      button->setGeometry(left, 17, 118, 32);
+      left += 128;
+    }
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QVERIFY(!main->isDefault());
+    QVERIFY(!main->autoDefault());
+    const auto drawn = [&](QPushButton *button) {
+      QImage image(button->size() * scale, QImage::Format_ARGB32_Premultiplied);
+      image.setDevicePixelRatio(scale);
+      image.fill(surface);
+      button->render(&image);
+      return image;
+    };
+    const QImage accepted = drawn(accept);
+    QCOMPARE(drawn(main), accepted);
+    // And the accent is something to see where a theme fills it; a high
+    // contrast theme outlines every button alike.
+    const QImage ordinary = drawn(plain);
+    if (mode == int(Theme::Mode::Dark) || mode == int(Theme::Mode::Light))
+      QVERIFY(ordinary != accepted);
+    // Marked once it is shown, a button takes the accent just the same, and
+    // gives it up again when a window passes it to another command.
+    showAsMainAction(*plain);
+    QCOMPARE(drawn(plain), accepted);
+    showAsMainAction(*plain, false);
+    QCOMPARE(drawn(plain), ordinary);
+  }
+
+  void aFlatGroupBoxFramesNothing_data() {
+    QTest::addColumn<qreal>("scale");
+    for (const qreal scale : {1.0, 1.25, 2.0})
+      QTest::newRow(qPrintable(QStringLiteral("%1x").arg(scale))) << scale;
+  }
+
+  void aFlatGroupBoxFramesNothing() {
+    // Offline package review shows its registry fields only while their
+    // group is checked; unchecked, the group drew a frame around nothing.  A
+    // flat group keeps the rule beside its title and no sides.
+    QFETCH(qreal, scale);
+    Theme::instance().setMode(Theme::Mode::Dark);
+    Theme::instance().apply();
+    const QColor surface = Theme::instance().chrome("Window");
+    const QColor line = Theme::instance().chrome("Border");
+    QGroupBox framed(QStringLiteral("Include declarations"));
+    QGroupBox flat(QStringLiteral("Include declarations"));
+    flat.setFlat(true);
+    // Device pixels of the frame's color down the left edge, and along the
+    // row that holds most of them, drawn at the scale asked for whatever
+    // the screen's own is.
+    int down[2] = {0, 0}, across[2] = {0, 0};
+    QSize size;
+    int index = 0;
+    for (QGroupBox *box : {&framed, &flat}) {
+      box->setCheckable(true);
+      box->setChecked(false);
+      box->resize(240, 64);
+      box->show();
+      QVERIFY(QTest::qWaitForWindowExposed(box));
+      QImage image(QSize(240, 64) * scale, QImage::Format_ARGB32_Premultiplied);
+      image.setDevicePixelRatio(scale);
+      image.fill(surface);
+      box->render(&image);
+      size = image.size();
+      for (int y = 0; y < image.height(); ++y) {
+        down[index] += image.pixelColor(0, y).rgb() == line.rgb();
+        int row = 0;
+        for (int x = 0; x < image.width(); ++x)
+          row += image.pixelColor(x, y).rgb() == line.rgb();
+        across[index] = qMax(across[index], row);
+      }
+      ++index;
+    }
+    // A frame's side runs down more than half the box; a rule ends where it
+    // began, as thick as one pixel of the layout at this scale.
+    QVERIFY2(down[0] > size.height() / 2, qPrintable(QString::number(down[0])));
+    QVERIFY2(down[1] <= qCeil(scale), qPrintable(QString::number(down[1])));
+    // The rule still runs across, broken only by the title.
+    QVERIFY2(across[1] > size.width() / 4,
+             qPrintable(QString::number(across[1])));
+  }
+
+  void columnHeadingsStartWithTheirColumnsAndKeepTheirWeight() {
+    // Qt centers a table's headings over cells that start at the left and
+    // draws them bold while a cell of their column is selected, where a
+    // tree's list keeps them left and plain: x87 support's headings turned
+    // bold with its first row, and Binary comparison's and the version
+    // graph's stood centered beside lists whose headings start at the left.
+    Theme::instance().apply();
+    QStandardItemModel model(2, 2);
+    model.setHorizontalHeaderLabels(
+        {QStringLiteral("Function"), QStringLiteral("Address")});
+    for (int row = 0; row < 2; ++row)
+      for (int column = 0; column < 2; ++column)
+        model.setItem(row, column, new QStandardItem(QStringLiteral("cell")));
+    QTableView table;
+    QTreeView tree;
+    for (QAbstractItemView *view : {static_cast<QAbstractItemView *>(&table),
+                                    static_cast<QAbstractItemView *>(&tree)}) {
+      view->setModel(&model);
+      view->resize(400, 160);
+      view->show();
+      QVERIFY(QTest::qWaitForWindowExposed(view));
+    }
+    for (const QHeaderView *header :
+         {table.horizontalHeader(), tree.header()}) {
+      QCOMPARE(header->defaultAlignment(),
+               Qt::Alignment(Qt::AlignLeft | Qt::AlignVCenter));
+      QVERIFY(!header->highlightSections());
+    }
+    // A selected row leaves the headings as they are drawn without one.
+    // The pair of pictures is taken again if it differs: a native window
+    // can become active between the two, once, and headings that turn bold
+    // differ every time.
+    const auto drawnAlike = [&table] {
+      table.selectRow(0);
+      QCoreApplication::processEvents();
+      const QImage selected = table.horizontalHeader()->grab().toImage();
+      table.clearSelection();
+      table.setCurrentIndex(QModelIndex());
+      QCoreApplication::processEvents();
+      return table.horizontalHeader()->grab().toImage() == selected;
+    };
+    QTRY_VERIFY(drawnAlike());
+  }
+
+  void splitterHandlesKeepAHairlineInTheirRoom_data() {
+    QTest::addColumn<int>("orientation");
+    QTest::addColumn<int>("room");
+    QTest::addColumn<qreal>("scale");
+    // The theme's own handle is the hairline; a wider one is a gutter
+    // between panes whose controls would otherwise touch the line.
+    for (const auto orientation : {Qt::Horizontal, Qt::Vertical})
+      for (const int room : {1, 13})
+        for (const qreal scale : {1.0, 1.25})
+          QTest::newRow(qPrintable(
+              QStringLiteral("%1-%2-%3x")
+                  .arg(orientation == Qt::Horizontal ? "beside" : "above")
+                  .arg(room)
+                  .arg(scale)))
+              << int(orientation) << room << scale;
+  }
+
+  void splitterHandlesKeepAHairlineInTheirRoom() {
+    QFETCH(int, orientation);
+    QFETCH(int, room);
+    QFETCH(qreal, scale);
+    Theme::instance().setMode(Theme::Mode::Dark);
+    Theme::instance().apply();
+    const Theme &theme = Theme::instance();
+    const QColor surface = theme.chrome("Window");
+    const QColor line = theme.chrome("DockSeparator");
+    QSplitter splitter{Qt::Orientation(orientation)};
+    splitter.setAutoFillBackground(true);
+    auto *first = new QWidget;
+    auto *second = new QWidget;
+    splitter.addWidget(first);
+    splitter.addWidget(second);
+    splitter.setChildrenCollapsible(false);
+    splitter.setHandleWidth(room);
+    splitter.resize(240, 140);
+    splitter.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&splitter));
+    QImage image(QSize(240, 140) * scale, QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(scale);
+    image.fill(surface);
+    splitter.render(&image);
+    // Across the handle, from one pane to the other: the surface, and one
+    // device pixel of the hairline in the middle.  A handle filled whole was
+    // a band as wide as its room.
+    const bool beside = orientation == Qt::Horizontal;
+    const int from =
+        beside ? first->geometry().right() + 1 : first->geometry().bottom() + 1;
+    const int to =
+        beside ? second->geometry().left() : second->geometry().top();
+    QCOMPARE(to - from, room);
+    const int begin = qFloor(from * scale), end = qCeil(to * scale);
+    const int along = qRound((beside ? 70 : 120) * scale);
+    int lines = 0, before = 0, after = 0;
+    for (int at = begin; at < end; ++at) {
+      const QColor color =
+          image.pixelColor(beside ? QPoint(at, along) : QPoint(along, at));
+      if (color.rgb() == line.rgb()) {
+        ++lines;
+        continue;
+      }
+      QVERIFY2(
+          color.rgb() == surface.rgb(),
+          qPrintable(QStringLiteral("%1 at %2").arg(color.name()).arg(at)));
+      ++(lines ? after : before);
+    }
+    QCOMPARE(lines, 1);
+    QVERIFY2(std::abs(before - after) <= 2,
+             qPrintable(
+                 QStringLiteral("%1 before, %2 after").arg(before).arg(after)));
   }
 
   void longMenusScrollWithinOneColumn_data() {

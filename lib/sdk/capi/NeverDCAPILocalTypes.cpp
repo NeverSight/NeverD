@@ -355,9 +355,13 @@ llvm::json::Object libraryChoiceJson(const Session::LibraryChoice &Choice) {
                             {"removed", std::move(Removed)}};
 }
 
-llvm::json::Array declarationRows(const Session &S) {
+/// The rows of the declarations from \p Begin, before \p End.
+llvm::json::Array declarationRows(const Session &S, size_t Begin = 0,
+                                  size_t End = SIZE_MAX) {
   llvm::json::Array Rows;
-  for (const Session::TypeDeclaration &Declaration : S.TypeDeclarations) {
+  End = std::min(End, S.TypeDeclarations.size());
+  for (size_t At = Begin; At < End; ++At) {
+    const Session::TypeDeclaration &Declaration = S.TypeDeclarations[At];
     if (!Declaration.Forget.empty()) {
       llvm::json::Array Names;
       for (const std::string &Name : Declaration.Forget)
@@ -742,15 +746,16 @@ void Session::readLocalTypeNames(const types::TypeLibrary &Library) {
       LocalTypeNames->Types == Library.size() &&
       LocalTypeNames->Declarations == TypeDeclarations.size())
     return;
-  LocalTypeNames.emplace();
-  LocalTypeNames->Library = &Library;
-  LocalTypeNames->Types = Library.size();
-  LocalTypeNames->Declarations = TypeDeclarations.size();
-  LocalTypeNames->Spelled = types::spelledNames(Library, types::Language::C);
+  LocalTypeNameFacts Facts;
+  Facts.Library = &Library;
+  Facts.Types = Library.size();
+  Facts.Declarations = TypeDeclarations.size();
+  Facts.Spelled = types::spelledNames(Library, types::Language::C);
   for (const types::LocalType *Type : Library.types())
     for (const std::string &Named : types::mentionedTypeNames(*Type))
-      LocalTypeNames->Mentioned.insert(Named);
-  LocalTypeNames->Prototyped = prototypeTypeNames(Library);
+      Facts.Mentioned.insert(Named);
+  Facts.Prototyped = prototypeTypeNames(Library);
+  LocalTypeNames = std::move(Facts);
 }
 
 bool Session::takeUnreadTypes(const types::TypeLibrary &Library,
@@ -812,8 +817,10 @@ bool Session::takeUnreadTypes(const types::TypeLibrary &Library,
     if (Renamed != Facts.Spelled.Renamed)
       return false;
   }
+  // No prototype reaches the new names (Facts.Prototyped, checked above).
   if (LocalTypesDbg)
-    LocalTypesDbg->takeNewTypes(Library, Names, OwnNames);
+    LocalTypesDbg->takeNewTypes(Library, Names, OwnNames,
+                                /*Prototyped=*/false);
   if (!OwnNames) {
     // Read again when next asked for.
     LocalTypeNames.reset();
@@ -1465,6 +1472,16 @@ const char *neverd_type_declarations_json(neverd_session_t Sess) {
     return nullptr;
   S->clearError();
   return dupStr(jsonToString(llvm::json::Value(declarationRows(*S))));
+}
+
+const char *neverd_type_declarations_range_json(neverd_session_t Sess,
+                                                size_t Begin, size_t End) {
+  auto *S = toSession(Sess);
+  if (!S)
+    return nullptr;
+  S->clearError();
+  return dupStr(jsonToString(llvm::json::Value(
+      Begin < End ? declarationRows(*S, Begin, End) : llvm::json::Array())));
 }
 
 const char *neverd_type_libraries_json(neverd_session_t Sess) {

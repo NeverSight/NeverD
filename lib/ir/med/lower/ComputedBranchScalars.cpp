@@ -46,8 +46,11 @@ bool scalarOperation(const MedOp &Op) {
 }
 
 bool physicalTargetSelector(const JumpTable &JT) {
+  // A dispatch by value compares what the jump read from the image's slots,
+  // which hold its labels as numbers already: no constant of the function
+  // needs another coordinate for it.
   if (JT.HasBaseAddr || JT.EntrySize || JT.Targets.empty() ||
-      JT.Targets.size() != JT.CaseLabels.size() ||
+      JT.ValueDispatch || JT.Targets.size() != JT.CaseLabels.size() ||
       JT.SelectorUseRefs.size() != 1)
     return false;
   const auto &Ref = JT.SelectorUseRefs.front();

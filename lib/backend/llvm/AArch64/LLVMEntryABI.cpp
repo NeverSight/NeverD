@@ -14,6 +14,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/ir/med/MedSourceParameterUses.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLExtras.h"
@@ -22,7 +23,10 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
+#include "llvm/TargetParser/SubtargetFeature.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -417,6 +421,51 @@ reconstructDarwinAArch64Entry(llvm::Function &Body, const MedFunc &Source) {
     }
   }
   return Entry;
+}
+
+static llvm::MetadataAsValue *reserveDarwinRegister(llvm::Function &F,
+                                                    llvm::StringRef Register,
+                                                    llvm::StringRef Feature) {
+  llvm::SubtargetFeatures Features(
+      F.getFnAttribute(kDarwinFeatureAttribute).getValueAsString());
+  Features.AddFeature(Feature);
+  F.addFnAttr(kDarwinFeatureAttribute, Features.getString());
+  auto &Context = F.getContext();
+  return llvm::MetadataAsValue::get(
+      Context,
+      llvm::MDNode::get(Context, llvm::MDString::get(Context, Register)));
+}
+
+// Read the architectural value once, on entry, before any lifted calls or
+// assignments. Reserving the register also keeps instruction selection from
+// assigning an unrelated temporary to the incoming value's location.
+llvm::Value *readDarwinAArch64EntryRegister(llvm::Function &F,
+                                            uint64_t Offset) {
+  llvm::StringRef Register;
+  llvm::StringRef Feature;
+#define NEVERD_DARWIN_ENTRY_REGISTER(X, W, Spelling, Reservation, Writable)    \
+  if (Offset == a64reg::X) {                                                   \
+    Register = Spelling;                                                       \
+    Feature = Reservation;                                                     \
+  }
+#include "neverd/backend/llvm/AArch64/LLVMDarwinEntryRegister.def"
+  if (Register.empty())
+    return nullptr;
+  auto *Name = reserveDarwinRegister(F, Register, Feature);
+  llvm::IRBuilder<> Entry(&F.getEntryBlock(),
+                          F.getEntryBlock().getFirstInsertionPt());
+  return Entry.CreateIntrinsic(llvm::Intrinsic::read_register,
+                               {Entry.getInt64Ty()}, {Name});
+}
+
+void writeDarwinAArch64ErrorRegister(llvm::IRBuilderBase &Builder,
+                                     llvm::Value *Value) {
+  auto *Name =
+      reserveDarwinRegister(*Builder.GetInsertBlock()->getParent(),
+                            kDarwinErrorRegister, kDarwinErrorReservation);
+  auto *Bits = Builder.CreateZExtOrTrunc(Value, Builder.getInt64Ty());
+  Builder.CreateIntrinsic(llvm::Intrinsic::write_register, {Bits->getType()},
+                          {Name, Bits});
 }
 
 } // namespace neverd

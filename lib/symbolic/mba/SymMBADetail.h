@@ -637,6 +637,22 @@ bool productCoefficientsFitScale(const HigherCoefficients &Higher,
 SymRef foldProductResidues(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
                            size_t &Storage);
 
+/// Linearize the factors whose pairwise disturbances vanish modulo the
+/// observed width and retain the other multiplicative factors exactly.
+SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
+                            size_t &Storage, bool *EmittedReading);
+
+/// Truncate products of repeated affine offsets on the same arbitrary word
+/// modulo the observed width. The caller has established a mixed product.
+SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
+                            WorkBudget &Budget, size_t &Storage,
+                            bool *EmittedReading);
+
+/// Absorb a top-bit correction into an adjacent sum by its exact parity.
+SymRef foldResidueParitySum(SymContext &Ctx, SymRef Root,
+                            const MBAOptions &Opts, WorkBudget &Budget,
+                            size_t Storage, SolveReport &Rep);
+
 /// A complete lower bound over every low-bit residue, capped at Ceiling.
 std::optional<unsigned>
 minimumProductResidueZeros(llvm::MutableArrayRef<llvm::APInt> Offsets,
@@ -673,6 +689,10 @@ inline size_t residueUnitPeriod(unsigned Width) {
   return size_t(1) << (Width > 2 ? Width - 2 : Width - 1);
 }
 
+/// Try the proved modular window before expanding a mixed-parity product.
+SymRef foldMixedProductProgression(SymContext &Ctx, SymRef Root,
+                                   WorkBudget &Budget, size_t &Storage);
+
 /// Complete bounded bit decisions over a product's observed low word.
 /// Complete, when supplied, records a finished search over free variables;
 /// it does not certify global minimality or an equivalence on its own.
@@ -681,6 +701,12 @@ SymRef foldResidueDecisions(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
                             size_t MaxWork = std::numeric_limits<size_t>::max(),
                             bool *StorageLimited = nullptr,
                             bool *Complete = nullptr);
+
+/// Reuse an accepted modular product reconstruction within this deep request.
+bool isReconstructedProgression(const SymContext &Ctx, SymRef Root,
+                                WorkBudget &Budget);
+void recordReconstructedProgression(const SymContext &Ctx, SymRef Root,
+                                    WorkBudget &Budget, size_t &Storage);
 
 /// Avoid rediscovering an emitted exact low-word reading. Original opaque
 /// inputs still participate in the deep walk. The canonical builder propagates

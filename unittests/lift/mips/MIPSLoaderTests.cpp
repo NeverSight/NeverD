@@ -60,6 +60,67 @@ TEST_P(MIPSLoader, MapsLinkedImageAndReadsTargetOrderPointers) {
             File.Little ? (File.Is64 ? 0x10 : 0x50) : 0x80);
 }
 
+TEST(MIPSN32Loader, IdentifiesELF32With64BitGPRsInBothByteOrders) {
+  for (const bool Little : {false, true}) {
+    ELFBytes File(Little ? Arch::MIPS32EL : Arch::MIPS32);
+    File.abiFlags();
+    File.put(36, 0xa0000020, 4); // MIPS64r6, ABI2, ELFCLASS32.
+    File.Bytes[0xe2] = 64;
+    File.Bytes[0xe3] = 6;
+    File.Bytes[0xe4] = File.Bytes[0xe5] = 2;
+    File.Bytes[0xe7] = 1;
+    ELFLoader Loader;
+    std::vector<LoadCandidate> Rows;
+    ELFLoader::identify(File.buffer(), Rows);
+    ASSERT_EQ(Rows.size(), 1u);
+    ASSERT_TRUE(Rows[0].Loadable) << Rows[0].Reason;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    const Arch A = Little ? Arch::MIPS64N32EL : Arch::MIPS64N32;
+    EXPECT_EQ(Rows[0].TheArch, A);
+    EXPECT_EQ(Image->Arch, A);
+    EXPECT_EQ(Image->getPointerSize(), 4u);
+    EXPECT_EQ(Image->MIPS->ABI, MIPSABI::N32);
+    File.Bytes[0xe4] = 1;
+    auto Invalid = Loader.loadBuffer(File.buffer());
+    ASSERT_FALSE(bool(Invalid));
+    llvm::consumeError(Invalid.takeError());
+  }
+}
+
+TEST(MIPSHistoricalLoader,
+     HeaderAndABIRecordsRetainIndependentArchitectureLevel) {
+  for (bool Little : {false, true})
+    for (bool N32 : {false, true})
+      for (unsigned Level : {4, 5})
+        for (bool ABI : {false, true}) {
+          ELFBytes File(N32 ? (Little ? Arch::MIPS32EL : Arch::MIPS32)
+                            : (Little ? Arch::MIPS64EL : Arch::MIPS64));
+          File.put(N32 ? 36 : 48, ((Level - 1) << 28) | (N32 ? 0x20 : 0), 4);
+          if (ABI) {
+            File.abiFlags();
+            File.Bytes[0xe2] = Level;
+            File.Bytes[0xe3] = 0;
+            File.Bytes[0xe4] = File.Bytes[0xe5] = 2;
+            File.Bytes[0xe7] = 1;
+          }
+          ELFLoader Loader;
+          auto Image = Loader.loadBuffer(File.buffer());
+          ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+          EXPECT_EQ(Image->MIPS->HistoricalISA, Level);
+          EXPECT_EQ(Image->MIPS->ISARevision, 0);
+          if (ABI) {
+            for (unsigned Wrong : {32u, 64u, 9u - Level}) {
+              File.Bytes[0xe2] = Wrong;
+              auto Bad = Loader.loadBuffer(File.buffer());
+              EXPECT_FALSE(bool(Bad));
+              if (!Bad)
+                llvm::consumeError(Bad.takeError());
+            }
+          }
+        }
+}
+
 TEST_P(MIPSLoader, ProgramABIFlagsAgreeWithHeader) {
   ELFBytes File(GetParam());
   File.abiFlags();
@@ -69,6 +130,51 @@ TEST_P(MIPSLoader, ProgramABIFlagsAgreeWithHeader) {
   ASSERT_TRUE(Image->MIPS);
   EXPECT_TRUE(Image->MIPS->HasABIFlags);
   EXPECT_EQ(Image->MIPS->FPABI, 3);
+}
+
+TEST_P(MIPSLoader, ScalarFP64ABIRequiresMatchingCPR1Evidence) {
+  for (unsigned Size = 0; Size < 4; ++Size) {
+    ELFBytes File(GetParam());
+    File.abiFlags();
+    File.Bytes[0xe5] = Size;
+    File.Bytes[0xe7] = File.Is64 ? 1 : 6;
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_EQ(bool(Image), Size == 2);
+    if (Image)
+      EXPECT_TRUE(Image->MIPS->hasScalarFP64ABI(File.Is64));
+    else
+      EXPECT_NE(llvm::toString(Image.takeError()).find("CPR1 width"),
+                std::string::npos);
+    std::vector<LoadCandidate> Candidates;
+    ELFLoader::identify(File.buffer(), Candidates);
+    ASSERT_EQ(Candidates.size(), 1u);
+    EXPECT_EQ(Candidates[0].Loadable, Size == 2);
+  }
+}
+
+TEST_P(MIPSLoader, ScalarFP32ABIRequiresMatchingCPR1Evidence) {
+  if (isMIPS64(GetParam()))
+    return;
+  for (unsigned Size = 0; Size < 4; ++Size) {
+    ELFBytes File(GetParam());
+    File.abiFlags();
+    File.Bytes[0xe5] = Size;
+    File.Bytes[0xe7] = 1;
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_EQ(bool(Image), Size == 1);
+    if (Image) {
+      EXPECT_TRUE(Image->MIPS->hasScalarFP32ABI(false));
+      EXPECT_FALSE(Image->MIPS->hasScalarFP64ABI(false));
+    } else
+      EXPECT_NE(llvm::toString(Image.takeError()).find("FP32"),
+                std::string::npos);
+    std::vector<LoadCandidate> Candidates;
+    ELFLoader::identify(File.buffer(), Candidates);
+    ASSERT_EQ(Candidates.size(), 1u);
+    EXPECT_EQ(Candidates[0].Loadable, Size == 1);
+  }
 }
 
 TEST_P(MIPSLoader, RuntimeSymbolModesAreValidatedWithoutSectionHeaders) {
@@ -91,7 +197,7 @@ TEST_P(MIPSLoader, RuntimeSymbolModesAreValidatedWithoutSectionHeaders) {
             std::string::npos);
 }
 
-TEST_P(MIPSLoader, DSPCapabilityRequiresClassic32BitProfileEvidence) {
+TEST_P(MIPSLoader, DSPCapabilityUsesWidthAndEncodingEvidence) {
   for (uint32_t ASE : {1u, 2u, 3u, 0x200u, 0x801u}) {
     ELFBytes File(GetParam());
     File.abiFlags();
@@ -101,11 +207,12 @@ TEST_P(MIPSLoader, DSPCapabilityRequiresClassic32BitProfileEvidence) {
                (File.Is64 ? 0x80000000u : 0x70001000u) | 0x02000000, 4);
     ELFLoader Loader;
     auto Image = Loader.loadBuffer(File.buffer());
-    const bool Admitted = ASE == 1 && !File.Is64;
+    const bool Admitted = ASE == 1 || ASE == 2 || ASE == 3 || ASE == 0x801;
     ASSERT_EQ(bool(Image), Admitted);
     if (Admitted) {
       ASSERT_TRUE(Image->MIPS);
       EXPECT_TRUE(Image->MIPS->HasDSP);
+      EXPECT_EQ(Image->MIPS->HasDSPR2, bool(ASE & 2));
     } else {
       llvm::consumeError(Image.takeError());
     }
@@ -140,6 +247,63 @@ TEST_P(MIPSLoader, MSARequiresRevisionFiveAndFP64VectorEvidence) {
     ELFLoader::identify(File.buffer(), Candidates);
     ASSERT_EQ(Candidates.size(), 1u);
     EXPECT_EQ(Candidates[0].Loadable, Admitted);
+  }
+}
+
+TEST_P(MIPSLoader, Release6HeaderAndABIFlagsMustAgree) {
+  for (bool WithABI : {false, true}) {
+    ELFBytes File(GetParam());
+    File.put(File.Is64 ? 48 : 36, File.Is64 ? 0xa0000000u : 0x90001000u, 4);
+    if (WithABI) {
+      File.abiFlags();
+      File.Bytes[0xe3] = 6;
+    }
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    ASSERT_TRUE(Image->MIPS);
+    EXPECT_EQ(Image->MIPS->ISARevision, 6);
+    File.abiFlags(); // r2 payload conflicts with the r6 header.
+    auto Conflict = Loader.loadBuffer(File.buffer());
+    ASSERT_FALSE(bool(Conflict));
+    llvm::consumeError(Conflict.takeError());
+  }
+}
+
+TEST_P(MIPSLoader, MicroRelease6TaggedELFEntryAndABIRecordAgree) {
+  ELFBytes File(GetParam());
+  File.abiFlags();
+  File.put(File.Is64 ? 48 : 36, File.Is64 ? 0xa2000000u : 0x92001000u, 4);
+  File.Bytes[0xe3] = 6;
+  File.put(0xec, 0x800, 4);
+  File.put(24, 0x10101, File.Is64 ? 8 : 4);
+  ELFLoader Loader;
+  auto Image = Loader.loadBuffer(File.buffer());
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  EXPECT_EQ(Image->MIPS->ISARevision, 6);
+  EXPECT_TRUE(Image->MIPS->HasMicroMIPS);
+  EXPECT_EQ(Image->Entry, 0x10100u);
+  EXPECT_EQ(Image->instructionModeAt(Image->Entry), InstructionMode::MicroMIPS);
+  File.put(0xec, 0, 4);
+  auto Conflict = Loader.loadBuffer(File.buffer());
+  ASSERT_FALSE(bool(Conflict));
+  llvm::consumeError(Conflict.takeError());
+}
+
+TEST_P(MIPSLoader, XPAHighWordTransferFlagRequiresRelease6) {
+  for (bool R6 : {false, true}) {
+    ELFBytes File(GetParam());
+    File.abiFlags();
+    if (R6) {
+      File.put(File.Is64 ? 48 : 36, File.Is64 ? 0xa0000000u : 0x90001000u, 4);
+      File.Bytes[0xe3] = 6;
+    }
+    File.put(0xec, 0x1000, 4); // AFL_ASE_XPA
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_EQ(bool(Image), R6);
+    if (!Image)
+      llvm::consumeError(Image.takeError());
   }
 }
 
@@ -272,6 +436,7 @@ TEST_P(MIPSLoader, CompletePLTVeneerNamesOnlyItsBoundImportSlot) {
 
 TEST_P(MIPSLoader, RejectsConflictingOrUnsupportedProfilesInBothEntrypoints) {
   const auto Reject = [&](ELFBytes &File, llvm::StringRef Expected) {
+    SCOPED_TRACE(Expected.str());
     ELFLoader Loader;
     auto Image = Loader.loadBuffer(File.buffer());
     ASSERT_FALSE(bool(Image));
@@ -287,20 +452,16 @@ TEST_P(MIPSLoader, RejectsConflictingOrUnsupportedProfilesInBothEntrypoints) {
   for (const auto &[Bits, Reason] :
        std::array<std::pair<uint32_t, const char *>, 4>{
            {{0x20, "n32"},
-            {0x02000000, "microMIPS"},
+            {0x06000000, "MIPS16"},
             {0x04000000, "MIPS16"},
             {0x00000100, "ABI"}}}) {
     ELFBytes File(GetParam());
-    if ((Bits == 0x02000000 || Bits == 0x04000000) && !File.Is64)
-      continue; // Compressed MIPS32 has separate admission/occurrence tests.
+    if (Bits == 0x04000000 && !File.Is64)
+      continue; // MIPS16/o32 has separate admission and occurrence tests.
     File.put(File.Is64 ? 48 : 36, (File.Is64 ? 0x80000000 : 0x70001000) | Bits,
              4);
     Reject(File, Reason);
   }
-  ELFBytes Revision(GetParam());
-  Revision.put(Revision.Is64 ? 48 : 36, Revision.Is64 ? 0xa0000000 : 0x90001000,
-               4);
-  Reject(Revision, "matching");
   ELFBytes ClassConflict(GetParam());
   ClassConflict.put(ClassConflict.Is64 ? 48 : 36,
                     ClassConflict.Is64 ? 0x70000000 : 0x80001000, 4);
@@ -408,13 +569,14 @@ TEST(MIPS16Loader, E2RequiresMatchingExplicitABIRecords) {
     F.put(36, 0x74001000, 4);
     F.put(24, 0x10101, 4);
     ELFLoader L;
-    for (uint32_t ASE : {0x400u, 0x4400u, 0x4000u, 0x4800u, 0x4401u}) {
+    for (uint32_t ASE :
+         {0x400u, 0x4400u, 0x4440u, 0x440u, 0x4000u, 0x4800u, 0x4401u}) {
       F.put(0xec, ASE, 4);
       auto I = L.loadBuffer(F.buffer());
-      const bool Valid = ASE == 0x400 || ASE == 0x4400;
+      const bool Valid = ASE == 0x400 || ASE == 0x4400 || ASE == 0x4440;
       ASSERT_EQ(bool(I), Valid);
       if (I)
-        EXPECT_EQ(I->MIPS->HasMIPS16E2, ASE == 0x4400);
+        EXPECT_EQ(I->MIPS->HasMIPS16E2, bool(ASE & 0x4000));
       else
         llvm::consumeError(I.takeError());
     }

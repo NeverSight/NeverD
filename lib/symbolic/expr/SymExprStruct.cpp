@@ -32,6 +32,37 @@ namespace neverd::symbolic {
 
 namespace {
 
+// Reassemble a Boolean data bit from the corresponding bit of each word.
+// The caller takes only bit zero, so all other bits of the representative
+// are free. A comparison, a different slice, or an unrelated width is a
+// boundary. Bound the speculative walk even for a shared or very deep DAG.
+SymRef packedBitWord(SymContext &Ctx, SymRef Bit, uint32_t Width,
+                     unsigned &Remaining) {
+  if (!Remaining)
+    return {};
+  --Remaining;
+  const auto Op = Ctx.op(Bit);
+  if (Op == SymOp::Extract && Ctx.node(Bit).Aux == 0) {
+    const auto Word = Ctx.operand(Bit, 0);
+    return Ctx.width(Word) == Width ? Word : SymRef{};
+  }
+  if (!isBitwise(Op))
+    return {};
+  const unsigned N = Ctx.numOperands(Bit);
+  // Keep n-ary chains projected. Their printed binary prefixes can fold
+  // differently when parsed again at full word width.
+  if (N > 2 || N > Remaining)
+    return {};
+  llvm::SmallVector<SymRef, 4> Words;
+  for (unsigned I = 0; I < N; ++I) {
+    const auto Word = packedBitWord(Ctx, Ctx.operand(Bit, I), Width, Remaining);
+    if (!Word)
+      return {};
+    Words.push_back(Word);
+  }
+  return Ctx.rebuild(Bit, Words);
+}
+
 uint64_t lowWordProjectionKey(SymRef Source, uint32_t Width) {
   return (uint64_t(Width) << 32) | Source.index();
 }
@@ -602,6 +633,19 @@ SymRef SymContext::mkConcat(llvm::ArrayRef<SymRef> Ops) {
   // so consumers do not depend on how those zero bits were written.
   if (isConst(Merged.front()) && constValue(Merged.front()).isZero())
     return mkZExt(mkConcat(llvm::ArrayRef<SymRef>(Merged).drop_front()), W);
+  // A Boolean sign column above a literal often reads more cheaply as one
+  // slice of a word than as a bitwise operation on several separate slices.
+  if (Merged.size() == 2 && width(Merged.front()) == 1 &&
+      isBitwise(op(Merged.front())) && isConst(Merged.back())) {
+    unsigned Remaining = ::neverd::limits::symbolic::kSymExprPackedBitNodes;
+    const auto Bit = Merged.front();
+    if (const auto Word = packedBitWord(*this, Bit, W, Remaining)) {
+      const auto Direct = readabilityCost(Word),
+                 Projected = readabilityCost(Bit);
+      if (Projected > Direct && Projected - Direct > 1)
+        Merged.front() = intern(SymOp::Extract, 1, {Word}, 0);
+    }
+  }
   return intern(SymOp::Concat, W, Merged, 0);
 }
 

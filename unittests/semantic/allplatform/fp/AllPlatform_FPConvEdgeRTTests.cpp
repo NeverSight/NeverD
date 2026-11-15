@@ -6,13 +6,14 @@
 //
 // Roundtrip probes for floating-point <-> integer conversion and scalar FP
 // arithmetic over IEEE special values (NaN, +/-Inf, denormal, and magnitudes
-// straddling INT_MAX / UINT_MAX), the saturation-semantics class the lifter must
-// reproduce per target: x86 `cvttss2si` makes an out-of-range/NaN result the
-// integer indefinite 0x80000000, whereas ARM `vcvt` / AArch64 `fcvtzs` saturate
-// to INT_MAX / INT_MIN / 0 — a real ISA divergence the lift has to keep, so a
-// faithful lift must re-emit the same instruction rather than fold the C-level
-// out-of-range conversion to a constant.  Unlike AllPlatform_FPEdgeValueRTTests
-// (x64/AArch64 only), this covers all four targets: i386 is forced onto SSE
+// straddling INT_MAX / UINT_MAX), the saturation-semantics class the lifter
+// must reproduce per target: x86 `cvttss2si` makes an out-of-range/NaN result
+// the integer indefinite 0x80000000, whereas ARM `vcvt` / AArch64 `fcvtzs`
+// saturate to INT_MAX / INT_MIN / 0 — a real ISA divergence the lift has to
+// keep, so a faithful lift must re-emit the same instruction rather than fold
+// the C-level out-of-range conversion to a constant.  Unlike
+// AllPlatform_FPEdgeValueRTTests (x64/AArch64 only), this covers all four
+// targets: i386 is forced onto SSE
 // (`-mfpmath=sse`) so it converts with cvttss2si instead of x87's 80-bit path,
 // and ARM32 stays on its cortex-a15 VFP default.  Special values travel as raw
 // bit patterns through memory so they survive the integer ABI; every kernel is
@@ -25,17 +26,29 @@
 #include "SemanticRoundTripFixture.h"
 
 class X64FPConvEdgeRT : public SemanticRoundTripFixture,
-                    public ::testing::WithParamInterface<RoundTripTC> {};
+                        public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(X64FPConvEdgeRT, Verify) { roundTripX64(GetParam()); }
 class X86FPConvEdgeRT : public SemanticRoundTripFixture,
-                    public ::testing::WithParamInterface<RoundTripTC> {};
+                        public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(X86FPConvEdgeRT, Verify) { roundTripX86(GetParam()); }
 class A64FPConvEdgeRT : public SemanticRoundTripFixture,
-                    public ::testing::WithParamInterface<RoundTripTC> {};
+                        public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(A64FPConvEdgeRT, Verify) { roundTripAArch64(GetParam()); }
 class ARM32FPConvEdgeRT : public SemanticRoundTripFixture,
-                      public ::testing::WithParamInterface<RoundTripTC> {};
+                          public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(ARM32FPConvEdgeRT, Verify) { roundTripARM32(GetParam()); }
+
+// The LLVM C route once read the i386 conversion table through an empty
+// string literal and converted a signed integer as unsigned on ARM32. No
+// environment selects that route in every run, so these do.
+class X86FPConvEdgeLLVMCRT : public SemanticRoundTripFixture,
+                             public ::testing::WithParamInterface<RoundTripTC> {
+};
+TEST_P(X86FPConvEdgeLLVMCRT, Verify) { roundTripX86(GetParam()); }
+class ARM32FPConvEdgeLLVMCRT
+    : public SemanticRoundTripFixture,
+      public ::testing::WithParamInterface<RoundTripTC> {};
+TEST_P(ARM32FPConvEdgeLLVMCRT, Verify) { roundTripARM32(GetParam()); }
 
 // clang-format off
 static std::vector<RoundTripTC> makeFPConvTC(const char *prefix, const char *T,
@@ -146,7 +159,21 @@ static const std::vector<RoundTripTC> kX86 =
 static const std::vector<RoundTripTC> kA64 = makeFPConvTC("a64fpc", "long", "");
 static const std::vector<RoundTripTC> kARM = makeFPConvTC("armfpc", "int", "");
 
-INSTANTIATE_TEST_SUITE_P(FPConv, X64FPConvEdgeRT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(FPConv, X86FPConvEdgeRT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(FPConv, A64FPConvEdgeRT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(FPConv, ARM32FPConvEdgeRT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(FPConv, X64FPConvEdgeRT, ::testing::ValuesIn(kX64),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(FPConv, X86FPConvEdgeRT, ::testing::ValuesIn(kX86),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(FPConv, A64FPConvEdgeRT, ::testing::ValuesIn(kA64),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(FPConv, ARM32FPConvEdgeRT, ::testing::ValuesIn(kARM),
+                         rtTCName);
+
+static std::vector<RoundTripTC> llvmCRoute(std::vector<RoundTripTC> Cases) {
+  for (RoundTripTC &Case : Cases)
+    Case.SourceRoute = true;
+  return Cases;
+}
+INSTANTIATE_TEST_SUITE_P(FPConvLLVMC, X86FPConvEdgeLLVMCRT,
+                         ::testing::ValuesIn(llvmCRoute(kX86)), rtTCName);
+INSTANTIATE_TEST_SUITE_P(FPConvLLVMC, ARM32FPConvEdgeLLVMCRT,
+                         ::testing::ValuesIn(llvmCRoute(kARM)), rtTCName);

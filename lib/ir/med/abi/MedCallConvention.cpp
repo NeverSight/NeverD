@@ -15,19 +15,19 @@ extern const CallArgumentConvention DarwinAArch64CallArguments;
 extern const CallArgumentConvention WindowsAArch64CallArguments;
 extern const CallArgumentConvention AAPCS32CallArguments;
 extern const CallArgumentConvention AAPCS64CallArguments;
-extern const CallArgumentConvention MIPSO32CallArguments;
-extern const CallArgumentConvention MIPSELO32CallArguments;
-extern const CallArgumentConvention MIPSN64CallArguments;
-extern const CallArgumentConvention MIPSELN64CallArguments;
+#define NEVERD_MIPS_TARGET(Name, Spelling, Triple)                             \
+  extern const CallArgumentConvention Name##CallArguments;
+#include "neverd/MIPSTargets.def"
 
 const CallArgumentConvention *callArgumentConvention(Arch A, BinaryFormat F) {
   static constexpr const CallArgumentConvention *Conventions[] = {
       &Win64CallArguments,          &SysVX64CallArguments,
       &I386CallArguments,           &DarwinAArch64CallArguments,
       &WindowsAArch64CallArguments, &AAPCS32CallArguments,
-      &AAPCS64CallArguments,        &MIPSO32CallArguments,
-      &MIPSELO32CallArguments,      &MIPSN64CallArguments,
-      &MIPSELN64CallArguments};
+      &AAPCS64CallArguments,
+#define NEVERD_MIPS_TARGET(Name, Spelling, Triple) &Name##CallArguments,
+#include "neverd/MIPSTargets.def"
+  };
   for (BinaryFormat Wanted : {F, BinaryFormat::Unknown})
     for (const CallArgumentConvention *C : Conventions)
       if (C->TheArch == A && C->Format == Wanted)
@@ -82,6 +82,9 @@ std::optional<CallingConv> callingConventionOf(Arch A, BinaryFormat F) {
   case Arch::MIPS32:
   case Arch::MIPS32EL:
     return CallingConv::MIPS_O32;
+  case Arch::MIPS64N32:
+  case Arch::MIPS64N32EL:
+    return CallingConv::MIPS_N32;
   case Arch::MIPS64:
   case Arch::MIPS64EL:
     return CallingConv::MIPS_N64;

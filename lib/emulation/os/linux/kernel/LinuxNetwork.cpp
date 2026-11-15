@@ -9,9 +9,11 @@
 #include "LinuxNetwork.h"
 
 #include "LinuxFiles.h"
+#include "LinuxTime.h"
 
 #include "neverd/emulation/Limits.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/FormatVariadic.h"
 
@@ -69,9 +71,11 @@ bool hasTimedReceives(const LinuxNetworkOptions &Options) {
            llvm::any_of(C.ReceiveEvents,
                         [](const auto &E) { return E.ReadyAtNS.has_value(); });
   };
-  return llvm::any_of(
-             Options.Connections,
-             [&](const auto &C) { return C.ReceiveEOFAtNS || Timed(C); }) ||
+  return llvm::any_of(Options.Connections,
+                      [&](const auto &C) {
+                        return C.ReceiveEOFAtNS ||
+                               C.ReceiveQuietAfterConnectNS || Timed(C);
+                      }) ||
          llvm::any_of(Options.DatagramConnections, Timed);
 }
 uint16_t networkAddressFamily(llvm::ArrayRef<uint8_t> Address) {
@@ -95,6 +99,8 @@ llvm::Error validateNetworkOptions(const LinuxNetworkOptions &Options) {
   if (const auto &F = Options.TCPConnectFailures) {
     if (!F->Count || !F->Error || !connectError(F->Error))
       return failure("invalid offline TCP connection failure contract");
+    if (F->AfterConnections && *F->AfterConnections > Streams)
+      return failure("after_connections exceeds the number of TCP connections");
     // Counted failures retain only a uint32_t cursor, not connection entries.
     // The explicit count and the execution budget bound their consumption.
   }
@@ -112,10 +118,15 @@ llvm::Error validateNetworkOptions(const LinuxNetworkOptions &Options) {
                             C.ReceiveEOF || !C.ReceiveEvents.empty())) ||
         (!C.Receive.empty() && !C.ReceiveEvents.empty()))
       return failure("invalid offline TCP connection contract");
+    const bool Quiet = C.ReceiveQuietUntilNS || C.ReceiveQuietAfterConnectNS;
     if ((C.ReceiveEOFAtNS && !C.ReceiveEOF) ||
-        (C.ReceiveQuietUntilNS && C.ReceiveEOF) ||
-        (C.ConnectErrno && (C.ReceiveEOFAtNS || C.ReceiveQuietUntilNS)))
+        (Quiet && (C.ReceiveEOF || C.ConnectErrno)) ||
+        (C.ConnectErrno && C.ReceiveEOFAtNS) ||
+        (C.ReceiveQuietUntilNS && C.ReceiveQuietAfterConnectNS))
       return failure("invalid offline TCP receive schedule");
+    if (C.ReceiveQuietAfterConnectNS &&
+        *C.ReceiveQuietAfterConnectNS >= uint64_t(INT64_MAX))
+      return failure("offline receive quiet interval has no finite end");
     if (auto E = receiveEnd(C.ReceiveEvents, C.ReceiveEOFAtNS,
                             C.ReceiveQuietUntilNS))
       return E;
@@ -305,32 +316,61 @@ LinuxFiles::network(ServiceKind Kind, const ProcessServiceEvent &Event,
       Socket->Datagram = &C;
       return Reply(0);
     }
-    if (NextConnection == Network->Connections.size() &&
-        Network->TCPConnectFailures) {
-      const auto &F = *Network->TCPConnectFailures;
-      if (TCPConnectFailuresConsumed == F.Count) {
+    const uint64_t AttemptNumber =
+        uint64_t(TCPConnectFailuresConsumed) + NextConnection + 1;
+    if (const auto &F = Network->TCPConnectFailures;
+        F && NextConnection ==
+                 F->AfterConnections.value_or(Network->Connections.size())) {
+      if (TCPConnectFailuresConsumed < F->Count) {
+        ++TCPConnectFailuresConsumed;
+        Socket->Failed = true;
+        return Reply(uint64_t(0) - F->Error);
+      }
+      if (NextConnection == Network->Connections.size()) {
         const auto Reason =
-            llvm::formatv("TCP connection failure contract exhausted after {0} "
-                          "supplied failures; next result is not supplied",
-                          TCPConnectFailuresConsumed)
+            llvm::formatv(
+                "TCP connection failure contract exhausted after {0} "
+                "supplied failures (attempt {1} has no supplied result), "
+                "peer_hex={2}",
+                TCPConnectFailuresConsumed, AttemptNumber,
+                llvm::toHex(Peer, true))
                 .str();
         return unsupported(Result, Reason.c_str());
       }
-      ++TCPConnectFailuresConsumed;
-      Socket->Failed = true;
-      return Reply(uint64_t(0) - F.Error);
     }
-    if (NextConnection == Network->Connections.size() ||
-        Network->Connections[NextConnection].Peer != Peer)
-      return unsupported(Result,
-                         "TCP peer has no matching offline connection attempt");
-    const auto &C = Network->Connections[NextConnection++];
+    const bool MissingResult = NextConnection == Network->Connections.size();
+    if (MissingResult || Network->Connections[NextConnection].Peer != Peer) {
+      const auto Reason =
+          llvm::formatv("TCP peer has no matching offline connection attempt "
+                        "(attempt {0}, connection index {1} {2}), peer_hex={3}",
+                        AttemptNumber, NextConnection,
+                        MissingResult ? "has no supplied result"
+                                      : "has a different peer",
+                        llvm::toHex(Peer, true))
+              .str();
+      return unsupported(Result, Reason.c_str());
+    }
+    const auto &C = Network->Connections[NextConnection];
     if (C.ConnectErrno) {
+      ++NextConnection;
       Socket->Failed = true;
       return Reply(uint64_t(0) - C.ConnectErrno);
     }
+    if (C.ReceiveQuietAfterConnectNS) {
+      if (!Clock || !Clock->advancesOnIdle())
+        return unsupported(Result,
+                           "timed network input requires virtual idle time");
+      const uint64_t Start = Clock->elapsed();
+      if (*C.ReceiveQuietAfterConnectNS >= uint64_t(INT64_MAX) - Start)
+        return unsupported(Result,
+                           "offline receive quiet interval has no finite end");
+      const uint64_t End = Start + *C.ReceiveQuietAfterConnectNS;
+      if (auto E = receiveEnd(C.ReceiveEvents, {}, End))
+        return unsupported(Result, llvm::toString(std::move(E)).c_str());
+      Socket->ConnectQuietEnd = End;
+    }
     Socket->Connection = &C;
-    Socket->ConnectionIndex = NextConnection - 1;
+    Socket->ConnectionIndex = NextConnection++;
     return Reply(0);
   }
   if (Kind == ServiceKind::ReceiveFrom)
@@ -393,18 +433,24 @@ LinuxFiles::transferSocket(OpenSocket &Socket, bool Send, uint64_t Address,
   }
   const auto &Bytes = Send ? C.ExpectedSend : Event ? Event->Bytes : C.Receive;
   auto &Position = Send ? Socket.Sent : Socket.Received;
-  if (Position == Bytes.size()) {
-    if (!Send && C.ReceiveEOF)
+  const uint64_t Remaining = Bytes.size() - Position;
+  if (!Send && !Remaining) {
+    if (C.ReceiveEOF)
       return Reply(0);
-    return unsupported(Result,
-                       Send ? "outgoing TCP stream exceeds its offline contract"
-                            : "TCP receive readiness has no offline input");
+    return unsupported(Result, "TCP receive readiness has no offline input");
   }
   const auto Count = std::min<uint64_t>(Size, Send ? C.MaxSend : C.MaxReceive);
-  if (Send && Count > Bytes.size() - Position)
-    return unsupported(Result,
-                       "outgoing TCP stream exceeds its offline contract");
-  const auto Transfer = std::min<uint64_t>(Count, Bytes.size() - Position);
+  if (Send && Count > Remaining) {
+    const auto Reason =
+        llvm::formatv(
+            "outgoing TCP stream exceeds its offline contract at "
+            "stream offset {0} (request size {1}, size after max_send "
+            "{2}, bytes remaining {3}, connection index {4})",
+            Position, Size, Count, Remaining, Socket.ConnectionIndex)
+            .str();
+    return unsupported(Result, Reason.c_str());
+  }
+  const auto Transfer = std::min(Count, Remaining);
   if (Address > Layout.UserLimit || Transfer > Layout.UserLimit - Address)
     return Reply(uint64_t(0) - BadAddress);
   auto Accessible =

@@ -19,6 +19,7 @@
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/MachO.h"
+#include "llvm/Support/LEB128.h"
 
 #include <algorithm>
 #include <cstring>
@@ -108,6 +109,100 @@ dwarf_eh::ParseResult parseMachOFrame(const std::vector<uint8_t> &Binary) {
       {});
 }
 
+TEST(AArch64DwarfRewrite, ZeroBaseTextRetainsOccupiedBytesAroundAnAlignedGap) {
+  using namespace llvm::MachO;
+  auto Binary = machOFrame({});
+  auto *Header = reinterpret_cast<mach_header_64 *>(Binary.data());
+  Header->filetype = MH_DYLIB;
+  auto *Text = reinterpret_cast<segment_command_64 *>(Header + 1);
+  auto *Code = reinterpret_cast<section_64 *>(Text + 1);
+  auto *Frame = Code + 1;
+  auto *Linkedit = reinterpret_cast<segment_command_64 *>(Frame + 1);
+  Text->vmaddr -= kMachOBase;
+  Code->addr -= kMachOBase;
+  Frame->addr -= kMachOBase;
+  Linkedit->vmaddr -= kMachOBase;
+  // Leave room for a section descriptor. Every other unowned interval has
+  // live bytes at its first candidate, including the gap we want to reuse.
+  const uint64_t CommandsEnd = sizeof(*Header) + Header->sizeofcmds;
+  std::fill(Binary.begin() + CommandsEnd + sizeof(section_64),
+            Binary.begin() + Code->offset, kOccupiedGap);
+  std::fill(Binary.begin() + Code->offset + Code->size,
+            Binary.begin() + Frame->offset, kOccupiedGap);
+  std::fill(Binary.begin() + Frame->offset + Frame->size,
+            Binary.begin() + kMachOPageSize, kOccupiedGap);
+  const uint64_t Gap = kMachOPageSize - 2 * kMetadataGapSize;
+  std::fill_n(Binary.begin() + Gap, kMetadataGapSize, 0);
+  const auto Before = Binary;
+  auto Added = declareMachOTextMetadata(
+      Binary, Arch::AArch64, kMachOMetadataSection, kMetadataGapSize);
+  ASSERT_TRUE(bool(Added)) << llvm::toString(Added.takeError());
+  EXPECT_EQ(*Added, Gap);
+  EXPECT_EQ(Binary.size(), Before.size());
+  EXPECT_TRUE(std::equal(Before.begin() + CommandsEnd + sizeof(section_64),
+                         Before.end(),
+                         Binary.begin() + CommandsEnd + sizeof(section_64)));
+}
+
+TEST(AArch64DwarfRewrite, FrameOnlyGrowthReplaysSignedRowsAfterMovingHeader) {
+  using namespace llvm::MachO;
+  auto Binary = machOFrame(kStates, kBKeyNonHint);
+  Binary.insert(Binary.begin() + kMachOPageSize, kMachOPageSize, kOccupiedGap);
+  auto *Header = reinterpret_cast<mach_header_64 *>(Binary.data());
+  auto *First = reinterpret_cast<segment_command_64 *>(Header + 1);
+  const unsigned TextSize = First->cmdsize;
+  const uint64_t NewCommands =
+      2 * sizeof(segment_command_64) + sizeof(linkedit_data_command);
+  ASSERT_LT(sizeof(*Header) + Header->sizeofcmds + NewCommands,
+            kMachOTextOffset);
+  auto Linkedit = *reinterpret_cast<segment_command_64 *>(
+      reinterpret_cast<uint8_t *>(First) + TextSize);
+  std::memmove(First + 1, First, TextSize);
+  *First = {};
+  First->cmd = LC_SEGMENT_64;
+  First->cmdsize = sizeof(*First);
+  std::memcpy(First->segname, kMachOPageZero, sizeof(kMachOPageZero));
+  First->vmsize = kMachOBase;
+  auto *Data = reinterpret_cast<segment_command_64 *>(
+      reinterpret_cast<uint8_t *>(First + 1) + TextSize);
+  *Data = Linkedit;
+  std::fill(std::begin(Data->segname), std::end(Data->segname), 0);
+  std::memcpy(Data->segname, kMachODataSegment, sizeof(kMachODataSegment));
+  Data->initprot = Data->maxprot = VM_PROT_READ | VM_PROT_WRITE;
+  Linkedit.fileoff += kMachOPageSize;
+  Linkedit.vmaddr += kMachOPageSize;
+  Data[1] = Linkedit;
+  auto *Starts = reinterpret_cast<linkedit_data_command *>(Data + 2);
+  *Starts = {LC_FUNCTION_STARTS, sizeof(*Starts), uint32_t(Linkedit.fileoff),
+             0};
+  Starts->datasize =
+      llvm::encodeULEB128(kMachOTextOffset, Binary.data() + Starts->dataoff) +
+      1;
+  Header->ncmds += 3;
+  Header->sizeofcmds += NewCommands;
+
+  const auto Before = parseMachOFrame(Binary);
+  ASSERT_EQ(Before.FDEs.size(), 1u);
+  auto Grown =
+      reserveMachOSourceUnwind(Binary, Arch::AArch64, kMachOPageSize, 0);
+  ASSERT_TRUE(bool(Grown)) << llvm::toString(Grown.takeError());
+  ASSERT_TRUE(*Grown);
+  const auto Region = findMachOEHFrameRegion(Binary);
+  ASSERT_TRUE(Region);
+  EXPECT_LT(Region->SectionVA, kMachOBase);
+  const auto After = parseMachOFrame(Binary);
+  ASSERT_EQ(After.FDEs.size(), 1u);
+  EXPECT_EQ(After.FDEs.front().InitialLocation,
+            Before.FDEs.front().InitialLocation);
+  for (uint64_t Offset = 0; Offset < kRange; Offset += kCodeAlign) {
+    const auto Old = query(Before, Offset);
+    const auto New = query(After, Offset);
+    ASSERT_TRUE(Old.State);
+    ASSERT_TRUE(New.State);
+    EXPECT_EQ(*Old.State, *New.State);
+  }
+}
+
 TEST(AArch64DwarfRewrite, NonHintAugmentationHasNoPayload) {
   for (const char *Augmentation :
        {kNonHint, kBKeyNonHint, kNonHintBeforeEncoding}) {
@@ -153,7 +248,8 @@ TEST(AArch64DwarfRewrite, MachOLayoutGrowthPreservesEverySigningRecipe) {
     std::optional<uint64_t> SigningOffset;
   };
   for (const char *Augmentation :
-       {kOrdinary, kBKey, kNonHint, kBKeyNonHint, kNonHintBeforeEncoding})
+       {kOrdinary, kBKey, kNonHint, kBKeyNonHint, kNonHintBeforeEncoding,
+        kSignalAugmentation, kBKeySignal})
     for (const auto &Case :
          {Program{{}, {}, 0, {}}, Program{kUnsignedIgnoredOffset, {}, 0, {}},
           Program{kSPIgnoredOffset, {}, 0, {}}, Program{{}, kInitialPC, 0, 0},
@@ -182,6 +278,9 @@ TEST(AArch64DwarfRewrite, MachOLayoutGrowthPreservesEverySigningRecipe) {
       ASSERT_EQ(After.FDEs.size(), 1u);
       EXPECT_EQ(After.CIEs.front().Augmentation,
                 Before.CIEs.front().Augmentation);
+      EXPECT_EQ(After.CIEs.front().IsSignalFrame,
+                Augmentation == kSignalAugmentation ||
+                    Augmentation == kBKeySignal);
       EXPECT_EQ(After.FDEs.front().InitialLocation,
                 kMachOBase + kMachOTextOffset);
       EXPECT_EQ(After.FDEs.front().AddressRange, kRange);
@@ -242,11 +341,47 @@ TEST(AArch64DwarfRewrite,
   Reject(kExpression, kOrdinary, kLayoutRefusal);
   Reject(kOpaque, kOrdinary, kLayoutRefusal);
   Reject({}, kDuplicateNonHint, kLayoutRefusal);
-  Reject({}, kSignalAugmentation, kLayoutRefusal);
+  Reject({}, kDuplicateSignal, kLayoutRefusal);
+  Reject(kExpression, kSignalAugmentation, kLayoutRefusal);
+  Reject(kTruncatedSignalLR, kSignalAugmentation, kLayoutRefusal);
+  Reject({}, kSignalAugmentation, kLayoutRefusal, kAbsoluteSignalCFA);
   language_eh_test::ByteBuilder Location;
   Location.u8(kSetLocation);
   Location.u64(kMachOBase + kMachOTextOffset + kCodeAlign);
   Reject(Location.data(), kOrdinary, kLayoutRefusal);
+}
+
+TEST(AArch64DwarfRewrite, RelocatesRegisterRelativeSignalContextRules) {
+  auto Binary = machOFrame(kSignalLR, kBKeySignal, kSignalCFA);
+  const auto Before = parseMachOFrame(Binary);
+  const auto Old = findMachOEHFrameRegion(Binary);
+  ASSERT_TRUE(Old);
+  auto Grown =
+      reserveMachOSourceUnwind(Binary, Arch::AArch64, kMachOPageSize, 0);
+  ASSERT_TRUE(bool(Grown)) << llvm::toString(Grown.takeError());
+  const auto Now = findMachOEHFrameRegion(Binary);
+  ASSERT_TRUE(Now);
+  EXPECT_NE(Old->SectionVA, Now->SectionVA);
+  const auto After = parseMachOFrame(Binary);
+  ASSERT_EQ(After.ParseStatus, ExceptionParseStatus::Complete);
+  ASSERT_EQ(After.CIEs.size(), 1u);
+  ASSERT_EQ(After.FDEs.size(), 1u);
+  EXPECT_TRUE(After.CIEs.front().IsSignalFrame);
+  const auto Expression = [](const auto &Rules, CFIOpKind Kind) {
+    const auto It =
+        llvm::find_if(Rules, [&](const auto &I) { return I.Kind == Kind; });
+    return It == Rules.end() ? std::vector<uint8_t>() : It->Expression;
+  };
+  const auto CFA = Expression(After.CIEs.front().InitialInstructions,
+                              CFIOpKind::DefCFAExpression);
+  const auto LR =
+      Expression(After.FDEs.front().Instructions, CFIOpKind::Expression);
+  EXPECT_FALSE(CFA.empty());
+  EXPECT_FALSE(LR.empty());
+  EXPECT_EQ(CFA, Expression(Before.CIEs.front().InitialInstructions,
+                            CFIOpKind::DefCFAExpression));
+  EXPECT_EQ(
+      LR, Expression(Before.FDEs.front().Instructions, CFIOpKind::Expression));
 }
 
 TEST(AArch64DwarfRewrite, MetadataInsertionPreservesSymbolSectionIdentity) {

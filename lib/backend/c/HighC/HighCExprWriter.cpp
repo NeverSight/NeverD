@@ -80,6 +80,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/SaveAndRestore.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -1981,6 +1982,13 @@ std::vector<size_t> HighCWriter::printedCallOperands(const HighExpr &E) const {
     return vaStartCallOperands(E, *Defined, *Va, /*Printed=*/false);
   // A call passes the declared parameters the definition prints after its
   // HighIR ones (unreadDeclaredParams) in the slots that follow theirs.
+  if (Defined->UsesNativeVariadicStack &&
+      E.Operands.size() >= Defined->Params.size()) {
+    auto Indices = emittedParamIndices(*Defined);
+    for (size_t I = Defined->Params.size(); I < E.Operands.size(); ++I)
+      Indices.push_back(I);
+    return Indices;
+  }
   const size_t Unread = unreadDeclaredParams(*Defined).size();
   if (Unread && E.Operands.size() == Defined->Params.size() + Unread) {
     std::vector<size_t> Indices = emittedParamIndices(*Defined);
@@ -2281,14 +2289,21 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     const auto Source = MemoryIdentifiers.allocate("x87_value_source");
     const auto Result = MemoryIdentifiers.allocate("x87_value_result");
     const auto Control = MemoryIdentifiers.allocate("x87_value_control");
+    const auto Status = MemoryIdentifiers.allocate("x87_value_status");
+    // The assembly samples status into a local of this expression and C hands
+    // it to the thread-local owner, as the scalar helpers do. The address of
+    // a thread-local object as an assembly operand would be formed from the
+    // thread pointer even where the compiler can remove every other use of
+    // the sample.
     return "({ unsigned _BitInt(80) " + Source + " = " +
            exprStr(*E.Operands[0]) + "; unsigned _BitInt(" +
            std::to_string(x87GuardedValueBytes(E.IntrinsicId) * 8) + ") " +
            Result + " = 0; uint16_t " + Control + " = " +
-           exprStr(*E.Operands[1]) + "; " +
-           renderX87GuardedValueAsm(E.IntrinsicId,
-                                    {"&" + Result, "&" + Source, "&" + Control,
-                                     "&neverd_x87_sampled_status"}) +
+           exprStr(*E.Operands[1]) + "; uint16_t " + Status + " = 0; " +
+           renderX87GuardedValueAsm(
+               E.IntrinsicId,
+               {"&" + Result, "&" + Source, "&" + Control, "&" + Status}) +
+           "; neverd_x87_sampled_status = " + Status +
            "; neverd_x87_status_pending = 1; " + Result + "; })";
   }
   if (isX87ConstantControlIntrinsic(E.IntrinsicId)) {
@@ -2359,7 +2374,7 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   if (E.IntrinsicId != Intrinsic::None) {
     if (mips::isScalarIntrinsic(E.IntrinsicId))
       return renderMIPSScalar(
-          E, Opts.TheArch, MIPSScalarHelpers.at(E.IntrinsicId),
+          E, Opts.TheArch, MIPSScalarHelpers.at(mipsScalarHelperKey(E)),
           E.Operands.empty() ? std::nullopt : constAddress(*E.Operands[0]),
           [this, &E](const HighExpr &V, unsigned Index) {
             return Index == 0 && mips::mergeMemory(E.IntrinsicId)
@@ -2561,10 +2576,14 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   const std::vector<size_t> VaCallOperands =
       VaCallee ? vaStartCallOperands(E, *Defined, *VaCallee, /*Printed=*/true)
                : std::vector<size_t>();
-  const size_t ArgCount = VaCallee ? VaCallOperands.size()
-                          : Defined && !Defined->SourceTypeHint
-                              ? emittedParamCount(*Defined)
-                              : E.Operands.size();
+  const std::vector<size_t> DefinedIndices =
+      VaCallee ? VaCallOperands : printedCallOperands(E);
+  const size_t ArgCount =
+      (VaCallee ||
+       (Defined && Defined->UsesNativeVariadicStack && !DefinedIndices.empty()))
+          ? DefinedIndices.size()
+      : Defined && !Defined->SourceTypeHint ? emittedParamCount(*Defined)
+                                            : E.Operands.size();
   std::string S = Name + "(";
   const auto Callee = debugCallee(E);
   if (Callee && !Defined)
@@ -2587,8 +2606,6 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
           : std::nullopt;
   const size_t ArityIntegers = Arity ? std::max(0, Arity->IntArgs) : 0;
   const size_t ArityFloats = Arity ? std::max(0, Arity->FpArgs) : 0;
-  const std::vector<size_t> DefinedIndices =
-      VaCallee ? VaCallOperands : printedCallOperands(E);
   auto OperandIndex = [&](size_t I) {
     if (I < DefinedIndices.size())
       return DefinedIndices[I];
@@ -2667,9 +2684,49 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     throw std::runtime_error("The header's record call ABI is unsupported");
   if (RecordCall)
     PrintedArgs = RecordCall->Parameters.size();
+  // Whether the code of \p Callee, a definition this unit prints, reads its
+  // parameter \p Index anywhere, or may hand it to a callee no operation
+  // names.
+  const auto ReadsParameter = [](const HighFunc &Callee, size_t Index) {
+    bool Reads = false;
+    HighExprSet Seen;
+    walkStmts(Callee.Body, [&](const HighStmt &Stmt) {
+      forEachExpr(Stmt, [&](const ExprPtr &Root) {
+        std::vector<const HighExpr *> Pending{Root.get()};
+        while (!Reads && !Pending.empty()) {
+          const HighExpr *Value = Pending.back();
+          Pending.pop_back();
+          if (!Value || !Seen.insert(Value).second)
+            continue;
+          // A call through a pointer passes on whatever the argument
+          // registers hold, the ones its recovered list leaves out too.
+          Reads =
+              (Value->Kind == ExprKind::Call && Value->IsIndirectCall) ||
+              ((Value->Kind == ExprKind::Var || Value->Kind == ExprKind::Phi) &&
+               Value->Var.Kind == MedVar::Param &&
+               Value->Var.Id == static_cast<int>(Index));
+          Value->forEachChildExpr(
+              [&](const ExprPtr &Child) { Pending.push_back(Child.get()); });
+        }
+      });
+    });
+    return Reads;
+  };
+  // An argument that is only available on some paths: where its text starts
+  // and the flag that says so.
+  size_t DeferredBegin = 0;
+  std::string DeferredFlag;
+  const auto CloseDeferred = [&] {
+    if (DeferredFlag.empty())
+      return;
+    S = S.substr(0, DeferredBegin) + "(" + DeferredFlag + " ? (" +
+        S.substr(DeferredBegin) + ") : 0)";
+    DeferredFlag.clear();
+  };
   // The string an argument points to reads beside it, before the comma.
   std::string Note;
   for (size_t I = 0; I < PrintedArgs; ++I) {
+    CloseDeferred();
     S += Note;
     if (I > 0)
       S += ", ";
@@ -2711,6 +2768,24 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
           0, Op->Type && Op->Type->Size ? Op->Type->Size : 8);
       Op = Missing.get();
     }
+    // A register only some paths to the call set is known on those alone
+    // (`v_known ? v : unknown`).  Where the callee's code never reads the
+    // parameter, nothing observes the others: it passes the value where it
+    // has one, and zero as an unread parameter does where it has none.
+    llvm::SaveAndRestore<bool> Unobserved(ReadingDeferredPayload,
+                                          ReadingDeferredPayload);
+    if (const HighExpr *Value = peelIntegerViewOps(Op);
+        Defined && !RecordCall && Defined->ConversionFailure.empty() &&
+        !Defined->AnalysisOnly && Source < Defined->Params.size() && Value &&
+        (Value->Kind == ExprKind::Var || Value->Kind == ExprKind::Phi))
+      if (const auto Flag =
+              DeferredUnknownFlags.find(copyForwardName(varName(Value->Var)));
+          Flag != DeferredUnknownFlags.end() && !ReadingDeferredPayload &&
+          !ReadsParameter(*Defined, Source)) {
+        DeferredBegin = S.size();
+        DeferredFlag = Flag->second;
+        ReadingDeferredPayload = true;
+      }
     // <excpt.h>'s GetExceptionInformation() points to its own
     // EXCEPTION_POINTERS, which the callee may take as a record of the unit's
     // own: the pointer converts through void *.
@@ -3130,6 +3205,7 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     }
     S += Arg;
   }
+  CloseDeferred();
   S += Note;
   S += ")";
   if (RecordCall && RecordCall->FloatingResult) {
@@ -6062,8 +6138,10 @@ std::string HighCWriter::unknownVarUse(const HighExpr &E,
     // The link register's full entry value is the return address, as the
     // LLVM route reads it: AArch64 x30 and ARM LR alike (x86 has none).
     if (E.Var.Kind == MedVar::Reg && TRI.isLinkRegister(E.Var.RegOff) &&
-        E.Var.Size == TRI.PointerSize)
-      return "(uintptr_t)__builtin_return_address(0)";
+        E.Var.Size == TRI.addressRegisterBytes())
+      return isMIPSN32(Opts.TheArch)
+                 ? "(int64_t)(intptr_t)__builtin_return_address(0)"
+                 : "(uintptr_t)__builtin_return_address(0)";
     // The platform register's entry value is the platform's state, which C
     // reads from the register itself.
     if (isPlatformRegisterEntry(E) && TRI.GetRegName) {
@@ -6077,6 +6155,14 @@ std::string HighCWriter::unknownVarUse(const HighExpr &E,
       return useX87Helper(X87CHelper::ControlWord) + "()";
     return unknownValueText(E, "register");
   }
+  // A temporary no statement assigns is unknown as well: the bytes of an
+  // incoming register a partial write keeps, where the register is no
+  // parameter (i386 `mov dl, 8; mov [esp + 44], edx`).  Nothing declares its
+  // name.
+  if (E.Kind == ExprKind::Var && E.Var.Kind == MedVar::Temp &&
+      E.Var.SSAVer == 0 && Name == RawName && !AssignedNames.count(RawName) &&
+      !isEmittedParamName(RawName))
+    return unknownValueText(E, "value");
   return {};
 }
 
@@ -7188,6 +7274,10 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
     return "(0 /* truncated: expr too deep */)";
 
   switch (E.Kind) {
+  case ExprKind::IncomingStack:
+    return llvm::formatv(c_stack::kNativeEntryValue.data(),
+                         c_stack::kNativeEntrySPName)
+        .str();
   case ExprKind::EntryRegister:
     return registrationEntryExpression(E);
   case ExprKind::Var:
@@ -8142,6 +8232,14 @@ std::optional<va_t> HighCWriter::constAddress(const HighExpr &E) const {
   return std::nullopt;
 }
 
+/// The `$d` mapping interval of an AArch32 ELF image that holds \p Addr:
+/// data wherever it lies, the literal pool of a function among its code.
+static const ARMCodeRegion *armLiteralPoolAt(const BinaryImage &Img,
+                                             va_t Addr) {
+  const ARMCodeRegion *Region = Img.armMappingRegionAt(Addr);
+  return Region && Region->Kind == ARMCodeRegionKind::Data ? Region : nullptr;
+}
+
 bool isImageDataAt(const BinaryImage &Img, va_t Addr) {
   // The image's own headers are `__ImageBase`, never a copied object, and
   // another module's storage an undefined data symbol names is no object of
@@ -8154,9 +8252,10 @@ bool isImageDataAt(const BinaryImage &Img, va_t Addr) {
     return false;
   // Instruction bytes are not data objects.  Read-only constants live in
   // .rdata / .rodata (readable, not writable, not executable), and where
-  // the debug information places data among the code.
+  // the debug information places data among the code, or an AArch32 `$d`
+  // mapping interval does (a literal pool).
   if (Seg->isExecutable() && !Seg->isWritable() &&
-      !isCodeSectionData(&Img, Addr))
+      !isCodeSectionData(&Img, Addr) && !armLiteralPoolAt(Img, Addr))
     return false;
   // An import's slot or stub is no data object either.  Asked last: a code
   // address asks whether a function starts there, which reads the symbols.
@@ -8288,7 +8387,8 @@ HighCWriter::indexedObjectAt(va_t Addr) const {
   // table cannot acquire this route.  An executable section holds data only
   // where the image says it does, as a kernel keeps constants in its paged
   // code.
-  const bool AmongCode = isCodeSectionData(Opts.Image, Addr);
+  const ARMCodeRegion *Pool = armLiteralPoolAt(*Opts.Image, Addr);
+  const bool AmongCode = isCodeSectionData(Opts.Image, Addr) || Pool;
   if ((!Sec && (!Seg || Opts.Image->layoutAddressOwner(Addr) != Seg->VA)) ||
       (Sec ? !Sec->isReadable() || (Sec->isExecutable() && !AmongCode)
            : !Seg->isReadable() || Seg->isExecutable()))
@@ -8328,8 +8428,12 @@ HighCWriter::indexedObjectAt(va_t Addr) const {
       Begin = *Before;
   }
   // Among code, the object starts where the image says, and the next function
-  // ends it as a next object would.
-  if (AmongCode) {
+  // ends it as a next object would.  A literal pool is its mapping interval:
+  // the code may reach any of it from an address inside.
+  if (Pool) {
+    Begin = std::max(Begin, Pool->Start);
+    End = std::min(End, Pool->End);
+  } else if (AmongCode) {
     Begin = std::max(Begin, Addr);
     const auto &CodeStarts = dataObjects().CodeSymbolStarts;
     const auto NextCode = llvm::upper_bound(CodeStarts, Addr);

@@ -1,0 +1,51 @@
+{
+  "date": "2026-11-11",
+  "scope": "Complete standalone classic macOS arm64e instruction sections made of verified frameless register-only integer leaves",
+  "source_revision": "ead18fa395dd95122fec9814ba94a9a481229104",
+  "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+  "configuration": "Release",
+  "host_sha256": "93ec2fb8e6eb6cf54c7a7e75296e2334b2799aa753aa26af29b905b9793c1efa",
+  "manifest_sha256": "92db42482ee7d21375a44ec2e7ca8439f50e3ebe940ca46fdcebe88127c1121d",
+  "archive_sha256": "a07f09210195e15487501a589265c2e6d2fb5d580f10e2f9eb492326cde15658",
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42957645426",
+  "workflow_revision": "3e56bfb876705dfab337fcdaedf4dabdd3465a35",
+  "cold_runner_build": false,
+  "arbitrary_lifted_images_qualified": false,
+  "native_apple_cpta_qualified": false,
+  "runners": {
+    "native-leaves-macos-26": {
+      "artifact_id": 13827651906,
+      "artifact_digest": "sha256:49ee719e67548f4ae843d4f7653b076bb32edea344c958fa01284d464f1c3654",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "sdk": "26.5",
+      "cpu": "Apple M1 (Virtual)",
+      "compiler_controls": 6,
+      "original_sha256": "e925c70cbaa2394f441b454245f276a53ec1459c39a566c5ad559b12be911953",
+      "published_sha256": "d6ee54e4d976cf290bb12e19921296303b649067507bafd933fb709aa63e7259",
+      "authenticated_call_sites": 10,
+      "executed_images": 2,
+      "published_entries": 2,
+      "argument_pairs_per_image": 25,
+      "report_sha256": "fcdb9b3b3aee00bfa41764c8b8ac033f734636a364eae4760811dc1909856716",
+      "probe_sha256": "8feab668e33104870bb450d202f9ec61b2b546fb7737f02d439dbe7ef2909fb8",
+      "test_xml_sha256": "3c4c77e7d20efda8fd8674d01daa6e83f0205047ede8c96472f4e4a1d0c35591"
+    },
+    "native-leaves-xcode-27": {
+      "artifact_id": 13827612114,
+      "artifact_digest": "sha256:b617cb8bc6d0f982d6c93b8f5f7ec662d002069babd74894505038b663d65d43",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "sdk": "27.0",
+      "cpu": "Apple M1 (Virtual)",
+      "compiler_controls": 6,
+      "original_sha256": "0fe856c8a577a934b8b8e2aa91f73c01330b4da04afd31e1146918b73068fbfc",
+      "published_sha256": "5b7e3db9ef8298cb725464ff2245ddd77e6c7465bf132469b2883bd239aeb108",
+      "authenticated_call_sites": 10,
+      "executed_images": 2,
+      "published_entries": 2,
+      "argument_pairs_per_image": 25,
+      "report_sha256": "440bae174bedcbbe95b09dd285c1a966f7ca0e0c8916faffbabbf6f6fc3d5aeb",
+      "probe_sha256": "d57b68ff848ba5f0fea317f98a61fa8dfc19d6803b3af21836d210462d22eadf",
+      "test_xml_sha256": "7c90792de6d2f1f99cecceb080c9e06f983da772e4ce706ba2925bc364b6b608"
+    }
+  }
+}

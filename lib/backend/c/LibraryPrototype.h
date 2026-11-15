@@ -246,6 +246,8 @@ inline std::string declaration(const libc::LibCPrototype &Prototype,
   std::string Text;
   if (Prototype.Winapi && TheArch == Arch::X86)
     Text += "__attribute__((stdcall)) ";
+  if (libc::isReturnsTwiceFunction(Prototype.Name))
+    Text += "__attribute__((returns_twice)) ";
   return Text +
          declarator(typeSpelling(Prototype.Return, TheArch, Format), Function);
 }

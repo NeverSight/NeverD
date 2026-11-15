@@ -272,6 +272,28 @@ TEST(AArch64DecodeOccurrence, FailedAttemptsInvalidateBorrowedResults) {
     }
 }
 
+TEST(AArch64DecodeOccurrence, SwitchingToMIPSClearsReusedOutputEvidence) {
+  std::array<uint8_t, kPairBytes> Pair;
+  writeLE<uint32_t>(Pair.data(), kPrefix);
+  writeLE<uint32_t>(Pair.data() + kWordBytes, kFollower);
+  const std::array<uint8_t, kWordBytes> MIPSNop{};
+  for (Route Path : Routes)
+    for (const unsigned Size : {kWordBytes, kWordBytes / 2}) {
+      Decoder D;
+      ASSERT_TRUE(D.init(Arch::AArch64));
+      DecodedInsn I;
+      ASSERT_EQ(decode(D, Route::Full, Pair.data(), Pair.size(), kEntry, I),
+                kWordBytes);
+      ASSERT_TRUE(I.AArch64Prefix);
+      ASSERT_TRUE(I.AArch64Occurrence);
+      ASSERT_TRUE(D.init(Arch::MIPS32));
+      EXPECT_EQ(decode(D, Path, MIPSNop.data(), Size, kEntry, I),
+                Size == kWordBytes ? kWordBytes : 0);
+      EXPECT_FALSE(I.AArch64Prefix);
+      EXPECT_FALSE(I.AArch64Occurrence);
+    }
+}
+
 TEST(AArch64DecodeOccurrence, OnlyOwnedSnapshotsSurviveDecoderReplacement) {
   for (Route Path : Routes) {
     std::optional<Decoder> Storage;

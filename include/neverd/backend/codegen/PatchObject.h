@@ -12,6 +12,7 @@
 
 namespace neverd {
 struct SourcePatchDependency;
+struct NativeMachOCompactRange;
 
 /// Append a native arm64e object's storage, authenticated fixups and supported
 /// native unwind records to a linked image. Does not change original entries,
@@ -77,7 +78,10 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
     llvm::function_ref<llvm::Error(const PatchResult &)> PrepareReceipt,
     const DynCodePatchEvidence *DynCode = nullptr,
     const SourcePatchPreparation *Preparation = nullptr,
-    llvm::ArrayRef<SourcePatchDependency> Dependencies = {});
+    llvm::ArrayRef<SourcePatchDependency> Dependencies = {},
+    llvm::function_ref<llvm::Error(const CompiledImage &,
+                                   llvm::ArrayRef<NativeMachOCompactRange>)>
+        VerifyGenerated = {});
 
 } // namespace neverd
 

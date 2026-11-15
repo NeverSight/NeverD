@@ -252,8 +252,10 @@ private:
 } // namespace
 
 llvm::Error validateX86LegacySegmentState(const X86LegacySegmentState &State,
-                                          const X86PagingState &Controls) {
-  if (!(Controls.CR0 & 1) || (Controls.EFER & 0x400) || State.CPL > 3 ||
+                                          const X86PagingState &Controls,
+                                          bool Compatibility) {
+  if (!(Controls.CR0 & 1) || ((Controls.EFER & 0x400) && !Compatibility) ||
+      (Compatibility && (Controls.RFlags & 0x20000)) || State.CPL > 3 ||
       ((Controls.RFlags & 0x20000) && State.CPL != 3))
     return invalid(
         "legacy segment execution requires bound protected-mode state");

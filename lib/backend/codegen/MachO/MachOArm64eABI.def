@@ -14,6 +14,8 @@
 #endif
 
 MACHO_ARM64E_ABI_TEXT(kTriple, "arm64e-apple-macosx")
+MACHO_ARM64E_ABI_TEXT(kTLVProvider, "/usr/lib/libSystem.B.dylib")
+MACHO_ARM64E_ABI_TEXT(kTLVBootstrap, "__tlv_bootstrap")
 // Darwin links classic ABI0 objects into ABI1 macOS main executables.
 MACHO_ARM64E_ABI_VALUE(uint32_t, kClassicObjectSubtype, 0x80000002u)
 MACHO_ARM64E_ABI_VALUE(uint32_t, kMacOSMainSubtype, 0x81000002u)

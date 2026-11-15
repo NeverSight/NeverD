@@ -60,6 +60,53 @@ bool hasIndependentTerms(const SymContext &Ctx, SymRef E) {
          Inputs.begin() + Count;
 }
 
+// A completed product and a separate monomial can share a polynomial
+// cofactor only through one of their arithmetic atoms. AND views may open
+// complementary partitions in the nested search, so keep those eligible.
+bool separateCompletedMonomial(const SymContext &Ctx, SymRef E,
+                               WorkBudget &Budget, size_t Storage) {
+  if (!Budget.Residues || Ctx.op(E) != SymOp::Add || Ctx.numOperands(E) != 2)
+    return false;
+  const auto A = Ctx.operand(E, 0), B = Ctx.operand(E, 1);
+  if (Ctx.op(A) != SymOp::Mul || Ctx.op(B) != SymOp::Mul)
+    return false;
+  SymRef Product = A, Neighbor = B;
+  if (!hasCompletedResidueReading(Ctx, Product, Budget, true)) {
+    std::swap(Product, Neighbor);
+    if (!hasCompletedResidueReading(Ctx, Product, Budget, true))
+      return false;
+  }
+  auto Factors = Ctx.operands(Neighbor);
+  if (Ctx.isConst(Factors.front()))
+    Factors = Factors.drop_front();
+  if (Factors.size() >= limits::kMinProductCofactorDegree ||
+      llvm::any_of(Factors, [&](SymRef F) {
+        return Ctx.op(F) == SymOp::Add || Ctx.op(F) == SymOp::And;
+      }))
+    return false;
+  llvm::SmallVector<SymRef, 16> Pending{Product};
+  const size_t MaxEdges =
+      std::min(limits::kProductCofactorMaxEdges, Storage / sizeof(SymRef));
+  size_t Edges = 0;
+  while (!Pending.empty()) {
+    const auto R = Pending.pop_back_val();
+    const auto Op = Ctx.op(R);
+    if (Op != SymOp::Mul && Op != SymOp::Add) {
+      if (Op == SymOp::And || llvm::is_contained(Factors, R))
+        return false;
+      continue;
+    }
+    const auto Children = Ctx.operands(R);
+    if (Children.size() > MaxEdges - Edges ||
+        !Budget.canConsume(Children.size()))
+      return false;
+    Budget.consume(Children.size());
+    Edges += Children.size();
+    Pending.append(Children.begin(), Children.end());
+  }
+  return true;
+}
+
 struct FactorUses {
   unsigned Count = 0;
   bool BitwiseQuotient = false;
@@ -229,9 +276,50 @@ static SymRef solveProductCofactorsImpl(
     return E;
   if (Higher == 1 && hasCompletedResidueReading(Ctx, LastHigher, Budget))
     return E;
-  if (Higher < 2)
-    return NestedSum ? solveNestedProductCofactors(Ctx, E, Opts, Budget, Rep)
-                     : E;
+  if (Higher < 2) {
+    if (!NestedSum)
+      return E;
+    // A standalone residue polynomial is already factored, including when
+    // a live masked neighbor remains as a second factor. Re-expanding that
+    // product cannot expose a cofactor shared with another summand.
+    if (Ctx.op(E) == SymOp::Mul &&
+        hasCompletedResidueReading(Ctx, E, Budget, /*GeneratedOnly=*/true))
+      return E;
+    // The low factors in a proved product may still contain sums. Keep
+    // that factorization beside atoms that share none of its direct factors.
+    // XOR remains one opaque coordinate in the nested arithmetic search.
+    if (Budget.Residues && Ctx.op(E) == SymOp::Add) {
+      SymRef Product;
+      auto Unscaled = [&](SymRef Term) {
+        if (Ctx.op(Term) == SymOp::Mul && Ctx.numOperands(Term) == 2 &&
+            Ctx.isConst(Ctx.operand(Term, 0)))
+          return Ctx.operand(Term, 1);
+        return Term;
+      };
+      bool OnlyAtomNeighbors = true;
+      for (auto Original : Ctx.operands(E)) {
+        const auto Term = Unscaled(Original);
+        if (Ctx.isConst(Term) || Ctx.isVar(Term) || Ctx.op(Term) == SymOp::Xor)
+          continue;
+        if (Product || Ctx.op(Term) != SymOp::Mul) {
+          OnlyAtomNeighbors = false;
+          break;
+        }
+        Product = Original;
+      }
+      if (OnlyAtomNeighbors && Product &&
+          hasCompletedResidueReading(Ctx, Product, Budget, true) &&
+          llvm::none_of(Ctx.operands(Product), [&](SymRef F) {
+            return !Ctx.isConst(F) &&
+                   llvm::any_of(Ctx.operands(E),
+                                [&](SymRef T) { return Unscaled(T) == F; });
+          }))
+        return E;
+    }
+    if (separateCompletedMonomial(Ctx, E, Budget, Opts.MaxTableBytes))
+      return E;
+    return solveNestedProductCofactors(Ctx, E, Opts, Budget, Rep);
+  }
 
   size_t Storage = Opts.MaxTableBytes;
   const size_t WordBytes =
