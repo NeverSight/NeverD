@@ -66,7 +66,7 @@
 
 namespace neverd::gui::pluginui {
 namespace {
-constexpr QSize ChatSize{440, 520};
+constexpr QSize ChatSize{480, 560};
 constexpr QSize ChatMinimumSize{340, 300};
 // The band inside the conversation's outline where a drag resizes it.
 constexpr int ResizeBand = 6;

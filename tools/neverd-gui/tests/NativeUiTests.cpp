@@ -548,9 +548,9 @@ private slots:
       QVERIFY(title);
       const QRect before = panel->geometry();
       // The title moves the window.
-      dragTitle(*title, QPoint(220, -60));
+      dragTitle(*title, QPoint(220, -40));
       QTRY_COMPARE(panel->geometry().topLeft(),
-                   before.topLeft() + QPoint(220, -60));
+                   before.topLeft() + QPoint(220, -40));
       QCOMPARE(panel->size(), before.size());
       // Its left edge resizes it.
       const QPoint edge(2, panel->height() / 2);
@@ -586,7 +586,7 @@ private slots:
       auto *title = panel->findChild<QWidget *>("NeverDAgentTitleBar");
       QTest::mouseDClick(title, Qt::LeftButton, Qt::NoModifier,
                          QPoint(title->width() / 2, title->height() / 2));
-      QTRY_VERIFY(panel->size() == QSize(440, 520) &&
+      QTRY_VERIFY(panel->size() == QSize(480, 560) &&
                   centeredIn(window, *panel));
       QVERIFY(!QSettings().contains("guiPlugins/neverd.agent-ui/chatPlace"));
       QVERIFY(!QSettings().contains("guiPlugins/neverd.agent-ui/chatSize"));
