@@ -1043,6 +1043,138 @@ in every language and compared every text of the main window across them.
 - Known limit: messages the analysis engine sends, such as why an operand has
   no structure offset, are English in every language.
 
+## Plugin views and the Agent
+
+NeverD Agent (a standalone Qt Quick window and an in-process workbench chat)
+was reviewed against the workbench on 2026-11-14 with real binaries and the
+real engine. These rules hold for it and for any view a plugin floats over
+the workbench.
+
+- Give a floating entry point the shape people already read as one: an
+  accent button with a mark and a short label ("Ask Agent"), at the
+  workbench's bottom-right corner, as Office places its Copilot button. A
+  48-pixel gray ball with a glyph was too quiet to find. Let it dock at the
+  side as its mark alone, and offer dock, reset and hide in its context menu,
+  with a menu action and a shortcut that keep working while it is hidden.
+- Keep the window's one accent while the entry's panel is open: the entry
+  is a checkable button, checked exactly while the panel shows, drawn as a
+  pressed toggle in the button gray, and the panel's Send keeps the accent.
+  The high contrast themes fill buttons with the window, so there the
+  button gray matched the closed accent button (Dark High Contrast: both
+  black, outlined alike); there the pressed toggle takes
+  `ToolButtonChecked`, the workbench's checked tool button fill.
+- Let a floating entry button take focus by Tab only (`Qt::TabFocus`). A
+  click that moved focus onto it made the panel record the button as the
+  view to return to, so Escape left the keyboard on the button instead of
+  the listing being read.
+- Keep floating views off the command line along the foot of the workbench,
+  under either bottom corner: mirrored, the command field does not reach the
+  right edge, so test the row's width, not its right edge.
+- Make a floating panel a window a person places: it moves by its title (a
+  six-dot grip says so) and resizes by its edges, as VS Code moves its quick
+  input. It opens at the golden section across the workbench, with the smaller
+  golden part of the free width (0.382, `2 - std::numbers::phi` in
+  `AgentUiPlugin.cpp`) before it on the side a line starts from: left of the
+  middle in a left-to-right language, right of it in Arabic. In a 1000 by 700
+  workbench it stands at (199, 70). The corner beside the entry button read
+  worse than the middle, and on 2026-11-15 the user still found the middle
+  uncomfortable and asked for the golden section, further left (SKILL.md
+  section 1.9). Down, it keeps to the middle of the whole workbench, which
+  already sits above the middle of the dock area because the toolbars take the
+  top (137 pixels of a 1440 by 864 workbench); a golden section down the whole
+  workbench would put its top 21 pixels above the dock area there, where the
+  host stops it against the toolbars. It keeps its place as its share
+  of the room it can move in, so it holds its relative place when the
+  workbench resizes. Moved within 20 pixels of where it opens, on either axis,
+  it snaps there (VS Code snaps its quick input to the horizontal center
+  within the same distance), and a double click on the title puts it back
+  there at its first size. It opens at 480 by 560 pixels, about the tallest
+  that still sits in the middle of a 1440 by 864 workbench, whose dock area
+  starts 137 pixels down; 440 by 520 read as cramped. In a small workbench the
+  panel may cover the entry button, so it closes by its own button and Escape
+  too. It stays open until closed, without a hover preview or a pin, and
+  closing gives the keyboard back to the view that had it.
+- Known limit of that place: the share is of the whole workbench, while the
+  host keeps views inside the dock area, between the toolbars and the
+  command line. A panel let go exactly at the dock area's top edge left it
+  when the workbench grew from 864 to 1000 pixels high (54 pixels down); a
+  panel dragged past an edge, or left where it opens, held its place.
+- Take plugin views along into focus mode. Focus mode (F pressed three times
+  in an analysis view) floats the disassembly, the pseudocode and the output
+  into a maximized workspace over the workbench, and the Ask Agent button and
+  the conversation stayed behind it, so the Agent looked gone there. The
+  workbench now lends that workspace every plugin view
+  (`GuiPluginUiHost::lendViews`): each moves there shown or hidden, at the
+  same corner and share, clear of the workspace's command line, and the
+  workspace's window takes the plugins' menu shortcuts, such as Ctrl+Alt+I,
+  which otherwise belong only to the workbench's menu bar. Leaving focus mode
+  returns them before the old layout is restored; a workspace that goes away
+  by any other path returns them from its `destroyed()` signal. A view placed
+  as a share of its parent places itself again on `QEvent::ParentChange`.
+  Known limit: in a right-to-left language the button sits at the bottom-left
+  corner, where the focus workspace's Functions sidebar also opens.
+- Show a view's mark once. The empty conversation's welcome carries the
+  Agent's mark, so the panel's title is the grip and the name alone; a
+  second, smaller mark beside the title repeated it a few lines above.
+- Explain a new entry once, beside it, in a small card with one button, as
+  Fluent teaches a new entry point.
+- Lay out a conversation as VS Code's chat view. An empty conversation says
+  what the view does in the middle of the panel: the mark at 40 pixels in
+  the secondary text color, as VS Code draws its chat welcome's icon, a
+  heading a step larger than the panel's title, and the message centered at
+  a short measure of about 40 average characters. First questions are
+  compact chips as wide as their words, just above the composer. Full-width
+  outlined rows under a top-anchored welcome, with a blue mark beside the
+  blue Send, read as cluttered.
+- Make the composer one box in the input fill, outlined in the focus color
+  while the prompt has focus: the prompt, then what the question takes
+  along, then Send. Show that context as one chip, as VS Code shows a
+  chat's current file: its cross leaves the context out, and the chip
+  turns dashed and italic, with a plus that takes it back. A gray context
+  line above the conversation and an "Attach current selection" check box
+  below the prompt said the same thing twice. Without a binary, a line in
+  the chip's place says to open one, beside a Send that waits for it; a
+  placeholder alone left a disabled Send unexplained once typing hid it.
+- Type prose in the interface font. The workbench's text fields type in the
+  code font (`theme.qss`), so a chat prompt sets the interface font in its
+  own sheet, as VS Code's chat input uses the interface font. Grow a prompt
+  with its lines, two to eight here, and measure the laid-out lines: a
+  Chinese line among Latin text is taller than the font's line, and
+  `QPlainTextEdit` scrolls unless a pixel is left below its bottom margin.
+- To put a text field inside a box of your own, let the field paint the
+  box's fill over its whole frame when its paint event arrives. The
+  workbench paints a box, with its focus outline, on every text field that
+  takes typing (`fieldFace`) just before the field paints, whatever its
+  style sheet says, and the field's page and scroll bar are transparent, so
+  that outline showed inside the box's. No style sheet reaches the box;
+  rules for the field's page (Qt leaves a scroll area's viewport unstyled)
+  or its scroll bar painted nothing either.
+- Outline chips in VS Code's `chat.requestBorder`: a tenth of white in a
+  dark theme and of black in a light one, which shows on the panel and on
+  the input fill alike, and the theme's border in high contrast. A dark
+  theme's toolbar hover gray is its input gray, so a chip in the composer
+  hovers with the same tenth.
+- Show code in a plugin view in the workbench's code font
+  (`AppearanceContext::codeFont`). Markdown asks for a generic monospace
+  family that the workbench process does not resolve, and the workbench's
+  own fallbacks for digits and punctuation then mixed two fonts in one code
+  line, which read as letter-spaced text. Wrap long code lines in a narrow
+  panel instead of scrolling the whole message sideways.
+- A Qt Quick window follows the same rules as the workbench's widgets:
+  colors from `ChromeColors.def` in all four columns, push and main faces
+  outlined in the high contrast themes (their fills equal the window there),
+  a modal dim that leaves the frame's shadow band alone, right-to-left by
+  `LayoutMirroring` set on the window's root item (dialogs and menus live in
+  the overlay, outside any content item), and glyphs that point along the
+  reading direction turned around in Arabic.
+- Size tabs and choosers to their text, and let a hint give way when it and
+  its neighbor do not both fit: German cut a fixed 56-pixel tab and a
+  150-pixel scope chooser. Keep line breaks out of the middle of a sentence
+  in a source string; English then broke a hint after "research,".
+- The Agent and its CLI read the workbench's language and theme from the
+  workbench's own settings, and read them again when the Agent window becomes
+  active, so a choice made in the workbench is the Agent's too.
+
 ## Resizing is part of the design
 
 Content-heavy dialogs should support ordinary desktop resizing unless the task

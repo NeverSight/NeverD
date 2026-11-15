@@ -176,6 +176,8 @@ void OutputWindow::run(const QString &line) {
   execute(trimmed);
 }
 
+QWidget *OutputWindow::commandLine() const { return command_; }
+
 void OutputWindow::focusCommandLine() {
   command_->setFocus(Qt::ShortcutFocusReason);
   command_->selectAll();
