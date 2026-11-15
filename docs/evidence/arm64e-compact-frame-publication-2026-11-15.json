@@ -1,0 +1,228 @@
+{
+  "neverd_revision": "b54eed139a515af9042314863daf30ad193f78b7",
+  "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+  "capstone_revision": "5c6987afcec8c2f21e64575c5b9c5f442a5001ae",
+  "prebuilt_release_unchanged": "r6",
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43617563664",
+  "ci_revision": "7226179af5bf18f490d884fcba581171b23d9a51",
+  "windows_frontend_job": "https://github.com/gmh5225/test_mac_intel/actions/runs/43617563664/job/132515861779",
+  "local": {
+    "publication_cases": 83,
+    "unwind_recovery_cases": 18,
+    "abi_format_passed": 137,
+    "abi_format_skipped": 42,
+    "initial_compact_admission_failures": 9,
+    "compact_cases_after_fix": 9,
+    "swift_handoff_regression_failures": 1,
+    "swift_handoff_cases_after_fix": 5
+  },
+  "runner_availability": {
+    "observed_at": "2026-11-14T16:37:20.851110+00:00",
+    "self_hosted_runner_counts": {
+      "gmh5225/test_mac_intel": 0,
+      "NeverSight/NeverD": 0
+    }
+  },
+  "hosts": {
+    "cursor-macos-26": {
+      "hardware": {
+        "exit": 0,
+        "text": "Apple M1 (Virtual)"
+      },
+      "os": {
+        "exit": 0,
+        "text": "ProductName:\t\tmacOS\nProductVersion:\t\t26.7.2\nBuildVersion:\t\t25G332"
+      },
+      "compiler": {
+        "exit": 0,
+        "text": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+      },
+      "cpa": {
+        "exit": 1,
+        "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA'"
+      },
+      "cpa2": {
+        "exit": 1,
+        "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA2'"
+      },
+      "host_sha256": "de4c770b1453d633b5c03f44bb1b7630c86d3527f10b8fc134e3a2912f1ac7d0",
+      "test_cases": 83,
+      "executed_native_images": 164,
+      "added_native_calls": 364,
+      "added_signal_resumptions": 24,
+      "added_cases": {
+        "PublishesAllPreservedPairs": {
+          "original_sha256": "368307363cc0afc9d1dc4e5ec53c45c2100b7daf601dabe602b0f8a7e209e428",
+          "published_sha256": "e8a2d51dd8b5ac2e9aecf4a1abfe87cbd18a941b346a423513aad3022202f914",
+          "executed_native_images": "2",
+          "native_preserved_register_calls": "26"
+        },
+        "PublishesSparsePreservedPairs": {
+          "original_sha256": "f1b13aa84476fea112bc130f0094800c43560594ae91fb0e5a7508f7fd39ca71",
+          "published_sha256": "488fe55e9f6383fcccb52180a9050d95fba8d135b2d80831e686bdd83a3416a1",
+          "executed_native_images": "2",
+          "native_preserved_register_calls": "26"
+        },
+        "PublishesAllPairsWithAdditionalStack": {
+          "original_sha256": "d25c6f538643de83ef1e9a743e5d2a0836ec72f793a484aadb79335f53e644e1",
+          "published_sha256": "73fb11bab3bddd9beb3d98f52a5af86bcc0a662ab94df846096c2be61061e57d",
+          "executed_native_images": "2",
+          "native_preserved_register_calls": "26"
+        },
+        "PublishesSparsePairsWithAdditionalStack": {
+          "original_sha256": "73fed05c40acad78c9927395569a39a94be644fc799d1e7368ddf07a7bbf40fc",
+          "published_sha256": "272770aa9658cda8d17928b50e3111ae77825d47d33d8c64902d6f1a49a28573",
+          "executed_native_images": "2",
+          "native_preserved_register_calls": "26"
+        },
+        "SignalResumesAllPreservedPairs": {
+          "original_sha256": "b88dc25546d530a7f6c8315a2670ef35270025e00b2a936cca0c176297cdfc49",
+          "published_sha256": "6e4834a10ad6f7c81153d77a44bcf7ce96affc69a3007a2c8a3a1632192d4832",
+          "executed_native_images": "2",
+          "native_signal_caller_resumptions": "6"
+        },
+        "SignalResumesSparsePreservedPairs": {
+          "original_sha256": "932b6ec9a0053dd8226db5aa5ca7fdb983172094682def99599b1fc22205e35b",
+          "published_sha256": "4df56056d6c8c65f797e45de7658e8a9144cb291f9c4d5c8542c9e8d0243a7f3",
+          "executed_native_images": "2",
+          "native_signal_caller_resumptions": "6"
+        },
+        "SignalResumesAllPairsWithAdditionalStack": {
+          "original_sha256": "dc0c8997f9a740774ec4b3f45b79de3a274e9d42cd397cdd6d48d00ff004a6bc",
+          "published_sha256": "941b565b45d761aa82937141dad7085e51d5fa218e68b9c562be15b2df14d6e5",
+          "executed_native_images": "2",
+          "native_signal_caller_resumptions": "6"
+        },
+        "SignalResumesSparsePairsWithAdditionalStack": {
+          "original_sha256": "f3cbfeb6c0673b4ac64c3077f46fbc7407127ee12f3d36849585267256cf5f3f",
+          "published_sha256": "c8f9061826bad9e4a6343b3a6fe87f0454a17e7ee989a687171fdf261d6d7545",
+          "executed_native_images": "2",
+          "native_signal_caller_resumptions": "6"
+        },
+        "PublishesEachPairAndFrameOnly": {
+          "original_sha256": "1af3aa02bc8dcb831933de239d0c360914806d6b2c633580a4a94d3be486ef15",
+          "published_sha256": "9bb10fea40fb7d4b8b754620fbb1650b26c5f11642c67822dd0e65d835f386d2",
+          "executed_native_images": "20",
+          "native_preserved_register_calls": "260"
+        }
+      },
+      "swift_handoff_case": {
+        "original_sha256": "794dfbd72324d4205bfa4593678a4f0012c0151f0a8a5e481ef7f716065c3d69",
+        "published_sha256": "8837a767870d995b558a2c0e11b4a13126531ea85c8e7d8e02b47a7ced46f7b8",
+        "caller_authenticated_call_sites": "10",
+        "executed_native_images": "2"
+      },
+      "qualification_sha256": "d65233ec22a61672243da7e73684a16a75c7138684d80e893404c2a674cb80d9",
+      "cpta_probe": {
+        "status": "unavailable",
+        "native_el0_cpta_observed": false,
+        "x1_el0_cpta_qualified": false,
+        "x1_el0_checked_writeback_qualified": false
+      }
+    },
+    "cursor-xcode-27": {
+      "hardware": {
+        "exit": 0,
+        "text": "Apple M1 (Virtual)"
+      },
+      "os": {
+        "exit": 0,
+        "text": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434"
+      },
+      "compiler": {
+        "exit": 0,
+        "text": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode_27.1.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+      },
+      "cpa": {
+        "exit": 0,
+        "text": "0"
+      },
+      "cpa2": {
+        "exit": 0,
+        "text": "0"
+      },
+      "host_sha256": "de4c770b1453d633b5c03f44bb1b7630c86d3527f10b8fc134e3a2912f1ac7d0",
+      "test_cases": 83,
+      "executed_native_images": 164,
+      "added_native_calls": 364,
+      "added_signal_resumptions": 24,
+      "added_cases": {
+        "PublishesAllPreservedPairs": {
+          "original_sha256": "1180c34728591c0fa92fdaf4ad098e0b122d0568b5a30629e44896fa7cb7d29e",
+          "published_sha256": "126ad9381c7449dc958335071a7140eff7e23704baebc406a450b132970101a0",
+          "executed_native_images": "2",
+          "native_preserved_register_calls": "26"
+        },
+        "PublishesSparsePreservedPairs": {
+          "original_sha256": "e104f2f7f38173cb632b7c5324928a8b067e032c8e8a8639dc5595001c7b28f3",
+          "published_sha256": "6b0d878133be48f88c95ad74d556e104298440a8f9d7259c4adc3a253a3c5d31",
+          "executed_native_images": "2",
+          "native_preserved_register_calls": "26"
+        },
+        "PublishesAllPairsWithAdditionalStack": {
+          "original_sha256": "d0d2053604156faece6ef7d8199317b0ffc7e0b4eb641211917964c10935d772",
+          "published_sha256": "d9588dcc8692e12d0a4682682194e76148209ed734e5d2adc7bf938427c8293f",
+          "executed_native_images": "2",
+          "native_preserved_register_calls": "26"
+        },
+        "PublishesSparsePairsWithAdditionalStack": {
+          "original_sha256": "894280789198bb8e6da6e8329c5c6657778d863b30b0e1d27761d3f9463cb615",
+          "published_sha256": "5d2fa0f4335a0c5946c24a287c5918683862fc4efaf3b6ae54afa33d1620fc08",
+          "executed_native_images": "2",
+          "native_preserved_register_calls": "26"
+        },
+        "SignalResumesAllPreservedPairs": {
+          "original_sha256": "2a1013ca4aa92f74ea31a16018e31d8d7ccd6bfdbbcdbbcb109b47875db7da36",
+          "published_sha256": "d8d9563931149c8c67d535b4888a282faacf5a9da099dc4954696977b17328d3",
+          "executed_native_images": "2",
+          "native_signal_caller_resumptions": "6"
+        },
+        "SignalResumesSparsePreservedPairs": {
+          "original_sha256": "5b97e52745c3f9eba9e9fd7ec774549fb84abe27606e23d8aa278a08bc92e7c3",
+          "published_sha256": "40b343f8c81a03bb2d19e42b2cce569e00f62cc360d7147f5c014bd179a988d5",
+          "executed_native_images": "2",
+          "native_signal_caller_resumptions": "6"
+        },
+        "SignalResumesAllPairsWithAdditionalStack": {
+          "original_sha256": "eecc0c9743eeccf42fe694872874ad90e4fc3db3be4ecd5c29380f48185e7efd",
+          "published_sha256": "0050cac1bebfafff40e170225b6883a0bb5839e1eca42cdae667303dcdbc06e8",
+          "executed_native_images": "2",
+          "native_signal_caller_resumptions": "6"
+        },
+        "SignalResumesSparsePairsWithAdditionalStack": {
+          "original_sha256": "a8edbf4cafdcf50b754919ba766b6525bdee1dcff4e5710e274f2b26f4b76898",
+          "published_sha256": "28dd95c61c27abf37aa5667dd820437cf3a9ef230fa2761975e7db476f6293c6",
+          "executed_native_images": "2",
+          "native_signal_caller_resumptions": "6"
+        },
+        "PublishesEachPairAndFrameOnly": {
+          "original_sha256": "e1d58cd1e8c5fef398fc1be98f50b3c03450ac77352550307b0c5433d726be19",
+          "published_sha256": "5641b67046c5a84296b0f045710f11b729a2901b9844f969282d171fd69d658c",
+          "executed_native_images": "20",
+          "native_preserved_register_calls": "260"
+        }
+      },
+      "swift_handoff_case": {
+        "original_sha256": "3e9a2fdde663e088530d210639b4f8f6aefe4d3deefc815156125c39cd6e8671",
+        "published_sha256": "d75da1d103b5a357f9f3432dce2e915b481dde1e50e16d2659a484d22357b186",
+        "caller_authenticated_call_sites": "10",
+        "executed_native_images": "2"
+      },
+      "qualification_sha256": "b305229871dddcf0a3dc4944ec9a22953f9a0c7d33fe7f20ef9d60a3c1f9dc2c",
+      "cpta_probe": {
+        "status": "unavailable",
+        "native_el0_cpta_observed": false,
+        "x1_el0_cpta_qualified": false,
+        "x1_el0_checked_writeback_qualified": false
+      }
+    }
+  },
+  "remaining_qualification": {
+    "coalesced_compact_function_recovery": false,
+    "frameless_saved_pair_publication": false,
+    "pauth_lr_compact_publication": false,
+    "arbitrary_lifted_images": false,
+    "arbitrary_protected_non_call_cleanup": false,
+    "native_cpta_on": false
+  }
+}

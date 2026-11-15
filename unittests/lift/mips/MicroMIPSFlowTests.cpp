@@ -28,7 +28,8 @@ using namespace neverd;
 namespace {
 
 TEST(MicroMIPSDelaySlots, AllFirstHalfwordsAndPhysicalWidths) {
-  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL}) {
+  for (Arch Target :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL}) {
     const auto Order = archLittleEndian(Target) ? llvm::endianness::little
                                                 : llvm::endianness::big;
     cs_insn Insn{};
@@ -64,6 +65,9 @@ TEST(MicroMIPSDelaySlots, AllFirstHalfwordsAndPhysicalWidths) {
               Expected = 4;
             if (Major == 0 && Second != 0)
               Expected = Second == 0x0f3c ? 4 : 2;
+            // BC1F/T: every FCC selector, with two reserved low bits clear.
+            if (First >= 0x4380 && First < 0x43c0 && !(First & 3))
+              Expected = 1;
           }
           const unsigned Selector = (First >> 5) & 31;
           const bool VBranch =

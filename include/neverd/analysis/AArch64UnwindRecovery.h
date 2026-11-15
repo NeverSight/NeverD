@@ -63,6 +63,8 @@ struct AArch64UnwindRecoveryLimits {
 /// Compact and partial-prologue/epilogue rows use live incoming values or
 /// active frame saves. A declared undefined register stays undefined.
 /// Explicit signing columns retain the loader's separate metadata query.
+/// Coalesced unwind-only compact ranges use independent known function
+/// entries; returned offsets remain relative to the shared metadata range.
 llvm::Expected<std::vector<AArch64RecoveredUnwindRow>>
 recoverDarwinAArch64Unwind(const BinaryImage &Image,
                            const ExceptionFunction &Function,
@@ -93,6 +95,8 @@ prepareDarwinArm64eSystemCaller(const AArch64RecoveredUnwindRow &Row,
 /// actual load address. A forwarding range contains no cleanup. A protected
 /// call keeps the interrupted frame. A transparent prefix must belong to its
 /// protected range or lead straight back to the same call from its return edge.
+/// An explicitly guarded non-call can supply its own return edge when both
+/// instruction boundaries have the same complete recovery row.
 std::optional<NDDarwinArm64eExceptionSite>
 prepareDarwinArm64eExceptionSite(const BinaryImage &Image,
                                  const ExceptionFunction &Function,

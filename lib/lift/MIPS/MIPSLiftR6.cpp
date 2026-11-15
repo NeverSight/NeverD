@@ -182,38 +182,98 @@ bool MIPSLifter::liftR6Compact(State &S, uint32_t Word,
   return true;
 }
 
-bool MIPSLifter::liftR6Float(State &S, uint32_t Word) const {
+bool MIPSLifter::liftScalarFloat(State &S, uint32_t Word) const {
   const unsigned Op = Word >> 26, Fmt = Word >> 21 & 31, FT = Word >> 16 & 31,
                  FS = Word >> 11 & 31, FD = Word >> 6 & 31, Fn = Word & 63;
   const auto FPR = [](unsigned R, uint16_t Bytes) {
     return NdVar::reg(mipsreg::w(R), Bytes);
   };
-  const auto StoreFPR = [&](unsigned R, NdVar Value) {
+  const auto ReadFPR = [&](unsigned R, uint16_t Bytes) {
+    return FP32Registers && Bytes == 8
+               ? S.binary(NdOp::CONCAT, FPR(R + 1, 4), FPR(R, 4), 8)
+               : FPR(R, Bytes);
+  };
+  const auto StoreFPR = [&](unsigned R, NdVar Value,
+                            std::optional<NdVar> Predicate = std::nullopt) {
+    if (FP32Registers) {
+      // FR=0 stores only the architectural word of each FPR. Snapshot the
+      // selected double before either member of an overlapping pair changes.
+      if (Predicate)
+        Value = S.select(*Predicate, Value, ReadFPR(R, Value.Size));
+      if (Value.Size == 8) {
+        const auto High = S.makeTemp(4);
+        S.emit(NdOp::SUBBYTES, High, {Value, NdVar::cst(4, 4)});
+        S.emit(NdOp::COPY, FPR(R, 4), {S.resize(Value, 4)});
+        S.emit(NdOp::COPY, FPR(R + 1, 4), {High});
+      } else
+        S.emit(NdOp::COPY, FPR(R, 4), {Value});
+      return;
+    }
+    const bool Word = Value.Size == 4;
     // StoreFPR(S/W) leaves the high 32 bits unpredictable even when a
     // previous DMTC1 defined them. MTHC1 can define them subsequently.
-    if (Value.Size == 4) {
+    if (Word) {
       auto Unknown = S.makeTemp(S.Width);
       S.emitIntrinsic(Intrinsic::MIPSUnpredictable, Unknown);
       Value = S.binary(NdOp::CONCAT, S.resize(Unknown, 4), Value, 8);
     }
+    if (Predicate) {
+      if (Word) {
+        // Transport an unpredictable upper word without observing it. SELECT
+        // requires a known chosen value in strict concrete evaluation.
+        const auto Mask =
+            S.binary(NdOp::INT_SUB, NdVar::cst(0, 8), S.resize(*Predicate, 8));
+        const auto Inverse =
+            S.binary(NdOp::INT_XOR, Mask, NdVar::cst(UINT64_MAX, 8));
+        Value = S.binary(NdOp::INT_OR, S.binary(NdOp::INT_AND, Value, Mask),
+                         S.binary(NdOp::INT_AND, FPR(R, 8), Inverse));
+      } else
+        Value = S.select(*Predicate, Value, FPR(R, 8));
+    }
     S.emit(NdOp::COPY, FPR(R, 8), {Value});
   };
-  if (Op == 49 || Op == 53 || Op == 57 || Op == 61) {
-    const unsigned Bytes = Op & 4 ? 8 : 4;
-    const auto Address = S.binary(NdOp::INT_ADD, S.read(Fmt),
-                                  NdVar::cst(int64_t(int16_t(Word)), S.Width));
-    if (Op & 8)
-      S.emit(NdOp::STORE, {}, {Address, FPR(FT, Bytes)});
+  const bool Indexed =
+      ISARevision != 6 && Op == 19 &&
+      (Fn == 0 || Fn == 1 || Fn == 5 || Fn == 8 || Fn == 9 || Fn == 13);
+  if (Indexed || Op == 49 || Op == 53 || Op == 57 || Op == 61) {
+    const bool Store = (Indexed ? Fn : Op) & 8;
+    if (Indexed && ((Store ? FD : FS) || (FP32Registers && (Fn & 4))))
+      return false;
+    const unsigned Bytes = Indexed ? (Fn & 1 ? 8 : 4) : (Op & 4 ? 8 : 4);
+    const unsigned Register = Indexed ? (Store ? FS : FD) : FT;
+    if (FP32Registers && Bytes == 8 && (Register & 1))
+      return false;
+    auto Address = S.binary(
+        NdOp::INT_ADD, S.read(Fmt),
+        Indexed ? S.read(FT) : NdVar::cst(int64_t(int16_t(Word)), S.Width));
+    if (Indexed && (Fn & 4)) // LUXC1/SUXC1 ignore the low three address bits.
+      Address =
+          S.binary(NdOp::INT_AND, Address, NdVar::cst(~uint64_t(7), S.Width));
+    else if (ISARevision != 6)
+      S.emitIntrinsic(Intrinsic::RequireAligned, {},
+                      {S.resize(Address, 8), NdVar::scalar(Bytes, 8)});
+    if (Store)
+      S.emit(NdOp::STORE, {}, {Address, ReadFPR(Register, Bytes)});
     else {
       auto Value = S.makeTemp(Bytes);
       S.emit(NdOp::LOAD, Value, {Address});
-      StoreFPR(FT, Value);
+      StoreFPR(Register, Value);
     }
     return true;
   }
-  if (Op != 17)
+  if (ISARevision != 6 && Op == 0 && Fn == 1 && !FD && !(FT & 2)) {
+    const auto Control = S.floatConditions(HistoricalISA != 0);
+    const auto Bit =
+        S.binary(NdOp::INT_AND, Control, NdVar::cst(1u << (FT >> 2), 4));
+    const auto Taken = S.binary(FT & 1 ? NdOp::INT_NOTEQUAL : NdOp::INT_EQUAL,
+                                Bit, NdVar::cst(0, 4), 1);
+    S.write(FS, S.select(Taken, S.read(Fmt), S.read(FS)));
+    return true;
+  }
+  if (Op != 17 && (Op != 19 || ISARevision == 6))
     return false;
-  if (Mode == InstructionMode::MicroMIPS && (Fmt == 9 || Fmt == 13)) {
+  if (ISARevision == 6 && Mode == InstructionMode::MicroMIPS &&
+      (Fmt == 9 || Fmt == 13)) {
     const auto Bit = S.binary(NdOp::INT_AND, FPR(FT, 4), NdVar::cst(1, 4));
     const auto Taken = S.binary(Fmt == 9 ? NdOp::INT_EQUAL : NdOp::INT_NOTEQUAL,
                                 Bit, NdVar::cst(0, 4), 1);
@@ -222,17 +282,19 @@ bool MIPSLifter::liftR6Float(State &S, uint32_t Word) const {
         {NdVar::cst(r6BranchTarget(Word, S.Addr, S.InsnSize), S.Width), Taken});
     return true;
   }
-  if (Fmt < 8) {
+  if (Op == 17 && Fmt < 8) {
     if ((Word & 0x7ff) || ((Fmt == 1 || Fmt == 5) && S.Width != 8))
+      return false;
+    if (FP32Registers && (Fmt & 1) && (FS & 1))
       return false;
     switch (Fmt) {
     case 0:
     case 1:
     case 3: { // MFC1, DMFC1, MFHC1
-      auto Value = FPR(FS, Fmt == 0 ? 4 : 8);
+      auto Value = ReadFPR(FS, Fmt == 0 ? 4 : 8);
       if (Fmt == 3) {
         Value = S.makeTemp(4);
-        S.emit(NdOp::SUBBYTES, Value, {FPR(FS, 8), NdVar::cst(4, 4)});
+        S.emit(NdOp::SUBBYTES, Value, {ReadFPR(FS, 8), NdVar::cst(4, 4)});
       }
       if (FT)
         S.write(FT, Value);
@@ -243,7 +305,7 @@ bool MIPSLifter::liftR6Float(State &S, uint32_t Word) const {
     case 2:   // CFC1
     case 6: { // CTC1
       const bool Write = Fmt == 6;
-      if (!mips::r6FPControlSelector(FS, Write))
+      if (!mips::scalarFPControlSelector(FS, Write))
         return false;
       const auto Selector = NdVar::cst(FS, 1);
       if (Write)
@@ -268,25 +330,138 @@ bool MIPSLifter::liftR6Float(State &S, uint32_t Word) const {
       return false;
     }
   }
-  if (const auto Id = mips::r6FPArithmetic(Word)) {
-    const auto &F = mips::r6FPOperation(*Id);
+  if (const auto Id =
+          mips::scalarFPArithmetic(Word, ISARevision, FP32Registers)) {
+    const auto &F = mips::scalarFPOperation(*Id);
+    if (FP32Registers &&
+        ((F.InputBytes == 8 && ((FS & 1) || (F.Arity >= 2 && (FT & 1)) ||
+                                (F.Arity == 3 && (Fmt & 1)))) ||
+         (F.OutputBytes == 8 && (FD & 1))))
+      return false;
+    const auto X = ReadFPR(FS, F.InputBytes);
+    if (F.writesCondition()) {
+      S.emitIntrinsic(*Id, {},
+                      {NdVar::cst(FD >> 2, 1), X, ReadFPR(FT, F.InputBytes)});
+      return true;
+    }
     const auto Out = S.makeTemp(F.OutputBytes);
-    const auto X = FPR(FS, F.InputBytes), Y = FPR(FT, F.InputBytes);
     if (F.Arity == 3)
-      S.emitIntrinsic(*Id, Out, {FPR(FD, F.InputBytes), X, Y});
+      S.emitIntrinsic(*Id, Out,
+                      {ReadFPR(Op == 19 ? Fmt : FD, F.InputBytes), X,
+                       ReadFPR(FT, F.InputBytes)});
     else if (F.Arity == 2)
-      S.emitIntrinsic(*Id, Out, {X, Y});
+      S.emitIntrinsic(*Id, Out, {X, ReadFPR(FT, F.InputBytes)});
     else
       S.emitIntrinsic(*Id, Out, {X});
     StoreFPR(FD, Out);
     return true;
   }
-  if (Fmt != 16 && Fmt != 17)
+  if (ISARevision != 6 && !FP32Registers) {
+    const auto Half = [&](NdVar V, bool Upper) {
+      if (!Upper)
+        return S.resize(V, 4);
+      const auto Result = S.makeTemp(4);
+      S.emit(NdOp::SUBBYTES, Result, {V, NdVar::cst(4, 4)});
+      return Result;
+    };
+    if (Op == 19 && Fn == 30) { // ALNV.PS
+      const auto Offset =
+          S.binary(NdOp::INT_AND, S.read(Fmt), NdVar::cst(7, S.Width));
+      const auto Bad =
+          S.binary(NdOp::INT_NOTEQUAL,
+                   S.binary(NdOp::INT_AND, Offset, NdVar::cst(3, S.Width)),
+                   NdVar::cst(0, S.Width), 1);
+      const auto A = FPR(FS, 8), B = FPR(FT, 8);
+      const auto Merged =
+          S.binary(NdOp::CONCAT, Half(archLittleEndian(Target) ? B : A, false),
+                   Half(archLittleEndian(Target) ? A : B, true), 8);
+      const auto Value =
+          S.select(S.binary(NdOp::INT_EQUAL, Offset, NdVar::cst(0, S.Width), 1),
+                   A, Merged);
+      const auto Guard = [&](NdVar Lane) {
+        const auto Result = S.makeTemp(Lane.Size);
+        S.emitIntrinsic(Intrinsic::MIPSExtractResult, Result, {Bad, Lane});
+        return Result;
+      };
+      StoreFPR(FD, isMIPS64(Target)
+                       ? Guard(Value)
+                       : S.binary(NdOp::CONCAT, Guard(Half(Value, true)),
+                                  Guard(Half(Value, false)), 8));
+      return true;
+    }
+    if (Op == 17 && Fmt == 16 && Fn == 38) { // CVT.PS.S is a bit merge.
+      StoreFPR(FD, S.binary(NdOp::CONCAT, FPR(FS, 4), FPR(FT, 4), 8));
+      return true;
+    }
+    if (Op == 17 && Fmt == 22) {
+      const auto X = FPR(FS, 8), Y = FPR(FT, 8);
+      if ((Fn == 32 || Fn == 40) && !FT) { // CVT.S.PU / CVT.S.PL
+        StoreFPR(FD, Half(X, Fn == 32));
+        return true;
+      }
+      if (Fn >= 44 && Fn <= 47) { // PLL / PLU / PUL / PUU
+        StoreFPR(FD,
+                 S.binary(NdOp::CONCAT, Half(X, Fn & 2), Half(Y, Fn & 1), 8));
+        return true;
+      }
+      if (Fn == 17 && !(FT & 6)) { // MOVF/T.PS selects each lane separately.
+        const auto Control = S.floatConditions(HistoricalISA != 0);
+        const auto Lane = [&](unsigned I) {
+          const auto Bit = S.binary(NdOp::INT_AND, Control,
+                                    NdVar::cst(1u << ((FT >> 2) + I), 4));
+          const auto Taken =
+              S.binary(FT & 1 ? NdOp::INT_NOTEQUAL : NdOp::INT_EQUAL, Bit,
+                       NdVar::cst(0, 4), 1);
+          return S.select(Taken, Half(X, I), Half(FPR(FD, 8), I));
+        };
+        StoreFPR(FD, S.binary(NdOp::CONCAT, Lane(1), Lane(0), 8));
+        return true;
+      }
+      if (Fn == 18 || Fn == 19) { // MOVZ/N.PS
+        const auto Taken =
+            S.binary(Fn == 18 ? NdOp::INT_EQUAL : NdOp::INT_NOTEQUAL,
+                     S.read(FT), NdVar::cst(0, S.Width), 1);
+        StoreFPR(FD, X, Taken);
+        return true;
+      }
+      if (Fn == 6 && !FT) {
+        StoreFPR(FD, X);
+        return true;
+      }
+      return false;
+    }
+  }
+  if (Op != 17 || (Fmt != 16 && Fmt != 17))
     return false;
   const uint16_t Bytes = Fmt == 16 ? 4 : 8;
-  const auto X = FPR(FS, Bytes), Y = FPR(FT, Bytes), Z = NdVar::cst(0, Bytes);
+  if (FP32Registers && Bytes == 8 && ((FS | FD) & 1))
+    return false;
+  const auto X = ReadFPR(FS, Bytes), Z = NdVar::cst(0, Bytes);
   const auto Sign = uint64_t{1} << (8 * Bytes - 1);
+  if (ISARevision != 6) {
+    if (Fn == 17 && !(FT & 2)) { // MOVF/T.fmt
+      const auto Control = S.floatConditions(HistoricalISA != 0);
+      const auto Bit =
+          S.binary(NdOp::INT_AND, Control, NdVar::cst(1u << (FT >> 2), 4));
+      const auto Taken = S.binary(FT & 1 ? NdOp::INT_NOTEQUAL : NdOp::INT_EQUAL,
+                                  Bit, NdVar::cst(0, 4), 1);
+      StoreFPR(FD, X, Taken);
+      return true;
+    }
+    if (Fn == 18 || Fn == 19) { // MOVZ/N.fmt tests a GPR, not an FPR.
+      const auto Taken =
+          S.binary(Fn == 18 ? NdOp::INT_EQUAL : NdOp::INT_NOTEQUAL, S.read(FT),
+                   NdVar::cst(0, S.Width), 1);
+      StoreFPR(FD, X, Taken);
+      return true;
+    }
+    if (Fn != 6 || FT)
+      return false;
+    StoreFPR(FD, X); // MOV.fmt does not modify FCSR, even for signaling NaNs.
+    return true;
+  }
   if (Fn == 16 || Fn == 20 || Fn == 23) {
+    const auto Y = ReadFPR(FT, Bytes);
     const auto Predicate = Fn == 16 ? FPR(FD, Bytes) : Y;
     const auto Bit = S.binary(NdOp::INT_AND, Predicate, NdVar::cst(1, Bytes));
     const auto Set = S.binary(NdOp::INT_NOTEQUAL, Bit, Z, 1);
@@ -317,7 +492,7 @@ bool MIPSLifter::liftRelease6(State &S, uint32_t Word) const {
   const bool Wide = S.Width == 8;
 
   if (Op == 17 || Op == 49 || Op == 53 || Op == 57 || Op == 61)
-    return liftR6Float(S, Word);
+    return liftScalarFloat(S, Word);
   if (Op == 15 || (Op == 29 && Wide && RS) ||
       (Op == 1 && Wide && (RT == 6 || RT == 30))) {
     const unsigned Shift = Op != 1 ? 16 : RT == 6 ? 32 : 48;

@@ -1338,7 +1338,7 @@ TEST(DarwinIndirectRecordCalls,
     ASSERT_EQ(Source.find("bad source call"), std::string::npos) << Source;
     const auto Record = typeToC(Signature.ReturnType);
     Source +=
-        "\nstatic unsigned calls; static int mismatch;\n"
+        "\n#include <string.h>\nstatic unsigned calls; static int mismatch;\n"
         "static uint64_t payload[16];\n" +
         Record + " matrix_probe(double, double, double" +
         (Rotation ? ", double" : "") + ") __asm__(\"_" + Name + "\");\n" +

@@ -16,6 +16,8 @@
 #include "neverd/ir/FloatingCallArguments.h"
 #include "neverd/ir/SourceCallTypeHint.h"
 
+#include "llvm/ADT/STLFunctionalExtras.h"
+
 #include <map>
 
 namespace neverd {
@@ -23,6 +25,7 @@ struct BinaryImage;
 class DebugContext;
 struct LowFunc;
 struct MedFunc;
+struct MedVar;
 
 /// Refuse unqualified vector-bearing source functions before SSA/DCE can hide
 /// their incoming machine state or a clobbered callee-preserved FPR view.
@@ -31,6 +34,12 @@ void requireMIPSSourceVectors(
     const std::map<va_t, FloatingCallArguments> *Calls = nullptr,
     const std::map<SourceCallOccurrenceKey, SourceCallTypeHint> *Sites =
         nullptr);
+
+/// After physical byte qualification, project FR=0 word FPRs into the paired
+/// eight-byte ABI carriers before SSA. Preserve unbound bytes as unpredictable.
+void projectMIPSFP32Registers(MedFunc &Function,
+                              llvm::function_ref<MedVar(uint16_t)> Temporary,
+                              llvm::function_ref<MedVar(unsigned)> Pair);
 
 /// Match the original instruction, sequence and direct/indirect target.
 const SourceCallTypeHint *mipsFloatingCallSite(

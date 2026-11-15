@@ -37,6 +37,9 @@ struct MIPSImageMetadata {
   /// admitted for that header without the record. Release 6 has distinct
   /// e_flags. MSA requires explicit R5 and FP64 evidence.
   uint8_t ISARevision = 2;
+  /// Historical MIPS I-V architecture level, independent of MIPS32/64 releases.
+  /// Zero denotes the release-based ISA; historical profiles use revision zero.
+  uint8_t HistoricalISA = 0;
   /// The ELF admits both classic and microMIPS code, not a global micro mode.
   bool HasMicroMIPS = false;
   /// MIPS16e32 code; mutually exclusive with the microMIPS ASE.
@@ -56,6 +59,18 @@ struct MIPSImageMetadata {
   /// GNU MIPS FP ABI tag, when supplied by .MIPS.abiflags. Integer analysis
   /// does not establish support for these floating-point calling conventions.
   std::optional<uint8_t> FPABI;
+
+  /// An explicit scalar hard-float ABI with 64-bit FPRs (FR=1).
+  bool hasScalarFP64ABI(bool Wide) const { return FPABI == (Wide ? 1 : 6); }
+
+  /// The o32 hard-double ABI uses 32-bit FPRs, pairing even/odd registers
+  /// for doubles. FPXX does not establish the runtime FR mode.
+  bool hasScalarFP32ABI(bool Wide) const {
+    return !Wide && ISARevision != 6 && FPABI == 1;
+  }
+  bool hasScalarFPABI(bool Wide) const {
+    return hasScalarFP64ABI(Wide) || hasScalarFP32ABI(Wide);
+  }
 };
 
 } // namespace neverd

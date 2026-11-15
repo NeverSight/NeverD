@@ -108,6 +108,10 @@ struct CodegenResult {
 /// lifted route retains its existing original-image fallback behavior.
 enum class RewriteInputKind { LiftedIR, ReplacementIR, ReplacementObject };
 
+/// The object consumer determines which compact unwind payloads can survive
+/// installation. Platform linkers may canonicalize final-image encodings.
+enum class ObjectConsumer { PlatformLinker, FinalImageInstaller };
+
 /// Validate frontend requirements before explicit replacement IR enters MC
 /// code generation. This never removes a runtime or protection requirement.
 llvm::Error validateReplacementIR(const llvm::Module &Module, Arch TargetArch);
@@ -115,9 +119,11 @@ llvm::Error validateReplacementIR(const llvm::Module &Module, Arch TargetArch);
 /// LLVM IR -> relocatable object for all four ISAs (see ArchSupport.h).
 class Codegen {
 public:
-  CodegenResult compile(llvm::Module &Mod, Arch TargetArch,
-                        BinaryFormat ObjectFormat = BinaryFormat::MachO,
-                        llvm::StringRef TargetTriple = {});
+  CodegenResult
+  compile(llvm::Module &Mod, Arch TargetArch,
+          BinaryFormat ObjectFormat = BinaryFormat::MachO,
+          llvm::StringRef TargetTriple = {},
+          ObjectConsumer Consumer = ObjectConsumer::PlatformLinker);
 
   /// Compile directly to fixed-up image bytes using the caller's address
   /// model, bypassing the relocatable object intermediate format.

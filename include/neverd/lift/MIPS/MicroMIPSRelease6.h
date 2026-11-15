@@ -126,7 +126,7 @@ inline std::optional<uint32_t> microR6Float(uint32_t Word) {
     return std::nullopt;
   }
   switch (Word & 0x7ff) {
-#define NEVERD_MICRO_FP_BINARY(Minor, Classic)                                 \
+#define NEVERD_MICRO_FP_BINARY(Minor, Classic, Legacy)                         \
   case Minor:                                                                  \
     return Classic | (T << 16) | (S << 11) | (D << 6);
 #include "neverd/lift/MIPS/MicroMIPSFloat.def"

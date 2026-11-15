@@ -34,6 +34,8 @@ def main():
         parser.add_argument("--" + name.replace("_", "-"), type=Path, required=True)
     parser.add_argument("--compare-capstone", action="store_true",
                         help="allow the decoder revision to be the varied build input")
+    parser.add_argument("--compare-unicorn", action="store_true",
+                        help="allow the concrete FP dependency to be the varied build input")
     parser.add_argument("--base-commit", required=True)
     parser.add_argument("--samples", type=int, required=True)
     parser.add_argument("--repeats", type=int, required=True)
@@ -52,7 +54,11 @@ def main():
     if not {"compiler", "llvm", "capstone", "build"} <= toolchain_a.keys():
         parser.error("toolchain manifests must identify compiler, LLVM, Capstone and build flags/allocator")
     def comparable(toolchain):
-        return {k: v for k, v in toolchain.items() if k != "capstone" or not args.compare_capstone}
+        return {k: v for k, v in toolchain.items()
+                if not ((k == "capstone" and args.compare_capstone) or
+                        (k == "unicorn" and args.compare_unicorn))}
+    if args.compare_unicorn and not all("unicorn" in t for t in (toolchain_a, toolchain_b)):
+        parser.error("Unicorn comparison requires both dependency revisions")
     if "capstone" not in toolchain_b or comparable(toolchain_a) != comparable(toolchain_b):
         parser.error("toolchain/flags/allocator snapshots differ; rebuild a matching baseline")
     inputs = (args.baseline, args.candidate, args.code, args.firmware,
@@ -67,7 +73,7 @@ def run(args, artifacts, toolchain_a, toolchain_b):
     artifacts.write("summary.json", {"status": "running"})
     profile_text = Path(__file__).with_name("mips-bench.def").read_text()
     profiles = args.profile or re.findall(
-        r"^NEVERD_MIPS_BENCH_PROFILE\((\w+), \w+, Default, 2, 0, 0, 0,\s*0\)",
+        r"^NEVERD_MIPS_BENCH_PROFILE\((\w+), \w+, Default, 2, 0, 0, 0,\s*0,\s*0\)",
         profile_text, re.M,
     )
     stages = re.findall(r'^NEVERD_MIPS_BENCH_STAGE\(\w+, "(\w+)"\)', profile_text, re.M)
@@ -164,6 +170,8 @@ def run(args, artifacts, toolchain_a, toolchain_b):
               "dependency_inputs_sha256": digest(args.baseline_inputs),
               "toolchain": toolchain_a,
               "candidate_toolchain": toolchain_b,
+              "varied_dependencies": [k for k in ("capstone", "unicorn")
+                                      if toolchain_a.get(k) != toolchain_b.get(k)],
               "toolchain_inputs_sha256": {"A": digest(args.baseline_toolchain),
                                           "B": digest(args.candidate_toolchain)},
               "firmware_sha256": digest(args.firmware),

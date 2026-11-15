@@ -1,0 +1,112 @@
+{
+  "neverd_revision": "a726549412997a5be4b257148ece6cc57916ed65",
+  "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43599335828",
+  "ci_revision": "e46fac688f740efab0c8439c6a80c7b6e43b1158",
+  "windows_frontend_job": "https://github.com/gmh5225/test_mac_intel/actions/runs/43599335828/job/132460513589",
+  "local": {
+    "publication_cases": 70,
+    "abi_format_passed": 137,
+    "abi_format_skipped": 42
+  },
+  "hosts": {
+    "cursor-macos-26": {
+      "hardware": {
+        "exit": 0,
+        "text": "Apple M1 (Virtual)"
+      },
+      "os": {
+        "exit": 0,
+        "text": "ProductName:\t\tmacOS\nProductVersion:\t\t26.7.2\nBuildVersion:\t\t25G332"
+      },
+      "cpa": {
+        "exit": 1,
+        "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA'"
+      },
+      "cpa2": {
+        "exit": 1,
+        "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA2'"
+      },
+      "host_sha256": "01979689d254af429f87cdf65af84c509b0d2160b720a1a832b0fe469ac947f6",
+      "test_cases": 70,
+      "executed_native_images": 120,
+      "added_cases": {
+        "SIMDDataPreservesIndexedStackAndRememberedRows": 2,
+        "PublishesSIMD16ByteArithmetic": 2,
+        "PublishesSIMD8ByteArithmetic": 2,
+        "PublishesSIMD8HalfArithmetic": 2,
+        "PublishesSIMD4HalfArithmetic": 2,
+        "PublishesSIMD4WordArithmetic": 2,
+        "PublishesSIMD2WordArithmetic": 2,
+        "PublishesSIMD2DoubleArithmetic": 2,
+        "PublishesSIMDScalarDoubleArithmetic": 2,
+        "PublishesSIMDPermutationsTablesAndLanes": 2,
+        "PublishesSIMDFusedLanesWithFloatingEnvironment": 2,
+        "PublishesSIMDRegisterArgumentsAndResults": 2,
+        "PublishesSIMDWidenNarrowReduceAndSaturationState": 2
+      },
+      "signal_and_tls": {
+        "native_signal_caller_resumptions": 8,
+        "native_signal_language_cleanups": 24,
+        "native_objc_signal_cleanups": 24,
+        "native_new_tls_lifecycles": 8,
+        "native_thread_resolver_lifecycles": 8
+      },
+      "cpta_probe": {
+        "status": "unavailable",
+        "native_el0_cpta_observed": false,
+        "x1_el0_cpta_qualified": false,
+        "x1_el0_checked_writeback_qualified": false
+      }
+    },
+    "cursor-xcode-27": {
+      "hardware": {
+        "exit": 0,
+        "text": "Apple M1 (Virtual)"
+      },
+      "os": {
+        "exit": 0,
+        "text": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434"
+      },
+      "cpa": {
+        "exit": 0,
+        "text": "0"
+      },
+      "cpa2": {
+        "exit": 0,
+        "text": "0"
+      },
+      "host_sha256": "01979689d254af429f87cdf65af84c509b0d2160b720a1a832b0fe469ac947f6",
+      "test_cases": 70,
+      "executed_native_images": 120,
+      "added_cases": {
+        "SIMDDataPreservesIndexedStackAndRememberedRows": 2,
+        "PublishesSIMD16ByteArithmetic": 2,
+        "PublishesSIMD8ByteArithmetic": 2,
+        "PublishesSIMD8HalfArithmetic": 2,
+        "PublishesSIMD4HalfArithmetic": 2,
+        "PublishesSIMD4WordArithmetic": 2,
+        "PublishesSIMD2WordArithmetic": 2,
+        "PublishesSIMD2DoubleArithmetic": 2,
+        "PublishesSIMDScalarDoubleArithmetic": 2,
+        "PublishesSIMDPermutationsTablesAndLanes": 2,
+        "PublishesSIMDFusedLanesWithFloatingEnvironment": 2,
+        "PublishesSIMDRegisterArgumentsAndResults": 2,
+        "PublishesSIMDWidenNarrowReduceAndSaturationState": 2
+      },
+      "signal_and_tls": {
+        "native_signal_caller_resumptions": 8,
+        "native_signal_language_cleanups": 24,
+        "native_objc_signal_cleanups": 24,
+        "native_new_tls_lifecycles": 8,
+        "native_thread_resolver_lifecycles": 8
+      },
+      "cpta_probe": {
+        "status": "unavailable",
+        "native_el0_cpta_observed": false,
+        "x1_el0_cpta_qualified": false,
+        "x1_el0_checked_writeback_qualified": false
+      }
+    }
+  }
+}

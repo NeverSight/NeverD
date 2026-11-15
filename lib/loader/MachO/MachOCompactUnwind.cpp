@@ -781,9 +781,10 @@ ParseResult parseCompactUnwind(const BinaryImage &Img) {
     const uint32_t PersonalityIndex =
         (Raw[I].Encoding & kPersonalityMask) >> kPersonalityShift;
     if (PersonalityIndex != 0) {
-      if (PersonalityIndex <= Result.Personalities.size())
+      if (PersonalityIndex <= Result.Personalities.size()) {
         Entry.PersonalityVA = Result.Personalities[PersonalityIndex - 1];
-      else
+        Entry.PersonalitySlotVA = Result.PersonalitySlots[PersonalityIndex - 1];
+      } else
         partial("__unwind_info entry names a missing personality");
     }
 

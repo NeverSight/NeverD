@@ -18,6 +18,7 @@
 
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -551,7 +552,8 @@ bool transfer(State &S, const State &Before, Decoder &Decode,
 // leave that row in effect while the frame is being built or torn down.
 // Use its register columns when the declared CFA is the incoming SP. Otherwise
 // reconstruct an interrupt row from carriers that agree on every path.
-FrameRow instructionFrameRow(const State &S, const FrameRow *Declared) {
+FrameRow instructionFrameRow(const State &S, const FrameRow *Declared,
+                             const CompactUnwindEntry *Compact) {
   const bool UseCFI =
       Declared && add(S.Registers[*Declared->CFARegister].StackOffset,
                       Declared->CFAOffset) == 0;
@@ -600,6 +602,23 @@ FrameRow instructionFrameRow(const State &S, const FrameRow *Declared) {
       if (R != kLR)
         break;
       SavedReturn = I->second.Return;
+    }
+  }
+  // A compact FP frame can retain both the live LR and its saved copy. Use
+  // the frame record when both carry the same proved return/signing state;
+  // a throw thunk may then overwrite LR without losing the interrupted frame.
+  // Query that one slot, not every saved value. Partial or released saves and
+  // copies with a different signing recipe cannot authorize this choice.
+  if (!Declared && Compact &&
+      Compact->Kind == CompactUnwindKind::FramePointer && SP &&
+      Row.Registers[kLR].Location == AArch64UnwindRegister::SameValue) {
+    const auto Offset = add(S.Registers[kFP].StackOffset, kRegisterBytes);
+    // Compact FP unwinding fixes CFA at FP + two words and LR at CFA - one.
+    if (Offset && *Offset == -int(kRegisterBytes) && *Offset >= *SP) {
+      const auto Saved = S.Stack.find(*Offset);
+      if (Saved != S.Stack.end() && Saved->second.Return &&
+          Saved->second.Return == S.Registers[kLR].Return)
+        Row.Registers[kLR] = {AArch64UnwindRegister::AtCFA, *Offset};
     }
   }
   return Row;
@@ -712,10 +731,35 @@ recoverImplicitFrame(const BinaryImage &Image,
   }
   const auto *Bytes = Image.readVA(Start, Size);
   const auto Data = Image.DataInCode.lower_bound(Start);
-  if (!Bytes || Image.nextKnownFunctionEntryAfter(Start) < Start + Size ||
-      !Image.isCodeRange(Start, Size) ||
+  if (!Bytes || !Image.isCodeRange(Start, Size) ||
       (Data != Image.DataInCode.end() && *Data - Start < Size))
     return fail(kCode);
+  // A linker may coalesce identical compact recipes across several functions.
+  // Keep their entry states and control-flow domains separate while retaining
+  // offsets relative to the original metadata range. DWARF, language tables
+  // and explicit signing-PC offsets still belong to one function.
+  llvm::SmallVector<size_t> Entries{0};
+  for (va_t Next = Image.nextKnownFunctionEntryAfter(Start);
+       Next < Start + Size; Next = Image.nextKnownFunctionEntryAfter(Next)) {
+    if ((Next - Start) % neverd::aarch64::kInsnSize)
+      return fail(kCode);
+    Entries.push_back((Next - Start) / neverd::aarch64::kInsnSize);
+  }
+  // Mach-O LC_FUNCTION_STARTS is represented by typed function symbols, not
+  // RuntimeFunctionAddrs (which identifies loader/CRT entry conventions).
+  // Collect those roots once, excluding discovery guesses and continuations.
+  const auto Guesses = Image.boundaryGuessFunctionStarts();
+  for (const auto &Symbol : Image.Symbols)
+    if (Symbol.IsFunc && Symbol.Addr > Start && Symbol.Addr < Start + Size &&
+        !Guesses.count(Symbol.Addr) &&
+        Image.isFunctionEntryCandidateAt(Symbol.Addr))
+      Entries.push_back((Symbol.Addr - Start) / neverd::aarch64::kInsnSize);
+  llvm::sort(Entries);
+  Entries.erase(std::unique(Entries.begin(), Entries.end()), Entries.end());
+  if (Entries.size() > 1 &&
+      (Function.Dwarf || !Function.describesUnwindOnly() ||
+       Function.Compact->ReturnAddressSigningOffset))
+    return fail(kProfile);
   Decoder Decode;
   if (!Decode.init(Image))
     return fail(kCode);
@@ -727,14 +771,21 @@ recoverImplicitFrame(const BinaryImage &Image,
     Entry.Registers[R].IncomingRegister = R;
   for (unsigned R = kFirstDSlot; R < kFrameRegisters; ++R)
     Entry.Registers[R].IncomingRegister = R;
-  States[0] = std::move(Entry);
-  std::deque<size_t> Work = {0};
+  std::deque<size_t> Work;
+  for (size_t Index : Entries) {
+    States[Index] = Entry;
+    Work.push_back(Index);
+  }
+  Entries.push_back(Count);
   size_t Transitions = 0;
   while (!Work.empty()) {
     if (++Transitions > Limits.MaxTransitions)
       return fail(kBudget, AArch64RAQueryStatus::ResourceLimit);
     const size_t Index = Work.front();
     Work.pop_front();
+    const auto Boundary = llvm::upper_bound(Entries, Index);
+    const size_t Begin = *std::prev(Boundary);
+    const size_t End = *Boundary;
     const uint64_t Offset = Index * neverd::aarch64::kInsnSize;
     DecodedInsn I{};
     if (Decode.decodeOne(Bytes + Offset, Size - Offset, Start + Offset, I) !=
@@ -749,7 +800,7 @@ recoverImplicitFrame(const BinaryImage &Image,
     const auto &D = I.Raw->detail->aarch64;
     const auto Ops = llvm::ArrayRef(D.operands, D.op_count);
     const auto Queue = [&](size_t Next, const State &Incoming) {
-      if (Next >= Count)
+      if (Next < Begin || Next >= End)
         return;
       if (!States[Next]) {
         States[Next] = Incoming;
@@ -793,12 +844,16 @@ recoverImplicitFrame(const BinaryImage &Image,
       if (Target >= Start && Target - Start < Size) {
         if ((Target - Start) % neverd::aarch64::kInsnSize)
           return fail(kCode);
-        Queue((Target - Start) / neverd::aarch64::kInsnSize, After);
+        const size_t Next = (Target - Start) / neverd::aarch64::kInsnSize;
+        if (Next >= Begin && Next < End)
+          Queue(Next, After);
+        else if (!llvm::binary_search(Entries, Next))
+          return fail(kCode);
       }
       if (I.Id != AARCH64_INS_B ||
           (D.cc != AArch64CC_Invalid && D.cc != AArch64CC_AL &&
            D.cc != AArch64CC_NV)) {
-        if (Index + 1 == Count)
+        if (Index + 1 == End)
           return fail(kCode);
         Queue(Index + 1, After);
       }
@@ -809,12 +864,15 @@ recoverImplicitFrame(const BinaryImage &Image,
       if (I.Id == AARCH64_INS_BL && Ops.size() == 1 &&
           Ops.front().type == AARCH64_OP_IMM) {
         const va_t Target = Ops.front().imm;
-        if (Target - Start < Size)
+        if (Target - Start < Size &&
+            ((Target - Start) % neverd::aarch64::kInsnSize ||
+             !llvm::binary_search(Entries, (Target - Start) /
+                                               neverd::aarch64::kInsnSize)))
           return fail(kCode);
         if (libc::isNoReturnTarget(Image, Target))
           continue;
       }
-      if (Index + 1 == Count)
+      if (Index + 1 == End)
         return fail(kCode);
       Queue(Index + 1, After);
     } else if (I.Id == AARCH64_INS_HLT || I.Id == AARCH64_INS_UDF ||
@@ -829,7 +887,7 @@ recoverImplicitFrame(const BinaryImage &Image,
                cs_insn_group(Decode.getHandle(), I.Raw, CS_GRP_IRET)) {
       return fail(kCode);
     } else {
-      if (Index + 1 == Count)
+      if (Index + 1 == End)
         return fail(kCode);
       Queue(Index + 1, After);
     }
@@ -843,7 +901,8 @@ recoverImplicitFrame(const BinaryImage &Image,
     std::optional<AArch64ReturnAddressState> Signing;
     if (States[I]) {
       const auto &S = *States[I];
-      Rule = instructionFrameRow(S, Declared);
+      Rule = instructionFrameRow(
+          S, Declared, Function.Compact ? &*Function.Compact : nullptr);
       if (Rule.CFARegister) {
         const auto &LR = Rule.Registers[kLR];
         if (LR.Location == AArch64UnwindRegister::SameValue)
@@ -879,6 +938,18 @@ recoverImplicitFrame(const BinaryImage &Image,
          FP});
   }
   return Result;
+}
+
+bool preservesLiveFrame(Decoder &Decode, const DecodedInsn &I) {
+  cs_regs Reads, Writes;
+  uint8_t NumReads = 0, NumWrites = 0;
+  if (cs_regs_access(Decode.getHandle(), I.Raw, Reads, &NumReads, Writes,
+                     &NumWrites) != CS_ERR_OK)
+    return false;
+  return llvm::all_of(llvm::ArrayRef(Writes, NumWrites), [](unsigned R) {
+    const auto Number = reg(R);
+    return (!Number || *Number <= kLastDarwinScratch) && !preservedDSlot(R);
+  });
 }
 
 // At a synchronous throwing call the personality can rely on preserved
@@ -1049,6 +1120,7 @@ prepareDarwinArm64eExceptionSite(const BinaryImage &Image,
     };
     const auto Initial = Lookup(PC);
     auto Protected = Sites.end();
+    bool PreservesLiveFrame = false;
     auto At = PC;
     Decoder Decode;
     if (!Decode.init(Image))
@@ -1071,6 +1143,8 @@ prepareDarwinArm64eExceptionSite(const BinaryImage &Image,
       if (!Code || Decode.decodeOne(Code, Width, At, I) != int(Width) ||
           !I.Raw || !I.Raw->detail)
         return std::nullopt;
+      if (At == PC)
+        PreservesLiveFrame = preservesLiveFrame(Decode, I);
       if (cs_insn_group(Decode.getHandle(), I.Raw, CS_GRP_CALL)) {
         // Outside a protected range the next call may belong to a newly
         // entered lexical scope. Only its own return edge, looping directly
@@ -1102,6 +1176,17 @@ prepareDarwinArm64eExceptionSite(const BinaryImage &Image,
       if (NextPC < Begin || NextPC >= End || NextPC % Width)
         break;
       At = NextPC;
+    }
+    // An explicitly guarded non-call instruction can supply its own virtual
+    // return edge. The complete recovery row must remain unchanged at that
+    // edge: the throw thunk replaces the instruction without executing it.
+    // In particular, do not skip a stack adjustment, spill or signing change.
+    if (!AtCall && PreservesLiveFrame && Initial != Sites.end() &&
+        Initial->LandingPadVA && Plan->Frame.SavedLR &&
+        Initial->GuardedRange.End - PC >= Width && End - PC > Width) {
+      AtCall = true;
+      Begin = PC;
+      End = PC + Width;
     }
     if (!AtCall) {
       if (Initial == Sites.end() || Initial->LandingPadVA)

@@ -14,6 +14,7 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/intrinsics/MIPS/MIPSHistoricalISA.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
@@ -22,13 +23,19 @@
 
 namespace neverd {
 
+MIPSLifter::MIPSLifter(Arch Target, InstructionMode Mode, uint8_t Revision,
+                       uint8_t Historical)
+    : Target(Target), Mode(Mode), ISARevision(Revision),
+      HistoricalISA(Historical), LittleEndian(archLittleEndian(Target)),
+      RegisterBytes(isMIPS64(Target) ? 8 : 4),
+      EncodingProfile(Revision | uint16_t(Historical) << 8) {}
+
 uint32_t MIPSLifter::word(const cs_insn &Instruction) const {
   if (Instruction.size != 4)
     throw UnliftedInstruction(Instruction.address, Instruction.mnemonic,
                               "MIPS requires a four-byte classic encoding");
-  return archLittleEndian(Target)
-             ? llvm::support::endian::read32le(Instruction.bytes)
-             : llvm::support::endian::read32be(Instruction.bytes);
+  return LittleEndian ? llvm::support::endian::read32le(Instruction.bytes)
+                      : llvm::support::endian::read32be(Instruction.bytes);
 }
 
 bool MIPSLifter::hasDelaySlot(uint32_t Word) {
@@ -41,26 +48,45 @@ bool MIPSLifter::hasDelaySlot(uint32_t Word) {
   }
   if (Opcode == 17) {
     const unsigned RS = (Word >> 21) & 31;
-    return RS == 11 || RS == 15 || RS >= 24;
+    return RS == 8 || RS == 11 || RS == 15 || RS >= 24;
   }
   return (Opcode >= 2 && Opcode <= 7) || (Opcode >= 20 && Opcode <= 23);
 }
 
+namespace {
+// Keep the historical catalog out of the inlined modern/compressed path.
+LLVM_ATTRIBUTE_NOINLINE bool historicalEncodingAvailable(Arch Target,
+                                                         unsigned Revision,
+                                                         unsigned Level,
+                                                         uint32_t Word) {
+  return Level >= 4 && Level <= 5 && !Revision && isMIPS64(Target) &&
+         mips::historicalInstructionAvailable(Word, Level);
+}
+} // namespace
+
 LLVM_ATTRIBUTE_ALWAYS_INLINE std::optional<MIPSLifter::Encoding>
 MIPSLifter::encoding(const cs_insn &Instruction) const {
   if (Mode == InstructionMode::MicroMIPS)
-    return microEncoding(Instruction);
+    return HistoricalISA ? std::nullopt : microEncoding(Instruction);
   if (Mode == InstructionMode::MIPS16)
-    return mips16Encoding(Instruction);
+    return HistoricalISA ? std::nullopt : mips16Encoding(Instruction);
   const uint32_t Word = word(Instruction);
-  if (ISARevision == 6)
-    return release6Encoding(Word);
+  // Classify the immutable profile once at construction; the common r2 path
+  // uses one load/comparison without admitting contradictory historical data.
+  if (EncodingProfile != 2) {
+    if (EncodingProfile == 6)
+      return release6Encoding(Word);
+    if (HistoricalISA &&
+        !historicalEncodingAvailable(Target, ISARevision, HistoricalISA, Word))
+      return std::nullopt;
+  }
   // A JALR with a hardwired zero link register has JR semantics on r2/r5.
   if ((Word & 0xfc1fffffu) == 9)
     return Encoding{(Word & ~63u) | 8u, 4};
 
   if (((Word >> 16) == 0x041c && !HasDSP) ||
-      (Word >> 26 == 17 && hasDelaySlot(Word) && !HasMSA))
+      (Word >> 26 == 17 && hasDelaySlot(Word) &&
+       (((Word >> 21) & 31) == 8 ? !HasScalarFP : !HasMSA)))
     return std::nullopt;
   if (Word >> 26 == 29) {
     if (Mode != InstructionMode::MIPSClassic)
@@ -166,6 +192,21 @@ NdVar MIPSLifter::State::read(unsigned Register, uint16_t Bytes) {
   return resize(NdVar::reg(mipsreg::r(Register), Width), Bytes);
 }
 
+NdVar MIPSLifter::State::floatConditions(bool Historical) {
+  const auto Control = makeTemp(4);
+  emitIntrinsic(Intrinsic::MIPSReadFPControl, Control,
+                {NdVar::cst(Historical ? 31 : 25, 1)});
+  if (!Historical)
+    return Control;
+  const auto First =
+      binary(NdOp::INT_AND, binary(NdOp::INT_RIGHT, Control, NdVar::cst(23, 4)),
+             NdVar::cst(1, 4));
+  const auto Rest =
+      binary(NdOp::INT_AND, binary(NdOp::INT_RIGHT, Control, NdVar::cst(24, 4)),
+             NdVar::cst(254, 4));
+  return binary(NdOp::INT_OR, First, Rest);
+}
+
 void MIPSLifter::State::requireWord(unsigned Register) {
   if (Width == 8 && Register)
     emitIntrinsic(Intrinsic::MIPSRequireWord, {}, {read(Register)});
@@ -198,11 +239,13 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
        (ISARevision == 6 && Word == 0x140)) &&
       liftSystem(S, Word))
     return true;
-  if (Word == 0x00000140)
-    return false;           // PAUSE requires an admitted execution profile.
-  if (Word == 0x000000c0) { // EHB, before the generic SLL zero destination.
-    S.emitIntrinsic(Intrinsic::MIPSExecutionHazardBarrier, {});
-    return true;
+  if (Word == 0x00000140 || Word == 0x000000c0) {
+    if (!HistoricalISA) {
+      if (Word == 0x00000140)
+        return false; // PAUSE requires an admitted execution profile.
+      S.emitIntrinsic(Intrinsic::MIPSExecutionHazardBarrier, {});
+      return true;
+    }
   }
   if ((Word & 0xfffff83f) == 0x0000000f) { // SYNC stype
     S.emitIntrinsic(Intrinsic::MIPSSync, {}, {NdVar::cst(SA, 1)});
@@ -528,6 +571,9 @@ bool MIPSLifter::liftNonControl(State &S, Encoding Code, va_t BasePC) const {
       liftMicroSequence(S, Code);
     return true;
   }
+  if (HasScalarFP && Mode != InstructionMode::MIPS16 &&
+      liftScalarFloat(S, Code.Word))
+    return true;
   return Code.PCRelative
              ? liftPCRelative(S, Code.Word, BasePC)
              : liftInteger(S, Code.Word) || liftMemory(S, Code.Word);
@@ -549,7 +595,7 @@ void MIPSLifter::lift(const cs_insn &Instruction, std::vector<LowOp> &Ops,
     liftControl(Instruction, nullptr, *Code, Ops);
     return;
   }
-  State S(Instruction.address, Ops, isMIPS64(Target) ? 8 : 4, Instruction.size);
+  State S(Instruction.address, Ops, RegisterBytes, Instruction.size);
   if (Code->R6 && isR6Compact(Word)) {
     if (Mode != InstructionMode::MicroMIPS && !ForbiddenFollower.has_value() &&
         isR6ConditionalCompact(Word))
@@ -582,11 +628,11 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
   if (Slot &&
       (!SlotCode || SlotCode->SlotBytes ||
        (Mode == InstructionMode::MicroMIPS && SlotCode->hasSequence()) ||
-       (SlotCode->R6
-            ? isR6Compact(SlotCode->Word)
-            : !SlotCode->hasSequence() && (hasDelaySlot(SlotCode->Word) ||
-                                           SlotCode->Word == 0x00000140 ||
-                                           SlotCode->Word >> 26 == 29))))
+       (SlotCode->R6 ? isR6Compact(SlotCode->Word)
+                     : !SlotCode->hasSequence() &&
+                           (hasDelaySlot(SlotCode->Word) ||
+                            (!HistoricalISA && SlotCode->Word == 0x00000140) ||
+                            SlotCode->Word >> 26 == 29))))
     throw UnliftedInstruction(
         Slot->address, Slot->mnemonic,
         "unsupported instruction or transfer in MIPS delay slot");
@@ -597,7 +643,7 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
   const unsigned SA = (Word >> 6) & 31;
   const unsigned Function = Word & 63;
   const size_t Begin = Ops.size();
-  State S(Head.address, Ops, isMIPS64(Target) ? 8 : 4, Head.size);
+  State S(Head.address, Ops, RegisterBytes, Head.size);
   const auto Address = [&](uint64_t Value) {
     return S.Width == 4 ? uint64_t(uint32_t(Value)) : Value;
   };
@@ -658,6 +704,13 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
                                 NdVar::cst(1, 4));
       Condition = S.binary(RS == 9 ? NdOp::INT_EQUAL : NdOp::INT_NOTEQUAL, Bit,
                            NdVar::cst(0, 4), 1);
+    } else if (Opcode == 17 && RS == 8) { // BC1F/T and likely variants
+      const auto Control = S.floatConditions(HistoricalISA != 0);
+      const auto Bit =
+          S.binary(NdOp::INT_AND, Control, NdVar::cst(1u << (RT >> 2), 4));
+      Condition = S.binary(RT & 1 ? NdOp::INT_NOTEQUAL : NdOp::INT_EQUAL, Bit,
+                           NdVar::cst(0, 4), 1);
+      Likely = RT & 2;
     } else if (Opcode == 17) {
       const bool Whole = RS == 11 || RS == 15;
       const bool Nonzero = (RS & 4) != 0;

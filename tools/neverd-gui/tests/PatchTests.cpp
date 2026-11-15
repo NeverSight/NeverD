@@ -402,7 +402,7 @@ private slots:
     for (bool ready : {true, false})
       for (auto key : {Qt::Key_J, Qt::Key_A, Qt::Key_B})
         QTest::newRow(
-            qPrintable(QString(QChar(key)) + (ready ? "-ready" : "-fast")))
+            qPrintable(QString(QChar(int(key))) + (ready ? "-ready" : "-fast")))
             << int(key) << ready;
   }
 

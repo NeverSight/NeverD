@@ -1909,10 +1909,57 @@ recipes. `AppleSignedCallbacks/SourcePatchPAuthLRCallbackMatrix`
 in `NeverDSourcePatchMatrixTests` rejects exact and interior original callbacks
 whose compact recipe requires PAuth_LR, leaving image and output unchanged.
 
+`NeverDArm64eLiftedImageTests` also runs indexed C++/Objective-C language frames
+through automatic whole-image lifting and publication. The explicitly protected
+non-call fixtures check original LSDA reuse, authenticated personality slots,
+direct `_Unwind_Resume` calls, bare-RET result preservation and refusal of a
+changed LSDA operand. With `NEVERD_ARM64E_ASYNC_NATIVE=1`, native replay checks
+both cleanup levels, exception identity and signal-mask restoration on ordinary
+and alternate stacks at O0/O2. These tests require complete declared lifetimes;
+they do not infer asynchronous cleanup scopes absent from the input LSDA.
+
 `NeverDArm64eLiftedImageTests` checks register-result publication with FP/SP
 CFA changes, explicit B-key augmentation, remembered states and two epilogues.
 It compares the final linked CFI with the original and rejects altered source
 spill rules. Native replay exercises both exits over an integer input matrix.
+`AArch64SavedRegisters` adds complete lifted-image publication with all
+X19-X28 and V8-V15 saves. It checks offset, restore and same-value DWARF rules,
+rejects altered GPR/vector spill locations, and compares both epilogues against
+independent register seeds. Separate D and Q fixtures check the low lanes and
+full saved vectors. With `NEVERD_ARM64E_LIFTED_NATIVE=1`, their signal cases
+interrupt the published body and resume the authenticated caller from the
+recovered rows, checking every saved register after returning through the
+system signal frame.
+`AArch64CompactRegisters` exercises classic frame-pointer compact encodings:
+each of the nine saved GPR/D pairs, all pairs, sparse masks, a frame with no
+additional saved pair, and extra SP allocation below the established FP. The
+published image must retain the original compact word without a DWARF fallback;
+altering any declared spill is refused. Independent callers check original and
+published normal returns, both signed epilogues, preserved registers, and
+signal-driven caller resumption. Unselected vector upper lanes must remain
+unchanged. Coalesced fixtures assert that two source functions really share
+one compact record, then recover each function independently. Frameless
+variants retain the live signed LR and cover every saved pair, full/sparse
+masks, additional stack allocation and coalescing. They validate NeverD's
+instruction-derived caller resumption; they do not independently qualify the
+system unwinder's frameless saved-pair implementation.
+
+Two PAuth_LR cases independently encode final mode-5 image records and check
+complete publication with zero/nonzero signing-PC offsets, full/sparse saves
+and both PC-relative epilogues. The fixtures write their one validated encoding
+slot in an unsigned structural input after Apple linking: Xcode 27
+canonicalizes the raw nonzero object record to ordinary FP mode. The linker
+word is recorded before fixture construction.
+A contradictory ordinary-FP input and removal of the signing CFI must both
+refuse publication.
+They report `structural_pauth_lr_images` and zero native executions: these
+cases do not run PAuth_LR instructions on older CPUs. The updated LLVM fork's
+MC producer is required; the unchanged r6 prebuilt explicitly skips these
+two cases. LLVM MC tests separately check offset limits, fixed fragment
+boundaries, ordinary-arm64 rejection and DWARF fallback for unrepresentable
+rules. Ordinary relocatable objects retain DWARF for a nonzero signing offset;
+only the provenance-bound final-image writer and explicit native object
+installer consume that compact payload directly.
 `InstructionAddressRecipesUseTheActualSigningPC` compiles the public Darwin
 signal cursor and an independent SP/PC signing oracle as C11 and C++20 at
 O0/O2. Set `NEVERD_ARM64E_ASYNC_NATIVE=1` only in a qualified arm64e process
@@ -1940,6 +1987,11 @@ path back to a protected call on both ordinary and alternate stacks. See the
 implicit signing at exact instruction boundaries, including conflicting
 paths, live and spilled LR, stale stack slots, missing preserved registers,
 relocated signing instructions and analysis limits. The lifted-image suite
+also checks independent entry states, direct calls/tail transfers and crossed
+boundaries in coalesced compact ranges. Typed symbols from Mach-O function
+starts are admitted; local labels, boundary guesses and continuations are
+excluded. A DWARF frame or explicit compact signing-PC recipe cannot be
+reinterpreted relative to each of several function entries. The suite
 also compiles a compact-only Apple Clang dylib. With native replay enabled,
 it checks both that dylib and the system cursor's next frame after crossing
 the real signal trampoline. See the [system signal qualification](arm64e-native-validation.md#system-signal-trampoline-and-implicit-signing-rows).
@@ -9142,8 +9194,10 @@ call and AArch64 strtof/strtod execution tests when changing this admission.
 `FloatCallsDefineOnlyTheirDeclaredScalarWidth` checks mixed float/double
 carriers in both input orders, using both call-site and callee-summary types.
 The shared HighC host fixture reports native `-m32` execution unavailable on
-macOS, where a 64-bit build would truncate the kernels' addresses. Linux and
-Windows retain the actual 32-bit differential. Native x87 IR inputs use
+macOS, where a 64-bit build would truncate the kernels' addresses, and on any
+other non-Linux host whose test Clang builds no runnable `-m32` program: the
+Windows CI's MSVC environment, set up for x64, links none. Linux retains the
+actual 32-bit differential, and a failed 32-bit build there stays a failure. Native x87 IR inputs use
 `LLVMHostFixture.h` at both host compiler boundaries; the original verified
 module and semantic proofs remain unchanged. The compiler copy lowers
 whole-object lifetime markers to the older `(i64 size, ptr)` signature, using
@@ -24208,7 +24262,7 @@ unknown-bit transport and source joins. MSA rounded shifts/inserts exhaust every
 count at every width with APInt expectations, aliases and reserved prefixes;
 source fixtures execute zero/mid/full immediate counts on both byte orders.
 
-### MIPS decode/lift and firmware performance
+### MIPS scalar floating-point and ABI roundtrips
 
 The hard-float call tests assemble original callers and callees and bind explicit declarations.
 
@@ -24220,6 +24274,15 @@ PYTHONPATH=third_party/unicorn/bindings/python LIBUNICORN_PATH=/path/to/unicorn-
   --output build-mips/floating-abi-roundtrip
 ```
 
+The runner defaults to Release 6. Add `--revision 2` for classic FR=1 Release 2
+with legacy NaNs, delayed JAL/JALR calls and the 74Kf/MIPS64R2 reference CPUs.
+Add `--revision 2 --fr 0 --abi 32` for o32 physical register pairs, including
+single/double entry and call results, variadic/indirect calls and preserved
+f20–f31 words. `--abi` and `--layout` narrow a diagnostic rerun; omitting them
+runs all cases for the selected mode.
+`SourceCallABI.AlignmentGuardPreservesOutgoingStackBytesAndAddresses` checks
+the reaching-store proof in all six MIPS ABI/byte-order profiles, with malformed
+alignment and opaque-effect controls that must still fail qualification.
 The runner compares original machine code with recompiled HighC and LLVMC at
 O0/O2 for o32, n32 and n64 in both byte orders, including float/double
 mixed entry arguments and nine-argument FP overflow. The SDK fixture obtains
@@ -24239,6 +24302,69 @@ FP state (including f0 after a declared non-floating call).
 `NeverDMIPSFlowTests` covers delayed snapshots with detail disabled and poisoned
 operand counts. `NeverDLLVMCAllocaTests` executes floating/integer storage views
 against original LLVM, including negative zero and NaN payloads.
+
+`MIPSLegacyFP` in `NeverDMIPSIntegerTests` covers classic FR=1 pre-R6 arithmetic,
+conversions, sign operations, COP1X multiply-add and all 32 S/D predicates at
+every FCC selector. Literal machine encodings are independent of the lifter's
+operation catalog. Original MIPS64R2_GENERIC FP execution is compared
+with LowIR for result bits, FCSR and destination suppression, in both byte
+orders and GPR widths. Separate cases check conditional moves, a slot that
+changes the branch's condition, likely-slot annulment and ten memory forms at
+all eight low address offsets. The loader test rejects inconsistent FP ABI and
+CPR1 width evidence. `MIPSFR0` compares physical even/odd word pairs,
+alignment faults and untouched FPR words in both byte orders. Odd doubles,
+long formats, PS and unaligned indexed transfers are rejected under FR=0.
+Paired-single tests cover both lanes' exception flags, all even FCC pairs,
+conditional moves, packing, overlapping registers and defined/undefined ALNV
+offsets. The reference CPU supplies PS even for MIPS32 LowIR; this does not
+claim original-byte execution on a 32-bit PS CPU. Historical ISA profiles
+remain outside these checks.
+
+`MIPSPipeline.PairedFR0EntryAndResultFollowO32ABI` checks scalar/double
+source signatures in both backends. `FR0ScratchPairDoesNotConsumeAnIncomingArgument`
+checks scratch pairing through straight-line code and a diamond.
+`FPParameterMask.NarrowScalarViewRequiresUnobservedUpperBytes` checks that
+reading a scalar register in two words cannot narrow the incoming double.
+
+`MIPSPipeline.DoubleResultDiscardsOnlyOverwrittenUnknownFPRWords` checks that
+MTC1 followed by CVT.D.W may return a defined double after replacing the
+unpredictable high word. ADD.D must still refuse that unknown input. Both
+source paths, ISA revisions and byte orders participate in the check.
+
+`profile-roundtrip.py` accepts `mips32r2fp_*` and `mips64r2fp_*` selections for
+82 scalar pre-R6 source profiles. The `mips64ps_*` selections add 59 PS
+profiles, including all predicates at FCC0/FCC6, sign exceptions, ternary
+arithmetic, moves, packing and ALNV offsets. They use n64 integer carriers
+and do not establish a PS vector call ABI. Examples are `mips32r2fp_abs`, `mips64r2fp_madd`,
+`mips32r2fp_cc7`, `mips64r2fp_branch` and `mips64r2fp_memory_suxc1`.
+Use its existing GNU assembler/linker, NeverD, Clang and output arguments;
+repeat `--profile` to select more than one. The runner assembles explicit
+`-mfp64` input, recompiles HighC/LLVMC at O0/O2 in both byte orders, and checks
+return bits, FCSR and output memory against the original target program.
+The optional Unicorn reference must be built from the pinned fork. Generated
+products are deleted on success or failure after results are recorded.
+
+Add `--micro-fp` to execute the original physical pre-R6 microMIPS floating
+kernels and both regenerated C views with the pinned generic micro FPU CPUs.
+The same scalar/PS profile names select the kernels. For n64, supply
+`--micro64-cc /path/to/mips64-linux-gnuabi64-gcc`; Clang cannot generate
+microMIPS64. The GNU C path uses `-minterlink-compressed` and the emitted
+function mode attribute. Both paths use `-fno-strict-aliasing`, verify the
+micro ELF flag and function tag, and compare return bits, FCSR and all 64
+observed data bytes. These tests execute micro originals directly, without
+re-encoding them into classic instructions for the reference CPU. Use a GNU
+MIPS linker for these fixed-address fixtures.
+
+`MIPSMicroLegacyFP` compares literal physical arithmetic, conversions and FCC
+predicates against LowIR in both GPR widths and endians. It also tests memory
+alignment, invalid fields, doubleword transfers refused on MIPS32, revision
+reuse and FCC capture before either slot width. `MIPSMicroFR0` compares
+physical paired registers and memory in both endians. The exhaustive
+`MicroMIPSDelaySlots.AllFirstHalfwordsAndPhysicalWidths` includes BC1F/T and
+their reserved selector bits for MIPS32 and MIPS64. These instruction tests
+do not claim compressed floating-call ABI coverage.
+
+### MIPS decode/lift and firmware performance
 
 The opt-in `neverd-mips-request-bench` target repeatedly decompiles one loaded
 SDK session and checks that every request produces identical source.
@@ -24260,6 +24386,9 @@ Profiles are `mips`, `mipsel`, `mips64`, `mips64el`, `micromips`,
 profiles enable MIPS16e2 encoding. The DSP profiles select the named revision
 of the classic MIPS32 DSP ASE. MSA profiles select classic32 r5/o32 FP64 for the admitted integer,
 permutation, floating-point and control-transfer instructions.
+`mips32r2fp`, `mips32r2fpel`, `mips64r2fp` and `mips64r2fpel` select classic
+pre-R6 FR=1 profiles. Newly admitted instructions have no successful baseline
+lift; report their throughput separately from comparisons of unchanged work.
 Stages are `capstone`
 (direct physical decoding), `decode` (NeverD physical decoding) and `lift`
 (decoding plus LowIR, including delay slots). Both decode paths request the same
@@ -24338,3 +24467,26 @@ child readers, preserved inputs and the actual paired-measurement entry point
 with tiny fake commands. The roundtrip compiler-failure entry check uses the
 local pinned Unicorn bindings when available. These are artifact lifecycle
 checks, not performance or ISA qualification measurements.
+
+### Historical MIPS IV/V qualification
+
+`MIPSHistoricalLoader.*` checks both byte orders, n32/n64, missing and matching
+ABI records and conflicting historical levels. `MIPSHistorical.*` distinguishes
+I–V instruction introductions, release-only words, invalid direct-lift profiles,
+decoder/architecture reuse and all eight FCSR condition bits.
+`MIPSHistoricalFP.*` executes 84 IV and 109 V scalar/paired arithmetic forms
+against compatible original machine instructions, including rounding, FCSR and
+faulting write suppression.
+The older I–III timing profiles remain rejected rather than silently using r2.
+
+Run `unittests/lift/mips/profile-roundtrip.py` with `--historical-isa 4` or `5`
+and `--historical-abi n32` or `n64`, plus the ordinary assembler, linker,
+NeverD, Clang and output arguments. This exercises original historical ELF
+admission, both C views, both byte orders and O0/O2. It preserves the original
+PS instruction in V helpers while compiling scalar code with Clang's MIPS IV
+backend, since Clang 22 rejects MIPS V code generation. GNU as assembles that
+unedited compiler output as V. Original and rebuilt ELF headers and ABI records
+must retain the selected historical ISA, ABI and byte order. Receipts record
+source, code-generation and rebuilt ISA; no physical historical CPU is claimed.
+The same artifact owner records failed source/commands and removes generated
+ELFs, objects and superseded source after each attempt.

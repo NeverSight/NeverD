@@ -76,6 +76,116 @@ TEST(MIPSFloatingResult, IntegerExtensionRequiresAnEntryDeclarationAndFP64) {
   }
 }
 
+TEST_P(MIPSPipeline, ScalarFPBitReturnRetainsObservedUnknownUpperWords) {
+  for (unsigned Revision : {2u, 6u})
+    for (bool HighWord : {false, true}) {
+      SCOPED_TRACE(Revision);
+      SCOPED_TRACE(HighWord);
+      mips_test::ELFBytes File(GetParam());
+      File.abiFlags();
+      if (Revision == 6)
+        File.put(File.Is64 ? 48 : 36, File.Is64 ? 0xa0000000 : 0x90001000, 4);
+      File.Bytes[0xe3] = Revision;
+      File.Bytes[0xe5] = 2;
+      File.Bytes[0xe7] = File.Is64 ? 1 : 6;
+      // mtc1 a0,f0; mtc1 a1,f2; add.s f4,f0,f2; mfc1/mfhc1 v0,f4; jr; nop
+      const uint32_t Words[] = {0x44840000,
+                                0x44851000,
+                                0x46020100,
+                                HighWord ? 0x44622000u : 0x44022000u,
+                                Revision == 6 ? 0x03e00009u : 0x03e00008u,
+                                0};
+      for (unsigned I = 0; I < std::size(Words); ++I)
+        File.put(0x100 + I * 4, Words[I], 4);
+      ELFLoader Loader;
+      auto Image = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      auto Symbol = Symbol::makeFunc(Image->Entry, sizeof(Words));
+      Symbol.Name = "fp_bits";
+      Image->Symbols.push_back(std::move(Symbol));
+      for (bool LLVM : {false, true}) {
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.OnlyFunctionEntries = {Image->Entry};
+        Options.LiftMode = LLVM;
+        Options.EmitDumpOutput = false;
+        auto Result = Pipeline().run(*Image, Context, Options);
+        if (LLVM) {
+          EXPECT_EQ(Result.Success, !HighWord) << Result.Error;
+          if (Result.Success)
+            EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+        } else {
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          CEmitterOptions C;
+          C.TheArch = GetParam();
+          C.Format = BinaryFormat::ELF;
+          C.Image = &*Image;
+          std::string Text;
+          llvm::raw_string_ostream Output(Text);
+          if (HighWord)
+            EXPECT_THROW(HighCEmitter().emit(Result.HighFuncs, Output, C),
+                         std::runtime_error);
+          else
+            EXPECT_NO_THROW(HighCEmitter().emit(Result.HighFuncs, Output, C));
+        }
+      }
+    }
+}
+
+TEST_P(MIPSPipeline, DoubleResultDiscardsOnlyOverwrittenUnknownFPRWords) {
+  for (unsigned Revision : {2u, 6u})
+    for (bool HighWord : {false, true}) {
+      SCOPED_TRACE(Revision);
+      SCOPED_TRACE(HighWord);
+      mips_test::ELFBytes File(GetParam());
+      File.abiFlags();
+      if (Revision == 6)
+        File.put(File.Is64 ? 48 : 36, File.Is64 ? 0xa0000000 : 0x90001000, 4);
+      File.Bytes[0xe3] = Revision;
+      File.Bytes[0xe5] = 2;
+      File.Bytes[0xe7] = File.Is64 ? 1 : 6;
+      // MTC1 leaves f0's upper word unpredictable. CVT.D.W reads only the
+      // defined low word, then replaces all of f0; ADD.D observes both words.
+      const uint32_t Words[] = {0x44840000,
+                                HighWord ? 0x46200000u : 0x46800021u,
+                                Revision == 6 ? 0x03e00009u : 0x03e00008u, 0};
+      for (unsigned I = 0; I < std::size(Words); ++I)
+        File.put(0x100 + I * 4, Words[I], 4);
+      ELFLoader Loader;
+      auto Image = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      auto Symbol = Symbol::makeFunc(Image->Entry, sizeof(Words));
+      Symbol.Name = "fp_double";
+      Image->Symbols.push_back(std::move(Symbol));
+      for (bool LLVM : {false, true}) {
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.OnlyFunctionEntries = {Image->Entry};
+        Options.LiftMode = LLVM;
+        Options.EmitDumpOutput = false;
+        auto Result = Pipeline().run(*Image, Context, Options);
+        if (LLVM) {
+          EXPECT_EQ(Result.Success, !HighWord) << Result.Error;
+          if (Result.Success)
+            EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+        } else {
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          CEmitterOptions C;
+          C.TheArch = GetParam();
+          C.Format = BinaryFormat::ELF;
+          C.Image = &*Image;
+          std::string Text;
+          llvm::raw_string_ostream Output(Text);
+          if (HighWord)
+            EXPECT_THROW(HighCEmitter().emit(Result.HighFuncs, Output, C),
+                         std::runtime_error);
+          else
+            EXPECT_NO_THROW(HighCEmitter().emit(Result.HighFuncs, Output, C));
+        }
+      }
+    }
+}
+
 TEST_P(MIPSPipeline, MixedFloatingEntryKeepsSourceParameterOrder) {
   mips_test::ELFBytes File(GetParam());
   File.abiFlags();
@@ -166,6 +276,107 @@ TEST_P(MIPSPipeline, ScalarFloatingEntryAndResultFollowHardFloatABI) {
           EXPECT_TRUE(Bytes == 8 ? Argument.getType()->isDoubleTy()
                                  : Argument.getType()->isFloatTy());
       }
+    }
+  }
+}
+
+TEST_P(MIPSPipeline, PairedFR0EntryAndResultFollowO32ABI) {
+  if (isMIPS64(GetParam()))
+    return;
+  for (unsigned Bytes : {4u, 8u}) {
+    SCOPED_TRACE(Bytes);
+    mips_test::ELFBytes File(GetParam());
+    File.abiFlags();
+    File.Bytes[0xe3] = 2;
+    File.Bytes[0xe5] = 1;
+    File.Bytes[0xe7] = 1;
+    // ADD.S/D f0,f12,f13 (n64), or f14 (o32); JR ra; NOP.
+    File.put(
+        0x100,
+        (File.Is64 ? 0x460d6000 : 0x460e6000) | (Bytes == 8 ? 0x200000 : 0), 4);
+    File.put(0x104, 0x03e00008, 4);
+    File.put(0x108, 0, 4);
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    auto Symbol = Symbol::makeFunc(Image->Entry, 12);
+    Symbol.Name = "fp_entry";
+    Image->Symbols.push_back(std::move(Symbol));
+    for (bool LLVM : {false, true}) {
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.OnlyFunctionEntries = {Image->Entry};
+      Options.LiftMode = LLVM;
+      Options.EmitDumpOutput = false;
+      auto Result = Pipeline().run(*Image, Context, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      ASSERT_EQ(Result.MedFuncs.size(), 1u);
+      const auto &Function = Result.MedFuncs.front();
+      ASSERT_EQ(Function.Params.size(), 2u);
+      EXPECT_EQ(Function.Params[0].RegOff, mipsreg::w(12));
+      EXPECT_EQ(Function.Params[1].RegOff, mipsreg::w(File.Is64 ? 13 : 14));
+      ASSERT_NE(Function.ReturnType, nullptr);
+      EXPECT_EQ(Function.ReturnType->Kind, NdTypeKind::Float);
+      EXPECT_EQ(Function.ReturnType->Size, Bytes);
+      if (LLVM) {
+        ASSERT_NE(Result.LlvmModule, nullptr);
+        EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+        const auto *Body = Result.LlvmModule->getFunction("fp_entry");
+        ASSERT_NE(Body, nullptr);
+        EXPECT_TRUE(Bytes == 8 ? Body->getReturnType()->isDoubleTy()
+                               : Body->getReturnType()->isFloatTy());
+        ASSERT_EQ(Body->arg_size(), 2u);
+        for (const auto &Argument : Body->args())
+          EXPECT_TRUE(Bytes == 8 ? Argument.getType()->isDoubleTy()
+                                 : Argument.getType()->isFloatTy());
+      }
+    }
+  }
+}
+
+TEST_P(MIPSPipeline, FR0ScratchPairDoesNotConsumeAnIncomingArgument) {
+  if (isMIPS64(GetParam()))
+    return;
+  for (const auto &Words : std::vector<std::vector<uint32_t>>{
+           // Linear scratch pair, then use both physical words.
+           {0x46206386, 0x44861000, 0x468010a1, 0x46227000, 0x03e00008, 0},
+           // Both sides of a diamond define f14/f15 from the incoming f12/f13.
+           {0x44861000, 0x468010a1, 0x04c10004, 0, 0x46206386, 0x10000002, 0,
+            0x46206386, 0x46227000, 0x03e00008, 0}}) {
+    SCOPED_TRACE(Words.size());
+    mips_test::ELFBytes File(GetParam());
+    File.Bytes.resize(0x140);
+    File.put(52 + 16, File.Bytes.size(), 4);
+    File.put(52 + 20, File.Bytes.size(), 4);
+    File.abiFlags();
+    File.Bytes[0xe3] = 2;
+    File.Bytes[0xe5] = 1;
+    File.Bytes[0xe7] = 1;
+    for (unsigned I = 0; I < std::size(Words); ++I)
+      File.put(0x100 + I * 4, Words[I], 4);
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    Image->Symbols.push_back(Symbol::makeFunc(Image->Entry, Words.size() * 4));
+    for (bool LLVM : {false, true}) {
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.OnlyFunctionEntries = {Image->Entry};
+      Options.LiftMode = LLVM;
+      Options.EmitDumpOutput = false;
+      auto Result = Pipeline().run(*Image, Context, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      ASSERT_EQ(Result.MedFuncs.size(), 1u);
+      const auto &Function = Result.MedFuncs.front();
+      ASSERT_EQ(Function.Params.size(), 2u);
+      EXPECT_EQ(Function.Params[0].RegOff, mipsreg::w(12));
+      EXPECT_EQ(Function.Params[1].RegOff, mipsreg::r(6));
+      EXPECT_EQ(Function.FPParamScalarBytes.at(mipsreg::w(12)), 8u);
+      ASSERT_NE(Function.ReturnType, nullptr);
+      EXPECT_EQ(Function.ReturnType->Kind, NdTypeKind::Float);
+      EXPECT_EQ(Function.ReturnType->Size, 8u);
+      if (LLVM)
+        EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
     }
   }
 }

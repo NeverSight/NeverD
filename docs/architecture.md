@@ -15516,6 +15516,24 @@ Preserved rows keep their original boundaries; splitting one would change its
 signing PC. Original callback preparation rejects these signed frames, including
 interior entries, until it can preserve the incoming signed LR state. This does
 not relax the arm64e native-rebuild restriction.
+Verified whole native bodies can publish canonical PAuth_LR FP recipes through
+the LLVM fork's MC compact producer. The signing CFI is placed immediately
+after the original PACIBSPPC; the final image must preserve the compact word,
+the signing offset and each instruction's function-relative position. Ordinary
+compact mode cannot authorize PC-signed return words. LLVM keeps nonzero
+signing offsets in DWARF for regular object emission, since Apple linking can
+discard that raw compact payload; the final-image writer and explicitly marked
+native object installer consume it directly. Classic frameless saved-pair
+bodies use their complete compact stack size and normalized slots, including
+PAC prefixes and multi-stage stack allocation.
+
+Instruction-derived unwind recovery can cover several functions under one
+classic compact record. Known metadata entries and nonguessed typed symbols
+seed independent incoming states, and control-flow joins remain within each
+entry's domain. A transfer to another proved entry is a call or tail transfer;
+fallthrough and branches into another function's interior are rejected. Rows
+remain relative to the original aggregate metadata range. DWARF/language
+records and PAuth_LR signing-PC records retain their single-owner restriction.
 Raw and semantic compact-page readers share offset, ordering and page-bound
 validation for every architecture. A malformed page contributes no recipes;
 its omission cannot extend a preceding valid row across the missing page.
@@ -16493,6 +16511,22 @@ byte ownership and execution order. MedIR expands predicated effects before SSA.
 The lifter validates encodings before emitting effects and reuses the explicit
 MIPS64 word-input contract; source backends do not reinterpret instruction bits.
 
+`MIPSImageMetadata::HistoricalISA` separates MIPS I–V architecture levels
+from modern releases. `MIPSHistoricalISA.def` owns physical instruction
+availability; decoding and direct lifting use the same catalog. Only classic
+IV/V n32/n64 profiles are admitted until earlier scheduling semantics are
+qualified. The scalar computational owner is shared with pre-R6; IV reads
+conditions through FCSR rather than the later FCCR alias. Native FP helpers
+and bound scalar evaluation also check historical operation/control availability.
+`MIPSPairedSingleDecode.def` supplies scalar operand templates for PS forms
+missing from the historical decoder tables; these never replace the physical
+word consumed by the lifter.
+The lifter classifies its immutable byte order, register width and combined ISA
+profile at construction. Classic and compressed instructions reuse those facts;
+modern instructions do not inline the historical availability catalog.
+Decoder initialization also records whether physical preprocessing is needed,
+so ordinary MIPS and unrelated architectures skip historical word checks.
+
 `MIPSLiftMicroASE` maps qualified microMIPS DSP, DSPR2 and MSA words to their
 classic semantic form. The physical decoder retains original bytes, mode and
 branch address, including when Capstone requires the canonical MSA encoding.
@@ -16501,6 +16535,30 @@ and compact transfers. Classic R6 records the follower of a conditional compact
 branch for its forbidden-slot check. Compact microMIPS R6 transfers use their
 physical length and permit consecutive branches. Tagged n64 control targets
 preserve all 64 address bits.
+
+The scalar COP1 owner shares `MIPSScalarFPOperations.h` across pre-R6 and R6
+lifting, concrete evaluation and native source generation. Stable operation
+descriptors come from `MIPSR6Float.def` and `MIPSLegacyFloat.def`; revision
+admission stays in that owner. Legacy comparisons have a constant FCC selector
+and an ordered FCSR effect, with no FPR result. Paired-single arithmetic combines
+both lane exceptions; moves and packing retain raw bits. `MIPSImageMetadata` owns FR=0/FR=1
+ABI evidence, and the ELF loader rejects a conflicting CPR1 width. A bound
+`MIPSScalarFPExecutor` must match the image revision; adapters must not silently
+substitute R6 NaN or exception behavior for a pre-R6 operation. Ordinary and
+indexed legacy FP memory use the existing alignment intrinsic. Delayed BC1
+uses the same snapshot and annulment path as integer branches.
+`MicroMIPSLegacyFloat` normalizes physical pre-R6 fields into this COP1 owner;
+it does not reimplement floating effects. Shared S/D field catalogs are reused
+with the R6 decoder and source assembler, while legacy-only fields have their
+own `.def`. Original halfword order, branch displacement scale and slot widths
+remain properties of the physical occurrence. Source helpers retain explicit
+classic mode; inline assembly in micro functions uses physical micro encodings.
+`MedMIPSSourceVectors` projects FR=0 physical words into even-register ABI
+carriers before SSA. A four-word entry-demand analysis distinguishes actual
+f12/f13 and f14/f15 inputs from scratch pairs whose synthetic preservation
+reads must not create parameters. Register pairing stays separate from the
+FR=1/MSA register alias table. The common parameter byte-use proof prevents
+narrowing a double when its upper word is observed.
 
 `MedMIPSMergeValues` owns the source-only proof for adjacent complementary
 merge loads in a single ordinary leaf block. It runs after SSA/projection/DCE

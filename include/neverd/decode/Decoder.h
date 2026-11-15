@@ -361,6 +361,8 @@ private:
   bool decodeR6HardwareRegister(const uint8_t *Bytes, uint32_t Word, va_t Addr);
   bool decodeMicroMIPSRelease6(const uint8_t *Bytes, size_t Len, va_t Addr);
   bool decodeMIPSReservation(const uint8_t *Bytes, uint32_t Word, va_t Addr);
+  bool decodeMIPSPairedSingle(const uint8_t *Bytes, uint32_t Physical,
+                              va_t Addr);
   bool decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr);
   bool decodeArchitectureFallback(const uint8_t *Bytes, size_t Len, va_t Addr);
 
@@ -378,8 +380,8 @@ private:
 
   /// Select an authenticated initial mode for a mixed ARM/Thumb image.
   bool initARMImageMode(const BinaryImage &Img);
-  bool initWithMIPSRevision(Arch Target, InstructionMode Mode,
-                            uint8_t Revision);
+  bool initWithMIPSRevision(Arch Target, InstructionMode Mode, uint8_t Revision,
+                            uint8_t Historical = 0);
 
   /// Configure the x86 platform ABI and x87 ownership, when active.
   void configureX86For(const BinaryImage &Img);
@@ -415,6 +417,8 @@ private:
   Arch TargetArch = Arch::Unknown;
   InstructionMode CurrentMode = InstructionMode::Default;
   uint8_t MIPSISARevision = 2;
+  uint8_t MIPSHistoricalISA = 0;
+  bool MIPSNeedsDecodeGuard = false;
   bool Strict = true;
   bool Detail = true;
   bool Text = true;

@@ -14,10 +14,13 @@
 #define NEVERD_BACKEND_CODEGEN_MACHO_MACHOREGISTERRESULTS_H
 
 #include "neverd/Common.h"
+#include "neverd/loader/LanguageEHDwarf.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/Error.h"
+
+#include <vector>
 
 namespace llvm {
 class Module;
@@ -25,14 +28,31 @@ class Module;
 
 namespace neverd {
 struct BinaryImage;
+struct CompactUnwindEntry;
+struct ExceptionFunction;
 struct MedFunc;
+
+/// Complete-prologue DWARF for a frameless compact recipe with saved pairs.
+/// Darwin's system compact walker cannot restore that layout correctly.
+/// Both the native producer and final-object verifier use this contract.
+std::vector<CFIInstruction>
+machOFramelessSpillRows(const CompactUnwindEntry &Compact);
+
+/// A complete C++/Objective-C frame whose language table can be preserved or
+/// rebuilt with a function-relative landing-pad base. Publication separately
+/// proves that every native instruction keeps its original offset.
+bool canPublishMachOLanguageFrame(const BinaryImage &Image,
+                                  const ExceptionFunction &Frame);
 
 /// An indexed access using the physical SP cannot use a reconstructed stack.
 bool needsMachONativeStackIndex(const MedFunc &Function);
 
 /// Lower audited patch-mode entries that use Darwin variadic cursors, indexed
-/// SP accesses, ordinary indexed/writeback memory or X8/X9 results consumed by
-/// an image-local direct caller, including across local control-flow edges.
+/// SP accesses, ordinary indexed/writeback memory, scalar FP/NEON data
+/// operations, compact FP/frameless saved frames (including PAuth_LR FP
+/// recipes) or X8/X9 results consumed by an
+/// image-local direct caller,
+/// including across local control-flow edges.
 /// Keep physical operands, control flow and unwind rows in one native body.
 /// Return an error if any declaration withheld for a physical SP access
 /// cannot be defined; the caller must discard the incomplete module.

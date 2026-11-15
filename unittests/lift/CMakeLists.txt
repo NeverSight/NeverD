@@ -35,11 +35,13 @@ add_neverd_unittest(NeverDMIPSIntegerTests
   mips/MIPS16MemoryTests.cpp
   mips/MIPS16FrameTests.cpp
   mips/MIPS16E2Tests.cpp
+  mips/MIPSHistoricalTests.cpp
   mips/MIPSDSPTests.cpp
   mips/MIPSMSATests.cpp
   mips/MicroMIPSIntegerTests.cpp
   mips/MIPSBitfieldTests.cpp
   mips/MIPSRelease6Tests.cpp
+  mips/MIPSLegacyFPTests.cpp
   mips/MicroMIPSSequenceTests.cpp
   mips/MicroMIPSRelease6Tests.cpp
   mips/MIPSIntegerTests.cpp
@@ -54,7 +56,7 @@ if(TARGET unicorn)
   else()
     target_sources(NeverDMIPSIntegerTests PRIVATE
       ${PROJECT_SOURCE_DIR}/lib/emulation/backends/unicorn/P5600MSA.cpp
-      ${PROJECT_SOURCE_DIR}/lib/emulation/backends/unicorn/R6ScalarFP.cpp)
+      ${PROJECT_SOURCE_DIR}/lib/emulation/backends/unicorn/ScalarFP.cpp)
   endif()
   target_link_libraries(NeverDMIPSIntegerTests PRIVATE unicorn)
   target_compile_definitions(NeverDMIPSIntegerTests PRIVATE
@@ -2460,6 +2462,7 @@ add_neverd_unittest(NeverDArm64eUnwindRecoveryTests
 add_neverd_unittest(NeverDArm64eLiftedImageTests
   aarch64/AArch64AsyncUnwindTests.cpp
   aarch64/AArch64LiftedLeafTests.cpp
+  aarch64/AArch64SavedRegisterTests.cpp
   LINK_COMPONENTS CodeGen Pipeline AArch64UnwindRecovery
 )
 

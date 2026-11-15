@@ -332,6 +332,180 @@ extern "C" __attribute__((noinline)) void signal_scope(int *trace,
     tick();
 }
 )cpp")
+// An independent LSDA protects exactly one load in a loop with no calls.
+// The handler updates the trace before resuming the same language exception.
+ASYNC_FRAME_TEXT(kRejectedLanguageImage, "rejected-language.dylib")
+ASYNC_FRAME_TEXT(kSignalNonCallDriver, "-DNEVERD_NONCALL_SCOPE")
+ASYNC_FRAME_TEXT(kSignalNonCallSource, "noncall.S")
+ASYNC_FRAME_TEXT(kSignalObjCPersonality, "-DNEVERD_OBJC_PERSONALITY")
+ASYNC_FRAME_TEXT(kSignalCompactFrame, "-DNEVERD_COMPACT_FRAME")
+ASYNC_FRAME_TEXT(kSignalFramelessFrame, "-DNEVERD_FRAMELESS_FRAME")
+ASYNC_FRAME_TEXT(kSignalEntryPad, "-DNEVERD_ENTRY_LANDING_PAD")
+ASYNC_FRAME_TEXT(kSignalGeneratedExplicitLSDA,
+                 "Lneverd_lsda_${:uid}:\n.byte 27\n")
+ASYNC_FRAME_VALUE(unsigned, kSignalTypeCount, 2)
+ASYNC_FRAME_VALUE(unsigned, kSignalActionCount, 3)
+ASYNC_FRAME_VALUE(uint64_t, kSignalSpecType, 2)
+ASYNC_FRAME_TEXT(kSignalTypedLSDA, "-DNEVERD_TYPED_LSDA")
+ASYNC_FRAME_TEXT(kSignalExplicitLPStart, "-DNEVERD_EXPLICIT_LPSTART")
+ASYNC_FRAME_TEXT(kSignalGeneratedLSDA, "Lneverd_lsda_${:uid}:\n.byte 255\n")
+ASYNC_FRAME_TEXT(kSignalInvalidLSDA, "Lneverd_lsda_${:uid}:\n.byte 0\n")
+ASYNC_FRAME_TEXT(kSignalNonCallExceptions, "native_noncall_language_cleanups")
+ASYNC_FRAME_TEXT(kSignalNonCallObjCExceptions, "native_noncall_objc_cleanups")
+ASYNC_FRAME_TEXT(kSignalNonCallBody, R"asm(
+ .text
+ .globl _signal_scope
+ .p2align 2
+_signal_scope:
+Lfunc_begin:
+ .cfi_startproc
+ .cfi_b_key_frame
+#ifdef NEVERD_OBJC_PERSONALITY
+ .cfi_personality 155, ___objc_personality_v0
+#else
+ .cfi_personality 155, ___gxx_personality_v0
+#endif
+ .cfi_lsda 16, Lexception
+#ifdef NEVERD_COMPACT_FRAME
+ nop
+#endif
+ pacibsp
+#ifdef NEVERD_FRAMELESS_FRAME
+ stp x19, x30, [sp, #-32]!
+ .cfi_def_cfa_offset 32
+ .cfi_offset x19, -32
+ .cfi_offset x30, -24
+#elif defined(NEVERD_COMPACT_FRAME)
+ stp x20, x19, [sp, #-32]!
+ stp x29, x30, [sp, #16]
+ add x29, sp, #16
+ .cfi_def_cfa x29, 16
+ .cfi_offset x30, -8
+ .cfi_offset x29, -16
+ .cfi_offset x19, -24
+ .cfi_offset x20, -32
+#else
+ stp x29, x30, [sp, #-32]!
+ .cfi_def_cfa_offset 32
+ .cfi_offset x29, -32
+ .cfi_offset x30, -24
+ stp x20, x19, [sp, #16]
+ .cfi_offset x20, -16
+ .cfi_offset x19, -8
+ mov x29, sp
+ .cfi_def_cfa_register x29
+#endif
+ mov x19, x0
+#ifndef NEVERD_COMPACT_FRAME
+ .cfi_escape 0x2e, 0
+#endif
+Lprotected:
+ ldr w9, [x19]
+Lprotected_end:
+ b Lprotected
+Lcleanup:
+ ldr w9, [x19]
+ mov w10, #10
+ madd w9, w9, w10, wzr
+#ifdef NEVERD_RESUME_PUBLISHED
+ add w9, w9, #3
+#else
+ add w9, w9, #1
+#endif
+ str w9, [x19]
+Lresume:
+#ifdef NEVERD_ENTRY_LANDING_PAD
+ b Lprotected
+#else
+ bl __Unwind_Resume
+#endif
+Lresume_end:
+ brk #1
+Lfunction_end:
+ .cfi_endproc
+ .globl _signal_tick
+ .p2align 2
+_signal_tick:
+ .cfi_startproc
+ ret
+ .cfi_endproc
+ .section __TEXT,__gcc_except_tab
+ .p2align 2
+Lexception:
+#ifdef NEVERD_EXPLICIT_LPSTART
+ // LPStart deliberately differs from the function start. Call-site ranges
+ // remain function-relative; only landing-pad offsets use this base.
+ .byte 27
+#ifdef NEVERD_ENTRY_LANDING_PAD
+ .long Lfunc_begin-4-.
+#else
+ .long Lfunc_begin+4-.
+#endif
+#else
+ .byte 255
+#endif
+#ifdef NEVERD_TYPED_LSDA
+ .byte 155
+ .uleb128 Ltypes_end-Ltypes_offset
+Ltypes_offset:
+#else
+ .byte 255
+#endif
+ .byte 1
+ .uleb128 Ltable_end-Ltable
+Ltable:
+ .uleb128 Lprotected-Lfunc_begin
+ .uleb128 Lprotected_end-Lprotected
+#ifdef NEVERD_ENTRY_LANDING_PAD
+ .uleb128 4
+#elif defined(NEVERD_EXPLICIT_LPSTART)
+ .uleb128 Lcleanup-Lfunc_begin-4
+#else
+ .uleb128 Lcleanup-Lfunc_begin
+#endif
+#ifdef NEVERD_TYPED_LSDA
+ .byte 1
+#else
+ .byte 0
+#endif
+ // Resuming the exception has no local cleanup. Without this entry the
+ // personality treats the second-phase return edge as a missing call site.
+ .uleb128 Lresume-Lfunc_begin
+ .uleb128 Lresume_end-Lresume
+ .byte 0
+ .byte 0
+#ifdef NEVERD_TYPED_LSDA
+ // The unreachable trap checks an exception-specification-only type index.
+ .uleb128 Lresume_end-Lfunc_begin
+ .uleb128 Lfunction_end-Lresume_end
+ .uleb128 Lcleanup-Lfunc_begin-4
+ .byte 5
+#endif
+Ltable_end:
+#ifdef NEVERD_TYPED_LSDA
+ // A nonmatching catch(int), followed by the active cleanup.
+ .sleb128 1
+ .sleb128 1
+ .sleb128 0
+ .sleb128 0
+ .sleb128 -1
+ .sleb128 0
+ .p2align 2
+ .long Lchar_type-.
+ .long Lint_type-.
+Ltypes_end:
+ .uleb128 2
+ .uleb128 0
+ .section __DATA,__data
+ .p2align 3
+Lint_type:
+ .quad __ZTIi
+Lchar_type:
+ .quad __ZTIPKc
+#endif
+ .subsections_via_symbols
+)asm")
+
 ASYNC_FRAME_TEXT(kSignalScopeDriver, R"cpp(
 #include "neverd/runtime/DarwinArm64eSystemUnwind.h"
 
@@ -343,6 +517,7 @@ ASYNC_FRAME_TEXT(kSignalScopeDriver, R"cpp(
 #include <cstdlib>
 #include <dlfcn.h>
 #include <exception>
+#include <initializer_list>
 #include <mach/mach.h>
 #include <pthread.h>
 #include <sched.h>
@@ -457,6 +632,15 @@ int main(int argc, char **argv) {
   auto tick = reinterpret_cast<Tick>(dlsym(image, "signal_tick"));
   if (!tick || !scope)
     return 3;
+#ifdef NEVERD_NONCALL_SCOPE
+  // The assembly entry is a bare RET. It must preserve the incoming result
+  // register even though no source-language return prototype was available.
+  using Identity = uint64_t (*)(uint64_t);
+  auto identity = reinterpret_cast<Identity>(dlsym(image, "signal_tick"));
+  for (uint64_t seed : {UINT64_C(73), UINT64_C(0xfedcba9876543210)})
+    if (identity(seed) != seed)
+      return 19;
+#endif
   auto file = fopen(argv[2], "rb");
   if (!file || fread(&site, sizeof(site), 1, file) != 1 ||
       fread(&row, sizeof(row), 1, file) != 1 ||

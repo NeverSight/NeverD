@@ -11,6 +11,7 @@
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/ir/low/FuncDetector.h"
 #include "neverd/loader/ExceptionInfo.h"
+#include "neverd/loader/ExecutableCodeOwnerIndex.h"
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -1100,6 +1101,67 @@ TEST(FunctionDiscoveryAlignment, RawDataPointerCandidatesRemainGuesses) {
           scanDataFuncPointers(Img);
           EXPECT_FALSE(Img.Symbols.front().IsBoundaryGuess);
         }
+}
+
+TEST(FunctionDiscoveryAlignment, PointerDiscoveryPreservesIndexedOwnership) {
+  BinaryImage Img;
+  Img.Format = BinaryFormat::ELF;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  std::vector<uint8_t> Code(0x60, 0xcc);
+  for (size_t Offset : {0u, 0x20u, 0x40u}) {
+    const std::array<uint8_t, 6> Body = {0x55, 0x48, 0x89, 0xe5, 0x5d, 0xc3};
+    std::copy(Body.begin(), Body.end(), Code.begin() + Offset);
+  }
+  Img.Segments.push_back(executableSegment(0x1000, Code));
+  // A coarse executable mapping does not make its data section code. Only
+  // the first two otherwise identical prologues lie in code sections.
+  Section DataInCode;
+  DataInCode.VA = 0x1040;
+  DataInCode.Size = 0x20;
+  DataInCode.Flags = SegmentFlags::Readable;
+  Img.Sections.push_back(DataInCode);
+  for (va_t Address : {0x1000u, 0x1020u}) {
+    Section OwnedCode;
+    OwnedCode.VA = Address;
+    OwnedCode.Size = 6;
+    OwnedCode.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Img.Sections.push_back(OwnedCode);
+  }
+  for (va_t I = 0; I != 1024; ++I)
+    Img.Symbols.push_back(Symbol::makeFunc(0x4000 + I * 16));
+
+  Segment Data;
+  Data.VA = 0x2000;
+  Data.Flags = SegmentFlags::Readable;
+  const std::array<va_t, 6> Pointers = {0x1000, 0x1040, 0x1000,
+                                        0x1020, 0x1040, 0x1020};
+  Data.Size = Pointers.size() * sizeof(uint64_t);
+  Data.Data.resize(Data.Size);
+  for (size_t I = 0; I != Pointers.size(); ++I)
+    writeLE<uint64_t>(Data.Data.data() + I * sizeof(uint64_t), Pointers[I]);
+  Img.Segments.push_back(std::move(Data));
+  // The later relocated occurrence confirms a guess appended earlier in
+  // this same scan. It must not add another symbol or change code ownership.
+  Img.CodePtrRelocSlots.insert(0x2010);
+  const ExecutableCodeOwnerIndex Owners(Img);
+
+  scanDataFuncPointers(Img);
+
+  ASSERT_EQ(Img.Symbols.size(), 1026u);
+  EXPECT_EQ(Img.Symbols[1024].Addr, 0x1000u);
+  EXPECT_EQ(Img.Symbols[1024].Size, 0u);
+  EXPECT_FALSE(Img.Symbols[1024].IsBoundaryGuess);
+  EXPECT_EQ(Img.Symbols[1025].Addr, 0x1020u);
+  EXPECT_EQ(Img.Symbols[1025].Size, 0u);
+  EXPECT_TRUE(Img.Symbols[1025].IsBoundaryGuess);
+  for (va_t Addr = 0x1000; Addr != 0x1060; ++Addr)
+    EXPECT_EQ(Img.hasExecutableCodeOwnerAt(Addr, &Owners),
+              Img.hasExecutableCodeOwnerAt(Addr))
+        << Addr;
+  EXPECT_FALSE(Img.hasExecutableCodeOwnerAt(0x1040));
+  scanDataFuncPointers(Img);
+  EXPECT_EQ(Img.Symbols.size(), 1026u);
 }
 
 TEST(FunctionDiscoveryAlignment, DebugCodeReferencesAreNotFunctionEntries) {

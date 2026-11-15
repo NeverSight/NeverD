@@ -11,6 +11,7 @@
 
 #include "neverd/backend/codegen/MachO/MachORegisterResults.h"
 
+#include "neverd/analysis/AArch64UnwindRecovery.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
@@ -18,9 +19,11 @@
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/DirectBranch.h"
+#include "neverd/loader/Limits.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/DwarfEH.h"
 #include "neverd/support/ISAEncoding.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -55,6 +58,10 @@ struct RegisterBody {
   bool HasStackIndex = false;
   bool HasMemoryWriteback = false;
   bool HasMemoryIndex = false;
+  bool HasSIMDData = false;
+  bool HasCompactFrame = false;
+  bool HasLanguageFrame = false;
+  bool HasBareReturn = false;
   bool LoadsStackArgument = false;
   bool MaterializesCursor = false;
 };
@@ -64,15 +71,17 @@ llvm::Error invalidBody() {
 }
 
 llvm::Expected<Entries>
-definedEntries(llvm::Module &M, const llvm::DenseSet<va_t> &Required = {}) {
+definedEntries(llvm::Module &M, const BinaryImage &Image,
+               const llvm::DenseSet<va_t> &Required = {}) {
   Entries Functions;
   for (llvm::Function &F : M) {
-    if (F.isDeclaration() && Required.empty())
+    if (F.isIntrinsic())
       continue;
     auto Entry = rewrite_source::getOriginalVA(F);
     if (!Entry)
       return Entry.takeError();
-    if (F.isDeclaration() && (!*Entry || !Required.contains(**Entry)))
+    if (F.isDeclaration() && (!*Entry || (!Required.contains(**Entry) &&
+                                          !Image.findImportStubAt(**Entry))))
       continue;
     if (!*Entry || !Functions.try_emplace(**Entry, &F).second)
       return invalidBody();
@@ -98,11 +107,19 @@ bool independent(const DecodedInsn &I) {
         llvm::ArrayRef(D.operands, D.op_count),
         [](const cs_aarch64_op &Op) { return Op.type == AARCH64_OP_MEM; });
   case AARCH64_INS_HINT:
-    return I.Raw->alias_id == AARCH64_INS_ALIAS_PACIBSP ||
+    return I.Raw->alias_id == AARCH64_INS_ALIAS_NOP ||
+           I.Raw->alias_id == AARCH64_INS_ALIAS_PACIBSP ||
            I.Raw->alias_id == AARCH64_INS_ALIAS_AUTIBSP;
   case AARCH64_INS_RETAB:
   case AARCH64_INS_RET:
+  case AARCH64_INS_PACIBSPPC:
     return D.op_count == 0;
+  case AARCH64_INS_BRK:
+  case AARCH64_INS_AUTIBSPPC:
+  case AARCH64_INS_RETABSPPC:
+    // These displacements stay relative to the same instruction in the
+    // copied body. Final publication checks every emitted instruction word.
+    return D.op_count == 1 && D.operands[0].type == AARCH64_OP_IMM;
   default:
     return false;
   }
@@ -279,6 +296,16 @@ void observeScratchResults(llvm::MutableArrayRef<ScratchFlow> Flow,
       Body.ObservedCallees.push_back(State.Callee);
 }
 
+bool savedFrameRegister(unsigned Register) {
+  const unsigned FirstVector =
+      aarch64_unwind::kDwarfV0 + NDArm64eFirstPreservedD;
+  return (Register >= NDArm64eFirstPreservedGPR &&
+          Register - NDArm64eFirstPreservedGPR < NDArm64ePreservedGPRCount) ||
+         Register == kDwarfFP || Register == kDwarfLR ||
+         (Register >= FirstVector &&
+          Register - FirstVector < NDArm64ePreservedDCount);
+}
+
 bool emitFrameRow(const CFIInstruction &Row, llvm::raw_ostream &OS) {
   switch (Row.Kind) {
   case CFIOpKind::Nop:
@@ -301,14 +328,14 @@ bool emitFrameRow(const CFIInstruction &Row, llvm::raw_ostream &OS) {
     OS << kCFAOffset << Row.Offset << '\n';
     return true;
   case CFIOpKind::Offset:
-    if ((Row.Register != kDwarfFP && Row.Register != kDwarfLR) ||
+    if (!savedFrameRegister(Row.Register) ||
         Row.Offset % int64_t(sizeof(uint64_t)))
       return false;
     OS << kSpill << Row.Register << kSeparator << Row.Offset << '\n';
     return true;
   case CFIOpKind::Restore:
   case CFIOpKind::SameValue:
-    if (Row.Register != kDwarfFP && Row.Register != kDwarfLR)
+    if (!savedFrameRegister(Row.Register))
       return false;
     OS << (Row.Kind == CFIOpKind::Restore ? kRestore : kSameValue)
        << Row.Register << '\n';
@@ -336,6 +363,110 @@ bool emitFrameRow(const CFIInstruction &Row, llvm::raw_ostream &OS) {
   }
 }
 
+// MC recognizes the compact frame from a canonical CFA and descending slots.
+// Emit its recipe without inventing instruction-specific DWARF rows. The
+// linked-image verifier requires the original compact word and machine body.
+void emitCompactFrame(const CompactUnwindEntry &Compact,
+                      llvm::raw_ostream &OS) {
+  constexpr int SlotSize = sizeof(uint64_t);
+  constexpr int FrameSize = NDArm64eFrameRecordWords * SlotSize;
+  int Offset = 0;
+  if (Compact.Kind == CompactUnwindKind::FramePointer) {
+    OS << kCFA << kDwarfFP << kSeparator << FrameSize << '\n';
+    // The compact encoder requires the return address before the frame pointer.
+    OS << kSpill << kDwarfLR << kSeparator << -SlotSize << '\n';
+    OS << kSpill << kDwarfFP << kSeparator << -FrameSize << '\n';
+    Offset = -FrameSize;
+  } else if (Compact.StackSize) {
+    OS << kCFAOffset << Compact.StackSize << '\n';
+  }
+  for (const auto &Slot : Compact.SavedRegisterSlots) {
+    const unsigned Register =
+        Slot.Register +
+        (Slot.RegisterClass == UnwindRegisterClass::FloatingPoint
+             ? aarch64_unwind::kDwarfV0
+             : 0);
+    Offset -= SlotSize;
+    OS << kSpill << Register << kSeparator << Offset << '\n';
+  }
+}
+
+// The function body keeps every instruction offset. Canonicalize LPStart to
+// the new function start and rebuild only address-bearing fields. Raw action
+// links and specification-list offsets retain their selectors and shared tails.
+bool emitLanguageTable(const BinaryImage &Image, const ExceptionFunction &Frame,
+                       llvm::Module &Module, RegisterBody &Body,
+                       llvm::raw_ostream &OS) {
+  const auto &Table = *Frame.Itanium;
+  // A zero landing-pad offset means no handler. An entry-point handler needs
+  // a base before the function so that its encoded offset remains nonzero.
+  const unsigned BaseBias =
+      llvm::any_of(Table.CallSites,
+                   [&](const auto &Site) {
+                     return Site.LandingPadVA == Frame.CodeRange.Begin;
+                   })
+          ? aarch64::kInsnSize
+          : 0;
+  const auto Bytes = [&](llvm::ArrayRef<uint8_t> Data) {
+    for (uint8_t Byte : Data)
+      OS << kByte << unsigned(Byte) << '\n';
+  };
+  const auto SourceBytes = [&](ExceptionAddressRange Range) {
+    if (Range.size())
+      Bytes({Image.readVA(Range.Begin, Range.size()), size_t(Range.size())});
+  };
+  llvm::SmallVector<char> Sites;
+  llvm::raw_svector_ostream Encoded(Sites);
+  for (const auto &Site : Table.CallSites) {
+    llvm::encodeULEB128(Site.GuardedRange.Begin - Frame.CodeRange.Begin,
+                        Encoded);
+    llvm::encodeULEB128(Site.GuardedRange.size(), Encoded);
+    llvm::encodeULEB128(Site.LandingPadVA ? Site.LandingPadVA -
+                                                Frame.CodeRange.Begin + BaseBias
+                                          : 0,
+                        Encoded);
+    llvm::encodeULEB128(Site.NativeActionRecord, Encoded);
+  }
+  OS << kPushSection << section_names::macho::TextSeg << kSeparator
+     << section_names::macho::GccExceptTab << '\n';
+  OS << kGeneratedLSDA << kEndLabel << kByte
+     << unsigned(BaseBias ? dweh::PCRel | dweh::Sdata4 : dweh::Omit) << '\n';
+  if (BaseBias)
+    OS << kLong << kLocal << 0 << '-' << BaseBias << kRelativeField;
+  const bool HasTypes = Table.TypeTableEncoding != dweh::Omit;
+  const bool Indirect = Table.TypeTableEncoding & dweh::Indirect;
+  OS << kByte
+     << unsigned(HasTypes ? dweh::PCRel | dweh::Sdata4 |
+                                (Indirect ? dweh::Indirect : 0)
+                          : dweh::Omit)
+     << '\n';
+  if (HasTypes)
+    OS << kULEB << kTypeTableEnd << '-' << kTypeTableBase << '\n'
+       << kTypeTableBase << kEndLabel;
+  OS << kByte << unsigned(dweh::Uleb128) << '\n'
+     << kULEB << Sites.size() << '\n';
+  Bytes({reinterpret_cast<const uint8_t *>(Sites.data()), Sites.size()});
+  SourceBytes(Table.ActionTableRange);
+  for (const auto &Type : llvm::reverse(Table.TypeTable)) {
+    OS << kLong;
+    if (Type.IsCatchAll) {
+      OS << 0 << '\n';
+      continue;
+    }
+    auto *Target = Module.getNamedGlobal(
+        makeNdDataSymbol(Indirect ? Type.TypeInfoSlotVA : Type.TypeInfoVA));
+    if (!Target)
+      return false;
+    emitOperand(Body, OS, Target, kSymbolConstraint);
+    OS << kRelativeField;
+  }
+  if (HasTypes)
+    OS << kTypeTableEnd << kEndLabel;
+  SourceBytes(Table.ExceptionSpecRange);
+  OS << kPopSection;
+  return true;
+}
+
 std::optional<RegisterBody> registerBody(Decoder &Decode,
                                          const BinaryImage &Image,
                                          const Entries &Functions,
@@ -356,33 +487,86 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
                      Image.Raw.size()))
     return std::nullopt;
   const auto *Frame = Image.ExceptionMetadata.findFunction(Start);
-  if (!Frame || !Frame->Compact || !Frame->describesUnwindOnly() ||
-      Frame->CodeRange.End < End)
+  if (!Frame || !Frame->Compact ||
+      (!Frame->describesUnwindOnly() &&
+       !canPublishMachOLanguageFrame(Image, *Frame)) ||
+      Frame->CodeRange.End < End ||
+      (Frame->Itanium &&
+       (Frame->CodeRange.Begin != Start || Frame->CodeRange.End != End)))
     return std::nullopt;
   const auto &Compact = *Frame->Compact;
-  const bool Indexed = (Compact.NativeEncoding & macho_unwind::kModeMask) ==
+  const auto FrameEncoding =
+      Compact.NativeEncoding &
+      ~(macho_unwind::kHasLSDA | macho_unwind::kPersonalityMask);
+  const bool Indexed = (FrameEncoding & macho_unwind::kModeMask) ==
                        macho_unwind::kARM64ModeDwarf;
+  const bool PAuthLR =
+      (FrameEncoding & ~(macho_unwind::kARM64RegisterPairsMask |
+                         macho_unwind::kARM64PAuthLROffsetMask)) ==
+      macho_unwind::kARM64ModeFramePAuthLR;
+  const bool Framed =
+      PAuthLR || (FrameEncoding & ~macho_unwind::kARM64RegisterPairsMask) ==
+                     macho_unwind::kARM64ModeFrame;
+  if (PAuthLR &&
+      (Frame->CodeRange.Begin != Start || !Compact.ReturnAddressSigningOffset ||
+       *Compact.ReturnAddressSigningOffset >= End - Start))
+    return std::nullopt;
   const DwarfCIE *CIE = nullptr;
   llvm::ArrayRef<CFIInstruction> Rows;
   if (Indexed) {
     if (!Frame->Dwarf || Frame->Dwarf->InitialLocation != Start ||
-        Frame->Dwarf->AddressRange != End - Start || Frame->Dwarf->LSDAVA ||
+        Frame->Dwarf->AddressRange != End - Start ||
         Frame->Dwarf->ParseStatus != ExceptionParseStatus::Complete)
       return std::nullopt;
     CIE = Image.ExceptionMetadata.findCIE(Frame->Dwarf->CIESectionOffset);
     if (!CIE || CIE->ParseStatus != ExceptionParseStatus::Complete)
       return std::nullopt;
     Rows = Frame->Dwarf->Instructions;
-  } else if (Frame->Dwarf || (Compact.NativeEncoding &
-                              ~macho_unwind::kARM64FramelessStackSizeMask) !=
-                                 macho_unwind::kARM64ModeFrameless) {
+  } else if (Frame->Dwarf ||
+             (!Framed &&
+              (FrameEncoding & ~(macho_unwind::kARM64FramelessStackSizeMask |
+                                 macho_unwind::kARM64RegisterPairsMask)) !=
+                  macho_unwind::kARM64ModeFrameless)) {
     return std::nullopt;
   }
 
   RegisterBody Body;
+  Body.HasLanguageFrame = Frame->Itanium.has_value();
+  Body.HasCompactFrame =
+      Framed || (!Indexed && !Compact.SavedRegisterSlots.empty());
   llvm::raw_string_ostream OS(Body.Assembly);
-  if (CIE && CIE->HasPointerAuth)
+  const bool FramelessSpills =
+      !Indexed && !Framed && !Compact.SavedRegisterSlots.empty();
+  if (PAuthLR || FramelessSpills || (CIE && CIE->HasPointerAuth))
     OS << kBKeyFrame;
+  if (Body.HasLanguageFrame) {
+    OS << kPersonality
+       << unsigned(CIE ? CIE->PersonalityEncoding
+                       : dweh::Indirect | dweh::PCRel | dweh::Sdata4)
+       << kSeparator
+       << (Frame->Personality == ExceptionPersonality::GxxPersonalityV0
+               ? kGxxPersonality
+               : kObjCPersonality)
+       << '\n';
+    OS << kLSDA << unsigned(CIE ? CIE->LSDAPointerEncoding : dweh::PCRel)
+       << kSeparator;
+    if (Frame->Itanium->LandingPadBaseEncoding != dweh::Omit) {
+      OS << kGeneratedLSDA;
+    } else {
+      auto *LSDA = Owner->second->getParent()->getNamedGlobal(
+          makeNdDataSymbol(Frame->Itanium->LSDAVA));
+      if (!LSDA)
+        return std::nullopt;
+      emitOperand(Body, OS, LSDA, kSymbolConstraint);
+    }
+    OS << '\n';
+  }
+  if (FramelessSpills) {
+    for (const auto &Row : machOFramelessSpillRows(Compact))
+      if (!emitFrameRow(Row, OS))
+        return std::nullopt;
+  } else if (!Indexed)
+    emitCompactFrame(Compact, OS);
   const uint8_t *Code = Image.Raw.data() + Text->FileOff + Start - Text->VA;
   bool HasCall = false;
   for (size_t Offset = 0; Offset < End - Start; Offset += Word)
@@ -402,9 +586,12 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
     if (Decode.decodeOne(Code + PC - Start, Word, PC, I) != int(Word) ||
         !I.Raw || !I.Raw->detail)
       return std::nullopt;
+    Body.HasBareReturn |= End - Start == Word && I.Id == AARCH64_INS_RET;
     const auto &D = I.Raw->detail->aarch64;
     const auto Ops = llvm::ArrayRef(D.operands, D.op_count);
     const auto Encoding = readLE<uint32_t>(I.Raw->bytes);
+    const bool SIMDData = (Encoding & kSIMDDataMask) == kSIMDDataClass;
+    Body.HasSIMDData |= SIMDData;
     if (const auto Memory = aarch64AddressMemoryInstruction(Encoding))
       Body.HasMemoryIndex |= Memory->hasRegisterIndex() && !Memory->stackBase();
     if (const auto Memory = aarch64WritebackMemoryInstruction(Encoding))
@@ -488,14 +675,22 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
       OS << kLocal << (Target - Start) / Word << '\n';
       continue;
     }
-    if (I.Id != AARCH64_INS_RET && I.Id != AARCH64_INS_RETAB)
+    if (I.Id != AARCH64_INS_RET && I.Id != AARCH64_INS_RETAB &&
+        I.Id != AARCH64_INS_RETABSPPC && I.Id != AARCH64_INS_BRK)
       Fallthrough();
-    if (!independent(I))
+    if (!SIMDData && !independent(I))
+      return std::nullopt;
+    // Classic compact mode has no signing-PC field. Copying these words with
+    // that recipe would publish a frame the system unwinder cannot describe.
+    if (!Indexed && !PAuthLR &&
+        (I.Id == AARCH64_INS_PACIBSPPC || I.Id == AARCH64_INS_AUTIBSPPC ||
+         I.Id == AARCH64_INS_RETABSPPC))
       return std::nullopt;
     // Frameless variadic entries can load directly at or above incoming SP
     // without materializing va_list. Count the pre-indexed address, not the
     // post-indexed writeback displacement.
-    if (!Indexed && (I.Id == AARCH64_INS_LDR || I.Id == AARCH64_INS_LDP))
+    if (!Indexed && !Framed &&
+        (I.Id == AARCH64_INS_LDR || I.Id == AARCH64_INS_LDP))
       for (const auto &Op : Ops)
         if (Op.type == AARCH64_OP_MEM && Op.mem.base == AARCH64_REG_SP &&
             Op.mem.index == AARCH64_REG_INVALID &&
@@ -512,13 +707,22 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
         Ops[1].type == AARCH64_OP_REG && Ops[1].reg == AARCH64_REG_SP)
       Body.MaterializesCursor = true;
 
-    // MOVZ zero and ORR from zero both preserve NZCV and clear the entire
-    // physical destination. Use the register form including for a W result.
-    if ((I.Id == AARCH64_INS_MOV || I.Id == AARCH64_INS_MOVZ) &&
-        Ops.size() == 2 && Ops[0].type == AARCH64_OP_REG &&
-        Ops[1].type == AARCH64_OP_IMM && Ops[1].imm == 0 &&
-        ((Ops[0].reg >= AARCH64_REG_X0 && Ops[0].reg <= AARCH64_REG_X28) ||
-         (Ops[0].reg >= AARCH64_REG_W0 && Ops[0].reg <= AARCH64_REG_W30))) {
+    // Retain scalar FP/NEON words, including lanes, arrangements, register
+    // lists and FP controls. PAuth_LR words retain their signing-PC distance
+    // because every instruction keeps its offset within the copied body.
+    // Both the assembly and final linked words are checked against the image.
+    if (SIMDData || I.Id == AARCH64_INS_PACIBSPPC ||
+        I.Id == AARCH64_INS_AUTIBSPPC || I.Id == AARCH64_INS_RETABSPPC) {
+      OS << kInstructionWord << Encoding << '\n';
+    } else if ((I.Id == AARCH64_INS_MOV || I.Id == AARCH64_INS_MOVZ) &&
+               Ops.size() == 2 && Ops[0].type == AARCH64_OP_REG &&
+               Ops[1].type == AARCH64_OP_IMM && Ops[1].imm == 0 &&
+               ((Ops[0].reg >= AARCH64_REG_X0 &&
+                 Ops[0].reg <= AARCH64_REG_X28) ||
+                (Ops[0].reg >= AARCH64_REG_W0 &&
+                 Ops[0].reg <= AARCH64_REG_W30))) {
+      // MOVZ zero and ORR from zero both preserve NZCV and clear the entire
+      // physical destination. Use the register form including for a W result.
       llvm::StringRef Reg = cs_reg_name(Decode.getHandle(), Ops[0].reg);
       OS << kClear << Reg
          << (Ops[0].reg >= AARCH64_REG_W0 && Ops[0].reg <= AARCH64_REG_W30
@@ -531,18 +735,18 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
         return std::nullopt;
       OS << '\n';
     }
-    if (!Indexed && PC == Start && Compact.StackSize) {
-      if (I.Id != AARCH64_INS_SUB || Ops.size() != 3 ||
-          Ops[0].type != AARCH64_OP_REG || Ops[0].reg != AARCH64_REG_SP ||
-          Ops[1].type != AARCH64_OP_REG || Ops[1].reg != AARCH64_REG_SP ||
-          Ops[2].type != AARCH64_OP_IMM || Ops[2].shift.value ||
-          Ops[2].imm != Compact.StackSize)
+    if (PAuthLR && PC - Start == *Compact.ReturnAddressSigningOffset) {
+      if (I.Id != AARCH64_INS_PACIBSPPC)
         return std::nullopt;
-      OS << kCFAOffset << Compact.StackSize << '\n';
+      OS << kSignWithPC;
     }
   }
   if (!llvm::all_of(Rows,
                     [](const auto &Row) { return Row.Kind == CFIOpKind::Nop; }))
+    return std::nullopt;
+  if (Body.HasLanguageFrame &&
+      Frame->Itanium->LandingPadBaseEncoding != dweh::Omit &&
+      !emitLanguageTable(Image, *Frame, *Owner->second->getParent(), Body, OS))
     return std::nullopt;
   observeScratchResults(Flow, Body);
   Body.Constraints += kEffects;
@@ -558,6 +762,79 @@ llvm::InlineAsm *assembly(llvm::Function &F, const RegisterBody &Body) {
   return llvm::InlineAsm::get(Ty, Body.Assembly, Body.Constraints, true);
 }
 } // namespace
+
+std::vector<CFIInstruction>
+machOFramelessSpillRows(const CompactUnwindEntry &Compact) {
+  // A zero outgoing-argument adjustment forces MC to retain an indexed FDE.
+  // The system compact walker reads the first spill at CFA instead of CFA-8
+  // and subtracts all pair slots from the restored SP. Preserve the actual
+  // frame with explicit CFA-relative locations rather than that encoding.
+  std::vector<CFIInstruction> Rows{
+      {.Kind = CFIOpKind::GnuArgsSize},
+      {.Kind = CFIOpKind::DefCFAOffset, .Offset = Compact.StackSize}};
+  int64_t Offset = 0;
+  for (const auto &Slot : Compact.SavedRegisterSlots) {
+    Offset -= sizeof(uint64_t);
+    Rows.push_back(
+        {.Kind = CFIOpKind::Offset,
+         .Register = Slot.Register +
+                     (Slot.RegisterClass == UnwindRegisterClass::FloatingPoint
+                          ? aarch64_unwind::kDwarfV0
+                          : 0),
+         .Offset = Offset});
+  }
+  return Rows;
+}
+
+bool canPublishMachOLanguageFrame(const BinaryImage &Image,
+                                  const ExceptionFunction &Frame) {
+  if (Frame.ParseStatus != ExceptionParseStatus::Complete || !Frame.Itanium ||
+      !Frame.Compact || !Frame.FragmentRanges.empty() ||
+      (Frame.Personality != ExceptionPersonality::GxxPersonalityV0 &&
+       Frame.Personality != ExceptionPersonality::ObjCPersonalityV0))
+    return false;
+  const auto &LSDA = *Frame.Itanium;
+  if (!LSDA.LSDAVA || !LSDA.IsCallSiteAddressForm)
+    return false;
+  const auto *Storage = Image.getSectionFor(LSDA.LSDAVA);
+  if (!Storage || Storage->isWritable() || !Image.readVA(LSDA.LSDAVA, 1))
+    return false;
+  for (const auto &Site : LSDA.CallSites)
+    if (!Frame.CodeRange.contains(Site.GuardedRange) ||
+        (Site.LandingPadVA && !Frame.CodeRange.contains(Site.LandingPadVA)))
+      return false;
+  // Rebuilding an explicit base retains the address-free bytes referenced by
+  // action links and exception specifications.
+  if (LSDA.LandingPadBaseEncoding != dweh::Omit) {
+    for (auto Range : {LSDA.ActionTableRange, LSDA.ExceptionSpecRange})
+      if (Range.End < Range.Begin ||
+          Range.size() > limits::loader::kLSDAMaxLSDABytes ||
+          (Range.size() && !Image.readVA(Range.Begin, Range.size())))
+        return false;
+    const bool Indirect = LSDA.TypeTableEncoding & dweh::Indirect;
+    for (const auto &Type : LSDA.TypeTable)
+      if (!Type.IsCatchAll &&
+          !(Indirect ? Type.TypeInfoSlotVA : Type.TypeInfoVA))
+        return false;
+  }
+  if (!Frame.Dwarf)
+    return (Frame.Compact->Kind == CompactUnwindKind::FramePointer ||
+            Frame.Compact->Kind == CompactUnwindKind::FramelessImmediate) &&
+           Frame.Compact->PersonalitySlotVA && Frame.Compact->HasLSDA &&
+           Frame.Compact->LSDAVA == LSDA.LSDAVA;
+  if (Frame.Compact->Kind != CompactUnwindKind::DwarfFDE ||
+      LSDA.LSDAVA != Frame.Dwarf->LSDAVA)
+    return false;
+  const auto *CIE =
+      Image.ExceptionMetadata.findCIE(Frame.Dwarf->CIESectionOffset);
+  return CIE && CIE->ParseStatus == ExceptionParseStatus::Complete &&
+         CIE->PersonalityEncoding ==
+             (dweh::Indirect | dweh::PCRel | dweh::Sdata4) &&
+         CIE->PersonalitySlotVA && !CIE->IsSignalFrame &&
+         !CIE->UsesNonHintPAuthLR && !CIE->HasMTETaggedFrame &&
+         (CIE->LSDAPointerEncoding == dweh::PCRel ||
+          CIE->LSDAPointerEncoding == (dweh::PCRel | dweh::Sdata4));
+}
 
 bool needsMachONativeStackIndex(const MedFunc &Function) {
   return llvm::any_of(Function.Blocks, [](const MedBlock &Block) {
@@ -577,7 +854,7 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
                           llvm::ArrayRef<va_t> RequiredNativeEntries) {
   llvm::DenseSet<va_t> Required(RequiredNativeEntries.begin(),
                                 RequiredNativeEntries.end());
-  auto Functions = definedEntries(M, Required);
+  auto Functions = definedEntries(M, Image, Required);
   if (!Functions) {
     if (!Required.empty())
       return Functions.takeError();
@@ -588,6 +865,25 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
   if (!Decode.init(Image))
     return Required.empty() ? llvm::Error::success() : invalidBody();
   llvm::DenseSet<va_t> Admitted(AdmittedEntries.begin(), AdmittedEntries.end());
+  for (const auto &[VA, F] : *Functions) {
+    const auto *Frame = Image.ExceptionMetadata.findFunction(VA);
+    if (!Admitted.contains(VA) || !Frame ||
+        !canPublishMachOLanguageFrame(Image, *Frame))
+      continue;
+    const auto &Table = *Frame->Itanium;
+    auto *Byte = llvm::Type::getInt8Ty(M.getContext());
+    if (Table.LandingPadBaseEncoding == dweh::Omit) {
+      M.getOrInsertGlobal(makeNdDataSymbol(Table.LSDAVA), Byte);
+      continue;
+    }
+    for (const auto &Type : Table.TypeTable)
+      if (!Type.IsCatchAll)
+        M.getOrInsertGlobal(
+            makeNdDataSymbol(Table.TypeTableEncoding & dweh::Indirect
+                                 ? Type.TypeInfoSlotVA
+                                 : Type.TypeInfoVA),
+            Byte);
+  }
   std::map<llvm::Function *, RegisterBody> Bodies;
   bool HasVariadicCursor = false;
   for (auto It = Functions->begin(); It != Functions->end(); ++It) {
@@ -618,9 +914,10 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
     Select(Entry->second);
   }
   for (const auto &[F, Body] : Bodies) {
-    // Preserve the one architectural access and base update, including its
-    // runtime checked-pointer behavior, throughout the complete native body.
-    if (Body.HasMemoryWriteback || Body.HasMemoryIndex)
+    // Keep physical addressing, vector lanes and FP status effects within
+    // their complete native body, including runtime checked-pointer behavior.
+    if (Body.HasMemoryWriteback || Body.HasMemoryIndex || Body.HasSIMDData ||
+        Body.HasCompactFrame || Body.HasLanguageFrame || Body.HasBareReturn)
       Select(F);
     if (HasVariadicCursor &&
         (F->isVarArg() || Body.MaterializesCursor || Body.LoadsStackArgument))
@@ -673,7 +970,7 @@ validateMachORegisterResults(llvm::Module &M, const BinaryImage &Image) {
   if (!llvm::any_of(
           M, [](const auto &F) { return F.hasFnAttribute(kRegisterBody); }))
     return Result;
-  auto Functions = definedEntries(M);
+  auto Functions = definedEntries(M, Image);
   if (!Functions)
     return Functions.takeError();
   Decoder Decode;

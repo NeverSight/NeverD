@@ -53,6 +53,7 @@ inline FPNativeAssembly msaAssembly(Intrinsic Id, unsigned Selector,
     A.ClobbersAT = true;
     const auto &Op = msaNativeOperation(Id);
     A.Pointers = 1 + Op.Arity;
+    A.FPRegisters = Op.Arity;
     // Renaming FP operands to scratch WRs is valid only without hardware
     // register partitioning. Stop before any WR access on a WRP machine.
     A.Text +=

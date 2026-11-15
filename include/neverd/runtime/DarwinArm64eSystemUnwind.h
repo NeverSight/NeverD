@@ -112,8 +112,9 @@ static inline bool ndDarwinArm64eResumeSignalCaller(
 /// Schedule a caller-supplied, nonreturning language throw or rethrow thunk.
 /// Return normally from SA_SIGINFO after success. The thunk executes with the
 /// restored signal mask and stack, outside the handler. Its return address
-/// selects the original protected call in the system personality. Prepare Site
-/// and the matching row before the signal, while the image is still loaded.
+/// selects the original protected instruction in the system personality.
+/// Prepare Site and the matching row before the signal, while the image is
+/// still loaded.
 typedef void (*NDDarwinArm64eExceptionDelivery)(void *);
 static inline bool ndDarwinArm64eDeliverSignalException(
     ucontext_t *Context, NDDarwinArm64eExceptionSite Site,

@@ -22,6 +22,27 @@ beside the desktop application. A prebuilt Qt library can depend on its own
 dynamic zlib even though NeverD uses static zlib. Keep that private Qt dependency
 in the package.
 
+## Qt baseline
+
+Use Qt 6.12, currently pinned to 6.12.0 in the desktop CI. Rebuild the GUI
+and native Qt plugins against the same Qt headers, compiler, architecture and
+runtime shipped in the package. Private Gui/Widgets APIs do not provide a
+version-independent ABI. The CI kit is a build/test input, not a qualified
+redistributable.
+
+Before distributing a source build of Qt 6.12.0, apply the official QtBase
+security fixes from the [Qt 6.12 download directory](https://download.qt.io/official_releases/qt/6.12/):
+`CVE-2026-105924-qtbase-6.12.diff`, `CVE-2026-105943-qtbase-6.12.diff`, and
+both `CVE-2026-116337-qtbase-6.12-0001.diff` and
+`CVE-2026-116337-qtbase-6.12-0002.diff`. Record source and patch hashes and
+retain the patched corresponding sources. A prebuilt kit must independently
+establish that it contains these fixes; its version string alone is insufficient.
+Review advisories for any additional Qt modules shipped by a custom kit.
+
+The checked-in older Qt license catalogs are historical inputs, not licenses
+for Qt 6.12. Supply a catalog generated from the exact Qt 6.12 source/build;
+do not rename an older catalog to satisfy the packaging check.
+
 ## Linux and Windows
 
 The GUI's CMake install runs Qt deployment and then completes and audits the

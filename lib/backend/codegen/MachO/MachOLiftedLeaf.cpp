@@ -7,6 +7,7 @@
 
 #include "MachOLiftedObject.h"
 
+#include "neverd/analysis/AArch64UnwindRecovery.h"
 #include "neverd/analysis/LLVMPrivateFrameAccesses.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/MachO/MachOCompactUnwindPatch.h"
@@ -23,6 +24,7 @@
 #include "neverd/loader/DirectBranch.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/object/SectionNames.h"
+#include "neverd/support/DwarfEH.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -399,7 +401,8 @@ void emitSwiftErrorForwarder(llvm::Function &Entry) {
 
 // Darwin's ordinary calling convention restores X21 in the epilogue. A leaf
 // with an observable X21 write needs the target's writable error carrier.
-llvm::Error bindLeafErrorResults(llvm::Module &Module) {
+llvm::Error bindLeafErrorResults(llvm::Module &Module,
+                                 const llvm::DenseSet<va_t> &NativeEntries) {
   auto &Context = Module.getContext();
   auto *Register = llvm::MetadataAsValue::get(
       Context, llvm::MDNode::get(Context, llvm::MDString::get(
@@ -428,6 +431,16 @@ llvm::Error bindLeafErrorResults(llvm::Module &Module) {
   for (size_t I = 0; I < Writers.size(); ++I)
     for (auto &Use : Writers[I]->uses()) {
       auto *Call = llvm::dyn_cast<llvm::CallInst>(Use.getUser());
+      // An already verified native body passes X21 physically. Rebind its
+      // symbolic callee, but do not rewrite the caller's LLVM prototype.
+      if (Call && Call->isInlineAsm() && Call->isArgOperand(&Use) &&
+          !Call->hasOperandBundles()) {
+        auto Source = rewrite_source::getOriginalVA(*Call->getFunction());
+        if (!Source)
+          return Source.takeError();
+        if (*Source && NativeEntries.contains(**Source))
+          continue;
+      }
       if (!Call || !Call->isCallee(&Use) || Call->hasOperandBundles())
         return refuse(kErrorResultABI);
       Writers.insert(Call->getFunction());
@@ -581,10 +594,10 @@ bool sameIndexedLinkFrame(const BinaryImage &Original,
                           const ExceptionFunction &Frame,
                           const dwarf_eh::ParseResult &Generated,
                           const DwarfFDE *NewFrame, va_t Start,
-                          const NativeMachOCompactRange &Range) {
+                          const NativeMachOCompactRange &Range, va_t Slide) {
+  const bool Language = Frame.Itanium.has_value();
   if (!Frame.Dwarf || !NewFrame || Frame.Dwarf->InitialLocation != Start ||
       Frame.Dwarf->AddressRange != Range.EndVA - Range.BeginVA ||
-      Frame.Dwarf->LSDAVA ||
       Frame.Dwarf->ParseStatus != ExceptionParseStatus::Complete ||
       (Frame.Compact->NativeEncoding & macho_unwind::kDwarfSectionOffsetMask) !=
           Frame.Dwarf->SectionOffset ||
@@ -593,9 +606,10 @@ bool sameIndexedLinkFrame(const BinaryImage &Original,
   const auto *Old =
       Original.ExceptionMetadata.findCIE(Frame.Dwarf->CIESectionOffset);
   if (!Old ||
-      (Old->Augmentation != kCompilerFrameAugmentation &&
+      (!Language && Old->Augmentation != kCompilerFrameAugmentation &&
        Old->Augmentation != kBKeyFrameAugmentation) ||
-      Old->ParseStatus != ExceptionParseStatus::Complete || NewFrame->LSDAVA ||
+      Old->ParseStatus != ExceptionParseStatus::Complete ||
+      (!Language && NewFrame->LSDAVA) ||
       NewFrame->AddressRange != Frame.Dwarf->AddressRange ||
       NewFrame->ParseStatus != ExceptionParseStatus::Complete)
     return false;
@@ -606,16 +620,122 @@ bool sameIndexedLinkFrame(const BinaryImage &Original,
     return std::tie(C.Version, C.Augmentation, C.CodeAlignmentFactor,
                     C.DataAlignmentFactor, C.ReturnAddressRegister,
                     C.AddressSize, C.SegmentSelectorSize, C.FDEPointerEncoding,
-                    C.UsesArm64eReturnAddressABI, C.ParseStatus);
+                    C.UsesArm64eReturnAddressABI, C.PersonalityEncoding,
+                    C.LSDAPointerEncoding, C.IsSignalFrame, C.HasPointerAuth,
+                    C.UsesNonHintPAuthLR, C.HasMTETaggedFrame, C.ParseStatus);
   };
   return New != Generated.CIEs.end() &&
          New->SectionOffset == NewFrame->CIESectionOffset &&
          ABI(*Old) == ABI(*New) &&
+         New->PersonalitySlotVA ==
+             (Language ? Old->PersonalitySlotVA + Slide : 0) &&
+         Range.LSDAVA.value_or(0) == NewFrame->LSDAVA &&
+         Range.PersonalitySlotVA.value_or(0) == New->PersonalitySlotVA &&
          sameSpillRules(Old->InitialInstructions, New->InitialInstructions) &&
          sameSpillRules(Frame.Dwarf->Instructions, NewFrame->Instructions);
 }
 
-llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
+bool sameLanguageTable(const ExceptionFunction &Before,
+                       const BinaryImage &Installed,
+                       const NativeMachOCompactRange &Range, va_t Slide) {
+  const auto *After = Installed.ExceptionMetadata.findFunction(Range.BeginVA);
+  if (!After || After->ParseStatus != ExceptionParseStatus::Complete ||
+      !After->Itanium || After->CodeRange.Begin != Range.BeginVA ||
+      After->CodeRange.End != Range.EndVA ||
+      After->Personality != Before.Personality)
+    return false;
+  const auto &Old = *Before.Itanium;
+  const auto &New = *After->Itanium;
+  if (Range.LSDAVA.value_or(0) != New.LSDAVA ||
+      Old.IsCallSiteAddressForm != New.IsCallSiteAddressForm ||
+      Old.TypeTableEntryKind != New.TypeTableEntryKind ||
+      Old.CallSites.size() != New.CallSites.size() ||
+      Old.Actions.size() != New.Actions.size() ||
+      Old.TypeTable.size() != New.TypeTable.size() ||
+      Old.ExceptionSpecs.size() != New.ExceptionSpecs.size())
+    return false;
+  if (Old.LandingPadBaseEncoding == dweh::Omit) {
+    if (New.LSDAVA != Old.LSDAVA + Slide)
+      return false;
+  }
+  // Explicit source bases may be canonicalized. Compare the normalized
+  // guard and handler coordinates below, including entry-point handlers.
+
+  for (size_t I = 0; I < Old.CallSites.size(); ++I) {
+    const auto &A = Old.CallSites[I];
+    const auto &B = New.CallSites[I];
+    if (A.GuardedRange.Begin - Before.CodeRange.Begin !=
+            B.GuardedRange.Begin - Range.BeginVA ||
+        A.GuardedRange.size() != B.GuardedRange.size() ||
+        A.FirstActionOffset != B.FirstActionOffset ||
+        (A.LandingPadVA ? A.LandingPadVA - Before.CodeRange.Begin !=
+                              B.LandingPadVA - Range.BeginVA
+                        : B.LandingPadVA != 0))
+      return false;
+  }
+  for (size_t I = 0; I < Old.Actions.size(); ++I) {
+    const auto &A = Old.Actions[I];
+    const auto &B = New.Actions[I];
+    if (std::tie(A.TableOffset, A.TypeFilter, A.NextActionOffset) !=
+        std::tie(B.TableOffset, B.TypeFilter, B.NextActionOffset))
+      return false;
+  }
+  for (size_t I = 0; I < Old.TypeTable.size(); ++I) {
+    const auto &A = Old.TypeTable[I];
+    const auto &B = New.TypeTable[I];
+    if (A.Index != B.Index || A.IsCatchAll != B.IsCatchAll ||
+        (A.TypeInfoSlotVA
+             ? B.TypeInfoSlotVA != A.TypeInfoSlotVA + Slide
+             : B.TypeInfoSlotVA ||
+                   B.TypeInfoVA != (A.TypeInfoVA ? A.TypeInfoVA + Slide : 0)))
+      return false;
+  }
+  for (size_t I = 0; I < Old.ExceptionSpecs.size(); ++I) {
+    const auto &A = Old.ExceptionSpecs[I];
+    const auto &B = New.ExceptionSpecs[I];
+    if (A.Index != B.Index || A.TypeIndices != B.TypeIndices)
+      return false;
+  }
+  return true;
+}
+
+bool sameFramelessSpillFrame(const ExceptionFunction &Original,
+                             const dwarf_eh::ParseResult &Generated,
+                             const DwarfFDE *Frame,
+                             const NativeMachOCompactRange &Range, va_t Slide) {
+  const bool Language = Original.Itanium.has_value();
+  if (!Frame || Frame->InitialLocation != Range.BeginVA ||
+      Frame->AddressRange != Range.EndVA - Range.BeginVA ||
+      (Language ? Frame->LSDAVA != Range.LSDAVA.value_or(0) : Frame->LSDAVA) ||
+      Frame->ParseStatus != ExceptionParseStatus::Complete ||
+      Generated.ParseStatus != ExceptionParseStatus::Complete)
+    return false;
+  const auto CIE = llvm::find_if(Generated.CIEs, [&](const auto &C) {
+    return C.SectionOffset == Frame->CIESectionOffset;
+  });
+  const CFIInstruction Initial{.Kind = CFIOpKind::DefCFA,
+                               .Register = aarch64_unwind::kSP};
+  return CIE != Generated.CIEs.end() &&
+         CIE->ParseStatus == ExceptionParseStatus::Complete &&
+         (Language ? CIE->PersonalityEncoding ==
+                             (dweh::Indirect | dweh::PCRel | dweh::Sdata4) &&
+                         CIE->PersonalitySlotVA ==
+                             Original.Compact->PersonalitySlotVA + Slide &&
+                         CIE->PersonalitySlotVA ==
+                             Range.PersonalitySlotVA.value_or(0) &&
+                         CIE->LSDAPointerEncoding == dweh::PCRel &&
+                         !CIE->IsSignalFrame && !CIE->UsesNonHintPAuthLR &&
+                         !CIE->HasMTETaggedFrame
+                   : CIE->Augmentation == kBKeyFrameAugmentation) &&
+         CIE->UsesArm64eReturnAddressABI && CIE->HasPointerAuth &&
+         CIE->ReturnAddressRegister == aarch64_unwind::kLR &&
+         sameSpillRules({Initial}, CIE->InitialInstructions) &&
+         sameSpillRules(machOFramelessSpillRows(*Original.Compact),
+                        Frame->Instructions);
+}
+
+llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
+                         const Section &Text,
                          llvm::ArrayRef<SourcePatchMapping> Mappings,
                          const CompiledImage &Generated, va_t Slide,
                          llvm::ArrayRef<NativeMachOCompactRange> Ranges,
@@ -628,12 +748,13 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
       if (Section.Name == section_names::macho::EhFrame &&
           !Section.ExternalBytes.empty())
         LinkedFrames =
-            dwarf_eh::parseEHFrame(Original,
+            dwarf_eh::parseEHFrame(Layout,
                                    {Section.ExternalBytes.data(),
                                     Section.ExternalBytes.size(), Section.VA},
                                    {});
       if (Section.Name != section_names::macho::CompactUnwind &&
-          Section.Name != section_names::macho::EhFrame)
+          Section.Name != section_names::macho::EhFrame &&
+          Section.Name != section_names::macho::GccExceptTab)
         return refuse(kLeafCode);
       continue;
     }
@@ -687,8 +808,14 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
       return llvm::createStringError(
           llvm::errc::not_supported,
           llvm::formatv(kGeneratedRange, Mapping.Symbol, Start, End).str());
-    if (!Frame || !Frame->describesUnwindOnly() || !Frame->Compact ||
+    if (!Frame || !Frame->Compact ||
+        (!Frame->describesUnwindOnly() &&
+         !(RegisterEntries.contains(Start) &&
+           canPublishMachOLanguageFrame(Original, *Frame))) ||
         Frame->CodeRange.End < End)
+      return refuse(kLeafFrame);
+    if (Frame->Itanium &&
+        !sameLanguageTable(*Frame, Layout, *Range.mapped(), Slide))
       return refuse(kLeafFrame);
     const auto Native = Range.mapped()->Encoding;
     const auto Source = llvm::ArrayRef(Original.Raw)
@@ -717,18 +844,37 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
                                                    Source.size(),
                                                    Emitted.size())
                                          .str());
-    const bool Indexed = (Native & ~macho_unwind::kDwarfSectionOffsetMask) ==
-                         macho_unwind::kARM64ModeDwarf;
+    const auto DwarfFields = macho_unwind::kDwarfSectionOffsetMask |
+                             macho_unwind::kHasLSDA |
+                             macho_unwind::kPersonalityMask;
+    const bool Indexed =
+        (Native & ~DwarfFields) == macho_unwind::kARM64ModeDwarf;
     const auto SourceEncoding = Frame->Compact->NativeEncoding;
-    if (Indexed) {
-      if ((SourceEncoding & ~macho_unwind::kDwarfSectionOffsetMask) !=
-              macho_unwind::kARM64ModeDwarf ||
+    const bool FramelessSpills =
+        RegisterEntries.contains(Start) &&
+        Frame->Compact->Kind == CompactUnwindKind::FramelessImmediate &&
+        !Frame->Compact->SavedRegisterSlots.empty();
+    if (FramelessSpills) {
+      if (!Indexed || Frame->Dwarf ||
+          !sameFramelessSpillFrame(*Frame, LinkedFrames,
+                                   FDEs.lookup(Owner->second), *Range.mapped(),
+                                   Slide))
+        return refuse(kLeafFrame);
+    } else if (Indexed) {
+      if ((SourceEncoding & ~DwarfFields) != macho_unwind::kARM64ModeDwarf ||
           !sameIndexedLinkFrame(Original, *Frame, LinkedFrames,
                                 FDEs.lookup(Owner->second), Start,
-                                *Range.mapped()))
+                                *Range.mapped(), Slide))
         return refuse(kLeafFrame);
-    } else if (SourceEncoding != Native) {
-      return refuse(kLeafFrame);
+    } else {
+      const bool Language = Frame->Itanium.has_value();
+      // The object has no final personality-array index yet. Compare its
+      // linked slot identity instead, together with the retained LSDA.
+      if ((SourceEncoding & ~macho_unwind::kPersonalityMask) != Native ||
+          Range.mapped()->PersonalitySlotVA.value_or(0) !=
+              (Language ? Frame->Compact->PersonalitySlotVA + Slide : 0) ||
+          (!Language && Range.mapped()->LSDAVA))
+        return refuse(kLeafFrame);
     }
 
     if (RegisterEntries.contains(Start)) {
@@ -1035,7 +1181,7 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
   for (const auto &Flag : Flags)
     if (Flag.Key->getString() != kArm64eAnalysisModuleFlag)
       Candidate->addModuleFlag(Flag.Behavior, Flag.Key->getString(), Flag.Val);
-  if (auto Error = bindLeafErrorResults(*Candidate))
+  if (auto Error = bindLeafErrorResults(*Candidate, *RegisterEntries))
     return Error;
   auto &Context = Candidate->getContext();
   auto *Version = llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
@@ -1080,18 +1226,18 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
       llvm::DCEPass().run(F, Analyses);
     }
   }
-  auto Object =
-      Codegen().compile(*Candidate, Image.Arch, Image.Format, *Triple);
+  auto Object = Codegen().compile(*Candidate, Image.Arch, Image.Format, *Triple,
+                                  ObjectConsumer::FinalImageInstaller);
   if (!Object.Success)
     return refuse(kLeafCode);
   return installMachOLiftedObject(
       llvm::StringRef(reinterpret_cast<const char *>(Object.ObjectData.data()),
                       Object.ObjectData.size()),
       Image, Mappings, Bindings, Output,
-      [&](const CompiledImage &Generated, va_t Slide,
+      [&](const CompiledImage &Generated, const BinaryImage &Layout, va_t Slide,
           llvm::ArrayRef<NativeMachOCompactRange> Ranges) {
-        return verifyLeaves(Image, *Text, Mappings, Generated, Slide, Ranges,
-                            *RegisterEntries);
+        return verifyLeaves(Image, Layout, *Text, Mappings, Generated, Slide,
+                            Ranges, *RegisterEntries);
       });
 }
 } // namespace neverd

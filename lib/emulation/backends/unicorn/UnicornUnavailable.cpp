@@ -9,14 +9,14 @@
 #include "../MachineFactories.h"
 
 #include "neverd/emulation/arch/mips/P5600MSA.h"
-#include "neverd/emulation/arch/mips/R6ScalarFP.h"
+#include "neverd/emulation/arch/mips/ScalarFP.h"
 namespace neverd::emulation {
 llvm::Expected<std::unique_ptr<MIPSMSAExecutor>> createP5600MSAExecutor(Arch) {
   return diagnostic::unavailable(diagnostic::UnicornDisabled,
                                  BackendAvailability::BuildDisabled);
 }
-llvm::Expected<std::unique_ptr<MIPSR6FPExecutor>>
-createR6ScalarFPExecutor(Arch) {
+llvm::Expected<std::unique_ptr<MIPSScalarFPExecutor>>
+createScalarFPExecutor(Arch, unsigned) {
   return diagnostic::unavailable(diagnostic::UnicornDisabled,
                                  BackendAvailability::BuildDisabled);
 }

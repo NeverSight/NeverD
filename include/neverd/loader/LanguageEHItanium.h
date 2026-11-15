@@ -132,6 +132,11 @@ struct ItaniumEHInfo {
   /// when it uses the SJLJ call-site form, whose "ranges" are call-site
   /// indices rather than addresses.
   bool IsCallSiteAddressForm = true;
+  /// Encoded action records and exception-specification lists contain no
+  /// addresses. Retain their proved source extents so a publisher can copy
+  /// links, selectors and shared list suffixes without changing their indices.
+  ExceptionAddressRange ActionTableRange;
+  ExceptionAddressRange ExceptionSpecRange;
 
   /// True when no call site names a catch or exception-specification action,
   /// so every landing pad is destructor cleanup.  A Rust frame compiled with

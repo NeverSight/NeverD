@@ -129,16 +129,22 @@ struct NativeMachO {
   std::map<size_t, unsigned> WeakData;
 };
 
-// dyld discovers runtime sections from segment commands. Reserve their
-// command bytes before assigning code, unwind and fixup addresses.
-uint64_t runtimeCommandBytes(const NativeMachO &Object) {
+// New data mappings and dyld runtime sections require segment commands.
+// Reserve them before assigning code, unwind and fixup addresses.
+uint64_t installationCommandBytes(const NativeMachO &Object) {
   const auto Sections =
       ((Object.Descriptors || !Object.ThreadInitializers.empty())
            ? kTLVSectionCount
            : 0) +
       unsigned(Object.InitializerOffsets.has_value());
-  return Sections
-             ? sizeof(segment_command_64) * kRuntimeSegmentCount +
+  const bool HasData = llvm::any_of(Object.Image.Sections, [](const auto &S) {
+    return S.IsAllocated && S.Size &&
+           (S.Kind == Kind::WritableData || S.Kind == Kind::UninitializedData);
+  });
+  return Sections || HasData
+             ? getMachOSegmentCmdSize(Object.Image.PointerWidth ==
+                                      sizeof(uint64_t)) *
+                       kRuntimeSegmentCount +
                    sizeof(section_64) * Sections + sizeof(linkedit_data_command)
              : 0;
 }
@@ -807,6 +813,7 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
   if (Result.EH) {
     const auto &EH = Image.Sections[*Result.EH];
     auto Logical = EH.ExternalBytes;
+    llvm::SmallVector<const Relocation *> ExternalLSDAs;
     // Native assemblers can leave FDE/LSDA section differences unresolved.
     // Decode a logical object-address view, preserving raw bytes for the final
     // placement relocation. Otherwise two placeholder FDEs look overlapping.
@@ -833,8 +840,20 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
         return fail(kLanguagePointer);
       const auto &Target = Result.Symbols.at(R.SymbolIndex);
       const auto &Subtract = Result.Symbols.at(*R.SubtractSymbol);
-      if (!Target.Section || !Subtract.Section)
+      if (!Subtract.Section)
         return fail(kLanguagePointer);
+      if (!Target.Section) {
+        // An explicitly bound LSDA may remain in the original image. Decode
+        // only the field shape here; the binding and final relocation supply
+        // its address. Never apply this to an FDE start or an arbitrary field.
+        if (!Original.isArm64e() || !R.External || R.PCRel || R.Scattered ||
+            Result.Sections.at(Subtract.Section) != *Result.EH ||
+            (R.Width != sizeof(uint32_t) && R.Width != sizeof(uint64_t)))
+          return fail(kLanguagePointer);
+        std::fill_n(Logical.data() + R.Offset, R.Width, 0);
+        ExternalLSDAs.push_back(&R);
+        continue;
+      }
       auto *Field = Logical.data() + R.Offset;
       const uint64_t Raw = R.Width == sizeof(uint64_t)
                                ? readLE<uint64_t>(Field)
@@ -860,6 +879,14 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
         Logical, Result.OldSectionVAs.at(Number), Image.PointerWidth == 8);
     if (!Records)
       return Records.takeError();
+    for (const auto *R : ExternalLSDAs)
+      if (llvm::none_of(*Records, [&](const auto &F) {
+            return F.LSDA && F.LSDA->Offset == R->Offset &&
+                   F.LSDA->Width == R->Width &&
+                   dweh::getApplication(F.LSDA->Encoding) == dweh::PCRel &&
+                   !(F.LSDA->Encoding & dweh::Indirect);
+          }))
+        return fail(kLanguagePointer);
     Result.OldFDEs = std::move(*Records);
   }
   if (Result.InitializerPointers) {
@@ -2318,12 +2345,9 @@ verifyNativeObjectUnwind(const BinaryImage &Image,
         (It->NativeEncoding & ~macho_unwind::kPersonalityMask) !=
             (Range.Encoding & ~macho_unwind::kPersonalityMask))
       return fail(kPublishedRange);
-    const auto Index = (It->NativeEncoding & macho_unwind::kPersonalityMask) >>
-                       macho_unwind::kPersonalityShift;
-    if (Range.PersonalitySlotVA
-            ? (!Index || Index > Native.PersonalitySlots.size() ||
-               Native.PersonalitySlots[Index - 1] != *Range.PersonalitySlotVA)
-            : Index != 0)
+    if (Range.PersonalitySlotVA.has_value() !=
+            bool(It->NativeEncoding & macho_unwind::kPersonalityMask) ||
+        It->PersonalitySlotVA != Range.PersonalitySlotVA.value_or(0))
       return fail(kLanguageReplay);
     const bool Arm64eDwarf =
         Image.isArm64e() && (Range.Encoding & macho_unwind::kModeMask) ==
@@ -2393,7 +2417,7 @@ appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
   auto Candidate = Binary;
   const uint64_t ExtraEH = requiredNativeEHBytes(*Object, Candidate);
   std::optional<MachODependencyState> SlidDependencies;
-  const auto CommandBytes = runtimeCommandBytes(*Object);
+  const auto CommandBytes = installationCommandBytes(*Object);
   auto Slide = reserveMachOPublishedUnwind(
       Candidate, Original->Arch, ExtraEH, unwindFunctionCounts(*Object),
       CommandBytes != 0, SlidDependencies, CommandBytes);
@@ -2462,7 +2486,10 @@ static llvm::Expected<PatchResult> installObject(
     const DynCodePatchEvidence *DynCode,
     const SourcePatchPreparation *Preparation,
     llvm::ArrayRef<SourcePatchDependency> Dependencies,
-    MachOLiftedObjectVerifier VerifyGenerated) {
+    llvm::function_ref<llvm::Error(const CompiledImage &,
+                                   llvm::ArrayRef<NativeMachOCompactRange>)>
+        VerifyGenerated,
+    MachOLiftedObjectVerifier VerifyLiftedImage) {
   const BinaryImage &Original =
       Preparation ? Preparation->Image : OriginalInput;
   if (Original.MachOSharedCache)
@@ -2516,7 +2543,7 @@ static llvm::Expected<PatchResult> installObject(
   auto Slide = reserveMachOPublishedUnwind(
       LayoutBytes, Original.Arch, ExtraEH, unwindFunctionCounts(*Object),
       Original.isArm64e() && !Preparation && !DynCode, SlidDependencies,
-      runtimeCommandBytes(*Object));
+      installationCommandBytes(*Object));
   if (!Slide)
     return Slide.takeError();
   for (auto &[Name, Binding] : Bindings)
@@ -2552,7 +2579,7 @@ static llvm::Expected<PatchResult> installObject(
       return E;
   }
   if (VerifyGenerated)
-    if (auto E = VerifyGenerated(Object->Image, *Slide, Object->Compact))
+    if (auto E = VerifyGenerated(Object->Image, Object->Compact))
       return E;
   if (DynCode)
     if (auto E =
@@ -2665,6 +2692,12 @@ static llvm::Expected<PatchResult> installObject(
         }
         if (auto E = verifyNativeObjectUnwind(Final, Object->Compact))
           return E;
+        // LSDA references must be read from the installed candidate, including
+        // newly generated tables. This still precedes atomic publication.
+        if (VerifyLiftedImage)
+          if (auto E = VerifyLiftedImage(Object->Image, Final, *Slide,
+                                         Object->Compact))
+            return E;
         if (Original.isArm64e()) {
           auto After = readMachODependencyState(Final.Raw);
           if (!After)
@@ -2697,11 +2730,7 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
         VerifyGenerated) {
   return installObject(Object, Original, Mappings, Bindings, Output,
                        PrepareReceipt, DynCode, Preparation, Dependencies,
-                       [&](const CompiledImage &Image, va_t,
-                           llvm::ArrayRef<NativeMachOCompactRange> Ranges) {
-                         return VerifyGenerated ? VerifyGenerated(Image, Ranges)
-                                                : llvm::Error::success();
-                       });
+                       VerifyGenerated, {});
 }
 
 llvm::Expected<PatchResult>
@@ -2711,6 +2740,6 @@ installMachOLiftedObject(llvm::StringRef Object, const BinaryImage &Original,
                          const std::filesystem::path &Output,
                          MachOLiftedObjectVerifier Verify) {
   return installObject(Object, Original, Mappings, Bindings, Output, {},
-                       nullptr, nullptr, {}, Verify);
+                       nullptr, nullptr, {}, {}, Verify);
 }
 } // namespace neverd

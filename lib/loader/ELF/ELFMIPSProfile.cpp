@@ -55,8 +55,14 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
        EF_MIPS_MACH))
     return profileError("vendor/ASE profile is not supported");
   const uint32_t ISA = Flags & EF_MIPS_ARCH;
+  const unsigned Historical = ISA <= EF_MIPS_ARCH_5 ? (ISA >> 28) + 1 : 0;
   const bool R6 = ISA == (Wide ? EF_MIPS_ARCH_64R6 : EF_MIPS_ARCH_32R6);
-  if (!R6 && ISA != (Wide ? EF_MIPS_ARCH_64R2 : EF_MIPS_ARCH_32R2))
+  if (Historical &&
+      (Historical < 4 || !Wide ||
+       (Flags & (EF_MIPS_MICROMIPS | EF_MIPS_ARCH_ASE_M16 | EF_MIPS_NAN2008))))
+    return profileError("historical ISA requires classic MIPS IV/V n32/n64");
+  if (!Historical && !R6 &&
+      ISA != (Wide ? EF_MIPS_ARCH_64R2 : EF_MIPS_ARCH_32R2))
     return profileError(
         "requires matching ELF class and MIPS32/MIPS64 r2 or r6");
   if ((Flags & EF_MIPS_ABI) != (Wide ? 0u : EF_MIPS_ABI_O32) ||
@@ -72,7 +78,8 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
   MIPSImageMetadata Profile;
   Profile.ABI = N32 ? MIPSABI::N32 : Wide ? MIPSABI::N64 : MIPSABI::O32;
   Profile.ELFFlags = Flags;
-  Profile.ISARevision = R6 ? 6 : 2;
+  Profile.ISARevision = Historical ? 0 : R6 ? 6 : 2;
+  Profile.HistoricalISA = Historical;
   Profile.HasMicroMIPS = Flags & EF_MIPS_MICROMIPS;
   Profile.HasMIPS16 = Flags & EF_MIPS_ARCH_ASE_M16;
   const bool Compressed = Profile.HasMicroMIPS || Profile.HasMIPS16;
@@ -224,6 +231,9 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
     if (llvm::support::endian::read16<ELFT::Endianness>(Bytes.data()) != 0)
       return profileError("unsupported .MIPS.abiflags version");
     const uint32_t ASE = Read32(12);
+    if (Historical && ASE)
+      return profileError(
+          "historical ISA does not admit release-based extensions");
     Profile.HasMIPS16E2 = ASE & kMIPS16E2ASE;
     if (Profile.HasMIPS16E2 && !Profile.HasMIPS16)
       return profileError("MIPS16e2 requires MIPS16 encoding capability");
@@ -241,8 +251,17 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
          Bytes[5] != 3 || Bytes[7] != (Wide ? 1 : 6)))
       return profileError("MSA requires r5 with 128-bit CPR1 and o32 FP64 or "
                           "n32/n64 hard double");
-    if (Bytes[2] != (Wide ? 64 : 32) ||
-        Bytes[3] != (R6               ? 6
+    if (Bytes[7] == (Wide ? 1 : 6) && Bytes[5] != (Profile.HasMSA ? 3 : 2))
+      return profileError("FP64 hard-float ABI requires matching CPR1 width");
+    if (!Wide && Bytes[7] == 1 &&
+        (R6 || Bytes[5] != 1 || (Flags & EF_MIPS_FP64)))
+      return profileError(
+          "FP32 hard-float ABI requires pre-R6 and 32-bit CPR1");
+    if (Bytes[2] != (Historical ? Historical
+                     : Wide     ? 64
+                                : 32) ||
+        Bytes[3] != (Historical       ? 0
+                     : R6             ? 6
                      : Profile.HasMSA ? 5
                                       : 2) ||
         Bytes[4] != (Wide ? 2 : 1))

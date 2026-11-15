@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Recompile and execute HighC/LLVMC from linked MIPS64 DSP, micro ASE and R6 ELFs."""
+"""Recompile HighC/LLVMC for historical, DSP, microMIPS and Release 6 profiles."""
 
 import argparse
 from pathlib import Path
 import runpy
 import subprocess
 
+from elftools.elf.elffile import ELFFile
+from unicorn import UcError
 from unicorn import mips_const as mips
 
 import roundtrip
@@ -31,6 +33,63 @@ DSP64_BOUNDARIES = {
 
 
 def kernels():
+    # The n64 r2 reference core implements PS; the 32-bit 74Kf does not.
+    setup = "dmtc1 $4,$f0\ndmtc1 $5,$f2\n"
+    for op in ("add", "sub", "mul", "abs", "neg", "mov", "pll", "plu", "pul", "puu"):
+        operands = "$f4,$f0" if op in ("abs", "neg", "mov") else "$f4,$f0,$f2"
+        yield f"mips64ps_{op}", "mips64r2", "ps", setup + f"{op}.ps {operands}\ndmfc1 $2,$f4"
+    for op in ("madd", "msub", "nmadd", "nmsub"):
+        yield f"mips64ps_{op}", "mips64r2", "ps", setup + f"{op}.ps $f4,$f0,$f0,$f2\ndmfc1 $2,$f4"
+    for op in ("f", "un", "eq", "ueq", "olt", "ult", "ole", "ule", "sf", "ngle", "seq", "ngl", "lt", "nge", "le", "ngt"):
+        for cc in (0, 6):
+            yield f"mips64ps_c_{op}_{cc}", "mips64r2", "ps", setup + f"c.{op}.ps $fcc{cc},$f0,$f2\ncfc1 $2,$25"
+    for op in ("movf", "movt"):
+        for cc in (0, 6):
+            yield f"mips64ps_{op}_{cc}", "mips64r2", "ps", (setup +
+                f"c.ult.ps $fcc{cc},$f0,$f2\nmov.ps $f4,$f2\n{op}.ps $f4,$f0,$fcc{cc}\ndmfc1 $2,$f4")
+    for op in ("movz", "movn"):
+        yield f"mips64ps_{op}", "mips64r2", "ps", setup + f"mov.ps $f4,$f2\n{op}.ps $f4,$f0,$5\ndmfc1 $2,$f4"
+    yield "mips64ps_pack", "mips64r2", "ps", "mtc1 $4,$f0\nmtc1 $5,$f2\ncvt.ps.s $f4,$f0,$f2\ndmfc1 $2,$f4"
+    for half in ("pl", "pu"):
+        yield f"mips64ps_unpack_{half}", "mips64r2", "ps", setup + f"cvt.s.{half} $f4,$f0\nmfc1 $2,$f4"
+    for offset in (0, 4, 8, 12):
+        yield f"mips64ps_align_{offset}", "mips64r2", "ps", setup + f"ori $6,$0,{offset}\nalnv.ps $f4,$f0,$f2,$6\ndmfc1 $2,$f4"
+    # Scalar FR=1 Release 2 uses legacy NaNs and pre-R6 FCSR behavior.
+    for bits in (32, 64):
+        fmt = "s" if bits == 32 else "d"
+        transfer, move = ("mtc1", "mfc1") if bits == 32 else ("dmtc1", "dmfc1")
+        for operation in ("add", "sub", "mul", "div", "sqrt", "recip", "rsqrt", "abs", "neg"):
+            operands = "$f4,$f0,$f2" if operation in ("add", "sub", "mul", "div") else "$f4,$f0"
+            yield (f"mips{bits}r2fp_{operation}", f"mips{bits}r2", "fp",
+                   f"{transfer} $4,$f0\n{transfer} $5,$f2\n"
+                   f"{operation}.{fmt} {operands}\n{move} $2,$f4")
+        for operation in ("madd", "msub", "nmadd", "nmsub"):
+            yield (f"mips{bits}r2fp_{operation}", f"mips{bits}r2", "fp",
+                   f"{transfer} $4,$f0\n{transfer} $5,$f2\n"
+                   f"{operation}.{fmt} $f4,$f0,$f0,$f2\n{move} $2,$f4")
+        for cc in range(8):
+            yield (f"mips{bits}r2fp_cc{cc}", f"mips{bits}r2", "fp",
+                   f"{transfer} $4,$f0\n{transfer} $5,$f2\n"
+                   f"c.ule.{fmt} $fcc{cc},$f0,$f2\ncfc1 $2,$25")
+        for operation in ("movf", "movt", "movz", "movn"):
+            predicate = "$fcc7" if operation in ("movf", "movt") else "$5"
+            yield (f"mips{bits}r2fp_{operation}", f"mips{bits}r2", "fp",
+                   f"{transfer} $4,$f0\n{transfer} $5,$f2\n{transfer} $5,$f4\n"
+                   f"c.eq.{fmt} $fcc7,$f0,$f2\n{operation}.{fmt} $f4,$f0,{predicate}\n{move} $2,$f4")
+        yield (f"mips{bits}r2fp_branch", f"mips{bits}r2", "fp",
+               f"{transfer} $4,$f0\n{transfer} $5,$f2\nc.ule.{fmt} $fcc3,$f0,$f2\n"
+               "ori $2,$0,1\nbc1tl $fcc3,1f\nori $2,$0,2\n1:")
+        for operation in ("round", "trunc", "ceil", "floor", "cvt"):
+            dest = "w" if bits == 32 else "l"
+            yield (f"mips{bits}r2fp_{operation}", f"mips{bits}r2", "fp",
+                   f"{transfer} $4,$f0\n{operation}.{dest}.{fmt} $f4,$f0\n{move} $2,$f4")
+        for operation in ("lwc1", "ldc1", "swc1", "sdc1", "lwxc1", "ldxc1",
+                          "swxc1", "sdxc1", "luxc1", "suxc1"):
+            address = "$5($4)" if "x" in operation else "0($4)"
+            setup = "ldc1 $f2,0($4)\n" if operation.startswith("s") else ""
+            yield (f"mips{bits}r2fp_memory_{operation}", f"mips{bits}r2", "fp",
+                   f"{setup}{operation} $f2,{address}\n"
+                   f"{'dmfc1' if bits == 64 and operation[1] != 'w' else 'mfc1'} $2,$f2")
     for bank in range(4):
         for op in ("dextp", "dextpv", "dextpdp", "dextpdpv"):
             operand = "$4" if op.endswith("v") else "7"
@@ -161,6 +220,37 @@ def kernels():
         yield cpu + "nal", cpu, "", "or $3,$31,$0\nnal\nor $2,$31,$0\nor $31,$3,$0"
 
 
+def historical_integer_kernels():
+    rows = {
+        "history_add": "daddu $2,$4,$5",
+        "history_shift": "dsllv $2,$4,$5",
+        "history_mul_lo": "dmult $4,$5\nmflo $2",
+        "history_mul_hi": "dmult $4,$5\nmfhi $2",
+        "history_div_lo": "ddiv $0,$4,$5\nmflo $2",
+        "history_div_hi": "ddiv $0,$4,$5\nmfhi $2",
+        "history_branch": "or $2,$4,$0\nbeql $4,$5,1f\ndaddiu $2,$2,7\n1:",
+        "history_merge": "ldl $2,7($4)\nldr $2,0($4)",
+    }
+    for name, body in rows.items():
+        # Hard-float metadata also lets the runner compare the unchanged FCSR.
+        yield name, "mips4", "fp", body
+
+
+def verify_historical_image(path, level, abi, little):
+    with path.open("rb") as stream:
+        image = ELFFile(stream)
+        record = image.get_section_by_name(".MIPS.abiflags")
+        if (
+            image.header.e_flags >> 28 != level - 1
+            or image.elfclass != (32 if abi == "n32" else 64)
+            or bool(image.header.e_flags & 0x20) != (abi == "n32")
+            or image.little_endian != little
+            or record is None
+            or record.data()[2:5] != bytes((level, 0, 2))
+        ):
+            raise ValueError(f"{path}: historical ISA/ABI/byte-order evidence changed")
+
+
 def inputs(name, bits):
     pairs = [
         (a, b)
@@ -181,6 +271,19 @@ def inputs(name, bits):
                             (0xffffffff00000000, 0xffffffff),
                             (0xffffffffffffffff, 0xffffffffffffffff)])
         return vectors
+    if name.startswith("mips64ps_"):
+        values = (0, 0x800000003fc00000, 0x3fc00000bf800000,
+                  0x7fc000003f800000, 0x3f8000007f800001,
+                  0x7f8000017fc00000, 0x8000000000000001)
+        return [(a, b) for a in values for b in values]
+    if name == "history_merge":
+        return [(roundtrip.DATA + offset, 0) for offset in range(8)]
+    if name.startswith("history_div_"):
+        return [(a, b) for a, b in pairs if b] + [(-(1 << 63), -1), (-17, 3), (17, -3)]
+    if "fp_memory_" in name:
+        stride = 1 if "uxc1" in name else 4 if "wc1" in name or "wxc1" in name else 8
+        return [(roundtrip.DATA + base, offset - base)
+                for base in (0, 8, 16) for offset in range(0, 32, stride)]
     if "fp" in name:
         values = (
             (0, 0x80000000, 0x3FC00000, 0xBF800000, 0x7FC00000, 0x7F800001, 1)
@@ -204,7 +307,12 @@ def inputs(name, bits):
     return pairs
 
 
-def reference_model(bits, feature):
+def reference_model(bits, feature, micro_fp=False):
+    if micro_fp:
+        return (mips.UC_CPU_MIPS64_MICROMIPS64R2_GENERIC if bits == 64 else
+                mips.UC_CPU_MIPS32_MICROMIPS32R2_GENERIC)
+    if feature in ("fp", "ps"):
+        return mips.UC_CPU_MIPS64_MIPS64R2_GENERIC if bits == 64 else mips.UC_CPU_MIPS32_74KF
     if not feature:
         return (
             mips.UC_CPU_MIPS64_I6400
@@ -216,9 +324,15 @@ def reference_model(bits, feature):
     return mips.UC_CPU_MIPS32_P5600 if feature == "msa" else mips.UC_CPU_MIPS32_74KF
 
 
-def observe(elf, bits, little, feature, cases):
+def observe(elf, bits, little, feature, cases, micro_fp=False):
+    if micro_fp:
+        with elf.open("rb") as stream:
+            image = ELFFile(stream)
+            symbol = image.get_section_by_name(".symtab").get_symbol_by_name("kernel")[0]
+            if not image["e_flags"] & 0x02000000 or not symbol["st_other"]["local"] & 4:
+                raise ValueError(f"{elf}: floating kernel lost its microMIPS mode")
     uc, entry = roundtrip.emulator(
-        elf, bits, little, "kernel", cpu_model=reference_model(bits, feature)
+        elf, bits, little, "kernel", cpu_model=reference_model(bits, feature, micro_fp)
     )
     order = "little" if little else "big"
 
@@ -226,34 +340,42 @@ def observe(elf, bits, little, feature, cases):
         uc.mem_write(address, b"".join(w.to_bytes(4, order) for w in words))
         uc.emu_start(address, address + len(words) * 4, count=len(words))
 
-    if feature:
+    if feature and feature not in ("fp", "ps"):
         execute(
             roundtrip.STOP + 0x200,
             ASE["ENABLE_MSA" if feature == "msa" else "ENABLE_DSP"],
         )
-    if not feature:
+    if not feature or feature in ("fp", "ps"):
         status = uc.reg_read(mips.UC_MIPS_REG_CP0_STATUS) | 0x24000000
         uc.reg_write(mips.UC_MIPS_REG_CP0_STATUS, status)
     uc.mem_write(roundtrip.DATA, bytes((0x87 + 29 * i) & 255 for i in range(64)))
     observations = []
     for i, pair in enumerate(cases):
-        if not feature:
-            uc.reg_write(mips.UC_MIPS_REG_FCSR, 0xC0000 | (i & 3))
-        if feature:
+        if not feature or feature in ("fp", "ps"):
+            uc.reg_write(mips.UC_MIPS_REG_FCSR, (0x1000000 if feature in ("fp", "ps") else 0xC0000) | (i & 3))
+        if feature and feature not in ("fp", "ps"):
             uc.reg_write(
                 mips.UC_MIPS_REG_A0, 0x01004005 if feature != "msa" and i % 2 else 0
             )
             execute(
                 roundtrip.STOP + 0x300, [0x783E2059 if feature == "msa" else 0x7C81FCF8]
             )
-        value = roundtrip.invoke(uc, entry, bits, little, pair)[0]
-        control = uc.reg_read(mips.UC_MIPS_REG_FCSR) if not feature else None
-        if feature:
+        try:
+            value = roundtrip.invoke(uc, entry, bits, little, pair)[0]
+        except UcError as error:
+            raise RuntimeError(
+                f"{elf}: input {pair}, PC {uc.reg_read(mips.UC_MIPS_REG_PC):#x}: {error}"
+            ) from error
+        control = uc.reg_read(mips.UC_MIPS_REG_FCSR) if not feature or feature in ("fp", "ps") else None
+        if feature and feature not in ("fp", "ps"):
             execute(
                 roundtrip.STOP + 0x400, [0x787E0A19 if feature == "msa" else 0x7C3F44B8]
             )
             control = uc.reg_read(mips.UC_MIPS_REG_8) & 0xFFFFFFFF
-        observations.append((value, control))
+        observation = (value, control)
+        if feature in ("fp", "ps"):
+            observation += (bytes(uc.mem_read(roundtrip.DATA, 64)).hex(),)
+        observations.append(observation)
     return observations
 
 
@@ -354,27 +476,63 @@ def run(args, artifacts):
         [args.clang, "-print-resource-dir"], text=True
     ).strip()
     report = {"complete": False, "builds": [], "neverd_sha256": digest(args.neverd)}
-    for name, cpu, feature, body in kernels():
+    selected = list(kernels())
+    if args.historical_isa:
+        selected.extend(historical_integer_kernels())
+    for name, cpu, feature, body in selected:
         if args.profile and name not in args.profile:
             continue
-        bits = 64 if "64" in cpu else 32
-        micro = name.startswith("micro")
+        if args.micro_fp:
+            if feature not in ("fp", "ps"):
+                continue
+            # microMIPS has ordinary BC1T/F, without the classic likely forms.
+            if name.endswith("_branch"):
+                body = body.replace("bc1tl", "bc1t").replace(
+                    "ori $2,$0,2\n1:", "ori $2,$0,2\nori $2,$0,3\n1:")
+        if args.historical_isa:
+            if feature not in ("fp", "ps") or (
+                args.historical_isa == 4 and (feature == "ps" or "uxc1" in name)
+            ):
+                continue
+            cpu = "mips" + str(args.historical_isa)
+            # FCCR/FEXR/FENR were introduced in MIPS V. Observe the complete
+            # legacy FCSR on IV; both source views must preserve it exactly.
+            if args.historical_isa == 4:
+                body = body.replace("cfc1 $2,$25", "cfc1 $2,$31")
+        bits = 64 if args.historical_isa or "64" in cpu else 32
+        gcc = args.micro_fp and bits == 64
+        if gcc and not args.micro64_cc:
+            raise ValueError("microMIPS64 source validation requires --micro64-cc (GCC)")
+        compiler = args.micro64_cc if gcc else args.clang
+        includes = (subprocess.check_output(
+            [compiler, "-print-file-name=include"], text=True).strip()
+            if gcc else resource + "/include")
+        micro = args.micro_fp or name.startswith("micro")
         micro_r6 = micro and cpu.endswith("r6")
         # Clang 22's microR6 backend emits legacy LUI and JRC16 in its
         # prologue/epilogue. Keep the original R6 ISA and tagged entry, then
         # execute the unedited C on the GNU sim microMIPS32r2/o32 target.
         rebuild_cpu = "mips32r2" if micro_r6 else cpu
+        if args.historical_isa == 5:
+            # Clang 22 has no MIPS V code generator. Its MIPS IV scalar code
+            # is valid on V; the semantic helpers retain the original PS words.
+            # Record both ISAs rather than silently compiling for MIPS64r2.
+            rebuild_cpu = "mips4"
         # The pinned I6400 implements MSA and n64, with the Release 6
         # return encoding. The original uses JALR zero,ra, valid in r5 and r6.
         if bits == 64 and feature == "msa":
             rebuild_cpu = "mips64r6"
-        cases = inputs(name, bits)
-        extra = (["-m" + feature] if feature else []) + (
+        cases = inputs(name, 32 if args.historical_isa and name.startswith("mips32r2fp") else bits)
+        extra = (["-mfp64"] if feature in ("fp", "ps") else ["-m" + feature] if feature else []) + (
             ["-mfp64"] if feature == "msa" else []
         )
         for little in (False, True):
             target = ("mips64" if bits == 64 else "mips") + ("el" if little else "")
-            emulation = f"elf{bits}{'l' if little else 'b'}tsmip"
+            if name == "history_merge":
+                body = "ldl $2,7($4)\nldr $2,0($4)" if little else "ldl $2,0($4)\nldr $2,7($4)"
+            n32 = args.historical_isa and args.historical_abi == "n32"
+            emulation = (f"elf32{'l' if little else 'b'}tsmipn32" if n32 else
+                         f"elf{bits}{'l' if little else 'b'}tsmip")
             directory = root / (name + ("el" if little else ""))
             directory.mkdir()
             log = directory / "command.log"
@@ -421,7 +579,7 @@ def run(args, artifacts):
                             args.assembler,
                             "-" + cpu,
                             "-EL" if little else "-EB",
-                            "-" + str(bits),
+                            "-n32" if n32 else "-" + str(bits),
                             *extra,
                             "-o",
                             obj,
@@ -446,13 +604,17 @@ def run(args, artifacts):
 
             original = directory / "original.elf"
             assemble(original, micro)
+            if args.historical_isa:
+                verify_historical_image(
+                    original, args.historical_isa, args.historical_abi, little
+                )
             oracle = original
-            if micro and not micro_r6:
+            if micro and not micro_r6 and not args.micro_fp:
                 # The reference cores with DSP/MSA expose the classic encoding.
                 # NeverD receives the separately assembled physical micro ELF.
                 oracle = directory / "classic.elf"
                 assemble(oracle, False)
-            wanted = observe(oracle, bits, little, feature, cases)
+            wanted = observe(oracle, bits, little, feature, cases, args.micro_fp)
             if name.startswith("mips64discard"):
                 op = name.split("_", 1)[1]
                 for i, ((a, b), actual) in enumerate(zip(cases, wanted, strict=True)):
@@ -559,31 +721,48 @@ def run(args, artifacts):
                 )
                 try:
                     for opt in ("-O0", "-O2"):
-                        rebuilt = directory / "rebuilt.elf"
+                        obj = directory / f"{view}{opt}.o"
+                        rebuilt = directory / f"{view}{opt}.elf"
                         command(
                             [
-                                args.clang,
-                                f"--target={target}-linux-gnu",
+                                compiler,
+                                *(["-EL" if little else "-EB", "-minterlink-compressed"]
+                                  if gcc else [f"--target={target}-linux-gnu"]),
                                 "-march=" + rebuild_cpu,
-                                f"-mabi={bits}",
+                                "-mabi=n32" if n32 else f"-mabi={bits}",
                                 "-mno-abicalls",
                                 "-fno-pic",
                                 "-G0",
                                 "-ffreestanding",
+                                "-fno-strict-aliasing",
                                 "-nostdinc",
                                 "-isystem",
-                                resource + "/include",
+                                includes,
                                 "-I",
                                 headers,
                                 *extra,
                                 opt,
-                                "-c",
+                                *(["-S", "-fno-addrsig"]
+                                  if args.historical_isa == 5 else ["-c"]),
                                 source,
                                 "-o",
-                                obj,
+                                (obj.with_suffix(".s")
+                                 if args.historical_isa == 5 else obj),
                             ]
                         )
-                        if micro:
+                        if args.historical_isa == 5:
+                            # Assemble the compiler's IV scalar code and the
+                            # original PS words as V, preserving the ELF ISA
+                            # declaration as well as the physical instructions.
+                            assembly = obj.with_suffix(".s")
+                            command([
+                                args.assembler, "-mips5", "-mfp64",
+                                "-EL" if little else "-EB",
+                                "-n32" if n32 else "-64",
+                                assembly, "-o", obj,
+                            ])
+                            artifacts.discard(assembly)
+                        if micro and not args.micro_fp:
                             verify_micro(
                                 args,
                                 artifacts,
@@ -611,7 +790,12 @@ def run(args, artifacts):
                                     obj,
                                 ]
                             )
-                            got = observe(rebuilt, bits, little, feature, cases)
+                            if args.historical_isa:
+                                verify_historical_image(
+                                    rebuilt, args.historical_isa,
+                                    args.historical_abi, little
+                                )
+                            got = observe(rebuilt, bits, little, feature, cases, args.micro_fp)
                             for pair, actual, expected in zip(
                                 cases, got, wanted, strict=True
                             ):
@@ -623,7 +807,12 @@ def run(args, artifacts):
                             {
                                 "profile": directory.name,
                                 "source_isa": cpu,
-                                "rebuilt_isa": rebuild_cpu,
+                                "encoding": "micro" if micro else "classic",
+                                "abi": "n32" if n32 else str(bits),
+                                "codegen_isa": rebuild_cpu,
+                                "compiler": str(compiler),
+                                "rebuilt_isa": (cpu if args.historical_isa == 5
+                                                else rebuild_cpu),
                                 "view": view,
                                 "opt": opt,
                                 "cases": len(cases),
@@ -637,7 +826,7 @@ def run(args, artifacts):
                     raise
                 artifacts.discard(source)
             artifacts.discard(original, log)
-            if micro and not micro_r6:
+            if micro and not micro_r6 and not args.micro_fp:
                 artifacts.discard(oracle)
             artifacts.write("results.json", report)
     report["complete"] = True
@@ -656,10 +845,35 @@ if __name__ == "__main__":
         parser.add_argument(
             "--" + option, type=lambda s: Path(s).absolute(), required=True
         )
+    parser.add_argument("--historical-isa", type=int, choices=(4, 5))
+    parser.add_argument("--micro-fp", action="store_true",
+                        help="execute physical pre-R6 microMIPS FP originals and rebuilt C")
+    parser.add_argument("--micro64-cc", type=lambda s: Path(s).absolute(),
+                        help="GNU C compiler for physical microMIPS64 rebuilt functions")
+    parser.add_argument("--historical-abi", choices=("n32", "n64"), default="n64")
     parser.add_argument("--simulator", type=lambda s: Path(s).absolute())
-    parser.add_argument("--profile", action="append", choices=[k[0] for k in kernels()])
+    parser.add_argument("--profile", action="append", choices=[k[0] for k in kernels()] + [k[0] for k in historical_integer_kernels()])
     args = parser.parse_args()
-    if not args.simulator and (
+    if args.micro_fp and args.historical_isa:
+        parser.error("historical MIPS has no microMIPS encoding")
+    if args.micro_fp and args.profile:
+        available = {name for name, _, feature, _ in kernels() if feature in ("fp", "ps")}
+        if not set(args.profile) <= available:
+            parser.error("--micro-fp requires pre-R6 floating profiles")
+    if args.profile and not args.historical_isa and any(
+        p.startswith("history_") for p in args.profile
+    ):
+        parser.error("historical integer profiles require --historical-isa")
+    if args.historical_isa and args.profile:
+        available = {
+            name
+            for name, _, feature, _ in (*kernels(), *historical_integer_kernels())
+            if feature in ("fp", "ps")
+            and not (args.historical_isa == 4 and (feature == "ps" or "uxc1" in name))
+        }
+        if not set(args.profile) <= available:
+            parser.error("selected profiles are unavailable in the historical ISA")
+    if not args.simulator and not args.historical_isa and not args.micro_fp and (
         not args.profile or any(p.startswith("micro") for p in args.profile)
     ):
         parser.error("--simulator is required to execute rebuilt microMIPS kernels")
@@ -671,6 +885,7 @@ if __name__ == "__main__":
             args.linker,
             args.neverd,
             args.clang,
+            *([args.micro64_cc] if args.micro64_cc else []),
             *([args.simulator] if args.simulator else []),
         ),
     ) as artifacts:

@@ -10,10 +10,11 @@
 #include "neverd/backend/codegen/PatchObject.h"
 
 namespace neverd {
-/// Verify lifted code at its final PCs before committing the source entries.
+/// Verify lifted code and language metadata in the installed private candidate
+/// before atomic publication. The image includes newly generated LSDA storage.
 using MachOLiftedObjectVerifier = llvm::function_ref<llvm::Error(
-    const CompiledImage &, va_t OriginalSectionSlide,
-    llvm::ArrayRef<NativeMachOCompactRange>)>;
+    const CompiledImage &, const BinaryImage &Installed,
+    va_t OriginalSectionSlide, llvm::ArrayRef<NativeMachOCompactRange>)>;
 
 llvm::Expected<PatchResult>
 installMachOLiftedObject(llvm::StringRef Object, const BinaryImage &Original,

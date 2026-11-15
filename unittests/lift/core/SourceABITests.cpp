@@ -3152,8 +3152,9 @@ TEST(SourceABI, IndirectRecordCallInitializesAllFieldsAndKeepsReturnClobbers) {
     CEmitterOptions Options;
     Options.TheArch = Architecture;
     ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
-    Source += "\nstatic unsigned calls;\n" + typeToC(Record) +
-              " make_three(uint64_t value) { ++calls; " + typeToC(Record) +
+    Source += "\n#include <string.h>\nstatic unsigned calls;\n" +
+              typeToC(Record) + " make_three(uint64_t value) { ++calls; " +
+              typeToC(Record) +
               " result; uint64_t words[] = {value, value + 7, value * 3}; "
               "memcpy(&result, words, sizeof(result)); return result; }\n";
     executeC(Source + R"(
@@ -3244,8 +3245,9 @@ TEST(SourceABI, SixDoubleIndirectCallWritesEveryField) {
   CEmitterOptions Options;
   Options.TheArch = Architecture;
   ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
-  Source += "\nstatic unsigned calls;\n" + typeToC(Record) +
-            " make_six(double angle) { ++calls; " + typeToC(Record) +
+  Source += "\n#include <string.h>\nstatic unsigned calls;\n" +
+            typeToC(Record) + " make_six(double angle) { ++calls; " +
+            typeToC(Record) +
             " result; double values[6] = {angle, angle + 1, angle + 2, "
             "angle + 3, angle + 4, angle + 5}; "
             "memcpy(&result, values, sizeof(result)); return result; }\n";

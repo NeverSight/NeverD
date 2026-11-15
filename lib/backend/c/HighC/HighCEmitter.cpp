@@ -933,8 +933,7 @@ void HighCWriter::writeMemoryHelpers() {
     // Plain accesses of other types, and of a bit-precise integer a
     // little-endian target copies inline, need no helper.
     if (AddressSpace == NdMemoryAddressSpace::Default &&
-        (!PartialIntegerBytes.count(Type) ||
-         inlineMemoryBytes(Type).value_or(0)))
+        !accessesThroughHelpers(Type))
       return;
     const auto ReadPtr =
         AddressSpace == NdMemoryAddressSpace::Default
@@ -1907,7 +1906,11 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
       }
   if (NeedsBool)
     Headers.insert("stdbool.h");
-  if (!MemoryTypes.empty())
+  // Only the helpers of a value narrower than its storage call memcpy; every
+  // other access is spelled in place, a copy through __builtin_memcpy.
+  if (llvm::any_of(MemoryTypes, [&](const std::string &Type) {
+        return accessesThroughHelpers(Type);
+      }))
     Headers.insert("string.h");
   // The objects a C library header declares, which the unit reaches as it
   // declares them, or as bytes at their addresses.

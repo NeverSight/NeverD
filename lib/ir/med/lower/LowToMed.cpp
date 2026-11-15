@@ -853,7 +853,8 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       (Image
            ? (hasCompressedMIPSCode(Image->Mode) ||
               (Image->MIPS && (Image->MIPS->HasDSP || Image->MIPS->HasMSA ||
-                               Image->MIPS->ISARevision == 6)))
+                               Image->MIPS->ISARevision == 6 ||
+                               Image->MIPS->hasScalarFPABI(isMIPS64(TheArch)))))
            : llvm::any_of(Low.Blocks, [](const auto &Block) {
                // Standalone IR cannot drop a changed return link merely
                // because the original image's ASE record is unavailable.
@@ -1853,6 +1854,21 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
     modelSEHFinallyRegisters(Func);
     debugVerifyMedFunc(Func, "modelSEHFinallyRegisters");
 
+    if (isMIPS(TheArch) && Image && Image->MIPS &&
+        Image->MIPS->hasScalarFP32ABI(isMIPS64(TheArch)))
+      projectMIPSFP32Registers(
+          Func,
+          [&](uint16_t Bytes) {
+            MedVar Value;
+            Value.Kind = MedVar::Temp;
+            Value.Id = allocVarId();
+            Value.Size = Bytes;
+            Value.TheArch = TheArch;
+            return Value;
+          },
+          [&](unsigned Even) {
+            return ndVarToMedVar(NdVar::reg(mipsreg::w(Even), 8));
+          });
     fixupSubRegisters(Func);
     debugVerifyMedFunc(Func, "fixupSubRegisters");
 
