@@ -85,6 +85,10 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   adapter still declines split o32 values, register-padding holes and narrow
   big-endian overflow slots; complete typed ABI reconstruction is not claimed.
 
+  Typed source calls marshal the emitted integer view before consulting the
+  parameter's floating declaration. This keeps forwarded values as bits in
+  ordinary calls and the shared AArch64 authenticated-call packet path.
+
 LowIR execution retains the common known bits of the two permitted partial
 MIPS64 `LWR` upper words. Scalar COPY, SUBBYTES, CONCAT and integer extensions
 transport that uncertainty, so a later complementary load can produce a fully

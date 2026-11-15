@@ -11861,6 +11861,13 @@ edge/random bit patterns. AArch64 hosts compare against native instructions;
 other hosts use an explicit scalar reference with saturating truncation. NaN
 results are compared by classification, while other results require exact bits.
 
+`HighCSourceCalls.FloatingCallCarriersRemainBitsAtSourceBoundaries` also executes
+float/double entry parameters read through signed and unsigned integer views
+before native calls. O0/O2 comparisons retain signed zero, infinities and NaN
+payloads. Run its `NeverDSourceEntryBindingTests` owner together with
+`NeverDAArch64AuthenticatedCallTests`: the authenticated-call regression
+requires reconstructed caller IR to contain no numeric FP/integer conversion.
+
 `HighCIntegerConversion.NarrowCopyKeepsLowBytesThroughSourceProjection` starts
 from MedIR and checks narrowing copies followed by zero extension for i386,
 x86-64 and AArch64. The emitted C executes at O0/O2 with undefined-behavior
