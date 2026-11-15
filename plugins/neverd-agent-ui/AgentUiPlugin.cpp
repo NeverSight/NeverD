@@ -7,8 +7,9 @@
 /// \file
 /// The workbench's Agent entry: an "Ask Agent" button at the workbench's
 /// corner, as Office places its Copilot button, and a conversation window
-/// that a person moves by its title and resizes by its edges, as VS Code
-/// moves its quick input. Both remember where they were left.
+/// that opens in the middle of the workbench, moves by its title as VS
+/// Code's quick input does, and resizes by its edges. Both remember where
+/// they were left.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -57,6 +58,8 @@
 #include <QVariant>
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstdlib>
 #include <functional>
 #include <optional>
 #include <utility>
@@ -69,6 +72,10 @@ constexpr QSize ChatMinimumSize{340, 300};
 constexpr int ResizeBand = 6;
 // A button let go this close to the workbench's side docks there.
 constexpr int DockReach = 24;
+// A conversation moved this close to the middle of the workbench, on either
+// axis, snaps to it; VS Code's quick input snaps to its horizontal center
+// within the same distance.
+constexpr int CenterSnap = 20;
 constexpr int TeachingWidth = 320;
 constexpr int SuggestionCount = 3;
 constexpr int SpinnerStepMs = 80;
@@ -82,7 +89,7 @@ constexpr auto LauncherVisibleKey =
 constexpr auto LauncherHintKey = "guiPlugins/neverd.agent-ui/launcherHintShown";
 constexpr auto LauncherOffsetKey = "guiPlugins/neverd.agent-ui/launcherOffset";
 constexpr auto LauncherDockedKey = "guiPlugins/neverd.agent-ui/launcherDocked";
-constexpr auto ChatOffsetKey = "guiPlugins/neverd.agent-ui/chatOffset";
+constexpr auto ChatPlaceKey = "guiPlugins/neverd.agent-ui/chatPlace";
 constexpr auto ChatSizeKey = "guiPlugins/neverd.agent-ui/chatSize";
 constexpr auto TeachingKey = "guiPlugins/neverd.agent-ui/teachingShown";
 constexpr auto OpenShortcut = "Ctrl+Alt+I";
@@ -536,8 +543,15 @@ private:
   Colors Color;
 };
 
+/// The top-left corner that centers \p size in \p area.
+QPoint centeredIn(QSize area, QSize size) {
+  return {(area.width() - size.width()) / 2,
+          (area.height() - size.height()) / 2};
+}
+
 /// A card the person moves by its title and, when it is resizable, sizes by
 /// its edges. It asks the host for the place through ViewPositionProperty.
+/// Moved near the middle of its parent, it snaps there.
 class FloatingCard : public QFrame {
 public:
   using Changed = std::function<void()>;
@@ -698,6 +712,13 @@ private:
     QRect target = Origin;
     if (!Edges) {
       target.moveTopLeft(Origin.topLeft() + delta);
+      if (const auto *parent = parentWidget()) {
+        const QPoint middle = centeredIn(parent->size(), target.size());
+        if (std::abs(target.left() - middle.x()) < CenterSnap)
+          target.moveLeft(middle.x());
+        if (std::abs(target.top() - middle.y()) < CenterSnap)
+          target.moveTop(middle.y());
+      }
     } else {
       const QSize least = minimumSize().expandedTo(minimumSizeHint());
       if (Edges & Qt::LeftEdge)
@@ -782,8 +803,8 @@ public:
       return false;
     Ball = static_cast<Launcher *>(ball);
     auto *panel = Host.mountView(
-        "chat", {corner.Corner, "launcher"},
-        [this](QWidget *parent) { return makePanel(parent); }, error);
+        "chat", corner, [this](QWidget *parent) { return makePanel(parent); },
+        error);
     if (!panel)
       return false;
     Panel = static_cast<FloatingCard *>(panel);
@@ -1232,17 +1253,23 @@ private:
         offset.metaType().id() == QMetaType::QPoint)
       LauncherOffset = offset.toPoint();
     Ball->setDocked(settings.value(LauncherDockedKey, false).toBool());
-    if (const auto offset = settings.value(ChatOffsetKey);
-        offset.metaType().id() == QMetaType::QPoint)
-      ChatOffset = offset.toPoint();
+    if (const auto place = settings.value(ChatPlaceKey);
+        place.metaType().id() == QMetaType::QPointF) {
+      const QPointF share = place.toPointF();
+      if (std::isfinite(share.x()) && std::isfinite(share.y()))
+        ChatPlace = QPointF(std::clamp(share.x(), 0.0, 1.0),
+                            std::clamp(share.y(), 0.0, 1.0));
+    }
     if (const auto size = settings.value(ChatSizeKey);
         size.metaType().id() == QMetaType::QSize)
       Panel->setChosenSize(size.toSize().expandedTo(ChatMinimumSize));
     applyPlaces();
   }
 
-  // Each element keeps its distance from the workbench's bottom-right corner;
-  // a docked button keeps to the side.
+  // The button keeps its distance from the workbench's bottom-right corner,
+  // or keeps to the side when docked. The conversation keeps its share of the
+  // room it can move in, the middle until the person moves it, so a centered
+  // conversation stays centered while the workbench resizes.
   void applyPlaces() {
     if (LauncherOffset || Ball->docked()) {
       QPoint offset = LauncherOffset.value_or(QPoint());
@@ -1256,25 +1283,51 @@ private:
     } else {
       Ball->setProperty(ViewPositionProperty, QVariant());
     }
-    if (ChatOffset)
+    if (const auto *parent = Panel->parentWidget()) {
+      const QSize size = Panel->sizeHint();
+      const QSize room = parent->size() - size;
+      const QPoint middle = centeredIn(parent->size(), size);
+      const QPointF share = ChatPlace.value_or(QPointF(0.5, 0.5));
+      const auto along = [](qreal part, int space, int center) {
+        return part == 0.5 ? center : qRound(part * std::max(space, 0));
+      };
       Panel->setProperty(ViewPositionProperty,
-                         topLeftFor(*Panel, *ChatOffset, Panel->sizeHint()));
-    else
-      Panel->setProperty(ViewPositionProperty, QVariant());
+                         QPoint(along(share.x(), room.width(), middle.x()),
+                                along(share.y(), room.height(), middle.y())));
+    }
   }
 
   void saveChatPlace() {
-    ChatOffset = cornerOffset(*Panel);
+    const auto *parent = Panel->parentWidget();
+    if (!parent)
+      return;
+    // Where the person put it: the host may not have laid it out yet.
+    const auto requested = Panel->property(ViewPositionProperty);
+    const QPoint at = requested.metaType().id() == QMetaType::QPoint
+                          ? requested.toPoint()
+                          : Panel->pos();
+    const QSize size = Panel->sizeHint();
+    const QSize room = parent->size() - size;
+    const QPoint middle = centeredIn(parent->size(), size);
+    const auto part = [](int position, int space, int center) {
+      return position == center || space <= 0
+                 ? 0.5
+                 : std::clamp(qreal(position) / space, 0.0, 1.0);
+    };
+    ChatPlace = QPointF(part(at.x(), room.width(), middle.x()),
+                        part(at.y(), room.height(), middle.y()));
     QSettings settings;
-    settings.setValue(ChatOffsetKey, *ChatOffset);
+    settings.setValue(ChatPlaceKey, *ChatPlace);
     settings.setValue(ChatSizeKey, Panel->chosenSize());
   }
 
+  // A double click on the title puts the conversation back in the middle at
+  // its first size.
   void resetChatPlace() {
-    ChatOffset.reset();
+    ChatPlace.reset();
     Panel->setChosenSize(ChatSize);
     QSettings settings;
-    settings.remove(ChatOffsetKey);
+    settings.remove(ChatPlaceKey);
     settings.remove(ChatSizeKey);
     applyPlaces();
   }
@@ -1581,7 +1634,8 @@ private:
   QJsonObject Binding, Pending;
   qint64 RequestId = 0;
   std::optional<QPointF> PressPosition;
-  std::optional<QPoint> LauncherOffset, ChatOffset;
+  std::optional<QPoint> LauncherOffset;
+  std::optional<QPointF> ChatPlace;
   QPoint LauncherOrigin;
   bool HasProject = false;
   bool Ready = false;

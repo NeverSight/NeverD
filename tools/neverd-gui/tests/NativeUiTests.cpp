@@ -83,6 +83,12 @@ bool write(const QString &path, const QJsonObject &object) {
   return write(path, QJsonDocument(object).toJson());
 }
 
+/// Whether \p view stands in the middle of \p window.
+bool centeredIn(const QWidget &window, const QWidget &view) {
+  return view.pos() == QPoint((window.width() - view.width()) / 2,
+                              (window.height() - view.height()) / 2);
+}
+
 QString prepareInspector(const QString &dir, const QString &id) {
   const QFileInfo module(QStringLiteral(TEST_NATIVE_UI));
   if (!QDir().mkpath(dir) ||
@@ -467,16 +473,15 @@ private slots:
     QCOMPARE(clicks.count(), 0);
     QVERIFY(!panel->isVisible());
 
+    // Wherever the button is, the conversation opens in the middle of the
+    // workbench and stays there while the button moves.
     QTest::mouseClick(ball, Qt::LeftButton);
     QCOMPARE(clicks.count(), 1);
-    QTRY_VERIFY(panel->isVisible() &&
-                panel->geometry().top() > ball->geometry().bottom() &&
-                window.rect().contains(panel->geometry()));
+    QTRY_VERIFY(panel->isVisible() && centeredIn(window, *panel));
 
     drag({45, 314});
     QTRY_COMPARE(ball->pos(), QPoint(45, 314));
-    QTRY_VERIFY(panel->geometry().left() > ball->geometry().right());
-    QVERIFY(panel->isVisible());
+    QVERIFY(panel->isVisible() && centeredIn(window, *panel));
     QCOMPARE(clicks.count(), 1);
 
     // Let go at the side, the button docks there as its mark alone.
@@ -484,10 +489,12 @@ private slots:
     QTRY_VERIFY(window.rect().contains(ball->geometry()) &&
                 ball->geometry().right() > 900);
     QTRY_COMPARE(ball->width(), ball->height());
+    // A small workbench keeps both inside; the conversation may then cover
+    // the button, and closes by its own button or Escape.
     window.resize(500, 380);
     QTRY_VERIFY(window.rect().contains(ball->geometry()) &&
                 window.rect().contains(panel->geometry()) &&
-                !panel->geometry().intersects(ball->geometry()));
+                panel->geometry().center().x() == window.rect().center().x());
     QTest::mouseClick(ball, Qt::LeftButton);
     QCOMPARE(clicks.count(), 2);
     QVERIFY(!panel->isVisible());
@@ -515,6 +522,18 @@ private slots:
       ball->click();
       return window.findChild<QWidget *>("NeverDAgentChat");
     };
+    // Press on the title, move once by delta and let go.
+    const auto dragTitle = [](QWidget &title, QPoint delta) {
+      const QPoint grip(title.width() / 2, title.height() / 2);
+      QTest::mousePress(&title, Qt::LeftButton, Qt::NoModifier, grip);
+      const QPoint target = title.mapToGlobal(grip) + delta;
+      QMouseEvent move(QEvent::MouseMove, title.mapFromGlobal(target), target,
+                       Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+      QCoreApplication::sendEvent(&title, &move);
+      QCoreApplication::processEvents();
+      QTest::mouseRelease(&title, Qt::LeftButton, Qt::NoModifier,
+                          title.mapFromGlobal(target));
+    };
     QRect moved;
     {
       Session session(QStringLiteral(TEST_WORKER));
@@ -523,25 +542,15 @@ private slots:
           window, session, [&] { return window.rect(); }, [](const auto &) {});
       auto *panel = open(session, window, host);
       QVERIFY(panel);
-      auto *ball = window.findChild<QAbstractButton *>("NeverDAgentLauncher");
-      // First beside the button, above it.
-      QTRY_VERIFY(panel->isVisible() &&
-                  panel->geometry().bottom() < ball->geometry().top());
+      // First in the middle of the workbench.
+      QTRY_VERIFY(panel->isVisible() && centeredIn(window, *panel));
       auto *title = panel->findChild<QWidget *>("NeverDAgentTitleBar");
       QVERIFY(title);
       const QRect before = panel->geometry();
       // The title moves the window.
-      const QPoint grip(title->width() / 2, title->height() / 2);
-      QTest::mousePress(title, Qt::LeftButton, Qt::NoModifier, grip);
-      const QPoint target = title->mapToGlobal(grip) + QPoint(-260, -60);
-      QMouseEvent move(QEvent::MouseMove, title->mapFromGlobal(target), target,
-                       Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
-      QCoreApplication::sendEvent(title, &move);
-      QCoreApplication::processEvents();
-      QTest::mouseRelease(title, Qt::LeftButton, Qt::NoModifier,
-                          title->mapFromGlobal(target));
+      dragTitle(*title, QPoint(220, -60));
       QTRY_COMPARE(panel->geometry().topLeft(),
-                   before.topLeft() + QPoint(-260, -60));
+                   before.topLeft() + QPoint(220, -60));
       QCOMPARE(panel->size(), before.size());
       // Its left edge resizes it.
       const QPoint edge(2, panel->height() / 2);
@@ -554,9 +563,10 @@ private slots:
       QTest::mouseRelease(panel, Qt::LeftButton, Qt::NoModifier,
                           panel->mapFromGlobal(wider));
       QTRY_COMPARE(panel->width(), before.width() + 80);
-      QCOMPARE(panel->geometry().right(), before.right() - 260);
+      QCOMPARE(panel->geometry().right(), before.right() + 220);
       moved = panel->geometry();
-      // It stays inside the workbench when the workbench shrinks.
+      // It stays inside the workbench when the workbench shrinks, and keeps
+      // its share of the room when it grows again.
       window.resize(700, 500);
       QTRY_VERIFY(window.rect().contains(panel->geometry()));
       window.resize(1000, 700);
@@ -571,14 +581,24 @@ private slots:
       auto *panel = open(session, window, host);
       QVERIFY(panel);
       QTRY_COMPARE(panel->geometry(), moved);
-      // A double click on its title puts it back beside the button.
+      // A double click on its title puts it back in the middle at its first
+      // size and forgets the place.
       auto *title = panel->findChild<QWidget *>("NeverDAgentTitleBar");
       QTest::mouseDClick(title, Qt::LeftButton, Qt::NoModifier,
                          QPoint(title->width() / 2, title->height() / 2));
-      auto *ball = window.findChild<QAbstractButton *>("NeverDAgentLauncher");
-      QTRY_VERIFY(panel->geometry() != moved &&
-                  panel->geometry().bottom() < ball->geometry().top());
-      QVERIFY(!QSettings().contains("guiPlugins/neverd.agent-ui/chatOffset"));
+      QTRY_VERIFY(panel->size() == QSize(440, 520) &&
+                  centeredIn(window, *panel));
+      QVERIFY(!QSettings().contains("guiPlugins/neverd.agent-ui/chatPlace"));
+      QVERIFY(!QSettings().contains("guiPlugins/neverd.agent-ui/chatSize"));
+      // Away from the middle it stands where it is let go; near it, it
+      // snaps there and stays centered while the workbench resizes.
+      const QPoint middle = panel->pos();
+      dragTitle(*title, QPoint(150, 40));
+      QTRY_COMPARE(panel->pos(), middle + QPoint(150, 40));
+      dragTitle(*title, QPoint(-140, -35));
+      QTRY_COMPARE(panel->pos(), middle);
+      window.resize(900, 640);
+      QTRY_VERIFY(panel->pos() != middle && centeredIn(window, *panel));
     }
   }
 
@@ -655,8 +675,7 @@ private slots:
     QVERIFY(window.rect().contains(panel->geometry()));
     QVERIFY(!panel->geometry().intersects(ball->geometry()));
     window.resize(520, 410);
-    QTRY_VERIFY(window.rect().contains(panel->geometry()) &&
-                !panel->geometry().intersects(ball->geometry()));
+    QTRY_VERIFY(window.rect().contains(panel->geometry()));
     QVERIFY(panel->height() > 0);
     window.resize(1000, 700);
 
