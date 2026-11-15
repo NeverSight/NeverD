@@ -1,0 +1,88 @@
+{
+  "implementation_commits": [
+    "c11200ae107b9255bad5f44f2d399c2d66d51972",
+    "e831d123cf8484c024def231227f492f95501522"
+  ],
+  "base_commit": "68725c0f922ff2fa78c4012e2ef1c693adcb2e68",
+  "host": "macOS arm64, Release",
+  "corrections": [
+    "Retain floating source parameter declarations in the existing HighC bit-view map",
+    "Track the actual signedness of the bit-cast text before integer operations",
+    "Use compiler-specific MIPS16 C mode attributes from the shared .def catalog"
+  ],
+  "qualified_binaries": {
+    "neverd": "cafe843659fbdae694d71abddad8bbbea0c34487eb317aa09d8110a20a8897f6",
+    "libneverd.dylib": "64dd708b177e7552b08c86b03ece452df32464606db4b8297210edc25fd0afc6",
+    "neverd-mips-request-bench": "5f18baa849687945e3b804b102f7ca9da1f196e845f399f2f43851b7883adf9e"
+  },
+  "reference": {
+    "commit": "0b976580a5447dff2fd6822f07b4683c33392d78",
+    "sha256": "317c11b60bd78971ab52bf0da72d9bc6f035b24e2ef0fac9edf8cfaef847b1d5"
+  },
+  "owner_tests": {
+    "tests": 728,
+    "failures": 0,
+    "skipped": 0
+  },
+  "typed_gpr_float_roundtrip": {
+    "profiles": 12,
+    "original_cases": 1536,
+    "builds": 96,
+    "rebuilt_cases": 12288,
+    "byte_orders": [
+      "big",
+      "little"
+    ],
+    "modes": [
+      "classic",
+      "microMIPS",
+      "MIPS16"
+    ],
+    "fpr_modes": [
+      "FR=0",
+      "FR=1"
+    ],
+    "compilers": [
+      "Clang 22.1.6",
+      "GCC 12.2.0"
+    ],
+    "source_routes": [
+      "HighC",
+      "LLVMC"
+    ],
+    "optimization": [
+      "O0",
+      "O2"
+    ],
+    "checks": [
+      "Raw result bits including NaN payloads and negative zero",
+      "FCSR",
+      "ABI-preserved GPRs and FPRs",
+      "SP and incoming return link",
+      "Executed classic instruction after compressed return"
+    ]
+  },
+  "existing_mips16_regression": {
+    "source_groups": 312,
+    "original_rebuilt_comparisons": 16736,
+    "qualified_domain_refusals": 16,
+    "complete": true
+  },
+  "negative_controls": [
+    "Before the declared-type correction, original classic/mips16 input produced integer XOR floating source; the old shared emitter also returned a numeric conversion instead of bits.",
+    "Before the signedness correction, logical right shift of negative raw carriers returned the arithmetic-shift result in the 32/64-bit O0 execution checks.",
+    "GCC 12.2 rejects the previous mips16,nomicromips attribute pair on the generated source."
+  ],
+  "receipts": {
+    "final-owner-tests.xml": "e7a37f9213900a56d3ff2af9a8cbe793888bdb87768ad8a572423e3a6bc87270",
+    "roundtrip/results.json": "64f24802ed7a8e7825f7179df335a04995a2a75cae6b2c2cdf20cb2161b28419",
+    "roundtrip/commands.json": "9b05ecaa6c6f6430bcc4010fff937c0c21745b16f594201382e59683eeba0bb2",
+    "mips16-regression/results.json": "95923432ff0449f03111b8b4ef793fc8b5a1622f823f4275f47d4045532994ea"
+  },
+  "limits": [
+    "The MIPS16 leaf receives a float following an integer in GPRs; leading FP parameters and linker/runtime FP call or return helpers are not qualified.",
+    "LLVMC retains the recovered integer carrier signature for these typed floating GPR inputs.",
+    "Old DSP64 rounding/saturating extraction, signed DMADD/DMSUB and MIPS I-III scheduling are unchanged by these source fixes.",
+    "Local qualification is separate from the pending final-head three-platform CI gate."
+  ]
+}
