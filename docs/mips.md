@@ -6,6 +6,8 @@ cover classic Release 2 integer, FR=0/FR=1 scalar floating-point and FR=1
 paired-single instructions,
 classic and microMIPS Release 6 integer and FR=1 floating-point instructions, microMIPS32 and microMIPS64 integer profiles,
 MIPS16e32 and MIPS16e2, and Release 5/o32 and n64 MSA.
+Classic MIPS IV/V n32/n64 also admit the implemented integer and floating-point
+slice, with version-specific instruction checks described below.
 The selected ELF profile determines register width, byte order, stack layout
 and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
 
@@ -128,7 +130,7 @@ Reading only a low byte or halfword does not prove that incoming upper bits
 have the extension a narrow C parameter would require. Declared source types
 remain a separate contract.
 
-Coverage remains incomplete for historical MIPS I–V profiles, pre-R6 microMIPS
+Coverage remains incomplete for historical MIPS I–III profiles, pre-R6 microMIPS
 floating point, trapping arithmetic and the MSA/DSP forms outside the
 slices below. Privileged instructions and reservations are admitted by profile
 as described under MIPS16e2 and classic Release 6. Unsupported instructions, missing slots and transfers in a
@@ -1139,6 +1141,49 @@ containers/mapping are tracked separately by [#1727](https://github.com/NeverSig
 the ISA work belongs to [#97](https://github.com/NeverSight/NeverD/issues/97).
 
 
+### Historical MIPS IV and V
+
+Linked classic n32/n64 ELF files can select MIPS IV or MIPS V in either byte
+order. `e_flags` and `.MIPS.abiflags` must agree about the historical architecture
+level; this level is separate from the MIPS32/MIPS64 release number. Historical
+profiles reject modern ASE declarations, compressed mode and NaN2008 evidence.
+The shared availability catalog gates physical words before decoder fallbacks
+and at direct lift entry, including after decoder reuse. It does not imply that
+every architecturally available instruction has a semantic implementation.
+Trapping arithmetic, privileged operations and reservations retain the limits
+listed above. Historical o32 and the I–III scheduling contracts remain unqualified.
+
+IV admits the implemented integer and scalar COP1/COP1X slice; V additionally
+admits paired-single and LUXC1/SUXC1. ROTR, EXT, MFHC1 and other release-only
+forms cannot enter through a Capstone alias. The historical SLL-to-zero words
+later used for EHB and PAUSE keep their original shift semantics. IV condition
+branches and conditional moves read the conditions from FCSR; V also admits
+FCCR/FEXR/FENR. Floating execution uses the existing pre-R6 computational
+contract after historical instruction admission, including legacy NaNs,
+rounding, sticky flags and enabled exceptions. It does not substitute Release 6
+floating behavior or establish a historical physical-CPU timing model.
+The paired-single decoder supplies missing pack, unpack, shuffle and alignment
+operand records while retaining the physical instruction for lifting.
+
+`profile-roundtrip.py --historical-isa 4|5 --historical-abi n32|n64` assembles
+original historical ELF profiles, then executes their HighC and LLVMC outputs
+at O0/O2. Clang 22 lacks a MIPS V code generator: the V source check uses its
+MIPS IV scalar code generator and the semantic helpers' original PS words.
+GNU as assembles that unedited output for V, so both original and rebuilt ELF
+headers and ABI records retain V. The receipt records source, code-generation
+and rebuilt ISA separately.
+The original-instruction reference is the pinned compatible MIPS64r2 FPU;
+physical MIPS IV/V hardware is not qualified. The availability rules follow
+[MIPS IV ISA revision 3.2](https://www.infania.net/misc1/sgi_techpubs/techpubs/007-2597-001.pdf)
+and the historical notes in
+[MIPS64 Volume II revision 2.50](https://0x04.net/~mwk/doc/mips/MD00087-2B-MIPS64BIS-AFP-02.50.pdf).
+
+The [2026-11-15 historical qualification receipt](evidence/mips-historical-2026-11-15.json)
+records 940 original ELF profiles, 3,760 source builds and 163,440 executions
+across both ABIs, byte orders, C views and optimization levels. The LowIR
+arithmetic matrix adds 264,576 original-instruction comparisons. These results
+qualify the stated slice, not full historical ISA coverage.
+
 ### Classic Release 2 scalar FPU
 
 The scalar FP owner admits classic pre-R6 COP1/COP1X with explicit register-mode
@@ -1146,7 +1191,7 @@ evidence: o32 FP64 (GNU FP ABI 6) or n32/n64 hard double (ABI 1) establishes
 FR=1. o32 hard double (ABI 1) with 32-bit CPR1 evidence establishes FR=0.
 Conflicting CPR1 widths, EF_MIPS_FP64 with FR=0, and FR=0 under Release 6 are
 rejected. FPXX and integer-only images do not establish an FPR mode. Both GPR
-widths and byte orders share the instruction owner. Historical MIPS I–V
+widths and byte orders share the instruction owner. Historical MIPS I–III
 profiles and pre-R6 microMIPS floating point remain outside this profile.
 
 FR=0 LowIR retains 32 independent physical FPR words. Doubles join the even

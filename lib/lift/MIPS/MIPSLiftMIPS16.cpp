@@ -36,7 +36,7 @@ std::optional<MIPSLifter::Encoding>
 MIPSLifter::mips16JumpEncoding(const cs_insn &Instruction) const {
   if (Instruction.size != 2 && Instruction.size != 4)
     return std::nullopt;
-  const bool Little = archLittleEndian(Target);
+  const bool Little = LittleEndian;
   const uint16_t First = readTargetEndian<uint16_t>(Instruction.bytes, Little);
   // Only direct calls and short register jumps can have a delay slot. Keep
   // their normalization here so slot queries do not normalize scalar ops.
@@ -163,7 +163,7 @@ std::optional<MIPSLifter::Encoding>
 MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
   if (Instruction.size != 2 && Instruction.size != 4)
     return std::nullopt;
-  const bool Little = archLittleEndian(Target);
+  const bool Little = LittleEndian;
   const uint16_t First = readTargetEndian<uint16_t>(Instruction.bytes, Little);
   const bool Extended = First >> 11 == 0x1e;
   const bool DirectCall = First >> 11 == 3;

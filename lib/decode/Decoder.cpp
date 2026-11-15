@@ -16,6 +16,7 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/MIPS/MIPSHistoricalISA.h"
 #include "neverd/lift/AArch64/AArch64Lifter.h"
 #include "neverd/lift/ARM/ARMLifter.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
@@ -97,7 +98,7 @@ bool Decoder::init(Arch TheArch, InstructionMode Mode) {
 }
 
 bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
-                                   uint8_t Revision) {
+                                   uint8_t Revision, uint8_t Historical) {
   if ((Mode == InstructionMode::MIPSClassic || isMIPSCompressedMode(Mode)) &&
       !isMIPS(TheArch)) {
     syncError() << "MIPS instruction mode requires a MIPS target\n";
@@ -145,14 +146,18 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
     if ((Mode != InstructionMode::Default &&
          Mode != InstructionMode::MIPSClassic && !isMIPSCompressedMode(Mode)) ||
         (isMIPS64(TheArch) && Mode == InstructionMode::MIPS16) ||
-        (Revision != 2 && Revision != 5 && Revision != 6) ||
+        (Historical ? (Historical < 4 || Historical > 5 || Revision ||
+                       !isMIPS64(TheArch) || isMIPSCompressedMode(Mode))
+                    : (Revision != 2 && Revision != 5 && Revision != 6)) ||
         (Revision != 2 && Mode == InstructionMode::MIPS16)) {
       syncError() << "unsupported MIPS instruction mode\n";
       return false;
     }
     CsArch = CS_ARCH_MIPS;
     CsMode = static_cast<cs_mode>(
-        (Revision == 6
+        (Historical == 4   ? CS_MODE_MIPS4
+         : Historical == 5 ? CS_MODE_MIPS5
+         : Revision == 6
              ? (isMIPS64(TheArch) ? CS_MODE_MIPS64R6 : CS_MODE_MIPS32R6)
          : Revision == 5
              ? (isMIPS64(TheArch) ? CS_MODE_MIPS64R5 : CS_MODE_MIPS32R5)
@@ -165,7 +170,7 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
         (Mode == InstructionMode::MIPS16 ? CS_MODE_MIPS16 : 0) |
         (archLittleEndian(TheArch) ? CS_MODE_LITTLE_ENDIAN
                                    : CS_MODE_BIG_ENDIAN));
-    NewMIPS = std::make_unique<MIPSLifter>(TheArch, Mode, Revision);
+    NewMIPS = std::make_unique<MIPSLifter>(TheArch, Mode, Revision, Historical);
     break;
   default:
     syncError() << "unsupported arch for decoder\n";
@@ -202,6 +207,8 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
   TargetArch = TheArch;
   CurrentMode = Mode;
   MIPSISARevision = Revision;
+  MIPSHistoricalISA = Historical;
+  MIPSNeedsDecodeGuard = NewMIPS && (Revision == 6 || Historical);
   MIPSInvalidAddressBits = mipsInvalidAddressBits(TheArch, Mode);
   Detail = true;
   Text = true;
@@ -247,7 +254,8 @@ bool Decoder::init(const BinaryImage &Img) {
   }
   if (Img.Mode != InstructionMode::MixedARMThumb) {
     if (!initWithMIPSRevision(Img.Arch, Img.Mode,
-                              Img.MIPS ? Img.MIPS->ISARevision : 2))
+                              Img.MIPS ? Img.MIPS->ISARevision : 2,
+                              Img.MIPS ? Img.MIPS->HistoricalISA : 0))
       return false;
     configureFor(Img);
     return true;
@@ -266,15 +274,17 @@ bool Decoder::selectMode(const BinaryImage &Img, va_t Addr,
   if (Addr & mipsInvalidAddressBits(Img.Arch, *Mode))
     return false;
   const uint8_t Revision = Img.MIPS ? Img.MIPS->ISARevision : 2;
+  const uint8_t Historical = Img.MIPS ? Img.MIPS->HistoricalISA : 0;
   if (Handle && TargetArch == Img.Arch && CurrentMode == *Mode &&
-      (!MIPS || MIPSISARevision == Revision)) {
+      (!MIPS ||
+       (MIPSISARevision == Revision && MIPSHistoricalISA == Historical))) {
     if (AArch64 || MIPS)
       configureFor(Img);
     return true;
   }
   const bool WasDetail = Detail;
   const bool WasText = Text;
-  if (!initWithMIPSRevision(Img.Arch, *Mode, Revision))
+  if (!initWithMIPSRevision(Img.Arch, *Mode, Revision, Historical))
     return false;
   setDetail(WasDetail);
   setText(WasText);
@@ -311,20 +321,43 @@ bool Decoder::decodeArchitectureFallback(const uint8_t *Bytes, size_t Len,
   return MIPS && decodeMIPSASE(Bytes, Len, Addr);
 }
 
+namespace {
+// The historical selector table must not expand every common decode entry.
+LLVM_ATTRIBUTE_NOINLINE bool historicalMIPSWordAvailable(const uint8_t *Bytes,
+                                                         size_t Len,
+                                                         Arch Target,
+                                                         unsigned Level) {
+  return Len >= 4 &&
+         mips::historicalInstructionAvailable(
+             readTargetEndian<uint32_t>(Bytes, archLittleEndian(Target)),
+             Level);
+}
+} // namespace
+
 LLVM_ATTRIBUTE_ALWAYS_INLINE bool
 Decoder::decodePhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
   InsnBuf->illegal = false;
-  if (MIPSISARevision == 6 && CurrentMode == InstructionMode::MicroMIPS)
-    return decodeMicroMIPSRelease6(Bytes, Len, Addr);
-  if (MIPSISARevision == 6 && Len >= 4) {
-    const auto Word =
-        readTargetEndian<uint32_t>(Bytes, archLittleEndian(TargetArch));
-    if ((Word & 0xffc0003c) == 0x4600001c)
-      return decodeR6FloatCompare(Bytes, Word, Addr);
-    // The physical decoder aliases paired LL/SC to an offset form and swaps the
-    // n64 SC operands. Own this small SPECIAL3 group before public decoding.
-    if ((Word & 0xfc00002e) == 0x7c000026)
-      return decodeMIPSReservation(Bytes, Word, Addr);
+  // Admission fixes whether this profile needs physical preprocessing. Keep
+  // historical checks off ordinary MIPS and unrelated architecture decoders.
+  if (MIPSNeedsDecodeGuard) {
+    if (MIPSHistoricalISA) {
+      if (!historicalMIPSWordAvailable(Bytes, Len, TargetArch,
+                                       MIPSHistoricalISA))
+        return false;
+    } else {
+      if (CurrentMode == InstructionMode::MicroMIPS)
+        return decodeMicroMIPSRelease6(Bytes, Len, Addr);
+      if (Len >= 4) {
+        const auto Word =
+            readTargetEndian<uint32_t>(Bytes, archLittleEndian(TargetArch));
+        if ((Word & 0xffc0003c) == 0x4600001c)
+          return decodeR6FloatCompare(Bytes, Word, Addr);
+        // The physical decoder aliases paired LL/SC to an offset form and
+        // swaps the n64 SC operands. Own SPECIAL3 before public decoding.
+        if ((Word & 0xfc00002e) == 0x7c000026)
+          return decodeMIPSReservation(Bytes, Word, Addr);
+      }
+    }
   }
   // POOL32S vector forms have no microMIPS entries in Capstone. Avoid a
   // failed physical decode for every vector arithmetic or load/store opcode.

@@ -97,7 +97,7 @@ MIPSLifter::microLegacyJump(uint16_t First, uint16_t Second) const {
 unsigned MIPSLifter::microDelaySlotBytes(const cs_insn &Instruction) const {
   if (ISARevision == 6 || (Instruction.size != 2 && Instruction.size != 4))
     return 0;
-  const bool Little = archLittleEndian(Target);
+  const bool Little = LittleEndian;
   const auto First = readTargetEndian<uint16_t>(Instruction.bytes, Little);
   const auto Size = microInstructionBytes(First);
   if (Instruction.size != Size)
@@ -112,7 +112,7 @@ std::optional<MIPSLifter::Encoding>
 MIPSLifter::microEncoding(const cs_insn &Instruction) const {
   if (Instruction.size != 2 && Instruction.size != 4)
     return std::nullopt;
-  const bool Little = archLittleEndian(Target);
+  const bool Little = LittleEndian;
   const uint16_t First = readTargetEndian<uint16_t>(Instruction.bytes, Little);
   const unsigned Major = First >> 10;
   if (Instruction.size != microInstructionBytes(First))

@@ -27,8 +27,7 @@ class MIPSLifter {
 public:
   explicit MIPSLifter(Arch Target,
                       InstructionMode Mode = InstructionMode::Default,
-                      uint8_t Revision = 2)
-      : Target(Target), Mode(Mode), ISARevision(Revision) {}
+                      uint8_t Revision = 2, uint8_t Historical = 0);
 
   void lift(const cs_insn &Instruction, std::vector<LowOp> &Ops,
             std::optional<bool> ForbiddenFollower = std::nullopt) const;
@@ -84,6 +83,7 @@ private:
     void writeAccumulator(unsigned Bank, NdVar Value);
     void discardHILO();
     NdVar floatClass(NdVar X);
+    NdVar floatConditions(bool Historical);
     NdVar vectorElement(unsigned Reg, unsigned Index, uint16_t Bytes);
     void writeVector(unsigned Reg, llvm::MutableArrayRef<NdVar> Elements);
     void requireWord(unsigned Register);
@@ -149,6 +149,10 @@ private:
   Arch Target;
   InstructionMode Mode;
   uint8_t ISARevision;
+  uint8_t HistoricalISA;
+  bool LittleEndian;
+  uint8_t RegisterBytes;
+  uint16_t EncodingProfile;
   bool HasDSP = false;
   bool HasDSPR2 = false;
   bool HasMSA = false;

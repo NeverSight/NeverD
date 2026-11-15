@@ -24447,3 +24447,26 @@ child readers, preserved inputs and the actual paired-measurement entry point
 with tiny fake commands. The roundtrip compiler-failure entry check uses the
 local pinned Unicorn bindings when available. These are artifact lifecycle
 checks, not performance or ISA qualification measurements.
+
+### Historical MIPS IV/V qualification
+
+`MIPSHistoricalLoader.*` checks both byte orders, n32/n64, missing and matching
+ABI records and conflicting historical levels. `MIPSHistorical.*` distinguishes
+I–V instruction introductions, release-only words, invalid direct-lift profiles,
+decoder/architecture reuse and all eight FCSR condition bits.
+`MIPSHistoricalFP.*` executes 84 IV and 109 V scalar/paired arithmetic forms
+against compatible original machine instructions, including rounding, FCSR and
+faulting write suppression.
+The older I–III timing profiles remain rejected rather than silently using r2.
+
+Run `unittests/lift/mips/profile-roundtrip.py` with `--historical-isa 4` or `5`
+and `--historical-abi n32` or `n64`, plus the ordinary assembler, linker,
+NeverD, Clang and output arguments. This exercises original historical ELF
+admission, both C views, both byte orders and O0/O2. It preserves the original
+PS instruction in V helpers while compiling scalar code with Clang's MIPS IV
+backend, since Clang 22 rejects MIPS V code generation. GNU as assembles that
+unedited compiler output as V. Original and rebuilt ELF headers and ABI records
+must retain the selected historical ISA, ABI and byte order. Receipts record
+source, code-generation and rebuilt ISA; no physical historical CPU is claimed.
+The same artifact owner records failed source/commands and removes generated
+ELFs, objects and superseded source after each attempt.

@@ -7,6 +7,7 @@
 #ifndef NEVERD_IR_INTRINSICS_MIPS_MIPSSCALARFPOPERATIONS_H
 #define NEVERD_IR_INTRINSICS_MIPS_MIPSSCALARFPOPERATIONS_H
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/intrinsics/MIPS/MIPSHistoricalISA.h"
 
 #include <array>
 #include <cstdint>
@@ -34,7 +35,7 @@ struct ScalarFPOperation {
             !(Function >= 8 && Function <= 15) && Function != 36 &&
             Function != 37);
   }
-  uint32_t encoding() const {
+  constexpr uint32_t encoding() const {
     return Key & 0x8000 ? 0x4c000000u | (Key & 63)
                         : 0x44000000u | (uint32_t(Key >> 6) << 21) | (Key & 63);
   }
@@ -56,7 +57,10 @@ constexpr bool isScalarFPControl(Intrinsic Id) {
   return Id == Intrinsic::MIPSReadFPControl ||
          Id == Intrinsic::MIPSWriteFPControl;
 }
-constexpr bool scalarFPControlSelector(unsigned Index, bool Write) {
+constexpr bool scalarFPControlSelector(unsigned Index, bool Write,
+                                       unsigned HistoricalISA = 0) {
+  if (HistoricalISA && HistoricalISA < 5 && Index != 0 && Index != 31)
+    return false;
   return (!Write && Index == 0) || Index == 25 || Index == 26 || Index == 28 ||
          Index == 31;
 }
@@ -72,12 +76,16 @@ constexpr bool scalarFPHasSelector(Intrinsic Id) {
          (isScalarFPArithmetic(Id) && scalarFPOperation(Id).writesCondition());
 }
 constexpr bool scalarFPAvailable(Intrinsic Id, unsigned Revision,
-                                 bool PairedRegisters = false) {
+                                 bool PairedRegisters = false,
+                                 unsigned HistoricalISA = 0) {
   if (isScalarFPControl(Id))
     return true;
   if (!isScalarFPArithmetic(Id))
     return false;
   const auto &F = scalarFPOperation(Id);
+  if (HistoricalISA &&
+      !historicalInstructionAvailable(F.encoding(), HistoricalISA))
+    return false;
   if (PairedRegisters &&
       (F.isPairedSingle() ||
        (!(F.Key & 0x8000) &&
