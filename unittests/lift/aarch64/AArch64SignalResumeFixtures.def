@@ -332,6 +332,85 @@ extern "C" __attribute__((noinline)) void signal_scope(int *trace,
     tick();
 }
 )cpp")
+// An independent LSDA protects exactly one load in a loop with no calls.
+// The handler updates the trace before resuming the same language exception.
+ASYNC_FRAME_TEXT(kSignalNonCallSource, "noncall.S")
+ASYNC_FRAME_TEXT(kSignalObjCPersonality, "-DNEVERD_OBJC_PERSONALITY")
+ASYNC_FRAME_TEXT(kSignalNonCallExceptions, "native_noncall_language_cleanups")
+ASYNC_FRAME_TEXT(kSignalNonCallObjCExceptions, "native_noncall_objc_cleanups")
+ASYNC_FRAME_TEXT(kSignalNonCallBody, R"asm(
+ .text
+ .globl _signal_scope
+ .p2align 2
+_signal_scope:
+Lfunc_begin:
+ .cfi_startproc
+ .cfi_b_key_frame
+#ifdef NEVERD_OBJC_PERSONALITY
+ .cfi_personality 155, ___objc_personality_v0
+#else
+ .cfi_personality 155, ___gxx_personality_v0
+#endif
+ .cfi_lsda 16, Lexception
+ pacibsp
+ stp x29, x30, [sp, #-32]!
+ .cfi_def_cfa_offset 32
+ .cfi_offset x29, -32
+ .cfi_offset x30, -24
+ stp x20, x19, [sp, #16]
+ .cfi_offset x20, -16
+ .cfi_offset x19, -8
+ mov x29, sp
+ .cfi_def_cfa_register x29
+ mov x19, x0
+ .cfi_escape 0x2e, 0
+Lprotected:
+ ldr w9, [x19]
+Lprotected_end:
+ b Lprotected
+Lcleanup:
+ ldr w9, [x19]
+ mov w10, #10
+ madd w9, w9, w10, wzr
+#ifdef NEVERD_RESUME_PUBLISHED
+ add w9, w9, #3
+#else
+ add w9, w9, #1
+#endif
+ str w9, [x19]
+Lresume:
+ bl __Unwind_Resume
+Lresume_end:
+ brk #1
+ .cfi_endproc
+ .globl _signal_tick
+ .p2align 2
+_signal_tick:
+ .cfi_startproc
+ ret
+ .cfi_endproc
+ .section __TEXT,__gcc_except_tab
+ .p2align 2
+Lexception:
+ .byte 255
+ .byte 255
+ .byte 1
+ .uleb128 Ltable_end-Ltable
+Ltable:
+ .uleb128 Lprotected-Lfunc_begin
+ .uleb128 Lprotected_end-Lprotected
+ .uleb128 Lcleanup-Lfunc_begin
+ .byte 0
+ // Resuming the exception has no local cleanup. Without this entry the
+ // personality treats the second-phase return edge as a missing call site.
+ .uleb128 Lresume-Lfunc_begin
+ .uleb128 Lresume_end-Lresume
+ .byte 0
+ .byte 0
+Ltable_end:
+ .subsections_via_symbols
+)asm")
+
 ASYNC_FRAME_TEXT(kSignalScopeDriver, R"cpp(
 #include "neverd/runtime/DarwinArm64eSystemUnwind.h"
 

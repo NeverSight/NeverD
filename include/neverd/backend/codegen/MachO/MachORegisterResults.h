@@ -14,10 +14,13 @@
 #define NEVERD_BACKEND_CODEGEN_MACHO_MACHOREGISTERRESULTS_H
 
 #include "neverd/Common.h"
+#include "neverd/loader/LanguageEHDwarf.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/Error.h"
+
+#include <vector>
 
 namespace llvm {
 class Module;
@@ -25,7 +28,14 @@ class Module;
 
 namespace neverd {
 struct BinaryImage;
+struct CompactUnwindEntry;
 struct MedFunc;
+
+/// Complete-prologue DWARF for a frameless compact recipe with saved pairs.
+/// Darwin's system compact walker cannot restore that layout correctly.
+/// Both the native producer and final-object verifier use this contract.
+std::vector<CFIInstruction>
+machOFramelessSpillRows(const CompactUnwindEntry &Compact);
 
 /// An indexed access using the physical SP cannot use a reconstructed stack.
 bool needsMachONativeStackIndex(const MedFunc &Function);

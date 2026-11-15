@@ -43,6 +43,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 using namespace neverd;
@@ -305,7 +306,30 @@ void verifySavedRegisters(
     if (Compact) {
       ASSERT_TRUE(Before->Compact && After->Compact);
       EXPECT_FALSE(Before->Dwarf);
-      EXPECT_FALSE(After->Dwarf);
+      if (Frameless) {
+        ASSERT_TRUE(After->Dwarf);
+        EXPECT_EQ(After->Compact->NativeEncoding & macho_unwind::kModeMask,
+                  macho_unwind::kARM64ModeDwarf);
+        std::vector<CFIInstruction> Expected{
+            {.Kind = CFIOpKind::GnuArgsSize},
+            {.Kind = CFIOpKind::DefCFAOffset,
+             .Offset =
+                 kCompactFrameDepth + (ExtraStack ? kCompactExtraDepth : 0)}};
+        for (const auto &[Reg, Offset] : CompactSpills)
+          Expected.push_back(
+              {.Kind = CFIOpKind::Offset, .Register = Reg, .Offset = Offset});
+        const auto Effective = [](const auto &Row) {
+          return Row.Kind != CFIOpKind::Nop;
+        };
+        EXPECT_TRUE(llvm::equal(
+            Expected,
+            llvm::make_filter_range(After->Dwarf->Instructions, Effective),
+            dwarf_eh::sameCFIInstruction));
+      } else {
+        EXPECT_FALSE(After->Dwarf);
+        EXPECT_EQ(After->Compact->NativeEncoding,
+                  Before->Compact->NativeEncoding);
+      }
       const auto Mode =
           Frameless ? kCompactFramelessMode |
                           ((kCompactFrameDepth +
@@ -317,8 +341,6 @@ void verifySavedRegisters(
                                           << kPAuthLRShift
               : kCompactFrameMode;
       EXPECT_EQ(Before->Compact->NativeEncoding, Mode | *CompactPairs);
-      EXPECT_EQ(After->Compact->NativeEncoding,
-                Before->Compact->NativeEncoding);
       continue;
     }
     ASSERT_TRUE(Before->Dwarf && After->Dwarf);
@@ -463,7 +485,8 @@ void verifySavedRegisters(
     if (!SigningOffset && std::getenv(kExecute)) {
       ASSERT_EQ(
           llvm::sys::ExecuteAndWait(
-              Driver, {Driver, InstalledImage ? Output : Input, RulesPath}),
+              Driver, {Driver, InstalledImage ? Output : Input, RulesPath,
+                       std::to_string(InstalledImage && Frameless && Signal)}),
           0);
       ++Executions;
     }
@@ -476,6 +499,9 @@ void verifySavedRegisters(
   testing::Test::RecordProperty(
       kPublishedHash, llvm::toHex(llvm::SHA256::hash(Published->Raw), true));
   testing::Test::RecordProperty(kNativeImages, Executions);
+  if (Frameless && Signal)
+    testing::Test::RecordProperty(kSystemSteps,
+                                  Executions / 2 * Functions * kSignalRounds);
   if (SigningOffset)
     testing::Test::RecordProperty(kPAuthLRImages, 2);
   testing::Test::RecordProperty(Signal ? kResumptions : kObservedCalls,
@@ -575,6 +601,20 @@ TEST(AArch64CompactRegisters, PublishesEachFramelessPair) {
                                 Executions * kCompactPairCases.size());
   testing::Test::RecordProperty(
       kObservedCalls, Executions * kCompactPairCases.size() * kNormalRounds);
+}
+
+TEST(AArch64CompactRegisters, SystemUnwindsEachFramelessPair) {
+  for (const auto &Pair : kCompactPairCases) {
+    SCOPED_TRACE(Pair.Mask);
+    verifySavedRegisters(false, true, Pair.Mask, false, false, true);
+  }
+  const auto Executions = std::getenv(kExecute) ? 2 : 0;
+  testing::Test::RecordProperty(kNativeImages,
+                                Executions * kCompactPairCases.size());
+  testing::Test::RecordProperty(
+      kResumptions, Executions * kCompactPairCases.size() * kSignalRounds);
+  testing::Test::RecordProperty(
+      kSystemSteps, Executions / 2 * kCompactPairCases.size() * kSignalRounds);
 }
 
 TEST(AArch64CompactRegisters, PublishesPAuthLRAllPairs) {

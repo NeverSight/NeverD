@@ -7,6 +7,7 @@
 
 #include "MachOLiftedObject.h"
 
+#include "neverd/analysis/AArch64UnwindRecovery.h"
 #include "neverd/analysis/LLVMPrivateFrameAccesses.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/MachO/MachOCompactUnwindPatch.h"
@@ -626,6 +627,29 @@ bool sameIndexedLinkFrame(const BinaryImage &Original,
          sameSpillRules(Frame.Dwarf->Instructions, NewFrame->Instructions);
 }
 
+bool sameFramelessSpillFrame(const CompactUnwindEntry &Compact,
+                             const dwarf_eh::ParseResult &Generated,
+                             const DwarfFDE *Frame,
+                             const NativeMachOCompactRange &Range) {
+  if (!Frame || Frame->InitialLocation != Range.BeginVA ||
+      Frame->AddressRange != Range.EndVA - Range.BeginVA || Frame->LSDAVA ||
+      Frame->ParseStatus != ExceptionParseStatus::Complete ||
+      Generated.ParseStatus != ExceptionParseStatus::Complete)
+    return false;
+  const auto CIE = llvm::find_if(Generated.CIEs, [&](const auto &C) {
+    return C.SectionOffset == Frame->CIESectionOffset;
+  });
+  const CFIInstruction Initial{.Kind = CFIOpKind::DefCFA,
+                               .Register = aarch64_unwind::kSP};
+  return CIE != Generated.CIEs.end() &&
+         CIE->ParseStatus == ExceptionParseStatus::Complete &&
+         CIE->Augmentation == kBKeyFrameAugmentation &&
+         CIE->UsesArm64eReturnAddressABI && CIE->HasPointerAuth &&
+         CIE->ReturnAddressRegister == aarch64_unwind::kLR &&
+         sameSpillRules({Initial}, CIE->InitialInstructions) &&
+         sameSpillRules(machOFramelessSpillRows(Compact), Frame->Instructions);
+}
+
 llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
                          llvm::ArrayRef<SourcePatchMapping> Mappings,
                          const CompiledImage &Generated, va_t Slide,
@@ -731,7 +755,16 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
     const bool Indexed = (Native & ~macho_unwind::kDwarfSectionOffsetMask) ==
                          macho_unwind::kARM64ModeDwarf;
     const auto SourceEncoding = Frame->Compact->NativeEncoding;
-    if (Indexed) {
+    const bool FramelessSpills =
+        RegisterEntries.contains(Start) &&
+        Frame->Compact->Kind == CompactUnwindKind::FramelessImmediate &&
+        !Frame->Compact->SavedRegisterSlots.empty();
+    if (FramelessSpills) {
+      if (!Indexed || Frame->Dwarf ||
+          !sameFramelessSpillFrame(*Frame->Compact, LinkedFrames,
+                                   FDEs.lookup(Owner->second), *Range.mapped()))
+        return refuse(kLeafFrame);
+    } else if (Indexed) {
       if ((SourceEncoding & ~macho_unwind::kDwarfSectionOffsetMask) !=
               macho_unwind::kARM64ModeDwarf ||
           !sameIndexedLinkFrame(Original, *Frame, LinkedFrames,

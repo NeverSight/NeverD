@@ -1617,3 +1617,71 @@ Both M1 environments still reported native CPTA-on unavailable, and neither
 repository had a registered self-hosted runner at the recorded observation.
 [Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43628073491)
 and [per-host verification record](evidence/arm64e-compact-range-publication-2026-11-15.json).
+
+
+### System unwinding of frameless saved pairs
+
+The previous frameless qualification compared native returns and NeverD's
+instruction-derived signal resumption. An independent public libunwind cursor
+exposed a different system consumer behavior: the compact frameless walker
+loads its first spill at CFA and leaves SP reduced by the saved-pair bytes.
+A two-register control restored the wrong X19/X20 values and SP. Apple's
+[compact walker source](https://github.com/apple-oss-distributions/libunwind/blob/main/libunwind/src/CompactUnwinder.hpp)
+contains the same slot and SP calculations.
+
+Publication now gives these bodies indexed DWARF with explicit actual stack
+size and CFA-relative saved slots. It retains the original instructions and
+B-key return ABI. The final-object verifier checks the complete CIE/FDE recipe;
+existing offset-mutation controls must still refuse publication. This is a
+complete-prologue synchronous recipe. Instruction-derived recovery remains
+the owner of interrupted prologue and epilogue states.
+
+The native signal driver additionally seeds a fresh system cursor from the
+genuine interrupted context, steps the published frame and compares SP,
+authenticated return PC, X19-X28 and D8-D15 with independent caller inputs.
+All-pair, sparse, coalesced and each individual-pair cases exercise this path.
+These checks do not qualify native PAuth_LR or CPTA-on, nor arbitrary non-call
+language cleanup or arbitrary image publication.
+
+
+### Explicitly protected non-call exception delivery
+
+An address-based C++ or Objective-C LSDA can now authorize delivery at a
+non-call instruction without finding a later throwing call. Its entire
+instruction must belong to the guarded range, have a saved original LR,
+preserve live frame registers, and keep the same complete recovery row at
+the virtual return edge. The existing signal-return bridge runs the supplied
+throw thunk outside the handler; the original system personality selects and
+executes the interrupted frame's cleanup. Missing LSDA ownership, partial
+instruction coverage, changed CFA/signing/spills and preserved-register
+writes remain rejected.
+
+Independent assembly fixtures protect exactly one load in a loop with no
+calls. Their C++ and Objective-C landing pads record the original or changed
+published cleanup before resuming the exception. The driver checks that
+cleanup, the outer cleanup, exception identity and the restored signal mask
+on both ordinary and alternate stacks, for original and installed images at
+O0 and O2. This qualifies explicitly guarded points with a proved frame;
+it does not infer missing asynchronous lifetime information in arbitrary
+compiler output.
+
+
+Both native runners passed all 99 cases from
+`c316fe83a8d07880aa6c851274ae0be62a8ea8ff`. Each reported 220 executed
+original/published images, 39 independent system frameless steps, eight C++
+non-call cleanup deliveries and eight Objective-C non-call cleanup deliveries.
+The latter cover both optimization settings, both image forms and both stacks.
+Windows frontend checks passed. The independent LSDA fixture includes a
+no-handler entry for `_Unwind_Resume`; omitting it was reproduced as a
+second-phase termination in a local ordinary-arm64 control before correction.
+
+Local validation passed 99 publication cases and 26 recovery cases, with the
+four affected cleanup cases rerun after the fixture correction. The broader
+1084-case ABI/language selection passed 1036 cases and explicitly skipped 48,
+with no failures. All twelve changed source files passed clang-format 22.1.2,
+and the documentation inventory check passed. LLVM and r6 pins are unchanged.
+Both M1 runners still report native CPTA unavailable; PAuth_LR execution,
+arbitrary lifted-image contracts and missing asynchronous lifetime information
+remain unqualified.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43675185998)
+and [per-host verification record](evidence/arm64e-system-frames-and-noncall-2026-11-15.json).
