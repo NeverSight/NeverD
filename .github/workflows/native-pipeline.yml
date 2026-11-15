@@ -1,297 +1,160 @@
-name: Native pipeline compatibility
+name: MIPS Windows qualification (temporary)
 
-# Dependency, threading, allocator and C API changes run here because these
-# extra compiler and threading configurations are most likely to disagree on
-# them. The real-engine worker cases run nowhere else, so their own test files
-# start this workflow too. ABI, lift and HighIR commits rely on CI's native legs,
-# so a problem only clang-cl, the native-thread baseline or those worker cases
-# would catch shows up at the next run here, or sooner through dispatch.
+# Diagnostic branch only. Retire after the pending MIPS chain is qualified.
 on:
   workflow_dispatch:
-  push:
-    branches: [dev, codex/pipeline-performance, codex/performance-libraries]
-    paths:
-      - '.github/workflows/native-pipeline.yml'
-      - 'tools/neverd-worker/tests/call_site_types_test.py'
-      - 'tools/neverd-worker/tests/native_mapping_test.py'
-      - 'lib/sdk/capi/**'
-      - 'cmake/NeverDPerformance.cmake'
-      - 'cmake/NeverDForks*'
-      - '.gitmodules'
-      - 'third_party/forks.json'
-      - 'third_party/capstone'
-      - 'third_party/highway'
-      - 'third_party/simdutf'
-      - 'third_party/simdjson'
-      - 'third_party/oneTBB'
-      - 'third_party/mimalloc'
-      - 'cmake/NeverDMimalloc.cmake'
-      - 'scripts/build.py'
-      - 'scripts/fork_dependencies.py'
-      - 'scripts/tests/test_fork_dependencies.py'
-      - 'include/neverd/support/ByteScan.h'
-      - 'include/neverd/support/Parallel.h'
-      - 'lib/support/**'
-      - 'tools/common/transport/**'
-      - 'unittests/acceleration/**'
-      - 'unittests/TextEncodingTests.cpp'
-  pull_request:
-    paths:
-      - '.github/workflows/native-pipeline.yml'
-      - 'tools/neverd-worker/tests/call_site_types_test.py'
-      - 'tools/neverd-worker/tests/native_mapping_test.py'
-      - 'lib/sdk/capi/**'
-      - 'cmake/NeverDPerformance.cmake'
-      - 'cmake/NeverDForks*'
-      - '.gitmodules'
-      - 'third_party/forks.json'
-      - 'third_party/capstone'
-      - 'third_party/highway'
-      - 'third_party/simdutf'
-      - 'third_party/simdjson'
-      - 'third_party/oneTBB'
-      - 'third_party/mimalloc'
-      - 'cmake/NeverDMimalloc.cmake'
-      - 'scripts/build.py'
-      - 'scripts/fork_dependencies.py'
-      - 'scripts/tests/test_fork_dependencies.py'
-      - 'include/neverd/support/ByteScan.h'
-      - 'include/neverd/support/Parallel.h'
-      - 'lib/support/**'
-      - 'tools/common/transport/**'
-      - 'unittests/acceleration/**'
-      - 'unittests/TextEncodingTests.cpp'
+    inputs:
+      source_sha:
+        description: Exact MIPS PR commit to qualify
+        required: true
+        type: string
+        default: 68725c0f922ff2fa78c4012e2ef1c693adcb2e68
 
 permissions:
   contents: read
 
 concurrency:
-  group: native-pipeline-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: mips-windows-qualification-${{ inputs.source_sha }}
+  cancel-in-progress: false
 
 jobs:
-  native:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Linux x64
-            runner: ubuntu-24.04
-            cc: clang
-            cxx: clang++
-          - name: macOS arm64
-            runner: macos-15
-            cc: clang
-            cxx: clang++
-          - name: Windows x64 MSVC
-            runner: windows-2025-vs2026
-            cc: cl
-            cxx: cl
-          - name: Windows x64 clang-cl
-            runner: windows-2025-vs2026
-            cc: clang-cl
-            cxx: clang-cl
+  windows:
+    name: Windows MSVC MIPS and source ABI
+    runs-on: windows-latest
+    timeout-minutes: 180
     env:
-      SCCACHE_GHA_ENABLED: 'true'
+      EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Initialize the pinned decoder
-        run: git submodule update --init --depth 1 third_party/capstone
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.14'
-      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.16.0
-        if: matrix.cc != 'cl'
-        with:
-          version: v0.16.0
-      - name: Install Linux build tools
-        if: runner.os == 'Linux'
+          python-version: '3.12'
+      - name: Verify source identity
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes clang cmake lld ninja-build
-      - name: Install macOS build tools
-        if: runner.os == 'macOS'
-        run: brew install cmake ninja lld
+          python - <<'PYTHON'
+          import os, re, subprocess
+          expected = os.environ['EXPECTED_SOURCE_SHA']
+          assert re.fullmatch(r'[0-9a-f]{40}', expected), expected
+          actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          assert actual == expected, (actual, expected)
+          PYTHON
+          git submodule update --init --depth 1 third_party/capstone third_party/unicorn
       - name: Install Windows build tools
-        if: runner.os == 'Windows'
         shell: pwsh
         run: choco install ninja --yes --no-progress
+      - name: Install pinned fixture compiler
+        shell: pwsh
+        run: ./scripts/ci/Install-WindowsFixtureClang.ps1
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
-        if: runner.os == 'Windows'
         with:
           arch: x64
-      - name: Configure native pipeline, SDK and worker
-        env:
-          # The cache server disconnects while compiling the Capstone decoder with cl.
-          COMPILER_LAUNCHER: ${{ matrix.cc != 'cl' && 'sccache' || '' }}
+      - name: Configure bounded Release qualification
         run: |
-          cmake -S . -B build-abi -G Ninja \
+          cmake -S . -B build-mips-ci -G Ninja \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
-            -DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
-            -DCMAKE_C_COMPILER_LAUNCHER="$COMPILER_LAUNCHER" -DCMAKE_CXX_COMPILER_LAUNCHER="$COMPILER_LAUNCHER" \
-            -DNEVERD_LLVM_PREBUILT=ON -DNEVERD_BUILD_WORKER=ON \
-            -DNEVERD_TEST_EXPECT_MIMALLOC=ON -DNEVERD_ENABLE_PYTHON_PLUGINS=ON \
-            -DNEVERD_ENABLE_WEB_ANALYSIS=OFF -DNEVERD_ENABLE_CPU_EMULATION=OFF \
-            -DNEVERD_ENABLE_SEMANTIC_TESTS=OFF
-      - name: Build production and complete focused test owners
+            -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl \
+            -DNEVERD_LLVM_PREBUILT=ON \
+            -DNEVERD_ENABLE_CPU_EMULATION=OFF -DNEVERD_ENABLE_WEB_ANALYSIS=OFF \
+            -DNEVERD_ENABLE_SEMANTIC_TESTS=ON \
+            "-DNEVERD_ARM64E_TEST_CLANG_EXECUTABLE=$(cygpath -m "$NEVERD_SOURCE_CLANG")"
+      - name: Build complete owning test targets
+        timeout-minutes: 125
         run: |
-          python scripts/build.py build-abi --parallel 4 --target \
-            neverd neverd-worker NeverDAllocatorTests NeverDSessionFunctionDiscoveryTests \
-            NeverDFPParameterMaskTests NeverDPipelineOutcomeTests NeverDSupportThreadTests NeverDLibCTests NeverDReturnContractTests \
-            NeverDX86NativeStateAuditTests NeverDX86LegacyAlignedMoveTests \
-            NeverDX86UndefinedEffectsTests \
-            NeverDHighControlFlowTests NeverDAccelerationTests \
-            NeverDStringScanTests NeverDTextEncodingTests \
-            NeverDPythonRuntimeTests NeverDPythonPluginTests
-      - name: Require every focused C++ case to execute and pass
+          python scripts/build.py build-mips-ci --config Release --parallel 4 --target \
+            neverd NeverDMIPSTests NeverDMIPSFlowTests NeverDMIPSIntegerTests \
+            NeverDMIPSPipelineTests NeverDMIPSSDKTests NeverDSourceEntryBindingTests \
+            NeverDHighControlFlowTests NeverDSourceCallABITests NeverDAArch64AuthenticatedCallTests
+      - name: Audit inventory and execute owners
+        timeout-minutes: 90
         run: |
-          python - <<'PY'
-          import json, os, subprocess, sys
-          from pathlib import Path
-          import xml.etree.ElementTree as ET
-          from scripts.run_lift_qualification import audit
-          output = Path('build-abi/evidence')
-          output.mkdir(parents=True, exist_ok=True)
-          cache = Path('build-abi/CMakeCache.txt').read_text()
-          for provider in ('MIMALLOC', 'HIGHWAY', 'SIMDUTF', 'SIMDJSON', 'TBB'):
-              assert f'NEVERD_ENABLE_{provider}:BOOL=ON' in cache, provider
-          suffix = '.exe' if os.name == 'nt' else ''
-          # The stderr descriptor checks are compiled only on their hosts.
-          pipeline_minimum = 40 + (os.name != 'nt') + (sys.platform == 'linux')
-          for owner, minimum in (('NeverDFPParameterMaskTests', 180),
-                                  ('NeverDLibCTests', 71),
-                                  ('NeverDReturnContractTests', 21),
-                                  ('NeverDPipelineOutcomeTests', pipeline_minimum),
-                                  ('NeverDX86NativeStateAuditTests', 8),
-                                  ('NeverDX86LegacyAlignedMoveTests', 7),
-                                  ('NeverDX86UndefinedEffectsTests', 52),
-                                  ('NeverDSupportThreadTests', 11),
-                                  ('NeverDHighControlFlowTests', 420),
-                                  ('NeverDAccelerationTests', 18),
-                                  ('NeverDStringScanTests', 17),
-                                  ('NeverDTextEncodingTests', 3),
-                                  ('NeverDPythonRuntimeTests', 7),
-                                  ('NeverDPythonPluginTests', 3)):
-              binary = Path('build-abi/bin') / (owner + suffix)
-              listed = subprocess.check_output([str(binary), '--gtest_list_tests'], text=True)
-              (output / (owner + '.inventory.txt')).write_text(listed)
-              names, suite = [], ''
-              for line in listed.splitlines():
-                  value = line.split(' #', 1)[0].strip()
-                  if line and not line.startswith(' ') and value.endswith('.'):
-                      suite = value
-                  elif line.startswith('  ') and suite:
-                      names.append(suite + value.split()[0])
-              assert len(names) >= minimum, (owner, len(names), minimum)
-              assert len(set(names)) == len(names), (owner, 'duplicate test identity')
-              if owner == 'NeverDPipelineOutcomeTests':
-                  for name, supported in (
-                      ('ClosedStderrPreservesNativeResult', os.name != 'nt'),
-                      ('FullStderrPreservesNativeResult', sys.platform == 'linux'),
-                  ):
-                      assert (('PipelineStageTrace.' + name) in names) == supported
-              if owner == 'NeverDFPParameterMaskTests':
-                  for name in ('FrameLocalLeafSummaryKeepsDefinitionIdentityAndDepth',
-                               'FrameLocalLeafSummaryDoesNotReuseAnotherFunctionOrInvocation'):
-                      assert 'MedABIPass.' + name in names
-              if owner == 'NeverDAccelerationTests':
-                  # The small-batch stack contract moved from support tests
-                  # to the scheduler owner; retain its explicit coverage.
-                  assert 'TaskScheduler.SmallAndSerialBatchesRetainTheWorkerStackContract' in names
-              xml = output / (owner + '.xml')
-              with (output / (owner + '.log')).open('w') as log:
-                  result = subprocess.run([str(binary), '--gtest_output=xml:' + str(xml)],
-                                          stdout=log, stderr=subprocess.STDOUT, timeout=300)
-              report = audit(ET.parse(xml).getroot(), names, result.returncode)
-              (output / (owner + '.json')).write_text(json.dumps(report, indent=2) + '\n')
-              print(f'{owner}: {len(names)} passed, zero failed, zero skipped')
-          PY
-      - name: Verify actual SDK allocation and native worker requests
-        run: |
-          cat > build-abi/verify-sdk-worker.py <<'PY'
+          python - <<'PYTHON'
           from collections import Counter
-          import json, os, re, subprocess
+          import hashlib, json, os, platform, subprocess, sys
           from pathlib import Path
           import xml.etree.ElementTree as ET
-          names = ['NeverDAllocatorTests', 'NeverDWorkerNativeMapping',
-                   'NeverDWorkerNativeMakeCode', 'NeverDWorkerPEBrowse',
-                   'NeverDWorkerRealEngine', 'NeverDWorkerUnicodePaths',
-                   'NeverDWorkerCallSiteTypes',
-                   'SessionFunctionDiscovery.NativeDiscoveryBeforeAnalysisPublishesRecoveredExtents',
-                   'SessionFunctionDiscovery.NativeRecoveryKeepsKnownExtentsAndDeletedEntries']
-          if os.name == 'nt':
-              names.append('NeverDAllocatorRedirectDisabled')
-          command = ['ctest', '--test-dir', 'build-abi', '-C', 'Release',
-                     '-R', '^(' + '|'.join(re.escape(name) for name in names) + ')$']
-          inventory = json.loads(subprocess.check_output(command + ['--show-only=json-v1'], text=True))
-          assert Counter(test['name'] for test in inventory['tests']) == Counter(names)
-          output = Path('build-abi') / os.environ.get('NEVERD_NATIVE_EVIDENCE', 'evidence')
+          output = Path('build-mips-ci/evidence')
           output.mkdir(parents=True, exist_ok=True)
-          xml = (output / 'integration.xml').resolve()
-          with (output / 'integration.log').open('w') as log:
-              result = subprocess.run(command + ['--no-tests=error', '--output-on-failure',
-                                                  '--output-junit', str(xml)],
-                                      stdout=log, stderr=subprocess.STDOUT, timeout=600)
-          cases = list(ET.parse(xml).getroot().iter('testcase'))
-          assert Counter(case.get('name') for case in cases) == Counter(names)
-          assert result.returncode == 0
-          assert all(case.get('status') == 'run' and
-                     not any(child.tag in {'failure', 'error', 'skipped'} for child in case)
-                     for case in cases)
-          print(f'SDK/worker: {len(cases)} passed, zero failed, zero skipped')
-          PY
-          python build-abi/verify-sdk-worker.py
-          cp build-abi/CMakeCache.txt build-abi/evidence/CMakeCache.txt
-      - name: Retain default dependency snapshot
-        run: cp build-abi/neverd-*.json build-abi/evidence/
-      - name: Repeat native contracts with native threads
-        run: |
-          cmake -S . -B build-abi -DNEVERD_ENABLE_TBB=OFF
-          python scripts/build.py build-abi --parallel 4 --target \
-            neverd neverd-worker NeverDAllocatorTests NeverDSessionFunctionDiscoveryTests \
-            NeverDFPParameterMaskTests NeverDPipelineOutcomeTests NeverDSupportThreadTests NeverDLibCTests NeverDReturnContractTests \
-            NeverDX86NativeStateAuditTests NeverDX86LegacyAlignedMoveTests \
-            NeverDX86UndefinedEffectsTests \
-            NeverDHighControlFlowTests NeverDAccelerationTests \
-            NeverDStringScanTests NeverDTextEncodingTests \
-            NeverDPythonRuntimeTests NeverDPythonPluginTests
-          python - <<'PY'
-          import json, os, subprocess
-          from pathlib import Path
-          suffix = '.exe' if os.name == 'nt' else ''
-          for previous in sorted(Path('build-abi/evidence').glob('NeverD*Tests.json')):
-              expected = json.loads(previous.read_text())['tests']
-              output = Path('build-abi/evidence-native') / previous.stem
-              if previous.stem == 'NeverDAccelerationTests':
-                  tbb_only = {'TaskScheduler.ForeignWorkersBeforeFirstBatch',
-                              'TaskScheduler.ForeignSerialLimitStillCompletes',
-                              'TaskScheduler.LargeCallerReusesAvailableHeadroom'}
-                  assert tbb_only <= set(expected)
-                  expected = sorted(set(expected) - tbb_only)
-              minimum = len(expected)
-              subprocess.run(['python', 'unittests/acceleration/verify.py',
-                              'build-abi/bin/' + previous.stem + suffix, str(output),
-                              '--minimum', str(minimum), '--timeout', '300'], check=True)
-              actual = json.loads((output / 'audit.json').read_text())['tests']
-              assert set(expected) == set(actual), previous.stem
-          PY
-          NEVERD_NATIVE_EVIDENCE=evidence-native python build-abi/verify-sdk-worker.py
-          cp build-abi/CMakeCache.txt build-abi/evidence-native/CMakeCache.txt
-          cp build-abi/neverd-*.json build-abi/evidence-native/
-      - name: Retain native results and configuration
+          owners = ['NeverDMIPSTests', 'NeverDMIPSFlowTests', 'NeverDMIPSIntegerTests',
+                    'NeverDMIPSPipelineTests', 'NeverDMIPSSDKTests',
+                    'NeverDSourceEntryBindingTests', 'NeverDHighControlFlowTests',
+                    'NeverDSourceCallABITests', 'NeverDAArch64AuthenticatedCallTests']
+          command = ['ctest', '--test-dir', 'build-mips-ci', '-C', 'Release',
+                     '-L', '^(' + '|'.join(owners) + ')$']
+          inventory = json.loads(subprocess.check_output(command + ['--show-only=json-v1'], text=True))
+          tests = inventory['tests']
+          name_to_owner = {}
+          counts = Counter()
+          for test in tests:
+              properties = {item['name']: item['value'] for item in test['properties']}
+              matched = set(properties.get('LABELS', [])) & set(owners)
+              assert len(matched) == 1, (test['name'], matched)
+              owner = matched.pop()
+              name_to_owner[test['name']] = owner
+              counts[owner] += 1
+          assert all(counts[owner] > 0 for owner in owners), counts
+          assert len(name_to_owner) == len(tests), 'duplicate CTest identity'
+          (output / 'inventory.json').write_text(json.dumps(name_to_owner, indent=2) + '\n')
+          source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          binary_hashes = {}
+          for owner in owners:
+              binary = Path('build-mips-ci/bin') / (owner + '.exe')
+              binary_hashes[owner] = hashlib.file_digest(binary.open('rb'), 'sha256').hexdigest()
+          def version(args):
+              result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+              return {'exit': result.returncode, 'output': result.stdout}
+          receipt = {
+              'source_sha': source, 'expected_source_sha': os.environ['EXPECTED_SOURCE_SHA'],
+              'platform': platform.platform(), 'machine': platform.machine(),
+              'cpu_count': os.cpu_count(), 'python': sys.version,
+              'llvm_mode': 'published prebuilt LLVM', 'configuration': 'Release',
+              'scope': 'complete MIPS and shared source ABI owners; not the full repository CI profile',
+              'owners': dict(counts), 'binary_sha256': binary_hashes,
+              'commands': {'inventory': command + ['--show-only=json-v1'],
+                           'test': command + ['--parallel', '4', '--no-tests=error', '--output-on-failure',
+                                              '--output-junit', str((output / 'results.xml').resolve())]},
+              'tools': {name: version(args) for name, args in {
+                  'cl': ['cl'], 'link': ['link', '/?'], 'cmake': ['cmake', '--version'],
+                  'fixture_clang': [os.environ['NEVERD_SOURCE_CLANG'], '--version']}.items()},
+              'submodules': subprocess.check_output(['git', 'submodule', 'status'], text=True)
+          }
+          (output / 'source.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          assert source == os.environ['EXPECTED_SOURCE_SHA'], source
+          with (output / 'ctest.log').open('w') as log:
+              result = subprocess.run(receipt['commands']['test'], stdout=log,
+                                      stderr=subprocess.STDOUT, timeout=5300)
+          cases = list(ET.parse(output / 'results.xml').getroot().iter('testcase'))
+          expected_names = Counter(test['name'] for test in tests)
+          actual_names = Counter(case.get('name') for case in cases)
+          failed = [case.get('name') for case in cases
+                    if case.find('failure') is not None or case.find('error') is not None]
+          skipped = [case.get('name') for case in cases if case.find('skipped') is not None]
+          mips_skipped = [name for name in skipped if name_to_owner[name].startswith('NeverDMIPS')]
+          audit = {'exit': result.returncode, 'total': len(cases), 'failed': failed,
+                   'skipped': skipped, 'mips_skipped': mips_skipped,
+                   'missing': list((expected_names - actual_names).elements()),
+                   'unexpected': list((actual_names - expected_names).elements())}
+          (output / 'outcomes.json').write_text(json.dumps(audit, indent=2) + '\n')
+          print(json.dumps(audit, indent=2))
+          assert actual_names == expected_names, 'incomplete inventory execution'
+          assert result.returncode == 0 and not failed and not mips_skipped, audit
+          PYTHON
+      - name: Upload bounded qualification evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: native-pipeline-${{ matrix.name }}-${{ github.sha }}
+          name: mips-windows-${{ inputs.source_sha }}
+          retention-days: 7
+          if-no-files-found: error
           path: |
-            build-abi/evidence
-            build-abi/evidence-native
-            build-abi/CMakeCache.txt
-            build-abi/neverd-*.json
-          if-no-files-found: warn
+            build-mips-ci/evidence/
+            build-mips-ci/CMakeCache.txt
+            build-mips-ci/neverd-build-receipt.json
+            build-mips-ci/neverd-dependency-inputs.json
+            build-mips-ci/Testing/Temporary/LastTest.log
+            build-mips-ci/Testing/Temporary/LastTestsFailed.log
