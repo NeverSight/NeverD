@@ -70,6 +70,8 @@ protected:
   }
 };
 
+class MIPSHistoricalFP : public MIPSLegacyFP {};
+
 class MIPSFR0 : public MIPSLegacyFP {
   void SetUp() override {
     MIPSLegacyFP::SetUp();
@@ -412,13 +414,20 @@ void MIPSLegacyFP::compareArithmetic(bool PairedRegisters) {
   ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_CP0_STATUS, &Status), UC_ERR_OK);
   ASSERT_EQ(uc_mem_map(Raw, 0x10000, 4096, UC_PROT_ALL), UC_ERR_OK);
   unsigned Index = 0;
+  unsigned QualifiedForms = 0;
   for (const auto &R : Rows) {
+    // IV has the scalar arithmetic in this independent fixture, but no PS.
+    const bool PairedForm =
+        (R.Word >> 26) == 19 ? (R.Word & 7) == 6 : ((R.Word >> 21) & 31) == 22;
+    if (Image.MIPS->HistoricalISA == 4 && PairedForm)
+      continue;
     const unsigned Op = R.Word >> 26, Fmt = R.Word >> 21 & 31, Fn = R.Word & 63;
     if (PairedRegisters &&
         ((Op == 17 && (Fmt == 22 || Fmt == 21 || (Fn >= 8 && Fn <= 11) ||
                        Fn == 37 || Fn == 38)) ||
          (Op == 19 && (Fn & 7) == 6)))
       continue;
+    ++QualifiedForms;
     for (unsigned CC = 0; CC < (R.Bytes ? 1u : 8u);
          CC += ((R.Word >> 21 & 31) == 22 ? 2 : 1)) {
       SCOPED_TRACE(R.Name);
@@ -494,10 +503,21 @@ void MIPSLegacyFP::compareArithmetic(bool PairedRegisters) {
         }
     }
   }
+  if (Image.MIPS->HistoricalISA)
+    EXPECT_EQ(QualifiedForms, Image.MIPS->HistoricalISA == 4 ? 84u : 109u);
 }
 
 TEST_P(MIPSLegacyFP, ArithmeticMatchesOriginalBitsFlagsAndExceptions) {
   compareArithmetic(false);
+}
+
+TEST_P(MIPSHistoricalFP, ArithmeticMatchesOriginalBitsFlagsAndExceptions) {
+  for (unsigned Level : {4u, 5u}) {
+    Image.MIPS->HistoricalISA = Level;
+    Image.MIPS->ISARevision = 0;
+    ASSERT_TRUE(Decode.init(Image));
+    compareArithmetic(false);
+  }
 }
 
 TEST_P(MIPSFR0, ArithmeticMatchesOriginalRegisterPairsFlagsAndExceptions) {
@@ -641,6 +661,10 @@ TEST_P(MIPSLegacyFP, LegacyNaNAndTrapCannotUseRelease6Executor) {
   ASSERT_TRUE(execute(E, C));
   EXPECT_EQ(uint32_t(*E.getRegister(mipsreg::V0)), *C.FCSR);
 }
+#endif
+#ifdef NEVERD_MIPS_UNICORN_REFERENCE
+INSTANTIATE_TEST_SUITE_P(ByteOrders, MIPSHistoricalFP,
+                         ::testing::Values(Arch::MIPS64, Arch::MIPS64EL));
 #endif
 INSTANTIATE_TEST_SUITE_P(ByteOrders, MIPSFR0,
                          ::testing::Values(Arch::MIPS32, Arch::MIPS32EL));

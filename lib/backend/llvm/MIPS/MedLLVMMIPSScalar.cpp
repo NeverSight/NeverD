@@ -44,7 +44,8 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
                       !Img->MIPS->hasScalarFPABI(isMIPS64(TargetArch))) ||
                      !mips::scalarFPAvailable(
                          Id, Img->MIPS->ISARevision,
-                         Img->MIPS->hasScalarFP32ABI(isMIPS64(TargetArch))))
+                         Img->MIPS->hasScalarFP32ABI(isMIPS64(TargetArch)),
+                         Img->MIPS->HistoricalISA))
                   : (!Img->MIPS->HasMSA || Img->MIPS->ISARevision != 5)))
       throw std::runtime_error(
           "native MIPS FP source requires a matching scalar or MSA profile");
@@ -52,6 +53,12 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
         (mips::isMSAControl(Id) || mips::scalarFPHasSelector(Id))
             ? Op.Inputs[1].ConstVal
             : 0;
+    if (mips::isScalarFPControl(Id) &&
+        !mips::scalarFPControlSelector(Selector,
+                                       Id == Intrinsic::MIPSWriteFPControl,
+                                       Img->MIPS->HistoricalISA))
+      throw std::runtime_error(
+          "FP control register is absent from historical ISA");
     const auto Asm =
         ScalarFP
             ? mips::scalarFPAssembly(

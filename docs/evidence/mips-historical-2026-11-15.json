@@ -1,0 +1,108 @@
+{
+  "base_commit": "2c7e2c3591293c994b67747b65c232a679b70fb1",
+  "capstone_commit": "729680277dd762704ea3270291b7a75318f51583",
+  "unicorn_commit": "a0bc496b8ca661be2d147b245aa200630ab31a8e",
+  "host": "macOS arm64, Release",
+  "historical_profiles": {
+    "isa": [
+      4,
+      5
+    ],
+    "abi": [
+      "n32",
+      "n64"
+    ],
+    "byte_orders": [
+      "big",
+      "little"
+    ],
+    "raw_assembly_profiles": 940,
+    "lowir": {
+      "4": {
+        "arithmetic_forms": 84,
+        "both_endian_observations": 118272
+      },
+      "5": {
+        "arithmetic_forms": 109,
+        "both_endian_observations": 146304
+      }
+    }
+  },
+  "roundtrips": {
+    "isa4-n32": {
+      "builds": 688,
+      "executions": 27760,
+      "receipt_sha256": "8e5cdda112e8b0b22918c03c936c461bef16a8d80dc2c1d4cd98ec40861a193c",
+      "sdk_sha256": "ad08112fbe6de3249997a99a24601463cff4f021af2fe917dfe2d1863d6f2ca6",
+      "source_isa": [
+        "mips4"
+      ],
+      "codegen_isa": [
+        "mips4"
+      ],
+      "rebuilt_isa": [
+        "mips4"
+      ]
+    },
+    "isa4-n64": {
+      "builds": 688,
+      "executions": 27760,
+      "receipt_sha256": "a2abdaa687b2d08c7d5dd7e411c283331d74d1005cb613a4e4bfbc1021e852b0",
+      "sdk_sha256": "ad08112fbe6de3249997a99a24601463cff4f021af2fe917dfe2d1863d6f2ca6",
+      "source_isa": [
+        "mips4"
+      ],
+      "codegen_isa": [
+        "mips4"
+      ],
+      "rebuilt_isa": [
+        "mips4"
+      ]
+    },
+    "isa5-n32": {
+      "builds": 1192,
+      "executions": 53960,
+      "receipt_sha256": "1bc63356b0224bdd001c83b206e937210aa2bc9331f78c516d15036b64bcdb62",
+      "sdk_sha256": "ad08112fbe6de3249997a99a24601463cff4f021af2fe917dfe2d1863d6f2ca6",
+      "source_isa": [
+        "mips5"
+      ],
+      "codegen_isa": [
+        "mips4"
+      ],
+      "rebuilt_isa": [
+        "mips5"
+      ]
+    },
+    "isa5-n64": {
+      "builds": 1192,
+      "executions": 53960,
+      "receipt_sha256": "15221da73a625f8de9eec7ebea33403db2665066ae031f43350bbf39a5c18e44",
+      "sdk_sha256": "ad08112fbe6de3249997a99a24601463cff4f021af2fe917dfe2d1863d6f2ca6",
+      "source_isa": [
+        "mips5"
+      ],
+      "codegen_isa": [
+        "mips4"
+      ],
+      "rebuilt_isa": [
+        "mips5"
+      ]
+    }
+  },
+  "ubus_call": {
+    "original_cases": 12,
+    "recompiled_executions": 48,
+    "receipt_sha256": "0e5b61c1e1e73b870ced5cdab1467af2bcbd04e8f511063eeef5b3bd97d689aa",
+    "sdk_sha256": "ad08112fbe6de3249997a99a24601463cff4f021af2fe917dfe2d1863d6f2ca6"
+  },
+  "owner_tests": 1062,
+  "limits": [
+    "Historical I-III load, coprocessor and HI/LO scheduling is not implemented; those ELF profiles remain rejected. Historical o32 is not admitted.",
+    "The compatible MIPS64R2_GENERIC reference qualifies original floating instruction computation, not physical IV/V hardware, timing, every CPU approximation or a paired-single vector calling convention.",
+    "Clang 22 uses IV scalar code generation for V source; GNU as assembles the unedited scalar assembly and original PS words as V. Both ELF headers and ABI records must retain the selected ISA and ABI.",
+    "Legacy DSP64 rounded/saturating DEXTR and signed DMADD/DMSUB remain unqualified. Public 3.02 documentation omits them; the historical executor and its tests contain unresolved arithmetic discrepancies.",
+    "Pre-R6 microMIPS floating point, trapping arithmetic, general privileged/atomic execution, aggregate ABI recovery and the other documented profiles are not fully covered.",
+    "Performance raw data, dependency manifests and complete output identity remain local. There is no world-fastest or complete-ISA coverage claim."
+  ]
+}

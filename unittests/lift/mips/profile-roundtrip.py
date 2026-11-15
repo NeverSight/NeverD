@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Recompile and execute HighC/LLVMC from linked MIPS64 DSP, micro ASE and R6 ELFs."""
+"""Recompile HighC/LLVMC for historical, DSP, microMIPS and Release 6 profiles."""
 
 import argparse
 from pathlib import Path
 import runpy
 import subprocess
 
+from elftools.elf.elffile import ELFFile
 from unicorn import mips_const as mips
 
 import roundtrip
@@ -218,6 +219,37 @@ def kernels():
         yield cpu + "nal", cpu, "", "or $3,$31,$0\nnal\nor $2,$31,$0\nor $31,$3,$0"
 
 
+def historical_integer_kernels():
+    rows = {
+        "history_add": "daddu $2,$4,$5",
+        "history_shift": "dsllv $2,$4,$5",
+        "history_mul_lo": "dmult $4,$5\nmflo $2",
+        "history_mul_hi": "dmult $4,$5\nmfhi $2",
+        "history_div_lo": "ddiv $0,$4,$5\nmflo $2",
+        "history_div_hi": "ddiv $0,$4,$5\nmfhi $2",
+        "history_branch": "or $2,$4,$0\nbeql $4,$5,1f\ndaddiu $2,$2,7\n1:",
+        "history_merge": "ldl $2,7($4)\nldr $2,0($4)",
+    }
+    for name, body in rows.items():
+        # Hard-float metadata also lets the runner compare the unchanged FCSR.
+        yield name, "mips4", "fp", body
+
+
+def verify_historical_image(path, level, abi, little):
+    with path.open("rb") as stream:
+        image = ELFFile(stream)
+        record = image.get_section_by_name(".MIPS.abiflags")
+        if (
+            image.header.e_flags >> 28 != level - 1
+            or image.elfclass != (32 if abi == "n32" else 64)
+            or bool(image.header.e_flags & 0x20) != (abi == "n32")
+            or image.little_endian != little
+            or record is None
+            or record.data()[2:5] != bytes((level, 0, 2))
+        ):
+            raise ValueError(f"{path}: historical ISA/ABI/byte-order evidence changed")
+
+
 def inputs(name, bits):
     pairs = [
         (a, b)
@@ -243,6 +275,10 @@ def inputs(name, bits):
                   0x7fc000003f800000, 0x3f8000007f800001,
                   0x7f8000017fc00000, 0x8000000000000001)
         return [(a, b) for a in values for b in values]
+    if name == "history_merge":
+        return [(roundtrip.DATA + offset, 0) for offset in range(8)]
+    if name.startswith("history_div_"):
+        return [(a, b) for a, b in pairs if b] + [(-(1 << 63), -1), (-17, 3), (17, -3)]
     if "fp_memory_" in name:
         stride = 1 if "uxc1" in name else 4 if "wc1" in name or "wxc1" in name else 8
         return [(roundtrip.DATA + base, offset - base)
@@ -425,27 +461,49 @@ def run(args, artifacts):
         [args.clang, "-print-resource-dir"], text=True
     ).strip()
     report = {"complete": False, "builds": [], "neverd_sha256": digest(args.neverd)}
-    for name, cpu, feature, body in kernels():
+    selected = list(kernels())
+    if args.historical_isa:
+        selected.extend(historical_integer_kernels())
+    for name, cpu, feature, body in selected:
         if args.profile and name not in args.profile:
             continue
-        bits = 64 if "64" in cpu else 32
+        if args.historical_isa:
+            if feature not in ("fp", "ps") or (
+                args.historical_isa == 4 and (feature == "ps" or "uxc1" in name)
+            ):
+                continue
+            cpu = "mips" + str(args.historical_isa)
+            # FCCR/FEXR/FENR were introduced in MIPS V. Observe the complete
+            # legacy FCSR on IV; both source views must preserve it exactly.
+            if args.historical_isa == 4:
+                body = body.replace("cfc1 $2,$25", "cfc1 $2,$31")
+        bits = 64 if args.historical_isa or "64" in cpu else 32
         micro = name.startswith("micro")
         micro_r6 = micro and cpu.endswith("r6")
         # Clang 22's microR6 backend emits legacy LUI and JRC16 in its
         # prologue/epilogue. Keep the original R6 ISA and tagged entry, then
         # execute the unedited C on the GNU sim microMIPS32r2/o32 target.
         rebuild_cpu = "mips32r2" if micro_r6 else cpu
+        if args.historical_isa == 5:
+            # Clang 22 has no MIPS V code generator. Its MIPS IV scalar code
+            # is valid on V; the semantic helpers retain the original PS words.
+            # Record both ISAs rather than silently compiling for MIPS64r2.
+            rebuild_cpu = "mips4"
         # The pinned I6400 implements MSA and n64, with the Release 6
         # return encoding. The original uses JALR zero,ra, valid in r5 and r6.
         if bits == 64 and feature == "msa":
             rebuild_cpu = "mips64r6"
-        cases = inputs(name, bits)
+        cases = inputs(name, 32 if args.historical_isa and name.startswith("mips32r2fp") else bits)
         extra = (["-mfp64"] if feature in ("fp", "ps") else ["-m" + feature] if feature else []) + (
             ["-mfp64"] if feature == "msa" else []
         )
         for little in (False, True):
             target = ("mips64" if bits == 64 else "mips") + ("el" if little else "")
-            emulation = f"elf{bits}{'l' if little else 'b'}tsmip"
+            if name == "history_merge":
+                body = "ldl $2,7($4)\nldr $2,0($4)" if little else "ldl $2,0($4)\nldr $2,7($4)"
+            n32 = args.historical_isa and args.historical_abi == "n32"
+            emulation = (f"elf32{'l' if little else 'b'}tsmipn32" if n32 else
+                         f"elf{bits}{'l' if little else 'b'}tsmip")
             directory = root / (name + ("el" if little else ""))
             directory.mkdir()
             log = directory / "command.log"
@@ -492,7 +550,7 @@ def run(args, artifacts):
                             args.assembler,
                             "-" + cpu,
                             "-EL" if little else "-EB",
-                            "-" + str(bits),
+                            "-n32" if n32 else "-" + str(bits),
                             *extra,
                             "-o",
                             obj,
@@ -517,6 +575,10 @@ def run(args, artifacts):
 
             original = directory / "original.elf"
             assemble(original, micro)
+            if args.historical_isa:
+                verify_historical_image(
+                    original, args.historical_isa, args.historical_abi, little
+                )
             oracle = original
             if micro and not micro_r6:
                 # The reference cores with DSP/MSA expose the classic encoding.
@@ -636,7 +698,7 @@ def run(args, artifacts):
                                 args.clang,
                                 f"--target={target}-linux-gnu",
                                 "-march=" + rebuild_cpu,
-                                f"-mabi={bits}",
+                                "-mabi=n32" if n32 else f"-mabi={bits}",
                                 "-mno-abicalls",
                                 "-fno-pic",
                                 "-G0",
@@ -648,12 +710,26 @@ def run(args, artifacts):
                                 headers,
                                 *extra,
                                 opt,
-                                "-c",
+                                *(["-S", "-fno-addrsig"]
+                                  if args.historical_isa == 5 else ["-c"]),
                                 source,
                                 "-o",
-                                obj,
+                                (obj.with_suffix(".s")
+                                 if args.historical_isa == 5 else obj),
                             ]
                         )
+                        if args.historical_isa == 5:
+                            # Assemble the compiler's IV scalar code and the
+                            # original PS words as V, preserving the ELF ISA
+                            # declaration as well as the physical instructions.
+                            assembly = obj.with_suffix(".s")
+                            command([
+                                args.assembler, "-mips5", "-mfp64",
+                                "-EL" if little else "-EB",
+                                "-n32" if n32 else "-64",
+                                assembly, "-o", obj,
+                            ])
+                            artifacts.discard(assembly)
                         if micro:
                             verify_micro(
                                 args,
@@ -682,6 +758,11 @@ def run(args, artifacts):
                                     obj,
                                 ]
                             )
+                            if args.historical_isa:
+                                verify_historical_image(
+                                    rebuilt, args.historical_isa,
+                                    args.historical_abi, little
+                                )
                             got = observe(rebuilt, bits, little, feature, cases)
                             for pair, actual, expected in zip(
                                 cases, got, wanted, strict=True
@@ -694,7 +775,10 @@ def run(args, artifacts):
                             {
                                 "profile": directory.name,
                                 "source_isa": cpu,
-                                "rebuilt_isa": rebuild_cpu,
+                                "abi": "n32" if n32 else str(bits),
+                                "codegen_isa": rebuild_cpu,
+                                "rebuilt_isa": (cpu if args.historical_isa == 5
+                                                else rebuild_cpu),
                                 "view": view,
                                 "opt": opt,
                                 "cases": len(cases),
@@ -727,10 +811,25 @@ if __name__ == "__main__":
         parser.add_argument(
             "--" + option, type=lambda s: Path(s).absolute(), required=True
         )
+    parser.add_argument("--historical-isa", type=int, choices=(4, 5))
+    parser.add_argument("--historical-abi", choices=("n32", "n64"), default="n64")
     parser.add_argument("--simulator", type=lambda s: Path(s).absolute())
-    parser.add_argument("--profile", action="append", choices=[k[0] for k in kernels()])
+    parser.add_argument("--profile", action="append", choices=[k[0] for k in kernels()] + [k[0] for k in historical_integer_kernels()])
     args = parser.parse_args()
-    if not args.simulator and (
+    if args.profile and not args.historical_isa and any(
+        p.startswith("history_") for p in args.profile
+    ):
+        parser.error("historical integer profiles require --historical-isa")
+    if args.historical_isa and args.profile:
+        available = {
+            name
+            for name, _, feature, _ in (*kernels(), *historical_integer_kernels())
+            if feature in ("fp", "ps")
+            and not (args.historical_isa == 4 and (feature == "ps" or "uxc1" in name))
+        }
+        if not set(args.profile) <= available:
+            parser.error("selected profiles are unavailable in the historical ISA")
+    if not args.simulator and not args.historical_isa and (
         not args.profile or any(p.startswith("micro") for p in args.profile)
     ):
         parser.error("--simulator is required to execute rebuilt microMIPS kernels")

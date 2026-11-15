@@ -1,0 +1,26 @@
+//===- MIPSPairedSingleDecode.def - PS operand aliases -------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Physical COP1 opcode/format/function, public ID, printed mnemonic, scalar
+// operand template and whether FT must be zero. These are decode aliases only.
+// The physical word is retained for the shared paired-single lift owner.
+#ifndef NEVERD_MIPS_PAIRED_DECODE
+#define NEVERD_MIPS_PAIRED_DECODE(Word, ID, Mnemonic, Equivalent, Unary)
+#endif
+NEVERD_MIPS_PAIRED_DECODE(0x46000026, MIPS_INS_CVT_PS_S, "cvt.ps.s", 0x46000000,
+                          false)
+NEVERD_MIPS_PAIRED_DECODE(0x46c00020, MIPS_INS_CVT_S_PU, "cvt.s.pu", 0x46000006,
+                          true)
+NEVERD_MIPS_PAIRED_DECODE(0x46c00028, MIPS_INS_CVT_S_PL, "cvt.s.pl", 0x46000006,
+                          true)
+NEVERD_MIPS_PAIRED_DECODE(0x46c0002c, MIPS_INS_PLL_PS, "pll.ps", 0x46000000,
+                          false)
+NEVERD_MIPS_PAIRED_DECODE(0x46c0002d, MIPS_INS_PLU_PS, "plu.ps", 0x46000000,
+                          false)
+NEVERD_MIPS_PAIRED_DECODE(0x46c0002e, MIPS_INS_PUL_PS, "pul.ps", 0x46000000,
+                          false)
+NEVERD_MIPS_PAIRED_DECODE(0x46c0002f, MIPS_INS_PUU_PS, "puu.ps", 0x46000000,
+                          false)
+#undef NEVERD_MIPS_PAIRED_DECODE

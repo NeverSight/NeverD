@@ -216,7 +216,19 @@ Decoder::decodeMIPSPairedSingle(const uint8_t *Bytes, uint32_t Physical,
   }
   const unsigned Fn = Physical & 63, FT = Physical >> 16 & 31;
   unsigned ID = 0;
+  const char *Mnemonic = nullptr;
   uint32_t Equivalent = Physical & ~(6u << 21);
+  switch (Physical & 0xffe0003f) {
+#define NEVERD_MIPS_PAIRED_DECODE(Word, PublicID, Name, Scalar, Unary)         \
+  case Word:                                                                   \
+    if (Unary && FT)                                                           \
+      return false;                                                            \
+    Mnemonic = Name;                                                           \
+    ID = PublicID;                                                             \
+    Equivalent = (Physical & 0x001fffc0) | Scalar;                             \
+    break;
+#include "neverd/lift/MIPS/MIPSPairedSingleDecode.def"
+  }
   if (Physical >> 21 == 0x236) {
     if (Fn == 6 && !FT)
       ID = MIPSLifter::MovePairedSingleID;
@@ -230,7 +242,7 @@ Decoder::decodeMIPSPairedSingle(const uint8_t *Bytes, uint32_t Physical,
   const bool Align = (Physical & 0xfc00003f) == 0x4c00001e;
   if (Align) {
     ID = MIPSLifter::AlignPairedSingleID;
-    Equivalent = (Physical & 0x001fffc0) | 0x46c00000; // ADD.PS operands
+    Equivalent = (Physical & 0x001fffc0) | 0x46000000; // ADD.S operand roles
   }
   if (ID) {
     if (!decodeMIPSEquivalent(Bytes, Equivalent, Addr))
@@ -238,7 +250,7 @@ Decoder::decodeMIPSPairedSingle(const uint8_t *Bytes, uint32_t Physical,
     InsnBuf->id = ID;
     if (Text)
       std::snprintf(InsnBuf->mnemonic, sizeof(InsnBuf->mnemonic), "%s",
-                    physicalMnemonic(Handle, ID));
+                    Mnemonic ? Mnemonic : physicalMnemonic(Handle, ID));
     if (Align) {
       const unsigned RS = Physical >> 21 & 31;
       if (Detail) {

@@ -262,8 +262,7 @@ bool MIPSLifter::liftScalarFloat(State &S, uint32_t Word) const {
     return true;
   }
   if (ISARevision != 6 && Op == 0 && Fn == 1 && !FD && !(FT & 2)) {
-    const auto Control = S.makeTemp(4);
-    S.emitIntrinsic(Intrinsic::MIPSReadFPControl, Control, {NdVar::cst(25, 1)});
+    const auto Control = S.floatConditions(HistoricalISA != 0);
     const auto Bit =
         S.binary(NdOp::INT_AND, Control, NdVar::cst(1u << (FT >> 2), 4));
     const auto Taken = S.binary(FT & 1 ? NdOp::INT_NOTEQUAL : NdOp::INT_EQUAL,
@@ -406,9 +405,7 @@ bool MIPSLifter::liftScalarFloat(State &S, uint32_t Word) const {
         return true;
       }
       if (Fn == 17 && !(FT & 6)) { // MOVF/T.PS selects each lane separately.
-        const auto Control = S.makeTemp(4);
-        S.emitIntrinsic(Intrinsic::MIPSReadFPControl, Control,
-                        {NdVar::cst(25, 1)});
+        const auto Control = S.floatConditions(HistoricalISA != 0);
         const auto Lane = [&](unsigned I) {
           const auto Bit = S.binary(NdOp::INT_AND, Control,
                                     NdVar::cst(1u << ((FT >> 2) + I), 4));
@@ -443,9 +440,7 @@ bool MIPSLifter::liftScalarFloat(State &S, uint32_t Word) const {
   const auto Sign = uint64_t{1} << (8 * Bytes - 1);
   if (ISARevision != 6) {
     if (Fn == 17 && !(FT & 2)) { // MOVF/T.fmt
-      const auto Control = S.makeTemp(4);
-      S.emitIntrinsic(Intrinsic::MIPSReadFPControl, Control,
-                      {NdVar::cst(25, 1)});
+      const auto Control = S.floatConditions(HistoricalISA != 0);
       const auto Bit =
           S.binary(NdOp::INT_AND, Control, NdVar::cst(1u << (FT >> 2), 4));
       const auto Taken = S.binary(FT & 1 ? NdOp::INT_NOTEQUAL : NdOp::INT_EQUAL,

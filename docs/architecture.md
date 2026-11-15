@@ -16511,6 +16511,20 @@ byte ownership and execution order. MedIR expands predicated effects before SSA.
 The lifter validates encodings before emitting effects and reuses the explicit
 MIPS64 word-input contract; source backends do not reinterpret instruction bits.
 
+`MIPSImageMetadata::HistoricalISA` separates MIPS I–V architecture levels
+from modern releases. `MIPSHistoricalISA.def` owns physical instruction
+availability; decoding and direct lifting use the same catalog. Only classic
+IV/V n32/n64 profiles are admitted until earlier scheduling semantics are
+qualified. The scalar computational owner is shared with pre-R6; IV reads
+conditions through FCSR rather than the later FCCR alias. Native FP helpers
+and bound scalar evaluation also check historical operation/control availability.
+`MIPSPairedSingleDecode.def` supplies scalar operand templates for PS forms
+missing from the historical decoder tables; these never replace the physical
+word consumed by the lifter.
+The lifter classifies its immutable byte order, register width and combined ISA
+profile at construction. Classic and compressed instructions reuse those facts;
+modern instructions do not inline the historical availability catalog.
+
 `MIPSLiftMicroASE` maps qualified microMIPS DSP, DSPR2 and MSA words to their
 classic semantic form. The physical decoder retains original bytes, mode and
 branch address, including when Capstone requires the canonical MSA encoding.

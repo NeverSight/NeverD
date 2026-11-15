@@ -55,10 +55,14 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
   if (mips::isScalarFPControl(Id)) {
     if (!Img.MIPS || (!R6 && !Img.MIPS->hasScalarFPABI(Wide)) ||
         !Context.ScalarFPU ||
-        !Context.ScalarFPU->supportsRevision(Img.MIPS->ISARevision) ||
+        !Context.ScalarFPU->supportsRevision(
+            Img.MIPS->HistoricalISA ? 2 : Img.MIPS->ISARevision) ||
         !Context.FCSR || Context.FloatingPointException)
       return false;
     const bool Write = Id == Intrinsic::MIPSWriteFPControl;
+    if (!mips::scalarFPControlSelector(Op.Inputs[1].Offset, Write,
+                                       Img.MIPS->HistoricalISA))
+      return false;
     if (Write && !knownOperandBytes(Op.Inputs[2], 0, 4))
       return false;
     auto Result = Context.ScalarFPU->control(
@@ -77,9 +81,11 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
   if (mips::isScalarFPArithmetic(Id)) {
     if (!Img.MIPS || (!R6 && !Img.MIPS->hasScalarFPABI(Wide)) ||
         !mips::scalarFPAvailable(Id, Img.MIPS->ISARevision,
-                                 Img.MIPS->hasScalarFP32ABI(Wide)) ||
+                                 Img.MIPS->hasScalarFP32ABI(Wide),
+                                 Img.MIPS->HistoricalISA) ||
         !Context.ScalarFPU ||
-        !Context.ScalarFPU->supportsRevision(Img.MIPS->ISARevision) ||
+        !Context.ScalarFPU->supportsRevision(
+            Img.MIPS->HistoricalISA ? 2 : Img.MIPS->ISARevision) ||
         !Context.FCSR || Context.FloatingPointException)
       return false;
     std::array<uint64_t, 3> Inputs;

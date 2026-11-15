@@ -37,6 +37,9 @@ struct MIPSImageMetadata {
   /// admitted for that header without the record. Release 6 has distinct
   /// e_flags. MSA requires explicit R5 and FP64 evidence.
   uint8_t ISARevision = 2;
+  /// Historical MIPS I-V architecture level, independent of MIPS32/64 releases.
+  /// Zero denotes the release-based ISA; historical profiles use revision zero.
+  uint8_t HistoricalISA = 0;
   /// The ELF admits both classic and microMIPS code, not a global micro mode.
   bool HasMicroMIPS = false;
   /// MIPS16e32 code; mutually exclusive with the microMIPS ASE.
