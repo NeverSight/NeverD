@@ -25,7 +25,7 @@ Flow {
                     parent: Overlay.overlay
                     anchors.centerIn: parent
                     width: Math.min(600, parent.width - 40); height: Math.min(400, parent.height - 40)
-                    padding: 18; modal: true
+                    padding: Theme.dialogPadding; modal: true
                     Overlay.modal: ModalDim {}
                     background: Surface { glass: true }
                     contentItem: ScrollView {

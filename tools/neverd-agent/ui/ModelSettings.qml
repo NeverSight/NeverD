@@ -14,10 +14,10 @@ Dialog {
     Overlay.modal: ModalDim {}
     width: Math.min(640, parent.width - 48)
     height: Math.min(implicitHeight, parent.height - 48)
-    padding: 18
-    topPadding: 4
+    padding: Theme.dialogPadding
+    topPadding: Theme.spaceSmall
     background: Surface { glass: true; radius: Theme.radius; color: Theme.background }
-    header: Label { text: qsTr("Model and analysis settings"); color: Theme.text; font.pointSize: Theme.bodyPointSize; font.weight: Font.Medium; padding: 18 }
+    header: Label { text: qsTr("Model and analysis settings"); color: Theme.text; font.pointSize: Theme.titlePointSize; font.weight: Font.Medium; padding: Theme.dialogPadding; bottomPadding: Theme.spaceSmall }
     function values() {
         return {protocol: protocols[protocol.currentIndex], url: endpoint.text.trim(), model: modelName.text.trim(),
             contextTokens: Number(contextSize.text), outputTokens: Number(outputSize.text),
@@ -124,14 +124,14 @@ Dialog {
     footer: RowLayout {
         spacing: 8
         ActionButton {
-            Layout.leftMargin: 18; Layout.bottomMargin: 16
+            Layout.leftMargin: Theme.dialogPadding; Layout.bottomMargin: Theme.dialogPadding - 4
             text: backend.testingConnection ? qsTr("Stop test") : qsTr("Test connection")
             onClicked: backend.testingConnection ? backend.cancelConnectionTest() : backend.testConnection(dialog.values(), secret.text, removeKey.checked)
         }
         Item { Layout.fillWidth: true }
-        ActionButton { text: qsTr("Cancel"); Layout.bottomMargin: 16; onClicked: dialog.close() }
+        ActionButton { text: qsTr("Cancel"); Layout.bottomMargin: Theme.dialogPadding - 4; onClicked: dialog.close() }
         ActionButton {
-            text: qsTr("Save"); primary: true; Layout.rightMargin: 18; Layout.bottomMargin: 16
+            text: qsTr("Save"); primary: true; Layout.rightMargin: Theme.dialogPadding; Layout.bottomMargin: Theme.dialogPadding - 4
             enabled: !backend.credentialBusy
             onClicked: backend.updateModelSettings(dialog.values(), secret.text, removeKey.checked, mcp.text)
         }

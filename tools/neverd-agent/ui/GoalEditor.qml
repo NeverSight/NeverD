@@ -12,9 +12,10 @@ Dialog {
     width: Math.min(640, parent.width - 48)
     Overlay.modal: ModalDim {}
     height: Math.min(660, parent.height - 48)
-    padding: 18
+    padding: Theme.dialogPadding
+    topPadding: Theme.spaceSmall
     background: Surface { glass: true; radius: Theme.radius; color: Theme.background }
-    header: Label { text: qsTr("Persistent goal"); color: Theme.text; font.pointSize: Theme.bodyPointSize; font.weight: Font.Medium; padding: 18 }
+    header: Label { text: qsTr("Persistent goal"); color: Theme.text; font.pointSize: Theme.titlePointSize; font.weight: Font.Medium; padding: Theme.dialogPadding; bottomPadding: Theme.spaceSmall }
     onOpened: {
         const goal = backend.goal
         editing = !!goal.id && goal.status !== "completed"
@@ -57,15 +58,15 @@ Dialog {
     footer: RowLayout {
         spacing: 8
         ActionButton {
-            Layout.leftMargin: 18; Layout.bottomMargin: 18
+            Layout.leftMargin: Theme.dialogPadding; Layout.bottomMargin: Theme.dialogPadding - 4
             visible: editor.backend.goal.status === "active"
             text: qsTr("Pause goal"); onClicked: editor.backend.pauseGoal()
         }
         Item { Layout.fillWidth: true }
-        ActionButton { text: qsTr("Close"); Layout.bottomMargin: 18; onClicked: editor.close() }
+        ActionButton { text: qsTr("Close"); Layout.bottomMargin: Theme.dialogPadding - 4; onClicked: editor.close() }
         ActionButton {
             text: editor.editing ? qsTr("Save and resume") : qsTr("Start goal")
-            primary: true; Layout.bottomMargin: 18; Layout.rightMargin: 18
+            primary: true; Layout.bottomMargin: Theme.dialogPadding - 4; Layout.rightMargin: Theme.dialogPadding
             enabled: !editor.backend.running && objective.text.trim().length > 0 && tokens.acceptableInput && rounds.acceptableInput
             onClicked: {
                 const ok = editor.editing

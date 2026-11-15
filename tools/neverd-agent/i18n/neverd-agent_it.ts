@@ -164,28 +164,8 @@
 <context>
     <name>Conversation</name>
     <message>
-        <source>Research workspace</source>
-        <translation>Ambiente di ricerca</translation>
-    </message>
-    <message>
         <source>Project file preview</source>
         <translation>Anteprima del file di progetto</translation>
-    </message>
-    <message>
-        <source>Project conversation  /  Analysis objects: %1</source>
-        <translation>Conversazione del progetto  /  Oggetti di analisi: %1</translation>
-    </message>
-    <message>
-        <source>Organize objects, connect leads, keep evidence</source>
-        <translation>Organizza gli oggetti, collega le piste, conserva le evidenze</translation>
-    </message>
-    <message>
-        <source>Goal</source>
-        <translation>Obiettivo</translation>
-    </message>
-    <message>
-        <source>Set a persistent goal…</source>
-        <translation>Imposta un obiettivo persistente…</translation>
     </message>
     <message>
         <source>Add analysis object…</source>
@@ -576,14 +556,6 @@ Revisione dell’analisi %3 · %4</translation>
 <context>
     <name>Main</name>
     <message>
-        <source>Research workspace</source>
-        <translation>Ambiente di ricerca</translation>
-    </message>
-    <message>
-        <source>Settings…</source>
-        <translation>Impostazioni…</translation>
-    </message>
-    <message>
         <source>Side chat · Approval request pending</source>
         <translation>Chat laterale · Richiesta di approvazione in sospeso</translation>
     </message>
@@ -598,10 +570,6 @@ Revisione dell’analisi %3 · %4</translation>
     <message>
         <source>Reading file fingerprints…</source>
         <translation>Lettura delle impronte dei file…</translation>
-    </message>
-    <message>
-        <source>Local workspace</source>
-        <translation>Ambiente di ricerca locale</translation>
     </message>
     <message>
         <source>Open in the NeverD workbench</source>
@@ -826,6 +794,14 @@ Revisione dell’analisi %3 · %4</translation>
     <message>
         <source>OK</source>
         <translation>OK</translation>
+    </message>
+    <message>
+        <source>Goal</source>
+        <translation>Obiettivo</translation>
+    </message>
+    <message>
+        <source>Set a persistent goal…</source>
+        <translation>Imposta un obiettivo persistente…</translation>
     </message>
 </context>
 <context>
