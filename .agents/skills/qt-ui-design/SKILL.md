@@ -5,10 +5,10 @@ description: >-
 license: LicenseRef-Qt-Commercial OR BSD-3-Clause
 metadata:
   author: qt-ai-skills
-  version: "1.12"
+  version: "1.13"
   qt-version: "6.x"
   category: conceptual
-  changelog: "Section 1.9: a floating panel opens at the golden section on the side lines start from, goes with the person into a focus mode, and lays out a conversation as VS Code's chat view"
+  changelog: "Section 1.9: a window that holds a conversation takes a conversation application's shapes: two columns parted by fill, stepped corners, a type scale, one reading column and the composer as its main object"
 ---
 # Qt UI Design
 
@@ -340,6 +340,15 @@ A panel that floats over a workbench (a chat, a quick input, a palette) is place
 - When the view cannot send yet, say why in the context chip's place, beside a send button that waits. A placeholder alone leaves the waiting button unexplained once typing hides it.
 - Type prose in the interface font, as VS Code's chat input does, even where the application types its text fields in a code font. Grow the prompt with its lines, two to eight, then scroll; measure the laid-out lines, because a line mixing scripts (Chinese among Latin) is taller than the font's line.
 - Keep the window's one accent on the send button: the mark, the chips and the entry toggle stay gray.
+
+**Shape a window that holds a conversation as a conversation application, not as a tool window.** A title band, hairlines between panes, tight corners, one text size and a status bar suit a dense tool window and read as dated around a conversation. The proportions below were measured on the desktop stylesheet of OpenAI's Codex application; they hold with any palette, so take them and keep the product's own colors.
+- Build the window as two columns: a side list that runs the window's height, with the application's name on the strip that moves the window, and the conversation under a strip with its title, its commands and the window's controls. Part the columns by their fills, and draw a line only in a theme where the fills are one, such as high contrast. Leave out a status bar that has nothing to report: show what the application reports as a note that leaves again.
+- Make a side-list row about 30 pixels high, with a 16-pixel glyph, 8 pixels of padding and corners of 8 to 10. The whole row answers the pointer, and the open row carries a quiet neutral fill, not the selection color, so the accent stays on the main button. A row's own actions show while the pointer or keyboard is on it.
+- Step corners with the size of the thing: 8 to 10 for rows, buttons and fields, 12 to 16 for cards, menus and dialogs, about 20 for the composer and a message bubble, none for the window. Keep spacing on a grid of 4 pixels.
+- Use a type scale in steps of the platform's interface size, never fixed pixels: about 0.93 for notes, 1.15 for a dialog's title, 1.3 for a heading, and one line at about twice the size, in the regular weight, on a page with nothing else to show. Center that page's mark, line, sentence and buttons, a little above the middle.
+- Read a conversation in one centered column no wider than about 768 pixels. Show who spoke by position: the person's words in a bubble at the trailing edge, at most four fifths of the column wide, and an answer plain across it. Write a name only where it adds something, and show the time and a message's actions only while the pointer or keyboard is on it. A header in every bubble reads as a form.
+- Make the composer the window's main object: an elevated surface with the largest corners, growing with its lines, its pickers quiet until hovered, and the send button a disc in the accent.
+- Where the reference orders its surfaces differently from the product (its content lighter than its side list, the product's darker), keep the product's order. Do not add a color to copy the lift.
 ---
 
 ## 2. Accessibility (WCAG 2.2)
@@ -477,6 +486,7 @@ Apply section 4 constraints first if the target is embedded.
 - [ ] Languages: does every window fit its texts in every bundled language, does a live language switch reword every pane, and do layouts placed by hand mirror right to left?
 - [ ] Floating panels: does each open at the golden section on the side lines start from rather than in the dead middle or a corner, snap back to that place, and stay with the person, shortcuts included, in every mode that covers the main window?
 - [ ] Conversations: does an empty one say what it does in the middle, are first questions compact chips above one composer box, is the context said once, is prose in the interface font, and is the send button the only accent?
+- [ ] Conversation windows: is the window two columns parted by fill, without a title band or an idle status bar; do rows, cards and the composer step up in corner size; is there a type scale with one large line on an empty page; is the conversation one centered column that shows who spoke by position; and does the open row take a quiet fill so the accent stays on the main button?
 - [ ] AI features: are latency patterns, uncertainty, and consent handled per section 3?
 ---
 
