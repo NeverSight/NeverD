@@ -6,11 +6,19 @@
 
 #include "ActionRegistry.h"
 #include "AnalysisPlugins.h"
+#include "DisassemblyView.h"
+#include "Docking.h"
 #include "GuiPluginUiHost.h"
+#include "LoadFileDialog.h"
+#include "MainWindow.h"
+#include "OutputWindow.h"
 #include "PluginManagerDialog.h"
 #include "PluginServices.h"
 #include "Session.h"
+#include "SettingsKeys.h"
 #include "Theme.h"
+#include "mcp/GuiSessionBroker.h"
+#include "mcp/McpConnectionManager.h"
 
 #include <QAbstractButton>
 #include <QAction>
@@ -41,8 +49,10 @@
 #include <QTest>
 #include <QTextBrowser>
 #include <QTextCursor>
+#include <QTimer>
 #include <QToolButton>
 #include <QTreeWidget>
+#include <memory>
 #include <numbers>
 
 using namespace neverd::gui;
@@ -660,6 +670,147 @@ private slots:
     // conversation, on the side its lines start from.
     QTRY_VERIFY(panel->isVisible());
     QTRY_COMPARE(panel->pos(), QPoint(mirrored ? 321 : 199, 70));
+  }
+
+  // Focus mode lends a window of its own to the views; they go there where
+  // they were, shown or hidden, its window takes the plugins' shortcuts, and
+  // they come back when it is returned or destroyed.
+  void viewsGoWhereTheHostLendsThem() {
+    const ScopedTestSettings settings("AgentLentViews");
+    QVERIFY(settings.isValid());
+    Session session(QStringLiteral(TEST_WORKER));
+    QWidget window;
+    GuiPluginUiHost host(
+        window, session, [&] { return window.rect(); }, [](const auto &) {});
+    ActionRegistry registry;
+    AnalysisPlugins plugins(session, registry, nullptr,
+                            QStringLiteral(TEST_AGENT_UI), &host);
+    window.resize(1000, 700);
+    window.show();
+    auto *ball = window.findChild<QAbstractButton *>("NeverDAgentLauncher");
+    auto *panel = window.findChild<QWidget *>("NeverDAgentChat");
+    auto *prompt = window.findChild<QPlainTextEdit *>("NeverDAgentPrompt");
+    QVERIFY(ball && panel && prompt);
+    QTRY_VERIFY(ball->isVisible() && panel->isHidden());
+
+    auto workspace = std::make_unique<QWidget>();
+    workspace->setFocusPolicy(Qt::StrongFocus);
+    workspace->resize(1200, 800);
+    workspace->show();
+    // Below a caption 40 pixels high, as a floating window's.
+    const QRect area(0, 40, 1200, 760);
+    host.lendViews(*workspace, [&] { return area; });
+    QCOMPARE(ball->window(), workspace.get());
+    QCOMPARE(panel->window(), workspace.get());
+    QTRY_VERIFY(ball->isVisible() && panel->isHidden());
+    QTRY_VERIFY(area.contains(ball->geometry()) &&
+                ball->geometry().right() > 1100 &&
+                ball->geometry().bottom() > 700);
+    // The shortcut opens the conversation in the workspace, at its golden
+    // section (720 pixels free across, 240 down), and closes it again.
+    workspace->activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(workspace.get()));
+    workspace->setFocus();
+    QTest::keyClick(workspace.get(), Qt::Key_I,
+                    Qt::ControlModifier | Qt::AltModifier);
+    QTRY_VERIFY(panel->isVisible() && ball->isChecked());
+    QTRY_COMPARE(panel->pos(), QPoint(275, 120));
+    QTRY_COMPARE(QApplication::focusWidget(), prompt);
+    QTest::keyClick(prompt, Qt::Key_I, Qt::ControlModifier | Qt::AltModifier);
+    QTRY_VERIFY(panel->isHidden() && !ball->isChecked());
+
+    ball->click();
+    QVERIFY(panel->isVisible());
+    host.returnViews();
+    QCOMPARE(ball->window(), &window);
+    QCOMPARE(panel->window(), &window);
+    QTRY_VERIFY(ball->isVisible() && panel->isVisible() &&
+                restsIn(window, *panel));
+    QVERIFY(window.rect().contains(ball->geometry()));
+
+    // A workspace destroyed while it holds the views gives them back first.
+    host.lendViews(*workspace, [&] { return area; });
+    QCOMPARE(panel->window(), workspace.get());
+    const QPointer<QWidget> keptBall(ball), keptPanel(panel);
+    workspace.reset();
+    QVERIFY(keptBall && keptPanel);
+    QCOMPARE(ball->window(), &window);
+    QCOMPARE(panel->window(), &window);
+    QTRY_VERIFY(ball->isVisible() && panel->isVisible());
+    ball->click();
+    QVERIFY(panel->isHidden());
+  }
+
+  // In focus mode, F pressed three times, the Ask Agent button and the
+  // conversation are in the workspace that covers the workbench, clear of
+  // its command line, and they come back with the workbench.
+  void askAgentFollowsFocusMode() {
+    const ScopedTestSettings settings("AgentFocusMode");
+    QVERIFY(settings.isValid());
+    QSettings().setValue(settings::OpenInNewInstance, false);
+    static const bool docking = (configureDocking(), true);
+    Q_UNUSED(docking);
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const auto binary = directory.filePath("focus.bin");
+    QVERIFY(write(binary, QByteArray("fixture")));
+    Session session(QStringLiteral(TEST_WORKER));
+    McpConnectionManager mcp;
+    GuiSessionBroker broker;
+    MainWindow window(session, mcp, broker, QStringLiteral(TEST_AGENT_UI));
+    window.setLayoutPath(directory.filePath("layout.json"));
+    window.resize(1400, 900);
+    window.initializeLayout();
+    window.show();
+    QTimer loads;
+    QObject::connect(&loads, &QTimer::timeout, [] {
+      if (auto *dialog =
+              qobject_cast<LoadFileDialog *>(QApplication::activeModalWidget()))
+        dialog->accept();
+    });
+    loads.start(10);
+    window.openFile(binary);
+    QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), 7000);
+    auto *ball = window.findChild<QAbstractButton *>("NeverDAgentLauncher");
+    auto *panel = window.findChild<QWidget *>("NeverDAgentChat");
+    auto *prompt = window.findChild<QPlainTextEdit *>("NeverDAgentPrompt");
+    QVERIFY(ball && panel && prompt);
+    QTRY_VERIFY(ball->isVisible() && panel->isHidden());
+
+    auto *mode = window.actions().action(ActionId::ViewFocusMode);
+    QTRY_VERIFY(mode->isEnabled());
+    mode->trigger();
+    QVERIFY(mode->isChecked());
+    auto *workspace = window.disassembly()->window();
+    QVERIFY(workspace != &window);
+    QCOMPARE(ball->window(), workspace);
+    QCOMPARE(panel->window(), workspace);
+    QTRY_VERIFY(workspace->isMaximized() && ball->isVisible());
+    auto *output = workspace->findChild<OutputWindow *>();
+    QVERIFY(output && output->commandLine());
+    const auto *line = output->commandLine();
+    QTRY_VERIFY(line->isVisible());
+    const QRect row(line->mapTo(workspace, QPoint()), line->size());
+    QTRY_VERIFY(workspace->rect().contains(ball->geometry()) &&
+                ball->geometry().center().x() > workspace->width() / 2 &&
+                ball->geometry().bottom() < row.top() &&
+                ball->geometry().bottom() > row.top() - 3 * ball->height());
+    // The plugins' shortcut works in the workspace's window.
+    workspace->activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(workspace));
+    QTest::keyClick(window.disassembly(), Qt::Key_I,
+                    Qt::ControlModifier | Qt::AltModifier);
+    QTRY_VERIFY(panel->isVisible() && ball->isChecked());
+    QTRY_COMPARE(QApplication::focusWidget(), prompt);
+    QVERIFY(workspace->rect().contains(panel->geometry()));
+
+    // Leaving focus mode brings both back, the conversation still open.
+    mode->trigger();
+    QVERIFY(!mode->isChecked());
+    QCOMPARE(ball->window(), &window);
+    QCOMPARE(panel->window(), &window);
+    QTRY_VERIFY(ball->isVisible() && panel->isVisible());
+    QTRY_VERIFY(window.rect().contains(panel->geometry()));
   }
 
   void agentChatUsesTheLiveWorkbenchAndReopensAfterHiding() {

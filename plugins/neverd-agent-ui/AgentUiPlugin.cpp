@@ -9,7 +9,8 @@
 /// corner, as Office places its Copilot button, and a conversation window
 /// that opens at the golden section across the workbench, on the side a
 /// line starts from, moves by its title as VS Code's quick input does, and
-/// resizes by its edges. Both remember where they were left.
+/// resizes by its edges. Both remember where they were left, and both go
+/// wherever the host puts its views, such as focus mode's workspace.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -1130,8 +1131,7 @@ public:
     Ball->installEventFilter(this);
     Panel->installEventFilter(this);
     Prompt->installEventFilter(this);
-    if (auto *workbench = Ball->parentWidget())
-      workbench->installEventFilter(this);
+    watchSurface();
     connect(Ball, &QAbstractButton::clicked, this, [this] {
       if (Panel->isVisible())
         hidePanel();
@@ -1408,6 +1408,13 @@ private:
       showLauncherMenu(static_cast<QContextMenuEvent *>(event)->globalPos());
       return true;
     }
+    // The host moved the views to another window, as into focus mode's
+    // workspace and back: each place is a share of what holds it.
+    if ((object == Ball.data() || object == Panel.data()) &&
+        event->type() == QEvent::ParentChange) {
+      watchSurface();
+      applyPlaces();
+    }
     // However the conversation shows or hides, the button follows it.
     if (Ball && object == Panel.data() &&
         (event->type() == QEvent::Show || event->type() == QEvent::Hide))
@@ -1415,7 +1422,7 @@ private:
     if (object == Ball.data() && event->type() == QEvent::LanguageChange) {
       loadTranslations();
       retranslate();
-    } else if (Ball && object == Ball->parentWidget() &&
+    } else if (Surface && object == Surface.data() &&
                event->type() == QEvent::Resize) {
       applyPlaces();
     } else if (object == WelcomeContent && WelcomeText &&
@@ -1546,6 +1553,19 @@ private:
     QSettings().setValue(LauncherDockedKey, docked);
     if (place)
       applyPlaces();
+  }
+
+  // The host may put the views in another window the person works in, as
+  // focus mode's workspace, and back.
+  void watchSurface() {
+    auto *surface = Ball->parentWidget();
+    if (surface == Surface)
+      return;
+    if (Surface)
+      Surface->removeEventFilter(this);
+    Surface = surface;
+    if (Surface)
+      Surface->installEventFilter(this);
   }
 
   void restorePlaces() {
@@ -1915,6 +1935,8 @@ private:
   QPointer<FloatingCard> Panel;
   QPointer<QWidget> Teaching;
   QPointer<QWidget> FocusBefore;
+  // The window that holds the views, whose resizes move them.
+  QPointer<QWidget> Surface;
   QAction *OpenAction = nullptr;
   QAction *LauncherAction = nullptr;
   QLabel *Title = nullptr;

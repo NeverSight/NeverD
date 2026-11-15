@@ -25,9 +25,9 @@ struct Placement {
 };
 
 /// Set this dynamic property on a mounted widget to request a QPoint top-left
-/// in workbench coordinates, as when a person drags the view. The host
-/// constrains the position to the workbench. An anchored view leaves its
-/// anchor while the property is set, and views anchored to a moved view
+/// in its parent's coordinates, as when a person drags the view. The host
+/// constrains the position to the parent's free area. An anchored view leaves
+/// its anchor while the property is set, and views anchored to a moved view
 /// follow it. Clear the property to return to the original placement.
 inline constexpr char ViewPositionProperty[] = "neverdViewPosition";
 
@@ -39,7 +39,11 @@ public:
   using Observer = std::function<void(const QJsonObject &)>;
 
   /// The factory creates a child of the supplied parent. The host owns its
-  /// destruction. Show/hide use Qt; close releases the mount.
+  /// destruction. Show/hide use Qt; close releases the mount. The host may
+  /// move every view to another window the person works in, such as focus
+  /// mode's workspace, and back, keeping each shown or hidden; a view then
+  /// receives QEvent::ParentChange, and one that keeps a place relative to
+  /// its parent places itself again.
   virtual QWidget *mountView(const QString &id, const Placement &placement,
                              Factory factory, QString &error) = 0;
   virtual QJsonObject captureContext() const = 0;

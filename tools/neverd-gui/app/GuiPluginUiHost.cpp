@@ -114,8 +114,8 @@ public:
       error = QString::fromStdString(issue.Message);
       return nullptr;
     }
-    QWidget *widget = factory(&Host.Workbench);
-    if (!widget || widget->parentWidget() != &Host.Workbench ||
+    QWidget *widget = factory(Host.Surface);
+    if (!widget || widget->parentWidget() != Host.Surface ||
         widget->isWindow()) {
       host.close(*scope, [&host, scope](const auto &) { host.forget(*scope); });
       error = tr("The view factory must create a workbench child widget.");
@@ -174,6 +174,8 @@ public:
       return false;
     }
     MenuActions.insert(id, action);
+    if (Host.Surface != &Host.Workbench)
+      Host.Surface->addAction(action);
     return true;
   }
 
@@ -271,8 +273,9 @@ public:
 GuiPluginUiHost::GuiPluginUiHost(QWidget &workbench, Session &session,
                                  std::function<QRect()> available,
                                  Navigate navigate)
-    : QObject(&workbench), Workbench(workbench), Project(session),
-      Jobs(session.pluginServices().jobs()), Available(std::move(available)),
+    : QObject(&workbench), Workbench(workbench), Surface(&workbench),
+      Project(session), Jobs(session.pluginServices().jobs()),
+      WorkbenchArea(std::move(available)), Available(WorkbenchArea),
       Jump(std::move(navigate)) {
   Workbench.installEventFilter(this);
   connect(&Jobs, &PluginJobs::componentBound, this, [this](const QString &id) {
@@ -334,7 +337,8 @@ GuiPluginUiHost::GuiPluginUiHost(QWidget &workbench, Session &session,
 
 GuiPluginUiHost::~GuiPluginUiHost() {
   Jobs.setGuiActivator({});
-  Workbench.removeEventFilter(this);
+  QObject::disconnect(SurfaceGone);
+  Surface->removeEventFilter(this);
   const auto bindings = Bindings;
   for (auto *binding : bindings)
     Jobs.host().close(binding->Scope);
@@ -359,6 +363,47 @@ QList<QAction *> GuiPluginUiHost::menuActions(const QString &pluginId) const {
     if (binding->Active && binding->PluginId == pluginId)
       return binding->MenuActions.values();
   return {};
+}
+
+void GuiPluginUiHost::lendViews(QWidget &surface,
+                                std::function<QRect()> available) {
+  moveViews(surface, std::move(available));
+}
+
+void GuiPluginUiHost::returnViews() { moveViews(Workbench, WorkbenchArea); }
+
+void GuiPluginUiHost::moveViews(QWidget &surface,
+                                std::function<QRect()> available) {
+  Available = std::move(available);
+  if (Surface != &surface) {
+    QObject::disconnect(std::exchange(SurfaceGone, {}));
+    Surface->removeEventFilter(this);
+    if (Surface != &Workbench)
+      for (const auto *binding : std::as_const(Bindings))
+        for (auto *action : binding->MenuActions)
+          Surface->removeAction(action);
+    Surface = &surface;
+    Surface->installEventFilter(this);
+    if (Surface != &Workbench) {
+      // A command's shortcut works in the window its views moved to.
+      for (const auto *binding : std::as_const(Bindings))
+        Surface->addActions(binding->MenuActions.values());
+      // QWidget announces its destruction before it deletes its children, so
+      // the views come back before the lender takes them along.
+      SurfaceGone = connect(Surface, &QObject::destroyed, this,
+                            [this] { returnViews(); });
+    }
+    for (const auto *binding : std::as_const(Bindings))
+      for (const auto &view : binding->Views)
+        if (auto *widget = view.Widget.data();
+            widget && widget->parentWidget() != Surface) {
+          // A new parent hides a widget; a view keeps whether it showed.
+          const bool hidden = widget->isHidden();
+          widget->setParent(Surface);
+          widget->setVisible(!hidden);
+        }
+  }
+  scheduleLayout();
 }
 
 bool GuiPluginUiHost::eventFilter(QObject *, QEvent *event) {
@@ -392,7 +437,7 @@ void GuiPluginUiHost::scheduleLayout() {
 
 void GuiPluginUiHost::layoutViews() {
   const int gap =
-      std::max(0, Workbench.style()->pixelMetric(QStyle::PM_LayoutRightMargin));
+      std::max(0, Surface->style()->pixelMetric(QStyle::PM_LayoutRightMargin));
   const auto area = Available().adjusted(gap, gap, -gap, -gap);
   if (area.isEmpty())
     return;

@@ -67,11 +67,17 @@ component requires the workbench.
   that creates a child of the provided parent. The host places and destroys
   the root widget. Use `sizeHint()` for the preferred size and Qt's
   `show()`, `hide()` and `close()` to manage visibility and release.
+- The host may move every view to another window the person works in, such
+  as the workspace of focus mode, and back. Each view keeps whether it was
+  shown and receives `QEvent::ParentChange`; a view that keeps a place
+  relative to its parent places itself again then. While the views are
+  there, that window also takes the shortcuts of the component's menu
+  actions.
 - A plugin can set the `ViewPositionProperty` dynamic property on a view to
-  a `QPoint` in workbench coordinates, as when a person drags it. The host fits
-  the view within the workbench. An anchored view leaves its anchor while the
-  property is set, and views anchored to a moved view follow it. Clear the
-  property to return the view to its original place.
+  a `QPoint` in its parent's coordinates, as when a person drags it. The host
+  fits the view within the parent's free area. An anchored view leaves its
+  anchor while the property is set, and views anchored to a moved view follow
+  it. Clear the property to return the view to its original place.
 - `captureContext` returns the active workbench selection and project identity.
   `watchContext` scopes its observer to the activation and the receiving
   `QObject`. Use `attachSession` for a private read-only MCP connection and

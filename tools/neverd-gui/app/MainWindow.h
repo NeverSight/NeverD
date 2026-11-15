@@ -187,6 +187,8 @@ private:
   void toggleFocusMode();
   void leaveFocusMode();
   void resetFocusSequence();
+  /// Where plugin views float in \p surface: \p content's rectangle.
+  QRect pluginViewArea(const QWidget &surface, const QWidget *content) const;
   void connectFunctions(ChooserView *view);
   void connectPatchActions();
   void preparePatchMenu(QMenu *menu);

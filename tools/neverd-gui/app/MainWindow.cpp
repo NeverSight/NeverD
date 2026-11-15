@@ -372,22 +372,7 @@ MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
   buildDocks();
   pluginUi_ = new GuiPluginUiHost(
       *this, session_,
-      [this] {
-        const auto *center = centralWidget();
-        QRect area = center
-                         ? QRect(center->mapTo(this, QPoint{}), center->size())
-                         : contentsRect();
-        // Floating plugin views keep off the command line when it runs
-        // along the foot of the workbench, under either bottom corner.
-        if (const auto *line = output_ ? output_->commandLine() : nullptr;
-            line && line->isVisible()) {
-          const QRect row(line->mapTo(this, QPoint{}), line->size());
-          if (row.bottom() >= area.bottom() - row.height() / 2 &&
-              row.width() >= area.width() / 2)
-            area.setBottom(std::min(area.bottom(), row.top() - 1));
-        }
-        return area;
-      },
+      [this] { return pluginViewArea(*this, centralWidget()); },
       [this](const QString &address) {
         if (const auto parsed = parseAddress(address))
           navigate(*parsed);
@@ -6158,7 +6143,31 @@ void MainWindow::toggleFocusMode() {
                 0, std::max(header->minimumSectionSize(),
                             header->sectionSize(0) + difference));
           });
+  // Plugin views, such as the Agent's Ask Agent button and conversation,
+  // stay with the person in the workspace that covers the workbench.
+  pluginUi_->lendViews(*floating, [this,
+                                   workspace = QPointer<QWidget>(floating),
+                                   content = QPointer<QWidget>(area)] {
+    return workspace && content ? pluginViewArea(*workspace, content) : QRect();
+  });
   updateActions();
+}
+
+QRect MainWindow::pluginViewArea(const QWidget &surface,
+                                 const QWidget *content) const {
+  QRect area = content && surface.isAncestorOf(content)
+                   ? QRect(content->mapTo(&surface, QPoint{}), content->size())
+                   : surface.contentsRect();
+  // Floating plugin views keep off the command line when it runs along the
+  // foot of the window, under either bottom corner.
+  if (const auto *line = output_ ? output_->commandLine() : nullptr;
+      line && line->isVisible() && surface.isAncestorOf(line)) {
+    const QRect row(line->mapTo(&surface, QPoint{}), line->size());
+    if (row.bottom() >= area.bottom() - row.height() / 2 &&
+        row.width() >= area.width() / 2)
+      area.setBottom(std::min(area.bottom(), row.top() - 1));
+  }
+  return area;
 }
 
 void MainWindow::resetFocusSequence() {
@@ -6173,6 +6182,9 @@ void MainWindow::leaveFocusMode() {
     return;
   const auto layout = std::exchange(focusLayout_, {});
   const auto focus = std::exchange(focusReturn_, {});
+  // The workspace goes away with the layout before focus mode.
+  if (pluginUi_)
+    pluginUi_->returnViews();
   focusFunctions_.clear();
   delete focusSidebar_.data();
   if (auto *toolbar = focusToolbar_.data()) {
