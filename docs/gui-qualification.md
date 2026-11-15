@@ -3,6 +3,9 @@
 This records the first runnable implementation for issue #108. It is not a
 claim that every P0–P4 release criterion has been completed.
 
+The records below retain their original Qt versions. They are historical
+results, not qualification of the current Qt 6.12 baseline.
+
 ## Delivered and exercised locally
 
 - Optional Qt Widgets application, separate Qt-free C ABI worker and

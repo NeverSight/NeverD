@@ -20,7 +20,7 @@ The normal engine/CLI configuration is unchanged. Qt is optional and is searched
 only when `NEVERD_BUILD_GUI=ON`. To add the workbench to an engine build, use:
 
 ```sh
-cmake -S . -B build -DNEVERD_BUILD_GUI=ON -DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/platform
+cmake -S . -B build -DNEVERD_BUILD_GUI=ON -DCMAKE_PREFIX_PATH=/path/to/Qt/6.12.0/platform
 cmake --build build --target neverd-gui
 ```
 
@@ -29,19 +29,21 @@ For fast desktop development, build against a matching existing shared engine:
 ```sh
 cmake -S tools/neverd-gui -B build-gui -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/platform \
+  -DCMAKE_PREFIX_PATH=/path/to/Qt/6.12.0/platform \
   -DNEVERD_ENGINE_LIBRARY=/path/to/libneverd.so
 cmake --build build-gui
 ctest --test-dir build-gui --output-on-failure
 build-gui/bin/neverd-gui /absolute/path/to/binary
 ```
 
-Requires C++20, CMake 3.24+, Qt 6.8+ Core, Gui, Widgets, Network, Svg, Sql
+Requires C++20, CMake 3.24+, Qt 6.12+ Core, Gui, Widgets, Network, Svg, Sql
 (with its SQLite driver), Concurrent and LinguistTools, the GuiPrivate and
 WidgetsPrivate headers for the pinned KDDockWidgets frontend (Qt Test for
 tests), and Python 3.10+ for tests and the MCP adapter. The first configure
 downloads nlohmann/json 3.11.3 and KDDockWidgets 2.4.1 using pinned SHA-256
-digests. Ship the exact Qt build used to compile its private headers. On Windows
+digests. Desktop CI pins Qt 6.12.0. See the [packaging guide](../tools/neverd-gui/PACKAGING.md#qt-baseline)
+for the required security patches and matching license catalog before distribution.
+Ship the exact Qt build used to compile its private headers. On Windows
 set `NEVERD_ENGINE_LIBRARY` to the runtime DLL and `NEVERD_ENGINE_IMPLIB` to its
 matching import `.lib`; make runtime dependencies available alongside the
 worker.
@@ -1715,7 +1717,7 @@ development bundle with:
 ```sh
 python3 tools/neverd-gui/package_macos.py --build-dir build-gui \
   --engine /absolute/path/to/libneverd.dylib \
-  --qt-dir /path/to/Qt/6.8.3/macos --output dist/NeverD.app
+  --qt-dir /path/to/Qt/6.12.0/macos --output dist/NeverD.app
 ```
 
 This produces an ad-hoc signed development application, not a notarized
