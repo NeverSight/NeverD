@@ -1867,6 +1867,8 @@ target_compile_definitions(NeverDRecordCallContractTests PRIVATE
 add_neverd_unittest(NeverDAAPCS64CallContractTests
   core/AAPCS64CallContractTests.cpp
   LINK_COMPONENTS BackendC BackendLLVM Loader Pipeline
+  # One case compiles and runs 144 source/ABI variants (455s on macOS).
+  TIMEOUT 600
 )
 target_include_directories(NeverDAAPCS64CallContractTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
@@ -1895,6 +1897,8 @@ add_neverd_unittest(NeverDWin64CallContractTests
   core/FloatingCallLeftoversTests.cpp
   x86_64/Win64CallContractTests.cpp
   LINK_COMPONENTS BackendC BackendLLVM Pipeline
+  # Native source/ABI matrices share the AAPCS64 suite's aggregate budget.
+  TIMEOUT 600
 )
 target_include_directories(NeverDWin64CallContractTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
@@ -2385,6 +2389,8 @@ add_neverd_unittest(NeverDLLVMMemoryAlignmentTests
 add_neverd_unittest(NeverDMedLLVMDirectDataTests
   core/MedLLVMDirectDataTests.cpp
   LINK_COMPONENTS BackendLLVM BackendC
+  # Cross-format native execution matrices take up to 302s on macOS.
+  TIMEOUT 600
 )
 
 add_neverd_unittest(NeverDMedLLVMDeadSlotsTests
@@ -2398,6 +2404,8 @@ target_include_directories(NeverDMedLLVMDeadSlotsTests PRIVATE
 add_neverd_unittest(NeverDMedLLVMEntryParameterTests
   core/MedLLVMEntryParameterTests.cpp
   LINK_COMPONENTS BackendLLVM BackendC Pipeline
+  # The entry-join matrix compiles and runs 72 programs (428s on macOS).
+  TIMEOUT 600
 )
 
 add_neverd_unittest(NeverDRegistrationCallResultTests
@@ -2498,6 +2506,8 @@ add_neverd_unittest(NeverDArm64eAnalysisTests
   format/MachOThreadedBindTests.cpp
   NO_PRETTY_VALUES
   LINK_COMPONENTS BackendC BackendLLVM CodeGen Decode Lift Loader
+  # Native memory projection matrices exceed the default 120s on macOS.
+  TIMEOUT 600
 )
 target_include_directories(NeverDArm64eAnalysisTests PRIVATE
   ${CMAKE_SOURCE_DIR}/lib/backend)

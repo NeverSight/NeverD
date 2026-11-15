@@ -7408,6 +7408,10 @@ the edges of a row round. `NeverDGuiController`, `NeverDGuiPatchKeys` and
 `NeverDGuiSourceVariableTypes` turn `PaintCheck` on: every paint of a code view is
 painted again into a picture of what its paints add up to, which is compared with the
 view painted afresh, and a test after which the two differ fails.
+The comparison follows Qt's visible region: an opaque loading label owns the
+pixels it covers until it disappears. `paintCheckFollowsOpaqueChildExposure`
+checks covered updates and subsequent exposure, with a missing repaint in an
+uncovered area as a positive control for stale-pixel detection.
 The listing paints the same way: the rows a change reaches, and the gutter of branch
 arrows where an arrow changed. `WorkbenchTests::aChangeToTheListingPaintsTheRowsItReachesAndNoOther`
 moves the cursor by lines and columns, onto and off a line an arrow leaves, with the focus
@@ -8583,7 +8587,9 @@ direct stubs and indirect import slots, unrelated declarations and SDK precedenc
 over inferred callee signatures on both architectures;
 `SessionCAPITest.UefiApplicationsJoinTheirFirmwaresLibrary` loads
 `uefi_calls_{x64,x86,arm64}.efi`, built as `uefi_calls.c` says, whose entry
-takes `EFI_IMAGE_ENTRY_POINT`;
+takes `EFI_IMAGE_ENTRY_POINT`. Its typed member chains retain the declared
+pointer's identity on 32-bit targets as well, independently of the source ABI
+validator's supported structural layouts;
 `SessionCAPITest.CallsThroughTypedMembersReadEachPointerOnce` decompiles
 `member_calls_x64` and checks that a call through a typed member's pointer
 reads each pointer once;
@@ -17892,6 +17898,21 @@ S/D homes from AAPCS64 Q-register variadic saves; the
 `AArch64_VariadicSaveArea.NamedScalarAndAggregateSpillsRemainParameters`
 runtime case compares generated C with a fixed-parameter function containing
 both register HFAs and overflow stack arguments.
+`MedCallingConvStackParams.MutableHomesFollowEveryRegisterParameter` keeps
+mutable stack homes bound to their parameter-vector position after integer and
+floating register parameters on AArch64, ARM and x64. The stack value's ABI
+slot identity remains unchanged. `NeverDWorkerVirtualTailArguments` and its
+x64 sibling check nine floating arguments through virtual tail calls; native
+hosts execute both HighC and LLVMC with independent callers at O0/O2.
+`NeverDAAPCS64CallContractTests`, `NeverDWin64CallContractTests`,
+`NeverDMedLLVMDirectDataTests`, `NeverDMedLLVMEntryParameterTests` and
+`NeverDArm64eAnalysisTests` allow 600 seconds per CTest case for their native
+compilation/execution matrices. The 144-variant omitted floating-result case
+takes 455 seconds on macOS, and the 72-variant entry-join case takes 428 seconds;
+individual compiler and executable invocations retain their 30-second limits.
+`NeverDWorkerSourceSynthesis` also allows 600 seconds for its complete corpus,
+which takes 420 seconds on the same host. These are aggregate test budgets,
+not changes to the semantic assertions or production pipeline limits.
 `CSourcePresentation.IndexedRelocationsPreserveStringStorageProofs` compares
 indexed range queries with individual-byte provenance across ELF, PE and Mach-O,
 including unsorted and duplicate fixups, invalid import slots and a relocation
