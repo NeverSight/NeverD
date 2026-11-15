@@ -24280,6 +24280,15 @@ Add `--revision 2 --fr 0 --abi 32` for o32 physical register pairs, including
 single/double entry and call results, variadic/indirect calls and preserved
 f20–f31 words. `--abi` and `--layout` narrow a diagnostic rerun; omitting them
 runs all cases for the selected mode.
+Add `--revision 2 --micro --micro64-cc /path/to/mips64-linux-gnuabi64-gcc`
+to execute physical microMIPS callers and callees. Despite the option name,
+the GNU compiler supplies all three compressed ABIs; Clang remains the classic
+compiler. Add `--interwork` to select classic callees instead, with direct JALX
+and runtime-tagged indirect targets. `--fr 0` narrows either compressed matrix
+to o32 register pairs. Run each selection in a separate `--output` directory.
+The ELF files retain each function's instruction mode, and generated source is
+compiled with `-minterlink-compressed`. This does not qualify MIPS16 floating
+linker/runtime stubs.
 `SourceCallABI.AlignmentGuardPreservesOutgoingStackBytesAndAddresses` checks
 the reaching-store proof in all six MIPS ABI/byte-order profiles, with malformed
 alignment and opaque-effect controls that must still fail qualification.
@@ -24302,6 +24311,14 @@ FP state (including f0 after a declared non-floating call).
 `NeverDMIPSFlowTests` covers delayed snapshots with detail disabled and poisoned
 operand counts. `NeverDLLVMCAllocaTests` executes floating/integer storage views
 against original LLVM, including negative zero and NaN payloads.
+`MicroMIPSInteger` checks physical LUI word sign extension and SEB/SEH/WSBH
+with aliased operands in both GPR widths and byte orders; the legacy LUI
+encoding remains rejected on R6. `MicroMIPSSequence` compares LWM/SWM with
+the pinned Unicorn's full word memory accesses and independent untouched-byte
+guards. The oracle's own tests also cover sign extension on 64-bit loads.
+`MicroMIPSPipelineSource.N32RetainsNativeWideRecordTypes` and
+`HighCIntegerWidths.A32BitTargetSpellsA128BitIntegerAsBitInt` distinguish n32's
+native 128-bit type from a target with only 32-bit registers in both emitters.
 
 `MIPSLegacyFP` in `NeverDMIPSIntegerTests` covers classic FR=1 pre-R6 arithmetic,
 conversions, sign operations, COP1X multiply-add and all 32 S/D predicates at

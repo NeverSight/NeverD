@@ -3,10 +3,14 @@
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
+/// \file
+/// Share native integer type availability between the C source emitters.
+//===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_BACKEND_C_NATIVEINTEGERTYPES_H
 #define NEVERD_BACKEND_C_NATIVEINTEGERTYPES_H
 
+#include "neverd/Common.h"
 #include "neverd/ir/TargetRegInfo.h"
 
 namespace neverd {

@@ -346,7 +346,7 @@ receipts below retain the zero-destination defect of the older reference.
 
 ## microMIPS instruction and source boundaries
 
-The loader accepts linked r2 and r6 microMIPS ELF for o32 and n64 in either
+The loader accepts linked r2 and r6 microMIPS ELF for o32, n32 and n64 in either
 byte order. It checks the ELF header against any available
 `.MIPS.abiflags` evidence. `st_other` supplies each defined function's encoding;
 an even `st_value` can name a microMIPS function. Entry tags, symbol ranges and
@@ -359,6 +359,9 @@ semantic forms. The current set includes MOVE16, ADDU16/SUBU16, SLL16/SRL16,
 LI16, compact byte/halfword/word memory forms, SP/GP-relative word accesses,
 the 32-bit immediate/register forms listed in `MicroMIPSInteger.def`,
 BEQZ16/BNEZ16/B16, BEQ/BNE, J/JAL/JALS/JALX and the supported JR/JALR forms.
+Pre-R6 LUI, SEB, SEH and WSBH normalize to their classic word semantics,
+including sign extension into 64-bit GPRs. Their literal physical encodings
+are checked against GNU as and original execution in both byte orders.
 microMIPS32r2 DSP/DSPR2 and microMIPS32r5 MSA use the same scalar/vector
 semantics as their classic encodings. The physical decoder preserves the two
 halfwords in target order, the instruction address, operand detail and size.
@@ -383,15 +386,16 @@ including FR=0 on o32. The original and regenerated floating source leaves use
 Clang for o32 and GCC for n64, with scalar results, FCSR and memory compared at
 O0/O2. PS source tests use n64 integer carriers; they do not establish a vector
 call ABI. The generic Unicorn CPU profiles are bounded execution references,
-not complete physical processor models. FR=0 source-call qualification remains
-separate from the physical-instruction tests.
+not complete physical processor models. Source-call qualification is described
+separately below.
 
 The [2026-11-15 physical microMIPS FP receipt](evidence/mips-micro-legacy-fp-2026-11-15.json)
 records 160 independently assembled encoding forms, 406,272 arithmetic
 comparisons, 448 memory cases and 512 branch/slot cases in both byte orders.
 Its source matrix contains 1,128 builds and 52,808 rebuilt execution comparisons.
-These checks qualify the listed instruction and source slices; compressed
-floating call ABI and full microMIPS ISA coverage remain separate work.
+These checks qualify the listed instruction and source slices. The subsequent
+compressed call matrix covers the ABI slice below; full microMIPS ISA coverage
+remains separate work.
 
 Physical instructions occupy two or four bytes, including four-byte heads at
 addresses congruent to two modulo four. The execution-unit record keeps the
@@ -406,7 +410,25 @@ attributes. A source return must prove the captured incoming RA, including its
 mode bit, from the original instruction boundaries and SSA. Tail calls and unproved stack restores
 across calls remain outside this source proof. Source tests currently target
 bounded integer and floating leaves, memory effects, o32 stack arguments and
-branch/slot capture.
+branch/slot capture. The Release 2 floating call matrix additionally executes
+microMIPS callers with microMIPS or classic callees: o32 FR=0/FR=1, n32 and n64,
+in both byte orders. It covers fixed and variadic signatures, FP overflow onto
+the stack, runtime indirect targets, and floating, narrow-integer, two-register
+integer, pointer and void results. Both HighC and LLVMC are recompiled with GNU
+MIPS GCC at O0/O2; original and rebuilt callers check result bits, FCSR, saved
+FPRs, SP and the tagged return link. Direct interworking uses JALX; indirect
+interworking uses the runtime target's mode tag.
+
+The [2026-11-15 compressed call receipt](evidence/mips-compressed-call-abi-2026-11-15.json)
+records 448 original ELF profiles and 8,960 original execution cases, followed
+by 2,176 source builds and 43,520 rebuilt comparisons. Its reference pin fixes
+microMIPS SWM word stores and 64-bit LWM sign extension, with an independent
+regression that fails against the previous executor.
+
+This matrix does not qualify MIPS16 hard-float calls. GNU MIPS16 uses GPR
+payloads and linker/runtime stubs to bridge the classic FPR convention; those
+stubs need their own entry, call and return proof. The microMIPS matrix does
+not establish their behavior.
 
 Numeric microMIPS code-pointer reconstruction is explicitly refused. The tested
 Clang 22 compiler folds a microMIPS function pointer's low bit to zero in some
@@ -428,9 +450,13 @@ The micro doubleword merge transfers use a signed 12-bit displacement.
 For micro functions, HighC and LLVMC select GCC's `micromips` attribute or
 Clang's `micromips,nomips16` pair. GCC requires `-minterlink-compressed` for
 calls between compressed functions and classic helpers in the same output.
-The micro source prelude supplies a single-evaluation, size-checked raw bit copy
+The MIPS source prelude supplies a single-evaluation, size-checked raw bit copy
 for GCC C, whose frontend lacks Clang's `__builtin_bit_cast`. This preserves
 pointer/integer and floating bit patterns without aliasing through another type.
+Classic functions in mixed-mode outputs use the same compatibility definition.
+Both emitters retain native `__int128` for n32: its pointers are 32 bits, but
+the GNU-compatible compiler type follows its 64-bit register architecture.
+Targets lacking that type continue to use the existing `_BitInt(128)` mapping.
 Compilation stops if Clang reports no microMIPS attribute for the selected
 target. GCC's MIPS attributes are
 documented in the [GCC manual](https://gcc.gnu.org/onlinedocs/gcc/MIPS-Attributes.html).
