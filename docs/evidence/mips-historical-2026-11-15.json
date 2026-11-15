@@ -1,6 +1,6 @@
 {
-  "base_commit": "2c7e2c3591293c994b67747b65c232a679b70fb1",
-  "capstone_commit": "729680277dd762704ea3270291b7a75318f51583",
+  "base_commit": "689d3a9637022e5615b2ffdcc1914e0b0b42a2c4",
+  "capstone_commit": "defa77a3b8395499e6dfc991808ed8d1c8d83df1",
   "unicorn_commit": "a0bc496b8ca661be2d147b245aa200630ab31a8e",
   "host": "macOS arm64, Release",
   "historical_profiles": {
@@ -33,7 +33,7 @@
       "builds": 688,
       "executions": 27760,
       "receipt_sha256": "8e5cdda112e8b0b22918c03c936c461bef16a8d80dc2c1d4cd98ec40861a193c",
-      "sdk_sha256": "ad08112fbe6de3249997a99a24601463cff4f021af2fe917dfe2d1863d6f2ca6",
+      "sdk_sha256": "caf5a85c2dc20f03d867c49d3a3ce48d46c5c8565076da6b29c636db08c7d48c",
       "source_isa": [
         "mips4"
       ],
@@ -48,7 +48,7 @@
       "builds": 688,
       "executions": 27760,
       "receipt_sha256": "a2abdaa687b2d08c7d5dd7e411c283331d74d1005cb613a4e4bfbc1021e852b0",
-      "sdk_sha256": "ad08112fbe6de3249997a99a24601463cff4f021af2fe917dfe2d1863d6f2ca6",
+      "sdk_sha256": "caf5a85c2dc20f03d867c49d3a3ce48d46c5c8565076da6b29c636db08c7d48c",
       "source_isa": [
         "mips4"
       ],
@@ -63,7 +63,7 @@
       "builds": 1192,
       "executions": 53960,
       "receipt_sha256": "1bc63356b0224bdd001c83b206e937210aa2bc9331f78c516d15036b64bcdb62",
-      "sdk_sha256": "ad08112fbe6de3249997a99a24601463cff4f021af2fe917dfe2d1863d6f2ca6",
+      "sdk_sha256": "caf5a85c2dc20f03d867c49d3a3ce48d46c5c8565076da6b29c636db08c7d48c",
       "source_isa": [
         "mips5"
       ],
@@ -78,7 +78,7 @@
       "builds": 1192,
       "executions": 53960,
       "receipt_sha256": "15221da73a625f8de9eec7ebea33403db2665066ae031f43350bbf39a5c18e44",
-      "sdk_sha256": "ad08112fbe6de3249997a99a24601463cff4f021af2fe917dfe2d1863d6f2ca6",
+      "sdk_sha256": "caf5a85c2dc20f03d867c49d3a3ce48d46c5c8565076da6b29c636db08c7d48c",
       "source_isa": [
         "mips5"
       ],
@@ -93,10 +93,10 @@
   "ubus_call": {
     "original_cases": 12,
     "recompiled_executions": 48,
-    "receipt_sha256": "0e5b61c1e1e73b870ced5cdab1467af2bcbd04e8f511063eeef5b3bd97d689aa",
-    "sdk_sha256": "ad08112fbe6de3249997a99a24601463cff4f021af2fe917dfe2d1863d6f2ca6"
+    "receipt_sha256": "b43b98762f482582af8115b375bba720b17684a27aff81b1075de2f62f2db1d8",
+    "sdk_sha256": "caf5a85c2dc20f03d867c49d3a3ce48d46c5c8565076da6b29c636db08c7d48c"
   },
-  "owner_tests": 1062,
+  "owner_tests": 1117,
   "limits": [
     "Historical I-III load, coprocessor and HI/LO scheduling is not implemented; those ELF profiles remain rejected. Historical o32 is not admitted.",
     "The compatible MIPS64R2_GENERIC reference qualifies original floating instruction computation, not physical IV/V hardware, timing, every CPU approximation or a paired-single vector calling convention.",
@@ -104,5 +104,15 @@
     "Legacy DSP64 rounded/saturating DEXTR and signed DMADD/DMSUB remain unqualified. Public 3.02 documentation omits them; the historical executor and its tests contain unresolved arithmetic discrepancies.",
     "Pre-R6 microMIPS floating point, trapping arithmetic, general privileged/atomic execution, aggregate ABI recovery and the other documented profiles are not fully covered.",
     "Performance raw data, dependency manifests and complete output identity remain local. There is no world-fastest or complete-ISA coverage claim."
-  ]
+  ],
+  "implementation_commit": "2563809355d9645b6f3130b79599f26b8cf6af42",
+  "qualified_binary_sha256": {
+    "neverd": "b3b5b0cffb8f36acf4784e4367f35576d5c70ab38573d19db1558cf033b624bf",
+    "neverd-mips-bench": "5b05412b5f21bd3395bdb4e4359c45c6723de6e8bf844dd1a3117d235c75d417",
+    "neverd-mips-request-bench": "5f18baa849687945e3b804b102f7ca9da1f196e845f399f2f43851b7883adf9e",
+    "libneverd.dylib": "caf5a85c2dc20f03d867c49d3a3ce48d46c5c8565076da6b29c636db08c7d48c"
+  },
+  "owner_log_sha256": "0bc15679d1b35a65233ebc9bba3a0a339ec9b95a066dbdfcfe78ae9404d34d17",
+  "artifact_lifecycle_tests": 8,
+  "artifact_test_log_sha256": "0bfecd559dfc0649f896d44ddbda902a5de456b8c1e4aaa2a9aa5c72f15d607f"
 }

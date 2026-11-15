@@ -16524,6 +16524,8 @@ word consumed by the lifter.
 The lifter classifies its immutable byte order, register width and combined ISA
 profile at construction. Classic and compressed instructions reuse those facts;
 modern instructions do not inline the historical availability catalog.
+Decoder initialization also records whether physical preprocessing is needed,
+so ordinary MIPS and unrelated architectures skip historical word checks.
 
 `MIPSLiftMicroASE` maps qualified microMIPS DSP, DSPR2 and MSA words to their
 classic semantic form. The physical decoder retains original bytes, mode and

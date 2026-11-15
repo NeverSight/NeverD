@@ -24444,9 +24444,10 @@ checks, not performance or ISA qualification measurements.
 `MIPSHistoricalLoader.*` checks both byte orders, n32/n64, missing and matching
 ABI records and conflicting historical levels. `MIPSHistorical.*` distinguishes
 I–V instruction introductions, release-only words, invalid direct-lift profiles,
-decoder reuse and all eight FCSR condition bits. `MIPSHistoricalFP.*` executes
-84 IV and 109 V scalar/paired arithmetic forms against compatible original
-machine instructions, including rounding, FCSR and faulting write suppression.
+decoder/architecture reuse and all eight FCSR condition bits.
+`MIPSHistoricalFP.*` executes 84 IV and 109 V scalar/paired arithmetic forms
+against compatible original machine instructions, including rounding, FCSR and
+faulting write suppression.
 The older I–III timing profiles remain rejected rather than silently using r2.
 
 Run `unittests/lift/mips/profile-roundtrip.py` with `--historical-isa 4` or `5`
