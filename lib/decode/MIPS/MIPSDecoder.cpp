@@ -12,6 +12,7 @@
 #include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/lift/MIPS/MicroMIPS64Release6.h"
+#include "neverd/lift/MIPS/MicroMIPSLegacyFloat.h"
 #include "neverd/lift/MIPS/MicroMIPSRelease6.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -360,6 +361,11 @@ bool Decoder::decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr) {
   const uint32_t MicroPhysical =
       uint32_t(readTargetEndian<uint16_t>(Bytes, Little)) << 16 |
       readTargetEndian<uint16_t>(Bytes + 2, Little);
+  if (MIPSISARevision != 6)
+    if (const auto FP = mips::microLegacyFloat(MicroPhysical))
+      return decodeMIPSEquivalent(Bytes, *FP, Addr,
+                                  MIPSLifter::hasDelaySlot(*FP)) ||
+             decodeMIPSPairedSingle(Bytes, *FP, Addr);
   auto Classic =
       isMIPS64(TargetArch) ? mips::micro64Word(MicroPhysical) : std::nullopt;
   if (!Classic)

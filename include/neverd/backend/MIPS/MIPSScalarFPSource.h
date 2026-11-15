@@ -53,12 +53,15 @@ inline FPNativeAssembly scalarFPAssembly(Intrinsic Id, unsigned Selector,
     auto Word = F.encoding() | (FS << 11) | (FT << 16) |
                 (F.writesCondition() ? Selector << 8 : 0);
     if (Micro) {
-      if (F.writesCondition())
-        throw std::invalid_argument("legacy microMIPS compare is not admitted");
       const auto Key = F.encoding();
       uint32_t Base = 0;
-      switch (Key) {
-#define NEVERD_MICRO_FP_BINARY(Minor, Classic)                                 \
+      if (F.writesCondition()) {
+        const unsigned Fmt = Key >> 21 & 31;
+        Base = 0x3c | ((Fmt == 22 ? 2 : Fmt - 16) << 10) | (Selector << 13) |
+               ((Key & 15) << 6) | (FT << 21) | (FS << 16);
+      } else
+        switch (Key) {
+#define NEVERD_MICRO_FP_BINARY(Minor, Classic, Legacy)                         \
   case Classic:                                                                \
     Base = Minor | (FT << 21) | (FS << 16);                                    \
     break;
@@ -71,12 +74,25 @@ inline FPNativeAssembly scalarFPAssembly(Intrinsic Id, unsigned Selector,
     Base = Minor | (FS << 21);                                                 \
     break;
 #include "neverd/lift/MIPS/MicroMIPSFloat.def"
-      default:
-        if ((Key >> 21 & 31) != 20 && (Key >> 21 & 31) != 21)
-          throw std::invalid_argument("missing microMIPS FP encoding");
-        Base = ((Key >> 21 & 1) ? 21 : 5) | ((Key & 31) << 6) | (FT << 21) |
-               (FS << 16);
-      }
+#define NEVERD_MICRO_LEGACY_FP_BINARY(Minor, Classic)                          \
+  case Classic:                                                                \
+    Base = Minor | (FT << 21) | (FS << 16);                                    \
+    break;
+#define NEVERD_MICRO_LEGACY_FP_UNARY(Minor, Classic)                           \
+  case Classic:                                                                \
+    Base = Minor | (FS << 16);                                                 \
+    break;
+#define NEVERD_MICRO_LEGACY_FP_TERNARY(Minor, Classic)                         \
+  case Classic:                                                                \
+    Base = Minor | (FT << 21) | (FS << 16);                                    \
+    break;
+#include "neverd/lift/MIPS/MicroMIPSLegacyFloat.def"
+        default:
+          if ((Key >> 21 & 31) != 20 && (Key >> 21 & 31) != 21)
+            throw std::invalid_argument("missing microMIPS FP encoding");
+          Base = ((Key >> 21 & 1) ? 21 : 5) | ((Key & 31) << 6) | (FT << 21) |
+                 (FS << 16);
+        }
       Word = 0x54000000 | Base;
       A.Text += ".2byte " + std::to_string(Word >> 16) + ", " +
                 std::to_string(Word & 65535);

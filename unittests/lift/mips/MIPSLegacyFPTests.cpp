@@ -17,7 +17,12 @@
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
+#include "neverd/lift/MIPS/MicroMIPSLegacyFloat.h"
 #include "neverd/support/BinaryEncoding.h"
+
+#include <algorithm>
+#include <array>
+#include <stdexcept>
 
 #ifdef NEVERD_MIPS_UNICORN_REFERENCE
 #include "unicorn/unicorn.h"
@@ -27,6 +32,17 @@
 
 namespace neverd {
 namespace {
+struct MicroFloatFixture {
+  const char *Name;
+  uint32_t Classic, Micro;
+  unsigned Bytes;
+};
+constexpr MicroFloatFixture MicroFloatFixtures[] = {
+#define NEVERD_TEST_MICRO_LEGACY_FP(Name, Classic, Micro, Bytes)               \
+  {Name, Classic, Micro, Bytes},
+#include "MIPSMicroLegacyFPFixtures.def"
+};
+
 class MIPSLegacyFP : public ::testing::TestWithParam<Arch> {
 protected:
   BinaryImage Image;
@@ -41,14 +57,30 @@ protected:
     Image.MIPS->FPABI = isMIPS64(GetParam()) ? 1 : 6;
     ASSERT_TRUE(Decode.init(Image));
   }
+  bool micro() const { return Image.Mode == InstructionMode::MicroMIPS; }
+  std::array<uint8_t, 4> encoded(uint32_t Word) const {
+    std::array<uint8_t, 4> Bytes;
+    const auto Order = archLittleEndian(GetParam()) ? llvm::endianness::little
+                                                    : llvm::endianness::big;
+    if (!micro()) {
+      llvm::support::endian::write32(Bytes.data(), Word, Order);
+      return Bytes;
+    }
+    for (const auto &F : MicroFloatFixtures) {
+      const uint32_t CCMask = F.Bytes ? 0 : 0x700;
+      if ((Word & ~CCMask) != F.Classic)
+        continue;
+      const auto Physical = F.Micro | ((Word & CCMask) << 5);
+      llvm::support::endian::write16(Bytes.data(), Physical >> 16, Order);
+      llvm::support::endian::write16(Bytes.data() + 2, Physical, Order);
+      return Bytes;
+    }
+    throw std::logic_error("missing independent microMIPS FP fixture");
+  }
   void lift(uint32_t Word) {
-    uint8_t Bytes[4];
-    llvm::support::endian::write32(Bytes, Word,
-                                   archLittleEndian(GetParam())
-                                       ? llvm::endianness::little
-                                       : llvm::endianness::big);
+    const auto Bytes = encoded(Word);
     Ops.clear();
-    ASSERT_EQ(Decode.decodeUnitForLift(Bytes, 4, 0x10000, Unit), 4);
+    ASSERT_EQ(Decode.decodeUnitForLift(Bytes.data(), 4, 0x10000, Unit), 4);
     Decode.liftUnitToLow(Unit, Ops);
   }
   void compareArithmetic(bool PairedRegisters);
@@ -73,12 +105,48 @@ protected:
 class MIPSHistoricalFP : public MIPSLegacyFP {};
 
 class MIPSFR0 : public MIPSLegacyFP {
+protected:
   void SetUp() override {
     MIPSLegacyFP::SetUp();
     Image.MIPS->FPABI = 1;
     ASSERT_TRUE(Decode.init(Image));
   }
 };
+
+class MIPSMicroLegacyFP : public MIPSLegacyFP {
+  void SetUp() override {
+    MIPSLegacyFP::SetUp();
+    Image.Mode = InstructionMode::MicroMIPS;
+    Image.MIPS->HasMicroMIPS = true;
+    ASSERT_TRUE(Decode.init(Image));
+  }
+};
+
+class MIPSMicroFR0 : public MIPSFR0 {
+  void SetUp() override {
+    MIPSFR0::SetUp();
+    Image.Mode = InstructionMode::MicroMIPS;
+    Image.MIPS->HasMicroMIPS = true;
+    ASSERT_TRUE(Decode.init(Image));
+  }
+};
+
+TEST_P(MIPSMicroLegacyFP, EncodingsMatchIndependentClassicAndMicroWords) {
+  for (const auto &F : MicroFloatFixtures) {
+    SCOPED_TRACE(F.Name);
+    EXPECT_EQ(mips::microLegacyFloat(F.Micro), F.Classic);
+    const auto Fmt = F.Classic >> 21 & 31;
+    if (!isMIPS64(GetParam()) && F.Classic >> 26 == 17 &&
+        (Fmt == 1 || Fmt == 5)) {
+      EXPECT_THROW(lift(F.Classic), UnliftedInstruction);
+      continue;
+    }
+    ASSERT_NO_FATAL_FAILURE(lift(F.Classic));
+    EXPECT_EQ(Unit.Head.Size, 4u);
+    const auto Bytes = encoded(F.Classic);
+    EXPECT_TRUE(std::equal(Bytes.begin(), Bytes.end(), Unit.Head.Raw->bytes));
+  }
+}
 
 TEST_P(MIPSLegacyFP, RequiresExplicitFPProfileAndRejectsRelease6Arithmetic) {
   lift(0x46062080); // add.s f2,f4,f6
@@ -280,8 +348,11 @@ void MIPSLegacyFP::compareMemory(bool PairedRegisters) {
                     &Raw),
             UC_ERR_OK);
   std::unique_ptr<uc_engine, decltype(&uc_close)> CPU(Raw, uc_close);
-  ASSERT_EQ(uc_ctl_set_cpu_model(Raw, Wide ? int(UC_CPU_MIPS64_MIPS64R2_GENERIC)
-                                           : int(UC_CPU_MIPS32_74KF)),
+  ASSERT_EQ(uc_ctl_set_cpu_model(
+                Raw, micro() ? (Wide ? int(UC_CPU_MIPS64_MICROMIPS64R2_GENERIC)
+                                     : int(UC_CPU_MIPS32_MICROMIPS32R2_GENERIC))
+                             : (Wide ? int(UC_CPU_MIPS64_MIPS64R2_GENERIC)
+                                     : int(UC_CPU_MIPS32_74KF))),
             UC_ERR_OK);
   uint64_t Status = 0;
   ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_CP0_STATUS, &Status), UC_ERR_OK);
@@ -303,12 +374,9 @@ void MIPSLegacyFP::compareMemory(bool PairedRegisters) {
       continue; // LUXC1/SUXC1 require FR=1, checked by the refusal test.
     SCOPED_TRACE(I);
     lift(F.Word);
-    uint8_t Code[4];
-    llvm::support::endian::write32(Code, F.Word,
-                                   Little ? llvm::endianness::little
-                                          : llvm::endianness::big);
+    const auto Code = encoded(F.Word);
     const uint64_t PC = 0x10000 + I * 4;
-    ASSERT_EQ(uc_mem_write(Raw, PC, Code, 4), UC_ERR_OK);
+    ASSERT_EQ(uc_mem_write(Raw, PC, Code.data(), 4), UC_ERR_OK);
     for (unsigned Offset = 0; Offset < 8; ++Offset) {
       SCOPED_TRACE(Offset);
       const uint64_t Base = 0x20000 + (I < 4 ? Offset : 0),
@@ -322,7 +390,7 @@ void MIPSLegacyFP::compareMemory(bool PairedRegisters) {
       ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_F2, &Low), UC_ERR_OK);
       if (PairedRegisters)
         ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_F3, &High), UC_ERR_OK);
-      const auto Status = uc_emu_start(Raw, PC, PC + 4, 0, 1);
+      const auto Status = uc_emu_start(Raw, PC | micro(), PC + 4, 0, 1);
       const bool Valid = F.IgnoreLowBits || Offset % F.Bytes == 0;
       EXPECT_EQ(Status == UC_ERR_OK, Valid);
       NdOpEmulator E(Image);
@@ -371,6 +439,14 @@ TEST_P(MIPSFR0, MemoryMatchesOriginalRegisterPairsAndFaults) {
   compareMemory(true);
 }
 
+TEST_P(MIPSMicroLegacyFP, MemoryMatchesPhysicalOriginalAlignmentAndByteOrder) {
+  compareMemory(false);
+}
+
+TEST_P(MIPSMicroFR0, MemoryMatchesPhysicalOriginalRegisterPairsAndFaults) {
+  compareMemory(true);
+}
+
 void MIPSLegacyFP::compareArithmetic(bool PairedRegisters) {
   struct Row {
     const char *Name;
@@ -400,12 +476,17 @@ void MIPSLegacyFP::compareArithmetic(bool PairedRegisters) {
   ASSERT_TRUE(bool(FPU)) << llvm::toString(FPU.takeError());
   uc_engine *Raw = nullptr;
   const bool Little = archLittleEndian(GetParam());
+  const bool Wide = !micro() || isMIPS64(GetParam());
   ASSERT_EQ(uc_open(UC_ARCH_MIPS,
-                    uc_mode(UC_MODE_MIPS64 | (Little ? 0 : UC_MODE_BIG_ENDIAN)),
+                    uc_mode((Wide ? UC_MODE_MIPS64 : UC_MODE_MIPS32) |
+                            (Little ? 0 : UC_MODE_BIG_ENDIAN)),
                     &Raw),
             UC_ERR_OK);
   std::unique_ptr<uc_engine, decltype(&uc_close)> CPU(Raw, uc_close);
-  ASSERT_EQ(uc_ctl_set_cpu_model(Raw, UC_CPU_MIPS64_MIPS64R2_GENERIC),
+  ASSERT_EQ(uc_ctl_set_cpu_model(
+                Raw, micro() ? (Wide ? int(UC_CPU_MIPS64_MICROMIPS64R2_GENERIC)
+                                     : int(UC_CPU_MIPS32_MICROMIPS32R2_GENERIC))
+                             : int(UC_CPU_MIPS64_MIPS64R2_GENERIC)),
             UC_ERR_OK);
   uint64_t Status = 0;
   ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_CP0_STATUS, &Status), UC_ERR_OK);
@@ -435,12 +516,9 @@ void MIPSLegacyFP::compareArithmetic(bool PairedRegisters) {
       const uint32_t Word = R.Word | (CC << 8);
       ASSERT_NO_FATAL_FAILURE(lift(Word));
       EXPECT_STREQ(Unit.Head.Raw->mnemonic, R.Name);
-      uint8_t Bytes[4];
-      llvm::support::endian::write32(Bytes, Word,
-                                     Little ? llvm::endianness::little
-                                            : llvm::endianness::big);
+      const auto Bytes = encoded(Word);
       const uint64_t PC = 0x10000 + 4 * Index++;
-      ASSERT_EQ(uc_mem_write(Raw, PC, Bytes, 4), UC_ERR_OK);
+      ASSERT_EQ(uc_mem_write(Raw, PC, Bytes.data(), 4), UC_ERR_OK);
       for (unsigned Sample = 0; Sample < std::size(Samples); ++Sample)
         for (unsigned Mode = 0; Mode < 16; ++Mode) {
           SCOPED_TRACE(Sample);
@@ -476,7 +554,7 @@ void MIPSLegacyFP::compareArithmetic(bool PairedRegisters) {
                         UC_ERR_OK);
             }
           }
-          const auto Result = uc_emu_start(Raw, PC, PC + 4, 0, 1);
+          const auto Result = uc_emu_start(Raw, PC | micro(), PC + 4, 0, 1);
           ASSERT_TRUE(Result == UC_ERR_OK || Result == UC_ERR_EXCEPTION);
           uint64_t Expected = 0;
           ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_F2, &Expected), UC_ERR_OK);
@@ -521,6 +599,15 @@ TEST_P(MIPSHistoricalFP, ArithmeticMatchesOriginalBitsFlagsAndExceptions) {
 }
 
 TEST_P(MIPSFR0, ArithmeticMatchesOriginalRegisterPairsFlagsAndExceptions) {
+  compareArithmetic(true);
+}
+
+TEST_P(MIPSMicroLegacyFP,
+       ArithmeticMatchesPhysicalOriginalBitsFlagsAndExceptions) {
+  compareArithmetic(false);
+}
+
+TEST_P(MIPSMicroFR0, ArithmeticMatchesPhysicalOriginalPairsFlagsAndExceptions) {
   compareArithmetic(true);
 }
 
@@ -668,6 +755,11 @@ INSTANTIATE_TEST_SUITE_P(ByteOrders, MIPSHistoricalFP,
 #endif
 INSTANTIATE_TEST_SUITE_P(ByteOrders, MIPSFR0,
                          ::testing::Values(Arch::MIPS32, Arch::MIPS32EL));
+INSTANTIATE_TEST_SUITE_P(ByteOrders, MIPSMicroFR0,
+                         ::testing::Values(Arch::MIPS32, Arch::MIPS32EL));
+INSTANTIATE_TEST_SUITE_P(EndianAndWidth, MIPSMicroLegacyFP,
+                         ::testing::Values(Arch::MIPS32, Arch::MIPS32EL,
+                                           Arch::MIPS64, Arch::MIPS64EL));
 INSTANTIATE_TEST_SUITE_P(EndianAndWidth, MIPSLegacyFP,
                          ::testing::Values(Arch::MIPS32, Arch::MIPS32EL,
                                            Arch::MIPS64, Arch::MIPS64EL));
