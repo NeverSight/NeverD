@@ -1778,3 +1778,21 @@ authorize reusing its table at a new function address: that still needs LSDA
 regeneration. Compact frameless language frames, other unsupported body
 operations, missing lifetime tables and native PAuth_LR/CPTA-on qualification
 remain separate gaps.
+
+
+Both macOS runners passed all 105 cases from
+`2a837b5adaa629e91477df909e66cb010f850707`. Each executed 32 new compact-frame
+cleanup deliveries across C++/Objective-C, native-object/lifted publication,
+O0/O2 and ordinary/alternate signal stacks, in addition to the existing
+220 original/published image checks. The Windows frontend job passed.
+Local publication passed 105 cases, implicit recovery passed 29, and the
+focused LSDA/compact-reader checks passed three. Seventeen source files passed
+clang-format 22.1.2; the documentation inventory passed.
+
+Both hosts remain M1 virtual machines. The probes did not qualify explicit
+PAuth_LR or CPTA-on, including the signed arm64e.x1 launch attempt on the
+newer environment. LLVM and prebuilt r6 are unchanged. The temporary replay
+release and asset were deleted with verified HTTP 404 responses, and the
+test repository was restored to its original tree.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43708062786)
+and [per-host verification record](evidence/arm64e-compact-language-frames-2026-11-15.json).
