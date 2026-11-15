@@ -1714,7 +1714,7 @@ images. It separately calls the bare RET entry with nonzero 64-bit seeds.
 Native-object replacement remains an independent control.
 
 This contract requires unchanged instruction offsets and complete original
-language metadata. Explicit LPStart, SJLJ tables, compact-only language frames,
+language metadata. Explicit LPStart, SJLJ tables, compact frameless language frames,
 unsupported native body operations and missing asynchronous lifetime tables
 remain outside this profile. It does not qualify arbitrary lifted-image
 publication or native PAuth_LR/CPTA-on execution.
@@ -1738,3 +1738,43 @@ unchanged. The temporary native replay release and asset were removed, and
 the CI branch was returned to its original tree.
 [Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43687902578)
 and [per-host verification record](evidence/arm64e-lifted-language-frames-2026-11-15.json).
+
+### Compact language frames and explicit LPStart decoding
+
+Automatic publication also accepts complete compact FP C++ and Objective-C
+language frames without a DWARF FDE. The compact reader retains the selected
+personality pointer slot; exception resolution, native-object verification and
+whole-image verification consume that identity. The generated object supplies
+canonical personality and LSDA references. Verification compares the linked
+slot and LSDA after any image slide, while retaining the original compact
+frame recipe and every instruction offset. A language frame must cover exactly
+one published function; an unwind-only coalesced range does not establish this
+LSDA contract.
+
+For a compact FP frame, asynchronous recovery can select the saved LR even
+while the live register still contains it. One exact frame-record lookup must
+prove an active, full-width copy with the same return and signing state.
+Partially overwritten or released saves and a different live signing recipe
+cannot authorize exception delivery through that copy. Declared DWARF columns
+keep their existing authority.
+
+`CompactNonCallRunsInterruptedAndOuterCleanups` and its Objective-C companion
+exercise native-object replacement. Their `LiftedCompactNonCall` counterparts
+exercise the normal lift/publication pipeline. Each uses O0/O2 original and
+published images, ordinary and alternate signal stacks, nested cleanup and
+exception-identity checks. The input must actually have a compact FP record
+and no FDE; a changed LSDA operand must still fail publication.
+The compact recovery tests separately cover overwritten, released, misplaced
+and differently signed LR copies.
+
+The shared Itanium reader now keeps explicit LPStart separate from the
+function-relative guarded ranges and preserves an explicitly encoded zero.
+This follows the independent address bases used by
+[LLVM libc++abi's personality](https://github.com/llvm/llvm-project/blob/main/libcxxabi/src/cxa_personality.cpp)
+and [GNU libsupc++](https://github.com/gcc-mirror/gcc/blob/master/libstdc%2B%2B-v3/libsupc%2B%2B/eh_personality.cc).
+`ItaniumLSDA.ExplicitLPStart*` checks ELF/Mach-O and x64/AArch64 coordinates,
+including guarded-range overflow. Decoding explicit LPStart does not yet
+authorize reusing its table at a new function address: that still needs LSDA
+regeneration. Compact frameless language frames, other unsupported body
+operations, missing lifetime tables and native PAuth_LR/CPTA-on qualification
+remain separate gaps.

@@ -188,14 +188,9 @@ void parseDarwinExceptions(BinaryImage &Img) {
       return;
     if (F.Compact &&
         (F.PersonalityVA || (F.Compact->NativeEncoding & kPersonalityMask))) {
-      const uint32_t Index =
-          (F.Compact->NativeEncoding & kPersonalityMask) >> kPersonalityShift;
-      const va_t Slot = Index && Index <= Compact.PersonalitySlots.size()
-                            ? Compact.PersonalitySlots[Index - 1]
-                            : 0;
-      const bool SameProvider =
-          sameRoutineProvider(Img, F.PersonalityVA, Slot, CIE->PersonalityVA,
-                              CIE->PersonalitySlotVA);
+      const bool SameProvider = sameRoutineProvider(
+          Img, F.PersonalityVA, F.Compact->PersonalitySlotVA,
+          CIE->PersonalityVA, CIE->PersonalitySlotVA);
       if (!SameProvider) {
         Incomplete("compact unwind and DWARF CIE disagree on personality");
         return;
@@ -292,20 +287,14 @@ void parseDarwinExceptions(BinaryImage &Img) {
           "compact unwind frame size is not readable from the prologue");
     }
 
-    // The personality index is an index into the section's array; recover the
-    // slot alongside the routine so a dynamically bound one can be named.
+    // The decoder retains the slot even for a dynamically bound routine.
     if (Entry.PersonalityVA != 0 || (Entry.NativeEncoding & kPersonalityMask)) {
-      const uint32_t Index =
-          (Entry.NativeEncoding & kPersonalityMask) >> kPersonalityShift;
-      const va_t Slot = Index != 0 && Index <= Compact.PersonalitySlots.size()
-                            ? Compact.PersonalitySlots[Index - 1]
-                            : 0;
       F.PersonalityVA = Entry.PersonalityVA;
-      if (!Entry.PersonalityVA && !Slot)
+      if (!Entry.PersonalityVA && !Entry.PersonalitySlotVA)
         F.Personality = ExceptionPersonality::Unknown;
       else
-        resolvePersonality(Entry.PersonalityVA, Slot, F.PersonalityName,
-                           F.Personality);
+        resolvePersonality(Entry.PersonalityVA, Entry.PersonalitySlotVA,
+                           F.PersonalityName, F.Personality);
       if (F.Personality == ExceptionPersonality::Unknown) {
         F.ParseStatus = mergeExceptionParseStatus(
             F.ParseStatus, ExceptionParseStatus::Partial);

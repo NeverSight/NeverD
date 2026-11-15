@@ -106,7 +106,8 @@ bool independent(const DecodedInsn &I) {
         llvm::ArrayRef(D.operands, D.op_count),
         [](const cs_aarch64_op &Op) { return Op.type == AARCH64_OP_MEM; });
   case AARCH64_INS_HINT:
-    return I.Raw->alias_id == AARCH64_INS_ALIAS_PACIBSP ||
+    return I.Raw->alias_id == AARCH64_INS_ALIAS_NOP ||
+           I.Raw->alias_id == AARCH64_INS_ALIAS_PACIBSP ||
            I.Raw->alias_id == AARCH64_INS_ALIAS_AUTIBSP;
   case AARCH64_INS_RETAB:
   case AARCH64_INS_RET:
@@ -412,18 +413,23 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
   if (!Frame || !Frame->Compact ||
       (!Frame->describesUnwindOnly() &&
        !canReuseMachOLanguageFrame(Image, *Frame)) ||
-      Frame->CodeRange.End < End)
+      Frame->CodeRange.End < End ||
+      (Frame->Itanium &&
+       (Frame->CodeRange.Begin != Start || Frame->CodeRange.End != End)))
     return std::nullopt;
   const auto &Compact = *Frame->Compact;
-  const bool Indexed = (Compact.NativeEncoding & macho_unwind::kModeMask) ==
+  const auto FrameEncoding =
+      Compact.NativeEncoding &
+      ~(macho_unwind::kHasLSDA | macho_unwind::kPersonalityMask);
+  const bool Indexed = (FrameEncoding & macho_unwind::kModeMask) ==
                        macho_unwind::kARM64ModeDwarf;
   const bool PAuthLR =
-      (Compact.NativeEncoding & ~(macho_unwind::kARM64RegisterPairsMask |
-                                  macho_unwind::kARM64PAuthLROffsetMask)) ==
+      (FrameEncoding & ~(macho_unwind::kARM64RegisterPairsMask |
+                         macho_unwind::kARM64PAuthLROffsetMask)) ==
       macho_unwind::kARM64ModeFramePAuthLR;
-  const bool Framed = PAuthLR || (Compact.NativeEncoding &
-                                  ~macho_unwind::kARM64RegisterPairsMask) ==
-                                     macho_unwind::kARM64ModeFrame;
+  const bool Framed =
+      PAuthLR || (FrameEncoding & ~macho_unwind::kARM64RegisterPairsMask) ==
+                     macho_unwind::kARM64ModeFrame;
   if (PAuthLR &&
       (Frame->CodeRange.Begin != Start || !Compact.ReturnAddressSigningOffset ||
        *Compact.ReturnAddressSigningOffset >= End - Start))
@@ -440,10 +446,10 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
       return std::nullopt;
     Rows = Frame->Dwarf->Instructions;
   } else if (Frame->Dwarf ||
-             (!Framed && (Compact.NativeEncoding &
-                          ~(macho_unwind::kARM64FramelessStackSizeMask |
-                            macho_unwind::kARM64RegisterPairsMask)) !=
-                             macho_unwind::kARM64ModeFrameless)) {
+             (!Framed &&
+              (FrameEncoding & ~(macho_unwind::kARM64FramelessStackSizeMask |
+                                 macho_unwind::kARM64RegisterPairsMask)) !=
+                  macho_unwind::kARM64ModeFrameless)) {
     return std::nullopt;
   }
 
@@ -461,12 +467,16 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
         makeNdDataSymbol(Frame->Itanium->LSDAVA));
     if (!LSDA)
       return std::nullopt;
-    OS << kPersonality << unsigned(CIE->PersonalityEncoding) << kSeparator
+    OS << kPersonality
+       << unsigned(CIE ? CIE->PersonalityEncoding
+                       : dweh::Indirect | dweh::PCRel | dweh::Sdata4)
+       << kSeparator
        << (Frame->Personality == ExceptionPersonality::GxxPersonalityV0
                ? kGxxPersonality
                : kObjCPersonality)
        << '\n';
-    OS << kLSDA << unsigned(CIE->LSDAPointerEncoding) << kSeparator;
+    OS << kLSDA << unsigned(CIE ? CIE->LSDAPointerEncoding : dweh::PCRel)
+       << kSeparator;
     emitOperand(Body, OS, LSDA, kSymbolConstraint);
     OS << '\n';
   }
@@ -694,25 +704,30 @@ machOFramelessSpillRows(const CompactUnwindEntry &Compact) {
 bool canReuseMachOLanguageFrame(const BinaryImage &Image,
                                 const ExceptionFunction &Frame) {
   if (Frame.ParseStatus != ExceptionParseStatus::Complete || !Frame.Itanium ||
-      !Frame.Dwarf || !Frame.Compact ||
-      Frame.Compact->Kind != CompactUnwindKind::DwarfFDE ||
-      !Frame.FragmentRanges.empty() ||
+      !Frame.Compact || !Frame.FragmentRanges.empty() ||
       (Frame.Personality != ExceptionPersonality::GxxPersonalityV0 &&
        Frame.Personality != ExceptionPersonality::ObjCPersonalityV0))
     return false;
   const auto &LSDA = *Frame.Itanium;
-  // These offsets are relative to the FDE's function start. Keeping the
+  // These offsets are relative to the owning function's start. Keeping the
   // instruction offsets lets the original read-only table serve the new body.
   // Explicit LPStart and SJLJ tables do not have that relocation contract.
-  if (!LSDA.LSDAVA || LSDA.LSDAVA != Frame.Dwarf->LSDAVA ||
-      LSDA.LandingPadBaseEncoding != dweh::Omit ||
+  if (!LSDA.LSDAVA || LSDA.LandingPadBaseEncoding != dweh::Omit ||
       !LSDA.IsCallSiteAddressForm || LSDA.CallSiteEncoding != dweh::Uleb128)
     return false;
   const auto *Storage = Image.getSectionFor(LSDA.LSDAVA);
+  if (!Storage || Storage->isWritable() || !Image.readVA(LSDA.LSDAVA, 1))
+    return false;
+  if (!Frame.Dwarf)
+    return Frame.Compact->Kind == CompactUnwindKind::FramePointer &&
+           Frame.Compact->PersonalitySlotVA && Frame.Compact->HasLSDA &&
+           Frame.Compact->LSDAVA == LSDA.LSDAVA;
+  if (Frame.Compact->Kind != CompactUnwindKind::DwarfFDE ||
+      LSDA.LSDAVA != Frame.Dwarf->LSDAVA)
+    return false;
   const auto *CIE =
       Image.ExceptionMetadata.findCIE(Frame.Dwarf->CIESectionOffset);
-  return Storage && !Storage->isWritable() && Image.readVA(LSDA.LSDAVA, 1) &&
-         CIE && CIE->ParseStatus == ExceptionParseStatus::Complete &&
+  return CIE && CIE->ParseStatus == ExceptionParseStatus::Complete &&
          CIE->PersonalityEncoding ==
              (dweh::Indirect | dweh::PCRel | dweh::Sdata4) &&
          CIE->PersonalitySlotVA && !CIE->IsSignalFrame &&

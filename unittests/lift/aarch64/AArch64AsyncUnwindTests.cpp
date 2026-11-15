@@ -716,9 +716,14 @@ TEST(AArch64AsyncUnwind, SignalReturnResumesCallerWithRecoveredVectorLanes) {
 #endif
 }
 
-static void verifySignalLanguageCleanup(bool ObjectiveC, bool NonCall = false,
-                                        bool Lifted = false) {
+enum class LanguageFrame { Call, IndexedNonCall, CompactNonCall };
+
+static void
+verifySignalLanguageCleanup(bool ObjectiveC,
+                            LanguageFrame Kind = LanguageFrame::Call,
+                            bool Lifted = false) {
 #if defined(__APPLE__) && defined(__aarch64__)
+  const bool NonCall = Kind != LanguageFrame::Call;
   llvm::SmallString<128> Dir;
   ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kDirectory, Dir));
   const std::filesystem::path Root(Dir.str().str());
@@ -768,6 +773,8 @@ static void verifySignalLanguageCleanup(bool ObjectiveC, bool NonCall = false,
       Command.append(Args.begin(), Args.end());
       if (NonCall && ObjectiveC)
         Command.push_back(kSignalObjCPersonality);
+      if (Kind == LanguageFrame::CompactNonCall)
+        Command.push_back(kSignalCompactFrame);
       if (ObjectiveC && llvm::is_contained(Args, kDylib))
         Command.append({kObjCFramework, kFoundation});
       return llvm::sys::ExecuteAndWait(Compiler, Command);
@@ -784,6 +791,11 @@ static void verifySignalLanguageCleanup(bool ObjectiveC, bool NonCall = false,
     const auto *SourceFrame =
         Original->ExceptionMetadata.findFunction(Scope->Addr);
     ASSERT_TRUE(SourceFrame && SourceFrame->Itanium);
+    if (Kind == LanguageFrame::CompactNonCall) {
+      ASSERT_TRUE(SourceFrame->Compact);
+      ASSERT_EQ(SourceFrame->Compact->Kind, CompactUnwindKind::FramePointer);
+      ASSERT_FALSE(SourceFrame->Dwarf);
+    }
     const SourcePatchMapping Maps[] = {{kSignalScopeMapping, Scope->Addr},
                                        {kSignalTickMapping, Tick->Addr}};
     llvm::Expected<PatchResult> Patch = [&]() -> llvm::Expected<PatchResult> {
@@ -925,19 +937,36 @@ TEST(AArch64AsyncUnwind, SignalExceptionRunsInterruptedAndOuterObjCCleanups) {
 }
 
 TEST(AArch64AsyncUnwind, ProtectedNonCallRunsInterruptedAndOuterCleanups) {
-  verifySignalLanguageCleanup(false, true);
+  verifySignalLanguageCleanup(false, LanguageFrame::IndexedNonCall);
 }
 
 TEST(AArch64AsyncUnwind, ProtectedNonCallRunsInterruptedAndOuterObjCCleanups) {
-  verifySignalLanguageCleanup(true, true);
+  verifySignalLanguageCleanup(true, LanguageFrame::IndexedNonCall);
 }
 
 TEST(AArch64AsyncUnwind, LiftedNonCallRunsInterruptedAndOuterCleanups) {
-  verifySignalLanguageCleanup(false, true, true);
+  verifySignalLanguageCleanup(false, LanguageFrame::IndexedNonCall, true);
 }
 
 TEST(AArch64AsyncUnwind, LiftedNonCallRunsInterruptedAndOuterObjCCleanups) {
-  verifySignalLanguageCleanup(true, true, true);
+  verifySignalLanguageCleanup(true, LanguageFrame::IndexedNonCall, true);
+}
+
+TEST(AArch64AsyncUnwind, CompactNonCallRunsInterruptedAndOuterCleanups) {
+  verifySignalLanguageCleanup(false, LanguageFrame::CompactNonCall);
+}
+
+TEST(AArch64AsyncUnwind, CompactNonCallRunsInterruptedAndOuterObjCCleanups) {
+  verifySignalLanguageCleanup(true, LanguageFrame::CompactNonCall);
+}
+
+TEST(AArch64AsyncUnwind, LiftedCompactNonCallRunsInterruptedAndOuterCleanups) {
+  verifySignalLanguageCleanup(false, LanguageFrame::CompactNonCall, true);
+}
+
+TEST(AArch64AsyncUnwind,
+     LiftedCompactNonCallRunsInterruptedAndOuterObjCCleanups) {
+  verifySignalLanguageCleanup(true, LanguageFrame::CompactNonCall, true);
 }
 
 TEST(AArch64AsyncUnwind, InstructionAddressRecipesUseTheActualSigningPC) {
