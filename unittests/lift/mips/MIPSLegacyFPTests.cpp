@@ -138,13 +138,62 @@ TEST_P(MIPSMicroLegacyFP, EncodingsMatchIndependentClassicAndMicroWords) {
     const auto Fmt = F.Classic >> 21 & 31;
     if (!isMIPS64(GetParam()) && F.Classic >> 26 == 17 &&
         (Fmt == 1 || Fmt == 5)) {
-      EXPECT_THROW(lift(F.Classic), UnliftedInstruction);
+      const auto Bytes = encoded(F.Classic);
+      EXPECT_EQ(Decode.decodeUnitForLift(Bytes.data(), 4, 0x10000, Unit), 0);
+      cs_insn Raw{};
+      Raw.address = 0x10000;
+      Raw.size = 4;
+      std::copy(Bytes.begin(), Bytes.end(), Raw.bytes);
+      MIPSLifter L(GetParam(), InstructionMode::MicroMIPS);
+      L.setScalarFPEnabled(true);
+      Ops.clear();
+      EXPECT_THROW(L.lift(Raw, Ops), UnliftedInstruction);
+      EXPECT_TRUE(Ops.empty());
       continue;
     }
     ASSERT_NO_FATAL_FAILURE(lift(F.Classic));
     EXPECT_EQ(Unit.Head.Size, 4u);
     const auto Bytes = encoded(F.Classic);
     EXPECT_TRUE(std::equal(Bytes.begin(), Bytes.end(), Unit.Head.Raw->bytes));
+  }
+}
+
+TEST_P(MIPSMicroLegacyFP, RejectsReservedPhysicalFields) {
+  // Reserved bits in compare, conditional move, indexed memory and BC1F/T.
+  for (uint32_t Word :
+       {0x54c4103cu, 0x54440820u, 0x54c41438u, 0x54a41648u, 0x43810003u}) {
+    EXPECT_FALSE(mips::microLegacyFloat(Word));
+    cs_insn Raw{};
+    Raw.address = 0x10000;
+    Raw.size = 4;
+    const auto Order = archLittleEndian(GetParam()) ? llvm::endianness::little
+                                                    : llvm::endianness::big;
+    llvm::support::endian::write16(Raw.bytes, Word >> 16, Order);
+    llvm::support::endian::write16(Raw.bytes + 2, Word, Order);
+    MIPSLifter L(GetParam(), InstructionMode::MicroMIPS);
+    L.setScalarFPEnabled(true);
+    Ops.clear();
+    EXPECT_THROW(L.lift(Raw, Ops), UnliftedInstruction);
+    EXPECT_TRUE(Ops.empty());
+  }
+}
+
+TEST_P(MIPSMicroLegacyFP,
+       ReusedDecoderDistinguishesLegacyMoveFromRelease6Round) {
+  // The same physical word means MOVF.S f2,f4,fcc0 before R6 and RINT.S in R6.
+  const auto Bytes = encoded(0x46002091);
+  for (unsigned Revision : {2u, 6u, 2u}) {
+    Image.MIPS->ISARevision = Revision;
+    ASSERT_TRUE(Decode.init(Image));
+    ASSERT_EQ(Decode.decodeUnitForLift(Bytes.data(), 4, 0x10000, Unit), 4);
+    Ops.clear();
+    Decode.liftUnitToLow(Unit, Ops);
+    const auto Expected =
+        Revision == 6 ? Intrinsic::MIPSFPRINT_S : Intrinsic::MIPSReadFPControl;
+    EXPECT_TRUE(std::any_of(Ops.begin(), Ops.end(), [&](const LowOp &Op) {
+      return Op.Opcode == NdOp::INTRINSIC &&
+             static_cast<Intrinsic>(Op.Inputs[0].Offset) == Expected;
+    }));
   }
 }
 
@@ -230,6 +279,92 @@ TEST_P(MIPSFR0, WordTransfersAndOddSingleWritesAliasDoublePairs) {
 }
 
 #ifdef NEVERD_MIPS_UNICORN_REFERENCE
+TEST_P(MIPSMicroLegacyFP, BranchSnapshotsFCCBeforeEitherPhysicalSlotWidth) {
+  const bool Wide = isMIPS64(GetParam()), Little = archLittleEndian(GetParam());
+  auto FPU = emulation::createScalarFPExecutor(GetParam(), 2);
+  ASSERT_TRUE(bool(FPU));
+  uc_engine *Raw = nullptr;
+  ASSERT_EQ(uc_open(UC_ARCH_MIPS,
+                    uc_mode((Wide ? UC_MODE_MIPS64 : UC_MODE_MIPS32) |
+                            (Little ? 0 : UC_MODE_BIG_ENDIAN)),
+                    &Raw),
+            UC_ERR_OK);
+  std::unique_ptr<uc_engine, decltype(&uc_close)> CPU(Raw, uc_close);
+  ASSERT_EQ(uc_ctl_set_cpu_model(
+                Raw, Wide ? int(UC_CPU_MIPS64_MICROMIPS64R2_GENERIC)
+                          : int(UC_CPU_MIPS32_MICROMIPS32R2_GENERIC)),
+            UC_ERR_OK);
+  uint64_t Status = 0;
+  ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_CP0_STATUS, &Status), UC_ERR_OK);
+  Status |= 0x24000000;
+  ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_CP0_STATUS, &Status), UC_ERR_OK);
+  ASSERT_EQ(uc_mem_map(Raw, 0x10000, 16384, UC_PROT_ALL), UC_ERR_OK);
+  unsigned Occurrence = 0;
+  for (unsigned CC = 0; CC < 8; ++CC)
+    for (unsigned True = 0; True < 2; ++True)
+      for (unsigned Set = 0; Set < 2; ++Set)
+        for (unsigned SlotBytes : {2u, 4u})
+          for (int Displacement : {-3, 3}) {
+            SCOPED_TRACE(CC);
+            SCOPED_TRACE(True);
+            SCOPED_TRACE(Set);
+            SCOPED_TRACE(SlotBytes);
+            SCOPED_TRACE(Displacement);
+            const uint64_t PC = 0x11000 + 16 * Occurrence++;
+            const uint32_t Branch =
+                0x43800000 | True << 21 | CC << 18 | uint16_t(Displacement);
+            // GNU 2.47: CTC1 a0,FCCR = 5499:183b; MOVE16 v0,a0 = 0c44.
+            const uint16_t Halfwords[] = {
+                uint16_t(Branch >> 16), uint16_t(Branch),
+                uint16_t(SlotBytes == 2 ? 0x0c44 : 0x5499), 0x183b};
+            uint8_t Bytes[8];
+            for (unsigned I = 0; I < 4; ++I)
+              llvm::support::endian::write16(Bytes + I * 2, Halfwords[I],
+                                             Little ? llvm::endianness::little
+                                                    : llvm::endianness::big);
+            ASSERT_EQ(Decode.decodeUnitForLift(Bytes, 4 + SlotBytes, PC, Unit),
+                      4 + SlotBytes);
+            ASSERT_TRUE(Unit.HasDelaySlot);
+            Ops.clear();
+            Decode.liftUnitToLow(Unit, Ops);
+            NdOpEmulator E(Image);
+            E.setStrictMode(true);
+            E.setRegister(mipsreg::A0, Set ? 0 : 255);
+            E.setRegister(mipsreg::V0, 0x55);
+            MIPSSystemContext C;
+            const uint32_t CSR = Set ? 1u << (CC ? CC + 24 : 23) : 0;
+            C.FCSR = CSR;
+            C.ScalarFPU = FPU->get();
+            uint64_t Next = PC + 4 + SlotBytes;
+            for (const auto &Op : Ops) {
+              if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR) {
+                if (Op.Opcode == NdOp::BRANCH ||
+                    E.getRegister(Op.Inputs[1].Offset) == 1) {
+                  Next = Op.Inputs[0].Offset;
+                  break;
+                }
+              } else
+                ASSERT_TRUE(step(E, C, Op));
+            }
+            EXPECT_EQ(Next, Set == True ? PC + 4 + 2 * Displacement
+                                        : PC + 4 + SlotBytes);
+            EXPECT_EQ(C.FCSR, SlotBytes == 4 ? (Set ? 0u : 0xfe800000u) : CSR);
+            ASSERT_EQ(uc_mem_write(Raw, PC, Bytes, 4 + SlotBytes), UC_ERR_OK);
+            uint64_t Input = Set ? 0 : 255, Value = 0x55, Control = CSR;
+            ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_A0, &Input), UC_ERR_OK);
+            ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_V0, &Value), UC_ERR_OK);
+            ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_FCSR, &Control), UC_ERR_OK);
+            ASSERT_EQ(uc_emu_start(Raw, PC | 1, 0, 0, 2), UC_ERR_OK);
+            uint64_t ActualPC = 0;
+            ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_PC, &ActualPC), UC_ERR_OK);
+            ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_V0, &Value), UC_ERR_OK);
+            ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_FCSR, &Control), UC_ERR_OK);
+            EXPECT_EQ(ActualPC & ~1ull, Next);
+            EXPECT_EQ(Value, E.getRegister(mipsreg::V0));
+            EXPECT_EQ(uint32_t(Control), C.FCSR);
+          }
+}
+
 TEST_P(MIPSLegacyFP, ConditionalMovesPreserveUntakenFullRegisterAndFCSR) {
   auto FPU = emulation::createScalarFPExecutor(GetParam(), 2);
   ASSERT_TRUE(bool(FPU));
