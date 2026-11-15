@@ -784,8 +784,16 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
                                 FDEs.lookup(Owner->second), Start,
                                 *Range.mapped(), Slide))
         return refuse(kLeafFrame);
-    } else if (SourceEncoding != Native) {
-      return refuse(kLeafFrame);
+    } else {
+      const bool Language = Frame->Itanium.has_value();
+      // The object has no final personality-array index yet. Compare its
+      // linked slot identity instead, together with the retained LSDA.
+      if ((SourceEncoding & ~macho_unwind::kPersonalityMask) != Native ||
+          Range.mapped()->PersonalitySlotVA.value_or(0) !=
+              (Language ? Frame->Compact->PersonalitySlotVA + Slide : 0) ||
+          Range.mapped()->LSDAVA.value_or(0) !=
+              (Language ? Frame->Itanium->LSDAVA + Slide : 0))
+        return refuse(kLeafFrame);
     }
 
     if (RegisterEntries.contains(Start)) {

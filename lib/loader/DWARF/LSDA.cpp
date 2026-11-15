@@ -130,10 +130,10 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
                             Base))
       return malformed("unreadable Itanium LSDA landing-pad base");
     Info.LandingPadBase = Base;
-  }
-  // The ABI default is the start of the function the record describes.
-  if (Info.LandingPadBase == 0)
+  } else {
+    // Only an omitted LPStart defaults to the function, not an encoded zero.
     Info.LandingPadBase = Req.FunctionStart;
+  }
 
   // --- Header: type table -------------------------------------------------
   if (Cursor >= Available)
@@ -164,9 +164,8 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
   const size_t ActionTableStart = CallSiteEnd;
   std::vector<uint64_t> ActionRoots;
 
-  // The call-site fields are displacements from the landing-pad base, not
-  // addresses, so only the value format applies.  Resolving the application
-  // nibble here would add a base twice.
+  // Decode displacements before applying their distinct bases below: guarded
+  // ranges use the function start, while landing pads use LPStart.
   const uint8_t CallSiteFormat = Info.CallSiteEncoding == Omit
                                      ? uint8_t(Omit)
                                      : getFormat(Info.CallSiteEncoding);
@@ -249,10 +248,10 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
       Site.NativeLandingPad = LandingPad;
       Site.NativeActionRecord = ActionRecord;
 
-      if (Info.LandingPadBase > InvalidVA - Start ||
-          Length > InvalidVA - (Info.LandingPadBase + Start))
+      if (Req.FunctionStart > InvalidVA - Start ||
+          Length > InvalidVA - (Req.FunctionStart + Start))
         return malformed("Itanium LSDA call-site range overflows");
-      const va_t RangeBegin = Info.LandingPadBase + Start;
+      const va_t RangeBegin = Req.FunctionStart + Start;
       // A zero-length region is legal in the encoding but describes nothing;
       // keeping it would create an empty protected range in the IR.
       if (Length != 0) {
