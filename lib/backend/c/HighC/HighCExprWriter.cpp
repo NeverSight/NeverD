@@ -6545,7 +6545,7 @@ HighCWriter::recordMemberAccess(const HighExpr &Expression,
     // anywhere else (CallResultNames).
     if (auto It = CallResultNames.find(BaseName); It != CallResultNames.end())
       BaseName = It->second;
-    if (!statedVariableType(Base->Var))
+    if (!statedVariableType(Base->Var)) {
       if (const auto *Location = recordPointerLocation(*Base);
           Location && Location->ByteOffset) {
         // Use the captured carrier, not its earlier source, which may since
@@ -6569,11 +6569,16 @@ HighCWriter::recordMemberAccess(const HighExpr &Expression,
             }
         if (!Declared && BaseName != Raw)
           Declared = declaredTypeNamed(BaseName);
+        // The declared type can be the very type propagated to this use.
+        // Its identity also covers 32-bit pointers and display-only records,
+        // which the source ABI's structural validator does not admit.
         if (!Declared || Declared->Kind != NdTypeKind::Ptr ||
-            !equalSourceTypes(Declared, Location->Type))
+            (Declared != Location->Type &&
+             !equalSourceTypes(Declared, Location->Type)))
           BaseName = "((" + typeToC(Location->Type) + ")(uintptr_t)(" +
                      BaseName + "))";
       }
+    }
   } else if (Base->Kind == ExprKind::Load && !Base->Operands.empty() &&
              Base->Operands[0]) {
     if (globalPointerType(*Base))
