@@ -69,7 +69,7 @@ _Unwind_Reason_Code ndDarwinArm64eLiveLRPersonality(
       return Failure;
     _Unwind_SetGR(Context, NDArm64eCallerLRRegister, CallerLR);
     _Unwind_SetGR(Context, NDArm64eInterruptedSPRegister, InterruptedSP);
-    _Unwind_SetGR(Context, NDArm64eVirtualReturnRegister, VirtualReturn);
+    _Unwind_SetGR(Context, NDArm64eResumeReturnRegister, VirtualReturn);
     _Unwind_SetGR(Context, NDArm64eLandingPadRegister,
                   (uintptr_t)ptrauth_sign_unauthenticated(
                       (void *)LandingPad, ptrauth_key_function_pointer, 0));

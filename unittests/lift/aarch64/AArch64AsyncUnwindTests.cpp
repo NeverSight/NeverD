@@ -808,7 +808,7 @@ verifySignalLanguageCleanup(bool ObjectiveC,
     const auto *ResumeCIE = DriverImage->ExceptionMetadata.findCIE(
         ResumeFrame->Dwarf->CIESectionOffset);
     ASSERT_NE(ResumeCIE, nullptr);
-    EXPECT_EQ(ResumeCIE->ReturnAddressRegister, NDArm64eVirtualReturnRegister);
+    EXPECT_EQ(ResumeCIE->ReturnAddressRegister, NDArm64eResumeReturnRegister);
     EXPECT_TRUE(
         llvm::any_of(ResumeFrame->Dwarf->Instructions, [](const auto &I) {
           return I.Kind == CFIOpKind::DefCFA &&

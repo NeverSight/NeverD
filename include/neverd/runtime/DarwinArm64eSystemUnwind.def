@@ -23,6 +23,7 @@ NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eStackAlignment, 16)
 NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eInstructionAlignment, 4)
 NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eDeliveryRegister, 16)
 NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eVirtualReturnRegister, 17)
+NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eResumeReturnRegister, 12)
 NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eInterruptedSPRegister, 13)
 NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eLandingPadRegister, 14)
 NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eCallerLRRegister, 15)
@@ -63,6 +64,7 @@ NEVERD_SYSTEM_UNWIND_BRIDGE(
 // LR after that transfer, before the original handler can spill or consume it.
 // The interrupted SP and virtual return retain the original frame's CFI,
 // including its saved registers, if a walker observes this transfer.
+// System resume does not restore x16/x17; use x12 for this return column.
 NEVERD_SYSTEM_UNWIND_BRIDGE(
     ndDarwinArm64eLiveLRResume, "_ndDarwinArm64eLiveLRResume",
     ".pushsection __TEXT,__text,regular,pure_instructions\n"
@@ -73,7 +75,7 @@ NEVERD_SYSTEM_UNWIND_BRIDGE(
     "_ndDarwinArm64eLiveLRResume:\n"
     ".cfi_startproc\n"
     ".cfi_b_key_frame\n"
-    ".cfi_return_column 17\n"
+    ".cfi_return_column 12\n"
     ".cfi_def_cfa 13, 0\n"
     ".cfi_register 30, 15\n"
     ".cfi_escape 0x2e, 0\n"

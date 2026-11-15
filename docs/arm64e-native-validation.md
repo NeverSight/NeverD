@@ -1882,7 +1882,8 @@ A local catch retains the bridge's identity across the two unwind phases.
 Darwin's landing-pad resume itself consumes x30, so a separate authenticated
 entry restores the caller LR before the original handler can spill it. Its CFI
 retains the interrupted frame's virtual return, original SP and LR; a walker
-can still apply the original frame's saved-register rules. Neither transfer
+can still apply the original frame's saved-register rules. The resumed virtual
+return uses x12 because system resume does not restore x16/x17. Neither transfer
 disables return authentication or copies an opaque system cursor.
 
 The eight `AArch64AsyncUnwind.*LiveLR*` cases cover C++ and Objective-C,
