@@ -339,6 +339,17 @@ ASYNC_FRAME_TEXT(kSignalNonCallDriver, "-DNEVERD_NONCALL_SCOPE")
 ASYNC_FRAME_TEXT(kSignalNonCallSource, "noncall.S")
 ASYNC_FRAME_TEXT(kSignalObjCPersonality, "-DNEVERD_OBJC_PERSONALITY")
 ASYNC_FRAME_TEXT(kSignalCompactFrame, "-DNEVERD_COMPACT_FRAME")
+ASYNC_FRAME_TEXT(kSignalFramelessFrame, "-DNEVERD_FRAMELESS_FRAME")
+ASYNC_FRAME_TEXT(kSignalEntryPad, "-DNEVERD_ENTRY_LANDING_PAD")
+ASYNC_FRAME_TEXT(kSignalGeneratedExplicitLSDA,
+                 "Lneverd_lsda_${:uid}:\n.byte 27\n")
+ASYNC_FRAME_VALUE(unsigned, kSignalTypeCount, 2)
+ASYNC_FRAME_VALUE(unsigned, kSignalActionCount, 3)
+ASYNC_FRAME_VALUE(uint64_t, kSignalSpecType, 2)
+ASYNC_FRAME_TEXT(kSignalTypedLSDA, "-DNEVERD_TYPED_LSDA")
+ASYNC_FRAME_TEXT(kSignalExplicitLPStart, "-DNEVERD_EXPLICIT_LPSTART")
+ASYNC_FRAME_TEXT(kSignalGeneratedLSDA, "Lneverd_lsda_${:uid}:\n.byte 255\n")
+ASYNC_FRAME_TEXT(kSignalInvalidLSDA, "Lneverd_lsda_${:uid}:\n.byte 0\n")
 ASYNC_FRAME_TEXT(kSignalNonCallExceptions, "native_noncall_language_cleanups")
 ASYNC_FRAME_TEXT(kSignalNonCallObjCExceptions, "native_noncall_objc_cleanups")
 ASYNC_FRAME_TEXT(kSignalNonCallBody, R"asm(
@@ -359,7 +370,12 @@ Lfunc_begin:
  nop
 #endif
  pacibsp
-#ifdef NEVERD_COMPACT_FRAME
+#ifdef NEVERD_FRAMELESS_FRAME
+ stp x19, x30, [sp, #-32]!
+ .cfi_def_cfa_offset 32
+ .cfi_offset x19, -32
+ .cfi_offset x30, -24
+#elif defined(NEVERD_COMPACT_FRAME)
  stp x20, x19, [sp, #-32]!
  stp x29, x30, [sp, #16]
  add x29, sp, #16
@@ -398,9 +414,14 @@ Lcleanup:
 #endif
  str w9, [x19]
 Lresume:
+#ifdef NEVERD_ENTRY_LANDING_PAD
+ b Lprotected
+#else
  bl __Unwind_Resume
+#endif
 Lresume_end:
  brk #1
+Lfunction_end:
  .cfi_endproc
  .globl _signal_tick
  .p2align 2
@@ -411,22 +432,77 @@ _signal_tick:
  .section __TEXT,__gcc_except_tab
  .p2align 2
 Lexception:
+#ifdef NEVERD_EXPLICIT_LPSTART
+ // LPStart deliberately differs from the function start. Call-site ranges
+ // remain function-relative; only landing-pad offsets use this base.
+ .byte 27
+#ifdef NEVERD_ENTRY_LANDING_PAD
+ .long Lfunc_begin-4-.
+#else
+ .long Lfunc_begin+4-.
+#endif
+#else
  .byte 255
+#endif
+#ifdef NEVERD_TYPED_LSDA
+ .byte 155
+ .uleb128 Ltypes_end-Ltypes_offset
+Ltypes_offset:
+#else
  .byte 255
+#endif
  .byte 1
  .uleb128 Ltable_end-Ltable
 Ltable:
  .uleb128 Lprotected-Lfunc_begin
  .uleb128 Lprotected_end-Lprotected
+#ifdef NEVERD_ENTRY_LANDING_PAD
+ .uleb128 4
+#elif defined(NEVERD_EXPLICIT_LPSTART)
+ .uleb128 Lcleanup-Lfunc_begin-4
+#else
  .uleb128 Lcleanup-Lfunc_begin
+#endif
+#ifdef NEVERD_TYPED_LSDA
+ .byte 1
+#else
  .byte 0
+#endif
  // Resuming the exception has no local cleanup. Without this entry the
  // personality treats the second-phase return edge as a missing call site.
  .uleb128 Lresume-Lfunc_begin
  .uleb128 Lresume_end-Lresume
  .byte 0
  .byte 0
+#ifdef NEVERD_TYPED_LSDA
+ // The unreachable trap checks an exception-specification-only type index.
+ .uleb128 Lresume_end-Lfunc_begin
+ .uleb128 Lfunction_end-Lresume_end
+ .uleb128 Lcleanup-Lfunc_begin-4
+ .byte 5
+#endif
 Ltable_end:
+#ifdef NEVERD_TYPED_LSDA
+ // A nonmatching catch(int), followed by the active cleanup.
+ .sleb128 1
+ .sleb128 1
+ .sleb128 0
+ .sleb128 0
+ .sleb128 -1
+ .sleb128 0
+ .p2align 2
+ .long Lchar_type-.
+ .long Lint_type-.
+Ltypes_end:
+ .uleb128 2
+ .uleb128 0
+ .section __DATA,__data
+ .p2align 3
+Lint_type:
+ .quad __ZTIi
+Lchar_type:
+ .quad __ZTIPKc
+#endif
  .subsections_via_symbols
 )asm")
 

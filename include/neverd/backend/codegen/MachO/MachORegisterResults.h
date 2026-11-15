@@ -38,11 +38,11 @@ struct MedFunc;
 std::vector<CFIInstruction>
 machOFramelessSpillRows(const CompactUnwindEntry &Compact);
 
-/// A complete indexed or compact FP C++/Objective-C frame whose LSDA uses only
-/// function-relative call-site and landing-pad offsets. Reuse is conditional
-/// on separately proving every native instruction keeps its original offset.
-bool canReuseMachOLanguageFrame(const BinaryImage &Image,
-                                const ExceptionFunction &Frame);
+/// A complete C++/Objective-C frame whose language table can be preserved or
+/// rebuilt with a function-relative landing-pad base. Publication separately
+/// proves that every native instruction keeps its original offset.
+bool canPublishMachOLanguageFrame(const BinaryImage &Image,
+                                  const ExceptionFunction &Frame);
 
 /// An indexed access using the physical SP cannot use a reconstructed stack.
 bool needsMachONativeStackIndex(const MedFunc &Function);

@@ -299,6 +299,8 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
 
   std::vector<uint64_t> Pending = ActionRoots;
   std::set<uint64_t> Decoded;
+  Info.ActionTableRange = {Req.LSDAVA + ActionTableStart,
+                           Req.LSDAVA + ActionTableStart};
   while (!Pending.empty()) {
     const uint64_t TableOffset = Pending.back();
     Pending.pop_back();
@@ -325,6 +327,8 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
       partial("truncated Itanium LSDA action record");
       continue;
     }
+    Info.ActionTableRange.End =
+        std::max(Info.ActionTableRange.End, Req.LSDAVA + ActionCursor);
 
     ItaniumAction Action;
     Action.TableOffset = TableOffset;
@@ -360,6 +364,62 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
       if (A.isCatch())
         HighestIndex =
             std::max(HighestIndex, static_cast<uint64_t>(A.TypeFilter));
+
+    // Exception-specification lists grow upward from the same base.
+    Info.ExceptionSpecRange = {Info.TypeTableVA, Info.TypeTableVA};
+    for (const ItaniumAction &A : Info.Actions) {
+      if (!A.isExceptionSpecification())
+        continue;
+      const uint64_t Index = uint64_t{0} - static_cast<uint64_t>(A.TypeFilter);
+      bool Known = false;
+      for (const ItaniumExceptionSpec &S : Info.ExceptionSpecs)
+        if (S.Index == Index)
+          Known = true;
+      if (Known)
+        continue;
+      if (Index == 0 || Index - 1 > InvalidVA - Info.TypeTableVA) {
+        partial("Itanium LSDA exception specification index is invalid");
+        continue;
+      }
+      ItaniumExceptionSpec Spec;
+      Spec.Index = Index;
+      const va_t ListVA = Info.TypeTableVA + (Index - 1);
+      const size_t ListAvailable = mappedBytesAt(Img, ListVA, 4096);
+      const uint8_t *List =
+          ListAvailable ? Img.readVA(ListVA, ListAvailable) : nullptr;
+      if (!List) {
+        partial("Itanium LSDA exception specification list is not mapped");
+        continue;
+      }
+      size_t ListCursor = 0;
+      bool Terminated = false;
+      while (ListCursor < ListAvailable) {
+        uint64_t TypeIndex = 0;
+        if (!readULEB128(List, ListAvailable, ListCursor, TypeIndex)) {
+          partial("truncated Itanium LSDA exception specification list");
+          break;
+        }
+        if (TypeIndex == 0) {
+          Terminated = true;
+          break;
+        }
+        if (Spec.TypeIndices.size() >= Req.MaxRecords) {
+          partial("Itanium LSDA exception specification exceeds budget");
+          break;
+        }
+        Spec.TypeIndices.push_back(TypeIndex);
+      }
+      // A failed first read is not an empty specification: Rust interprets
+      // a proven empty list as a nounwind guard. Publish only complete lists.
+      if (Terminated) {
+        for (uint64_t TypeIndex : Spec.TypeIndices)
+          HighestIndex = std::max(HighestIndex, TypeIndex);
+        Info.ExceptionSpecRange.End =
+            std::max(Info.ExceptionSpecRange.End, ListVA + ListCursor);
+        Info.ExceptionSpecs.push_back(std::move(Spec));
+      } else
+        partial("Itanium LSDA exception specification has no valid terminator");
+    }
 
     // The declared byte stays in the record: it is what the producer wrote,
     // and an override says how the platform's runtime reads that slot rather
@@ -427,57 +487,6 @@ LSDAParseResult parseLSDA(const BinaryImage &Img, const LSDAParseRequest &Req,
         }
         Info.TypeTable.push_back(std::move(Entry));
       }
-    }
-
-    // Exception-specification lists grow upward from the same base.
-    for (const ItaniumAction &A : Info.Actions) {
-      if (!A.isExceptionSpecification())
-        continue;
-      const uint64_t Index = uint64_t{0} - static_cast<uint64_t>(A.TypeFilter);
-      bool Known = false;
-      for (const ItaniumExceptionSpec &S : Info.ExceptionSpecs)
-        if (S.Index == Index)
-          Known = true;
-      if (Known)
-        continue;
-      if (Index == 0 || Index - 1 > InvalidVA - Info.TypeTableVA) {
-        partial("Itanium LSDA exception specification index is invalid");
-        continue;
-      }
-      ItaniumExceptionSpec Spec;
-      Spec.Index = Index;
-      const va_t ListVA = Info.TypeTableVA + (Index - 1);
-      const size_t ListAvailable = mappedBytesAt(Img, ListVA, 4096);
-      const uint8_t *List =
-          ListAvailable ? Img.readVA(ListVA, ListAvailable) : nullptr;
-      if (!List) {
-        partial("Itanium LSDA exception specification list is not mapped");
-        continue;
-      }
-      size_t ListCursor = 0;
-      bool Terminated = false;
-      while (ListCursor < ListAvailable) {
-        uint64_t TypeIndex = 0;
-        if (!readULEB128(List, ListAvailable, ListCursor, TypeIndex)) {
-          partial("truncated Itanium LSDA exception specification list");
-          break;
-        }
-        if (TypeIndex == 0) {
-          Terminated = true;
-          break;
-        }
-        if (Spec.TypeIndices.size() >= Req.MaxRecords) {
-          partial("Itanium LSDA exception specification exceeds budget");
-          break;
-        }
-        Spec.TypeIndices.push_back(TypeIndex);
-      }
-      // A failed first read is not an empty specification: Rust interprets
-      // a proven empty list as a nounwind guard. Publish only complete lists.
-      if (Terminated)
-        Info.ExceptionSpecs.push_back(std::move(Spec));
-      else
-        partial("Itanium LSDA exception specification has no valid terminator");
     }
   }
 

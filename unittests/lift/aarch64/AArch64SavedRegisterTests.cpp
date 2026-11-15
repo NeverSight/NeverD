@@ -93,10 +93,12 @@ void writeCompactFixture(const std::string &Path, const BinaryImage &Image,
 }
 #endif
 
-void verifySavedRegisters(
-    bool Quad, bool Signal, std::optional<unsigned> CompactPairs = std::nullopt,
-    bool ExtraStack = false, bool Coalesced = false, bool Frameless = false,
-    std::optional<unsigned> SigningOffset = std::nullopt) {
+void verifySavedRegisters(bool Quad, bool Signal,
+                          std::optional<unsigned> CompactPairs = std::nullopt,
+                          bool ExtraStack = false, bool Coalesced = false,
+                          bool Frameless = false,
+                          std::optional<unsigned> SigningOffset = std::nullopt,
+                          bool Language = false) {
 #if defined(__APPLE__) && defined(__aarch64__)
 #if !__has_include("llvm/BinaryFormat/AArch64CompactUnwind.def")
   if (SigningOffset)
@@ -157,7 +159,11 @@ void verifySavedRegisters(
       std::string(kPAuthLRFlag) + std::to_string(SigningOffset.value_or(0));
   if (SigningOffset)
     Common.push_back(PAuthFlag);
+  if (Language)
+    Common.push_back(kLanguageFlag);
   auto Compile = Common;
+  if (Language)
+    Compile.push_back(kCXXRuntime);
   Compile.append({kDylib, kTight, Source, kOutputFlag, Input});
   ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, Compile), 0);
   const auto *Override = std::getenv(kHeaderRoot);
@@ -306,7 +312,18 @@ void verifySavedRegisters(
     if (Compact) {
       ASSERT_TRUE(Before->Compact && After->Compact);
       EXPECT_FALSE(Before->Dwarf);
-      if (Frameless) {
+      if (Language) {
+        ASSERT_TRUE(Before->Itanium && After->Itanium);
+        EXPECT_EQ(Before->Personality, After->Personality);
+        EXPECT_EQ(Before->Itanium->LSDAVA + Installed.OriginalSectionSlide,
+                  After->Itanium->LSDAVA);
+        ASSERT_EQ(After->Itanium->CallSites.size(), 1u);
+        EXPECT_EQ(After->Itanium->CallSites.front().LandingPadVA -
+                      After->CodeRange.Begin,
+                  Before->Itanium->CallSites.front().LandingPadVA -
+                      Before->CodeRange.Begin);
+      }
+      if (Frameless && !CompactSpills.empty()) {
         ASSERT_TRUE(After->Dwarf);
         EXPECT_EQ(After->Compact->NativeEncoding & macho_unwind::kModeMask,
                   macho_unwind::kARM64ModeDwarf);
@@ -340,7 +357,9 @@ void verifySavedRegisters(
               ? kCompactPAuthLRMode | (*SigningOffset / aarch64::kInsnSize)
                                           << kPAuthLRShift
               : kCompactFrameMode;
-      EXPECT_EQ(Before->Compact->NativeEncoding, Mode | *CompactPairs);
+      EXPECT_EQ(Before->Compact->NativeEncoding &
+                    ~(macho_unwind::kPersonalityMask | macho_unwind::kHasLSDA),
+                Mode | *CompactPairs);
       continue;
     }
     ASSERT_TRUE(Before->Dwarf && After->Dwarf);
@@ -615,6 +634,18 @@ TEST(AArch64CompactRegisters, SystemUnwindsEachFramelessPair) {
       kResumptions, Executions * kCompactPairCases.size() * kSignalRounds);
   testing::Test::RecordProperty(
       kSystemSteps, Executions / 2 * kCompactPairCases.size() * kSignalRounds);
+}
+
+TEST(AArch64CompactRegisters, PublishesFramelessLanguageFrame) {
+  verifySavedRegisters(false, false, 0, false, false, true, std::nullopt, true);
+}
+TEST(AArch64CompactRegisters, PublishesFramelessLanguageSavedPairs) {
+  verifySavedRegisters(false, false, kCompactAllPairs, false, false, true,
+                       std::nullopt, true);
+}
+TEST(AArch64CompactRegisters, SystemUnwindsFramelessLanguageSavedPairs) {
+  verifySavedRegisters(false, true, kCompactSparsePairs, true, false, true,
+                       std::nullopt, true);
 }
 
 TEST(AArch64CompactRegisters, PublishesPAuthLRAllPairs) {
