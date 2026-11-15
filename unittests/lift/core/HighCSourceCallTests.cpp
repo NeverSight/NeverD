@@ -3205,9 +3205,12 @@ TEST(HighCSourceCalls, FloatingCallCarriersRemainBitsAtSourceBoundaries) {
       const std::string Suffix = std::to_string(Width);
       const std::string Helper = "_helper_" + Suffix;
       Functions.push_back(returning(Helper, parameter(0, Float), {Float}));
-      for (unsigned Boundary = 0; Boundary != 3; ++Boundary) {
-        auto Value =
-            call(native(Helper, Float, {Float}), Bits, {parameter(0, Bits)});
+      // The last two callers declare a floating parameter but read it through
+      // unsigned and signed machine integer views before passing it onward.
+      for (unsigned Boundary = 0; Boundary != 5; ++Boundary) {
+        const auto ArgumentBits = NdType::makeInt(Width, Boundary == 4);
+        auto Value = call(native(Helper, Float, {Float}), Bits,
+                          {parameter(0, ArgumentBits)});
         if (Boundary == 1) {
           auto Cast = std::make_shared<HighExpr>();
           Cast->Kind = ExprKind::BitCast;
@@ -3220,7 +3223,7 @@ TEST(HighCSourceCalls, FloatingCallCarriersRemainBitsAtSourceBoundaries) {
         }
         auto Function =
             returning("forward_" + Suffix + "_" + std::to_string(Boundary),
-                      Value, {Bits});
+                      Value, {Boundary >= 3 ? Float : Bits});
         Function.ReturnType = Float;
         Functions.push_back(std::move(Function));
       }
@@ -3233,11 +3236,15 @@ int main(void) {
   for (unsigned i=0; i<sizeof(a)/sizeof(a[0]); ++i)
     if (__builtin_bit_cast(uint32_t, forward_4_0(a[i])) != a[i] ||
         __builtin_bit_cast(uint32_t, forward_4_1(a[i])) != a[i] ||
-        __builtin_bit_cast(uint32_t, forward_4_2(a[i])) != a[i]) return 1;
+        __builtin_bit_cast(uint32_t, forward_4_2(a[i])) != a[i] ||
+        __builtin_bit_cast(uint32_t, forward_4_3(__builtin_bit_cast(float, a[i]))) != a[i] ||
+        __builtin_bit_cast(uint32_t, forward_4_4(__builtin_bit_cast(float, a[i]))) != a[i]) return 1;
   for (unsigned i=0; i<sizeof(b)/sizeof(b[0]); ++i)
     if (__builtin_bit_cast(uint64_t, forward_8_0(b[i])) != b[i] ||
         __builtin_bit_cast(uint64_t, forward_8_1(b[i])) != b[i] ||
-        __builtin_bit_cast(uint64_t, forward_8_2(b[i])) != b[i]) return 2;
+        __builtin_bit_cast(uint64_t, forward_8_2(b[i])) != b[i] ||
+        __builtin_bit_cast(uint64_t, forward_8_3(__builtin_bit_cast(double, b[i]))) != b[i] ||
+        __builtin_bit_cast(uint64_t, forward_8_4(__builtin_bit_cast(double, b[i]))) != b[i]) return 2;
   return 0;
 })";
     for (const char *Optimization : {"-O0", "-O2"}) {

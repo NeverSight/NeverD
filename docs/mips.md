@@ -88,6 +88,9 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   HighC preserves integer bit reads of declared floating parameters, including
   o32 floats following an integer in GPRs. Its emitted bit carrier retains
   signedness so logical right shifts receive the required unsigned view.
+  Typed source calls marshal the emitted integer view before consulting the
+  parameter's floating declaration. This keeps forwarded values as bits in
+  ordinary calls and the shared AArch64 authenticated-call packet path.
   Classic, microMIPS and MIPS16 FR=0/1 leaves are checked in both byte orders
   against original machine code, with Clang and GCC at O0/O2. MIPS16 source
   attributes use compiler-specific spelling from `MIPSInstructionModes.def`;

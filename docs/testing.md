@@ -11458,6 +11458,13 @@ The ARM32 VFP call regression also runs its recovered recurrence against the
 source. The softfp external-call oracle compares R0 result bits: its tail-call
 bytes cannot distinguish a source float from an integer view of that float.
 
+`HighCSourceCalls.FloatingCallCarriersRemainBitsAtSourceBoundaries` also executes
+float/double entry parameters read through signed and unsigned integer views
+before native calls. O0/O2 comparisons retain signed zero, infinities and NaN
+payloads. Run its `NeverDSourceEntryBindingTests` owner together with
+`NeverDAArch64AuthenticatedCallTests`: the authenticated-call regression
+requires reconstructed caller IR to contain no numeric FP/integer conversion.
+
 `HighCIntegerConversion.NarrowCopyKeepsLowBytesThroughSourceProjection` starts
 from MedIR and checks narrowing copies followed by zero extension for i386,
 x86-64 and AArch64. The emitted C executes at O0/O2 with undefined-behavior
