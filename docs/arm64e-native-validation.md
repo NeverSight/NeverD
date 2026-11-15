@@ -1876,13 +1876,26 @@ mutating the context. No bridge slots are written over an active kernel signal
 frame. Its assembly, register indices and frame size belong to
 `DarwinArm64eSystemUnwind.def`.
 
-The four `AArch64AsyncUnwind.*LiveLR*` cases cover C++ and Objective-C,
+The bridge personality advances the system cursor to the original language
+frame and delegates matching and cleanup selection to that frame's personality.
+A local catch retains the bridge's identity across the two unwind phases.
+Darwin's landing-pad resume itself consumes x30, so a separate authenticated
+entry restores the caller LR before the original handler can spill it. Its CFI
+retains the interrupted frame's virtual return, original SP and LR; a walker
+can still apply the original frame's saved-register rules. Neither transfer
+disables return authentication or copies an opaque system cursor.
+
+The eight `AArch64AsyncUnwind.*LiveLR*` cases cover C++ and Objective-C,
 replacement objects and NeverD-generated images, O0/O2, and normal/alternate
 signal stacks. They verify red-zone contents, nested handler exceptions,
 exception identity, interrupted/outer cleanup ordering, the original SP/LR,
 insufficient-stack rejection, and the emitted bridge's independent return
-columns. The cleanup spills its live LR before calling `_Unwind_Resume`, with
-matching PC-specific CFI. `LDUR` and `STUR` now participate in native register-
+columns. Four cases execute a local catch and authenticated normal return;
+the others spill live LR before calling `_Unwind_Resume`, with matching
+PC-specific CFI. Hardware breakpoints also interrupt each of the two resume
+instructions. A fresh public cursor walks through the interrupted frame to its
+caller and checks SP, LR, FP and the preserved general registers before signal
+return continues the landing pad. `LDUR` and `STUR` now participate in native register-
 body generation and the existing exact-instruction publication checks.
 
 This admission requires an owned language lifetime table. It does not infer

@@ -724,6 +724,7 @@ enum class LanguageFrame {
   CompactNonCall,
   FramelessNonCall,
   LiveLRNonCall,
+  LiveLRCatch,
   ExplicitLPStart,
   TypedExplicitLPStart,
   EntryLandingPad
@@ -739,6 +740,8 @@ verifySignalLanguageCleanup(bool ObjectiveC,
   const bool Explicit = Kind == LanguageFrame::ExplicitLPStart ||
                         Kind == LanguageFrame::TypedExplicitLPStart || EntryPad;
   const bool Typed = Kind == LanguageFrame::TypedExplicitLPStart;
+  const bool LocalCatch = Kind == LanguageFrame::LiveLRCatch;
+  const bool LiveLR = Kind == LanguageFrame::LiveLRNonCall || LocalCatch;
   llvm::SmallString<128> Dir;
   ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kDirectory, Dir));
   const std::filesystem::path Root(Dir.str().str());
@@ -774,9 +777,11 @@ verifySignalLanguageCleanup(bool ObjectiveC,
     DriverArgs.append({kObjCExceptions, kObjCFramework, kFoundation});
   if (NonCall)
     DriverArgs.push_back(kSignalNonCallDriver);
+  if (LocalCatch)
+    DriverArgs.push_back(kSignalLocalCatch);
   ASSERT_EQ(llvm::sys::ExecuteAndWait(kCxxCompiler, DriverArgs), 0);
   auto Reader = Loader::create(BinaryFormat::MachO);
-  if (Kind == LanguageFrame::LiveLRNonCall) {
+  if (LiveLR) {
     auto DriverImage = Reader->load(Driver);
     ASSERT_TRUE(bool(DriverImage)) << llvm::toString(DriverImage.takeError());
     const auto *Bridge = DriverImage->findSymbol(kSignalLiveLRBridge);
@@ -795,6 +800,25 @@ verifySignalLanguageCleanup(bool ObjectiveC,
                                (Reg == kDwarfLR ? int(sizeof(uintptr_t)) : 0);
       }));
     }
+    const auto *Resume = DriverImage->findSymbol(kSignalLiveLRResume);
+    ASSERT_NE(Resume, nullptr);
+    const auto *ResumeFrame =
+        DriverImage->ExceptionMetadata.findFunction(Resume->Addr);
+    ASSERT_TRUE(ResumeFrame && ResumeFrame->Dwarf);
+    const auto *ResumeCIE = DriverImage->ExceptionMetadata.findCIE(
+        ResumeFrame->Dwarf->CIESectionOffset);
+    ASSERT_NE(ResumeCIE, nullptr);
+    EXPECT_EQ(ResumeCIE->ReturnAddressRegister, NDArm64eVirtualReturnRegister);
+    EXPECT_TRUE(
+        llvm::any_of(ResumeFrame->Dwarf->Instructions, [](const auto &I) {
+          return I.Kind == CFIOpKind::DefCFA &&
+                 I.Register == NDArm64eInterruptedSPRegister && I.Offset == 0;
+        }));
+    EXPECT_TRUE(
+        llvm::any_of(ResumeFrame->Dwarf->Instructions, [](const auto &I) {
+          return I.Kind == CFIOpKind::Register && I.Register == kDwarfLR &&
+                 I.Register2 == NDArm64eCallerLRRegister;
+        }));
   }
   unsigned Delivered = 0;
   for (const auto *Opt : {kNoOptimize, kOptimize}) {
@@ -818,8 +842,10 @@ verifySignalLanguageCleanup(bool ObjectiveC,
         Command.push_back(kSignalEntryPad);
       if (Kind == LanguageFrame::FramelessNonCall)
         Command.push_back(kSignalFramelessFrame);
-      if (Kind == LanguageFrame::LiveLRNonCall)
+      if (LiveLR)
         Command.push_back(kSignalLiveLR);
+      if (LocalCatch)
+        Command.push_back(kSignalLocalCatch);
       if (ObjectiveC && llvm::is_contained(Args, kDylib))
         Command.append({kObjCFramework, kFoundation});
       return llvm::sys::ExecuteAndWait(Compiler, Command);
@@ -1007,7 +1033,7 @@ verifySignalLanguageCleanup(bool ObjectiveC,
         }
         ASSERT_TRUE(Site && Plan);
         if (NonCall)
-          EXPECT_EQ(Plan->Frame.SavedLR, Kind != LanguageFrame::LiveLRNonCall);
+          EXPECT_EQ(Plan->Frame.SavedLR, !LiveLR);
         std::ofstream Out(Rules, std::ios::binary);
         const auto Write = [&](const auto &Value) {
           Out.write(reinterpret_cast<const char *>(&Value), sizeof(Value));
@@ -1099,6 +1125,19 @@ TEST(AArch64AsyncUnwind, LiftedLiveLRRunsLanguageCleanups) {
 }
 TEST(AArch64AsyncUnwind, LiftedLiveLRRunsObjCCleanups) {
   verifySignalLanguageCleanup(true, LanguageFrame::LiveLRNonCall, true);
+}
+
+TEST(AArch64AsyncUnwind, NativeLiveLRCatchesLanguageException) {
+  verifySignalLanguageCleanup(false, LanguageFrame::LiveLRCatch);
+}
+TEST(AArch64AsyncUnwind, NativeLiveLRCatchesObjCException) {
+  verifySignalLanguageCleanup(true, LanguageFrame::LiveLRCatch);
+}
+TEST(AArch64AsyncUnwind, LiftedLiveLRCatchesLanguageException) {
+  verifySignalLanguageCleanup(false, LanguageFrame::LiveLRCatch, true);
+}
+TEST(AArch64AsyncUnwind, LiftedLiveLRCatchesObjCException) {
+  verifySignalLanguageCleanup(true, LanguageFrame::LiveLRCatch, true);
 }
 
 TEST(AArch64AsyncUnwind, NativeFramelessRunsLanguageCleanups) {

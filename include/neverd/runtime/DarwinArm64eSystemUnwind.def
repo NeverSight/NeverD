@@ -10,6 +10,9 @@
 #ifndef NEVERD_SYSTEM_UNWIND_BRIDGE
 #define NEVERD_SYSTEM_UNWIND_BRIDGE(Name, Symbol, Assembly)
 #endif
+#ifndef NEVERD_SYSTEM_UNWIND_PERSONALITY
+#define NEVERD_SYSTEM_UNWIND_PERSONALITY(Name, Symbol)
+#endif
 
 NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eFirstPreservedGPR, 19)
 NEVERD_SYSTEM_UNWIND_VALUE(NDArm64ePreservedGPRCount, 10)
@@ -20,7 +23,13 @@ NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eStackAlignment, 16)
 NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eInstructionAlignment, 4)
 NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eDeliveryRegister, 16)
 NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eVirtualReturnRegister, 17)
+NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eInterruptedSPRegister, 13)
+NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eLandingPadRegister, 14)
+NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eCallerLRRegister, 15)
 NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eLiveLRBridgeBytes, 144)
+
+NEVERD_SYSTEM_UNWIND_PERSONALITY(ndDarwinArm64eLiveLRPersonality,
+                                 "_ndDarwinArm64eLiveLRPersonality")
 
 // Keep the interrupted 128-byte red zone above two independent return slots.
 // DWARF's return column supplies the virtual PC; x30 retains the caller's LR.
@@ -33,10 +42,12 @@ NEVERD_SYSTEM_UNWIND_BRIDGE(
     ".globl _ndDarwinArm64eLiveLRBridge\n"
     ".private_extern _ndDarwinArm64eLiveLRBridge\n"
     ".weak_definition _ndDarwinArm64eLiveLRBridge\n"
+    ".private_extern _ndDarwinArm64eLiveLRPersonality\n"
     "_ndDarwinArm64eLiveLRBridge:\n"
     ".cfi_startproc\n"
     ".cfi_b_key_frame\n"
     ".cfi_return_column 17\n"
+    ".cfi_personality 155, _ndDarwinArm64eLiveLRPersonality\n"
     ".cfi_escape 0x2e, 0\n"
     "sub sp, sp, #144\n"
     ".cfi_def_cfa_offset 144\n"
@@ -48,5 +59,29 @@ NEVERD_SYSTEM_UNWIND_BRIDGE(
     ".cfi_endproc\n"
     ".popsection\n")
 
+// Darwin's system resume uses LR to enter the landing pad. Restore the caller
+// LR after that transfer, before the original handler can spill or consume it.
+// The interrupted SP and virtual return retain the original frame's CFI,
+// including its saved registers, if a walker observes this transfer.
+NEVERD_SYSTEM_UNWIND_BRIDGE(
+    ndDarwinArm64eLiveLRResume, "_ndDarwinArm64eLiveLRResume",
+    ".pushsection __TEXT,__text,regular,pure_instructions\n"
+    ".p2align 2\n"
+    ".globl _ndDarwinArm64eLiveLRResume\n"
+    ".private_extern _ndDarwinArm64eLiveLRResume\n"
+    ".weak_definition _ndDarwinArm64eLiveLRResume\n"
+    "_ndDarwinArm64eLiveLRResume:\n"
+    ".cfi_startproc\n"
+    ".cfi_b_key_frame\n"
+    ".cfi_return_column 17\n"
+    ".cfi_def_cfa 13, 0\n"
+    ".cfi_register 30, 15\n"
+    ".cfi_escape 0x2e, 0\n"
+    "mov x30, x15\n"
+    "braaz x14\n"
+    ".cfi_endproc\n"
+    ".popsection\n")
+
 #undef NEVERD_SYSTEM_UNWIND_VALUE
 #undef NEVERD_SYSTEM_UNWIND_BRIDGE
+#undef NEVERD_SYSTEM_UNWIND_PERSONALITY
