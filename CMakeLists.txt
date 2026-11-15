@@ -210,9 +210,7 @@ add_subdirectory(tools)
 option(NEVERD_BUILD_PLUGINS "Build NeverD example plugins" OFF)
 include("${CMAKE_SOURCE_DIR}/cmake/NeverDWebProduct.cmake")
 if(NEVERD_BUILD_PLUGINS)
-  add_subdirectory(plugins/bytecode)
   add_subdirectory(plugins/example)
-  add_subdirectory(plugins/semantic)
 endif()
 
 # --- Copy signature files to build/bin/sig/ ---
