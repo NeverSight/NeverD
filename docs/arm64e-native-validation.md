@@ -1895,14 +1895,31 @@ columns. Four cases execute a local catch and authenticated normal return;
 the others spill live LR before calling `_Unwind_Resume`, with matching
 PC-specific CFI. The Objective-C catch uses the compiler's `_OBJC_EHTYPE_id`
 GOT reference to obtain the original object through `objc_begin_catch`.
-Hardware breakpoints also interrupt each of the two resume
-instructions. A fresh public cursor walks through the interrupted frame to its
+Hardware breakpoints also interrupt each resume instruction. A fresh public
+cursor walks through the interrupted frame to its
 caller and checks SP, LR, FP and the preserved general registers before signal
-return continues the landing pad. `LDUR` and `STUR` now participate in native register-
-body generation and the existing exact-instruction publication checks.
+return continues the landing pad. `LDUR` and `STUR` now participate in native
+register body generation and the existing exact-instruction publication checks.
 
 This admission requires an owned language lifetime table. It does not infer
 cleanup scopes for arbitrary faulting instructions. Compact-only live-LR
 language delivery, additional signing recipes, and native PAuth_LR/PACM-PC/
 CPTA-on qualification remain separate coverage requirements. The LLVM fork
 revision and prebuilt r6 are unchanged.
+
+Both macos-26 and xcode-27 passed all 127 source-bound publication cases from
+`ec26d6dfa35fc2ae4e945a3bdfcfb07a034248e1`, with no failed or skipped cases.
+Each host completed 64 live-LR deliveries: 32 cleanup paths and 32 local catches,
+covering original/replacement/lifted images, O0/O2 and both signal stacks.
+All 64 also checked the resumed cursor against the original caller. The Windows
+frontend job passed. Local publication passed 127 cases, unwind recovery passed
+31, and related CTest coverage passed 142 with four explicit native/environment
+skips. C11/C++20 multi-translation-unit linking, clang-format 22.1.2 and the
+documentation inventory passed.
+
+Fresh reports still identify both runners as M1 virtual machines. Explicit
+PAuth_LR, PACM PC dependence and CPTA-on remain unqualified, including the signed
+arm64e.x1 launch attempt. The temporary release and asset were deleted with
+verified HTTP 404 responses; the replay repository was returned to its baseline
+tree. [Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43746760233)
+and [per-host verification record](evidence/arm64e-live-lr-2026-11-16.json).
