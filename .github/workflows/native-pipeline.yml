@@ -69,7 +69,8 @@ jobs:
           python scripts/build.py build-mips-ci --config Release --parallel 4 --target \
             neverd NeverDMIPSTests NeverDMIPSFlowTests NeverDMIPSIntegerTests \
             NeverDMIPSPipelineTests NeverDMIPSSDKTests NeverDSourceEntryBindingTests \
-            NeverDHighControlFlowTests NeverDSourceCallABITests NeverDAArch64AuthenticatedCallTests
+            NeverDHighControlFlowTests NeverDSourceCallABITests NeverDAArch64AuthenticatedCallTests \
+            NeverDSourceAnchorTests
       - name: Audit inventory and execute owners
         timeout-minutes: 90
         run: |
@@ -83,7 +84,8 @@ jobs:
           owners = ['NeverDMIPSTests', 'NeverDMIPSFlowTests', 'NeverDMIPSIntegerTests',
                     'NeverDMIPSPipelineTests', 'NeverDMIPSSDKTests',
                     'NeverDSourceEntryBindingTests', 'NeverDHighControlFlowTests',
-                    'NeverDSourceCallABITests', 'NeverDAArch64AuthenticatedCallTests']
+                    'NeverDSourceCallABITests', 'NeverDAArch64AuthenticatedCallTests',
+                    'NeverDSourceAnchorTests']
           command = ['ctest', '--test-dir', 'build-mips-ci', '-C', 'Release',
                      '-L', '^(' + '|'.join(owners) + ')$']
           inventory = json.loads(subprocess.check_output(command + ['--show-only=json-v1'], text=True))
@@ -113,7 +115,7 @@ jobs:
               'platform': platform.platform(), 'machine': platform.machine(),
               'cpu_count': os.cpu_count(), 'python': sys.version,
               'llvm_mode': 'published prebuilt LLVM', 'configuration': 'Release',
-              'scope': 'complete MIPS and shared source ABI owners; not the full repository CI profile',
+              'scope': 'complete MIPS, shared source ABI and source mapping owners; not the full repository CI profile',
               'owners': dict(counts), 'binary_sha256': binary_hashes,
               'commands': {'inventory': command + ['--show-only=json-v1'],
                            'test': command + ['--parallel', '4', '--no-tests=error', '--output-on-failure',
@@ -135,14 +137,16 @@ jobs:
                     if case.find('failure') is not None or case.find('error') is not None]
           skipped = [case.get('name') for case in cases if case.find('skipped') is not None]
           mips_skipped = [name for name in skipped if name_to_owner[name].startswith('NeverDMIPS')]
+          source_anchor_skipped = [name for name in skipped if name_to_owner[name] == 'NeverDSourceAnchorTests']
           audit = {'exit': result.returncode, 'total': len(cases), 'failed': failed,
                    'skipped': skipped, 'mips_skipped': mips_skipped,
+                   'source_anchor_skipped': source_anchor_skipped,
                    'missing': list((expected_names - actual_names).elements()),
                    'unexpected': list((actual_names - expected_names).elements())}
           (output / 'outcomes.json').write_text(json.dumps(audit, indent=2) + '\n')
           print(json.dumps(audit, indent=2))
           assert actual_names == expected_names, 'incomplete inventory execution'
-          assert result.returncode == 0 and not failed and not mips_skipped, audit
+          assert result.returncode == 0 and not failed and not mips_skipped and not source_anchor_skipped, audit
           PYTHON
       - name: Upload bounded qualification evidence
         if: always()
