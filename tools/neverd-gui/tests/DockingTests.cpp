@@ -38,6 +38,7 @@
 #include <QPushButton>
 #include <QScopeGuard>
 #include <QScreen>
+#include <QScrollBar>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QStandardPaths>
@@ -1062,6 +1063,27 @@ private slots:
     } else if (edges & Qt::BottomEdge) {
       start.setY(initial.height() - shadow - 2);
       delta.setY(60);
+    }
+    if (!maximized) {
+      const QMargins margins(shadow, shadow, shadow, shadow);
+      // The loaded workbench can put a scrollbar at the right-edge midpoint.
+      // That track intentionally receives clicks instead of resizing the
+      // window. Choose an exposed part of the same edge, not a corner.
+      if ((edges == int(Qt::LeftEdge) || edges == int(Qt::RightEdge)) &&
+          qobject_cast<QScrollBar *>(window->childAt(start))) {
+        for (int y = shadow; y < initial.height() - shadow; ++y) {
+          const QPoint candidate(start.x(), y);
+          if (WindowFrame::edgesAt(candidate, initial, margins) ==
+                  Qt::Edges(edges) &&
+              !qobject_cast<QScrollBar *>(window->childAt(candidate))) {
+            start = candidate;
+            break;
+          }
+        }
+      }
+      QCOMPARE(WindowFrame::edgesAt(start, initial, margins), Qt::Edges(edges));
+      QVERIFY2(!qobject_cast<QScrollBar *>(window->childAt(start)),
+               "The native resize gesture must not target a scrollbar");
     }
     Pointer pointer;
     QVERIFY(pointer.button(*window, QPoint(), false));
