@@ -1909,6 +1909,15 @@ recipes. `AppleSignedCallbacks/SourcePatchPAuthLRCallbackMatrix`
 in `NeverDSourcePatchMatrixTests` rejects exact and interior original callbacks
 whose compact recipe requires PAuth_LR, leaving image and output unchanged.
 
+`NeverDArm64eLiftedImageTests` also runs indexed C++/Objective-C language frames
+through automatic whole-image lifting and publication. The explicitly protected
+non-call fixtures check original LSDA reuse, authenticated personality slots,
+direct `_Unwind_Resume` calls, bare-RET result preservation and refusal of a
+changed LSDA operand. With `NEVERD_ARM64E_ASYNC_NATIVE=1`, native replay checks
+both cleanup levels, exception identity and signal-mask restoration on ordinary
+and alternate stacks at O0/O2. These tests require complete declared lifetimes;
+they do not infer asynchronous cleanup scopes absent from the input LSDA.
+
 `NeverDArm64eLiftedImageTests` checks register-result publication with FP/SP
 CFA changes, explicit B-key augmentation, remembered states and two epilogues.
 It compares the final linked CFI with the original and rejects altered source

@@ -593,10 +593,10 @@ bool sameIndexedLinkFrame(const BinaryImage &Original,
                           const ExceptionFunction &Frame,
                           const dwarf_eh::ParseResult &Generated,
                           const DwarfFDE *NewFrame, va_t Start,
-                          const NativeMachOCompactRange &Range) {
+                          const NativeMachOCompactRange &Range, va_t Slide) {
+  const bool Language = Frame.Itanium.has_value();
   if (!Frame.Dwarf || !NewFrame || Frame.Dwarf->InitialLocation != Start ||
       Frame.Dwarf->AddressRange != Range.EndVA - Range.BeginVA ||
-      Frame.Dwarf->LSDAVA ||
       Frame.Dwarf->ParseStatus != ExceptionParseStatus::Complete ||
       (Frame.Compact->NativeEncoding & macho_unwind::kDwarfSectionOffsetMask) !=
           Frame.Dwarf->SectionOffset ||
@@ -605,9 +605,10 @@ bool sameIndexedLinkFrame(const BinaryImage &Original,
   const auto *Old =
       Original.ExceptionMetadata.findCIE(Frame.Dwarf->CIESectionOffset);
   if (!Old ||
-      (Old->Augmentation != kCompilerFrameAugmentation &&
+      (!Language && Old->Augmentation != kCompilerFrameAugmentation &&
        Old->Augmentation != kBKeyFrameAugmentation) ||
-      Old->ParseStatus != ExceptionParseStatus::Complete || NewFrame->LSDAVA ||
+      Old->ParseStatus != ExceptionParseStatus::Complete ||
+      NewFrame->LSDAVA != (Language ? Frame.Dwarf->LSDAVA + Slide : 0) ||
       NewFrame->AddressRange != Frame.Dwarf->AddressRange ||
       NewFrame->ParseStatus != ExceptionParseStatus::Complete)
     return false;
@@ -618,11 +619,17 @@ bool sameIndexedLinkFrame(const BinaryImage &Original,
     return std::tie(C.Version, C.Augmentation, C.CodeAlignmentFactor,
                     C.DataAlignmentFactor, C.ReturnAddressRegister,
                     C.AddressSize, C.SegmentSelectorSize, C.FDEPointerEncoding,
-                    C.UsesArm64eReturnAddressABI, C.ParseStatus);
+                    C.UsesArm64eReturnAddressABI, C.PersonalityEncoding,
+                    C.LSDAPointerEncoding, C.IsSignalFrame, C.HasPointerAuth,
+                    C.UsesNonHintPAuthLR, C.HasMTETaggedFrame, C.ParseStatus);
   };
   return New != Generated.CIEs.end() &&
          New->SectionOffset == NewFrame->CIESectionOffset &&
          ABI(*Old) == ABI(*New) &&
+         New->PersonalitySlotVA ==
+             (Language ? Old->PersonalitySlotVA + Slide : 0) &&
+         Range.LSDAVA.value_or(0) == NewFrame->LSDAVA &&
+         Range.PersonalitySlotVA.value_or(0) == New->PersonalitySlotVA &&
          sameSpillRules(Old->InitialInstructions, New->InitialInstructions) &&
          sameSpillRules(Frame.Dwarf->Instructions, NewFrame->Instructions);
 }
@@ -650,7 +657,8 @@ bool sameFramelessSpillFrame(const CompactUnwindEntry &Compact,
          sameSpillRules(machOFramelessSpillRows(Compact), Frame->Instructions);
 }
 
-llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
+llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
+                         const Section &Text,
                          llvm::ArrayRef<SourcePatchMapping> Mappings,
                          const CompiledImage &Generated, va_t Slide,
                          llvm::ArrayRef<NativeMachOCompactRange> Ranges,
@@ -663,7 +671,7 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
       if (Section.Name == section_names::macho::EhFrame &&
           !Section.ExternalBytes.empty())
         LinkedFrames =
-            dwarf_eh::parseEHFrame(Original,
+            dwarf_eh::parseEHFrame(Layout,
                                    {Section.ExternalBytes.data(),
                                     Section.ExternalBytes.size(), Section.VA},
                                    {});
@@ -722,7 +730,10 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
       return llvm::createStringError(
           llvm::errc::not_supported,
           llvm::formatv(kGeneratedRange, Mapping.Symbol, Start, End).str());
-    if (!Frame || !Frame->describesUnwindOnly() || !Frame->Compact ||
+    if (!Frame || !Frame->Compact ||
+        (!Frame->describesUnwindOnly() &&
+         !(RegisterEntries.contains(Start) &&
+           canReuseMachOLanguageFrame(Original, *Frame))) ||
         Frame->CodeRange.End < End)
       return refuse(kLeafFrame);
     const auto Native = Range.mapped()->Encoding;
@@ -752,8 +763,11 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
                                                    Source.size(),
                                                    Emitted.size())
                                          .str());
-    const bool Indexed = (Native & ~macho_unwind::kDwarfSectionOffsetMask) ==
-                         macho_unwind::kARM64ModeDwarf;
+    const auto DwarfFields = macho_unwind::kDwarfSectionOffsetMask |
+                             macho_unwind::kHasLSDA |
+                             macho_unwind::kPersonalityMask;
+    const bool Indexed =
+        (Native & ~DwarfFields) == macho_unwind::kARM64ModeDwarf;
     const auto SourceEncoding = Frame->Compact->NativeEncoding;
     const bool FramelessSpills =
         RegisterEntries.contains(Start) &&
@@ -765,11 +779,10 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const Section &Text,
                                    FDEs.lookup(Owner->second), *Range.mapped()))
         return refuse(kLeafFrame);
     } else if (Indexed) {
-      if ((SourceEncoding & ~macho_unwind::kDwarfSectionOffsetMask) !=
-              macho_unwind::kARM64ModeDwarf ||
+      if ((SourceEncoding & ~DwarfFields) != macho_unwind::kARM64ModeDwarf ||
           !sameIndexedLinkFrame(Original, *Frame, LinkedFrames,
                                 FDEs.lookup(Owner->second), Start,
-                                *Range.mapped()))
+                                *Range.mapped(), Slide))
         return refuse(kLeafFrame);
     } else if (SourceEncoding != Native) {
       return refuse(kLeafFrame);
@@ -1132,10 +1145,10 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
       llvm::StringRef(reinterpret_cast<const char *>(Object.ObjectData.data()),
                       Object.ObjectData.size()),
       Image, Mappings, Bindings, Output,
-      [&](const CompiledImage &Generated, va_t Slide,
+      [&](const CompiledImage &Generated, const BinaryImage &Layout, va_t Slide,
           llvm::ArrayRef<NativeMachOCompactRange> Ranges) {
-        return verifyLeaves(Image, *Text, Mappings, Generated, Slide, Ranges,
-                            *RegisterEntries);
+        return verifyLeaves(Image, Layout, *Text, Mappings, Generated, Slide,
+                            Ranges, *RegisterEntries);
       });
 }
 } // namespace neverd

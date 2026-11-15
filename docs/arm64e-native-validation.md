@@ -1685,3 +1685,56 @@ arbitrary lifted-image contracts and missing asynchronous lifetime information
 remain unqualified.
 [Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43675185998)
 and [per-host verification record](evidence/arm64e-system-frames-and-noncall-2026-11-15.json).
+
+
+### Lifted indexed language frames
+
+Automatic whole-image publication can retain a complete indexed C++ or
+Objective-C frame whose original read-only LSDA uses an omitted LPStart and
+ULEB128 function-relative call-site offsets. The native register-body producer
+keeps every instruction at its original function offset, including the cleanup
+landing pad, direct imported calls and terminal BRK. It emits the original
+personality and LSDA CFI references. The installer binds the LSDA to original
+storage and resolves the personality through the original authenticated GOT.
+A bare RET entry also retains its incoming physical result registers.
+
+The native-object reader accepts an external LSDA difference relocation only
+at a decoded PC-relative LSDA field. Original-image bindings and final
+relocations remain mandatory. The publication verifier parses linked CFI
+against the relocated image, compares the complete CIE/FDE rules, checks
+LSDA/personality slot addresses after any image slide, and compares every
+source instruction and direct transfer. A changed LSDA operand is rejected
+without publishing an output.
+
+`LiftedNonCallRunsInterruptedAndOuterCleanups` and its Objective-C companion
+run the complete Pipeline/PatchMode/MachOPatcher route at O0/O2. Their native
+driver checks interrupted and outer cleanup, exception identity, restored
+signal masks and ordinary/alternate signal stacks for original and published
+images. It separately calls the bare RET entry with nonzero 64-bit seeds.
+Native-object replacement remains an independent control.
+
+This contract requires unchanged instruction offsets and complete original
+language metadata. Explicit LPStart, SJLJ tables, compact-only language frames,
+unsupported native body operations and missing asynchronous lifetime tables
+remain outside this profile. It does not qualify arbitrary lifted-image
+publication or native PAuth_LR/CPTA-on execution.
+
+
+Both macOS runners passed all 101 cases from
+`efa88237c8a6e6078e5c73b6674efc0abf87406f`. Each executed eight C++ and eight
+Objective-C cleanup deliveries through the new lifted-image route, in addition
+to the independent native-object controls and 220 existing original/published
+image checks. The Windows frontend job also passed. Both hosts remain M1
+virtual machines: explicit PAuth_LR and CPTA-on were unavailable, including
+the signed arm64e.x1 launch attempt on the newer environment.
+
+Local publication passed 101 cases. The 1408-case exception/ABI selection
+finished with 1359 passes, 48 skips and one 120-second parallel timeout. That
+unchanged immediate-memory test passed alone in 22.60 seconds, leaving 1360
+passed cases and 48 environmental skips after retry. Both logs are retained;
+the initial timeout is not counted as a pass. Eight source files passed
+clang-format 22.1.2 and the documentation inventory passed. LLVM and r6 are
+unchanged. The temporary native replay release and asset were removed, and
+the CI branch was returned to its original tree.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43687902578)
+and [per-host verification record](evidence/arm64e-lifted-language-frames-2026-11-15.json).

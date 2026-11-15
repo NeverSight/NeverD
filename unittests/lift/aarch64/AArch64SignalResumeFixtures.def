@@ -334,6 +334,8 @@ extern "C" __attribute__((noinline)) void signal_scope(int *trace,
 )cpp")
 // An independent LSDA protects exactly one load in a loop with no calls.
 // The handler updates the trace before resuming the same language exception.
+ASYNC_FRAME_TEXT(kRejectedLanguageImage, "rejected-language.dylib")
+ASYNC_FRAME_TEXT(kSignalNonCallDriver, "-DNEVERD_NONCALL_SCOPE")
 ASYNC_FRAME_TEXT(kSignalNonCallSource, "noncall.S")
 ASYNC_FRAME_TEXT(kSignalObjCPersonality, "-DNEVERD_OBJC_PERSONALITY")
 ASYNC_FRAME_TEXT(kSignalNonCallExceptions, "native_noncall_language_cleanups")
@@ -536,6 +538,15 @@ int main(int argc, char **argv) {
   auto tick = reinterpret_cast<Tick>(dlsym(image, "signal_tick"));
   if (!tick || !scope)
     return 3;
+#ifdef NEVERD_NONCALL_SCOPE
+  // The assembly entry is a bare RET. It must preserve the incoming result
+  // register even though no source-language return prototype was available.
+  using Identity = uint64_t (*)(uint64_t);
+  auto identity = reinterpret_cast<Identity>(dlsym(image, "signal_tick"));
+  for (uint64_t seed : {UINT64_C(73), UINT64_C(0xfedcba9876543210)})
+    if (identity(seed) != seed)
+      return 19;
+#endif
   auto file = fopen(argv[2], "rb");
   if (!file || fread(&site, sizeof(site), 1, file) != 1 ||
       fread(&row, sizeof(row), 1, file) != 1 ||
