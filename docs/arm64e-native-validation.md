@@ -1617,3 +1617,28 @@ Both M1 environments still reported native CPTA-on unavailable, and neither
 repository had a registered self-hosted runner at the recorded observation.
 [Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43628073491)
 and [per-host verification record](evidence/arm64e-compact-range-publication-2026-11-15.json).
+
+
+### System unwinding of frameless saved pairs
+
+The previous frameless qualification compared native returns and NeverD's
+instruction-derived signal resumption. An independent public libunwind cursor
+exposed a different system consumer behavior: the compact frameless walker
+loads its first spill at CFA and leaves SP reduced by the saved-pair bytes.
+A two-register control restored the wrong X19/X20 values and SP. Apple's
+[compact walker source](https://github.com/apple-oss-distributions/libunwind/blob/main/libunwind/src/CompactUnwinder.hpp)
+contains the same slot and SP calculations.
+
+Publication now gives these bodies indexed DWARF with explicit actual stack
+size and CFA-relative saved slots. It retains the original instructions and
+B-key return ABI. The final-object verifier checks the complete CIE/FDE recipe;
+existing offset-mutation controls must still refuse publication. This is a
+complete-prologue synchronous recipe. Instruction-derived recovery remains
+the owner of interrupted prologue and epilogue states.
+
+The native signal driver additionally seeds a fresh system cursor from the
+genuine interrupted context, steps the published frame and compares SP,
+authenticated return PC, X19-X28 and D8-D15 with independent caller inputs.
+All-pair, sparse, coalesced and each individual-pair cases exercise this path.
+These checks do not qualify native PAuth_LR or CPTA-on, nor arbitrary non-call
+language cleanup or arbitrary image publication.

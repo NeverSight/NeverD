@@ -443,9 +443,15 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
   Body.HasCompactFrame =
       Framed || (!Indexed && !Compact.SavedRegisterSlots.empty());
   llvm::raw_string_ostream OS(Body.Assembly);
-  if (PAuthLR || (CIE && CIE->HasPointerAuth))
+  const bool FramelessSpills =
+      !Indexed && !Framed && !Compact.SavedRegisterSlots.empty();
+  if (PAuthLR || FramelessSpills || (CIE && CIE->HasPointerAuth))
     OS << kBKeyFrame;
-  if (!Indexed)
+  if (FramelessSpills) {
+    for (const auto &Row : machOFramelessSpillRows(Compact))
+      if (!emitFrameRow(Row, OS))
+        return std::nullopt;
+  } else if (!Indexed)
     emitCompactFrame(Compact, OS);
   const uint8_t *Code = Image.Raw.data() + Text->FileOff + Start - Text->VA;
   bool HasCall = false;
@@ -637,6 +643,29 @@ llvm::InlineAsm *assembly(llvm::Function &F, const RegisterBody &Body) {
   return llvm::InlineAsm::get(Ty, Body.Assembly, Body.Constraints, true);
 }
 } // namespace
+
+std::vector<CFIInstruction>
+machOFramelessSpillRows(const CompactUnwindEntry &Compact) {
+  // A zero outgoing-argument adjustment forces MC to retain an indexed FDE.
+  // The system compact walker reads the first spill at CFA instead of CFA-8
+  // and subtracts all pair slots from the restored SP. Preserve the actual
+  // frame with explicit CFA-relative locations rather than that encoding.
+  std::vector<CFIInstruction> Rows{
+      {.Kind = CFIOpKind::GnuArgsSize},
+      {.Kind = CFIOpKind::DefCFAOffset, .Offset = Compact.StackSize}};
+  int64_t Offset = 0;
+  for (const auto &Slot : Compact.SavedRegisterSlots) {
+    Offset -= sizeof(uint64_t);
+    Rows.push_back(
+        {.Kind = CFIOpKind::Offset,
+         .Register = Slot.Register +
+                     (Slot.RegisterClass == UnwindRegisterClass::FloatingPoint
+                          ? aarch64_unwind::kDwarfV0
+                          : 0),
+         .Offset = Offset});
+  }
+  return Rows;
+}
 
 bool needsMachONativeStackIndex(const MedFunc &Function) {
   return llvm::any_of(Function.Blocks, [](const MedBlock &Block) {

@@ -48,6 +48,7 @@ SAVED_TEXT(kOriginalHash, "original_sha256")
 SAVED_TEXT(kPublishedHash, "published_sha256")
 SAVED_TEXT(kResumptions, "native_signal_caller_resumptions")
 SAVED_TEXT(kObservedCalls, "native_preserved_register_calls")
+SAVED_TEXT(kSystemSteps, "native_system_frameless_steps")
 SAVED_VALUE(unsigned, kFunctions, 2)
 SAVED_VALUE(unsigned, kNormalRounds, 13)
 SAVED_VALUE(unsigned, kSignalRounds, 3)
@@ -314,6 +315,56 @@ static unsigned Current;
 static uintptr_t Low, High;
 static pthread_t Worker;
 static volatile sig_atomic_t Handled;
+static int SystemUnwind;
+static const uint64_t *ExpectedRegisters;
+
+// Seed a fresh public system cursor from a genuine interrupted register set.
+// Its unwind step consumes only the published image's registered DWARF. The
+// independently supplied caller values catch shifted slots or a wrong SP.
+static int checkSystemFrame(const ucontext_t *Context, const struct Plan *Plan) {
+  unw_context_t Capture;
+  unw_cursor_t Cursor;
+  NDDarwinArm64eCursor Interrupted = ndDarwinArm64eSignalCursor(Context);
+  uintptr_t CFA = Interrupted.SP + Plan->Frame.CFAOffset;
+  if (unw_getcontext(&Capture) || unw_init_local(&Cursor, &Capture) ||
+      unw_set_reg(&Cursor, UNW_REG_SP, Interrupted.SP) ||
+      unw_set_reg(&Cursor, UNW_ARM64_FP, Interrupted.FP) ||
+      unw_set_reg(&Cursor, UNW_ARM64_LR, Interrupted.LR))
+    return 0;
+  for (unsigned I = 0; I < GPRCount; ++I)
+    if (unw_set_reg(&Cursor, UNW_ARM64_X19 + I,
+                    Context->uc_mcontext->__ss.__x[19 + I]))
+      return 0;
+  for (unsigned I = 0; I < DCount; ++I) {
+    unw_fpreg_t Value;
+    memcpy(&Value, &Context->uc_mcontext->__ns.__v[8 + I], sizeof(Value));
+    if (unw_set_fpreg(&Cursor, UNW_ARM64_D8 + I, Value))
+      return 0;
+  }
+  void *PC = ptrauth_sign_unauthenticated((void *)Interrupted.PC,
+                                          ptrauth_key_return_address,
+                                          Interrupted.SP);
+  unw_word_t Value;
+  if (unw_set_reg(&Cursor, UNW_REG_IP, (uintptr_t)PC) ||
+      unw_step(&Cursor) <= 0 || unw_get_reg(&Cursor, UNW_REG_SP, &Value) ||
+      Value != CFA || unw_get_reg(&Cursor, UNW_REG_IP, &Value) ||
+      Value != (uintptr_t)ptrauth_strip((void *)Interrupted.LR,
+                                         ptrauth_key_return_address))
+    return 0;
+  for (unsigned I = 0; I < GPRCount; ++I)
+    if (unw_get_reg(&Cursor, UNW_ARM64_X19 + I, &Value) ||
+        Value != ExpectedRegisters[I])
+      return 0;
+  for (unsigned I = 0; I < DCount; ++I) {
+    unw_fpreg_t Floating;
+    if (unw_get_fpreg(&Cursor, UNW_ARM64_D8 + I, &Floating))
+      return 0;
+    memcpy(&Value, &Floating, sizeof(Value));
+    if (Value != ExpectedRegisters[GPRCount + 2 * I])
+      return 0;
+  }
+  return 1;
+}
 
 static int readPlan(FILE *File, Entry Run, struct Plan *Plan) {
   intptr_t Delta;
@@ -351,6 +402,9 @@ static void observe(int Signal, siginfo_t *Info, void *Data) {
   ucontext_t *Context = Data;
   struct Plan *Plan = &Plans[Current];
   uintptr_t PC = arm_thread_state64_get_pc(Context->uc_mcontext->__ss);
+  if (SystemUnwind && (Signal != SIGUSR1 || PC < Plan->Begin ||
+                       PC >= Plan->End || !checkSystemFrame(Context, Plan)))
+    _exit(13);
   if (Signal != SIGUSR1 || PC < Plan->Begin || PC >= Plan->End ||
       !ndDarwinArm64eResumeSignalCaller(
           Context, Plan->Frame, Plan->Saved, Plan->Count, &Plan->Vectors,
@@ -371,7 +425,7 @@ static void *deliver(void *Unused) {
 #endif
 
 int main(int Argc, char **Argv) {
-  if (Argc != 3)
+  if (Argc != 4)
     return 1;
   void *Image = dlopen(Argv[1], RTLD_NOW | RTLD_LOCAL);
   if (!Image)
@@ -387,6 +441,7 @@ int main(int Argc, char **Argv) {
       return 3;
   unsigned Rounds = NormalRounds;
 #ifdef TEST_SIGNAL
+  SystemUnwind = atoi(Argv[3]);
   alarm(30);
   FILE *File = fopen(Argv[2], "r");
   if (!File)
@@ -416,6 +471,7 @@ int main(int Argc, char **Argv) {
       uint64_t Expected = I ? A - B : A + B;
 #ifdef TEST_SIGNAL
       Current = I;
+      ExpectedRegisters = Input;
       Handled = 0;
       atomic_store(&Ready, 0);
       pthread_t Monitor;
