@@ -1836,3 +1836,21 @@ only. Compact frames whose caller return exists solely in live LR still need a
 validated exception-delivery bridge: the current throw thunk would overwrite
 that return address. They are not admitted to protected exception delivery.
 Absent lifetime tables cannot establish arbitrary asynchronous cleanup scopes.
+
+Both macos-26 and xcode-27 passed all 119 source-bound publication cases from
+`42786bcb1fc38597a31cb79a04b4f434e635eb24`, with no failed or skipped cases. Each
+host executed 80 new language-cleanup deliveries, 52 new frameless preserved-
+register calls, six signal resumptions and three system frameless steps. The
+complete replay includes 226 original/published image checks per host. The
+Windows frontend job passed. Local publication passed 119 cases; related CTest
+coverage passed 1,067 with 48 explicitly skipped native/environment cases; all
+11 focused LSDA checks passed. Thirteen C++/header/definition files passed
+clang-format 22.1.2 and the documentation inventory passed.
+
+The fresh hardware reports still identify both runners as M1 virtual machines.
+Explicit PAuth_LR, PACM PC dependence and CPTA-on remain unqualified, including
+the arm64e.x1 launch attempt. LLVM and prebuilt r6 are unchanged. The temporary
+release and asset were deleted with verified HTTP 404 responses, and the replay
+branch was returned to its baseline tree after saving the results.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43733530036)
+and [per-host verification record](evidence/arm64e-lsda-frameless-2026-11-16.json).
