@@ -621,6 +621,69 @@ TEST(AArch64ImplicitUnwind, ProtectedNonCallNeedsAnUnchangedCompleteRow) {
   }
 }
 
+TEST(AArch64ImplicitUnwind, CompactProtectedNonCallUsesTheProvenFrameRecord) {
+  for (auto Operation : {Nop, ClobberLR, ByteInsideLR, PopFP}) {
+    SCOPED_TRACE(Operation);
+    Frame F{SignB, PushFP, MoveFP, Operation, LoadAboveFrame, Skip, Nop,
+            PopFP, Ret,    PopFP,  Ret};
+    F.addHandler(CompactProtectedBegin, CompactProtectedEnd, CompactLandingPad);
+    F.useCompact();
+    F.Function.Compact->HasLSDA = true;
+    F.Function.Compact->LSDAVA = F.Function.Itanium->LSDAVA;
+    auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+    ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+    const auto PC = CompactProtectedBegin * sizeof(uint32_t);
+    const auto Site =
+        prepareDarwinArm64eExceptionSite(F.Image, F.Function, *Rows, PC, 0);
+    if (Operation != Nop && Operation != ClobberLR) {
+      EXPECT_FALSE(Site);
+      continue;
+    }
+    ASSERT_TRUE(Site);
+    EXPECT_TRUE(Site->AtProtectedCall);
+    const auto Plan = prepareDarwinArm64eSystemCaller(
+        aarch64UnwindRowAt(*Rows, PC), F.Function.CodeRange, 0);
+    ASSERT_TRUE(Plan);
+    EXPECT_TRUE(Plan->Frame.SavedLR);
+    EXPECT_EQ(Plan->Frame.LROffset, -int(kRegisterBytes));
+    EXPECT_EQ(Plan->Frame.Signing, NDArm64eSignedIBWithCFA);
+  }
+}
+
+TEST(AArch64ImplicitUnwind, CompactNonCallKeepsDifferentLiveSigning) {
+  Frame F{SaveInX9, SignB, PushFP, MoveFP, RestoreFromX9, LoadAboveFrame,
+          Skip,     Nop,   PopFP,  Ret,    PopFP,         Ret};
+  F.addHandler(MismatchedProtectedBegin, MismatchedProtectedEnd,
+               MismatchedLandingPad);
+  F.useCompact();
+  F.Function.Compact->HasLSDA = true;
+  F.Function.Compact->LSDAVA = F.Function.Itanium->LSDAVA;
+  auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+  ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+  const auto PC = MismatchedProtectedBegin * sizeof(uint32_t);
+  const auto &Row = aarch64UnwindRowAt(*Rows, PC);
+  ASSERT_TRUE(Row.Signing.State);
+  ASSERT_EQ(Row.Signing.State->Kind, Kind::Unsigned);
+  EXPECT_EQ(Row.Registers[kLR].Location, AArch64UnwindRegister::SameValue);
+  EXPECT_FALSE(
+      prepareDarwinArm64eExceptionSite(F.Image, F.Function, *Rows, PC, 0));
+}
+
+TEST(AArch64ImplicitUnwind, CompactNonCallRejectsMisplacedFrameRecord) {
+  // The live and saved LR agree, but FP + two words is not the incoming SP.
+  // The system compact walker cannot use this record for the language frame.
+  Frame F{SignB, Allocate, PushFP, MoveFP, LoadAboveFrame, Skip, Nop,
+          PopFP, Ret,      PopFP,  Ret};
+  F.addHandler(CompactProtectedBegin, CompactProtectedEnd, CompactLandingPad);
+  F.useCompact();
+  F.Function.Compact->HasLSDA = true;
+  F.Function.Compact->LSDAVA = F.Function.Itanium->LSDAVA;
+  auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+  ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+  EXPECT_FALSE(prepareDarwinArm64eExceptionSite(
+      F.Image, F.Function, *Rows, CompactProtectedBegin * sizeof(uint32_t), 0));
+}
+
 TEST(AArch64ImplicitUnwind, RequiresAnOwnedAddressBasedCxxLandingPadTable) {
   Frame F{SignB, PushFP, Call, Ret, Ret};
   F.saveRow(2);

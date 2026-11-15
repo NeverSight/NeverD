@@ -495,6 +495,9 @@ TEST(CompactUnwindSection,
   const auto &First = Result.Entries.front();
   const auto &Second = Result.Entries.back();
   ASSERT_TRUE(First.ReturnAddressSigningOffset);
+  EXPECT_EQ(First.PersonalitySlotVA, 0u);
+  ASSERT_EQ(Result.PersonalitySlots.size(), 1u);
+  EXPECT_EQ(Second.PersonalitySlotVA, Result.PersonalitySlots.front());
   EXPECT_EQ(*First.ReturnAddressSigningOffset, fixture::kFirstSigningOffset);
   ASSERT_TRUE(Second.ReturnAddressSigningOffset);
   EXPECT_EQ(*Second.ReturnAddressSigningOffset, fixture::kLocalSigningOffset);

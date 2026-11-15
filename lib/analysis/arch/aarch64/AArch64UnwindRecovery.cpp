@@ -552,7 +552,8 @@ bool transfer(State &S, const State &Before, Decoder &Decode,
 // leave that row in effect while the frame is being built or torn down.
 // Use its register columns when the declared CFA is the incoming SP. Otherwise
 // reconstruct an interrupt row from carriers that agree on every path.
-FrameRow instructionFrameRow(const State &S, const FrameRow *Declared) {
+FrameRow instructionFrameRow(const State &S, const FrameRow *Declared,
+                             const CompactUnwindEntry *Compact) {
   const bool UseCFI =
       Declared && add(S.Registers[*Declared->CFARegister].StackOffset,
                       Declared->CFAOffset) == 0;
@@ -601,6 +602,23 @@ FrameRow instructionFrameRow(const State &S, const FrameRow *Declared) {
       if (R != kLR)
         break;
       SavedReturn = I->second.Return;
+    }
+  }
+  // A compact FP frame can retain both the live LR and its saved copy. Use
+  // the frame record when both carry the same proved return/signing state;
+  // a throw thunk may then overwrite LR without losing the interrupted frame.
+  // Query that one slot, not every saved value. Partial or released saves and
+  // copies with a different signing recipe cannot authorize this choice.
+  if (!Declared && Compact &&
+      Compact->Kind == CompactUnwindKind::FramePointer && SP &&
+      Row.Registers[kLR].Location == AArch64UnwindRegister::SameValue) {
+    const auto Offset = add(S.Registers[kFP].StackOffset, kRegisterBytes);
+    // Compact FP unwinding fixes CFA at FP + two words and LR at CFA - one.
+    if (Offset && *Offset == -int(kRegisterBytes) && *Offset >= *SP) {
+      const auto Saved = S.Stack.find(*Offset);
+      if (Saved != S.Stack.end() && Saved->second.Return &&
+          Saved->second.Return == S.Registers[kLR].Return)
+        Row.Registers[kLR] = {AArch64UnwindRegister::AtCFA, *Offset};
     }
   }
   return Row;
@@ -883,7 +901,8 @@ recoverImplicitFrame(const BinaryImage &Image,
     std::optional<AArch64ReturnAddressState> Signing;
     if (States[I]) {
       const auto &S = *States[I];
-      Rule = instructionFrameRow(S, Declared);
+      Rule = instructionFrameRow(
+          S, Declared, Function.Compact ? &*Function.Compact : nullptr);
       if (Rule.CFARegister) {
         const auto &LR = Rule.Registers[kLR];
         if (LR.Location == AArch64UnwindRegister::SameValue)

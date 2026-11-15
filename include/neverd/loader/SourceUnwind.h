@@ -51,8 +51,8 @@ inline bool isPlainSourceUnwind(const ExceptionFunction &Metadata) {
     return false;
   }
   if (Metadata.Compact &&
-      (Metadata.Compact->PersonalityVA || Metadata.Compact->HasLSDA ||
-       Metadata.Compact->LSDAVA ||
+      (Metadata.Compact->PersonalityVA || Metadata.Compact->PersonalitySlotVA ||
+       Metadata.Compact->HasLSDA || Metadata.Compact->LSDAVA ||
        Metadata.Compact->SemanticStatus !=
            CompactUnwindSemanticStatus::Complete))
     return false;

@@ -2339,12 +2339,9 @@ verifyNativeObjectUnwind(const BinaryImage &Image,
         (It->NativeEncoding & ~macho_unwind::kPersonalityMask) !=
             (Range.Encoding & ~macho_unwind::kPersonalityMask))
       return fail(kPublishedRange);
-    const auto Index = (It->NativeEncoding & macho_unwind::kPersonalityMask) >>
-                       macho_unwind::kPersonalityShift;
-    if (Range.PersonalitySlotVA
-            ? (!Index || Index > Native.PersonalitySlots.size() ||
-               Native.PersonalitySlots[Index - 1] != *Range.PersonalitySlotVA)
-            : Index != 0)
+    if (Range.PersonalitySlotVA.has_value() !=
+            bool(It->NativeEncoding & macho_unwind::kPersonalityMask) ||
+        It->PersonalitySlotVA != Range.PersonalitySlotVA.value_or(0))
       return fail(kLanguageReplay);
     const bool Arm64eDwarf =
         Image.isArm64e() && (Range.Encoding & macho_unwind::kModeMask) ==
