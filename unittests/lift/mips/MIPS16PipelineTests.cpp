@@ -865,6 +865,7 @@ TEST_P(MIPS16Pipeline, EntryAdapterProofChecksEveryParameterByteAndEffect) {
     UnauthenticatedDeclaration,
     Variadic,
     FloatingResult,
+    DoubleResult,
     ExistingEntryDeclaration
   };
   for (bool Double : {false, true})
@@ -875,7 +876,8 @@ TEST_P(MIPS16Pipeline, EntryAdapterProofChecksEveryParameterByteAndEffect) {
             Change::Store, Change::Load, Change::Call, Change::MissingSlot,
             Change::MissingModeTag, Change::MissingDeclaration,
             Change::UnauthenticatedDeclaration, Change::Variadic,
-            Change::FloatingResult, Change::ExistingEntryDeclaration}) {
+            Change::FloatingResult, Change::DoubleResult,
+            Change::ExistingEntryDeclaration}) {
         if (!Double && C == Change::WrongHighWord)
           continue;
         SCOPED_TRACE(Double);
@@ -963,9 +965,10 @@ TEST_P(MIPS16Pipeline, EntryAdapterProofChecksEveryParameterByteAndEffect) {
             FunctionSym F;
             F.Name = "declared_body";
             F.Addr = Address;
-            F.ReturnType = C == Change::FloatingResult
-                               ? NdType::makeFloat(4)
-                               : NdType::makeInt(4, false);
+            F.ReturnType =
+                C == Change::FloatingResult || C == Change::DoubleResult
+                    ? NdType::makeFloat(C == Change::DoubleResult ? 8 : 4)
+                    : NdType::makeInt(4, false);
             F.Params = {{"value", NdType::makeFloat(Double ? 8 : 4)},
                         {"mask", NdType::makeInt(4, false)}};
             F.IsVariadic = C == Change::Variadic;
@@ -976,11 +979,21 @@ TEST_P(MIPS16Pipeline, EntryAdapterProofChecksEveryParameterByteAndEffect) {
         } Debug(Double, C);
         const auto Proof =
             pipeline_detail::proveMIPS16EntryAdapter(*Image, 0x10100, Debug);
-        EXPECT_EQ(bool(Proof), C == Change::None);
+        EXPECT_EQ(bool(Proof), C == Change::None ||
+                                   C == Change::FloatingResult ||
+                                   C == Change::DoubleResult);
         if (Proof) {
           EXPECT_EQ(Proof->Body, 0x10140u);
           EXPECT_FALSE(Proof->EntryArguments.MIPS16Parameters);
           EXPECT_TRUE(Proof->BodyArguments.MIPS16Parameters);
+          if (C == Change::FloatingResult || C == Change::DoubleResult) {
+            EXPECT_EQ(Proof->EntryArguments.ReturnKind, NdTypeKind::Float);
+            EXPECT_EQ(Proof->BodyArguments.ReturnKind, NdTypeKind::Float);
+            EXPECT_EQ(Proof->EntryArguments.ReturnBytes,
+                      C == Change::DoubleResult ? 8u : 4u);
+            EXPECT_EQ(Proof->BodyArguments.ReturnBytes,
+                      Proof->EntryArguments.ReturnBytes);
+          }
         }
       }
 }

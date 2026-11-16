@@ -49,8 +49,7 @@ proveMIPS16EntryAdapter(const BinaryImage &Image, va_t Entry,
   auto Outgoing =
       libc::floatingCallArguments(*Declaration, Image.Arch, Image.abiFormat(),
                                   &Debug, InstructionMode::MIPS16);
-  if (!Incoming || !Outgoing || Incoming->ReturnKind == NdTypeKind::Float ||
-      Incoming->ReturnElements)
+  if (!Incoming || !Outgoing || Incoming->ReturnElements)
     return std::nullopt;
   const auto Types =
       floatingCallTypes(Image.Arch, Image.abiFormat(), *Incoming);
