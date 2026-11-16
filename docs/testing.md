@@ -20573,6 +20573,10 @@ blocks branch too. `LLVMCSourceMapNamesTheUnwindCallForItsHandlers` uses the
 emitter's own observations: the body's call keeps its instruction through the
 change to an invoke, the unwind's handlers name the runtime call's address,
 and another call placed at that address names nothing.
+`SEHDefinitionOrderTests.cpp` prints hand-built HighIR definitions in several
+orders: an `__except` arm that jumps past a copy of its own frame alias, and
+one that jumps past a copy between two names another definition aliased to one
+slot, print the same text alone, first and after any other definition.
 `WindowsEHModesCorpus.LLVMCPlacesLocalUnwindHandlersUnderRepeatedRanges` reads
 the same in the LLVM C of xcpt4's MSVC x64 /O2 image: `0x1400037D0` and
 `0x140003870` print their clauses with no not-lowered note, the inner handler's

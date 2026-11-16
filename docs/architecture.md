@@ -12015,7 +12015,16 @@ copy of the writer those declarations prepared, and joins the definitions in
 order. A definition reads only what the declarations prepared and resets its
 own state, so its text does not depend on the thread or on the definitions
 written before it; the first definition that fails, in order, fails the unit
-as in one pass. A unit of fewer than `kMinParallelCFunctionDefinitions`
+as in one pass. Frame aliases are part of that state. The passes that decide a
+definition's labels and try exits ask which statements C hides before the
+definition collects its frame slots, and a copy of a frame address into a name
+that is an alias of it is hidden: they read the aliases the declaration pass
+found in that definition (`DeclaredFrameAliases`), never those the writer's
+previous definition left behind, which made an `__except` exit print or omit a
+label by the order the threads claimed the definitions in. A label those
+passes ask for stays when the later pass, which sees every hidden statement,
+finds that nothing jumps to it: the unit prints it unreferenced, as a unit of
+that definition alone does. A unit of fewer than `kMinParallelCFunctionDefinitions`
 definitions, or one rendered with a source map, recorded positions or source
 names, which follow the text as one pass prints it, is written on one thread.
 
