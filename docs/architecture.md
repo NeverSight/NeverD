@@ -14269,7 +14269,12 @@ chain.
 LLVMC normalizes ordinary vector memory accesses and lane operations on a
 private module clone. Packed vector casts use the source data layout both
 before and after scalarization, since scalarization can introduce new casts
-when lane widths change. Volatile vector memory, unsupported vector operations,
+when lane widths change. LLVM's scalarizer writes a value's lanes right after
+the instruction that defines it, which for an invoke is past the end of its
+block: while the pass runs, the users of a vector an invoke returns read a
+stand-in call at the start of the invoke's normal destination, in a block of
+its own when that destination has other entries or merges the value in a PHI,
+and the invoke stays the call the function makes. Volatile vector memory, unsupported vector operations,
 vector global/local storage, and floating-vector function interfaces remain
 rejected. Selected-function emission also rejects referenced vector storage,
 including storage reached through opaque pointers; unrelated globals do not

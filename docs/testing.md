@@ -14759,6 +14759,11 @@ integer/stack positions, partial carriers, absent bank proofs, fixed arguments,
 Windows and Darwin ARM64 vararg conventions. Run the complete AAPCS64, SysV and
 Win64 call-contract suites after changing this ownership boundary.
 
+`LLVMCValues.AVectorAnInvokeReturnsIsScalarizedWhereItIsFirstRead` gives the
+C emitter hand-built IR whose invokes return a vector, one read in the normal
+destination and one merged there in a PHI: without the stand-in the
+scalarizer crashes, and the test also requires one call per function and no
+trace of the stand-in.
 `NeverDLLVMCVectorTests` checks deferred vector assembly with an independently
 controlled known/missing input and optional consumers. Native O0/O2 executions
 require ignored missing payloads to return normally, known payloads to retain
