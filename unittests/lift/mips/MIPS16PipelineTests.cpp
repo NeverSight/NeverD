@@ -478,7 +478,7 @@ TEST_P(MIPS16Pipeline, ClassicEntryStubUsesItsDeclaredCompressedBody) {
         Options.OnlyFunctionEntries =
             Together ? std::set<va_t>{0x10100, 0x10140, 0x10160}
                      : std::set<va_t>{0x10100};
-        Options.LiftMode = LLVM;
+        Options.LiftMode = Options.SourceProjection = LLVM;
         Options.EmitDumpOutput = false;
         auto Result = Pipeline().run(*Image, Context, Options, &Debug);
         std::string Diagnostic;
