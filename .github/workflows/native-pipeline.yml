@@ -8,6 +8,14 @@ on:
         description: Exact MIPS PR commit to qualify
         required: true
         type: string
+      qualification_role:
+        description: Source role for exact-base comparison
+        required: true
+        default: candidate
+        type: choice
+        options:
+          - baseline
+          - candidate
       scope:
         description: Native owners or a bounded compiler/worker reproducer
         type: choice
@@ -114,6 +122,7 @@ jobs:
     env:
       EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
       QUALIFICATION_CXX: ${{ matrix.cxx }}
+      QUALIFICATION_ROLE: ${{ inputs.qualification_role }}
     defaults:
       run:
         shell: bash
@@ -235,7 +244,7 @@ jobs:
             neverd NeverDMIPSTests NeverDMIPSFlowTests NeverDMIPSIntegerTests \
             NeverDMIPSPipelineTests NeverDMIPSSDKTests NeverDSourceEntryBindingTests \
             NeverDHighControlFlowTests NeverDSourceCallABITests NeverDAArch64AuthenticatedCallTests \
-            NeverDSourceAnchorTests NeverDTypesTests NeverDSessionCAPITests NeverDSessionLLVMTests
+            NeverDSourceAnchorTests NeverDTypesTests NeverDSessionCAPITests NeverDSessionLLVMTests NeverDDebugInfoTests
       - name: Audit inventory and execute owners
         timeout-minutes: 90
         run: |
@@ -251,7 +260,7 @@ jobs:
                     'NeverDSourceEntryBindingTests', 'NeverDHighControlFlowTests',
                     'NeverDSourceCallABITests', 'NeverDAArch64AuthenticatedCallTests',
                     'NeverDSourceAnchorTests', 'NeverDTypesTests',
-                    'NeverDSessionCAPITests', 'NeverDSessionLLVMTests']
+                    'NeverDSessionCAPITests', 'NeverDSessionLLVMTests', 'NeverDDebugInfoTests']
           command = ['ctest', '--test-dir', 'build-mips-ci', '-C', 'Release',
                      '-L', '^(' + '|'.join(owners) + ')$']
           inventory = json.loads(subprocess.check_output(command + ['--show-only=json-v1'], text=True))
@@ -267,8 +276,9 @@ jobs:
               counts[owner] += 1
           assert all(counts[owner] > 0 for owner in owners), counts
           assert len(name_to_owner) == len(tests), 'duplicate CTest identity'
-          assert 'TypeJSONFixture.SharedSpellerMatchesOwnedLayouts' in name_to_owner
-          assert 'SessionCAPITest.LocalTypePagesKeepQueryChangesIndependent' in name_to_owner
+          if os.environ['QUALIFICATION_ROLE'] == 'candidate':
+              assert 'TypeJSONFixture.SharedSpellerMatchesOwnedLayouts' in name_to_owner
+              assert 'SessionCAPITest.LocalTypePagesKeepQueryChangesIndependent' in name_to_owner
           (output / 'inventory.json').write_text(json.dumps(name_to_owner, indent=2) + '\n')
           source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
           binary_hashes = {}
@@ -284,10 +294,11 @@ jobs:
               compiler_tools['libstdcxx'] = ['g++-14', '--version']
           receipt = {
               'source_sha': source, 'expected_source_sha': os.environ['EXPECTED_SOURCE_SHA'],
+              'qualification_role': os.environ['QUALIFICATION_ROLE'],
               'platform': platform.platform(), 'machine': platform.machine(),
               'cpu_count': os.cpu_count(), 'python': sys.version,
               'llvm_mode': 'published prebuilt LLVM', 'configuration': 'Release',
-              'scope': 'complete MIPS, shared source ABI, source mapping, type-system and C API/SessionLLVM owners; not the full repository CI profile',
+              'scope': 'complete MIPS, shared source ABI, source mapping, type-system, DebugInfo and C API/SessionLLVM owners; not the full repository CI profile',
               'owners': dict(counts), 'binary_sha256': binary_hashes,
               'commands': {'inventory': command + ['--show-only=json-v1'],
                            'test': command + ['--parallel', '4', '--no-tests=error', '--output-on-failure',
