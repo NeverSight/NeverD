@@ -49,6 +49,17 @@ protected:
     return Bytes;
   }
 
+  void initializeDebugOracle(X64PagedNativeCPU &Native) {
+    if (!neverd::test::hostCpuIsIntel())
+      GTEST_SKIP() << neverd::test::IntelOracleOnlyReason;
+    ASSERT_NO_FATAL_FAILURE(Native.initialize());
+    if (IsSkipped())
+      return;
+    if (!neverd::test::supportsX86KVMPrefault(Native.KVM))
+      GTEST_SKIP() << "MOV-DR oracle requires KVM pre-fault memory";
+    ASSERT_NO_FATAL_FAILURE(Native.pinForReturnComparison());
+  }
+
   void originalDebug(X64PagedNativeCPU &Native) {
     ASSERT_NO_FATAL_FAILURE(initializeOriginal(Native));
     kvm_debugregs D{};
@@ -89,10 +100,9 @@ protected:
           for (unsigned Prefix = 0; Prefix != 4; ++Prefix) {
             SCOPED_TRACE((unsigned(M) * 8 + Debug) * 8 + Write * 4 + Prefix);
             X64PagedNativeCPU Native;
-            ASSERT_NO_FATAL_FAILURE(Native.initialize());
+            ASSERT_NO_FATAL_FAILURE(initializeDebugOracle(Native));
             if (IsSkipped())
               return;
-            ASSERT_NO_FATAL_FAILURE(Native.pinForReturnComparison());
             startDebug(M);
             const auto Before = *Machine.Debug;
             registers().GPR[1] =
@@ -161,10 +171,9 @@ TEST_F(X86ModeDebugRegisterTest,
             for (const std::string Optimization : {"-O0", "-O2"}) {
               SCOPED_TRACE(unsigned(M) * 8 + Debug * 2 + Write);
               X64PagedNativeCPU Native;
-              ASSERT_NO_FATAL_FAILURE(Native.initialize());
+              ASSERT_NO_FATAL_FAILURE(initializeDebugOracle(Native));
               if (IsSkipped())
                 return;
-              ASSERT_NO_FATAL_FAILURE(Native.pinForReturnComparison());
               startDebug(M);
               registers().GPR[1] = uint32_t(Machine.Debug->DR[Debug]);
               const auto PC = add(0x1000, M, move(Debug, Write, 3, 0));
@@ -208,10 +217,9 @@ TEST_F(X86ModeDebugRegisterTest, OriginalImmediateDebugUsesTheCommittedBank) {
       for (bool Prefix : {false, true}) {
         SCOPED_TRACE(unsigned(M) * 8 + Case * 2 + Prefix);
         X64PagedNativeCPU Native;
-        ASSERT_NO_FATAL_FAILURE(Native.initialize());
+        ASSERT_NO_FATAL_FAILURE(initializeDebugOracle(Native));
         if (IsSkipped())
           return;
-        ASSERT_NO_FATAL_FAILURE(Native.pinForReturnComparison());
         startDebug(M);
         registers().GPR[1] = Case == 2 ? 0x400 : 0x401;
         // Release KVM's lazy debug-register interception with GD clear. Set
@@ -266,10 +274,9 @@ TEST_F(X86ModeDebugRegisterTest, OriginalGeneralDetectAndOpcodePriority) {
     for (unsigned Case = 0; Case != 5; ++Case) {
       SCOPED_TRACE(unsigned(M) * 5 + Case);
       X64PagedNativeCPU Native;
-      ASSERT_NO_FATAL_FAILURE(Native.initialize());
+      ASSERT_NO_FATAL_FAILURE(initializeDebugOracle(Native));
       if (IsSkipped())
         return;
-      ASSERT_NO_FATAL_FAILURE(Native.pinForReturnComparison());
       startDebug(M);
       const auto Before = Machine.Debug->DR;
       registers().GPR[1] = 0x2400;
@@ -413,10 +420,9 @@ TEST_F(X86ModeDebugRegisterTest, OriginalPrivilegeAndUndefinedOpcodePrecedeGD) {
     for (unsigned Case = 0; Case != 3; ++Case) {
       SCOPED_TRACE(unsigned(M) * 3 + Case);
       X64PagedNativeCPU Native;
-      ASSERT_NO_FATAL_FAILURE(Native.initialize());
+      ASSERT_NO_FATAL_FAILURE(initializeDebugOracle(Native));
       if (IsSkipped())
         return;
-      ASSERT_NO_FATAL_FAILURE(Native.pinForReturnComparison());
       startDebug(M);
       auto &V = Machine.Core.Core;
       V.Core.CS = {0, UINT32_MAX, 59, uint16_t(code32(M) ? 0xc0fb : 0x80fb)};
