@@ -193,7 +193,7 @@ jobs:
           cmake -S . -B build-mips-ci -G Ninja \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
             -DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
-            -DNEVERD_LLVM_PREBUILT=ON \
+            -DNEVERD_LLVM_PREBUILT=ON -DNEVERD_BUILD_WORKER=ON \
             -DNEVERD_ENABLE_CPU_EMULATION=OFF -DNEVERD_ENABLE_WEB_ANALYSIS=OFF \
             -DNEVERD_ENABLE_SEMANTIC_TESTS=ON "${platform_args[@]}"
       - name: Compile known portability boundaries first
@@ -204,9 +204,39 @@ jobs:
           python scripts/build.py build-mips-ci --config Release --parallel ${{ matrix.parallel }} --target \
             "lib/types/CMakeFiles/NeverDTypes.dir/TypeJSON.cpp.$object_suffix" \
             "lib/sdk/CMakeFiles/neverd_shared.dir/capi/NeverDCAPILocalTypes.cpp.$object_suffix" \
-            "unittests/CMakeFiles/NeverDSessionLLVMTests.dir/__/lib/sdk/capi/NeverDCAPILocalTypes.cpp.$object_suffix"
+            "unittests/CMakeFiles/NeverDSessionLLVMTests.dir/__/lib/sdk/capi/NeverDCAPILocalTypes.cpp.$object_suffix" \
+            "tools/neverd-worker/CMakeFiles/neverd-worker-test-server.dir/EngineComputedStrings.cpp.$object_suffix"
           mkdir -p build-mips-ci/evidence
           cp build-mips-ci/neverd-build-receipt.json build-mips-ci/evidence/portability-build-receipt.json
+      - name: Build and verify complete mock worker transport owner
+        timeout-minutes: 20
+        run: |
+          python scripts/build.py build-mips-ci --config Release --parallel ${{ matrix.parallel }} --target neverd-worker-test-server
+          python - <<'PYTHON'
+          from collections import Counter
+          from pathlib import Path
+          import hashlib,json,os,re,subprocess,xml.etree.ElementTree as ET
+          output=Path('build-mips-ci/evidence');output.mkdir(parents=True,exist_ok=True)
+          inventory=json.loads(subprocess.check_output(['ctest','--test-dir','build-mips-ci','-C','Release','--show-only=json-v1'],text=True))
+          tests=[t for t in inventory['tests'] if len(t.get('command',[]))>2 and Path(t['command'][2]).stem=='neverd-worker-test-server']
+          names=[t['name'] for t in tests]
+          assert len(names)==20 and 'NeverDWorkerComputedStrings' in names, names
+          (output/'worker-inventory.json').write_text(json.dumps(tests,indent=2)+'\n')
+          binary=Path('build-mips-ci/bin')/('neverd-worker-test-server.exe' if os.name=='nt' else 'neverd-worker-test-server')
+          source=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          assert source==os.environ['EXPECTED_SOURCE_SHA']
+          command=['ctest','--test-dir','build-mips-ci','-C','Release','-R','^('+'|'.join(re.escape(n) for n in names)+')$','--parallel','4','--no-tests=error','--output-on-failure','--output-junit',str((output/'worker-results.xml').resolve())]
+          receipt={'source_sha':source,'binary_sha256':hashlib.file_digest(binary.open('rb'),'sha256').hexdigest(),'command':command,'scope':'Complete mock C ABI worker transport group; real worker engine and protocol, not real SDK execution.'}
+          (output/'worker-source.json').write_text(json.dumps(receipt,indent=2)+'\n')
+          with (output/'worker-ctest.log').open('w') as log: result=subprocess.run(command,stdout=log,stderr=subprocess.STDOUT,timeout=1050)
+          cases=list(ET.parse(output/'worker-results.xml').getroot().iter('testcase'))
+          actual=Counter(c.get('name') for c in cases);expected=Counter(names)
+          failed=[c.get('name') for c in cases if c.find('failure') is not None or c.find('error') is not None]
+          skipped=[c.get('name') for c in cases if c.find('skipped') is not None]
+          audit={'exit':result.returncode,'total':len(cases),'failed':failed,'skipped':skipped,'missing':list((expected-actual).elements()),'unexpected':list((actual-expected).elements())}
+          (output/'worker-outcomes.json').write_text(json.dumps(audit,indent=2)+'\n');print(json.dumps(audit,indent=2))
+          assert actual==expected and result.returncode==0 and not failed and not skipped,audit
+          PYTHON
       - name: Build complete owning test targets
         timeout-minutes: 125
         run: |
