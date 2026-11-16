@@ -1810,6 +1810,7 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
   bool NeedsMIPS16Mode = false;
   bool NeedsBool = false;
   bool HasFloatingArithmetic = false;
+  unsigned PossibleRotateWidths = 0;
   bool NeedsAArch64RawCall = false;
   bool NeedsAArch64ResultStorageCall = false;
   const auto CheckType = [&](const TypeRef &Type) {
@@ -1832,6 +1833,13 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     HasFloatingArithmetic |=
         Expr->Op == NdOp::FLOAT_ADD || Expr->Op == NdOp::FLOAT_SUB ||
         Expr->Op == NdOp::FLOAT_MULT || Expr->Op == NdOp::FLOAT_DIV;
+    // renderBinOp may spell an integer shift/OR as a rotate builtin. Header
+    // collection need not repeat that expression-equivalence proof: a guarded
+    // unused macro has no runtime effect.
+    if (Expr->Kind == ExprKind::BinOp && Expr->Op == NdOp::INT_OR &&
+        Expr->Type && Expr->Type->Kind == NdTypeKind::Int &&
+        Expr->Type->Size <= sizeof(uint64_t))
+      PossibleRotateWidths |= 1u << Expr->Type->Size;
     if (Expr->Kind == ExprKind::Call) {
       if (HasMicroModes && !Expr->IsIndirectCall && Expr->CallAddr) {
         const auto Mode = Opts.Image->instructionModeAt(Expr->CallAddr);
@@ -1892,6 +1900,28 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
   };
   if (HasFloatingArithmetic)
     c_float::writeContractionPolicy(OS);
+  const auto WriteRotate = [&](unsigned Bytes, unsigned Bits,
+                               llvm::StringRef Type) {
+    if (!(PossibleRotateWidths & (1u << Bytes)))
+      return;
+    OS << "#if defined(__GNUC__) && !defined(__clang__) && "
+          "!__has_builtin(__builtin_rotateleft"
+       << Bits << ")\n#define __builtin_rotateleft" << Bits
+       << "(V, A) __extension__ ({ \\\n"
+       << "    __auto_type __neverd_rotate_value = (" << Type << ")(V); \\\n"
+       << "    unsigned int __neverd_rotate_amount = (A) & " << Bits - 1
+       << "u; \\\n"
+       << "    (" << Type
+       << ")(__neverd_rotate_amount ? "
+          "((__neverd_rotate_value << __neverd_rotate_amount) | "
+          "(__neverd_rotate_value >> ("
+       << Bits
+       << " - __neverd_rotate_amount))) : "
+          "__neverd_rotate_value); })\n#endif\n\n";
+  };
+#define NEVERD_C_ROTATE_BUILTIN(Bytes, Bits, Type)                             \
+  WriteRotate(Bytes, Bits, Type);
+#include "neverd/backend/c/render/CRotateBuiltins.def"
   if (NeedsMicroMode)
     OS << mips::MicroModeCPrelude;
   if (NeedsMIPS16Mode)
