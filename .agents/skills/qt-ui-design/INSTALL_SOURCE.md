@@ -49,4 +49,6 @@ conversation laid out as Visual Studio Code's chat view. The section's last
 rule and the conversation-windows item came on 2026-11-15 from reshaping the
 Agent's own window after OpenAI's Codex desktop application: the shapes of a
 window that holds a conversation, with the product's own colors. The profile's
-"The Agent's own window" section records NeverD's values.
+"The Agent's own window" section records NeverD's values. The rule on lists
+the application keeps, and the kept-lists item, came the same day from adding
+project removal to that window.

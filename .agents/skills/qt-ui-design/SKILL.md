@@ -5,10 +5,10 @@ description: >-
 license: LicenseRef-Qt-Commercial OR BSD-3-Clause
 metadata:
   author: qt-ai-skills
-  version: "1.13"
+  version: "1.14"
   qt-version: "6.x"
   category: conceptual
-  changelog: "Section 1.9: a window that holds a conversation takes a conversation application's shapes: two columns parted by fill, stepped corners, a type scale, one reading column and the composer as its main object"
+  changelog: "Section 1.9: an entry of a kept list can always leave it; removing that only forgets says so and says what stays; an entry whose target is gone stays as a quiet row instead of an error at every start"
 ---
 # Qt UI Design
 
@@ -349,6 +349,7 @@ A panel that floats over a workbench (a chat, a quick input, a palette) is place
 - Read a conversation in one centered column no wider than about 768 pixels. Show who spoke by position: the person's words in a bubble at the trailing edge, at most four fifths of the column wide, and an answer plain across it. Write a name only where it adds something, and show the time and a message's actions only while the pointer or keyboard is on it. A header in every bubble reads as a form.
 - Make the composer the window's main object: an elevated surface with the largest corners, growing with its lines, its pickers quiet until hovered, and the send button a disc in the accent.
 - Where the reference orders its surfaces differently from the product (its content lighter than its side list, the product's darker), keep the product's order. Do not add a color to copy the lift.
+- Every entry of a list the application keeps (projects, recent folders) can leave it from its own menu. When removing only forgets the entry, call it "remove", and let the confirmation say what stays on disk and how the entry comes back; keep "delete" for what destroys data. An entry whose target is gone stays as a quieter row with its reason in a tool tip, a click that tries it again and the same way off the list. An error dialog at every start with no way to drop the entry is a dead end.
 ---
 
 ## 2. Accessibility (WCAG 2.2)
@@ -487,6 +488,7 @@ Apply section 4 constraints first if the target is embedded.
 - [ ] Floating panels: does each open at the golden section on the side lines start from rather than in the dead middle or a corner, snap back to that place, and stay with the person, shortcuts included, in every mode that covers the main window?
 - [ ] Conversations: does an empty one say what it does in the middle, are first questions compact chips above one composer box, is the context said once, is prose in the interface font, and is the send button the only accent?
 - [ ] Conversation windows: is the window two columns parted by fill, without a title band or an idle status bar; do rows, cards and the composer step up in corner size; is there a type scale with one large line on an empty page; is the conversation one centered column that shows who spoke by position; and does the open row take a quiet fill so the accent stays on the main button?
+- [ ] Kept lists: can every project or recent entry be removed from its own menu; does the confirmation say what stays and how it comes back; and does an entry whose folder is gone stay listed with its reason, a retry and the same removal, instead of an error at every start?
 - [ ] AI features: are latency patterns, uncertainty, and consent handled per section 3?
 ---
 
