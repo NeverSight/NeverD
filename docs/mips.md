@@ -292,11 +292,21 @@ without identifying its historical revision. Concrete use of these encodings
 therefore requires a processor implementing them. Twenty dot-product and selected-lane instructions update complete 128-bit
 HI/LO accumulators. Q15/Q31 product saturation, carry/borrow, Q31/Q63 result
 saturation and the selected bank's sticky overflow flag remain explicit IR
-operations. Classic `DMADDU` and `DMSUBU` add or subtract the sum of two
-unsigned 32×32-bit lane products in the selected 128-bit accumulator.
+operations. Classic `DMADD`/`DMSUB` and `DMADDU`/`DMSUBU` add or subtract
+the sum of two signed or unsigned 32×32-bit lane products in the selected
+128-bit accumulator. Signed products retain their full 64-bit value and
+sign-extend into the accumulator before addition or subtraction.
 Carry and borrow propagate between LO and HI. DSPControl is preserved.
 Classic `DEXTR.W/.L` and `DEXTRV.W/.L` extract
 the low word or doubleword after shifting the complete 128-bit accumulator.
+`DEXTR_R.W/.L` and `DEXTRV_R.W/.L` round the shifted value;
+`DEXTR_RS.W/.L` and `DEXTRV_RS.W/.L` additionally saturate it to the signed
+destination range. `DEXTR_S.H` and `DEXTRV_S.H` saturate a shifted halfword
+without rounding. Overflow sets sticky DSPControl bit 23 even when the
+destination is `$zero`. Immediate counts use five bits; variable halfword
+counts use five and variable word/doubleword counts use six. The rounded
+range check retains both accumulator halves, including a rounding carry
+from LO into HI. Extraction preserves every accumulator bank.
 `DEXTP[V]` and `DEXTPDP[V]` extract up to 64 bits ending at the seven-bit
 POS, including fields crossing HI/LO and fields wholly within HI. A failed
 extraction sets EFI, preserves POS and returns an unpredictable value.
@@ -320,9 +330,13 @@ host shifts and the DSHILO -64 endpoint. Original-machine comparisons cover
 negative LO, zero and full-width fields, fields wholly in HI, and the -64
 shift through both C views. Its dedicated regression constructs expected
 bits independently for every register count and position in all four banks
-and both byte orders. The native boundary checks do not qualify hardware
-or the remaining rounded/saturating legacy DEXTR and signed DMADD/DMSUB
-semantics. In n64 DSPControl,
+and both byte orders. The rounded-extraction and word-product additions use
+APInt expectations and original instructions through the pinned reference.
+The reference fixes include truncated signed products, rounded word overflow,
+negative halfword saturation and the variable halfword count operand.
+Their [qualification receipt](evidence/mips-dsp64-rounded-products-2026-11-17.json)
+records the classic n64 slice; it does not establish execution on historical
+physical CPUs or support for deprecated microMIPS64 encodings. In n64 DSPControl,
 POS has seven bits and CCOND has eight. RDDSP zero-extends selected bits.
 See the register model and revision history in the
 [MIPS64 DSP Module, revision 3.02](https://docs.alexrp.com/mips/mips64_dsp_v3_02.pdf).
