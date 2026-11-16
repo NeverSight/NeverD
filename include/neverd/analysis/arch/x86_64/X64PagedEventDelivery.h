@@ -37,16 +37,27 @@ using X64PagedAlignmentPriority = translate::X86AlignmentPriority;
 /// Bound processor observation for competing IRET stack faults. The qualified
 /// order reads FLAGS, CS, IP, then SS and SP, and updates accessed descriptors
 /// as qwords. CS/SS slots read only the selector word. This is not inferred
-/// from the host or the ISA pseudocode.
-enum class X64PagedIretAccessOrder : uint8_t { FlagsFirst };
-/// Both profiles read CS then IP, validate and update the code descriptor,
+/// from the host or the ISA pseudocode. FlagsFirst reports #GP(selector) for
+/// a noncanonical descriptor start or tail. FlagsFirstTailGPZero uses #GP(0)
+/// when only the tail is noncanonical. Both validate the complete descriptor
+/// range before page-table accesses.
+enum class X64PagedIretAccessOrder : uint8_t {
+  FlagsFirst,
+  FlagsFirstTailGPZero,
+};
+/// All profiles read CS then IP, validate and update the code descriptor,
 /// then read outer SS and SP. SelectorFirst checks the original saved IP for
 /// canonicality; SelectorFirstTruncatedIP truncates a compatibility target
 /// first. The qualified hybrid Intel host exhibits both behaviors on different
 /// core types, so this is an explicit target binding, never a host inference.
+/// The two original profiles report #GP(selector) for any noncanonical
+/// descriptor byte. SelectorFirstTailGPZero preserves the original-IP order
+/// and uses #GP(0) when only the descriptor tail is noncanonical. Every profile
+/// validates the complete descriptor range before its page-table accesses.
 enum class X64PagedFarReturnProfile : uint8_t {
   SelectorFirst,
   SelectorFirstTruncatedIP,
+  SelectorFirstTailGPZero,
 };
 
 /// Bound order for LSS/LFS/LGS: read offset, then selector, then validate and

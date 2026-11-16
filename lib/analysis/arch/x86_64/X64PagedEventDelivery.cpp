@@ -47,6 +47,7 @@ struct X64PagedTransitionProgress {
 struct X64PagedReturnContinuation : X64PagedTransitionProgress {
   uint16_t FieldBytes = 0, Discard = 0;
   bool Interrupt = false, TruncateCompatibilityIP = false;
+  X86DescriptorCanonicalityProfile Canonicality;
 };
 struct X64PagedSegmentContinuation : X64PagedTransitionProgress {
   llvm::SmallVector<uint8_t, 15> Bytes;
@@ -614,6 +615,7 @@ llvm::Expected<X64PagedReturnResult>
 returnFrame(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
             uint16_t FieldBytes, uint16_t Discard, bool Interrupt,
             X64PagedAlignmentPriority AlignmentPriority,
+            X86DescriptorCanonicalityProfile Canonicality,
             bool TruncateCompatibilityIP = false,
             const detail::X64PagedReturnContinuation *Continuation = nullptr) {
   assert((FieldBytes == 2 || FieldBytes == 4 || FieldBytes == 8) &&
@@ -627,7 +629,7 @@ returnFrame(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
   if (Continuation)
     W.CompletedAccesses = Continuation->CompletedAccesses;
   detail::X64ContinuationEvents<TransitionWriter> Transfer(
-      W, Memory.controls().CR4 & 0x1000 ? 57 : 48);
+      W, Memory.controls().CR4 & 0x1000 ? 57 : 48, Canonicality);
   if (Interrupt)
     Transfer.iret(FieldBytes);
   else
@@ -653,6 +655,7 @@ returnFrame(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
     Pending->Discard = Discard;
     Pending->Interrupt = Interrupt;
     Pending->TruncateCompatibilityIP = TruncateCompatibilityIP;
+    Pending->Canonicality = Canonicality;
     Result.Continuation = std::move(Pending);
   }
   if (Result.Completed) {
@@ -681,6 +684,7 @@ resumeX64PagedReturn(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
   return returnFrame(State, Memory, Continuation->FieldBytes,
                      Continuation->Discard, Continuation->Interrupt,
                      Continuation->AlignmentPriority,
+                     Continuation->Canonicality,
                      Continuation->TruncateCompatibilityIP, Continuation.get());
 }
 
@@ -689,8 +693,20 @@ returnX64PagedInterrupt(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
                         uint16_t FieldBytes,
                         X64PagedAlignmentPriority AlignmentPriority,
                         X64PagedIretAccessOrder AccessOrder) {
-  assert(AccessOrder == X64PagedIretAccessOrder::FlagsFirst);
-  return returnFrame(State, Memory, FieldBytes, 0, true, AlignmentPriority);
+  X86DescriptorCanonicalityProfile Canonicality;
+  switch (AccessOrder) {
+  case X64PagedIretAccessOrder::FlagsFirst:
+    Canonicality = X86DescriptorCanonicalityProfile::SelectorForRange;
+    break;
+  case X64PagedIretAccessOrder::FlagsFirstTailGPZero:
+    Canonicality = X86DescriptorCanonicalityProfile::SelectorForStart;
+    break;
+  default:
+    return llvm::createStringError(llvm::errc::invalid_argument,
+                                   "unknown paged IRET access-order profile");
+  }
+  return returnFrame(State, Memory, FieldBytes, 0, true, AlignmentPriority,
+                     Canonicality);
 }
 
 llvm::Expected<X64PagedReturnResult>
@@ -698,11 +714,25 @@ returnX64PagedFar(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
                   uint16_t FieldBytes, uint16_t Discard,
                   X64PagedAlignmentPriority AlignmentPriority,
                   X64PagedFarReturnProfile Profile) {
-  assert(Profile == X64PagedFarReturnProfile::SelectorFirst ||
-         Profile == X64PagedFarReturnProfile::SelectorFirstTruncatedIP);
-  return returnFrame(
-      State, Memory, FieldBytes, Discard, false, AlignmentPriority,
-      Profile == X64PagedFarReturnProfile::SelectorFirstTruncatedIP);
+  X86DescriptorCanonicalityProfile Canonicality;
+  bool TruncateCompatibilityIP = false;
+  switch (Profile) {
+  case X64PagedFarReturnProfile::SelectorFirst:
+    Canonicality = X86DescriptorCanonicalityProfile::SelectorForRange;
+    break;
+  case X64PagedFarReturnProfile::SelectorFirstTruncatedIP:
+    Canonicality = X86DescriptorCanonicalityProfile::SelectorForRange;
+    TruncateCompatibilityIP = true;
+    break;
+  case X64PagedFarReturnProfile::SelectorFirstTailGPZero:
+    Canonicality = X86DescriptorCanonicalityProfile::SelectorForStart;
+    break;
+  default:
+    return llvm::createStringError(llvm::errc::invalid_argument,
+                                   "unknown paged far-return profile");
+  }
+  return returnFrame(State, Memory, FieldBytes, Discard, false,
+                     AlignmentPriority, Canonicality, TruncateCompatibilityIP);
 }
 
 namespace {
