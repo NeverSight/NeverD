@@ -28,7 +28,6 @@
 #include <tuple>
 
 namespace neverd {
-void structureIfElse(HighFunc &, int, const MedFunc * = nullptr);
 bool sinkJoinDefaultsLate(HighFunc &Func);
 void detectAndConvertLoops(HighFunc &, const std::unordered_map<va_t, int> &,
                            const MedFunc &, bool);
