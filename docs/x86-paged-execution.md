@@ -1020,6 +1020,12 @@ cross-page partial publication, concurrent CPUs, DMA or MMIO. Remaining mode
 and machine owners, software SMM/SGX and physical SGX remain open. Production
 LLVM stays r6; no final release or pin change is included.
 
+The [post-merge integration record](evidence/x86-code64-event-accessed-integration-2026-11-16.json)
+separately qualifies `3831e73fde` after retaining the remote GUI
+changes and Capstone test update. Each SDK passes 423 selected checks with
+1 LA57 skip; both export indexes agree. The full qualification above
+continues to name its original implementation commit.
+
 ## Paged IRQ/NMI scheduling
 
 Add `scheduled_events: true` to the paged binding to export:
