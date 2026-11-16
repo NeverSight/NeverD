@@ -736,6 +736,99 @@ TEST_P(X86LegacySourceTest, MachineStatusFaultRepairAndRetry) {
   }
 }
 
+TEST_P(X86LegacySourceTest, MachineStatusPaidOperandSurvivesContextRebuild) {
+  unsigned Comparisons = 0;
+  for (bool PAE : {false, true})
+    for (bool Code32 : {false, true})
+      for (unsigned Form : {0u, 1u}) {
+        SCOPED_TRACE(PAE * 4 + Code32 * 2 + Form);
+        controlState(PAE, Code32);
+        O.MachineStatus = X86LegacyMachineStatusProfile::FullCR0;
+        S.Core.GPR[3] = 0x8000;
+        put(0x8000, 0xdead0008, GuestScalarWidth::I32);
+        const auto Bytes =
+            test::legacyMachineStatusBytes(Form, Code32, true, true, -1);
+        Driver Run = nullptr;
+        ASSERT_NO_FATAL_FAILURE(
+            compile({{0x1000, Code32 ? 32u : 16u, Bytes}}, Run));
+        const auto Initial = S;
+        const auto Controls = M->controls();
+        const auto Features = M->features();
+        auto Original =
+            llvm::cantFail(createZeroedGuestState(GuestArchitecture::X86_64));
+        Original.Memory = M->physicalMemory().snapshotMemoryRegions();
+        X86LegacySourceExecution Baseline(S, *M, O);
+        uint64_t Budget = 1;
+        ASSERT_EQ(Run(&Baseline, &Budget),
+                  uint32_t(X86LegacySourceExit::BudgetExhausted))
+            << Baseline.lastError().str();
+        ASSERT_TRUE(Baseline.lastResult().InstructionCompleted);
+        const auto Expected = S;
+        const auto ExpectedControls = M->controls();
+        auto ExpectedRAM = M->physicalMemory().snapshotMemoryRegions();
+        ExpectedRAM.front().Bytes[0x1000] = 0xff;
+        S = Initial;
+        M = llvm::cantFail(
+            X86PagedMemory::create(Original, Features, Controls));
+        const auto PTE = PAE ? 0x12040u : 0x11020u;
+        const auto Width = PAE ? GuestScalarWidth::I64 : GuestScalarWidth::I32;
+        put(PTE, 0x40007, Width);
+        X86LegacySourceExecution Suspended(S, *M, O);
+        Budget = 1;
+        ASSERT_EQ(Run(&Suspended, &Budget),
+                  uint32_t(X86LegacyExecutionStatus::BackingFault))
+            << Suspended.lastError().str();
+        ASSERT_TRUE(S.PendingTransfer);
+        EXPECT_TRUE(Suspended.lastResult().InstructionAttempted);
+        EXPECT_FALSE(Suspended.lastResult().InstructionCompleted);
+        EXPECT_EQ(Budget, 0u);
+        EXPECT_EQ(M->controls().CR0, Controls.CR0);
+        const auto Pending = S.PendingTransfer;
+        auto Changed = O;
+        Changed.MachineStatus.reset();
+        X86LegacySourceExecution Rejected(S, *M, Changed);
+        EXPECT_EQ(Run(&Rejected, &Budget),
+                  uint32_t(X86LegacySourceExit::InvalidState));
+        EXPECT_EQ(S.PendingTransfer, Pending);
+        EXPECT_EQ(Budget, 0u);
+        put(0x1000, 0xff, GuestScalarWidth::I8);
+        for (unsigned Repeat = 0; Repeat != 2; ++Repeat) {
+          X86LegacySourceExecution Retried(S, *M, O);
+          ASSERT_EQ(Run(&Retried, &Budget),
+                    uint32_t(X86LegacyExecutionStatus::BackingFault))
+              << Retried.lastError().str();
+          EXPECT_FALSE(Retried.lastResult().InstructionAttempted);
+          EXPECT_FALSE(Retried.lastResult().InstructionCompleted);
+          EXPECT_EQ(Budget, 0u);
+          EXPECT_EQ(S.EIP, Initial.EIP);
+        }
+        put(PTE, 0x8007, Width);
+        Original.Memory = M->physicalMemory().snapshotMemoryRegions();
+        M = llvm::cantFail(
+            X86PagedMemory::create(Original, Features, M->controls()));
+        X86LegacySourceExecution Restored(S, *M, O);
+        ASSERT_EQ(Run(&Restored, &Budget),
+                  uint32_t(X86LegacySourceExit::BudgetExhausted))
+            << Restored.lastError().str();
+        EXPECT_FALSE(Restored.lastResult().InstructionAttempted);
+        EXPECT_TRUE(Restored.lastResult().InstructionCompleted);
+        EXPECT_EQ(Budget, 0u);
+        EXPECT_FALSE(S.PendingTransfer);
+        EXPECT_FALSE(S.PendingInstructionAttempted);
+        EXPECT_EQ(S.Core.GPR, Expected.Core.GPR);
+        EXPECT_EQ(S.EIP, Expected.EIP);
+        EXPECT_EQ(S.EFlags, Expected.EFlags);
+        EXPECT_EQ(S.CR2, Expected.CR2);
+        EXPECT_EQ(M->controls(), ExpectedControls);
+        ASSERT_EQ(M->physicalMemory().snapshotMemoryRegions().size(),
+                  ExpectedRAM.size());
+        EXPECT_EQ(M->physicalMemory().snapshotMemoryRegions().front().Bytes,
+                  ExpectedRAM.front().Bytes);
+        ++Comparisons;
+      }
+  RecordProperty("compiled_status_operand_resume_comparisons", Comparisons);
+}
+
 TEST_P(X86LegacySourceTest, MachineStatusCommitsBeforeDebugTrap) {
   Driver Run = nullptr;
   ASSERT_NO_FATAL_FAILURE(compile({{0x1000, 32, {0x0f, 6}}}, Run));
