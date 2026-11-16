@@ -139,7 +139,7 @@ void compileAndRun(const std::string &Source) {
   const std::optional<llvm::StringRef> Redirects[] = {
       std::nullopt, std::nullopt, ErrorPath.str()};
   for (const char *Optimization : {"-O0", "-O2"}) {
-    const llvm::SmallVector<llvm::StringRef, 12> Arguments{
+    llvm::SmallVector<llvm::StringRef, 12> Arguments{
         Compiler,
         "-std=c11",
         Optimization,
@@ -151,6 +151,10 @@ void compileAndRun(const std::string &Source) {
         SourcePath,
         "-o",
         BinaryPath};
+#ifndef _WIN32
+    // Scalar FMA can lower to the host math library instead of an instruction.
+    Arguments.push_back("-lm");
+#endif
     std::string Error;
     int Result = llvm::sys::ExecuteAndWait(Compiler, Arguments, std::nullopt,
                                            Redirects, 30, 0, &Error);
