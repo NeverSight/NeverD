@@ -183,3 +183,23 @@ metadata cases, 32 null-base observations after real far jumps into generated
 code64, and 16 descriptor faults per primary core. Every independent stream
 starts with a fresh VM/vCPU and one initial SREGS write. The complete CPU/RAM
 comparison remains strict; this avoids stale TLBs between reset RAM images.
+
+
+### Integration with current dev (2026-11-16)
+
+The [integration evidence](evidence/x86-mode-segment-integration-2026-11-16.json) records a fresh rebuild at
+`de0eabb090` after merging upstream `eb173c9ec7`. Each SDK passes
+1,058 cases across the full HighIR control-flow, paged-source, legacy-source,
+instruction-boundary and SDK suites, with no skips. These counts are separate
+from the November 11 full paging qualification above.
+
+The replay exposed a shared HighIR address-index regression: two reserved hash
+keys collided with valid synthetic continuation return labels. Restoring the
+original complete address domain fixes the generated validator crash; explicit
+label-retention and branch-result tests cover those addresses. The expanded
+host-C suite also needed its POSIX FMA fixture to link the math library.
+
+Upstream independently advanced the LLVM source gitlink to `09ff60dd1ddb`; this
+merge preserves that change. The development SDK remains the existing intrinsic
+snapshot and the production SDK remains r6. This integration creates no LLVM
+release and does not close the outstanding x86 qualification boundaries.

@@ -11658,6 +11658,14 @@ scalar offsets. The existing expression-expansion bound remains enforced.
 original extension in mixed-width additions and positive low-64-bit constants
 in a 128-bit operation.
 
+`HighControlFlowSemantics.StatementIndexRetainsSyntheticReturnLabels` keeps
+both high-address continuation return labels in the shared statement index.
+`SyntheticHighAddressReturnsKeepBothPaths` checks both branch results with an
+independent interpreter at low/high addresses and in either label layout.
+The generated paged execution suite exercises the actual HighC validator that
+exposed the reserved-key collision. Host floating-conversion fixtures link
+`libm` on POSIX when scalar FMA needs a library call.
+
 `HighControlFlowDAG.*` in `NeverDHighControlFlowTests` checks single-use
 condition folding on large shared expression graphs. Shared reads retain
 their multiplicity without expanding every path, and substitution reaches a

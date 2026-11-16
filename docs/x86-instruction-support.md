@@ -4524,3 +4524,9 @@ owners, real/unreal/VM86 composition, software SMM/SGX and unbound event produce
 remain open. Code64 descriptor-tail policy needs its own original-byte evidence.
 The production LLVM r6 pin and gitlink remain unchanged; no final LLVM release
 is declared.
+
+
+The [November 16 integration](x86-mode-execution.md#integration-with-current-dev-2026-11-16)
+rebuilds and replays 1,058 cases per SDK after merging current dev and repairing
+a shared HighIR synthetic-label collision. The upstream LLVM gitlink update is
+preserved; the production r6 pin and final-release boundary remain unchanged.
