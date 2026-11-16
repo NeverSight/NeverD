@@ -991,8 +991,11 @@ source-call type admission. Binary16/binary80 inverse bit views cancel, while
 numeric precision reductions, signedness changes and reserved Boolean/vector
 roles remain. `I386CallContract.HeaderFloatingImportsDefineTheNormalizedX87Result`
 checks readable direct float/double returns and real FSTP/FLD transports in
-both C routes. On Linux x86 it also compares emitted C with the original
-32-bit instruction bytes at O0/O2 under UBSan: signed zeros, subnormals,
+both C routes. On Apple Silicon, the store/reload C is compiled for x86-64
+and runs through Rosetta to retain its 80-bit x87 representation; direct
+float/double C still runs on the host target. On Linux x86 it also compares
+emitted C with the original 32-bit instruction bytes at O0/O2 under UBSan:
+signed zeros, subnormals,
 finite extrema, infinities and quiet/signaling NaNs retain their result bits
 and exactly one provider call. This checks result transport under the native
 default FP environment, not arbitrary x87 exception or control-word state.
