@@ -11,6 +11,7 @@
 #include "../../lift/NeverDLiftFixture.h"
 #include "X64PagedNativeCPU.h"
 #include "X86BranchDebugOracle.h"
+#include "X86LegacyMachineStatusTestEncoding.h"
 #include "X86PortDevice.h"
 
 #include "neverd/analysis/arch/x86_64/X64PagedExecution.h"
@@ -1017,5 +1018,6 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 
 // These cases reuse the mixed-mode native fixture above.
 #include "X86ModeDebugRegisterTests.inc"
+#include "X86ModeMachineStatusTests.inc"
 
 } // namespace

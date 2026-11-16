@@ -249,8 +249,6 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
         State.Mpx || Options.Tasks || FastSystem || Port || String || Mpx ||
         IRET || RETF || (Far && (Far->Call || Far->Memory)) ||
         (Scalar && (Scalar->DescriptorQuery || Scalar->SystemSelector ||
-                    Scalar->Operation == Op::LoadMachineStatus ||
-                    Scalar->Operation == Op::ClearTaskSwitch ||
                     Scalar->Operation == Op::Bound)))
       return invalid("instruction requires a separate mixed-mode state owner");
     const auto &F = Memory.features();
@@ -801,9 +799,24 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
       NextIP = State.EIP;
     }
   } else if (!R.Exception && Scalar) {
+    using Op = detail::X86LegacyScalarOperation;
+    const bool MachineStatusMemory =
+        (Scalar->Operation == Op::StoreMachineStatus &&
+         !Scalar->Destination.Register) ||
+        (Scalar->Operation == Op::LoadMachineStatus &&
+         !Scalar->Source.Register);
+    // These forms have one logical operand transaction. After it completes,
+    // only scalar/control publication remains; any following #DB owns its own
+    // event progress. An empty marker retains authenticated bytes and the
+    // paid attempt, not partially read physical fragments.
+    detail::X86LegacyTransferJournal Journal(
+        State, Memory, Options, Instruction,
+        detail::X86LegacyTransferKind::MachineStatus, MachineStatusMemory);
     auto Staged = State;
     auto Got =
         detail::executeLegacyScalar(Staged, Memory, *Scalar, NextIP, Options);
+    Journal.finish(Got ? Got->Status : X86PageWalkStatus::Completed);
+    detail::retainLegacyTransferWatchpoints(State, Observation.Matches);
     if (!Got)
       return Got.takeError();
     if (Accept(*Got)) {
