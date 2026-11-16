@@ -18,7 +18,9 @@
 #include <gtest/gtest.h>
 #include <map>
 #include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
 using namespace neverd::types;
 using neverd::types::test::shapeOf;
@@ -64,6 +66,59 @@ std::string leaves(const RecordDef &Record, uint64_t Base = 0) {
 }
 
 } // namespace
+
+TEST(TypeParse, TokenSpansKeepWhitespaceNumbersAndErrorPositions) {
+  const std::vector<std::string> Spaces = {
+      " ", "\t", "\r", "\v", "\f", " \t\r\v\f", std::string(4096, ' ')};
+  for (DataModel Model :
+       {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {
+    for (const std::string &Space : Spaces) {
+      SCOPED_TRACE(int(Model));
+      SCOPED_TRACE(Space.size());
+      auto Library = parsed(
+          Space + "#define WORD unsigned\r\n" + Space +
+              "#pragma pack(push, 1)\n" + Space + "struct SPAN {" + Space +
+              "char first;" + Space + "WORD values[0x2UL]; };\n" + Space +
+              "#pragma pack(pop)\n" + Space + "int call(WORD value, ...);\n" +
+              Space +
+              "_Static_assert((1UL << 3) >= 8 && (0x20u >> 2) == 8 && "
+              "0b10 == 2, \"number spans\");" +
+              Space,
+          {}, Model);
+      const auto &Record = recordOf(Library, "SPAN");
+      ASSERT_EQ(Record.Members.size(), 2u);
+      EXPECT_EQ(Record.Members[1].BitOffset, 8u);
+      EXPECT_EQ(Record.Size, 9u);
+      const auto *Call = Library.findPrototype("call");
+      ASSERT_NE(Call, nullptr);
+      EXPECT_TRUE(Call->Variadic);
+      const auto Before = renderTypes(Library, {}, {});
+      for (llvm::StringRef Number : {"0x", "18446744073709551616ULL"}) {
+        const std::string Text =
+            "\r\n" + Space + "int bad[" + Number.str() + "];";
+        const auto Read = parseCTypes(Text, Library);
+        ASSERT_EQ(Read.Problems.size(), 1u);
+        EXPECT_EQ(Read.Problems[0].Line, 2u);
+        EXPECT_EQ(Read.Problems[0].Column, Space.size() + 9u);
+        EXPECT_EQ(renderTypes(Library, {}, {}), Before);
+      }
+      const auto End =
+          parseCTypes("\n" + Space + "int missing" + Space, Library);
+      ASSERT_EQ(End.Problems.size(), 1u);
+      EXPECT_EQ(End.Problems[0].Line, 2u);
+      EXPECT_EQ(End.Problems[0].Column, Space.size() * 2 + 12u);
+      EXPECT_EQ(renderTypes(Library, {}, {}), Before);
+      const auto Macro = parseCTypes(
+          "#define BAD MissingType\n" + Space + "BAD value;", Library);
+      ASSERT_EQ(Macro.Problems.size(), 1u);
+      EXPECT_EQ(Macro.Problems[0].Line, 2u);
+      EXPECT_EQ(Macro.Problems[0].Column, Space.size() + 1u);
+      EXPECT_EQ(renderTypes(Library, {}, {}), Before);
+      EXPECT_TRUE(parseCTypes(Space, Library).ok());
+      EXPECT_EQ(renderTypes(Library, {}, {}), Before);
+    }
+  }
+}
 
 TEST(TypeParse, IdentifierRunsKeepBoundariesAndSourcePositions) {
   for (DataModel Model :

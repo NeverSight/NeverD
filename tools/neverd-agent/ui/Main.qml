@@ -667,6 +667,7 @@ ApplicationWindow {
                 Layout.preferredHeight: 220
                 TextArea {
                     id: memoryText
+                    ContextMenu.menu: EditMenu { editor: memoryText }
                     color: Theme.text
                     placeholderTextColor: Theme.quiet
                     placeholderText: qsTr("e.g. key functions, call relationships, addresses and how they were verified…")

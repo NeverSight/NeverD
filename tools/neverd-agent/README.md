@@ -745,6 +745,12 @@ application's resources, and the window's QML engine answers any request with
 an error instead of a connection (`platform/OfflineQml.h`). The window reaches
 no machine; model requests are made by `neverd-agent-cli`.
 
+A right click or the menu key in a text input offers Undo, Redo, Cut, Copy,
+Paste and Select all in the Agent's own menu (`ui/EditMenu.qml`). From Qt 6.9
+Qt Quick Controls gives every text input a context menu of its own, in the
+style's look and with Qt's words; each input names the Agent's menu as its
+`ContextMenu.menu` instead, which the same check requires.
+
 The current executable opens the original file in ND GUI; it does not attach
 the Agent's conversation or memory to an existing GUI analysis session. The
 file pane is a manual-refresh UTF-8 preview (up to 256 KiB), not an editor.

@@ -89,6 +89,18 @@ class CheckAgentQmlTextTest(unittest.TestCase):
             "    header: Label { textFormat: Text.PlainText; text: parent.title }\n}\n"), [])
         self.assertEqual(len(self.problems("Dialog { title: project.name }\n")), 1)
 
+    def test_a_text_input_names_its_context_menu(self) -> None:
+        self.assertEqual(self.problems(
+            "TextField { id: field; ContextMenu.menu: EditMenu { editor: field } }\n"
+            "TextArea {\n    id: area\n    ContextMenu.menu: EditMenu { editor: area }\n}\n"
+            "Field { placeholderText: qsTr(\"Name\") }\nChatComposer { id: composer }\n"), [])
+        for source in ("TextField { text: name }\n",
+                       "TextArea {\n    readOnly: true\n}\n",
+                       "ScrollView { TextArea { id: a }\n    ContextMenu.menu: EditMenu {} }\n"):
+            found = self.problems(source)
+            self.assertEqual(len(found), 1, source)
+            self.assertIn("context menu", found[0])
+
     def test_written_tells_words_in_the_source_from_data(self) -> None:
         for expression in ('"x"', 'qsTr("x")', 'a ? "x" : qsTr("y")',
                            'a ? "x" : b ? qsTr("y") : "z"', 'f(a ? 1 : 2) ? "x" : "y"',

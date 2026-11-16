@@ -536,6 +536,25 @@ private slots:
     QSettings().remove(settings::NativeTitleBar);
   }
 
+  // A frame paints its shadow in a margin the compositor blends with the
+  // desktop.  QtWayland settles a surface's pixel format as the native
+  // window is made, and KDDockWidgets makes the workbench's and a floating
+  // window's before their frames come: without an alpha channel from then
+  // on, the shadow shows as a black band.
+  void framedSurfacesHaveAnAlphaChannel() {
+    if (!onWayland())
+      QSKIP("Checks the format QtWayland settles when a surface is made.");
+    Desktop desktop;
+    auto *floating = desktop.Source.QWidget::window();
+    QVERIFY(QTest::qWaitForWindowExposed(floating, 30000));
+    QVERIFY(QTest::qWaitForWindowExposed(&desktop.Window, 30000));
+    for (QWidget *window :
+         {static_cast<QWidget *>(&desktop.Window), floating}) {
+      QVERIFY(window->windowFlags() & Qt::FramelessWindowHint);
+      QVERIFY(window->windowHandle()->format().hasAlpha());
+    }
+  }
+
   void retiredFloatingCaptionDoesNotRestoreFocus() {
     Desktop desktop;
     auto *floating = desktop.Source.QWidget::window();

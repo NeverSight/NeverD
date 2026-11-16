@@ -1280,6 +1280,13 @@ dense tool window; a window that holds a conversation takes these instead
   `textFormat: Text.PlainText`, which `scripts/check_agent_qml_text.py`
   checks, and the window's engine has no network (`platform/OfflineQml.h`).
   A long title wraps to a second line before it is cut.
+- Give a text input the application's own editing menu. From Qt 6.9 Qt Quick
+  Controls opens a context menu of its own on a right click in a `TextField`
+  or `TextArea`: the style's menu, with Qt's icons and Qt's words, beside
+  menus that are the Agent's. Each input names `EditMenu` as its
+  `ContextMenu.menu`: Undo, Redo, Cut, Copy, Paste and Select all in the
+  themed menu and the Agent's catalogs, with Cut and Copy off for a field
+  that hides what is typed. The check for the window's text requires it.
 - Check the window with `neverd-agent --capture`, which needs no display, on
   illustrative data in a private home: an empty workspace, a conversation, an
   empty project, a paused goal with queued inputs, each right panel and the

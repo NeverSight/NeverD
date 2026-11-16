@@ -97,6 +97,8 @@ ColumnLayout {
                     sourceComponent: ScrollView {
                         clip: true
                         TextArea {
+                            id: callText
+                            ContextMenu.menu: EditMenu { editor: callText }
                             text: JSON.stringify({arguments: row.modelData.arguments || {}, result: row.modelData.result || {}}, null, 2)
                             readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap
                             color: Theme.secondary; font.family: "JetBrains Mono NL"; font.pointSize: Theme.smallPointSize

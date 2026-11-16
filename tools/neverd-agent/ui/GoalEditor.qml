@@ -32,6 +32,7 @@ Dialog {
                 Layout.fillWidth: true; Layout.preferredHeight: 135; clip: true
                 TextArea {
                     id: objective
+                    ContextMenu.menu: EditMenu { editor: objective }
                     enabled: !editor.backend.running
                     placeholderText: qsTr("Describe the expected outcome and when it is complete…")
                     placeholderTextColor: Theme.quiet; color: Theme.text
