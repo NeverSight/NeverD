@@ -154,7 +154,8 @@ bool appendGraphHeader(CanonicalBytes &Bytes, uint8_t GraphKind,
 }
 
 std::optional<std::array<uint8_t, 32>>
-getSEHGraphDigest(const ExceptionFunction &EH, Arch TargetArch) {
+getSEHGraphDigest(const ExceptionFunction &EH, Arch TargetArch,
+                  bool AllowRepeatedRanges) {
   if (!EH.SEH || EH.Cxx || EH.GSCookie ||
       EH.Personality != ExceptionPersonality::CSpecificHandler ||
       EH.ParseStatus != ExceptionParseStatus::Complete ||
@@ -190,16 +191,29 @@ getSEHGraphDigest(const ExceptionFunction &EH, Arch TargetArch) {
       const ExceptionAddressRange &B = SemanticRanges[J];
       if (!A.overlaps(B))
         continue;
-      if ((A.Begin == B.Begin && A.End == B.End) ||
+      const bool Repeated = A.Begin == B.Begin && A.End == B.End;
+      if ((Repeated && !AllowRepeatedRanges) ||
           (!A.contains(B) && !B.contains(A)))
         return std::nullopt;
     }
 
+  auto SameRange = [&](size_t A, size_t B) {
+    return SemanticRanges[A].Begin == SemanticRanges[B].Begin &&
+           SemanticRanges[A].End == SemanticRanges[B].End;
+  };
   for (size_t I = 0; I != EH.SEH->Scopes.size(); ++I) {
+    // Rows over one range nest by their order, the earlier inside the later:
+    // a row's parent is the next row over its range, or else the first row
+    // over the smallest range that holds it.
     int32_t Parent = -1;
+    for (size_t J = I + 1; J != SemanticRanges.size() && Parent < 0; ++J)
+      if (SameRange(I, J))
+        Parent = static_cast<int32_t>(J);
+    const bool ParentRepeatsRange = Parent >= 0;
     uint64_t ParentSize = std::numeric_limits<uint64_t>::max();
-    for (size_t J = 0; J != SemanticRanges.size(); ++J) {
-      if (I == J || !SemanticRanges[J].contains(SemanticRanges[I]) ||
+    for (size_t J = 0; !ParentRepeatsRange && J != SemanticRanges.size(); ++J) {
+      if (I == J || SameRange(I, J) ||
+          !SemanticRanges[J].contains(SemanticRanges[I]) ||
           SemanticRanges[J].size() >= ParentSize)
         continue;
       Parent = static_cast<int32_t>(J);
@@ -446,14 +460,14 @@ makeToken(const std::array<uint8_t, 32> &GraphDigest,
 
 std::optional<llvm::mc_rewrite::RewriteWinEHSemanticToken>
 getSEHScopeSemanticToken(const ExceptionFunction &EH, Arch TargetArch,
-                         uint32_t ScopeIndex) {
+                         uint32_t ScopeIndex, bool AllowRepeatedRanges) {
   const bool Registration = TargetArch == Arch::X86 && EH.Registration;
   if (Registration ? ScopeIndex >= EH.Registration->Scopes.size()
                    : (!EH.SEH || ScopeIndex >= EH.SEH->Scopes.size()))
     return std::nullopt;
   const std::optional<std::array<uint8_t, 32>> GraphDigest =
       Registration ? getRegistrationSEHGraphDigest(EH)
-                   : getSEHGraphDigest(EH, TargetArch);
+                   : getSEHGraphDigest(EH, TargetArch, AllowRepeatedRanges);
   if (!GraphDigest)
     return std::nullopt;
   return makeToken(*GraphDigest,

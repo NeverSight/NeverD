@@ -6841,6 +6841,17 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
     }
     if (BoundedVarargs && ArgIdx >= BoundedVarargs->FixedCount &&
         (Integer || Operand->getType()->isPointerTy())) {
+      const bool PointerTail = libc::isPointerType(BoundedVarargs->Type);
+      if (PointerTail && Integer && !PointerSpelling) {
+        // fcntl/ioctl select an integer or pointer tail by command. Their
+        // generic forwarding carrier does not establish a pointer parameter.
+        // Preserve the recovered scalar, including a literal's LLVM width.
+        Expr +=
+            llvm::isa<llvm::ConstantInt>(Operand)
+                ? "(" + typeToCLLVM(Operand->getType()) + ")(" + Argument + ")"
+                : Argument;
+        continue;
+      }
       // A variadic argument has no parameter conversion. In particular, a
       // small literal is an int even when the import reads a machine word.
       // Use the same tail type as its forwarding contract, including the
@@ -6853,9 +6864,8 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
               ? "(uintptr_t)"
               : "";
       std::string Projected = "(" + Type + ")" + Bridge + "(" + Argument + ")";
-      Expr += libc::isPointerType(BoundedVarargs->Type)
-                  ? imagePointerArgument(Operand, std::move(Projected))
-                  : std::move(Projected);
+      Expr += PointerTail ? imagePointerArgument(Operand, std::move(Projected))
+                          : std::move(Projected);
       continue;
     }
     if (const auto *Callee = Call.getCalledFunction();
@@ -8790,6 +8800,17 @@ bool LLVMCWriter::callDoesNotReturn(const llvm::CallBase &Call) const {
 void LLVMCWriter::writeCall(llvm::CallInst &Call, const std::string &Name,
                             int Indent) {
   writeCallLike(Call, Name, Indent);
+}
+
+void LLVMCWriter::writeInvokedCall(llvm::InvokeInst &Invoke, int Indent) {
+  const auto Event =
+      SourceRecorder ? SourceRecorder->instruction(Invoke) : std::nullopt;
+  if (Event)
+    OS << SourceRecorder->begin(*Event);
+  writeCallLike(Invoke, Invoke.getType()->isVoidTy() ? "" : getName(&Invoke),
+                Indent);
+  if (Event)
+    OS << SourceRecorder->end(*Event);
 }
 
 void LLVMCWriter::writeInvoke(llvm::InvokeInst &Invoke, const std::string &Name,

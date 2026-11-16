@@ -107,9 +107,50 @@ TEST(FixedIntegerCallArguments, RequiresCompleteOrdinaryDeclarations) {
   Function.ReturnType = NdType::makeInt(16);
   EXPECT_FALSE(Supported());
   Function.ReturnType = NdType::makeInt(4);
-  for (Arch Architecture : {Arch::X86, Arch::ARM})
-    EXPECT_FALSE(libc::fixedIntegerCallArguments(Function, Architecture,
-                                                 BinaryFormat::COFF));
+  EXPECT_FALSE(
+      libc::fixedIntegerCallArguments(Function, Arch::ARM, BinaryFormat::COFF));
+}
+
+TEST(FixedIntegerCallArguments, I386UsesDeclaredStackWidthsWithoutRegparm) {
+  auto Pointer = NdType::makePtr();
+  Pointer->Size = 4;
+  for (auto Format :
+       {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+    const auto Layout = fixedIntegerCallArguments(
+        Arch::X86, Format, NdType::makeInt(4),
+        {NdType::makeInt(1), NdType::makeInt(2), Pointer, NdType::makeInt(8)});
+    ASSERT_TRUE(Layout);
+    ASSERT_EQ(Layout->Parameters.size(), 4u);
+    for (unsigned I = 0; I < 4; ++I) {
+      EXPECT_EQ(Layout->Parameters[I].Kind, SourceABICarrierKind::Stack);
+      EXPECT_EQ(Layout->Parameters[I].StackOffset, 4 + I * 4);
+      EXPECT_EQ(Layout->Parameters[I].Bytes, (1u << I));
+    }
+  }
+}
+
+TEST(FloatingCallArguments, I386MixedParametersRetainSingleRegisterResults) {
+  for (auto Format :
+       {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+    for (uint16_t Bytes : {1u, 2u, 4u}) {
+      const auto Layout = floatingCallArguments(
+          Arch::X86, Format, NdType::makeInt(Bytes),
+          {NdType::makeInt(4), NdType::makeFloat(4), NdType::makeFloat(8)});
+      ASSERT_TRUE(Layout);
+      ASSERT_EQ(Layout->Scalars.size(), 3u);
+      EXPECT_EQ(Layout->ReturnKind, NdTypeKind::Int);
+      EXPECT_EQ(Layout->ReturnBytes, Bytes);
+      for (unsigned I = 0; I < 3; ++I) {
+        EXPECT_EQ(Layout->Scalars[I].Kind, SourceABICarrierKind::Stack);
+        EXPECT_EQ(Layout->Scalars[I].StackOffset, 4 + I * 4);
+        EXPECT_EQ(Layout->Scalars[I].Bytes, I == 2 ? 8u : 4u);
+        EXPECT_EQ(Layout->Scalars[I].Floating, I != 0);
+      }
+      EXPECT_TRUE(floatingCallTypes(Arch::X86, Format, *Layout));
+    }
+    EXPECT_FALSE(floatingCallArguments(Arch::X86, Format, NdType::makeInt(8),
+                                       {NdType::makeFloat(4)}));
+  }
 }
 
 TEST(FloatingCallArguments, HFAPlacementKeepsCompleteRecordsAndResultFields) {

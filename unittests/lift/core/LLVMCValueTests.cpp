@@ -14,6 +14,7 @@
 #include "WindowsQualifiedFixture.h"
 #include "gtest/gtest.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/backend/LLVMSourceUnknownValue.h"
@@ -6309,6 +6310,96 @@ TEST(LLVMCValues, BoundedLibraryVarargsKeepTheirDeclaredCarrierTypes) {
       source_call_execution_test::compileAndRun(
           Program, {Optimization, "-fsanitize=undefined",
                     "-fno-sanitize-recover=undefined"});
+  }
+}
+
+TEST(LLVMCValues, PointerForwardingCarriersDoNotRetypeScalarVarargs) {
+  for (const auto Architecture :
+       {neverd::Arch::MIPS32, neverd::Arch::MIPS32EL, neverd::Arch::MIPS64,
+        neverd::Arch::MIPS64EL}) {
+    const bool Wide = neverd::isMIPS64(Architecture);
+    for (const bool Pointer : {false, true}) {
+      SCOPED_TRACE(static_cast<unsigned>(Architecture));
+      SCOPED_TRACE(Pointer);
+      llvm::LLVMContext Context;
+      llvm::Module Module("polymorphic-library-varargs", Context);
+      Module.setDataLayout(
+          std::string(neverd::archLittleEndian(Architecture) ? "e" : "E") +
+          (Wide ? "-p:64:64" : "-p:32:32"));
+      llvm::IRBuilder<> Builder(Context);
+      auto *Word = Builder.getIntNTy(Wide ? 64 : 32);
+      auto *Type =
+          Pointer ? static_cast<llvm::Type *>(Builder.getPtrTy()) : Word;
+      auto *Caller = llvm::Function::Create(
+          llvm::FunctionType::get(Builder.getInt32Ty(), {Type}, false),
+          llvm::GlobalValue::ExternalLinkage, "forward_tail", Module);
+      Builder.SetInsertPoint(
+          llvm::BasicBlock::Create(Context, "entry", Caller));
+      llvm::Value *Result = Builder.getInt32(0);
+      for (const char *Name : {"fcntl", "ioctl"}) {
+        auto *Imported = llvm::Function::Create(
+            llvm::FunctionType::get(
+                Builder.getInt32Ty(),
+                {Builder.getInt32Ty(), Builder.getInt32Ty()}, true),
+            llvm::GlobalValue::ExternalLinkage, Name, Module);
+        Result = Builder.CreateAdd(
+            Result, Builder.CreateCall(Imported, {Builder.getInt32(1),
+                                                  Builder.getInt32(4),
+                                                  Caller->getArg(0)}));
+        if (!Pointer)
+          Result = Builder.CreateAdd(
+              Result, Builder.CreateCall(
+                          Imported, {Builder.getInt32(1), Builder.getInt32(4),
+                                     llvm::ConstantInt::get(Word, 11)}));
+      }
+      Builder.CreateRet(Result);
+      ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+      neverd::CEmitterOptions Options;
+      Options.TheArch = Architecture;
+      Options.Format = neverd::BinaryFormat::ELF;
+      std::string Source;
+      llvm::raw_string_ostream Out(Source);
+      ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, Options));
+      const auto Definition = Source.rfind("uint32_t forward_tail(");
+      ASSERT_NE(Definition, std::string::npos) << Source;
+      const auto End = Source.find("\n}\n", Definition);
+      ASSERT_NE(End, std::string::npos) << Source;
+      // Execute the unchanged function on the host, outside the target's
+      // surrounding MIPS attribute pragmas.
+      // The generic forwarding slot is not a proof that fcntl/ioctl consume a
+      // pointer. Check the expression type as well as independently reading
+      // va_arg; equal-sized integer/pointer arguments can otherwise hide it.
+      const std::string TypeName = Pointer ? "void *"
+                                   : Wide  ? "uint64_t"
+                                           : "uint32_t";
+      const std::string Value =
+          Wide ? "UINT64_C(0xfedcba9876543210)" : "UINT32_C(0xfedcba98)";
+      const std::string Program =
+          "#include <stdint.h>\n#include <stdarg.h>\ntypedef " + TypeName +
+          R"( tail_type;
+static int object;
+static int observed(int fd, int command, ...) {
+  va_list ap;
+  va_start(ap, command);
+  tail_type value = va_arg(ap, tail_type);
+  va_end(ap);
+  return fd == 1 && command == 4 && )" +
+          (Pointer ? "value == &object"
+                   : "(value == " + Value + " || value == 11)") +
+          R"(;
+}
+#define EXACT(x) ((void)sizeof(char[_Generic((x), tail_type: 1, default: -1)]), (x))
+#define fcntl(fd,cmd,x) observed(fd,cmd,EXACT(x))
+#define ioctl(fd,cmd,x) observed(fd,cmd,EXACT(x))
+)" + Source.substr(Definition, End + 3 - Definition) +
+          "\nint main(void) { return forward_tail(" +
+          (Pointer ? "&object" : Value) + ") != " + (Pointer ? "2" : "4") +
+          "; }\n";
+      for (const char *Optimization : {"-O0", "-O2"})
+        source_call_execution_test::compileAndRun(
+            Program, {Optimization, "-fsanitize=undefined",
+                      "-fno-sanitize-recover=undefined"});
+    }
   }
 }
 

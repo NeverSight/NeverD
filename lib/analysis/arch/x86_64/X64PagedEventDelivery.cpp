@@ -47,6 +47,7 @@ struct X64PagedTransitionProgress {
 struct X64PagedReturnContinuation : X64PagedTransitionProgress {
   uint16_t FieldBytes = 0, Discard = 0;
   bool Interrupt = false, TruncateCompatibilityIP = false;
+  X86DescriptorCanonicalityProfile Canonicality;
 };
 struct X64PagedSegmentContinuation : X64PagedTransitionProgress {
   llvm::SmallVector<uint8_t, 15> Bytes;
@@ -224,6 +225,15 @@ public:
       emit(NdOp::STORE, {}, {Address, Value});
   }
 
+  NdVar updateEventDescriptorAccessed(NdVar Address, NdVar Original) {
+    if (Stopped || (value(Original) & (uint64_t{1} << 40)))
+      return Original;
+    const auto Image = temporary();
+    memory(NdOp::STORE, Image, {Address, NdVar::scalar(uint64_t{1} << 40, 8)},
+           true);
+    return Image;
+  }
+
   NdVar loadMemoryIf(NdVar Condition, NdVar Address, NdVar Fallback) {
     if (!value(Condition))
       return Fallback;
@@ -313,7 +323,8 @@ public:
   }
 
 private:
-  void memory(NdOp Code, NdVar Output, std::initializer_list<NdVar> Inputs) {
+  void memory(NdOp Code, NdVar Output, std::initializer_list<NdVar> Inputs,
+              bool DescriptorAccessed = false) {
     const bool Write = Code == NdOp::STORE;
     const unsigned Size = Write ? Inputs.begin()[1].Size : Output.Size;
     assert(Size && Size <= 8);
@@ -326,14 +337,16 @@ private:
       const auto &Completed = CompletedAccesses[AccessCursor++];
       if (Completed.Address != Access.Address || Completed.Bytes != Size ||
           Completed.Write != Write ||
-          (Write && Completed.Value != value(Inputs.begin()[1]))) {
+          Completed.DescriptorAccessed != DescriptorAccessed ||
+          (Write && !DescriptorAccessed &&
+           Completed.Value != value(Inputs.begin()[1]))) {
         Error = llvm::createStringError(
             llvm::errc::invalid_argument,
             "paged transition resume changed a completed access");
         Stopped = true;
         return;
       }
-      if (!Write)
+      if (!Write || DescriptorAccessed)
         Values[Output.Offset] = Completed.Value;
       return;
     }
@@ -367,8 +380,18 @@ private:
         return Prepared.takeError();
       // A post-translation #AC must retain page-walk effects without
       // publishing the explicit selector store.
-      if (Prepared->Status == X86PageWalkStatus::Completed && !AlignmentFault)
+      if (Prepared->Status == X86PageWalkStatus::Completed && !AlignmentFault) {
+        if (DescriptorAccessed) {
+          // Use the exact prepared physical fragments. Its page walks can
+          // update A/D bits inside this descriptor; a second translation or
+          // writing the earlier check image would lose those effects.
+          auto Current = Memory.loadPreparedStore(*Prepared, Bytes);
+          if (!Current || Current->Status != X86PageWalkStatus::Completed)
+            return Current;
+          Bytes[5] |= 1;
+        }
         Memory.commitStore(*Prepared, llvm::ArrayRef(Bytes).take_front(Size));
+      }
       return std::move(
           static_cast<translate::X86MemoryAccessResult &>(*Prepared));
     };
@@ -389,8 +412,9 @@ private:
       Fault = X86MemoryException{17, 0, std::nullopt};
       Stopped = true;
     } else {
-      uint64_t Value = Write ? value(Inputs.begin()[1]) : 0;
-      if (!Write) {
+      uint64_t Value =
+          Write && !DescriptorAccessed ? value(Inputs.begin()[1]) : 0;
+      if (!Write || DescriptorAccessed) {
         for (unsigned I = 0; I != Size; ++I)
           Value |= uint64_t(Bytes[I]) << (I * 8);
         Values[Output.Offset] = Value;
@@ -399,7 +423,7 @@ private:
       }
       if (CaptureAccesses) {
         CompletedAccesses.push_back(
-            {Access.Address, Value, uint8_t(Size), Write});
+            {Access.Address, Value, uint8_t(Size), Write, DescriptorAccessed});
         ++AccessCursor;
       }
     }
@@ -417,6 +441,7 @@ llvm::Expected<X64PagedEventResult> deliverEventSequence(
     X64ContinuationStateV6 &State, X86PagedMemory &Memory,
     const X64ContinuationEventV1 &Input, uint32_t MXCSRMask, uint64_t FaultPC,
     const translate::X86EventDeliveryOptions &Options,
+    X86DescriptorCanonicalityProfile DescriptorCanonicality,
     std::optional<X86MemoryException> LastException = {}, bool Accepted = false,
     llvm::SmallVector<X64PagedEventContinuation::Access> CompletedAccesses = {},
     X64PagedDebugState *Debug = nullptr,
@@ -424,6 +449,10 @@ llvm::Expected<X64PagedEventResult> deliverEventSequence(
         X86InstructionDebugProfile::InstructionStep,
     uint8_t DataBreakpoints = 0, bool SoftwareCompleted = false,
     bool InputAccepted = false) {
+  if (!x86DescriptorCanonicalityValid(DescriptorCanonicality))
+    return llvm::createStringError(
+        llvm::errc::invalid_argument,
+        "invalid event descriptor canonicality profile");
   if (!Options.MaxAttempts)
     return llvm::createStringError(
         llvm::errc::invalid_argument,
@@ -432,6 +461,12 @@ llvm::Expected<X64PagedEventResult> deliverEventSequence(
     return llvm::createStringError(
         llvm::errc::invalid_argument,
         "unaccepted event cannot retain partial accesses");
+  for (const auto &Access : CompletedAccesses)
+    if (Access.DescriptorAccessed && (!Access.Write || Access.Bytes != 8 ||
+                                      !(Access.Value & (uint64_t{1} << 40))))
+      return llvm::createStringError(
+          llvm::errc::invalid_argument,
+          "invalid completed event descriptor update");
   if (!(Memory.controls().EFER & 0x400))
     return llvm::createStringError(
         llvm::errc::not_supported,
@@ -469,7 +504,8 @@ llvm::Expected<X64PagedEventResult> deliverEventSequence(
                                                       {},
                                                       Observation.Matches,
                                                       Result.SoftwareCompleted,
-                                                      false};
+                                                      false,
+                                                      DescriptorCanonicality};
       return Result;
     }
     TransitionWriter W(State, Memory, Event, MXCSRMask);
@@ -477,7 +513,7 @@ llvm::Expected<X64PagedEventResult> deliverEventSequence(
     W.CaptureAccesses = true;
     W.CompletedAccesses = std::move(CompletedAccesses);
     detail::X64ContinuationDelivery<TransitionWriter>(
-        W, Controls.CR4 & 0x1000 ? 57 : 48)
+        W, Controls.CR4 & 0x1000 ? 57 : 48, DescriptorCanonicality)
         .execute(NdVar::scalar(0, 8));
     if (Result.DeliveryAttempts == 0)
       Result.InputAccepted |= W.Result.InputAccepted;
@@ -501,7 +537,9 @@ llvm::Expected<X64PagedEventResult> deliverEventSequence(
                                       Result.LastException,
                                       std::move(W.CompletedAccesses),
                                       Observation.Matches,
-                                      Result.SoftwareCompleted};
+                                      Result.SoftwareCompleted,
+                                      true,
+                                      DescriptorCanonicality};
       if (Result.Status == X64PagedEventStatus::Delivered) {
         Result.DeliveredVector = Event.Vector;
         const bool Software = Event.Kind == X64ContinuationEventKind::Software;
@@ -561,14 +599,16 @@ deliverX64PagedEvent(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
                      const X64ContinuationEventV1 &Input, uint32_t MXCSRMask,
                      X64PagedDebugState *Debug,
                      X86InstructionDebugProfile DebugProfile,
-                     const translate::X86EventDeliveryOptions &Options) {
+                     const translate::X86EventDeliveryOptions &Options,
+                     X86DescriptorCanonicalityProfile DescriptorCanonicality) {
   // Software entry saves fallthrough only on success. Its secondary faults
   // retain the original instruction PC, also across a physical backing stop.
   const uint64_t FaultPC = Input.Kind == X64ContinuationEventKind::Software
                                ? State.Core.Core.Core.Core.PC
                                : Input.SavedPC;
   return deliverEventSequence(State, Memory, Input, MXCSRMask, FaultPC, Options,
-                              {}, false, {}, Debug, DebugProfile);
+                              DescriptorCanonicality, {}, false, {}, Debug,
+                              DebugProfile);
 }
 
 llvm::Expected<X64PagedEventResult>
@@ -579,9 +619,10 @@ resumeX64PagedEvent(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
                     const translate::X86EventDeliveryOptions &Options) {
   return deliverEventSequence(
       State, Memory, Continuation.Event, MXCSRMask, Continuation.FaultPC,
-      Options, Continuation.LastException, Continuation.EventAccepted,
-      Continuation.CompletedAccesses, Debug, DebugProfile,
-      Continuation.DataBreakpoints, Continuation.SoftwareCompleted, true);
+      Options, Continuation.DescriptorCanonicality, Continuation.LastException,
+      Continuation.EventAccepted, Continuation.CompletedAccesses, Debug,
+      DebugProfile, Continuation.DataBreakpoints,
+      Continuation.SoftwareCompleted, true);
 }
 
 namespace {
@@ -614,6 +655,7 @@ llvm::Expected<X64PagedReturnResult>
 returnFrame(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
             uint16_t FieldBytes, uint16_t Discard, bool Interrupt,
             X64PagedAlignmentPriority AlignmentPriority,
+            X86DescriptorCanonicalityProfile Canonicality,
             bool TruncateCompatibilityIP = false,
             const detail::X64PagedReturnContinuation *Continuation = nullptr) {
   assert((FieldBytes == 2 || FieldBytes == 4 || FieldBytes == 8) &&
@@ -627,7 +669,7 @@ returnFrame(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
   if (Continuation)
     W.CompletedAccesses = Continuation->CompletedAccesses;
   detail::X64ContinuationEvents<TransitionWriter> Transfer(
-      W, Memory.controls().CR4 & 0x1000 ? 57 : 48);
+      W, Memory.controls().CR4 & 0x1000 ? 57 : 48, Canonicality);
   if (Interrupt)
     Transfer.iret(FieldBytes);
   else
@@ -653,6 +695,7 @@ returnFrame(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
     Pending->Discard = Discard;
     Pending->Interrupt = Interrupt;
     Pending->TruncateCompatibilityIP = TruncateCompatibilityIP;
+    Pending->Canonicality = Canonicality;
     Result.Continuation = std::move(Pending);
   }
   if (Result.Completed) {
@@ -681,6 +724,7 @@ resumeX64PagedReturn(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
   return returnFrame(State, Memory, Continuation->FieldBytes,
                      Continuation->Discard, Continuation->Interrupt,
                      Continuation->AlignmentPriority,
+                     Continuation->Canonicality,
                      Continuation->TruncateCompatibilityIP, Continuation.get());
 }
 
@@ -689,8 +733,20 @@ returnX64PagedInterrupt(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
                         uint16_t FieldBytes,
                         X64PagedAlignmentPriority AlignmentPriority,
                         X64PagedIretAccessOrder AccessOrder) {
-  assert(AccessOrder == X64PagedIretAccessOrder::FlagsFirst);
-  return returnFrame(State, Memory, FieldBytes, 0, true, AlignmentPriority);
+  X86DescriptorCanonicalityProfile Canonicality;
+  switch (AccessOrder) {
+  case X64PagedIretAccessOrder::FlagsFirst:
+    Canonicality = X86DescriptorCanonicalityProfile::SelectorForRange;
+    break;
+  case X64PagedIretAccessOrder::FlagsFirstTailGPZero:
+    Canonicality = X86DescriptorCanonicalityProfile::SelectorForStart;
+    break;
+  default:
+    return llvm::createStringError(llvm::errc::invalid_argument,
+                                   "unknown paged IRET access-order profile");
+  }
+  return returnFrame(State, Memory, FieldBytes, 0, true, AlignmentPriority,
+                     Canonicality);
 }
 
 llvm::Expected<X64PagedReturnResult>
@@ -698,11 +754,25 @@ returnX64PagedFar(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
                   uint16_t FieldBytes, uint16_t Discard,
                   X64PagedAlignmentPriority AlignmentPriority,
                   X64PagedFarReturnProfile Profile) {
-  assert(Profile == X64PagedFarReturnProfile::SelectorFirst ||
-         Profile == X64PagedFarReturnProfile::SelectorFirstTruncatedIP);
-  return returnFrame(
-      State, Memory, FieldBytes, Discard, false, AlignmentPriority,
-      Profile == X64PagedFarReturnProfile::SelectorFirstTruncatedIP);
+  X86DescriptorCanonicalityProfile Canonicality;
+  bool TruncateCompatibilityIP = false;
+  switch (Profile) {
+  case X64PagedFarReturnProfile::SelectorFirst:
+    Canonicality = X86DescriptorCanonicalityProfile::SelectorForRange;
+    break;
+  case X64PagedFarReturnProfile::SelectorFirstTruncatedIP:
+    Canonicality = X86DescriptorCanonicalityProfile::SelectorForRange;
+    TruncateCompatibilityIP = true;
+    break;
+  case X64PagedFarReturnProfile::SelectorFirstTailGPZero:
+    Canonicality = X86DescriptorCanonicalityProfile::SelectorForStart;
+    break;
+  default:
+    return llvm::createStringError(llvm::errc::invalid_argument,
+                                   "unknown paged far-return profile");
+  }
+  return returnFrame(State, Memory, FieldBytes, Discard, false,
+                     AlignmentPriority, Canonicality, TruncateCompatibilityIP);
 }
 
 namespace {

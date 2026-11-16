@@ -29,6 +29,8 @@
 
 #include "llvm/Support/Errc.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <utility>
@@ -147,6 +149,12 @@ llvm::Error detail::admitLegacyExecution(const X86LegacyExecutionState &S,
                       M.controls().CR4, S.Debug->PendingData)))
     return invalid("legacy debug state requires a valid instruction-debug "
                    "profile, DR6 and supported DR7/DEBUGCTL");
+  if (O.Non64Mode && S.Debug &&
+      !std::equal(
+          O.Non64Mode->DebugAddresses.begin(),
+          O.Non64Mode->DebugAddresses.end(), S.Debug->DR.begin(),
+          [](uint64_t Full, uint32_t Low) { return uint32_t(Full) == Low; }))
+    return invalid("mixed-mode debug addresses disagree with the low bank");
   auto Controls = M.controls();
   Controls.RFlags = S.EFlags;
   if (S.PendingTask) {
@@ -238,11 +246,9 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
   if (Non64Mode) {
     using Op = detail::X86LegacyScalarOperation;
     if ((State.EFlags & 0x20000) || State.PendingTask || State.PendingEvent ||
-        State.Mpx || Options.Tasks || DebugRegister || FastSystem || Port ||
-        String || Mpx || IRET || RETF || (Far && (Far->Call || Far->Memory)) ||
+        State.Mpx || Options.Tasks || FastSystem || Port || String || Mpx ||
+        IRET || RETF || (Far && (Far->Call || Far->Memory)) ||
         (Scalar && (Scalar->DescriptorQuery || Scalar->SystemSelector ||
-                    Scalar->Operation == Op::LoadMachineStatus ||
-                    Scalar->Operation == Op::ClearTaskSwitch ||
                     Scalar->Operation == Op::Bound)))
       return invalid("instruction requires a separate mixed-mode state owner");
     const auto &F = Memory.features();
@@ -441,10 +447,12 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
           detail::admitLegacyExecution(State, Memory, Options, Non64Mode))
     return std::move(Error);
   X86LegacyExecutionResult R;
+  auto DebugAddresses = Options.Non64Mode ? Options.Non64Mode->DebugAddresses
+                                          : std::array<uint64_t, 4>{};
   X86WatchpointObservation Observation(
       Memory, State.Debug ? &*State.Debug : nullptr,
       Options.Debug.value_or(X86InstructionDebugProfile::InstructionStep), 0,
-      Options.Non64Mode ? &Options.Non64Mode->DebugAddresses : nullptr);
+      Options.Non64Mode ? &DebugAddresses : nullptr);
   if (ResumingStack)
     Observation.Matches = State.PendingStack->DataBreakpoints;
   if (State.PendingMpx)
@@ -480,6 +488,7 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
     Delivered->DeviceTransferCompleted = R.DeviceTransferCompleted;
     Delivered->PortInputBytesWritten = R.PortInputBytesWritten;
     Delivered->SegmentWritten = R.SegmentWritten;
+    Delivered->DebugAddressWritten = R.DebugAddressWritten;
     Delivered->InstructionAttempted = Attempted;
     Delivered->InstructionCompleted =
         Completed && (Event.Kind == X86LegacyEventKind::Trap ||
@@ -493,9 +502,8 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
   };
   const auto ExecuteBreakpoints = [&](uint32_t PC, bool SS) {
     return Options.Non64Mode
-               ? x86ExecutionBreakpoints(Options.Non64Mode->DebugAddresses,
-                                         State.Debug->DR7, uint64_t(PC),
-                                         State.EFlags, SS)
+               ? x86ExecutionBreakpoints(DebugAddresses, State.Debug->DR7,
+                                         uint64_t(PC), State.EFlags, SS)
                : x86ExecutionBreakpoints(State.Debug->DR, State.Debug->DR7, PC,
                                          State.EFlags, SS);
   };
@@ -698,9 +706,14 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                : X86LegacyEventKind::DebugRegisterFault},
           false);
     }
-    if (Result == Status::Completed)
+    if (Result == Status::Completed) {
       *State.Debug = Bank;
-    else
+      const auto &Access = DebugRegister->Access;
+      if (Access.Write && Access.Debug < Bank.DR.size()) {
+        R.DebugAddressWritten = Access.Debug;
+        DebugAddresses[Access.Debug] = Bank.DR[Access.Debug];
+      }
+    } else
       R.Exception = X86MemoryException{
           uint8_t(Result == Status::UndefinedOpcode ? 6 : 13), 0, {}};
   } else if (!R.Exception && Mpx && Mpx->Id != X86_INS_NOP) {
@@ -786,9 +799,24 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
       NextIP = State.EIP;
     }
   } else if (!R.Exception && Scalar) {
+    using Op = detail::X86LegacyScalarOperation;
+    const bool MachineStatusMemory =
+        (Scalar->Operation == Op::StoreMachineStatus &&
+         !Scalar->Destination.Register) ||
+        (Scalar->Operation == Op::LoadMachineStatus &&
+         !Scalar->Source.Register);
+    // These forms have one logical operand transaction. After it completes,
+    // only scalar/control publication remains; any following #DB owns its own
+    // event progress. An empty marker retains authenticated bytes and the
+    // paid attempt, not partially read physical fragments.
+    detail::X86LegacyTransferJournal Journal(
+        State, Memory, Options, Instruction,
+        detail::X86LegacyTransferKind::MachineStatus, MachineStatusMemory);
     auto Staged = State;
     auto Got =
         detail::executeLegacyScalar(Staged, Memory, *Scalar, NextIP, Options);
+    Journal.finish(Got ? Got->Status : X86PageWalkStatus::Completed);
+    detail::retainLegacyTransferWatchpoints(State, Observation.Matches);
     if (!Got)
       return Got.takeError();
     if (Accept(*Got)) {

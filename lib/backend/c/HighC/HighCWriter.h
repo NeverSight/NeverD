@@ -43,6 +43,7 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -1667,6 +1668,13 @@ public:
   std::optional<std::string> frameRecordMemberValue(const HighExpr &Addr,
                                                     const TypeRef &Ty) const;
   std::map<std::string, int64_t> FrameAliases;
+  /// The aliases the declaration pass found in each definition
+  /// (collectMemoryTypes); a definition with none has no entry.  The analysis
+  /// passes that run before a definition collects its frame slots read them,
+  /// so every copy of the writer that prints definitions shares the table.
+  std::shared_ptr<const std::unordered_map<const HighFunc *,
+                                           std::map<std::string, int64_t>>>
+      DeclaredFrameAliases;
   /// Bounds nested alignment-to-base certification as well as flat offsets.
   mutable unsigned FrameDisplacementDepth = 0;
   /// Slot names and interior accesses that share storage with another slot;

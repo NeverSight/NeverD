@@ -175,9 +175,6 @@ inline constexpr int kJumpDialogHeight = 480;
 /// The match list's first width; the preview takes the rest.
 inline constexpr int kJumpDialogListWidth = 320;
 
-// tools/neverd-gui/app/WheelInput.cpp
-inline constexpr int kTextViewWheelLinesPerNotch = 3;
-
 // tools/neverd-gui/app/ListingView.cpp
 inline constexpr int kListingViewPrefetchMargin = 80;
 inline constexpr int kListingViewTextMargin = 6;
@@ -344,6 +341,15 @@ inline constexpr qreal kWorkbenchStyleCardRadius = 6.0;
 /// tab, and the room Qt's common style leaves beside it for an icon.
 inline constexpr QMargins kWorkbenchStyleTabPadding{10, 5, 10, 5};
 inline constexpr int kWorkbenchStyleTabIconRoom = 12;
+/// A tab's close button, or another widget set on its side, stands this far
+/// in from the tab's end.  Qt's common style kept this room itself until
+/// Qt 6.11, which reads it from PM_TabBarTabHSpace, none in this style.
+inline constexpr int kWorkbenchStyleTabButtonInset = 4;
+/// A field's text keeps this room from the field's edge: the pixel of
+/// border and the four of padding that theme.qss gives a line edit, a combo
+/// box and a spin box.  A spin box's text keeps it from the box's buttons
+/// too.
+inline constexpr int kWorkbenchStyleFieldTextInset = 5;
 /// A toolbar's separator stops this far short of the bar's edges.
 inline constexpr int kWorkbenchStyleToolBarSeparatorInset = 3;
 

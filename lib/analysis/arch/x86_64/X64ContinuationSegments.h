@@ -205,26 +205,23 @@ protected:
       W.rejectIf(less(op(NdOp::INT_SUB, {k(UINT64_MAX), Last}), Base));
     const auto Address = op(NdOp::INT_ADD, {Base, Index});
     if constexpr (Writer::FaultableMemory) {
-      if (InstructionDescriptors) {
-        // System descriptors are implicit supervisor accesses. A null return
-        // SS must not read the CS descriptor again or acquire an accessed
-        // write.
-        const auto Shift = k(64 - AddressBits);
-        const auto Noncanonical = [&](NdVar A) {
-          return ne(
-              A, op(NdOp::INT_ASHR, {op(NdOp::INT_LEFT, {A, Shift}), Shift}));
-        };
-        faultIf(Enabled(Noncanonical(Address)), 13, Error);
-        faultIf(Enabled(Noncanonical(op(NdOp::INT_ADD, {Address, k(7)}))), 13,
-                DescriptorCanonicality ==
-                        X86DescriptorCanonicalityProfile::SelectorForStart
-                    ? k(0)
-                    : Error);
-        if (ReadIf)
-          return {Address,
-                  W.loadMemoryIf(*ReadIf, Address, k(uint64_t{1} << 40))};
-        return {Address, readMemory(Address)};
-      }
+      // Check the full descriptor extent before a page walk, including events.
+      // A null return SS must not read or update another descriptor.
+      const auto Shift = k(64 - AddressBits);
+      const auto Noncanonical = [&](NdVar A) {
+        return ne(A,
+                  op(NdOp::INT_ASHR, {op(NdOp::INT_LEFT, {A, Shift}), Shift}));
+      };
+      faultIf(Enabled(Noncanonical(Address)), 13, Error);
+      faultIf(Enabled(Noncanonical(op(NdOp::INT_ADD, {Address, k(7)}))), 13,
+              DescriptorCanonicality ==
+                      X86DescriptorCanonicalityProfile::SelectorForStart
+                  ? DeliveryExternal.value_or(k(0))
+                  : Error);
+      if (ReadIf)
+        return {Address,
+                W.loadMemoryIf(*ReadIf, Address, k(uint64_t{1} << 40))};
+      return {Address, readMemory(Address)};
     }
     range(Address, 7);
     return {Address, readMemory(Address)};

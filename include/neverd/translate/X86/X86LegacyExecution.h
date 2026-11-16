@@ -150,9 +150,11 @@ struct X86LegacyExecutionState {
   /// stop or a fault after loading the incoming task. Preserve this with the
   /// CPU and RAM; only that owner may resume or retire it.
   std::shared_ptr<const detail::X86LegacyTaskContinuation> PendingTask;
-  /// Segment, return and far-transfer progress across backing stops. Retain
-  /// this opaque state with the CPU, bindings and original instruction bytes;
-  /// repair only backing. Completed RAM accesses are never repeated.
+  /// Segment, return, far-transfer and machine-status backing progress.
+  /// Retain this opaque state with CPU, bindings and original instruction
+  /// bytes; repair only backing. Completed journaled accesses are not replayed.
+  /// Machine-status markers retain an incomplete logical operand, not partial
+  /// physical reads.
   std::shared_ptr<const detail::X86LegacyTransferContinuation> PendingTransfer;
   /// MOV-CR retains original inputs and completed physical PDPTE reads
   /// across unavailable backing. Controls publish atomically after all four
@@ -461,6 +463,9 @@ struct X86LegacyExecutionResult {
   bool CSWritten = false;
   bool SSWritten = false;
   std::optional<X86LegacySegmentWrite> SegmentWritten;
+  /// A completed non64 MOV to DR0..3 clears that full address bank's high
+  /// half, including when the low dword is unchanged. Reads and GD do not.
+  std::optional<uint8_t> DebugAddressWritten;
 };
 
 /// Authenticate a complete instruction extent with the executor's own byte
@@ -560,8 +565,8 @@ executeX86LegacyInstruction(X86LegacyExecutionState &State,
 
 /// Mixed-mode instruction boundary. Shares original-byte authentication,
 /// scalar semantics and retained-attempt accounting with the legacy entry.
-/// It admits protected/compatibility scalar execution, MOV-CR, EFER MSR
-/// access and direct far JMP. Mode-specific task, selector, fast-system,
+/// It admits protected/compatibility scalar and segment execution, MOV-CR/DR,
+/// EFER MSR access and direct far JMP. Mode-specific task, fast-system,
 /// call-gate and return owners remain separate. Events are returned without
 /// entering either IDT; the caller must commit its full-width view, retain the
 /// request and receipts, then select the owner from the committed LMA.

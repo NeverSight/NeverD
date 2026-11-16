@@ -43334,7 +43334,11 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeLlvmcExceptContainsHandler) {
   EXPECT_EQ(Source.find("_140003000"), std::string::npos) << Source;
   // Split ranges can share an out-of-line handler. Keep both the conditional
   // skip and handler rejoin edges without requiring one lexical try body.
-  const auto SkipAt = Source.find("goto L_seh_try_end_0_");
+  // The skip is the first jump of the protected body, and lands past the
+  // range's end marker, which only jumps and prints nothing.
+  const auto FirstTryAt = Source.find("__try {");
+  ASSERT_NE(FirstTryAt, std::string::npos) << Source;
+  const auto SkipAt = Source.find("goto L_", FirstTryAt);
   ASSERT_NE(SkipAt, std::string::npos) << Source;
   const auto SkipEnd = Source.find(';', SkipAt);
   ASSERT_NE(SkipEnd, std::string::npos) << Source;

@@ -597,9 +597,9 @@ always produces #GP(selector). When the start is canonical but the tail is not:
 These are independent original code64 MOV/POP/LFS/LGS/LSS observations, not an
 inference from compatibility instructions or the host running generated C.
 Existing enum values retain their meaning and value. Unknown profile values
-fail before direct-owner effects. Code64 return and event owners retain their
-established descriptor policy; these selector-load measurements do not qualify
-a different return or event profile.
+fail before direct-owner effects. Returns have a separate
+[original instruction qualification](#code64-return-descriptor-profiles);
+event descriptor policies remain independent of these selector-load results.
 
 An accepted instruction stores its neutral descriptor choice in the lower
 continuation. A reconstructed `X64PagedExecution` refuses changed profile
@@ -762,6 +762,59 @@ including 3,712 fault cases. The 568 captured source/header/manifest files match
 between SDKs, and all 280 selector exports also match between core classes.
 The 272 inherited IRET #AC VMX/NMI discrepancies are recorded separately.
 
+## Code64 return descriptor profiles
+
+IRET and RETF have an independent descriptor-range qualification for return CS
+and outer SS. They use the shared descriptor owner, with an explicit target
+choice retained by each accepted return:
+
+| IRET binding | RETF binding | Noncanonical descriptor tail | Qualified local core |
+| --- | --- | --- | --- |
+| `FlagsFirst` | `SelectorFirstTruncatedIP` | #GP(selector) | Intel hybrid E, type `0x20` |
+| `FlagsFirstTailGPZero` | `SelectorFirstTailGPZero` | #GP(0) | Intel hybrid P, type `0x40` |
+
+Both choices report #GP(selector) for a noncanonical starting address, and
+check the complete eight-byte descriptor extent before paging. RETF's existing
+`SelectorFirst` value keeps its original-IP check and #GP(selector) range
+policy. Old numeric values are unchanged; production does not infer a target
+choice from the host. Events have their own
+[independent descriptor qualification](#code64-event-descriptor-profiles).
+
+A return continuation stores the neutral descriptor choice alongside accepted
+reads/writes and its budget state. Changing either return binding in an ordinary
+reconstructed context refuses before resume effects. Full-mode accepted work
+uses its frozen options. IRET's NMI unblocking, and an earlier descriptor
+accessed write, remain charged across repeated backing stops with zero budget.
+Once a return faults, the instruction token retires; a paused fault entry resumes
+through `Delivery->Continuation` and the event API, preserving the accepted
+error code. The direct return APIs reject unknown enum values before CPU,
+NMI, paging-control or RAM effects; source authentication and fetch still
+precede those direct calls.
+
+The [November 16 evidence](evidence/x86-code64-return-descriptors-2026-11-16.json) at
+`378710cf20` records 535 passing tests and 1 LA57 skip per SDK.
+Six new groups contain 312 original observations and 2,496 complete
+original/generated CPU-state and RAM comparisons per SDK: IRET widths 2/4/8,
+RETF widths 2/4/8 with no immediate or cleanup 16/65535, both CS/outer SS,
+thirteen descriptor cases, both C emitters, host-x64 Clang/NeverC and O0/O2.
+The existing complete IRET/RETF matrices also exercise the new P-core profiles
+through privilege, flags and compatibility returns. Comparison counts are
+within the test groups, not additional test totals.
+
+The new groups include 288 backing-resume comparisons, eight IRET frame/fault
+entry double suspensions and 64 full-mode comparisons per SDK. The matrix
+compares all output RAM without masks, including first-fragment Dirty effects
+before a second-fragment write fault. Like the selector suite, it pre-accesses
+the oracle's HLT page and the ancestors of an absent first wrapped descriptor
+page in both inputs. Data caches start usable at the outer CPL3 so their
+inactive metadata does not become a hardware witness. This does not define
+arbitrary initially-clear fault-walk A effects, unusable-cache metadata or a
+partial descriptor-data store. Original CPU runs remain uninterrupted.
+
+Selector and return suites share neutral range-input construction. Generated
+source, library and artifact names include the test suite, preventing same-name
+tests from reusing a permanent library handle or overwriting evidence.
+
 ## Faultable IRET, IRETD and IRETQ
 
 Canonical `66 cf`, `cf` and `48 cf` use the same descriptor, return-frame,
@@ -772,9 +825,10 @@ the existing paged bridge; no host pointer or inline assembly executes the
 return. Source admission authenticates the original bytes and LowIR shape.
 
 Bind `X64PagedExecutionOptions::IretAccessOrder` to the target processor's
-qualified order. The currently qualified `FlagsFirst` profile reads FLAGS,
-CS and IP, validates and updates CS's descriptor, then reads SS and SP,
-validates and updates SS's descriptor, and finally validates the target IP.
+qualified `FlagsFirst` or `FlagsFirstTailGPZero` profile
+[described above](#code64-return-descriptor-profiles). Both read FLAGS,
+CS and IP, validate and update CS's descriptor, then read SS and SP,
+validate and update SS's descriptor, and finally validate the target IP.
 CS and SS read only their two-byte selectors, independently of frame-slot width.
 Descriptor reads precede RPL validation, so a missing descriptor page wins over
 a simultaneous RPL error. A compatibility target is truncated before the final
@@ -824,17 +878,18 @@ and Intel SDM volume 2, IRET/IRETD/IRETQ.
 
 Canonical `CB` and `CA imm16`, with no prefix, `66` or `48`, use the same
 faultable return owner. Bind `X64PagedExecutionOptions::FarReturnProfile` before
-executing them. Both profiles read CS before IP, validate and update the CS
+executing them. All profiles read CS before IP, validate and update the CS
 descriptor, then read SS before SP only for an outer return. Descriptor fetch
 precedes RPL validation; descriptor accessed writes precede late target faults.
 A same-CPL return never speculatively accesses an outer frame. NT is retained,
 RF clears on successful completion, and NMI inhibition remains unchanged.
 
-The two profiles differ in the final compatibility target check:
+The qualified profiles differ in the final compatibility target check as well
+as the [descriptor-tail fault code](#code64-return-descriptor-profiles):
 
 | Profile | Canonical-address input | Locally qualified CPU |
 | --- | --- | --- |
-| `SelectorFirst` | Original saved IP | Core i9-13900H performance core, CPUID core type `0x40` |
+| `SelectorFirstTailGPZero` | Original saved IP | Core i9-13900H performance core, CPUID core type `0x40` |
 | `SelectorFirstTruncatedIP` | Truncated compatibility EIP | Core i9-13900H efficient core, CPUID core type `0x20` |
 
 This difference was reproduced by executing the same original RETFQ bytes on
@@ -861,6 +916,115 @@ Architectural faults still use the common IDT/#DF/shutdown owner and original
 restart PC. Missing profile, changed code and fetch faults do not access the
 return frame. The [RETF qualification](evidence/x86-paged-retf-2026-11-02.json)
 also records the added competing-fault IRET cases and both hybrid core profiles.
+
+## Code64 event descriptor profiles
+
+`X64PagedExecutionOptions::EventDescriptorCanonicality` binds event entry's
+code-descriptor range check independently of selector loads and returns.
+`deliverX64PagedEvent` accepts the same binding as its last argument. The
+single default, `kX64PagedEventDescriptorCanonicality`, is `SelectorForStart`;
+production never selects a profile from the host:
+
+| Binding | Noncanonical start | Noncanonical tail | Qualified local core |
+| --- | --- | --- | --- |
+| `SelectorForStart` | #GP(selector \| EXT) | #GP(EXT) | Intel hybrid P, type `0x40` |
+| `SelectorForRange` | #GP(selector \| EXT) | #GP(selector \| EXT) | Intel hybrid E, type `0x20` |
+
+Both check the complete eight-byte descriptor range before paging for that
+descriptor. Software INT/INT3 use EXT=0; the measured IRQ/NMI cases use EXT=1.
+A page-fault error code keeps its independent paging meaning. Fixing the
+noncanonical start's selector does not change the default tail behavior.
+Unknown bindings refuse before paging-control, CPU, NMI or RAM effects.
+
+`X64PagedEventContinuation` retains the choice through physical backing
+stops, secondary faults and a work-budget stop before the next event is
+accepted. The lower resume API uses that saved choice without a replacement
+parameter. Ordinary context reconstruction rejects a changed event binding
+before effects. Pending IRET, selector MOV and far-pointer loads retain the
+same event binding because their later fault can still enter this owner.
+Full-mode pending work uses its frozen options. Software entry followed by a
+watchpoint #DB also retains the choice and its completed-instruction receipt.
+
+The [November 16 evidence](evidence/x86-code64-event-descriptors-2026-11-16.json) at `62e3cded30` records
+543 passing tests and 1 LA57 skip per SDK. Eight new groups contain
+40 raw original observations, 40 original/direct-owner comparisons and 320
+original/generated comparisons per SDK. Four streams (INT80, INT3, IRQ and
+NMI) cover ten already-accessed descriptor cases through HighC/LLVMC,
+host-x64 Clang/NeverC and O0/O2. Complete represented State and all RAM are
+compared without output masks. Pre-accessed target/HLT pages and absent-first-
+wrapped-page ancestors are identical in both inputs.
+
+Software retention checks add 160 event, 24 suspended instruction, four
+software-debug sequence and 96 full-mode comparisons per SDK. They compare
+against uninterrupted software executions; original CPU runs are uninterrupted.
+These counts are within the test groups, not extra passing tests.
+
+At this canonicality checkpoint, accessed writes remained open. The retained
+diagnostic matrix has eight A=0/read-only descriptor CR2 mismatches per core:
+hardware reports the descriptor start, while the byte update reports start+5. Cross-line A=0
+probes terminate with KVM `INTERNAL_ERROR_SIMUL_EX` during #AC delivery,
+including with page A/D bits pre-set. These failed probes are not architectural
+guest outcomes or successful qualification. This unit does not infer locked
+update width, descriptor-cache publication or a split-lock policy from return
+instructions. Those aligned accessed cases are addressed by the following
+independent [accessed-update qualification](#code64-event-accessed-updates). Host split-lock
+configuration and the production LLVM pin are unchanged.
+
+## Code64 event accessed updates
+
+The paged event owner now updates an A=0 code descriptor through one prepared
+supervisor write transaction at the descriptor's starting address. It reads
+that plan's exact physical fragments after page-table A/D changes, sets A and
+commits the eight-byte image. Initial type/presence/privilege checks keep their
+original read; the hidden CS cache receives the committed image. An A=1
+check image needs no write. Return and selector-load policies remain independent.
+
+The [November 16 accessed evidence](evidence/x86-code64-event-accessed-2026-11-16.json)
+at `5462d88487` records
+551 passing tests and 1 LA57 skip per SDK. Four event kinds (INT80, INT3,
+IRQ and NMI) cover aligned high-canonical/last-qword read-only faults and a
+descriptor that shares bytes with its own PTE. The extra physical page at
+`0x209000` is disjoint from main RAM; descriptor `0x5024` maps to `0x209024`,
+overlapping PTE `0x209028`. A cold `0x209a03` entry becomes `0x209b63`, and
+native CS.base is `0x630000`. A descriptor-A-preset control leaves D clear,
+ends at `0x209b23` and loads base `0x230000`. This distinguishes the old cache
+image and stale writeback without claiming a unique microarchitectural implementation.
+
+Per SDK, 40 raw observations, 40 direct-owner and 320 generated comparisons
+check complete represented State and every byte of both physical regions.
+HighC/LLVMC and host-x64 Clang/NeverC run at O0/O2. Fresh pinned local Intel P/E
+VMs use equal inputs and pre-faulted KVM backing. Thirty-two original guest
+write-watchpoint comparisons cover descriptor offsets 0/4/5/7: all four A=0
+event kinds report B0/#DB; A=1 controls do not. No output differences are masked.
+
+A completed update has a distinct continuation tag and retains its committed
+image. Resume returns that image without another RAM access or observer call.
+Unfinished prepare/read backing stops retain earlier accesses and A/D effects,
+without publishing the cache or retaining a physical plan across contexts.
+Malformed update records and ordinary-store/update substitutions are rejected.
+
+Software-only recovery groups include 96 ordinary/lower and 96 full-mode
+comparisons per SDK: initial descriptor backing, read-only then write-only
+physical backing, first/partial frame backing, a read-only alias table with
+A/D already set, and a frame field overwriting the descriptor before the next
+missing slot. Eight debug-retention comparisons preserve the match across
+repeated backing stops and deliver one following #DB. Successful resumed
+INT/INT3 completes once; ordinary event resume exposes this as
+`Delivery.SoftwareCompleted`, and the full-mode owner converts that receipt to
+one completion. Accepted IRQ/NMI is not acknowledged twice.
+
+Cross-line A=0 probes in the predecessor record still end in KVM
+`INTERNAL_ERROR_SIMUL_EX` while delivering #AC, not an architectural guest
+result. These same-cache-line observations do not qualify split-lock policies,
+cross-page partial publication, concurrent CPUs, DMA or MMIO. Remaining mode
+and machine owners, software SMM/SGX and physical SGX remain open. Production
+LLVM stays r6; no final release or pin change is included.
+
+The [post-merge integration record](evidence/x86-code64-event-accessed-integration-2026-11-16.json)
+separately qualifies `3831e73fde` after retaining the remote GUI
+changes and Capstone test update. Each SDK passes 423 selected checks with
+1 LA57 skip; both export indexes agree. The full qualification above
+continues to name its original implementation commit.
 
 ## Paged IRQ/NMI scheduling
 

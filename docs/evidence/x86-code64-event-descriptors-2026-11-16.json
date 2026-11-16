@@ -1,0 +1,2892 @@
+{
+  "date": "2026-11-16",
+  "scope": "Code64 INT/INT3, IRQ and NMI descriptor canonicality, including selector/EXT fault codes and retained event/instruction/full-mode bindings. Accessed-write transactions are explicitly outside this unit.",
+  "source_commit": "62e3cded3021287a91e56cd7d64c75ed77a771f8",
+  "source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+  "baseline_commit": "1c292344ab8cf42ce42994a437074cafc4fc20e1",
+  "baseline_evidence": "x86-code64-return-descriptors-2026-11-16.json",
+  "runs": {
+    "build-x86-native-qualification-build": {
+      "working_source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_head": "62e3cded3021287a91e56cd7d64c75ed77a771f8",
+      "source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "env",
+        "GIT_CONFIG_COUNT=2",
+        "GIT_CONFIG_KEY_0=http.curloptResolve",
+        "GIT_CONFIG_VALUE_0=github.com:443:4.237.22.38",
+        "GIT_CONFIG_KEY_1=http.proxy",
+        "GIT_CONFIG_VALUE_1=",
+        "/usr/bin/python3",
+        "scripts/build.py",
+        "build-x86-native",
+        "--target",
+        "NeverDX64PagedExecutionTests",
+        "NeverDX86PagingTests",
+        "NeverDX86LegacySourceTests",
+        "NeverDLowInstructionBoundaryTests",
+        "neverd",
+        "neverd_shared",
+        "--parallel",
+        "4"
+      ],
+      "environment": {},
+      "binaries": {},
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 65.92043960792944,
+      "log": "build-x86-native-qualification-build.log",
+      "log_sha256": "37f0610c258117f8b75e4bda0113af16375bae84097d273d09e4f09eca7962e4"
+    },
+    "build-x86-native-qualification-paged-source": {
+      "working_source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_head": "62e3cded3021287a91e56cd7d64c75ed77a771f8",
+      "source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86-native/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=*",
+        "--gtest_output=xml:/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-qualification-paged-source.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-qualification-paged-source-tmp",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-qualification-paged-source-exports",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store"
+      },
+      "binaries": {
+        "build-x86-native/bin/NeverDX64PagedExecutionTests": "5e657511ff7b155ca99d44fd65dc2e495981a552ce2c0299552a7a21113ed6ce",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+        "build-x86-native/bin/libneverd.so": "d06b113d5e0e78fb2ab495ad577f52bf833a2fce1922b532b0cf3c6a9dc9b84d",
+        "build-x86-native/bin/neverd": "57afdfd56a596b39b555c518418bdbb3a0ee17539e845c7eb9512888d4e8d95d"
+      },
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 337.7367199489381,
+      "log": "build-x86-native-qualification-paged-source.log",
+      "log_sha256": "44c50a1f462de20f63324e1eb5b82a0943cef6f1312a245dce1acec51b83e806",
+      "tests": {
+        "tests": "184",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "335.799",
+        "timestamp": "2026-11-16T04:14:47.909",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {
+        "cpu_comparisons": 438753,
+        "fault_cpu_comparisons": 14936,
+        "handler_cpu_comparisons": 33440,
+        "software_interrupt_cpu_comparisons": 30840,
+        "software_completion_cpu_comparisons": 18504,
+        "processor": 52,
+        "core_type": 896,
+        "far_pointer_fault_cpu_comparisons": 90024,
+        "return_processor": 8,
+        "return_core_type": 128,
+        "far_return_fault_cpu_comparisons": 3840,
+        "port_restart_checks": 720,
+        "port_permission_checks": 22,
+        "port_fragment_checks": 30,
+        "kvm_port_missing_alignment_checks": 1024,
+        "kvm_port_wrong_ss_faults": 96,
+        "kvm_port_comparisons": 38624,
+        "kvm_port_fault_comparisons": 18960,
+        "kvm_port_input_fault_effects": 2432,
+        "policy_backing_checks": 536,
+        "rep_fault_cpu_comparisons": 14944,
+        "rep_partial_fault_cpu_comparisons": 3552,
+        "iret_cpu_comparisons": 6048,
+        "iret_fault_cpu_comparisons": 2456,
+        "iret_ac_vmm_nmi_discrepancies": 136,
+        "iret_roundtrip_cpu_comparisons": 8,
+        "return_retry_cpu_comparisons": 4,
+        "accepted_cpu_comparisons": 14376,
+        "secondary_fault_cpu_comparisons": 2040,
+        "segment_load_fault_cpu_comparisons": 42384,
+        "segment_read_fault_cpu_comparisons": 3456,
+        "segment_push_fault_cpu_comparisons": 928,
+        "round_trip_comparisons": 2704,
+        "compiler_count": 2,
+        "original_code64_descriptor_range_observations": 117,
+        "original_code64_descriptor_range_comparisons": 936,
+        "descriptor_profile_resume_comparisons": 64,
+        "descriptor_profile_full_mode_comparisons": 16,
+        "original_code64_event_descriptor_observations": 40,
+        "original_code64_event_descriptor_owner_comparisons": 40,
+        "original_code64_event_descriptor_comparisons": 320,
+        "event_descriptor_resume_comparisons": 160,
+        "event_descriptor_instruction_resume_comparisons": 24,
+        "event_descriptor_software_debug_comparisons": 4,
+        "event_descriptor_full_mode_comparisons": 96,
+        "original_code64_return_descriptor_observations": 312,
+        "original_code64_return_descriptor_comparisons": 2496,
+        "return_descriptor_resume_comparisons": 288,
+        "return_descriptor_event_resume_comparisons": 8,
+        "return_descriptor_full_mode_comparisons": 64,
+        "original_segment_alias_comparisons": 12,
+        "original_comparisons": 6576,
+        "original_shutdowns": 2,
+        "branch_selection_comparisons": 640,
+        "continuous_source_roundtrips": 8,
+        "continuous_native_event_comparisons": 4,
+        "original_initial_sregs_writes": 203,
+        "original_mode_rewrites": 0,
+        "continuous_original_cpu_comparisons": 1,
+        "continuous_external_frame_comparisons": 4,
+        "continuous_external_iret_comparisons": 4,
+        "original_non64_segment_comparisons": 144,
+        "original_non64_null_base_source_comparisons": 32,
+        "original_non64_descriptor_fault_comparisons": 16
+      },
+      "report": "build-x86-native-qualification-paged-source.xml",
+      "report_sha256": "29375ddbbe81b0abc7027fdd7c5f0eb9ce88a3a86e06726ab0734d4f556563ed"
+    },
+    "build-x86-native-qualification-transition": {
+      "working_source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_head": "62e3cded3021287a91e56cd7d64c75ed77a771f8",
+      "source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86-native/bin/NeverDX86PagingTests",
+        "--gtest_filter=X64PagedEventTest.*:PagingModes/X86PagingNativeTest.*",
+        "--gtest_output=xml:/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-qualification-transition.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-qualification-transition-tmp",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-qualification-transition-exports",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store"
+      },
+      "binaries": {
+        "build-x86-native/bin/NeverDX86PagingTests": "164c1bed01e00d2b51cfdc4ee914a08219a972414cd11c1b889b50edc3993b09",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+        "build-x86-native/bin/libneverd.so": "d06b113d5e0e78fb2ab495ad577f52bf833a2fce1922b532b0cf3c6a9dc9b84d",
+        "build-x86-native/bin/neverd": "57afdfd56a596b39b555c518418bdbb3a0ee17539e845c7eb9512888d4e8d95d"
+      },
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 4.346161372959614,
+      "log": "build-x86-native-qualification-transition.log",
+      "log_sha256": "f7ea11de9cdd5d2cf35f66771e41819f0435ff3195a504bf2efd257763ab5ce4",
+      "tests": {
+        "tests": "20",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "1.437",
+        "timestamp": "2026-11-16T04:20:28.635",
+        "name": "AllTests"
+      },
+      "skipped": [
+        {
+          "name": "OriginalInstructionsMatchPagingFaultsAndCommit/3",
+          "value_param": "5",
+          "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp",
+          "line": "559",
+          "status": "run",
+          "result": "skipped",
+          "time": "0.005",
+          "timestamp": "2026-11-16T04:20:30.067",
+          "classname": "PagingModes/X86PagingNativeTest"
+        }
+      ],
+      "properties": {
+        "cpu_comparisons": 900,
+        "event_cpu_comparisons": 292
+      },
+      "report": "build-x86-native-qualification-transition.xml",
+      "report_sha256": "af8a7dcd0639d1b7244061d4379af4715506953c20d07ea6231b59277e62f368"
+    },
+    "build-x86-native-qualification-source": {
+      "working_source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_head": "62e3cded3021287a91e56cd7d64c75ed77a771f8",
+      "source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86-native/bin/NeverDX86LegacySourceTests",
+        "--gtest_filter=*",
+        "--gtest_output=xml:/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-qualification-source.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-qualification-source-tmp",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-qualification-source-exports",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store"
+      },
+      "binaries": {
+        "build-x86-native/bin/NeverDX86LegacySourceTests": "ddfd0670d79fcf621870adb3fd8a57c955d711da81b4c7f64c12ef285f259ccf",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+        "build-x86-native/bin/libneverd.so": "d06b113d5e0e78fb2ab495ad577f52bf833a2fce1922b532b0cf3c6a9dc9b84d",
+        "build-x86-native/bin/neverd": "57afdfd56a596b39b555c518418bdbb3a0ee17539e845c7eb9512888d4e8d95d"
+      },
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 17.49180504400283,
+      "log": "build-x86-native-qualification-source.log",
+      "log_sha256": "92887354184a2a721e6c9744b854c35d33b506a4e39ba270099d364db0411dc4",
+      "tests": {
+        "tests": "249",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "14.635",
+        "timestamp": "2026-11-16T04:20:36.348",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {
+        "branch_selection_comparisons": 256
+      },
+      "report": "build-x86-native-qualification-source.xml",
+      "report_sha256": "e144940018833e194a0941af55c0f724497793e585c4e454684757c1cb9a601e"
+    },
+    "build-x86-native-qualification-boundary": {
+      "working_source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_head": "62e3cded3021287a91e56cd7d64c75ed77a771f8",
+      "source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86-native/bin/NeverDLowInstructionBoundaryTests",
+        "--gtest_filter=*",
+        "--gtest_output=xml:/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-qualification-boundary.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-qualification-boundary-tmp",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-qualification-boundary-exports",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store"
+      },
+      "binaries": {
+        "build-x86-native/bin/NeverDLowInstructionBoundaryTests": "262d8d22a7f81c03afb88868192b171861723b87505345201b25f8cb21c88aa1",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+        "build-x86-native/bin/libneverd.so": "d06b113d5e0e78fb2ab495ad577f52bf833a2fce1922b532b0cf3c6a9dc9b84d",
+        "build-x86-native/bin/neverd": "57afdfd56a596b39b555c518418bdbb3a0ee17539e845c7eb9512888d4e8d95d"
+      },
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 5.221536653116345,
+      "log": "build-x86-native-qualification-boundary.log",
+      "log_sha256": "de8c86722ee23c41657e5d94af52bf14258d7b3a5ffd4b573b847a634ce09723",
+      "tests": {
+        "tests": "89",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "2.342",
+        "timestamp": "2026-11-16T04:20:57.407",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {},
+      "report": "build-x86-native-qualification-boundary.xml",
+      "report_sha256": "1fc29cfa67a59a9a00033812d44752357feba908b34534b15a5c8404acc05fe1"
+    },
+    "build-x86-native-qualification-sdk": {
+      "working_source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_head": "62e3cded3021287a91e56cd7d64c75ed77a771f8",
+      "source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "4",
+        "/usr/bin/python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "pluginsdk/python/tests",
+        "-p",
+        "test_legacy_source_integration.py",
+        "-v"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-qualification-sdk-tmp",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-qualification-sdk-exports",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store",
+        "PYTHONPATH": "pluginsdk/python",
+        "NEVERD_TEST_LIBNEVERD": "build-x86-native/bin/libneverd.so"
+      },
+      "binaries": {
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+        "build-x86-native/bin/libneverd.so": "d06b113d5e0e78fb2ab495ad577f52bf833a2fce1922b532b0cf3c6a9dc9b84d",
+        "build-x86-native/bin/neverd": "57afdfd56a596b39b555c518418bdbb3a0ee17539e845c7eb9512888d4e8d95d"
+      },
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 2.9809628799557686,
+      "log": "build-x86-native-qualification-sdk.log",
+      "log_sha256": "ba818d393b3412a96b830cb7196173249e569a0fbafe11df10f9ac0860297c0e"
+    },
+    "build-x86-qualification-build": {
+      "working_source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_head": "62e3cded3021287a91e56cd7d64c75ed77a771f8",
+      "source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "env",
+        "GIT_CONFIG_COUNT=2",
+        "GIT_CONFIG_KEY_0=http.curloptResolve",
+        "GIT_CONFIG_VALUE_0=github.com:443:4.237.22.38",
+        "GIT_CONFIG_KEY_1=http.proxy",
+        "GIT_CONFIG_VALUE_1=",
+        "/usr/bin/python3",
+        "scripts/build.py",
+        "build-x86",
+        "--target",
+        "NeverDX64PagedExecutionTests",
+        "NeverDX86PagingTests",
+        "NeverDX86LegacySourceTests",
+        "NeverDLowInstructionBoundaryTests",
+        "neverd",
+        "neverd_shared",
+        "--parallel",
+        "4"
+      ],
+      "environment": {},
+      "binaries": {},
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 70.77347002690658,
+      "log": "build-x86-qualification-build.log",
+      "log_sha256": "ed8672f052c663cc08e1b767c947e4da4a3470c32c62b8a1d2abaf6e9eb72252"
+    },
+    "build-x86-qualification-paged-source": {
+      "working_source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_head": "62e3cded3021287a91e56cd7d64c75ed77a771f8",
+      "source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "12",
+        "build-x86/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=*",
+        "--gtest_output=xml:/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-qualification-paged-source.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-qualification-paged-source-tmp",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-qualification-paged-source-exports",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "check"
+      },
+      "binaries": {
+        "build-x86/bin/NeverDX64PagedExecutionTests": "420416216d26d9d6751a354655def643bdeb754bced2e063760c3e10ee5449a4",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+        "build-x86/bin/libneverd.so": "cca22faf31233bb35f58c89d34d69450058190cad4a45551452b060edcdd3d4a",
+        "build-x86/bin/neverd": "01a53f79a4f3a5e6b28596bba7877321d9fdb6389def7186ff765f500a9bd893"
+      },
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 567.9171287410427,
+      "log": "build-x86-qualification-paged-source.log",
+      "log_sha256": "6c70dbd28ae2996d246aac8166561c447d31e7142c93892f5ede2064679a101d",
+      "tests": {
+        "tests": "184",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "565.942",
+        "timestamp": "2026-11-16T04:14:52.766",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {
+        "cpu_comparisons": 438753,
+        "fault_cpu_comparisons": 14936,
+        "handler_cpu_comparisons": 33440,
+        "software_interrupt_cpu_comparisons": 30840,
+        "software_completion_cpu_comparisons": 18504,
+        "processor": 156,
+        "core_type": 448,
+        "far_pointer_fault_cpu_comparisons": 90024,
+        "return_processor": 24,
+        "return_core_type": 64,
+        "far_return_fault_cpu_comparisons": 3816,
+        "port_restart_checks": 720,
+        "port_permission_checks": 22,
+        "port_fragment_checks": 30,
+        "kvm_port_missing_alignment_checks": 1024,
+        "kvm_port_wrong_ss_faults": 96,
+        "kvm_port_comparisons": 38624,
+        "kvm_port_fault_comparisons": 18960,
+        "kvm_port_input_fault_effects": 2432,
+        "policy_backing_checks": 536,
+        "rep_fault_cpu_comparisons": 14944,
+        "rep_partial_fault_cpu_comparisons": 3552,
+        "iret_cpu_comparisons": 6048,
+        "iret_fault_cpu_comparisons": 2456,
+        "iret_ac_vmm_nmi_discrepancies": 136,
+        "iret_roundtrip_cpu_comparisons": 8,
+        "return_retry_cpu_comparisons": 4,
+        "accepted_cpu_comparisons": 14376,
+        "secondary_fault_cpu_comparisons": 2040,
+        "segment_load_fault_cpu_comparisons": 42384,
+        "segment_read_fault_cpu_comparisons": 3456,
+        "segment_push_fault_cpu_comparisons": 928,
+        "round_trip_comparisons": 2704,
+        "compiler_count": 2,
+        "original_code64_descriptor_range_observations": 117,
+        "original_code64_descriptor_range_comparisons": 936,
+        "descriptor_profile_resume_comparisons": 64,
+        "descriptor_profile_full_mode_comparisons": 16,
+        "original_code64_event_descriptor_observations": 40,
+        "original_code64_event_descriptor_owner_comparisons": 40,
+        "original_code64_event_descriptor_comparisons": 320,
+        "event_descriptor_resume_comparisons": 160,
+        "event_descriptor_instruction_resume_comparisons": 24,
+        "event_descriptor_software_debug_comparisons": 4,
+        "event_descriptor_full_mode_comparisons": 96,
+        "original_code64_return_descriptor_observations": 312,
+        "original_code64_return_descriptor_comparisons": 2496,
+        "return_descriptor_resume_comparisons": 288,
+        "return_descriptor_event_resume_comparisons": 8,
+        "return_descriptor_full_mode_comparisons": 64,
+        "original_segment_alias_comparisons": 12,
+        "original_comparisons": 6576,
+        "original_shutdowns": 2,
+        "branch_selection_comparisons": 640,
+        "continuous_source_roundtrips": 8,
+        "continuous_native_event_comparisons": 4,
+        "original_initial_sregs_writes": 203,
+        "original_mode_rewrites": 0,
+        "continuous_original_cpu_comparisons": 1,
+        "continuous_external_frame_comparisons": 4,
+        "continuous_external_iret_comparisons": 4,
+        "original_non64_segment_comparisons": 144,
+        "original_non64_null_base_source_comparisons": 32,
+        "original_non64_descriptor_fault_comparisons": 16
+      },
+      "report": "build-x86-qualification-paged-source.xml",
+      "report_sha256": "e672600630fb964a6cde6b6aefb9a7cf8525f96512820f876eb7df910f0ff472"
+    },
+    "build-x86-qualification-transition": {
+      "working_source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_head": "62e3cded3021287a91e56cd7d64c75ed77a771f8",
+      "source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "12",
+        "build-x86/bin/NeverDX86PagingTests",
+        "--gtest_filter=X64PagedEventTest.*:PagingModes/X86PagingNativeTest.*",
+        "--gtest_output=xml:/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-qualification-transition.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-qualification-transition-tmp",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-qualification-transition-exports",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "check"
+      },
+      "binaries": {
+        "build-x86/bin/NeverDX86PagingTests": "cc8bea0ef94799d92a7ed0b76ece50ae30ebfaaa41bd79c01c6d7b3d96b0df1a",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+        "build-x86/bin/libneverd.so": "cca22faf31233bb35f58c89d34d69450058190cad4a45551452b060edcdd3d4a",
+        "build-x86/bin/neverd": "01a53f79a4f3a5e6b28596bba7877321d9fdb6389def7186ff765f500a9bd893"
+      },
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 4.066170463105664,
+      "log": "build-x86-qualification-transition.log",
+      "log_sha256": "6fa48efc7867c882e0b0d2c2f88cafc28c46936a5c157ed86495ddad656a63b9",
+      "tests": {
+        "tests": "20",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "2.091",
+        "timestamp": "2026-11-16T04:24:23.028",
+        "name": "AllTests"
+      },
+      "skipped": [
+        {
+          "name": "OriginalInstructionsMatchPagingFaultsAndCommit/3",
+          "value_param": "5",
+          "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/translate/x86/X86PagingNativeTests.cpp",
+          "line": "559",
+          "status": "run",
+          "result": "skipped",
+          "time": "0.023",
+          "timestamp": "2026-11-16T04:24:25.097",
+          "classname": "PagingModes/X86PagingNativeTest"
+        }
+      ],
+      "properties": {
+        "cpu_comparisons": 900,
+        "event_cpu_comparisons": 292
+      },
+      "report": "build-x86-qualification-transition.xml",
+      "report_sha256": "5c8c001e95737bb474b39e6a6dcb132172b5488aa06ce738af4d0036a5326a8c"
+    },
+    "build-x86-qualification-source": {
+      "working_source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_head": "62e3cded3021287a91e56cd7d64c75ed77a771f8",
+      "source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "12",
+        "build-x86/bin/NeverDX86LegacySourceTests",
+        "--gtest_filter=*",
+        "--gtest_output=xml:/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-qualification-source.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-qualification-source-tmp",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-qualification-source-exports",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "check"
+      },
+      "binaries": {
+        "build-x86/bin/NeverDX86LegacySourceTests": "c19c168c86ab4fe788c59160c04417204d73e84aec86af82957ef56c860308ef",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+        "build-x86/bin/libneverd.so": "cca22faf31233bb35f58c89d34d69450058190cad4a45551452b060edcdd3d4a",
+        "build-x86/bin/neverd": "01a53f79a4f3a5e6b28596bba7877321d9fdb6389def7186ff765f500a9bd893"
+      },
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 26.15348952403292,
+      "log": "build-x86-qualification-source.log",
+      "log_sha256": "c61683282f9898b5e04307698eff5694103fba6a3eb1ba657087c61bd5e033f2",
+      "tests": {
+        "tests": "249",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "24.246",
+        "timestamp": "2026-11-16T04:24:29.366",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {
+        "branch_selection_comparisons": 256
+      },
+      "report": "build-x86-qualification-source.xml",
+      "report_sha256": "0e1b9c99d55472781a0a3186fbfc90c734587326d0d450e45d6b6575361d6fc3"
+    },
+    "build-x86-qualification-boundary": {
+      "working_source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_head": "62e3cded3021287a91e56cd7d64c75ed77a771f8",
+      "source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "12",
+        "build-x86/bin/NeverDLowInstructionBoundaryTests",
+        "--gtest_filter=*",
+        "--gtest_output=xml:/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-qualification-boundary.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-qualification-boundary-tmp",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-qualification-boundary-exports",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "check"
+      },
+      "binaries": {
+        "build-x86/bin/NeverDLowInstructionBoundaryTests": "14e227da58a13a061012e5f2f5758e0d3b81261a617e5ec65ee8c49a56e3c327",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+        "build-x86/bin/libneverd.so": "cca22faf31233bb35f58c89d34d69450058190cad4a45551452b060edcdd3d4a",
+        "build-x86/bin/neverd": "01a53f79a4f3a5e6b28596bba7877321d9fdb6389def7186ff765f500a9bd893"
+      },
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 6.90504863508977,
+      "log": "build-x86-qualification-boundary.log",
+      "log_sha256": "810a8871eee5ed231470874877af0d6b5b0d760fa047fad1c9530fdf536ee7b9",
+      "tests": {
+        "tests": "89",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "5.006",
+        "timestamp": "2026-11-16T04:24:57.955",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {},
+      "report": "build-x86-qualification-boundary.xml",
+      "report_sha256": "c2e38b82bdfb784d354060a9ee35f86ff1b612a41e9a0a302ed85f11937e21be"
+    },
+    "build-x86-qualification-sdk": {
+      "working_source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_head": "62e3cded3021287a91e56cd7d64c75ed77a771f8",
+      "source_tree": "299ef945a61f73f4e26f73a18aeccc4913e87e56",
+      "source_status": "",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "12",
+        "/usr/bin/python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "pluginsdk/python/tests",
+        "-p",
+        "test_legacy_source_integration.py",
+        "-v"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-qualification-sdk-tmp",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-qualification-sdk-exports",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "check",
+        "PYTHONPATH": "pluginsdk/python",
+        "NEVERD_TEST_LIBNEVERD": "build-x86/bin/libneverd.so"
+      },
+      "binaries": {
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+        "build-x86/bin/libneverd.so": "cca22faf31233bb35f58c89d34d69450058190cad4a45551452b060edcdd3d4a",
+        "build-x86/bin/neverd": "01a53f79a4f3a5e6b28596bba7877321d9fdb6389def7186ff765f500a9bd893"
+      },
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 2.0752950231544673,
+      "log": "build-x86-qualification-sdk.log",
+      "log_sha256": "67c968a16a2e7326e346496adf1837929c6d44ba9c154d41910ca271ff22c0d2"
+    }
+  },
+  "by_sdk": {
+    "build-x86-native": {
+      "passed": 543,
+      "skipped": 1
+    },
+    "build-x86": {
+      "passed": 543,
+      "skipped": 1
+    }
+  },
+  "totals": {
+    "passed": 1086,
+    "skipped": 2,
+    "failures": 0
+  },
+  "diagnostics": {
+    "build-x86-green-build0.json": {
+      "working_source_tree": "76763652b4f13f64c3003b15b1d3a67ac510e844",
+      "source_head": "1c292344ab8cf42ce42994a437074cafc4fc20e1",
+      "source_tree": "0a2d2316119e48a149dc0a8d8bc46b89285a1342",
+      "source_status": "M include/neverd/analysis/arch/x86_64/X64PagedEventDelivery.h\n M include/neverd/analysis/arch/x86_64/X64PagedExecution.h\n M include/neverd/ir/X86/X86SegmentDescriptorProfile.h\n M lib/analysis/arch/x86_64/X64ContinuationDelivery.h\n M lib/analysis/arch/x86_64/X64ContinuationSegments.h\n M lib/analysis/arch/x86_64/X64PagedEventDelivery.cpp\n M lib/analysis/arch/x86_64/X64PagedExecution.cpp\n M lib/analysis/arch/x86_64/X86ModeExecution.cpp\n M unittests/translate/x86/X64PagedExecutionTests.cpp\n M unittests/translate/x86/X64PagedNativeCPU.h\n?? unittests/translate/x86/X64PagedEventDescriptorTests.inc",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "env",
+        "GIT_CONFIG_COUNT=2",
+        "GIT_CONFIG_KEY_0=http.curloptResolve",
+        "GIT_CONFIG_VALUE_0=github.com:443:4.237.22.38",
+        "GIT_CONFIG_KEY_1=http.proxy",
+        "GIT_CONFIG_VALUE_1=",
+        "/usr/bin/python3",
+        "scripts/build.py",
+        "build-x86",
+        "--target",
+        "NeverDX64PagedExecutionTests",
+        "--parallel",
+        "4"
+      ],
+      "environment": {},
+      "binaries": {},
+      "source_unchanged": true,
+      "exit_code": 1,
+      "seconds": 23.75761961005628,
+      "log": "build-x86-green-build0.log",
+      "log_sha256": "ed211ca8169f9927971dba17c0cf4dc74b3fccd503063cc6d1dd0360da37c546"
+    },
+    "build-x86-green-build1.json": {
+      "working_source_tree": "70c4337edaf7b60a1e74f515c3fd18d9f65a1440",
+      "source_head": "1c292344ab8cf42ce42994a437074cafc4fc20e1",
+      "source_tree": "0a2d2316119e48a149dc0a8d8bc46b89285a1342",
+      "source_status": "M include/neverd/analysis/arch/x86_64/X64PagedEventDelivery.h\n M include/neverd/analysis/arch/x86_64/X64PagedExecution.h\n M include/neverd/ir/X86/X86SegmentDescriptorProfile.h\n M lib/analysis/arch/x86_64/X64ContinuationDelivery.h\n M lib/analysis/arch/x86_64/X64ContinuationSegments.h\n M lib/analysis/arch/x86_64/X64PagedEventDelivery.cpp\n M lib/analysis/arch/x86_64/X64PagedExecution.cpp\n M lib/analysis/arch/x86_64/X86ModeExecution.cpp\n M unittests/translate/x86/X64PagedExecutionTests.cpp\n M unittests/translate/x86/X64PagedNativeCPU.h\n?? unittests/translate/x86/X64PagedEventDescriptorTests.inc",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "env",
+        "GIT_CONFIG_COUNT=2",
+        "GIT_CONFIG_KEY_0=http.curloptResolve",
+        "GIT_CONFIG_VALUE_0=github.com:443:4.237.22.38",
+        "GIT_CONFIG_KEY_1=http.proxy",
+        "GIT_CONFIG_VALUE_1=",
+        "/usr/bin/python3",
+        "scripts/build.py",
+        "build-x86",
+        "--target",
+        "NeverDX64PagedExecutionTests",
+        "--parallel",
+        "4"
+      ],
+      "environment": {},
+      "binaries": {},
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 58.93714662385173,
+      "log": "build-x86-green-build1.log",
+      "log_sha256": "a46b7eaa9efc415cf4129de7facd3891941efb4019c6406fbf98134f167f29f3"
+    },
+    "build-x86-green1.json": {
+      "working_source_tree": "70c4337edaf7b60a1e74f515c3fd18d9f65a1440",
+      "source_head": "1c292344ab8cf42ce42994a437074cafc4fc20e1",
+      "source_tree": "0a2d2316119e48a149dc0a8d8bc46b89285a1342",
+      "source_status": "M include/neverd/analysis/arch/x86_64/X64PagedEventDelivery.h\n M include/neverd/analysis/arch/x86_64/X64PagedExecution.h\n M include/neverd/ir/X86/X86SegmentDescriptorProfile.h\n M lib/analysis/arch/x86_64/X64ContinuationDelivery.h\n M lib/analysis/arch/x86_64/X64ContinuationSegments.h\n M lib/analysis/arch/x86_64/X64PagedEventDelivery.cpp\n M lib/analysis/arch/x86_64/X64PagedExecution.cpp\n M lib/analysis/arch/x86_64/X86ModeExecution.cpp\n M unittests/translate/x86/X64PagedExecutionTests.cpp\n M unittests/translate/x86/X64PagedNativeCPU.h\n?? unittests/translate/x86/X64PagedEventDescriptorTests.inc",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "12",
+        "build-x86/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=X64PagedEventDescriptorTest.*",
+        "--gtest_output=xml:/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-green1.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-green1-tmp",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-green1-exports",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "check"
+      },
+      "binaries": {
+        "build-x86/bin/NeverDX64PagedExecutionTests": "420416216d26d9d6751a354655def643bdeb754bced2e063760c3e10ee5449a4",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f"
+      },
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 17.447508845943958,
+      "log": "build-x86-green1.log",
+      "log_sha256": "13e16fa72b35278ea745ae7d7dd5c13cd69462ca2d4d0673f1e237526bc23d5c",
+      "tests": {
+        "tests": "8",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "15.515",
+        "timestamp": "2026-11-16T04:11:27.172",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {
+        "original_code64_event_descriptor_observations": 40,
+        "original_code64_event_descriptor_owner_comparisons": 40,
+        "original_code64_event_descriptor_comparisons": 320,
+        "event_descriptor_resume_comparisons": 160,
+        "event_descriptor_instruction_resume_comparisons": 24,
+        "event_descriptor_software_debug_comparisons": 4,
+        "event_descriptor_full_mode_comparisons": 96
+      },
+      "report": "build-x86-green1.xml",
+      "report_sha256": "9a547e8562ac1cdef3eb8e0cab99a1f600191c3164d998f9c4d357644eb8889b"
+    },
+    "build-x86-native-green-build0.json": {
+      "working_source_tree": "76763652b4f13f64c3003b15b1d3a67ac510e844",
+      "source_head": "1c292344ab8cf42ce42994a437074cafc4fc20e1",
+      "source_tree": "0a2d2316119e48a149dc0a8d8bc46b89285a1342",
+      "source_status": "M include/neverd/analysis/arch/x86_64/X64PagedEventDelivery.h\n M include/neverd/analysis/arch/x86_64/X64PagedExecution.h\n M include/neverd/ir/X86/X86SegmentDescriptorProfile.h\n M lib/analysis/arch/x86_64/X64ContinuationDelivery.h\n M lib/analysis/arch/x86_64/X64ContinuationSegments.h\n M lib/analysis/arch/x86_64/X64PagedEventDelivery.cpp\n M lib/analysis/arch/x86_64/X64PagedExecution.cpp\n M lib/analysis/arch/x86_64/X86ModeExecution.cpp\n M unittests/translate/x86/X64PagedExecutionTests.cpp\n M unittests/translate/x86/X64PagedNativeCPU.h\n?? unittests/translate/x86/X64PagedEventDescriptorTests.inc",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "env",
+        "GIT_CONFIG_COUNT=2",
+        "GIT_CONFIG_KEY_0=http.curloptResolve",
+        "GIT_CONFIG_VALUE_0=github.com:443:4.237.22.38",
+        "GIT_CONFIG_KEY_1=http.proxy",
+        "GIT_CONFIG_VALUE_1=",
+        "/usr/bin/python3",
+        "scripts/build.py",
+        "build-x86-native",
+        "--target",
+        "NeverDX64PagedExecutionTests",
+        "--parallel",
+        "4"
+      ],
+      "environment": {},
+      "binaries": {},
+      "source_unchanged": true,
+      "exit_code": 1,
+      "seconds": 25.36576174106449,
+      "log": "build-x86-native-green-build0.log",
+      "log_sha256": "97034b9f70c9b2ae7dc957fc2cf5f5bc01c26b554766892ba172ea2969c68ac1"
+    },
+    "build-x86-native-green-build1.json": {
+      "working_source_tree": "70c4337edaf7b60a1e74f515c3fd18d9f65a1440",
+      "source_head": "1c292344ab8cf42ce42994a437074cafc4fc20e1",
+      "source_tree": "0a2d2316119e48a149dc0a8d8bc46b89285a1342",
+      "source_status": "M include/neverd/analysis/arch/x86_64/X64PagedEventDelivery.h\n M include/neverd/analysis/arch/x86_64/X64PagedExecution.h\n M include/neverd/ir/X86/X86SegmentDescriptorProfile.h\n M lib/analysis/arch/x86_64/X64ContinuationDelivery.h\n M lib/analysis/arch/x86_64/X64ContinuationSegments.h\n M lib/analysis/arch/x86_64/X64PagedEventDelivery.cpp\n M lib/analysis/arch/x86_64/X64PagedExecution.cpp\n M lib/analysis/arch/x86_64/X86ModeExecution.cpp\n M unittests/translate/x86/X64PagedExecutionTests.cpp\n M unittests/translate/x86/X64PagedNativeCPU.h\n?? unittests/translate/x86/X64PagedEventDescriptorTests.inc",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "env",
+        "GIT_CONFIG_COUNT=2",
+        "GIT_CONFIG_KEY_0=http.curloptResolve",
+        "GIT_CONFIG_VALUE_0=github.com:443:4.237.22.38",
+        "GIT_CONFIG_KEY_1=http.proxy",
+        "GIT_CONFIG_VALUE_1=",
+        "/usr/bin/python3",
+        "scripts/build.py",
+        "build-x86-native",
+        "--target",
+        "NeverDX64PagedExecutionTests",
+        "--parallel",
+        "4"
+      ],
+      "environment": {},
+      "binaries": {},
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 65.6972834689077,
+      "log": "build-x86-native-green-build1.log",
+      "log_sha256": "2e51f8841a0ec5a03e8fd18710c99069db3a9350fc48a28b196dea0fa0715808"
+    },
+    "build-x86-native-green1.json": {
+      "working_source_tree": "70c4337edaf7b60a1e74f515c3fd18d9f65a1440",
+      "source_head": "1c292344ab8cf42ce42994a437074cafc4fc20e1",
+      "source_tree": "0a2d2316119e48a149dc0a8d8bc46b89285a1342",
+      "source_status": "M include/neverd/analysis/arch/x86_64/X64PagedEventDelivery.h\n M include/neverd/analysis/arch/x86_64/X64PagedExecution.h\n M include/neverd/ir/X86/X86SegmentDescriptorProfile.h\n M lib/analysis/arch/x86_64/X64ContinuationDelivery.h\n M lib/analysis/arch/x86_64/X64ContinuationSegments.h\n M lib/analysis/arch/x86_64/X64PagedEventDelivery.cpp\n M lib/analysis/arch/x86_64/X64PagedExecution.cpp\n M lib/analysis/arch/x86_64/X86ModeExecution.cpp\n M unittests/translate/x86/X64PagedExecutionTests.cpp\n M unittests/translate/x86/X64PagedNativeCPU.h\n?? unittests/translate/x86/X64PagedEventDescriptorTests.inc",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86-native/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=X64PagedEventDescriptorTest.*",
+        "--gtest_output=xml:/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-green1.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-green1-tmp",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-green1-exports",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store"
+      },
+      "binaries": {
+        "build-x86-native/bin/NeverDX64PagedExecutionTests": "5e657511ff7b155ca99d44fd65dc2e495981a552ce2c0299552a7a21113ed6ce",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f"
+      },
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 13.430987576954067,
+      "log": "build-x86-native-green1.log",
+      "log_sha256": "bdbd4ad202fcd99117ac5fe5394e5b635360d451c9a511b642864b90e64b5950",
+      "tests": {
+        "tests": "8",
+        "failures": "0",
+        "disabled": "0",
+        "errors": "0",
+        "time": "11.579",
+        "timestamp": "2026-11-16T04:11:33.978",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {
+        "original_code64_event_descriptor_observations": 40,
+        "original_code64_event_descriptor_owner_comparisons": 40,
+        "original_code64_event_descriptor_comparisons": 320,
+        "event_descriptor_resume_comparisons": 160,
+        "event_descriptor_instruction_resume_comparisons": 24,
+        "event_descriptor_software_debug_comparisons": 4,
+        "event_descriptor_full_mode_comparisons": 96
+      },
+      "report": "build-x86-native-green1.xml",
+      "report_sha256": "c96fb90a91a2c0879a56e4f496b522694b9dfe6220fa4d2925311a314f065017"
+    },
+    "build-x86-native-probe-build.json": {
+      "working_source_tree": "9299961b4894fb217e51605a49c74036ee6e3d62",
+      "source_head": "1c292344ab8cf42ce42994a437074cafc4fc20e1",
+      "source_tree": "0a2d2316119e48a149dc0a8d8bc46b89285a1342",
+      "source_status": "M unittests/translate/x86/X64PagedExecutionTests.cpp\n?? unittests/translate/x86/X64PagedEventDescriptorTests.inc",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "env",
+        "GIT_CONFIG_COUNT=2",
+        "GIT_CONFIG_KEY_0=http.curloptResolve",
+        "GIT_CONFIG_VALUE_0=github.com:443:4.237.22.38",
+        "GIT_CONFIG_KEY_1=http.proxy",
+        "GIT_CONFIG_VALUE_1=",
+        "/usr/bin/python3",
+        "scripts/build.py",
+        "build-x86-native",
+        "--target",
+        "NeverDX64PagedExecutionTests",
+        "--parallel",
+        "4"
+      ],
+      "environment": {},
+      "binaries": {},
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 59.6296617242042,
+      "log": "build-x86-native-probe-build.log",
+      "log_sha256": "903792a088dfed561062fc2f187b054a11d227729563f094d9a8c4d08f11c852"
+    },
+    "build-x86-native-probe.json": {
+      "working_source_tree": "9299961b4894fb217e51605a49c74036ee6e3d62",
+      "source_head": "1c292344ab8cf42ce42994a437074cafc4fc20e1",
+      "source_tree": "0a2d2316119e48a149dc0a8d8bc46b89285a1342",
+      "source_status": "M unittests/translate/x86/X64PagedExecutionTests.cpp\n?? unittests/translate/x86/X64PagedEventDescriptorTests.inc",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86-native/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=X64PagedEventDescriptorTest.ObserveOriginalRanges",
+        "--gtest_output=xml:/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-probe.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-probe-tmp",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-probe-exports",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store"
+      },
+      "binaries": {
+        "build-x86-native/bin/NeverDX64PagedExecutionTests": "b7312c28443bf4422b3b3dc3c3a5018b74bc51d66a2b81aad8b3756c89c75959",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f"
+      },
+      "source_unchanged": true,
+      "exit_code": 1,
+      "seconds": 2.100515381898731,
+      "log": "build-x86-native-probe.log",
+      "log_sha256": "c14ee00e45a25432e55649541734a0b4d55dd7a3f80cc9b6717ec74f05a94228",
+      "tests": {
+        "tests": "1",
+        "failures": "1",
+        "disabled": "0",
+        "errors": "0",
+        "time": "0.212",
+        "timestamp": "2026-11-16T03:45:43.772",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {},
+      "report": "build-x86-native-probe.xml",
+      "report_sha256": "e1e95eda6c7cd6f1f3e0aa0bcad7d72c99698720f6f26a9a1b7bc6ca59bcc04e"
+    },
+    "build-x86-native-probe2-build.json": {
+      "working_source_tree": "4533ee57d22a6739aa12f08cd8c66b00c6c9dc60",
+      "source_head": "1c292344ab8cf42ce42994a437074cafc4fc20e1",
+      "source_tree": "0a2d2316119e48a149dc0a8d8bc46b89285a1342",
+      "source_status": "M unittests/translate/x86/X64PagedExecutionTests.cpp\n M unittests/translate/x86/X64PagedNativeCPU.h\n?? unittests/translate/x86/X64PagedEventDescriptorTests.inc",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "env",
+        "GIT_CONFIG_COUNT=2",
+        "GIT_CONFIG_KEY_0=http.curloptResolve",
+        "GIT_CONFIG_VALUE_0=github.com:443:4.237.22.38",
+        "GIT_CONFIG_KEY_1=http.proxy",
+        "GIT_CONFIG_VALUE_1=",
+        "/usr/bin/python3",
+        "scripts/build.py",
+        "build-x86-native",
+        "--target",
+        "NeverDX64PagedExecutionTests",
+        "--parallel",
+        "4"
+      ],
+      "environment": {},
+      "binaries": {},
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 59.32906260713935,
+      "log": "build-x86-native-probe2-build.log",
+      "log_sha256": "903792a088dfed561062fc2f187b054a11d227729563f094d9a8c4d08f11c852"
+    },
+    "build-x86-native-probe2.json": {
+      "working_source_tree": "4533ee57d22a6739aa12f08cd8c66b00c6c9dc60",
+      "source_head": "1c292344ab8cf42ce42994a437074cafc4fc20e1",
+      "source_tree": "0a2d2316119e48a149dc0a8d8bc46b89285a1342",
+      "source_status": "M unittests/translate/x86/X64PagedExecutionTests.cpp\n M unittests/translate/x86/X64PagedNativeCPU.h\n?? unittests/translate/x86/X64PagedEventDescriptorTests.inc",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86-native/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=X64PagedEventDescriptorTest.*",
+        "--gtest_output=xml:/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-probe2.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-probe2-tmp",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-probe2-exports",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store"
+      },
+      "binaries": {
+        "build-x86-native/bin/NeverDX64PagedExecutionTests": "31741663287dd9793deb17473232658496c72ba597b7df9cacd975a89bfc12e0",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f"
+      },
+      "source_unchanged": true,
+      "exit_code": 1,
+      "seconds": 4.331508383853361,
+      "log": "build-x86-native-probe2.log",
+      "log_sha256": "2c6518d1baa41d439e94e4a04eca33abebef5e62204ee80664cac7f6615a9523",
+      "tests": {
+        "tests": "2",
+        "failures": "2",
+        "disabled": "0",
+        "errors": "0",
+        "time": "2.414",
+        "timestamp": "2026-11-16T03:49:28.271",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {
+        "internal_error_0_10": 4,
+        "internal_error_0_11": 4,
+        "internal_error_0_12": 4,
+        "internal_error_0_13": 4,
+        "internal_error_0_14": 4,
+        "internal_error_0_15": 4,
+        "internal_error_1_10": 4,
+        "internal_error_1_11": 4,
+        "internal_error_1_12": 4,
+        "internal_error_1_13": 4,
+        "internal_error_1_14": 4,
+        "internal_error_1_15": 4,
+        "internal_error_2_10": 4,
+        "internal_error_2_11": 4,
+        "internal_error_2_12": 4,
+        "internal_error_2_13": 4,
+        "internal_error_2_14": 4,
+        "internal_error_2_15": 4,
+        "internal_error_3_10": 4,
+        "internal_error_3_11": 4,
+        "internal_error_3_12": 4,
+        "internal_error_3_13": 4,
+        "internal_error_3_14": 4,
+        "internal_error_3_15": 4,
+        "original_code64_event_descriptor_observations": 40,
+        "original_code64_event_descriptor_owner_comparisons": 40
+      },
+      "report": "build-x86-native-probe2.xml",
+      "report_sha256": "b6884541b0a98656e55b32556aa2221f1e6c643e1163f579225b276abec906fb"
+    },
+    "build-x86-native-probe3-build.json": {
+      "working_source_tree": "d9b8840dbc573dd886c49cbb21efe3b5f209ef3b",
+      "source_head": "1c292344ab8cf42ce42994a437074cafc4fc20e1",
+      "source_tree": "0a2d2316119e48a149dc0a8d8bc46b89285a1342",
+      "source_status": "M unittests/translate/x86/X64PagedExecutionTests.cpp\n M unittests/translate/x86/X64PagedNativeCPU.h\n?? unittests/translate/x86/X64PagedEventDescriptorTests.inc",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "env",
+        "GIT_CONFIG_COUNT=2",
+        "GIT_CONFIG_KEY_0=http.curloptResolve",
+        "GIT_CONFIG_VALUE_0=github.com:443:4.237.22.38",
+        "GIT_CONFIG_KEY_1=http.proxy",
+        "GIT_CONFIG_VALUE_1=",
+        "/usr/bin/python3",
+        "scripts/build.py",
+        "build-x86-native",
+        "--target",
+        "NeverDX64PagedExecutionTests",
+        "--parallel",
+        "4"
+      ],
+      "environment": {},
+      "binaries": {},
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 57.125243704998866,
+      "log": "build-x86-native-probe3-build.log",
+      "log_sha256": "76b6143219e30110ca5be73e36130001784d78ef1f7b629340fa45c972c5e725"
+    },
+    "build-x86-native-probe3.json": {
+      "working_source_tree": "d9b8840dbc573dd886c49cbb21efe3b5f209ef3b",
+      "source_head": "1c292344ab8cf42ce42994a437074cafc4fc20e1",
+      "source_tree": "0a2d2316119e48a149dc0a8d8bc46b89285a1342",
+      "source_status": "M unittests/translate/x86/X64PagedExecutionTests.cpp\n M unittests/translate/x86/X64PagedNativeCPU.h\n?? unittests/translate/x86/X64PagedEventDescriptorTests.inc",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "4",
+        "build-x86-native/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=X64PagedEventDescriptorTest.*",
+        "--gtest_output=xml:/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-probe3.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-probe3-tmp",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-native-probe3-exports",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "store"
+      },
+      "binaries": {
+        "build-x86-native/bin/NeverDX64PagedExecutionTests": "0a984b5f0fcf9582aae01f70bc67b9e0e8e9cd95ffa15f135538d5f55b0074f8",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f"
+      },
+      "source_unchanged": true,
+      "exit_code": 1,
+      "seconds": 4.2198567350860685,
+      "log": "build-x86-native-probe3.log",
+      "log_sha256": "48040dc912945cffd61fa315e748edca9f7544f5d602459d788e21b23666c95b",
+      "tests": {
+        "tests": "2",
+        "failures": "1",
+        "disabled": "0",
+        "errors": "0",
+        "time": "2.392",
+        "timestamp": "2026-11-16T03:55:35.935",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {
+        "original_code64_event_descriptor_observations": 56,
+        "original_code64_event_descriptor_owner_comparisons": 56
+      },
+      "report": "build-x86-native-probe3.xml",
+      "report_sha256": "9427aa4dddf075eba2e2dc2a1a57e9b2026ee32537242e7d5dfe1b9bf678d04e"
+    },
+    "build-x86-probe-build.json": {
+      "working_source_tree": "9299961b4894fb217e51605a49c74036ee6e3d62",
+      "source_head": "1c292344ab8cf42ce42994a437074cafc4fc20e1",
+      "source_tree": "0a2d2316119e48a149dc0a8d8bc46b89285a1342",
+      "source_status": "M unittests/translate/x86/X64PagedExecutionTests.cpp\n?? unittests/translate/x86/X64PagedEventDescriptorTests.inc",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "env",
+        "GIT_CONFIG_COUNT=2",
+        "GIT_CONFIG_KEY_0=http.curloptResolve",
+        "GIT_CONFIG_VALUE_0=github.com:443:4.237.22.38",
+        "GIT_CONFIG_KEY_1=http.proxy",
+        "GIT_CONFIG_VALUE_1=",
+        "/usr/bin/python3",
+        "scripts/build.py",
+        "build-x86",
+        "--target",
+        "NeverDX64PagedExecutionTests",
+        "--parallel",
+        "4"
+      ],
+      "environment": {},
+      "binaries": {},
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 53.800322463037446,
+      "log": "build-x86-probe-build.log",
+      "log_sha256": "e49e39327564bd7bd460dae77f1745717e102a0a0298f17ba0b6d089810f6943"
+    },
+    "build-x86-probe.json": {
+      "working_source_tree": "9299961b4894fb217e51605a49c74036ee6e3d62",
+      "source_head": "1c292344ab8cf42ce42994a437074cafc4fc20e1",
+      "source_tree": "0a2d2316119e48a149dc0a8d8bc46b89285a1342",
+      "source_status": "M unittests/translate/x86/X64PagedExecutionTests.cpp\n?? unittests/translate/x86/X64PagedEventDescriptorTests.inc",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "12",
+        "build-x86/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=X64PagedEventDescriptorTest.ObserveOriginalRanges",
+        "--gtest_output=xml:/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-probe.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-probe-tmp",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-probe-exports",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "check"
+      },
+      "binaries": {
+        "build-x86/bin/NeverDX64PagedExecutionTests": "d240c49c9f5ac5f9ef87c8d2da9c0ba5a29c95f06091a186e6ca98d9827e9f0f",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f"
+      },
+      "source_unchanged": true,
+      "exit_code": 1,
+      "seconds": 2.054578789975494,
+      "log": "build-x86-probe.log",
+      "log_sha256": "2b276dcbc252ce672fe4c39d2d4228623bb636916e36e117a8350eb9252c5839",
+      "tests": {
+        "tests": "1",
+        "failures": "1",
+        "disabled": "0",
+        "errors": "0",
+        "time": "0.21",
+        "timestamp": "2026-11-16T03:45:37.808",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {},
+      "report": "build-x86-probe.xml",
+      "report_sha256": "ee2fc36f890bf3f2301e8ffb0eacd354a8cbede2bc3dfba50bd4aa0e627fba57"
+    },
+    "build-x86-probe2-build.json": {
+      "working_source_tree": "4533ee57d22a6739aa12f08cd8c66b00c6c9dc60",
+      "source_head": "1c292344ab8cf42ce42994a437074cafc4fc20e1",
+      "source_tree": "0a2d2316119e48a149dc0a8d8bc46b89285a1342",
+      "source_status": "M unittests/translate/x86/X64PagedExecutionTests.cpp\n M unittests/translate/x86/X64PagedNativeCPU.h\n?? unittests/translate/x86/X64PagedEventDescriptorTests.inc",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "env",
+        "GIT_CONFIG_COUNT=2",
+        "GIT_CONFIG_KEY_0=http.curloptResolve",
+        "GIT_CONFIG_VALUE_0=github.com:443:4.237.22.38",
+        "GIT_CONFIG_KEY_1=http.proxy",
+        "GIT_CONFIG_VALUE_1=",
+        "/usr/bin/python3",
+        "scripts/build.py",
+        "build-x86",
+        "--target",
+        "NeverDX64PagedExecutionTests",
+        "--parallel",
+        "4"
+      ],
+      "environment": {},
+      "binaries": {},
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 53.84543773904443,
+      "log": "build-x86-probe2-build.log",
+      "log_sha256": "7a6107b01ec812888e0ebb59f224174ad8a780bf789ad462fac25558db70ea29"
+    },
+    "build-x86-probe2.json": {
+      "working_source_tree": "4533ee57d22a6739aa12f08cd8c66b00c6c9dc60",
+      "source_head": "1c292344ab8cf42ce42994a437074cafc4fc20e1",
+      "source_tree": "0a2d2316119e48a149dc0a8d8bc46b89285a1342",
+      "source_status": "M unittests/translate/x86/X64PagedExecutionTests.cpp\n M unittests/translate/x86/X64PagedNativeCPU.h\n?? unittests/translate/x86/X64PagedEventDescriptorTests.inc",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "12",
+        "build-x86/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=X64PagedEventDescriptorTest.*",
+        "--gtest_output=xml:/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-probe2.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-probe2-tmp",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-probe2-exports",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "check"
+      },
+      "binaries": {
+        "build-x86/bin/NeverDX64PagedExecutionTests": "a65230ec38b976617c94393036978d8aecc43c00c6fc6bf9f4311f87c836df0b",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f"
+      },
+      "source_unchanged": true,
+      "exit_code": 1,
+      "seconds": 4.248009569011629,
+      "log": "build-x86-probe2.log",
+      "log_sha256": "0ecc7b5143313cacb298a8137060868bc6de6678b20c4d14aff9aab422bc471f",
+      "tests": {
+        "tests": "2",
+        "failures": "2",
+        "disabled": "0",
+        "errors": "0",
+        "time": "2.382",
+        "timestamp": "2026-11-16T03:49:22.635",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {
+        "internal_error_0_10": 4,
+        "internal_error_0_11": 4,
+        "internal_error_0_12": 4,
+        "internal_error_0_13": 4,
+        "internal_error_0_14": 4,
+        "internal_error_0_15": 4,
+        "internal_error_1_10": 4,
+        "internal_error_1_11": 4,
+        "internal_error_1_12": 4,
+        "internal_error_1_13": 4,
+        "internal_error_1_14": 4,
+        "internal_error_1_15": 4,
+        "internal_error_2_10": 4,
+        "internal_error_2_11": 4,
+        "internal_error_2_12": 4,
+        "internal_error_2_13": 4,
+        "internal_error_2_14": 4,
+        "internal_error_2_15": 4,
+        "internal_error_3_10": 4,
+        "internal_error_3_11": 4,
+        "internal_error_3_12": 4,
+        "internal_error_3_13": 4,
+        "internal_error_3_14": 4,
+        "internal_error_3_15": 4,
+        "original_code64_event_descriptor_observations": 40,
+        "original_code64_event_descriptor_owner_comparisons": 40
+      },
+      "report": "build-x86-probe2.xml",
+      "report_sha256": "061dfaab553b92c1c5487299350236418340b041652dd933f67a5a2a95e75802"
+    },
+    "build-x86-probe3-build.json": {
+      "working_source_tree": "d9b8840dbc573dd886c49cbb21efe3b5f209ef3b",
+      "source_head": "1c292344ab8cf42ce42994a437074cafc4fc20e1",
+      "source_tree": "0a2d2316119e48a149dc0a8d8bc46b89285a1342",
+      "source_status": "M unittests/translate/x86/X64PagedExecutionTests.cpp\n M unittests/translate/x86/X64PagedNativeCPU.h\n?? unittests/translate/x86/X64PagedEventDescriptorTests.inc",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "env",
+        "GIT_CONFIG_COUNT=2",
+        "GIT_CONFIG_KEY_0=http.curloptResolve",
+        "GIT_CONFIG_VALUE_0=github.com:443:4.237.22.38",
+        "GIT_CONFIG_KEY_1=http.proxy",
+        "GIT_CONFIG_VALUE_1=",
+        "/usr/bin/python3",
+        "scripts/build.py",
+        "build-x86",
+        "--target",
+        "NeverDX64PagedExecutionTests",
+        "--parallel",
+        "4"
+      ],
+      "environment": {},
+      "binaries": {},
+      "source_unchanged": true,
+      "exit_code": 0,
+      "seconds": 55.61680347495712,
+      "log": "build-x86-probe3-build.log",
+      "log_sha256": "5ed59b8400ae0ac05bb8cfbbefa00b24171e3d98db88593f844e4b865178403b"
+    },
+    "build-x86-probe3.json": {
+      "working_source_tree": "d9b8840dbc573dd886c49cbb21efe3b5f209ef3b",
+      "source_head": "1c292344ab8cf42ce42994a437074cafc4fc20e1",
+      "source_tree": "0a2d2316119e48a149dc0a8d8bc46b89285a1342",
+      "source_status": "M unittests/translate/x86/X64PagedExecutionTests.cpp\n M unittests/translate/x86/X64PagedNativeCPU.h\n?? unittests/translate/x86/X64PagedEventDescriptorTests.inc",
+      "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+      "command": [
+        "timeout",
+        "2400",
+        "taskset",
+        "-c",
+        "12",
+        "build-x86/bin/NeverDX64PagedExecutionTests",
+        "--gtest_filter=X64PagedEventDescriptorTest.*",
+        "--gtest_output=xml:/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-probe3.xml"
+      ],
+      "environment": {
+        "NEVERD_THREADS": "1",
+        "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+        "TMPDIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-probe3-tmp",
+        "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-event-descriptors-20261116/build-x86-probe3-exports",
+        "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+        "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+        "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+        "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+        "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+        "NEVERD_TEST_LEGACY_CALL": "check"
+      },
+      "binaries": {
+        "build-x86/bin/NeverDX64PagedExecutionTests": "95d0d447ccb90467c6a9c12d6aa1d573e7e4094c515546ff2c63cc6015ff9da8",
+        "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f"
+      },
+      "source_unchanged": true,
+      "exit_code": 1,
+      "seconds": 4.297912492183968,
+      "log": "build-x86-probe3.log",
+      "log_sha256": "6725b4b1f98ad5b0781929fe3493930913dc8158b704f7eb0a524fabccf4bcaf",
+      "tests": {
+        "tests": "2",
+        "failures": "1",
+        "disabled": "0",
+        "errors": "0",
+        "time": "2.406",
+        "timestamp": "2026-11-16T03:55:34.388",
+        "name": "AllTests"
+      },
+      "skipped": [],
+      "properties": {
+        "original_code64_event_descriptor_observations": 56,
+        "original_code64_event_descriptor_owner_comparisons": 56
+      },
+      "report": "build-x86-probe3.xml",
+      "report_sha256": "7c79c9c6dfc9041ade65ac1b8efe27998e93fc52e452627712daf8eaaadaed6b"
+    }
+  },
+  "diagnostic_interpretation": [
+    "Probe1 reaches ten already-accessed descriptor cases for software INT80 before a cross-wrap A=0 update exits with KVM INTERNAL_ERROR. Probe2 records all four event kinds, retaining every internal exit as a failed test, never as an architectural guest outcome.",
+    "Probe2 has 40 valid original observations and 40 direct-owner comparisons per core. All 24 cross-wrap A=0 cases per core, including pre-set leaf A/D controls, exit with KVM INTERNAL_ERROR_SIMUL_EX=2 and interruption info 0x80000b11 (#AC during delivery). Host split-lock settings were not changed. KVM_GET/SET_MSRS reject MSR_TEST_CTRL 0x33 in the disposable capability probe.",
+    "Probe3 removes the cross-line update cases and adds aligned high-canonical and last-qword A=0 descriptors with writable/read-only controls. Both cores finish all 56 original observations. P has four canonicality error-frame RAM differences; E has twelve. Both have eight A=0/read-only State differences: original CR2 is the descriptor start, whereas the current byte update reports start+5. These eight per-core cases remain unresolved and are not included among final canonicality passes.",
+    "Final canonicality groups use the ten A=1 cases with full represented CPU/RAM comparisons. Descriptor updates are unchanged, not silently replaced by the return instruction qword transaction.",
+    "First implementation build attempts failed before tests because inheriting the protected base constructor did not make it publicly callable. Explicit public forwarding constructors fix the access issue; original failed build logs are retained."
+  ],
+  "native_oracle": {
+    "observations_per_sdk": 40,
+    "direct_owner_comparisons_per_sdk": 40,
+    "generated_comparisons_per_sdk": 320,
+    "logical_processors": {
+      "build-x86-native": 4,
+      "build-x86": 12
+    },
+    "method": "Fresh KVM VM/vCPU per stream, two initial SREGS writes and no intermediate rewrites. KVM_PRE_FAULT_MEMORY fills physical backing. Four original streams (INT80, INT3, explicit IRQ and NMI) each use ten A=1 descriptor inputs. Full represented State and every byte of 0x40000 RAM are compared without output masks. Original target/debug and HLT code pages are pre-accessed in both inputs; absent-first-wrapped-page ancestors are pre-accessed in both inputs.",
+    "reference": "https://docs.kernel.org/virt/kvm/api.html#kvm-pre-fault-memory",
+    "profiles": {
+      "SelectorForStart": "Qualified local P core type 0x40: noncanonical start reports selector|EXT, noncanonical tail reports EXT.",
+      "SelectorForRange": "Qualified local E core type 0x20: noncanonical start and tail report selector|EXT."
+    },
+    "limitations": [
+      "Only pinned local Intel hybrid cores qualify these choices; no production host inference.",
+      "The final matrix has already-accessed descriptors. No new accessed-write width, locked transaction, cache publication or split-lock policy is qualified.",
+      "No initially-clear fault-walk ancestor A policy is inferred. Original executions are uninterrupted; backing/budget cases verify software retention contracts against uninterrupted software results."
+    ]
+  },
+  "coverage": [
+    "Independent code64 software INT/INT3 and explicit IRQ/NMI streams cover low/high canonical extremes, noncanonical start/tail, range-before-paging priority, high canonical page faults, end-to-zero qword wrap and descriptor-base-plus-index wrap.",
+    "HighC and LLVMC through host-x64 Clang and NeverC at O0/O2: 320 original/generated comparisons per SDK, plus 40 direct-owner comparisons. Nonzero CR2 distinguishes its preservation on GP from page-fault addresses. External selector errors retain EXT; page-fault error codes are not ORed with EXT.",
+    "160 software event-resume comparisons per SDK cover first/mid IDT backing, descriptor backing, partial exception-frame writes and unaccepted secondary events at work-budget stops. Retained NMI acceptance, error codes and instruction budgets survive retries. Changed ordinary-context profile refuses before effects; lower resume uses the token profile.",
+    "24 suspended IRET/MOV DS/LGS comparisons preserve the event binding before an instruction faults; four software INT-to-data-DB sequences preserve it after software completion at an unaccepted event-budget stop.",
+    "96 full-mode comparisons per SDK keep frozen profiles through backing and budget stops when a reconstructed caller supplies the opposite choice. Unknown direct, ordinary-context and token profiles refuse before effects.",
+    "Shared neutral descriptor-range owner performs complete-extent checks before paging. Event binding is independent of selector/return profiles and their accessed-store choices; existing enum numeric identities are unchanged."
+  ],
+  "artifact_hashes": {
+    "index": "artifact-hashes.json",
+    "sha256": "5b2a5acd27553a99002fe8c7e1f6736e68f52ed2dc86f43d22fce206f1720c67",
+    "counts": {
+      "build-x86-native-paged-source": 2748,
+      "build-x86-paged-source": 2748,
+      "build-x86-native-source": 1812,
+      "build-x86-source": 1812
+    }
+  },
+  "dependencies": {
+    "build-x86-native": {
+      "neverd-build-receipt.json": "4d635f4f8c3784f802ac9c8b477bca25c30f0948914af33b83e1af113a05f913",
+      "neverd-dependency-inputs.json": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c"
+    },
+    "build-x86": {
+      "neverd-build-receipt.json": "61496ae670b3843f9933ac2551134e95e189cdf3c1633a1d3610a109cf5ac641",
+      "neverd-dependency-inputs.json": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c"
+    }
+  },
+  "recovery_archives": [
+    {
+      "archive": "first-probe-products.tar.gz",
+      "archive_sha256": "d922160de3676fe644fd4bf86217d7015d3a3df3a5d9f8dd7ae1b359d621f3d2",
+      "verified_decompressed_files": 0,
+      "files": {},
+      "directories": [
+        "build-x86-native-probe-exports",
+        "build-x86-native-probe-tmp",
+        "build-x86-native-probe-tmp/nd_test_2934065_ObserveOriginalRanges",
+        "build-x86-probe-exports",
+        "build-x86-probe-tmp",
+        "build-x86-probe-tmp/nd_test_2933866_ObserveOriginalRanges"
+      ]
+    },
+    {
+      "archive": "focused-green-products.tar.gz",
+      "archive_sha256": "fe0054b64c9577df209e951a2bef181b26917be0c0c45bd16a0ad32c6705c97b",
+      "verified_decompressed_files": 304,
+      "files": {
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-0.c": {
+          "sha256": "46565df23c798e54c7f1ddcd95e46da56f3029f67690bafa768727a7004e092f",
+          "bytes": 16375
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-0.json": {
+          "sha256": "84b427d7d31eaac908530e1aa35e6da529df2058f205e98703ef31a9605ddf4e",
+          "bytes": 6074
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-10.c": {
+          "sha256": "39b02bdf20a6dd1275c1d8aba20302c00464262dd73868271a3dd7eef3d7bedc",
+          "bytes": 16385
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-10.json": {
+          "sha256": "16708cb02836854aee16cf4a0042a33a4a4630ea9986217b3d02bb04a30c68d4",
+          "bytes": 6072
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-12.c": {
+          "sha256": "39b02bdf20a6dd1275c1d8aba20302c00464262dd73868271a3dd7eef3d7bedc",
+          "bytes": 16385
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-12.json": {
+          "sha256": "16708cb02836854aee16cf4a0042a33a4a4630ea9986217b3d02bb04a30c68d4",
+          "bytes": 6072
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-14.c": {
+          "sha256": "39b02bdf20a6dd1275c1d8aba20302c00464262dd73868271a3dd7eef3d7bedc",
+          "bytes": 16385
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-14.json": {
+          "sha256": "16708cb02836854aee16cf4a0042a33a4a4630ea9986217b3d02bb04a30c68d4",
+          "bytes": 6072
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-2.c": {
+          "sha256": "46565df23c798e54c7f1ddcd95e46da56f3029f67690bafa768727a7004e092f",
+          "bytes": 16375
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-2.json": {
+          "sha256": "84b427d7d31eaac908530e1aa35e6da529df2058f205e98703ef31a9605ddf4e",
+          "bytes": 6074
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-4.c": {
+          "sha256": "e822297e34e366c40fcf2e151550fec79408f0be7f2a316d3d35dae90c45005c",
+          "bytes": 16368
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-4.json": {
+          "sha256": "14823e41a5d8ca634d7f0b3b4712186925eb86700111f68a2e9d4275b779ce2d",
+          "bytes": 6072
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-6.c": {
+          "sha256": "e822297e34e366c40fcf2e151550fec79408f0be7f2a316d3d35dae90c45005c",
+          "bytes": 16368
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-6.json": {
+          "sha256": "14823e41a5d8ca634d7f0b3b4712186925eb86700111f68a2e9d4275b779ce2d",
+          "bytes": 6072
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-8.c": {
+          "sha256": "39b02bdf20a6dd1275c1d8aba20302c00464262dd73868271a3dd7eef3d7bedc",
+          "bytes": 16385
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-8.json": {
+          "sha256": "16708cb02836854aee16cf4a0042a33a4a4630ea9986217b3d02bb04a30c68d4",
+          "bytes": 6072
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-1.c": {
+          "sha256": "603b6fd452b51448ec6a8a0c3f641fa77550a8bc68302525abf7688ffeae30cc",
+          "bytes": 17065
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-1.json": {
+          "sha256": "28f998288a09c94a6e89a0ceec251ea3db19a6f21f1e8352713c7aa8498bcbcc",
+          "bytes": 6074
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-11.c": {
+          "sha256": "b8130bcb25884d4107a771e664a92f12dd23a72386765bdb3ed09d6320b636ad",
+          "bytes": 16961
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-11.json": {
+          "sha256": "93a4f4a9c777d6a2d69873a98cccf721ea189539192df811e22d755476277592",
+          "bytes": 6072
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-13.c": {
+          "sha256": "b8130bcb25884d4107a771e664a92f12dd23a72386765bdb3ed09d6320b636ad",
+          "bytes": 16961
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-13.json": {
+          "sha256": "93a4f4a9c777d6a2d69873a98cccf721ea189539192df811e22d755476277592",
+          "bytes": 6072
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-15.c": {
+          "sha256": "b8130bcb25884d4107a771e664a92f12dd23a72386765bdb3ed09d6320b636ad",
+          "bytes": 16961
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-15.json": {
+          "sha256": "93a4f4a9c777d6a2d69873a98cccf721ea189539192df811e22d755476277592",
+          "bytes": 6072
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-3.c": {
+          "sha256": "603b6fd452b51448ec6a8a0c3f641fa77550a8bc68302525abf7688ffeae30cc",
+          "bytes": 17065
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-3.json": {
+          "sha256": "28f998288a09c94a6e89a0ceec251ea3db19a6f21f1e8352713c7aa8498bcbcc",
+          "bytes": 6074
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-5.c": {
+          "sha256": "3d536447a21081f8f239d345306ae90fae2dfb3e0004a5beba187aaaa13af1a5",
+          "bytes": 17058
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-5.json": {
+          "sha256": "c02eca5b47f472edbd71c4a3afec483a9d4932e9e21701175013774bd54a4563",
+          "bytes": 6072
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-7.c": {
+          "sha256": "3d536447a21081f8f239d345306ae90fae2dfb3e0004a5beba187aaaa13af1a5",
+          "bytes": 17058
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-7.json": {
+          "sha256": "c02eca5b47f472edbd71c4a3afec483a9d4932e9e21701175013774bd54a4563",
+          "bytes": 6072
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-9.c": {
+          "sha256": "b8130bcb25884d4107a771e664a92f12dd23a72386765bdb3ed09d6320b636ad",
+          "bytes": 16961
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-9.json": {
+          "sha256": "93a4f4a9c777d6a2d69873a98cccf721ea189539192df811e22d755476277592",
+          "bytes": 6072
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O0-clang-GeneratedRangesMatchOriginalEvents-0.c": {
+          "sha256": "379c516096ecbecf80b1becd35376357473c4a3cae7fb8764060cdd493fdc887",
+          "bytes": 16159
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O0-clang-GeneratedRangesMatchOriginalEvents-0.json": {
+          "sha256": "840aa64aa20786cd073287cf7258d5841cdec613b2f7761c59a9cedb813c9c57",
+          "bytes": 6167
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O0-clang-GeneratedRangesMatchOriginalEvents-16.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O0-clang-GeneratedRangesMatchOriginalEvents-16.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O0-clang-GeneratedRangesMatchOriginalEvents-24.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O0-clang-GeneratedRangesMatchOriginalEvents-24.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O0-clang-GeneratedRangesMatchOriginalEvents-8.c": {
+          "sha256": "43eedcd34d53da3982cc20449fdfecac8326c98a32a94c9aa906a8d0e30262cd",
+          "bytes": 16152
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O0-clang-GeneratedRangesMatchOriginalEvents-8.json": {
+          "sha256": "72fc80c2d19ed0a0c306ad56fb7cc335c5dd38d410165ba4d67675c0d20c7b18",
+          "bytes": 6165
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O0-neverc-GeneratedRangesMatchOriginalEvents-12.c": {
+          "sha256": "43eedcd34d53da3982cc20449fdfecac8326c98a32a94c9aa906a8d0e30262cd",
+          "bytes": 16152
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O0-neverc-GeneratedRangesMatchOriginalEvents-12.json": {
+          "sha256": "72fc80c2d19ed0a0c306ad56fb7cc335c5dd38d410165ba4d67675c0d20c7b18",
+          "bytes": 6165
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O0-neverc-GeneratedRangesMatchOriginalEvents-20.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O0-neverc-GeneratedRangesMatchOriginalEvents-20.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O0-neverc-GeneratedRangesMatchOriginalEvents-28.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O0-neverc-GeneratedRangesMatchOriginalEvents-28.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O0-neverc-GeneratedRangesMatchOriginalEvents-4.c": {
+          "sha256": "379c516096ecbecf80b1becd35376357473c4a3cae7fb8764060cdd493fdc887",
+          "bytes": 16159
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O0-neverc-GeneratedRangesMatchOriginalEvents-4.json": {
+          "sha256": "840aa64aa20786cd073287cf7258d5841cdec613b2f7761c59a9cedb813c9c57",
+          "bytes": 6167
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-GeneratedRangesMatchOriginalEvents-1.c": {
+          "sha256": "379c516096ecbecf80b1becd35376357473c4a3cae7fb8764060cdd493fdc887",
+          "bytes": 16159
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-GeneratedRangesMatchOriginalEvents-1.json": {
+          "sha256": "840aa64aa20786cd073287cf7258d5841cdec613b2f7761c59a9cedb813c9c57",
+          "bytes": 6167
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-GeneratedRangesMatchOriginalEvents-17.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-GeneratedRangesMatchOriginalEvents-17.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-GeneratedRangesMatchOriginalEvents-25.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-GeneratedRangesMatchOriginalEvents-25.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-GeneratedRangesMatchOriginalEvents-9.c": {
+          "sha256": "43eedcd34d53da3982cc20449fdfecac8326c98a32a94c9aa906a8d0e30262cd",
+          "bytes": 16152
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-GeneratedRangesMatchOriginalEvents-9.json": {
+          "sha256": "72fc80c2d19ed0a0c306ad56fb7cc335c5dd38d410165ba4d67675c0d20c7b18",
+          "bytes": 6165
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-PendingInstructionsRetainEventBinding-0.c": {
+          "sha256": "22b958075660825795804a9ef64ffb90277ad2b73e6b72dbaccbbe9b4efbc11c",
+          "bytes": 16150
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-PendingInstructionsRetainEventBinding-0.json": {
+          "sha256": "f53921f576fef3a7431f0f1827473469bd111a8d47c49f30d68c5927ab93c34a",
+          "bytes": 8515
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-PendingInstructionsRetainEventBinding-4.c": {
+          "sha256": "871323d3f307828f6862df36ae4f65308c574ec8bf661c16f8a6c685fb14f0ce",
+          "bytes": 16153
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-PendingInstructionsRetainEventBinding-4.json": {
+          "sha256": "7a3ec97e7b3422d384cc675f6293c640fe724de3d13f09974ab17d182dc26ac0",
+          "bytes": 6167
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-PendingInstructionsRetainEventBinding-8.c": {
+          "sha256": "498894bacbfd2a854f67bf877d0d4af3c75240c88bf5050604410ce8edf144f9",
+          "bytes": 16158
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-PendingInstructionsRetainEventBinding-8.json": {
+          "sha256": "595838ed0d236d7391c1ea0fa9c01da5fb995afcc7b395f2325937e7d08d20ad",
+          "bytes": 6171
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-ResumeRetainsAcceptedDescriptorProfile-0.c": {
+          "sha256": "379c516096ecbecf80b1becd35376357473c4a3cae7fb8764060cdd493fdc887",
+          "bytes": 16159
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-ResumeRetainsAcceptedDescriptorProfile-0.json": {
+          "sha256": "840aa64aa20786cd073287cf7258d5841cdec613b2f7761c59a9cedb813c9c57",
+          "bytes": 6167
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-ResumeRetainsAcceptedDescriptorProfile-12.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-ResumeRetainsAcceptedDescriptorProfile-12.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-ResumeRetainsAcceptedDescriptorProfile-4.c": {
+          "sha256": "43eedcd34d53da3982cc20449fdfecac8326c98a32a94c9aa906a8d0e30262cd",
+          "bytes": 16152
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-ResumeRetainsAcceptedDescriptorProfile-4.json": {
+          "sha256": "72fc80c2d19ed0a0c306ad56fb7cc335c5dd38d410165ba4d67675c0d20c7b18",
+          "bytes": 6165
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-ResumeRetainsAcceptedDescriptorProfile-8.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-ResumeRetainsAcceptedDescriptorProfile-8.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-GeneratedRangesMatchOriginalEvents-13.c": {
+          "sha256": "43eedcd34d53da3982cc20449fdfecac8326c98a32a94c9aa906a8d0e30262cd",
+          "bytes": 16152
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-GeneratedRangesMatchOriginalEvents-13.json": {
+          "sha256": "72fc80c2d19ed0a0c306ad56fb7cc335c5dd38d410165ba4d67675c0d20c7b18",
+          "bytes": 6165
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-GeneratedRangesMatchOriginalEvents-21.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-GeneratedRangesMatchOriginalEvents-21.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-GeneratedRangesMatchOriginalEvents-29.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-GeneratedRangesMatchOriginalEvents-29.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-GeneratedRangesMatchOriginalEvents-5.c": {
+          "sha256": "379c516096ecbecf80b1becd35376357473c4a3cae7fb8764060cdd493fdc887",
+          "bytes": 16159
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-GeneratedRangesMatchOriginalEvents-5.json": {
+          "sha256": "840aa64aa20786cd073287cf7258d5841cdec613b2f7761c59a9cedb813c9c57",
+          "bytes": 6167
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-PendingInstructionsRetainEventBinding-10.c": {
+          "sha256": "498894bacbfd2a854f67bf877d0d4af3c75240c88bf5050604410ce8edf144f9",
+          "bytes": 16158
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-PendingInstructionsRetainEventBinding-10.json": {
+          "sha256": "595838ed0d236d7391c1ea0fa9c01da5fb995afcc7b395f2325937e7d08d20ad",
+          "bytes": 6171
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-PendingInstructionsRetainEventBinding-2.c": {
+          "sha256": "22b958075660825795804a9ef64ffb90277ad2b73e6b72dbaccbbe9b4efbc11c",
+          "bytes": 16150
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-PendingInstructionsRetainEventBinding-2.json": {
+          "sha256": "f53921f576fef3a7431f0f1827473469bd111a8d47c49f30d68c5927ab93c34a",
+          "bytes": 8515
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-PendingInstructionsRetainEventBinding-6.c": {
+          "sha256": "871323d3f307828f6862df36ae4f65308c574ec8bf661c16f8a6c685fb14f0ce",
+          "bytes": 16153
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-PendingInstructionsRetainEventBinding-6.json": {
+          "sha256": "7a3ec97e7b3422d384cc675f6293c640fe724de3d13f09974ab17d182dc26ac0",
+          "bytes": 6167
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-10.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-10.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-14.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-14.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-2.c": {
+          "sha256": "379c516096ecbecf80b1becd35376357473c4a3cae7fb8764060cdd493fdc887",
+          "bytes": 16159
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-2.json": {
+          "sha256": "840aa64aa20786cd073287cf7258d5841cdec613b2f7761c59a9cedb813c9c57",
+          "bytes": 6167
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-6.c": {
+          "sha256": "43eedcd34d53da3982cc20449fdfecac8326c98a32a94c9aa906a8d0e30262cd",
+          "bytes": 16152
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-6.json": {
+          "sha256": "72fc80c2d19ed0a0c306ad56fb7cc335c5dd38d410165ba4d67675c0d20c7b18",
+          "bytes": 6165
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O0-clang-GeneratedRangesMatchOriginalEvents-10.c": {
+          "sha256": "b0b634873296a0cc862c9e2d713b6d444bcdbe4a1a90cc751721c1fab1ac30f3",
+          "bytes": 16842
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O0-clang-GeneratedRangesMatchOriginalEvents-10.json": {
+          "sha256": "a63473567a1d0a1f7feb9a02e8288cc43a71802f66f546513ed0f2f8f7a27b73",
+          "bytes": 6165
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O0-clang-GeneratedRangesMatchOriginalEvents-18.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O0-clang-GeneratedRangesMatchOriginalEvents-18.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O0-clang-GeneratedRangesMatchOriginalEvents-2.c": {
+          "sha256": "e6271de3db6035f226bb6e4008647718837f84ea4d64c75df17eb1e0c14e70c4",
+          "bytes": 16849
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O0-clang-GeneratedRangesMatchOriginalEvents-2.json": {
+          "sha256": "6df4d5a26699577048fcc0c405b22858e41c3a0b2ce2024d7c0dc8121d8be5e6",
+          "bytes": 6167
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O0-clang-GeneratedRangesMatchOriginalEvents-26.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O0-clang-GeneratedRangesMatchOriginalEvents-26.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O0-neverc-GeneratedRangesMatchOriginalEvents-14.c": {
+          "sha256": "b0b634873296a0cc862c9e2d713b6d444bcdbe4a1a90cc751721c1fab1ac30f3",
+          "bytes": 16842
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O0-neverc-GeneratedRangesMatchOriginalEvents-14.json": {
+          "sha256": "a63473567a1d0a1f7feb9a02e8288cc43a71802f66f546513ed0f2f8f7a27b73",
+          "bytes": 6165
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O0-neverc-GeneratedRangesMatchOriginalEvents-22.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O0-neverc-GeneratedRangesMatchOriginalEvents-22.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O0-neverc-GeneratedRangesMatchOriginalEvents-30.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O0-neverc-GeneratedRangesMatchOriginalEvents-30.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O0-neverc-GeneratedRangesMatchOriginalEvents-6.c": {
+          "sha256": "e6271de3db6035f226bb6e4008647718837f84ea4d64c75df17eb1e0c14e70c4",
+          "bytes": 16849
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O0-neverc-GeneratedRangesMatchOriginalEvents-6.json": {
+          "sha256": "6df4d5a26699577048fcc0c405b22858e41c3a0b2ce2024d7c0dc8121d8be5e6",
+          "bytes": 6167
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-GeneratedRangesMatchOriginalEvents-11.c": {
+          "sha256": "b0b634873296a0cc862c9e2d713b6d444bcdbe4a1a90cc751721c1fab1ac30f3",
+          "bytes": 16842
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-GeneratedRangesMatchOriginalEvents-11.json": {
+          "sha256": "a63473567a1d0a1f7feb9a02e8288cc43a71802f66f546513ed0f2f8f7a27b73",
+          "bytes": 6165
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-GeneratedRangesMatchOriginalEvents-19.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-GeneratedRangesMatchOriginalEvents-19.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-GeneratedRangesMatchOriginalEvents-27.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-GeneratedRangesMatchOriginalEvents-27.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-GeneratedRangesMatchOriginalEvents-3.c": {
+          "sha256": "e6271de3db6035f226bb6e4008647718837f84ea4d64c75df17eb1e0c14e70c4",
+          "bytes": 16849
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-GeneratedRangesMatchOriginalEvents-3.json": {
+          "sha256": "6df4d5a26699577048fcc0c405b22858e41c3a0b2ce2024d7c0dc8121d8be5e6",
+          "bytes": 6167
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-PendingInstructionsRetainEventBinding-1.c": {
+          "sha256": "3077b19fd6e428fc0da83ecd0ca315317c048e9f0e7862e426eae5a04266fe87",
+          "bytes": 16840
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-PendingInstructionsRetainEventBinding-1.json": {
+          "sha256": "ce7004a6ed8e6a07eacc23b04e563999ffeac65a05bb8efde860d552c5bd177c",
+          "bytes": 8515
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-PendingInstructionsRetainEventBinding-5.c": {
+          "sha256": "15d308049665bd50626f8dd6f9f029de5b0c30268f62ef5d0c89600110cdf0d5",
+          "bytes": 16843
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-PendingInstructionsRetainEventBinding-5.json": {
+          "sha256": "521d9fc53bf12b9d55caf9feb9645ff8e3fd494c42bba91a3b6cf36c080f5c4b",
+          "bytes": 6167
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-PendingInstructionsRetainEventBinding-9.c": {
+          "sha256": "7990c64afafd22cb278cf0a1bef41efea174213a87ecb9b5af2ce463e5242d24",
+          "bytes": 16848
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-PendingInstructionsRetainEventBinding-9.json": {
+          "sha256": "827059d359a6b97a9741c8b95dc6c793491cf6346af7afeac93d3fd134b65e60",
+          "bytes": 6171
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-ResumeRetainsAcceptedDescriptorProfile-1.c": {
+          "sha256": "e6271de3db6035f226bb6e4008647718837f84ea4d64c75df17eb1e0c14e70c4",
+          "bytes": 16849
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-ResumeRetainsAcceptedDescriptorProfile-1.json": {
+          "sha256": "6df4d5a26699577048fcc0c405b22858e41c3a0b2ce2024d7c0dc8121d8be5e6",
+          "bytes": 6167
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-ResumeRetainsAcceptedDescriptorProfile-13.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-ResumeRetainsAcceptedDescriptorProfile-13.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-ResumeRetainsAcceptedDescriptorProfile-5.c": {
+          "sha256": "b0b634873296a0cc862c9e2d713b6d444bcdbe4a1a90cc751721c1fab1ac30f3",
+          "bytes": 16842
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-ResumeRetainsAcceptedDescriptorProfile-5.json": {
+          "sha256": "a63473567a1d0a1f7feb9a02e8288cc43a71802f66f546513ed0f2f8f7a27b73",
+          "bytes": 6165
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-ResumeRetainsAcceptedDescriptorProfile-9.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-ResumeRetainsAcceptedDescriptorProfile-9.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-GeneratedRangesMatchOriginalEvents-15.c": {
+          "sha256": "b0b634873296a0cc862c9e2d713b6d444bcdbe4a1a90cc751721c1fab1ac30f3",
+          "bytes": 16842
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-GeneratedRangesMatchOriginalEvents-15.json": {
+          "sha256": "a63473567a1d0a1f7feb9a02e8288cc43a71802f66f546513ed0f2f8f7a27b73",
+          "bytes": 6165
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-GeneratedRangesMatchOriginalEvents-23.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-GeneratedRangesMatchOriginalEvents-23.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-GeneratedRangesMatchOriginalEvents-31.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-GeneratedRangesMatchOriginalEvents-31.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-GeneratedRangesMatchOriginalEvents-7.c": {
+          "sha256": "e6271de3db6035f226bb6e4008647718837f84ea4d64c75df17eb1e0c14e70c4",
+          "bytes": 16849
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-GeneratedRangesMatchOriginalEvents-7.json": {
+          "sha256": "6df4d5a26699577048fcc0c405b22858e41c3a0b2ce2024d7c0dc8121d8be5e6",
+          "bytes": 6167
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-PendingInstructionsRetainEventBinding-11.c": {
+          "sha256": "7990c64afafd22cb278cf0a1bef41efea174213a87ecb9b5af2ce463e5242d24",
+          "bytes": 16848
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-PendingInstructionsRetainEventBinding-11.json": {
+          "sha256": "827059d359a6b97a9741c8b95dc6c793491cf6346af7afeac93d3fd134b65e60",
+          "bytes": 6171
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-PendingInstructionsRetainEventBinding-3.c": {
+          "sha256": "3077b19fd6e428fc0da83ecd0ca315317c048e9f0e7862e426eae5a04266fe87",
+          "bytes": 16840
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-PendingInstructionsRetainEventBinding-3.json": {
+          "sha256": "ce7004a6ed8e6a07eacc23b04e563999ffeac65a05bb8efde860d552c5bd177c",
+          "bytes": 8515
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-PendingInstructionsRetainEventBinding-7.c": {
+          "sha256": "15d308049665bd50626f8dd6f9f029de5b0c30268f62ef5d0c89600110cdf0d5",
+          "bytes": 16843
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-PendingInstructionsRetainEventBinding-7.json": {
+          "sha256": "521d9fc53bf12b9d55caf9feb9645ff8e3fd494c42bba91a3b6cf36c080f5c4b",
+          "bytes": 6167
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-11.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-11.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-15.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-15.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-3.c": {
+          "sha256": "e6271de3db6035f226bb6e4008647718837f84ea4d64c75df17eb1e0c14e70c4",
+          "bytes": 16849
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-3.json": {
+          "sha256": "6df4d5a26699577048fcc0c405b22858e41c3a0b2ce2024d7c0dc8121d8be5e6",
+          "bytes": 6167
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-7.c": {
+          "sha256": "b0b634873296a0cc862c9e2d713b6d444bcdbe4a1a90cc751721c1fab1ac30f3",
+          "bytes": 16842
+        },
+        "build-x86-native-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-7.json": {
+          "sha256": "a63473567a1d0a1f7feb9a02e8288cc43a71802f66f546513ed0f2f8f7a27b73",
+          "bytes": 6165
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-0.c": {
+          "sha256": "46565df23c798e54c7f1ddcd95e46da56f3029f67690bafa768727a7004e092f",
+          "bytes": 16375
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-0.json": {
+          "sha256": "84b427d7d31eaac908530e1aa35e6da529df2058f205e98703ef31a9605ddf4e",
+          "bytes": 6074
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-10.c": {
+          "sha256": "39b02bdf20a6dd1275c1d8aba20302c00464262dd73868271a3dd7eef3d7bedc",
+          "bytes": 16385
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-10.json": {
+          "sha256": "16708cb02836854aee16cf4a0042a33a4a4630ea9986217b3d02bb04a30c68d4",
+          "bytes": 6072
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-12.c": {
+          "sha256": "39b02bdf20a6dd1275c1d8aba20302c00464262dd73868271a3dd7eef3d7bedc",
+          "bytes": 16385
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-12.json": {
+          "sha256": "16708cb02836854aee16cf4a0042a33a4a4630ea9986217b3d02bb04a30c68d4",
+          "bytes": 6072
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-14.c": {
+          "sha256": "39b02bdf20a6dd1275c1d8aba20302c00464262dd73868271a3dd7eef3d7bedc",
+          "bytes": 16385
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-14.json": {
+          "sha256": "16708cb02836854aee16cf4a0042a33a4a4630ea9986217b3d02bb04a30c68d4",
+          "bytes": 6072
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-2.c": {
+          "sha256": "46565df23c798e54c7f1ddcd95e46da56f3029f67690bafa768727a7004e092f",
+          "bytes": 16375
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-2.json": {
+          "sha256": "84b427d7d31eaac908530e1aa35e6da529df2058f205e98703ef31a9605ddf4e",
+          "bytes": 6074
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-4.c": {
+          "sha256": "e822297e34e366c40fcf2e151550fec79408f0be7f2a316d3d35dae90c45005c",
+          "bytes": 16368
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-4.json": {
+          "sha256": "14823e41a5d8ca634d7f0b3b4712186925eb86700111f68a2e9d4275b779ce2d",
+          "bytes": 6072
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-6.c": {
+          "sha256": "e822297e34e366c40fcf2e151550fec79408f0be7f2a316d3d35dae90c45005c",
+          "bytes": 16368
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-6.json": {
+          "sha256": "14823e41a5d8ca634d7f0b3b4712186925eb86700111f68a2e9d4275b779ce2d",
+          "bytes": 6072
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-8.c": {
+          "sha256": "39b02bdf20a6dd1275c1d8aba20302c00464262dd73868271a3dd7eef3d7bedc",
+          "bytes": 16385
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-high-8.json": {
+          "sha256": "16708cb02836854aee16cf4a0042a33a4a4630ea9986217b3d02bb04a30c68d4",
+          "bytes": 6072
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-1.c": {
+          "sha256": "603b6fd452b51448ec6a8a0c3f641fa77550a8bc68302525abf7688ffeae30cc",
+          "bytes": 17065
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-1.json": {
+          "sha256": "28f998288a09c94a6e89a0ceec251ea3db19a6f21f1e8352713c7aa8498bcbcc",
+          "bytes": 6074
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-11.c": {
+          "sha256": "b8130bcb25884d4107a771e664a92f12dd23a72386765bdb3ed09d6320b636ad",
+          "bytes": 16961
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-11.json": {
+          "sha256": "93a4f4a9c777d6a2d69873a98cccf721ea189539192df811e22d755476277592",
+          "bytes": 6072
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-13.c": {
+          "sha256": "b8130bcb25884d4107a771e664a92f12dd23a72386765bdb3ed09d6320b636ad",
+          "bytes": 16961
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-13.json": {
+          "sha256": "93a4f4a9c777d6a2d69873a98cccf721ea189539192df811e22d755476277592",
+          "bytes": 6072
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-15.c": {
+          "sha256": "b8130bcb25884d4107a771e664a92f12dd23a72386765bdb3ed09d6320b636ad",
+          "bytes": 16961
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-15.json": {
+          "sha256": "93a4f4a9c777d6a2d69873a98cccf721ea189539192df811e22d755476277592",
+          "bytes": 6072
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-3.c": {
+          "sha256": "603b6fd452b51448ec6a8a0c3f641fa77550a8bc68302525abf7688ffeae30cc",
+          "bytes": 17065
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-3.json": {
+          "sha256": "28f998288a09c94a6e89a0ceec251ea3db19a6f21f1e8352713c7aa8498bcbcc",
+          "bytes": 6074
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-5.c": {
+          "sha256": "3d536447a21081f8f239d345306ae90fae2dfb3e0004a5beba187aaaa13af1a5",
+          "bytes": 17058
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-5.json": {
+          "sha256": "c02eca5b47f472edbd71c4a3afec483a9d4932e9e21701175013774bd54a4563",
+          "bytes": 6072
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-7.c": {
+          "sha256": "3d536447a21081f8f239d345306ae90fae2dfb3e0004a5beba187aaaa13af1a5",
+          "bytes": 17058
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-7.json": {
+          "sha256": "c02eca5b47f472edbd71c4a3afec483a9d4932e9e21701175013774bd54a4563",
+          "bytes": 6072
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-9.c": {
+          "sha256": "b8130bcb25884d4107a771e664a92f12dd23a72386765bdb3ed09d6320b636ad",
+          "bytes": 16961
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-event-descriptor-mode-llvm-9.json": {
+          "sha256": "93a4f4a9c777d6a2d69873a98cccf721ea189539192df811e22d755476277592",
+          "bytes": 6072
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O0-clang-GeneratedRangesMatchOriginalEvents-0.c": {
+          "sha256": "379c516096ecbecf80b1becd35376357473c4a3cae7fb8764060cdd493fdc887",
+          "bytes": 16159
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O0-clang-GeneratedRangesMatchOriginalEvents-0.json": {
+          "sha256": "840aa64aa20786cd073287cf7258d5841cdec613b2f7761c59a9cedb813c9c57",
+          "bytes": 6167
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O0-clang-GeneratedRangesMatchOriginalEvents-16.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O0-clang-GeneratedRangesMatchOriginalEvents-16.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O0-clang-GeneratedRangesMatchOriginalEvents-24.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O0-clang-GeneratedRangesMatchOriginalEvents-24.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O0-clang-GeneratedRangesMatchOriginalEvents-8.c": {
+          "sha256": "43eedcd34d53da3982cc20449fdfecac8326c98a32a94c9aa906a8d0e30262cd",
+          "bytes": 16152
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O0-clang-GeneratedRangesMatchOriginalEvents-8.json": {
+          "sha256": "72fc80c2d19ed0a0c306ad56fb7cc335c5dd38d410165ba4d67675c0d20c7b18",
+          "bytes": 6165
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O0-neverc-GeneratedRangesMatchOriginalEvents-12.c": {
+          "sha256": "43eedcd34d53da3982cc20449fdfecac8326c98a32a94c9aa906a8d0e30262cd",
+          "bytes": 16152
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O0-neverc-GeneratedRangesMatchOriginalEvents-12.json": {
+          "sha256": "72fc80c2d19ed0a0c306ad56fb7cc335c5dd38d410165ba4d67675c0d20c7b18",
+          "bytes": 6165
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O0-neverc-GeneratedRangesMatchOriginalEvents-20.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O0-neverc-GeneratedRangesMatchOriginalEvents-20.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O0-neverc-GeneratedRangesMatchOriginalEvents-28.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O0-neverc-GeneratedRangesMatchOriginalEvents-28.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O0-neverc-GeneratedRangesMatchOriginalEvents-4.c": {
+          "sha256": "379c516096ecbecf80b1becd35376357473c4a3cae7fb8764060cdd493fdc887",
+          "bytes": 16159
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O0-neverc-GeneratedRangesMatchOriginalEvents-4.json": {
+          "sha256": "840aa64aa20786cd073287cf7258d5841cdec613b2f7761c59a9cedb813c9c57",
+          "bytes": 6167
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-GeneratedRangesMatchOriginalEvents-1.c": {
+          "sha256": "379c516096ecbecf80b1becd35376357473c4a3cae7fb8764060cdd493fdc887",
+          "bytes": 16159
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-GeneratedRangesMatchOriginalEvents-1.json": {
+          "sha256": "840aa64aa20786cd073287cf7258d5841cdec613b2f7761c59a9cedb813c9c57",
+          "bytes": 6167
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-GeneratedRangesMatchOriginalEvents-17.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-GeneratedRangesMatchOriginalEvents-17.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-GeneratedRangesMatchOriginalEvents-25.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-GeneratedRangesMatchOriginalEvents-25.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-GeneratedRangesMatchOriginalEvents-9.c": {
+          "sha256": "43eedcd34d53da3982cc20449fdfecac8326c98a32a94c9aa906a8d0e30262cd",
+          "bytes": 16152
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-GeneratedRangesMatchOriginalEvents-9.json": {
+          "sha256": "72fc80c2d19ed0a0c306ad56fb7cc335c5dd38d410165ba4d67675c0d20c7b18",
+          "bytes": 6165
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-PendingInstructionsRetainEventBinding-0.c": {
+          "sha256": "22b958075660825795804a9ef64ffb90277ad2b73e6b72dbaccbbe9b4efbc11c",
+          "bytes": 16150
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-PendingInstructionsRetainEventBinding-0.json": {
+          "sha256": "f53921f576fef3a7431f0f1827473469bd111a8d47c49f30d68c5927ab93c34a",
+          "bytes": 8515
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-PendingInstructionsRetainEventBinding-4.c": {
+          "sha256": "871323d3f307828f6862df36ae4f65308c574ec8bf661c16f8a6c685fb14f0ce",
+          "bytes": 16153
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-PendingInstructionsRetainEventBinding-4.json": {
+          "sha256": "7a3ec97e7b3422d384cc675f6293c640fe724de3d13f09974ab17d182dc26ac0",
+          "bytes": 6167
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-PendingInstructionsRetainEventBinding-8.c": {
+          "sha256": "498894bacbfd2a854f67bf877d0d4af3c75240c88bf5050604410ce8edf144f9",
+          "bytes": 16158
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-PendingInstructionsRetainEventBinding-8.json": {
+          "sha256": "595838ed0d236d7391c1ea0fa9c01da5fb995afcc7b395f2325937e7d08d20ad",
+          "bytes": 6171
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-ResumeRetainsAcceptedDescriptorProfile-0.c": {
+          "sha256": "379c516096ecbecf80b1becd35376357473c4a3cae7fb8764060cdd493fdc887",
+          "bytes": 16159
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-ResumeRetainsAcceptedDescriptorProfile-0.json": {
+          "sha256": "840aa64aa20786cd073287cf7258d5841cdec613b2f7761c59a9cedb813c9c57",
+          "bytes": 6167
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-ResumeRetainsAcceptedDescriptorProfile-12.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-ResumeRetainsAcceptedDescriptorProfile-12.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-ResumeRetainsAcceptedDescriptorProfile-4.c": {
+          "sha256": "43eedcd34d53da3982cc20449fdfecac8326c98a32a94c9aa906a8d0e30262cd",
+          "bytes": 16152
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-ResumeRetainsAcceptedDescriptorProfile-4.json": {
+          "sha256": "72fc80c2d19ed0a0c306ad56fb7cc335c5dd38d410165ba4d67675c0d20c7b18",
+          "bytes": 6165
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-ResumeRetainsAcceptedDescriptorProfile-8.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-clang-ResumeRetainsAcceptedDescriptorProfile-8.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-GeneratedRangesMatchOriginalEvents-13.c": {
+          "sha256": "43eedcd34d53da3982cc20449fdfecac8326c98a32a94c9aa906a8d0e30262cd",
+          "bytes": 16152
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-GeneratedRangesMatchOriginalEvents-13.json": {
+          "sha256": "72fc80c2d19ed0a0c306ad56fb7cc335c5dd38d410165ba4d67675c0d20c7b18",
+          "bytes": 6165
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-GeneratedRangesMatchOriginalEvents-21.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-GeneratedRangesMatchOriginalEvents-21.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-GeneratedRangesMatchOriginalEvents-29.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-GeneratedRangesMatchOriginalEvents-29.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-GeneratedRangesMatchOriginalEvents-5.c": {
+          "sha256": "379c516096ecbecf80b1becd35376357473c4a3cae7fb8764060cdd493fdc887",
+          "bytes": 16159
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-GeneratedRangesMatchOriginalEvents-5.json": {
+          "sha256": "840aa64aa20786cd073287cf7258d5841cdec613b2f7761c59a9cedb813c9c57",
+          "bytes": 6167
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-PendingInstructionsRetainEventBinding-10.c": {
+          "sha256": "498894bacbfd2a854f67bf877d0d4af3c75240c88bf5050604410ce8edf144f9",
+          "bytes": 16158
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-PendingInstructionsRetainEventBinding-10.json": {
+          "sha256": "595838ed0d236d7391c1ea0fa9c01da5fb995afcc7b395f2325937e7d08d20ad",
+          "bytes": 6171
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-PendingInstructionsRetainEventBinding-2.c": {
+          "sha256": "22b958075660825795804a9ef64ffb90277ad2b73e6b72dbaccbbe9b4efbc11c",
+          "bytes": 16150
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-PendingInstructionsRetainEventBinding-2.json": {
+          "sha256": "f53921f576fef3a7431f0f1827473469bd111a8d47c49f30d68c5927ab93c34a",
+          "bytes": 8515
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-PendingInstructionsRetainEventBinding-6.c": {
+          "sha256": "871323d3f307828f6862df36ae4f65308c574ec8bf661c16f8a6c685fb14f0ce",
+          "bytes": 16153
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-PendingInstructionsRetainEventBinding-6.json": {
+          "sha256": "7a3ec97e7b3422d384cc675f6293c640fe724de3d13f09974ab17d182dc26ac0",
+          "bytes": 6167
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-10.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-10.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-14.c": {
+          "sha256": "414558bd9ba502efd25f841f8528718091ade74e68c657474c76caf794ca90f9",
+          "bytes": 22958
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-14.json": {
+          "sha256": "b307a38c86fbc7fd1f7551158df9d132e959f76daf22182ea707199db4a8dac1",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-2.c": {
+          "sha256": "379c516096ecbecf80b1becd35376357473c4a3cae7fb8764060cdd493fdc887",
+          "bytes": 16159
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-2.json": {
+          "sha256": "840aa64aa20786cd073287cf7258d5841cdec613b2f7761c59a9cedb813c9c57",
+          "bytes": 6167
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-6.c": {
+          "sha256": "43eedcd34d53da3982cc20449fdfecac8326c98a32a94c9aa906a8d0e30262cd",
+          "bytes": 16152
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-high-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-6.json": {
+          "sha256": "72fc80c2d19ed0a0c306ad56fb7cc335c5dd38d410165ba4d67675c0d20c7b18",
+          "bytes": 6165
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O0-clang-GeneratedRangesMatchOriginalEvents-10.c": {
+          "sha256": "b0b634873296a0cc862c9e2d713b6d444bcdbe4a1a90cc751721c1fab1ac30f3",
+          "bytes": 16842
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O0-clang-GeneratedRangesMatchOriginalEvents-10.json": {
+          "sha256": "a63473567a1d0a1f7feb9a02e8288cc43a71802f66f546513ed0f2f8f7a27b73",
+          "bytes": 6165
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O0-clang-GeneratedRangesMatchOriginalEvents-18.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O0-clang-GeneratedRangesMatchOriginalEvents-18.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O0-clang-GeneratedRangesMatchOriginalEvents-2.c": {
+          "sha256": "e6271de3db6035f226bb6e4008647718837f84ea4d64c75df17eb1e0c14e70c4",
+          "bytes": 16849
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O0-clang-GeneratedRangesMatchOriginalEvents-2.json": {
+          "sha256": "6df4d5a26699577048fcc0c405b22858e41c3a0b2ce2024d7c0dc8121d8be5e6",
+          "bytes": 6167
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O0-clang-GeneratedRangesMatchOriginalEvents-26.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O0-clang-GeneratedRangesMatchOriginalEvents-26.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O0-neverc-GeneratedRangesMatchOriginalEvents-14.c": {
+          "sha256": "b0b634873296a0cc862c9e2d713b6d444bcdbe4a1a90cc751721c1fab1ac30f3",
+          "bytes": 16842
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O0-neverc-GeneratedRangesMatchOriginalEvents-14.json": {
+          "sha256": "a63473567a1d0a1f7feb9a02e8288cc43a71802f66f546513ed0f2f8f7a27b73",
+          "bytes": 6165
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O0-neverc-GeneratedRangesMatchOriginalEvents-22.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O0-neverc-GeneratedRangesMatchOriginalEvents-22.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O0-neverc-GeneratedRangesMatchOriginalEvents-30.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O0-neverc-GeneratedRangesMatchOriginalEvents-30.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O0-neverc-GeneratedRangesMatchOriginalEvents-6.c": {
+          "sha256": "e6271de3db6035f226bb6e4008647718837f84ea4d64c75df17eb1e0c14e70c4",
+          "bytes": 16849
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O0-neverc-GeneratedRangesMatchOriginalEvents-6.json": {
+          "sha256": "6df4d5a26699577048fcc0c405b22858e41c3a0b2ce2024d7c0dc8121d8be5e6",
+          "bytes": 6167
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-GeneratedRangesMatchOriginalEvents-11.c": {
+          "sha256": "b0b634873296a0cc862c9e2d713b6d444bcdbe4a1a90cc751721c1fab1ac30f3",
+          "bytes": 16842
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-GeneratedRangesMatchOriginalEvents-11.json": {
+          "sha256": "a63473567a1d0a1f7feb9a02e8288cc43a71802f66f546513ed0f2f8f7a27b73",
+          "bytes": 6165
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-GeneratedRangesMatchOriginalEvents-19.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-GeneratedRangesMatchOriginalEvents-19.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-GeneratedRangesMatchOriginalEvents-27.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-GeneratedRangesMatchOriginalEvents-27.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-GeneratedRangesMatchOriginalEvents-3.c": {
+          "sha256": "e6271de3db6035f226bb6e4008647718837f84ea4d64c75df17eb1e0c14e70c4",
+          "bytes": 16849
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-GeneratedRangesMatchOriginalEvents-3.json": {
+          "sha256": "6df4d5a26699577048fcc0c405b22858e41c3a0b2ce2024d7c0dc8121d8be5e6",
+          "bytes": 6167
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-PendingInstructionsRetainEventBinding-1.c": {
+          "sha256": "3077b19fd6e428fc0da83ecd0ca315317c048e9f0e7862e426eae5a04266fe87",
+          "bytes": 16840
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-PendingInstructionsRetainEventBinding-1.json": {
+          "sha256": "ce7004a6ed8e6a07eacc23b04e563999ffeac65a05bb8efde860d552c5bd177c",
+          "bytes": 8515
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-PendingInstructionsRetainEventBinding-5.c": {
+          "sha256": "15d308049665bd50626f8dd6f9f029de5b0c30268f62ef5d0c89600110cdf0d5",
+          "bytes": 16843
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-PendingInstructionsRetainEventBinding-5.json": {
+          "sha256": "521d9fc53bf12b9d55caf9feb9645ff8e3fd494c42bba91a3b6cf36c080f5c4b",
+          "bytes": 6167
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-PendingInstructionsRetainEventBinding-9.c": {
+          "sha256": "7990c64afafd22cb278cf0a1bef41efea174213a87ecb9b5af2ce463e5242d24",
+          "bytes": 16848
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-PendingInstructionsRetainEventBinding-9.json": {
+          "sha256": "827059d359a6b97a9741c8b95dc6c793491cf6346af7afeac93d3fd134b65e60",
+          "bytes": 6171
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-ResumeRetainsAcceptedDescriptorProfile-1.c": {
+          "sha256": "e6271de3db6035f226bb6e4008647718837f84ea4d64c75df17eb1e0c14e70c4",
+          "bytes": 16849
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-ResumeRetainsAcceptedDescriptorProfile-1.json": {
+          "sha256": "6df4d5a26699577048fcc0c405b22858e41c3a0b2ce2024d7c0dc8121d8be5e6",
+          "bytes": 6167
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-ResumeRetainsAcceptedDescriptorProfile-13.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-ResumeRetainsAcceptedDescriptorProfile-13.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-ResumeRetainsAcceptedDescriptorProfile-5.c": {
+          "sha256": "b0b634873296a0cc862c9e2d713b6d444bcdbe4a1a90cc751721c1fab1ac30f3",
+          "bytes": 16842
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-ResumeRetainsAcceptedDescriptorProfile-5.json": {
+          "sha256": "a63473567a1d0a1f7feb9a02e8288cc43a71802f66f546513ed0f2f8f7a27b73",
+          "bytes": 6165
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-ResumeRetainsAcceptedDescriptorProfile-9.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-clang-ResumeRetainsAcceptedDescriptorProfile-9.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-GeneratedRangesMatchOriginalEvents-15.c": {
+          "sha256": "b0b634873296a0cc862c9e2d713b6d444bcdbe4a1a90cc751721c1fab1ac30f3",
+          "bytes": 16842
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-GeneratedRangesMatchOriginalEvents-15.json": {
+          "sha256": "a63473567a1d0a1f7feb9a02e8288cc43a71802f66f546513ed0f2f8f7a27b73",
+          "bytes": 6165
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-GeneratedRangesMatchOriginalEvents-23.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-GeneratedRangesMatchOriginalEvents-23.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-GeneratedRangesMatchOriginalEvents-31.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-GeneratedRangesMatchOriginalEvents-31.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-GeneratedRangesMatchOriginalEvents-7.c": {
+          "sha256": "e6271de3db6035f226bb6e4008647718837f84ea4d64c75df17eb1e0c14e70c4",
+          "bytes": 16849
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-GeneratedRangesMatchOriginalEvents-7.json": {
+          "sha256": "6df4d5a26699577048fcc0c405b22858e41c3a0b2ce2024d7c0dc8121d8be5e6",
+          "bytes": 6167
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-PendingInstructionsRetainEventBinding-11.c": {
+          "sha256": "7990c64afafd22cb278cf0a1bef41efea174213a87ecb9b5af2ce463e5242d24",
+          "bytes": 16848
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-PendingInstructionsRetainEventBinding-11.json": {
+          "sha256": "827059d359a6b97a9741c8b95dc6c793491cf6346af7afeac93d3fd134b65e60",
+          "bytes": 6171
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-PendingInstructionsRetainEventBinding-3.c": {
+          "sha256": "3077b19fd6e428fc0da83ecd0ca315317c048e9f0e7862e426eae5a04266fe87",
+          "bytes": 16840
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-PendingInstructionsRetainEventBinding-3.json": {
+          "sha256": "ce7004a6ed8e6a07eacc23b04e563999ffeac65a05bb8efde860d552c5bd177c",
+          "bytes": 8515
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-PendingInstructionsRetainEventBinding-7.c": {
+          "sha256": "15d308049665bd50626f8dd6f9f029de5b0c30268f62ef5d0c89600110cdf0d5",
+          "bytes": 16843
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-PendingInstructionsRetainEventBinding-7.json": {
+          "sha256": "521d9fc53bf12b9d55caf9feb9645ff8e3fd494c42bba91a3b6cf36c080f5c4b",
+          "bytes": 6167
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-11.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-11.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-15.c": {
+          "sha256": "b4fbe4a7a2b134a171560a57a726bdec04a9eb2e9db38bcb7bd925f30ce848fa",
+          "bytes": 23534
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-15.json": {
+          "sha256": "3392be96d791d720bd1accd1450caa5cfd335fe2ce36bc903d955499e0df0d55",
+          "bytes": 6387
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-3.c": {
+          "sha256": "e6271de3db6035f226bb6e4008647718837f84ea4d64c75df17eb1e0c14e70c4",
+          "bytes": 16849
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-3.json": {
+          "sha256": "6df4d5a26699577048fcc0c405b22858e41c3a0b2ce2024d7c0dc8121d8be5e6",
+          "bytes": 6167
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-7.c": {
+          "sha256": "b0b634873296a0cc862c9e2d713b6d444bcdbe4a1a90cc751721c1fab1ac30f3",
+          "bytes": 16842
+        },
+        "build-x86-green1-exports/X64PagedEventDescriptorTest-llvm-O2-neverc-ResumeRetainsAcceptedDescriptorProfile-7.json": {
+          "sha256": "a63473567a1d0a1f7feb9a02e8288cc43a71802f66f546513ed0f2f8f7a27b73",
+          "bytes": 6165
+        }
+      },
+      "directories": [
+        "build-x86-native-green1-exports",
+        "build-x86-native-green1-tmp",
+        "build-x86-green1-exports",
+        "build-x86-green1-tmp"
+      ]
+    },
+    {
+      "archive": "second-probe-products.tar.gz",
+      "archive_sha256": "d6f90bf95be9b9ff7cc8e7ae08f6b408ff18e813ff42b4010ccdde84e8e7c99f",
+      "verified_decompressed_files": 0,
+      "files": {},
+      "directories": [
+        "build-x86-native-probe2-exports",
+        "build-x86-native-probe2-tmp",
+        "build-x86-native-probe2-tmp/nd_test_2937107_ObserveOriginalRanges",
+        "build-x86-native-probe2-tmp/nd_test_2937107_OwnerMatchesOriginalRanges",
+        "build-x86-probe2-exports",
+        "build-x86-probe2-tmp",
+        "build-x86-probe2-tmp/nd_test_2936793_ObserveOriginalRanges",
+        "build-x86-probe2-tmp/nd_test_2936793_OwnerMatchesOriginalRanges"
+      ]
+    },
+    {
+      "archive": "third-probe-products.tar.gz",
+      "archive_sha256": "15eca1023d38c44c1468b974bc9d368fade5ae9690e4f3562646ffd7d5b2880d",
+      "verified_decompressed_files": 0,
+      "files": {},
+      "directories": [
+        "build-x86-native-probe3-exports",
+        "build-x86-native-probe3-tmp",
+        "build-x86-native-probe3-tmp/nd_test_2946730_OwnerMatchesOriginalRanges",
+        "build-x86-probe3-exports",
+        "build-x86-probe3-tmp",
+        "build-x86-probe3-tmp/nd_test_2946567_OwnerMatchesOriginalRanges"
+      ]
+    }
+  ],
+  "gitlinks": {
+    "third_party/llvm-project": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
+    "third_party/capstone": "502bd6b9d9ab35cab7727a9e9d73cc1882c4a5ff",
+    "third_party/unicorn": "bd582f668a29518bfa2e3c98cff56914f4661be1"
+  },
+  "boundaries": [
+    "NeverC remains host/source x64; guest mode/operand widths do not add a compiler target.",
+    "Full paged-source, legacy-source, shared events/native paging, low instruction-boundary and SDK suites are replayed on both SDKs. Prior independent paging qualification is not recounted.",
+    "Event accessed-update CR2/locked transaction and split-lock qualification remain open, along with mode-aware owners, real/unreal/VM86 composition, software SMM/SGX, unbound asynchronous producers and physical SGX qualification.",
+    "Production LLVM remains neverd-llvm-v23.0.0-r6. No LLVM release, production pin or source gitlink change."
+  ]
+}

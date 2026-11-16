@@ -64,6 +64,8 @@ struct X86LegacyTransferContinuation {
   std::optional<X86DescriptorCanonicalityProfile> DescriptorCanonicality;
   std::optional<X86LegacyDebugProfile> DebugProfile;
   std::optional<X86LegacyVM86Profile> Virtual8086;
+  std::optional<X86LegacyScalarProfile> Scalars;
+  std::optional<X86LegacyMachineStatusProfile> MachineStatus;
   uint8_t DataBreakpoints = 0;
   std::optional<X86Non64ModeBinding> Mode;
 
@@ -81,7 +83,8 @@ struct X86LegacyTransferContinuation {
         FullLimit(O.Segments.FullLimitChoice),
         NullBase(O.Segments.NullBasePolicy),
         DescriptorCanonicality(O.Segments.DescriptorCanonicality),
-        DebugProfile(O.Debug), Virtual8086(O.Virtual8086), Mode(O.Non64Mode) {}
+        DebugProfile(O.Debug), Virtual8086(O.Virtual8086), Scalars(O.Scalars),
+        MachineStatus(O.MachineStatus), Mode(O.Non64Mode) {}
 
   bool matches(const X86LegacyExecutionState &S, const X86PagedMemory &M,
                const X86LegacyExecutionOptions &O) const {
@@ -102,6 +105,8 @@ struct X86LegacyTransferContinuation {
            NullBase == O.Segments.NullBasePolicy &&
            DescriptorCanonicality == O.Segments.DescriptorCanonicality &&
            DebugProfile == O.Debug && Virtual8086 == O.Virtual8086 &&
+           (Kind != X86LegacyTransferKind::MachineStatus ||
+            (Scalars == O.Scalars && MachineStatus == O.MachineStatus)) &&
            Mode == O.Non64Mode;
   }
 };
@@ -156,12 +161,21 @@ llvm::Error validateLegacyTransferContinuation(
   if (!S.PendingTransfer)
     return llvm::Error::success();
   const auto &P = *S.PendingTransfer;
-  const bool Bound =
-      P.Kind == X86LegacyTransferKind::Far
-          ? O.FarTransfers == X86LegacyFarTransferProfile::OrderedFrame
-      : P.Kind == X86LegacyTransferKind::Return
-          ? O.Returns == X86LegacyReturnProfile::OrderedFrame
-          : O.Segments.Profile == X86LegacySegmentProfile::WordStackOffsetFirst;
+  bool Bound = false;
+  switch (P.Kind) {
+  case X86LegacyTransferKind::Far:
+    Bound = O.FarTransfers == X86LegacyFarTransferProfile::OrderedFrame;
+    break;
+  case X86LegacyTransferKind::Return:
+    Bound = O.Returns == X86LegacyReturnProfile::OrderedFrame;
+    break;
+  case X86LegacyTransferKind::Segment:
+    Bound = O.Segments.Profile == X86LegacySegmentProfile::WordStackOffsetFirst;
+    break;
+  case X86LegacyTransferKind::MachineStatus:
+    Bound = O.Scalars == X86LegacyScalarProfile::OrderedRAM;
+    break;
+  }
   if (S.PendingEvent || S.PendingStack || S.PendingMpx || S.PendingTask ||
       S.PendingControl || Instruction != llvm::ArrayRef(P.Instruction) ||
       !P.matches(S, M, O) || !Bound)

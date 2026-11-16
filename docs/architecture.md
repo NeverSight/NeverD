@@ -1221,7 +1221,13 @@ For fragmented Windows SEH ranges, LLVM C follows the begin/end markers along
 the CFG and retains each block's complete ordered unwind chain. Independent
 handlers and a handler nested within a finally keep their own clauses. Normal
 edges assign PHIs before leaving the generated compounds; a block's finally
-executes the recovered cleanup only on unwind. Closed lexical ranges retain
+executes the recovered cleanup only on unwind. A block that prints only its
+jump, such as a range marker or what a call's continuation or a split left
+empty, runs nothing a scope could guard: it prints no `__try`, and a jump to
+it goes where it goes, so it prints no text. The first block, blocks that
+only jump to one another in a ring, and the deepest block of a scope none of
+whose blocks prints a statement keep theirs, the last with its nest so that
+every clause still shows. Closed lexical ranges retain
 their compact rendering. C also runs a `__finally` when its try falls through,
 where the source already holds the normal copy, so a compact finally runs the
 cleanup under `if (AbnormalTermination())`. C counts a return or a jump out of
@@ -1249,7 +1255,32 @@ stack and its return address. The frame a filter takes is captured before the
 first clause, the block form's included. SEH this view cannot structure prints
 no `__try`: a catch-all around the whole body would claim the function
 swallows exceptions its scopes let pass, so the function says it is not
-lowered instead.
+lowered instead. The note follows the scope table in the function's exception
+metadata, not the name of its language handler: a table whose handler checks
+a stack cookie first (`__GSHandlerCheck_SEH`) runs the same scopes, so a
+function this view leaves unlowered behind that check says so too.
+This view also takes a table with several rows over one range, which MSVC and
+clang-cl write for a `__try` whose body is exactly another `__try`. The rows
+nest by their order, the earlier inside the later, because
+`__C_specific_handler` scans the table from its first row; the scope identity
+(`getSEHScopeSemanticToken`) covers such a table only on request. Native
+output, where the code generator writes the table again, still leaves these
+functions as metadata. A local unwind reaches this view as MedIR spells it, a
+call of each termination handler at the runtime call's address
+(`MedSEHLocalUnwindExit`). The runtime calls the handler of row k with its
+scan already past k, so what that handler raises meets only the later rows
+that guard the call: the lowering ends scope k and every scope inside it
+before the call and keeps the call in the scopes around k, and the last
+handler of an unwind that leaves every scope is a plain call. The calls at an
+exit's address must be its handlers, in its order, with no other call after
+them in the block; anything else leaves the function unlowered. Native output
+keeps a lone handler call in its block's innermost scope.
+For navigation these handler calls, which no instruction of the function
+makes, observe the runtime call they stand for (its address and LowIR
+sequence), and the form that prints each block in its own `__try` marks a call
+that became an invoke, the terminator of its block, as the instruction writer
+marks any other call. A call a `__finally` clause prints is the clause itself
+and names no instruction.
 HighIR adds this recovery for positional register/stack conventions. Independent
 register banks retain their source variadic and floating-return preparation.
 
@@ -4955,12 +4986,22 @@ Unsupported record carriers fail explicitly. This does not add ARM32 record
 placement or general mixed floating record-call support.
 
 Complete scalar integer/pointer declarations bind through
-`fixedIntegerCallArguments` before SSA on x64 and AArch64. This includes
+`fixedIntegerCallArguments` before SSA on x86, x64 and AArch64. This includes
 register-only and empty signatures: incidental register setup and frame stores
 cannot enlarge an authenticated fixed argument list. The same operand contract
 owns explicit stack loads and declared byte widths, and both source routes
 reject a bound call that loses those operands. This argument contract does not
 authorize additional result registers or implicit machine-state inputs.
+The fixed integer and floating adapters share declaration authentication.
+Exact native declarations from an authenticated debug reader bind private and
+exported callees alike; an unused parameter in the callee body cannot shorten
+the caller's declared operand list. Missing types, unknown return contracts,
+variadic functions and custom parameter locations do not establish this
+contract. i386 retains stack-slot counts and stdcall cleanup alongside the
+explicit operands. An omitted fixed integer callee's LLVM declaration remains
+nonvariadic even on targets whose unknown external calls default to varargs.
+The x64 entry-read summaries also retain these declared inputs, so a forwarding
+body cannot erase a parameter its final callee does not read.
 Internal Windows routines authenticated by the platform prototype registry
 publish the same full operand contract as imported routines. Register-read
 and stack-arity summaries alone cannot enforce this boundary in either emitter.
@@ -5007,6 +5048,15 @@ only along an unclobbered entry path. Its existing bounded summary worklist
 propagates the resulting facts. `recoveredFloatingCallArguments` checks the
 complete fixed signature for both LLVM declarations and HighC call metadata;
 expression types alone do not establish a nonvariadic external signature.
+The cached declaration inventory includes exact authenticated native function
+symbols and local function-pointer targets. It resolves their placements once
+in parallel and publishes both operand maps to i386 as well as register-based
+conventions. Symbol inventory changes and the existing declaration invalidation
+boundary retire that inventory. HighC authenticates native mixed declarations
+through the same adapter. On i386, floating stack parameters may accompany an
+integer or pointer result that fits one return register; only floating results
+require the independently proved x87 return slot. Register-pair integer results
+remain outside this scalar adapter.
 Mixed scalar arguments and dense AAPCS64 HFAs use the same checked placement
 model, with source groups retained separately from their physical scalar
 operands. A spilled HFA occupies one stack object; its float members remain
@@ -11714,6 +11764,8 @@ closure rejects values derived from unspecified inputs, missing definitions or
 unbound call clobbers, rather than accepting an arithmetic copy of unknown bits.
 The image and current call-summary reads own cached conversions, so changing the
 selection or warming the cache cannot supply a missing second result. HighC
+return-block inlining leaves multi-register results to the complete return
+lowering; a scalar epilogue shortcut cannot replace their packed value. HighC
 externs retain the complete recovered call-result width, and source LLVM cannot
 replace that result with a cached scalar callee declaration. A wide assignment
 alone does not widen a scalar call. Omitted floating aggregates still require
@@ -11963,7 +12015,16 @@ copy of the writer those declarations prepared, and joins the definitions in
 order. A definition reads only what the declarations prepared and resets its
 own state, so its text does not depend on the thread or on the definitions
 written before it; the first definition that fails, in order, fails the unit
-as in one pass. A unit of fewer than `kMinParallelCFunctionDefinitions`
+as in one pass. Frame aliases are part of that state. The passes that decide a
+definition's labels and try exits ask which statements C hides before the
+definition collects its frame slots, and a copy of a frame address into a name
+that is an alias of it is hidden: they read the aliases the declaration pass
+found in that definition (`DeclaredFrameAliases`), never those the writer's
+previous definition left behind, which made an `__except` exit print or omit a
+label by the order the threads claimed the definitions in. A label those
+passes ask for stays when the later pass, which sees every hidden statement,
+finds that nothing jumps to it: the unit prints it unreferenced, as a unit of
+that definition alone does. A unit of fewer than `kMinParallelCFunctionDefinitions`
 definitions, or one rendered with a source map, recorded positions or source
 names, which follow the text as one pass prints it, is written on one thread.
 
@@ -20632,10 +20693,14 @@ their largest bound; unknown selectors and other operating systems retain
 the library maximum. The selector walk respects integer widths, including
 wrapping arithmetic before zero extension. This establishes argument
 consumption, not a proof of the system call's result or effects.
-LLVM-C spells bounded variadic tails with the forwarding contract's exact
-target type. A small integer literal cannot rely on an absent parameter
-conversion to retain a machine-word width; signedness, pointer carriers and
-the target's `long` width come from that existing contract.
+LLVM-C spells fixed-type bounded variadic tails with the forwarding contract's
+exact target type. A small integer literal cannot rely on an absent parameter
+conversion to retain a machine-word width; signedness and the target's `long`
+width come from that existing contract. The generic pointer slot used to forward
+`fcntl`/`ioctl` is not evidence that a particular command takes a pointer.
+Recovered integer tails retain their scalar expression and LLVM literal width;
+actual pointer operands retain their pointer projection. This preserves the
+recovered carrier without inventing a command-specific source prototype.
 Omitted signature bodies use the ordinary per-function operation bound, not
 HighIR's structuring limit. Type inference retains its own smaller admission;
 a complete large SSA body still supplies parameter bounds.

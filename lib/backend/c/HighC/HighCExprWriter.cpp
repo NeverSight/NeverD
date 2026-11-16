@@ -2692,8 +2692,8 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   std::string S = Name + "(";
   const auto Callee = debugCallee(E);
   if (Callee && !Defined)
-    if (const auto Signature =
-            libc::floatingCallArguments(*Callee, Opts.TheArch, Opts.Format);
+    if (const auto Signature = libc::floatingCallArguments(
+            *Callee, Opts.TheArch, Opts.Format, Dbg);
         Signature &&
         (Opts.TheArch == Arch::X86 || !Signature->Scalars.empty() ||
          Signature->ReturnElements) &&
@@ -2778,7 +2778,7 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   const bool SourceRecord =
       !Defined && Callee &&
       ((Name == Callee->Name && includesHeaderOf(Name)) ||
-       libc::floatingCallArguments(*Callee, Opts.TheArch, Opts.Format));
+       libc::floatingCallArguments(*Callee, Opts.TheArch, Opts.Format, Dbg));
   const auto RecordCall =
       SourceRecord ? libc::recordCallArguments(*Callee, Opts.TheArch,
                                                Opts.Format, Opts.libcVariant())
@@ -4837,7 +4837,7 @@ size_t HighCWriter::debugCallArgLimit(const HighExpr &E) const {
   };
   if (const auto Callee = debugCallee(E)) {
     if ((Callee->Name == Name && includesHeaderOf(Name)) ||
-        libc::floatingCallArguments(*Callee, Opts.TheArch, Opts.Format))
+        libc::floatingCallArguments(*Callee, Opts.TheArch, Opts.Format, Dbg))
       if (const auto Layout = libc::recordCallArguments(
               *Callee, Opts.TheArch, Opts.Format, Opts.libcVariant()))
         return Layout->Positions;
@@ -5567,7 +5567,7 @@ HighCWriter::debugExternPrototype(const FunctionSym &FS,
     return "extern " + Convention + Declaration.str();
   }
   if (const auto Floating =
-          libc::floatingCallArguments(FS, Opts.TheArch, Opts.Format);
+          libc::floatingCallArguments(FS, Opts.TheArch, Opts.Format, Dbg);
       Floating &&
       (!Floating->ParameterElements.empty() || Floating->ReturnElements)) {
     const auto Declare = [&](const TypeRef &Type, const std::string &Name) {
@@ -7024,7 +7024,7 @@ HighCWriter::checkedCalleeFunctionType(const HighExpr &Call,
   // same signature, including when an HFA occupies several machine operands.
   if (!calledDefinition(Call) && Call.FloatingCallSignature) {
     auto Floating =
-        libc::floatingCallArguments(Callee, Opts.TheArch, Opts.Format);
+        libc::floatingCallArguments(Callee, Opts.TheArch, Opts.Format, Dbg);
     // An occurrence-bound scalar descriptor also authenticates a local
     // declaration. Reclassify its complete signature through the same ABI
     // owner; debug spelling alone must not authorize a typed callback.

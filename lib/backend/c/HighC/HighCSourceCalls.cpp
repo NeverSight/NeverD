@@ -242,6 +242,10 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
                    .str();
     }
     const auto ArgumentCarrier = [&](const HighExpr &Argument) {
+      // exprStr may have read a floating declaration as integer register bits.
+      // Marshal the emitted expression's type, not the declaration it read.
+      if (const auto Printed = printedIntegerType(Argument))
+        return NdType::makeInt(Printed->first, Printed->second);
       if (Argument.Kind == ExprKind::Var || Argument.Kind == ExprKind::Phi)
         if (auto Declared = declaredParamType(Argument.Var))
           return Declared;
@@ -1331,8 +1335,11 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
     if (!E.Operands[I])
       return bad("missing argument expression");
     const auto &Argument = *E.Operands[I];
+    const std::string ArgumentText = exprStr(Argument);
     TypeRef Carrier = Argument.Type;
-    if (Argument.Kind == ExprKind::Var || Argument.Kind == ExprKind::Phi)
+    if (const auto Printed = printedIntegerType(Argument))
+      Carrier = NdType::makeInt(Printed->first, Printed->second);
+    else if (Argument.Kind == ExprKind::Var || Argument.Kind == ExprKind::Phi)
       if (auto Declared = declaredParamType(Argument.Var);
           Declared && Declared->Kind == NdTypeKind::Float)
         Carrier = Declared;
@@ -1358,8 +1365,8 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       // the physical pointer exactly once while retaining the logical ABI.
       Value = "({ " + declarationToC(SourceType, "nd_copy") +
               "; __builtin_memcpy(&nd_copy, (const void *)(uintptr_t)(" +
-              exprStr(Argument) + "), " +
-              std::to_string(Hint.ByValueCopy->Bytes) + "); nd_copy; })";
+              ArgumentText + "), " + std::to_string(Hint.ByValueCopy->Bytes) +
+              "); nd_copy; })";
     } else
       Value = Argument.Kind == ExprKind::Const && Carrier &&
                       Carrier->Kind == NdTypeKind::Int &&
@@ -1367,7 +1374,7 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
                       SourceType->Kind == NdTypeKind::Ptr &&
                       Carrier->Size != SourceType->Size
                   ? std::optional<std::string>("(" + typeToC(SourceType) + ")0")
-                  : sourceValue(exprStr(Argument), Carrier, SourceType);
+                  : sourceValue(ArgumentText, Carrier, SourceType);
     if (!Value)
       return bad("argument carrier disagrees with the source declaration");
     if (I != FirstArgument)

@@ -26,7 +26,8 @@ std::optional<FixedIntegerCallArguments>
 neverd::fixedIntegerCallArguments(Arch A, BinaryFormat F,
                                   const TypeRef &ReturnType,
                                   llvm::ArrayRef<TypeRef> Parameters) {
-  if ((A != Arch::X64 && A != Arch::AArch64 && !isMIPS(A)) || !ReturnType ||
+  if ((A != Arch::X86 && A != Arch::X64 && A != Arch::AArch64 && !isMIPS(A)) ||
+      !ReturnType ||
       Parameters.size() > static_cast<size_t>(limits::kMaxBoundSourceCallArgs))
     return std::nullopt;
   const auto Scalar = [&](const TypeRef &Type) {

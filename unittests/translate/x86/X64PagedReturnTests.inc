@@ -332,7 +332,10 @@ TEST_F(X64PagedExecutionTest, PagedInterruptReturnsMatchOriginalCPU) {
             X64PagedExecution Context(
                 *Memory,
                 {.AlignmentPriority = X64PagedAlignmentPriority::BeforePaging,
-                 .IretAccessOrder = X64PagedIretAccessOrder::FlagsFirst});
+                 .IretAccessOrder =
+                     CPU.ReturnCoreType == 0x40
+                         ? X64PagedIretAccessOrder::FlagsFirstTailGPZero
+                         : X64PagedIretAccessOrder::FlagsFirst});
             uint64_t Budget = 1;
             const auto Exit =
                 Driver(&State, reinterpret_cast<uint8_t *>(&Context), &Budget);

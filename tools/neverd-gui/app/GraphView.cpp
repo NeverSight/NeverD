@@ -4,6 +4,7 @@
 #include "HighlightLocks.h"
 #include "Session.h"
 #include "Theme.h"
+#include "WheelInput.h"
 #include "WorkerCodes.h"
 
 #include <QHash>
@@ -723,7 +724,7 @@ void GraphView::wheelEvent(QWheelEvent *event) {
     return;
   }
   const bool horizontal = event->modifiers() & Qt::ShiftModifier;
-  const QPointF pixels = !event->pixelDelta().isNull()
+  const QPointF pixels = WheelInput::measuresPixels(*event)
                              ? QPointF(event->pixelDelta())
                              : QPointF(angle) / 120.0 * PanStep * 3;
   origin_ -= (horizontal ? QPointF(pixels.y(), pixels.x()) : pixels) / scale_;

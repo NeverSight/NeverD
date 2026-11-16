@@ -1849,6 +1849,16 @@ add_neverd_unittest(NeverDIntegerCallArgumentsTests
 target_include_directories(NeverDIntegerCallArgumentsTests PRIVATE
   ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
 
+add_neverd_unittest(NeverDNativeCallSignatureTests
+  core/NativeCallSignatureTests.cpp
+  LINK_COMPONENTS BackendC BackendLLVM Pipeline
+  TIMEOUT 600
+)
+target_include_directories(NeverDNativeCallSignatureTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
+target_compile_definitions(NeverDNativeCallSignatureTests PRIVATE
+  NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")
+
 add_neverd_unittest(NeverDMedParameterEntryTests
   core/MedParameterEntryTests.cpp
   LINK_COMPONENTS IR
@@ -2346,6 +2356,8 @@ add_neverd_unittest(NeverDSEHTerminationHandlerTests
   eh/ARMSEHFinallyBodyTests.cpp
   eh/ARM64SEHLocalUnwindTests.cpp
   eh/ARMSEHLocalUnwindTests.cpp
+  eh/SEHDefinitionOrderTests.cpp
+  eh/TableSEHSourceScopeTests.cpp
   eh/X86SEHDisplayTests.cpp
   LINK_COMPONENTS Pipeline BackendC
 )
