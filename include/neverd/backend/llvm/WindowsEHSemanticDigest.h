@@ -32,10 +32,13 @@ inline constexpr uint32_t SemanticDigestSchemaVersion = 2;
 
 /// Return the source-issued identity for one native SEH scope.  The digest
 /// covers the complete ordered scope graph; Region identifies \p ScopeIndex
-/// inside that graph and Clause is zero.
+/// inside that graph and Clause is zero.  A table with two rows over one
+/// range has an identity only with \p AllowRepeatedRanges: such rows nest by
+/// their order, the earlier inside the later, which only the lowering for
+/// printed C takes up (WindowsEHNativeCapability::SourceIRLowering).
 std::optional<llvm::mc_rewrite::RewriteWinEHSemanticToken>
 getSEHScopeSemanticToken(const ExceptionFunction &EH, Arch TargetArch,
-                         uint32_t ScopeIndex);
+                         uint32_t ScopeIndex, bool AllowRepeatedRanges = false);
 
 /// Return the source-issued identity for one FH3 or FH4 catch clause.  The
 /// digest covers the complete ordered FuncInfo graph, including its native

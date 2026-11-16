@@ -1250,6 +1250,22 @@ first clause, the block form's included. SEH this view cannot structure prints
 no `__try`: a catch-all around the whole body would claim the function
 swallows exceptions its scopes let pass, so the function says it is not
 lowered instead.
+This view also takes a table with several rows over one range, which MSVC and
+clang-cl write for a `__try` whose body is exactly another `__try`. The rows
+nest by their order, the earlier inside the later, because
+`__C_specific_handler` scans the table from its first row; the scope identity
+(`getSEHScopeSemanticToken`) covers such a table only on request. Native
+output, where the code generator writes the table again, still leaves these
+functions as metadata. A local unwind reaches this view as MedIR spells it, a
+call of each termination handler at the runtime call's address
+(`MedSEHLocalUnwindExit`). The runtime calls the handler of row k with its
+scan already past k, so what that handler raises meets only the later rows
+that guard the call: the lowering ends scope k and every scope inside it
+before the call and keeps the call in the scopes around k, and the last
+handler of an unwind that leaves every scope is a plain call. The calls at an
+exit's address must be its handlers, in its order, with no other call after
+them in the block; anything else leaves the function unlowered. Native output
+keeps a lone handler call in its block's innermost scope.
 HighIR adds this recovery for positional register/stack conventions. Independent
 register banks retain their source variadic and floating-return preparation.
 
