@@ -4548,3 +4548,70 @@ CPU/generated-state and complete-RAM comparisons per SDK. High-end wrapping and
 accessed-update protection checks are included. Return/event descriptor-tail
 profiles and remaining full-machine owners stay open; no final LLVM release
 or production pin update is claimed.
+
+The [code64 return descriptor qualification](x86-paged-execution.md#code64-return-descriptor-profiles)
+adds explicit target tail-fault profiles for IRET and RETF, including all operand
+widths, immediate cleanup and return CS/outer SS. Both SDKs pass 535 tests
+with 1 LA57 skip each; the new groups contain 2,496 original CPU/generated
+state and complete-RAM comparisons per SDK. Return, event and full-mode
+continuations preserve the accepted fault choice and charge the instruction
+once. Event descriptor-tail qualification and remaining mode/machine owners
+remain open. No final LLVM release or production pin update is included.
+
+The [code64 event descriptor qualification](x86-paged-execution.md#code64-event-descriptor-profiles)
+adds independent selector/EXT fault profiles for INT/INT3, IRQ and NMI.
+Both SDKs pass 543 tests with 1 LA57 skip each. The new groups include
+320 original/generated state and complete-RAM comparisons per SDK, plus
+retained event, instruction and full-mode bindings. At that checkpoint, the
+preserved A=0/read-only CR2 red cases and cross-line KVM internal errors remained
+separate unresolved accessed-update work. Remaining mode/machine owners, physical SGX and the final
+LLVM release/pin gate are still open. NeverC remains host/source x64.
+
+The [code64 event accessed-update qualification](x86-paged-execution.md#code64-event-accessed-updates)
+closes the aligned read-only CR2 and self-PTE cache-image differences. Per SDK,
+320 original/generated complete State/RAM comparisons and 32 original write-
+watchpoint comparisons agree; ordinary/full-mode/debug continuations retain
+completed updates. Both SDKs pass 551 tests with 1 LA57 skip each.
+Cross-line/split-lock, further mode/machine owners and physical SGX remain open;
+no final LLVM release, production pin or NeverC source-target expansion is included.
+
+## Continuous-mode debug-register transfers (2026-11-16)
+
+The [mode debug-register qualification](x86-mode-execution.md#debug-register-transfers-and-complete-addresses)
+closes MOV-DR integration for protected16/32 and compatibility16/32. Explicit
+addressed-write receipts clear exactly one full bank's high32 on a completed
+write, including unchanged low halves; immediate TF comparisons use the new
+bank, and event backing repair preserves the write without replaying it.
+Shared GD/DE/CPL/LOCK rules retain their original priority.
+
+At `f95dc84266`, each SDK passes 569 full regression tests with 1 LA57 skip.
+The new matrices include 256 raw observations, 256 direct-owner and 128 generated
+comparisons per SDK, plus TF, GD and privilege faults. The subsequent native
+fixture admission change passes all eight groups per SDK and has a separate
+source/binary record; production code is identical. NeverC remains host/source
+x64. Ports/strings/MPX, legacy returns, task/system and fast-system transitions,
+VM86 composition, software SMM/SGX and physical SGX remain outside this unit.
+No final LLVM release or production pin change is declared.
+
+## Continuous-mode machine status (2026-11-16)
+
+The [machine-status binding](x86-mode-execution.md#machine-status-and-paid-operand-progress)
+admits LMSW/CLTS through protected16/32 and compatibility16/32 using the existing
+CR0 owner. CR0 commits before debug delivery without reloading PDPTEs or
+changing other controls. Memory SMSW/LMSW now keep authenticated bytes and their
+paid attempt across operand backing stops; success and guest faults retire
+that marker before separate event entry.
+
+At `d314e78acf`, both SDKs pass 1398 regression tests each with 2 LA57
+skips each, including full paging and both generated-C suites. Each SDK's new
+coverage includes 768 raw execution cases, 768 direct-owner comparisons,
+96 original/generated cases, 24 original TF/SS cases and 16 fault-priority
+cases. Software repair matrices separately check repeated zero-budget progress,
+frozen bindings, complete banks and a single completion before suspended #DB.
+These KVM observations do not claim physical interception-free LMSW behavior.
+A separate test-only follow-up at `c86cda5c49` passes four compiled-source tests
+per SDK, totaling 32 generated-C software recovery cases per SDK. It verifies
+reconstructed RAM/context, changed bytes and zero-budget completion against an
+uninterrupted compiled baseline; production code is unchanged.
+NeverC remains host/source x64. Other mode/machine owners, software SMM/SGX,
+asynchronous producers and physical SGX remain open; production LLVM stays r6.

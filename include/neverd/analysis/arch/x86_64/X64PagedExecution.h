@@ -58,11 +58,12 @@ struct X64PagedExecutionOptions {
   /// Required when CPL3 alignment checking is active. Absence refuses the
   /// entry before fetch or RAM effects instead of inferring a host CPU policy.
   std::optional<X64PagedAlignmentPriority> AlignmentPriority;
-  /// Required before executing IRET's return-frame accesses. Authentication
-  /// and fetch still precede this instruction-specific runtime binding.
+  /// Required before executing IRET's return-frame accesses. Includes its
+  /// descriptor-tail fault code. Authentication and fetch still precede this
+  /// instruction-specific runtime binding.
   std::optional<X64PagedIretAccessOrder> IretAccessOrder;
   /// Required before RETF accesses its frame. Includes the target processor's
-  /// order of compatibility-IP truncation and canonical-address validation.
+  /// compatibility-IP order and descriptor-tail canonical-address fault code.
   std::optional<X64PagedFarReturnProfile> FarReturnProfile;
   /// Required before LSS/LFS/LGS reads either pointer field or descriptor.
   std::optional<X64PagedFarPointerProfile> FarPointerProfile;
@@ -87,6 +88,9 @@ struct X64PagedExecutionOptions {
       X86InstructionDebugProfile::InstructionStep;
   std::optional<X86GeneralDetectFrame> GeneralDetectFrame;
   translate::X86EventDeliveryOptions EventDelivery;
+  /// Retained across instruction/event stops and their secondary faults.
+  X86DescriptorCanonicalityProfile EventDescriptorCanonicality =
+      kX64PagedEventDescriptorCanonicality;
 };
 
 /// A committed near CALL/RET, captured before its post-instruction event.

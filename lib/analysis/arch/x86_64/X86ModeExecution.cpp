@@ -80,6 +80,7 @@ void mergeEvent(X86ModeExecutionResult &R,
   const bool CR2Written = R.CR2Written, CSWritten = R.CSWritten,
              SSWritten = R.SSWritten;
   const auto SegmentWritten = R.SegmentWritten;
+  const auto DebugAddressWritten = R.DebugAddressWritten;
   auto Effects = std::move(R.SelfModifications);
   const auto Exception = R.Exception;
   static_cast<X86LegacyExecutionResult &>(R) = Event;
@@ -90,6 +91,8 @@ void mergeEvent(X86ModeExecutionResult &R,
   R.SSWritten |= SSWritten;
   if (SegmentWritten)
     R.SegmentWritten = SegmentWritten;
+  if (DebugAddressWritten)
+    R.DebugAddressWritten = DebugAddressWritten;
   if (!R.Exception)
     R.Exception = Exception;
   R.SelfModifications.insert(R.SelfModifications.begin(), Effects.begin(),
@@ -160,6 +163,8 @@ llvm::Error admit(const X86ModeState &S, const X86ModeExecutionOptions &O,
   if ((S.STIBlocked && !(R.RFlags & 0x200)) ||
       (S.Halted && ((V.Core.CS.Selector & 3) || S.STIBlocked || S.SSBlocked)))
     return invalid("mixed-mode halt/shadow state is inconsistent");
+  if (!x86DescriptorCanonicalityValid(O.Long.EventDescriptorCanonicality))
+    return invalid("invalid event descriptor canonicality profile");
   if (!O.Legacy.EventDelivery.MaxAttempts || !O.Long.EventDelivery.MaxAttempts)
     return invalid("mixed-mode event owners require positive work budgets");
   return llvm::Error::success();
@@ -178,7 +183,8 @@ void deliver(X86ModeState &S, X86PagedMemory &M, detail::X86ModeContinuation &P,
                                   O.Long.DebugProfile, O.Long.EventDelivery)
             : deliverX64PagedEvent(S.Core.Core, M, *P.Event, O.MXCSRMask,
                                    S.Debug ? &*S.Debug : nullptr,
-                                   O.Long.DebugProfile, O.Long.EventDelivery);
+                                   O.Long.DebugProfile, O.Long.EventDelivery,
+                                   O.Long.EventDescriptorCanonicality);
     if (!Got) {
       R.OwnerError = llvm::toString(Got.takeError());
       R.Status = X86LegacyExecutionStatus::ModeUnavailable;

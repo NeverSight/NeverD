@@ -22,6 +22,7 @@
 #include <QTest>
 #include <QWheelEvent>
 #include <memory>
+#include <optional>
 #include <utility>
 
 namespace neverd::gui {
@@ -46,9 +47,10 @@ using namespace neverd::gui;
 namespace {
 void wheel(QAbstractScrollArea &view, QPoint pixels, QPoint angles,
            Qt::KeyboardModifiers modifiers = Qt::NoModifier,
-           Qt::ScrollPhase phase = Qt::ScrollUpdate) {
+           Qt::ScrollPhase phase = Qt::ScrollUpdate,
+           Qt::MouseEventSource source = Qt::MouseEventNotSynthesized) {
   QWheelEvent event(QPointF(20, 20), QPointF(20, 20), pixels, angles,
-                    Qt::NoButton, modifiers, phase, false);
+                    Qt::NoButton, modifiers, phase, false, source);
   QApplication::sendEvent(view.viewport(), &event);
 }
 } // namespace
@@ -109,6 +111,55 @@ private slots:
     source.verticalScrollBar()->setValue(100);
     wheel(source, pixels * 24, angles * 24, Qt::NoModifier, Qt::ScrollBegin);
     QCOMPARE(source.verticalScrollBar()->value(), sourceAfterSmall);
+  }
+
+  void wheelNotchesScrollByLines_data() {
+    QTest::addColumn<QPoint>("pixels");
+    // A notch as a wheel reports it, and with the distance some platforms
+    // send along: a Wayland compositor's 10 or 15 from Qt 6.12, and Cocoa's
+    // guess at a line.
+    QTest::newRow("angle-only") << QPoint();
+    QTest::newRow("wayland-10") << QPoint(0, -10);
+    QTest::newRow("wayland-15") << QPoint(0, -15);
+    QTest::newRow("cocoa-line") << QPoint(0, -40);
+  }
+
+  void wheelNotchesScrollByLines() {
+    QFETCH(QPoint, pixels);
+    // As many lines as a list of Qt's scrolls rows for a notch.
+    const int lines = QApplication::wheelScrollLines();
+    QVERIFY(lines > 0);
+    Session session(QStringLiteral("unused-worker"));
+    AddressSpace space;
+    ListingView listing(session, space);
+    listing.resize(800, 300);
+    ListingViewTestAccess::seedScrolling(listing);
+    wheel(listing, pixels, QPoint(0, -120), Qt::NoModifier, Qt::NoScrollPhase);
+    QCOMPARE(listing.topItem(), std::optional<Address>(100 + lines));
+    wheel(listing, -pixels, QPoint(0, 120), Qt::NoModifier, Qt::NoScrollPhase);
+    QCOMPARE(listing.topItem(), std::optional<Address>(100));
+
+    CodeText source(session);
+    source.verticalScrollBar()->setRange(0, 500);
+    source.verticalScrollBar()->setValue(100);
+    wheel(source, pixels, QPoint(0, -120), Qt::NoModifier, Qt::NoScrollPhase);
+    QCOMPARE(source.verticalScrollBar()->value(), 100 + lines);
+  }
+
+  void systemMovementScrollsByItsPixels() {
+    // A movement the platform marks as its own measures pixels even outside
+    // a gesture's phases, as a Wayland compositor's continuous source does.
+    Session session(QStringLiteral("unused-worker"));
+    AddressSpace space;
+    ListingView listing(session, space);
+    listing.resize(800, 300);
+    ListingViewTestAccess::seedScrolling(listing);
+    wheel(listing, QPoint(0, -400), QPoint(0, -120), Qt::NoModifier,
+          Qt::NoScrollPhase, Qt::MouseEventSynthesizedBySystem);
+    const auto top = listing.topItem();
+    QVERIFY(top);
+    QVERIFY2(*top > 100 + 3 * QApplication::wheelScrollLines(),
+             qPrintable(QString::number(*top)));
   }
 
   void sourceScrollsHorizontally_data() {

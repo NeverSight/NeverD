@@ -254,8 +254,12 @@ private slots:
     QTRY_VERIFY(oldA.isNull() && oldB.isNull());
     QTRY_COMPARE(labels().size(), 2);
     QCOMPARE(labels().front()->text(), QStringLiteral("0x2010"));
+    // The host took each view along after what its module kept below the
+    // activation's lifetime, which may watch the view until it goes itself.
+    QVERIFY(!qApp->property("nativeSelectionViewWentFirst").toBool());
     QVERIFY(jobs.catalog().setEnabled("fixture.one", false, diagnostic));
     QTRY_COMPARE(labels().size(), 1);
+    QVERIFY(!qApp->property("nativeSelectionViewWentFirst").toBool());
     QVERIFY(labels().front()->close());
     QTRY_VERIFY(labels().isEmpty());
     QVERIFY(jobs.catalog().component("fixture.two"));

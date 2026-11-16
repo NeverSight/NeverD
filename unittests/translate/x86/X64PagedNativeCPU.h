@@ -18,6 +18,8 @@
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/translate/X86/X86PagedMemory.h"
 
+#include "llvm/ADT/ArrayRef.h"
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -70,8 +72,35 @@ public:
   int ReturnProcessor = -1;
   std::optional<cpu_set_t> OriginalAffinity;
   std::vector<uint64_t> CPUIDStorage;
+  struct ExtraMapping {
+    uint64_t Address;
+    uint8_t *Bytes;
+    uint64_t Size;
+  };
+  std::vector<ExtraMapping> ExtraMemory;
+
+  void addMemory(uint64_t Address, llvm::ArrayRef<uint8_t> Input) {
+    ASSERT_GE(Address, Size);
+    ASSERT_EQ(Address & 4095, 0u);
+    ASSERT_FALSE(Input.empty());
+    ASSERT_EQ(Input.size() & 4095, 0u);
+    auto *Bytes = static_cast<uint8_t *>(
+        mmap(nullptr, Input.size(), PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    ASSERT_NE(Bytes, MAP_FAILED);
+    ExtraMemory.push_back({Address, Bytes, Input.size()});
+    std::copy(Input.begin(), Input.end(), Bytes);
+    kvm_userspace_memory_region Region{};
+    Region.slot = ExtraMemory.size();
+    Region.guest_phys_addr = Address;
+    Region.memory_size = Input.size();
+    Region.userspace_addr = reinterpret_cast<uintptr_t>(Bytes);
+    ASSERT_EQ(ioctl(VM, KVM_SET_USER_MEMORY_REGION, &Region), 0);
+  }
 
   ~X64PagedNativeCPU() {
+    for (const auto &Region : ExtraMemory)
+      munmap(Region.Bytes, Region.Size);
     if (Run && Run != MAP_FAILED)
       munmap(Run, RunSize);
     if (RAM && RAM != MAP_FAILED)
@@ -203,8 +232,12 @@ public:
     Flush.cr3 = 0x3f000;
     ASSERT_EQ(ioctl(CPU, KVM_SET_SREGS, &Flush), 0);
     ASSERT_EQ(ioctl(CPU, KVM_SET_SREGS, &S), 0);
-    if (PrefaultMemory)
+    if (PrefaultMemory) {
       ASSERT_NO_FATAL_FAILURE(neverd::test::prefaultX86KVMBacking(CPU, Size));
+      for (const auto &Region : ExtraMemory)
+        ASSERT_NO_FATAL_FAILURE(neverd::test::prefaultX86KVMBacking(
+            CPU, Region.Size, Region.Address));
+    }
     kvm_vcpu_events Events{};
     Events.flags = KVM_VCPUEVENT_VALID_NMI_PENDING | KVM_VCPUEVENT_VALID_SHADOW;
     Events.nmi.masked = State.NMIBlocked;
@@ -255,10 +288,18 @@ public:
       ASSERT_EQ(ioctl(CPU, KVM_INTERRUPT, &Interrupt), 0);
       ASSERT_NO_FATAL_FAILURE(run());
     }
+    testing::Message ExitDetail;
+    ExitDetail << "KVM exit " << Run->exit_reason;
+    if (Run->exit_reason == KVM_EXIT_INTERNAL_ERROR) {
+      ExitDetail << " suberror=" << Run->internal.suberror
+                 << " data=" << Run->internal.ndata;
+      for (unsigned I = 0; I != Run->internal.ndata; ++I)
+        ExitDetail << " [" << I << "]=" << Run->internal.data[I];
+    }
     ASSERT_TRUE(Run->exit_reason == KVM_EXIT_DEBUG ||
                 Run->exit_reason == KVM_EXIT_HLT ||
                 (CaptureShutdown && Run->exit_reason == KVM_EXIT_SHUTDOWN))
-        << "KVM exit " << Run->exit_reason;
+        << ExitDetail;
     ASSERT_EQ(ioctl(CPU, KVM_GET_REGS, &R), 0);
     ASSERT_EQ(ioctl(CPU, KVM_GET_SREGS, &S), 0);
     if (DebugRegisters)

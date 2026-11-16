@@ -93,6 +93,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLabel>
+#include <QLayout>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QLocalServer>
@@ -3568,6 +3569,13 @@ private slots:
     bench.action(ActionId::SearchInView)->trigger();
     auto *find = bench.window->findChild<FindInViewDialog *>();
     QVERIFY(find);
+    // The dialog opens before it names the view it searches, and has the
+    // room for what it shows once it does.
+    QVERIFY(find->layout());
+    QVERIFY2(find->width() >= find->layout()->totalMinimumSize().width(),
+             qPrintable(QStringLiteral("%1 for %2")
+                            .arg(find->width())
+                            .arg(find->layout()->totalMinimumSize().width())));
     for (const auto &[name, key] :
          {std::pair{"findInViewPrevious", QKeySequence(Qt::SHIFT | Qt::Key_F3)},
           std::pair{"findInViewNext", QKeySequence(Qt::Key_F3)}}) {

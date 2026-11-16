@@ -39,7 +39,10 @@ public:
   using Observer = std::function<void(const QJsonObject &)>;
 
   /// The factory creates a child of the supplied parent. The host owns its
-  /// destruction. Show/hide use Qt; close releases the mount. The host may
+  /// destruction: when the activation ends it hides the view, destroys what
+  /// the module made below the activation's lifetime, and destroys the view
+  /// after that, so those objects never see a view of theirs gone unless the
+  /// module closed it. Show/hide use Qt; close releases the mount. The host may
   /// move every view to another window the person works in, such as focus
   /// mode's workspace, and back, keeping each shown or hidden; a view then
   /// receives QEvent::ParentChange, and one that keeps a place relative to

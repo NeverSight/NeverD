@@ -64,6 +64,10 @@ class X64ContinuationDelivery : private X64ContinuationSegments<Writer> {
 public:
   X64ContinuationDelivery(Writer &Output, unsigned Bits) : Base(Output, Bits) {}
 
+  X64ContinuationDelivery(Writer &Output, unsigned Bits,
+                          X86DescriptorCanonicalityProfile Canonicality)
+      : Base(Output, Bits, Canonicality) {}
+
   void execute(NdVar Pointer) {
     const auto Type = event(Pointer, offsetof(Event, Kind));
     const auto Vector = event(Pointer, offsetof(Event, Vector));
@@ -160,7 +164,8 @@ public:
                choose(either(Fault, Repeated),
                       op(NdOp::INT_OR, {Flags, k(0x10000)}), Flags));
     W.beginEvent(NMI);
-    X64ContinuationEvents<Writer>(W, Base::AddressBits)
+    X64ContinuationEvents<Writer>(W, Base::AddressBits,
+                                  Base::DescriptorCanonicality)
         .interrupt(Vector, SavedPC, SavedFlags, op(NdOp::INT_ZEXT, {HasError}),
                    Error, op(NdOp::INT_ZEXT, {Software}),
                    op(NdOp::INT_ZEXT, {NMI}), op(NdOp::INT_ZEXT, {PageFault}),

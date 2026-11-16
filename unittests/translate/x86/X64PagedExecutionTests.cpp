@@ -11,6 +11,7 @@
 #include "../../lift/NeverDLiftFixture.h"
 #include "X64PagedNativeCPU.h"
 #include "X86BranchDebugOracle.h"
+#include "X86LegacyMachineStatusTestEncoding.h"
 #include "X86PortDevice.h"
 
 #include "neverd/analysis/arch/x86_64/X64PagedExecution.h"
@@ -227,7 +228,14 @@ protected:
                       const std::string &Optimization,
                       llvm::sys::DynamicLibrary &DL,
                       llvm::StringRef ExtraSource = {}) {
-    const auto Source = tmpFile(Name + ".c"), Library = tmpFile(Name + ".so");
+    // Permanent library handles outlive each test fixture. Different suites
+    // may use the same test name and compilation index in this process.
+    const auto QualifiedName = std::string(testing::UnitTest::GetInstance()
+                                               ->current_test_info()
+                                               ->test_suite_name()) +
+                               "-" + Name;
+    const auto Source = tmpFile(QualifiedName + ".c"),
+               Library = tmpFile(QualifiedName + ".so");
     std::ofstream File(Source);
     File << Export.Source << R"C(
 static uint64_t (*access_bridge)(void *, uint64_t, uint64_t, uint64_t);
@@ -306,9 +314,10 @@ uint64_t neverd_x64_paged_debug_validate_v2(uint8_t *context, uint8_t *state,
     if (const char *Artifacts =
             std::getenv("NEVERD_ISA_REGRESSION_ARTIFACT_DIR")) {
       fs::create_directories(Artifacts);
-      fs::copy_file(Source, fs::path(Artifacts) / (Name + ".c"),
+      fs::copy_file(Source, fs::path(Artifacts) / (QualifiedName + ".c"),
                     fs::copy_options::overwrite_existing);
-      std::ofstream(fs::path(Artifacts) / (Name + ".json")) << Export.Manifest;
+      std::ofstream(fs::path(Artifacts) / (QualifiedName + ".json"))
+          << Export.Manifest;
     }
     const auto Built =
         exec(Compiler,
@@ -973,7 +982,9 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 }
 #endif
 #include "X64PagedDebugTests.inc"
+#include "X64PagedDescriptorBoundaryFixture.inc"
 #include "X64PagedDescriptorCanonicalityTests.inc"
+#include "X64PagedEventDescriptorTests.inc"
 #include "X64PagedExecutionBreakpointTests.inc"
 #include "X64PagedFarPointerTests.inc"
 #include "X64PagedFarReturnTests.inc"
@@ -983,6 +994,7 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 #include "X64PagedRepeatedStringBoundaryTests.inc"
 #include "X64PagedRepeatedStringTests.inc"
 #include "X64PagedReturnContinuationTests.inc"
+#include "X64PagedReturnDescriptorTests.inc"
 #include "X64PagedReturnTests.inc"
 #include "X64PagedScheduleTests.inc"
 #include "X64PagedSegmentContinuationTests.inc"
@@ -990,6 +1002,9 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 #include "X64PagedSegmentMoveTests.inc"
 #include "X64PagedSegmentPushTests.inc"
 #include "X64PagedWatchpointTests.inc"
+
+// Accessed-update cases extend the event descriptor fixture above.
+#include "X64PagedEventAccessedTests.inc"
 
 // These cases reuse the debug/watchpoint fixtures above.
 #include "X64PagedBranchDebugTests.inc"
@@ -1000,5 +1015,9 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 
 // Native comparisons extend the selector fixture above.
 #include "X86ModeSegmentNativeTests.inc"
+
+// These cases reuse the mixed-mode native fixture above.
+#include "X86ModeDebugRegisterTests.inc"
+#include "X86ModeMachineStatusTests.inc"
 
 } // namespace

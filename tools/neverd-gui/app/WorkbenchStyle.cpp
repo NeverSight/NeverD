@@ -40,6 +40,7 @@
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeView>
+#include <QtMath>
 #include <algorithm>
 #include <optional>
 
@@ -555,6 +556,53 @@ bool verticalTab(const QStyleOptionTab &tab) {
          tab.shape == QTabBar::TriangularEast ||
          tab.shape == QTabBar::TriangularWest;
 }
+
+/// Where the widget on a tab's leading or trailing side stands, its close
+/// button for one: centered across the tab and kWorkbenchStyleTabButtonInset
+/// in from the tab's end.  A west tab reads upwards and an east tab
+/// downwards, so the leading side is the bottom of the one and the top of the
+/// other.
+QRect tabButton(const QStyleOptionTab &tab, bool leading) {
+  const int inset = ::neverd::limits::gui_config::kWorkbenchStyleTabButtonInset;
+  const QSize size = leading ? tab.leftButtonSize : tab.rightButtonSize;
+  const QRect &rect = tab.rect;
+  if (verticalTab(tab)) {
+    const bool west = tab.shape == QTabBar::RoundedWest ||
+                      tab.shape == QTabBar::TriangularWest;
+    return QRect(rect.x() + (rect.width() - size.width()) / 2,
+                 west == leading ? rect.bottom() + 1 - inset - size.height()
+                                 : rect.y() + inset,
+                 size.width(), size.height());
+  }
+  const QRect button(leading ? rect.x() + inset
+                             : rect.right() - size.width() - inset,
+                     rect.y() + qCeil((rect.height() - size.height()) / 2.0),
+                     size.width(), size.height());
+  return QStyle::visualRect(tab.direction, rect, button);
+}
+
+/// Keeps a spin box's text the field's inset away from the box's edge on the
+/// side its buttons leave free, and from the buttons on the other.  The
+/// style sheet places the editor: Qt 6.12.0 starts it at the box's own edge,
+/// without the rule's border and padding, later releases start it inside
+/// them, and right to left the free side has only the border.  The editor's
+/// text margin makes up whatever room is missing.
+void insetSpinBoxText(QLineEdit &editor, const QAbstractSpinBox &box) {
+  const int inset = ::neverd::limits::gui_config::kWorkbenchStyleFieldTextInset;
+  const QRect field = editor.geometry();
+  const bool mirrored = box.layoutDirection() == Qt::RightToLeft;
+  const int room = mirrored ? box.width() - 1 - field.right() : field.left();
+  const int freeSide = std::max(0, inset - room);
+  const int buttonSide =
+      box.buttonSymbols() == QAbstractSpinBox::NoButtons
+          ? std::max(0, inset - (mirrored ? field.left()
+                                          : box.width() - 1 - field.right()))
+          : inset;
+  const QMargins margins = mirrored ? QMargins(buttonSide, 0, freeSide, 0)
+                                    : QMargins(freeSide, 0, buttonSide, 0);
+  if (editor.textMargins() != margins)
+    editor.setTextMargins(margins);
+}
 } // namespace
 
 WorkbenchStyle::WorkbenchStyle()
@@ -590,6 +638,14 @@ QRect WorkbenchStyle::subElementRect(SubElement element,
         bar && tab->tabIndex != -1 ? bar->tabRect(tab->tabIndex) : tab->rect);
     return QProxyStyle::subElementRect(element, &label, widget);
   }
+  // Qt's common style placed a tab's buttons four pixels in from the tab's
+  // ends whatever PM_TabBarTabHSpace said; from Qt 6.11 it takes the room
+  // from that metric, none here, which set a close button against the tab's
+  // edge.
+  if (const auto *tab = qstyleoption_cast<const QStyleOptionTab *>(option);
+      tab &&
+      (element == SE_TabBarTabLeftButton || element == SE_TabBarTabRightButton))
+    return tabButton(*tab, element == SE_TabBarTabLeftButton);
   return QProxyStyle::subElementRect(element, option, widget);
 }
 
@@ -733,6 +789,27 @@ void WorkbenchStyle::drawControl(ControlElement element,
       }
       return;
     }
+  }
+  // Qt's common style frames a view's current item through the style its
+  // proxy names, and from Qt 6.9 the style sheet's style names itself there
+  // while it has this style draw an item: the frame then meets the sheet's
+  // "outline: none" for views and is dropped.  So this style draws the item
+  // without its focus and frames it itself, where the common style would.
+  if (const auto *item =
+          qstyleoption_cast<const QStyleOptionViewItem *>(option);
+      item && element == CE_ItemViewItem && (item->state & State_HasFocus)) {
+    QStyleOptionViewItem plain(*item);
+    plain.state &= ~State_HasFocus;
+    QProxyStyle::drawControl(element, &plain, painter, widget);
+    QStyleOptionFocusRect focus;
+    focus.QStyleOption::operator=(*item);
+    focus.rect = subElementRect(SE_ItemViewItemFocusRect, item, widget);
+    focus.state |= State_KeyboardFocusChange | State_Item;
+    focus.backgroundColor = item->palette.color(
+        item->state & State_Enabled ? QPalette::Normal : QPalette::Disabled,
+        item->state & State_Selected ? QPalette::Highlight : QPalette::Window);
+    drawPrimitive(PE_FrameFocusRect, &focus, painter, widget);
+    return;
   }
   // A heading fills with the header and ends in a line along its end and its
   // foot, on device pixels.  The style sheet gives the fill.
@@ -1205,6 +1282,15 @@ bool WorkbenchStyle::eventFilter(QObject *watched, QEvent *event) {
                                 : nullptr)
         fitFileColumns(*files, *details);
     }
+    break;
+  case QEvent::Move:
+  case QEvent::Resize:
+  case QEvent::LayoutDirectionChange:
+    // Once a spin box has placed its editor.
+    if (auto *editor = qobject_cast<QLineEdit *>(watched))
+      if (const auto *box =
+              qobject_cast<const QAbstractSpinBox *>(editor->parentWidget()))
+        insetSpinBoxText(*editor, *box);
     break;
   case QEvent::LanguageChange:
     // Qt words a tab's close button only as it builds it.

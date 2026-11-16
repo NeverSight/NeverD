@@ -1221,7 +1221,13 @@ For fragmented Windows SEH ranges, LLVM C follows the begin/end markers along
 the CFG and retains each block's complete ordered unwind chain. Independent
 handlers and a handler nested within a finally keep their own clauses. Normal
 edges assign PHIs before leaving the generated compounds; a block's finally
-executes the recovered cleanup only on unwind. Closed lexical ranges retain
+executes the recovered cleanup only on unwind. A block that prints only its
+jump, such as a range marker or what a call's continuation or a split left
+empty, runs nothing a scope could guard: it prints no `__try`, and a jump to
+it goes where it goes, so it prints no text. The first block, blocks that
+only jump to one another in a ring, and the deepest block of a scope none of
+whose blocks prints a statement keep theirs, the last with its nest so that
+every clause still shows. Closed lexical ranges retain
 their compact rendering. C also runs a `__finally` when its try falls through,
 where the source already holds the normal copy, so a compact finally runs the
 cleanup under `if (AbnormalTermination())`. C counts a return or a jump out of
@@ -1249,7 +1255,26 @@ stack and its return address. The frame a filter takes is captured before the
 first clause, the block form's included. SEH this view cannot structure prints
 no `__try`: a catch-all around the whole body would claim the function
 swallows exceptions its scopes let pass, so the function says it is not
-lowered instead.
+lowered instead. The note follows the scope table in the function's exception
+metadata, not the name of its language handler: a table whose handler checks
+a stack cookie first (`__GSHandlerCheck_SEH`) runs the same scopes, so a
+function this view leaves unlowered behind that check says so too.
+This view also takes a table with several rows over one range, which MSVC and
+clang-cl write for a `__try` whose body is exactly another `__try`. The rows
+nest by their order, the earlier inside the later, because
+`__C_specific_handler` scans the table from its first row; the scope identity
+(`getSEHScopeSemanticToken`) covers such a table only on request. Native
+output, where the code generator writes the table again, still leaves these
+functions as metadata. A local unwind reaches this view as MedIR spells it, a
+call of each termination handler at the runtime call's address
+(`MedSEHLocalUnwindExit`). The runtime calls the handler of row k with its
+scan already past k, so what that handler raises meets only the later rows
+that guard the call: the lowering ends scope k and every scope inside it
+before the call and keeps the call in the scopes around k, and the last
+handler of an unwind that leaves every scope is a plain call. The calls at an
+exit's address must be its handlers, in its order, with no other call after
+them in the block; anything else leaves the function unlowered. Native output
+keeps a lone handler call in its block's innermost scope.
 HighIR adds this recovery for positional register/stack conventions. Independent
 register banks retain their source variadic and floating-return preparation.
 

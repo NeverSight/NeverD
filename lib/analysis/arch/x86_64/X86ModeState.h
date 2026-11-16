@@ -141,6 +141,10 @@ inline void publishNon64(X86ModeState &S,
     }
   }
   if (S.Debug && L.Debug) {
+    if (Result.DebugAddressWritten) {
+      const auto Index = *Result.DebugAddressWritten;
+      S.Debug->DR[Index] = L.Debug->DR[Index];
+    }
     S.Debug->DR6 = L.Debug->DR6;
     S.Debug->DR7 = L.Debug->DR7;
     S.Debug->DebugCTL = L.Debug->DebugCTL;
