@@ -42,10 +42,12 @@ class Builder {
 public:
   Builder(const TypeLibrary &Library, BuiltinSpelling Spelling,
           const TypeSpeller *Shared = nullptr)
-      : Library(Library),
-        Own(Shared ? std::optional<TypeSpeller>()
-                   : std::optional<TypeSpeller>(std::in_place, Library,
-                                                options(Spelling))),
+      : Library(Library), Own([&]() -> std::optional<TypeSpeller> {
+          if (Shared)
+            return {};
+          return std::optional<TypeSpeller>(std::in_place, Library,
+                                            options(Spelling));
+        }()),
         Speller(Shared ? *Shared : *Own) {}
 
   llvm::json::Array members(const RecordDef &Record, uint64_t Base) const;
