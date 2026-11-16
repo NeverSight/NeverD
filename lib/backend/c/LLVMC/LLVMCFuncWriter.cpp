@@ -11623,7 +11623,8 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
                 } else if (llvm::isa<llvm::CleanupReturnInst>(Term)) {
                   emitIndent(Indent + 2);
                   OS << "goto " << Done << ";\n";
-                } else {
+                } else if (!AfterCxxThrow) {
+                  // A call that does not return has said so itself.
                   emitIndent(Indent + 2);
                   OS << "__builtin_unreachable();\n";
                 }
@@ -11646,7 +11647,9 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
                 } else if (const auto *Branch =
                                llvm::dyn_cast<llvm::UncondBrInst>(CleanupTerm))
                   Next = Branch->getSuccessor(0);
-                if (llvm::isa<llvm::UnreachableInst>(CleanupTerm)) {
+                // A call that does not return has said so itself.
+                if (llvm::isa<llvm::UnreachableInst>(CleanupTerm) &&
+                    !AfterCxxThrow) {
                   emitIndent(Indent + 2);
                   OS << "__builtin_unreachable();\n";
                 }
