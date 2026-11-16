@@ -16,6 +16,7 @@ Surface {
     signal openRequested()
     signal settingsRequested()
     signal menuRequested(string projectId, string objectId, var origin)
+    signal unavailableMenuRequested(string name, string directory, var origin)
 
     ColumnLayout {
         anchors.fill: parent
@@ -146,8 +147,24 @@ Surface {
                         }
                     }
                 }
+                // A listed folder that did not open keeps its place, quieter:
+                // a click tries it again, and its menu takes it off the list.
+                Repeater {
+                    model: sidebar.backend.unavailableProjects
+                    delegate: SidebarRow {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        text: modelData.name
+                        glyph: "folder_alert"
+                        dimmed: true
+                        hint: modelData.directory + "\n" + modelData.issue
+                        menuHint: qsTr("Project menu")
+                        onClicked: sidebar.backend.openProject(modelData.directory)
+                        onMenuRequested: origin => sidebar.unavailableMenuRequested(modelData.name, modelData.directory, origin)
+                    }
+                }
                 Label {
-                    visible: sidebar.backend.projects.length === 0
+                    visible: sidebar.backend.projects.length === 0 && sidebar.backend.unavailableProjects.length === 0
                     text: qsTr("Create a project for one line of research, then add the files to analyze together.")
                     color: Theme.quiet
                     font.pointSize: Theme.smallPointSize

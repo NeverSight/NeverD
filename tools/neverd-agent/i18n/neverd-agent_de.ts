@@ -803,6 +803,26 @@ Analyserevision %3 · %4</translation>
         <source>Set a persistent goal…</source>
         <translation>Dauerhaftes Ziel festlegen…</translation>
     </message>
+    <message>
+        <source>Remove project…</source>
+        <translation>Projekt entfernen…</translation>
+    </message>
+    <message>
+        <source>Try opening again</source>
+        <translation>Erneut öffnen</translation>
+    </message>
+    <message>
+        <source>Remove %1?</source>
+        <translation>%1 entfernen?</translation>
+    </message>
+    <message>
+        <source>This only takes the project off the list. Nothing on disk is deleted: its folder, conversation and memory stay where they are, and Open project brings it back.</source>
+        <translation>Das Projekt wird nur aus der Liste genommen. Auf dem Datenträger wird nichts gelöscht: Ordner, Unterhaltung und Gedächtnis bleiben, wo sie sind, und „Projekt öffnen“ holt es zurück.</translation>
+    </message>
+    <message>
+        <source>Remove project</source>
+        <translation>Projekt entfernen</translation>
+    </message>
 </context>
 <context>
     <name>MarkdownView</name>
@@ -1877,6 +1897,10 @@ Notizen, Skripte und Berichte erscheinen hier.</translation>
     <message>
         <source>An API key is sent only over HTTPS, or over HTTP to this computer. Use an HTTPS address for a remote server.</source>
         <translation>Ein API-Schlüssel wird nur über HTTPS oder per HTTP an diesen Computer gesendet. Verwenden Sie für einen entfernten Server eine HTTPS-Adresse.</translation>
+    </message>
+    <message>
+        <source>Stop this project&apos;s analysis before removing it.</source>
+        <translation>Stoppen Sie die Analyse dieses Projekts, bevor Sie es entfernen.</translation>
     </message>
 </context>
 <context>

@@ -9,6 +9,7 @@
 
 #ifdef AGENT_PROPERTY
 AGENT_PROPERTY(QVariantList, projects, workspaceChanged)
+AGENT_PROPERTY(QVariantList, unavailableProjects, workspaceChanged)
 AGENT_PROPERTY(QVariantMap, activeProject, workspaceChanged)
 AGENT_PROPERTY(QString, activeId, workspaceChanged)
 AGENT_PROPERTY(QString, selectedObjectId, objectChanged)
@@ -83,6 +84,7 @@ AGENT_ACTION(void, refreshResearch, (), ())
 AGENT_ACTION(bool, createProject,
              (const QString &name, const QString &directory), (name, directory))
 AGENT_ACTION(bool, openProject, (const QString &directory), (directory))
+AGENT_ACTION(bool, removeProject, (const QString &directory), (directory))
 AGENT_ACTION(bool, selectProject, (const QString &id), (id))
 AGENT_ACTION(void, selectObject, (const QString &id), (id))
 AGENT_ACTION(void, addObject, (const QString &path), (path))

@@ -803,6 +803,26 @@ Analysis revision %3 · %4</source>
         <source>Set a persistent goal…</source>
         <translation>継続目標を設定…</translation>
     </message>
+    <message>
+        <source>Remove project…</source>
+        <translation>プロジェクトを一覧から削除…</translation>
+    </message>
+    <message>
+        <source>Try opening again</source>
+        <translation>もう一度開く</translation>
+    </message>
+    <message>
+        <source>Remove %1?</source>
+        <translation>%1 を一覧から削除しますか？</translation>
+    </message>
+    <message>
+        <source>This only takes the project off the list. Nothing on disk is deleted: its folder, conversation and memory stay where they are, and Open project brings it back.</source>
+        <translation>プロジェクトを一覧から外すだけです。ディスク上のものは何も削除されません。フォルダー、会話、記憶はそのまま残り、「プロジェクトを開く」で元に戻せます。</translation>
+    </message>
+    <message>
+        <source>Remove project</source>
+        <translation>一覧から削除</translation>
+    </message>
 </context>
 <context>
     <name>MarkdownView</name>
@@ -1877,6 +1897,10 @@ Notes, scripts and reports appear here.</source>
     <message>
         <source>An API key is sent only over HTTPS, or over HTTP to this computer. Use an HTTPS address for a remote server.</source>
         <translation>API キーは HTTPS 経由、またはこのコンピューターへの HTTP 経由でのみ送信されます。リモートサーバーには HTTPS のアドレスを使用してください。</translation>
+    </message>
+    <message>
+        <source>Stop this project&apos;s analysis before removing it.</source>
+        <translation>このプロジェクトを一覧から削除する前に、解析を停止してください。</translation>
     </message>
 </context>
 <context>

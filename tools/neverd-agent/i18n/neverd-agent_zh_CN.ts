@@ -803,6 +803,26 @@ Analysis revision %3 · %4</source>
         <source>Set a persistent goal…</source>
         <translation>设置持续目标</translation>
     </message>
+    <message>
+        <source>Remove project…</source>
+        <translation>移除项目…</translation>
+    </message>
+    <message>
+        <source>Try opening again</source>
+        <translation>重新尝试打开</translation>
+    </message>
+    <message>
+        <source>Remove %1?</source>
+        <translation>移除 %1？</translation>
+    </message>
+    <message>
+        <source>This only takes the project off the list. Nothing on disk is deleted: its folder, conversation and memory stay where they are, and Open project brings it back.</source>
+        <translation>只是把项目从列表中移除，不会删除磁盘上的任何内容：项目文件夹、对话和记忆都原样保留，用“打开项目”即可重新加入。</translation>
+    </message>
+    <message>
+        <source>Remove project</source>
+        <translation>移除项目</translation>
+    </message>
 </context>
 <context>
     <name>MarkdownView</name>
@@ -1877,6 +1897,10 @@ Notes, scripts and reports appear here.</source>
     <message>
         <source>An API key is sent only over HTTPS, or over HTTP to this computer. Use an HTTPS address for a remote server.</source>
         <translation>API Key 只通过 HTTPS 发送，或通过 HTTP 发送到本机。远程服务器请使用 HTTPS 地址。</translation>
+    </message>
+    <message>
+        <source>Stop this project&apos;s analysis before removing it.</source>
+        <translation>请先停止该项目的分析，再移除项目。</translation>
     </message>
 </context>
 <context>
