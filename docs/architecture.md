@@ -1272,6 +1272,18 @@ any other keeps the note, since a row the record holds back never runs. The
 identity of such a table covers the record, so it is never the identity of
 the same rows under `__C_specific_handler`, and native output, which would
 have to write the record again, leaves the function as metadata.
+One function whose lowering is missing keeps its whole unit from being
+optimized (`validateExceptionRewriteContracts`), so the classification says
+which refusals are a known shape that stays metadata
+(`isIntentionalMetadataOnlyNativeIR`) and which mean something is missing. A
+C++ table of unwind actions and no try block, a function with destructors, is
+a known shape: it is refused as `UnsupportedCxxUnwindAction` on every route,
+where a table with no action either is empty (`EmptyCxxTryMap`) and stays
+missing, and the destructor chain IR lowering takes is one beside a try
+block. Behind a cookie check the writer does not know (`__GSHandlerCheck_EH4`
+with a record that passes unwinds only, as a function with no catch has it)
+such a table is refused for the same reason: the check refuses only a table
+that would otherwise be lowered.
 This view also takes a table with several rows over one range, which MSVC and
 clang-cl write for a `__try` whose body is exactly another `__try`. The rows
 nest by their order, the earlier inside the later, because

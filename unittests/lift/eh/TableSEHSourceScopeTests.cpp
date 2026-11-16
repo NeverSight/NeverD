@@ -839,7 +839,7 @@ TEST(TableSEHSourceScopes, ATableBehindACookieCheckIsLoweredForPrintedC) {
     EXPECT_EQ(Source.Reason, WindowsEHNativeSourceReason::GSWrappedPersonality);
   }
   // The wrapper of another architecture is not this one until it is read.
-  for (const Arch Other : {Arch::AArch64, Arch::ARM}) {
+  for (const Arch Other : {Arch::AArch64, Arch::ARM, Arch::X86}) {
     const WindowsEHNativeSourceClassification Source =
         classifyWindowsEHNativeSource(
             EH, Other, BinaryFormat::COFF,

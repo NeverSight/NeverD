@@ -177,6 +177,14 @@ WindowsEHNativeSourceReason validateSEH(const ExceptionFunction &EH,
   return WindowsEHNativeSourceReason::Eligible;
 }
 
+/// Whether the unwind map of \p Cxx runs anything: a destructor or another
+/// action at some state.
+bool runsCxxUnwindActions(const CxxExceptionInfo &Cxx) {
+  return llvm::any_of(Cxx.UnwindMap, [](const CxxUnwindAction &Action) {
+    return Action.ActionVA != 0;
+  });
+}
+
 WindowsEHNativeSourceReason validateCxxFH3(const ExceptionFunction &EH,
                                            bool Registration = false) {
   if (!EH.Cxx)
@@ -189,11 +197,16 @@ WindowsEHNativeSourceReason validateCxxFH3(const ExceptionFunction &EH,
     return WindowsEHNativeSourceReason::UnsupportedCxxVersion;
   if (!Cxx.hasValidStateGraph())
     return WindowsEHNativeSourceReason::InvalidCxxStateGraph;
-  if (Cxx.TryBlocks.empty() &&
-      (!Registration || llvm::none_of(Cxx.UnwindMap, [](const auto &Action) {
-        return Action.ActionVA != 0;
-      })))
-    return WindowsEHNativeSourceReason::EmptyCxxTryMap;
+  if (Cxx.TryBlocks.empty()) {
+    // A table of unwind actions alone is a function with destructors and no
+    // try block: a complete table of a kind that is not lowered, where one
+    // with no action either is empty.  A registration frame's is lowered.
+    const bool RunsActions = runsCxxUnwindActions(Cxx);
+    if (!RunsActions)
+      return WindowsEHNativeSourceReason::EmptyCxxTryMap;
+    if (!Registration)
+      return WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction;
+  }
   if (!Registration && Cxx.IPMap.empty())
     return WindowsEHNativeSourceReason::EmptyCxxIPMap;
   if (Registration &&
@@ -302,7 +315,9 @@ WindowsEHNativeSourceReason validateCxxFH4(const ExceptionFunction &EH) {
   if (!Cxx.hasValidStateGraph())
     return WindowsEHNativeSourceReason::InvalidCxxStateGraph;
   if (Cxx.TryBlocks.empty())
-    return WindowsEHNativeSourceReason::EmptyCxxTryMap;
+    return runsCxxUnwindActions(Cxx)
+               ? WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction
+               : WindowsEHNativeSourceReason::EmptyCxxTryMap;
   if (Cxx.IPMap.empty())
     return WindowsEHNativeSourceReason::EmptyCxxIPMap;
 
@@ -780,15 +795,18 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
   if (EH.PersonalityVA == 0)
     return reject(Model, WindowsEHNativeSourceReason::MissingPersonalityAddress,
                   Capability);
-  if (EH.Personality == ExceptionPersonality::GSHandlerCheckEH4) {
-    if (TargetArch != Arch::X64 || !hasExactBoundedX64GSCookie(EH))
-      return reject(Model, WindowsEHNativeSourceReason::GSWrappedPersonality,
-                    Capability);
-  } else if (EH.Personality == ExceptionPersonality::GSHandlerCheckSEH) {
+  // A cookie check other than the one the writer knows refuses a table that
+  // would otherwise be lowered.  One that is refused anyway is refused for
+  // its own reason, found below: the check decides nothing for it.
+  const bool UnknownCookieCheck =
+      EH.Personality == ExceptionPersonality::GSHandlerCheckEH4 &&
+      (TargetArch != Arch::X64 || !hasExactBoundedX64GSCookie(EH));
+  if (EH.Personality == ExceptionPersonality::GSHandlerCheckSEH) {
     if (!cookieCheckPassesEveryScope(EH))
       return reject(Model, WindowsEHNativeSourceReason::GSWrappedPersonality,
                     Capability);
-  } else if (EH.GSCookie) {
+  } else if (EH.Personality != ExceptionPersonality::GSHandlerCheckEH4 &&
+             EH.GSCookie) {
     return reject(Model, WindowsEHNativeSourceReason::UnexpectedGSCookie,
                   Capability);
   }
@@ -804,7 +822,8 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
       : Model == WindowsEHNativeSourceModel::CxxFH3 ? validateCxxFH3(EH)
                                                     : validateCxxFH4(EH);
   // Output patch stays fail-closed for every unwind action and for an
-  // out-of-line catch. IR lowering can represent one destructor chain, and a
+  // out-of-line catch. IR lowering can represent one destructor chain beside
+  // a try block (a table of unwind actions alone stays metadata), and a
   // catch whose funclet is outside the function when every continuation is
   // inside the function, or when that catch names no continuation at all.
   // Two or more continuations are resumed from the funclet's pointer result.
@@ -812,12 +831,16 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
       (Model == WindowsEHNativeSourceModel::CxxFH3 ||
        Model == WindowsEHNativeSourceModel::CxxFH4) &&
       ((Reason == WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction &&
+        !EH.Cxx->TryBlocks.empty() &&
         !cxxLowerableDestructorChain(EH).empty()) ||
        (Reason == WindowsEHNativeSourceReason::InvalidCxxHandler &&
         cxxStandaloneOutOfLineCatch(EH))))
     Reason = WindowsEHNativeSourceReason::Eligible;
   if (Reason != WindowsEHNativeSourceReason::Eligible)
     return reject(Model, Reason, Capability);
+  if (UnknownCookieCheck)
+    return reject(Model, WindowsEHNativeSourceReason::GSWrappedPersonality,
+                  Capability);
   if (Model == WindowsEHNativeSourceModel::SEH) {
     const bool HasNormalizedFilter =
         std::any_of(EH.SEH->Scopes.begin(), EH.SEH->Scopes.end(),

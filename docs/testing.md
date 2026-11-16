@@ -20590,6 +20590,11 @@ another cookie slot. `LLVMCSaysAWrappedTableIsNotLowered` keeps the note for a
 record that holds back exceptions from an `__except` row or unwinds from a
 `__finally` row, and takes a table of termination handlers whose record
 passes unwinds only.
+`WindowsEHNativeSource.DestructorsAloneAreRefusedAsUnwindActions` classifies
+x64 FH3 and FH4 tables with no try block: empty without an action, an unwind
+action table with one, on all three capabilities; behind a cookie record that
+passes unwinds only, a table the writer or IR lowering would take is refused
+for the check and a destructor-only one for its own reason.
 `SEHDefinitionOrderTests.cpp` prints hand-built HighIR definitions in several
 orders: an `__except` arm that jumps past a copy of its own frame alias, and
 one that jumps past a copy between two names another definition aliased to one
