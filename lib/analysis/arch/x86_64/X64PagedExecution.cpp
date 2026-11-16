@@ -55,6 +55,7 @@ struct X64PagedInstructionContinuation {
   std::optional<X64PagedFarReturnProfile> FarReturnProfile;
   std::optional<X64PagedFarPointerProfile> FarPointerProfile;
   std::optional<X64PagedSegmentMoveProfile> SegmentMoveProfile;
+  X86DescriptorCanonicalityProfile EventDescriptorCanonicality;
   uint8_t DataBreakpoints = 0;
   uint16_t FieldBytes = 0, Discard = 0;
   bool Interrupt = false;
@@ -330,6 +331,8 @@ X64PagedExecution::validate(X64ContinuationStateV6 &State, uint64_t Address,
   Error.clear();
   if (!Validate || (PagingAddressBits != 48 && PagingAddressBits != 57))
     return invalid("invalid paged entry binding");
+  if (!x86DescriptorCanonicalityValid(Options.EventDescriptorCanonicality))
+    return invalid("invalid event descriptor canonicality profile");
   if (!Options.EventDelivery.MaxAttempts)
     return invalid("event delivery requires a positive work budget");
   if (PendingInstruction) {
@@ -346,7 +349,8 @@ X64PagedExecution::validate(X64ContinuationStateV6 &State, uint64_t Address,
         Options.IretAccessOrder != P.IretAccessOrder ||
         Options.FarReturnProfile != P.FarReturnProfile ||
         Options.FarPointerProfile != P.FarPointerProfile ||
-        Options.SegmentMoveProfile != P.SegmentMoveProfile)
+        Options.SegmentMoveProfile != P.SegmentMoveProfile ||
+        Options.EventDescriptorCanonicality != P.EventDescriptorCanonicality)
       return invalid(
           "paged instruction resume changed instruction or debug binding");
     auto Failure =
@@ -396,7 +400,8 @@ llvm::Error X64PagedExecution::deliverEvent(
                                 Options.Debug, Options.DebugProfile,
                                 Options.EventDelivery)
           : deliverX64PagedEvent(State, Memory, Event, MXCSRMask, Options.Debug,
-                                 Options.DebugProfile, Options.EventDelivery);
+                                 Options.DebugProfile, Options.EventDelivery,
+                                 Options.EventDescriptorCanonicality);
   if (!Delivered)
     return Delivered.takeError();
   Last.Delivery = *Delivered;
@@ -475,6 +480,9 @@ X64PagedExecution::resume(X64ContinuationStateV6 &State,
   Error.clear();
   if (PendingInstruction)
     return invalid("resume the pending instruction before resuming an event");
+  if (Options.EventDescriptorCanonicality !=
+      Continuation.DescriptorCanonicality)
+    return invalid("paged event resume changed descriptor binding");
   if (auto Failure =
           deliverEvent(State, Continuation.Event, MXCSRMask, &Continuation))
     return std::move(Failure);
@@ -678,6 +686,7 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
     Binding.FarReturnProfile = Options.FarReturnProfile;
     Binding.FarPointerProfile = Options.FarPointerProfile;
     Binding.SegmentMoveProfile = Options.SegmentMoveProfile;
+    Binding.EventDescriptorCanonicality = Options.EventDescriptorCanonicality;
     Binding.DataBreakpoints = Observation.Matches;
     if (T.Return) {
       Binding.FieldBytes = T.Return->Bytes;

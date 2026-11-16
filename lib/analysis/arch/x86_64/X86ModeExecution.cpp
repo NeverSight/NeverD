@@ -160,6 +160,8 @@ llvm::Error admit(const X86ModeState &S, const X86ModeExecutionOptions &O,
   if ((S.STIBlocked && !(R.RFlags & 0x200)) ||
       (S.Halted && ((V.Core.CS.Selector & 3) || S.STIBlocked || S.SSBlocked)))
     return invalid("mixed-mode halt/shadow state is inconsistent");
+  if (!x86DescriptorCanonicalityValid(O.Long.EventDescriptorCanonicality))
+    return invalid("invalid event descriptor canonicality profile");
   if (!O.Legacy.EventDelivery.MaxAttempts || !O.Long.EventDelivery.MaxAttempts)
     return invalid("mixed-mode event owners require positive work budgets");
   return llvm::Error::success();
@@ -178,7 +180,8 @@ void deliver(X86ModeState &S, X86PagedMemory &M, detail::X86ModeContinuation &P,
                                   O.Long.DebugProfile, O.Long.EventDelivery)
             : deliverX64PagedEvent(S.Core.Core, M, *P.Event, O.MXCSRMask,
                                    S.Debug ? &*S.Debug : nullptr,
-                                   O.Long.DebugProfile, O.Long.EventDelivery);
+                                   O.Long.DebugProfile, O.Long.EventDelivery,
+                                   O.Long.EventDescriptorCanonicality);
     if (!Got) {
       R.OwnerError = llvm::toString(Got.takeError());
       R.Status = X86LegacyExecutionStatus::ModeUnavailable;

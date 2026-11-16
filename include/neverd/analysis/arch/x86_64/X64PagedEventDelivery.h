@@ -14,6 +14,7 @@
 #include "neverd/analysis/arch/x86_64/X64ContinuationEvent.h"
 #include "neverd/analysis/arch/x86_64/X64ContinuationSource.h"
 #include "neverd/ir/X86/X86DebugRules.h"
+#include "neverd/ir/X86/X86SegmentDescriptorProfile.h"
 #include "neverd/translate/X86/X86EventDeliveryOptions.h"
 #include "neverd/translate/X86/X86PagedMemory.h"
 
@@ -88,6 +89,14 @@ enum class X64PagedSegmentMoveProfile : uint8_t {
   SelectorFirstTailGPZero,
 };
 
+/// Default event descriptor binding: a noncanonical start reports
+/// #GP(selector | EXT); a noncanonical tail reports #GP(EXT). The alternative
+/// includes the selector at either boundary. Both check the entire eight-byte
+/// range before paging. This is an explicit target choice, never host
+/// detection.
+inline constexpr auto kX64PagedEventDescriptorCanonicality =
+    X86DescriptorCanonicalityProfile::SelectorForStart;
+
 enum class X64PagedEventStatus : uint8_t {
   Delivered,
   Deferred,
@@ -119,6 +128,9 @@ struct X64PagedEventContinuation {
   /// False at a work-budget boundary before the next event is accepted.
   /// Such a record has no completed accesses or speculative data matches.
   bool EventAccepted = true;
+  /// Retained for every secondary event, including an unaccepted budget stop.
+  X86DescriptorCanonicalityProfile DescriptorCanonicality =
+      kX64PagedEventDescriptorCanonicality;
 };
 
 struct X64PagedEventResult {
@@ -163,8 +175,12 @@ deliverX64PagedEvent(X64ContinuationStateV6 &State,
                      X64PagedDebugState *Debug = nullptr,
                      X86InstructionDebugProfile DebugProfile =
                          X86InstructionDebugProfile::InstructionStep,
-                     const translate::X86EventDeliveryOptions &Options = {});
+                     const translate::X86EventDeliveryOptions &Options = {},
+                     X86DescriptorCanonicalityProfile DescriptorCanonicality =
+                         kX64PagedEventDescriptorCanonicality);
 
+/// Resume uses the descriptor binding retained in Continuation. A new work
+/// budget does not replace the already accepted sequence's processor profile.
 llvm::Expected<X64PagedEventResult>
 resumeX64PagedEvent(X64ContinuationStateV6 &State,
                     translate::X86PagedMemory &Memory,

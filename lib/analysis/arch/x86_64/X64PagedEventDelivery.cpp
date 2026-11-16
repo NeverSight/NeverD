@@ -418,6 +418,7 @@ llvm::Expected<X64PagedEventResult> deliverEventSequence(
     X64ContinuationStateV6 &State, X86PagedMemory &Memory,
     const X64ContinuationEventV1 &Input, uint32_t MXCSRMask, uint64_t FaultPC,
     const translate::X86EventDeliveryOptions &Options,
+    X86DescriptorCanonicalityProfile DescriptorCanonicality,
     std::optional<X86MemoryException> LastException = {}, bool Accepted = false,
     llvm::SmallVector<X64PagedEventContinuation::Access> CompletedAccesses = {},
     X64PagedDebugState *Debug = nullptr,
@@ -425,6 +426,10 @@ llvm::Expected<X64PagedEventResult> deliverEventSequence(
         X86InstructionDebugProfile::InstructionStep,
     uint8_t DataBreakpoints = 0, bool SoftwareCompleted = false,
     bool InputAccepted = false) {
+  if (!x86DescriptorCanonicalityValid(DescriptorCanonicality))
+    return llvm::createStringError(
+        llvm::errc::invalid_argument,
+        "invalid event descriptor canonicality profile");
   if (!Options.MaxAttempts)
     return llvm::createStringError(
         llvm::errc::invalid_argument,
@@ -470,7 +475,8 @@ llvm::Expected<X64PagedEventResult> deliverEventSequence(
                                                       {},
                                                       Observation.Matches,
                                                       Result.SoftwareCompleted,
-                                                      false};
+                                                      false,
+                                                      DescriptorCanonicality};
       return Result;
     }
     TransitionWriter W(State, Memory, Event, MXCSRMask);
@@ -478,7 +484,7 @@ llvm::Expected<X64PagedEventResult> deliverEventSequence(
     W.CaptureAccesses = true;
     W.CompletedAccesses = std::move(CompletedAccesses);
     detail::X64ContinuationDelivery<TransitionWriter>(
-        W, Controls.CR4 & 0x1000 ? 57 : 48)
+        W, Controls.CR4 & 0x1000 ? 57 : 48, DescriptorCanonicality)
         .execute(NdVar::scalar(0, 8));
     if (Result.DeliveryAttempts == 0)
       Result.InputAccepted |= W.Result.InputAccepted;
@@ -502,7 +508,9 @@ llvm::Expected<X64PagedEventResult> deliverEventSequence(
                                       Result.LastException,
                                       std::move(W.CompletedAccesses),
                                       Observation.Matches,
-                                      Result.SoftwareCompleted};
+                                      Result.SoftwareCompleted,
+                                      true,
+                                      DescriptorCanonicality};
       if (Result.Status == X64PagedEventStatus::Delivered) {
         Result.DeliveredVector = Event.Vector;
         const bool Software = Event.Kind == X64ContinuationEventKind::Software;
@@ -562,14 +570,16 @@ deliverX64PagedEvent(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
                      const X64ContinuationEventV1 &Input, uint32_t MXCSRMask,
                      X64PagedDebugState *Debug,
                      X86InstructionDebugProfile DebugProfile,
-                     const translate::X86EventDeliveryOptions &Options) {
+                     const translate::X86EventDeliveryOptions &Options,
+                     X86DescriptorCanonicalityProfile DescriptorCanonicality) {
   // Software entry saves fallthrough only on success. Its secondary faults
   // retain the original instruction PC, also across a physical backing stop.
   const uint64_t FaultPC = Input.Kind == X64ContinuationEventKind::Software
                                ? State.Core.Core.Core.Core.PC
                                : Input.SavedPC;
   return deliverEventSequence(State, Memory, Input, MXCSRMask, FaultPC, Options,
-                              {}, false, {}, Debug, DebugProfile);
+                              DescriptorCanonicality, {}, false, {}, Debug,
+                              DebugProfile);
 }
 
 llvm::Expected<X64PagedEventResult>
@@ -580,9 +590,10 @@ resumeX64PagedEvent(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
                     const translate::X86EventDeliveryOptions &Options) {
   return deliverEventSequence(
       State, Memory, Continuation.Event, MXCSRMask, Continuation.FaultPC,
-      Options, Continuation.LastException, Continuation.EventAccepted,
-      Continuation.CompletedAccesses, Debug, DebugProfile,
-      Continuation.DataBreakpoints, Continuation.SoftwareCompleted, true);
+      Options, Continuation.DescriptorCanonicality, Continuation.LastException,
+      Continuation.EventAccepted, Continuation.CompletedAccesses, Debug,
+      DebugProfile, Continuation.DataBreakpoints,
+      Continuation.SoftwareCompleted, true);
 }
 
 namespace {

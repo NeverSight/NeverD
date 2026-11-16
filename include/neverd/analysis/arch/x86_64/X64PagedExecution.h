@@ -88,6 +88,9 @@ struct X64PagedExecutionOptions {
       X86InstructionDebugProfile::InstructionStep;
   std::optional<X86GeneralDetectFrame> GeneralDetectFrame;
   translate::X86EventDeliveryOptions EventDelivery;
+  /// Retained across instruction/event stops and their secondary faults.
+  X86DescriptorCanonicalityProfile EventDescriptorCanonicality =
+      kX64PagedEventDescriptorCanonicality;
 };
 
 /// A committed near CALL/RET, captured before its post-instruction event.

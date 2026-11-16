@@ -255,10 +255,18 @@ public:
       ASSERT_EQ(ioctl(CPU, KVM_INTERRUPT, &Interrupt), 0);
       ASSERT_NO_FATAL_FAILURE(run());
     }
+    testing::Message ExitDetail;
+    ExitDetail << "KVM exit " << Run->exit_reason;
+    if (Run->exit_reason == KVM_EXIT_INTERNAL_ERROR) {
+      ExitDetail << " suberror=" << Run->internal.suberror
+                 << " data=" << Run->internal.ndata;
+      for (unsigned I = 0; I != Run->internal.ndata; ++I)
+        ExitDetail << " [" << I << "]=" << Run->internal.data[I];
+    }
     ASSERT_TRUE(Run->exit_reason == KVM_EXIT_DEBUG ||
                 Run->exit_reason == KVM_EXIT_HLT ||
                 (CaptureShutdown && Run->exit_reason == KVM_EXIT_SHUTDOWN))
-        << "KVM exit " << Run->exit_reason;
+        << ExitDetail;
     ASSERT_EQ(ioctl(CPU, KVM_GET_REGS, &R), 0);
     ASSERT_EQ(ioctl(CPU, KVM_GET_SREGS, &S), 0);
     if (DebugRegisters)
