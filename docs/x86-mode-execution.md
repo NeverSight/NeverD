@@ -43,6 +43,52 @@ LOCK and privilege checks follow authenticated fetch. Other MSR banks are
 explicit refusals. These checks follow [Intel SDM Volume 3A, sections 2.2.1
 and 5.1.1](https://cdrdv2.intel.com/v1/dl/getContent/671190).
 
+## Machine status and paid operand progress
+
+SMSW, LMSW and CLTS reuse the shared scalar owner in protected16/32 and
+compatibility16/32. LMSW reads a fixed word, retains PE and changes only
+CR0.MP/EM/TS. CLTS clears only TS. Full CR0 publishes before post-instruction
+#DB, while CR3, CR4, EFER/LMA and active or inactive PDPTE banks stay unchanged.
+These operations do not perform a MOV-CR reload. Dword SMSW requires the
+explicit `Legacy.MachineStatus = FullCR0` choice for its undefined high word.
+Authenticated fetch still precedes CPL/UMIP checks and operand access.
+
+A memory SMSW/LMSW stopped on physical backing retains the accepted instruction
+and its paid attempt in a typed machine-status continuation. Resume can use
+zero budget; it neither fetches changed opcode bytes nor charges another
+attempt. The complete machine bank remains authenticated and accepted options
+stay frozen across context reconstruction. Completion, a guest operand fault
+or owner refusal retires the instruction marker before event delivery. A later
+#DB or fault-entry backing stop has its own event continuation and cannot
+replay the completed instruction. This retains one incomplete logical operand
+access; it does not preserve partially read physical fragments.
+
+The [machine-status evidence](evidence/x86-mode-machine-status-2026-11-16.json) records 1398 passes and
+2 LA57 skips per SDK at `d314e78acf`. Each SDK checks 768 raw original
+execution cases and 768 complete-owner comparisons, including repeated CLTS
+encodings across parameter combinations. Another 96 original/generated cases
+observe committed controls after real far jumps to code64, through both C
+emitters, x64 Clang/NeverC and O0/O2. Twenty-four original TF/SS cases and
+16 CPL/UMIP/fetch cases compare represented banks, frames and complete RAM.
+Native tests use pinned Intel KVM with pre-faulted backing. LMSW cases changing
+EM remain KVM comparisons; they do not qualify physical data-watchpoint traps.
+
+Sixteen software operand-repair cases and sixteen software #DB-entry recovery
+cases check repeated stops, full-bank rejection, changed opcode memory, frozen
+bindings and single attempt/completion accounting. Standalone legacy negatives
+also cover retry into guest #PF followed by suspended fault entry. Full paging
+regression includes the other consumers of the shared transfer journal.
+
+A test-only follow-up at `c86cda5c49` additionally passes four compiled-source
+tests per SDK, counted separately. Its 32 software cases per SDK cover
+legacy/PAE paging, guest16/32 and both memory forms through x64 Clang/NeverC at
+O0/O2. Changed bindings reject without losing the paid marker; repeated stops
+and reconstruction of both RAM and context finish at zero budget. The complete
+control/RAM image matches the uninterrupted compiled baseline, including PTE
+A/D bits and the explicitly changed opcode byte. Production code is unchanged.
+NeverC stays host/source x64; other machine owners and final LLVM qualification
+remain separate work.
+
 ## Selector loads and full caches
 
 MOV in both directions, selector PUSH/POP and all five LxS forms use the existing
@@ -192,8 +238,8 @@ wire layouts and host-x64 NeverC targets are unchanged.
 ## Admitted scope and evidence
 
 The non-64-bit boundary deliberately admits the existing ordinary scalar,
-stack, selector transfer, direct far-JMP, control/debug-register and EFER forms
-whose state ownership is complete here. Port/string/MPX, legacy returns,
+stack, selector transfer, direct far-JMP, machine-status, control/debug-register
+and EFER forms whose state ownership is complete here. Port/string/MPX, legacy returns,
 task/system selectors, descriptor queries, fast-system entry,
 call gates and VM86 require their separate mode-aware integration. Real/unreal
 mode, software SMM/SGX and unbound asynchronous producers remain open. A

@@ -4592,3 +4592,26 @@ source/binary record; production code is identical. NeverC remains host/source
 x64. Ports/strings/MPX, legacy returns, task/system and fast-system transitions,
 VM86 composition, software SMM/SGX and physical SGX remain outside this unit.
 No final LLVM release or production pin change is declared.
+
+## Continuous-mode machine status (2026-11-16)
+
+The [machine-status binding](x86-mode-execution.md#machine-status-and-paid-operand-progress)
+admits LMSW/CLTS through protected16/32 and compatibility16/32 using the existing
+CR0 owner. CR0 commits before debug delivery without reloading PDPTEs or
+changing other controls. Memory SMSW/LMSW now keep authenticated bytes and their
+paid attempt across operand backing stops; success and guest faults retire
+that marker before separate event entry.
+
+At `d314e78acf`, both SDKs pass 1398 regression tests each with 2 LA57
+skips each, including full paging and both generated-C suites. Each SDK's new
+coverage includes 768 raw execution cases, 768 direct-owner comparisons,
+96 original/generated cases, 24 original TF/SS cases and 16 fault-priority
+cases. Software repair matrices separately check repeated zero-budget progress,
+frozen bindings, complete banks and a single completion before suspended #DB.
+These KVM observations do not claim physical interception-free LMSW behavior.
+A separate test-only follow-up at `c86cda5c49` passes four compiled-source tests
+per SDK, totaling 32 generated-C software recovery cases per SDK. It verifies
+reconstructed RAM/context, changed bytes and zero-budget completion against an
+uninterrupted compiled baseline; production code is unchanged.
+NeverC remains host/source x64. Other mode/machine owners, software SMM/SGX,
+asynchronous producers and physical SGX remain open; production LLVM stays r6.

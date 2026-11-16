@@ -150,9 +150,11 @@ struct X86LegacyExecutionState {
   /// stop or a fault after loading the incoming task. Preserve this with the
   /// CPU and RAM; only that owner may resume or retire it.
   std::shared_ptr<const detail::X86LegacyTaskContinuation> PendingTask;
-  /// Segment, return and far-transfer progress across backing stops. Retain
-  /// this opaque state with the CPU, bindings and original instruction bytes;
-  /// repair only backing. Completed RAM accesses are never repeated.
+  /// Segment, return, far-transfer and machine-status backing progress.
+  /// Retain this opaque state with CPU, bindings and original instruction
+  /// bytes; repair only backing. Completed journaled accesses are not replayed.
+  /// Machine-status markers retain an incomplete logical operand, not partial
+  /// physical reads.
   std::shared_ptr<const detail::X86LegacyTransferContinuation> PendingTransfer;
   /// MOV-CR retains original inputs and completed physical PDPTE reads
   /// across unavailable backing. Controls publish atomically after all four

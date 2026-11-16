@@ -358,6 +358,13 @@ then reports exactly one attempt; completed accesses are not replayed. Ordinary 
 their original attempt in `PendingTransfer`, including completed frame and
 descriptor accesses. A subsequent debug-event backing stop belongs to the event
 continuation and does not repeat the completed return.
+Memory SMSW/LMSW also retain their accepted bytes and paid attempt in a typed
+machine-status `PendingTransfer`. The direct legacy API rejects changed scalar
+or machine-status bindings before effects. Its marker survives only an
+incomplete logical operand access; completion, guest fault and owner refusal
+retire it before any separate event progress. It does not retain partially read
+physical fragments. The [continuous-mode binding](x86-mode-execution.md#machine-status-and-paid-operand-progress)
+reuses this contract with complete controls and frozen accepted options.
 Zero budget permits only an instruction continuation whose attempt was already
 reported and charged. Completion stops before selecting another instruction;
 missing backing or refused bindings preserve the retained charge. Without that

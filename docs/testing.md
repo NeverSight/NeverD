@@ -126,6 +126,28 @@ on both SDKs after changing the common owner. See the [mode debug evidence](evid
 its 569 passes and 1 LA57 skip per SDK are separate from the eight-group
 test-only admission follow-up per SDK.
 
+`X86ModeMachineStatusTest.*` compares SMSW/LMSW/CLTS across all four non64
+modes, operand/address widths, register/memory forms and MP/EM/TS inputs.
+Its 768 raw observations and 768 owner comparisons per SDK are execution
+cases, not distinct encodings. The code64 observation matrix adds 96 cases
+through both emitters, host-x64 Clang/NeverC and O0/O2. Assert the native
+terminal PC before accepting a success run; a fault-handler HLT is not success.
+Native cases require Intel/KVM/pre-fault support; UMIP additionally requires the
+host feature. KVM TF cases changing EM are not physical data-watchpoint proof.
+
+Software operand and event recovery cases run independently of native gates.
+Bind both legacy and long debug profiles consistently, using `Watchpoints` for
+data comparators. Check full bank/control/RAM output, zero-budget resumes,
+frozen bytes/options, and retirement before a following #DB or guest fault.
+Run all `NeverDX86PagingTests` when changing the shared transfer marker, plus
+full paged-source, legacy-source, instruction-boundary and SDK regressions.
+The [machine-status qualification](evidence/x86-mode-machine-status-2026-11-16.json) records 1398 passes
+and 2 LA57 skips per SDK; its recovery cases are counted separately
+from uninterrupted original-stream comparisons.
+`MachineStatusPaidOperandSurvivesContextRebuild` adds four passing tests per SDK
+at `c86cda5c49`: 32 software cases through compiled C, with a separate receipt
+and no production change.
+
 The `X86ModeInterruptTest.*` subset checks selected IRQ/NMI input in all five
 protected/compatibility/64-bit modes, deferred/refused inputs without effects,
 NMI-under-STI choices, high-half stack witnesses, suspended frame/event-budget
@@ -688,9 +710,9 @@ and consuming chains, faults/retry and single-step traps with Clang and NeverC
 at O0/O2. Run both SDKs on the qualified P/E cores and the shared scalar,
 descriptor/selector and system-state regressions. FullCR0 is an explicit target
 choice, not a universal definition of SMSW's undefined high word. NeverC's
-descriptor-builtin harness also checks CLTS on i386 and x64; privileged native
-builtins have code-generation coverage there, while these protected CPU tests
-own the original instruction state/fault comparisons.
+native-intrinsic frontend checks target x64 only; any i386 backend fixtures
+use Clang/LLVM. These protected CPU tests own the original guest instruction
+state/fault comparisons independently of the host source target.
 The same native matrix qualifies CLAC/STAC flag preservation and #UD privilege
 checks in both code sizes, including #UD for the 66 prefix, and the guest debug
 tests cover their TF traps. Software tests check fetch-fault priority over that
