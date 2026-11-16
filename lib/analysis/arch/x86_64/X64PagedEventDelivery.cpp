@@ -51,6 +51,7 @@ struct X64PagedReturnContinuation : X64PagedTransitionProgress {
 struct X64PagedSegmentContinuation : X64PagedTransitionProgress {
   llvm::SmallVector<uint8_t, 15> Bytes;
   std::optional<X64NullSegmentBasePolicy> NullBasePolicy;
+  X86DescriptorCanonicalityProfile Canonicality;
   bool FarPointer = false;
 };
 } // namespace detail
@@ -710,6 +711,7 @@ llvm::Expected<X64PagedSegmentResult> segmentTransfer(
     llvm::ArrayRef<uint8_t> Instruction,
     X64PagedAlignmentPriority AlignmentPriority,
     std::optional<X64NullSegmentBasePolicy> NullBasePolicy, bool FarPointer,
+    X86DescriptorCanonicalityProfile Canonicality,
     const detail::X64PagedSegmentContinuation *Continuation = nullptr) {
   auto Next = State;
   const X64ContinuationEventV1 Event{};
@@ -726,7 +728,8 @@ llvm::Expected<X64PagedSegmentResult> segmentTransfer(
     if (!Pointer)
       return llvm::createStringError(llvm::errc::invalid_argument,
                                      "invalid paged far-pointer encoding");
-    detail::X64ContinuationEvents<TransitionWriter>(W, AddressBits)
+    detail::X64ContinuationEvents<TransitionWriter>(W, AddressBits,
+                                                    Canonicality)
         .farPointerLoad(*Pointer, NextPC, NullBasePolicy);
   } else {
     const auto Move = detail::x64SegmentMove(Instruction);
@@ -734,7 +737,8 @@ llvm::Expected<X64PagedSegmentResult> segmentTransfer(
       return llvm::createStringError(
           llvm::errc::invalid_argument,
           "invalid paged selector transfer encoding");
-    detail::X64ContinuationSegmentMoves<TransitionWriter>(W, AddressBits)
+    detail::X64ContinuationSegmentMoves<TransitionWriter>(W, AddressBits,
+                                                          Canonicality)
         .execute(*Move, NextPC, NullBasePolicy);
   }
   if (W.Error)
@@ -753,6 +757,7 @@ llvm::Expected<X64PagedSegmentResult> segmentTransfer(
                    Consumed || Result.InstructionAttempted);
     Pending->Bytes.assign(Instruction.begin(), Instruction.end());
     Pending->NullBasePolicy = NullBasePolicy;
+    Pending->Canonicality = Canonicality;
     Pending->FarPointer = FarPointer;
     Result.Continuation = std::move(Pending);
   }
@@ -768,9 +773,20 @@ loadX64PagedFarPointer(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
                        X64PagedAlignmentPriority AlignmentPriority,
                        X64PagedFarPointerProfile Profile,
                        std::optional<X64NullSegmentBasePolicy> NullBasePolicy) {
-  assert(Profile == X64PagedFarPointerProfile::OffsetFirst);
+  X86DescriptorCanonicalityProfile Canonicality;
+  switch (Profile) {
+  case X64PagedFarPointerProfile::OffsetFirst:
+    Canonicality = X86DescriptorCanonicalityProfile::SelectorForRange;
+    break;
+  case X64PagedFarPointerProfile::OffsetFirstTailGPZero:
+    Canonicality = X86DescriptorCanonicalityProfile::SelectorForStart;
+    break;
+  default:
+    return llvm::createStringError(llvm::errc::invalid_argument,
+                                   "unknown paged far-pointer profile");
+  }
   return segmentTransfer(State, Memory, Instruction, AlignmentPriority,
-                         NullBasePolicy, true);
+                         NullBasePolicy, true, Canonicality);
 }
 
 llvm::Expected<X64PagedSegmentResult>
@@ -779,9 +795,20 @@ moveX64PagedSegment(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
                     X64PagedAlignmentPriority AlignmentPriority,
                     X64PagedSegmentMoveProfile Profile,
                     std::optional<X64NullSegmentBasePolicy> NullBasePolicy) {
-  assert(Profile == X64PagedSegmentMoveProfile::SelectorFirst);
+  X86DescriptorCanonicalityProfile Canonicality;
+  switch (Profile) {
+  case X64PagedSegmentMoveProfile::SelectorFirst:
+    Canonicality = X86DescriptorCanonicalityProfile::SelectorForRange;
+    break;
+  case X64PagedSegmentMoveProfile::SelectorFirstTailGPZero:
+    Canonicality = X86DescriptorCanonicalityProfile::SelectorForStart;
+    break;
+  default:
+    return llvm::createStringError(llvm::errc::invalid_argument,
+                                   "unknown paged selector-transfer profile");
+  }
   return segmentTransfer(State, Memory, Instruction, AlignmentPriority,
-                         NullBasePolicy, false);
+                         NullBasePolicy, false, Canonicality);
 }
 
 llvm::Error
@@ -799,7 +826,7 @@ resumeX64PagedSegment(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
   return segmentTransfer(State, Memory, Continuation->Bytes,
                          Continuation->AlignmentPriority,
                          Continuation->NullBasePolicy, Continuation->FarPointer,
-                         Continuation.get());
+                         Continuation->Canonicality, Continuation.get());
 }
 
 } // namespace neverd::analysis

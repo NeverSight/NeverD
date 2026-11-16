@@ -88,7 +88,10 @@ class X64ContinuationEvents : private X64ContinuationSegments<Writer> {
   }
 
 public:
-  X64ContinuationEvents(Writer &Output, unsigned Bits) : Base(Output, Bits) {}
+  X64ContinuationEvents(Writer &Output, unsigned Bits,
+                        X86DescriptorCanonicalityProfile Canonicality =
+                            X86DescriptorCanonicalityProfile::SelectorForRange)
+      : Base(Output, Bits, Canonicality) {}
 
   void farPointerLoad(const X64FarPointerLoad &F, uint64_t NextPC,
                       std::optional<X64NullSegmentBasePolicy> NullBasePolicy) {

@@ -52,7 +52,14 @@ enum class X64PagedFarReturnProfile : uint8_t {
 /// Bound order for LSS/LFS/LGS: read offset, then selector, then validate and
 /// update the descriptor as a qword. Descriptor reads precede RPL checks.
 /// Qualified on both local hybrid core types, never inferred from the host.
-enum class X64PagedFarPointerProfile : uint8_t { OffsetFirst };
+/// OffsetFirst reports #GP(selector) for any noncanonical byte of the
+/// eight-byte descriptor; OffsetFirstTailGPZero reports #GP(0) when only the
+/// tail is noncanonical. Both check the whole range before descriptor page
+/// walks and report #GP(selector) for a noncanonical start.
+enum class X64PagedFarPointerProfile : uint8_t {
+  OffsetFirst,
+  OffsetFirstTailGPZero,
+};
 
 /// Selector word, descriptor validation, then conditional qword accessed
 /// update. POP reads two bytes and publishes its two/eight-byte stack increment
@@ -61,7 +68,14 @@ enum class X64PagedFarPointerProfile : uint8_t { OffsetFirst };
 /// descriptor. The scheduler starts MOV-SS inhibition unless an
 /// incoming MOV-SS window is already active; STI does not prevent that start.
 /// Processor observations require explicit target qualification.
-enum class X64PagedSegmentMoveProfile : uint8_t { SelectorFirst };
+/// SelectorFirst reports #GP(selector) for any noncanonical byte of the
+/// eight-byte descriptor; SelectorFirstTailGPZero reports #GP(0) when only the
+/// tail is noncanonical. Both check the whole range before descriptor page
+/// walks and report #GP(selector) for a noncanonical start.
+enum class X64PagedSegmentMoveProfile : uint8_t {
+  SelectorFirst,
+  SelectorFirstTailGPZero,
+};
 
 enum class X64PagedEventStatus : uint8_t {
   Delivered,
