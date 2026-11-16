@@ -10,6 +10,7 @@
 
 #include "../../../lib/backend/c/DebugParamBinding.h"
 #include "../../../lib/pipeline/MIPS/MIPS16EntryAdapter.h"
+#include "../../../lib/pipeline/MIPS/MIPS16ReturnAdapter.h"
 #include "MIPSFixtures.h"
 #include "gtest/gtest.h"
 
@@ -148,6 +149,122 @@ TEST_P(MIPS16Pipeline, ReturnHelpersRequireExactByteTransport) {
               EXPECT_TRUE(mipsreg::isVector(Op.Output.Offset));
           }
         }
+}
+
+TEST_P(MIPS16Pipeline, RuntimeFloatReturnPreservesOriginalCallAndSourceResult) {
+  for (bool FP64 : {false, true})
+    for (bool BadHelper : {false, true}) {
+      SCOPED_TRACE(FP64);
+      SCOPED_TRACE(BadHelper);
+      mips_test::ELFBytes File(GetParam());
+      File.Bytes.resize(0x180);
+      File.put(52 + 16, File.Bytes.size(), 4);
+      File.put(52 + 20, File.Bytes.size(), 4);
+      File.abiFlags();
+      File.Bytes[0xe5] = FP64 ? 2 : 1;
+      File.Bytes[0xe7] = FP64 ? 6 : 1;
+      File.put(36, FP64 ? 0x74001200 : 0x74001000, 4);
+      File.put(24, 0x10100, 4);
+      File.put(0xec, 0x400, 4);
+      // GCC 12.4 o32 MIPS16 float return, including SAVE/RESTORE and JALX.
+      // The classic caller observes f0; the compressed body retains v0.
+      const uint32_t Caller[] = {0x27bdffe8, 0xafb00010, 0xafbf0014, 0x74004050,
+                                 0x00a08025, 0x8fbf0014, 0x44020000, 0x02021026,
+                                 0x8fb00010, 0x03e00008, 0x27bd0018};
+      const uint16_t Callee[] = {0x9c40, 0x64c1, 0x1c00, 0x4058,
+                                 0x6500, 0x6441, 0xe8a0, 0x6500};
+      for (unsigned I = 0; I < std::size(Caller); ++I)
+        File.put(0x100 + 4 * I, Caller[I], 4);
+      for (unsigned I = 0; I < std::size(Callee); ++I)
+        File.put(0x140 + 2 * I, Callee[I], 2);
+      File.put(0x160, 0x03e00008, 4);
+      File.put(0x164, BadHelper ? 0xafa20000 : 0x44820000, 4);
+      ELFLoader Loader;
+      auto Image = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      for (const auto &[Address, Size, Name, Mode] :
+           {std::tuple{0x10100u, 44u, "kernel", InstructionMode::MIPSClassic},
+            std::tuple{0x10140u, 16u, "fp_callee", InstructionMode::MIPS16},
+            std::tuple{0x10160u, 8u, "transfer_leaf",
+                       InstructionMode::MIPSClassic}}) {
+        auto Symbol = Symbol::makeFunc(Address, Size);
+        Symbol.Name = Name;
+        Image->Symbols.push_back(std::move(Symbol));
+        Image->MIPS->CodeModeEntries.emplace(Address, Mode);
+        Image->MIPS->CodeRegions.push_back({Address, Address + Size, Mode});
+      }
+      class ReturnDebug final : public NullDebugContext {
+      public:
+        std::optional<FunctionSym>
+        resolveFunction(va_t Address) const override {
+          if (Address != 0x10140)
+            return std::nullopt;
+          FunctionSym F;
+          F.Addr = Address;
+          F.Name = "fp_callee";
+          F.ReturnType = NdType::makeFloat(4);
+          auto Pointer = NdType::makePtr(NdType::makeInt(4, false));
+          Pointer->Size = Pointer->Alignment = 4;
+          F.Params = {{"input", std::move(Pointer)}};
+          F.PrototypeLibrary = UserPrototypeLibrary.str();
+          return F;
+        }
+        bool hasInfo() const override { return true; }
+      } Debug;
+      for (bool LLVM : {false, true}) {
+        SCOPED_TRACE(LLVM);
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.OnlyFunctionEntries = {0x10100, 0x10140};
+        Options.LiftMode = Options.SourceProjection = LLVM;
+        Options.EmitDumpOutput = false;
+        auto Result = Pipeline().run(*Image, Context, Options, &Debug);
+        if (BadHelper) {
+          EXPECT_FALSE(Result.Success);
+          continue;
+        }
+        ASSERT_TRUE(Result.Success) << Result.Error;
+        EXPECT_EQ(Result.MedIRVerifierFailures, 0u);
+        const auto Low = llvm::find_if(
+            Result.LowFuncs, [](const auto &F) { return F.Entry == 0x10140; });
+        ASSERT_NE(Low, Result.LowFuncs.end());
+        bool OriginalCall = false;
+        for (const auto &Block : Low->Blocks)
+          for (const auto &Op : Block.Ops)
+            OriginalCall |= Op.Opcode == NdOp::CALL && Op.NumInputs &&
+                            Op.Inputs[0].isConst() &&
+                            Op.Inputs[0].Offset == 0x10160;
+        EXPECT_TRUE(OriginalCall);
+        const auto Transports =
+            pipeline_detail::mips16ReturnTransports(*Image, Result.LowFuncs);
+        const auto Projected =
+            pipeline_detail::projectMIPS16ReturnCalls(*Image, *Low, Transports);
+        ASSERT_TRUE(Projected);
+        auto BoundaryError = validateLowInstructionBoundaries(
+            *Projected, LowInstructionBoundaryRequirement::Required);
+        EXPECT_FALSE(bool(BoundaryError))
+            << llvm::toString(std::move(BoundaryError));
+        for (const auto &Function : Result.MedFuncs)
+          for (const auto &Call : Function.CallInfos)
+            EXPECT_NE(Call.TargetAddr, 0x10160u);
+        CEmitterOptions Emit;
+        Emit.TheArch = GetParam();
+        Emit.Format = BinaryFormat::ELF;
+        Emit.Image = &*Image;
+        std::string Text;
+        llvm::raw_string_ostream Out(Text);
+        if (LLVM) {
+          ASSERT_TRUE(Result.LlvmModule);
+          EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+          ASSERT_TRUE(
+              LLVMCEmitter().emit(*Result.LlvmModule, Out, Emit, &Debug));
+        } else {
+          ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, Emit, &Debug));
+        }
+        EXPECT_NE(Text.find("float fp_callee("), std::string::npos) << Text;
+        EXPECT_EQ(Text.find("transfer_leaf("), std::string::npos) << Text;
+      }
+    }
 }
 
 TEST_P(MIPS16Pipeline, DoubleParameterNamesDistinguishWholeFromPhysicalWords) {

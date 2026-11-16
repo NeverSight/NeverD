@@ -1773,6 +1773,28 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
         Save.addInput(MOp.Output);
         MB.Ops.push_back(std::move(Save));
       }
+      if (isMIPS(TheArch) && !isMIPS64(TheArch) && MOp.ScalarCallSignature &&
+          MOp.ScalarCallSignature->MIPS16Parameters &&
+          MOp.ScalarCallSignature->ReturnKind == NdTypeKind::Float) {
+        // MIPS16 returns scalar FP bits in both the classic FPR carrier and
+        // o32 integer words. Define the aliases before SSA so compressed and
+        // classic callers observe the same logical result.
+        const auto &Signature = *MOp.ScalarCallSignature;
+        for (unsigned I = 0; I < Signature.ReturnBytes / 4; ++I) {
+          MedOp Word;
+          Word.Opcode = NdOp::SUBBYTES;
+          Word.Addr = LOp.Addr;
+          Word.Output =
+              ndVarToMedVar(NdVar::reg(ConventionRegs.IntReturnRegs[I], 4));
+          Word.addInput(MOp.Output);
+          Word.addInput(
+              MedVar::makeConst(Signature.ReturnBytes == 4
+                                    ? 0
+                                    : ConventionRegs.integerReturnWordOffset(I),
+                                4, ConstantAddressProvenance::Scalar));
+          MB.Ops.push_back(std::move(Word));
+        }
+      }
       if (isMIPS(TheArch) && MOp.ScalarCallSignature && MOp.Output.Size &&
           MOp.Output.Kind == MedVar::Temp) {
         const auto &Signature = *MOp.ScalarCallSignature;

@@ -62,6 +62,7 @@ struct FloatingCallArguments {
   std::optional<unsigned> FixedCount;
   /// MIPS16 bodies take floating parameters through GPRs; classic entry
   /// stubs and ordinary function pointers retain the platform FP transport.
+  /// An o32 scalar FP result defines both f0 and its v0/v1 bit carriers.
   bool MIPS16Parameters = false;
   bool operator==(const FloatingCallArguments &) const = default;
 };

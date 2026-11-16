@@ -32,10 +32,11 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
     return std::nullopt;
   if (A != Arch::X86 && A != Arch::X64 && A != Arch::AArch64 && !isMIPS(A))
     return std::nullopt;
-  // A MIPS16 caller observes an FP result through GPRs, while the classic
-  // entry uses FPRs. That dual result contract needs its own runtime-stub
-  // adapter; the ordinary scalar-result descriptor cannot represent it.
-  if (EntryMode == InstructionMode::MIPS16 && ReturnType &&
+  // The o32 MIPS16 result contract defines f0 and the matching v0/v1 bits.
+  // A source body must prove its runtime transfer; a declaration alone does
+  // not erase the helper's machine call or establish its effects. The 64-bit
+  // compressed result convention still needs a separate carrier contract.
+  if (EntryMode == InstructionMode::MIPS16 && isMIPS64(A) && ReturnType &&
       ReturnType->Kind == NdTypeKind::Float)
     return std::nullopt;
   const auto Scalar = [](const TypeRef &Type) {
