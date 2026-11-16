@@ -25556,8 +25556,20 @@ conversion or swapped double halves. `--kind sc` and `--kind dc` exercise
 complex results; the driver does not treat a source refusal as success.
 Omit `--neverd` to qualify compiler interworking separately from reconstruction.
 `--endian`, `--fr`, `--mode` and `--rebuild-compiler` select a diagnosis slice.
+Add `--floating-input` to pass a scalar float/double through the classic entry
+stub and the compressed body, then return through the real GNU result helper.
+This selection qualifies entry and result transport together. It defaults to
+`sf` and `df`; complex input signatures are not silently substituted.
 Every attempt records tool/source hashes and removes generated binaries via
 the shared artifact lifecycle. Compiler-only success does not qualify NeverD.
+
+`MIPS16Pipeline.RuntimeScalarReturnPreservesOriginalCallAndSourceResult`
+checks both source routes, original LowIR call retention, repeated helpers,
+double result spills and external input loads across predecessor blocks.
+Altered helpers, frame-derived arguments and a frame address stored before the
+input load must fail; machine lift remains outside the source projection.
+`EntryAdapterProofChecksEveryParameterByteAndEffect` also checks scalar
+floating results through both single and split-double parameter adapters.
 
 `HighCIntegerConversion.MachineIntegerReadsOfFloatingParametersKeepBits`
 separately executes direct, forwarded and logical-shift reads through signed
@@ -25566,9 +25578,11 @@ checks. `MIPS16Pipeline.DeclaredGPRFloatKeepsItsIntegerBitUse` covers loader
 and source binding in both byte orders. MIPS16 source mode spelling uses a
 compiler-specific `.def` prelude because GCC rejects the Clang attribute
 pair; the selected LLVMC caller must retain its callee's prelude too.
-The leading MIPS16 execution case has one `float` followed by `uint32_t` and a
-`uint32_t` result. Split double inputs, variadic entry reconstruction, floating
-return helpers and linker/runtime floating-call stubs remain unqualified.
+The older leading MIPS16 execution case has one `float` followed by `uint32_t`
+and a `uint32_t` result. The separate call and result matrices above qualify
+split double inputs, proven classic entry stubs and scalar return helpers.
+Variadic entry reconstruction, complex source results and general indirect
+runtime adapters remain unqualified.
 
 The hard-float call tests assemble original callers and callees and bind explicit declarations.
 

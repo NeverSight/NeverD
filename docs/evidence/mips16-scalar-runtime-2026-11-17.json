@@ -1,0 +1,72 @@
+{
+  "schema": 1,
+  "date": "2026-11-17",
+  "scope": "Local MIPS16 o32 scalar source ABI runtime execution; no whole-ISA, three-platform CI, performance, or merge qualification is implied.",
+  "matrix": [
+    "BE/LE",
+    "FR=0/FR=1",
+    "classic/MIPS16 original caller",
+    "HighC/LLVMC",
+    "GCC12.4/Clang fork",
+    "O0/O2",
+    "rebuild caller/callee/both"
+  ],
+  "observations": [
+    "every result bit including raw NaN payloads",
+    "FCSR",
+    "SP and incoming RA",
+    "preserved GPR/FPR state",
+    "classic return mode"
+  ],
+  "matrices": [
+    {
+      "scope": "pointer input, scalar result",
+      "source_commit": "29e06100120e16a8ea2b3e3b858899c59f67cf22",
+      "driver_source_commit": "29e06100120e16a8ea2b3e3b858899c59f67cf22",
+      "driver_sha256": "29c56c5056ec9daee7cbbcb2a37bf4d4d2ea25e26d0a544505d92841dfea818e",
+      "clang_sha256": "f2a9b7249ca4d8e729098402ca10c352761c36e74d1aa4201dc47bb4c4053242",
+      "libneverd_sha256": "738e72f922dc4d83489169b8cd53b5a7f6d4c62660e6f87547bff7340a0350e3",
+      "summary": {
+        "builds": 384,
+        "executions": 12288,
+        "profiles": 16,
+        "original_cases": 512,
+        "runtime_source_sha256": "f848c2497a6666364916d48a300ef4a8f73c251b2ec817b9eef77770df5bf493"
+      },
+      "results_sha256": "ebb4afdf90ee647325fb06dc242b7a49db53265b60368c303d443373e9e74661",
+      "originals_sha256": "ed44a7193c7ab4dba1d67a4e23e92b28ee1b1b67434a4b006624d3d50200fb38",
+      "cleanup_sha256": "0d723389e826bdf7d051169e1b0e86609984fec79b6992a72eaac9baaf2ce6be"
+    },
+    {
+      "scope": "scalar input and scalar result with classic entry adapters",
+      "source_commit": "bfacad508eba53fef5c2e18216560e2cb0eaebe5",
+      "driver_source_commit": "bfacad508eba53fef5c2e18216560e2cb0eaebe5",
+      "driver_sha256": "9e9dd81b9610999653470c96a573c7e64b2aa2626d9960270d78dbe0cdfb728c",
+      "clang_sha256": "fc1cfce1d618de8c404fa4e58d09b2735165984331dfb230ccbab006dc80e49e",
+      "libneverd_sha256": "4a84892232c516e4630966cd5d5a3ee666f707563a5794af2a2742c2213a31f6",
+      "summary": {
+        "builds": 384,
+        "executions": 12288,
+        "profiles": 16,
+        "original_cases": 512,
+        "runtime_source_sha256": "f848c2497a6666364916d48a300ef4a8f73c251b2ec817b9eef77770df5bf493",
+        "floating_input": true
+      },
+      "results_sha256": "70c6e2c36d308e47722031e7d1e0a40461498645ca742c214f16a3796e538f4c",
+      "originals_sha256": "501124e42eb4f57641d45474b2feff33aec85805026a581869664c780de39c34",
+      "cleanup_sha256": "fd67b45fb4969653253dcc8f24d935c386c47d438549bcd96e76001744e836a4"
+    }
+  ],
+  "tests": [
+    "MIPS16Pipeline.ReturnHelpersRequireExactByteTransport",
+    "MIPS16Pipeline.RuntimeScalarReturnPreservesOriginalCallAndSourceResult",
+    "MIPS16Pipeline.EntryAdapterProofChecksEveryParameterByteAndEffect"
+  ],
+  "boundaries": [
+    "Only decoded byte-proven register-only helpers; symbol names do not qualify transport",
+    "Machine lift does not inherit the private source projection",
+    "Complex helper byteproof does not qualify complex source ABI",
+    "MIPS64 compressed results, variadic adapters and indirect runtime conversions remain unqualified"
+  ],
+  "artifacts": "Generated originals and rebuilds removed after each attempt; hashed sources and compressed diagnostics retained. Active builds and current comparison inputs retained."
+}

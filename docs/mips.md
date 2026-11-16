@@ -465,8 +465,8 @@ separately from successful reconstruction.
 Classic linker entry stubs remain distinct physical functions and need a
 verified prototype association; their names alone do not establish it.
 [GCC's MIPS16 function-stub implementation](https://gnu.googlesource.com/gcc/+/refs/tags/releases/gcc-12.1.0/gcc/config/mips/mips.cc)
-describes this FPR-to-GPR bridge. Floating-return helpers and indirect runtime
-stubs still require separate result and control-flow qualification.
+describes this FPR-to-GPR bridge. Indirect runtime stubs still require their
+own result and control-flow qualification.
 
 The [MIPS16 call roundtrip](../unittests/lift/mips/mips16-floating-call-roundtrip.py)
 also covers split double parameters and proven classic entry stubs, in both
@@ -487,8 +487,29 @@ high-word register. Independent original-code executions distinguish these
 compiler failures from source reconstruction. The corrected compiler in
 [NeverSight LLVM PR #12](https://github.com/NeverSight/llvm-project/pull/12)
 passes the float/double reconstruction matrix locally; fork CI and merge
-qualification remain separate. Floating results, runtime helpers and
-variadic adapters remain separate work.
+qualification remain separate.
+
+MIPS16 o32 scalar `float` and `double` results now admit byte-proven classic
+return helpers. The proof checks the decoded operations, physical delay slot,
+unchanged incoming link and exact GPR-to-FPR words in both byte orders and
+FR=0/1. Names do not confer a contract. HighC and LLVMC project the helper's
+effects into a private source body before SSA; published LowIR and original
+call targets remain intact. Machine lift does not inherit this source-only
+qualification. Proven classic parameter adapters can also accompany a scalar
+floating result.
+
+The [scalar runtime receipt](evidence/mips16-scalar-runtime-2026-11-17.json)
+records separate pointer-input and floating-input matrices against unmodified
+GCC 12.4 runtime helpers. Each matrix has 16 profiles, 384 source rebuilds and
+12,288 independent execution comparisons, including NaN payloads, asymmetric
+double words and preserved machine state. The return-link proof follows
+numerical result spills and external scalar input loads before any possible
+frame escape, including predecessor blocks. Passing a frame-derived argument,
+or reading after an external store or call without a stronger memory contract,
+does not acquire that proof. Complex helper byte transfers have unit coverage
+but do not establish a general complex source ABI. Complex source results,
+variadic/runtime conversion adapters and MIPS64 compressed floating results
+remain unqualified.
 
 Numeric microMIPS code-pointer reconstruction is explicitly refused. The tested
 Clang 22 compiler folds a microMIPS function pointer's low bit to zero in some
