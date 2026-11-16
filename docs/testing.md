@@ -5037,6 +5037,17 @@ return fault. Source/library/artifact names include suite identity to avoid
 permanent dynamic-library reuse across identically named tests. See the
 [return descriptor evidence](evidence/x86-code64-return-descriptors-2026-11-16.json).
 
+`X64PagedEventDescriptorTest.*` independently measures INT80, INT3, IRQ and
+NMI entry over ten already-accessed descriptor ranges. It checks exact
+selector/EXT error codes, CR2, all represented state and complete RAM through
+both emitters, x64 Clang/NeverC and O0/O2. Native runs use fresh pinned P/E
+VMs, pre-faulted KVM backing and the documented equal input A bits. Event,
+instruction, software-debug and full-mode suspension groups verify retained
+profiles without claiming suspended hardware observations. The separate A=0
+CR2 red cases and KVM internal-error probes remain failed diagnostics, outside
+this canonicality qualification. See the
+[event descriptor evidence](evidence/x86-code64-event-descriptors-2026-11-16.json).
+
 Faultable RETF is covered by `PagedFarReturnsMatchOriginalCPU` and
 `PagedFarReturnRetainedEffectsControlProgress` in
 `unittests/translate/x86/X64PagedFarReturnTests.inc`. The common return retry

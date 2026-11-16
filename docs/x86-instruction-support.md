@@ -4557,3 +4557,12 @@ state and complete-RAM comparisons per SDK. Return, event and full-mode
 continuations preserve the accepted fault choice and charge the instruction
 once. Event descriptor-tail qualification and remaining mode/machine owners
 remain open. No final LLVM release or production pin update is included.
+
+The [code64 event descriptor qualification](x86-paged-execution.md#code64-event-descriptor-profiles)
+adds independent selector/EXT fault profiles for INT/INT3, IRQ and NMI.
+Both SDKs pass 543 tests with 1 LA57 skip each. The new groups include
+320 original/generated state and complete-RAM comparisons per SDK, plus
+retained event, instruction and full-mode bindings. The preserved A=0/read-only
+CR2 red cases and cross-line KVM internal errors are separate unresolved
+accessed-update work. Remaining mode/machine owners, physical SGX and the final
+LLVM release/pin gate are still open. NeverC remains host/source x64.

@@ -69,7 +69,7 @@ runtime code does not infer the profile from its host. This compatibility
 measurement alone does not select a code64 policy. Code64 MOV/POP/LFS/LGS/LSS
 now have an [independent descriptor qualification](x86-paged-execution.md#code64-descriptor-boundary-profiles);
 returns have a [separate code64 qualification](x86-paged-execution.md#code64-return-descriptor-profiles),
-and event descriptor-tail profiles remain separate work.
+and events have an [independent code64 qualification](x86-paged-execution.md#code64-event-descriptor-profiles).
 
 The existing transfer journal retains completed pointer fields, selector
 reads and descriptor accessed writes, including aliases with paging A bits
@@ -244,3 +244,14 @@ accepted work. The [return descriptor evidence](evidence/x86-code64-return-descr
 comparisons. Guest operand widths do not add NeverC source targets. Event
 descriptor-tail choices and the remaining full-machine work are still open;
 production LLVM remains r6.
+
+### Code64 event descriptor profiles (2026-11-16)
+
+`Long.EventDescriptorCanonicality` selects the event descriptor's tail error
+code and retains EXT. Full-mode accepted work preserves it through IDT backing
+and event-budget stops even when a reconstructed caller supplies the opposite
+choice. The [event descriptor evidence](evidence/x86-code64-event-descriptors-2026-11-16.json) records 543
+passing tests and 1 LA57 skip per SDK, including 96 full-mode comparisons.
+Event accessed-update CR2/locked transaction and split-lock qualification are
+still open, as are the remaining mode and machine-state owners. NeverC stays
+host x64; no final LLVM release or production pin change is included.

@@ -777,7 +777,8 @@ Both choices report #GP(selector) for a noncanonical starting address, and
 check the complete eight-byte descriptor extent before paging. RETF's existing
 `SelectorFirst` value keeps its original-IP check and #GP(selector) range
 policy. Old numeric values are unchanged; production does not infer a target
-choice from the host. Event descriptor-tail policies remain separate work.
+choice from the host. Events have their own
+[independent descriptor qualification](#code64-event-descriptor-profiles).
 
 A return continuation stores the neutral descriptor choice alongside accepted
 reads/writes and its budget state. Changing either return binding in an ordinary
@@ -915,6 +916,58 @@ Architectural faults still use the common IDT/#DF/shutdown owner and original
 restart PC. Missing profile, changed code and fetch faults do not access the
 return frame. The [RETF qualification](evidence/x86-paged-retf-2026-11-02.json)
 also records the added competing-fault IRET cases and both hybrid core profiles.
+
+## Code64 event descriptor profiles
+
+`X64PagedExecutionOptions::EventDescriptorCanonicality` binds event entry's
+code-descriptor range check independently of selector loads and returns.
+`deliverX64PagedEvent` accepts the same binding as its last argument. The
+single default, `kX64PagedEventDescriptorCanonicality`, is `SelectorForStart`;
+production never selects a profile from the host:
+
+| Binding | Noncanonical start | Noncanonical tail | Qualified local core |
+| --- | --- | --- | --- |
+| `SelectorForStart` | #GP(selector \| EXT) | #GP(EXT) | Intel hybrid P, type `0x40` |
+| `SelectorForRange` | #GP(selector \| EXT) | #GP(selector \| EXT) | Intel hybrid E, type `0x20` |
+
+Both check the complete eight-byte descriptor range before paging for that
+descriptor. Software INT/INT3 use EXT=0; the measured IRQ/NMI cases use EXT=1.
+A page-fault error code keeps its independent paging meaning. Fixing the
+noncanonical start's selector does not change the default tail behavior.
+Unknown bindings refuse before paging-control, CPU, NMI or RAM effects.
+
+`X64PagedEventContinuation` retains the choice through physical backing
+stops, secondary faults and a work-budget stop before the next event is
+accepted. The lower resume API uses that saved choice without a replacement
+parameter. Ordinary context reconstruction rejects a changed event binding
+before effects. Pending IRET, selector MOV and far-pointer loads retain the
+same event binding because their later fault can still enter this owner.
+Full-mode pending work uses its frozen options. Software entry followed by a
+watchpoint #DB also retains the choice and its completed-instruction receipt.
+
+The [November 16 evidence](evidence/x86-code64-event-descriptors-2026-11-16.json) at `62e3cded30` records
+543 passing tests and 1 LA57 skip per SDK. Eight new groups contain
+40 raw original observations, 40 original/direct-owner comparisons and 320
+original/generated comparisons per SDK. Four streams (INT80, INT3, IRQ and
+NMI) cover ten already-accessed descriptor cases through HighC/LLVMC,
+host-x64 Clang/NeverC and O0/O2. Complete represented State and all RAM are
+compared without output masks. Pre-accessed target/HLT pages and absent-first-
+wrapped-page ancestors are identical in both inputs.
+
+Software retention checks add 160 event, 24 suspended instruction, four
+software-debug sequence and 96 full-mode comparisons per SDK. They compare
+against uninterrupted software executions; original CPU runs are uninterrupted.
+These counts are within the test groups, not extra passing tests.
+
+Accessed writes remain a separate open issue. The retained diagnostic matrix
+has eight A=0/read-only descriptor CR2 mismatches per core: hardware reports
+the descriptor start, while the byte update reports start+5. Cross-line A=0
+probes terminate with KVM `INTERNAL_ERROR_SIMUL_EX` during #AC delivery,
+including with page A/D bits pre-set. These failed probes are not architectural
+guest outcomes or successful qualification. This unit does not infer locked
+update width, descriptor-cache publication or a split-lock policy from return
+instructions. Host split-lock configuration and the production LLVM pin are
+unchanged.
 
 ## Paged IRQ/NMI scheduling
 
