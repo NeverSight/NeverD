@@ -447,6 +447,12 @@ Those controls cannot be supplied and silently ignored. The additional
 execution comparators in `X86LegacyDebugState::DR`; its control and priority
 rules are shared with [paged x64](x86-paged-execution.md#hardware-execution-breakpoints).
 
+The [continuous-mode debug binding](x86-mode-execution.md#debug-register-transfers-and-complete-addresses)
+now reuses these register rules in protected16/32 and compatibility16/32. Its
+complete DR bank and explicit write receipt preserve high halves across mode
+changes and pending events; the standalone legacy state remains a low-width
+interface.
+
 `X86LegacyDebugProfile::DebugRegisters` additionally owns MOV-DR and GD,
 sharing [the x64 register rules and explicit GD frame choices](x86-paged-execution.md#debug-register-transfers-and-general-detect).
 The protected executor always transfers full dwords, independently of CS.D,

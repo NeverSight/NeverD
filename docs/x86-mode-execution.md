@@ -24,8 +24,8 @@ The complete V7 register, segment, descriptor-table, CR2 and SYSENTER banks,
 plus debug state, STI/SS/halt and terminal shutdown state, belong to
 `X86ModeState`. The non-64-bit
 executor receives a temporary low-width view. Explicit write receipts publish
-CR2, CS/SS and data-segment changes; unchanged low halves never prove that a
-full-width write did not occur. Full GDTR/LDTR addresses remain available to
+CR2, addressed DR0..3, CS/SS and data-segment changes; unchanged low halves never
+prove that a full-width write did not occur. Full GDTR/LDTR addresses remain available to
 compatibility far transfers and selector loads. Full DR addresses remain
 available to instruction/event comparators. Upper halves cannot alias a low-32-bit watchpoint address.
 
@@ -79,6 +79,53 @@ not acquire MOV-SS inhibition. GPR/cache publication waits for the complete
 load, and a guest fault retires that journal before retaining event entry.
 `SegmentWritten` accompanies the completing step even when immediate #DB
 entry suspends; event-only resumes do not repeat it or the completion count.
+
+## Debug-register transfers and complete addresses
+
+MOV-DR in protected16/32 and compatibility16/32 uses the existing shared debug
+access owner. Bind `Legacy.Debug` to `DebugRegisters`, supply the complete debug
+bank and choose `GeneralDetectFrame` explicitly. The low executor requires each
+DR0..3 low32 value to agree with its supplied full-width address before fetch.
+DR4/5 aliasing, CR4.DE, CPL, LOCK and GD priority retain the common rules.
+
+Non64 transfers always use dword operands; ignored operand/address prefixes do
+not change the width. Reads expose low32 without changing the full address.
+Every completed DR0..3 write clears that register's high32, even when its low32
+value is unchanged, and leaves all other address banks intact. The explicit
+`DebugAddressWritten` receipt identifies that write. The same instruction's
+post-completion debug comparator uses the committed full-width bank, including
+a DR7 enable/disable change; a high address cannot alias the next low32 PC.
+
+The mode owner publishes the completed write before entering #DB. Its event
+continuation authenticates the complete bank and freezes the accepted policy.
+IDT/frame backing repair resumes without another instruction attempt, address
+write or completion receipt. A GD fault does not complete the MOV or produce
+a DR address write receipt. Missing required bindings are explicit refusals;
+contradictory low/full banks fail before fetch or state effects.
+
+The [November 16 evidence](evidence/x86-mode-debug-registers-2026-11-16.json) records 569 passing tests and
+1 LA57 skip per SDK at `f95dc84266`. Each SDK checks 256 raw original
+transfers, 256 owner comparisons, 128 original/generated observations after
+real far jumps to code64, 32 immediate-TF cases, 20 GD/encoding cases and
+12 CPL3 priority cases. Both C emitters and x64 Clang/NeverC run at O0/O2.
+The original streams compare all 16 represented GPRs, debug banks, relevant
+segment/control state, frames and every RAM byte. They do not qualify
+unrepresented machine banks or complete XSAVE state.
+
+Twenty-four software recovery cases cover completed TF and uncompleted GD at
+IDT, first-frame and second-frame backing. Twenty admission cases check the
+full/low bank consistency contract. These compare software behavior separately
+from uninterrupted original hardware execution. Native fixtures use fresh
+pinned Intel VMs, one initial SREGS write and KVM pre-faulted backing. GD/TF/SS
+setup uses real guest instructions after releasing lazy KVM MOV-DR interception.
+
+A test-only follow-up at `4712c53af6` adds explicit Intel and KVM pre-fault
+admission; unavailable native capability skips at the caller before observation.
+All eight new groups pass again per SDK, counted separately from the full
+qualification. The software recovery/admission groups remain independent of
+those native checks. No production code changes between these two commits.
+Other mode-aware owners, software SMM/SGX and physical SGX remain open; the
+production LLVM pin stays r6 and NeverC remains host/source x64.
 
 ## Events and retained progress
 
@@ -145,9 +192,9 @@ wire layouts and host-x64 NeverC targets are unchanged.
 ## Admitted scope and evidence
 
 The non-64-bit boundary deliberately admits the existing ordinary scalar,
-stack, selector transfer, direct far-JMP, control-register and EFER forms whose
-state ownership is complete here. Debug-register instructions, port/string/MPX,
-legacy returns, task/system selectors, descriptor queries, fast-system entry,
+stack, selector transfer, direct far-JMP, control/debug-register and EFER forms
+whose state ownership is complete here. Port/string/MPX, legacy returns,
+task/system selectors, descriptor queries, fast-system entry,
 call gates and VM86 require their separate mode-aware integration. Real/unreal
 mode, software SMM/SGX and unbound asynchronous producers remain open. A
 missing instruction binding is an explicit result; unsupported semantics never

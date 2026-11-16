@@ -4574,3 +4574,21 @@ watchpoint comparisons agree; ordinary/full-mode/debug continuations retain
 completed updates. Both SDKs pass 551 tests with 1 LA57 skip each.
 Cross-line/split-lock, further mode/machine owners and physical SGX remain open;
 no final LLVM release, production pin or NeverC source-target expansion is included.
+
+## Continuous-mode debug-register transfers (2026-11-16)
+
+The [mode debug-register qualification](x86-mode-execution.md#debug-register-transfers-and-complete-addresses)
+closes MOV-DR integration for protected16/32 and compatibility16/32. Explicit
+addressed-write receipts clear exactly one full bank's high32 on a completed
+write, including unchanged low halves; immediate TF comparisons use the new
+bank, and event backing repair preserves the write without replaying it.
+Shared GD/DE/CPL/LOCK rules retain their original priority.
+
+At `f95dc84266`, each SDK passes 569 full regression tests with 1 LA57 skip.
+The new matrices include 256 raw observations, 256 direct-owner and 128 generated
+comparisons per SDK, plus TF, GD and privilege faults. The subsequent native
+fixture admission change passes all eight groups per SDK and has a separate
+source/binary record; production code is identical. NeverC remains host/source
+x64. Ports/strings/MPX, legacy returns, task/system and fast-system transitions,
+VM86 composition, software SMM/SGX and physical SGX remain outside this unit.
+No final LLVM release or production pin change is declared.

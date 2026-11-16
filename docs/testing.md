@@ -107,6 +107,25 @@ The original CPU's terminal long HLT is outside that source observation.
 Changes to the common cache or transfer journal require the full paging and
 legacy-source suites, including standalone legacy and VM86 paths, on both SDKs.
 
+`X86ModeDebugRegisterTest.*` covers all eight MOV-DR encodings, both directions,
+four prefix/Mod combinations and protected/compatibility16/32. Preserve complete
+DR address banks: same-low32 writes clear the addressed high32; reads and
+unaddressed slots retain it. The generated matrix observes all four addresses
+after an original far JMP into code64 through both emitters, host-x64
+Clang/NeverC and O0/O2. Original TF/GD tests set DR7, TF and MOV-SS shadows with
+guest instructions after releasing lazy KVM interception; CPL3/LOCK/DE cases
+check fault priority. Compare all represented GPRs/debug banks, relevant caches,
+controls and entire RAM rather than only the low-width execution view.
+
+The native groups require Intel, usable KVM and KVM pre-fault support. Propagate
+helper skips before reading native registers or executing a guest. Software
+backing-resume and contradictory full/low-bank admission groups do not inherit
+those gates. Run the full paged-source and legacy-source suites plus
+`X86LegacyDebugRegisterTest.*` and `LegacyDebugRegister/*` from the paging target
+on both SDKs after changing the common owner. See the [mode debug evidence](evidence/x86-mode-debug-registers-2026-11-16.json);
+its 569 passes and 1 LA57 skip per SDK are separate from the eight-group
+test-only admission follow-up per SDK.
+
 The `X86ModeInterruptTest.*` subset checks selected IRQ/NMI input in all five
 protected/compatibility/64-bit modes, deferred/refused inputs without effects,
 NMI-under-STI choices, high-half stack witnesses, suspended frame/event-budget
