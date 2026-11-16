@@ -496,11 +496,11 @@ TEST(HighCSourceCalls, IncludedReturnRecordsDeclareTheirLocalType) {
     }
     bool hasInfo() const override { return true; }
   } Debug;
-  Debug.Callee.Name = "readdir";
+  Debug.Callee.Name = "localtime";
   Debug.Callee.Addr = 0x2000;
-  Debug.Callee.ReturnType = NdType::makePtr(NdType::makeNamedRecord("dirent"));
+  Debug.Callee.ReturnType = NdType::makePtr(NdType::makeNamedRecord("tm"));
   const auto Pointer = NdType::makePtr(NdType::makeVoid());
-  Debug.Callee.Params = {{"directory", Pointer}};
+  Debug.Callee.Params = {{"clock", Pointer}};
   Debug.Callee.PrototypeFromCLibrary = true;
   const auto Integer = NdType::makeInt(8, false);
   MedVar Temporary;
@@ -512,12 +512,12 @@ TEST(HighCSourceCalls, IncludedReturnRecordsDeclareTheirLocalType) {
       HighExpr::makeBinop(NdOp::INT_NOTEQUAL, Value, HighExpr::makeConst(0, 8));
   auto Result = HighExpr::makeBinop(NdOp::INT_ADD, Nonnull, Nonnull);
   Result->Type = NdType::makeInt(4, true);
-  auto Function = returning("has_entry_twice", Result, {Pointer});
+  auto Function = returning("has_time_twice", Result, {Pointer});
   HighStmt Read;
   Read.Kind = StmtKind::Assign;
   Read.Dst = Value;
   Read.Val =
-      HighExpr::makeCall("readdir", Debug.Callee.Addr, {parameter(0, Pointer)});
+      HighExpr::makeCall("localtime", Debug.Callee.Addr, {parameter(0, Pointer)});
   Read.Val->Type = Integer;
   Function.Body.insert(Function.Body.begin(), Read);
   bool RequestedOpaqueReturn = false;
@@ -528,9 +528,9 @@ TEST(HighCSourceCalls, IncludedReturnRecordsDeclareTheirLocalType) {
     CRecordDefinitions Definitions;
     for (const auto &Type : Types)
       if (Type->Kind == NdTypeKind::Ptr && Type->Pointee &&
-          Type->Pointee->SourceName == "dirent") {
+          Type->Pointee->SourceName == "tm") {
         RequestedOpaqueReturn = true;
-        Definitions.Tags["dirent"] = false;
+        Definitions.Tags["tm"] = false;
       }
     return Definitions;
   };
@@ -540,11 +540,8 @@ TEST(HighCSourceCalls, IncludedReturnRecordsDeclareTheirLocalType) {
   EXPECT_TRUE(RequestedOpaqueReturn) << Source;
   Source += R"(
 int main(void) {
-    DIR *directory = opendir(".");
-    if (!directory) return 1;
-    int result = has_entry_twice(directory);
-    closedir(directory);
-    return result != 2;
+    time_t clock = 0;
+    return has_time_twice(&clock) != 2;
 }
 )";
   for (auto Optimization : {"-O0", "-O2"})
@@ -762,8 +759,15 @@ TEST(HighCSourceCalls, PortableDeclarationsOwnObjectPointerConversions) {
                "-Werror=incompatible-pointer-types"});
   for (const auto Optimization : {"-O0", "-O2"})
     compileAndRun(Source + R"(
-int read_mask(uint32_t *mask) { return *mask == 0x1234; }
-int main(void) { uint32_t mask = 0x1234; return use_mask(&mask) != 1; }
+int read_mask(__typeof__(__builtin_choose_expr(
+    sizeof(unsigned long) == 4, (unsigned long)0, (uint32_t)0)) *mask) {
+    return *mask == 0x1234;
+}
+int main(void) {
+    __typeof__(__builtin_choose_expr(sizeof(unsigned long) == 4,
+        (unsigned long)0, (uint32_t)0)) mask = 0x1234;
+    return use_mask((void *)&mask) != 1;
+}
 )",
                   {Optimization, "-Werror=incompatible-pointer-types"});
 }
