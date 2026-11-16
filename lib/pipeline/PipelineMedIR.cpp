@@ -1167,7 +1167,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   for (const auto &F : Result.LowFuncs)
     SourceCalleeFunctions.emplace(F.Entry, &F);
   const auto MIPS16Returns =
-      Opts.usesMachineMedIR()
+      !Opts.usesSourceDeclarations()
           ? std::map<va_t, MIPS16ReturnTransport>{}
           : pipeline_detail::mips16ReturnTransports(Img, Result.LowFuncs);
   if (Opts.usesSourceDeclarations())

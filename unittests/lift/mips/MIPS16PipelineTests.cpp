@@ -220,15 +220,19 @@ TEST_P(MIPS16Pipeline, RuntimeFloatReturnPreservesOriginalCallAndSourceResult) {
           }
           bool hasInfo() const override { return true; }
         } Debug;
-        for (bool LLVM : {false, true}) {
-          SCOPED_TRACE(LLVM);
+        enum class Surface { HighC, LLVMC, MachineLift };
+        for (Surface S :
+             {Surface::HighC, Surface::LLVMC, Surface::MachineLift}) {
+          SCOPED_TRACE(int(S));
+          const bool LLVM = S == Surface::LLVMC;
           llvm::LLVMContext Context;
           PipelineOptions Options;
           Options.OnlyFunctionEntries = {0x10100, 0x10140};
-          Options.LiftMode = Options.SourceProjection = LLVM;
+          Options.LiftMode = S != Surface::HighC;
+          Options.SourceProjection = LLVM;
           Options.EmitDumpOutput = false;
           auto Result = Pipeline().run(*Image, Context, Options, &Debug);
-          if (BadHelper) {
+          if (BadHelper || S == Surface::MachineLift) {
             EXPECT_FALSE(Result.Success);
             continue;
           }
