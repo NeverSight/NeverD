@@ -582,14 +582,64 @@ No new native intrinsic or production LLVM pin is required for this runtime
 extension. Reference: Intel SDM revision 093, volume 3 §§20.2.4–20.2.5 and
 20.3.1.2; the unaligned and delayed-status choices are separately measured.
 
+## Code64 descriptor boundary profiles
+
+The explicit selector-load profiles include the target processor's descriptor
+fault error code as well as operand order. Both validate the complete eight-byte
+descriptor extent before its page-table access. A noncanonical starting address
+always produces #GP(selector). When the start is canonical but the tail is not:
+
+| Far-pointer binding | Segment-move binding | Error | Qualified local core |
+| --- | --- | --- | --- |
+| `OffsetFirst` | `SelectorFirst` | #GP(selector) | Intel hybrid E, type `0x20` |
+| `OffsetFirstTailGPZero` | `SelectorFirstTailGPZero` | #GP(0) | Intel hybrid P, type `0x40` |
+
+These are independent original code64 MOV/POP/LFS/LGS/LSS observations, not an
+inference from compatibility instructions or the host running generated C.
+Existing enum values retain their meaning and value. Unknown profile values
+fail before direct-owner effects. Code64 return and event owners retain their
+established descriptor policy; these selector-load measurements do not qualify
+a different return or event profile.
+
+An accepted instruction stores its neutral descriptor choice in the lower
+continuation. A reconstructed `X64PagedExecution` refuses changed profile
+bindings before effects. `X86ModeExecution` instead continues with the accepted
+instruction's frozen options; newly supplied options affect subsequent work.
+Fault frames and CR2 follow the same shared owner through either C emitter.
+
+The [November 16 evidence](evidence/x86-code64-descriptor-boundaries-2026-11-16.json) at
+`b08198eb61` records 529 passing tests and 1 LA57 skip
+per SDK. Its five new groups include 117 original observations and 936 complete
+original/generated CPU-state and RAM comparisons per SDK: nine instruction
+forms, thirteen descriptor cases, both emitters, host-x64 Clang/NeverC and O0/O2.
+Sixty-four suspended and sixteen full-mode comparisons check both choices.
+These comparison counts are within the test groups, not additional test totals.
+
+Cases include the last low/high canonical descriptors, noncanonical starts and
+tails, missing translations, an eight-byte descriptor wrapping through address
+zero, base-plus-index wrap, accessed updates and either wrapped fragment being
+read-only. Nonzero initial CR2 is preserved by #GP and replaced by the exact
+#PF address. A second-fragment write fault retains the first page's Dirty bit;
+unchanged first-fragment descriptor bytes do not prove a partial data store.
+
+Each original stream uses a fresh VM/vCPU, two initial SREGS writes and
+pre-faulted KVM stage-2 backing. Output RAM is compared without masks. Both
+inputs pre-access the handler page because the original oracle executes a HLT
+there while the model stops at event entry. For the absent first wrapped page,
+both inputs also pre-access its ancestors: the raw probes observed different
+ancestor A effects on the two cores, and this qualification does not define
+that separate fault-walk choice. Failed KVM entry with a noncanonical cached
+LDTR base is a fixture limitation, not a measured guest instruction fault.
+
 ## Faultable LSS, LFS and LGS
 
 The paged V6 binding executes 16/32/64-bit far-pointer loads through the shared
 segment owner. Bind `X64PagedExecutionOptions::FarPointerProfile` to the target
-processor's qualified `OffsetFirst` order. It reads the offset, then the
-selector, then reads and validates the descriptor before its conditional
-qword accessed-bit update. The profile has been compared with original bytes
-on both local Intel hybrid core types. It is an explicit target binding, not a
+processor's qualified `OffsetFirst` or `OffsetFirstTailGPZero` profile, as
+[described above](#code64-descriptor-boundary-profiles). Both read the offset,
+then the selector, then validate the descriptor before its conditional qword
+accessed-bit update. The order has been compared with original bytes on both
+local Intel hybrid core types. It is an explicit target binding, not a
 claim about every processor. Missing binding stops after instruction fetch and
 before operand access. The usual alignment-priority binding also applies.
 
@@ -648,8 +698,10 @@ native intrinsics; they are not added to the CPU totals.
 
 The paged V6 path owns `MOV r/m16,Sreg`, register-width selector reads,
 `MOV Sreg,r/m16`, and long-mode `PUSH/POP FS/GS`. Bind
-`X64PagedExecutionOptions::SegmentMoveProfile` to `SelectorFirst`. Memory
-MOV and POP selector operands access exactly two bytes. On the qualified processor, even
+`X64PagedExecutionOptions::SegmentMoveProfile` to the qualified
+`SelectorFirst` or `SelectorFirstTailGPZero`
+[descriptor profile](#code64-descriptor-boundary-profiles). Memory MOV and POP
+selector operands access exactly two bytes. On the qualified processor, even
 the default eight-byte POP reads only that word; its successful RSP increment
 is eight bytes, or two with an operand-size override. REX.W selects eight.
 PUSH writes the full zero-extended selector at its operand width, two or eight

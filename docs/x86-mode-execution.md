@@ -66,7 +66,9 @@ noncanonical starting address and #GP(0) for only a noncanonical tail;
 `SelectorForRange` uses #GP(selector) in either case. Original local P/E-core
 streams distinguish these cases, including a missing first-page translation;
 runtime code does not infer the profile from its host. This compatibility
-measurement does not select a new code64 MOV/POP/LxS/return policy.
+measurement alone does not select a code64 policy. Code64 MOV/POP/LFS/LGS/LSS
+now have an [independent descriptor qualification](x86-paged-execution.md#code64-descriptor-boundary-profiles);
+return/event tail profiles remain separate work.
 
 The existing transfer journal retains completed pointer fields, selector
 reads and descriptor accessed writes, including aliases with paging A bits
@@ -215,6 +217,18 @@ operands, original bytes and paging effects, and charges the attempt once.
 The [runtime contract](x86-paged-execution.md#resuming-a-suspended-segment-transfer)
 and [evidence](evidence/x86-code64-segment-continuation-2026-11-16.json) record 524 passing cases and 1 LA57
 skip per SDK. This closes code64 segment progress; remaining mode-aware
-owners, descriptor-tail qualification, real/unreal/VM86 composition, software
+owners, return/event descriptor-tail qualification, real/unreal/VM86 composition, software
 SMM/SGX and unbound asynchronous producers remain separate work. NeverC remains
 host x64 and the production LLVM release pin remains r6.
+
+
+### Code64 descriptor fault profiles (2026-11-16)
+
+The long-mode branch accepts the explicit `TailGPZero` variants for selector
+loads, using the same shared descriptor owner as the plain paged context.
+Pending full-mode work retains its original profile even when a new context
+supplies the opposite choice. The [boundary qualification](evidence/x86-code64-descriptor-boundaries-2026-11-16.json)
+records 529 passing tests and 1 LA57 skip per SDK, including sixteen
+full-mode profile comparisons. This does not expand NeverC source targets,
+qualify return/event descriptor-tail choices, or close the remaining mode and
+machine-owner work. The production LLVM release pin remains r6.

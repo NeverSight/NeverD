@@ -4538,3 +4538,13 @@ direct runtime and full-mode dispatch. Both SDKs pass 524 cases with
 1 LA57 skip each; original CPU alias comparisons preserve complete RAM.
 This does not close the remaining full-machine qualification gaps or authorize
 a final LLVM release.
+
+
+The [code64 descriptor boundary qualification](x86-paged-execution.md#code64-descriptor-boundary-profiles)
+adds explicit target fault-code profiles for selector MOV/POP and LFS/LGS/LSS,
+retained through backing suspension and full-mode dispatch. Both SDKs pass
+529 tests with 1 LA57 skip each; the new matrix contains 936 original
+CPU/generated-state and complete-RAM comparisons per SDK. High-end wrapping and
+accessed-update protection checks are included. Return/event descriptor-tail
+profiles and remaining full-machine owners stay open; no final LLVM release
+or production pin update is claimed.

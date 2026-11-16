@@ -5010,6 +5010,20 @@ removes the observed cold-stage-2 discrepancy without warming or rewriting
 guest translations.
 Run on both pinned core classes. See the [segment continuation evidence](evidence/x86-code64-segment-continuation-2026-11-16.json).
 
+`X64PagedDescriptorCanonicalityTest.*` independently qualifies code64
+MOV/POP/LFS/LGS/LSS descriptor starts, tails, high canonical addresses and
+end-to-zero wrapping, including both fragment write protections. Run on both
+pinned qualified core classes with KVM pre-fault support and
+`NEVERD_TEST_NEVERC`. The complete input CR2 is loaded into the native fixture;
+full output state, exception frames and RAM are compared. The handler PTE A
+bit is pre-set in both inputs to remove the original HLT observation's extra
+fetch effect. For an absent first wrapped descriptor page, ancestor A bits are
+also pre-set in both inputs; this does not qualify the raw fault-walk difference.
+No output bytes are masked. Unknown Intel core types skip profile comparison.
+The same group tests frozen profile choices, ordinary-context refusal,
+full-mode continuation and invalid public profiles. Counts and invalid KVM
+entry diagnostics are recorded in the [descriptor boundary evidence](evidence/x86-code64-descriptor-boundaries-2026-11-16.json).
+
 Faultable RETF is covered by `PagedFarReturnsMatchOriginalCPU` and
 `PagedFarReturnRetainedEffectsControlProgress` in
 `unittests/translate/x86/X64PagedFarReturnTests.inc`. The common return retry
