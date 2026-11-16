@@ -1739,7 +1739,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       // variadic: a declaration from this call's would cut a longer call's.
       auto undescribedCalleeType = [&](bool VarArg) {
         std::vector<llvm::Type *> Fixed = ArgTypes;
-        if (!VarArg && AggregateRetTy == nullptr && CI && !CI->IsIndirect)
+        if (!VarArg && !Op.IntegerCallSignature && AggregateRetTy == nullptr &&
+            CI && !CI->IsIndirect)
           if (const auto It = DirectCallArgumentCounts.find(CI->TargetAddr);
               It != DirectCallArgumentCounts.end() &&
               It->second.first != It->second.second) {
@@ -1749,7 +1750,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         return llvm::FunctionType::get(DefaultRetTy, Fixed, VarArg);
       };
       if (!Callee && !CalleeName.empty()) {
-        bool UseVarArg = getTargetRegInfo(TargetArch).UnknownExternIsVarArg &&
+        bool UseVarArg = !Op.IntegerCallSignature &&
+                         getTargetRegInfo(TargetArch).UnknownExternIsVarArg &&
                          AggregateRetTy == nullptr;
         auto *FT = undescribedCalleeType(UseVarArg);
         Callee = llvm::Function::Create(FT, llvm::GlobalValue::ExternalLinkage,

@@ -635,7 +635,7 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
       CallEntryFloatingArguments && MOp.NumInputs == 1)
     if (const auto F = CallEntryFloatingArguments->find(ArgumentsKey);
         F != CallEntryFloatingArguments->end() &&
-        (TargetArch != Arch::X86 || !F->second.ReturnBytes ||
+        (TargetArch != Arch::X86 || F->second.ReturnKind != NdTypeKind::Float ||
          (LOp.Output.isReg() && TRI.isX87StackReg(LOp.Output.Offset) &&
           LOp.Output.Size == x86reg::FPURegSize))) {
       const auto &Signature = F->second;

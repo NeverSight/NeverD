@@ -4977,12 +4977,22 @@ Unsupported record carriers fail explicitly. This does not add ARM32 record
 placement or general mixed floating record-call support.
 
 Complete scalar integer/pointer declarations bind through
-`fixedIntegerCallArguments` before SSA on x64 and AArch64. This includes
+`fixedIntegerCallArguments` before SSA on x86, x64 and AArch64. This includes
 register-only and empty signatures: incidental register setup and frame stores
 cannot enlarge an authenticated fixed argument list. The same operand contract
 owns explicit stack loads and declared byte widths, and both source routes
 reject a bound call that loses those operands. This argument contract does not
 authorize additional result registers or implicit machine-state inputs.
+The fixed integer and floating adapters share declaration authentication.
+Exact native declarations from an authenticated debug reader bind private and
+exported callees alike; an unused parameter in the callee body cannot shorten
+the caller's declared operand list. Missing types, unknown return contracts,
+variadic functions and custom parameter locations do not establish this
+contract. i386 retains stack-slot counts and stdcall cleanup alongside the
+explicit operands. An omitted fixed integer callee's LLVM declaration remains
+nonvariadic even on targets whose unknown external calls default to varargs.
+The x64 entry-read summaries also retain these declared inputs, so a forwarding
+body cannot erase a parameter its final callee does not read.
 Internal Windows routines authenticated by the platform prototype registry
 publish the same full operand contract as imported routines. Register-read
 and stack-arity summaries alone cannot enforce this boundary in either emitter.
@@ -5029,6 +5039,15 @@ only along an unclobbered entry path. Its existing bounded summary worklist
 propagates the resulting facts. `recoveredFloatingCallArguments` checks the
 complete fixed signature for both LLVM declarations and HighC call metadata;
 expression types alone do not establish a nonvariadic external signature.
+The cached declaration inventory includes exact authenticated native function
+symbols and local function-pointer targets. It resolves their placements once
+in parallel and publishes both operand maps to i386 as well as register-based
+conventions. Symbol inventory changes and the existing declaration invalidation
+boundary retire that inventory. HighC authenticates native mixed declarations
+through the same adapter. On i386, floating stack parameters may accompany an
+integer or pointer result that fits one return register; only floating results
+require the independently proved x87 return slot. Register-pair integer results
+remain outside this scalar adapter.
 Mixed scalar arguments and dense AAPCS64 HFAs use the same checked placement
 model, with source groups retained separately from their physical scalar
 operands. A spilled HFA occupies one stack object; its float members remain

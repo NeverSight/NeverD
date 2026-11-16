@@ -3484,6 +3484,20 @@ selected functions execute against an independent provider observing every
 record field and following parameter; whole modules are syntax-checked with
 their original import-slot aliases. Those aliases need the SDK's image linker
 for runtime binding. Other hosts explicitly skip the native glibc test.
+
+`NeverDNativeCallSignatureTests` checks complete authenticated native call
+declarations on x86, x64 and AArch64, with ELF, COFF and Mach-O ABI profiles.
+Private and exported callees keep parameters their bodies do not read. Both C
+routes execute at O0/O2 against a provider that observes every passed operand;
+LLVM declarations must retain a fixed argument list. Mixed scalar cases check
+the independent integer and floating banks, and i386 floating stack operands
+with an integer result. Selected and omitted forwarders retain the same
+arguments in both output routes, with and without a reused analysis cache and
+in repeated selection order. Incomplete types, unauthenticated or interior
+declarations, variadics and custom conventions remain unbound.
+The integer-placement owner also checks narrow and eight-byte i386 stack
+operands without treating them as regparm inputs.
+
 `RecordCallContract.LLVMOperandsKeepPhysicalStackPieceLocations` checks that
 record pieces follow the LLVM call's recorded stack byte offsets after unused
 register operands are removed. Reordered offsets retain their values; missing

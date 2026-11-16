@@ -5156,7 +5156,7 @@ bool HighCWriter::positionalDebugSignature(const FunctionSym &FS) const {
   if (!FS.PlatformConvention || !FS.ParamEntryLocations.empty())
     return false;
   if (const auto Signature =
-          libc::floatingCallArguments(FS, Opts.TheArch, Opts.Format);
+          libc::floatingCallArguments(FS, Opts.TheArch, Opts.Format, Dbg);
       Signature && (Opts.TheArch == Arch::X86 || !Signature->Scalars.empty() ||
                     Signature->ReturnElements))
     return true;
