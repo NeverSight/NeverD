@@ -233,6 +233,22 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
                    });
           }
         break;
+      case NdOp::CALL:
+      case NdOp::INDIR_CALL:
+        // Follow a bound numerical result only when the target and every
+        // argument have no provenance in this frame. Spilling that result
+        // beside the saved link does not escape the link slot. Unknown and
+        // pointer-returning calls still provide no such proof.
+        if (const auto Call = Calls.find(&Op);
+            Call != Calls.end() &&
+            Call->second.ReturnKind == NdTypeKind::Float &&
+            First + Bytes <= Call->second.ReturnBytes) {
+          Safe = IsNonFrame(Op.Inputs[0]);
+          for (size_t I = 0; Safe && I < Call->second.Scalars.size(); ++I)
+            Safe = NonFrameBytes(Op.Inputs[I + 1], 0,
+                                 Call->second.Scalars[I].Bytes);
+        }
+        break;
       case NdOp::INT_ZEXT:
       case NdOp::INT_SEXT:
       case NdOp::INT_ADD:
