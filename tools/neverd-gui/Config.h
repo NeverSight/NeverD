@@ -175,9 +175,6 @@ inline constexpr int kJumpDialogHeight = 480;
 /// The match list's first width; the preview takes the rest.
 inline constexpr int kJumpDialogListWidth = 320;
 
-// tools/neverd-gui/app/WheelInput.cpp
-inline constexpr int kTextViewWheelLinesPerNotch = 3;
-
 // tools/neverd-gui/app/ListingView.cpp
 inline constexpr int kListingViewPrefetchMargin = 80;
 inline constexpr int kListingViewTextMargin = 6;
