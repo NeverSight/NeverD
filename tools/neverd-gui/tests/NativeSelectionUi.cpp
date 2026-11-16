@@ -6,6 +6,7 @@
 
 #include "GuiPluginUi.h"
 
+#include <QApplication>
 #include <QLabel>
 
 using namespace neverd::gui::pluginui;
@@ -16,7 +17,7 @@ class SelectionModule final : public QObject, public Module {
   Q_INTERFACES(neverd::gui::pluginui::Module)
 
 public:
-  bool activate(Context &context, QObject &, QString &error) override {
+  bool activate(Context &context, QObject &lifetime, QString &error) override {
     auto *view = context.mountView(
         "selection", {},
         [](QWidget *parent) {
@@ -28,6 +29,11 @@ public:
         error);
     if (!view)
       return false;
+    // What a module keeps below the activation's lifetime may watch its
+    // view.  This one records a view that the host destroyed before it.
+    auto *keeper = new QObject(&lifetime);
+    connect(view, &QObject::destroyed, keeper,
+            [] { qApp->setProperty("nativeSelectionViewWentFirst", true); });
     auto *label = static_cast<QLabel *>(view);
     const auto update = [label](const QJsonObject &selection) {
       label->setText(selection.value("address").toString(

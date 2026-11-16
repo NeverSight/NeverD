@@ -94,9 +94,23 @@ public:
 
   ~Binding() override {
     Host.Bindings.removeOne(this);
+    // What the module made below this lifetime goes first, in the order Qt
+    // deletes children: it may watch the views, and QObject's destructor
+    // would reach it only after them.
+    Broker = nullptr;
+    MenuActions.clear();
+    while (!children().isEmpty())
+      delete children().constFirst();
     const auto views = std::exchange(Views, {});
     for (const auto &view : views)
       delete view.Widget.data();
+  }
+
+  /// Whether the component's own scope is closing, and this binding with it.
+  bool closing() const {
+    const auto state = Host.Jobs.host().snapshot(Scope);
+    return !state || state->Phase == plugin::OwnerPhase::Retiring ||
+           state->Phase == plugin::OwnerPhase::Closed;
   }
 
   QWidget *mountView(const QString &id, const pluginui::Placement &place,
@@ -128,8 +142,15 @@ public:
               if (*guard)
                 (*guard)->hide();
             },
-            [guard](auto done) {
-              delete guard->data();
+            [guard, binding = QPointer<Binding>(this)](auto done) {
+              // A closing component closes its views' scopes first, and the
+              // binding goes a turn of the event loop later.  What the
+              // module keeps below the activation's lifetime may look at a
+              // view until then, on a resize of the workbench for one, so
+              // the binding takes its views along.  A view whose scope
+              // closes alone goes here.
+              if (!binding || !binding->closing())
+                delete guard->data();
               done({});
             },
             issue)) {

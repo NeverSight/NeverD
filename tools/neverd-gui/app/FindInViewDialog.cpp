@@ -156,6 +156,15 @@ void FindInViewDialog::search(CodeText *code, ListingView *listing) {
     Input->setText(seed);
   Pending = true;
   refreshDocument();
+  // The dialog opened before it named the view it searches, and takes the
+  // size of what it shows now unless a person gave it one.  Up to Qt 6.10
+  // the show() below fitted an open dialog again, its layout brought up to
+  // date first; from Qt 6.11 it returns at once for a dialog already shown.
+  if (isVisible() && !testAttribute(Qt::WA_Resized)) {
+    layout()->activate();
+    adjustSize();
+    setAttribute(Qt::WA_Resized, false);
+  }
   show();
   raise();
   activateWindow();

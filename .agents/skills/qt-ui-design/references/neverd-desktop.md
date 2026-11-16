@@ -1050,6 +1050,13 @@ was reviewed against the workbench on 2026-11-14 with real binaries and the
 real engine. These rules hold for it and for any view a plugin floats over
 the workbench.
 
+- A component's views live as long as what its module keeps below the
+  activation's lifetime. The host hides a closing component's views and
+  destroys them with the binding, after the module's own objects, never a
+  turn of the event loop before: an object that watches its views, as the
+  Agent's button follows the workbench's size, would meet a view already
+  gone. That gap crashed the workbench when a file opened while its window
+  was still taking its size.
 - Give a floating entry point the shape people already read as one: an
   accent button with a mark and a short label ("Ask Agent"), at the
   workbench's bottom-right corner, as Office places its Copilot button. A
@@ -1410,6 +1417,60 @@ change: for example, a timestamp beside the filename hides a build suffix, so
 move metadata below it. Separate observable defects from aesthetic judgment.
 Show the actual result and state what was verified. Avoid promising objectively
 perfect aesthetics or using decorative effects as a substitute for hierarchy.
+
+## When the Qt version changes
+
+A new Qt changes what the workbench shows and how it answers input without a
+line of ours changing. The move from Qt 6.8.3 to 6.12 changed seven things a
+person would notice; none of them failed a test before it was looked for.
+
+Compare the two versions before trusting either:
+
+1. Build the same source against the old Qt and the new one. A second
+   worktree with the version floors lowered serves for the old side; it is
+   never committed.
+2. Capture every window with both builds: the audit probe of "Auditing every
+   window" and `NEVERD_APPEARANCE_CAPTURES`. Run each build twice first to
+   learn what differs between two runs of one build (times, free disk space,
+   temporary paths), and compare pixel data, colors apart from alpha: a
+   capture can gain an alpha channel and still show the same colors.
+3. Read the differences by window, sizes first. A dialog that changed width
+   is a finding; a column one pixel wide where a caret stands is not.
+4. Run the GUI test programs inside a real compositor with both builds, and
+   drive the application there with real pointer and key events. A test that
+   opens a popup without an input event fails on the newer Qt under Wayland
+   for its own reason, and a wheel's notch arrives differently than a test
+   builds it.
+5. Read Qt's own changes where this application leans on it: the style sheet
+   style, the common and Fusion styles for every metric and element the
+   workbench style overrides or sets to nothing, and the platform plugin's
+   input and window code. A metric set to nothing is a place where Qt's
+   default stood in, and the default can go.
+6. Prove each cause in Qt's source and each fix by a test that fails with the
+   fix taken out.
+
+What 6.8.3 to 6.12 changed, and where the answer lives:
+
+| What a person saw | Why | Where it is answered |
+|---|---|---|
+| A black band where a window's shadow fades | A Wayland surface keeps the pixel format its native window was made with, and loses its alpha channel unless that was asked first | `WindowFrame::attach` makes the native window again |
+| A tab's close button against the tab's edge | The common style stopped keeping four pixels beside a tab's buttons when `PM_TabBarTabHSpace` is none | `WorkbenchStyle::subElementRect`, `kWorkbenchStyleTabButtonInset` |
+| A spin box 18 pixels wider, its number against the frame | The style sheet adds the buttons' width to the box itself, and 6.12.0 places the editor from the box's edge | `theme.qss` keeps no padding for the buttons; `insetSpinBoxText` |
+| No frame on a table's current cell or a tree's current row | The style sheet names itself as the proxy while the base style draws an item, so the frame meets the sheet's `outline: none` | `WorkbenchStyle::drawControl` frames the item itself |
+| Find in view too narrow for its own text | `show()` on an open dialog no longer fits it again, and a width set on a dialog for its title takes the layout's minimum off it | `FindInViewDialog::search` fits the dialog once it has named its view |
+| The listing and pseudocode scroll half a line a notch | A wheel's notch on Wayland also carries the compositor's distance as pixels | `WheelInput::measuresPixels`; a notch is as many lines as Qt's lists scroll rows |
+| A foreign menu in the Agent's text inputs | Qt Quick Controls give every text input a context menu | `EditMenu.qml` |
+
+Left as Qt now draws them, each a pixel or a few: check boxes and radio
+buttons one pixel smaller (Fusion no longer etches disabled text), a caret in
+the text's own color, a push button's menu chevron three pixels further in, a
+tab's icon painted through its engine, and Qt's own color and font dialogs.
+
+A dialog that fills itself in after it opens fits itself then, with its
+layout brought up to date first (`layout()->activate()`, then
+`adjustSize()`): a second `show()` does nothing from Qt 6.11. Widening every
+framed dialog whenever its layout asks was tried and dropped: a dialog would
+then jump wider with each longer status text and never come back.
 
 ## References and implementation
 
