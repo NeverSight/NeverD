@@ -245,7 +245,7 @@ jobs:
             neverd NeverDMIPSTests NeverDMIPSFlowTests NeverDMIPSIntegerTests \
             NeverDMIPSPipelineTests NeverDMIPSSDKTests NeverDSourceEntryBindingTests \
             NeverDHighControlFlowTests NeverDSourceCallABITests NeverDAArch64AuthenticatedCallTests \
-            NeverDSourceAnchorTests NeverDTypesTests NeverDSessionCAPITests NeverDSessionLLVMTests NeverDDebugInfoTests NeverDLLVMCValueTests NeverDNativeCallSignatureTests NeverDIntegerCallArgumentsTests
+            NeverDSourceAnchorTests NeverDTypesTests NeverDSessionCAPITests NeverDSessionLLVMTests NeverDDebugInfoTests NeverDLLVMCValueTests NeverDNativeCallSignatureTests NeverDIntegerCallArgumentsTests NeverDHighCIntegerWidthTests
       - name: Audit inventory and execute owners
         timeout-minutes: 90
         run: |
@@ -262,7 +262,7 @@ jobs:
                     'NeverDSourceCallABITests', 'NeverDAArch64AuthenticatedCallTests',
                     'NeverDSourceAnchorTests', 'NeverDTypesTests',
                     'NeverDSessionCAPITests', 'NeverDSessionLLVMTests', 'NeverDDebugInfoTests',
-                    'NeverDLLVMCValueTests', 'NeverDNativeCallSignatureTests', 'NeverDIntegerCallArgumentsTests']
+                    'NeverDLLVMCValueTests', 'NeverDNativeCallSignatureTests', 'NeverDIntegerCallArgumentsTests', 'NeverDHighCIntegerWidthTests']
           command = ['ctest', '--test-dir', 'build-mips-ci', '-C', 'Release',
                      '-L', '^(' + '|'.join(owners) + ')$']
           inventory = json.loads(subprocess.check_output(command + ['--show-only=json-v1'], text=True))
@@ -300,7 +300,7 @@ jobs:
               'platform': platform.platform(), 'machine': platform.machine(),
               'cpu_count': os.cpu_count(), 'python': sys.version,
               'llvm_mode': 'published prebuilt LLVM', 'configuration': 'Release',
-              'scope': 'complete MIPS, shared source ABI, source mapping, type-system, DebugInfo and C API/SessionLLVM owners; not the full repository CI profile',
+              'scope': 'complete MIPS, shared source ABI, source mapping, type-system, DebugInfo, integer-width source and C API/SessionLLVM owners; not the full repository CI profile',
               'owners': dict(counts), 'binary_sha256': binary_hashes,
               'commands': {'inventory': command + ['--show-only=json-v1'],
                            'test': command + ['--parallel', '4', '--no-tests=error', '--output-on-failure',
