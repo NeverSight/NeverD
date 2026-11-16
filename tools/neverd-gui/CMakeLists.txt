@@ -423,6 +423,10 @@ if(BUILD_TESTING)
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
     qt_add_executable(neverd-gui-tests tests/WorkbenchTests.cpp)
+    # The controller suite exceeds the standard COFF section limit on MSVC.
+    if(MSVC)
+      target_compile_options(neverd-gui-tests PRIVATE /bigobj)
+    endif()
     if(APPLE)
       target_sources(neverd-gui-tests PRIVATE tests/platform/NativeWindowStateMac.mm)
       target_link_libraries(neverd-gui-tests PRIVATE "-framework ApplicationServices")
