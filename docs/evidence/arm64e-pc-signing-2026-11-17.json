@@ -1,0 +1,963 @@
+{
+  "neverd_revision": "4140bf3243b1ce37d57bc308409f175288649515",
+  "llvm_revision": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
+  "capstone_revision": "ce07fdfca945d55de72325eb6482aaf9dd9297b2",
+  "prebuilt_release_unchanged": "r6",
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43910496915",
+  "ci_revision": "f3bfa5f9a07b9f3a60f5f40e2d14a185917f767f",
+  "package": {
+    "revision": "4140bf3243b1ce37d57bc308409f175288649515",
+    "tag": "neverd-pc-signing-4140bf3243b1",
+    "host": "NeverDArm64eLiftedImageTests",
+    "asset": "pc-signing.tgz",
+    "host_sha256": "707a04a2b8a5552943cef737afa17faf6d6a3b5a6648ebf8df223adb49d66778",
+    "archive_sha256": "9acd127c82bc3dfb52b58fe0bc468b078e03aee1029b44c593ee9571f001d5b7",
+    "host_bytes": 126892736,
+    "archive_bytes": 42325529
+  },
+  "hosts": {
+    "macos-26": {
+      "hardware": {
+        "exit": 0,
+        "text": "Apple M1 (Virtual)"
+      },
+      "os": {
+        "exit": 0,
+        "text": "ProductName:\t\tmacOS\nProductVersion:\t\t26.7.2\nBuildVersion:\t\t25G332"
+      },
+      "compiler": {
+        "exit": 0,
+        "text": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+      },
+      "cpa": {
+        "exit": 1,
+        "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA'"
+      },
+      "cpa2": {
+        "exit": 1,
+        "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA2'"
+      },
+      "host_sha256": "707a04a2b8a5552943cef737afa17faf6d6a3b5a6648ebf8df223adb49d66778",
+      "test_cases": 231,
+      "failed": 0,
+      "skipped": 0,
+      "live_lr_cases": 112,
+      "live_lr_deliveries": 640,
+      "live_lr_cleanup_deliveries": 320,
+      "live_lr_local_catches": 320,
+      "compact_live_lr_deliveries": 320,
+      "pc_recipe_structural_images": 256,
+      "pc_recipe_deliveries": 256,
+      "explicit_recipe_deliveries": 0,
+      "cases": {
+        "NativePACMIALiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativePACMIALiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativePACMIALiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativePACMIALiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedPACMIALiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedPACMIALiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedPACMIALiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedPACMIALiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativeCompactPACMIALiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativeCompactPACMIALiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativeCompactPACMIALiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativeCompactPACMIALiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedCompactPACMIALiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedCompactPACMIALiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedCompactPACMIALiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedCompactPACMIALiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativePACMIBLiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativePACMIBLiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativePACMIBLiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativePACMIBLiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedPACMIBLiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedPACMIBLiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedPACMIBLiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedPACMIBLiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativeCompactPACMIBLiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativeCompactPACMIBLiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativeCompactPACMIBLiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativeCompactPACMIBLiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedCompactPACMIBLiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedCompactPACMIBLiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedCompactPACMIBLiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedCompactPACMIBLiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativeExplicitIALiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeExplicitIALiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeExplicitIALiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeExplicitIALiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedExplicitIALiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedExplicitIALiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedExplicitIALiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedExplicitIALiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeCompactExplicitIALiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeCompactExplicitIALiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeCompactExplicitIALiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeCompactExplicitIALiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedCompactExplicitIALiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedCompactExplicitIALiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedCompactExplicitIALiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedCompactExplicitIALiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeExplicitIBLiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeExplicitIBLiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeExplicitIBLiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeExplicitIBLiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedExplicitIBLiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedExplicitIBLiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedExplicitIBLiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedExplicitIBLiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeCompactExplicitIBLiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeCompactExplicitIBLiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeCompactExplicitIBLiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeCompactExplicitIBLiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedCompactExplicitIBLiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedCompactExplicitIBLiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedCompactExplicitIBLiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedCompactExplicitIBLiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        }
+      },
+      "native_cursor_qualified": true,
+      "explicit_pauth_lr_qualified": false,
+      "pacm_pc_qualified": false,
+      "cpta_qualified": false,
+      "cpta_writeback_qualified": false,
+      "cursor_profiles": {
+        "O0-pacm": {
+          "sha256": "1476eb6e67596a0fd634bc04ac27df0b781260d4d1e347818141579cd364ae51",
+          "bytes": 35208,
+          "cpu_subtype": 2164260866,
+          "status": "passed",
+          "checks": 1058,
+          "signed": [
+            64,
+            64
+          ],
+          "pc_rejected": [
+            0,
+            0
+          ],
+          "key_rejected": [
+            64,
+            64
+          ],
+          "recipe_rejected": [
+            0,
+            0
+          ]
+        },
+        "O0-explicit": {
+          "sha256": "1476eb6e67596a0fd634bc04ac27df0b781260d4d1e347818141579cd364ae51",
+          "bytes": 35208,
+          "cpu_subtype": 2164260866,
+          "status": "unavailable"
+        },
+        "O2-pacm": {
+          "sha256": "0cc63fc4ce5c91b93a089273ffcb8be71ed247c92ba84ac1b391627506ae824d",
+          "bytes": 36024,
+          "cpu_subtype": 2164260866,
+          "status": "passed",
+          "checks": 1058,
+          "signed": [
+            64,
+            64
+          ],
+          "pc_rejected": [
+            0,
+            0
+          ],
+          "key_rejected": [
+            64,
+            64
+          ],
+          "recipe_rejected": [
+            0,
+            0
+          ]
+        },
+        "O2-explicit": {
+          "sha256": "0cc63fc4ce5c91b93a089273ffcb8be71ed247c92ba84ac1b391627506ae824d",
+          "bytes": 36024,
+          "cpu_subtype": 2164260866,
+          "status": "unavailable"
+        }
+      },
+      "cpta_profiles": {
+        "arm64": {
+          "outcome": "undefined-instruction",
+          "sha256": "61ee4ce24e923e16ed8fae952c45890c0a1c5687c5dac5d7cda828889c492c0a",
+          "cpu_subtype": 0,
+          "results": [],
+          "ordinary_memory_writeback": "unchecked"
+        },
+        "arm64e": {
+          "outcome": "undefined-instruction",
+          "sha256": "33cbc4e7d028fe7f0b9521f026fddb0e9e214ae2b65c23d4d63f79832a507346",
+          "cpu_subtype": 2164260866,
+          "results": [],
+          "ordinary_memory_writeback": "unchecked"
+        },
+        "arm64e.x1": {
+          "outcome": "slice-unavailable"
+        }
+      },
+      "report_sha256": {
+        "native-image/qualification.json": "fe4c601a9cd2d81915184bef6aedd2d55352488c24edf963b098371547b39ddc",
+        "native-image/results.xml": "ed423416e87f9c571e7168fcf45b7a1445ff464309a1814f6881ce28ae8c1f64",
+        "cursor/report.json": "77412d72bf690f39340d1b3879dffb166a3efc84439d209ed5736e1674324fbe",
+        "cpta/report.json": "90768d6c19dabbd04f51c0268c8c3974c54956e8f5e2edddfc2909642e441baa"
+      }
+    },
+    "xcode-27": {
+      "hardware": {
+        "exit": 0,
+        "text": "Apple M1 (Virtual)"
+      },
+      "os": {
+        "exit": 0,
+        "text": "ProductName:\t\tmacOS\nProductVersion:\t\t27.2\nBuildVersion:\t\t26B123"
+      },
+      "compiler": {
+        "exit": 0,
+        "text": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.2.0\nThread model: posix\nInstalledDir: /Applications/Xcode_27.1.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+      },
+      "cpa": {
+        "exit": 0,
+        "text": "0"
+      },
+      "cpa2": {
+        "exit": 0,
+        "text": "0"
+      },
+      "host_sha256": "707a04a2b8a5552943cef737afa17faf6d6a3b5a6648ebf8df223adb49d66778",
+      "test_cases": 231,
+      "failed": 0,
+      "skipped": 0,
+      "live_lr_cases": 112,
+      "live_lr_deliveries": 640,
+      "live_lr_cleanup_deliveries": 320,
+      "live_lr_local_catches": 320,
+      "compact_live_lr_deliveries": 320,
+      "pc_recipe_structural_images": 256,
+      "pc_recipe_deliveries": 256,
+      "explicit_recipe_deliveries": 0,
+      "cases": {
+        "NativePACMIALiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativePACMIALiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativePACMIALiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativePACMIALiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedPACMIALiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedPACMIALiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedPACMIALiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedPACMIALiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativeCompactPACMIALiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativeCompactPACMIALiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativeCompactPACMIALiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativeCompactPACMIALiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedCompactPACMIALiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedCompactPACMIALiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedCompactPACMIALiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedCompactPACMIALiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativePACMIBLiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativePACMIBLiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativePACMIBLiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativePACMIBLiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedPACMIBLiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedPACMIBLiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedPACMIBLiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedPACMIBLiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativeCompactPACMIBLiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativeCompactPACMIBLiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativeCompactPACMIBLiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativeCompactPACMIBLiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedCompactPACMIBLiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedCompactPACMIBLiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedCompactPACMIBLiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "LiftedCompactPACMIBLiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 8,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 8
+        },
+        "NativeExplicitIALiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeExplicitIALiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeExplicitIALiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeExplicitIALiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedExplicitIALiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedExplicitIALiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedExplicitIALiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedExplicitIALiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeCompactExplicitIALiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeCompactExplicitIALiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeCompactExplicitIALiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeCompactExplicitIALiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedCompactExplicitIALiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedCompactExplicitIALiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedCompactExplicitIALiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedCompactExplicitIALiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeExplicitIBLiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeExplicitIBLiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeExplicitIBLiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeExplicitIBLiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedExplicitIBLiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedExplicitIBLiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedExplicitIBLiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedExplicitIBLiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeCompactExplicitIBLiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeCompactExplicitIBLiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeCompactExplicitIBLiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "NativeCompactExplicitIBLiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedCompactExplicitIBLiveLRRunsLanguageCleanups": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedCompactExplicitIBLiveLRCatchesLanguageException": {
+          "native_noncall_language_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedCompactExplicitIBLiveLRRunsObjCCleanups": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        },
+        "LiftedCompactExplicitIBLiveLRCatchesObjCException": {
+          "native_noncall_objc_cleanups": 0,
+          "structural_pc_signing_images": 4,
+          "native_pc_recipe_deliveries": 0
+        }
+      },
+      "native_cursor_qualified": true,
+      "explicit_pauth_lr_qualified": false,
+      "pacm_pc_qualified": false,
+      "cpta_qualified": false,
+      "cpta_writeback_qualified": false,
+      "cursor_profiles": {
+        "O0-pacm": {
+          "sha256": "73245957f7f078e6127a18072d61981b37e03530488cb0cc5da64fdaef75a0b5",
+          "bytes": 35208,
+          "cpu_subtype": 2164260866,
+          "status": "passed",
+          "checks": 1058,
+          "signed": [
+            64,
+            64
+          ],
+          "pc_rejected": [
+            0,
+            0
+          ],
+          "key_rejected": [
+            64,
+            64
+          ],
+          "recipe_rejected": [
+            0,
+            0
+          ]
+        },
+        "O0-explicit": {
+          "sha256": "73245957f7f078e6127a18072d61981b37e03530488cb0cc5da64fdaef75a0b5",
+          "bytes": 35208,
+          "cpu_subtype": 2164260866,
+          "status": "unavailable"
+        },
+        "O2-pacm": {
+          "sha256": "8f48a6b38a2beacda2105f832f94440d989c352af45c687d844d155a537b26c6",
+          "bytes": 36024,
+          "cpu_subtype": 2164260866,
+          "status": "passed",
+          "checks": 1058,
+          "signed": [
+            64,
+            64
+          ],
+          "pc_rejected": [
+            0,
+            0
+          ],
+          "key_rejected": [
+            64,
+            64
+          ],
+          "recipe_rejected": [
+            0,
+            0
+          ]
+        },
+        "O2-explicit": {
+          "sha256": "8f48a6b38a2beacda2105f832f94440d989c352af45c687d844d155a537b26c6",
+          "bytes": 36024,
+          "cpu_subtype": 2164260866,
+          "status": "unavailable"
+        }
+      },
+      "cpta_profiles": {
+        "arm64": {
+          "outcome": "undefined-instruction",
+          "sha256": "652b6c214ce70a43f09d40d910100b4f534d4678f485cc6e632fb75505a41c85",
+          "cpu_subtype": 0,
+          "results": [],
+          "ordinary_memory_writeback": "unchecked"
+        },
+        "arm64e": {
+          "outcome": "undefined-instruction",
+          "sha256": "201acbe0b519519f9ad63181f590f924e19ec0f4f5b15ba19dd708025665d5ec",
+          "cpu_subtype": 2164260866,
+          "results": [],
+          "ordinary_memory_writeback": "unchecked"
+        },
+        "arm64e.x1": {
+          "outcome": "did-not-start",
+          "signed_entitlements": {
+            "com.apple.security.hardened-process": true,
+            "com.apple.security.hardened-process.checked-allocations": true,
+            "com.apple.security.hardened-process.checked-allocations.enforce-checked-pointer-arithmetic-overflow": true,
+            "com.apple.security.hardened-process.enhanced-security-version-string": "*"
+          },
+          "sha256": "d68ea6f743adf78f4098ee7bfe2584fadf31aeff0360d02d043b37e2853c0c78",
+          "cpu_subtype": 2147483660,
+          "errno": 86
+        }
+      },
+      "report_sha256": {
+        "native-image/qualification.json": "3343cf1fb18d3b1bb409cce6d6af375557878a870d23791265f4a830b36022c7",
+        "native-image/results.xml": "10f0facc9d7611b0ced329006a2dcf4b6a1a00b47f8d409820cc0e9c2d237076",
+        "cursor/report.json": "c1ee5570cc054ab71592483d85b00959193f928bd3859e232b2e7c5daa90eb30",
+        "cpta/report.json": "61139a6cbb93faf1d7dcc54ddba058b75078a6650c709dcb15349d0a2dbb7989"
+      }
+    }
+  },
+  "local": {
+    "publication_passed": 231,
+    "related_passed": 690,
+    "related_skipped": [
+      "Scratch.DumpRealBinary"
+    ],
+    "clang_format": "22.1.2",
+    "documentation_files": 309,
+    "locales": 10
+  },
+  "windows_frontend": "passed",
+  "first_attempt": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43910103688",
+    "failure": "The replay report path included an extra directory; test host execution had not started. Only the CI path definition changed before the successful run."
+  },
+  "cleanup": {
+    "remote": {
+      "release": {
+        "endpoint": "repos/gmh5225/test_mac_intel/releases/447307484",
+        "status": 404
+      },
+      "asset": {
+        "endpoint": "repos/gmh5225/test_mac_intel/releases/assets/755598190",
+        "status": 404
+      },
+      "tag": {
+        "endpoint": "repos/gmh5225/test_mac_intel/git/ref/tags/neverd-pc-signing-4140bf3243b1",
+        "status": 404
+      }
+    },
+    "ci_retirement_commit": "f65dbd9aad36de9adfd714cedb62ced818835121",
+    "ci_baseline_tree": "db7ed02d796fbb3939a8987056eefd15edec13a6",
+    "ci_baseline_tree_verified": true,
+    "local_diagnostics": {
+      "archive": "arm64e-pc-signing-20261117-evidence.tar.gz",
+      "sha256": "fd584e6d77378ae71a957f36530d6ba9578ef4fca088643068e50bef29b73ba0",
+      "verified_decompressed_hashes": true,
+      "files": 208,
+      "recovery_index": "arm64e-pc-signing-20261117-recovery-index.json"
+    },
+    "local_package_removed_bytes": 42325529
+  }
+}

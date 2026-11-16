@@ -2026,3 +2026,28 @@ structural original/published images. Explicit native execution is conditional
 on an independent instruction probe. PACM native delivery and PC-modifier
 qualification are recorded separately; hint-compatible execution cannot prove
 that the PC contributes to the signature.
+
+Both macos-26 and xcode-27 passed all 231 source-bound cases from
+`4140bf3243b1ce37d57bc308409f175288649515`, with no failed or skipped cases.
+Each host completed 640 live-LR deliveries and resume-cursor checks: 320
+cleanups and 320 local catches, including 320 compact-only deliveries. The
+new PC-recipe cases checked 256 original/published image layouts per host;
+PACM supplied 256 additional native deliveries. The 32 explicit PAuth_LR
+cases completed structural publication and recovery with zero native deliveries.
+The Windows frontend checks passed as well.
+
+Both hosts still report M1 virtual CPUs. Their independent probes qualify
+baseline signing and PACM hint behavior, while explicit PAuth_LR, PACM PC
+dependence and CPTA-on remain unavailable. The repository has no self-hosted
+runner providing those missing features. This result does not establish full
+native arm64e.x1 coverage.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43910496915)
+and [per-host verification record](evidence/arm64e-pc-signing-2026-11-17.json).
+
+Local Release checks passed all 231 publication cases and 690 related recovery,
+language-EH, return-protection, relocation and rewrite-contract cases, with one
+explicit real-binary sample skip. clang-format 22.1.2, whitespace and the
+localized documentation inventory passed. The temporary release, asset and
+tag were removed with verified HTTP 404 responses; the replay repository was
+restored to its baseline tree. The 42,325,529-byte local replay package was
+removed after recording its hash. The active build and prebuilt r6 are retained.
