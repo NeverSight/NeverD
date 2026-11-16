@@ -6362,6 +6362,10 @@ TEST(LLVMCValues, PointerForwardingCarriersDoNotRetypeScalarVarargs) {
       ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, Out, Options));
       const auto Definition = Source.rfind("uint32_t forward_tail(");
       ASSERT_NE(Definition, std::string::npos) << Source;
+      const auto End = Source.find("\n}\n", Definition);
+      ASSERT_NE(End, std::string::npos) << Source;
+      // Execute the unchanged function on the host, outside the target's
+      // surrounding MIPS attribute pragmas.
       // The generic forwarding slot is not a proof that fcntl/ioctl consume a
       // pointer. Check the expression type as well as independently reading
       // va_arg; equal-sized integer/pointer arguments can otherwise hide it.
@@ -6387,7 +6391,7 @@ static int observed(int fd, int command, ...) {
 #define EXACT(x) ((void)sizeof(char[_Generic((x), tail_type: 1, default: -1)]), (x))
 #define fcntl(fd,cmd,x) observed(fd,cmd,EXACT(x))
 #define ioctl(fd,cmd,x) observed(fd,cmd,EXACT(x))
-)" + Source.substr(Definition) +
+)" + Source.substr(Definition, End + 3 - Definition) +
           "\nint main(void) { return forward_tail(" +
           (Pointer ? "&object" : Value) + ") != " + (Pointer ? "2" : "4") +
           "; }\n";
