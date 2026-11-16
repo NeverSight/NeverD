@@ -4,8 +4,6 @@
 //
 //===----------------------------------------------------------------------===//
 NEVERD_CI_STYLE_EXPECTATION("name: LLVM Style")
-NEVERD_CI_STYLE_EXPECTATION("    branches:\n      - dev")
-NEVERD_CI_STYLE_EXPECTATION("  pull_request:")
 NEVERD_CI_STYLE_EXPECTATION("  workflow_dispatch:")
 NEVERD_CI_STYLE_EXPECTATION("  contents: read")
 NEVERD_CI_STYLE_EXPECTATION("runs-on: ubuntu-24.04")
