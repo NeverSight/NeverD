@@ -16,6 +16,7 @@
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
+#include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QUrl>
 #include <QtTest>
@@ -225,6 +226,190 @@ private slots:
     QCOMPARE(reopened.messages().size(), 1);
     QCOMPARE(reopened.messages()[0].toMap()["text"].toString(),
              QString("second project request"));
+  }
+
+  // Removing a project forgets it and deletes nothing: the folder keeps what
+  // was typed, and opens again in the same session because its lock went too.
+  void removedProjectLeavesTheListAndKeepsItsFolder() {
+    QTemporaryDir workspace;
+    QString error;
+    const QString global = workspace.filePath("global");
+    const QString first = workspace.filePath("first");
+    QString firstId;
+    {
+      AgentController controller(global);
+      QVERIFY(controller.initialize(error));
+      QVERIFY(controller.createProject("first", first));
+      firstId = controller.activeId();
+      QVERIFY(controller.createProject("second", workspace.filePath("second")));
+      QVERIFY(controller.createProject("third", workspace.filePath("third")));
+      QVERIFY(controller.selectProject(firstId));
+      controller.setDraft("typed before the project was removed");
+      QSignalSpy errors(&controller, &AgentController::operationError);
+      QVERIFY(controller.removeProject(first));
+      QCOMPARE(errors.count(), 0);
+      QCOMPARE(controller.projects().size(), 2);
+      // The project that followed it is the open one.
+      QCOMPARE(controller.activeProject()["name"].toString(),
+               QString("second"));
+      QVERIFY(controller.draft().isEmpty());
+      QVERIFY(
+          QFileInfo(QDir(first).filePath(".nd-agent/project.json")).isFile());
+      QVERIFY(!controller.removeProject(first));
+      QVERIFY(controller.openProject(first));
+      QCOMPARE(errors.count(), 0);
+      QCOMPARE(controller.activeId(), firstId);
+      QCOMPARE(controller.draft(),
+               QString("typed before the project was removed"));
+      // One that is not open leaves without changing which one is.
+      QVERIFY(controller.removeProject(workspace.filePath("third")));
+      QCOMPARE(controller.activeId(), firstId);
+      QVERIFY(controller.removeProject(first));
+      QCOMPARE(controller.activeProject()["name"].toString(),
+               QString("second"));
+      QCOMPARE(errors.count(), 0);
+      QVERIFY(controller.prepareClose());
+    }
+    AgentController reopened(global);
+    QVERIFY(reopened.initialize(error));
+    QCOMPARE(reopened.projects().size(), 1);
+    QCOMPARE(reopened.unavailableProjects().size(), 0);
+    QCOMPARE(reopened.activeProject()["name"].toString(), QString("second"));
+  }
+
+  void removingTheLastProjectLeavesNoneOpen() {
+    QTemporaryDir workspace;
+    QString error;
+    const QString global = workspace.filePath("global");
+    const QString only = workspace.filePath("only");
+    {
+      AgentController controller(global);
+      QVERIFY(controller.initialize(error));
+      QVERIFY(controller.createProject("only", only));
+      controller.setDraft("a saved request");
+      QVERIFY(controller.saveRequest(""));
+      QFile note(QDir(only).filePath("note.txt"));
+      QVERIFY(note.open(QIODevice::WriteOnly));
+      note.close();
+      controller.refreshFiles();
+      QCOMPARE(controller.files().size(), 1);
+      QVERIFY(controller.removeProject(only));
+      QVERIFY(controller.activeId().isEmpty());
+      QVERIFY(controller.activeProject().isEmpty());
+      QCOMPARE(controller.projects().size(), 0);
+      QCOMPARE(controller.messages().size(), 0);
+      QCOMPARE(controller.files().size(), 0);
+      // Nothing is open to take a draft, and nothing is written for one.
+      controller.setDraft("typed with no project open");
+      QVERIFY(controller.draft().isEmpty());
+      QVERIFY(controller.prepareClose());
+    }
+    QJsonObject config;
+    QVERIFY(ProjectStore::readJson(QDir(global).filePath("config.json"), config,
+                                   error));
+    QCOMPARE(config["projects"].toArray().size(), 0);
+    AgentController reopened(global);
+    QVERIFY(reopened.initialize(error));
+    QVERIFY(reopened.activeId().isEmpty());
+    QVERIFY(reopened.openProject(only));
+    QCOMPARE(reopened.messages().size(), 1);
+  }
+
+  // A folder deleted outside the Agent: the project leaves the list all the
+  // same, and its folder is not made again to hold a draft.
+  void aProjectWhoseFolderIsGoneIsRemovedWithoutMakingItAgain() {
+#ifdef Q_OS_WIN
+    // Windows keeps a folder in place while a file in it is open, and an
+    // open project holds its lock file.
+    QSKIP("An open project's folder cannot be deleted on Windows.");
+#endif
+    QTemporaryDir workspace;
+    QString error;
+    const QString lost = workspace.filePath("lost");
+    AgentController controller(workspace.filePath("global"));
+    QVERIFY(controller.initialize(error));
+    QVERIFY(controller.createProject("kept", workspace.filePath("kept")));
+    QVERIFY(controller.createProject("lost", lost));
+    controller.setDraft("typed before the folder was deleted");
+    QVERIFY(QDir(lost).removeRecursively());
+    QSignalSpy errors(&controller, &AgentController::operationError);
+    QVERIFY(controller.removeProject(lost));
+    QCOMPARE(errors.count(), 0);
+    QVERIFY(!QFileInfo::exists(lost));
+    QCOMPARE(controller.projects().size(), 1);
+    QCOMPARE(controller.activeProject()["name"].toString(), QString("kept"));
+    QVERIFY(controller.prepareClose());
+    QVERIFY(!QFileInfo::exists(lost));
+  }
+
+  // Folders that are gone when the Agent starts stay listed, each on its own
+  // row with the reason, until the person removes them or they come back.
+  void foldersGoneAtStartStayListedUntilRemoved() {
+    QTemporaryDir workspace;
+    QString error;
+    const QString global = workspace.filePath("global");
+    const QString away = workspace.filePath("away");
+    const QString gone = workspace.filePath("gone");
+    const QString parked = workspace.filePath("parked");
+    {
+      AgentController controller(global);
+      QVERIFY(controller.initialize(error));
+      QVERIFY(controller.createProject("kept", workspace.filePath("kept")));
+      QVERIFY(controller.createProject("away", away));
+      QVERIFY(controller.createProject("gone", gone));
+      QVERIFY(controller.prepareClose());
+    }
+    QVERIFY(QDir().rename(away, parked));
+    QVERIFY(QDir(gone).removeRecursively());
+    {
+      AgentController controller(global);
+      QSignalSpy errors(&controller, &AgentController::operationError);
+      QVERIFY(controller.initialize(error));
+      QCoreApplication::processEvents();
+      // The rows say it; no sheet interrupts the start.
+      QCOMPARE(errors.count(), 0);
+      QCOMPARE(controller.projects().size(), 1);
+      const auto unavailable = controller.unavailableProjects();
+      QCOMPARE(unavailable.size(), 2);
+      QCOMPARE(unavailable[0].toMap()["name"].toString(), QString("away"));
+      QCOMPARE(unavailable[0].toMap()["directory"].toString(), away);
+      QVERIFY(!unavailable[0].toMap()["issue"].toString().isEmpty());
+      // Two missing folders are two entries: removing one keeps the other.
+      QVERIFY(controller.removeProject(gone));
+      QCOMPARE(controller.unavailableProjects().size(), 1);
+      QCOMPARE(controller.unavailableProjects()[0].toMap()["name"].toString(),
+               QString("away"));
+      QVERIFY(!controller.removeProject(gone));
+      QVERIFY(!QFileInfo::exists(gone));
+      // Trying one that is still away says why and keeps its row.
+      QVERIFY(!controller.openProject(away));
+      QCOMPARE(errors.count(), 1);
+      QCOMPARE(controller.unavailableProjects().size(), 1);
+      QVERIFY(controller.prepareClose());
+    }
+    QVERIFY(QDir().rename(parked, away));
+    {
+      AgentController controller(global);
+      QVERIFY(controller.initialize(error));
+      QCOMPARE(controller.projects().size(), 2);
+      QCOMPARE(controller.unavailableProjects().size(), 0);
+      QVERIFY(controller.prepareClose());
+    }
+    QVERIFY(QDir().rename(away, parked));
+    AgentController controller(global);
+    QVERIFY(controller.initialize(error));
+    QCOMPARE(controller.unavailableProjects().size(), 1);
+    // It comes back while the Agent runs: a click on its row opens it.
+    QVERIFY(QDir().rename(parked, away));
+    QVERIFY(controller.openProject(away));
+    QCOMPARE(controller.unavailableProjects().size(), 0);
+    QCOMPARE(controller.projects().size(), 2);
+    QCOMPARE(controller.activeProject()["name"].toString(), QString("away"));
+    QVERIFY(controller.prepareClose());
+    QJsonObject config;
+    QVERIFY(ProjectStore::readJson(QDir(global).filePath("config.json"), config,
+                                   error));
+    QCOMPARE(config["projects"].toArray().size(), 2);
   }
 
   void sharedMemoryFollowsToggleWithoutCopyingConversations() {

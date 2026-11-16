@@ -803,6 +803,26 @@ Analysis revision %3 · %4</source>
         <source>Set a persistent goal…</source>
         <translation>지속 목표 설정…</translation>
     </message>
+    <message>
+        <source>Remove project…</source>
+        <translation>프로젝트 제거…</translation>
+    </message>
+    <message>
+        <source>Try opening again</source>
+        <translation>다시 열어 보기</translation>
+    </message>
+    <message>
+        <source>Remove %1?</source>
+        <translation>%1 프로젝트를 목록에서 제거할까요?</translation>
+    </message>
+    <message>
+        <source>This only takes the project off the list. Nothing on disk is deleted: its folder, conversation and memory stay where they are, and Open project brings it back.</source>
+        <translation>프로젝트를 목록에서만 제거합니다. 디스크의 내용은 아무것도 삭제되지 않습니다. 폴더, 대화, 메모리는 그대로 남으며 &apos;프로젝트 열기&apos;로 다시 불러올 수 있습니다.</translation>
+    </message>
+    <message>
+        <source>Remove project</source>
+        <translation>프로젝트 제거</translation>
+    </message>
 </context>
 <context>
     <name>MarkdownView</name>
@@ -1877,6 +1897,10 @@ Notes, scripts and reports appear here.</source>
     <message>
         <source>An API key is sent only over HTTPS, or over HTTP to this computer. Use an HTTPS address for a remote server.</source>
         <translation>API 키는 HTTPS 또는 이 컴퓨터로의 HTTP 연결로만 전송됩니다. 원격 서버에는 HTTPS 주소를 사용하세요.</translation>
+    </message>
+    <message>
+        <source>Stop this project&apos;s analysis before removing it.</source>
+        <translation>프로젝트를 제거하기 전에 이 프로젝트의 분석을 중지하세요.</translation>
     </message>
 </context>
 <context>

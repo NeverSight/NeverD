@@ -40,6 +40,8 @@ ApplicationWindow {
 
     property bool sideOpen: false
     property string menuObject: ""
+    property string removeName: ""
+    property string removeDirectory: ""
     property string lastProject: ""
     property string noticeText: ""
     property var sideViews: []
@@ -92,6 +94,11 @@ ApplicationWindow {
             else { sideViews = sideViews.concat([entry]); sideIndex = sideViews.length - 1 }
         }
         sideOpen = true
+    }
+    function confirmRemove(name, directory) {
+        removeName = name
+        removeDirectory = directory
+        removeDialog.open()
     }
     function showContext(projectId, objectId, origin) {
         const point = origin.mapToItem(Overlay.overlay, 0, origin.height)
@@ -170,6 +177,11 @@ ApplicationWindow {
             onOpenRequested: openProjectDialog.open()
             onSettingsRequested: window.showSettings()
             onMenuRequested: (projectId, objectId, origin) => window.showContext(projectId, objectId, origin)
+            onUnavailableMenuRequested: (name, directory, origin) => {
+                window.removeName = name
+                window.removeDirectory = directory
+                window.popupAt(unavailableMenu, origin)
+            }
         }
         Rectangle { visible: Theme.highContrast; Layout.fillHeight: true; Layout.preferredWidth: 1; color: Theme.paneLine }
         Rectangle {
@@ -373,6 +385,18 @@ ApplicationWindow {
         ThemedMenuItem { text: qsTr("Show project files in the sidebar"); visible: !window.menuObject; onTriggered: window.openSide("files", "") }
         ThemedMenuItem { text: qsTr("Open side chat"); onTriggered: window.openSide("chat", "") }
         ThemedMenuItem { text: qsTr("Add analysis object…"); visible: !window.menuObject; onTriggered: objectFileDialog.open() }
+        ThemedSeparator { visible: !window.menuObject }
+        ThemedMenuItem {
+            text: qsTr("Remove project…")
+            visible: !window.menuObject
+            onTriggered: window.confirmRemove(backend.activeProject.name, backend.activeProject.directory)
+        }
+    }
+    ThemedMenu {
+        id: unavailableMenu
+        ThemedMenuItem { text: qsTr("Try opening again"); onTriggered: backend.openProject(window.removeDirectory) }
+        ThemedSeparator {}
+        ThemedMenuItem { text: qsTr("Remove project…"); onTriggered: removeDialog.open() }
     }
     ThemedMenu {
         id: viewMenu
@@ -438,11 +462,53 @@ ApplicationWindow {
         background: Surface { glass: true; radius: Theme.radius; color: Theme.background }
         header: Label {
             text: parent.title
+            // A title may carry a name the person chose.
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
             color: Theme.text
             font.pointSize: Theme.titlePointSize
             font.weight: Font.Medium
             padding: Theme.dialogPadding
             bottomPadding: 0
+        }
+    }
+    Sheet {
+        id: removeDialog
+        title: qsTr("Remove %1?").arg(window.removeName)
+        onOpened: removeButton.forceActiveFocus()
+        contentItem: ColumnLayout {
+            spacing: 12
+            Label {
+                text: qsTr("This only takes the project off the list. Nothing on disk is deleted: its folder, conversation and memory stay where they are, and Open project brings it back.")
+                color: Theme.text
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+            }
+            Label {
+                text: window.removeDirectory
+                textFormat: Text.PlainText
+                color: Theme.secondary
+                Layout.fillWidth: true
+                // A path reads left to right; it still starts where the
+                // sentence above it does.
+                horizontalAlignment: Text.AlignLeft
+                elide: Text.ElideMiddle
+            }
+            RowLayout {
+                Layout.topMargin: 10
+                Item { Layout.fillWidth: true }
+                ActionButton { text: qsTr("Cancel"); onClicked: removeDialog.close() }
+                ActionButton {
+                    id: removeButton
+                    text: qsTr("Remove project")
+                    primary: true
+                    onClicked: {
+                        // A refusal says why in its own sheet.
+                        removeDialog.close()
+                        backend.removeProject(window.removeDirectory)
+                    }
+                }
+            }
         }
     }
     Sheet {
@@ -623,7 +689,9 @@ ApplicationWindow {
                 window.lastProject = backend.activeId
                 window.sideViews = []
                 window.sideIndex = 0
-                if (window.sideOpen) window.openSide("files", "")
+                // The panel shows a project's views; with none open it closes.
+                if (!backend.activeId) window.sideOpen = false
+                else if (window.sideOpen) window.openSide("files", "")
             }
         }
     }

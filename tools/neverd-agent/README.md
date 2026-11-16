@@ -294,6 +294,19 @@ conversations and evidence references, retires cached analysis processes, and
 updates side chats. Rebinding is refused while that project is analyzing or
 applying changes, including if work starts while the file is being hashed.
 
+Right-click a project and choose **Remove project…** to take it off the list.
+Removing forgets the project and deletes nothing: its folder and the
+`.nd-agent` state in it stay where they are, and **Open project…** brings the
+project back with its conversation and memory. A draft that was not saved yet
+is written first. A project that is analyzing or applying changes is not
+removed until it stops.
+
+A listed folder that does not open when the application starts (moved,
+deleted, or on a drive that is away) keeps a quieter row in the side list, and
+its tool tip gives the folder and the reason. A click on the row tries it
+again, and its menu removes it from the list. Nothing is written into a folder
+that is gone.
+
 State uses versioned UTF-8 JSON and `QSaveFile` replacement. Malformed state is
 reported without resetting it. A data-directory lock and retained project locks
 prevent two desktop instances from overwriting the same loaded project. These
