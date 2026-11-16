@@ -18,6 +18,9 @@
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallPtrSet.h"
+
 #include <functional>
 #include <map>
 #include <set>
@@ -152,6 +155,59 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   };
   MedDefSiteIndex Definitions(Function);
   safety::detail::ExactPhiGraph Graph(Function);
+  std::optional<llvm::DenseMap<int, const MedBlock *>> BlocksById;
+  const auto BeforeFrameEscape = [&](const MedBlock &LoadBlock,
+                                     size_t LoadIndex) {
+    if (!BlocksById) {
+      BlocksById.emplace();
+      for (const auto &Block : Function.Blocks)
+        BlocksById->try_emplace(Block.Id, &Block);
+    }
+    // An external read cannot recover this function's frame address before
+    // any operation publishes it. Private stack saves are harmless here;
+    // external stores and calls need a stronger memory contract. Visit every
+    // predecessor, including a loop's later operations on its back edge.
+    llvm::SmallPtrSet<const MedBlock *, 16> Seen;
+    std::vector<std::pair<const MedBlock *, size_t>> Pending{
+        {&LoadBlock, LoadIndex}};
+    bool ReachesEntry = false;
+    while (!Pending.empty()) {
+      const auto [Block, End] = Pending.back();
+      Pending.pop_back();
+      if (End == Block->Ops.size() && !Seen.insert(Block).second)
+        continue;
+      if (!Graph.hasCompleteNormalPredecessors(*Block))
+        return false;
+      for (size_t I = 0; I < End; ++I) {
+        if (!Remaining)
+          return false;
+        --Remaining;
+        const auto &Op = Block->Ops[I];
+        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+          return false;
+        if (Op.Opcode != NdOp::STORE)
+          continue;
+        const auto *Address = safety::detail::memoryAddress(Op);
+        const auto *Value = safety::detail::storedValue(Op);
+        const auto At = Address ? Offset(*Address) : std::nullopt;
+        if (!Value || !At || *At >= 0 ||
+            *At < -limits::ir::kSourceFrameAnalysisMaxFrame ||
+            *At + Value->Size > 0)
+          return false;
+      }
+      if (Block->StartAddr == Function.Entry)
+        ReachesEntry = true;
+      else if (Block->Preds.empty())
+        return false;
+      for (int Id : Block->Preds) {
+        const auto Found = BlocksById->find(Id);
+        if (Found == BlocksById->end())
+          return false;
+        Pending.emplace_back(Found->second, Found->second->Ops.size());
+      }
+    }
+    return ReachesEntry;
+  };
   std::map<Key, bool> Results;
   std::set<Key> Active;
   const auto &TRI = getTargetRegInfo(Target);
@@ -187,8 +243,8 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
       });
     } else if (!D.Ambiguous && D.Op) {
       const auto &Op = *D.Op;
-      // Only explicit value producers can exclude frame-derived bits. Unknown
-      // loads, calls and unknown state have no non-frame provenance here.
+      // Only explicit value producers and reads before a possible frame
+      // escape can exclude frame-derived bits. Unknown state stays unknown.
       switch (Op.Opcode) {
       case NdOp::COPY:
       case NdOp::CAST:
@@ -213,7 +269,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         }
         break;
       case NdOp::LOAD:
-        if (Op.NumInputs == 1 && QualifiedMemory)
+        if (Op.NumInputs == 1 && QualifiedMemory) {
           if (const auto At = Offset(Op.Inputs[0]);
               At && *At < 0 && *At + Op.Output.Size <= 0) {
             // Fixed stack arguments are loaded into explicit call operands.
@@ -231,7 +287,10 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
                    llvm::all_of(Reaching.Values, [&](const MedVar &Stored) {
                      return NonFrameBytes(Stored, First, Bytes);
                    });
+          } else if (!At && IsNonFrame(Op.Inputs[0])) {
+            Safe = BeforeFrameEscape(*D.Block, &Op - D.Block->Ops.data());
           }
+        }
         break;
       case NdOp::CALL:
       case NdOp::INDIR_CALL:

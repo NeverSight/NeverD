@@ -156,168 +156,217 @@ TEST_P(MIPS16Pipeline,
   for (unsigned Bytes : {4u, 8u})
     for (bool FP64 : {false, true})
       for (bool Repeated : {false, true})
-        for (unsigned Mutation : {0u, 1u, 2u}) {
-          const bool BadHelper = Mutation == 1;
-          const bool FrameArgument = Mutation == 2;
-          SCOPED_TRACE(Bytes);
-          SCOPED_TRACE(Mutation);
-          SCOPED_TRACE(FP64);
-          SCOPED_TRACE(Repeated);
-          SCOPED_TRACE(BadHelper);
-          mips_test::ELFBytes File(GetParam());
-          File.Bytes.resize(0x180);
-          File.put(52 + 16, File.Bytes.size(), 4);
-          File.put(52 + 20, File.Bytes.size(), 4);
-          File.abiFlags();
-          File.Bytes[0xe5] = FP64 ? 2 : 1;
-          File.Bytes[0xe7] = FP64 ? 6 : 1;
-          File.put(36, FP64 ? 0x74001200 : 0x74001000, 4);
-          File.put(24, 0x10100, 4);
-          File.put(0xec, 0x400, 4);
-          // GCC 12.4 o32 MIPS16 float return, including SAVE/RESTORE and JALX.
-          // The classic caller observes f0; the compressed body retains v0.
-          std::vector<uint32_t> Caller = {0x27bdffe8, 0xafb00010, 0xafbf0014,
-                                          0x74004050, 0x00a08025, 0x8fbf0014,
-                                          0x44020000, 0x02021026, 0x8fb00010,
-                                          0x03e00008, 0x27bd0018};
-          std::vector<uint16_t> Callee = {0x9c40, 0x64c1, 0x1c00, 0x4058,
-                                          0x6500, 0x6441, 0xe8a0, 0x6500};
-          if (Bytes == 8) {
-            // The caller spills the numerical result beside its saved RA.
-            // That store must retain the call's non-frame value provenance.
-            Caller = {0x27bdffe0, 0xafb00018, 0xafbf001c, 0x74004050,
-                      0x00a08025, 0xf7a00010, 0x8fbf001c, 0x8fa20014,
-                      0x8fa30010, 0x00221642, 0x02038026, 0x00501026,
-                      0x8fb00018, 0x03e00008, 0x27bd0020};
-            Callee = {0x9cc0, 0x64c1, 0x9ca1, 0x6746, 0x1c00,
-                      0x4058, 0x6765, 0x6441, 0xe8a0, 0x6500};
-          }
-          if (FrameArgument)
-            Caller.insert(Caller.begin() + 3, 0x03a02025); // move a0,sp.
-          if (Repeated)
-            Callee.insert(Callee.begin() + (Bytes == 8 ? 7 : 5),
-                          {0x1c00, 0x4058, 0x6500});
-          std::vector<uint32_t> Helper = {0x03e00008, 0x44820000};
-          if (Bytes == 8) {
-            const bool Little = GetParam() == Arch::MIPS32EL;
-            const unsigned Low = 2 + !Little, High = 2 + Little;
-            Helper = {0x44800000 | (Low << 16), 0x03e00008,
-                      (FP64 ? 0x44e00000 : 0x44800800) | (High << 16)};
-          }
-          if (BadHelper)
-            Helper.back() = 0xafa20000;
-          for (unsigned I = 0; I < Caller.size(); ++I)
-            File.put(0x100 + 4 * I, Caller[I], 4);
-          for (unsigned I = 0; I < Callee.size(); ++I)
-            File.put(0x140 + 2 * I, Callee[I], 2);
-          for (unsigned I = 0; I < Helper.size(); ++I)
-            File.put(0x160 + 4 * I, Helper[I], 4);
-          ELFLoader Loader;
-          auto Image = Loader.loadBuffer(File.buffer());
-          ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
-          for (const auto &[Address, Size, Name, Mode] :
-               {std::tuple{0x10100u, static_cast<unsigned>(Caller.size() * 4),
-                           "kernel", InstructionMode::MIPSClassic},
-                std::tuple{0x10140u, static_cast<unsigned>(Callee.size() * 2),
-                           "fp_callee", InstructionMode::MIPS16},
-                std::tuple{0x10160u, static_cast<unsigned>(Helper.size() * 4),
-                           "transfer_leaf", InstructionMode::MIPSClassic}}) {
-            auto Symbol = Symbol::makeFunc(Address, Size);
-            Symbol.Name = Name;
-            Image->Symbols.push_back(std::move(Symbol));
-            Image->MIPS->CodeModeEntries.emplace(Address, Mode);
-            Image->MIPS->CodeRegions.push_back({Address, Address + Size, Mode});
-          }
-          class ReturnDebug final : public NullDebugContext {
-          public:
-            unsigned Bytes = 0;
-            std::optional<FunctionSym>
-            resolveFunction(va_t Address) const override {
-              if (Address != 0x10140)
-                return std::nullopt;
-              FunctionSym F;
-              F.Addr = Address;
-              F.Name = "fp_callee";
-              F.ReturnType = NdType::makeFloat(Bytes);
-              auto Pointer = NdType::makePtr(NdType::makeInt(4, false));
-              Pointer->Size = Pointer->Alignment = 4;
-              F.Params = {{"input", std::move(Pointer)}};
-              F.PrototypeLibrary = UserPrototypeLibrary.str();
-              return F;
-            }
-            bool hasAuthenticatedFunctionSignatures() const override {
-              return true;
-            }
-            bool hasInfo() const override { return true; }
-          } Debug;
-          Debug.Bytes = Bytes;
-          enum class Surface { HighC, LLVMC, MachineLift };
-          for (Surface S :
-               {Surface::HighC, Surface::LLVMC, Surface::MachineLift}) {
-            SCOPED_TRACE(int(S));
-            const bool LLVM = S == Surface::LLVMC;
-            llvm::LLVMContext Context;
-            PipelineOptions Options;
-            Options.OnlyFunctionEntries = {0x10100, 0x10140};
-            Options.LiftMode = S != Surface::HighC;
-            Options.SourceProjection = LLVM;
-            Options.EmitDumpOutput = false;
-            auto Result = Pipeline().run(*Image, Context, Options, &Debug);
-            if (BadHelper || FrameArgument || S == Surface::MachineLift) {
-              EXPECT_FALSE(Result.Success);
+        for (bool FloatingInput : {false, true})
+          for (unsigned Mutation : {0u, 1u, 2u, 3u}) {
+            if (!FloatingInput && Mutation == 3)
               continue;
+            const bool BadHelper = Mutation == 1;
+            const bool FrameArgument = Mutation == 2;
+            const bool ExternalEscape = Mutation == 3;
+            SCOPED_TRACE(FloatingInput);
+            SCOPED_TRACE(Bytes);
+            SCOPED_TRACE(Mutation);
+            SCOPED_TRACE(FP64);
+            SCOPED_TRACE(Repeated);
+            SCOPED_TRACE(BadHelper);
+            mips_test::ELFBytes File(GetParam());
+            File.Bytes.resize(0x1e0);
+            File.put(52 + 16, File.Bytes.size(), 4);
+            File.put(52 + 20, File.Bytes.size(), 4);
+            File.abiFlags();
+            File.Bytes[0xe5] = FP64 ? 2 : 1;
+            File.Bytes[0xe7] = FP64 ? 6 : 1;
+            File.put(36, FP64 ? 0x74001200 : 0x74001000, 4);
+            File.put(24, 0x10100, 4);
+            File.put(0xec, 0x400, 4);
+            // GCC 12.4 o32 MIPS16 float return, including SAVE/RESTORE and
+            // JALX. The classic caller observes f0; the compressed body retains
+            // v0.
+            std::vector<uint32_t> Caller = {0x27bdffe8, 0xafb00010, 0xafbf0014,
+                                            0x74004060, 0x00a08025, 0x8fbf0014,
+                                            0x44020000, 0x02021026, 0x8fb00010,
+                                            0x03e00008, 0x27bd0018};
+            std::vector<uint16_t> Callee = {0x9c40, 0x64c1, 0x1c00, 0x4068,
+                                            0x6500, 0x6441, 0xe8a0, 0x6500};
+            if (Bytes == 8) {
+              // The caller spills the numerical result beside its saved RA.
+              // That store must retain the call's non-frame value provenance.
+              Caller = {0x27bdffe0, 0xafb00018, 0xafbf001c, 0x74004060,
+                        0x00a08025, 0xf7a00010, 0x8fbf001c, 0x8fa20014,
+                        0x8fa30010, 0x00221642, 0x02038026, 0x00501026,
+                        0x8fb00018, 0x03e00008, 0x27bd0020};
+              Callee = {0x9cc0, 0x64c1, 0x9ca1, 0x6746, 0x1c00,
+                        0x4068, 0x6765, 0x6441, 0xe8a0, 0x6500};
             }
-            ASSERT_TRUE(
-                Result.CallEntryFloatingArguments.get().contains(0x10140));
-            ASSERT_TRUE(Result.Success) << Result.Error;
-            EXPECT_EQ(Result.MedIRVerifierFailures, 0u);
-            const auto Low = llvm::find_if(Result.LowFuncs, [](const auto &F) {
-              return F.Entry == 0x10140;
-            });
-            ASSERT_NE(Low, Result.LowFuncs.end());
-            unsigned OriginalCalls = 0;
-            for (const auto &Block : Low->Blocks)
-              for (const auto &Op : Block.Ops)
-                OriginalCalls += Op.Opcode == NdOp::CALL && Op.NumInputs &&
-                                 Op.Inputs[0].isConst() &&
-                                 Op.Inputs[0].Offset == 0x10160;
-            EXPECT_EQ(OriginalCalls, Repeated ? 2u : 1u);
-            const auto Transports = pipeline_detail::mips16ReturnTransports(
-                *Image, Result.LowFuncs);
-            EXPECT_EQ(Transports.size(), 1u);
-            const auto Projected = pipeline_detail::projectMIPS16ReturnCalls(
-                *Image, *Low, Transports);
-            ASSERT_TRUE(Projected);
-            auto BoundaryError = validateLowInstructionBoundaries(
-                *Projected, LowInstructionBoundaryRequirement::Required);
-            EXPECT_FALSE(bool(BoundaryError))
-                << llvm::toString(std::move(BoundaryError));
-            for (const auto &Function : Result.MedFuncs)
-              for (const auto &Call : Function.CallInfos)
-                EXPECT_NE(Call.TargetAddr, 0x10160u);
-            CEmitterOptions Emit;
-            Emit.TheArch = GetParam();
-            Emit.Format = BinaryFormat::ELF;
-            Emit.Image = &*Image;
-            std::string Text;
-            llvm::raw_string_ostream Out(Text);
-            if (LLVM) {
-              ASSERT_TRUE(Result.LlvmModule);
-              EXPECT_FALSE(
-                  llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
-              ASSERT_TRUE(
-                  LLVMCEmitter().emit(*Result.LlvmModule, Out, Emit, &Debug));
-            } else {
-              ASSERT_TRUE(
-                  HighCEmitter().emit(Result.HighFuncs, Out, Emit, &Debug));
+            if (FrameArgument)
+              Caller.insert(Caller.begin() + 3,
+                            FloatingInput ? 0x449d6000 : 0x03a02025);
+            std::vector<uint32_t> Adapter;
+            if (FloatingInput) {
+              for (auto &Word : Caller)
+                if (Word == 0x74004060)
+                  Word = 0x0c004070;
+              Caller.insert(Caller.begin(),
+                            Bytes == 8 ? 0xd48c0000 : 0xc48c0000);
+              if (ExternalEscape)
+                Caller.insert(Caller.begin(), 0xac9d0000); // sw sp,0(a0).
+              Callee = {0x64c1, 0x6744, 0x1c00, 0x4068,
+                        0x6500, 0x6441, 0xe8a0, 0x6500};
+              if (Bytes == 8)
+                Callee.insert(Callee.begin() + 2, 0x6765); // move v1,a1.
+              Adapter = {0x3c190001, 0x27390181, 0x03200008, 0x44046000};
+              if (Bytes == 8) {
+                const bool Little = GetParam() == Arch::MIPS32EL;
+                Adapter = {0x3c190001, 0x27390181,
+                           0x44006000u | ((Little ? 4u : 5u) << 16), 0x03200008,
+                           (FP64 ? 0x44606000u : 0x44006800u) |
+                               ((Little ? 5u : 4u) << 16)};
+              }
             }
-            EXPECT_NE(Text.find(Bytes == 4 ? "float fp_callee("
-                                           : "double fp_callee("),
-                      std::string::npos)
-                << Text;
-            EXPECT_EQ(Text.find("transfer_leaf("), std::string::npos) << Text;
+            if (Repeated) {
+              const auto Restore = llvm::find(Callee, 0x6441);
+              ASSERT_NE(Restore, Callee.end());
+              Callee.insert(Restore, {0x1c00, 0x4068, 0x6500});
+            }
+            std::vector<uint32_t> Helper = {0x03e00008, 0x44820000};
+            if (Bytes == 8) {
+              const bool Little = GetParam() == Arch::MIPS32EL;
+              const unsigned Low = 2 + !Little, High = 2 + Little;
+              Helper = {0x44800000 | (Low << 16), 0x03e00008,
+                        (FP64 ? 0x44e00000 : 0x44800800) | (High << 16)};
+            }
+            if (BadHelper)
+              Helper.back() = 0xafa20000;
+            for (unsigned I = 0; I < Caller.size(); ++I)
+              File.put(0x100 + 4 * I, Caller[I], 4);
+            for (unsigned I = 0; I < Callee.size(); ++I)
+              File.put(0x180 + 2 * I, Callee[I], 2);
+            for (unsigned I = 0; I < Helper.size(); ++I)
+              File.put(0x1a0 + 4 * I, Helper[I], 4);
+            for (unsigned I = 0; I < Adapter.size(); ++I)
+              File.put(0x1c0 + 4 * I, Adapter[I], 4);
+            ELFLoader Loader;
+            auto Image = Loader.loadBuffer(File.buffer());
+            ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+            for (const auto &[Address, Size, Name, Mode] :
+                 {std::tuple{0x10100u, static_cast<unsigned>(Caller.size() * 4),
+                             "kernel", InstructionMode::MIPSClassic},
+                  std::tuple{0x10180u, static_cast<unsigned>(Callee.size() * 2),
+                             "fp_callee", InstructionMode::MIPS16},
+                  std::tuple{0x101a0u, static_cast<unsigned>(Helper.size() * 4),
+                             "transfer_leaf", InstructionMode::MIPSClassic}}) {
+              auto Symbol = Symbol::makeFunc(Address, Size);
+              Symbol.Name = Name;
+              Image->Symbols.push_back(std::move(Symbol));
+              Image->MIPS->CodeModeEntries.emplace(Address, Mode);
+              Image->MIPS->CodeRegions.push_back(
+                  {Address, Address + Size, Mode});
+            }
+            if (FloatingInput) {
+              auto Entry = Symbol::makeFunc(0x101c0, Adapter.size() * 4);
+              Entry.Name = "classic_entry";
+              Image->Symbols.push_back(std::move(Entry));
+              Image->MIPS->CodeModeEntries.emplace(
+                  0x101c0, InstructionMode::MIPSClassic);
+              Image->MIPS->CodeRegions.push_back(
+                  {0x101c0, 0x101c0 + Adapter.size() * 4,
+                   InstructionMode::MIPSClassic});
+            }
+            class ReturnDebug final : public NullDebugContext {
+            public:
+              unsigned Bytes = 0;
+              bool FloatingInput = false;
+              std::optional<FunctionSym>
+              resolveFunction(va_t Address) const override {
+                if (Address != 0x10180)
+                  return std::nullopt;
+                FunctionSym F;
+                F.Addr = Address;
+                F.Name = "fp_callee";
+                F.ReturnType = NdType::makeFloat(Bytes);
+                auto Pointer = NdType::makePtr(NdType::makeInt(4, false));
+                Pointer->Size = Pointer->Alignment = 4;
+                F.Params = {{"input", FloatingInput ? NdType::makeFloat(Bytes)
+                                                    : std::move(Pointer)}};
+                F.PrototypeLibrary = UserPrototypeLibrary.str();
+                return F;
+              }
+              bool hasAuthenticatedFunctionSignatures() const override {
+                return true;
+              }
+              bool hasInfo() const override { return true; }
+            } Debug;
+            Debug.Bytes = Bytes;
+            Debug.FloatingInput = FloatingInput;
+            enum class Surface { HighC, LLVMC, MachineLift };
+            for (Surface S :
+                 {Surface::HighC, Surface::LLVMC, Surface::MachineLift}) {
+              SCOPED_TRACE(int(S));
+              const bool LLVM = S == Surface::LLVMC;
+              llvm::LLVMContext Context;
+              PipelineOptions Options;
+              Options.OnlyFunctionEntries = {0x10100, 0x10180};
+              Options.LiftMode = S != Surface::HighC;
+              Options.SourceProjection = LLVM;
+              Options.EmitDumpOutput = false;
+              auto Result = Pipeline().run(*Image, Context, Options, &Debug);
+              if (BadHelper || FrameArgument || ExternalEscape ||
+                  S == Surface::MachineLift) {
+                EXPECT_FALSE(Result.Success);
+                continue;
+              }
+              ASSERT_TRUE(
+                  Result.CallEntryFloatingArguments.get().contains(0x10180));
+              ASSERT_TRUE(Result.Success) << Result.Error;
+              EXPECT_EQ(Result.MedIRVerifierFailures, 0u);
+              const auto Low =
+                  llvm::find_if(Result.LowFuncs, [](const auto &F) {
+                    return F.Entry == 0x10180;
+                  });
+              ASSERT_NE(Low, Result.LowFuncs.end());
+              unsigned OriginalCalls = 0;
+              for (const auto &Block : Low->Blocks)
+                for (const auto &Op : Block.Ops)
+                  OriginalCalls += Op.Opcode == NdOp::CALL && Op.NumInputs &&
+                                   Op.Inputs[0].isConst() &&
+                                   Op.Inputs[0].Offset == 0x101a0;
+              EXPECT_EQ(OriginalCalls, Repeated ? 2u : 1u);
+              const auto Transports = pipeline_detail::mips16ReturnTransports(
+                  *Image, Result.LowFuncs);
+              EXPECT_EQ(Transports.size(), 1u);
+              const auto Projected = pipeline_detail::projectMIPS16ReturnCalls(
+                  *Image, *Low, Transports);
+              ASSERT_TRUE(Projected);
+              auto BoundaryError = validateLowInstructionBoundaries(
+                  *Projected, LowInstructionBoundaryRequirement::Required);
+              EXPECT_FALSE(bool(BoundaryError))
+                  << llvm::toString(std::move(BoundaryError));
+              for (const auto &Function : Result.MedFuncs)
+                for (const auto &Call : Function.CallInfos)
+                  EXPECT_NE(Call.TargetAddr, 0x101a0u);
+              CEmitterOptions Emit;
+              Emit.TheArch = GetParam();
+              Emit.Format = BinaryFormat::ELF;
+              Emit.Image = &*Image;
+              std::string Text;
+              llvm::raw_string_ostream Out(Text);
+              if (LLVM) {
+                ASSERT_TRUE(Result.LlvmModule);
+                EXPECT_FALSE(
+                    llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+                ASSERT_TRUE(
+                    LLVMCEmitter().emit(*Result.LlvmModule, Out, Emit, &Debug));
+              } else {
+                ASSERT_TRUE(
+                    HighCEmitter().emit(Result.HighFuncs, Out, Emit, &Debug));
+              }
+              EXPECT_NE(Text.find(Bytes == 4 ? "float fp_callee("
+                                             : "double fp_callee("),
+                        std::string::npos)
+                  << Text;
+              EXPECT_EQ(Text.find("transfer_leaf("), std::string::npos) << Text;
+            }
           }
-        }
 }
 
 TEST_P(MIPS16Pipeline, DoubleParameterNamesDistinguishWholeFromPhysicalWords) {
