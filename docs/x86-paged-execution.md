@@ -219,6 +219,13 @@ it does not observe hardware pausing within an instruction. The accessed-write
 backing fixture checks progress recovery, but its unchanged descriptor value
 does not independently establish descriptor read-count preservation.
 
+The subsequent merge with upstream `f90e7e6c6a` adds independent GUI and
+C-type-parser changes. At `3c633eaadf`, each SDK passes 333 further integration
+cases with no skips: the complete type-parser suite including the local Windows
+kernel PDB, segment/return progress, legacy source and SDK adapters. These
+integration counts are separate from the primary qualification above; the
+x86 runtime sources and production r6 pin are unchanged.
+
 ## Instruction-step debug events
 
 Add `"paged_debug": true` to a paged V6 instruction-region export and bind a

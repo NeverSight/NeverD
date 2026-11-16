@@ -5006,7 +5006,8 @@ RAM access. Generated cases use both emitters, O0/O2 and host-x64 Clang/NeverC.
 `AliasesMatchOriginalInstructions` requires KVM pre-fault support, uses a fresh
 VM/vCPU per stream and compares all represented CPU state and physical RAM,
 including guest page tables. Pre-faulting builds only stage-2 mappings: it
-avoids cold-backing retries without warming or rewriting guest translations.
+removes the observed cold-stage-2 discrepancy without warming or rewriting
+guest translations.
 Run on both pinned core classes. See the [segment continuation evidence](evidence/x86-code64-segment-continuation-2026-11-16.json).
 
 Faultable RETF is covered by `PagedFarReturnsMatchOriginalCPU` and

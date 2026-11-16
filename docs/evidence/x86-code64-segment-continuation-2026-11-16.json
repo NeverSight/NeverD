@@ -4166,5 +4166,682 @@
     "The shared code64 return/event path, complete paged-source and legacy-source, instruction-boundary and SDK integration suites were rebuilt and replayed. The earlier full lower-paging qualification remains independent; untouched lower legacy owners are not recounted here.",
     "Code64 descriptor-tail canonicality, remaining mode-aware owners, real/unreal/VM86 composition, software SMM/SGX, unbound asynchronous producers and physical SGX qualification remain open.",
     "Production LLVM remains neverd-llvm-v23.0.0-r6. This work does not publish a new LLVM release or change source gitlinks."
-  ]
+  ],
+  "dev_integration": {
+    "source_commit": "3c633eaadfd607be738bba6ed6dc7388a4e7a61a",
+    "source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+    "upstream_commit": "f90e7e6c6a6795fb9b3de490005243b4fa192d8a",
+    "changed_library_and_test_files": [
+      "lib/types/CTypeParser.cpp",
+      "unittests/types/TypeParseTests.cpp"
+    ],
+    "scope": "Rebuild and qualify the merged source after independent upstream GUI and CTypeParser source-position batching changes; x86 production and regression sources are unchanged from the primary qualified implementation.",
+    "runs": {
+      "build-x86-native-integration-build": {
+        "working_source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_head": "3c633eaadfd607be738bba6ed6dc7388a4e7a61a",
+        "source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "env",
+          "GIT_CONFIG_COUNT=2",
+          "GIT_CONFIG_KEY_0=http.curloptResolve",
+          "GIT_CONFIG_VALUE_0=github.com:443:4.237.22.38",
+          "GIT_CONFIG_KEY_1=http.proxy",
+          "GIT_CONFIG_VALUE_1=",
+          "/usr/bin/python3",
+          "scripts/build.py",
+          "build-x86-native",
+          "--target",
+          "NeverDTypeParseTests",
+          "NeverDX64PagedExecutionTests",
+          "NeverDX86LegacySourceTests",
+          "neverd",
+          "neverd_shared",
+          "--parallel",
+          "4"
+        ],
+        "environment": {},
+        "binaries": {},
+        "source_unchanged": true,
+        "exit_code": 0,
+        "seconds": 23.169177839066833,
+        "log": "build-x86-native-integration-build.log",
+        "log_sha256": "dcdf87b28816e6aad8ec5df43363640b99c69e0be8abb968f40b80faf44fd401"
+      },
+      "build-x86-native-integration-kernel-types": {
+        "working_source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_head": "3c633eaadfd607be738bba6ed6dc7388a4e7a61a",
+        "source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "2400",
+          "taskset",
+          "-c",
+          "4",
+          "build-x86-native/bin/NeverDTypeParseTests",
+          "--gtest_filter=*",
+          "--gtest_output=xml:/mnt/data/neverd-code64-segment-integration-20261116/build-x86-native-integration-kernel-types.xml"
+        ],
+        "environment": {
+          "NEVERD_TYPES_NTKRNLMP": "<host>/code/NeverD-ida-parity/build-source-register-inputs-20261102/kernel-inputs/ntkrnlmp.pdb",
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-code64-segment-integration-20261116/build-x86-native-integration-kernel-types-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-segment-integration-20261116/build-x86-native-integration-kernel-types-exports",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "store"
+        },
+        "binaries": {
+          "build-x86-native/bin/NeverDTypeParseTests": "8e676b8633a9700a0af46ff1e0aadfbfbc2946708e09b54de9dc612742ee3fc6",
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86-native/bin/libneverd.so": "9435808621588bc8864d24abe97f19ce3359b719bbada279bcb69a0a6d80ef3e",
+          "build-x86-native/bin/neverd": "57afdfd56a596b39b555c518418bdbb3a0ee17539e845c7eb9512888d4e8d95d"
+        },
+        "inputs": {
+          "<host>/code/NeverD-ida-parity/build-source-register-inputs-20261102/kernel-inputs/ntkrnlmp.pdb": "b06e15ab4cbcb75bc5f85880b0554a0978b58cae521f6f8f2847ead8fc2e87f8"
+        },
+        "source_unchanged": true,
+        "exit_code": 0,
+        "seconds": 2.7751487409695983,
+        "log": "build-x86-native-integration-kernel-types.log",
+        "log_sha256": "495d16f1b19e89d14b8439a339cc07670a2fc479c521414c97f21dde84252d52",
+        "tests": {
+          "tests": "65",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "0.77",
+          "timestamp": "2026-11-16T02:26:50.875",
+          "name": "AllTests"
+        },
+        "skipped": [],
+        "properties": {},
+        "report": "build-x86-native-integration-kernel-types.xml",
+        "report_sha256": "0f57fde1c226c5fcadfdd9aeb81b15fd1513eacaf87b807d98046a62555b08fd"
+      },
+      "build-x86-native-integration-segment": {
+        "working_source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_head": "3c633eaadfd607be738bba6ed6dc7388a4e7a61a",
+        "source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "2400",
+          "taskset",
+          "-c",
+          "4",
+          "build-x86-native/bin/NeverDX64PagedExecutionTests",
+          "--gtest_filter=X64PagedSegmentContinuationTest.*:X64PagedReturnContinuationTest.*",
+          "--gtest_output=xml:/mnt/data/neverd-code64-segment-integration-20261116/build-x86-native-integration-segment.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-code64-segment-integration-20261116/build-x86-native-integration-segment-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-segment-integration-20261116/build-x86-native-integration-segment-exports",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "store"
+        },
+        "binaries": {
+          "build-x86-native/bin/NeverDX64PagedExecutionTests": "2e82389b4504e4835b54c589f522c68ed6e26ea9cb25a2863224d8f162480277",
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86-native/bin/libneverd.so": "9435808621588bc8864d24abe97f19ce3359b719bbada279bcb69a0a6d80ef3e",
+          "build-x86-native/bin/neverd": "57afdfd56a596b39b555c518418bdbb3a0ee17539e845c7eb9512888d4e8d95d"
+        },
+        "source_unchanged": true,
+        "exit_code": 0,
+        "seconds": 14.816812820034102,
+        "log": "build-x86-native-integration-segment.log",
+        "log_sha256": "506a9905cb6a4a098cbedc39b58ccd1869d139fdb975ae1fafb47f72b7a91904",
+        "tests": {
+          "tests": "17",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "12.985",
+          "timestamp": "2026-11-16T02:25:03.598",
+          "name": "AllTests"
+        },
+        "skipped": [],
+        "properties": {
+          "original_segment_alias_comparisons": 12
+        },
+        "report": "build-x86-native-integration-segment.xml",
+        "report_sha256": "5005b3995059fd476237f82afa34ed16744259c7a8a3fe7d851599cfda30a9da"
+      },
+      "build-x86-native-integration-source": {
+        "working_source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_head": "3c633eaadfd607be738bba6ed6dc7388a4e7a61a",
+        "source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "2400",
+          "taskset",
+          "-c",
+          "4",
+          "build-x86-native/bin/NeverDX86LegacySourceTests",
+          "--gtest_filter=*",
+          "--gtest_output=xml:/mnt/data/neverd-code64-segment-integration-20261116/build-x86-native-integration-source.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-code64-segment-integration-20261116/build-x86-native-integration-source-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-segment-integration-20261116/build-x86-native-integration-source-exports",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "store"
+        },
+        "binaries": {
+          "build-x86-native/bin/NeverDX86LegacySourceTests": "ddfd0670d79fcf621870adb3fd8a57c955d711da81b4c7f64c12ef285f259ccf",
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86-native/bin/libneverd.so": "9435808621588bc8864d24abe97f19ce3359b719bbada279bcb69a0a6d80ef3e",
+          "build-x86-native/bin/neverd": "57afdfd56a596b39b555c518418bdbb3a0ee17539e845c7eb9512888d4e8d95d"
+        },
+        "source_unchanged": true,
+        "exit_code": 0,
+        "seconds": 15.53644506400451,
+        "log": "build-x86-native-integration-source.log",
+        "log_sha256": "37ba0533a92fbb792344a8ba3f0af0d36941e2d2d7da36734b8a1a64599e2ac2",
+        "tests": {
+          "tests": "249",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "13.43",
+          "timestamp": "2026-11-16T02:25:21.044",
+          "name": "AllTests"
+        },
+        "skipped": [],
+        "properties": {
+          "branch_selection_comparisons": 256
+        },
+        "report": "build-x86-native-integration-source.xml",
+        "report_sha256": "017d06480d6b4cfdeaad35e5b5e5e3b021c949c3eca259ab53cfbf224aeba117"
+      },
+      "build-x86-native-integration-sdk": {
+        "working_source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_head": "3c633eaadfd607be738bba6ed6dc7388a4e7a61a",
+        "source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "2400",
+          "taskset",
+          "-c",
+          "4",
+          "/usr/bin/python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "pluginsdk/python/tests",
+          "-p",
+          "test_legacy_source_integration.py",
+          "-v"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-code64-segment-integration-20261116/build-x86-native-integration-sdk-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-segment-integration-20261116/build-x86-native-integration-sdk-exports",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "store",
+          "PYTHONPATH": "pluginsdk/python",
+          "NEVERD_TEST_LIBNEVERD": "build-x86-native/bin/libneverd.so"
+        },
+        "binaries": {
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86-native/bin/libneverd.so": "9435808621588bc8864d24abe97f19ce3359b719bbada279bcb69a0a6d80ef3e",
+          "build-x86-native/bin/neverd": "57afdfd56a596b39b555c518418bdbb3a0ee17539e845c7eb9512888d4e8d95d"
+        },
+        "source_unchanged": true,
+        "exit_code": 0,
+        "seconds": 2.07113064895384,
+        "log": "build-x86-native-integration-sdk.log",
+        "log_sha256": "ba818d393b3412a96b830cb7196173249e569a0fbafe11df10f9ac0860297c0e"
+      },
+      "build-x86-integration-build": {
+        "working_source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_head": "3c633eaadfd607be738bba6ed6dc7388a4e7a61a",
+        "source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "env",
+          "GIT_CONFIG_COUNT=2",
+          "GIT_CONFIG_KEY_0=http.curloptResolve",
+          "GIT_CONFIG_VALUE_0=github.com:443:4.237.22.38",
+          "GIT_CONFIG_KEY_1=http.proxy",
+          "GIT_CONFIG_VALUE_1=",
+          "/usr/bin/python3",
+          "scripts/build.py",
+          "build-x86",
+          "--target",
+          "NeverDTypeParseTests",
+          "NeverDX64PagedExecutionTests",
+          "NeverDX86LegacySourceTests",
+          "neverd",
+          "neverd_shared",
+          "--parallel",
+          "4"
+        ],
+        "environment": {},
+        "binaries": {},
+        "source_unchanged": true,
+        "exit_code": 0,
+        "seconds": 21.906646791147068,
+        "log": "build-x86-integration-build.log",
+        "log_sha256": "b8e9aec5c4741280b78ab779f4c4edf0975aee08400e0d74c482a90ab57f1e8b"
+      },
+      "build-x86-integration-kernel-types": {
+        "working_source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_head": "3c633eaadfd607be738bba6ed6dc7388a4e7a61a",
+        "source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "2400",
+          "taskset",
+          "-c",
+          "12",
+          "build-x86/bin/NeverDTypeParseTests",
+          "--gtest_filter=*",
+          "--gtest_output=xml:/mnt/data/neverd-code64-segment-integration-20261116/build-x86-integration-kernel-types.xml"
+        ],
+        "environment": {
+          "NEVERD_TYPES_NTKRNLMP": "<host>/code/NeverD-ida-parity/build-source-register-inputs-20261102/kernel-inputs/ntkrnlmp.pdb",
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-code64-segment-integration-20261116/build-x86-integration-kernel-types-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-segment-integration-20261116/build-x86-integration-kernel-types-exports",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "check"
+        },
+        "binaries": {
+          "build-x86/bin/NeverDTypeParseTests": "1b401fd927f271d1be012060462afaf93be1d60b21952ce64d75d6fc8ebfb4b2",
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86/bin/libneverd.so": "ac19c49cbc1470f56326cd0d3cc8a79b922c872ad2eb55ea80234b942580c4e8",
+          "build-x86/bin/neverd": "01a53f79a4f3a5e6b28596bba7877321d9fdb6389def7186ff765f500a9bd893"
+        },
+        "inputs": {
+          "<host>/code/NeverD-ida-parity/build-source-register-inputs-20261102/kernel-inputs/ntkrnlmp.pdb": "b06e15ab4cbcb75bc5f85880b0554a0978b58cae521f6f8f2847ead8fc2e87f8"
+        },
+        "source_unchanged": true,
+        "exit_code": 0,
+        "seconds": 3.0641596510540694,
+        "log": "build-x86-integration-kernel-types.log",
+        "log_sha256": "3e9816e57cd1274c927b91dfac277e65cecd834c62175fd833b09ebbd9abce8f",
+        "tests": {
+          "tests": "65",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "1.267",
+          "timestamp": "2026-11-16T02:26:50.876",
+          "name": "AllTests"
+        },
+        "skipped": [],
+        "properties": {},
+        "report": "build-x86-integration-kernel-types.xml",
+        "report_sha256": "b4ceaccbc76374bcf6d8da702a3022bac81c2e0b659da1eced7261c8b3b80fa2"
+      },
+      "build-x86-integration-segment": {
+        "working_source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_head": "3c633eaadfd607be738bba6ed6dc7388a4e7a61a",
+        "source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "2400",
+          "taskset",
+          "-c",
+          "12",
+          "build-x86/bin/NeverDX64PagedExecutionTests",
+          "--gtest_filter=X64PagedSegmentContinuationTest.*:X64PagedReturnContinuationTest.*",
+          "--gtest_output=xml:/mnt/data/neverd-code64-segment-integration-20261116/build-x86-integration-segment.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-code64-segment-integration-20261116/build-x86-integration-segment-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-segment-integration-20261116/build-x86-integration-segment-exports",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "check"
+        },
+        "binaries": {
+          "build-x86/bin/NeverDX64PagedExecutionTests": "2104d0dcdc025fbf59eac753cb818cc963e6357ca7baa4d8060288066ad646c8",
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86/bin/libneverd.so": "ac19c49cbc1470f56326cd0d3cc8a79b922c872ad2eb55ea80234b942580c4e8",
+          "build-x86/bin/neverd": "01a53f79a4f3a5e6b28596bba7877321d9fdb6389def7186ff765f500a9bd893"
+        },
+        "source_unchanged": true,
+        "exit_code": 0,
+        "seconds": 24.495517847128212,
+        "log": "build-x86-integration-segment.log",
+        "log_sha256": "b5640662394ba80bbe7f9f0e69dad2097d2245fde2b66cd7984fd159afa2f708",
+        "tests": {
+          "tests": "17",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "22.64",
+          "timestamp": "2026-11-16T02:25:02.322",
+          "name": "AllTests"
+        },
+        "skipped": [],
+        "properties": {
+          "original_segment_alias_comparisons": 12
+        },
+        "report": "build-x86-integration-segment.xml",
+        "report_sha256": "b5640e3cd1bb479cb36c7809fd2fbd75c20c91e90748bbf17cc7b9ce155b1c48"
+      },
+      "build-x86-integration-source": {
+        "working_source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_head": "3c633eaadfd607be738bba6ed6dc7388a4e7a61a",
+        "source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "2400",
+          "taskset",
+          "-c",
+          "12",
+          "build-x86/bin/NeverDX86LegacySourceTests",
+          "--gtest_filter=*",
+          "--gtest_output=xml:/mnt/data/neverd-code64-segment-integration-20261116/build-x86-integration-source.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-code64-segment-integration-20261116/build-x86-integration-source-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-segment-integration-20261116/build-x86-integration-source-exports",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "check"
+        },
+        "binaries": {
+          "build-x86/bin/NeverDX86LegacySourceTests": "c19c168c86ab4fe788c59160c04417204d73e84aec86af82957ef56c860308ef",
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86/bin/libneverd.so": "ac19c49cbc1470f56326cd0d3cc8a79b922c872ad2eb55ea80234b942580c4e8",
+          "build-x86/bin/neverd": "01a53f79a4f3a5e6b28596bba7877321d9fdb6389def7186ff765f500a9bd893"
+        },
+        "source_unchanged": true,
+        "exit_code": 0,
+        "seconds": 25.065349910175428,
+        "log": "build-x86-integration-source.log",
+        "log_sha256": "25efed13e907c2ddfc3c21b28b7bcf0b789426d966057080ecf562b0e3033073",
+        "tests": {
+          "tests": "249",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "23.15",
+          "timestamp": "2026-11-16T02:25:29.056",
+          "name": "AllTests"
+        },
+        "skipped": [],
+        "properties": {
+          "branch_selection_comparisons": 256
+        },
+        "report": "build-x86-integration-source.xml",
+        "report_sha256": "7afa8da9ad144e453d15c6d3f66a0f7e2b7f172b5af0f94202c9849bf4fdfc03"
+      },
+      "build-x86-integration-sdk": {
+        "working_source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_head": "3c633eaadfd607be738bba6ed6dc7388a4e7a61a",
+        "source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "2400",
+          "taskset",
+          "-c",
+          "12",
+          "/usr/bin/python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "pluginsdk/python/tests",
+          "-p",
+          "test_legacy_source_integration.py",
+          "-v"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-code64-segment-integration-20261116/build-x86-integration-sdk-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-segment-integration-20261116/build-x86-integration-sdk-exports",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "check",
+          "PYTHONPATH": "pluginsdk/python",
+          "NEVERD_TEST_LIBNEVERD": "build-x86/bin/libneverd.so"
+        },
+        "binaries": {
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86/bin/libneverd.so": "ac19c49cbc1470f56326cd0d3cc8a79b922c872ad2eb55ea80234b942580c4e8",
+          "build-x86/bin/neverd": "01a53f79a4f3a5e6b28596bba7877321d9fdb6389def7186ff765f500a9bd893"
+        },
+        "source_unchanged": true,
+        "exit_code": 0,
+        "seconds": 1.9604095849208534,
+        "log": "build-x86-integration-sdk.log",
+        "log_sha256": "6ab28b5c003e4bd0944e758187ccc0ff67ce3c67b2669948348f8cb28c96b719"
+      }
+    },
+    "by_sdk": {
+      "build-x86-native": {
+        "passed": 333,
+        "skipped": 0
+      },
+      "build-x86": {
+        "passed": 333,
+        "skipped": 0
+      }
+    },
+    "initial_types_without_kernel_input": {
+      "build-x86-native": {
+        "working_source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_head": "3c633eaadfd607be738bba6ed6dc7388a4e7a61a",
+        "source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "2400",
+          "taskset",
+          "-c",
+          "4",
+          "build-x86-native/bin/NeverDTypeParseTests",
+          "--gtest_filter=*",
+          "--gtest_output=xml:/mnt/data/neverd-code64-segment-integration-20261116/build-x86-native-integration-types.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-code64-segment-integration-20261116/build-x86-native-integration-types-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-segment-integration-20261116/build-x86-native-integration-types-exports",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "1",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "store"
+        },
+        "binaries": {
+          "build-x86-native/bin/NeverDTypeParseTests": "8e676b8633a9700a0af46ff1e0aadfbfbc2946708e09b54de9dc612742ee3fc6",
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86-native/bin/libneverd.so": "9435808621588bc8864d24abe97f19ce3359b719bbada279bcb69a0a6d80ef3e",
+          "build-x86-native/bin/neverd": "57afdfd56a596b39b555c518418bdbb3a0ee17539e845c7eb9512888d4e8d95d"
+        },
+        "source_unchanged": true,
+        "exit_code": 0,
+        "seconds": 1.8102994421496987,
+        "log": "build-x86-native-integration-types.log",
+        "log_sha256": "1e9b4071081f3f0beba1c1307bec06a2df1e2e236c0a157e037d3d2769a66abb",
+        "tests": {
+          "tests": "65",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "0.026",
+          "timestamp": "2026-11-16T02:24:59.389",
+          "name": "AllTests"
+        },
+        "skipped": [
+          {
+            "name": "ReadsBackEveryKernelTypeAsRendered",
+            "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/types/TypeParseTests.cpp",
+            "line": "2593",
+            "status": "run",
+            "result": "skipped",
+            "time": "0.",
+            "timestamp": "2026-11-16T02:24:59.415",
+            "classname": "TypeParseKernel"
+          }
+        ],
+        "properties": {},
+        "report": "build-x86-native-integration-types.xml",
+        "report_sha256": "7960f19543df657001c0fb1dadebe3639a1d10fbc4dd96dcd563c0ac4f33f199"
+      },
+      "build-x86": {
+        "working_source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_head": "3c633eaadfd607be738bba6ed6dc7388a4e7a61a",
+        "source_tree": "43e4fd7104d0fc5b53c5634f85c4b43606e3b726",
+        "source_status": "",
+        "working_directory": "<host>/code/NeverD-worktrees/x86-instruction-completion",
+        "command": [
+          "timeout",
+          "2400",
+          "taskset",
+          "-c",
+          "12",
+          "build-x86/bin/NeverDTypeParseTests",
+          "--gtest_filter=*",
+          "--gtest_output=xml:/mnt/data/neverd-code64-segment-integration-20261116/build-x86-integration-types.xml"
+        ],
+        "environment": {
+          "NEVERD_THREADS": "1",
+          "NEVERD_TEST_NEVERC": "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc",
+          "TMPDIR": "/mnt/data/neverd-code64-segment-integration-20261116/build-x86-integration-types-tmp",
+          "NEVERD_ISA_REGRESSION_ARTIFACT_DIR": "/mnt/data/neverd-code64-segment-integration-20261116/build-x86-integration-types-exports",
+          "NEVERD_TEST_REPEAT_DEBUG_GROUP_BYTES": "16",
+          "NEVERD_TEST_LEGACY_MULTIPLY_FLAGS": "sign-parity-zero",
+          "NEVERD_TEST_LEGACY_DIVIDE_FLAGS": "preserve",
+          "NEVERD_TEST_LEGACY_FAST_SYSTEM": "intel",
+          "NEVERD_TEST_LEGACY_ALIGNMENT": "before",
+          "NEVERD_TEST_LEGACY_CALL": "check"
+        },
+        "binaries": {
+          "build-x86/bin/NeverDTypeParseTests": "1b401fd927f271d1be012060462afaf93be1d60b21952ce64d75d6fc8ebfb4b2",
+          "<host>/code/NeverD-worktrees/x86-native-intrinsics-neverc/build-neverc/bin/neverc": "4537077edba0102cc184c63f4a9afbf490be7e2fed212e60f87cec66cfc8044f",
+          "build-x86/bin/libneverd.so": "ac19c49cbc1470f56326cd0d3cc8a79b922c872ad2eb55ea80234b942580c4e8",
+          "build-x86/bin/neverd": "01a53f79a4f3a5e6b28596bba7877321d9fdb6389def7186ff765f500a9bd893"
+        },
+        "source_unchanged": true,
+        "exit_code": 0,
+        "seconds": 1.8664495591074228,
+        "log": "build-x86-integration-types.log",
+        "log_sha256": "ffaa1c62f5c3205eeb2ff8723c4bb93841137969412d0705f9056edff5335bf3",
+        "tests": {
+          "tests": "65",
+          "failures": "0",
+          "disabled": "0",
+          "errors": "0",
+          "time": "0.027",
+          "timestamp": "2026-11-16T02:24:58.115",
+          "name": "AllTests"
+        },
+        "skipped": [
+          {
+            "name": "ReadsBackEveryKernelTypeAsRendered",
+            "file": "<host>/code/NeverD-worktrees/x86-instruction-completion/unittests/types/TypeParseTests.cpp",
+            "line": "2593",
+            "status": "run",
+            "result": "skipped",
+            "time": "0.",
+            "timestamp": "2026-11-16T02:24:58.142",
+            "classname": "TypeParseKernel"
+          }
+        ],
+        "properties": {},
+        "report": "build-x86-integration-types.xml",
+        "report_sha256": "e0689dd3be222b970f6d913f8e80903f109cb64c39f2f3432a580978ccd36e6a"
+      }
+    },
+    "kernel_input_note": "Initial parser runs explicitly skipped the optional Windows kernel PDB because its environment binding was absent. An existing local kernel PDB was found and hashed; the final complete parser replay enables that input on both SDKs.",
+    "totals": {
+      "passed": 666,
+      "skipped": 0,
+      "failures": 0
+    },
+    "artifact_hashes": {
+      "index": "artifact-hashes.json",
+      "sha256": "dc437d8cd5d477dbc2921cf948c8c9be04e00b72a77456858f9e7148b0bf8127",
+      "counts": {
+        "build-x86-native-segment": 516,
+        "build-x86-native-source": 1812,
+        "build-x86-segment": 516,
+        "build-x86-source": 1812
+      }
+    },
+    "dependencies": {
+      "build-x86-native": {
+        "neverd-build-receipt.json": "1bb2347ca5179462955db49dfda7b1c06374ce112ff1afec13e02ef5f37d25b7",
+        "neverd-dependency-inputs.json": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c"
+      },
+      "build-x86": {
+        "neverd-build-receipt.json": "91139c6d334470594832caaeb5cdd991c5797d00da06c9ccb5e884e63d10137f",
+        "neverd-dependency-inputs.json": "0d185e80e033e56c739f8efa6c9652c56f7005bd399558403138262879bfc48c"
+      }
+    },
+    "boundaries": [
+      "These integration counts are separate from the primary 524-pass/1-LA57-skip qualification per SDK.",
+      "Both emitters, host-x64 Clang/NeverC and original-CPU alias comparisons remain covered by the segment replay.",
+      "No x86 runtime sources, source gitlinks or production LLVM release pin changed in the integration."
+    ]
+  }
 }
