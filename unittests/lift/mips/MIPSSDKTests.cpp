@@ -21,6 +21,8 @@
 
 #include <filesystem>
 #include <string>
+#include <tuple>
+#include <vector>
 
 using namespace neverd;
 
@@ -260,6 +262,100 @@ INSTANTIATE_TEST_SUITE_P(ByteOrders, MicroMIPSSDK,
                          ::testing::Values(Arch::MIPS32, Arch::MIPS32EL));
 
 class MIPS16SDK : public MIPSSDK {};
+
+TEST_P(MIPS16SDK, CallTreeFollowsProvenClassicEntryTransportWithoutTypes) {
+  for (unsigned Change = 0; Change < 4; ++Change) {
+    SCOPED_TRACE(Change);
+    mips_test::ELFBytes File(GetParam());
+    File.Bytes.resize(0x3a0);
+    File.put(52 + 16, File.Bytes.size(), 4);
+    File.put(52 + 20, File.Bytes.size(), 4);
+    File.abiFlags();
+    File.Bytes[0xe5] = 1;
+    File.Bytes[0xe7] = 1;
+    File.put(36, 0x74001000, 4);
+    File.put(0xec, 0x400, 4);
+    // GNU's linked classic caller, compressed body and local entry stub.
+    const uint32_t Caller[] = {0x44856000, 0x27bdffe8, 0xafbf0014, 0x0c004058,
+                               0x00802825, 0x8fbf0014, 0x03e00008, 0x27bd0018};
+    const uint16_t Callee[] = {0x6745, 0xe820, 0xea8e};
+    const uint32_t Adapter[] = {0x3c190001, 0x27390141, 0x03200008, 0x44046000};
+    for (unsigned I = 0; I < std::size(Caller); ++I)
+      File.put(0x100 + I * 4, Caller[I], 4);
+    for (unsigned I = 0; I < std::size(Callee); ++I)
+      File.put(0x140 + I * 2, Callee[I], 2);
+    for (unsigned I = 0; I < std::size(Adapter); ++I)
+      File.put(0x160 + I * 4, Adapter[I], 4);
+    if (Change == 1)
+      File.put(0x164, 0x27390140, 4); // missing destination mode tag
+    if (Change == 2)
+      File.put(0x164, 0x03e0c825, 4); // t9 depends on the live return link
+    if (Change == 3)
+      File.put(0x16c, 0xafbf0000, 4); // store in the actual delay slot
+    // Real ELF symbols provide the extents and mode entries. There is no
+    // declaration or debug context for the graph to borrow a call contract.
+    File.put(32, 0x300, 4);
+    File.put(48, 4, 2);
+    const char Names[] = "\0entry_adapter\0fp_callee\0kernel\0";
+    std::copy(std::begin(Names), std::end(Names), File.Bytes.begin() + 0x250);
+    unsigned Index = 1;
+    for (const auto &[Name, Address, Size, Info, Mode] :
+         {std::tuple{1u, 0x10160u, 16u, 2u, 0u},
+          std::tuple{15u, 0x10140u, 6u, 18u, 0xf0u},
+          std::tuple{25u, 0x10100u, 32u, 18u, 0u}}) {
+      const size_t S = 0x200 + 16 * Index++;
+      File.put(S, Name, 4);
+      File.put(S + 4, Address, 4);
+      File.put(S + 8, Size, 4);
+      File.Bytes[S + 12] = Info;
+      File.Bytes[S + 13] = Mode;
+      File.put(S + 14, 1, 2);
+    }
+    File.put(0x328 + 4, 1, 4); // text: SHT_PROGBITS, SHF_ALLOC|EXEC
+    File.put(0x328 + 8, 6, 4);
+    File.put(0x328 + 12, 0x10100, 4);
+    File.put(0x328 + 16, 0x100, 4);
+    File.put(0x328 + 20, 0x70, 4);
+    File.put(0x328 + 32, 4, 4);
+    File.put(0x350 + 4, 2, 4); // symtab -> strtab
+    File.put(0x350 + 16, 0x200, 4);
+    File.put(0x350 + 20, 64, 4);
+    File.put(0x350 + 24, 3, 4);
+    File.put(0x350 + 28, 2, 4);
+    File.put(0x350 + 32, 4, 4);
+    File.put(0x350 + 36, 16, 4);
+    File.put(0x378 + 4, 3, 4); // strtab
+    File.put(0x378 + 16, 0x250, 4);
+    File.put(0x378 + 20, sizeof(Names), 4);
+    File.put(0x378 + 32, 1, 4);
+    const auto Path =
+        (std::filesystem::path(Directory.str().str()) / "entry-stub.elf")
+            .string();
+    std::error_code Error;
+    llvm::raw_fd_ostream Output(Path, Error);
+    ASSERT_FALSE(Error);
+    Output.write(reinterpret_cast<const char *>(File.Bytes.data()),
+                 File.Bytes.size());
+    Output.close();
+    ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1)
+        << take(neverd_last_error(Session));
+    const auto Text =
+        take(neverd_call_tree_json(Session, "{\"root\":\"0x10100\"}"));
+    auto Tree = llvm::json::parse(Text);
+    ASSERT_TRUE(bool(Tree)) << Text << take(neverd_last_error(Session));
+    const auto *Root = Tree->getAsObject();
+    ASSERT_NE(Root, nullptr);
+    const auto *Order = Root->getArray("bottom_up");
+    ASSERT_NE(Order, nullptr);
+    std::vector<std::string> Entries;
+    for (const auto &Value : *Order)
+      Entries.push_back(Value.getAsString().value_or("").str());
+    EXPECT_EQ(Entries, Change ? (std::vector<std::string>{"0x10160", "0x10100"})
+                              : (std::vector<std::string>{"0x10140", "0x10160",
+                                                          "0x10100"}))
+        << Text;
+  }
+}
 
 TEST_P(MIPS16SDK, PhysicalPagesKeepExtendPairsAndTwoByteDelaySlots) {
   mips_test::ELFBytes File(GetParam());
