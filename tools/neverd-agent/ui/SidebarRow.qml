@@ -82,6 +82,9 @@ Item {
             leftPadding: 4
             rightPadding: 4
             Accessible.name: row.text
+            // What the tool tip says, for a reader that cannot hover: where
+            // the row's thing is kept, and why it did not open.
+            Accessible.description: row.hint !== row.text ? row.hint : ""
             contentItem: Text {
                 text: row.text
                 textFormat: Text.PlainText
