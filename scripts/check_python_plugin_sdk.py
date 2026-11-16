@@ -955,7 +955,6 @@ def check_workflows(errors: list[str]) -> None:
     main_ci = MAIN_CI_WORKFLOW.read_text(encoding="utf-8")
 
     required_sdk_patterns = {
-        "pull-request trigger": r"(?m)^\s{2}pull_request:",
         "manual trigger": r"(?m)^\s{2}workflow_dispatch:",
         "published-release trigger": r"release:\s*\n\s+types:\s*\[published\]",
         "Python 3.10 lane": r"[\"']3\.10[\"']",
@@ -976,6 +975,9 @@ def check_workflows(errors: list[str]) -> None:
     for label, pattern in required_sdk_patterns.items():
         if not re.search(pattern, workflow, flags=re.MULTILINE | re.DOTALL):
             errors.append(f"Python SDK workflow is missing {label}")
+    for trigger in ("push", "pull_request", "schedule"):
+        if re.search(rf"(?m)^\s{{2}}{trigger}:", workflow):
+            errors.append(f"Python SDK routine checks must be manual, not {trigger}")
 
     for action, pin in ACTION_PINS.items():
         expected = f"uses: {action}@{pin}"
