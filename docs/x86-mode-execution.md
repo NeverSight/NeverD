@@ -86,6 +86,19 @@ O0/O2. Changed bindings reject without losing the paid marker; repeated stops
 and reconstruction of both RAM and context finish at zero budget. The complete
 control/RAM image matches the uninterrupted compiled baseline, including PTE
 A/D bits and the explicitly changed opcode byte. Production code is unchanged.
+
+The [post-merge evidence](evidence/x86-mode-machine-status-integration-2026-11-16.json)
+records 553 passing x86/source/SDK checks per SDK at `3dbd8d8470`, after merging
+`dev`'s SEH changes. A test-only follow-up at `6ce665a8e4` repairs an inherited
+SEH assertion for the current unknown-argument trap; all 99 SEH tests and the
+real x64 Windows LLVM-to-C corpus case then pass per SDK. The product code is
+unchanged between these two sources. These 1306 passing checks are separate
+from the preceding full paging qualification and its hardware limitations.
+
+Each SDK's 3324 paged-source and 1940 legacy-source exported files have identical
+names and SHA-256 values to the preceding qualification plus its compiled-resume
+follow-up. The SEH repair requires the actual first argument and a trap at the
+unknown second argument, preserving rejection rather than inventing a value.
 NeverC stays host/source x64; other machine owners and final LLVM qualification
 remain separate work.
 
