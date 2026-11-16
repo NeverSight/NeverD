@@ -1975,3 +1975,30 @@ now distinguishes these annotations from landing pads, fragile setjmp state and
 MSVC tables; personality, LSDA, parse completeness and other language-table
 requirements remain intact. The narrower scalar comparison profile continues
 to reject runtime-call annotations it cannot project.
+
+Both macos-26 and xcode-27 passed all 167 source-bound publication cases from
+`9fa1dda6876d960bac97bd0a69c6cb4a8c457861`, with no failed or skipped cases.
+Each host completed 384 live-LR deliveries and resume-cursor checks: 192
+cleanup paths and 192 local catches, including 192 compact-only deliveries.
+Unsigned, IA/CFA and IB/CFA each contributed 128 deliveries per host. This
+includes original, replacement and NeverD-generated images at O0/O2 on normal
+and alternate signal stacks. Windows frontend checks passed as well.
+
+Both fresh hardware reports still identify M1 virtual machines. Explicit
+PAuth_LR, PACM PC dependence and CPTA-on remain unqualified, including the
+signed arm64e.x1 launch attempt. The extended PC-dependent recipes have
+recovery/admission coverage here; that does not complete their native
+publication and language-delivery matrices. The temporary release, asset and
+tag were deleted with verified HTTP 404 responses, and the replay repository
+was returned to its baseline tree.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43792618472)
+and [per-host verification record](evidence/arm64e-compact-live-lr-2026-11-16.json).
+
+Local Release checks passed all 167 publication cases, all 33 unwind-recovery
+cases, 321 language-EH cases with one explicit sample skip, and 144 related
+cases with four native/environment skips. All 324 binary-diff cases and 12
+tail-frame cases passed, including the scalar profile's nine focused checks.
+The latter target's CLI dependency was built with the real shared SDK enabled.
+C11/C++20 multi-translation-unit checks, clang-format 22.1.2 and the documentation
+inventory also passed. Generated products were removed after recording hashes;
+the active Release build and r6 were retained.
