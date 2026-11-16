@@ -5048,6 +5048,16 @@ CR2 red cases and KVM internal-error probes remain failed diagnostics, outside
 this canonicality qualification. See the
 [event descriptor evidence](evidence/x86-code64-event-descriptors-2026-11-16.json).
 
+`X64PagedEventAccessedTest.*` adds independent original accessed-update and
+write-watchpoint matrices, then compiles both C emitters with x64 Clang/NeverC
+at O0/O2. The self-PTE alias distinguishes the committed image from the initial
+check image. Complete State and both RAM regions are compared. Six backing
+positions, write-only fresh-read failure, overwritten descriptor bytes, invalid
+journal operation kinds and debug receipt retention exercise lower, ordinary
+and full-mode recovery. Native runs are uninterrupted; paused runs compare
+software contracts. Cross-line KVM internal failures remain diagnostic limits.
+See the [accessed-update evidence](evidence/x86-code64-event-accessed-2026-11-16.json).
+
 Faultable RETF is covered by `PagedFarReturnsMatchOriginalCPU` and
 `PagedFarReturnRetainedEffectsControlProgress` in
 `unittests/translate/x86/X64PagedFarReturnTests.inc`. The common return retry

@@ -4566,3 +4566,11 @@ retained event, instruction and full-mode bindings. The preserved A=0/read-only
 CR2 red cases and cross-line KVM internal errors are separate unresolved
 accessed-update work. Remaining mode/machine owners, physical SGX and the final
 LLVM release/pin gate are still open. NeverC remains host/source x64.
+
+The [code64 event accessed-update qualification](x86-paged-execution.md#code64-event-accessed-updates)
+closes the aligned read-only CR2 and self-PTE cache-image differences. Per SDK,
+320 original/generated complete State/RAM comparisons and 32 original write-
+watchpoint comparisons agree; ordinary/full-mode/debug continuations retain
+completed updates. Both SDKs pass 551 tests with 1 LA57 skip each.
+Cross-line/split-lock, further mode/machine owners and physical SGX remain open;
+no final LLVM release, production pin or NeverC source-target expansion is included.

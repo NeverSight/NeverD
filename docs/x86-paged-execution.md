@@ -959,15 +959,66 @@ software-debug sequence and 96 full-mode comparisons per SDK. They compare
 against uninterrupted software executions; original CPU runs are uninterrupted.
 These counts are within the test groups, not extra passing tests.
 
-Accessed writes remain a separate open issue. The retained diagnostic matrix
-has eight A=0/read-only descriptor CR2 mismatches per core: hardware reports
-the descriptor start, while the byte update reports start+5. Cross-line A=0
+At this canonicality checkpoint, accessed writes remained open. The retained
+diagnostic matrix has eight A=0/read-only descriptor CR2 mismatches per core:
+hardware reports the descriptor start, while the byte update reports start+5. Cross-line A=0
 probes terminate with KVM `INTERNAL_ERROR_SIMUL_EX` during #AC delivery,
 including with page A/D bits pre-set. These failed probes are not architectural
 guest outcomes or successful qualification. This unit does not infer locked
 update width, descriptor-cache publication or a split-lock policy from return
-instructions. Host split-lock configuration and the production LLVM pin are
-unchanged.
+instructions. Those aligned accessed cases are addressed by the following
+independent [accessed-update qualification](#code64-event-accessed-updates). Host split-lock
+configuration and the production LLVM pin are unchanged.
+
+## Code64 event accessed updates
+
+The paged event owner now updates an A=0 code descriptor through one prepared
+supervisor write transaction at the descriptor's starting address. It reads
+that plan's exact physical fragments after page-table A/D changes, sets A and
+commits the eight-byte image. Initial type/presence/privilege checks keep their
+original read; the hidden CS cache receives the committed image. An A=1
+check image needs no write. Return and selector-load policies remain independent.
+
+The [November 16 accessed evidence](evidence/x86-code64-event-accessed-2026-11-16.json)
+at `5462d88487` records
+551 passing tests and 1 LA57 skip per SDK. Four event kinds (INT80, INT3,
+IRQ and NMI) cover aligned high-canonical/last-qword read-only faults and a
+descriptor that shares bytes with its own PTE. The extra physical page at
+`0x209000` is disjoint from main RAM; descriptor `0x5024` maps to `0x209024`,
+overlapping PTE `0x209028`. A cold `0x209a03` entry becomes `0x209b63`, and
+native CS.base is `0x630000`. A descriptor-A-preset control leaves D clear,
+ends at `0x209b23` and loads base `0x230000`. This distinguishes the old cache
+image and stale writeback without claiming a unique microarchitectural implementation.
+
+Per SDK, 40 raw observations, 40 direct-owner and 320 generated comparisons
+check complete represented State and every byte of both physical regions.
+HighC/LLVMC and host-x64 Clang/NeverC run at O0/O2. Fresh pinned local Intel P/E
+VMs use equal inputs and pre-faulted KVM backing. Thirty-two original guest
+write-watchpoint comparisons cover descriptor offsets 0/4/5/7: all four A=0
+event kinds report B0/#DB; A=1 controls do not. No output differences are masked.
+
+A completed update has a distinct continuation tag and retains its committed
+image. Resume returns that image without another RAM access or observer call.
+Unfinished prepare/read backing stops retain earlier accesses and A/D effects,
+without publishing the cache or retaining a physical plan across contexts.
+Malformed update records and ordinary-store/update substitutions are rejected.
+
+Software-only recovery groups include 96 ordinary/lower and 96 full-mode
+comparisons per SDK: initial descriptor backing, read-only then write-only
+physical backing, first/partial frame backing, a read-only alias table with
+A/D already set, and a frame field overwriting the descriptor before the next
+missing slot. Eight debug-retention comparisons preserve the match across
+repeated backing stops and deliver one following #DB. Successful resumed
+INT/INT3 completes once; ordinary event resume exposes this as
+`Delivery.SoftwareCompleted`, and the full-mode owner converts that receipt to
+one completion. Accepted IRQ/NMI is not acknowledged twice.
+
+Cross-line A=0 probes in the predecessor record still end in KVM
+`INTERNAL_ERROR_SIMUL_EX` while delivering #AC, not an architectural guest
+result. These same-cache-line observations do not qualify split-lock policies,
+cross-page partial publication, concurrent CPUs, DMA or MMIO. Remaining mode
+and machine owners, software SMM/SGX and physical SGX remain open. Production
+LLVM stays r6; no final release or pin change is included.
 
 ## Paged IRQ/NMI scheduling
 

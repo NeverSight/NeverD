@@ -252,6 +252,19 @@ code and retains EXT. Full-mode accepted work preserves it through IDT backing
 and event-budget stops even when a reconstructed caller supplies the opposite
 choice. The [event descriptor evidence](evidence/x86-code64-event-descriptors-2026-11-16.json) records 543
 passing tests and 1 LA57 skip per SDK, including 96 full-mode comparisons.
-Event accessed-update CR2/locked transaction and split-lock qualification are
-still open, as are the remaining mode and machine-state owners. NeverC stays
+At that checkpoint, event accessed-update CR2/locked transaction and split-lock
+qualification remained open, alongside the remaining mode and machine-state owners. NeverC stays
 host x64; no final LLVM release or production pin change is included.
+
+### Code64 event accessed updates (2026-11-16)
+
+The [accessed-update qualification](evidence/x86-code64-event-accessed-2026-11-16.json)
+includes 96 full-mode
+recoveries per SDK. Accepted entry keeps the fresh descriptor cache image even
+when a completed frame store overwrites the descriptor before a later backing
+stop. Pending software entry publishes its one completion after successful
+resume, with no new instruction attempt; external events retain their original
+acceptance. Eight additional debug-receipt cases preserve the accessed-write
+match through repeated stops. The complete affected matrix passes 551 tests
+with 1 LA57 skip per SDK. Cross-line updates, remaining machine owners and
+physical SGX still gate the final LLVM release; NeverC remains host/source x64.
