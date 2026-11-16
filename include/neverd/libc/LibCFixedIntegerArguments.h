@@ -13,9 +13,8 @@
 #ifndef NEVERD_LIBC_LIBCFIXEDINTEGERARGUMENTS_H
 #define NEVERD_LIBC_LIBCFIXEDINTEGERARGUMENTS_H
 
-#include "neverd/debug/DebugContext.h"
-#include "neverd/debug/UserPrototype.h"
 #include "neverd/ir/IntegerCallArguments.h"
+#include "neverd/libc/LibCCallDeclaration.h"
 
 #include <optional>
 #include <vector>
@@ -23,13 +22,9 @@
 namespace neverd::libc {
 
 inline std::optional<FixedIntegerCallArguments>
-fixedIntegerCallArguments(const FunctionSym &Function, Arch A, BinaryFormat F) {
-  if ((!Function.PrototypeFromHeader && !Function.PrototypeFromCLibrary &&
-       Function.PrototypeLibrary != UserPrototypeLibrary) ||
-      !Function.PlatformConvention || Function.IsVariadic ||
-      !Function.ParamEntryLocations.empty() ||
-      Function.CallConv == DebugCallConv::Fastcall ||
-      Function.CallConv == DebugCallConv::Thiscall)
+fixedIntegerCallArguments(const FunctionSym &Function, Arch A, BinaryFormat F,
+                          const DebugContext *NativeDebug = nullptr) {
+  if (!hasFixedPlatformCallDeclaration(Function, NativeDebug))
     return std::nullopt;
   std::vector<TypeRef> Parameters;
   for (const auto &[Name, Type] : Function.Params)

@@ -90,8 +90,8 @@ private:
       FH4ContinuationCandidates;
 };
 
-/// The prototype counts of every import of an image, as
-/// importPrototypeArguments gives them with the debug context it read.
+/// Image-wide import counts and fixed native call declarations, resolved
+/// against the same image and debug context for omitted-callee recovery.
 struct ImageImportCounts {
   const BinaryImage *Image = nullptr;
   const DebugContext *Debug = nullptr;
@@ -101,6 +101,8 @@ struct ImageImportCounts {
   size_t RelocationCount = 0;
   const Export *ExportData = nullptr;
   size_t ExportCount = 0;
+  const Symbol *SymbolData = nullptr;
+  size_t SymbolCount = 0;
   std::map<va_t, int> Counts;
   std::map<va_t, int> StackArgs;
   std::set<va_t> StackSlots;
@@ -114,7 +116,9 @@ struct ImageImportCounts {
            RelocationData == Img.Relocations.data() &&
            RelocationCount == Img.Relocations.size() &&
            ExportData == Img.Exports.data() &&
-           ExportCount == Img.Exports.size();
+           ExportCount == Img.Exports.size() &&
+           SymbolData == Img.Symbols.data() &&
+           SymbolCount == Img.Symbols.size();
   }
 };
 

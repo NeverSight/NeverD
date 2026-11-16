@@ -991,8 +991,11 @@ source-call type admission. Binary16/binary80 inverse bit views cancel, while
 numeric precision reductions, signedness changes and reserved Boolean/vector
 roles remain. `I386CallContract.HeaderFloatingImportsDefineTheNormalizedX87Result`
 checks readable direct float/double returns and real FSTP/FLD transports in
-both C routes. On Linux x86 it also compares emitted C with the original
-32-bit instruction bytes at O0/O2 under UBSan: signed zeros, subnormals,
+both C routes. On Apple Silicon, the store/reload C is compiled for x86-64
+and runs through Rosetta to retain its 80-bit x87 representation; direct
+float/double C still runs on the host target. On Linux x86 it also compares
+emitted C with the original 32-bit instruction bytes at O0/O2 under UBSan:
+signed zeros, subnormals,
 finite extrema, infinities and quiet/signaling NaNs retain their result bits
 and exactly one provider call. This checks result transport under the native
 default FP environment, not arbitrary x87 exception or control-word state.
@@ -3494,6 +3497,20 @@ selected functions execute against an independent provider observing every
 record field and following parameter; whole modules are syntax-checked with
 their original import-slot aliases. Those aliases need the SDK's image linker
 for runtime binding. Other hosts explicitly skip the native glibc test.
+
+`NeverDNativeCallSignatureTests` checks complete authenticated native call
+declarations on x86, x64 and AArch64, with ELF, COFF and Mach-O ABI profiles.
+Private and exported callees keep parameters their bodies do not read. Both C
+routes execute at O0/O2 against a provider that observes every passed operand;
+LLVM declarations must retain a fixed argument list. Mixed scalar cases check
+the independent integer and floating banks, and i386 floating stack operands
+with an integer result. Selected and omitted forwarders retain the same
+arguments in both output routes, with and without a reused analysis cache and
+in repeated selection order. Incomplete types, unauthenticated or interior
+declarations, variadics and custom conventions remain unbound.
+The integer-placement owner also checks narrow and eight-byte i386 stack
+operands without treating them as regparm inputs.
+
 `RecordCallContract.LLVMOperandsKeepPhysicalStackPieceLocations` checks that
 record pieces follow the LLVM call's recorded stack byte offsets after unused
 register operands are removed. Reordered offsets retain their values; missing
@@ -20574,7 +20591,16 @@ body's call stands in three compounds, the inner handler's in two and the outer
 handler's in none; a scope whose blocks only jump keeps one nest with all its
 clauses; an empty loop after the scopes keeps its label and jump while the
 blocks leading to it are passed; and the render that marks source positions
-agrees with the ordinary one and publishes its definitions and a call anchor.
+agrees with the ordinary one, publishes its definitions and anchors every call
+of the body and of the unwind's handlers, plain or invoked, in a clause whose
+blocks branch too. `LLVMCSourceMapNamesTheUnwindCallForItsHandlers` uses the
+emitter's own observations: the body's call keeps its instruction through the
+change to an invoke, the unwind's handlers name the runtime call's address,
+and another call placed at that address names nothing.
+`SEHDefinitionOrderTests.cpp` prints hand-built HighIR definitions in several
+orders: an `__except` arm that jumps past a copy of its own frame alias, and
+one that jumps past a copy between two names another definition aliased to one
+slot, print the same text alone, first and after any other definition.
 `WindowsEHModesCorpus.LLVMCPlacesLocalUnwindHandlersUnderRepeatedRanges` reads
 the same in the LLVM C of xcpt4's MSVC x64 /O2 image: `0x1400037D0` and
 `0x140003870` print their clauses with no not-lowered note, the inner handler's
@@ -21918,6 +21944,8 @@ callers link an independently written C provider of both fields.
 `SharedAggregateReturnKeepsBothFields` exercises two loop entries and shared
 return blocks whose second fields differ. HighC and LLVM-C must preserve the
 complete record on every exit and compile/run at O0/O2 in all three formats.
+The shared return blocks also prevent scalar goto-to-return inlining from
+dropping a field after the complete return value has already been lowered.
 This also checks selected callers together with their callee definitions;
 individual scalar-looking views cannot validate a joint record-return unit.
 `ReturnFieldsConsumedThroughPhisStayObserved` checks a caller joining a pair

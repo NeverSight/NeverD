@@ -755,7 +755,8 @@ boundFloatingCallArguments(const MedOp &Op, Arch A, BinaryFormat F) {
         Signature.ReturnElements > Registers.FPReturnRegs.size())
       return std::nullopt;
   } else if (Signature.ReturnKind != NdTypeKind::Float) {
-    if ((!isMIPS(A) && A != Arch::AArch64 && A != Arch::X64) ||
+    if ((!isMIPS(A) && A != Arch::AArch64 && A != Arch::X64 &&
+         A != Arch::X86) ||
         Op.CalleeFloatReturnBytes ||
         (Signature.ReturnKind == NdTypeKind::Void
              ? Op.Output.Size != 0
