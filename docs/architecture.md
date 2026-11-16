@@ -1275,6 +1275,12 @@ handler of an unwind that leaves every scope is a plain call. The calls at an
 exit's address must be its handlers, in its order, with no other call after
 them in the block; anything else leaves the function unlowered. Native output
 keeps a lone handler call in its block's innermost scope.
+For navigation these handler calls, which no instruction of the function
+makes, observe the runtime call they stand for (its address and LowIR
+sequence), and the form that prints each block in its own `__try` marks a call
+that became an invoke, the terminator of its block, as the instruction writer
+marks any other call. A call a `__finally` clause prints is the clause itself
+and names no instruction.
 HighIR adds this recovery for positional register/stack conventions. Independent
 register banks retain their source variadic and floating-return preparation.
 

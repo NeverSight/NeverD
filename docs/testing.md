@@ -20567,7 +20567,12 @@ body's call stands in three compounds, the inner handler's in two and the outer
 handler's in none; a scope whose blocks only jump keeps one nest with all its
 clauses; an empty loop after the scopes keeps its label and jump while the
 blocks leading to it are passed; and the render that marks source positions
-agrees with the ordinary one and publishes its definitions and a call anchor.
+agrees with the ordinary one, publishes its definitions and anchors every call
+of the body and of the unwind's handlers, plain or invoked, in a clause whose
+blocks branch too. `LLVMCSourceMapNamesTheUnwindCallForItsHandlers` uses the
+emitter's own observations: the body's call keeps its instruction through the
+change to an invoke, the unwind's handlers name the runtime call's address,
+and another call placed at that address names nothing.
 `WindowsEHModesCorpus.LLVMCPlacesLocalUnwindHandlersUnderRepeatedRanges` reads
 the same in the LLVM C of xcpt4's MSVC x64 /O2 image: `0x1400037D0` and
 `0x140003870` print their clauses with no not-lowered note, the inner handler's

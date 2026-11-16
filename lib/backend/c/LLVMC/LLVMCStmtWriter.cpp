@@ -8792,6 +8792,17 @@ void LLVMCWriter::writeCall(llvm::CallInst &Call, const std::string &Name,
   writeCallLike(Call, Name, Indent);
 }
 
+void LLVMCWriter::writeInvokedCall(llvm::InvokeInst &Invoke, int Indent) {
+  const auto Event =
+      SourceRecorder ? SourceRecorder->instruction(Invoke) : std::nullopt;
+  if (Event)
+    OS << SourceRecorder->begin(*Event);
+  writeCallLike(Invoke, Invoke.getType()->isVoidTy() ? "" : getName(&Invoke),
+                Indent);
+  if (Event)
+    OS << SourceRecorder->end(*Event);
+}
+
 void LLVMCWriter::writeInvoke(llvm::InvokeInst &Invoke, const std::string &Name,
                               int Indent) {
   writeCallLike(Invoke, Name, Indent);

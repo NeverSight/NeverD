@@ -2285,9 +2285,22 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   // aligned to machine blocks, so the address this call came from has to
   // survive lowering for the LSDA to be able to name it.
   if (SourceMap && llvm::isa_and_nonnull<llvm::CallBase>(Result) &&
-      Op.Addr != InvalidVA && Op.OriginSeq >= 0)
-    SourceMap->Observations.push_back(
-        {CurMedFunc->Entry, {Op.Addr, Op.OriginSeq}, Result});
+      Op.Addr != InvalidVA) {
+    // A local unwind's handler calls stand where its runtime call stood
+    // (MedSEHLocalUnwindExit) and have no instruction of their own: the
+    // runtime call is where each of them came from.
+    int Sequence = Op.OriginSeq;
+    if (Sequence < 0 && Op.NumInputs && Op.Inputs[0].isConst())
+      for (const MedSEHLocalUnwindExit &Exit : CurMedFunc->SEHLocalUnwindExits)
+        if (Exit.CallAddr == Op.Addr &&
+            llvm::any_of(Exit.Handlers, [&](const auto &Handler) {
+              return Handler.Entry == Op.Inputs[0].ConstVal;
+            }))
+          Sequence = Exit.CallSeq;
+    if (Sequence >= 0)
+      SourceMap->Observations.push_back(
+          {CurMedFunc->Entry, {Op.Addr, Sequence}, Result});
+  }
   if (auto *Emitted = llvm::dyn_cast_or_null<llvm::CallBase>(Result)) {
     AttachSafetyCallsite(*Emitted);
     if (BoundArgumentBanks) {
