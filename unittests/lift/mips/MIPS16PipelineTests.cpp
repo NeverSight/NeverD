@@ -215,6 +215,9 @@ TEST_P(MIPS16Pipeline, RuntimeFloatReturnPreservesOriginalCallAndSourceResult) {
             F.PrototypeLibrary = UserPrototypeLibrary.str();
             return F;
           }
+          bool hasAuthenticatedFunctionSignatures() const override {
+            return true;
+          }
           bool hasInfo() const override { return true; }
         } Debug;
         for (bool LLVM : {false, true}) {
@@ -229,6 +232,8 @@ TEST_P(MIPS16Pipeline, RuntimeFloatReturnPreservesOriginalCallAndSourceResult) {
             EXPECT_FALSE(Result.Success);
             continue;
           }
+          ASSERT_TRUE(
+              Result.CallEntryFloatingArguments.get().contains(0x10140));
           ASSERT_TRUE(Result.Success) << Result.Error;
           EXPECT_EQ(Result.MedIRVerifierFailures, 0u);
           const auto Low = llvm::find_if(Result.LowFuncs, [](const auto &F) {
