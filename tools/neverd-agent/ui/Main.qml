@@ -462,8 +462,11 @@ ApplicationWindow {
         background: Surface { glass: true; radius: Theme.radius; color: Theme.background }
         header: Label {
             text: parent.title
-            // A title may carry a name the person chose.
+            // A title may carry a name the person chose: plain text, and
+            // a second line before it is cut.
             textFormat: Text.PlainText
+            wrapMode: Text.Wrap
+            maximumLineCount: 2
             elide: Text.ElideRight
             color: Theme.text
             font.pointSize: Theme.titlePointSize
