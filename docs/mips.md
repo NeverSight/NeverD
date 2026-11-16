@@ -100,12 +100,15 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   mode enters call classification, source binding and descriptor validation;
   classic and microMIPS entry rules keep their FPR prefix. Both C routes retain
   the target's mode on declarations even when its body is omitted. A complete
-  fixed MIPS16 signature whose parameters match individual recovered GPRs also
-  supplies the definition's logical types. Split values, missing inputs and
-  variadic entry adapters require separate qualification. MIPS16 floating
-  results still need a dual GPR/FPR result adapter and are declined by the
-  scalar-call classifier. Automatic typing of linker/runtime stubs remains
-  outside this qualification.
+  fixed MIPS16 signature supplies logical parameter types when all recovered
+  GPR bytes match, including both words of an o32 double in target byte order.
+  Missing inputs, stack and variadic entry adapters need separate proof.
+  Classic entry stubs can inherit an exact body declaration only after their
+  actual LowIR transfers and delay slot prove every parameter byte; a name
+  alone never establishes that association. The original call graph shares
+  the transport proof without requiring a prototype. MIPS16 floating results
+  still need a dual GPR/FPR result adapter and are declined by the scalar-call
+  classifier. General runtime call and return helpers remain unqualified.
 
 LowIR execution retains the common known bits of the two permitted partial
 MIPS64 `LWR` upper words. Scalar COPY, SUBBYTES, CONCAT and integer extensions
@@ -464,6 +467,28 @@ verified prototype association; their names alone do not establish it.
 [GCC's MIPS16 function-stub implementation](https://gnu.googlesource.com/gcc/+/refs/tags/releases/gcc-12.1.0/gcc/config/mips/mips.cc)
 describes this FPR-to-GPR bridge. Floating-return helpers and indirect runtime
 stubs still require separate result and control-flow qualification.
+
+The [MIPS16 call roundtrip](../unittests/lift/mips/mips16-floating-call-roundtrip.py)
+also covers split double parameters and proven classic entry stubs, in both
+byte orders and FR=0/1. GCC originals are compared with GCC and Clang rebuilds
+of either isolated side and of the combined caller/callee, through HighC and
+LLVMC at O0/O2. The proof rejects altered target tags, unproven register
+targets, stores in the delay slot, and missing or mismatched declarations.
+Source definitions of compiler-generated stubs use a distinct identifier so
+regenerated stubs cannot collide; original addresses and names remain in
+metadata. GNU rebuilds use fixed-width rotate helpers with modulo counts and
+single evaluation. Tests and paired performance receipts are retained in the
+task's ignored build directory; the entry adapter does not establish a
+universal speed ranking or qualify other firmware.
+
+Clang 22 misses an entry stub when only a function attribute enables MIPS16
+inside a classic compilation unit; its FR=1 double stubs also use the wrong
+high-word register. Independent original-code executions distinguish these
+compiler failures from source reconstruction. The corrected compiler in
+[NeverSight LLVM PR #12](https://github.com/NeverSight/llvm-project/pull/12)
+passes the float/double reconstruction matrix locally; fork CI and merge
+qualification remain separate. Floating results, runtime helpers and
+variadic adapters remain separate work.
 
 Numeric microMIPS code-pointer reconstruction is explicitly refused. The tested
 Clang 22 compiler folds a microMIPS function pointer's low bit to zero in some
