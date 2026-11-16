@@ -32,7 +32,21 @@ DSP64_BOUNDARIES = {
 }
 
 
+DSP64_ROUNDED = {
+    f"mips64rounded_{op.replace('.', '_')}_{count}": (op, count)
+    for op in ("dextr_r.w", "dextrv_r.w", "dextr_rs.w", "dextrv_rs.w",
+               "dextr_s.h", "dextrv_s.h", "dextr_r.l", "dextrv_r.l",
+               "dextr_rs.l", "dextrv_rs.l")
+    for count in ((0, 1, 31, 63) if "dextrv" in op else (0, 1, 31))
+}
+
+
 def kernels():
+    for name, (op, count) in DSP64_ROUNDED.items():
+        operand = "$6" if "dextrv" in op else str(count)
+        yield (name, "mips64r2", "dsp",
+               f"mthi $4,$ac2\nmtlo $5,$ac2\nori $6,$0,{count}\n"
+               f"{op} $2,$ac2,{operand}")
     # The n64 r2 reference core implements PS; the 32-bit 74Kf does not.
     setup = "dmtc1 $4,$f0\ndmtc1 $5,$f2\n"
     for op in ("add", "sub", "mul", "abs", "neg", "mov", "pll", "plu", "pul", "puu"):
@@ -147,7 +161,7 @@ def kernels():
             "mips64acc_" + instruction.replace(".", "_"), "mips64r2", "dsp",
             "mthi $0\nmtlo $0\n" + instruction + " $ac0,$4,$5\nmflo $2",
         )
-    for instruction in ("dmaddu", "dmsubu"):
+    for instruction in ("dmadd", "dmsub", "dmaddu", "dmsubu"):
         for half in ("hi", "lo"):
             yield (
                 f"mips64acc_{instruction}_{half}", "mips64r2", "dsp",
@@ -252,6 +266,14 @@ def verify_historical_image(path, level, abi, little):
 
 
 def inputs(name, bits):
+    if name in DSP64_ROUNDED:
+        return ([(0, value) for value in (0, 5, 0x7fff, 0x8000, 0x7fffffff,
+                                         0x80000000, 0xffffffff, (1 << 63) - 1,
+                                         1 << 63, (1 << 64) - 1)]
+                + [((1 << 64) - 1, value & ((1 << 64) - 1))
+                   for value in (-32768, -32769, -40000, -4294967297, 0, -1)]
+                + [(1, (1 << 64) - 1), ((1 << 63) - 1, (1 << 64) - 1),
+                   (1 << 63, 0)])
     pairs = [
         (a, b)
         for a in (0, 1, -1, 0x11223344, 0x8000000000000001)
@@ -266,10 +288,15 @@ def inputs(name, bits):
             for a in (0, 1, 2, 0x0001000200030004, 0xFFFF00010002FFFF)
             for b in (0, 5, 6, 0x0005000600070008, 0xFFFF00020001FFFF)
         ]
-        if name.startswith(("mips64acc_dmaddu_", "mips64acc_dmsubu_")):
+        if name.startswith(("mips64acc_dmadd", "mips64acc_dmsub")):
             vectors.extend([(0x10000, 0x10000), (0xffffffff, 0xffffffff),
                             (0xffffffff00000000, 0xffffffff),
-                            (0xffffffffffffffff, 0xffffffffffffffff)])
+                            (0xffffffffffffffff, 0xffffffffffffffff),
+                            (0x8000000080000000, 0x8000000080000000),
+                            (0x800000007fffffff, 0x7fffffff80000000),
+                            (0x8000000080000000, 0xffffffffffffffff),
+                            (0x7fffffff7fffffff, 0x7fffffff7fffffff),
+                            (0xffffffff00000001, 0x0000000100000001)])
         return vectors
     if name.startswith("mips64ps_"):
         values = (0, 0x800000003fc00000, 0x3fc00000bf800000,
@@ -644,6 +671,28 @@ def run(args, artifacts):
                         value = b if form == "shift_hi" else 0
                     if actual != (value, control):
                         raise ValueError(f"{name}: original {actual}, independent {(value, control)}")
+            if name in DSP64_ROUNDED:
+                op, count = DSP64_ROUNDED[name]
+                width = 16 if op.endswith(".h") else 32 if op.endswith(".w") else 64
+                shift = count & (31 if width == 16 else 63)
+                for i, ((a, b), actual) in enumerate(zip(cases, wanted, strict=True)):
+                    acc = (a << 64) | b
+                    if acc >> 127:
+                        acc -= 1 << 128
+                    rounded = acc >> shift
+                    if width != 16 and shift:
+                        rounded += (acc >> (shift - 1)) & 1
+                    minimum, maximum = -(1 << (width - 1)), (1 << (width - 1)) - 1
+                    overflow = rounded < minimum or rounded > maximum
+                    control = (0x01004005 if i % 2 else 0) | (1 << 23 if overflow else 0)
+                    if "_rs." in op or width == 16:
+                        rounded = min(maximum, max(minimum, rounded))
+                    value = rounded & ((1 << width) - 1)
+                    if value >> (width - 1):
+                        value -= 1 << width
+                    expected = (value & ((1 << 64) - 1), control)
+                    if actual != expected:
+                        raise ValueError(f"{name}: original {actual}, independent {expected}")
             if name in DSP64_BOUNDARIES:
                 op, count, pos, half = DSP64_BOUNDARIES[name]
                 mask = (1 << 64) - 1
@@ -696,12 +745,17 @@ def run(args, artifacts):
                         control = (control & ~0x407f) | 63
                     if actual != (value, control):
                         raise ValueError(f"{name}: original {actual}, independent {(value, control)}")
-            if name.startswith(("mips64acc_dmaddu_", "mips64acc_dmsubu_")):
+            if name.startswith(("mips64acc_dmadd", "mips64acc_dmsub")):
+                instruction = name.removeprefix("mips64acc_").rsplit("_", 1)[0]
+                signed = instruction in ("dmadd", "dmsub")
                 word = (1 << 32) - 1
                 mask = (1 << 64) - 1
+                def lane(value, shift):
+                    result = (value >> shift) & word
+                    return result - (1 << 32) if signed and result >> 31 else result
                 for (a, b), (value, _) in zip(cases, wanted, strict=True):
-                    dot = (a >> 32) * (b >> 32) + (a & word) * (b & word)
-                    result = ((a << 64) | b) + (-dot if "dmsubu" in name else dot)
+                    dot = sum(lane(a, shift) * lane(b, shift) for shift in (0, 32))
+                    result = ((a << 64) | b) + (-dot if instruction.startswith("dmsub") else dot)
                     expected = (result >> (64 if name.endswith("_hi") else 0)) & mask
                     if value != expected:
                         raise ValueError(f"{name}: original returned {value:#x}, expected {expected:#x}")

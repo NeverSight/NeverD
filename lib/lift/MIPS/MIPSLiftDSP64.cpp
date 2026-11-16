@@ -79,9 +79,11 @@ bool MIPSLifter::liftDSP64Extract(State &S, uint32_t Word) const {
     return true;
   }
 
-  const auto Count =
-      (Sel & 1) ? S.binary(NdOp::INT_AND, S.read(RS, 4), NdVar::cst(63, 4))
-                : NdVar::cst(RS, 4);
+  const bool Half = Sel == 14 || Sel == 15;
+  const bool RoundedOrSaturated = Sel & 4;
+  const auto Count = (Sel & 1) ? S.binary(NdOp::INT_AND, S.read(RS, 4),
+                                          NdVar::cst(Half ? 31 : 63, 4))
+                               : NdVar::cst(RS, 4);
   const bool PositionExtract = Sel == 2 || Sel == 3 || Sel == 10 || Sel == 11;
   auto Offset = Count;
   auto Failed = NdVar::cst(0, 1);
@@ -101,7 +103,7 @@ bool MIPSLifter::liftDSP64Extract(State &S, uint32_t Word) const {
         S.select(Failed, S.binary(NdOp::INT_OR, Control, NdVar::cst(0x4000, 4)),
                  Success));
   }
-  if (!RT)
+  if (!RT && !RoundedOrSaturated)
     return true;
   const auto Shift =
       S.resize(S.binary(NdOp::INT_AND, Offset, NdVar::cst(63, 4)), 8);
@@ -127,6 +129,42 @@ bool MIPSLifter::liftDSP64Extract(State &S, uint32_t Word) const {
     S.emitIntrinsic(Intrinsic::MIPSExtractResult, Result,
                     {Failed, S.binary(NdOp::INT_AND, Value, Mask)});
     S.write(RT, Result);
+  } else if (RoundedOrSaturated) {
+    // Keep both halves until after rounding: the discarded bit can carry from
+    // LO into HI, and a representable low word does not prove a valid result.
+    auto Upper = S.binary(NdOp::INT_ASHR, Hi, Shift);
+    if (!Half) {
+      const auto Previous = S.binary(
+          NdOp::INT_AND, S.binary(NdOp::INT_SUB, Shift, NdVar::cst(1, 8)),
+          NdVar::cst(63, 8));
+      const auto Round = S.select(
+          S.binary(NdOp::INT_EQUAL, Shift, NdVar::cst(0, 8), 1),
+          NdVar::cst(0, 8),
+          S.binary(NdOp::INT_AND, S.binary(NdOp::INT_RIGHT, Lo, Previous),
+                   NdVar::cst(1, 8)));
+      const auto Sum = S.binary(NdOp::INT_ADD, Value, Round);
+      Upper = S.binary(NdOp::INT_ADD, Upper,
+                       S.resize(S.binary(NdOp::INT_LESS, Sum, Value, 1), 8));
+      Value = Sum;
+    }
+    const uint16_t Bytes = Half ? 2 : Sel & 16 ? 8 : 4;
+    const auto Result = S.resize(S.resize(Value, Bytes), 8, true);
+    const auto Sign = S.binary(NdOp::INT_ASHR, Result, NdVar::cst(63, 8));
+    const auto Overflow =
+        S.binary(NdOp::BOOL_OR, S.binary(NdOp::INT_NOTEQUAL, Value, Result, 1),
+                 S.binary(NdOp::INT_NOTEQUAL, Upper, Sign, 1), 1);
+    WriteControl(S.binary(
+        NdOp::INT_OR, ReadControl(),
+        S.binary(NdOp::INT_LEFT, S.resize(Overflow, 4), NdVar::cst(23, 4))));
+    Value = Result;
+    if (Sel & 2) {
+      const uint64_t Minimum = UINT64_MAX << (Bytes * 8 - 1);
+      const auto Limit =
+          S.select(S.binary(NdOp::INT_SLESS, Upper, NdVar::cst(0, 8), 1),
+                   NdVar::cst(Minimum, 8), NdVar::cst(~Minimum, 8));
+      Value = S.select(Overflow, Limit, Value);
+    }
+    S.write(RT, Value);
   } else {
     S.write(RT, Sel & 16 ? Value : S.resize(Value, 4));
   }
@@ -371,12 +409,15 @@ bool MIPSLifter::liftDSP64Accumulator(State &S, uint32_t Word) const {
              Lo = NdVar::reg(mipsreg::accumulatorLO(Bank), 8);
   auto Upper = Hi, Lower = Lo;
   const bool DotByte = Sel == 3 || Sel == 7 || Sel == 11 || Sel == 15;
+  const bool SignedWordDot = Sel == 25 || Sel == 27;   // DMADD / DMSUB
   const bool UnsignedWordDot = Sel == 29 || Sel == 31; // DMADDU / DMSUBU
-  const bool Fractional = !DotByte && !UnsignedWordDot;
-  const bool Pair = Sel == 12 || Sel == 13 || Sel == 14 || Sel >= 28;
-  const bool Single = Sel >= 16 && !UnsignedWordDot;
+  const bool WordDot = SignedWordDot || UnsignedWordDot;
+  const bool Fractional = !DotByte && !WordDot;
+  const bool SignedProduct = Fractional || SignedWordDot;
+  const bool Pair = Sel == 12 || Sel == 13 || Sel == 14 || Sel >= 28 || WordDot;
+  const bool Single = Sel >= 16 && !WordDot;
   const bool Subtract =
-      Sel == 5 || Sel == 11 || Sel == 13 || Sel == 15 || Sel == 31;
+      Sel == 5 || Sel == 11 || Sel == 13 || Sel == 15 || Sel == 27 || Sel == 31;
   const bool Difference = Sel == 6 || Sel == 14;
   const uint16_t Bytes = DotByte ? 1 : Pair ? 4 : 2;
   const auto Lane = [&](NdVar V, unsigned I) {
@@ -391,8 +432,8 @@ bool MIPSLifter::liftDSP64Accumulator(State &S, uint32_t Word) const {
   auto Overflow = NdVar::cst(0, 1);
   for (unsigned I = 0; I < Count; ++I) {
     auto X = Lane(A, First + I), Y = Lane(B, First + I);
-    auto Product = S.binary(NdOp::INT_MULT, S.resize(X, 8, Fractional),
-                            S.resize(Y, 8, Fractional));
+    auto Product = S.binary(NdOp::INT_MULT, S.resize(X, 8, SignedProduct),
+                            S.resize(Y, 8, SignedProduct));
     if (Fractional) {
       const auto Min = NdVar::cst(uint64_t(1) << (Bytes * 8 - 1), Bytes);
       const auto Sat =
@@ -404,8 +445,8 @@ bool MIPSLifter::liftDSP64Accumulator(State &S, uint32_t Word) const {
     }
     const bool Sub = Subtract || (Difference && !(I & 1));
     const auto HighProduct =
-        Fractional ? S.binary(NdOp::INT_ASHR, Product, NdVar::cst(63, 8))
-                   : NdVar::cst(0, 8);
+        SignedProduct ? S.binary(NdOp::INT_ASHR, Product, NdVar::cst(63, 8))
+                      : NdVar::cst(0, 8);
     const auto NewLow =
         S.binary(Sub ? NdOp::INT_SUB : NdOp::INT_ADD, Lower, Product);
     const auto Carry = Sub ? S.binary(NdOp::INT_LESS, Lower, Product, 1)
