@@ -21291,6 +21291,14 @@ The earlier 204-observation translation-profile receipt is historical. Current f
 
 ## Native Lift qualification
 
+Windows source fixtures use the AddressSanitizer DLL reported by their pinned
+Clang driver. The installer prepends that runtime directory to the job's DLL
+search path; MSVC's independently installed ASan DLL is not interchangeable.
+LLVMC tests inspect original Windows runtime declarations before renaming
+mock definitions for execution, so they cannot collide with the host CRT.
+The POSIX `optarg`/`optind` case checks emitted declarations on every host and
+explicitly skips native execution on Windows, which lacks `<unistd.h>`.
+
 The `Lift native qualification` workflow owns the 108 previously unqualified cases (62 failures and 46 skips). It installs Clang 23 or newer, GNU GCC and the i386 development libraries on a native Linux x86-64 runner, and initializes the pinned binary corpus. `unittests/Inputs/lift-qualification.json` retains every original test identity. `scripts/run_lift_qualification.py` rejects missing, duplicate, disabled, skipped or failed cases and a nonzero process exit; `qualification.json` records individual passes, source/corpus revisions, compiler versions and binary hashes.
 
 The profile executes native i386/x86-64 controls, x87 extended precision, and generated Swift SSE result, state and unmasked-trap checks at both optimization levels. The AArch64 parity controls decode the actual `.text` of a pinned Rust runtime. Cross-target decoding does not establish native execution on that target; use the separate source-patch native process jobs for Windows/Linux x64/ARM64 and the local macOS checks.
