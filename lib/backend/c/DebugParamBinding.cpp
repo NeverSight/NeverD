@@ -147,6 +147,26 @@ neverd::bindDebugParams(Arch A, BinaryFormat F, const FunctionSym &Signature,
                   Piece.Location.ValueBytes >= Size &&
                   (Piece.Location.Kind != SourceABICarrierKind::Stack ||
                    Site.Bytes >= Size);
+        // Scalar entry projection can rejoin a floating value split across
+        // integer registers. Its full-width site anchors at the first physical
+        // word, which is the high word on big-endian MIPS. A remaining site for
+        // another piece means these are still separate machine parameters.
+        const auto &Pieces = Placement->Parameters[DI];
+        if (Declared && Declared->Kind == NdTypeKind::Float &&
+            Site.Bytes == Size && Site.Bytes > Piece.Location.ValueBytes &&
+            &Piece == &Pieces.front() &&
+            llvm::all_of(Pieces, [&](const SourceParameterPiece &P) {
+              return !P.Indirect &&
+                     P.Location.Kind == SourceABICarrierKind::IntegerRegister &&
+                     (&P == &Piece ||
+                      llvm::none_of(
+                          Sites, [&](const RecoveredParamSite &Other) {
+                            return Other.RegOff == P.Location.RegisterOffset;
+                          }));
+            })) {
+          B.Offset = 0;
+          B.Whole = true;
+        }
         B.Indirect = Piece.Indirect && Delta == 0;
       }
   }

@@ -520,6 +520,7 @@ void bindMIPS16ScalarEntry(MedFunc &Function, Arch Target,
       Call.OpIdx = Indices[Call.OpIdx];
   Entry = std::move(Projected);
   Function.Params = std::move(Parameters);
+  Function.SourceParametersBound = true;
   Function.TypedParams.clear();
   for (size_t I = 0; I < Function.Params.size(); ++I)
     Function.TypedParams.push_back(

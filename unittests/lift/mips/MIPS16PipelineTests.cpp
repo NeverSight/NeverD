@@ -8,6 +8,7 @@
 /// of the alternate compressed ISA on definitions and declarations.
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/backend/c/DebugParamBinding.h"
 #include "MIPSFixtures.h"
 #include "gtest/gtest.h"
 
@@ -18,6 +19,7 @@
 #include "neverd/debug/DebugContext.h"
 #include "neverd/debug/UserPrototype.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/pipeline/Pipeline.h"
 
@@ -35,6 +37,33 @@ using namespace neverd;
 namespace {
 
 class MIPS16Pipeline : public ::testing::TestWithParam<Arch> {};
+
+TEST_P(MIPS16Pipeline, DoubleParameterNamesDistinguishWholeFromPhysicalWords) {
+  FunctionSym Signature;
+  Signature.ReturnType = NdType::makeInt(4, false);
+  Signature.Params = {{"value", NdType::makeFloat(8)}};
+  const bool Little = GetParam() == Arch::MIPS32EL;
+  const auto Bind = [&](const std::vector<RecoveredParamSite> &Sites) {
+    return bindDebugParams(GetParam(), BinaryFormat::ELF, Signature, Sites,
+                           nullptr, InstructionMode::MIPS16);
+  };
+  const auto Whole = Bind({{mipsreg::r(4), 0, 8}});
+  ASSERT_EQ(Whole.Params.size(), 1u);
+  EXPECT_TRUE(Whole.Params[0].Whole);
+  EXPECT_EQ(debugParamName(Signature, Whole.Params[0]), "value");
+  const auto Split = Bind({{mipsreg::r(4), 0, 4}, {mipsreg::r(5), 1, 4}});
+  ASSERT_EQ(Split.Params.size(), 2u);
+  EXPECT_FALSE(Split.Params[0].Whole);
+  EXPECT_FALSE(Split.Params[1].Whole);
+  EXPECT_EQ(debugParamName(Signature, Split.Params[0]),
+            Little ? "value" : "value_4");
+  EXPECT_EQ(debugParamName(Signature, Split.Params[1]),
+            Little ? "value_4" : "value");
+  const auto Overlapping = Bind({{mipsreg::r(4), 0, 8}, {mipsreg::r(5), 1, 4}});
+  EXPECT_FALSE(Overlapping.Params[0].Whole);
+  const auto LaterWord = Bind({{mipsreg::r(5), 0, 8}});
+  EXPECT_FALSE(LaterWord.Params[0].Whole);
+}
 
 TEST(MIPS16PipelineSource, SelectedClassicCallerRetainsCompressedDeclaration) {
   llvm::LLVMContext Context;
