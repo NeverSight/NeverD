@@ -30,6 +30,13 @@ _, version = run('compiler-version', [compiler, '--version'])
 code, runtime = run('runtime-directory', [compiler, '-print-runtime-dir'])
 assert code == 0
 runtime = Path(runtime.strip())
+code, dll = run('runtime-file', [compiler, '-print-file-name=clang_rt.asan_dynamic-x86_64.dll'])
+assert code == 0
+runtime_file = Path(dll.strip())
+installed_dlls = list(compiler.parent.parent.rglob('clang_rt.asan_dynamic-x86_64.dll'))
+(out / 'installed-runtime-files.json').write_text(json.dumps([str(x) for x in installed_dlls], indent=2) + '\n')
+if runtime_file.is_file():
+    runtime = runtime_file.parent
 metadata = dict(manifest, workflow_source=os.environ['GITHUB_SHA'],
                 compiler=str(compiler), compiler_sha256=digest(compiler),
                 compiler_version=version, runtime_directory=str(runtime),
