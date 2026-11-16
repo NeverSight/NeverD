@@ -1902,10 +1902,10 @@ return continues the landing pad. `LDUR` and `STUR` now participate in native
 register body generation and the existing exact-instruction publication checks.
 
 This admission requires an owned language lifetime table. It does not infer
-cleanup scopes for arbitrary faulting instructions. Compact-only live-LR
-language delivery, additional signing recipes, and native PAuth_LR/PACM-PC/
-CPTA-on qualification remain separate coverage requirements. The LLVM fork
-revision and prebuilt r6 are unchanged.
+cleanup scopes for arbitrary faulting instructions. At this milestone,
+compact-only live-LR delivery, additional signing recipes, and native
+PAuth_LR/PACM-PC/CPTA-on qualification remained separate coverage requirements.
+The LLVM fork revision and prebuilt r6 were unchanged.
 
 Both macos-26 and xcode-27 passed all 127 source-bound publication cases from
 `ec26d6dfa35fc2ae4e945a3bdfcfb07a034248e1`, with no failed or skipped cases.
@@ -1923,3 +1923,82 @@ arm64e.x1 launch attempt. The temporary release and asset were deleted with
 verified HTTP 404 responses; the replay repository was returned to its baseline
 tree. [Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43746760233)
 and [per-host verification record](evidence/arm64e-live-lr-2026-11-16.json).
+
+### Compact live-LR and adapted signing recipes
+
+Protected compact frameless scopes can now use live LR when their actual system
+recipe agrees with the instruction-derived frame: SP plus the encoded stack
+size, no saved register pairs, and unchanged preserved registers. The scope's
+owned address-based language table must protect the interrupted instruction.
+A mismatched stack size, compact FP record or saved-pair encoding cannot
+authorize this route. The saved-pair consumer discrepancy described above still
+requires publication to indexed DWARF.
+
+Live-LR delivery first authenticates the recovered original recipe. It then
+signs a separate caller return using Darwin's implicit IB/CFA unwind schema.
+The bridge preserves this value, the virtual protected edge, and the original
+LR independently, below the interrupted red zone. Its personality and resume
+entry expose the adapted LR to the system walker while restoring the original
+LR for the landing pad's instructions. Thus unsigned and IA-signed interrupted
+states need not masquerade as an IB signature. The source still owns its
+synchronous calling ABI: the indexed fixtures authenticate or sign their live
+return before spilling it for calls; the compact fixtures restore their stack
+and authenticate before tail-calling a language resume or catch helper.
+
+The recovered row also retains explicit PAuth_LR and PACM IA/IB recipes and
+their relocated signing PCs. These use the existing hardware-capability and
+signature checks before any signal-context mutation. Static admission across
+both metadata forms does not qualify executing explicit PAuth_LR or the
+PC-dependent behavior of PACM on unsupported hardware. The bridge does not
+repair arbitrary synchronous CFI, invent language lifetimes, or replace the
+signature in a saved source stack slot.
+
+The regression matrix covers C++/Objective-C, compact/indexed frames,
+unsigned/IA/IB live returns, replacement objects and NeverD-generated images,
+cleanup/local catch, O0/O2, and normal/alternate signal stacks. Each native
+delivery also walks a cursor from the resume entry, checks both the original
+and adapted returns, and verifies refusal of an unknown recipe or unavailable
+explicit PAuth_LR without modifying the kernel context. Runtime assembly and
+ABI constants, fixture source, and admitted native hint aliases remain in
+their owning `.def` tables. LLVM and prebuilt r6 are unchanged.
+
+Once a proved native register body supplies every instruction and CFI row, it
+owns the return-signing policy. Its naked LLVM wrapper drops inferred compiler
+prologue attributes and retains the PAuth instruction feature. This permits
+an IA or unsigned protected scope to convert its return recipe before making
+ordinary Darwin calls without also requesting a conflicting compiler prologue.
+
+The compact Objective-C catch helper also exposed an overly broad shared frame
+classification: `objc_begin_catch` and other ordinary runtime-call annotations
+were treated as local unwind handlers. `ExceptionFunction::describesUnwindOnly`
+now distinguishes these annotations from landing pads, fragile setjmp state and
+MSVC tables; personality, LSDA, parse completeness and other language-table
+requirements remain intact. The narrower scalar comparison profile continues
+to reject runtime-call annotations it cannot project.
+
+Both macos-26 and xcode-27 passed all 167 source-bound publication cases from
+`9fa1dda6876d960bac97bd0a69c6cb4a8c457861`, with no failed or skipped cases.
+Each host completed 384 live-LR deliveries and resume-cursor checks: 192
+cleanup paths and 192 local catches, including 192 compact-only deliveries.
+Unsigned, IA/CFA and IB/CFA each contributed 128 deliveries per host. This
+includes original, replacement and NeverD-generated images at O0/O2 on normal
+and alternate signal stacks. Windows frontend checks passed as well.
+
+Both fresh hardware reports still identify M1 virtual machines. Explicit
+PAuth_LR, PACM PC dependence and CPTA-on remain unqualified, including the
+signed arm64e.x1 launch attempt. The extended PC-dependent recipes have
+recovery/admission coverage here; that does not complete their native
+publication and language-delivery matrices. The temporary release, asset and
+tag were deleted with verified HTTP 404 responses, and the replay repository
+was returned to its baseline tree.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43792618472)
+and [per-host verification record](evidence/arm64e-compact-live-lr-2026-11-16.json).
+
+Local Release checks passed all 167 publication cases, all 33 unwind-recovery
+cases, 321 language-EH cases with one explicit sample skip, and 144 related
+cases with four native/environment skips. All 324 binary-diff cases and 12
+tail-frame cases passed, including the scalar profile's nine focused checks.
+The latter target's CLI dependency was built with the real shared SDK enabled.
+C11/C++20 multi-translation-unit checks, clang-format 22.1.2 and the documentation
+inventory also passed. Generated products were removed after recording hashes;
+the active Release build and r6 were retained.

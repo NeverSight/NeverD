@@ -4,9 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "gtest/gtest.h"
-
 #include "ObjCEHTestsDetail.h"
+#include "gtest/gtest.h"
 
 namespace {
 
@@ -16,6 +15,38 @@ using namespace neverd::objc_eh_test;
 //===----------------------------------------------------------------------===//
 // Runtime call sites
 //===----------------------------------------------------------------------===//
+
+TEST(ObjCRuntimeCalls, OrdinaryCallsDoNotInstallAnUnwindHandler) {
+  for (auto Kind :
+       {ObjCRuntimeCallKind::Throw, ObjCRuntimeCallKind::Rethrow,
+        ObjCRuntimeCallKind::BeginCatch, ObjCRuntimeCallKind::EndCatch,
+        ObjCRuntimeCallKind::SyncEnter, ObjCRuntimeCallKind::SyncExit,
+        ObjCRuntimeCallKind::Terminate, ObjCRuntimeCallKind::ARCCleanup}) {
+    SCOPED_TRACE(static_cast<unsigned>(Kind));
+    ExceptionFunction F;
+    F.Dwarf.emplace();
+    F.ObjC.emplace().RuntimeCalls.push_back({.Kind = Kind});
+    EXPECT_TRUE(F.describesUnwindOnly());
+    auto Changed = F;
+    Changed.ObjC->LandingPads.emplace_back();
+    EXPECT_FALSE(Changed.describesUnwindOnly());
+    Changed = F;
+    Changed.ObjC->UsesFragileSetjmp = true;
+    EXPECT_FALSE(Changed.describesUnwindOnly());
+    Changed = F;
+    Changed.ObjC->UsesMSVCTables = true;
+    EXPECT_FALSE(Changed.describesUnwindOnly());
+    Changed = F;
+    Changed.Itanium.emplace();
+    EXPECT_FALSE(Changed.describesUnwindOnly());
+    Changed = F;
+    Changed.Personality = ExceptionPersonality::ObjCPersonalityV0;
+    EXPECT_FALSE(Changed.describesUnwindOnly());
+    Changed = F;
+    Changed.ParseStatus = ExceptionParseStatus::Partial;
+    EXPECT_FALSE(Changed.describesUnwindOnly());
+  }
+}
 
 TEST(ObjCRuntimeCalls, ClassifiesEveryEntryPointAFrameCanReach) {
   struct Case {
@@ -35,9 +66,8 @@ TEST(ObjCRuntimeCalls, ClassifiesEveryEntryPointAFrameCanReach) {
       {"objc_exception_match", ObjCRuntimeCallKind::FragileTry},
   };
   for (const Case &C : Cases) {
-    BinaryImage Img =
-        makeObjCImage("__objc_personality_v0", {},
-                      {SiteSpec{0x10, 0x10, 0x40, /*Action=*/0}});
+    BinaryImage Img = makeObjCImage("__objc_personality_v0", {},
+                                    {SiteSpec{0x10, 0x10, 0x40, /*Action=*/0}});
     addSymbol(Img, C.Symbol, kRuntimeVA);
     writeCall(Img, kFuncVA, kRuntimeVA);
 

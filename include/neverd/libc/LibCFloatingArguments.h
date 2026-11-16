@@ -23,9 +23,18 @@
 namespace neverd::libc {
 
 inline std::optional<FloatingCallArguments>
-floatingCallArguments(const FunctionSym &Function, Arch A, BinaryFormat F) {
+floatingCallArguments(const FunctionSym &Function, Arch A, BinaryFormat F,
+                      const DebugContext *NativeDebug = nullptr) {
+  // A native declaration must come from the exact image's validated type
+  // reader. Names alone, ambiguous entries and missing return contracts do
+  // not establish a complete call ABI.
+  const bool NativeDeclaration =
+      NativeDebug && NativeDebug->hasAuthenticatedFunctionSignatures() &&
+      NativeDebug->resolveAuthenticatedReturnValueState(Function.Addr).Kind !=
+          AuthenticatedReturnKind::Unknown;
   if ((!Function.PrototypeFromHeader && !Function.PrototypeFromCLibrary &&
-       Function.PrototypeLibrary != UserPrototypeLibrary) ||
+       Function.PrototypeLibrary != UserPrototypeLibrary &&
+       !NativeDeclaration) ||
       !Function.PlatformConvention || Function.IsVariadic ||
       !Function.ParamEntryLocations.empty() ||
       Function.CallConv == DebugCallConv::Fastcall ||

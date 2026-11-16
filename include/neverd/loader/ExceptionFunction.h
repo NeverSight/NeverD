@@ -204,9 +204,12 @@ struct ExceptionFunction {
   /// True when this record only says how to unwind the frame: it is fully
   /// parsed and names no personality routine, handler data or language table,
   /// so no handler or cleanup of this function runs during an unwind.
+  /// Ordinary Objective-C runtime calls do not install a local unwind handler.
   bool describesUnwindOnly() const {
     return ParseStatus == ExceptionParseStatus::Complete &&
-           !hasLanguageTable() && !Rust && !ObjC &&
+           !hasLanguageTable() && !Rust &&
+           (!ObjC || (ObjC->LandingPads.empty() && !ObjC->UsesFragileSetjmp &&
+                      !ObjC->UsesMSVCTables)) &&
            Personality == ExceptionPersonality::None && PersonalityVA == 0 &&
            PersonalityName.empty() && HandlerDataVA == 0 &&
            (!Dwarf || Dwarf->LSDAVA == 0);

@@ -148,7 +148,7 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
     const bool ScalarIntegerResult =
         (A == Arch::X64 || A == Arch::AArch64) && ScalarParameter(ReturnType);
     if ((!isMIPS(A) && !VoidReturn && !ScalarIntegerResult) || !ReturnType ||
-        !llvm::any_of(Parameters, Scalar) ||
+        (!isMIPS(A) && !llvm::any_of(Parameters, Scalar)) ||
         (ReturnType->Kind != NdTypeKind::Void && !IntegerPair &&
          !ScalarParameter(ReturnType)))
       return std::nullopt;

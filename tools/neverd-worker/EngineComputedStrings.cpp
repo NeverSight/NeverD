@@ -54,7 +54,7 @@ Json Engine::computedStringsStep() {
   if (arch != "x86_64" && arch != "x64" && arch != "aarch64")
     throw Error("unsupported", "Computed strings require x64 or AArch64");
   if (!computedStrings_) {
-    computedStrings_.emplace();
+    computedStrings_.emplace(ComputedStrings{});
     // Identifies a disposable catalogue, including across replica restarts.
     computedStrings_->generation = std::to_string(
         std::chrono::steady_clock::now().time_since_epoch().count());

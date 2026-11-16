@@ -183,20 +183,16 @@ private:
   /// prepares one function in an analysis replica; table reads never prepare
   /// functions, and completed failures remain visible alongside observations.
   struct ComputedStrings {
-    ComputedStrings()
-        : next(0), failures(0), discovered(false), complete(false),
-          rows(Json::array()), ordered(false) {}
-
     std::string generation;
     std::vector<std::uint64_t> pending;
     std::unordered_set<std::uint64_t> scheduled;
-    std::size_t next, failures;
-    bool discovered, complete;
+    std::size_t next = 0, failures = 0;
+    bool discovered = false, complete = false;
     std::string discoveryError;
-    Json rows;
+    Json rows = Json::array();
     std::vector<std::size_t> order;
     std::string orderKey;
-    bool ordered;
+    bool ordered = false;
   };
   std::optional<ComputedStrings> computedStrings_;
   Json computedStringsStep();

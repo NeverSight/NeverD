@@ -36,10 +36,12 @@ _Unwind_Reason_Code ndDarwinArm64eLiveLRPersonality(
   const _Unwind_Reason_Code Failure = Actions & _UA_SEARCH_PHASE
                                           ? _URC_FATAL_PHASE1_ERROR
                                           : _URC_FATAL_PHASE2_ERROR;
-  unw_word_t BridgeSP, BridgePC, CallerLR, InterruptedSP, VirtualReturn;
+  unw_word_t BridgeSP, BridgePC, CallerLR, SystemLR, InterruptedSP,
+      VirtualReturn;
   if (unw_get_reg(System, UNW_REG_SP, &BridgeSP) ||
       unw_get_reg(System, UNW_REG_IP, &BridgePC) || unw_step(System) <= 0 ||
-      unw_get_reg(System, UNW_ARM64_LR, &CallerLR) ||
+      unw_get_reg(System, UNW_ARM64_LR, &SystemLR) ||
+      unw_get_reg(System, NDArm64eCallerLRRegister, &CallerLR) ||
       unw_get_reg(System, UNW_REG_SP, &InterruptedSP) ||
       unw_get_reg(System, UNW_REG_IP, &VirtualReturn))
     return Failure;
@@ -68,6 +70,7 @@ _Unwind_Reason_Code ndDarwinArm64eLiveLRPersonality(
     if (unw_get_reg(System, UNW_REG_SP, &SP))
       return Failure;
     _Unwind_SetGR(Context, NDArm64eCallerLRRegister, CallerLR);
+    _Unwind_SetGR(Context, NDArm64eSystemLRRegister, SystemLR);
     _Unwind_SetGR(Context, NDArm64eInterruptedSPRegister, InterruptedSP);
     _Unwind_SetGR(Context, NDArm64eResumeReturnRegister, VirtualReturn);
     _Unwind_SetGR(Context, NDArm64eLandingPadRegister,
@@ -207,8 +210,7 @@ static inline bool ndDarwinArm64eDeliverSignalException(
         Site.Begin != PC || Site.End - PC != NDArm64eInstructionAlignment ||
         Caller.SP < Low || Caller.SP > High ||
         Caller.SP % NDArm64eStackAlignment ||
-        (!Row.SavedLR && (Row.Signing != NDArm64eSignedIBWithCFA ||
-                          Caller.SP - Low < NDArm64eLiveLRBridgeBytes)) ||
+        (!Row.SavedLR && Caller.SP - Low < NDArm64eLiveLRBridgeBytes) ||
         !ndDarwinArm64eStepFrameWithPAuthLR(&Caller, Row, Low, High,
                                             HasPAuthLR))
       return false;
@@ -217,6 +219,12 @@ static inline bool ndDarwinArm64eDeliverSignalException(
       // allocates its frame after sigreturn and restores LR independently of
       // the virtual protected edge. Nothing writes below interrupted SP here.
       State->__x[NDArm64eDeliveryRegister] = (uintptr_t)Deliver;
+      // Authenticate with the recovered recipe before adapting the cursor's
+      // separate LR column to Darwin's implicit IB/CFA unwind ABI. The bridge
+      // retains the original LR for executable landing-pad restoration.
+      State->__x[NDArm64eSystemLRRegister] =
+          (uintptr_t)ptrauth_sign_unauthenticated(
+              (void *)Caller.PC, ptrauth_key_return_address, Caller.SP);
       State->__x[NDArm64eVirtualReturnRegister] =
           (uintptr_t)ptrauth_sign_unauthenticated(
               (void *)(Site.ProtectedReturn ? Site.ProtectedReturn : Site.End),

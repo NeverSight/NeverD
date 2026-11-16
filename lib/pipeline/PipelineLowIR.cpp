@@ -4044,11 +4044,11 @@ ImportPrototypeArguments importPrototypeArguments(
       const auto Function = Dbg->resolveFunction(Addr);
       if (!Function)
         return;
-      if (isMIPS(Img.Arch) && Convention &&
+      if (isMIPS(Img.Arch) && Function->Addr == Addr && Convention &&
           (Convention->ArgumentsFromCallSetup ||
            Convention->RegisterArgumentsFromCalleeSummary))
         if (auto Floating = libc::floatingCallArguments(*Function, Img.Arch,
-                                                        Img.abiFormat())) {
+                                                        Img.abiFormat(), Dbg)) {
           if (Floating->ReturnKind == NdTypeKind::Float)
             Result.FloatReturns[Addr] = Floating->ReturnBytes;
           Result.FloatingArguments.emplace(Addr, std::move(*Floating));
