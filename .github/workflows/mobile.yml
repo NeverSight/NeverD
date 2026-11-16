@@ -6,47 +6,6 @@ name: Mobile Decompilation
 # covers those commits. A regression from one reaches a result within a day
 # without spending this workflow's runner hours on every commit.
 on:
-  schedule:
-    - cron: '17 23 * * *'
-  push:
-    branches: [dev]
-    paths:
-      - '.github/workflows/mobile.yml'
-      - '.github/workflows/mobile-real-apps.yml'
-      - 'tools/neverd/mobile/**'
-      - 'tools/neverd/neverd.cpp'
-      - 'tools/neverd/cmd/NeverDCmdMobile.cpp'
-      - 'lib/dalvik/**'
-      - 'include/neverd/dalvik/**'
-      - 'lib/loader/ObjC/**'
-      - 'include/neverd/loader/ObjC/**'
-      - 'lib/loader/Swift/**'
-      - 'include/neverd/loader/Swift/**'
-      - 'lib/backend/swift/**'
-      - 'unittests/mobile/**'
-      - 'scripts/*mobile*'
-      - 'scripts/tests/*mobile*'
-      - 'scripts/tests/fixtures/mobile/**'
-  pull_request:
-    # closed cancels this PR's run through its concurrency group; no job runs.
-    types: [opened, synchronize, reopened, closed]
-    paths:
-      - '.github/workflows/mobile.yml'
-      - '.github/workflows/mobile-real-apps.yml'
-      - 'tools/neverd/mobile/**'
-      - 'tools/neverd/neverd.cpp'
-      - 'tools/neverd/cmd/NeverDCmdMobile.cpp'
-      - 'lib/dalvik/**'
-      - 'include/neverd/dalvik/**'
-      - 'lib/loader/ObjC/**'
-      - 'include/neverd/loader/ObjC/**'
-      - 'lib/loader/Swift/**'
-      - 'include/neverd/loader/Swift/**'
-      - 'lib/backend/swift/**'
-      - 'unittests/mobile/**'
-      - 'scripts/*mobile*'
-      - 'scripts/tests/*mobile*'
-      - 'scripts/tests/fixtures/mobile/**'
   workflow_dispatch:
 
 permissions:

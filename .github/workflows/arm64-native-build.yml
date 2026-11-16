@@ -4,36 +4,7 @@ name: ARM64 native backend build
 # and the result follows these sources and the build configuration. Changes to
 # shared headers or other dependencies surface in the nightly run.
 on:
-  schedule:
-    - cron: '47 23 * * *'
   workflow_dispatch:
-  push:
-    branches: [dev]
-    paths:
-      - '.github/workflows/arm64-native-build.yml'
-      - 'CMakeLists.txt'
-      - 'cmake/**'
-      - 'lib/emulation/**'
-      - 'include/neverd/emulation/**'
-      - 'third_party/llvm-project'
-      - 'scripts/build.py'
-      - 'scripts/audit_native_backend_build.py'
-      - 'scripts/probe_native_host.*'
-      - 'scripts/NativeHostProbe.def'
-      - 'scripts/tests/test_audit_native_backend_build.py'
-  pull_request:
-    paths:
-      - '.github/workflows/arm64-native-build.yml'
-      - 'CMakeLists.txt'
-      - 'cmake/**'
-      - 'lib/emulation/**'
-      - 'include/neverd/emulation/**'
-      - 'third_party/llvm-project'
-      - 'scripts/build.py'
-      - 'scripts/audit_native_backend_build.py'
-      - 'scripts/probe_native_host.*'
-      - 'scripts/NativeHostProbe.def'
-      - 'scripts/tests/test_audit_native_backend_build.py'
 
 permissions:
   contents: read

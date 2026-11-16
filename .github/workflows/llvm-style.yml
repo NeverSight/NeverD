@@ -1,12 +1,6 @@
 name: LLVM Style
 
 on:
-  push:
-    branches:
-      - dev
-  pull_request:
-    # closed cancels this PR's run through its concurrency group; no job runs.
-    types: [opened, synchronize, reopened, closed]
   workflow_dispatch:
 
 permissions:

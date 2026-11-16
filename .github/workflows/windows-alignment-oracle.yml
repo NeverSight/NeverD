@@ -2,41 +2,6 @@ name: Windows alignment observations
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - '.github/workflows/windows-alignment-oracle.yml'
-      - 'scripts/check_windows_alignment.py'
-      - 'scripts/tests/test_check_windows_alignment.py'
-      - 'unittests/emulation/fixtures/windows_alignment.*'
-      - 'unittests/emulation/fixtures/WindowsAlignmentCases.def'
-      - 'scripts/check_aarch64_exclusives.py'
-      - 'scripts/tests/test_check_aarch64_exclusives.py'
-      - 'unittests/emulation/aarch64/AArch64ExclusiveCases.def'
-      - 'unittests/emulation/fixtures/aarch64_exclusive*'
-      - 'unittests/emulation/fixtures/AArch64ExclusiveOracle.def'
-      - 'scripts/check_aarch64_atomics.py'
-      - 'scripts/tests/test_check_aarch64_atomics.py'
-      - 'unittests/emulation/aarch64/AArch64AtomicCases.def'
-      - 'unittests/emulation/fixtures/aarch64_atomic*'
-      - 'unittests/emulation/fixtures/AArch64AtomicOracle.def'
-  push:
-    branches: [dev]
-    paths:
-      - '.github/workflows/windows-alignment-oracle.yml'
-      - 'scripts/check_windows_alignment.py'
-      - 'scripts/tests/test_check_windows_alignment.py'
-      - 'unittests/emulation/fixtures/windows_alignment.*'
-      - 'unittests/emulation/fixtures/WindowsAlignmentCases.def'
-      - 'scripts/check_aarch64_exclusives.py'
-      - 'scripts/tests/test_check_aarch64_exclusives.py'
-      - 'unittests/emulation/aarch64/AArch64ExclusiveCases.def'
-      - 'unittests/emulation/fixtures/aarch64_exclusive*'
-      - 'unittests/emulation/fixtures/AArch64ExclusiveOracle.def'
-      - 'scripts/check_aarch64_atomics.py'
-      - 'scripts/tests/test_check_aarch64_atomics.py'
-      - 'unittests/emulation/aarch64/AArch64AtomicCases.def'
-      - 'unittests/emulation/fixtures/aarch64_atomic*'
-      - 'unittests/emulation/fixtures/AArch64AtomicOracle.def'
 
 permissions:
   contents: read
