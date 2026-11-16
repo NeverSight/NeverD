@@ -42,6 +42,22 @@ CALLER = PRELUDE + """u32 kernel(u32 mask, u32 bits) {
 }
 """
 
+DOUBLE_CALLEE = PRELUDE.replace("float value", "double value") + """
+M16 u32 fp_callee(double value, u32 mask) {
+  union { double f; unsigned long long bits; } v = { .f = value };
+  u32 high = (u32)(v.bits >> 32);
+  return mask ^ (u32)v.bits ^ (high << 7 | high >> 25);
+}
+"""
+DOUBLE_CALLER = PRELUDE.replace("float value", "double value") + """
+u32 kernel(u32 mask, u32 low, u32 high) {
+  union { double f; unsigned long long bits; } v = {
+    .bits = (unsigned long long)high << 32 | low
+  };
+  return fp_callee(v.f, mask);
+}
+"""
+
 
 def run(args, artifacts):
     rows = []
@@ -51,6 +67,14 @@ def run(args, artifacts):
                 0x7f800000, 0xff800000, 0x7fa12345, 0xffc54321,
                 0x3fc00000, 0xc0200000, 0xffffffff]
     patterns += [rng.getrandbits(32) for _ in range(19)]
+    if args.double:
+        patterns = [0, 1, 0x8000000000000000, 0x000fffffffffffff,
+                    0x0010000000000000, 0x7fefffffffffffff,
+                    0x7ff0000000000000, 0xfff0000000000000,
+                    0x7ff123456789abcd, 0xfff8fedcba987654,
+                    0x3ff8000000000000, 0xc004000000000000,
+                    0xffffffffffffffff]
+        patterns += [rng.getrandbits(64) for _ in range(19)]
     cases = [(mask, bits) for mask in (0, 0x71395217, 0x80000000, 0xffffffff)
              for bits in patterns]
 
@@ -87,16 +111,18 @@ def run(args, artifacts):
                              "-Ttext", "0x10000", "-e", "kernel", *objects, "-o", output])
 
                 caller, callee = directory / "caller.c", directory / "callee.c"
-                caller.write_text(CALLER)
-                callee.write_text(CALLEE)
+                caller.write_text(DOUBLE_CALLER if args.double else CALLER)
+                callee.write_text(DOUBLE_CALLEE if args.double else CALLEE)
                 caller_obj, callee_obj = directory / "caller.o", directory / "callee.o"
                 compile(args.clang, caller, caller_obj, mode, "-O2")
                 compile(args.clang, callee, callee_obj, "mips16", "-O2")
                 original = directory / "original.elf"
                 link([caller_obj, callee_obj], original)
-                expected = gpr_float.observe(original, little, mode, fr, cases)
+                expected = gpr_float.observe(original, little, mode, fr, cases,
+                                             split_double=args.double)
                 header = directory / "declarations.h"
-                header.write_text("unsigned int fp_callee(float value, unsigned int mask);\n")
+                scalar = "double" if args.double else "float"
+                header.write_text(f"unsigned int fp_callee({scalar} value, unsigned int mask);\n")
                 command([args.neverd, "types", original, "--declare", header, "--save"])
                 # This separate linker-created local symbol does not yet acquire
                 # the callee's source signature. Keep the refusal explicit, rather
@@ -133,7 +159,8 @@ def run(args, artifacts):
                                 obj, rebuilt = directory / "rebuilt.o", directory / "rebuilt.elf"
                                 compile(compiler, source, obj, "classic", opt)
                                 link([obj, other] if other else [obj], rebuilt)
-                                actual = gpr_float.observe(rebuilt, little, mode, fr, cases)
+                                actual = gpr_float.observe(rebuilt, little, mode, fr, cases,
+                                                           split_double=args.double)
                                 assert actual == expected
                                 rows.append({"profile": profile, "function": function,
                                              "route": route, "compiler": str(compiler),
@@ -145,7 +172,8 @@ def run(args, artifacts):
                                 artifacts.discard(obj, rebuilt)
                         artifacts.discard(source)
                 artifacts.discard(original, caller_obj, callee_obj, caller, callee, header)
-    artifacts.write("summary.json", {"profiles": 8, "original_cases": 8 * len(cases),
+    artifacts.write("summary.json", {"scalar": "double" if args.double else "float",
+                                    "profiles": 8, "original_cases": 8 * len(cases),
                                     "builds": len(rows), "rebuilt_cases": len(rows) * len(cases),
                                     "expected_refusals": len(refusals)})
     print(json.dumps({"builds": len(rows), "rebuilt_cases": len(rows) * len(cases)}))
@@ -153,6 +181,8 @@ def run(args, artifacts):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--double", action="store_true",
+                        help="check both words of a split double parameter")
     for name in ("neverd", "clang", "assembler", "ld", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--gcc", type=Path)

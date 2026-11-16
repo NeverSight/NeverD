@@ -199,6 +199,89 @@ TEST_P(MIPS16Pipeline, DeclaredLeadingFloatUsesItsActualEntryMode) {
   }
 }
 
+TEST_P(MIPS16Pipeline, SplitDoubleEntryKeepsBothPhysicalWords) {
+  mips_test::ELFBytes File(GetParam());
+  File.abiFlags();
+  File.Bytes[0xe5] = 1;
+  File.Bytes[0xe7] = 1;
+  File.put(36, 0x74001000, 4);
+  File.put(24, 0x10101, 4);
+  File.put(0xec, 0x400, 4);
+  // Clang 22 + GNU as 2.47 for uint32_t f(double value, uint32_t mask):
+  // low(value) ^ rotl(high(value), 7) ^ mask. The two words have deliberately
+  // different uses, so an endian-dependent exchange cannot pass the replay.
+  const bool Little = GetParam() == Arch::MIPS32EL;
+  const uint16_t Words[] = {uint16_t(Little ? 0xecce : 0xedce),
+                            0xf640,
+                            uint16_t(Little ? 0x33a2 : 0x3382),
+                            uint16_t(Little ? 0x32bc : 0x329c),
+                            0xea6d,
+                            uint16_t(Little ? 0xea8e : 0xeaae),
+                            0xe8a0};
+  for (unsigned I = 0; I < std::size(Words); ++I)
+    File.put(0x100 + I * 2, Words[I], 2);
+  ELFLoader Loader;
+  auto Image = Loader.loadBuffer(File.buffer());
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  auto Symbol = Symbol::makeFunc(Image->Entry, sizeof(Words));
+  Symbol.Name = "split_double";
+  Image->Symbols.push_back(std::move(Symbol));
+  class DoubleDebug final : public NullDebugContext {
+  public:
+    va_t Entry = 0;
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      if (Address != Entry)
+        return std::nullopt;
+      FunctionSym F;
+      F.Name = "split_double";
+      F.Addr = Address;
+      F.ReturnType = NdType::makeInt(4, false);
+      F.Params = {{"value", NdType::makeFloat(8)},
+                  {"mask", NdType::makeInt(4, false)}};
+      F.PrototypeLibrary = UserPrototypeLibrary.str();
+      return F;
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  Debug.Entry = Image->Entry;
+  for (bool LLVM : {false, true}) {
+    SCOPED_TRACE(LLVM);
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.OnlyFunctionEntries = {Image->Entry};
+    Options.LiftMode = LLVM;
+    Options.EmitDumpOutput = false;
+    auto Result = Pipeline().run(*Image, Context, Options, &Debug);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    ASSERT_EQ(Result.MedIRVerifierFailures, 0u);
+    CEmitterOptions Emit;
+    Emit.TheArch = GetParam();
+    Emit.Format = BinaryFormat::ELF;
+    Emit.Image = &*Image;
+    std::string Text;
+    llvm::raw_string_ostream Out(Text);
+    if (LLVM) {
+      ASSERT_TRUE(Result.LlvmModule);
+      EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+      const auto *Body = Result.LlvmModule->getFunction("split_double");
+      ASSERT_NE(Body, nullptr);
+      ASSERT_EQ(Body->arg_size(), 2u);
+      EXPECT_TRUE(Body->getArg(0)->getType()->isDoubleTy());
+      EXPECT_TRUE(Body->getArg(1)->getType()->isIntegerTy(32));
+      ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, Emit, &Debug));
+    } else {
+      ASSERT_EQ(Result.HighFuncs.size(), 1u);
+      ASSERT_EQ(Result.HighFuncs[0].Params.size(), 2u);
+      EXPECT_EQ(Result.HighFuncs[0].Params[0].Type->Kind, NdTypeKind::Float);
+      EXPECT_EQ(Result.HighFuncs[0].Params[0].Type->Size, 8u);
+      ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, Emit, &Debug));
+    }
+    EXPECT_NE(Text.find("double value, uint32_t mask"), std::string::npos)
+        << Text;
+    EXPECT_NE(Text.find("NEVERD_MIPS16 "), std::string::npos) << Text;
+  }
+}
+
 TEST_P(MIPS16Pipeline, TypedDirectCallReadsGPRFloatInEitherSelection) {
   mips_test::ELFBytes File(GetParam());
   File.Bytes.resize(0x140);
