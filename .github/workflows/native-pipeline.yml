@@ -9,12 +9,13 @@ on:
         required: true
         type: string
       scope:
-        description: Native owners or a bounded MSVC construction reproducer
+        description: Native owners or a bounded compiler/worker reproducer
         type: choice
         default: qualification
         options:
           - qualification
           - constructor-repro
+          - render-store-probe
 
 permissions:
   contents: read
@@ -99,7 +100,7 @@ jobs:
           if-no-files-found: error
           path: constructor-evidence/
   native:
-    if: inputs.scope != 'constructor-repro'
+    if: inputs.scope == 'qualification'
     name: ${{ matrix.name }} MIPS and source ABI
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -347,3 +348,141 @@ jobs:
             build-mips-ci/neverd-dependency-inputs.json
             build-mips-ci/Testing/Temporary/LastTest.log
             build-mips-ci/Testing/Temporary/LastTestsFailed.log
+
+  render_store_probe:
+    if: inputs.scope == 'render-store-probe'
+    name: macOS RenderStore timeout diagnosis
+    runs-on: macos-15
+    timeout-minutes: 55
+    env:
+      EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - name: Verify exact source and pinned dependencies
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          git submodule update --init --depth 1 third_party/capstone third_party/unicorn signatures
+      - name: Install matching macOS build and fixture tools
+        run: |
+          brew install cmake lld ninja llvm@22
+          echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
+          echo "NEVERD_SOURCE_CLANG=$(brew --prefix llvm@22)/bin/clang" >> "$GITHUB_ENV"
+      - name: Configure the failing Release profile and build only the mock worker
+        run: |
+          cmake -S . -B build-mips-ci -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DNEVERD_LLVM_PREBUILT=ON -DNEVERD_BUILD_WORKER=ON \
+            -DNEVERD_ENABLE_CPU_EMULATION=OFF -DNEVERD_ENABLE_WEB_ANALYSIS=OFF \
+            -DNEVERD_ENABLE_SEMANTIC_TESTS=ON \
+            "-DNEVERD_SOURCE_PATCH_TEST_CLANG_EXECUTABLE=$NEVERD_SOURCE_CLANG"
+          python scripts/build.py build-mips-ci --config Release --parallel 3 --target neverd-worker-test-server
+      - name: Repeat exact tests and capture a bounded phase diagnostic
+        run: |
+          cat > build-mips-ci/worker-probe.py <<'PROBE'
+          from collections import Counter
+          from pathlib import Path
+          import datetime, hashlib, json, os, platform, re, shutil, signal, subprocess, sys, time
+          import xml.etree.ElementTree as ET
+
+          root=Path.cwd();build=root/'build-mips-ci';output=build/'evidence';output.mkdir(exist_ok=True)
+          expected=os.environ['EXPECTED_SOURCE_SHA']
+          actual=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          assert re.fullmatch(r'[0-9a-f]{40}',expected) and actual==expected
+          command=['ctest','--test-dir',str(build),'-C','Release']
+          inventory=json.loads(subprocess.check_output(command+['--show-only=json-v1'],text=True))
+          tests=[t for t in inventory['tests'] if len(t.get('command',[]))>2 and Path(t['command'][2]).stem=='neverd-worker-test-server']
+          names=[t['name'] for t in tests];assert len(names)==20 and 'NeverDWorkerRenderStore' in names
+          (output/'worker-inventory.json').write_text(json.dumps(tests,indent=2)+'\n')
+          props={v['name']:v['value'] for t in tests if t['name']=='NeverDWorkerRenderStore' for v in t['properties']}
+          assert float(props['TIMEOUT'])==240
+          binary=build/'bin/neverd-worker-test-server'
+          receipt={'source_sha':actual,'workflow_sha':os.environ['GITHUB_SHA'],'platform':platform.platform(),'machine':platform.machine(),'cpu_count':os.cpu_count(),'python':sys.version,'compiler':subprocess.check_output(['clang++','--version'],text=True),'binary_sha256':hashlib.file_digest(binary.open('rb'),'sha256').hexdigest(),'harness_sha256':hashlib.file_digest(Path(__file__).open('rb'),'sha256').hexdigest(),'fixture_sha256':{n:hashlib.file_digest((root/'tools/neverd-worker/tests'/n).open('rb'),'sha256').hexdigest() for n in ['render_store_test.py','render_ahead_test.py','transport_test.py']},'source_status':subprocess.check_output(['git','status','--porcelain'],text=True),'scope':'Bounded native macOS diagnosis. Three unmodified isolated runs and two complete parallel4 mock-worker groups; existing240second CTest timeout and NEVERD_THREADS unchanged. Not productionSDK or completeMIPS qualification.'}
+          assert not receipt['source_status']
+          (output/'probe-source.json').write_text(json.dumps(receipt,indent=2)+'\n')
+          results=[]
+          def save():
+              (output/'probe-results.json').write_text(json.dumps({'updated_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'source':actual,'runs':results,'scope':receipt['scope']},indent=2)+'\n')
+          def execute(label,args,limit,xml=None,expected_names=None):
+              directory=output/label;directory.mkdir();temporary=directory/'tmp';temporary.mkdir()
+              env=dict(os.environ,TMPDIR=str(temporary.resolve()),PYTHONUNBUFFERED='1')
+              started=time.monotonic();timeout=False
+              with (directory/'run.log').open('w') as log:
+                  child=subprocess.Popen(args,env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+                  try:code=child.wait(timeout=limit)
+                  except subprocess.TimeoutExpired:
+                      timeout=True;os.killpg(child.pid,signal.SIGKILL);code=child.wait()
+                  finally:
+                      # CTest can terminate the Python fixture before it closes its workers.
+                      try:os.killpg(child.pid,signal.SIGKILL)
+                      except ProcessLookupError:pass
+              row={'label':label,'command':args,'exit':code,'outer_timeout':timeout,'wall_seconds':time.monotonic()-started,'temporary_root':str(temporary),'complete_inventory':False}
+              if xml and xml.exists():
+                  cases=list(ET.parse(xml).getroot().iter('testcase'));actual_names=Counter(c.get('name') for c in cases)
+                  row.update({'total':len(cases),'complete_inventory':actual_names==Counter(expected_names),'failed':[c.get('name') for c in cases if c.find('failure') is not None or c.find('error') is not None],'skipped':[c.get('name') for c in cases if c.find('skipped') is not None],'cases':[dict(c.attrib) for c in cases]})
+              files=[f for f in temporary.rglob('*') if f.is_file()];row['discarded_temporary_products']={'files':len(files),'logical_bytes':sum(f.stat().st_size for f in files)}
+              shutil.rmtree(temporary);results.append(row);save();print(json.dumps({k:v for k,v in row.items() if k not in ['command','cases']},indent=2),flush=True)
+              return row
+          for i in range(3):
+              label=f'isolated-{i+1}';xml=output/(label+'.xml')
+              execute(label,command+['-R','^NeverDWorkerRenderStore$','--parallel','1','--no-tests=error','--output-on-failure','--output-junit',str(xml)],310,xml,['NeverDWorkerRenderStore'])
+          for i in range(2):
+              label=f'complete-group-{i+1}';xml=output/(label+'.xml')
+              execute(label,command+['-R','^('+'|'.join(re.escape(n) for n in names)+')$','--parallel','4','--no-tests=error','--output-on-failure','--output-junit',str(xml)],1050,xml,names)
+          # A diagnostic-only longer run can locate the time spent; it cannot turn an
+          # original240second failure into a qualifying pass. No production test is edited.
+          if any(r['exit'] or r['outer_timeout'] or not r['complete_inventory'] or (r['label'].startswith('isolated') and r['wall_seconds']>210) for r in results):
+              trace=output/'trace-render-store.py'
+              trace.write_text('''from pathlib import Path
+          import faulthandler,json,sys,time
+          sys.path.insert(0,str(Path.cwd()/"tools/neverd-worker/tests"))
+          import render_store_test as target
+          start=time.monotonic()
+          def emit(event,**data):print(json.dumps({"event":event,"elapsed":time.monotonic()-start,**data}),flush=True)
+          original_session=target.session
+          original_end=target.end
+          def session(*args,**kwargs):
+              name=Path(args[2]).name
+              emit("session.begin",fixture=name,mode=kwargs.get("store",args[3] if len(args)>3 else "write"))
+              result=original_session(*args,**kwargs)
+              emit("session.ready",fixture=name)
+              return result
+          def end(*clients):
+              emit("close.begin",clients=len(clients))
+              result=original_end(*clients)
+              emit("close.end",clients=len(clients))
+              return result
+          target.session=session;target.end=end
+          faulthandler.dump_traceback_later(60,repeat=True)
+          try:
+              target.run(Path(sys.argv[1]))
+              emit("completed")
+          finally:faulthandler.cancel_dump_traceback_later()
+          ''')
+              execute('instrumented-diagnostic',[sys.executable,str(trace),str(binary)],600)
+          original=results[:5]
+          assert len(original)==5 and all(r['exit']==0 and not r['outer_timeout'] and r['complete_inventory'] and not r.get('failed') and not r.get('skipped') for r in original), 'Original fixture/group failure reproduced; see complete artifacts, diagnostic run does not waive it.'
+          PROBE
+          python build-mips-ci/worker-probe.py
+      - name: Upload only diagnostic evidence and configuration
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: mips-render-store-probe-${{ inputs.source_sha }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            build-mips-ci/evidence/
+            build-mips-ci/worker-probe.py
+            build-mips-ci/CMakeCache.txt
+            build-mips-ci/neverd-build-receipt.json
+            build-mips-ci/neverd-dependency-inputs.json
