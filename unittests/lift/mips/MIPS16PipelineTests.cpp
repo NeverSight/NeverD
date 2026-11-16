@@ -17,6 +17,7 @@
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/debug/DebugContext.h"
 #include "neverd/debug/UserPrototype.h"
+#include "neverd/ir/med/LowToMed.h"
 #include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/pipeline/Pipeline.h"
 
@@ -254,6 +255,8 @@ TEST_P(MIPS16Pipeline, SplitDoubleEntryKeepsBothPhysicalWords) {
     auto Result = Pipeline().run(*Image, Context, Options, &Debug);
     ASSERT_TRUE(Result.Success) << Result.Error;
     ASSERT_EQ(Result.MedIRVerifierFailures, 0u);
+    for (const auto &Function : Result.MedFuncs)
+      ASSERT_TRUE(verifyMedFunc(Function, "MIPS16 split-double source entry"));
     CEmitterOptions Emit;
     Emit.TheArch = GetParam();
     Emit.Format = BinaryFormat::ELF;

@@ -11,20 +11,24 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/ir/SourceABI.h"
+#include "neverd/ir/SourceParameterPlacement.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/med/MIPS/MIPSSourceVectors.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/ir/med/MedPrologueSaves.h"
 #include "neverd/libc/LibCFloatingArguments.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/DenseMap.h"
 
+#include <algorithm>
 #include <bitset>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <set>
 #include <tuple>
@@ -354,6 +358,175 @@ void projectMIPSFP32Registers(MedFunc &Function,
   First = std::move(Entry);
 }
 
+namespace {
+/// Keep source parameters whole while their machine users still read physical
+/// words. Placement owns the significance of each word, including big endian.
+void bindMIPS16ScalarEntry(MedFunc &Function, Arch Target,
+                           const FloatingCallArguments &Signature,
+                           const FloatingCallTypes &Types) {
+  if (!Signature.MIPS16Parameters || Signature.FixedCount ||
+      Function.SourceTypeHint || Function.SourceParametersBound ||
+      Function.Blocks.empty())
+    return;
+  const auto Placement = placeSourceParameters(
+      Target, BinaryFormat::ELF, Types.Result, Types.Parameters, false,
+      std::nullopt, InstructionMode::MIPS16);
+  if (!Placement || Placement->ResultPointer ||
+      Placement->Parameters.size() != Types.Parameters.size())
+    return;
+  struct Piece {
+    SourceParameterPiece Physical;
+    MedVar Value;
+  };
+  std::vector<Piece> Pieces;
+  std::vector<MedVar> Parameters;
+  for (size_t I = 0; I < Placement->Parameters.size(); ++I) {
+    const auto &Locations = Placement->Parameters[I];
+    if (Locations.empty())
+      return;
+    MedVar Parameter;
+    Parameter.Kind = MedVar::Param;
+    Parameter.TheArch = Target;
+    Parameter.Id = static_cast<int>(I);
+    Parameter.Size = Types.Parameters[I]->Size;
+    Parameter.RegOff = Locations.front().Location.RegisterOffset;
+    Parameters.push_back(Parameter);
+    for (const auto &Location : Locations) {
+      if (Location.Indirect ||
+          Location.Location.Kind != SourceABICarrierKind::IntegerRegister)
+        return; // Stack and variadic entries require their own range proof.
+      Pieces.push_back({Location, Parameter});
+    }
+  }
+  if (Pieces.size() != Function.Params.size())
+    return;
+  for (size_t I = 0; I < Pieces.size(); ++I)
+    if (Function.Params[I].RegOff !=
+            Pieces[I].Physical.Location.RegisterOffset ||
+        Function.Params[I].Size != Pieces[I].Physical.Location.ValueBytes)
+      return;
+
+  using Key = std::tuple<MedVar::VarKind, int, int>;
+  std::map<Key, bool> EntryValues;
+  size_t SeedCount = 0;
+  for (const auto &Op : Function.Blocks.front().Ops) {
+    if (Op.Opcode != NdOp::COPY || Op.Output.Kind != MedVar::Reg ||
+        !isEntryLiveInValue(Function, Op.Output, Op.Output.RegOff))
+      break;
+    EntryValues[{Op.Output.Kind, Op.Output.Id, Op.Output.SSAVer}] = true;
+    ++SeedCount;
+  }
+  std::vector<std::pair<MedVar *, size_t>> Rewrites;
+  int MaximumId = 0;
+  bool Valid = true;
+  const auto RecordId = [&](const MedVar &Value) {
+    if (!Value.isConst())
+      MaximumId = std::max(MaximumId, Value.Id);
+  };
+  const auto Read = [&](MedVar &Value) {
+    RecordId(Value);
+    if (Value.Kind != MedVar::Param && Value.Kind != MedVar::Reg)
+      return;
+    for (size_t I = 0; I < Pieces.size(); ++I) {
+      const auto &Location = Pieces[I].Physical.Location;
+      if (Value.RegOff != Location.RegisterOffset)
+        continue;
+      if (Value.Kind == MedVar::Reg) {
+        const Key K{Value.Kind, Value.Id, Value.SSAVer};
+        auto [It, New] = EntryValues.try_emplace(K, false);
+        if (New)
+          It->second = isEntryLiveInValue(Function, Value, Value.RegOff);
+        if (!It->second)
+          return;
+      }
+      Valid &= Value.Size == Location.ValueBytes;
+      Rewrites.emplace_back(&Value, I);
+      return;
+    }
+    // An ordinary source parameter outside this complete placement cannot be
+    // dropped. Other physical registers retain their existing SSA ownership.
+    Valid &= Value.Kind != MedVar::Param;
+  };
+  for (auto &Block : Function.Blocks) {
+    for (auto &Phi : Block.Phis) {
+      RecordId(Phi.Output);
+      for (auto &[Pred, Argument] : Phi.Args)
+        Read(Argument);
+      if (Phi.ExceptionalEntry)
+        Read(*Phi.ExceptionalEntry);
+    }
+    for (auto &Op : Block.Ops) {
+      RecordId(Op.Output);
+      for (unsigned I = 0; I < Op.NumInputs; ++I)
+        Read(Op.Inputs[I]);
+    }
+  }
+  for (auto &Call : Function.CallInfos)
+    for (auto &Argument : Call.Args)
+      Read(Argument);
+  for (const auto &Clobber : Function.CallClobbers)
+    RecordId(Clobber.Value);
+  for (const auto &Local : Function.Locals)
+    RecordId(Local);
+  if (!Valid ||
+      Pieces.size() >
+          static_cast<size_t>(std::numeric_limits<int>::max() - MaximumId))
+    return;
+  std::vector<MedOp> Slices;
+  for (auto &Piece : Pieces) {
+    if (Piece.Physical.Location.ValueBytes == Piece.Value.Size)
+      continue;
+    MedOp Slice;
+    Slice.Opcode = NdOp::SUBBYTES;
+    Slice.Addr = Function.Entry;
+    Slice.Output.Kind = MedVar::Temp;
+    Slice.Output.TheArch = Target;
+    Slice.Output.Id = ++MaximumId;
+    Slice.Output.SSAVer = 1;
+    Slice.Output.Size = Piece.Physical.Location.ValueBytes;
+    Slice.addInput(Piece.Value);
+    Slice.addInput(MedVar::makeConst(Piece.Physical.Offset, 4,
+                                     ConstantAddressProvenance::Scalar));
+    Piece.Value = Slice.Output;
+    Slices.push_back(std::move(Slice));
+  }
+  for (const auto &[Value, I] : Rewrites)
+    *Value = Pieces[I].Value;
+  // Entry-register proofs recognize an uninterrupted prefix of seed COPYs.
+  // The projected registers no longer need those seeds; preserve the others
+  // before adding slices so later stack/source proofs keep seeing them.
+  auto &Entry = Function.Blocks.front().Ops;
+  std::vector<MedOp> Projected;
+  Projected.reserve(Entry.size() + Slices.size());
+  std::vector<int> Indices(Entry.size());
+  for (size_t I = 0; I < Entry.size(); ++I) {
+    auto &Op = Entry[I];
+    if (I == SeedCount)
+      Projected.insert(Projected.end(), Slices.begin(), Slices.end());
+    if (I < SeedCount && std::any_of(
+                             Pieces.begin(), Pieces.end(),
+                             [&](const Piece &P) {
+                               return Op.Output.RegOff ==
+                                      P.Physical.Location.RegisterOffset;
+                             }))
+      continue;
+    Indices[I] = static_cast<int>(Projected.size());
+    Projected.push_back(std::move(Op));
+  }
+  if (SeedCount == Entry.size())
+    Projected.insert(Projected.end(), Slices.begin(), Slices.end());
+  for (auto &Call : Function.CallInfos)
+    if (Call.BlockId == Function.Blocks.front().Id && Call.OpIdx >= 0)
+      Call.OpIdx = Indices[Call.OpIdx];
+  Entry = std::move(Projected);
+  Function.Params = std::move(Parameters);
+  Function.TypedParams.clear();
+  for (size_t I = 0; I < Function.Params.size(); ++I)
+    Function.TypedParams.push_back(
+        {Function.Params[I].display(), Types.Parameters[I]});
+}
+} // namespace
+
 void discardUnobservedMIPSFPUpperBits(
     MedFunc &Function, const BinaryImage &Image,
     const std::map<va_t, FloatingCallArguments> &EntrySignatures,
@@ -385,25 +558,7 @@ void discardUnobservedMIPSFPUpperBits(
           Types->Result->Kind == NdTypeKind::Int;
       Function.MultiReturn.clear();
       Function.ReturnsVectorRegister = false;
-      // A MIPS16 body and its typed direct callers must share the logical
-      // parameter types. Retain exact register identities and widths: a
-      // split double or an omitted input needs a separate entry adapter.
-      if (Signature->MIPS16Parameters && !Signature->FixedCount &&
-          Signature->Scalars.size() == Function.Params.size()) {
-        bool Exact = true;
-        for (size_t I = 0; I < Function.Params.size(); ++I) {
-          const auto &P = Function.Params[I];
-          const auto &S = Signature->Scalars[I];
-          Exact &= S.Kind == SourceABICarrierKind::IntegerRegister &&
-                   P.RegOff == S.Register && P.Size == S.Bytes;
-        }
-        if (Exact) {
-          Function.TypedParams.clear();
-          for (size_t I = 0; I < Function.Params.size(); ++I)
-            Function.TypedParams.push_back(
-                {Function.Params[I].display(), Types->Parameters[I]});
-        }
-      }
+      bindMIPS16ScalarEntry(Function, Target, *Signature, *Types);
     }
   if (!Function.ReturnType || !Function.MultiReturn.empty())
     return;
