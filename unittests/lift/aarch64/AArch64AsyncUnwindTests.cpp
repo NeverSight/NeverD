@@ -725,23 +725,29 @@ enum class LanguageFrame {
   FramelessNonCall,
   LiveLRNonCall,
   LiveLRCatch,
+  CompactLiveLR,
+  CompactLiveLRCatch,
   ExplicitLPStart,
   TypedExplicitLPStart,
   EntryLandingPad
 };
 
-static void
-verifySignalLanguageCleanup(bool ObjectiveC,
-                            LanguageFrame Kind = LanguageFrame::Call,
-                            bool Lifted = false) {
+static void verifySignalLanguageCleanup(
+    bool ObjectiveC, LanguageFrame Kind = LanguageFrame::Call,
+    bool Lifted = false,
+    NDDarwinArm64eSigning Signing = NDArm64eSignedIBWithCFA) {
 #if defined(__APPLE__) && defined(__aarch64__)
   const bool NonCall = Kind != LanguageFrame::Call;
   const bool EntryPad = Kind == LanguageFrame::EntryLandingPad;
   const bool Explicit = Kind == LanguageFrame::ExplicitLPStart ||
                         Kind == LanguageFrame::TypedExplicitLPStart || EntryPad;
   const bool Typed = Kind == LanguageFrame::TypedExplicitLPStart;
-  const bool LocalCatch = Kind == LanguageFrame::LiveLRCatch;
-  const bool LiveLR = Kind == LanguageFrame::LiveLRNonCall || LocalCatch;
+  const bool CompactLiveLR = Kind == LanguageFrame::CompactLiveLR ||
+                             Kind == LanguageFrame::CompactLiveLRCatch;
+  const bool LocalCatch = Kind == LanguageFrame::LiveLRCatch ||
+                          Kind == LanguageFrame::CompactLiveLRCatch;
+  const bool LiveLR =
+      Kind == LanguageFrame::LiveLRNonCall || LocalCatch || CompactLiveLR;
   llvm::SmallString<128> Dir;
   ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kDirectory, Dir));
   const std::filesystem::path Root(Dir.str().str());
@@ -793,11 +799,15 @@ verifySignalLanguageCleanup(bool ObjectiveC,
         DriverImage->ExceptionMetadata.findCIE(Frame->Dwarf->CIESectionOffset);
     ASSERT_NE(CIE, nullptr);
     EXPECT_EQ(CIE->ReturnAddressRegister, NDArm64eVirtualReturnRegister);
-    for (unsigned Reg : {unsigned(NDArm64eVirtualReturnRegister), kDwarfLR}) {
+    for (unsigned Reg : {unsigned(NDArm64eVirtualReturnRegister), kDwarfLR,
+                         unsigned(NDArm64eCallerLRRegister)}) {
       EXPECT_TRUE(llvm::any_of(Frame->Dwarf->Instructions, [&](const auto &I) {
         return I.Kind == CFIOpKind::Offset && I.Register == Reg &&
                I.Offset == -int(NDArm64eLiveLRBridgeBytes) +
-                               (Reg == kDwarfLR ? int(sizeof(uintptr_t)) : 0);
+                               (Reg == NDArm64eVirtualReturnRegister
+                                    ? 0
+                                    : int(sizeof(uintptr_t)) *
+                                          (Reg == kDwarfLR ? 1 : 2));
       }));
     }
     const auto *Resume = DriverImage->findSymbol(kSignalLiveLRResume);
@@ -817,7 +827,7 @@ verifySignalLanguageCleanup(bool ObjectiveC,
     EXPECT_TRUE(
         llvm::any_of(ResumeFrame->Dwarf->Instructions, [](const auto &I) {
           return I.Kind == CFIOpKind::Register && I.Register == kDwarfLR &&
-                 I.Register2 == NDArm64eCallerLRRegister;
+                 I.Register2 == NDArm64eSystemLRRegister;
         }));
   }
   unsigned Delivered = 0;
@@ -844,6 +854,12 @@ verifySignalLanguageCleanup(bool ObjectiveC,
         Command.push_back(kSignalFramelessFrame);
       if (LiveLR)
         Command.push_back(kSignalLiveLR);
+      if (CompactLiveLR)
+        Command.push_back(kSignalCompactLiveLR);
+      if (Signing == NDArm64eUnsigned)
+        Command.push_back(kSignalUnsignedLR);
+      if (Signing == NDArm64eSignedIAWithCFA)
+        Command.push_back(kSignalIALR);
       if (LocalCatch)
         Command.push_back(kSignalLocalCatch);
       if (ObjectiveC && llvm::is_contained(Args, kDylib))
@@ -862,6 +878,12 @@ verifySignalLanguageCleanup(bool ObjectiveC,
     const auto *SourceFrame =
         Original->ExceptionMetadata.findFunction(Scope->Addr);
     ASSERT_TRUE(SourceFrame && SourceFrame->Itanium);
+    if (CompactLiveLR) {
+      ASSERT_TRUE(SourceFrame->Compact);
+      EXPECT_EQ(SourceFrame->Compact->Kind,
+                CompactUnwindKind::FramelessImmediate);
+      ASSERT_FALSE(SourceFrame->Dwarf);
+    }
     if (Kind == LanguageFrame::CompactNonCall || Explicit) {
       ASSERT_TRUE(SourceFrame->Compact);
       ASSERT_EQ(SourceFrame->Compact->Kind, CompactUnwindKind::FramePointer);
@@ -885,8 +907,13 @@ verifySignalLanguageCleanup(bool ObjectiveC,
       EXPECT_EQ(SourceFrame->Itanium->ExceptionSpecs.front().TypeIndices,
                 std::vector<uint64_t>({kSignalSpecType}));
     }
-    const SourcePatchMapping Maps[] = {{kSignalScopeMapping, Scope->Addr},
-                                       {kSignalTickMapping, Tick->Addr}};
+    llvm::SmallVector<SourcePatchMapping> Maps{
+        {kSignalScopeMapping, Scope->Addr}, {kSignalTickMapping, Tick->Addr}};
+    if (CompactLiveLR && LocalCatch) {
+      const auto *Catch = Original->findSymbol(kSignalCatchSymbol);
+      ASSERT_NE(Catch, nullptr);
+      Maps.push_back({kSignalCatchMapping, Catch->Addr});
+    }
     llvm::Expected<PatchResult> Patch = [&]() -> llvm::Expected<PatchResult> {
       if (!Lifted) {
         auto Bytes = llvm::MemoryBuffer::getFile(Object);
@@ -1034,6 +1061,8 @@ verifySignalLanguageCleanup(bool ObjectiveC,
         ASSERT_TRUE(Site && Plan);
         if (NonCall)
           EXPECT_EQ(Plan->Frame.SavedLR, !LiveLR);
+        if (LiveLR)
+          EXPECT_EQ(Plan->Frame.Signing, Signing);
         std::ofstream Out(Rules, std::ios::binary);
         const auto Write = [&](const auto &Value) {
           Out.write(reinterpret_cast<const char *>(&Value), sizeof(Value));
@@ -1056,7 +1085,7 @@ verifySignalLanguageCleanup(bool ObjectiveC,
                            std::to_string(Owner - Public->Addr),
                            std::to_string(Alternate),
                            std::to_string(Installed && !Lifted ? 3 : 1)},
-                          std::nullopt, {}, 0, 0, &Error),
+                          std::nullopt, {}, kSignalDeliverySeconds, 0, &Error),
                       0)
                 << Error;
             ++Delivered;
@@ -1139,6 +1168,198 @@ TEST(AArch64AsyncUnwind, LiftedLiveLRCatchesLanguageException) {
 }
 TEST(AArch64AsyncUnwind, LiftedLiveLRCatchesObjCException) {
   verifySignalLanguageCleanup(true, LanguageFrame::LiveLRCatch, true);
+}
+
+TEST(AArch64AsyncUnwind, NativeCompactLiveLRRunsLanguageCleanups) {
+  verifySignalLanguageCleanup(false, LanguageFrame::CompactLiveLR, false);
+}
+
+TEST(AArch64AsyncUnwind, NativeCompactLiveLRCatchesLanguageException) {
+  verifySignalLanguageCleanup(false, LanguageFrame::CompactLiveLRCatch, false);
+}
+
+TEST(AArch64AsyncUnwind, NativeCompactLiveLRRunsObjCCleanups) {
+  verifySignalLanguageCleanup(true, LanguageFrame::CompactLiveLR, false);
+}
+
+TEST(AArch64AsyncUnwind, NativeCompactLiveLRCatchesObjCException) {
+  verifySignalLanguageCleanup(true, LanguageFrame::CompactLiveLRCatch, false);
+}
+
+TEST(AArch64AsyncUnwind, LiftedCompactLiveLRRunsLanguageCleanups) {
+  verifySignalLanguageCleanup(false, LanguageFrame::CompactLiveLR, true);
+}
+
+TEST(AArch64AsyncUnwind, LiftedCompactLiveLRCatchesLanguageException) {
+  verifySignalLanguageCleanup(false, LanguageFrame::CompactLiveLRCatch, true);
+}
+
+TEST(AArch64AsyncUnwind, LiftedCompactLiveLRRunsObjCCleanups) {
+  verifySignalLanguageCleanup(true, LanguageFrame::CompactLiveLR, true);
+}
+
+TEST(AArch64AsyncUnwind, LiftedCompactLiveLRCatchesObjCException) {
+  verifySignalLanguageCleanup(true, LanguageFrame::CompactLiveLRCatch, true);
+}
+
+TEST(AArch64AsyncUnwind, NativeUnsignedLiveLRRunsLanguageCleanups) {
+  verifySignalLanguageCleanup(false, LanguageFrame::LiveLRNonCall, false,
+                              NDArm64eUnsigned);
+}
+
+TEST(AArch64AsyncUnwind, NativeUnsignedLiveLRCatchesLanguageException) {
+  verifySignalLanguageCleanup(false, LanguageFrame::LiveLRCatch, false,
+                              NDArm64eUnsigned);
+}
+
+TEST(AArch64AsyncUnwind, NativeUnsignedLiveLRRunsObjCCleanups) {
+  verifySignalLanguageCleanup(true, LanguageFrame::LiveLRNonCall, false,
+                              NDArm64eUnsigned);
+}
+
+TEST(AArch64AsyncUnwind, NativeUnsignedLiveLRCatchesObjCException) {
+  verifySignalLanguageCleanup(true, LanguageFrame::LiveLRCatch, false,
+                              NDArm64eUnsigned);
+}
+
+TEST(AArch64AsyncUnwind, LiftedUnsignedLiveLRRunsLanguageCleanups) {
+  verifySignalLanguageCleanup(false, LanguageFrame::LiveLRNonCall, true,
+                              NDArm64eUnsigned);
+}
+
+TEST(AArch64AsyncUnwind, LiftedUnsignedLiveLRCatchesLanguageException) {
+  verifySignalLanguageCleanup(false, LanguageFrame::LiveLRCatch, true,
+                              NDArm64eUnsigned);
+}
+
+TEST(AArch64AsyncUnwind, LiftedUnsignedLiveLRRunsObjCCleanups) {
+  verifySignalLanguageCleanup(true, LanguageFrame::LiveLRNonCall, true,
+                              NDArm64eUnsigned);
+}
+
+TEST(AArch64AsyncUnwind, LiftedUnsignedLiveLRCatchesObjCException) {
+  verifySignalLanguageCleanup(true, LanguageFrame::LiveLRCatch, true,
+                              NDArm64eUnsigned);
+}
+
+TEST(AArch64AsyncUnwind, NativeIALiveLRRunsLanguageCleanups) {
+  verifySignalLanguageCleanup(false, LanguageFrame::LiveLRNonCall, false,
+                              NDArm64eSignedIAWithCFA);
+}
+
+TEST(AArch64AsyncUnwind, NativeIALiveLRCatchesLanguageException) {
+  verifySignalLanguageCleanup(false, LanguageFrame::LiveLRCatch, false,
+                              NDArm64eSignedIAWithCFA);
+}
+
+TEST(AArch64AsyncUnwind, NativeIALiveLRRunsObjCCleanups) {
+  verifySignalLanguageCleanup(true, LanguageFrame::LiveLRNonCall, false,
+                              NDArm64eSignedIAWithCFA);
+}
+
+TEST(AArch64AsyncUnwind, NativeIALiveLRCatchesObjCException) {
+  verifySignalLanguageCleanup(true, LanguageFrame::LiveLRCatch, false,
+                              NDArm64eSignedIAWithCFA);
+}
+
+TEST(AArch64AsyncUnwind, LiftedIALiveLRRunsLanguageCleanups) {
+  verifySignalLanguageCleanup(false, LanguageFrame::LiveLRNonCall, true,
+                              NDArm64eSignedIAWithCFA);
+}
+
+TEST(AArch64AsyncUnwind, LiftedIALiveLRCatchesLanguageException) {
+  verifySignalLanguageCleanup(false, LanguageFrame::LiveLRCatch, true,
+                              NDArm64eSignedIAWithCFA);
+}
+
+TEST(AArch64AsyncUnwind, LiftedIALiveLRRunsObjCCleanups) {
+  verifySignalLanguageCleanup(true, LanguageFrame::LiveLRNonCall, true,
+                              NDArm64eSignedIAWithCFA);
+}
+
+TEST(AArch64AsyncUnwind, LiftedIALiveLRCatchesObjCException) {
+  verifySignalLanguageCleanup(true, LanguageFrame::LiveLRCatch, true,
+                              NDArm64eSignedIAWithCFA);
+}
+
+TEST(AArch64AsyncUnwind, NativeCompactUnsignedLiveLRRunsLanguageCleanups) {
+  verifySignalLanguageCleanup(false, LanguageFrame::CompactLiveLR, false,
+                              NDArm64eUnsigned);
+}
+
+TEST(AArch64AsyncUnwind, NativeCompactUnsignedLiveLRCatchesLanguageException) {
+  verifySignalLanguageCleanup(false, LanguageFrame::CompactLiveLRCatch, false,
+                              NDArm64eUnsigned);
+}
+
+TEST(AArch64AsyncUnwind, NativeCompactUnsignedLiveLRRunsObjCCleanups) {
+  verifySignalLanguageCleanup(true, LanguageFrame::CompactLiveLR, false,
+                              NDArm64eUnsigned);
+}
+
+TEST(AArch64AsyncUnwind, NativeCompactUnsignedLiveLRCatchesObjCException) {
+  verifySignalLanguageCleanup(true, LanguageFrame::CompactLiveLRCatch, false,
+                              NDArm64eUnsigned);
+}
+
+TEST(AArch64AsyncUnwind, LiftedCompactUnsignedLiveLRRunsLanguageCleanups) {
+  verifySignalLanguageCleanup(false, LanguageFrame::CompactLiveLR, true,
+                              NDArm64eUnsigned);
+}
+
+TEST(AArch64AsyncUnwind, LiftedCompactUnsignedLiveLRCatchesLanguageException) {
+  verifySignalLanguageCleanup(false, LanguageFrame::CompactLiveLRCatch, true,
+                              NDArm64eUnsigned);
+}
+
+TEST(AArch64AsyncUnwind, LiftedCompactUnsignedLiveLRRunsObjCCleanups) {
+  verifySignalLanguageCleanup(true, LanguageFrame::CompactLiveLR, true,
+                              NDArm64eUnsigned);
+}
+
+TEST(AArch64AsyncUnwind, LiftedCompactUnsignedLiveLRCatchesObjCException) {
+  verifySignalLanguageCleanup(true, LanguageFrame::CompactLiveLRCatch, true,
+                              NDArm64eUnsigned);
+}
+
+TEST(AArch64AsyncUnwind, NativeCompactIALiveLRRunsLanguageCleanups) {
+  verifySignalLanguageCleanup(false, LanguageFrame::CompactLiveLR, false,
+                              NDArm64eSignedIAWithCFA);
+}
+
+TEST(AArch64AsyncUnwind, NativeCompactIALiveLRCatchesLanguageException) {
+  verifySignalLanguageCleanup(false, LanguageFrame::CompactLiveLRCatch, false,
+                              NDArm64eSignedIAWithCFA);
+}
+
+TEST(AArch64AsyncUnwind, NativeCompactIALiveLRRunsObjCCleanups) {
+  verifySignalLanguageCleanup(true, LanguageFrame::CompactLiveLR, false,
+                              NDArm64eSignedIAWithCFA);
+}
+
+TEST(AArch64AsyncUnwind, NativeCompactIALiveLRCatchesObjCException) {
+  verifySignalLanguageCleanup(true, LanguageFrame::CompactLiveLRCatch, false,
+                              NDArm64eSignedIAWithCFA);
+}
+
+TEST(AArch64AsyncUnwind, LiftedCompactIALiveLRRunsLanguageCleanups) {
+  verifySignalLanguageCleanup(false, LanguageFrame::CompactLiveLR, true,
+                              NDArm64eSignedIAWithCFA);
+}
+
+TEST(AArch64AsyncUnwind, LiftedCompactIALiveLRCatchesLanguageException) {
+  verifySignalLanguageCleanup(false, LanguageFrame::CompactLiveLRCatch, true,
+                              NDArm64eSignedIAWithCFA);
+}
+
+TEST(AArch64AsyncUnwind, LiftedCompactIALiveLRRunsObjCCleanups) {
+  verifySignalLanguageCleanup(true, LanguageFrame::CompactLiveLR, true,
+                              NDArm64eSignedIAWithCFA);
+}
+
+TEST(AArch64AsyncUnwind, LiftedCompactIALiveLRCatchesObjCException) {
+  verifySignalLanguageCleanup(true, LanguageFrame::CompactLiveLRCatch, true,
+                              NDArm64eSignedIAWithCFA);
 }
 
 TEST(AArch64AsyncUnwind, NativeFramelessRunsLanguageCleanups) {

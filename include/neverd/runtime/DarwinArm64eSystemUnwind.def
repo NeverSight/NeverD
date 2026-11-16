@@ -23,17 +23,19 @@ NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eStackAlignment, 16)
 NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eInstructionAlignment, 4)
 NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eDeliveryRegister, 16)
 NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eVirtualReturnRegister, 17)
+NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eSystemLRRegister, 11)
 NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eResumeReturnRegister, 12)
 NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eInterruptedSPRegister, 13)
 NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eLandingPadRegister, 14)
 NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eCallerLRRegister, 15)
-NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eLiveLRBridgeBytes, 144)
+NEVERD_SYSTEM_UNWIND_VALUE(NDArm64eLiveLRBridgeBytes, 160)
 
 NEVERD_SYSTEM_UNWIND_PERSONALITY(ndDarwinArm64eLiveLRPersonality,
                                  "_ndDarwinArm64eLiveLRPersonality")
 
-// Keep the interrupted 128-byte red zone above two independent return slots.
-// DWARF's return column supplies the virtual PC; x30 retains the caller's LR.
+// Keep the interrupted 128-byte red zone above three independent return slots.
+// The return column supplies the virtual PC; x30 uses the authenticated return
+// adapted to the system ABI, and x15 retains its original signing recipe.
 // Enter only after sigreturn, when this allocation cannot overwrite a live
 // kernel signal frame. The alternate RA column requires indexed DWARF.
 NEVERD_SYSTEM_UNWIND_BRIDGE(
@@ -50,11 +52,13 @@ NEVERD_SYSTEM_UNWIND_BRIDGE(
     ".cfi_return_column 17\n"
     ".cfi_personality 155, _ndDarwinArm64eLiveLRPersonality\n"
     ".cfi_escape 0x2e, 0\n"
-    "sub sp, sp, #144\n"
-    ".cfi_def_cfa_offset 144\n"
-    "stp x17, x30, [sp]\n"
-    ".cfi_offset 17, -144\n"
-    ".cfi_offset 30, -136\n"
+    "sub sp, sp, #160\n"
+    ".cfi_def_cfa_offset 160\n"
+    "stp x17, x11, [sp]\n"
+    ".cfi_offset 17, -160\n"
+    ".cfi_offset 30, -152\n"
+    "str x30, [sp, #16]\n"
+    ".cfi_offset 15, -144\n"
     "blraaz x16\n"
     "brk #1\n"
     ".cfi_endproc\n"
@@ -77,7 +81,7 @@ NEVERD_SYSTEM_UNWIND_BRIDGE(
     ".cfi_b_key_frame\n"
     ".cfi_return_column 12\n"
     ".cfi_def_cfa 13, 0\n"
-    ".cfi_register 30, 15\n"
+    ".cfi_register 30, 11\n"
     ".cfi_escape 0x2e, 0\n"
     "mov x30, x15\n"
     "braaz x14\n"

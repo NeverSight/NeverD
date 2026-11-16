@@ -106,7 +106,9 @@ void bindExceptions(const Program &P, const Function &Native,
     return;
   }
   const auto &EH = *Lift.Exceptions;
-  require(EH.describesUnwindOnly(),
+  // Runtime-call annotations are outside this scalar profile even when they
+  // do not install a local unwind handler.
+  require(EH.describesUnwindOnly() && !EH.ObjC,
           "only complete source unwind-only records are supported");
   require(hasUnloweredContract(F, SourceState::Complete),
           "unwind-only source requires complete, unlowered exception metadata");

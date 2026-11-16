@@ -1114,14 +1114,14 @@ prepareDarwinArm64eExceptionSite(const BinaryImage &Image,
         !hasDarwinCallSitePersonality(Function.Personality))
       return std::nullopt;
     bool RetainsCaller = Plan->Frame.SavedLR;
-    if (!RetainsCaller && Function.Dwarf &&
-        Plan->Frame.Signing == NDArm64eSignedIBWithCFA) {
+    if (!RetainsCaller && Function.Dwarf) {
       // The bridge restores a live LR as a separate DWARF register. Admit it
       // only when the system's actual row uses that LR and the same CFA.
       // An inferred interrupt row alone cannot repair synchronous metadata.
       const auto &FDE = *Function.Dwarf;
       const auto *CIE = Image.ExceptionMetadata.findCIE(FDE.CIESectionOffset);
-      if (!CIE || CIE->ReturnAddressRegister != kLR || CIE->IsSignalFrame)
+      if (!CIE || !CIE->UsesArm64eReturnAddressABI ||
+          CIE->ReturnAddressRegister != kLR || CIE->IsSignalFrame)
         return std::nullopt;
       auto Declared = frameRows(*CIE, FDE, kMaxInstructions, true);
       if (!Declared) {
@@ -1137,6 +1137,23 @@ prepareDarwinArm64eExceptionSite(const BinaryImage &Image,
         if (!RetainsCaller)
           break;
       }
+    } else if (!RetainsCaller && Function.Compact) {
+      // Darwin's frameless consumer retains LR and adds the encoded size to
+      // SP when no register pairs are present. Pair encodings instead restore
+      // from different slots and adjust SP by the pair bytes; publication
+      // uses indexed DWARF for those bodies. Do not infer that system recipe
+      // from the normalized compact slots or an interrupted prologue.
+      const auto &Compact = *Function.Compact;
+      RetainsCaller =
+          Compact.Kind == CompactUnwindKind::FramelessImmediate &&
+          Compact.HasStackSize &&
+          !(Compact.NativeEncoding & macho_unwind::kARM64RegisterPairsMask) &&
+          Row.CFARegister == kSP && Row.CFAOffset == Compact.StackSize;
+      for (unsigned R = NDArm64eFirstPreservedGPR;
+           RetainsCaller && R < kFirstHighSlot; ++R)
+        if (R != kSP)
+          RetainsCaller =
+              Row.Registers[R].Location == AArch64UnwindRegister::SameValue;
     }
     const auto &Sites = Function.Itanium->CallSites;
     const auto Lookup = [&](va_t At) {
