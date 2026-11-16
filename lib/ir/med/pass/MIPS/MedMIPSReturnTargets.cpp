@@ -38,19 +38,51 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
     return false;
   using Site = std::pair<va_t, int>;
   std::set<Site> Required;
+  std::map<Site, Site> TailReturns;
   for (const auto &Block : Low.Blocks)
     for (const auto &Boundary : Block.InstructionBoundaries) {
-      // A synthetic return does not prove the link supplied to the tail
-      // callee. Qualify that pre-transfer identity before admitting tails.
-      if (Boundary.Control == LowInstructionControl::TailCall)
-        return false;
-      for (size_t I = Boundary.FirstOp; I < Boundary.FirstOp + Boundary.OpCount;
-           ++I)
-        if (const auto &Op = Block.Ops[I]; Op.Opcode == NdOp::RETURN)
-          Required.emplace(Op.Addr, Op.Seq);
+      if (Boundary.Control == LowInstructionControl::TailCall) {
+        // CFG lowering appends a synthetic result return. Its value is not
+        // the physical link. First establish a complete, unframed leaf tail:
+        // no earlier call, memory, opaque effect, or write of RA/SP can have
+        // changed the incoming return context before the terminal transfer.
+        if (Low.Blocks.size() != 1 || Boundary.OpCount < 2 ||
+            Boundary.FirstOp + Boundary.OpCount != Block.Ops.size())
+          return false;
+        const auto &Call = Block.Ops[Block.Ops.size() - 2];
+        const auto &Return = Block.Ops.back();
+        if ((Call.Opcode != NdOp::CALL && Call.Opcode != NdOp::INDIR_CALL) ||
+            Return.Opcode != NdOp::RETURN)
+          return false;
+        const unsigned Width = isMIPS64(Target) ? 8 : 4;
+        for (size_t I = 0; I < Block.Ops.size(); ++I) {
+          const auto &Op = Block.Ops[I];
+          if (Op.Output.isReg() && Op.Output.Size)
+            for (uint64_t Register : {mipsreg::RA, mipsreg::SP})
+              if (Op.Output.Offset < Register + Width &&
+                  Register < Op.Output.Offset + Op.Output.Size)
+                return false;
+          if (I + 2 >= Block.Ops.size())
+            continue;
+          if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
+              Op.Opcode == NdOp::RETURN || Op.Opcode == NdOp::BRANCH ||
+              Op.Opcode == NdOp::COND_BR || Op.Opcode == NdOp::INDIR_BR ||
+              Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE ||
+              Op.Opcode == NdOp::INTRINSIC)
+            return false;
+        }
+        TailReturns.emplace(Site{Return.Addr, Return.Seq},
+                            Site{Call.Addr, Call.Seq});
+      } else {
+        for (size_t I = Boundary.FirstOp;
+             I < Boundary.FirstOp + Boundary.OpCount; ++I)
+          if (const auto &Op = Block.Ops[I]; Op.Opcode == NdOp::RETURN)
+            Required.emplace(Op.Addr, Op.Seq);
+      }
     }
-  if (Required.empty())
+  if (Required.empty() && TailReturns.empty())
     return true;
+  std::set<Site> QualifiedTails;
   using Key = std::tuple<int, int, int, uint64_t, uint16_t>;
   const auto key = [](const MedVar &V) -> Key {
     return {int(V.Kind), V.Id, V.SSAVer, V.RegOff, V.Size};
@@ -88,8 +120,11 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         const auto Signature = boundFloatingCallArguments(Op, Target, Format);
         if (!Signature)
           QualifiedMemory = false;
-        else
+        else {
           Calls.emplace(&Op, *Signature);
+          if (Op.IsTailCall)
+            QualifiedTails.emplace(Op.Addr, Op.OriginSeq);
+        }
       }
       if ((Op.Opcode == NdOp::INTRINSIC && !NoDataWrite &&
            (Op.NumInputs != 3 || !Op.Inputs[0].isConst() ||
@@ -322,11 +357,18 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
     for (const auto &Op : Block.Ops)
       if (Op.Opcode == NdOp::RETURN) {
         const Site Origin{Op.Addr, Op.OriginSeq};
+        if (const auto Tail = TailReturns.find(Origin);
+            Tail != TailReturns.end()) {
+          if (!QualifiedTails.erase(Tail->second))
+            return false;
+          TailReturns.erase(Tail);
+          continue;
+        }
         if (!Required.erase(Origin) || Op.NumInputs != 1 ||
             !Prove(Op.Inputs[0]))
           return false;
       }
-  return Required.empty();
+  return Required.empty() && TailReturns.empty() && QualifiedTails.empty();
 }
 
 } // namespace neverd
