@@ -17897,6 +17897,11 @@ validating only freshly rebuilt dedicated lift targets.
 reference reuse, newly independent function entries, relocated code roots and
 reload invalidation. Run the computed-string/reference, function-disassembly
 and function-discovery suites after changing the shared page/index owner.
+The unsized reference traversal and PE analysis-cache tests call internal
+page/index operations through `SessionTestAccess`. This same-build interface
+is compiled only with testing enabled and supplies the DLL exports needed by
+the Windows test executable; the internal operations remain outside the public
+C SDK.
 GUI `largeImageViewsShareOnePreparedReplica` checks queued source views and
 independent owner reads; worker `analysis_snapshot_test.py` compares prepared
 and ordinary replicas and verifies snapshot/name-update identity.

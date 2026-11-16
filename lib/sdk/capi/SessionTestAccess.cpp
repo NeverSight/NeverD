@@ -80,4 +80,20 @@ FunctionPage SessionTestAccess::functionPage(const Session &State,
                                              neverd_va_t First, int Limit) {
   return sdk::functionPage(State, First, Limit);
 }
+FunctionPage SessionTestAccess::functionPage(llvm::ArrayRef<FuncInfo> Functions,
+                                             neverd_va_t First, int Limit) {
+  return sdk::functionPage(Functions, First, Limit);
+}
+bool SessionTestAccess::decodeFunctionReferences(
+    const BinaryImage &Img, const FunctionPage &Page,
+    llvm::function_ref<
+        void(size_t Index, va_t Address, llvm::StringRef Instruction,
+             const InstructionFlow &Flow, unsigned Size, InstructionMode Mode)>
+        Visit) {
+  return sdk::decodeFunctionReferences(Img, Page, Visit);
+}
+const ReferenceImageIndex &
+SessionTestAccess::referenceImageIndex(const Session &State) {
+  return State.referenceImageIndex();
+}
 } // namespace neverd::sdk

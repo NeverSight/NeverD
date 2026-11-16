@@ -3183,10 +3183,10 @@ TEST(InstructionFlow, UnsizedReferenceTraversalReachesThePhysicalEnd) {
   Image.Segments.push_back(std::move(Data));
   neverd::sdk::FuncInfo Function{};
   Function.Entry = 0x1000;
-  const auto Page = neverd::sdk::functionPage(
+  const auto Page = neverd::sdk::SessionTestAccess::functionPage(
       llvm::ArrayRef<neverd::sdk::FuncInfo>(Function), 0, 1);
   size_t Instructions = 0, Reads = 0;
-  ASSERT_TRUE(neverd::sdk::decodeFunctionReferences(
+  ASSERT_TRUE(neverd::sdk::SessionTestAccess::decodeFunctionReferences(
       Image, Page,
       [&](size_t, neverd::va_t Address, llvm::StringRef,
           const neverd::sdk::InstructionFlow &Flow, unsigned,
@@ -12705,7 +12705,7 @@ TEST_F(SessionCAPITest, PEAnalysisCacheRetiresOnlyWhenHandlersGrowMetadata) {
   ASSERT_NE(Facts, nullptr);
   const auto Source = takeString(neverd_decompile(Session, Entries[0]));
   ASSERT_FALSE(Source.empty()) << takeString(neverd_last_error(Session));
-  (void)State.referenceImageIndex();
+  (void)neverd::sdk::SessionTestAccess::referenceImageIndex(State);
   const auto ReferenceFacts = State.ReferenceImage;
   ASSERT_EQ(neverd_prepare_function(Session, Entries[1]), 1);
   EXPECT_EQ(neverd::PipelineTestPeer::analysisFacts(State.AnalysisCache),
