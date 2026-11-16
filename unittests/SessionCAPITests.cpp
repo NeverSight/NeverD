@@ -9889,9 +9889,10 @@ TEST_F(SessionCAPITest, DarwinCallsPassWhatLibSystemDeclares) {
       {"_SetFlags", "fcntl(arg0, 4, arg1)", "fcntl(arg0, 4, arg1)"},
       {"_Request", "ioctl(arg0, arg1, arg2)", "ioctl(arg0, arg1, "},
       // Named pointer parameters retain the header's character type even
-      // though the variadic tail follows Apple's stack convention.
+      // though the variadic tail follows Apple's stack convention. LLVMC
+      // projects openat's mode to the bounded int variadic carrier.
       {"_OpenAt", "openat(arg0, (char*)(uintptr_t)arg1, 0x201, arg2)",
-       "0x201, arg2)"},
+       "0x201, (int32_t)(uintptr_t)(arg2))"},
       // Preserve the recovered wide carrier in the untyped variadic tail.
       {"_Shared", "shm_open((char*)(uintptr_t)arg0, 0x202, (uint64_t)0x180)",
        "0x202, 0x180)"},

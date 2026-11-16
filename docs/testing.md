@@ -21883,6 +21883,11 @@ checks byte/word wrapping and the distinct unwrapped 64-bit selector.
 and unsigned bounded tails, small constants, negative/high-bit words and
 dynamic integer and pointer carriers. Its independent providers check both exact C expression types
 and values at O0/O2 with UBSan.
+`LLVMCValues.PointerForwardingCarriersDoNotRetypeScalarVarargs` checks MIPS32/64
+in both byte orders. Integer parameters and small word-sized literals remain
+integers through `fcntl`/`ioctl`, while pointer parameters remain pointers.
+Independent variadic providers check C expression types before conversion and
+read the original values at O0/O2 with UBSan.
 These tests execute scalar C on the host with local providers; they neither
 invoke real kernel services nor qualify native x64 execution on an ARM host.
 `LargeCalleeSignaturesDoNotNeedStructuredHighIR` exceeds the block and operation

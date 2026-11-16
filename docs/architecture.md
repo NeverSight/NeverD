@@ -20657,10 +20657,14 @@ their largest bound; unknown selectors and other operating systems retain
 the library maximum. The selector walk respects integer widths, including
 wrapping arithmetic before zero extension. This establishes argument
 consumption, not a proof of the system call's result or effects.
-LLVM-C spells bounded variadic tails with the forwarding contract's exact
-target type. A small integer literal cannot rely on an absent parameter
-conversion to retain a machine-word width; signedness, pointer carriers and
-the target's `long` width come from that existing contract.
+LLVM-C spells fixed-type bounded variadic tails with the forwarding contract's
+exact target type. A small integer literal cannot rely on an absent parameter
+conversion to retain a machine-word width; signedness and the target's `long`
+width come from that existing contract. The generic pointer slot used to forward
+`fcntl`/`ioctl` is not evidence that a particular command takes a pointer.
+Recovered integer tails retain their scalar expression and LLVM literal width;
+actual pointer operands retain their pointer projection. This preserves the
+recovered carrier without inventing a command-specific source prototype.
 Omitted signature bodies use the ordinary per-function operation bound, not
 HighIR's structuring limit. Type inference retains its own smaller admission;
 a complete large SSA body still supplies parameter bounds.
