@@ -452,15 +452,14 @@ bool MedLLVMEmitter::emitNativeSEH(
   // runs, at the runtime call's address (MedSEHLocalUnwindExit).  The runtime
   // calls the handler of row k with its scan already past k, so what the
   // handler raises meets only the later rows that guard the call: the call
-  // stands outside scope k and inside those.  Printed C places it there.
-  // Native output keeps each call in its block's innermost scope, and refuses
-  // two calls at one address below.
+  // stands outside scope k and inside those.  Both routes place it there;
+  // native IR also marks each such call (LocalUnwindHandlerCall), which the
+  // output gate refuses until the placement is certified by execution.
   std::map<va_t, const MedSEHLocalUnwindExit *> LocalUnwinds;
-  if (SourceView)
-    for (const MedSEHLocalUnwindExit &Exit : Func.SEHLocalUnwindExits)
-      if (!Exit.Handlers.empty() &&
-          !LocalUnwinds.emplace(Exit.CallAddr, &Exit).second)
-        return false;
+  for (const MedSEHLocalUnwindExit &Exit : Func.SEHLocalUnwindExits)
+    if (!Exit.Handlers.empty() &&
+        !LocalUnwinds.emplace(Exit.CallAddr, &Exit).second)
+      return false;
   struct LocalUnwindProgress {
     size_t Next = 0;
     const llvm::BasicBlock *Block = nullptr;
@@ -739,6 +738,17 @@ bool MedLLVMEmitter::emitNativeSEH(
         if (Regions[I].Blocks.count(Before) &&
             IsProperAncestor(static_cast<int>(I), Plan.Ended))
           Regions[I].Blocks.insert(After);
+      // Native IR says which calls these are and which scope each ends, for
+      // the output gate, which takes none of them yet.
+      if (!SourceView) {
+        llvm::IRBuilder<> MarkBuilder(Call);
+        med_llvm_eh::emitWindowsEHProvenanceAnchor(
+            MarkBuilder, windows_eh_md::NativeProvenanceModel::SEH,
+            windows_eh_md::NativeProvenanceRole::LocalUnwindHandlerCall,
+            EH.CodeRange.Begin, Plan.SourceAddress,
+            Regions[static_cast<size_t>(Plan.Ended)].SourceIndex,
+            /*Clause=*/0);
+      }
       if (Plan.Region < 0)
         continue;
     }

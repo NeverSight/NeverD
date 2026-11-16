@@ -1298,8 +1298,13 @@ that guard the call: the lowering ends scope k and every scope inside it
 before the call and keeps the call in the scopes around k, and the last
 handler of an unwind that leaves every scope is a plain call. The calls at an
 exit's address must be its handlers, in its order, with no other call after
-them in the block; anything else leaves the function unlowered. Native output
-keeps a lone handler call in its block's innermost scope.
+them in the block; anything else leaves the function unlowered. Native IR
+places these calls the same way and marks each with a provenance role of its
+own (`LocalUnwindHandlerCall`: the runtime call's address and the row the
+handler ends). The output gate refuses that role by name: its rule for a
+protected call is the innermost source scope at the call's address, which is
+the scope such a call has just left, and no execution has yet shown that the
+rewritten table gives the call the scopes the runtime gave it.
 For navigation these handler calls, which no instruction of the function
 makes, observe the runtime call they stand for (its address and LowIR
 sequence), and the form that prints each block in its own `__try` marks a call

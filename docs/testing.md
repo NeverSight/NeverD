@@ -20590,6 +20590,13 @@ another cookie slot. `LLVMCSaysAWrappedTableIsNotLowered` keeps the note for a
 record that holds back exceptions from an `__except` row or unwinds from a
 `__finally` row, and takes a table of termination handlers whose record
 passes unwinds only.
+`COFFExceptionIR.NativeLocalUnwindHandlerCallsLeaveTheirScope` emits native
+x64 IR for a local unwind out of the only scope, out of the inner of two and
+out of both: the handler's call is a plain one, an invoke to the outer row's
+pad, or both in that order; each carries one mark with the runtime call's
+address and the row it ends; the contract counts only the invokes; and
+`planCOFFExceptionPatch` refuses the module by the mark's name, before and
+after optimization.
 `WindowsEHNativeSource.DestructorsAloneAreRefusedAsUnwindActions` classifies
 x64 FH3 and FH4 tables with no try block: empty without an action, an unwind
 action table with one, on all three capabilities; behind a cookie record that

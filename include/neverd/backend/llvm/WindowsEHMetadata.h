@@ -52,6 +52,11 @@ enum class NativeProvenanceRole : unsigned {
   RegistrationChainAccess = 8,
   RegistrationCallback = 9,
   RegistrationDynamicCall = 10,
+  /// A termination handler a local unwind calls, standing where the runtime
+  /// call stood: outside the scope it ends (Region, by source row) and inside
+  /// the ones around it.  Marks the call, protected or not.  The output gate
+  /// has no certified form for it and refuses it by this role.
+  LocalUnwindHandlerCall = 11,
 };
 
 inline constexpr llvm::StringLiteral
