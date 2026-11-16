@@ -87,6 +87,22 @@ bool hasExactBoundedX64GSCookie(const ExceptionFunction &EH) {
   return readLE<uint32_t>(Cookie.Payload.data()) == Expected;
 }
 
+/// Whether `__GSHandlerCheck_SEH` hands every row of \p EH's table to
+/// `__C_specific_handler`.  After its cookie check the wrapper calls that
+/// handler for an exception only when its record's EHANDLER bit is set and
+/// for an unwind only when its UHANDLER bit is, and otherwise continues the
+/// search: an `__except` row needs the first, a `__finally` row the second.
+bool cookieCheckPassesEveryScope(const ExceptionFunction &EH) {
+  if (!EH.GSCookie || !EH.SEH ||
+      EH.GSCookie->ParseStatus != ExceptionParseStatus::Complete)
+    return false;
+  return llvm::all_of(EH.SEH->Scopes, [&](const SEHScopeRecord &Scope) {
+    return Scope.Kind == SEHScopeKind::Finally
+               ? EH.GSCookie->HasUnwindHandler
+               : EH.GSCookie->HasExceptionHandler;
+  });
+}
+
 WindowsEHNativeSourceReason validateSEH(const ExceptionFunction &EH,
                                         Arch TargetArch,
                                         bool AllowRepeatedRanges) {
@@ -730,6 +746,16 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
     return reject(Model, WindowsEHNativeSourceReason::UnknownPersonality,
                   Capability);
   case ExceptionPersonality::GSHandlerCheckSEH:
+    // The scopes are `__C_specific_handler`'s, behind a check of the frame's
+    // stack cookie.  Printed C shows them when the check lets every row
+    // through (below); native output would have to write the record again.
+    // Only the x64 wrapper gets here: the ARM and AArch64 guards above take
+    // no wrapped personality.
+    if (Capability != WindowsEHNativeCapability::SourceIRLowering)
+      return reject(Model, WindowsEHNativeSourceReason::GSWrappedPersonality,
+                    Capability);
+    Model = WindowsEHNativeSourceModel::SEH;
+    break;
   case ExceptionPersonality::GSHandlerCheckEH:
     return reject(Model, WindowsEHNativeSourceReason::GSWrappedPersonality,
                   Capability);
@@ -756,6 +782,10 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
                   Capability);
   if (EH.Personality == ExceptionPersonality::GSHandlerCheckEH4) {
     if (TargetArch != Arch::X64 || !hasExactBoundedX64GSCookie(EH))
+      return reject(Model, WindowsEHNativeSourceReason::GSWrappedPersonality,
+                    Capability);
+  } else if (EH.Personality == ExceptionPersonality::GSHandlerCheckSEH) {
+    if (!cookieCheckPassesEveryScope(EH))
       return reject(Model, WindowsEHNativeSourceReason::GSWrappedPersonality,
                     Capability);
   } else if (EH.GSCookie) {

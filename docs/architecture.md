@@ -1256,14 +1256,22 @@ first clause, the block form's included. SEH this view cannot structure prints
 no `__try`: a catch-all around the whole body would claim the function
 swallows exceptions its scopes let pass, so the function says it is not
 lowered instead. The note follows the scope table in the function's exception
-metadata, not the name of its language handler: a table whose handler checks
-a stack cookie first (`__GSHandlerCheck_SEH`) runs the same scopes, so a
-function this view leaves unlowered behind that check says so too.
+metadata, not the name of its language handler.
 A termination handler that never returns, a `__finally` that leaves by
 `longjmp` or ends the program, is a clause this view prints: the call, and
 once that the path ends there. Native output, whose clauses the code generator
 writes again from what the optimizer leaves, does not take one, and no view
 takes a filter that never returns.
+On x64 this view also takes a table behind `__GSHandlerCheck_SEH`. That
+wrapper checks the frame's stack cookie and then calls `__C_specific_handler`
+for an exception only when its record's EHANDLER bit is set and for an unwind
+only when its UHANDLER bit is, and otherwise continues the search
+(`cookieCheckPassesEveryScope`): a table whose every `__except` row has the
+first and every `__finally` row the second runs as the same table alone, and
+any other keeps the note, since a row the record holds back never runs. The
+identity of such a table covers the record, so it is never the identity of
+the same rows under `__C_specific_handler`, and native output, which would
+have to write the record again, leaves the function as metadata.
 This view also takes a table with several rows over one range, which MSVC and
 clang-cl write for a `__try` whose body is exactly another `__try`. The rows
 nest by their order, the earlier inside the later, because

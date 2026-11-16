@@ -324,7 +324,8 @@ bool MedLLVMEmitter::emitNativeSEH(
     R.SemanticRange = *SemanticRange;
     R.SourceIndex = static_cast<uint32_t>(ScopeIndex);
     const auto SemanticToken = windows_eh_semantics::getSEHScopeSemanticToken(
-        EH, TargetArch, R.SourceIndex, /*AllowRepeatedRanges=*/SourceView);
+        EH, TargetArch, R.SourceIndex, /*AllowRepeatedRanges=*/SourceView,
+        /*AllowCookieCheck=*/SourceView);
     if (!SemanticToken)
       return false;
     R.SemanticToken = *SemanticToken;

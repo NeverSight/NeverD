@@ -20582,7 +20582,14 @@ and another call placed at that address names nothing.
 `ALocalUnwindHandlerThatDoesNotReturnIsPlaced` give a termination handler that
 never returns: the parent keeps its pads, each clause that calls the handler
 says once that the path ends, and a local unwind still calls it outside the
-scope it ends.
+scope it ends. `ATableBehindACookieCheckIsLoweredForPrintedC` puts the table
+behind `__GSHandlerCheck_SEH` with a record that passes every row: printed C
+lowers it, native capabilities and other architectures refuse it, and its
+identity differs from the bare table's, which is unchanged, and from that of
+another cookie slot. `LLVMCSaysAWrappedTableIsNotLowered` keeps the note for a
+record that holds back exceptions from an `__except` row or unwinds from a
+`__finally` row, and takes a table of termination handlers whose record
+passes unwinds only.
 `SEHDefinitionOrderTests.cpp` prints hand-built HighIR definitions in several
 orders: an `__except` arm that jumps past a copy of its own frame alias, and
 one that jumps past a copy between two names another definition aliased to one

@@ -179,6 +179,9 @@ enum class Cookie {
   /// The same, with a record that keeps exceptions from the handler: the
   /// table's `__except` never runs.
   CheckedForUnwindsOnly,
+  /// The same, with a record that keeps unwinds from the handler: the table's
+  /// `__finally` rows never run for one.
+  CheckedForExceptionsOnly,
 };
 
 /// MSVC's table for
@@ -257,10 +260,11 @@ threeScopesOverOneRange(Leave How, bool MiddleIsFinally = false,
     GSCookieInfo Record;
     Record.ParseStatus = ExceptionParseStatus::Complete;
     Record.CookieOffset = 0x40;
-    Record.HasExceptionHandler = Wrapped == Cookie::Checked;
-    Record.HasUnwindHandler = true;
-    Record.Payload = {uint8_t(0x40 | (Record.HasExceptionHandler ? 3 : 2)), 0,
-                      0, 0};
+    Record.HasExceptionHandler = Wrapped != Cookie::CheckedForUnwindsOnly;
+    Record.HasUnwindHandler = Wrapped != Cookie::CheckedForExceptionsOnly;
+    Record.Payload = {uint8_t(0x40 | (Record.HasExceptionHandler ? 1 : 0) |
+                              (Record.HasUnwindHandler ? 2 : 0)),
+                      0, 0, 0};
     EH.GSCookie = std::move(Record);
   }
   EH.SEH.emplace();
@@ -811,27 +815,140 @@ TEST(TableSEHSourceScopes, ALocalUnwindHandlerThatDoesNotReturnIsPlaced) {
       << Function;
 }
 
-// A scope table this view does not lower says so whatever its language
-// handler is called: one behind a cookie check whose record keeps exceptions
-// from the handler has an `__except` that never runs, so it is not lowered,
-// and the function must not read as one without SEH.
-TEST(TableSEHSourceScopes, LLVMCSaysAWrappedTableIsNotLowered) {
-  const std::vector<MedFunc> Unit = threeScopesOverOneRange(
-      Leave::Branch, /*MiddleIsFinally=*/false, /*BodyCalls=*/true,
-      Cookie::CheckedForUnwindsOnly);
+// `__GSHandlerCheck_SEH` checks the frame's stack cookie and hands the table
+// to `__C_specific_handler`: printed C shows the same scopes as for the table
+// alone.  Its identity is another one, and native output, which would have to
+// write the cookie record again, leaves the function as metadata.
+TEST(TableSEHSourceScopes, ATableBehindACookieCheckIsLoweredForPrintedC) {
+  const std::vector<MedFunc> Plain = threeScopesOverOneRange(Leave::Branch);
+  const std::vector<MedFunc> Unit =
+      threeScopesOverOneRange(Leave::Branch, /*MiddleIsFinally=*/false,
+                              /*BodyCalls=*/true, Cookie::Checked);
+  const ExceptionFunction &EH = *Unit.front().ExceptionMetadata;
+  EXPECT_TRUE(
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::SourceIRLowering)
+          .isEligible());
+  for (WindowsEHNativeCapability Capability :
+       {WindowsEHNativeCapability::IRLowering,
+        WindowsEHNativeCapability::OutputPatch}) {
+    const WindowsEHNativeSourceClassification Source =
+        classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                      Capability);
+    EXPECT_FALSE(Source.isEligible());
+    EXPECT_EQ(Source.Reason, WindowsEHNativeSourceReason::GSWrappedPersonality);
+  }
+  // The wrapper of another architecture is not this one until it is read.
+  for (const Arch Other : {Arch::AArch64, Arch::ARM}) {
+    const WindowsEHNativeSourceClassification Source =
+        classifyWindowsEHNativeSource(
+            EH, Other, BinaryFormat::COFF,
+            WindowsEHNativeCapability::SourceIRLowering);
+    EXPECT_FALSE(Source.isEligible());
+    EXPECT_EQ(Source.Reason,
+              WindowsEHNativeSourceReason::UnsupportedArchitecture);
+  }
+
+  for (uint32_t Row = 0; Row < 3; ++Row) {
+    SCOPED_TRACE(Row);
+    const auto Bare = windows_eh_semantics::getSEHScopeSemanticToken(
+        *Plain.front().ExceptionMetadata, Arch::X64, Row,
+        /*AllowRepeatedRanges=*/true, /*AllowCookieCheck=*/true);
+    const auto Checked = windows_eh_semantics::getSEHScopeSemanticToken(
+        EH, Arch::X64, Row, /*AllowRepeatedRanges=*/true,
+        /*AllowCookieCheck=*/true);
+    ASSERT_TRUE(Bare.has_value());
+    ASSERT_TRUE(Checked.has_value());
+    EXPECT_NE(Bare->Digest, Checked->Digest);
+    // The plain table's identity is what it was without the allowance.
+    const auto BareBefore = windows_eh_semantics::getSEHScopeSemanticToken(
+        *Plain.front().ExceptionMetadata, Arch::X64, Row,
+        /*AllowRepeatedRanges=*/true);
+    ASSERT_TRUE(BareBefore.has_value());
+    EXPECT_EQ(Bare->Digest, BareBefore->Digest);
+    EXPECT_FALSE(windows_eh_semantics::getSEHScopeSemanticToken(
+                     EH, Arch::X64, Row, /*AllowRepeatedRanges=*/true)
+                     .has_value());
+  }
+  // Another cookie slot is another frame.
+  ExceptionFunction Moved = EH;
+  Moved.GSCookie->CookieOffset += 8;
+  EXPECT_NE(windows_eh_semantics::getSEHScopeSemanticToken(
+                EH, Arch::X64, 0, /*AllowRepeatedRanges=*/true,
+                /*AllowCookieCheck=*/true)
+                ->Digest,
+            windows_eh_semantics::getSEHScopeSemanticToken(
+                Moved, Arch::X64, 0, /*AllowRepeatedRanges=*/true,
+                /*AllowCookieCheck=*/true)
+                ->Digest);
+
   llvm::LLVMContext Context;
   auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/true);
   ASSERT_NE(Module, nullptr);
   const llvm::Function *Parent = Module->getFunction("three_scopes_parent");
   ASSERT_NE(Parent, nullptr);
-  EXPECT_FALSE(Parent->hasPersonalityFn()) << printed(*Parent);
-  const std::string Source = printedC(*Module);
-  const std::string Function = parentIn(Source);
-  ASSERT_FALSE(Function.empty()) << Source;
-  EXPECT_NE(Function.find("neverd.seh: not lowered"), std::string::npos)
+  ASSERT_TRUE(Parent->hasPersonalityFn()) << printed(*Parent);
+  const Pads Found = padsOf(*Parent);
+  ASSERT_NE(Found.cleanup("inner_finally"), nullptr) << printed(*Parent);
+  ASSERT_NE(Found.Except, nullptr) << printed(*Parent);
+  ASSERT_NE(Found.cleanup("outer_finally"), nullptr) << printed(*Parent);
+  EXPECT_EQ(unwindOfCleanup(*Found.cleanup("inner_finally")), Found.Except);
+  const std::string Function = parentIn(printedC(*Module));
+  ASSERT_FALSE(Function.empty());
+  EXPECT_EQ(Function.find("neverd.seh: not lowered"), std::string::npos)
       << Function;
-  EXPECT_EQ(Function.find("__try {"), std::string::npos) << Function;
-  EXPECT_NE(Function.find("may_throw("), std::string::npos) << Function;
+  EXPECT_NE(Function.find("__try {"), std::string::npos) << Function;
+  EXPECT_NE(Function.find("__except"), std::string::npos) << Function;
+
+  llvm::LLVMContext NativeContext;
+  auto Native = emitUnit(Unit, NativeContext, /*ForPrintedC=*/false);
+  ASSERT_NE(Native, nullptr);
+  const llvm::Function *NativeParent =
+      Native->getFunction("three_scopes_parent");
+  ASSERT_NE(NativeParent, nullptr);
+  EXPECT_FALSE(NativeParent->hasPersonalityFn()) << printed(*NativeParent);
+}
+
+// The wrapper calls `__C_specific_handler` for an exception only when its
+// record's EHANDLER bit is set and for an unwind only when its UHANDLER bit
+// is.  A table with a row the record keeps from the handler runs that row
+// never: its `__except` or `__finally` must not print as one that runs, so
+// the function says it is not lowered.
+TEST(TableSEHSourceScopes, LLVMCSaysAWrappedTableIsNotLowered) {
+  for (const Cookie Record :
+       {Cookie::CheckedForUnwindsOnly, Cookie::CheckedForExceptionsOnly}) {
+    SCOPED_TRACE(static_cast<int>(Record));
+    const std::vector<MedFunc> Unit = threeScopesOverOneRange(
+        Leave::Branch, /*MiddleIsFinally=*/false, /*BodyCalls=*/true, Record);
+    const WindowsEHNativeSourceClassification Source =
+        classifyWindowsEHNativeSource(
+            *Unit.front().ExceptionMetadata, Arch::X64, BinaryFormat::COFF,
+            WindowsEHNativeCapability::SourceIRLowering);
+    EXPECT_FALSE(Source.isEligible());
+    EXPECT_EQ(Source.Reason, WindowsEHNativeSourceReason::GSWrappedPersonality);
+    llvm::LLVMContext Context;
+    auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/true);
+    ASSERT_NE(Module, nullptr);
+    const llvm::Function *Parent = Module->getFunction("three_scopes_parent");
+    ASSERT_NE(Parent, nullptr);
+    EXPECT_FALSE(Parent->hasPersonalityFn()) << printed(*Parent);
+    const std::string Source_ = printedC(*Module);
+    const std::string Function = parentIn(Source_);
+    ASSERT_FALSE(Function.empty()) << Source_;
+    EXPECT_NE(Function.find("neverd.seh: not lowered"), std::string::npos)
+        << Function;
+    EXPECT_EQ(Function.find("__try {"), std::string::npos) << Function;
+    EXPECT_NE(Function.find("may_throw("), std::string::npos) << Function;
+  }
+  // A table of termination handlers alone needs no exceptions passed on.
+  const std::vector<MedFunc> Finallys = threeScopesOverOneRange(
+      Leave::Branch, /*MiddleIsFinally=*/true, /*BodyCalls=*/true,
+      Cookie::CheckedForUnwindsOnly);
+  EXPECT_TRUE(
+      classifyWindowsEHNativeSource(*Finallys.front().ExceptionMetadata,
+                                    Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::SourceIRLowering)
+          .isEligible());
 }
 
 // The render that marks source positions drops the same blocks as the
