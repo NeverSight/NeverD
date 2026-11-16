@@ -1792,6 +1792,26 @@ const llvm::MDNode *ehAnnotationNode(const llvm::MDNode &Node, unsigned Index) {
   return llvm::dyn_cast_if_present<llvm::MDNode>(Node.getOperand(Index));
 }
 
+/// Whether \p Fn's exception metadata carries a `__C_specific_handler` scope
+/// table and no C++ tables, whatever routine the unwind data names as the
+/// language handler: `__GSHandlerCheck_SEH` checks a stack cookie and then
+/// gives the same table to `__C_specific_handler`.
+bool carriesSEHScopeTable(const llvm::Function &Fn) {
+  const llvm::MDNode *Payload =
+      Fn.getMetadata(windows_eh_md::FunctionAttachment);
+  if (!Payload)
+    Payload = Fn.getMetadata(windows_eh_md::NativeAttachment);
+  if (!Payload)
+    return false;
+  const llvm::MDNode *Scopes =
+      ehAnnotationNode(*Payload, windows_eh_md::SEHScopes);
+  // An image without C++ tables still encodes their header, empty.
+  const llvm::MDNode *Cxx =
+      ehAnnotationNode(*Payload, windows_eh_md::CxxHeader);
+  return Scopes && Scopes->getNumOperands() != 0 &&
+         (!Cxx || Cxx->getNumOperands() == 0);
+}
+
 bool ehAnnotationUIntFields(
     const llvm::MDNode &Node,
     std::initializer_list<std::pair<unsigned, unsigned>> Fields) {
@@ -10040,7 +10060,8 @@ void LLVMCWriter::writeFunction(llvm::Function &Fn) {
     OS << x86NativeFunctionPreamble(Fn, Opts.TheArch);
   if (GuardAnalysisOnlyFunctions && isAnalysisOnlyFunction(Fn) &&
       (Fn.hasFnAttribute(llvm_analysis_dispatch::FunctionAttribute) ||
-       functionHasWindowsEHPads(Fn) || functionNeedsAnalysisOnlyEHWrap(Fn))) {
+       functionHasWindowsEHPads(Fn) || functionNeedsAnalysisOnlyEHWrap(Fn) ||
+       carriesSEHScopeTable(Fn))) {
     writeAnalysisOnlyFunction(Fn);
     return;
   }
@@ -10794,7 +10815,11 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
       SEHNotLowered = true;
     }
   } else if (GuardAnalysisOnlyFunctions && isAnalysisOnlyFunction(Fn) &&
-             functionNeedsAnalysisOnlyEHWrap(Fn)) {
+             (functionNeedsAnalysisOnlyEHWrap(Fn) ||
+              carriesSEHScopeTable(Fn))) {
+    // A scope table says so whatever its language handler is called: a
+    // function whose handler checks a stack cookie first runs the same
+    // scopes, and prints none of them here either.
     EHWrapClause Fallback;
     const bool Cxx = functionIsCxxEH(Fn) || [&Fn]() {
       const llvm::MDNode *Payload =
