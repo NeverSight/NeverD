@@ -461,7 +461,9 @@ TEST_P(MIPS16Pipeline, ClassicEntryStubUsesItsDeclaredCompressedBody) {
         if (Address != 0x10140)
           return std::nullopt;
         FunctionSym F;
-        F.Name = "fp_callee";
+        // Address-bound user types need not repeat the ELF symbol's name.
+        // Keep the body unnamed here, as the local type context does without
+        // DWARF, so source projection must use the image's naming owner.
         F.Addr = Address;
         F.ReturnType = NdType::makeInt(4, false);
         F.Params = {{"value", NdType::makeFloat(4)},
