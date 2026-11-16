@@ -295,11 +295,20 @@ updates side chats. Rebinding is refused while that project is analyzing or
 applying changes, including if work starts while the file is being hashed.
 
 Right-click a project and choose **Remove project…** to take it off the list.
-Removing forgets the project and deletes nothing: its folder and the
-`.nd-agent` state in it stay where they are, and **Open project…** brings the
-project back with its conversation and memory. A draft that was not saved yet
-is written first. A project that is analyzing or applying changes is not
+By itself, removing forgets the project and deletes nothing: its folder and
+the `.nd-agent` state in it stay where they are, and **Open project…** brings
+the project back with its conversation and memory. A draft that was not saved
+yet is written first. A project that is analyzing or applying changes is not
 removed until it stops.
+
+The sheet that confirms a removal has a check box, never on by itself, that
+also deletes the Agent's records of the project: the `.nd-agent` folder with
+its conversation, memory and evidence. That cannot be undone. Nothing else in
+the project's folder is deleted, and the folder itself stays. Records are
+deleted only under the project's own lock, so a folder another Agent has open
+keeps everything; a link standing in place of `.nd-agent` is not followed; and
+when something of the records remains, the project still leaves the list and
+a message names the folder.
 
 A listed folder that does not open when the application starts (moved,
 deleted, or on a drive that is away) keeps a quieter row in the side list, and

@@ -823,6 +823,18 @@ Analysis revision %3 · %4</source>
         <source>Remove project</source>
         <translation>프로젝트 제거</translation>
     </message>
+    <message>
+        <source>Also delete the Agent&apos;s records of this project (the .nd-agent folder)</source>
+        <translation>이 프로젝트의 Agent 기록(.nd-agent 폴더)도 삭제</translation>
+    </message>
+    <message>
+        <source>The project leaves the list, and its conversation, memory and evidence are deleted with the .nd-agent folder. This cannot be undone. Other files in the folder are kept.</source>
+        <translation>프로젝트가 목록에서 제거되고 대화, 메모리, 증거가 .nd-agent 폴더와 함께 삭제됩니다. 이 작업은 되돌릴 수 없습니다. 폴더의 다른 파일은 그대로 유지됩니다.</translation>
+    </message>
+    <message>
+        <source>Remove and delete</source>
+        <translation>제거 및 삭제</translation>
+    </message>
 </context>
 <context>
     <name>MarkdownView</name>
@@ -1901,6 +1913,10 @@ Notes, scripts and reports appear here.</source>
     <message>
         <source>Stop this project&apos;s analysis before removing it.</source>
         <translation>프로젝트를 제거하기 전에 이 프로젝트의 분석을 중지하세요.</translation>
+    </message>
+    <message>
+        <source>The project was removed from the list, but its records could not be deleted: %1</source>
+        <translation>프로젝트를 목록에서 제거했지만 기록을 삭제하지 못했습니다: %1</translation>
     </message>
 </context>
 <context>

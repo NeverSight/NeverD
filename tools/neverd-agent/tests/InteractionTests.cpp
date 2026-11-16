@@ -407,10 +407,12 @@ private slots:
     QCOMPARE(workspace.activeId(), secondId);
     QVERIFY(!workspace.sideChat());
     QCOMPARE(workspace.messages().size(), 0);
-    QVERIFY(workspace.removeProject(second));
+    // Its records go with the other one, asked for through the same pipe.
+    QVERIFY(workspace.removeProject(second, true));
     QVERIFY(workspace.activeId().isEmpty());
     QCOMPARE(workspace.projects().size(), 0);
     QCOMPARE(errors.count(), 1);
+    QVERIFY(!QFileInfo::exists(QDir(second).filePath(".nd-agent")));
     QVERIFY(QFileInfo(QDir(first).filePath(".nd-agent/project.json")).isFile());
     QVERIFY(workspace.openProject(first));
     QCOMPARE(workspace.messages().size(), 2);

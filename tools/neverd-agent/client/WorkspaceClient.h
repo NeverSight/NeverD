@@ -148,7 +148,8 @@ public:
   Q_INVOKABLE void refreshResearch();
   Q_INVOKABLE bool createProject(const QString &name, const QString &directory);
   Q_INVOKABLE bool openProject(const QString &directory);
-  Q_INVOKABLE bool removeProject(const QString &directory);
+  Q_INVOKABLE bool removeProject(const QString &directory,
+                                 bool deleteRecords = false);
   Q_INVOKABLE bool selectProject(const QString &id);
   Q_INVOKABLE void selectObject(const QString &id);
   Q_INVOKABLE void addObject(const QString &path);

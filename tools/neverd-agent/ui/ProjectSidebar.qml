@@ -16,7 +16,7 @@ Surface {
     signal openRequested()
     signal settingsRequested()
     signal menuRequested(string projectId, string objectId, var origin)
-    signal unavailableMenuRequested(string name, string directory, var origin)
+    signal unavailableMenuRequested(string name, string directory, bool records, var origin)
 
     ColumnLayout {
         anchors.fill: parent
@@ -163,7 +163,7 @@ Surface {
                         hint: modelData.directory + "\n" + modelData.issue
                         menuHint: qsTr("Project menu")
                         onClicked: sidebar.backend.openProject(modelData.directory)
-                        onMenuRequested: origin => sidebar.unavailableMenuRequested(modelData.name, modelData.directory, origin)
+                        onMenuRequested: origin => sidebar.unavailableMenuRequested(modelData.name, modelData.directory, modelData.records, origin)
                     }
                 }
                 Label {

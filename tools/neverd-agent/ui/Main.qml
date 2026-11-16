@@ -42,6 +42,8 @@ ApplicationWindow {
     property string menuObject: ""
     property string removeName: ""
     property string removeDirectory: ""
+    // Whether that folder holds Agent state the removal could also delete.
+    property bool removeHasRecords: false
     property string lastProject: ""
     property string noticeText: ""
     property var sideViews: []
@@ -95,9 +97,10 @@ ApplicationWindow {
         }
         sideOpen = true
     }
-    function confirmRemove(name, directory) {
+    function confirmRemove(name, directory, records) {
         removeName = name
         removeDirectory = directory
+        removeHasRecords = records
         removeDialog.open()
     }
     function showContext(projectId, objectId, origin) {
@@ -177,9 +180,10 @@ ApplicationWindow {
             onOpenRequested: openProjectDialog.open()
             onSettingsRequested: window.showSettings()
             onMenuRequested: (projectId, objectId, origin) => window.showContext(projectId, objectId, origin)
-            onUnavailableMenuRequested: (name, directory, origin) => {
+            onUnavailableMenuRequested: (name, directory, records, origin) => {
                 window.removeName = name
                 window.removeDirectory = directory
+                window.removeHasRecords = records
                 window.popupAt(unavailableMenu, origin)
             }
         }
@@ -391,7 +395,7 @@ ApplicationWindow {
         ThemedMenuItem {
             text: qsTr("Remove project…")
             visible: !window.menuObject
-            onTriggered: window.confirmRemove(backend.activeProject.name, backend.activeProject.directory)
+            onTriggered: window.confirmRemove(backend.activeProject.name, backend.activeProject.directory, true)
         }
     }
     ThemedMenu {
@@ -480,12 +484,16 @@ ApplicationWindow {
     Sheet {
         id: removeDialog
         title: qsTr("Remove %1?").arg(window.removeName)
+        // Deleting is chosen anew each time, never left on from the last.
+        onAboutToShow: removeRecords.checked = false
         onOpened: removeButton.forceActiveFocus()
         contentItem: ColumnLayout {
             spacing: 12
             Label {
                 textFormat: Text.PlainText
-                text: qsTr("This only takes the project off the list. Nothing on disk is deleted: its folder, conversation and memory stay where they are, and Open project brings it back.")
+                text: removeRecords.checked
+                      ? qsTr("The project leaves the list, and its conversation, memory and evidence are deleted with the .nd-agent folder. This cannot be undone. Other files in the folder are kept.")
+                      : qsTr("This only takes the project off the list. Nothing on disk is deleted: its folder, conversation and memory stay where they are, and Open project brings it back.")
                 color: Theme.text
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
@@ -500,18 +508,26 @@ ApplicationWindow {
                 horizontalAlignment: Text.AlignLeft
                 elide: Text.ElideMiddle
             }
+            CheckField {
+                id: removeRecords
+                visible: window.removeHasRecords
+                text: qsTr("Also delete the Agent's records of this project (the .nd-agent folder)")
+                Layout.fillWidth: true
+            }
             RowLayout {
                 Layout.topMargin: 10
                 Item { Layout.fillWidth: true }
                 ActionButton { text: qsTr("Cancel"); onClicked: removeDialog.close() }
                 ActionButton {
                     id: removeButton
-                    text: qsTr("Remove project")
+                    // The button says what it will do.
+                    text: removeRecords.checked ? qsTr("Remove and delete") : qsTr("Remove project")
                     primary: true
                     onClicked: {
                         // A refusal says why in its own sheet.
+                        const records = removeRecords.visible && removeRecords.checked
                         removeDialog.close()
-                        backend.removeProject(window.removeDirectory)
+                        backend.removeProject(window.removeDirectory, records)
                     }
                 }
             }

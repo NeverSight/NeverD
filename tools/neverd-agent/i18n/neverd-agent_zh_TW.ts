@@ -823,6 +823,18 @@ Analysis revision %3 · %4</source>
         <source>Remove project</source>
         <translation>移除專案</translation>
     </message>
+    <message>
+        <source>Also delete the Agent&apos;s records of this project (the .nd-agent folder)</source>
+        <translation>同時刪除此專案的 Agent 記錄（.nd-agent 資料夾）</translation>
+    </message>
+    <message>
+        <source>The project leaves the list, and its conversation, memory and evidence are deleted with the .nd-agent folder. This cannot be undone. Other files in the folder are kept.</source>
+        <translation>專案會從清單中移除，其對話、記憶與證據會隨 .nd-agent 資料夾一併刪除，且無法復原。資料夾中的其他檔案會保留。</translation>
+    </message>
+    <message>
+        <source>Remove and delete</source>
+        <translation>移除並刪除</translation>
+    </message>
 </context>
 <context>
     <name>MarkdownView</name>
@@ -1901,6 +1913,10 @@ Notes, scripts and reports appear here.</source>
     <message>
         <source>Stop this project&apos;s analysis before removing it.</source>
         <translation>請先停止此專案的分析，再移除專案。</translation>
+    </message>
+    <message>
+        <source>The project was removed from the list, but its records could not be deleted: %1</source>
+        <translation>專案已從清單中移除，但無法刪除其記錄：%1</translation>
     </message>
 </context>
 <context>
