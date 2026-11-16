@@ -8,6 +8,13 @@ on:
         description: Exact MIPS PR commit to qualify
         required: true
         type: string
+      scope:
+        description: Native owners or a bounded MSVC construction reproducer
+        type: choice
+        default: qualification
+        options:
+          - qualification
+          - constructor-repro
 
 permissions:
   contents: read
@@ -17,7 +24,82 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  constructor:
+    if: inputs.scope == 'constructor-repro'
+    name: MSVC noncopyable constructor reproducer
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+      - name: Reproduce and compare construction forms
+        run: |
+          python - <<'PYTHON'
+          from pathlib import Path
+          import hashlib,json,os,re,subprocess
+          p=Path('constructor-evidence');p.mkdir()
+          assert re.fullmatch(r'[0-9a-f]{40}', os.environ['EXPECTED_SOURCE_SHA'])
+          common="""#include <memory>
+          #include <optional>
+          #include <type_traits>
+          struct Library {};
+          struct Options {};
+          class State {
+           public:
+            State(const Library &, const Options &) : P(std::make_unique<int>(7)) {}
+            ~State() = default;
+           private:
+            std::unique_ptr<int> P;
+          };
+          static_assert(!std::is_copy_constructible_v<State>);
+          static_assert(!std::is_move_constructible_v<State>);
+          struct Builder {
+            const Library &L;
+            std::optional<State> Own;
+            const State &Ref;
+            Builder(const Library &L, const State *Shared = nullptr)
+                : L(L), @INITIALIZER@ {}
+          };
+          int main() { Library L; State Shared(L, {}); Builder A(L), B(L, &Shared); }
+          """
+          forms={
+           'conditional':'Own(Shared ? std::optional<State>() : std::optional<State>(std::in_place, L, Options{})), Ref(Shared ? *Shared : *Own)',
+           'direct_return':'Own([&]() -> std::optional<State> { if (Shared) return {}; return std::optional<State>(std::in_place, L, Options{}); }()), Ref(Shared ? *Shared : *Own)',
+           'emplace':'Ref(Shared ? *Shared : Own.emplace(L, Options{}))'}
+          results={}
+          for name,initial in forms.items():
+           source=p/(name+'.cpp');source.write_text(common.replace('@INITIALIZER@',initial));obj=p/(name+'.obj')
+           command=['cl','/nologo','/std:c++20','/O2','/EHsc','/c',str(source),'/Fo'+str(obj)]
+           result=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
+           (p/(name+'.log')).write_text(result.stdout)
+           results[name]={'command':command,'exit':result.returncode,'source_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),'has_C2280':'C2280' in result.stdout}
+           if obj.exists():results[name]['object_sha256']=hashlib.sha256(obj.read_bytes()).hexdigest();obj.unlink()
+          version=subprocess.run(['cl'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
+          receipt={'reference_source':os.environ['EXPECTED_SOURCE_SHA'],'workflow_source':os.environ['GITHUB_SHA'],'compiler':version.stdout,'variants':results,'scope':'Compiler reproducer with the same noncopyable/nonmovable unique_ptr state and user-declared destructor as TypeSpeller, not a build of NeverD or its LLVM dependencies','cleanup':'Generated objects removed after hashing; sources/logs retained'}
+          (p/'results.json').write_text(json.dumps(receipt,indent=2)+'\n')
+          print(json.dumps(receipt,indent=2))
+          assert results['conditional']['exit']!=0 and results['conditional']['has_C2280'], 'original compiler failure not reproduced'
+          assert results['direct_return']['exit']==0 and results['emplace']['exit']==0
+          PYTHON
+      - name: Upload constructor diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: msvc-constructor-${{ inputs.source_sha }}
+          retention-days: 7
+          if-no-files-found: error
+          path: constructor-evidence/
   native:
+    if: inputs.scope != 'constructor-repro'
     name: ${{ matrix.name }} MIPS and source ABI
     runs-on: ${{ matrix.runner }}
     strategy:
