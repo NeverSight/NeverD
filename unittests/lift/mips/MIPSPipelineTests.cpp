@@ -588,56 +588,62 @@ TEST(MIPSN32Calls, PointerSpillsPreserveTheIncomingLinkAcrossCalls) {
       Export Callee;
       Callee.Name = "touch";
       Callee.Addr = 0x10200;
-      Image->Exports.push_back(Callee);
-      for (unsigned Variant = 0; Variant < 10; ++Variant) {
-        SCOPED_TRACE(Variant);
-        NativeDebug Debug;
-        switch (Variant) {
-        case 1:
-          Debug.Authenticated = false;
-          break;
-        case 2:
-          Debug.ReturnState = {};
-          break;
-        case 3:
-          Debug.Function.Addr -= 4;
-          break;
-        case 4:
-          Debug.Function.IsVariadic = true;
-          break;
-        case 5:
-          Debug.Function.PlatformConvention = false;
-          break;
-        case 6:
-          Debug.Function.CallConv = DebugCallConv::Fastcall;
-          break;
-        case 7:
-          Debug.Function.ParamEntryLocations.emplace_back();
-          break;
-        case 8:
-          Debug.Function.Params = {{"unknown", TypeRef()}};
-          break;
-        case 9:
-          Debug.Function.ReturnType = {};
-          break;
-        }
-        for (bool LLVM : {false, true}) {
-          SCOPED_TRACE(LLVM);
-          llvm::LLVMContext Context;
-          PipelineOptions Options;
-          Options.OnlyFunctionEntries = {Image->Entry};
-          Options.LiftMode = LLVM;
-          Options.EmitDumpOutput = false;
-          auto Result = Pipeline().run(*Image, Context, Options, &Debug);
-          EXPECT_EQ(Result.Success, Variant == 0) << Result.Error;
-          if (Variant == 0 && LLVM) {
-            ASSERT_NE(Result.LlvmModule, nullptr);
-            EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+      for (const bool Exported : {false, true}) {
+        SCOPED_TRACE(Exported);
+        Image->Exports.clear();
+        if (Exported)
+          Image->Exports.push_back(Callee);
+        for (unsigned Variant = 0; Variant < 10; ++Variant) {
+          SCOPED_TRACE(Variant);
+          NativeDebug Debug;
+          switch (Variant) {
+          case 1:
+            Debug.Authenticated = false;
+            break;
+          case 2:
+            Debug.ReturnState = {};
+            break;
+          case 3:
+            Debug.Function.Addr -= 4;
+            break;
+          case 4:
+            Debug.Function.IsVariadic = true;
+            break;
+          case 5:
+            Debug.Function.PlatformConvention = false;
+            break;
+          case 6:
+            Debug.Function.CallConv = DebugCallConv::Fastcall;
+            break;
+          case 7:
+            Debug.Function.ParamEntryLocations.emplace_back();
+            break;
+          case 8:
+            Debug.Function.Params = {{"unknown", TypeRef()}};
+            break;
+          case 9:
+            Debug.Function.ReturnType = {};
+            break;
           }
-          if (Variant != 0)
-            EXPECT_NE(Result.Error.find("MIPS source return target"),
-                      std::string::npos)
-                << Result.Error;
+          for (bool LLVM : {false, true}) {
+            SCOPED_TRACE(LLVM);
+            llvm::LLVMContext Context;
+            PipelineOptions Options;
+            Options.OnlyFunctionEntries = {Image->Entry};
+            Options.LiftMode = LLVM;
+            Options.EmitDumpOutput = false;
+            auto Result = Pipeline().run(*Image, Context, Options, &Debug);
+            EXPECT_EQ(Result.Success, Variant == 0) << Result.Error;
+            if (Variant == 0 && LLVM && Result.Success) {
+              ASSERT_NE(Result.LlvmModule, nullptr);
+              EXPECT_FALSE(
+                  llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+            }
+            if (Variant != 0)
+              EXPECT_NE(Result.Error.find("MIPS source return target"),
+                        std::string::npos)
+                  << Result.Error;
+          }
         }
       }
     }

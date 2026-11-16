@@ -25283,25 +25283,35 @@ against original LLVM, including negative zero and NaN payloads.
 
 `SourceParameterPlacement.MIPSScalarOnlyCallsKeepCompleteSignatures` covers
 integer, pointer and void signatures without any floating parameters in all
-six MIPS ABI/byte-order profiles. `MIPSN32Calls` checks the four-byte pointer
+six MIPS ABI/byte-order profiles. `MIPSScalarCalls` checks integer/pointer/void
+calls without a qualified floating profile; floating signatures and malformed
+descriptors must still fail. `MIPSN32Calls` checks the four-byte pointer
 spill beside an eight-byte saved RA, both stack-adjustment widths, both byte
-orders and both pipeline routes. Names-only providers, unknown return contracts,
+orders, public/private callees and both pipeline routes. Names-only providers,
+unknown return contracts,
 containing-function matches, non-platform or variadic declarations, custom
 parameter locations and incomplete types must still fail. A declaration also
 cannot admit an overlapping write to the saved link.
 
-The owned `n32-pointer-call.c` fixture exercises the real ELF/DWARF reader and
-external `void(void)` call. Its runner compares original execution with HighC
-and LLVMC recompiled at O0/O2, in both byte orders. It checks the full return
-register (including n32 word sign extension), unchanged object bytes, SP, RA,
+`DWARFSourceTypes.MissingFunctionParameterTypesRemainUnknown` checks absent and
+malformed parameter types through the real shared DWARF reader, including
+inherited declarations. A complete void return does not supply the missing
+parameter type.
+
+The owned `scalar-pointer-call.c` fixture exercises the real ELF/DWARF reader
+and global or private `void(void)` callees. Its runner compares original
+execution with HighC and LLVMC recompiled at O0/O2 for o32, n32 and n64, in both
+byte orders, with default and soft-float compiler profiles. Add `--abi n32` to
+narrow a diagnostic run. It checks the full return register (including n32/n64
+word sign extension), unchanged object bytes, SP, RA,
 preserved GPRs and exactly one callee entry. Commands, hashes and source evidence
 are retained; generated binaries are removed on success or failure.
 
 ```sh
 PYTHONPATH=third_party/unicorn/bindings/python LIBUNICORN_PATH=/path/to/unicorn-build \
-  python3 unittests/lift/mips/n32-call-roundtrip.py \
+  python3 unittests/lift/mips/scalar-call-roundtrip.py \
   --neverd build-mips/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld \
-  --output build-mips/n32-call-roundtrip
+  --output build-mips/scalar-call-roundtrip
 ```
 
 `MIPSLegacyFP` in `NeverDMIPSIntegerTests` covers classic FR=1 pre-R6 arithmetic,

@@ -4977,8 +4977,11 @@ of the adapted call.
 `floatingCallArguments` uses the same placement authority for complete fixed
 float/double signatures, including scalar floating arguments with a `void`
 result. A void signature has no result carrier; LowIR-to-MedIR binding, cached
-import pointers and both emitters preserve that absence. It still needs at
-least one floating parameter; integer-only calls keep their own adapter. LLVM
+import pointers and both emitters preserve that absence. Outside MIPS this
+adapter requires a floating parameter or result; integer-only calls keep their
+own adapter. MIPS uses this complete descriptor for integer/pointer/void calls too;
+only actual floating values or vector-register accesses require a floating
+profile. Its descriptors remain validated even without those accesses. LLVM
 import emission verifies those exact SSA operands and widths before declaring
 the typed callee, including immutable import identities absent from libc tables.
 Windows x64 and ARM64 publish these operands before SSA and record the scalar

@@ -1,10 +1,10 @@
-//===- n32-pointer-call.c - Narrow pointer across a native call -----------===//
+//===- scalar-pointer-call.c - Pointer across a native call ---------------===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Owned n32 DWARF fixture: four-byte pointer spill, eight-byte saved link.
+/// Owned DWARF fixture: a pointer spill beside the saved incoming link.
 //===----------------------------------------------------------------------===//
 
 struct Device {
@@ -12,7 +12,10 @@ struct Device {
   unsigned value;
 };
 
-__attribute__((noinline)) void touch(void) {
+#ifdef PRIVATE_CALLEE
+static
+#endif
+    __attribute__((noinline)) void touch(void) {
   __asm__ volatile("" ::: "memory");
 }
 
