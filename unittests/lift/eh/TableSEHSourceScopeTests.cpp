@@ -37,6 +37,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <cstring>
 #include <map>
 #include <memory>
 #include <string>
@@ -92,11 +93,16 @@ MedBlock blockAt(int Id, va_t Begin, va_t End) {
 }
 
 /// A termination handler that reads nothing of its parent: it counts a run.
-MedFunc terminationHandler(va_t Entry, const char *Name, uint64_t Step) {
+/// A termination handler that stores \p Step and returns, or, unless
+/// \p Returns, never does: a `__finally` that leaves by `longjmp`, here a
+/// loop.
+MedFunc terminationHandler(va_t Entry, const char *Name, uint64_t Step,
+                           bool Returns = true) {
   MedFunc Handler;
   Handler.Entry = Entry;
   Handler.Name = Name;
   Handler.ReturnType = NdType::makeVoid();
+  Handler.DoesNotReturn = !Returns;
   MedBlock Body = blockAt(0, Entry, Entry + 8);
   MedOp Store;
   Store.Opcode = NdOp::STORE;
@@ -104,7 +110,13 @@ MedFunc terminationHandler(va_t Entry, const char *Name, uint64_t Step) {
   Store.addInput(MedVar::makeConst(CounterVA, 8));
   Store.addInput(MedVar::makeConst(Step, 4));
   Body.Ops.push_back(std::move(Store));
-  Body.Ops.push_back(returnAt(Entry + 4));
+  if (Returns) {
+    Body.Ops.push_back(returnAt(Entry + 4));
+  } else {
+    Body.Ops.push_back(branchTo(Entry + 4, Entry));
+    Body.Preds = {0};
+    Body.Succs = {0};
+  }
   Handler.Blocks.push_back(std::move(Body));
   return Handler;
 }
@@ -176,10 +188,11 @@ enum class Cookie {
 /// innermost first.  Block 1 calls may_throw inside it and block 2 leaves it.
 /// With \p MiddleIsFinally the middle scope is a third `__finally`, which a
 /// local unwind runs between the other two.
-std::vector<MedFunc> threeScopesOverOneRange(Leave How,
-                                             bool MiddleIsFinally = false,
-                                             bool BodyCalls = true,
-                                             Cookie Wrapped = Cookie::None) {
+/// \p NeverReturns names a termination handler that does not return.
+std::vector<MedFunc>
+threeScopesOverOneRange(Leave How, bool MiddleIsFinally = false,
+                        bool BodyCalls = true, Cookie Wrapped = Cookie::None,
+                        llvm::StringRef NeverReturns = {}) {
   MedFunc Parent;
   Parent.Entry = ParentVA;
   Parent.Name = "three_scopes_parent";
@@ -269,10 +282,12 @@ std::vector<MedFunc> threeScopesOverOneRange(Leave How,
     Parent.SEHLocalUnwindExits.push_back(std::move(Exit));
   }
 
-  return {
-      std::move(Parent), terminationHandler(InnerFinallyVA, "inner_finally", 1),
-      terminationHandler(OuterFinallyVA, "outer_finally", 2),
-      terminationHandler(MiddleFinallyVA, "middle_finally", 3), personality()};
+  const auto Handler = [&](va_t Entry, const char *Name, uint64_t Step) {
+    return terminationHandler(Entry, Name, Step, NeverReturns != Name);
+  };
+  return {std::move(Parent), Handler(InnerFinallyVA, "inner_finally", 1),
+          Handler(OuterFinallyVA, "outer_finally", 2),
+          Handler(MiddleFinallyVA, "middle_finally", 3), personality()};
 }
 
 std::unique_ptr<llvm::Module> emitUnit(const std::vector<MedFunc> &Unit,
@@ -721,6 +736,79 @@ TEST(TableSEHSourceScopes, LLVMCKeepsALoopOfBlocksThatOnlyJump) {
   EXPECT_EQ(countOf(Function, "__try {"), 3u) << Function;
   // The blocks that lead into the loop only jump, and are passed as any.
   EXPECT_EQ(Function.find("seh_try_"), std::string::npos) << Function;
+}
+
+// A `__finally` that never returns, as one that leaves by `longjmp`, is a
+// clause the printed C can show: the call, and that the path ends there, once.
+// Native output, whose clauses the code generator writes again, still leaves
+// such a function as metadata (here the rows over one range already do).
+TEST(TableSEHSourceScopes, AFinallyThatDoesNotReturnIsLoweredForPrintedC) {
+  const std::vector<MedFunc> Unit = threeScopesOverOneRange(
+      Leave::Branch, /*MiddleIsFinally=*/false, /*BodyCalls=*/true,
+      Cookie::None, "outer_finally");
+  llvm::LLVMContext Context;
+  auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/true);
+  ASSERT_NE(Module, nullptr);
+  const llvm::Function *Parent = Module->getFunction("three_scopes_parent");
+  ASSERT_NE(Parent, nullptr);
+  const llvm::Function *Outer = Module->getFunction("outer_finally");
+  ASSERT_NE(Outer, nullptr);
+  ASSERT_TRUE(Outer->doesNotReturn()) << printed(*Outer);
+  ASSERT_TRUE(Parent->hasPersonalityFn()) << printed(*Parent);
+  const Pads Found = padsOf(*Parent);
+  ASSERT_NE(Found.cleanup("inner_finally"), nullptr) << printed(*Parent);
+  ASSERT_NE(Found.Except, nullptr) << printed(*Parent);
+  ASSERT_NE(Found.cleanup("outer_finally"), nullptr) << printed(*Parent);
+  EXPECT_EQ(unwindOfCleanup(*Found.cleanup("inner_finally")), Found.Except);
+
+  const std::string Function = parentIn(printedC(*Module));
+  ASSERT_FALSE(Function.empty());
+  EXPECT_EQ(Function.find("neverd.seh: not lowered"), std::string::npos)
+      << Function;
+  // Each clause that runs the handler says once that it does not return.
+  size_t Clauses = 0;
+  for (size_t At = Function.find("outer_finally("); At != std::string::npos;
+       At = Function.find("outer_finally(", At + 1)) {
+    ++Clauses;
+    const size_t Next = Function.find('\n', At) + 1;
+    const llvm::StringRef After = llvm::StringRef(Function).substr(Next);
+    EXPECT_TRUE(After.ltrim().starts_with("__builtin_unreachable();"))
+        << Function;
+    EXPECT_FALSE(After.ltrim()
+                     .drop_front(std::strlen("__builtin_unreachable();"))
+                     .ltrim()
+                     .starts_with("__builtin_unreachable();"))
+        << Function;
+  }
+  EXPECT_NE(Clauses, 0u) << Function;
+}
+
+// A local unwind whose first handler never returns runs that handler outside
+// the scope it ends and inside the ones around it, as any other does; what
+// follows the call is never reached.
+TEST(TableSEHSourceScopes, ALocalUnwindHandlerThatDoesNotReturnIsPlaced) {
+  const std::vector<MedFunc> Unit = threeScopesOverOneRange(
+      Leave::LocalUnwind, /*MiddleIsFinally=*/false, /*BodyCalls=*/true,
+      Cookie::None, "inner_finally");
+  llvm::LLVMContext Context;
+  auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/true);
+  ASSERT_NE(Module, nullptr);
+  const llvm::Function *Parent = Module->getFunction("three_scopes_parent");
+  ASSERT_NE(Parent, nullptr);
+  ASSERT_TRUE(Parent->hasPersonalityFn()) << printed(*Parent);
+  const Pads Found = padsOf(*Parent);
+  ASSERT_NE(Found.cleanup("inner_finally"), nullptr) << printed(*Parent);
+  ASSERT_NE(Found.Except, nullptr) << printed(*Parent);
+  const auto Inner = ownCallsOf(*Parent, "inner_finally");
+  ASSERT_EQ(Inner.size(), 1u) << printed(*Parent);
+  const auto *InnerInvoke = llvm::dyn_cast<llvm::InvokeInst>(Inner.front());
+  ASSERT_NE(InnerInvoke, nullptr) << printed(*Parent);
+  EXPECT_EQ(InnerInvoke->getUnwindDest(), Found.Except) << printed(*Parent);
+
+  const std::string Function = parentIn(printedC(*Module));
+  ASSERT_FALSE(Function.empty());
+  EXPECT_EQ(Function.find("neverd.seh: not lowered"), std::string::npos)
+      << Function;
 }
 
 // A scope table this view does not lower says so whatever its language

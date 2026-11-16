@@ -1259,6 +1259,11 @@ lowered instead. The note follows the scope table in the function's exception
 metadata, not the name of its language handler: a table whose handler checks
 a stack cookie first (`__GSHandlerCheck_SEH`) runs the same scopes, so a
 function this view leaves unlowered behind that check says so too.
+A termination handler that never returns, a `__finally` that leaves by
+`longjmp` or ends the program, is a clause this view prints: the call, and
+once that the path ends there. Native output, whose clauses the code generator
+writes again from what the optimizer leaves, does not take one, and no view
+takes a filter that never returns.
 This view also takes a table with several rows over one range, which MSVC and
 clang-cl write for a `__try` whose body is exactly another `__try`. The rows
 nest by their order, the earlier inside the later, because

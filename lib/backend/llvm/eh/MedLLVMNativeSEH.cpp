@@ -94,9 +94,14 @@ bool hasSupportedSEHCallbackABI(const llvm::Function &Callback,
          (Callback.hasLocalLinkage() && !Callback.isDeclaration());
 }
 
-bool canPreserveSEHCallbackAcrossOptimization(const llvm::Function &Callback) {
+/// \p MayNotReturn admits a callback that never returns: a `__finally` that
+/// leaves by `longjmp` or ends the program.  The printed C calls it and says
+/// the path ends there; native output, whose clauses are written again from
+/// what the optimizer leaves, does not take one.
+bool canPreserveSEHCallbackAcrossOptimization(const llvm::Function &Callback,
+                                              bool MayNotReturn = false) {
   if (Callback.hasFnAttribute(llvm::Attribute::AlwaysInline) ||
-      Callback.hasFnAttribute(llvm::Attribute::NoReturn) ||
+      (!MayNotReturn && Callback.hasFnAttribute(llvm::Attribute::NoReturn)) ||
       Callback.hasFnAttribute(llvm::Attribute::ReturnsTwice) ||
       Callback.hasFnAttribute(llvm::Attribute::Speculatable))
     return false;
@@ -328,7 +333,8 @@ bool MedLLVMEmitter::emitNativeSEH(
       if (!R.Callback || R.Callback == &LLVMFunc ||
           !hasSupportedSEHCallbackABI(*R.Callback, FinallyCallbackTy,
                                       TargetArch, SourceView) ||
-          !canPreserveSEHCallbackAcrossOptimization(*R.Callback) ||
+          !canPreserveSEHCallbackAcrossOptimization(
+              *R.Callback, /*MayNotReturn=*/SourceView) ||
           (SourceView && RestoresRegisters &&
            !sehCallbackReadsOnlyArguments(Scope.FilterOrFinallyVA)))
         return false;

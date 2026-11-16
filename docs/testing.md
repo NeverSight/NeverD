@@ -20578,6 +20578,11 @@ blocks branch too. `LLVMCSourceMapNamesTheUnwindCallForItsHandlers` uses the
 emitter's own observations: the body's call keeps its instruction through the
 change to an invoke, the unwind's handlers name the runtime call's address,
 and another call placed at that address names nothing.
+`AFinallyThatDoesNotReturnIsLoweredForPrintedC` and
+`ALocalUnwindHandlerThatDoesNotReturnIsPlaced` give a termination handler that
+never returns: the parent keeps its pads, each clause that calls the handler
+says once that the path ends, and a local unwind still calls it outside the
+scope it ends.
 `SEHDefinitionOrderTests.cpp` prints hand-built HighIR definitions in several
 orders: an `__except` arm that jumps past a copy of its own frame alias, and
 one that jumps past a copy between two names another definition aliased to one
