@@ -149,6 +149,9 @@ void compileAndRun(const std::string &Source) {
         "-Werror=int-conversion",
         "-Werror=constant-conversion",
         SourcePath,
+#ifndef _WIN32
+        "-lm",
+#endif
         "-o",
         BinaryPath};
     std::string Error;
